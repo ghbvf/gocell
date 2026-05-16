@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/constructor_interface_without_isnil_violates
+
+go 1.22

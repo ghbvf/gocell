@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/isnil_inside_non_if_call_violates
+
+go 1.22

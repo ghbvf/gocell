@@ -14,7 +14,6 @@
 package archtest
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"go/ast"
@@ -39,20 +38,9 @@ import (
 // This avoids hardcoding the module path, which would silently disable all rules on rename or /v2 bump.
 func readModulePath(t *testing.T, modRoot string) string {
 	t.Helper()
-	f, err := os.Open(filepath.Clean(filepath.Join(modRoot, "go.mod")))
-	require.NoError(t, err, "cannot open go.mod")
-	defer func() { require.NoError(t, f.Close()) }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module"))
-		}
-	}
-	require.NoError(t, scanner.Err())
-	t.Fatal("go.mod has no module directive")
-	return ""
+	path, err := moduleImportPath(modRoot)
+	require.NoError(t, err, "cannot read module path from go.mod")
+	return path
 }
 
 // violation describes a single layering rule breach.

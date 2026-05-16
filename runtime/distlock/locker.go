@@ -106,7 +106,9 @@ func New(driver Driver, clk clock.Clock, opts ...Option) (Locker, error) {
 	if validation.IsNilInterface(driver) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "distlock.New: driver must not be nil")
 	}
-	clock.MustHaveClock(clk, "distlock.New")
+	if validation.IsNilInterface(clk) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "distlock.New: clock must not be nil")
+	}
 	cfg := defaultConfig()
 	cfg.clock = clk
 	for _, o := range opts {

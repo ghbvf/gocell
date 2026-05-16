@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/then_in_goroutine_violates
+
+go 1.22

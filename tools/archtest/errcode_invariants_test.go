@@ -25,10 +25,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -134,14 +132,6 @@ var errorFirstEnforcedFiles = []string{
 	"adapters/postgres/refresh_store.go",
 }
 
-// errorFirstViolation describes a single ERROR-FIRST-API-01 violation.
-type errorFirstViolation struct {
-	File     string // relative slash path from module root
-	Line     int
-	FuncName string
-	Reason   string
-}
-
 // This list is functionally a subset of ADR 202604270030 §4.1 C-class re-throw sites.
 // ERROR-FIRST-API-01 needs it because those four sites are inside error-less functions
 // (recover defers) and must be permitted to panic; PANIC-REGISTERED-01 handles the
@@ -235,28 +225,44 @@ const errcodeAllowlistPath = "pkg/errcode/"
 // outside a carved function, even in the same file, is a violation.
 func TestErrcodeLiteralConstructionBanned(t *testing.T) {
 	root := findModuleRoot(t)
-	files, err := collectGoFiles(root)
-	require.NoError(t, err)
 
-	var violations []string
-	for _, file := range files {
-		rel, _ := filepath.Rel(root, file)
-		rel = filepath.ToSlash(rel)
-		if strings.HasPrefix(rel, "pkg/errcode/") {
-			continue
-		}
-		hits, err := findErrcodeErrorLiteralsInFile(file, rel, errcodeKindLiteralCarveOuts)
-		require.NoError(t, err, "scan %s", rel)
-		for _, line := range hits {
-			violations = append(violations,
-				fmt.Sprintf("ERRCODE-KIND-LITERAL-01: %s:%d constructs errcode.Error directly; use errcode.New/Wrap", rel, line))
+	// Package-level scope skip (NOT a carve-out): only pkg/errcode/ itself.
+	// Function-level carve-outs are applied inside findErrcodeErrorLiteralsPass
+	// via errcodeKindLiteralCarveOuts.
+	errcodeKindAllowedRel := func(rel string) bool {
+		// pkg/errcode/ is the definition site of errcode.Error; its New/Wrap
+		// implementation legitimately constructs the struct literal. This is a
+		// package-level skip, not a carve-out. Everything else outside the
+		// function-level errcodeKindLiteralCarveOuts entries is a violation.
+		return strings.HasPrefix(rel, "pkg/errcode/")
+	}
+
+	diags := Run(t, ModuleScope(root, MatchRels(func(rel string) bool {
+		return !errcodeKindAllowedRel(rel)
+	})), findErrcodeErrorLiteralsPass)
+
+	Report(t, "ERRCODE-KIND-LITERAL-01", diags)
+}
+
+// findErrcodeErrorLiteralsPass reports errcode.Error composite literals
+// constructed outside the function-level carve-outs declared in
+// errcodeKindLiteralCarveOuts. It delegates to scanErrcodeErrorLiteralsInAST
+// so the production scan and the TestFindErrcodeErrorLiteralsFunctionLevel
+// red-fixture proof share one carve-out-aware core — a single funnel with no
+// file-level allowlist and no parallel disk-read path.
+func findErrcodeErrorLiteralsPass(p *Pass) []Diagnostic {
+	var out []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		for _, h := range scanErrcodeErrorLiteralsInAST(p.Fset, file, rel, errcodeKindLiteralCarveOuts) {
+			out = append(out, Diagnostic{
+				Rel:     rel,
+				Line:    h.line,
+				Message: fmt.Sprintf("%s constructs errcode.Error directly; use errcode.New/Wrap", rel),
+			})
 		}
 	}
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations, "errcode.Error literal construction outside pkg/errcode is forbidden")
+	return out
 }
 
 // errcodeErrorHit records a detected errcode.Error{} literal with its line number.
@@ -332,27 +338,6 @@ func scanErrcodeErrorLiteralsInAST(fset *token.FileSet, f *ast.File, rel string,
 		hits = append(hits, errcodeErrorHit{fset.Position(lit.Pos()).Line})
 	})
 	return hits
-}
-
-// findErrcodeErrorLiteralsInFile parses the file at path and returns line
-// numbers of errcode.Error composite literals that are not inside a carved
-// function body.
-func findErrcodeErrorLiteralsInFile(path, rel string, carveOuts map[carveOut]struct{}) ([]int, error) {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-	hits := scanErrcodeErrorLiteralsInAST(fset, f, rel, carveOuts)
-	lines := make([]int, len(hits))
-	for i, h := range hits {
-		lines[i] = h.line
-	}
-	return lines, nil
 }
 
 // INVARIANT: ERRCODE-CARVEOUT-ADR-CONSISTENCY-01
@@ -918,61 +903,48 @@ func TestErrcodeMessageConstLiteral(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, []string{"e2e", "integration", "pg"}, patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	var violations []string
 	visited := map[string]bool{}
 
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
-			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+	diags := RunTyped(t,
+		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
+		patterns,
+		func(p *Pass) []Diagnostic {
+			var out []Diagnostic
+			for _, file := range p.Files {
+				abs := p.Abs(file)
+				if visited[abs] {
+					continue
+				}
+				visited[abs] = true
 
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsProductionCode(rel) {
-				continue
+				rel := p.Rel(file)
+				if !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				if strings.HasPrefix(rel, errcodeMessageAllowlist) {
+					continue
+				}
+				if strings.HasPrefix(rel, errcodeMessageTestdataAllowlist) {
+					continue
+				}
+				out = append(out, scanErrcodeMessageASTDiags(p.Fset, file, rel, p.TypesInfo)...)
 			}
-			if strings.HasPrefix(rel, errcodeMessageAllowlist) {
-				continue
-			}
-			if strings.HasPrefix(rel, errcodeMessageTestdataAllowlist) {
-				continue
-			}
-			violations = append(violations, scanErrcodeMessageAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
+			return out
+		})
 
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"%s: errcode.New/Wrap message must be a const literal — runtime data "+
-			"belongs in WithDetails (slog.Attr) or WithInternal. "+
-			"ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
-		ruleMessageConstLiteral01)
+	Report(t, ruleMessageConstLiteral01, diags)
 }
 
-// scanErrcodeMessageAST returns "<rel>:<line>: <kind>" violations for a
-// single parsed file. info may be nil; in that case the resolver and
-// isAcceptableMessageExpr fall back to pure-AST name matching (used by
-// fixture scanning).
-func scanErrcodeMessageAST(
+// scanErrcodeMessageASTDiags is the Diagnostic-returning form used by the
+// TestErrcodeMessageConstLiteral Pass-funnel rule.
+func scanErrcodeMessageASTDiags(
 	fset *token.FileSet,
 	file *ast.File,
 	rel string,
 	info *types.Info,
-) []string {
-	var out []string
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		callee, ok := resolveGatedCallee(call, info)
 		if !ok {
 			return
@@ -985,10 +957,14 @@ func scanErrcodeMessageAST(
 			return
 		}
 		line := fset.Position(call.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: %s(...) message must be a const literal (got %T) "+
-				"— move runtime data to WithDetails(slog.Attr) or WithInternal",
-			rel, line, callee.displayName, msgArg))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"%s(...) message must be a const literal (got %T) "+
+					"— move runtime data to WithDetails(slog.Attr) or WithInternal",
+				callee.displayName, msgArg),
+		})
 	})
 	return out
 }
@@ -1138,318 +1114,25 @@ func isAcceptableMessageExpr(expr ast.Expr, info *types.Info) bool {
 func TestErrorFirstAPI01(t *testing.T) {
 	root := findModuleRoot(t)
 
-	var violations []errorFirstViolation
+	// Build the enforced set as a map for O(1) lookup by rel path.
+	enforcedSet := make(map[string]struct{}, len(errorFirstEnforcedFiles))
 	for _, rel := range errorFirstEnforcedFiles {
-		abs := filepath.Join(root, filepath.FromSlash(rel))
-		v := scanFileForErrorFirstViolations(t, abs, rel)
-		violations = append(violations, v...)
+		enforcedSet[rel] = struct{}{}
 	}
 
-	if len(violations) > 0 {
-		t.Logf("%s: %d violation(s):", ruleErrorFirstAPI01, len(violations))
-		for _, v := range violations {
-			t.Logf("  %s:%d  %s — %s", v.File, v.Line, v.FuncName, v.Reason)
+	diags := Run(t, ModuleScope(root, MatchRels(func(rel string) bool {
+		_, ok := enforcedSet[rel]
+		return ok
+	})), func(p *Pass) []Diagnostic {
+		var out []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			out = append(out, scanFileForErrorFirstViolations(p.Fset, file, rel)...)
 		}
-	}
-	assert.Empty(t, violations,
-		"%s: error-less functions must not contain panic(); use error-returning signature, "+
-			"rename to Must*, or add an ADR-justified file-level whitelist entry "+
-			"(see docs/architecture/202604270030-architectural-panic-whitelist.md)",
-		ruleErrorFirstAPI01)
-}
+		return out
+	})
 
-// INVARIANT: ERROR-FIRST-TYPED-NIL-01
-//
-// TestErrorFirstTypedNil01 verifies error-returning New* constructors in the
-// enrolled file scope nil-guard each nil-able dependency parameter at
-// construction time (see ERROR-FIRST-API-01 for the companion panic-free
-// rule).
-func TestErrorFirstTypedNil01(t *testing.T) {
-	root := findModuleRoot(t)
-
-	violations := scanErrorFirstConstructorsForTypedNilGuards(t, root)
-
-	if len(violations) > 0 {
-		t.Logf("%s: %d violation(s):", ruleErrorFirstTypedNil01, len(violations))
-		for _, v := range violations {
-			t.Logf("  %s:%d  %s — %s", v.File, v.Line, v.FuncName, v.Reason)
-		}
-	}
-	assert.Empty(t, violations,
-		"%s: error-first constructors must guard each nil-able dependency at construction time. "+
-			"Interface params: validation.IsNilInterface(p); pointer/map/chan/func params: p == nil. "+
-			"Guard must be the if-Cond (top-level || allowed) with then doing return or assignment to p.",
-		ruleErrorFirstTypedNil01)
-}
-
-func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
-	tests := []struct {
-		name      string
-		src       string
-		wantLines []int
-	}{
-		{
-			name: "constructor interface param without IsNilInterface fails",
-			src: `package p
-type Dep interface{ Do() }
-func New(dep Dep) (*Service, error) {
-	if dep == nil {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-			wantLines: []int{3},
-		},
-		{
-			name: "constructor interface param with IsNilInterface passes",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-type Dep interface{ Do() }
-func New(dep Dep) (*Service, error) {
-	if validation.IsNilInterface(dep) {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "optional interface param default with IsNilInterface passes",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-type Reader interface{ Read([]byte) (int, error) }
-type defaultReader struct{}
-func (defaultReader) Read([]byte) (int, error) { return 0, nil }
-func New(reader Reader) (*Service, error) {
-	if validation.IsNilInterface(reader) {
-		reader = defaultReader{}
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "non error returning constructor is outside error-first typed-nil rule",
-			src: `package p
-type Dep interface{ Do() }
-func New(dep Dep) *Service {
-	return &Service{}
-}
-type Service struct{}`,
-		},
-		{
-			name: "non constructor function is outside typed-nil rule",
-			src: `package p
-type Dep interface{ Do() }
-func Build(dep Dep) (*Service, error) {
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "negative: IsNilInterface result discarded fails",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-type Dep interface{ Do() }
-func New(dep Dep) (*Service, error) {
-	_ = validation.IsNilInterface(dep)
-	return &Service{}, nil
-}
-type Service struct{}`,
-			wantLines: []int{4},
-		},
-		{
-			name: "negative: IsNilInterface inside non-if call fails",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-func sink(bool) {}
-type Dep interface{ Do() }
-func New(dep Dep) (*Service, error) {
-	sink(validation.IsNilInterface(dep))
-	return &Service{}, nil
-}
-type Service struct{}`,
-			wantLines: []int{5},
-		},
-		{
-			name: "negative: if cond matches but then neither returns nor assigns dep",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-type Dep interface{ Do() }
-func New(dep Dep) (*Service, error) {
-	if validation.IsNilInterface(dep) {
-		_ = 1
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-			wantLines: []int{4},
-		},
-		{
-			name: "negative: then handles nil only inside goroutine FuncLit fails",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-type Dep interface{ Do() }
-func New(dep Dep) (*Service, error) {
-	if validation.IsNilInterface(dep) {
-		go func() { _ = 1 }()
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-			wantLines: []int{4},
-		},
-		{
-			name: "negative: && compound does not fail-fast on nil dep",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-type Dep interface{ Do() }
-func New(dep Dep, strict bool) (*Service, error) {
-	if validation.IsNilInterface(dep) && strict {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-			wantLines: []int{4},
-		},
-		{
-			name: "positive: pointer dependency with == nil guard passes",
-			src: `package p
-type Pool struct{}
-func New(pool *Pool) (*Service, error) {
-	if pool == nil {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "positive: || compound IsNilInterface with return passes",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-type Dep interface{ Do() }
-func New(dep Dep, strict bool) (*Service, error) {
-	if validation.IsNilInterface(dep) || strict {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "positive: map dependency with == nil guard passes",
-			src: `package p
-func New(routes map[string]int) (*Service, error) {
-	if routes == nil {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "positive: chan dependency with == nil guard passes",
-			src: `package p
-func New(events chan int) (*Service, error) {
-	if events == nil {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "positive: func dependency with == nil guard passes",
-			src: `package p
-func New(handler func() error) (*Service, error) {
-	if handler == nil {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "positive: slice dependency is not in nil-able rule scope",
-			src: `package p
-func New(items []int) (*Service, error) {
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "negative: then handles nil only inside defer FuncLit fails",
-			src: `package p
-var validation = struct{ IsNilInterface func(any) bool }{}
-type Dep interface{ Do() }
-func New(dep Dep) (*Service, error) {
-	if validation.IsNilInterface(dep) {
-		defer func() { _ = 1 }()
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-			wantLines: []int{4},
-		},
-		{
-			name: "negative: aliased validation pkg is not recognized as guard (known-gap)",
-			src: `package p
-var val = struct{ IsNilInterface func(any) bool }{}
-type Dep interface{ Do() }
-func New(dep Dep) (*Service, error) {
-	if val.IsNilInterface(dep) {
-		return nil, nil
-	}
-	return &Service{}, nil
-}
-type Service struct{}`,
-			wantLines: []int{4},
-		},
-		{
-			name: "positive: unnamed (type-only) param is intentionally outside rule scope",
-			src: `package p
-type Dep interface{ Do() }
-func New(Dep) (*Service, error) {
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-		{
-			name: "positive: blank-name (_) param is intentionally outside rule scope",
-			src: `package p
-type Dep interface{ Do() }
-func New(_ Dep) (*Service, error) {
-	return &Service{}, nil
-}
-type Service struct{}`,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, "p.go", tc.src, parser.SkipObjectResolution|parser.ParseComments)
-			require.NoError(t, err)
-			info := types.Info{
-				Types: map[ast.Expr]types.TypeAndValue{},
-				Defs:  map[*ast.Ident]types.Object{},
-				Uses:  map[*ast.Ident]types.Object{},
-			}
-			conf := types.Config{Importer: nil}
-			_, err = conf.Check("p", fset, []*ast.File{file}, &info)
-			require.NoError(t, err)
-
-			violations := scanTypedNilGuardsInFile(fset, &info, file, "p.go")
-			var gotLines []int
-			for _, v := range violations {
-				gotLines = append(gotLines, v.Line)
-			}
-			assert.Equal(t, tc.wantLines, gotLines)
-		})
-	}
+	Report(t, ruleErrorFirstAPI01, diags)
 }
 
 // scanFileForErrorFirstViolations parses a single Go source file and returns
@@ -1463,14 +1146,9 @@ type Service struct{}`,
 // panic at all (vs. the rule's "no panic in error-less functions" default),
 // without dictating the panic shape. The two rules compose: a panic in a
 // Must* function must still be panicregister.Approved-wrapped.
-func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirstViolation {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution|parser.ParseComments)
-	require.NoErrorf(t, err, "%s: parse failed", rel)
-
-	var violations []errorFirstViolation
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+func scanFileForErrorFirstViolations(fset *token.FileSet, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
 			return
 		}
@@ -1488,66 +1166,114 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 			return
 		}
 		findPanicCalls(fd.Body, func(callPos token.Pos) {
-			violations = append(violations, errorFirstViolation{
-				File:     rel,
-				Line:     fset.Position(callPos).Line,
-				FuncName: fd.Name.Name,
-				Reason:   "function does not return error but contains panic()",
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: fset.Position(callPos).Line,
+				Message: fmt.Sprintf(
+					"function %s does not return error but contains panic()",
+					fd.Name.Name),
 			})
 		})
 	})
-	return violations
+	return out
 }
 
-func scanErrorFirstConstructorsForTypedNilGuards(t *testing.T, root string) []errorFirstViolation {
-	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, errorFirstPackagePatterns()...)
-	require.NoError(t, err, "packages.Load")
-	require.Empty(t, errs, "packages.Load type errors")
+// INVARIANT: ERROR-FIRST-TYPED-NIL-01
+//
+// TestErrorFirstTypedNil01 verifies error-returning New* constructors in the
+// enrolled file scope nil-guard each nil-able dependency parameter at
+// construction time (see ERROR-FIRST-API-01 for the companion panic-free
+// rule).
+func TestErrorFirstTypedNil01(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	root := findModuleRoot(t)
 
 	enforced := errorFirstEnforcedFileMap(root)
-	var violations []errorFirstViolation
-	for _, pkg := range pkgs {
-		violations = append(violations, scanTypedNilGuardsInPackage(pkg, enforced)...)
-	}
-	return violations
-}
 
-func scanTypedNilGuardsInPackage(pkg *packages.Package, enforced map[string]string) []errorFirstViolation {
-	var violations []errorFirstViolation
-	for i, file := range pkg.Syntax {
-		if i >= len(pkg.CompiledGoFiles) {
-			continue
-		}
-		abs := filepath.Clean(pkg.CompiledGoFiles[i])
-		rel, ok := enforced[abs]
-		if !ok {
-			continue
-		}
-		violations = append(violations, scanTypedNilGuardsInFile(pkg.Fset, pkg.TypesInfo, file, rel)...)
-	}
-	return violations
-}
-
-func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.File, rel string) []errorFirstViolation {
-	var violations []errorFirstViolation
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-		if fd.Body == nil || !isErrorFirstConstructor(fd) {
-			return
-		}
-		for _, param := range nillableDependencyParams(info, fd) {
-			if hasNilGuard(fd.Body, param.name, param.kind) {
-				continue
+	diags := RunTyped(t, TypedOpts{Tests: false}, errorFirstPackagePatterns(),
+		func(p *Pass) []Diagnostic {
+			var out []Diagnostic
+			for _, file := range p.Files {
+				abs := filepath.Clean(p.Abs(file))
+				rel, ok := enforced[abs]
+				if !ok {
+					continue
+				}
+				out = append(out, scanTypedNilGuardsInFile(p.Fset, p.TypesInfo, file, rel)...)
 			}
-			violations = append(violations, errorFirstViolation{
-				File:     rel,
-				Line:     fset.Position(fd.Pos()).Line,
-				FuncName: fd.Name.Name,
-				Reason:   "nil-able dependency " + param.name + " is not guarded at construction time",
-			})
-		}
-	})
-	return violations
+			return out
+		})
+
+	Report(t, ruleErrorFirstTypedNil01, diags)
+}
+
+// TestErrorFirstTypedNilScannerFixtures verifies the typed-nil guard detector
+// via real fixture modules (Hard upgrade from inline-source table).
+//
+// Each subdirectory under testdata/errorfirsttypednilfixture/ is a standalone
+// Go module. *_violates cases expect non-empty diagnostics; *_passes cases
+// expect zero diagnostics. This mirrors TestKernelClockResetRelativeFixtures.
+func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	base := root + "/tools/archtest/testdata/errorfirsttypednilfixture"
+
+	cases := []struct {
+		dir      string
+		wantViol bool // true = expect ≥1 violation; false = expect 0
+	}{
+		{"constructor_interface_without_isnil_violates", true},
+		{"constructor_interface_with_isnil_passes", false},
+		{"optional_interface_with_isnil_passes", false},
+		{"non_error_constructor_passes", false},
+		{"non_constructor_function_passes", false},
+		{"isnil_result_discarded_violates", true},
+		{"isnil_inside_non_if_call_violates", true},
+		{"if_cond_no_return_violates", true},
+		{"then_in_goroutine_violates", true},
+		{"and_compound_violates", true},
+		{"pointer_param_nil_guard_passes", false},
+		{"or_compound_isnil_passes", false},
+		{"map_param_nil_guard_passes", false},
+		{"chan_param_nil_guard_passes", false},
+		{"func_param_nil_guard_passes", false},
+		{"slice_param_passes", false},
+		{"then_in_defer_violates", true},
+		{"aliased_validation_violates", true},
+		{"unnamed_param_passes", false},
+		{"blank_param_passes", false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.dir, func(t *testing.T) {
+			t.Parallel()
+			fixtureDir := base + "/" + tc.dir
+			got := RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+				func(p *Pass) []Diagnostic {
+					var out []Diagnostic
+					for _, file := range p.Files {
+						rel := p.Rel(file)
+						out = append(out, scanTypedNilGuardsInFile(p.Fset, p.TypesInfo, file, rel)...)
+					}
+					return out
+				})
+
+			if tc.wantViol {
+				assert.NotEmpty(t, got,
+					"fixture %s: expected ≥1 violation, got 0", tc.dir)
+			} else {
+				assert.Empty(t, got,
+					"fixture %s: expected 0 violations, got %d: %v", tc.dir, len(got), got)
+			}
+		})
+	}
 }
 
 func errorFirstPackagePatterns() []string {
@@ -1647,7 +1373,7 @@ func nillableDependencyParams(info *types.Info, fd *ast.FuncDecl) []paramRef {
 // constructor's outer fail-fast contract.
 func hasNilGuard(body *ast.BlockStmt, paramName string, kind paramKind) bool {
 	found := false
-	scanner.EachInSubtree[ast.IfStmt](body, func(ifStmt *ast.IfStmt) {
+	EachInSubtree[ast.IfStmt](body, func(ifStmt *ast.IfStmt) {
 		if found {
 			return
 		}
@@ -1744,7 +1470,7 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 	// Collect pos ranges of all FuncLit nodes so we can skip nodes inside them.
 	type posRange struct{ lo, hi token.Pos }
 	var funcLitRanges []posRange
-	scanner.EachInSubtree[ast.FuncLit](body, func(fl *ast.FuncLit) {
+	EachInSubtree[ast.FuncLit](body, func(fl *ast.FuncLit) {
 		funcLitRanges = append(funcLitRanges, posRange{fl.Pos(), fl.End()})
 	})
 	inFuncLit := func(pos token.Pos) bool {
@@ -1757,7 +1483,7 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 	}
 
 	found := false
-	scanner.EachInSubtree[ast.ReturnStmt](body, func(s *ast.ReturnStmt) {
+	EachInSubtree[ast.ReturnStmt](body, func(s *ast.ReturnStmt) {
 		if !found && !inFuncLit(s.Pos()) {
 			found = true
 		}
@@ -1765,7 +1491,7 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 	if found {
 		return true
 	}
-	scanner.EachInSubtree[ast.AssignStmt](body, func(s *ast.AssignStmt) {
+	EachInSubtree[ast.AssignStmt](body, func(s *ast.AssignStmt) {
 		if found || inFuncLit(s.Pos()) {
 			return
 		}
@@ -1777,6 +1503,30 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 		}
 	})
 	return found
+}
+
+// scanTypedNilGuardsInFile returns Diagnostic violations for
+// ERROR-FIRST-TYPED-NIL-01 in a single file.
+func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Body == nil || !isErrorFirstConstructor(fd) {
+			return
+		}
+		for _, param := range nillableDependencyParams(info, fd) {
+			if hasNilGuard(fd.Body, param.name, param.kind) {
+				continue
+			}
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: fset.Position(fd.Pos()).Line,
+				Message: fmt.Sprintf(
+					"constructor %s: nil-able dependency %s is not guarded at construction time",
+					fd.Name.Name, param.name),
+			})
+		}
+	})
+	return out
 }
 
 // isInitFunc returns true if fd is `func init()` (no receiver, no params, no
@@ -1828,7 +1578,7 @@ func isErrorIdent(expr ast.Expr) bool {
 // would shadow the built-in; we treat them the same as the built-in to keep
 // the rule conservative — there is no production reason to shadow `panic`.
 func findPanicCalls(body *ast.BlockStmt, onPanic func(token.Pos)) {
-	scanner.EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
 		ident, ok := call.Fun.(*ast.Ident)
 		if !ok {
 			return
@@ -1855,18 +1605,41 @@ func TestDetailsSlogAttr(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	var violations []string
+	var allDiags []Diagnostic
 	for _, dir := range detailsSlogAttrScanRoots {
-		violations = append(violations, scanWithDetailsDir(t, root, dir)...)
+		diags := Run(t, DirsScope(root, []string{dir}), func(p *Pass) []Diagnostic {
+			var out []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if isInDetailsSlogAttrAllowlist(rel) {
+					continue
+				}
+				out = append(out, scanWithDetailsFile(p.Fset, file, rel)...)
+			}
+			return out
+		})
+		allDiags = append(allDiags, diags...)
 	}
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
+
+	// Re-sort across all dirs since each Run returns its own diagnostic slice.
+	sort.Slice(allDiags, func(i, j int) bool {
+		if allDiags[i].Rel != allDiags[j].Rel {
+			return allDiags[i].Rel < allDiags[j].Rel
+		}
+		return allDiags[i].Line < allDiags[j].Line
+	})
+
+	Report(t, ruleDetailsSlogAttr01, allDiags)
+}
+
+// isInDetailsSlogAttrAllowlist reports whether rel matches any allowlist prefix.
+func isInDetailsSlogAttrAllowlist(rel string) bool {
+	for _, prefix := range detailsSlogAttrAllowlist {
+		if strings.HasPrefix(rel, prefix) {
+			return true
+		}
 	}
-	assert.Empty(t, violations,
-		"%s: errcode.WithDetails must receive typed slog.Attr arguments. "+
-			"ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
-		ruleDetailsSlogAttr01)
+	return false
 }
 
 // TestDetailsSlogAttrFixtures verifies the AST scanner via static
@@ -1888,10 +1661,18 @@ func TestDetailsSlogAttrFixtures(t *testing.T) {
 		tc := tc
 		t.Run(tc.pkg, func(t *testing.T) {
 			t.Parallel()
-			got := runDetailsSlogAttrFixtureScan(t, filepath.Join(base, tc.pkg))
-			assert.Equal(t, tc.wantViolCount, len(got),
+			fixtureDir := filepath.Join(base, tc.pkg)
+			diags := Run(t, DirsScope(fixtureDir, []string{"."}), func(p *Pass) []Diagnostic {
+				var out []Diagnostic
+				for _, file := range p.Files {
+					rel := p.Rel(file)
+					out = append(out, scanWithDetailsFile(p.Fset, file, rel)...)
+				}
+				return out
+			})
+			assert.Equal(t, tc.wantViolCount, len(diags),
 				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.pkg, tc.wantViolCount, len(got), got)
+				tc.pkg, tc.wantViolCount, len(diags), diags)
 		})
 	}
 }
@@ -1929,14 +1710,14 @@ func argHasMapLiteral(expr ast.Expr) bool {
 // scanWithDetailsFile walks file and reports every
 // `<errcodeLocal>.WithDetails(map[...]{...})` call whose argument is a map
 // literal.
-func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []string {
+func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []Diagnostic {
 	local := errcodeLocalName(file)
 	if local == "" {
 		return nil
 	}
 
-	var out []string
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "WithDetails" {
 			return
@@ -1948,19 +1729,25 @@ func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []stri
 		for _, arg := range call.Args {
 			if argHasMapLiteral(arg) {
 				line := fset.Position(call.Pos()).Line
-				out = append(out, fmt.Sprintf(
-					"%s:%d: errcode.WithDetails(map[string]any{...}) — pass typed slog.Attr "+
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: line,
+					Message: "errcode.WithDetails(map[string]any{...}) — pass typed slog.Attr " +
 						"values instead. ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
-					rel, line))
+				})
 				continue
 			}
 			if name, ok := unsafeSlogAttrConstructor(arg); ok {
 				line := fset.Position(call.Pos()).Line
-				out = append(out, fmt.Sprintf(
-					"%s:%d: errcode.WithDetails(slog.%s(...)) — wire-unsafe kind; "+
-						"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time. "+
-						"ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
-					rel, line, name))
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: line,
+					Message: fmt.Sprintf(
+						"errcode.WithDetails(slog.%s(...)) — wire-unsafe kind; "+
+							"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time. "+
+							"ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
+						name),
+				})
 			}
 		}
 	})
@@ -1996,36 +1783,6 @@ func unsafeSlogAttrConstructor(expr ast.Expr) (string, bool) {
 	return "", false
 }
 
-// scanWithDetailsDir walks every non-test .go file under root/dir and
-// returns DETAILS-SLOG-ATTR-01 violations.
-func scanWithDetailsDir(t *testing.T, root, dir string) []string {
-	t.Helper()
-	scope := scanner.DirsScope(root, []string{dir})
-	var out []string
-	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		for _, prefix := range detailsSlogAttrAllowlist {
-			if strings.HasPrefix(fc.Rel, prefix) {
-				return
-			}
-		}
-		out = append(out, scanWithDetailsFile(fc.Fset, fc.File, fc.Rel)...)
-	})
-	return out
-}
-
-// runDetailsSlogAttrFixtureScan parses fixture .go files (non-test, no
-// module load) and reports violations relative to fixtureDir.
-func runDetailsSlogAttrFixtureScan(t *testing.T, fixtureDir string) []string {
-	t.Helper()
-	scope := scanner.DirsScope(fixtureDir, []string{"."})
-	var out []string
-	scanner.EachFile(t, scope, parser.ParseComments, func(t *testing.T, fc scanner.FileContext) {
-		out = append(out, scanWithDetailsFile(fc.Fset, fc.File, fc.Rel)...)
-	})
-	sort.Strings(out)
-	return out
-}
-
 // INVARIANT: EXPORTED-ERROR-NEW-01
 //
 // TestExportedErrorNew enforces EXPORTED-ERROR-NEW-01 by walking every
@@ -2053,60 +1810,70 @@ func TestExportedErrorNew(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, []string{"e2e", "integration", "pg"}, patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	var violations []string
 	visited := map[string]bool{}
 
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
-			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+	diags := RunTyped(t,
+		TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}},
+		patterns,
+		func(p *Pass) []Diagnostic {
+			var out []Diagnostic
+			for _, file := range p.Files {
+				abs := p.Abs(file)
+				if visited[abs] {
+					continue
+				}
+				visited[abs] = true
 
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsProductionCode(rel) {
-				continue
+				rel := p.Rel(file)
+				if !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				if strings.HasPrefix(rel, errcodeAllowlistPath) {
+					continue
+				}
+				out = append(out, scanExportedErrorNewASTDiags(p.Fset, file, rel, p.TypesInfo)...)
 			}
-			if strings.HasPrefix(rel, errcodeAllowlistPath) {
-				continue
-			}
-			violations = append(violations, scanExportedErrorNewAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
+			return out
+		})
 
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"%s: package-scope exported `var Err* = errors.New(...)` violates "+
-			"CLAUDE.md '禁止 errors.New 对外暴露'. Migrate to errcode.New(code, message). "+
-			"ref: docs/plans/202605011500-029-master-roadmap.md G2",
-		ruleExportedErrorNew01)
+	Report(t, ruleExportedErrorNew01, diags)
 }
 
-// scanExportedErrorNewAST returns "<rel>:<line>: <ident>" violation strings
-// for a single parsed file.
+// scanExportedErrorNewAST returns violation strings for a single parsed file.
+//
+// The []string form is kept for backward compatibility with the one remaining
+// companion fixture scanner: exported_error_new_fixtures_test.go. That file
+// is in archtestmeta.LegacyAllowlist and imports golang.org/x/tools/go/packages
+// directly, making its migration out of PR-7 scope. It is the only caller of
+// this bridge; when it is migrated, this helper and the bridge can be deleted.
 func scanExportedErrorNewAST(
 	fset *token.FileSet,
 	file *ast.File,
 	rel string,
 	info *types.Info,
 ) []string {
-	var out []string
-	scanner.EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
+	diags := scanExportedErrorNewASTDiags(fset, file, rel, info)
+	out := make([]string, 0, len(diags))
+	for _, d := range diags {
+		out = append(out, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
+	}
+	return out
+}
+
+// scanExportedErrorNewASTDiags is the Diagnostic-returning form used by the
+// TestExportedErrorNew Pass-funnel rule.
+func scanExportedErrorNewASTDiags(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
 		if gen.Tok != token.VAR {
 			return
 		}
-		scanner.EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
+		EachInChildren[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
 			// A ValueSpec with N names and 1 value is a multi-assign from a
 			// single function call; errors.New only returns one value, so
 			// such a form would not type-check. We still iterate Values
@@ -2122,9 +1889,13 @@ func scanExportedErrorNewAST(
 					continue
 				}
 				pos := fset.Position(name.Pos())
-				out = append(out, fmt.Sprintf(
-					"%s:%d: %s = errors.New(...) — migrate to errcode.New(code, message)",
-					rel, pos.Line, name.Name))
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"%s = errors.New(...) — migrate to errcode.New(code, message)",
+						name.Name),
+				})
 			}
 		})
 	})

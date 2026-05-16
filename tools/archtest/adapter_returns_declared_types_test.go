@@ -20,11 +20,9 @@
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -558,24 +556,9 @@ func extractMethodPrefix(typeName string) string {
 }
 
 // readModulePathFromRoot reads the module path from go.mod at root.
+// Delegates to moduleImportPath (module_root.go) — single-source parse logic.
 func readModulePathFromRoot(root string) (string, error) {
-	return readGoModModulePath(filepath.Join(root, "go.mod"))
-}
-
-// readGoModModulePath parses the given go.mod file and returns the module path
-// declared on the "module" directive line.
-func readGoModModulePath(goModPath string) (string, error) {
-	data, err := os.ReadFile(goModPath) //nolint:gosec // path constructed from module root
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module")), nil
-		}
-	}
-	return "", fmt.Errorf("no module directive in %s", goModPath)
+	return moduleImportPath(root)
 }
 
 // sortedStatuses returns a sorted slice of statuses from the declared set.

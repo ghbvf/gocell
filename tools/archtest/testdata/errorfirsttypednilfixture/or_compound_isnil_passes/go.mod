@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/or_compound_isnil_passes
+
+go 1.22

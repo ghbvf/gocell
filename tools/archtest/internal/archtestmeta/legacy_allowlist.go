@@ -66,7 +66,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/archtest_test.go":                                true,
 	"tools/archtest/archtest_verify_coverage_test.go":                true,
 	"tools/archtest/audit_ledger_composition_root_test.go":           true,
-	"tools/archtest/auth_bootstrap_invariants_test.go":               true,
 	"tools/archtest/build_constraint_test.go":                        true, // Stage 1.5: uses ParseBuildConstraint/BuildContextPredicate
 	"tools/archtest/cell_id_pattern_single_source_test.go":           true,
 	"tools/archtest/cell_init_test.go":                               true,
@@ -74,7 +73,6 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/ci_integration_discovery_invariants_test.go":     true, // Stage 1.5: uses ParseBuildConstraint/FlatNonDefaultTags
 	"tools/archtest/credential_invalidate_funnel_invariants_test.go": true,
 	"tools/archtest/domain_authz_mutation_funnel_invariants_test.go": true,
-	"tools/archtest/errcode_invariants_test.go":                      true,
 	"tools/archtest/eval_predicate_centralization_test.go":           true,
 	"tools/archtest/exported_error_new_fixtures_test.go":             true,
 	"tools/archtest/goose_session_locker_fixtures_test.go":           true,

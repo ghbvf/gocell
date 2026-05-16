@@ -66,10 +66,12 @@ var (
 	_ = EachFile         // dot-import (bare Ident)
 
 	// PASS-FUNNEL-LOADPACKAGES-01 violations
-	_ = typeseval.LoadPackages   // qualified
-	_ = typeseval.SharedResolver // qualified
-	_ = te.LoadPackages          // alias-import
-	_ = te.SharedResolver        // alias-import
+	_ = typeseval.LoadPackages           // qualified
+	_ = typeseval.SharedResolver         // qualified
+	_ = typeseval.LoadProductionPackages // qualified (Stage 1.7 funnel widen)
+	_ = te.LoadPackages                  // alias-import
+	_ = te.SharedResolver                // alias-import
+	_ = te.LoadProductionPackages        // alias-import (Stage 1.7 funnel widen)
 
 	// Force a packages reference so the import is not elided. The Config
 	// type usage exists only to keep the import live; the import itself is

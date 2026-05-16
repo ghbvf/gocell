@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/map_param_nil_guard_passes
+
+go 1.22
