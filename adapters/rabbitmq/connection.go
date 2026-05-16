@@ -33,7 +33,13 @@ const (
 	// (net.Error.Timeout() == true). Always routed via errcode.WrapInfra →
 	// IsTransient(err) == true, distinguishing transient timeout from generic
 	// dial failures so consumers and operators can route differently.
-	ErrAdapterAMQPConnectTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_TIMEOUT"
+	ErrAdapterAMQPConnectTimeout errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_TIMEOUT"
+	// ErrAdapterAMQPNeverConnected signals Health() when the connection has never
+	// successfully completed a dial (StateConnecting). Distinct from
+	// ErrAdapterAMQPConnect (which covers connection-available and connection-closed
+	// states) so operators can distinguish "never dialed" from other health states.
+	// Always WrapInfra → IsTransient == true (broker may become reachable).
+	ErrAdapterAMQPNeverConnected     errcode.Code = "ERR_ADAPTER_AMQP_NEVER_CONNECTED"
 	ErrAdapterAMQPPublish            errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
 	ErrAdapterAMQPConfirmTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
 	ErrAdapterAMQPSubscribe          errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
@@ -76,9 +82,13 @@ const (
 // This makes the transient marker (single source of truth) drive subscriber
 // retry decisions; consumer of Health() can use errcode.IsTransient directly
 // instead of keying on code strings.
+//
+// errHealthNeverConnected uses ErrAdapterAMQPNeverConnected (distinct from
+// ErrAdapterAMQPConnect) so operators can distinguish "never successfully
+// dialed" from "connection available" / "connection closed" states.
 var (
 	errHealthReconnecting   = errcode.WrapInfra(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting", nil)
-	errHealthNeverConnected = errcode.WrapInfra(ErrAdapterAMQPConnect, "rabbitmq: never connected", nil)
+	errHealthNeverConnected = errcode.WrapInfra(ErrAdapterAMQPNeverConnected, "rabbitmq: never connected", nil)
 	errHealthClosed         = errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
 )
 
@@ -283,8 +293,13 @@ func classifyStructuredDialError(err error) (dialClass, bool) {
 //   - dialClassPermanent{Definitive,Inferred} → errcode.Wrap(KindInternal, ErrAdapterAMQPConnectPermanent, …) (permanent)
 //   - dialClassUnknown              → errcode.WrapInfra(ErrAdapterAMQPConnect, …) (transient, fail-open)
 //
-// Caller is responsible for passing an already-sanitized cause (URL credentials
-// redacted via c.sanitizeDialError) because this funnel does not own URL state.
+// rawErr is the error as returned by connect(), which may be a one-layer
+// *errcode.Error wrapper; unwrapDialErr handles both wrapped and raw shapes.
+//
+// SECURITY: sanitizedCause MUST be pre-sanitized via Connection.sanitizeDialError;
+// passing the raw error directly will leak AMQP URL credentials into the error
+// chain. The funnel intentionally does not re-sanitize to keep the redaction
+// responsibility at the call site (NewConnection / reconnectWithBackoff).
 //
 // archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 verifies this function's
 // body routes through errcode.WrapInfra (upstream Hard).
@@ -584,9 +599,9 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 	clock.MustHaveClock(c.clock, "rabbitmq.NewConnection")
 
 	if err := c.connect(); err != nil {
-		// classifyConnectError funnel selects timeout / permanent / transient
-		// envelope from the underlying dial error; caller pre-sanitizes URL
-		// credentials since the funnel does not own URL state.
+		// classifyConnectError reads rawErr (1st arg) for classification BEFORE
+		// sanitizeDialError (2nd arg) is evaluated — Go's left-to-right argument
+		// evaluation guarantees this order. Do not swap arguments.
 		return nil, classifyConnectError(err, c.sanitizeDialError(err))
 	}
 
@@ -758,45 +773,7 @@ func (c *Connection) reconnectWithBackoff() bool {
 		}
 
 		if err := c.connect(); err != nil {
-			sanitizedErr := sanitizeErrorURL(err.Error(), c.config.URL)
-			class := classifyDialError(unwrapDialErr(err))
-
-			switch class {
-			case dialClassPermanentDefinitive:
-				c.markPermanent(err, sanitizedErr)
-				slog.Error("rabbitmq: reconnect dial classified permanent (definitive); /readyz will return 503 until recovery",
-					slog.String("errCode", string(ErrAdapterAMQPConnectPermanent)),
-					slog.Int("attempt", attempt+1),
-					slog.String("error", sanitizedErr))
-			case dialClassPermanentInferred:
-				c.mu.Lock()
-				c.pendingPermanentHits++
-				hits := c.pendingPermanentHits
-				c.lastError = sanitizedErr
-				c.mu.Unlock()
-				if hits >= runtimePermanentConfirmHits {
-					c.markPermanent(err, sanitizedErr)
-					slog.Error("rabbitmq: reconnect dial classified permanent (inferred, confirmed); /readyz will return 503 until recovery",
-						slog.String("errCode", string(ErrAdapterAMQPConnectPermanent)),
-						slog.Int("attempt", attempt+1),
-						slog.Int("confirmedHits", hits),
-						slog.String("error", sanitizedErr))
-				} else {
-					slog.Warn("rabbitmq: reconnect failed, awaiting confirmation before classifying permanent",
-						slog.Int("attempt", attempt+1),
-						slog.Int("pendingHits", hits),
-						slog.Int("confirmThreshold", runtimePermanentConfirmHits),
-						slog.String("error", sanitizedErr))
-				}
-			default: // dialClassUnknown / dialClassTimeout — transient retries
-				c.mu.Lock()
-				c.lastError = sanitizedErr
-				c.pendingPermanentHits = 0
-				c.mu.Unlock()
-				slog.Warn("rabbitmq: reconnect failed, retrying",
-					slog.Int("attempt", attempt+1),
-					slog.String("error", sanitizedErr))
-			}
+			c.handleReconnectError(err, attempt)
 			attempt++
 			continue
 		}
@@ -805,6 +782,63 @@ func (c *Connection) reconnectWithBackoff() bool {
 		slog.Info("rabbitmq: reconnected successfully",
 			slog.Int("attempts", attempt+1))
 		return true
+	}
+}
+
+// handleReconnectError classifies a failed reconnect dial and updates connection
+// state accordingly. Extracted from reconnectWithBackoff to stay within the
+// funlen limit (cognitive complexity of the retry loop is in the caller).
+func (c *Connection) handleReconnectError(err error, attempt int) {
+	sanitizedErr := sanitizeErrorURL(err.Error(), c.config.URL)
+	switch classifyDialError(unwrapDialErr(err)) {
+	case dialClassPermanentDefinitive:
+		c.markPermanent(err, sanitizedErr)
+		slog.Error("rabbitmq: reconnect dial classified permanent (definitive); /readyz will return 503 until recovery",
+			slog.String("errCode", string(ErrAdapterAMQPConnectPermanent)),
+			slog.Int("attempt", attempt+1),
+			slog.String("error", sanitizedErr))
+	case dialClassPermanentInferred:
+		c.mu.Lock()
+		c.pendingPermanentHits++
+		hits := c.pendingPermanentHits
+		c.lastError = sanitizedErr
+		c.mu.Unlock()
+		if hits >= runtimePermanentConfirmHits {
+			c.markPermanent(err, sanitizedErr)
+			slog.Error("rabbitmq: reconnect dial classified permanent (inferred, confirmed); /readyz will return 503 until recovery",
+				slog.String("errCode", string(ErrAdapterAMQPConnectPermanent)),
+				slog.Int("attempt", attempt+1),
+				slog.Int("confirmedHits", hits),
+				slog.String("error", sanitizedErr))
+		} else {
+			slog.Warn("rabbitmq: reconnect failed, awaiting confirmation before classifying permanent",
+				slog.Int("attempt", attempt+1),
+				slog.Int("pendingHits", hits),
+				slog.Int("confirmThreshold", runtimePermanentConfirmHits),
+				slog.String("error", sanitizedErr))
+		}
+	case dialClassTimeout:
+		// Timeout is transient — broker may recover; reset pending hits so a
+		// timeout burst does not accumulate toward permanent classification.
+		// Distinct slog errCode aligns with PG classifyPGError timeout sub-branch;
+		// operators can route timeout-vs-refusal differently via log filters.
+		c.mu.Lock()
+		c.lastError = sanitizedErr
+		c.pendingPermanentHits = 0
+		c.mu.Unlock()
+		slog.Warn("rabbitmq: reconnect failed (timeout), retrying",
+			slog.Int("attempt", attempt+1),
+			slog.String("errCode", string(ErrAdapterAMQPConnectTimeout)),
+			slog.String("error", sanitizedErr))
+	default: // dialClassUnknown — transient retries (fail-open)
+		c.mu.Lock()
+		c.lastError = sanitizedErr
+		c.pendingPermanentHits = 0
+		c.mu.Unlock()
+		slog.Warn("rabbitmq: reconnect failed, retrying",
+			slog.Int("attempt", attempt+1),
+			slog.String("errClass", "unknown"),
+			slog.String("error", sanitizedErr))
 	}
 }
 
