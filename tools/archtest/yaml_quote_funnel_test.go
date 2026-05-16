@@ -2,46 +2,46 @@
 //   - INVARIANT: YAML-QUOTE-FUNNEL-01
 //
 // YAML-QUOTE-FUNNEL-01: every type conversion `yamlsafe.Scalar(x)` outside
-// the pkg/yamlsafe package itself must have x = `yamlsafe.Quote(...)` —
-// raw string conversions bypass the single quoting funnel and reintroduce
-// YAML injection via colons / braces / leading whitespace / metacharacters.
+// the pkg/yamlsafe package itself must have x = `yamlsafe.Quote(...)` (or
+// already typed as yamlsafe.Scalar) — raw string conversions bypass the
+// single quoting funnel and reintroduce YAML injection via colons / braces /
+// leading whitespace / metacharacters.
 //
-// AI-rebust: Hard (typed-function-call funnel + types.Info form uniqueness,
-// charter §1 string-typed concept funnel template). The conversion callee
-// is resolved via *types.Info.Uses[ident] so a same-name local TypeName or
-// alias cannot bypass the check; the Arg expression is also resolved
-// through *types.Info to its callee Func so only yamlsafe.Quote — not
-// shadowed identifiers — satisfies the funnel.
+// AI-rebust: Hard (charter §1 string-typed concept funnel template). The
+// conversion callee is resolved via *types.Info.Uses[ident] so a same-name
+// local TypeName or alias cannot bypass the check; the argument expression
+// is also resolved through *types.Info to its callee Func so only
+// yamlsafe.Quote — not shadowed identifiers — satisfies the funnel.
 //
 // Blind spot inventory (covered by reverse self-test):
-//   - bare ident form `Scalar(x)` inside pkg/yamlsafe itself (allowed)
-//   - selector form `yamlsafe.Scalar(x)` outside pkg/yamlsafe (the common case)
+//   - bare ident form `Scalar(x)` inside pkg/yamlsafe itself (allowed,
+//     skipped via Pkg.Path() == yamlsafePkgPath)
+//   - selector form `yamlsafe.Scalar(x)` outside pkg/yamlsafe (common case)
 //   - Arg shape: only direct `yamlsafe.Quote(x)` CallExpr is allowed (a value
-//     of declared static type yamlsafe.Scalar already in scope is also
-//     allowed as a no-op identity conversion, covering helpers that return
-//     a Scalar without going through Quote — see allowedScalarConversionArg)
-//   - reverse self-test fixture: bare string literal `Scalar("evil")` must
-//     fire the violation
+//     of declared static type yamlsafe.Scalar is also allowed as a no-op
+//     identity conversion, covering helpers that return a Scalar)
+//   - reverse self-test fixture: scanner applied to pkg/yamlsafe production
+//     AST (path filter bypassed) MUST report ≥3 bare Scalar(raw) sites
+//     present in Quote() — proves types.Info resolution actually fires
 //
 // ref: pkg/yamlsafe/yamlsafe.go — Quote single funnel definition
 // ref: tools/archtest/prom_cell_label_funnel_test.go — companion Hard pattern
+// ref: docs/architecture/202605141519-adr-archtest-pass-funnel.md — Pass-driver
+//
+//	paradigm; this file uses RunTyped / RunTypedProduction (no direct
+//	packages.Load).
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"go/token"
 	"go/types"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 const (
@@ -53,144 +53,111 @@ const (
 
 // TestYAMLQuoteFunnel enforces YAML-QUOTE-FUNNEL-01 on the production
 // codebase: every yamlsafe.Scalar(...) type conversion outside pkg/yamlsafe
-// must have a yamlsafe.Quote(...) call as its argument.
+// must have a yamlsafe.Quote(...) call (or a typed Scalar value) as its
+// argument.
 func TestYAMLQuoteFunnel(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, "./...")
-	require.NoError(t, err, "LoadPackages failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	var violations []string
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		// Skip pkg/yamlsafe itself — its internal helpers (Quote, doubleQuote)
-		// construct Scalar from raw string by design.
-		if p.PkgPath == yamlsafePkgPath {
-			return
-		}
-		// Skip synthetic test packages; their PkgPath suffix is ".test" or
-		// "_test" and they are duplicates of the same Syntax.
-		if strings.HasSuffix(p.PkgPath, ".test") || strings.HasSuffix(p.PkgPath, "_test") {
-			return
-		}
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	diags := RunTypedProduction(t, TypedOpts{Tests: false},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
 			}
-			abs := p.GoFiles[i]
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok {
-				continue
+			if p.Pkg.Path() == yamlsafePkgPath {
+				return nil
 			}
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
+			var out []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				out = append(out, scanYAMLQuoteFunnel(p, f, rel)...)
 			}
-			violations = append(violations,
-				scanYAMLQuoteFunnel(p.TypesInfo, p.Fset, file, rel)...)
-		}
-	})
+			return out
+		})
 
-	sort.Strings(violations)
-	if len(violations) > 0 {
-		t.Fatalf("%s: yamlsafe.Scalar(...) type conversions outside pkg/yamlsafe "+
-			"must have yamlsafe.Quote(...) as the argument.\n"+
-			"Violations (%d):\n  %s",
-			yamlQuoteFunnelRule, len(violations), strings.Join(violations, "\n  "))
-	}
+	Report(t, yamlQuoteFunnelRule, diags)
 }
 
 // TestYAMLQuoteFunnel_DetectsViolation is the reverse self-test: feed the
-// scanner a file known to contain bare `Scalar(rawString)` conversions
-// (pkg/yamlsafe/yamlsafe.go itself — Quote internally constructs Scalar
-// from raw strings) and assert the scanner produces violations. The outer
-// TestYAMLQuoteFunnel skips the yamlsafe package by path, so production
-// stays clean; this test invokes scanYAMLQuoteFunnel directly to exercise
-// detection without the path filter.
-//
-// Blind-spot coverage:
-//   - bare string conversion form `Scalar(x)` where x is not a Quote call
-//   - bare ident form (inside yamlsafe package): scanner must still flag
-//   - production-realistic AST (uses real packages.LoadPackages, not synth)
+// scanner the pkg/yamlsafe production AST (which intentionally constructs
+// Scalar from raw strings inside Quote()) and assert the scanner produces
+// ≥3 violations. The outer TestYAMLQuoteFunnel skips pkg/yamlsafe by path,
+// so production stays clean; this test invokes the scanner with the path
+// filter bypassed to exercise detection.
 //
 // If the scanner ever stops detecting these bare conversions — e.g. the
-// types.Info-based callee resolution silently fails to bind — this test
-// goes red and the YAML-QUOTE-FUNNEL-01 Hard property has regressed.
+// types.Info-based callee resolution silently fails — this test goes red
+// and the YAML-QUOTE-FUNNEL-01 Hard property has regressed.
 func TestYAMLQuoteFunnel_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
+	var diags []Diagnostic
+	found := false
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, "./pkg/yamlsafe/")
-	require.NoError(t, err, "LoadPackages failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	var (
-		found      bool
-		violations []string
-	)
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		if p.PkgPath != yamlsafePkgPath {
-			return
-		}
-		found = true
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/yamlsafe/"},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != yamlsafePkgPath {
+				return nil
 			}
-			abs := p.GoFiles[i]
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok {
-				continue
+			found = true
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				diags = append(diags, scanYAMLQuoteFunnel(p, f, rel)...)
 			}
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			violations = append(violations,
-				scanYAMLQuoteFunnel(p.TypesInfo, p.Fset, file, rel)...)
-		}
-	})
+			return nil
+		})
 
 	require.True(t, found, "yamlsafe package must be loaded")
-	require.NotEmpty(t, violations,
+	require.NotEmpty(t, diags,
 		"scanner must detect bare Scalar(raw) conversions inside yamlsafe.go "+
 			"(Quote() body has three such sites); empty result means the "+
 			"types.Info-based detection silently regressed")
-	require.GreaterOrEqual(t, len(violations), 3,
+	require.GreaterOrEqual(t, len(diags), 3,
 		"expected ≥3 bare-conversion sites inside Quote(); scanner detected only %d: %v",
-		len(violations), violations)
+		len(diags), diags)
 }
 
-// scanYAMLQuoteFunnel walks file's AST looking for yamlsafe.Scalar(...) type
-// conversions. For each found conversion, validates that the argument is
-// either (a) a yamlsafe.Quote(...) call or (b) an expression whose declared
-// static type is already yamlsafe.Scalar (allowing identity / helper-returns
-// without forcing redundant Quote wrapping).
-func scanYAMLQuoteFunnel(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []string {
-	var violations []string
+// scanYAMLQuoteFunnel walks the file's AST looking for yamlsafe.Scalar(...)
+// type conversions. For each found conversion, validates that the argument
+// is either (a) a yamlsafe.Quote(...) call or (b) an expression whose
+// declared static type is already yamlsafe.Scalar (allowing identity /
+// helper-returns without forcing redundant Quote wrapping).
+func scanYAMLQuoteFunnel(p *Pass, file *ast.File, rel string) []Diagnostic {
+	if p.TypesInfo == nil {
+		return nil
+	}
+	var diags []Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !isYAMLScalarConversion(info, call.Fun) {
+		if !isYAMLScalarConversion(p.TypesInfo, call.Fun) {
 			return
 		}
 		if len(call.Args) != 1 {
-			pos := fset.Position(call.Pos())
-			violations = append(violations, fmt.Sprintf(
-				"%s:%d: yamlsafe.Scalar(...) conversion must take exactly one argument",
-				rel, pos.Line))
+			pos := p.Fset.Position(call.Pos())
+			diags = append(diags, Diagnostic{
+				Rel:     rel,
+				Line:    pos.Line,
+				Message: "yamlsafe.Scalar(...) conversion must take exactly one argument",
+			})
 			return
 		}
-		if allowedScalarConversionArg(info, call.Args[0]) {
+		if allowedScalarConversionArg(p.TypesInfo, call.Args[0]) {
 			return
 		}
-		pos := fset.Position(call.Pos())
-		violations = append(violations, fmt.Sprintf(
-			"%s:%d: yamlsafe.Scalar(...) argument must be yamlsafe.Quote(...) "+
-				"or a value of declared yamlsafe.Scalar type",
-			rel, pos.Line))
+		pos := p.Fset.Position(call.Pos())
+		diags = append(diags, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"yamlsafe.Scalar(...) argument must be yamlsafe.Quote(...) " +
+					"or a value of declared yamlsafe.Scalar type"),
+		})
 	})
-	return violations
+	return diags
 }
 
 // isYAMLScalarConversion reports whether fun resolves to the yamlsafe.Scalar
@@ -236,7 +203,6 @@ func allowedScalarConversionArg(info *types.Info, arg ast.Expr) bool {
 			return true
 		}
 	}
-	// Identity conversion case: arg's static type already is yamlsafe.Scalar.
 	t := info.TypeOf(arg)
 	if t == nil {
 		return false
@@ -277,4 +243,3 @@ func isYAMLQuoteCall(info *types.Info, fun ast.Expr) bool {
 	}
 	return fn.Pkg().Path() == yamlsafePkgPath && fn.Name() == yamlsafeQuoteFunc
 }
-
