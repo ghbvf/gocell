@@ -402,12 +402,18 @@ func countAuditEntries(t *testing.T, ctx context.Context, h *l2Harness, eventTyp
 
 // latestAuditEntry returns the most recent audit-ledger entry for the given
 // event type. Fails if zero entries exist.
+//
+// MemStore.Query (and the PG store, by ORDER BY clause symmetry) returns
+// entries sorted by timestamp DESC — element 0 is the newest, not the last.
+// Returning entries[0] keeps the helper correct under reuse with multiple
+// entries; the current callers only ever see one, but a future test that
+// triggers multiple revokes on the same harness needs the correct semantic.
 func latestAuditEntry(t *testing.T, ctx context.Context, h *l2Harness, eventType string) *ledger.Entry {
 	t.Helper()
 	entries, err := h.auditStore.Query(ctx, ledger.AuditFilters{EventType: eventType}, ledger.QueryListParams{})
 	require.NoError(t, err)
 	require.NotEmpty(t, entries, "expected at least one audit entry for event %s", eventType)
-	return entries[len(entries)-1]
+	return entries[0]
 }
 
 // countLiveRefreshTokensForSubject returns the count of live (not revoked) refresh

@@ -598,7 +598,7 @@ func setupHasAdmin(t *testing.T, base string) bool {
 			HasAdmin bool `json:"hasAdmin"`
 		} `json:"data"`
 	}
-	if decErr := json.NewDecoder(resp.Body).Decode(&parsed); decErr != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return false
 	}
 	return parsed.Data.HasAdmin
