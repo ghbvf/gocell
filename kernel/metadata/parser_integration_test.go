@@ -146,7 +146,7 @@ func TestParseRealProject(t *testing.T) {
 	ac := pm.Cells["accesscore"]
 	require.NotNil(t, ac)
 	assert.Equal(t, "core", ac.Type)
-	assert.Equal(t, "L2", ac.ConsistencyLevel)
+	assert.Equal(t, "L3", ac.ConsistencyLevel)
 	assert.Equal(t, "platform", ac.Owner.Team)
 
 	// Spot-check a contract.
