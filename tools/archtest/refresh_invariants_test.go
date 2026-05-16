@@ -95,23 +95,64 @@ var refreshGuardedMethods = map[refreshGuardedMethod]struct{}{
 // (type-aware archtest) is the章程级 ceiling for structural rules of this
 // form (see plan §S4c T3 reflection L3).
 //
+// # Scope: only direct Refresh.Body calls are inspected
+//
+// The rule scans CallExprs in *Refresh's own body* — not inside helper
+// methods that Refresh transitively calls. Production code intentionally
+// uses this property: Refresh's RunInTx closure body is `pair, err =
+// s.refreshInTx(txCtx, outerCtx, refreshToken); return err`, and the
+// guarded calls (Peek / sessionStore.Get / userRepo.GetByID / Rotate)
+// live inside the named helper `refreshInTx`. Helper-resident calls are
+// "inside the wrap" by transitive reachability (the helper executes
+// inside the closure on the call stack); the original Soft predecessor
+// adopted this same scope (its godoc: "They may live inside the closure
+// or in any helper method on s reachable through it — any direct call
+// from Refresh's top level escapes the wrap").
+//
+// Practical implication: the rule defends against a developer adding a
+// new guarded call DIRECTLY at Refresh's top level outside the closure
+// (an easy-to-miss regression). It does NOT enforce that helpers like
+// refreshInTx commit their own guarded calls inside the closure — a
+// helper that opens its own ambient tx would escape detection. Treating
+// transitive enforcement as out-of-scope is intentional: helper
+// extraction is a normal refactor; widening the rule to follow the call
+// graph would require fixed-point analysis and produce false positives
+// when helpers branch.
+//
 // # 盲区 (BS)
 //
 //   - BS-1 Method receiver renamed from `s`: the structural anchors
-//     isTxRunnerRunInTxCall + receiver-loop literally match `ident.Name ==
-//     "s"`. A renamed receiver (e.g. `func (svc *Service) Refresh(...)`)
-//     would bypass both checks. The repo convention is `s` (4 of 4 method
-//     decls in service.go). If the convention drifts, refresh_red.go's
-//     fixture (also uses `s`) would still PASS the rule even if production
-//     drifted to `svc` — a silent regression. Accepted because the
-//     receiver-name convention is enforced socially via review; no Go
-//     mechanism makes it inexpressible.
+//     isTxRunnerRunInTxCall + isServiceRefreshMethod + closureCallsReceiverS
+//     all literally match `ident.Name == "s"` / `"Service"` / `"txRunner"`.
+//     A renamed receiver (e.g. `func (svc *Service) Refresh(...)`) would
+//     bypass these checks. Reverse self-check:
+//     TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS asserts
+//     production Service.Refresh's receiver name is literally "s" so a
+//     future rename surfaces as a self-check failure before the rule
+//     silently disengages.
 //   - BS-2 Detached cascade variant (RevokeSessionDetached) is intentionally
 //     out of scope per PR #395: detached paths commit independently of the
 //     outer tx. Listed in this godoc so future maintainers see it is a
 //     known carve-out, not an oversight.
 //   - BS-3 Reflection / dynamic dispatch on a refresh.Store value — out of
 //     scope per ai-collab.md §3 (no Go static rule reaches it).
+//   - BS-4 RED fixture cannot exercise the (ports, UserRepository, GetByID)
+//     guard entry: cells/accesscore/internal/ports is internal-importable
+//     only within cells/accesscore/ and is not reachable from the fixture
+//     at tools/archtest/internal/refreshinvariantsfixture/. The
+//     ResolveMethodCall resolution path is structurally identical to the
+//     (refresh, Store, *) entries (which ARE exercised by the fixture),
+//     so the resolver's correctness on the userRepo path is covered by
+//     analogy; the only un-tested layer is the literal pkgPath constant
+//     for `cells/accesscore/internal/ports`. Accepted limitation.
+//   - BS-5 isTxRunnerRunInTxCall is a Soft anchor (pure AST string match
+//     on `s.txRunner.RunInTx`), not type-aware. If the field name
+//     `txRunner` is renamed (e.g. to `tx`), the rule's RunInTx detection
+//     silently fails. The receiver-name reverse self-check above (BS-1)
+//     happens to also exercise the txRunner.RunInTx call site, so a
+//     field rename would surface there. The rule's Medium grade comes
+//     from the guarded-method match (ResolveMethodCall); this anchor is
+//     a Soft assist, honestly disclosed here.
 func TestRefreshCrossStoreTX01(t *testing.T) {
 	diags := RunTyped(t,
 		TypedOpts{Tests: false},
@@ -119,6 +160,75 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 		scanRefreshCrossStoreTX,
 	)
 	Report(t, ruleRefreshCrossStoreTX01, diags)
+}
+
+// TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS is the
+// reverse self-check for BS-1. The four structural anchors in
+// TestRefreshCrossStoreTX01 all depend on the receiver name `s`:
+//
+//   - isTxRunnerRunInTxCall looks for `s.txRunner.RunInTx(...)`
+//   - isServiceRefreshMethod accepts any (*Service).Refresh / (Service).Refresh
+//   - closureCallsReceiverS verifies ≥ 1 call rooted at Ident `s` in the closure
+//   - scanGuardedCallsOutsideClosure matches CallExpr selectors via
+//     ResolveMethodCall (receiver-type independent, but the structural
+//     prerequisites above gate the analysis)
+//
+// If a future refactor renames the receiver from `s` to `svc` / `r` / `c`,
+// TestRefreshCrossStoreTX01 silently disengages: the structural anchors
+// all return false, the rule reports zero diagnostics, and a real bug
+// (a guarded call escaped to Refresh's top level) would slip through.
+// This test fails loudly when the convention drifts so the rule's
+// authors are forced to update the anchors in lock-step.
+//
+// AI-rebust: Soft (string-anchor on production AST), but exists precisely
+// to make BS-1 fail-loud rather than fail-silent — the章程级 minimum for
+// any blind-spot disclosure per ai-collab.md "盲区 + 反向自检测试".
+func TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS(t *testing.T) {
+	diags := RunTyped(t,
+		TypedOpts{Tests: false},
+		[]string{"./cells/accesscore/slices/sessionrefresh/..."},
+		func(p *Pass) []Diagnostic {
+			var out []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+					if !isServiceRefreshMethod(fn) {
+						return
+					}
+					name := refreshReceiverName(fn)
+					if name == "s" {
+						return
+					}
+					out = append(out, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(fn.Pos()).Line,
+						Message: fmt.Sprintf(
+							"(*Service).Refresh receiver is %q; rule structural anchors hard-code "+
+								"`s` — update isTxRunnerRunInTxCall + closureCallsReceiverS + the "+
+								"rule godoc (BS-1) in lock-step before renaming the receiver",
+							name),
+					})
+				})
+			}
+			return out
+		})
+	Report(t, ruleRefreshCrossStoreTX01+"-BS-1", diags)
+}
+
+// refreshReceiverName extracts the receiver variable's name from a method
+// FuncDecl. Returns "" when the receiver is anonymous (`func (*Service)
+// Refresh(...)`) which would also bypass the rule's `s`-rooted anchors.
+func refreshReceiverName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 {
+		return ""
+	}
+	if len(fn.Recv.List[0].Names) != 1 {
+		return ""
+	}
+	return fn.Recv.List[0].Names[0].Name
 }
 
 // scanRefreshCrossStoreTX walks every production file in pass.Files for a
@@ -322,6 +432,9 @@ func scanGuardedCallsOutsideClosure(p *Pass, fn *ast.FuncDecl, closure *ast.Func
 // matchRefreshGuardedMethod resolves call's callee via ResolveMethodCall and
 // returns the guarded-method tuple plus a boolean indicating whether it is
 // in refreshGuardedMethods.
+//
+// receiverNamedType (the *types.Named unwrap helper) is defined in
+// sessionrefresh_no_session_create_test.go and shared package-locally.
 func matchRefreshGuardedMethod(info *types.Info, call *ast.CallExpr) (refreshGuardedMethod, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel == nil {

@@ -83,8 +83,22 @@ func TestSessionProtocol_CompositionRootOnly(t *testing.T) {
 }
 
 // sessionProtocolProductionPatterns returns the package patterns scanned by
-// the production rule (cells / runtime / adapters). cmd/ and examples/ own
-// their own composition roots and are intentionally outside scope.
+// the production rule (cells / runtime / adapters).
+//
+// cmd/ and examples/ are intentionally outside scope:
+//
+//   - cmd/* is the composition root by definition — wiring authority owns
+//     session.NewProtocol construction.
+//   - examples/* each carry their own composition root (typically
+//     examples/<demo>/main.go or app.go); allowing them mirrors the
+//     AUTH-PLAN-04 / LAYER-09 carve-out for example projects. The rule
+//     does not validate whether examples/* actually use NewProtocol
+//     legitimately — examples are intentionally a separate enforcement
+//     surface, owned by their own composition-root files.
+//
+// Adding a new module subtree that owns a composition root (e.g. a future
+// tools/<demo>/) requires extending this list AND updating the godoc
+// above so the carve-out is documented at every layer.
 func sessionProtocolProductionPatterns() []string {
 	return []string{
 		"./cells/...",
