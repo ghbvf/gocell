@@ -24,6 +24,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"net"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -118,6 +119,18 @@ func isRetryablePGError(err error) bool {
 // marker, enabling errcode.IsTransient to recognize the result. The caller's
 // operation code is reused (no separate ErrAdapterPGTransient constant).
 //
+// Timeout sub-branch (Wave-4-B ADAPTER-CONNECT-BUDGET-01):
+//
+//	errcode.WrapInfra(ErrAdapterPGConnectTimeout, "postgres: connect timeout", err,
+//	    errcode.WithInternal(opContext))
+//
+// When err carries a network-level timeout signal (`context.DeadlineExceeded`
+// or `net.Error.Timeout()=true` — typically *net.OpError surfaced from
+// pgxpool's dial path when Config.ConnectTimeout fires), we substitute the
+// distinct ErrAdapterPGConnectTimeout code so operators can route timeout
+// alerts independently from generic connect failures (refused/reset/etc.).
+// Still transient (consumer Requeue path); only the code differs.
+//
 // Permanent branch (default, fail-closed):
 //
 //	errcode.Wrap(errcode.KindInternal, permanentCode, "postgres: operation failed", err,
@@ -130,6 +143,11 @@ func isRetryablePGError(err error) bool {
 // ref: jackc/pgx pgconn SafeToRetry
 // ref: archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
 func classifyPGError(err error, permanentCode errcode.Code, opContext string) error {
+	if isConnectTimeout(err) {
+		return errcode.WrapInfra(ErrAdapterPGConnectTimeout,
+			"postgres: connect timeout", err,
+			errcode.WithInternal(opContext))
+	}
 	if isRetryablePGError(err) {
 		return errcode.WrapInfra(permanentCode,
 			"postgres: transient error", err,
@@ -138,4 +156,26 @@ func classifyPGError(err error, permanentCode errcode.Code, opContext string) er
 	return errcode.Wrap(errcode.KindInternal, permanentCode,
 		"postgres: operation failed", err,
 		errcode.WithInternal(opContext))
+}
+
+// isConnectTimeout reports whether err carries a network-level timeout signal:
+//   - errors.Is(err, context.DeadlineExceeded)
+//   - any error in the chain implementing net.Error with Timeout() == true
+//
+// Used by classifyPGError to substitute ErrAdapterPGConnectTimeout for the
+// generic transient code. context.Canceled is NOT a timeout — caller-abandoned
+// work is handled by the upstream isRetryablePGError check (returns false →
+// permanent fail-closed) and never enters this function.
+func isConnectTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return false
 }
