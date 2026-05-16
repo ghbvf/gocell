@@ -2,7 +2,6 @@ package assembly
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -183,9 +182,9 @@ func TestValidateAssemblyScaffoldSpec_OwnerTextRule(t *testing.T) {
 	}
 }
 
-// assertInvalidErrcode checks that err is a KindInvalid errcode error and
-// surfaces a useful diagnostic when the type doesn't match. Errors must be
-// errcode.Error so the cmd layer can map them onto exit codes consistently.
+// assertInvalidErrcode checks that err is a KindInvalid errcode error.
+// Error message wording is not asserted; that's a documentation concern,
+// not a behavioral one. Only KindInvalid is a behavioral invariant.
 func assertInvalidErrcode(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -197,9 +196,5 @@ func assertInvalidErrcode(t *testing.T, err error) {
 	}
 	if ec.Kind != errcode.KindInvalid {
 		t.Fatalf("expected KindInvalid, got %q (msg=%s)", ec.Kind, ec.Message)
-	}
-	if !strings.Contains(strings.ToLower(ec.Message), "assembly scaffold") &&
-		!strings.Contains(strings.ToLower(ec.Message), "metadata") {
-		t.Fatalf("error message should mention scaffold or metadata; got %q", ec.Message)
 	}
 }

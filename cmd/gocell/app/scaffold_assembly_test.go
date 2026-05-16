@@ -64,6 +64,61 @@ func TestRunScaffoldAssembly_UnknownCell(t *testing.T) {
 	}
 }
 
+// TestRunScaffoldAssembly_OwnerTextRule asserts that --team and --role
+// containing control characters (\n, \r, \x00) are rejected with
+// ERR_SCAFFOLD_INVALID_OPTS at the CLI flag-validation layer.
+func TestRunScaffoldAssembly_OwnerTextRule(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		team string
+		role string
+	}{
+		{"team_lf_rejected", "alice\nbob", "maintainer"},
+		{"team_cr_rejected", "alice\rbob", "maintainer"},
+		{"team_nul_rejected", "alice\x00bob", "maintainer"},
+		{"role_lf_rejected", "platform", "evil\nrole"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := setupAssemblyTestProject(t, "examplecell")
+			args := []string{
+				"--id=myassembly",
+				"--cells=examplecell",
+				"--team=" + tc.team,
+				"--role=" + tc.role,
+			}
+			err := scaffoldAssembly(root, args)
+			if err == nil {
+				t.Fatal("expected error for control char in owner field, got nil")
+			}
+			if !strings.Contains(err.Error(), string(ErrScaffoldInvalidOpts)) {
+				t.Errorf("error must contain %q; got: %v", ErrScaffoldInvalidOpts, err)
+			}
+		})
+	}
+
+	// Positive: ascii values accepted.
+	t.Run("ascii_accepted", func(t *testing.T) {
+		t.Parallel()
+		root := setupAssemblyTestProject(t, "examplecell")
+		args := []string{
+			"--id=myassembly",
+			"--cells=examplecell",
+			"--team=platform-team",
+			"--role=maintainer",
+		}
+		if err := scaffoldAssembly(root, args); err != nil {
+			t.Fatalf("ascii team/role must be accepted, got: %v", err)
+		}
+	})
+}
+
 // TestRunScaffoldAssembly_DryRun produces no files.
 func TestRunScaffoldAssembly_DryRun(t *testing.T) {
 	t.Parallel()

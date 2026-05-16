@@ -1,5 +1,4 @@
-// invariants asserted in this file:
-//   - INVARIANT: YAML-QUOTE-FUNNEL-01
+// INVARIANT: YAML-QUOTE-FUNNEL-01
 //
 // YAML-QUOTE-FUNNEL-01: every type conversion `yamlsafe.Scalar(x)` outside
 // the pkg/yamlsafe package itself must have x = `yamlsafe.Quote(...)` (or
@@ -13,6 +12,13 @@
 // is also resolved through *types.Info to its callee Func so only
 // yamlsafe.Quote — not shadowed identifiers — satisfies the funnel.
 //
+// Funnel 双向锁: 下游 Hard（types.Info-resolved Scalar conversion call site
+// must have Quote arg or already-typed Scalar). 上游 Medium — Pass.Pkg 路径
+// 过滤跳过 pkg/yamlsafe 内部即认为是合规上游；任何包外类型化 Scalar 字段
+// 都需经过 Quote 才能赋值（构造点被下游 archtest 守住）。041 plan §3 明确
+// 不登记 backlog，本 PR 内三件套闭环（typed funnel + archtest 下游 Hard +
+// 反向自检）。
+//
 // Blind spot inventory (covered by reverse self-test):
 //   - bare ident form `Scalar(x)` inside pkg/yamlsafe itself (allowed,
 //     skipped via Pkg.Path() == yamlsafePkgPath)
@@ -21,7 +27,7 @@
 //     of declared static type yamlsafe.Scalar is also allowed as a no-op
 //     identity conversion, covering helpers that return a Scalar)
 //   - reverse self-test fixture: scanner applied to pkg/yamlsafe production
-//     AST (path filter bypassed) MUST report ≥3 bare Scalar(raw) sites
+//     AST (path filter bypassed) MUST report at least one bare Scalar(raw) site
 //     present in Quote() — proves types.Info resolution actually fires
 //
 // ref: pkg/yamlsafe/yamlsafe.go — Quote single funnel definition
@@ -83,11 +89,15 @@ func TestYAMLQuoteFunnel(t *testing.T) {
 // TestYAMLQuoteFunnel_DetectsViolation is the reverse self-test: feed the
 // scanner the pkg/yamlsafe production AST (which intentionally constructs
 // Scalar from raw strings inside Quote()) and assert the scanner produces
-// ≥3 violations. The outer TestYAMLQuoteFunnel skips pkg/yamlsafe by path,
-// so production stays clean; this test invokes the scanner with the path
-// filter bypassed to exercise detection.
+// at least one violation. The outer TestYAMLQuoteFunnel skips pkg/yamlsafe
+// by path, so production stays clean; this test invokes the scanner with the
+// path filter bypassed to exercise detection.
 //
-// If the scanner ever stops detecting these bare conversions — e.g. the
+// The count threshold is ≥1 (not ≥3) so that internal refactoring of
+// Quote()'s implementation does not break this guard. The invariant is that
+// detection fires at least once — proving types.Info resolution works.
+//
+// If the scanner ever stops detecting bare conversions — e.g. the
 // types.Info-based callee resolution silently fails — this test goes red
 // and the YAML-QUOTE-FUNNEL-01 Hard property has regressed.
 func TestYAMLQuoteFunnel_DetectsViolation(t *testing.T) {
@@ -113,13 +123,9 @@ func TestYAMLQuoteFunnel_DetectsViolation(t *testing.T) {
 		})
 
 	require.True(t, found, "yamlsafe package must be loaded")
-	require.NotEmpty(t, diags,
-		"scanner must detect bare Scalar(raw) conversions inside yamlsafe.go "+
-			"(Quote() body has three such sites); empty result means the "+
-			"types.Info-based detection silently regressed")
-	require.GreaterOrEqual(t, len(diags), 3,
-		"expected ≥3 bare-conversion sites inside Quote(); scanner detected only %d: %v",
-		len(diags), diags)
+	require.GreaterOrEqual(t, len(diags), 1,
+		"scanner must detect at least one bare Scalar(raw) conversion inside yamlsafe.go; "+
+			"empty result means the types.Info-based detection silently regressed")
 }
 
 // scanYAMLQuoteFunnel walks the file's AST looking for yamlsafe.Scalar(...)

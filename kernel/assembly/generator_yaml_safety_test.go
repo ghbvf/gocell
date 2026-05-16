@@ -135,6 +135,14 @@ func TestScaffoldAssembly_YAMLScalarInjection(t *testing.T) {
 					}
 				}
 			}
+			// build sub-keys must not gain new entries from injection.
+			if buildMap, ok := topLevel["build"].(map[string]any); ok {
+				for k := range buildMap {
+					if k != "entrypoint" && k != "binary" && k != "deployTemplate" {
+						t.Errorf("YAML injection created adjacent build key %q (allowed: entrypoint/binary/deployTemplate)", k)
+					}
+				}
+			}
 		})
 	}
 }
