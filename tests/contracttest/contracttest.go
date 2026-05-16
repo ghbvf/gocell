@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -43,11 +44,13 @@ type Contract struct {
 	Dir              string // absolute path to the contract version directory
 	HTTP             *HTTPTransport
 
-	requestSchema  *jsonschema.Schema
-	responseSchema *jsonschema.Schema
-	payloadSchema  *jsonschema.Schema
-	headersSchema  *jsonschema.Schema
-	extraSchemas   map[string]*jsonschema.Schema // keyed by extra ref name
+	requestSchema     *jsonschema.Schema
+	responseSchema    *jsonschema.Schema
+	payloadSchema     *jsonschema.Schema
+	headersSchema     *jsonschema.Schema
+	extraSchemas      map[string]*jsonschema.Schema // keyed by extra ref name
+	pathParamSchemas  map[string]*jsonschema.Schema // keyed by param name
+	queryParamSchemas map[string]*jsonschema.Schema // keyed by param name
 }
 
 // HTTPTransport holds optional transport metadata for migrated HTTP contracts.
@@ -131,6 +134,19 @@ func Load(t testing.TB, contractDir string) *Contract {
 	c.extraSchemas = make(map[string]*jsonschema.Schema)
 	for key, filename := range cy.SchemaRefs.Extra {
 		c.extraSchemas[key] = compileSchemaFile(t, contractDir, filename)
+	}
+
+	c.pathParamSchemas = make(map[string]*jsonschema.Schema)
+	if cy.Endpoints.HTTP != nil {
+		for name, param := range cy.Endpoints.HTTP.PathParams {
+			c.pathParamSchemas[name] = compileInlineParamSchema(t, cy.ID+"/pathParams/"+name, param)
+		}
+		c.queryParamSchemas = make(map[string]*jsonschema.Schema)
+		for name, param := range cy.Endpoints.HTTP.QueryParams {
+			c.queryParamSchemas[name] = compileInlineParamSchema(t, cy.ID+"/queryParams/"+name, param)
+		}
+	} else {
+		c.queryParamSchemas = make(map[string]*jsonschema.Schema)
 	}
 
 	return c
@@ -512,6 +528,152 @@ func formatValidationErrorDetail(ve *jsonschema.ValidationError, indent string) 
 
 func newHTTPTransport(meta *metadata.HTTPTransportMeta) *HTTPTransport {
 	return meta
+}
+
+// ValidatePathParam validates value against the path param schema for name.
+// Calls t.Errorf if name is not declared in pathParams or value violates schema.
+func (c *Contract) ValidatePathParam(t testing.TB, name, value string) {
+	t.Helper()
+	schema, ok := c.pathParamSchemas[name]
+	if !ok {
+		t.Errorf("contracttest: pathParam %q is not declared in contract %q", name, c.ID)
+		return
+	}
+	validateParamValue(t, schema, name, value, "pathParam")
+}
+
+// MustRejectPathParam asserts that value is rejected by the path param schema for name.
+// Calls t.Errorf if name is not declared in pathParams or value is accepted by schema.
+func (c *Contract) MustRejectPathParam(t testing.TB, name, value string) {
+	t.Helper()
+	schema, ok := c.pathParamSchemas[name]
+	if !ok {
+		t.Errorf("contracttest: pathParam %q is not declared in contract %q", name, c.ID)
+		return
+	}
+	mustRejectParamValue(t, schema, name, value, "pathParam")
+}
+
+// ValidateQueryParam validates value against the query param schema for name.
+// Calls t.Errorf if name is not declared in queryParams or value violates schema.
+func (c *Contract) ValidateQueryParam(t testing.TB, name, value string) {
+	t.Helper()
+	schema, ok := c.queryParamSchemas[name]
+	if !ok {
+		t.Errorf("contracttest: queryParam %q is not declared in contract %q", name, c.ID)
+		return
+	}
+	validateParamValue(t, schema, name, value, "queryParam")
+}
+
+// MustRejectQueryParam asserts that value is rejected by the query param schema for name.
+// Calls t.Errorf if name is not declared in queryParams or value is accepted by schema.
+func (c *Contract) MustRejectQueryParam(t testing.TB, name, value string) {
+	t.Helper()
+	schema, ok := c.queryParamSchemas[name]
+	if !ok {
+		t.Errorf("contracttest: queryParam %q is not declared in contract %q", name, c.ID)
+		return
+	}
+	mustRejectParamValue(t, schema, name, value, "queryParam")
+}
+
+// validateParamValue validates a string-encoded param value against schema.
+// The value is converted to the appropriate JSON token for the schema type.
+func validateParamValue(t testing.TB, schema *jsonschema.Schema, name, value, kind string) {
+	t.Helper()
+	token, ok := paramValueToJSON(value)
+	if !ok {
+		t.Errorf("contracttest: %s %q: value %q is not a valid JSON token", kind, name, value)
+		return
+	}
+	var v any
+	if err := json.Unmarshal(token, &v); err != nil {
+		t.Errorf("contracttest: %s %q: unmarshal JSON token: %v", kind, name, err)
+		return
+	}
+	if err := schema.Validate(v); err != nil {
+		t.Errorf("contracttest: %s %q validation failed for value %q:\n%s", kind, name, value, formatValidationError(err))
+	}
+}
+
+// mustRejectParamValue asserts that a string-encoded param value is NOT valid against schema.
+// A value that fails JSON parsing is considered rejected (type mismatch).
+func mustRejectParamValue(t testing.TB, schema *jsonschema.Schema, name, value, kind string) {
+	t.Helper()
+	token, ok := paramValueToJSON(value)
+	if !ok {
+		// Non-parseable as the declared type — counts as valid rejection.
+		return
+	}
+	var v any
+	if err := json.Unmarshal(token, &v); err != nil {
+		// Invalid JSON also counts as rejected.
+		return
+	}
+	if err := schema.Validate(v); err == nil {
+		kindTitle := strings.ToUpper(kind[:1]) + kind[1:]
+		t.Errorf("contracttest: MustReject%s: %s %q expected to reject value %q but it passed", kindTitle, kind, name, value)
+	}
+}
+
+// paramValueToJSON converts the string value to a JSON token []byte.
+// It tries integer, then float, and falls back to a JSON string.
+// Returns (token, true) on success, (nil, false) if the value cannot be
+// represented as any JSON primitive.
+func paramValueToJSON(value string) ([]byte, bool) {
+	// Try integer first.
+	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return []byte(value), true
+	}
+	// Try float.
+	if _, err := strconv.ParseFloat(value, 64); err == nil {
+		return []byte(value), true
+	}
+	// Fall back to JSON string.
+	b, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// compileInlineParamSchema converts a metadata.ParamSchema declaration into a
+// compiled jsonschema.Schema. Builds a JSON Schema document from the ParamSchema
+// fields (type, minLength, maxLength, minimum, maximum, pattern, format, required)
+// and registers it via jsonschema.Compiler.AddResource + Compile.
+// Calls t.Fatal on errors.
+func compileInlineParamSchema(t testing.TB, name string, param metadata.ParamSchema) *jsonschema.Schema {
+	t.Helper()
+	doc := map[string]any{
+		"type": param.Type,
+	}
+	if param.MinLength != nil {
+		doc["minLength"] = *param.MinLength
+	}
+	if param.MaxLength != nil {
+		doc["maxLength"] = *param.MaxLength
+	}
+	if param.Minimum != nil {
+		doc["minimum"] = *param.Minimum
+	}
+	if param.Maximum != nil {
+		doc["maximum"] = *param.Maximum
+	}
+	if param.Format != "" {
+		doc["format"] = param.Format
+	}
+
+	compiler := jsonschema.NewCompiler()
+	url := "mem:///param/" + name
+	if err := compiler.AddResource(url, doc); err != nil {
+		t.Fatalf("contracttest: compileInlineParamSchema %q: add resource: %v", name, err)
+	}
+	schema, err := compiler.Compile(url)
+	if err != nil {
+		t.Fatalf("contracttest: compileInlineParamSchema %q: compile: %v", name, err)
+	}
+	return schema
 }
 
 // ValidateErrorResponse validates body against the JSON Schema declared for
