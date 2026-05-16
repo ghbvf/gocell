@@ -309,14 +309,17 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	c.commandHandler = devicecommand.NewHandler(pubSvc)
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	c.commandInternalHandler = devicecommandinternal.NewHandler(intSvc)
-	// C.1: no clock arg — sweeper tick is driven by control-plane real-time ticker.
+	// C.1: kernel Sweeper has no clock field — control-plane tick is real-time
+	// (controlPlaneTicker). Business-plane now (expiry) uses the cell clock
+	// (c.clk) so deadlines stay consistent with command-creation time under a
+	// fake-clock assembly (review P2-2).
 	// C.3: SweepTick errors are logged + counted by SweeperLifecycle.
 	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue)
 	if err != nil {
 		return fmt.Errorf("device-command sweeper: %w", err)
 	}
 	// interval=0 lets NewSweeperLifecycle apply defaultCommandSweeperInterval (30s).
-	lc := commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, 0)
+	lc := commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, 0, c.clk)
 	lc.CellID = c.ID()
 	lc.SweepErrorCounter = c.sweepErrorCounter // nil-safe: runLoop guards with != nil
 	c.commandSweeper = lc

@@ -1,8 +1,8 @@
-// Package control_plane_marker_passes verifies that a FuncDecl whose doc
-// comment carries //archtest:allow:clock-injection:control-plane with a
-// non-empty reason produces 0 violations. Only the two marked functions use
-// stdlib time; the rest of the file is clean.
-package control_plane_marker_passes
+// Package command is the GREEN control-plane carve-out fixture. It mirrors the
+// real runtime/command/lifecycle.go path + func names so the (rel, name)
+// allowlist (controlPlaneClockCarveOut) plus a valid doc-comment marker yields
+// 0 violations — the only shape the carve-out accepts (review P1-3).
+package command
 
 import "time"
 

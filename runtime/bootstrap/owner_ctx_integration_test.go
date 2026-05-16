@@ -186,7 +186,7 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 		ticker := &fakeSweepTicker{}
 		// Use a large interval so SweepTick is never called during the test;
 		// we only care about goroutine lifecycle, not tick behaviour.
-		sl := command.NewSweeperLifecycle("owner-cancel-sweeper", ticker, testtime.D1h)
+		sl := command.NewSweeperLifecycle("owner-cancel-sweeper", ticker, testtime.D1h, clock.Real())
 
 		ln := newIntegrationListener(t)
 		addr := ln.Addr().String()

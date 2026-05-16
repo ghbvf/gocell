@@ -12,6 +12,7 @@ package bootstrap
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -101,6 +102,7 @@ type Bootstrap struct {
 	// --- lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets ---
 	lifecycle                Lifecycle
 	defaultStartTimeout      time.Duration
+	startupTimeout           time.Duration // whole-Start orchestration backstop; 0→DefaultStartupTimeout, <0→disabled (caller-ctx only)
 	defaultStopTimeout       time.Duration
 	lifecycleRegistrars      []func(Lifecycle)
 	managedResources         []kernellifecycle.ManagedResource
@@ -378,6 +380,13 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 // External ctx cancellation only triggers phase9 to return; workers and the
 // event router continue until their phase10 teardown functions run.
 //
+// Exception (review P1-1): the lifecycle.Start step is additionally supervised
+// by the caller ctx + a startup budget (WithStartupTimeout). A hook whose
+// OnStart never returns would otherwise wedge Run() forever because ownerCtx
+// is background-derived and OnStart carries no per-hook deadline (ADR
+// 202605170000 §D-B). superviseLifecycleStart cancels ownerCtx and rolls back
+// on caller-cancel / budget-exceeded so Run() always makes progress.
+//
 // ref: uber-go/fx app.go (Run/Start/Stop lifecycle, withRollback pattern)
 // ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go (engageStopProcedure LIFO)
 func (b *Bootstrap) Run(ctx context.Context) error {
@@ -455,9 +464,13 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// ref: uber-go/fx internal/lifecycle/lifecycle.go — numStarted LIFO rollback.
 	b.ownerCtx, b.ownerCancel = context.WithCancel(runCtx) //nolint:gosec // G118: called on Start failure and LIFO teardown (C.2)
 
-	if err := b.lifecycle.Start(b.ownerCtx); err != nil {
-		b.ownerCancel() // release before returning
-		return rollback(fmt.Errorf("bootstrap: lifecycle start: %w", err))
+	// Supervise lifecycle.Start with the caller ctx + startup budget so a hook
+	// whose OnStart never returns cannot wedge Run() (review P1-1). On abort
+	// superviseLifecycleStart cancels ownerCtx (unblocking the wedged OnStart)
+	// and waits for Start to fully unwind before returning.
+	if err := b.superviseLifecycleStart(ctx); err != nil {
+		b.ownerCancel() // idempotent; supervise already canceled on abort paths
+		return rollback(err)
 	}
 	// lifecycle.Stop teardown registered first → runs second in LIFO.
 	s.addTeardown(func(stopCtx context.Context) error {
@@ -485,6 +498,62 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 
 	sig := b.phase9AwaitShutdownSignal(ctx, s)
 	return b.phase10OrchestrateShutdown(s, sig)
+}
+
+// superviseLifecycleStart runs b.lifecycle.Start(b.ownerCtx) under supervision
+// so a hook whose OnStart never returns cannot wedge Run() (review P1-1).
+//
+// lifecycle.Start runs in its own goroutine; this method selects on:
+//
+//   - start completed → propagate its (possibly nil) error verbatim;
+//   - caller ctx canceled → cancel ownerCtx (unblocking the wedged OnStart so
+//     lifecycle.Start can unwind + LIFO-roll-back), wait for it, return the
+//     caller cause joined with the unwind error;
+//   - startup budget elapsed → same teardown path, cause = ErrBootstrapStartupTimeout.
+//
+// The owner-ctx single-truth contract (ADR 202605170000 §D-B) is preserved:
+// hooks still see exactly one ctx; the bound lives at the orchestration layer,
+// mirroring controller-runtime mgr.Start which is unblocked by its caller ctx.
+func (b *Bootstrap) superviseLifecycleStart(callerCtx context.Context) error {
+	startErr := make(chan error, 1)
+	go func() { startErr <- b.lifecycle.Start(b.ownerCtx) }()
+
+	budgetCh, stopBudget := b.startupBudget()
+	defer stopBudget()
+
+	select {
+	case err := <-startErr:
+		if err != nil {
+			return fmt.Errorf("bootstrap: lifecycle start: %w", err)
+		}
+		return nil
+	case <-callerCtx.Done():
+		b.ownerCancel()
+		unwind := <-startErr // Start observes ownerCtx cancel, unwinds + rolls back
+		return errors.Join(
+			fmt.Errorf("bootstrap: startup aborted by caller: %w", callerCtx.Err()),
+			unwind)
+	case <-budgetCh:
+		b.ownerCancel()
+		unwind := <-startErr
+		return errors.Join(ErrBootstrapStartupTimeout, unwind)
+	}
+}
+
+// startupBudget returns the startup-budget fire channel and a stop func.
+// b.startupTimeout: 0 → DefaultStartupTimeout, <0 → disabled (nil channel
+// never fires; caller ctx remains the sole abort path). Uses the injected
+// clock so tests drive the budget deterministically with a fake clock.
+func (b *Bootstrap) startupBudget() (<-chan time.Time, func()) {
+	d := b.startupTimeout
+	if d == 0 {
+		d = DefaultStartupTimeout
+	}
+	if d < 0 {
+		return nil, func() {}
+	}
+	timer := b.clock.NewTimerAt(b.clock.Now().Add(d))
+	return timer.C(), func() { timer.Stop() }
 }
 
 // ---------------------------------------------------------------------------

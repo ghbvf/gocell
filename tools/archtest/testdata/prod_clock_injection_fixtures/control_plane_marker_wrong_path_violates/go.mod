@@ -1,0 +1,3 @@
+module fixturetest/prod_clock_injection/control_plane_marker_wrong_path_violates
+
+go 1.22

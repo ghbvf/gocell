@@ -160,6 +160,36 @@ func NewSweeper(scanner ActiveScanner, queue Queue, opts ...SweeperOption) (*Swe
 	return s, nil
 }
 
+// Validate reports whether the Sweeper is ready to run, with NO side effects
+// (no scan, no Ack). It is the readiness gate runtime/command.SweeperLifecycle
+// invokes at OnStart so a misconstructed sweeper fails startup (bootstrap
+// rolls back) instead of starting and erroring on every tick (review P2-1).
+//
+// It catches exactly the cases SweepTick's head guards catch — nil receiver
+// and the zero-value &command.Sweeper{} literal (built==false) — plus a
+// defensive nil scanner/queue check (NewSweeper already guarantees these when
+// built, but Validate is the single readiness contract so it states the full
+// invariant).
+func (s *Sweeper) Validate() error {
+	if s == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.Sweeper: nil receiver; use NewSweeper to construct")
+	}
+	if !s.built {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.Sweeper must be constructed via NewSweeper")
+	}
+	if validation.IsNilInterface(s.scanner) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.Sweeper: scanner is nil")
+	}
+	if validation.IsNilInterface(s.queue) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.Sweeper: queue is nil")
+	}
+	return nil
+}
+
 // SweepTick executes a single sweep: read non-terminal entries via
 // ScanActive, compute expirations via SweepOnce, terminate each expired entry
 // via Queue.Ack(AckTimeout).

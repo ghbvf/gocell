@@ -542,6 +542,64 @@ func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
 	assert.Nil(t, rec, "negative StartTimeout must skip hook.start_slow, got %v", rec)
 }
 
+// TestLifecycle_StartFailure_FailedHookGoroutineCancelledBeforeRollback pins
+// the review P1-2 contract: when a hook's OnStart spawns a goroutine bound to
+// its OnStart ctx and then returns an error, that goroutine MUST observe
+// cancellation BEFORE any already-started sibling's OnStop runs during the
+// LIFO rollback. Before the fix, lifecycle.Start ran the internal rollback
+// while the failed hook's worker was still alive (ownerCancel only happened
+// later in bootstrap, after Start returned).
+func TestLifecycle_StartFailure_FailedHookGoroutineCancelledBeforeRollback(t *testing.T) {
+	cStartErr := errors.New("C start failed")
+
+	cWorkerCtxDone := make(chan struct{}) // closed when C's spawned goroutine sees ctx cancel
+	var wg sync.WaitGroup
+
+	var aStopSawCWorkerExited bool
+
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
+	require.NoError(t, lc.Append(Hook{
+		Name:    "A",
+		OnStart: func(_ context.Context) error { return nil },
+		OnStop: func(_ context.Context) error {
+			// By the time A.OnStop runs in rollback, the failed hook C's
+			// goroutine must already be canceled (workCancel ran first).
+			select {
+			case <-cWorkerCtxDone:
+				aStopSawCWorkerExited = true
+			case <-time.After(testtime.D1s):
+				aStopSawCWorkerExited = false
+			}
+			return nil
+		},
+	}))
+	require.NoError(t, lc.Append(Hook{
+		Name: "C",
+		OnStart: func(ctx context.Context) error {
+			// Failed hook spawns its own worker bound to the OnStart ctx,
+			// then fails — exactly the P1-2 scenario.
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-ctx.Done()
+				close(cWorkerCtxDone)
+			}()
+			return cStartErr
+		},
+		OnStop: func(_ context.Context) error {
+			t.Error("C.OnStop must not run (failed hook)")
+			return nil
+		},
+	}))
+
+	startErr := lc.Start(context.Background())
+	require.ErrorIs(t, startErr, cStartErr)
+	wg.Wait() // C's goroutine exited (proves workCtx was canceled)
+
+	assert.True(t, aStopSawCWorkerExited,
+		"failed hook C's goroutine must be canceled BEFORE sibling A.OnStop runs (P1-2)")
+}
+
 func findLifecycleLogRecord(t *testing.T, buf *bytes.Buffer, msg string) map[string]any {
 	t.Helper()
 	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {

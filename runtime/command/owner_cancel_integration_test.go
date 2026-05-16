@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -32,7 +33,7 @@ func TestSweeperLifecycle_OwnerCancel_ExitsWithoutOnStop(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q)
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("owner-cancel-integration", sw, testtime.D1h)
+	lc := NewSweeperLifecycle("owner-cancel-integration", sw, testtime.D1h, clock.Real())
 
 	ownerCtx, ownerCancel := context.WithCancel(context.Background())
 
@@ -58,7 +59,7 @@ func TestSweeperLifecycle_OwnerCtxNotNilAfterStart(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q)
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("owner-ctx-not-nil", sw, testtime.D1h)
+	lc := NewSweeperLifecycle("owner-ctx-not-nil", sw, testtime.D1h, clock.Real())
 
 	ownerCtx, ownerCancel := context.WithCancel(context.Background())
 	defer ownerCancel()

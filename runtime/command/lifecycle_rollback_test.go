@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 )
@@ -36,7 +37,7 @@ func TestSweeperLifecycle_StartupFailRollback(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q) // C.1: no clock arg
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("devicecommand.sweeper", sw, time.Hour) // long interval — no tick fires
+	lc := NewSweeperLifecycle("devicecommand.sweeper", sw, time.Hour, clock.Real()) // long interval — no tick fires
 
 	// Step 1: simulate cell A startup completing (Start returns prompt).
 	ownerCtx, ownerCancel := context.WithCancel(context.Background())

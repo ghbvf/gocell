@@ -57,11 +57,16 @@ const clockViaSliceAllowMarker = "//archtest:allow:clock-injection:via-slice"
 // immediately preceding the "func" keyword) with a non-empty reason:
 // `//archtest:allow:clock-injection:control-plane <reason>`
 //
-// Carve-out scope: function-level only. The enclosing file and package are NOT
-// exempted. Any other function in the same file without this marker is still
-// checked and will fail if it references a forbidden time.* symbol.
+// Carve-out scope: function-level only, AND gated by the explicit
+// controlPlaneClockCarveOut {rel → func names} allowlist (review P1-3). The
+// marker comment alone never exempts: the FuncDecl's (module-relative path,
+// name) must also be listed. The enclosing file and package are NOT exempted;
+// any other function — including a third function in the same allowlisted
+// file — is still checked.
 //
-// AI-rebust grade: Medium (archtest-enforced comment guard, not compile-time).
+// AI-rebust grade: Medium (archtest-enforced: allowlist map + marker, not a
+// bare comment a business PR can add anywhere; not compile-time). Before P1-3
+// this was effectively Soft (any marked FuncDecl in any prod file self-exempt).
 // Hard upgrade path: backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01
 // tracks replacing this with a typed funnel (sealed clock-source type) once
 // the control-plane clock abstraction is established.
@@ -81,17 +86,44 @@ const clockViaSliceAllowMarker = "//archtest:allow:clock-injection:via-slice"
 //     text is silently ignored (same rule as clockViaSliceAllowMarker).
 const clockControlPlaneAllowMarker = "//archtest:allow:clock-injection:control-plane"
 
-// clockControlPlaneAllowedFuncs returns the set of FuncDecl name-positions
-// whose doc comment group contains a valid clockControlPlaneAllowMarker with a
-// non-empty reason. Only the outermost FuncDecl (package-level function) is
-// considered; methods are also included if their doc carries the marker.
+// controlPlaneClockCarveOut is the EXHAUSTIVE {module-relative path → func
+// names} allowlist of control-plane clock carve-out sites. The marker comment
+// alone is NOT sufficient: a FuncDecl is exempt only if (a) its doc comment
+// carries a valid clockControlPlaneAllowMarker AND (b) its (rel, name) pair is
+// listed here. This closes review P1-3 — previously any production FuncDecl in
+// any file could self-exempt PROD-CLOCK-INJECTION-01 just by adding the marker
+// (effectively Soft). The allowlist is the binding truth source; the in-source
+// marker is retained for self-documentation + the doc-comment blind-spot
+// self-checks.
+//
+// Adding an entry is a deliberate, reviewable archtest change (not a comment a
+// business PR can sneak in). Hard upgrade path (typed real-only clock funnel):
+// backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+var controlPlaneClockCarveOut = map[string]map[string]bool{
+	"runtime/command/lifecycle.go": {
+		"controlPlaneTicker":     true,
+		"controlPlaneProbeTimer": true,
+	},
+}
+
+// clockControlPlaneAllowedFuncs returns the set of FuncDecl name-positions in
+// file that are exempt from PROD-CLOCK-INJECTION-01: doc comment carries a
+// valid clockControlPlaneAllowMarker (non-empty reason) AND the (rel, name)
+// pair is in controlPlaneClockCarveOut. A marker on any other function — a
+// third function in the allowlisted file, or any function in any other file /
+// package — does NOT exempt (review P1-3 RED self-checks
+// control_plane_marker_wrong_func_violates / _wrong_path_violates).
 //
 // Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
 // direct children of *ast.File, so depth=1 is correct and sufficient.
-func clockControlPlaneAllowedFuncs(fset *token.FileSet, file *ast.File) map[string]bool {
+func clockControlPlaneAllowedFuncs(fset *token.FileSet, file *ast.File, rel string) map[string]bool {
 	out := map[string]bool{}
+	allowedNames := controlPlaneClockCarveOut[rel]
+	if allowedNames == nil {
+		return out // rel not an allowlisted carve-out path — nothing is exempt
+	}
 	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-		if fd.Doc == nil {
+		if fd.Doc == nil || !allowedNames[fd.Name.Name] {
 			return
 		}
 		for _, c := range fd.Doc.List {
@@ -1109,11 +1141,13 @@ var forbiddenTimeFns = map[string]string{
 // gated on obj.Pkg().Path() == "time" and obj.Name() in forbiddenTimeFns.
 // This makes the check immune to import aliases and dot-imports.
 //
-// Function-level carve-out: a FuncDecl whose doc comment contains
-// `//archtest:allow:clock-injection:control-plane <reason>` (non-empty reason)
-// is individually exempt. The exemption does NOT extend to other functions in
-// the same file or to closures/FuncLits within the exempt FuncDecl body.
-// Carve-out functions as of this PR:
+// Function-level carve-out: a FuncDecl is exempt only if its doc comment
+// contains `//archtest:allow:clock-injection:control-plane <reason>` (non-empty
+// reason) AND its (module-relative path, func name) is in the
+// controlPlaneClockCarveOut allowlist (review P1-3 — the marker alone is not
+// sufficient). The exemption does NOT extend to other functions in the same
+// file (incl. a third marked function) or to closures/FuncLits within the
+// exempt FuncDecl body. Allowlisted carve-out functions:
 //   - runtime/command/lifecycle.go: controlPlaneTicker, controlPlaneProbeTimer
 //     (control-plane scheduling; backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
 //
@@ -1204,8 +1238,9 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 	var out []Diagnostic
 	seen := map[string]bool{}
 
-	// Compute which FuncDecls carry the control-plane allow marker.
-	allowedFuncs := clockControlPlaneAllowedFuncs(fset, file)
+	// Compute which FuncDecls are control-plane carve-out exempt: marker doc
+	// comment AND (rel, name) ∈ controlPlaneClockCarveOut (review P1-3).
+	allowedFuncs := clockControlPlaneAllowedFuncs(fset, file, rel)
 
 	record := func(node ast.Node, name string) {
 		// Function-level carve-out: skip if inside an exempt FuncDecl.

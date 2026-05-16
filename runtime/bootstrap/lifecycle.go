@@ -35,11 +35,33 @@ var ErrLifecycleAlreadyStarted = errcode.New(errcode.KindInternal, errcode.ErrBo
 // hooks accept the risk of duplicates (diagnostic cost, not correctness).
 var ErrDuplicateHookName = errcode.New(errcode.KindInternal, errcode.ErrBootstrapLifecycle, "duplicate lifecycle hook name")
 
+// ErrBootstrapStartupTimeout is returned by Bootstrap.Run when lifecycle.Start
+// does not complete within the orchestration-layer startup budget
+// (WithStartupTimeout, default DefaultStartupTimeout). It is the deadlock
+// backstop for a hook whose OnStart never returns (ADR 202605170000 §D-B
+// amendment / review P1-1): caller-ctx cancellation is the primary abort, this
+// sentinel covers "caller never cancels and an OnStart wedged".
+//
+// Reuses ErrBootstrapLifecycle so no new errcode sentinel/Kind is introduced
+// (contract-fanout not triggered). Callers may errors.Is against it.
+var ErrBootstrapStartupTimeout = errcode.New(errcode.KindInternal, errcode.ErrBootstrapLifecycle, "lifecycle startup exceeded budget")
+
 const (
-	// DefaultStartTimeout is the default per-hook start deadline.
+	// DefaultStartTimeout is the default per-hook StartTimeout. Since ADR
+	// 202605170000 §D-B it is NOT an enforced OnStart ctx deadline — it is the
+	// slow-start warning threshold only (warn when OnStart elapsed ≥ 80% of
+	// it). The whole-Start deadlock backstop is the orchestration-layer
+	// supervision in Bootstrap.Run (caller ctx + WithStartupTimeout), not this.
 	DefaultStartTimeout = 30 * time.Second
 	// DefaultStopTimeout is the default per-hook stop deadline.
 	DefaultStopTimeout = 10 * time.Second
+
+	// DefaultStartupTimeout is the default whole-Start orchestration budget
+	// (Bootstrap.Run supervises lifecycle.Start with caller ctx + this timer).
+	// It is a deadlock backstop, NOT a per-hook SLA: well-behaved hooks
+	// fast-probe-return far inside it. Override with WithStartupTimeout;
+	// negative disables the timer (caller-ctx-only abort).
+	DefaultStartupTimeout = 30 * time.Second
 
 	// hookSlowNumerator and hookSlowDenominator define the slow-start warning
 	// threshold as a fraction of the hook timeout: threshold = timeout * num / den.
@@ -130,6 +152,24 @@ type lifecycle struct {
 	defaultStop  time.Duration
 	logger       *slog.Logger
 	clock        clock.Clock
+
+	// workCtx is the OnStart context handed to every hook. It is a child of
+	// the ctx passed to Start (the bootstrap ownerCtx). workCancel is invoked
+	// BEFORE the LIFO rollback on a partial Start failure so the failed hook's
+	// own already-spawned goroutine (bound to workCtx) is torn down before any
+	// successfully-started hook's OnStop runs — closing the C.2 gap where a
+	// failed hook's worker kept running during sibling rollback (review P1-2).
+	//
+	// OnStop is NOT derived from workCtx: rollback / Stop pass the original
+	// Start ctx so OnStop still has a live context to drain in-flight work
+	// after workCancel has fired.
+	//
+	// Single-ctx-truth (ADR 202605170000 §D-B) is preserved: a hook still sees
+	// exactly one context whose only cancellation triggers are ownerCancel
+	// (assembly shutdown) and start-failure teardown — both "owner is going
+	// away", never a competing startup deadline.
+	workCtx    context.Context
+	workCancel context.CancelFunc
 }
 
 // NewLifecycle creates a new Lifecycle with the given config.
@@ -190,11 +230,22 @@ func (lc *lifecycle) Start(ctx context.Context) error {
 		return ErrLifecycleAlreadyStarted
 	}
 	lc.state = stateStarting
+	// workCtx is the single OnStart context for every hook (child of the
+	// bootstrap ownerCtx). Canceling it on partial-start failure tears down
+	// the failed hook's own spawned goroutine before sibling rollback (P1-2).
+	lc.workCtx, lc.workCancel = context.WithCancel(ctx)
 	lc.mu.Unlock()
 
 	for i, h := range lc.hooks {
 		if err := lc.runHook(ctx, h, true); err != nil {
-			// Start failed: roll back all hooks that succeeded (indices 0..i-1) in LIFO.
+			// Start failed: cancel workCtx FIRST so the failed hook's own
+			// already-spawned goroutine (and every started hook's worker)
+			// observes cancellation before LIFO OnStop runs (P1-2). OnStop
+			// itself uses the original ctx (not workCtx) so it still has a
+			// live context to drain.
+			lc.workCancel()
+
+			// Roll back all hooks that succeeded (indices 0..i-1) in LIFO.
 			lc.mu.Lock()
 			lc.state = stateIncompleteStart
 			lc.mu.Unlock()
@@ -231,7 +282,14 @@ func (lc *lifecycle) Stop(ctx context.Context) error {
 
 	errs := lc.rollback(ctx)
 
+	// Release workCtx after OnStop has drained (OnStop used the original ctx,
+	// not workCtx, so canceling here does not truncate any in-flight drain).
+	// Direct lifecycle.Stop callers (tests) rely on this to avoid a leaked
+	// context; in the bootstrap path ownerCancel already cascaded.
 	lc.mu.Lock()
+	if lc.workCancel != nil {
+		lc.workCancel()
+	}
 	lc.state = stateStopped
 	lc.mu.Unlock()
 
@@ -343,7 +401,10 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 // OnStop applies applyTimeout(StopTimeout).
 func (lc *lifecycle) hookContext(ctx context.Context, p hookPhase) (context.Context, context.CancelFunc) {
 	if p.isStart {
-		return ctx, func() {}
+		// OnStart receives workCtx (child of the Start ctx = ownerCtx). It is
+		// the single owner-lifetime ctx (ADR 202605170000 §D-B); the only
+		// extra cancellation trigger vs ownerCtx is start-failure teardown.
+		return lc.workCtx, func() {}
 	}
 	return lc.applyTimeout(ctx, p.timeout)
 }

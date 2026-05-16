@@ -9,10 +9,22 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
+
+// sweeperReadinessChecker is the optional no-side-effect readiness contract a
+// SweepTicker may implement. SweeperLifecycle.Start invokes it before spawning
+// the loop so a misconstructed sweeper (e.g. the zero-value &command.Sweeper{})
+// fails at OnStart — bootstrap rolls back — instead of starting "successfully"
+// and only erroring on the first (logged-and-swallowed) tick (review P2-1).
+//
+// *kcommand.Sweeper implements it via Sweeper.Validate.
+type sweeperReadinessChecker interface {
+	Validate() error
+}
 
 // defaultCommandSweeperInterval is the default ticker period when callers do
 // not supply an explicit interval.
@@ -91,11 +103,15 @@ var _ SweepTicker = (*kcommand.Sweeper)(nil)
 // LifecycleHook.OnStart fast-return contract: it spawns the loop, awaits the
 // first-tick probe (≤50 ms), then returns.
 //
-// C.1 Hard carrier: SweeperLifecycle holds no clock.Clock field. All stdlib
-// time.* calls are funneled through controlPlaneTicker / controlPlaneProbeTimer
-// (function-level marker //archtest:allow:clock-injection:control-plane) —
-// control-plane scheduling must not be driven by a business-plane injected fake
-// clock. Backlog: CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// C.1 control-plane/business-plane clock split: kernel/command.Sweeper holds
+// NO clock field (Hard, type-unrepresentable). SweeperLifecycle holds a
+// BusinessClock used ONLY for the SweepTick `now` argument (business-plane
+// expiry time). All control-plane stdlib time.* calls (ticker, startup probe)
+// are funneled through controlPlaneTicker / controlPlaneProbeTimer
+// (function-level marker //archtest:allow:clock-injection:control-plane,
+// anchored by PROD-CLOCK-INJECTION-01) — control-plane scheduling is never
+// driven by an injected clock. Backlog:
+// CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
 //
 // C.2 Owner ctx: OnStart receives the long-lived owner ctx (controller-runtime
 // Runnable.Start semantics). The worker derives its runCtx from ownerCtx so
@@ -122,6 +138,18 @@ type SweeperLifecycle struct {
 	StopTimeout time.Duration
 	Logger      *slog.Logger
 
+	// BusinessClock supplies the business-plane "now" passed to SweepTick (the
+	// time against which command deadlines are evaluated). It is read-only here
+	// (only .Now() is called) and is NEVER used for control-plane scheduling —
+	// the ticker / startup probe stay on real wall-clock via controlPlaneTicker
+	// / controlPlaneProbeTimer. Sourcing `now` from the real-time ticker.C
+	// instead (the pre-fix behavior) mismatched a cell whose command-creation
+	// time came from an injected (e.g. fake) clock, corrupting expiry decisions
+	// in fake-clock assemblies (review P2-2). Inject the cell clock here
+	// (devicecell passes c.clk); kernel/command.Sweeper itself still holds NO
+	// clock field (ADR 202605170000 §D-A Hard invariant unchanged).
+	BusinessClock clock.Clock
+
 	// CellID is the owner cell identifier for observability labels and log fields.
 	// Inject from the composition root (e.g. cell.ID()). Defaults to "_runtime"
 	// sentinel when empty, aligning with the observability.md cell label convention.
@@ -140,18 +168,22 @@ type SweeperLifecycle struct {
 // NewSweeperLifecycle creates a lifecycle contributor for sweeper.
 // interval is the ticker period; if zero, defaultCommandSweeperInterval is used.
 //
-// C.1: no clock parameter — the control-plane ticker is driven by real time
-// via controlPlaneTicker / controlPlaneProbeTimer (function-level
-// //archtest:allow:clock-injection:control-plane marker). Backlog:
-// CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// businessClock supplies the business-plane "now" for SweepTick. It is NOT a
+// control-plane scheduling clock: the ticker / startup probe remain on real
+// wall-clock via controlPlaneTicker / controlPlaneProbeTimer (function-level
+// //archtest:allow:clock-injection:control-plane marker, anchored by
+// PROD-CLOCK-INJECTION-01). Backlog: CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// Validated non-nil at construction via clock.MustHaveClock (composition root
+// passes the cell clock, e.g. clock.Real() in production / a fake in tests).
 //
 // The sweeper parameter accepts any SweepTicker; *kcommand.Sweeper is the
 // primary implementation. Tests may inject mocks directly.
-func NewSweeperLifecycle(name string, sweeper SweepTicker, interval time.Duration) *SweeperLifecycle {
+func NewSweeperLifecycle(name string, sweeper SweepTicker, interval time.Duration, businessClock clock.Clock) *SweeperLifecycle {
+	clock.MustHaveClock(businessClock, "command.NewSweeperLifecycle: businessClock required")
 	if interval <= 0 {
 		interval = defaultCommandSweeperInterval
 	}
-	return &SweeperLifecycle{Name: name, Sweeper: sweeper, Interval: interval}
+	return &SweeperLifecycle{Name: name, Sweeper: sweeper, Interval: interval, BusinessClock: businessClock}
 }
 
 // Hook returns the single lifecycle hook managed by SweeperLifecycle.
@@ -179,6 +211,35 @@ func (l *SweeperLifecycle) Hook() cell.LifecycleHook {
 func (l *SweeperLifecycle) Start(ownerCtx context.Context) error {
 	if l == nil || validation.IsNilInterface(l.Sweeper) {
 		return fmt.Errorf("runtime/command: sweeper lifecycle requires non-nil Sweeper")
+	}
+
+	// P2-2: business-plane now source. Defensive nil check — NewSweeperLifecycle
+	// validates via clock.MustHaveClock, but a struct-literal composer may omit
+	// it; returning a typed error keeps OnStart fail-fast (bootstrap rolls back)
+	// instead of a nil deref in runLoop.
+	if validation.IsNilInterface(l.BusinessClock) {
+		return fmt.Errorf("runtime/command: sweeper lifecycle requires non-nil BusinessClock " +
+			"(use NewSweeperLifecycle, or set BusinessClock on the struct literal)")
+	}
+
+	// P2-1: no-side-effect readiness gate. A zero-value &command.Sweeper{}
+	// (or any SweepTicker exposing Validate) must fail here so bootstrap rolls
+	// back, rather than starting and silently erroring on every tick.
+	if rc, ok := l.Sweeper.(sweeperReadinessChecker); ok {
+		if err := rc.Validate(); err != nil {
+			return fmt.Errorf("runtime/command: sweeper not ready: %w", err)
+		}
+	}
+
+	// P1-4: preflight the optional error counter's label set. CounterVec.With
+	// panics (MustValidateLabels) on a label-set mismatch; the first SweepTick
+	// error would otherwise crash the (recover-less) loop goroutine and
+	// crashloop the service. Probe .With here under recover so a misconfigured
+	// counter is a fail-fast wiring error at OnStart, never a runtime crash.
+	if l.SweepErrorCounter != nil {
+		if err := l.preflightSweepErrorCounter(); err != nil {
+			return err
+		}
 	}
 
 	interval := l.Interval
@@ -238,11 +299,16 @@ func (l *SweeperLifecycle) runLoop(
 		select {
 		case <-runCtx.Done():
 			return
-		case now := <-ticker.C:
+		case <-ticker.C:
 			if !started {
 				started = true
 				earlyExit <- nil // signal that the goroutine is running
 			}
+			// P2-2: business-plane now (against which command deadlines are
+			// evaluated) comes from BusinessClock, NOT the real-time ticker's
+			// tick value — keeps expiry consistent with a cell whose command
+			// creation time uses the same (possibly fake) injected clock.
+			now := l.BusinessClock.Now()
 			if err := l.Sweeper.SweepTick(runCtx, now); err != nil {
 				l.logger().Error("runtime/command: SweepTick error",
 					slog.String("hook", l.hookName()),
@@ -337,6 +403,23 @@ func (l *SweeperLifecycle) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// preflightSweepErrorCounter exercises SweepErrorCounter.With with the exact
+// label set runLoop uses, under recover. CounterVec.With panics on a label-set
+// mismatch (kernelmetrics.MustValidateLabels); catching it here converts a
+// crash-on-first-error wiring bug into a fail-fast OnStart error so bootstrap
+// rolls back at startup (review P1-4). No counter value is mutated (.Inc is
+// not called) — .With alone triggers label validation.
+func (l *SweeperLifecycle) preflightSweepErrorCounter() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("runtime/command: SweepErrorCounter label set invalid "+
+				"(must be exactly {\"cell\"}): %v", r)
+		}
+	}()
+	_ = l.SweepErrorCounter.With(kernelmetrics.Labels{"cell": l.cellID()})
+	return nil
 }
 
 // cellID returns the cell ID for observability labels. Defaults to "_runtime"
