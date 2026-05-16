@@ -43,6 +43,6 @@ func (*locator) isValidationResultEmitter() {}
 // threat. These witnesses upgrade rename to compile failure.
 var (
 	_ validationResultEmitter = (*locator)(nil)
-	_ RuleCode                // zero-value witness; no composite literal so
-	_ ValidationResult        // TestGovernanceRuleCodeConstSingleSource does not flag.
+	_ RuleCode                // zero-value blank var; not a newResult call site
+	_ ValidationResult        // and not a composite literal, so INV-2 skips it.
 )

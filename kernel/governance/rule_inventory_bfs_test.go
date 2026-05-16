@@ -34,6 +34,12 @@ import (
 // rather than name matching. Without *types.Info the fixtures would have
 // no method to dispatch against.
 //
+// Fixtures use only built-in Go types (no external imports); the
+// importer.Default() type-checker config is sufficient for that scope.
+// Adding fixtures that import third-party packages would require a
+// module-aware loader (packages.Load) similar to the production
+// loadGovernancePackageWithTypes path.
+//
 // ref: kubernetes/apimachinery pkg/runtime/scheme_test.go (registration
 // equivalence fixtures); golang.org/x/tools go/analysis/analysistest
 // (synthetic-source negative cases for static checkers).
@@ -48,8 +54,12 @@ func TestBFSReachabilityFixtures(t *testing.T) {
 	}{
 		{
 			name: "free_function_with_validator_param_emits_rule_id",
-			// BFS reaches helper(v) via the free-function call edge, then
-			// detects v.newResult inside helper despite recvName == "".
+			// BFS reaches helper(v) via the free-function call edge.
+			// Inside helper (recvName=""), enqueueMethodValue early-returns
+			// on the empty recvName, but handleCall's selector branch
+			// resolves v.newResult via ResolveCallee + signature gate,
+			// captures the rule ID via that path — not via the
+			// enqueueMethodValue path.
 			source: `package fixture
 type RuleCode string
 type ValidationResult struct{ Code RuleCode }
