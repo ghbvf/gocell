@@ -666,6 +666,19 @@ formatters:
     - gofumpt
     - goimports
   settings:
+    # Keep the gofumpt config aligned with tools/codegen/render.go
+    # GofumptOptions so `golangci-lint fmt` (verify-gofumpt.sh / CI lint
+    # shard) and the producer-side codegen formatter agree byte-for-byte on
+    # import-locality grouping.
+    #   - module-path: golangci-lint here vs render.go GofumptOptions.ModulePath.
+    #     SYNC: must equal the module path on go.mod line 1.
+    #   - LangVersion: golangci-lint auto-injects it from the go.mod `go`
+    #     directive (go1.25); render.go hardcodes GofumptOptions.LangVersion.
+    #     These are two manual truth points — when the go.mod `go` directive
+    #     changes, render.go's literal must be updated in lockstep (the
+    #     render.go godoc carries the matching SYNC note).
+    gofumpt:
+      module-path: github.com/ghbvf/gocell
     goimports:
       local-prefixes:
         - github.com/ghbvf/gocell

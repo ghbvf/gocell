@@ -6,7 +6,13 @@
 # cache, (c) high "forgot to run" rate. Slow / infra-bound gates (full
 # golangci-lint, go test, archtest, integration testcontainers) stay in CI.
 #
-# Not a 1:1 CI mirror — two deliberate deviations:
+# Not a 1:1 CI mirror — three deliberate deviations:
+#   - Tier 1 runs `go run mvdan.cc/gofumpt` (version resolved from the repo
+#     go.mod) rather than an ambient $PATH `gofumpt`. A host-installed
+#     gofumpt drifts from the version the CI formatter gate enforces
+#     (golangci-lint's vendored copy — see hack/lib/golangci-lint.sh),
+#     producing "local hook passes / CI red" or the reverse. go.mod is the
+#     single source of truth; there is no hook-side version constant.
 #   - It checks the WORKING TREE, not the pushed commit snapshot. Git does
 #     not check out the push range; every tier (gofumpt / build / vet /
 #     verify-generated) inspects whatever is on disk now. Un-staged
@@ -121,8 +127,18 @@ start=$(date +%s)
 fail=0
 
 # ---------------------------------------------------------------------------
-# Tier 1 — gofumpt, scoped to the changed .go files. ~ms. Always when .go
-# changed. This is the exact gate that failed CI #525.
+# Tier 1 — gofumpt, scoped to the changed .go files. Always when .go changed.
+# This is the exact gate that failed CI #525.
+#
+# `go run mvdan.cc/gofumpt` pins the version via go.mod (rationale: see the
+# first header deviation — go.mod is the only SoR, no PATH ambient).
+# Cost has two independent cache layers:
+#   - Go build cache (GOCACHE) warm  → ~200ms (module-graph load + cached
+#     binary dispatch; not literally sub-millisecond).
+#   - gofumpt binary not yet compiled → +~2-3s one-time compile.
+#   - GOMODCACHE missing the module   → +~1-2s source download (first ever).
+# Warm steady state is ~200ms; a cold gofumpt compile is still well under
+# the Tier 2 build/vet cost that dominates a cold-cache push.
 # ---------------------------------------------------------------------------
 if [[ ${go_changed} -eq 1 ]]; then
     fmt_targets=()
@@ -130,13 +146,18 @@ if [[ ${go_changed} -eq 1 ]]; then
         [[ -n "${f}" && -f "${f}" ]] && fmt_targets+=("${f}")
     done < <(printf '%s\n' "${go_files}" | grep -E '\.go$' || true)
     if [[ ${#fmt_targets[@]} -gt 0 ]]; then
-        # Fail-closed if gofumpt is absent: a missing formatter must not
-        # silently skip the gate (no-soft-fallback). `2>/dev/null` would
-        # swallow "command not found" into an empty drift string and pass.
-        if ! command -v gofumpt >/dev/null 2>&1; then
-            note "gofumpt not found — install: go install mvdan.cc/gofumpt@latest"
+        # Fail-closed: a non-zero exit from `go run` (go toolchain absent,
+        # module/build failure, gofumpt internal error) must block the push,
+        # not silently skip the gate (no-soft-fallback). gofumpt -l exits 0
+        # and lists drifting files on stdout; the `-f` existence pre-filter
+        # above guarantees no missing-file path reaches gofumpt, so a
+        # non-zero here is unambiguously a tooling failure, never "found
+        # drift".
+        if ! drift="$(go run mvdan.cc/gofumpt -l "${fmt_targets[@]}" 2>&1)"; then
+            note "gofumpt gate failed to run (go run mvdan.cc/gofumpt):"
+            printf '%s\n' "${drift}" | sed 's/^/    /' >&2
             fail=1
-        elif drift="$(gofumpt -l "${fmt_targets[@]}")" && [[ -n "${drift}" ]]; then
+        elif [[ -n "${drift}" ]]; then
             note "formatter drift (run: make fmt):"
             printf '%s\n' "${drift}" | sed 's/^/    /' >&2
             fail=1
