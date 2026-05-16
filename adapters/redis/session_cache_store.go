@@ -22,8 +22,8 @@ import (
 //   - Get: cache hit → unmarshal sessionCacheEntry → entry.validate(id). On
 //     validation failure: slog.Warn + best-effort async cache.Delete + fall
 //     through to inner.Get. Miss / Redis error / corrupt JSON → slog.Warn +
-//     fall through to inner.Get. On inner success the view is lazily populated
-//     into the cache (Set error is also swallowed).
+//     fall through to inner.Get. On inner success only active (RevokedAt == nil)
+//     views are lazily populated into the cache (Set error is also swallowed).
 //   - Create: delegated to inner. No cache write — the first Get after Create
 //     primes the cache via the read-through path (avoids "created then revoked"
 //     edge thinking and removes a method's worth of code).
@@ -57,16 +57,18 @@ import (
 //
 //   - Stale-cache revoke window: by design, single-session sessionlogout's
 //     revocation propagates to cache state only after the existing cache
-//     entry's TTL elapses (≤ GOCELL_SESSION_CACHE_TTL, max 30s). The in-
-//     transaction cache.Delete pattern was removed in the third-round review
-//     (PR #524 → fix PR) because it raced with concurrent re-population from
-//     the still-uncommitted PG row, potentially extending the stale window to
-//     2×TTL. Single-session sessionlogout does NOT bump user.AuthzEpoch, so
-//     the epoch invariant in sessionvalidate.go does not catch this case —
-//     the TTL is the security floor. Mitigation: keep TTL short (max 30s,
-//     enforced at wiring by wrapSessionStoreWithCache). RevokeForSubject
-//     paths (driven by credentialinvalidate.Apply) are NOT affected because
-//     the co-tx epoch bump catches stale views regardless of cache state.
+//     entry's TTL elapses (up to GOCELL_SESSION_CACHE_TTL, ≤30s by wiring).
+//     The stale window is bounded by the remaining TTL at Revoke time, not
+//     always 30s. The in-transaction cache.Delete pattern was removed in the
+//     third-round review (PR #524 → fix PR) because it raced with concurrent
+//     re-population from the still-uncommitted PG row, potentially extending
+//     the stale window to 2×TTL. Single-session sessionlogout does NOT bump
+//     user.AuthzEpoch, so the epoch invariant in sessionvalidate.go does not
+//     catch this case — the TTL is the security floor. Mitigation: keep TTL
+//     short (≤ GOCELL_SESSION_CACHE_TTL, ≤30s enforced at wiring by
+//     wrapSessionStoreWithCache). RevokeForSubject paths (driven by
+//     credentialinvalidate.Apply) are NOT affected because the co-tx epoch
+//     bump catches stale views regardless of cache state.
 //   - Redis keyspace enumeration: cache keys take the form
 //     accesscore:session:<rawSessionID>; anyone with redis-cli KEYS / SCAN
 //     access can enumerate active session identifiers. Operators MUST gate
@@ -77,6 +79,17 @@ import (
 //     session.ValidateView) is the on-wire shape. Adding a sensitive field
 //     to ValidateView does NOT automatically propagate into Redis — the
 //     copy is explicit, providing an audit gate.
+//
+// # Ops guidance
+//
+// For high-security scenarios requiring instant logout effect (e.g. session
+// compromise response), DO NOT enable this cache (leave GOCELL_SESSION_CACHE_TTL
+// empty) or configure an extremely short TTL (e.g. 5s). The stale-cache window
+// after a single-session Revoke is bounded by the remaining TTL at the time of
+// revocation — with a 5s TTL the maximum exposure is 5s. See backlog
+// AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01 for the sub-TTL invalidation upgrade
+// path (kernel AfterCommit primitive) that would reduce this window to near-zero
+// without the 2×TTL race described in the Stale-cache revoke window threat above.
 //
 // ref: alexedwards/scs redisstore/redisstore.go@master (PEXPIREAT object-level
 // expiry alignment — we use fixed Duration TTL because ValidateView hides
@@ -125,7 +138,8 @@ func (e sessionCacheEntry) toView() *session.ValidateView {
 
 // validate enforces the wire-schema invariants the producer (lazyPopulate)
 // upholds: ID must match the requested id, SubjectID must be non-empty,
-// AuthzEpochAtIssue must be positive. Failure → fall through to inner.
+// AuthzEpochAtIssue must be positive, and RevokedAt must be nil (only active
+// views are written to cache). Failure → fall through to inner.
 func (e sessionCacheEntry) validate(wantID string) error {
 	if e.ID != wantID {
 		return errors.New("session-cache: id mismatch")
@@ -135,6 +149,9 @@ func (e sessionCacheEntry) validate(wantID string) error {
 	}
 	if e.AuthzEpochAtIssue <= 0 {
 		return errors.New("session-cache: non-positive AuthzEpochAtIssue")
+	}
+	if e.RevokedAt != nil {
+		return errors.New("session-cache: cached revoked session")
 	}
 	return nil
 }
@@ -215,8 +232,12 @@ func (s *CachingSessionStore) Get(ctx context.Context, id string) (*session.Vali
 
 // lazyPopulate writes the freshly-fetched view back into Redis. Marshal or
 // Set errors are logged at Warn and ignored — the caller already has the
-// correct view in hand, the cache is best-effort.
+// correct view in hand, the cache is best-effort. Revoked views are never
+// written — only active (RevokedAt == nil) views go into the cache.
 func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view *session.ValidateView, sid string) {
+	if view.RevokedAt != nil {
+		return // never cache revoked views — only active views go into the cache
+	}
 	payload, err := json.Marshal(entryFromView(view))
 	if err != nil {
 		s.logger.Warn("session-cache: marshal failed; skipping populate",

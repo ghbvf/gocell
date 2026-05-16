@@ -267,7 +267,8 @@ func TestCachingSessionStore_Revoke_DoesNotTouchCache(t *testing.T) {
 }
 
 // TestCachingSessionStore_Revoke_InnerError_Propagates — inner errors flow
-// through unchanged; cache.Delete still attempted (fail-safe order).
+// through unchanged; no cache operation is attempted (TTL-floor contract per
+// CACHING-SESSION-REVOKE-DELEGATE-ONLY-01).
 func TestCachingSessionStore_Revoke_InnerError_Propagates(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
@@ -378,19 +379,21 @@ func TestCachingSessionStore_Get_ConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
-// TestCachingSessionStore_Get_InvalidCachedEntry_FallsThrough — T2 RED test.
+// TestCachingSessionStore_Get_InvalidCachedEntry_FallsThrough verifies that
+// the Get read-through falls back to inner.Get for any cached entry that fails
+// validation. Two distinct code paths are exercised:
 //
-// When the Redis cache holds a well-formed JSON payload that passes
-// json.Unmarshal but contains a semantically invalid cached entry (mismatched
-// ID, empty SubjectID, zero AuthzEpochAtIssue, empty object, or JSON null),
-// the Get method must:
-//  1. fall through to inner.Get (inner.getCalls == 1)
-//  2. return the view from inner, not from the invalid cache
-//  3. not return the corrupt cache entry as the result
+//   - json-unmarshal path: the stored value is not valid JSON (or parses to a
+//     type that cannot be assigned to sessionCacheEntry). json.Unmarshal returns
+//     a non-nil jerr — the wrapper logs "corrupt cached entry" and falls through.
 //
-// Current code (session_cache_store.go:160-163) returns any successfully
-// unmarshalled entry without validation, so all five cases FAIL — that is the
-// intentional RED state. The GREEN fix will add an entry.validate() helper.
+//   - validate path: json.Unmarshal succeeds but entry.validate(id) rejects the
+//     entry because of a field-level invariant violation (mismatched ID, empty
+//     SubjectID, zero AuthzEpochAtIssue, or revoked entry). The wrapper logs
+//     "invalid cached entry" and falls through.
+//
+// In both paths Get must: (1) fall through to inner.Get (inner.getCalls == 1),
+// (2) return the view from inner, and (3) not surface the bad cache entry.
 func TestCachingSessionStore_Get_InvalidCachedEntry_FallsThrough(t *testing.T) {
 	t.Parallel()
 
@@ -398,25 +401,35 @@ func TestCachingSessionStore_Get_InvalidCachedEntry_FallsThrough(t *testing.T) {
 		name    string
 		payload string
 	}{
+		// ── json-unmarshal path ──────────────────────────────────────────────────
 		{
-			name:    "mismatched_id",
+			name:    "not_json", // json-unmarshal path: jerr != nil
+			payload: `<<not-json>>`,
+		},
+		// ── validate path ────────────────────────────────────────────────────────
+		{
+			name:    "mismatched_id", // validate-path: ID != wantID
 			payload: `{"id":"different-sid","subjectId":"subject-A","authzEpochAtIssue":7}`,
 		},
 		{
-			name:    "empty_subject_id",
+			name:    "empty_subject_id", // validate-path: empty SubjectID
 			payload: `{"id":"sess-test-1","subjectId":"","authzEpochAtIssue":7}`,
 		},
 		{
-			name:    "zero_epoch",
+			name:    "zero_epoch", // validate-path: non-positive AuthzEpochAtIssue
 			payload: `{"id":"sess-test-1","subjectId":"subject-A","authzEpochAtIssue":0}`,
 		},
 		{
-			name:    "empty_object",
+			name:    "empty_object", // validate-path: empty SubjectID (zero-value struct)
 			payload: `{}`,
 		},
 		{
-			name:    "json_null",
+			name:    "json_null", // validate-path: empty SubjectID (null → zero-value struct)
 			payload: `null`,
+		},
+		{
+			name:    "revoked_view_in_cache", // validate-path: RevokedAt != nil
+			payload: `{"id":"sess-test-1","subjectId":"subject-A","authzEpochAtIssue":7,"revokedAt":"2026-05-17T00:00:00Z"}`,
 		},
 	}
 
@@ -452,6 +465,33 @@ func TestCachingSessionStore_Get_InvalidCachedEntry_FallsThrough(t *testing.T) {
 				"returned view must have correct AuthzEpochAtIssue from inner")
 		})
 	}
+}
+
+// TestCachingSessionStore_Get_RevokedViewFromInner_DoesNotPopulate — inner may
+// return a revoked view (RevokedAt != nil); the wrapper must return it to the
+// caller (inner result is always authoritative) but must NOT write it into the
+// cache. Mirrors TestCachingSessionStore_Get_NilViewFromInner_DoesNotPopulate.
+func TestCachingSessionStore_Get_RevokedViewFromInner_DoesNotPopulate(t *testing.T) {
+	t.Parallel()
+	mock := newMockCmdable()
+	now := time.Now()
+	revokedView := &session.ValidateView{
+		ID:                scsTestSID,
+		SubjectID:         scsTestSubj,
+		RevokedAt:         &now,
+		AuthzEpochAtIssue: scsTestEpoch,
+	}
+	inner := &fakeSessionStore{view: revokedView}
+	store := newTestCachingStore(t, inner, mock)
+
+	got, err := store.Get(context.Background(), scsTestSID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.NotNil(t, got.RevokedAt, "returned view must preserve RevokedAt from inner")
+
+	cmd := mock.Get(context.Background(), scsCachedKey)
+	_, err = cmd.Result()
+	assert.Error(t, err, "revoked view must not be written to cache")
 }
 
 // TestNewCachingSessionStore_TypedNilInner_Rejected — T3 RED test.

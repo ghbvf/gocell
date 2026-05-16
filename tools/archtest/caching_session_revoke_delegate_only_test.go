@@ -236,9 +236,12 @@ func verifyRevokeDelegateRedFixture(t *testing.T, label, pattern string) {
 // ─── Blind-spot self-check tests ────────────────────────────────────────────
 
 // TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt asserts that
-// multi-statement Revoke/RevokeForSubject bodies (beyond the 1-stmt form)
-// are detected by the len(body.List) check — confirmed absent in production.
-// This check is covered by the main archtest; this test documents the guarantee.
+// multi-statement Revoke/RevokeForSubject bodies are absent from production
+// adapters/redis code (post-GREEN state). The F1 RED fixture (fixtures/
+// caching_session_revoke_f1_multi_stmt/) proves the detection mechanism works:
+// verifyRevokeDelegateRedFixture asserts ≥ 1 violation in that fixture.
+// This blind-spot self-check asserts the continued absence of multi-stmt bodies
+// in the real production code, closing the coverage loop.
 func TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt(t *testing.T) {
 	t.Parallel()
 	// Verification via the F1 fixture: verifyRevokeDelegateRedFixture already
@@ -262,10 +265,8 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_MultiStmt(t *testing.T) {
 		}
 		return nil
 	})
-	// Production code currently HAS multi-stmt Revoke — this self-check is informational
-	// and not an assertion. The main test (TestCachingSessionRevokeDelegateOnly_01) is
-	// the RED assertion. This blind-spot test only documents the coverage.
-	_ = multiStmtFound
+	assert.False(t, multiStmtFound,
+		"production Revoke/RevokeForSubject body must be single-statement after GREEN fix; F1 fixture is the RED-state mirror")
 }
 
 // TestCachingSessionRevokeDelegateOnly_BlindSpot_MethodValue asserts that

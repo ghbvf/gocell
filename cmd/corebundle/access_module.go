@@ -320,7 +320,8 @@ func wrapSessionStoreWithCache(inner session.Store, shared *SharedDeps, logger *
 	}
 	logger.Info("accesscore: session cache enabled",
 		slog.Duration("ttl", ttl),
-		slog.String("namespace", string(sessionCacheNamespace)))
+		slog.String("namespace", string(sessionCacheNamespace)),
+		slog.String("inner_store", fmt.Sprintf("%T", inner)))
 	return wrapped, nil
 }
 
