@@ -181,8 +181,8 @@ type CellEmitterInputs struct {
 //     level is cellvocab.L2 or higher, emit a Warn explaining the degraded atomicity
 //     guarantee. The log carries cell, consistency_level, durability_mode.
 //
-// Per-cell side-effects (e.g. AccessCore.rbacEmitterMode) remain at the call
-// site and read outcome.Durable from the return value.
+// Callers read outcome.Durable from the return value for any
+// composition-root decision that depends on the resolved durability mode.
 //
 // ref: kernel/cell.ResolveEmitter — the primitive this wraps.
 func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {

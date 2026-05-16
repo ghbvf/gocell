@@ -334,9 +334,8 @@ type AccessCore struct {
 	authzSvc    *authorizationdecide.Service
 
 	// +slice:route:slice=rbaccheck,subPath=/roles
-	rbacHandler     *rbaccheck.Handler
-	rbacRunMode     query.RunMode
-	rbacEmitterMode bool
+	rbacHandler *rbaccheck.Handler
+	rbacRunMode query.RunMode
 
 	// +slice:route:slice=rbacassign,listener=cell.InternalListener,subPath=/roles
 	rbacAssignHandler *rbacassign.Handler
