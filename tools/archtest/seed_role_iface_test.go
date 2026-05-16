@@ -22,18 +22,23 @@
 // archtest in CI; there is no Soft string-comment escape.
 //
 // Blind-spot inventory (not auto-covered by *ast.SelectorExpr walk):
-//   - Type aliases `type R = mem.RoleRepository` — covered by separate
-//     scan for *ast.TypeSpec with Assign != token.NoPos + RHS selector
-//     (see scanForMemRoleRepositoryAliases below). RED fixture T-ALIAS.
+//   - Type aliases `type R = mem.RoleRepository` (and pointer-aliased
+//     `type R = *mem.RoleRepository`) — covered by scanForMemRoleRepositoryAliases
+//     below, which inspects *ast.TypeSpec with Assign != token.NoPos. RED
+//     fixtures: TypeAlias + TypeAliasPointer.
 //   - Embedding via interface embedding of mem.RoleRepository — not
 //     possible: RoleRepository is a *struct*, not an interface. Compile
 //     would fail. No archtest coverage needed.
-//   - Dot-imports (`import . "cells/accesscore/internal/mem"`) — covered
-//     by detecting alias == "." and scanning bare `RoleRepository` Ident.
-//     Out-of-scope here: GoCell has `LAYER-09` / depguard banning dot
-//     imports on cells/* already. Documented out of this archtest's scope.
+//   - Dot-imports (`import . "cells/accesscore/internal/mem"`) — NOT
+//     covered by this archtest (memPackageAlias returns "." which is not
+//     a valid Go selector base; bare `RoleRepository` Ident would slip
+//     past the SelectorExpr scan). Out-of-scope here because GoCell's
+//     `LAYER-09` / depguard already bans dot imports on cells/*, and an
+//     accesscore-internal dot-import would itself be a layering bug
+//     surfaced by other rules.
 //   - Internal/mem package itself: skipped (file path contains
-//     "/internal/mem/").
+//     "/internal/mem/"); in-package code references RoleRepository
+//     without a "mem." qualifier, which this archtest does not flag.
 //
 // ref: docs/plans/202605082145-034-pg-corecell-b-route-plan.md §S4c T1
 // ref: tools/archtest/cells_no_contractspec_import_test.go (form precedent)
