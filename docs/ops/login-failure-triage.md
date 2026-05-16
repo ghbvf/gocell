@@ -1,6 +1,6 @@
 # Login Failure Triage Runbook
 
-Public login endpoint (`POST /api/v1/auth/sessions`) returns a uniform
+Public login endpoint (`POST /api/v1/access/sessions/login`) returns a uniform
 `401 ERR_AUTH_LOGIN_FAILED` for **every** authentication failure to prevent
 account-existence enumeration and timing sidechannels. The real failure reason
 is recorded server-side via `errcode.WithInternal` and lands in structured
@@ -103,11 +103,11 @@ credential cache.
 
 ## Correlated metrics
 
-`http_requests_total{route="POST /api/v1/auth/sessions",status="401"}` —
+`http_requests_total{route="POST /api/v1/access/sessions/login",status="401"}` —
 counts the public-facing 401s. Use the slog discriminator above to break
 them down by cause when paging.
 
-`http_request_duration_seconds{route="POST /api/v1/auth/sessions"}` —
+`http_request_duration_seconds{route="POST /api/v1/access/sessions/login"}` —
 must remain flat across the four causes. The login handler runs bcrypt
 unconditionally (using `dummyBcryptHash` on missing-user) so all four paths
 produce ~12-cost bcrypt latency. A statistically distinguishable bimodal
