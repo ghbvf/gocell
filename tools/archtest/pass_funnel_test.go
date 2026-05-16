@@ -42,9 +42,11 @@ import (
 )
 
 const (
-	scannerPkgPath   = "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	typesevalPkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	packagesPkgPath  = "golang.org/x/tools/go/packages"
+	scannerPkgPath         = "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+	typesevalPkgPath       = "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	packagesPkgPath        = "golang.org/x/tools/go/packages"
+	usage02FixturesPkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/usage02fixtures"
+	usage02FixturesRelDir  = "tools/archtest/internal/usage02fixtures"
 )
 
 // passFunnelPermanentExempt names archtest framework files that import or
