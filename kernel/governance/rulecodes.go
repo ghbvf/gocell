@@ -109,7 +109,8 @@ const (
 	codeFMTC1 RuleCode = "FMT-C1"
 
 	// ADV — advisory warnings & dead-event detection (rules_misc_advisory.go).
-	// ADV-02 retired; ADV-05/06 are SeverityError; ADV-01/03/04 are warnings.
+	// 5 active constants (ADV-01/03/04/05/06); ADV-02 retired, gap intentional.
+	// ADV-05/06 are SeverityError; ADV-01/03/04 are SeverityWarning.
 	codeADV01 RuleCode = "ADV-01"
 	codeADV03 RuleCode = "ADV-03"
 	codeADV04 RuleCode = "ADV-04"

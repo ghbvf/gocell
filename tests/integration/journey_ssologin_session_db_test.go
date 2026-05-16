@@ -44,10 +44,17 @@ func TestJSsologinSessionDb(t *testing.T) {
 	store, err := session.NewMemStore(storetest.NewTestProtocol(t), fc)
 	require.NoError(t, err)
 
+	// authzEpoch is an opaque positive int64 to the Store contract: MemStore
+	// only enforces non-zero (S4d row-level credential provenance), and PG
+	// stores will enforce a FK against users.authz_epoch. We pick 7 because
+	// storetest.NewSessionFixture's internal case suite uses the same value
+	// — keeping it consistent makes case-suite seed diffs zero if this
+	// fixture is later extended into the storetest suite — but any
+	// non-zero int64 would satisfy the contract for this test.
+	const authzEpoch = int64(7)
 	sess := storetest.NewSessionFixture(t,
 		"user-ssologin-fixture", "jti-ssologin-fixture",
-		7, /* authz epoch — matches storetest caseEpoch convention */
-		time.Hour, anchor)
+		authzEpoch, time.Hour, anchor)
 
 	ctx := context.Background()
 	require.NoError(t, store.Create(ctx, sess), "session must persist on Create")

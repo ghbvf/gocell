@@ -41,8 +41,19 @@ import (
 )
 
 // validBoardLifecycleMatrix maps board.state → set of allowed J-*.yaml
-// lifecycle values. Package-private; unreachable from outside governance
-// — modification requires editing this file (Medium funnel form-uniqueness).
+// lifecycle values. Package-private and treated as immutable after init —
+// no production code path writes to it. The Medium funnel form-uniqueness
+// holds at the *external* boundary: callers outside kernel/governance
+// cannot reach the symbol at all. Same-package _test.go files technically
+// could mutate the map, but governance tests do not, and the
+// JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01 Hard upgrade backlog
+// (typed const + parse-time reject) is the planned path to make even
+// same-package mutation unrepresentable.
+//
+// Reverse-lookup intuition for readers: the matrix encodes both directions
+// of the legal pairing. `stable` lifecycle appears in exactly one entry
+// (under `done`), so `lifecycle: stable + state: ∈ {todo, doing}` is
+// illegal; symmetrically `state: todo` requires `lifecycle: experimental`.
 var validBoardLifecycleMatrix = map[string]map[string]bool{
 	"todo":  {"experimental": true},
 	"doing": {"experimental": true, "active": true},

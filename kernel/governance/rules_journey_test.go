@@ -88,18 +88,17 @@ func TestJOURNEYCONTRACTEXISTENCE01_ExampleContractExempt(t *testing.T) {
 
 // --- JOURNEY-STATUS-LIFECYCLE-01 (board.state × yaml.lifecycle matrix) ---
 
-func TestJOURNEYSTATUSLIFECYCLE01_HappyPath(t *testing.T) {
+func TestJOURNEYSTATUSLIFECYCLE01_ZeroFindingsOnTodoExperimental(t *testing.T) {
+	// True happy path: every status-board state is paired with an allowed
+	// lifecycle AND the active+doing in-transit warning is not triggered.
 	pm := validProject()
-	// Baseline J-ssologin is lifecycle=active + state=doing → active+doing
-	// emits a Warning, not Error. The validProject smoke test
-	// (TestValidProject_ZeroErrors) only filters errors so it stays green.
+	// Demote J-ssologin lifecycle to experimental and board state to todo —
+	// the canonical "not started yet" combination, fully clean.
+	pm.Journeys["J-ssologin"].Lifecycle = "experimental"
+	pm.StatusBoard[0].State = "todo"
 	val := NewValidator(pm, ".", clock.Real())
 	got := findByCode(val.validateJOURNEYSTATUSLIFECYCLE01(), codeJOURNEYSTATUSLIFECYCLE01)
-	// Expect exactly one Warning (active+doing reminder), no Errors.
-	require.Len(t, got, 1)
-	assert.Equal(t, SeverityWarning, got[0].Severity)
-	assert.True(t, strings.Contains(got[0].Message, "; fix:"),
-		"Warning messages with fix guidance still anchor `; fix:`; got: %s", got[0].Message)
+	assert.Empty(t, got, "todo+experimental must produce no findings")
 }
 
 func TestJOURNEYSTATUSLIFECYCLE01_TodoMustBeExperimental(t *testing.T) {
@@ -157,6 +156,38 @@ func TestJOURNEYSTATUSLIFECYCLE01_OrphanEntrySkipped(t *testing.T) {
 	// entry is left to ADV-04. The new rule must not double-emit.
 	require.Len(t, got, 1)
 	assert.Equal(t, "J-ssologin", findJourneyIDFromMessage(t, got[0].Message))
+}
+
+// TestValidateStrict_JourneyRulesIntegrated guards against silent
+// de-registration: a future refactor that moves either JOURNEY rule
+// out of rules() would let the per-method unit tests still pass while
+// the rule no longer fires in any real validate pipeline. This end-to-end
+// assertion catches that drift even before INV-1 (which only checks the
+// reflection ↔ registration sets match) would surface it.
+func TestValidateStrict_JourneyRulesIntegrated(t *testing.T) {
+	pm := validProject()
+	// Set up one violation per JOURNEY rule:
+	//   - JOURNEY-CONTRACT-EXISTENCE-01: drop projection.session.active.v1
+	//     from J-ssologin.contracts so it goes unreferenced.
+	//   - JOURNEY-STATUS-LIFECYCLE-01: set board state=todo while lifecycle
+	//     stays active → illegal pair.
+	pm.Journeys["J-ssologin"].Contracts = []string{
+		"http.auth.login.v1",
+		"event.session.created.v1",
+	}
+	pm.StatusBoard[0].State = "todo"
+
+	val := NewValidator(pm, ".", clock.Real())
+	results, err := val.ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+
+	gotContract := findByCode(results, codeJOURNEYCONTRACTEXISTENCE01)
+	require.Len(t, gotContract, 1, "JOURNEY-CONTRACT-EXISTENCE-01 must fire via ValidateStrict")
+	assert.Equal(t, SeverityError, gotContract[0].Severity)
+
+	gotLifecycle := findByCode(results, codeJOURNEYSTATUSLIFECYCLE01)
+	require.Len(t, gotLifecycle, 1, "JOURNEY-STATUS-LIFECYCLE-01 must fire via ValidateStrict")
+	assert.Equal(t, SeverityError, gotLifecycle[0].Severity)
 }
 
 // findJourneyIDFromMessage extracts the quoted journey ID from a JOURNEY-
