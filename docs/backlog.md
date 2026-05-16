@@ -201,7 +201,7 @@
 |---|---|---|---|---|---|---|---|
 | ACCESSCORE-PG-USERS-MIGRATION-01 | **AccessCore PG repository + migration** — 现状: 仅内存；修复: users/roles/role_assignments 表 + UNIQUE on admin role | feat | P1/— | 🔴 | — | `adapters/postgres/accesscore/` | PR #392 v2 review |
 | PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE | **TEST-RACE-COVERAGE-ADAPTERS-INTEGRATION-01** — 现状: PG concurrent Up CI 不带 -race；修复: test-race.yml 加 adapters/postgres 路径（评估） | test | P2/Cx3 | 🟡 | — | `.github/workflows/test-race.yml` | PR-V1-PG-STARTUP-HARDEN F5 |
-| X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE ✅ closed by S4c-T1 (rbacassign 统一 L2 + RBACASSIGN-L2-STATIC-01 archtest 锁定字面量)/ SEED-ROLE-IFACE ✅ closed by S4c-T1 (adminprovision 重构隐性闭环 + SEED-ROLE-IFACE-01 Hard archtest 锁定生产代码零 `*mem.RoleRepository` 引用)/ AUTH-CACHE 激活 (also: cap-05) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |
+| X1 | **PG-DOMAIN-REPO** — 现状: 5 个 Repository 仅内存；修复: User/Session/Role/Device/Command PG 实现 + 4 migration DDL；联动 RBAC-ASSIGN-LEVEL-UPGRADE ✅ closed by S4c-T1 (rbacassign 统一 L2 + RBACASSIGN-L2-STATIC-01 archtest 锁定字面量)/ SEED-ROLE-IFACE ✅ closed by S4c-T1 (adminprovision 重构隐性闭环 + SEED-ROLE-IFACE-01 Hard archtest 锁定生产代码零 `*mem.RoleRepository` 引用)/ AUTH-CACHE 激活 ✅ closed by S4c-T5 (`adapters/redis.CachingSessionStore` 默认关闭，env `GOCELL_SESSION_CACHE_TTL` 启用；触发型 backlog AUTH-CACHE-SUBJECT-REVERSE-INDEX-01 守 user.AuthzEpoch 进 cache 升级路径) | feat | P3/— | 🟡 | — | `adapters/postgres/*` | PR#155 review F4 |
 | S14a | **AWS KMS provider** — 现状: 仅 Vault；修复: 加 KMS adapter | feat | — | 🟠 | 云平台部署需求 | `adapters/kms/` (新) | S14a |
 
 ---
