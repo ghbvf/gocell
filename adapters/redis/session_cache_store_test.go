@@ -494,6 +494,35 @@ func TestCachingSessionStore_Get_RevokedViewFromInner_DoesNotPopulate(t *testing
 	assert.Error(t, err, "revoked view must not be written to cache")
 }
 
+// TestCachingSessionStore_Get_CorruptCacheEntry_DeletesAndFallsThrough — F4 RED test.
+//
+// When the cache holds a corrupt (non-JSON) entry, Get must:
+//  1. Fall through to inner.Get (inner.getCalls == 1).
+//  2. Synchronously delete the corrupt entry so subsequent Gets do not keep
+//     hitting the same corrupt value (DEL the key, not just fall through).
+//
+// The current code falls through (step 1) but does NOT delete the corrupt
+// entry (step 2 missing). This test FAILS on the pre-GREEN codebase — that
+// is the intentional RED state. The GREEN fix adds a synchronous cache.Delete
+// in the unmarshal-fail branch.
+func TestCachingSessionStore_Get_CorruptCacheEntry_DeletesAndFallsThrough(t *testing.T) {
+	t.Parallel()
+	mock := newMockCmdable()
+	require.NoError(t, mock.Set(context.Background(), scsCachedKey, "<<not-json>>", scsTestTTL).Err())
+	inner := &fakeSessionStore{view: newTestView()}
+	store := newTestCachingStore(t, inner, mock)
+
+	got, err := store.Get(context.Background(), scsTestSID)
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Equal(t, int64(1), inner.getCalls.Load(), "corrupt cache entry must fall through to inner")
+
+	// The corrupt entry must have been deleted so subsequent Gets are clean.
+	cmd := mock.Get(context.Background(), scsCachedKey)
+	_, getErr := cmd.Result()
+	assert.Error(t, getErr, "corrupt cache entry must be deleted after fall-through; key must not exist")
+}
+
 // TestNewCachingSessionStore_TypedNilInner_Rejected — T3 RED test.
 //
 // A typed-nil session.Store interface (concrete type is non-nil, pointer value

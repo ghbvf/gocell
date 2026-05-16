@@ -72,11 +72,11 @@ const cachingStoreInnerField = "inner"
 // single-statement pure delegate to s.inner.<SameMethodName>(args...).
 //
 // Production code at adapters/redis/session_cache_store.go satisfies this
-// invariant post-GREEN; the four RED fixtures below mirror the rejected
+// invariant post-GREEN; the seven RED fixtures below mirror the rejected
 // forms so the scanner's detection mechanism is itself verified.
 //
 // RED fixture verification — each fixture package embodies one violation
-// class; all four MUST be detected by scanRevokeDelegateViolations:
+// class; all seven MUST be detected by scanRevokeDelegateViolations:
 //
 //   - F1 (testdata/.../f1_multi_stmt_red): Revoke body contains a second
 //     statement before the return (logs/side-effects). Detects multi-stmt
@@ -92,6 +92,15 @@ const cachingStoreInnerField = "inner"
 //     differently-named inner method (e.g. RevokeForSubject). Detects
 //     same-method-name invariant breakage that would silently route revoke
 //     semantics to the wrong sink.
+//   - F5 (testdata/.../f5_wrong_receiver_red): Revoke body delegates via a
+//     different variable (other.inner.Revoke) instead of the method receiver
+//     (s.inner.Revoke). Detects receiver-ident invariant breakage.
+//   - F6 (testdata/.../f6_wrong_args_red): Revoke body delegates with
+//     literal arguments (context.Background(), "") instead of the method's
+//     own parameter idents. Detects args-ident invariant breakage.
+//   - F7 (testdata/.../f7_cache_in_arg_red): Revoke body delegates with a
+//     CallExpr as an argument (idFromCache(s.cache, id)) instead of a plain
+//     parameter ident. Detects computed/derived args invariant breakage.
 func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +141,9 @@ func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 		{"F2_cache_delete", fixtureRoot + "/f2_cache_delete_red"},
 		{"F3_cache_set", fixtureRoot + "/f3_cache_set_red"},
 		{"F4_wrong_delegate", fixtureRoot + "/f4_wrong_delegate_red"},
+		{"F5_wrong_receiver", fixtureRoot + "/f5_wrong_receiver_red"},
+		{"F6_wrong_args", fixtureRoot + "/f6_wrong_args_red"},
+		{"F7_cache_in_arg", fixtureRoot + "/f7_cache_in_arg_red"},
 	} {
 		verifyRevokeDelegateRedFixture(t, fix.name, fix.pattern)
 	}
