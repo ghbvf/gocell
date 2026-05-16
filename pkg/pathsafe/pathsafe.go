@@ -390,27 +390,35 @@ func rollbackWrites(written, dirs []string, originalErr error) error {
 // The second return value carries any non-ENOENT stat error (most importantly
 // EACCES when an intermediate parent is chmoded 0o000); callers MUST propagate
 // it so rollback runs over previously-written entries. Treating EACCES as
-// "directory exists" — the develop @ 41fc70074 behavior — causes the rollback
-// path to skip dirs that were never actually created and leave goroutine-local
-// state inconsistent with disk.
+// "directory exists" — the develop @ 41fc70074 behavior — caused the rollback
+// path to skip directories that were never actually created and leave
+// goroutine-local rollback state inconsistent with disk.
+//
+// On unix this helper is now only reachable through the Windows code path
+// (nofollow_windows.go's secureMkdirAllAndWrite); the unix fd-walk handles
+// EACCES natively via syscall.Openat propagation. Kept in the platform-neutral
+// file so the internal correctness test runs on linux/macOS CI.
 func collectMissingDirs(dir, realRoot string) ([]string, error) {
 	var missing []string
 	cur := dir
 	for cur != realRoot && cur != filepath.Dir(cur) {
-		if _, err := os.Stat(cur); err != nil {
-			if os.IsNotExist(err) {
-				missing = append(missing, cur)
-				cur = filepath.Dir(cur)
-				continue
-			}
-			// RED-commit stub: original develop swallowed every non-ENOENT
-			// error as "directory exists". Returning nil here preserves that
-			// (buggy) behavior so the internal RED test fails until A9 GREEN
-			// commit replaces this with `return nil, errcode.Wrap(...)`.
+		_, err := os.Stat(cur)
+		if err == nil {
+			// Hit an existing dir → all parents exist too.
 			break
 		}
-		// Once we hit an existing dir, all parents exist too.
-		break
+		if os.IsNotExist(err) {
+			missing = append(missing, cur)
+			cur = filepath.Dir(cur)
+			continue
+		}
+		// EACCES (and any other non-ENOENT error): propagate so rollback
+		// of previously-written entries actually runs. Wrap once with
+		// errcode so callers' errors.Is(err, fs.ErrPermission) walk
+		// continues to match the underlying syscall.Errno.
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"pathsafe: stat parent dir", err,
+			errcode.WithInternal(fmt.Sprintf("dir=%s", cur)))
 	}
 	return missing, nil
 }
