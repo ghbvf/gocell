@@ -16,10 +16,10 @@
 //   - Inside the closure makes a method call on s (rule prerequisite that
 //     the closure is not empty).
 //   - OUTSIDE the closure makes two banned calls that must be guarded:
-//       1. s.refreshStore.Peek(ctx, token)   — caught by Soft AND Medium
-//       2. s.sessionStore.Get(ctx, sid)      — caught only by Medium (Soft
-//          rule's stale guardedCalls map listed "sessionRepo.GetByID", which
-//          no longer exists in production code post-PR #482)
+//     1. s.refreshStore.Peek(ctx, token)   — caught by Soft AND Medium
+//     2. s.sessionStore.Get(ctx, sid)      — caught only by Medium (Soft
+//     rule's stale guardedCalls map listed "sessionRepo.GetByID", which
+//     no longer exists in production code post-PR #482)
 //
 // The receiver field types match production sessionrefresh.Service so the
 // type-aware ResolveMethodCall path returns the right *types.Func; the rule
