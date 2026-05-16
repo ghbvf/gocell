@@ -12,21 +12,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
-// assertMemTx returns an error when ctx does not carry the mem-tx sentinel
-// injected by memTxRunner.RunInTx. FOR-UPDATE semantics require an enclosing
-// RunInTx boundary — calling without one is a programming error.
-//
-// Lock contract: assertMemTx only checks the sentinel; it does NOT acquire
-// store.mu. Callers that verify the sentinel may then read the maps directly
-// because RunInTx already holds store.mu for the entire tx closure.
-func assertMemTx(ctx context.Context) error {
-	if isInMemTx(ctx) {
-		return nil
-	}
-	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
-		"user_repo: FOR UPDATE requires a mem transaction context; call inside Store.TxRunner().RunInTx")
-}
-
 var _ ports.UserRepository = (*UserRepository)(nil)
 
 const (
@@ -48,8 +33,13 @@ const (
 //     re-acquiring would deadlock).
 //   - outside tx: acquire store.mu for the duration of this method call.
 //
-// ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) are only valid
-// inside a tx; they call assertMemTx and never acquire store.mu themselves.
+// ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) follow the same
+// rule: inside memTxRunner.RunInTx they read under the held store.mu and deliver
+// SELECT FOR UPDATE-until-commit serialization; driven by a foreign CellTxManager
+// (corebundle PG-outbox topology, ssobff/demo) they fall back to a per-call
+// store.mu read lock — functional, but the cross-statement serialization
+// guarantee holds only when the mem Store's own TxRunner drives the tx. PG is
+// the production path that provides the hard guarantee unconditionally.
 type UserRepository struct {
 	store *Store
 }
@@ -108,16 +98,16 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*d
 }
 
 // GetByIDForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE semantics.
-// Must be called inside memTxRunner.RunInTx — assertMemTx enforces this.
 //
-// Lock contract: does NOT acquire store.mu. memTxRunner.RunInTx holds store.mu
-// for the entire tx closure; re-acquiring here would deadlock. The map read is
-// safe because the tx lock serializes all concurrent writes.
+// Lock contract: inside memTxRunner.RunInTx the tx already holds store.mu for
+// the whole closure (full FOR-UPDATE-until-commit serialization); re-acquiring
+// would deadlock, so skip. Outside a mem tx (foreign CellTxManager) acquire
+// store.mu for this read — functional per-call locking, see UserRepository doc.
 func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
-	if err := assertMemTx(ctx); err != nil {
-		return nil, err
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
 	}
-	// store.mu already held by RunInTx — bare map read is safe.
 	u, ok := r.store.usersByID[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
@@ -128,16 +118,13 @@ func (r *UserRepository) GetByIDForUpdate(ctx context.Context, id string) (*doma
 }
 
 // GetByUsernameForUpdate (S4d): mem implementation of SELECT ... FOR UPDATE
-// semantics. Must be called inside memTxRunner.RunInTx — assertMemTx enforces this.
-//
-// Lock contract: does NOT acquire store.mu. memTxRunner.RunInTx holds store.mu
-// for the entire tx closure; re-acquiring here would deadlock. The map read is
-// safe because the tx lock serializes all concurrent writes.
+// semantics. Same lock contract as GetByIDForUpdate: full serialization inside
+// memTxRunner.RunInTx; per-call store.mu read lock under a foreign CellTxManager.
 func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
-	if err := assertMemTx(ctx); err != nil {
-		return nil, err
+	if !isInMemTx(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
 	}
-	// store.mu already held by RunInTx — bare map read is safe.
 	u, ok := r.store.byName[username]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,

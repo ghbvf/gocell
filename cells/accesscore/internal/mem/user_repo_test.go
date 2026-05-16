@@ -194,12 +194,22 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// GetByIDForUpdate / GetByUsernameForUpdate fail-fast tests (E1)
+// GetByIDForUpdate / GetByUsernameForUpdate graceful-fallback tests
+//
+// Regression guard (#501): the mem user repo is legitimately wired with a
+// FOREIGN CellTxManager in real composition roots — cmd/corebundle PGMode
+// pairs the mem user repo with the PG outbox tx manager in one cell tx, and
+// ssobff/demo use cell.DemoTxRunner. A hard fail-fast here returned 500 on
+// every such login. ForUpdate must therefore stay FUNCTIONAL outside a mem
+// tx (acquire store.mu per call), not error. Full FOR-UPDATE-until-commit
+// serialization is delivered only when driven by the Store's own TxRunner
+// (the InsideRunInTx tests below); PG is the production hard-guarantee path.
 // ---------------------------------------------------------------------------
 
-// TestGetByIDForUpdate_NoAmbientTx is the RED conformance test for E1:
-// calling GetByIDForUpdate without a mem-tx sentinel must fail with ErrInternal.
-func TestGetByIDForUpdate_NoAmbientTx(t *testing.T) {
+// TestGetByIDForUpdate_NoMemTx_StillFunctional: outside a mem tx (foreign
+// CellTxManager topology) GetByIDForUpdate must NOT error — it acquires
+// store.mu for the call and returns the row.
+func TestGetByIDForUpdate_NoMemTx_StillFunctional(t *testing.T) {
 	store := NewStore(clock.Real())
 	repo := store.UserRepository()
 
@@ -208,14 +218,17 @@ func TestGetByIDForUpdate_NoAmbientTx(t *testing.T) {
 	user.ID = "usr-forupdate-001"
 	require.NoError(t, repo.Create(context.Background(), user))
 
-	// Call WITHOUT a mem-tx sentinel → must fail with ErrInternal.
-	_, err = repo.GetByIDForUpdate(context.Background(), "usr-forupdate-001")
-	require.Error(t, err, "GetByIDForUpdate must error without a mem-tx context")
+	// Call WITHOUT a mem-tx sentinel → must succeed (per-call store.mu lock).
+	got, err := repo.GetByIDForUpdate(context.Background(), "usr-forupdate-001")
+	require.NoError(t, err, "GetByIDForUpdate must stay functional outside a mem tx (foreign TxRunner topology)")
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-forupdate-001", got.ID)
+
+	// Absent row → domain NotFound (not an infra error).
+	_, err = repo.GetByIDForUpdate(context.Background(), "nope")
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
-	assert.Equal(t, errcode.KindInternal, ce.Kind)
-	assert.Equal(t, errcode.ErrInternal, ce.Code)
-	assert.Contains(t, ce.Message, "FOR UPDATE")
+	assert.Equal(t, errcode.KindNotFound, ce.Kind)
 }
 
 // TestGetByIDForUpdate_InsideRunInTx verifies that GetByIDForUpdate succeeds
@@ -240,9 +253,10 @@ func TestGetByIDForUpdate_InsideRunInTx(t *testing.T) {
 	assert.Equal(t, "usr-intx-001", got.ID)
 }
 
-// TestGetByUsernameForUpdate_NoAmbientTx is the RED conformance test for E1:
-// calling GetByUsernameForUpdate without a mem-tx sentinel must fail with ErrInternal.
-func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
+// TestGetByUsernameForUpdate_NoMemTx_StillFunctional: same regression guard as
+// the ID variant — username-keyed ForUpdate must stay functional outside a
+// mem tx (this is the exact path that returned 500 on corebundle/ssobff login).
+func TestGetByUsernameForUpdate_NoMemTx_StillFunctional(t *testing.T) {
 	store := NewStore(clock.Real())
 	repo := store.UserRepository()
 
@@ -251,14 +265,16 @@ func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
 	user.ID = "usr-forupdate-un-001"
 	require.NoError(t, repo.Create(context.Background(), user))
 
-	// Call WITHOUT a mem-tx sentinel → must fail with ErrInternal.
-	_, err = repo.GetByUsernameForUpdate(context.Background(), "forupdate-un")
-	require.Error(t, err, "GetByUsernameForUpdate must error without a mem-tx context")
+	// Call WITHOUT a mem-tx sentinel → must succeed.
+	got, err := repo.GetByUsernameForUpdate(context.Background(), "forupdate-un")
+	require.NoError(t, err, "GetByUsernameForUpdate must stay functional outside a mem tx")
+	require.NotNil(t, got)
+	assert.Equal(t, "usr-forupdate-un-001", got.ID)
+
+	_, err = repo.GetByUsernameForUpdate(context.Background(), "absent")
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
-	assert.Equal(t, errcode.KindInternal, ce.Kind)
-	assert.Equal(t, errcode.ErrInternal, ce.Code)
-	assert.Contains(t, ce.Message, "FOR UPDATE")
+	assert.Equal(t, errcode.KindNotFound, ce.Kind)
 }
 
 // TestGetByUsernameForUpdate_InsideRunInTx verifies that GetByUsernameForUpdate

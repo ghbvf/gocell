@@ -52,10 +52,16 @@ type UserRepository interface {
 	// with a snapshot of users.authz_epoch that the in-flight Invalidator has
 	// already advanced (PR #490 review P1-#3).
 	//
-	// fail-fast enforced: both PG and mem implementations return
-	// errcode.ErrInternal when called without an ambient transaction context.
-	// PG checks for a pgx.Tx under persistence.TxCtxKey; mem checks for the
-	// sentinel injected by Store.TxRunner().RunInTx.
+	// Serialization contract differs by implementation:
+	//   - PG: fail-fast — returns errcode.ErrInternal without a pgx.Tx under
+	//     persistence.TxCtxKey (FOR UPDATE is meaningless outside a tx). This
+	//     is the production hard guarantee.
+	//   - mem: under the Store's own TxRunner the tx holds store.mu for the
+	//     whole closure → full FOR-UPDATE-until-commit serialization. Driven
+	//     by a foreign CellTxManager (corebundle PG-outbox topology,
+	//     ssobff/demo) it takes store.mu per call — functional; cross-statement
+	//     serialization holds only on the Store-TxRunner path. mem never
+	//     hard-fails on TxRunner pairing (that broke real composition roots, #501).
 	GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error)
 
 	// GetByUsernameForUpdate is the username-keyed counterpart to
@@ -63,7 +69,8 @@ type UserRepository interface {
 	// callers from password / lock paths (which already have the userID) use
 	// GetByIDForUpdate.
 	//
-	// fail-fast enforced: same contract as GetByIDForUpdate — both PG and mem
-	// return errcode.ErrInternal when called outside an ambient transaction.
+	// Serialization contract: same as GetByIDForUpdate (PG fail-fast hard
+	// guarantee; mem full serialization on Store-TxRunner, per-call lock under
+	// a foreign CellTxManager, never hard-fails on pairing).
 	GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error)
 }

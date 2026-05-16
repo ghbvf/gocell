@@ -35,9 +35,11 @@
 //     reentrant; re-acquiring would deadlock).
 //   - outside tx (no sentinel): acquire store.mu as usual.
 //
-// ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) additionally
-// enforce that they are always called inside a tx via assertMemTx; they never
-// acquire the lock themselves (the tx body already holds it).
+// ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) follow the same
+// rule: inside a mem tx they read under the held store.mu (full
+// FOR-UPDATE-until-commit serialization); under a foreign CellTxManager they
+// take store.mu per call (functional fallback). They never hard-fail on the
+// TxRunner pairing — see #501 (that broke corebundle/ssobff/demo logins).
 package mem
 
 import (
@@ -94,10 +96,12 @@ func (r memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error
 // cross-repo invariants without leaking storage details across the repo
 // boundary.
 //
-// TxRunner is the only source of a correctly-paired TxRunner for this Store.
-// Wiring a different TxRunner (e.g. cell.DemoTxRunner) with repos from this
-// Store breaks the single-lock rule and will cause assertMemTx to fail-fast on
-// any ForUpdate call.
+// TxRunner is the source of the Store-paired TxRunner that delivers full
+// FOR-UPDATE-until-commit serialization. Wiring a different TxRunner (e.g.
+// cell.DemoTxRunner, or a PG tx manager in corebundle's mixed-topology e2e)
+// is still functional — ForUpdate falls back to a per-call store.mu lock —
+// but the cross-statement serialization guarantee then holds only on the
+// Store-TxRunner path. mem never hard-fails on the pairing (#501).
 type Store struct {
 	mu        sync.Mutex
 	usersByID map[string]*domain.User
