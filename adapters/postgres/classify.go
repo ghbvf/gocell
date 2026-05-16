@@ -64,13 +64,22 @@ func isRetryablePGError(err error) bool {
 		return false
 	}
 
+	// context.Canceled FIRST — the caller abandoned the work; retry is
+	// pointless. This MUST precede pgconn.SafeToRetry: pgx sets safeToRetry
+	// on its connect/exec wrapper when the failure occurred before any bytes
+	// were sent, which is exactly the shape of a context-canceled acquire —
+	// so SafeToRetry(canceledErr) can be true. Checking Canceled first
+	// prevents a caller-canceled operation from being mislabeled transient.
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+
 	// Driver-level safe-to-retry signal (e.g. *pgconn.connectError).
 	if pgconn.SafeToRetry(err) {
 		return true
 	}
 
 	// context.DeadlineExceeded — the deadline may not recur on retry.
-	// context.Canceled is intentionally excluded.
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

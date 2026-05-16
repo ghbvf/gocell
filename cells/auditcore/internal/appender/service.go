@@ -3,6 +3,7 @@ package appender
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -147,6 +148,19 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		}
 		return outbox.Emit(txCtx, s.emitter, dto.TopicAuditAppended, appendedEvent)
 	}); err != nil {
+		// Idempotent replay: the ledger already holds this entry (same
+		// content/EventID fingerprint), e.g. outbox redelivery or a parallel
+		// consumer-group. errcode.ErrAuditLedgerAlreadyExists is an idempotent
+		// SUCCESS — the entry is committed; the contract (pkg/errcode godoc)
+		// is "treat as already committed and not retry". Ack (not Requeue,
+		// not DLX) and log at Info, before the error-disposition path.
+		var dup *errcode.Error
+		if errors.As(err, &dup) && dup.Code == errcode.ErrAuditLedgerAlreadyExists {
+			s.logger.Info(logPrefix+": entry already appended (idempotent replay)",
+				slog.String("event_id", entry.ID),
+				slog.String("event_type", entry.EventType))
+			return outbox.Ack()
+		}
 		s.logger.Error(logPrefix+": failed to persist entry",
 			slog.Any("error", err),
 			slog.String("event_id", entry.ID),

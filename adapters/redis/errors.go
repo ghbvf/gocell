@@ -64,11 +64,20 @@ func classifyRedisError(err error, opCode errcode.Code, opMsg string) error {
 //     event loss. Not an AI-rebust enforcement mechanism (business
 //     classification, not archtest/governance) — no Soft-upgrade backlog
 //     entry required; the typed check (2) is the durable signal.
+//     3b. goredis.ErrPoolTimeout → transient (connection-pool exhaustion; the
+//     pool frees up — go-redis itself classifies this retryable).
 //  4. Redis reply-code prefixes CLUSTERDOWN / LOADING / TRYAGAIN / MASTERDOWN →
 //     transient (server-recovering states; go-redis typed helpers via HasErrorPrefix
 //     are preferred; plain errors.New strings match the HasPrefix fallback path).
 func isTransientRedisError(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// go-redis pool exhaustion: the client could not obtain a connection
+	// within PoolTimeout. go-redis itself treats this as retryable (the pool
+	// frees up); requeue rather than DLX.
+	if errors.Is(err, goredis.ErrPoolTimeout) {
 		return true
 	}
 

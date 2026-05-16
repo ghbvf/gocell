@@ -3,8 +3,11 @@ package redis
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
+
+	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -90,6 +93,16 @@ func TestClassifyRedisError(t *testing.T) {
 		{
 			name:      "i/o timeout string → transient",
 			err:       errors.New("read tcp 127.0.0.1:0->127.0.0.1:6379: i/o timeout"),
+			transient: true,
+		},
+		{
+			name:      "goredis.ErrPoolTimeout → transient",
+			err:       goredis.ErrPoolTimeout,
+			transient: true,
+		},
+		{
+			name:      "wrapped goredis.ErrPoolTimeout → transient",
+			err:       fmt.Errorf("cache get: %w", goredis.ErrPoolTimeout),
 			transient: true,
 		},
 	}

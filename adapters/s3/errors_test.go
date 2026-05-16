@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
 
@@ -122,6 +123,33 @@ func TestClassifyS3Error(t *testing.T) {
 		{
 			name:      "net.Error Timeout=false → permanent",
 			err:       &fakeNetError{timeout: false},
+			wantTrans: false,
+		},
+
+		// ---- transient: AWS SDK API error codes (status-agnostic) ----
+		{
+			// RequestTimeout arrives as HTTP 400 — the status-only check
+			// would mis-classify it permanent; the code makes it transient.
+			name: "API RequestTimeout (HTTP 400) → transient",
+			err: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: 400}},
+				Err:      &smithy.GenericAPIError{Code: "RequestTimeout", Message: "timed out"},
+			},
+			wantTrans: true,
+		},
+		{
+			name:      "API SlowDown → transient",
+			err:       &smithy.GenericAPIError{Code: "SlowDown", Message: "reduce rate"},
+			wantTrans: true,
+		},
+		{
+			name:      "API ThrottlingException → transient",
+			err:       &smithy.GenericAPIError{Code: "ThrottlingException", Message: "throttled"},
+			wantTrans: true,
+		},
+		{
+			name:      "API AccessDenied → permanent",
+			err:       &smithy.GenericAPIError{Code: "AccessDenied", Message: "denied"},
 			wantTrans: false,
 		},
 	}

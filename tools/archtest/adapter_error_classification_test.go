@@ -8,10 +8,11 @@
 //     func WrapInfra. The field is unexported (Go type system forbids any
 //     package outside pkg/errcode from setting it at all); this archtest adds
 //     the in-package lock so no future New/Wrap/Assertion/Option sets it.
-//   - Upstream Hard: each in-scope adapter (postgres / redis / s3) routes its
-//     transient branch through errcode.WrapInfra — verified by a type-aware
-//     call-resolution presence check, so dropping an adapter's classifier
-//     fails CI.
+//   - Upstream Hard: each in-scope adapter (postgres / redis / s3) declares a
+//     classify…Error function WHOSE BODY routes through errcode.WrapInfra —
+//     verified by type-aware call resolution scoped to that function (a stray
+//     or dead-code WrapInfra call elsewhere in the package does NOT satisfy
+//     it), so dropping/bypassing an adapter's classifier fails CI.
 //
 // Tool: archtest.RunTypedProduction (040 Pass-Driver) + *types.Info call /
 // field resolution. NOT registered in internal/archtestmeta.LegacyAllowlist.
@@ -56,6 +57,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -100,15 +102,16 @@ func TestAdapterErrorClassificationTransient01(t *testing.T) {
 		if _, tracked := wantAdapters[p.Pkg.Path()]; !tracked {
 			return nil
 		}
-		if packageCallsWrapInfra(p, errcodePkgPath) {
+		if classifierRoutesThroughWrapInfra(p, errcodePkgPath) {
 			wantAdapters[p.Pkg.Path()] = true
 		}
 		return nil
 	})
 	for pkg, present := range wantAdapters {
 		assert.Truef(t, present,
-			"adapter %s must route its transient branch through errcode.WrapInfra "+
-				"(ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 upstream Hard)", pkg)
+			"adapter %s must declare a classify…Error function whose body routes "+
+				"through errcode.WrapInfra (ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 "+
+				"upstream Hard — package-level presence is insufficient)", pkg)
 	}
 }
 
@@ -230,24 +233,58 @@ func isErrcodeTransientField(info *types.Info, ident *ast.Ident, errcodePkgPath 
 	return v.Pkg() != nil && v.Pkg().Path() == errcodePkgPath
 }
 
-// packageCallsWrapInfra reports whether p contains at least one call whose
-// callee resolves to errcodePkgPath.WrapInfra (qualified or dot-imported).
-func packageCallsWrapInfra(p *Pass, errcodePkgPath string) bool {
+// classifierFuncNamePattern matches the per-adapter classifier function
+// (classifyPGError / classifyRedisError / classifyS3Error). Anchoring the
+// scan to this function — rather than the whole package — means a stray /
+// dead-code / unrelated errcode.WrapInfra call elsewhere in the adapter does
+// NOT satisfy the upstream lock: the classifier itself must route through
+// the funnel.
+var classifierFuncNamePattern = regexp.MustCompile(`^classify\w*Error$`)
+
+// classifierRoutesThroughWrapInfra reports whether p declares a
+// classify…Error function whose body contains a call resolving to
+// errcodePkgPath.WrapInfra. This proves the classifier's transient branch is
+// wired through the funnel, not merely that the package mentions WrapInfra
+// somewhere (F7: package-presence was too weak — dead code passed it).
+func classifierRoutesThroughWrapInfra(p *Pass, errcodePkgPath string) bool {
 	if p.TypesInfo == nil {
 		return false
 	}
-	found := false
 	for _, file := range p.Files {
-		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			if found {
-				return
+		// FindFirstChild is the typed depth-1 funnel (SCANNER-FRAMEWORK-USAGE-02:
+		// no caller-held sentinel over EachInChildren). FuncDecl is a direct
+		// child of *ast.File.
+		_, ok := FindFirstChild[ast.FuncDecl](file, func(fd *ast.FuncDecl) bool {
+			if fd.Body == nil || fd.Name == nil {
+				return false
 			}
-			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-			if ok && pkgPath == errcodePkgPath && name == transientMarkerWriterFunc {
-				found = true
+			if !classifierFuncNamePattern.MatchString(fd.Name.Name) {
+				return false
 			}
+			return funcBodyCallsWrapInfra(p.TypesInfo, fd.Body, errcodePkgPath)
 		})
+		if ok {
+			return true
+		}
 	}
+	return false
+}
+
+// funcBodyCallsWrapInfra reports whether body contains a call resolving to
+// errcodePkgPath.WrapInfra. EachInSubtree (recursive) is required because the
+// call is nested (inside an IfStmt/ReturnStmt); USAGE-02 monitors only the
+// depth-1 EachInChildren sentinel, not the subtree walk.
+func funcBodyCallsWrapInfra(info *types.Info, body *ast.BlockStmt, errcodePkgPath string) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+		if ok && pkgPath == errcodePkgPath && name == transientMarkerWriterFunc {
+			found = true
+		}
+	})
 	return found
 }
 

@@ -137,32 +137,47 @@ func WrapInfra(code Code, message string, cause error, opts ...Option) *Error {
 //	}
 //	return outbox.Reject(outbox.NewPermanentError(err))
 //
-// It returns true when, anywhere in the Unwrap chain:
-//   - an *Error carries the WrapInfra transient marker (the single recognized
-//     *Error signal — downstream Hard: a transient-looking code constructed
-//     via New/Wrap without WrapInfra is NOT transient); or
-//   - the error is context.DeadlineExceeded (a deadline may succeed on retry);
-//     context.Canceled is deliberately NOT transient (the caller gave up); or
-//   - a net.Error reports Timeout()==true (modern replacement for the
-//     deprecated net.Error.Temporary(), golang/go #45729); or
-//   - an error implements interface{ RetryableError() bool } returning true
-//     (the pgconn.SafeToRetry / aws-sdk-go-v2 RetryableError idiom, letting
-//     raw SDK errors be recognized before adapter wrapping).
+// Classification is two-tier and the outer tier is authoritative:
 //
-// Returns false for nil. Uses errors.As/Is so it traverses chains produced by
-// fmt.Errorf("…: %w", err).
+//  1. If the chain contains any *errcode.Error, the OUTERMOST one's WrapInfra
+//     transient marker is the final answer — return ec.transient and stop.
+//     A re-wrap via Wrap/New is a deliberate RE-CLASSIFICATION: the outer
+//     layer owns the disposition decision, so an inner WrapInfra marker does
+//     NOT leak through an outer permanent re-wrap (e.g. configcore
+//     cryptoOpError re-wraps a vault-transient cause as a config-layer
+//     KindInternal error and is routed via IsInfraError, not IsTransient).
+//     Raw recognizers (tier 2) are NOT consulted once the error is classified
+//     — a classified-permanent error stays permanent even if some inner cause
+//     looks network-ish. This is the open-source consensus (gRPC/AWS SDK v2/
+//     Kratos: the boundary classifier's decision wins; re-wrap = re-classify)
+//     and keeps the WrapInfra funnel single-sourced.
+//  2. Only when the chain contains NO *errcode.Error (a raw, un-classified
+//     low-level error) are these recognized as transient:
+//     - context.DeadlineExceeded (a deadline may not recur on retry);
+//     context.Canceled is NOT transient (the caller gave up);
+//     - net.Error with Timeout()==true (modern replacement for the
+//     deprecated net.Error.Temporary(), golang/go #45729);
+//     - interface{ RetryableError() bool } == true (pgconn.SafeToRetry /
+//     aws-sdk-go-v2 RetryableError idiom for raw SDK errors).
+//
+// errors.As binds the outermost *Error (fmt.Errorf("…: %w", WrapInfra(…))
+// still yields the WrapInfra *Error as the first — and only — *Error, so
+// fmt-wrapping is transparent; only an outer errcode.Wrap/New re-classifies).
+//
+// Returns false for nil.
 func IsTransient(err error) bool {
 	if err == nil {
 		return false
 	}
 
+	// Tier 1: a classified *errcode.Error is authoritative (outermost wins).
 	var ec *Error
-	if errors.As(err, &ec) && ec.transient {
-		return true
+	if errors.As(err, &ec) {
+		return ec.transient
 	}
 
-	// context.Canceled is intentionally excluded: a canceled parent context
-	// means the work is no longer wanted; retrying is pointless.
+	// Tier 2: raw, un-classified low-level error only.
+	// context.Canceled is intentionally excluded (caller gave up).
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

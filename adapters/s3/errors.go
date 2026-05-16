@@ -5,10 +5,38 @@ import (
 	"errors"
 	"net"
 
+	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// retryableS3ErrorCodes mirrors aws-sdk-go-v2 retry.DefaultRetryableErrorCodes
+// + DefaultThrottleErrorCodes (plus S3 InternalError / ServiceUnavailable).
+// These codes are retry-safe regardless of HTTP status — notably
+// RequestTimeout / RequestTimeoutException arrive as HTTP 400, which the
+// status-only check would mis-classify as permanent.
+//
+// ref: aws/aws-sdk-go-v2 aws/retry/standard.go DefaultRetryableErrorCodes /
+// DefaultThrottleErrorCodes.
+var retryableS3ErrorCodes = map[string]struct{}{
+	"RequestTimeout":                         {},
+	"RequestTimeoutException":                {},
+	"InternalError":                          {},
+	"ServiceUnavailable":                     {},
+	"SlowDown":                               {},
+	"Throttling":                             {},
+	"ThrottlingException":                    {},
+	"ThrottledException":                     {},
+	"RequestThrottled":                       {},
+	"RequestThrottledException":              {},
+	"TooManyRequestsException":               {},
+	"RequestLimitExceeded":                   {},
+	"BandwidthLimitExceeded":                 {},
+	"LimitExceededException":                 {},
+	"PriorRequestNotComplete":                {},
+	"ProvisionedThroughputExceededException": {},
+}
 
 // S3 adapter error codes.
 const (
@@ -48,7 +76,11 @@ func classifyS3Error(err error, opCode errcode.Code, opMsg string) error {
 // Classification order:
 //  1. errcode.IsTransient in chain → transient (respects WrapInfra marker).
 //  2. Any other *errcode.Error in chain → permanent (already classified).
-//  3. smithyhttp.ResponseError with HTTP status → classify by status code.
+//  3. smithyhttp.ResponseError with HTTP status → transient if status is
+//     retryable; otherwise fall through (status alone is not authoritative).
+//     3b. smithy.APIError with a retryable/throttle ErrorCode → transient
+//     (RequestTimeout / SlowDown / Throttling… — retry-safe regardless of
+//     HTTP status; RequestTimeout is HTTP 400).
 //  4. context.DeadlineExceeded → transient; context.Canceled → permanent.
 //  5. net.Error.Timeout() == true → transient.
 //  6. Everything else → permanent (fail-closed).
@@ -67,7 +99,20 @@ func isTransientS3Error(err error) bool {
 	// 3. AWS SDK smithy HTTP response error — classify by status code.
 	var respErr *smithyhttp.ResponseError
 	if errors.As(err, &respErr) {
-		return isTransientHTTPStatus(respErr.HTTPStatusCode())
+		if isTransientHTTPStatus(respErr.HTTPStatusCode()) {
+			return true
+		}
+		// fall through to the API error-code check below: some retryable
+		// codes (RequestTimeout) arrive with a non-retryable HTTP status.
+	}
+
+	// 3b. AWS SDK API error code — retryable/throttle codes are retry-safe
+	// independent of HTTP status (RequestTimeout is HTTP 400).
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if _, ok := retryableS3ErrorCodes[apiErr.ErrorCode()]; ok {
+			return true
+		}
 	}
 
 	// 4. Context errors: deadline is transient, canceled is permanent.

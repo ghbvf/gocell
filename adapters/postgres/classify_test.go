@@ -11,6 +11,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// safeToRetryErr mimics pgx's connect/exec wrapper: pgconn.SafeToRetry
+// recognizes any error whose chain implements SafeToRetry() bool == true.
+// It also unwraps to its cause so errors.Is(err, context.Canceled) holds.
+type safeToRetryErr struct{ cause error }
+
+func (e safeToRetryErr) Error() string     { return "pg: " + e.cause.Error() }
+func (e safeToRetryErr) Unwrap() error     { return e.cause }
+func (e safeToRetryErr) SafeToRetry() bool { return true }
+
 // TestIsRetryablePGError covers all SQLSTATE branches for isRetryablePGError.
 func TestIsRetryablePGError(t *testing.T) {
 	tests := []struct {
@@ -71,6 +80,14 @@ func TestIsRetryablePGError(t *testing.T) {
 		{
 			name: "context.Canceled — NOT transient",
 			err:  context.Canceled,
+			want: false,
+		},
+		{
+			// pgx wraps a canceled-context acquire/exec in an error whose
+			// SafeToRetry()==true (failure before any bytes sent). The
+			// Canceled check must win — caller gave up, not transient.
+			name: "SafeToRetry error wrapping context.Canceled — NOT transient",
+			err:  safeToRetryErr{cause: context.Canceled},
 			want: false,
 		},
 		{

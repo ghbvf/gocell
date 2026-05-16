@@ -285,6 +285,35 @@ func TestService_HandleEvent_AppendFails_Classified(t *testing.T) {
 	}
 }
 
+// TestService_HandleEvent_DuplicateReplay_Ack verifies the idempotent-replay
+// contract: redelivering the same entry (same content/EventID fingerprint)
+// makes ledger.Append return errcode.ErrAuditLedgerAlreadyExists, which the
+// handler must treat as an idempotent SUCCESS → Ack (not Requeue, not DLX).
+func TestService_HandleEvent_DuplicateReplay_Ack(t *testing.T) {
+	p := newTestProtocol(t)
+	realStore, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	svc := newService(t, spec, realStore, p)
+
+	entry := outbox.Entry{
+		ID:        "evt-dup",
+		EventType: "event.user.created.v1",
+		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
+	}
+
+	first := svc.HandleEvent(context.Background(), entry)
+	require.Equal(t, outbox.DispositionAck, first.Disposition, "first append must succeed")
+
+	// Redelivery of the identical entry → ErrAuditLedgerAlreadyExists → Ack.
+	second := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, second.Disposition,
+		"idempotent replay must Ack, not Requeue/Reject")
+	var permErr *outbox.PermanentError
+	assert.False(t, errors.As(second.Err, &permErr),
+		"idempotent replay must not be a PermanentError")
+}
+
 // TestService_HandleEvent_Happy verifies the full happy path: ledger.Append +
 // outbox.Emit run inside the same RunInTx block (L2 OutboxFact pattern). We
 // observe the emit by injecting a recording emitter.

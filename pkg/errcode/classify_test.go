@@ -91,4 +91,38 @@ func TestWrapInfra_NilCauseTolerated(t *testing.T) {
 	assert.Nil(t, ec.Cause)
 }
 
+// TestIsTransient_TwoTierAuthority locks the two-tier semantic (F2/F3):
+// a classified *errcode.Error is authoritative (outermost wins, re-wrap =
+// re-classify); raw recognizers apply ONLY when the chain has no *Error.
+func TestIsTransient_TwoTierAuthority(t *testing.T) {
+	inner := WrapInfra(Code("ERR_ADAPTER_PG_QUERY"), "serialization failure",
+		errors.New("40001"))
+
+	// F2: an outer permanent errcode.Wrap re-classifies — the inner WrapInfra
+	// marker must NOT leak through (re-classification wins).
+	reclassified := Wrap(KindInternal, Code("ERR_CONFIG_DECRYPT_FAILED"),
+		"config decrypt failed", inner)
+	assert.False(t, IsTransient(reclassified),
+		"outer permanent Wrap re-classifies; inner WrapInfra marker must not leak")
+
+	// fmt.Errorf wrapping is transparent: WrapInfra stays the outermost (only)
+	// *Error, so the marker is still authoritative → transient.
+	assert.True(t, IsTransient(fmt.Errorf("svc: %w", inner)),
+		"fmt.Errorf wrap is transparent; WrapInfra marker still authoritative")
+
+	// F3: a classified-permanent *Error whose cause is a raw transient-looking
+	// error (ctx.DeadlineExceeded) stays permanent — tier-2 raw recognizers
+	// are NOT consulted once the error is classified.
+	permWrapsDeadline := Wrap(KindInternal, Code("ERR_ADAPTER_PG_QUERY"),
+		"schema drift", context.DeadlineExceeded)
+	assert.False(t, IsTransient(permWrapsDeadline),
+		"classified-permanent must not be overridden by an inner ctx.DeadlineExceeded")
+
+	// Tier 2 still works for genuinely un-classified raw errors.
+	assert.True(t, IsTransient(context.DeadlineExceeded),
+		"bare ctx.DeadlineExceeded (no *Error) → tier-2 transient")
+	assert.True(t, IsTransient(fmt.Errorf("dial: %w", context.DeadlineExceeded)),
+		"fmt-wrapped bare ctx.DeadlineExceeded (no *Error) → tier-2 transient")
+}
+
 var _ = time.Second // keep time import stable for future deadline cases
