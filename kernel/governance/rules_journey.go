@@ -15,10 +15,16 @@ package governance
 //	(work-progress vs production-maturity); the matrix below codifies the
 //	legal combinations rather than collapsing them into a single field.
 //
-//	  todo  → {experimental}        — not yet started, must be experimental
-//	  doing → {experimental, active}— in progress, contract can be either
-//	  done  → {active, stable}      — finished, must have promoted at least
-//	                                  to active (stable is fully cooled)
+//	  todo  → {experimental}         — not yet started, must be experimental
+//	  doing → {experimental, active} — in progress, contract can be either
+//	  done  → {active}               — finished, must have promoted to active
+//
+//	The matrix tracks the lifecycle vocab actually accepted by FMT (rules_fmt.go
+//	validJourneyLifecycles) and the journey.schema.json enum — currently
+//	{active, experimental} only. If a future PR introduces a stable lifecycle
+//	state, it must (1) extend the schema enum, (2) extend validJourneyLifecycles,
+//	and (3) extend this matrix simultaneously — anything less leaves a phantom
+//	state in the matrix that the schema layer rejects unreachable.
 //
 // AI-rebust grade: Medium. Hard upgrade paths (backlog, not in PR-4):
 //   - JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01 — kernel/metadata layer
@@ -50,14 +56,15 @@ import (
 // (typed const + parse-time reject) is the planned path to make even
 // same-package mutation unrepresentable.
 //
-// Reverse-lookup intuition for readers: the matrix encodes both directions
-// of the legal pairing. `stable` lifecycle appears in exactly one entry
-// (under `done`), so `lifecycle: stable + state: ∈ {todo, doing}` is
-// illegal; symmetrically `state: todo` requires `lifecycle: experimental`.
+// Reverse-lookup intuition for readers: `state: todo` requires
+// `lifecycle: experimental`; `state: done` requires `lifecycle: active`;
+// `state: doing` accepts either. The matrix entries are kept in lock-step
+// with rules_fmt.go validJourneyLifecycles so an unsupported lifecycle
+// value cannot show up here as a "phantom" target.
 var validBoardLifecycleMatrix = map[string]map[string]bool{
 	"todo":  {"experimental": true},
 	"doing": {"experimental": true, "active": true},
-	"done":  {"active": true, "stable": true},
+	"done":  {"active": true},
 }
 
 // validateJOURNEYCONTRACTEXISTENCE01 enforces the inverse of REF-07: every

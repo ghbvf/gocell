@@ -119,7 +119,7 @@ func TestJOURNEYSTATUSLIFECYCLE01_TodoMustBeExperimental(t *testing.T) {
 		"error message must enumerate allowed lifecycles; got: %s", r.Message)
 }
 
-func TestJOURNEYSTATUSLIFECYCLE01_DoneRequiresActiveOrStable(t *testing.T) {
+func TestJOURNEYSTATUSLIFECYCLE01_DoneRequiresActive(t *testing.T) {
 	pm := validProject()
 	pm.StatusBoard[0].State = "done"
 	pm.Journeys["J-ssologin"].Lifecycle = "experimental"
@@ -129,8 +129,9 @@ func TestJOURNEYSTATUSLIFECYCLE01_DoneRequiresActiveOrStable(t *testing.T) {
 	require.Len(t, got, 1)
 	r := got[0]
 	assert.Equal(t, SeverityError, r.Severity)
-	assert.True(t, strings.Contains(r.Message, "active, stable"),
-		"error message must enumerate {active, stable} as the allowed set; got: %s", r.Message)
+	// Allowed set for "done" is just {active}; schema/FMT does not accept stable.
+	assert.True(t, strings.Contains(r.Message, "allowed lifecycles for state \"done\": active"),
+		"error message must enumerate {active} as the allowed set; got: %s", r.Message)
 }
 
 func TestJOURNEYSTATUSLIFECYCLE01_ActiveDoingWarning(t *testing.T) {

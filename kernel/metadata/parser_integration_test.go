@@ -121,20 +121,18 @@ func TestParseRealProject(t *testing.T) {
 	assert.Contains(t, pm.Assemblies, "corebundle")
 
 	// --- Status Board: at least the 8 original entries (upper bound catches over-parse) ---
-	assert.GreaterOrEqual(t, len(pm.StatusBoard), 8, "expected at least 8 status-board entries")
-	assert.LessOrEqual(t, len(pm.StatusBoard), 12, "unexpected extra status-board entries parsed — update this bound if new entries were added intentionally")
-	var orderCreateStatus *StatusBoardEntry
+	//
+	// J-ordercreate (an example journey under examples/todoorder/journeys/)
+	// is NOT tracked in the platform journeys/status-board.yaml — example
+	// projects manage their own readiness. This is enforced by validateADV01's
+	// examples/ exemption and the parallel CHECK-JOURNEY-NO-STATUS-ENTRY
+	// exemption in cmd/gocell/app/check.go::journeyStatusCheck.
+	assert.GreaterOrEqual(t, len(pm.StatusBoard), 8, "expected at least 8 platform status-board entries")
+	assert.LessOrEqual(t, len(pm.StatusBoard), 11, "unexpected extra status-board entries parsed — update this bound if new platform entries were added intentionally")
 	for i := range pm.StatusBoard {
-		if pm.StatusBoard[i].JourneyID == "J-ordercreate" {
-			orderCreateStatus = &pm.StatusBoard[i]
-			break
-		}
+		assert.NotEqual(t, "J-ordercreate", pm.StatusBoard[i].JourneyID,
+			"J-ordercreate is an example journey and must not appear in the platform status-board")
 	}
-	require.NotNil(t, orderCreateStatus, "status-board must track J-ordercreate")
-	assert.Equal(t, "J-ordercreate", orderCreateStatus.JourneyID)
-	assert.NotEmpty(t, orderCreateStatus.State)
-	assert.NotEmpty(t, orderCreateStatus.Risk)
-	assert.NotEmpty(t, orderCreateStatus.UpdatedAt)
 
 	// --- Actors: 4 (edge-bff + 3 external subscribers added by PR-CFG-B for ADV-05) ---
 	assert.Len(t, pm.Actors, 4, "expected 4 actors")
