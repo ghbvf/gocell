@@ -77,3 +77,16 @@ func (r Status400ErrorResponse) visitStatusResponse(ctx context.Context, w http.
 	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
 	return nil
 }
+
+// Status404ErrorResponse renders an HTTP 404 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Status404ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Status404ErrorResponse) visitStatusResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
+	return nil
+}
