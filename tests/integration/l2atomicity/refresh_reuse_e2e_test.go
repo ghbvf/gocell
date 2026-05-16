@@ -78,4 +78,18 @@ func TestL2_RefreshReuseTriggersCascade(t *testing.T) {
 		return countLiveSessions(t, h, victimID) == 0
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"all victim sessions must be revoked after reuse cascade")
+
+	// credentialinvalidate.Apply's third op is refresh.Store.RevokeUser — without
+	// this assertion the test would still pass if RevokeUser degraded to a no-op
+	// (epoch bump + session revoke alone would still make access tokens 401).
+	// Verify both the DB-row terminal state and the HTTP-surface effect.
+	require.Eventually(t, func() bool {
+		return countLiveRefreshTokensForSubject(t, h, victimID) == 0
+	}, testtime.EventuallyLong, testtime.MediumPoll,
+		"all victim refresh tokens must be revoked after reuse cascade (RevokeUser third op)")
+
+	// Even the most recently rotated child refresh token must now be rejected.
+	envChild := httpRefreshExpect401(t, h.base, second.RefreshToken)
+	assert.Equal(t, "ERR_AUTH_REFRESH_FAILED", envChild.Error.Code,
+		"post-cascade refresh with a previously-live child token must surface ERR_AUTH_REFRESH_FAILED")
 }

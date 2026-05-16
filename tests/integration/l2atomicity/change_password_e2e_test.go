@@ -72,6 +72,18 @@ func TestL2_ChangePasswordOldPasswordIncorrect(t *testing.T) {
 		assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", stale.Error.Code,
 			"stale access token must be rejected with the generic ERR_AUTH_UNAUTHORIZED (enumeration defense)")
 
+		// Old refresh token must also be rejected. ChangePassword runs the
+		// credentialinvalidate.Invalidator.Apply funnel which includes
+		// refresh.Store.RevokeUser as its third op; this assertion plus the
+		// row-count check below would catch a regression where RevokeUser
+		// degrades to no-op (epoch+session alone would still 401 access tokens
+		// but the refresh chain would survive).
+		envStaleRefresh := httpRefreshExpect401(t, h.base, fresh.RefreshToken)
+		assert.Equal(t, "ERR_AUTH_REFRESH_FAILED", envStaleRefresh.Error.Code,
+			"stale refresh token must be rejected after ChangePassword cascade")
+		assert.Equal(t, 1, countLiveRefreshTokensForSubject(t, h, victimID),
+			"only the freshly issued refresh token may remain live; pre-change tokens must be revoked")
+
 		// The freshly-returned token must work.
 		httpGetUser(t, h.base, res.AccessToken, victimID)
 	})

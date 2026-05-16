@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -38,27 +39,53 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
-// Bootstrap operator credentials for /api/v1/access/setup/admin Basic Auth.
+// Username + email fixtures are non-credential; passwords are runtime-generated
+// (see below) so the source contains no committed credential literal — even an
+// inadvertent copy-paste into a production env cannot reuse a value that never
+// existed in source.
 const (
 	bootstrapUsername = "l2-test-op"
-	bootstrapPassword = "l2-test-pass-1!"
+	adminUsername     = "l2-admin"
+	adminEmail        = "l2-admin@gocell.local"
 )
 
-// Seed admin credentials provisioned by the harness via setup/admin.
-// These are integration-test fixtures behind `//go:build integration` and
-// are never compiled into production binaries; mirrors the same pattern
-// used by cmd/corebundle/setup_pg_integration_test.go::sessionPGAdminPassword.
-//
-//nolint:gosec // G101 false positive: integration-test fixture, not a real credential.
-const (
-	adminUsername = "l2-admin"
-	adminEmail    = "l2-admin@gocell.local"
-	adminPassword = "L2AdminPass!99"
+// bootstrapPassword and adminPassword are initialized once per test process
+// with crypto/rand-derived base64url strings (16 bytes → 22 ASCII chars,
+// well within MinPasswordBytes=8 / MaxPasswordBytes=72 of
+// cells/accesscore/slices/setup/service.go). Process-scoped (not per-harness)
+// so tests reference them by name without threading the value through every
+// helper.
+var (
+	bootstrapPassword = mustRandomPassword(16)
+	adminPassword     = mustRandomPassword(16)
 )
+
+// mustRandomPassword returns a base64url-encoded random string suitable for
+// the accesscore password policy. Panics on rand.Read failure — package init
+// has no testing.T to call t.Fatal on, and a non-seeded RNG is unrecoverable.
+func mustRandomPassword(byteLen int) string {
+	b := make([]byte, byteLen)
+	if _, err := rand.Read(b); err != nil {
+		panic("l2atomicity: crypto/rand.Read failed: " + err.Error())
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// mustRandom32Bytes returns 32 cryptographically random bytes for HMAC rings,
+// cursor codecs, and audit chain keys (all 32-byte primitives in GoCell).
+// Panics on RNG failure for the same reason as mustRandomPassword.
+func mustRandom32Bytes() []byte {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("l2atomicity: crypto/rand.Read failed: " + err.Error())
+	}
+	return b
+}
 
 // httpClient is shared across tests. *http.Client is safe for concurrent use
 // per the net/http documentation; tests do not mutate any client state and
@@ -91,6 +118,13 @@ type l2Harness struct {
 	base         string // primary HTTP base URL (e.g. http://127.0.0.1:1234)
 	internalBase string // internal HTTP base URL (for /internal/v1/access/roles/*)
 	ring         *auth.HMACKeyRing
+	// auditStore is the auditcore ledger.Store (in-memory) exposed so tests
+	// can observe the subscriber-driven Append after a role.revoked /
+	// session.created event lands. Demonstrates that PG outbox → relay →
+	// in-process eventbus → auditcore consumer is functionally wired in
+	// this harness; the relay+consumer link is the only mechanism by which
+	// audit chain entries advance.
+	auditStore ledger.Store
 }
 
 // noopTxRunner executes fn directly without a real transaction.
@@ -165,8 +199,10 @@ func newTestConsumerBase(t testing.TB, clk clock.Clock) *outbox.ConsumerBase {
 	return cb
 }
 
-// buildAuditcoreLedgerOpts builds the auditcore ledger options for the harness.
-func buildAuditcoreLedgerOpts(t testing.TB, hmacKey []byte) []auditcore.Option {
+// buildAuditcoreLedgerOpts builds the auditcore ledger options for the harness
+// and returns the underlying ledger.Store so tests can observe Append events
+// via Tail() after relay+consumer settles.
+func buildAuditcoreLedgerOpts(t testing.TB, hmacKey []byte) ([]auditcore.Option, ledger.Store) {
 	t.Helper()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err, "audit namespace parse")
@@ -182,7 +218,7 @@ func buildAuditcoreLedgerOpts(t testing.TB, hmacKey []byte) []auditcore.Option {
 	return []auditcore.Option{
 		auditcore.WithLedgerProtocol(proto),
 		auditcore.WithLedgerStore(store),
-	}
+	}, store
 }
 
 // newL2Harness boots the full assembly. PG-backed user/role/session/refresh
@@ -211,17 +247,28 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	pgOutboxWriter := pickOutboxWriter(pgOutboxOverride)
 
-	ac, cc, auc := buildCells(t, pg, authDeps, eb, pgOutboxWriter)
+	ac, cc, auc, auditStore := buildCells(t, pg, authDeps, eb, pgOutboxWriter)
 
-	// DurabilityDemo: uses in-process eventbus instead of PG outbox relay,
-	// which is sufficient to cover L2 cross-cell cascade in this integration
-	// harness.
+	// Wire a PG outbox relay so events committed by accesscore (via the PG
+	// outbox writer) are drained from outbox_entries and published into the
+	// in-process eventbus where auditcore subscribes — exercising the
+	// producer → relay → publisher → consumer chain on the in-process
+	// transport (not the broker). The full broker path is tracked as
+	// L2-ATOMICITY-HARNESS-FOLLOWUPS in cap-14-tooling.md.
+	relayCfg := outboxruntime.DefaultRelayConfig()
+	relayCfg.Clock = clock.Real()
+	pgOutboxStore := adapterpg.NewOutboxStore(pg.pool.DB(), clock.Real())
+	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
+
+	// DurabilityDemo only describes the assembly construction mode; the
+	// relay above is the durable bridge between PG outbox_entries and the
+	// in-process eventbus.
 	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	runBootstrap(t, asm, primaryLn, internalLn, eb, authDeps)
+	runBootstrap(t, asm, primaryLn, internalLn, eb, authDeps, relayWorker)
 	base := "http://" + primaryLn.Addr().String()
 	waitForHealthz(t, base)
 	seedAdmin(t, base)
@@ -231,6 +278,7 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 		base:         base,
 		internalBase: "http://" + internalLn.Addr().String(),
 		ring:         authDeps.ring,
+		auditStore:   auditStore,
 	}
 }
 
@@ -322,7 +370,7 @@ type authLayer struct {
 // real-mode startup.
 func buildAuthLayer(t *testing.T) *authLayer {
 	t.Helper()
-	ring, err := auth.NewHMACKeyRing([]byte("l2-test-secret-32-bytes-padding!!"), nil)
+	ring, err := auth.NewHMACKeyRing(mustRandom32Bytes(), nil)
 	require.NoError(t, err)
 	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
@@ -365,20 +413,22 @@ func pickOutboxWriter(override outbox.Writer) outbox.Writer {
 
 // buildCells constructs accesscore + configcore + auditcore. Only accesscore
 // holds PG state in this harness; configcore + auditcore stay in-memory.
+// The audit ledger.Store is returned alongside the cells so tests can
+// observe the subscriber-driven Append after relay+consumer settle.
 func buildCells(
 	t *testing.T,
 	pg *pgStores,
 	a *authLayer,
 	eb *eventbus.InMemoryEventBus,
 	pgOutboxWriter outbox.Writer,
-) (*accesscore.AccessCore, *configcore.ConfigCore, *auditcore.AuditCore) {
+) (*accesscore.AccessCore, *configcore.ConfigCore, *auditcore.AuditCore, ledger.Store) {
 	t.Helper()
 
 	var nw outbox.Writer = outbox.NoopWriter{}
 
-	auditCursorCodec, err := query.NewCursorCodec([]byte("l2-audit-cursor-key-32-bytes!!!!"))
+	auditCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
 	require.NoError(t, err)
-	configCursorCodec, err := query.NewCursorCodec([]byte("l2-config-cursor-key-32-bytes!!!"))
+	configCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
 	require.NoError(t, err)
 
 	ac := accesscore.NewAccessCore(append(pg.storeOpts,
@@ -400,7 +450,8 @@ func buildCells(
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 	)
-	auditHMACKey := []byte("l2-test-hmac-key-32-bytes-pad!!!")
+	auditHMACKey := mustRandom32Bytes()
+	auditLedgerOpts, auditStore := buildAuditcoreLedgerOpts(t, auditHMACKey)
 	//archtest:allow:clock-injection:via-slice WithClock in first slice arg
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
@@ -408,19 +459,21 @@ func buildCells(
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, buildAuditcoreLedgerOpts(t, auditHMACKey)...)...)
+	}, auditLedgerOpts...)...)
 
-	return ac, cc, auc
+	return ac, cc, auc, auditStore
 }
 
 // runBootstrap launches bootstrap.App on the supplied listeners and registers
-// the LIFO cleanup that drains it gracefully.
+// the LIFO cleanup that drains it gracefully. The relay is registered as a
+// ManagedResource so bootstrap drives its Start/Close lifecycle.
 func runBootstrap(
 	t *testing.T,
 	asm *assembly.CoreAssembly,
 	primaryLn, internalLn net.Listener,
 	eb *eventbus.InMemoryEventBus,
 	a *authLayer,
+	relayWorker *outboxruntime.Relay,
 ) {
 	t.Helper()
 	app := bootstrap.New(
@@ -434,6 +487,7 @@ func runBootstrap(
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
+		bootstrap.WithManagedResource(relayWorker),
 		// Race-detector overhead inflates pending request completion. The
 		// shutdown timeout must be ≥ httpClient.Timeout so the last in-flight
 		// request can finish before forced close. 20s gives the longest
@@ -485,15 +539,18 @@ func httpGetOK(url string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// seedAdmin provisions the initial admin via POST /api/v1/access/setup/admin so
-// login is immediately available to tests.
+// seedAdmin provisions the initial admin via POST /api/v1/access/setup/admin
+// so login is immediately available to tests.
 //
-// The single eligible-for-retry failure mode is io.EOF: under -race + heavy
-// Docker contention on slow machines the bcrypt-bound handler can complete
-// server-side (200 logged) while the client's TCP socket has already
-// surfaced a transport-level EOF. Retry exactly once with a fresh
-// connection so we don't hide a real failure but tolerate the rare
-// transport flake. Any other error type fails fast.
+// Failure mode handling: under -race + heavy Docker contention the bcrypt-
+// bound handler can complete server-side (201 logged) while the client's
+// TCP socket has already surfaced a transport-level io.EOF. On EOF we
+// re-probe /api/v1/access/setup/status — if hasAdmin=true the first POST
+// landed and we accept it as success (setup/admin is non-idempotent;
+// re-POSTing yields 410 ERR_SETUP_ALREADY_INITIALIZED which would otherwise
+// fail the test). If hasAdmin=false the first POST never landed and we
+// retry once with a fresh connection. Any non-EOF error fails fast so real
+// bugs remain visible.
 func seedAdmin(t *testing.T, base string) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{
@@ -505,12 +562,40 @@ func seedAdmin(t *testing.T, base string) {
 
 	resp, err := postSetupAdmin(base, postBody())
 	if errors.Is(err, io.EOF) {
-		t.Logf("seedAdmin: transient io.EOF on first attempt; retrying once")
+		if setupHasAdmin(t, base) {
+			t.Logf("seedAdmin: transient io.EOF on first POST but setup-status confirms admin exists; accepting")
+			return
+		}
+		t.Logf("seedAdmin: transient io.EOF on first POST and setup-status reports no admin; retrying once")
 		resp, err = postSetupAdmin(base, postBody())
 	}
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "harness: admin provisioning must succeed")
+}
+
+// setupHasAdmin queries GET /api/v1/access/setup/status and returns true iff
+// the response confirms an admin already exists. Used by seedAdmin to make
+// the EOF retry idempotent.
+func setupHasAdmin(t *testing.T, base string) bool {
+	t.Helper()
+	resp, err := httpClient.Get(base + "/api/v1/access/setup/status")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		return false
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Data struct {
+			HasAdmin bool `json:"hasAdmin"`
+		} `json:"data"`
+	}
+	if decErr := json.NewDecoder(resp.Body).Decode(&parsed); decErr != nil {
+		return false
+	}
+	return parsed.Data.HasAdmin
 }
 
 func postSetupAdmin(base string, body *bytes.Reader) (*http.Response, error) {

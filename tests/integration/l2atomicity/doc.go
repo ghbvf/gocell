@@ -2,19 +2,31 @@
 
 // Package l2atomicity is the L2 (OutboxFact) e2e harness for accesscore
 // session/refresh/revoke/validate fail-closed regression coverage. It boots
-// a full PG + RabbitMQ-free in-process eventbus assembly and exercises:
+// a full PG + outbox-relay + in-process eventbus assembly (no broker;
+// RabbitMQ-bound broker e2e tracked as a follow-up in
+// docs/backlog/cap-14-tooling.md::L2-ATOMICITY-HARNESS-FOLLOWUPS) and
+// exercises:
 //
 //   - login → sessions row + refresh_tokens row + outbox event committed atomically
-//   - refresh → stable sid (OAuth2/OIDC sid invariant) + jti/authz_epoch JWT claims
+//   - refresh → stable sid (OAuth2/OIDC sid invariant) + jti claim; epoch
+//     provenance lives on sessions.authz_epoch_at_issue (S4d removed the
+//     authz_epoch JWT claim)
 //   - refresh reuse detected → credentialinvalidate funnel cascades (BumpAuthzEpoch +
 //     RevokeForSubject + RevokeUser) under same tx
-//   - rbacassign Revoke → outbox emit → in-process eventbus consumer drain →
-//     credential cascade → bob's sessions revoked + validate 401
-//   - sessionvalidate epoch mismatch → 401 (claim epoch < user.authz_epoch)
+//   - rbacassign Revoke → same-tx credentialinvalidate funnel revokes the
+//     victim's sessions + refresh chains synchronously (the cascade itself
+//     is intra-tx, not eventbus-driven); _additionally_, the L2 outbox row
+//     committed alongside is drained by runtime/outbox.NewRelay, republished
+//     into the in-process eventbus, and observed by the auditcore subscriber
+//     advancing the audit chain Tail. This is the producer → relay →
+//     publisher → consumer evidence on the in-process transport.
+//   - sessionvalidate epoch mismatch → 401 (session.authz_epoch_at_issue <
+//     users.authz_epoch via row provenance)
 //   - login uniform 401 wire shape: missing user / wrong password / inactive
 //     account all collapse to same envelope (account-enumeration defense)
 //   - ChangePassword wrong old password → 401 ERR_AUTH_OLD_PASSWORD_INCORRECT;
-//     correct old password → 204 + authz_epoch bump + old access token 401
+//     correct old password → 200 + new token pair + authz_epoch bump + old
+//     access/refresh tokens revoked
 //
 // Build tag: integration (testcontainer PG + in-process eventbus subscriber).
 //

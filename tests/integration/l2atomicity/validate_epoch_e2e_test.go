@@ -10,10 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestL2_ValidateEpochMismatch verifies the PR #490 (S4b) closure: every
-// JWT-guarded request walks sessionvalidate.enforceSessionState, which compares
-// the JWT's authz_epoch claim against users.authz_epoch. A claim issued before
-// an epoch bump must be rejected once the row's epoch advances.
+// TestL2_ValidateEpochMismatch verifies the PR #490 (S4b) + S4d row-provenance
+// closure: every JWT-guarded request walks sessionvalidate.enforceSessionState,
+// which loads users.authz_epoch and sessions.authz_epoch_at_issue and rejects
+// the token when the session's pinned epoch falls below the current user
+// epoch. The authz_epoch claim was removed from the JWT in S4d; provenance
+// is read from the session row.
 //
 // Wire shape: AuthMiddleware collapses every JWT verification failure to the
 // generic ERR_AUTH_UNAUTHORIZED to prevent token-state enumeration (granular
@@ -44,9 +46,9 @@ func TestL2_ValidateEpochMismatch(t *testing.T) {
 	require.Greater(t, epochAfter, epochBefore,
 		"direct UPDATE must advance authz_epoch (epochBefore=%d, epochAfter=%d)", epochBefore, epochAfter)
 
-	// The previously-issued access JWT carries authz_epoch=epochBefore in its
-	// claim, which is now < users.authz_epoch. sessionvalidate.enforceSessionState
-	// must reject the token.
+	// The previously-issued session row pinned authz_epoch_at_issue=epochBefore;
+	// users.authz_epoch is now greater. sessionvalidate.enforceSessionState
+	// loads both and rejects the token.
 	env := httpGetUserExpectError(t, h.base, victimLogin.AccessToken, victimID, http.StatusUnauthorized)
 	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", env.Error.Code,
 		"epoch-mismatch JWT must surface as the generic ERR_AUTH_UNAUTHORIZED (enumeration defense)")

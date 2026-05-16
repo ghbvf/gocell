@@ -54,6 +54,8 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 		"victim must have 2 live sessions before revoke")
 
 	epochBefore := queryUserAuthzEpoch(t, h, victimID)
+	auditTailBefore, err := h.auditStore.Tail(ctx)
+	require.NoError(t, err)
 
 	// Revoke "editor" via internal listener — triggers same-tx
 	// credentialinvalidate funnel.
@@ -81,4 +83,17 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 		`SELECT count(*) FROM role_assignments WHERE user_id = $1 AND role_id = 'editor'`,
 		victimID).Scan(&roleCount))
 	assert.Equal(t, 0, roleCount, "editor role assignment must be removed after revoke")
+
+	// Real producer → relay → publisher → consumer evidence: rbacassign's
+	// L2 event.role.revoked.v1 row must be drained by the outbox relay,
+	// republished onto the in-process eventbus, and appended by the auditcore
+	// subscriber. A no-op relay or a broken subscription would leave the
+	// audit chain stalled at auditTailBefore.SeqNo even though the same-tx
+	// cascade (asserted above) succeeded.
+	require.Eventually(t, func() bool {
+		tail, terr := h.auditStore.Tail(ctx)
+		return terr == nil && tail.SeqNo > auditTailBefore.SeqNo
+	}, testtime.EventuallyLong, testtime.MediumPoll,
+		"auditcore ledger Tail.SeqNo must advance after relay publishes role.revoked event (before=%d)",
+		auditTailBefore.SeqNo)
 }

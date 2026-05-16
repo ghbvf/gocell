@@ -346,6 +346,22 @@ func countLiveRefreshTokens(t *testing.T, h *l2Harness, sessionID string) int {
 	return n
 }
 
+// countLiveRefreshTokensForSubject returns the count of live (not revoked) refresh
+// tokens across all sessions for the subject. Used by cascade tests to confirm
+// credentialinvalidate.Invalidator.RevokeUser actually swept the subject's chains
+// (RevokeUser is the third op of Apply — separate from RevokeForSubject which
+// hits sessions; a no-op RevokeUser would leave refresh rows live even after
+// session.revoked_at is set).
+func countLiveRefreshTokensForSubject(t *testing.T, h *l2Harness, subjectID string) int {
+	t.Helper()
+	var n int
+	err := h.pool.DB().QueryRow(context.Background(),
+		`SELECT count(*) FROM refresh_tokens WHERE subject_id = $1 AND revoked_at IS NULL`,
+		subjectID).Scan(&n)
+	require.NoError(t, err)
+	return n
+}
+
 // assignRole calls POST /internal/v1/access/roles/assign with a service token
 // signed for the "accesscore" caller cell. Inlined literal is required by the
 // SVCTOKEN-CALLER-CELL-REQUIRED-01 archtest: every GenerateServiceToken call

@@ -71,6 +71,11 @@ func TestL2_LoginRefreshValidate_HappyPath(t *testing.T) {
 	assert.NotEmpty(t, loginClaims.JTI, "login access token must carry jti claim")
 	assert.Equal(t, res.SessionID, loginClaims.SessionID, "JWT sid must equal HTTP sessionId")
 	assert.Equal(t, userID, loginClaims.Subject)
+	// S4d invariant: authz_epoch was removed from the JWT and lives on the
+	// session row instead. If a future change reintroduces it, this assertion
+	// surfaces the regression so the row-provenance contract is explicit.
+	assert.Zero(t, loginClaims.AuthzEpoch,
+		"S4d removed authz_epoch from JWT; provenance lives on sessions.authz_epoch_at_issue")
 
 	// 3. Row-side epoch provenance: sessions.authz_epoch_at_issue must match
 	// users.authz_epoch at login time (S4d row-provenance invariant).

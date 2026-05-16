@@ -57,7 +57,9 @@ var wellKnownDemoKeys = []string{
 	"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 
 	// L2 atomicity e2e harness keys (tests/integration/l2atomicity).
-	// Published in the source tree; real mode must refuse all four.
+	// Initially hardcoded in source then refactored to crypto/rand-generated
+	// per-process values; retained here per the append-only rule above so any
+	// leaked copy from intermediate commits stays rejected in real mode.
 	"l2-test-secret-32-bytes-padding!!", // harness internal HMAC ring
 	"l2-test-hmac-key-32-bytes-pad!!!",  // audit HMAC
 	"l2-audit-cursor-key-32-bytes!!!!",  // audit cursor codec
