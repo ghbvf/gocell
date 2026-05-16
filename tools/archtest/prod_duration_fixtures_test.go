@@ -14,11 +14,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 // runFixtureScan loads the fixture package at fixtureDir and returns the sorted
@@ -27,37 +22,22 @@ import (
 // are excluded via fileroles.Rel returning ok=false.
 func runFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, []string{"e2e", "integration", "pg"}, "./...")
-	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
-	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
-
 	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				// Fixtures live in their own ad-hoc module rooted at fixtureDir;
+				// stdlib / dependency files come back with a "../" rel prefix
+				// from fileroles.Rel, which returns ok=false for them.
+				// RunTypedDir sets the root to fixtureDir, so p.Rel already
+				// returns fixture-relative paths without a "../" prefix for
+				// files in the fixture module; stdlib files won't appear in p.Files.
+				raw := scanProdDurationAST(p.Fset, f, rel, p.TypesInfo)
+				violations = append(violations, raw...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			// Fixtures live in their own ad-hoc module rooted at fixtureDir;
-			// stdlib / dependency files come back with a "../" rel prefix
-			// from fileroles.Rel, which returns ok=false for them.
-			rel, ok := fileroles.Rel(fixtureDir, abs)
-			if !ok {
-				continue
-			}
-
-			raw := scanProdDurationAST(p.Fset, file, rel, p.TypesInfo)
-			violations = append(violations, raw...)
-		}
-	})
-
+			return nil
+		})
 	sort.Strings(violations)
 	return violations
 }
@@ -135,27 +115,6 @@ func TestProdDurationConstFixtures(t *testing.T) {
 	}
 }
 
-// TestProdDurationConstFailsClosedOnLoadError verifies that when packages.Load
-// encounters a parse/type-check error, the scanner fails closed (require.Empty
-// on errs causes test failure) rather than silently passing.
-func TestProdDurationConstFailsClosedOnLoadError(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based fixture test in -short mode")
-	}
-
-	root := findModuleRoot(t)
-	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "prod_duration_fixtures", "package_load_error")
-
-	_, errs, err := typeseval.LoadPackages(fixtureDir, false, []string{"e2e", "integration", "pg"}, "./...")
-	// The load itself should not return a hard error (packages.Load returns
-	// partial results with per-package errors for syntax failures), but there
-	// must be at least one package error.
-	if err != nil {
-		// Hard loader error also satisfies fail-closed.
-		t.Logf("packages.Load returned hard error (fail-closed): %v", err)
-		return
-	}
-	assert.NotEmpty(t, errs,
-		"package_load_error fixture must produce at least one packages.Error to trigger fail-closed")
-}
+// TestProdDurationConstFailsClosedOnLoadError is intentionally removed: the
+// fail-closed property is now enforced by RunTypedDir itself (it calls
+// t.Fatalf on load errors), making a separate test redundant.

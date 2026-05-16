@@ -27,17 +27,11 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // pgRepoFiles enumerates the PG-backed repository files this rule covers.
@@ -105,35 +99,20 @@ func TestPGRepoAmbientTx(t *testing.T) {
 			"(loads PG repo packages with TypesInfo, ~2-3s)")
 	}
 
-	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, false, nil, pgRepoPackagePatterns...)
-	require.NoError(t, err)
-	require.NotNil(t, resolver, "SharedResolver must return a non-nil resolver")
-
 	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(resolver.Packages(), nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
-			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-			rel, ok := relPath(root, abs)
-			if !ok {
-				continue
-			}
+	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if _, watched := pgRepoFiles[rel]; !watched {
 				continue
 			}
 			violations = append(violations, scanPGRepoFileTyped(p.Fset, file, rel, p.TypesInfo)...)
 		}
+		return nil
 	})
-
 	sort.Strings(violations)
 	for _, v := range violations {
 		t.Log(v)
@@ -142,16 +121,6 @@ func TestPGRepoAmbientTx(t *testing.T) {
 		"PG-REPO-AMBIENT-TX-01: write-method bodies must route via ambient-tx "+
 			"aware typed executors or txRunner.RunInTx; direct "+
 			"*pgxpool.Pool method calls bypass the caller's ambient transaction.")
-}
-
-// relPath converts an absolute path under root into a forward-slash relative
-// path. Returns ("", false) when path does not lie under root.
-func relPath(root, abs string) (string, bool) {
-	rel, err := filepath.Rel(root, abs)
-	if err != nil {
-		return "", false
-	}
-	return filepath.ToSlash(rel), true
 }
 
 // scanPGRepoFileTyped inspects each method on file's repo type. Write-path
@@ -164,14 +133,14 @@ func scanPGRepoFileTyped(
 	info *types.Info,
 ) []string {
 	var out []string
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil || fn.Body == nil {
 			return
 		}
 		if !isPGWriteMethod(fn.Name.Name) {
 			return
 		}
-		scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return

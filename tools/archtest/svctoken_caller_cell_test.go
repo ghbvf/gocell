@@ -12,7 +12,7 @@
 // unregistered cell name, which would defeat the purpose of 4-part service
 // token caller-cell propagation.
 //
-// Detection: type-aware — resolved via typeseval.ResolvePackageRef which
+// Detection: type-aware — resolved via ResolvePackageRef which
 // uniformly handles SelectorExpr (path A.2 qualified `auth.GenerateServiceToken`)
 // and Ident (path A.3 dot-imported bare `GenerateServiceToken` after
 // `import . ".../runtime/auth"`). Closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01
@@ -28,8 +28,6 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // ruleSvctokenCallerCellRequired01 is the archtest rule identifier; not a credential.
@@ -56,9 +54,9 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 
 	// tests=true loads the test variants of every package, so test helpers
 	// (e.g. examples/ssobff/walkthrough_test.go) that call
-	// GenerateServiceToken are also scanned. typeseval.FlatNonDefaultTags()
+	// GenerateServiceToken are also scanned. FlatNonDefaultTags()
 	// returns the union of every tag tracked in KnownNonDefaultTags(); a
-	// single SharedResolver call carrying all tags simultaneously satisfies
+	// single RunTyped call carrying all tags simultaneously satisfies
 	// every //go:build constraint at once (e.g. `//go:build integration` is
 	// included because `integration` is in the set; `//go:build integration
 	// && otelcollector` is included because both tags are present). This
@@ -72,28 +70,38 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	// disposition can iterate KnownNonDefaultTags() themselves with
 	// post-load filtering by file build constraints.
 	seen := map[string]struct{}{}
-	var diags []scanner.Diagnostic
-	resolver, err := typeseval.SharedResolver(root, true, typeseval.FlatNonDefaultTags(),
-		"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-	collectGenerateServiceTokenDiags(resolver, root, knownCells, seen, &diags)
-	scanner.Report(t, ruleSvctokenCallerCellRequired01, diags)
+	var diags []Diagnostic
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			authOwningPackage := p.Pkg.Path() == authRuntimeImportPath
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if authOwningPackage && strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				collectGenerateServiceTokenDiagsFromFile(p, file, rel, knownCells, seen, &diags)
+			}
+			return nil
+		})
+	Report(t, ruleSvctokenCallerCellRequired01, diags)
 }
 
-// collectGenerateServiceTokenDiags walks resolver's packages and appends
-// any GenerateServiceToken-callsite diagnostics to *diags, deduplicating
-// by (rel, line, message) via the seen map. Extracted as a helper so the
-// per-tag-set loop in TestSVCTOKEN_CALLER_CELL_REQUIRED_01 stays terse.
-func collectGenerateServiceTokenDiags(
-	resolver *typeseval.Resolver,
-	root string,
+// collectGenerateServiceTokenDiagsFromFile walks a single file's AST for
+// GenerateServiceToken callsites and appends any diagnostics to *diags,
+// deduplicating by (rel, line, message) via the seen map.
+func collectGenerateServiceTokenDiagsFromFile(
+	p *Pass,
+	file *ast.File,
+	rel string,
 	knownCells map[string]bool,
 	seen map[string]struct{},
-	diags *[]scanner.Diagnostic,
+	diags *[]Diagnostic,
 ) {
-	add := func(d scanner.Diagnostic) {
+	add := func(d Diagnostic) {
 		key := fmt.Sprintf("%s:%d:%s", d.Rel, d.Line, d.Message)
 		if _, ok := seen[key]; ok {
 			return
@@ -101,118 +109,96 @@ func collectGenerateServiceTokenDiags(
 		seen[key] = struct{}{}
 		*diags = append(*diags, d)
 	}
-	for _, pkg := range resolver.Packages() {
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		path, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+		if !ok || path != authRuntimeImportPath || name != "GenerateServiceToken" {
+			return
 		}
-		// Test files inside runtime/auth itself (notably servicetoken_test.go's
-		// negative-path tests asserting GenerateServiceToken returns "" for bad
-		// input) are not cross-package consumers and are exempt. The exemption
-		// is scoped narrowly: only _test.go files whose owning package is
-		// runtime/auth proper (PkgPath equality, not file-rel prefix — so a
-		// future runtime/auth/internal/* sub-package would NOT be exempt; a
-		// non-test production file under runtime/auth/ would NOT be exempt).
-		// Pre-PR-SH1 these escaped the SelectorExpr-only matcher silently
-		// (bare-Ident in same package); the migration to ResolvePackageRef
-		// surfaces them so the exemption must be explicit.
-		authOwningPackage := pkg.PkgPath == authRuntimeImportPath
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if authOwningPackage && strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				path, name, ok := typeseval.ResolvePackageRef(pkg.TypesInfo, call.Fun)
-				if !ok || path != authRuntimeImportPath || name != "GenerateServiceToken" {
-					return
-				}
-				pos := pkg.Fset.Position(call.Pos())
+		pos := p.Fset.Position(call.Pos())
 
-				// The 4-part signature is GenerateServiceToken(ring, callerCell, method, path, query, ts).
-				// callerCell is argument index 1 (0-based).
-				if len(call.Args) < 2 {
-					add(scanner.Diagnostic{
-						Rel:     rel,
-						Line:    pos.Line,
-						Message: "auth.GenerateServiceToken called with fewer than 2 arguments — missing callerCell",
-					})
-					return
-				}
+		// The 4-part signature is GenerateServiceToken(ring, callerCell, method, path, query, ts).
+		// callerCell is argument index 1 (0-based).
+		if len(call.Args) < 2 {
+			add(Diagnostic{
+				Rel:     rel,
+				Line:    pos.Line,
+				Message: "auth.GenerateServiceToken called with fewer than 2 arguments — missing callerCell",
+			})
+			return
+		}
 
-				arg1 := call.Args[1]
-				lit, isLit := arg1.(*ast.BasicLit)
-				if !isLit {
-					add(scanner.Diagnostic{
-						Rel:     rel,
-						Line:    pos.Line,
-						Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
-					})
-					return
-				}
-				callerCell, ok := scanner.StringLitValue(lit)
-				if !ok {
-					add(scanner.Diagnostic{
-						Rel:     rel,
-						Line:    pos.Line,
-						Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
-					})
-					return
-				}
+		arg1 := call.Args[1]
+		lit, isLit := arg1.(*ast.BasicLit)
+		if !isLit {
+			add(Diagnostic{
+				Rel:     rel,
+				Line:    pos.Line,
+				Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
+			})
+			return
+		}
+		callerCell, ok := StringLitValue(lit)
+		if !ok {
+			add(Diagnostic{
+				Rel:     rel,
+				Line:    pos.Line,
+				Message: "auth.GenerateServiceToken second argument (callerCell) must be a string literal",
+			})
+			return
+		}
 
-				if callerCell == "" {
-					add(scanner.Diagnostic{
-						Rel:     rel,
-						Line:    pos.Line,
-						Message: "auth.GenerateServiceToken callerCell must not be empty",
-					})
-					return
-				}
+		if callerCell == "" {
+			add(Diagnostic{
+				Rel:     rel,
+				Line:    pos.Line,
+				Message: "auth.GenerateServiceToken callerCell must not be empty",
+			})
+			return
+		}
 
-				if !metadata.MatchCellID(callerCell) {
-					add(scanner.Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"auth.GenerateServiceToken callerCell %q does not match metadata.CellIDPattern (%s)",
-							callerCell, metadata.CellIDPattern),
-					})
-					return
-				}
+		if !metadata.MatchCellID(callerCell) {
+			add(Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"auth.GenerateServiceToken callerCell %q does not match metadata.CellIDPattern (%s)",
+					callerCell, metadata.CellIDPattern),
+			})
+			return
+		}
 
-				if !knownCells[callerCell] {
-					add(scanner.Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"auth.GenerateServiceToken callerCell %q is not a known cell ID"+
-								" — register it in cells/ or actors.yaml", callerCell),
-					})
-				}
+		if !knownCells[callerCell] {
+			add(Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"auth.GenerateServiceToken callerCell %q is not a known cell ID"+
+						" — register it in cells/ or actors.yaml", callerCell),
 			})
 		}
-	}
+	})
 }
 
 // TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED is a
 // RED-step regression test (TDD per ai-collab.md) for PR445-FU finding F2.
 //
 // The production rule TestSVCTOKEN_CALLER_CELL_REQUIRED_01 calls
-// `typeseval.SharedResolver(root, true, nil, ...)` — the third argument
-// `tags []string` is nil, so packages.Load uses the default build set and
-// silently skips every file gated by `//go:build <tag>`. Two real callsites
-// of auth.GenerateServiceToken are gated this way and therefore escape the
-// rule:
+// RunTyped with FlatNonDefaultTags() — so packages.Load uses all known
+// build tags and includes every file gated by `//go:build <tag>`. Two real
+// callsites of auth.GenerateServiceToken are gated this way and therefore
+// escape the rule without the flat-tag load:
 //
 //   - examples/ssobff/walkthrough_test.go  (//go:build integration)
 //   - tests/integration/internal_rpc_caller_cell_test.go  (//go:build integration)
 //
-// Wave 5 introduces typeseval.FlatNonDefaultTags() — the union of every
-// tag tracked in KnownNonDefaultTags() — and the production rule loads
-// once with all tags simultaneously. This test asserts the load contract
-// directly: build-tagged files MUST be loaded so the rule's
-// scanForCallExpr loop actually reaches their callsites.
+// Wave 5 introduces FlatNonDefaultTags() — the union of every tag tracked
+// in KnownNonDefaultTags() — and the production rule loads once with all
+// tags simultaneously. This test asserts the load contract directly:
+// build-tagged files MUST be loaded so the rule's scan loop actually reaches
+// their callsites.
 //
-// Wave 1 (tags=nil): integration-tagged files NOT in resolver output →
+// Wave 1 (tags=nil): integration-tagged files NOT in loaded set →
 // assertion fails → RED.
 //
 // Wave 5 (FlatNonDefaultTags single load): integration-tagged files
@@ -220,32 +206,25 @@ func collectGenerateServiceTokenDiags(
 // loader exactly.
 //
 // Single-load (vs the obvious "iterate KnownNonDefaultTags() and call
-// SharedResolver per tag-set") avoids retaining 7 independent type graphs
-// in SharedResolver's package-cache, which OOM'd CI runners with ~7GB RAM
+// RunTyped per tag-set") avoids retaining 7 independent type graphs in
+// SharedResolver's package-cache, which OOM'd CI runners with ~7GB RAM
 // before this fix.
 func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
 	// Mirror the production rule's loader call (single flat-tag load) exactly.
-	resolver, err := typeseval.SharedResolver(root, true, typeseval.FlatNonDefaultTags(),
-		"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
 	loadedFiles := map[string]bool{}
-	for _, pkg := range resolver.Packages() {
-		if pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			loadedFiles[rel] = true
-		}
-	}
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
+		[]string{"./runtime/...", "./cells/...", "./cmd/...", "./examples/...", "./tests/..."},
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				loadedFiles[p.Rel(file)] = true
+			}
+			return nil
+		})
 
 	// Files known to contain auth.GenerateServiceToken callsites under
-	// `//go:build integration`. Wave 5's KnownNonDefaultTags iteration must
+	// `//go:build integration`. Wave 5's FlatNonDefaultTags load must
 	// load each.
 	expectedScanned := []string{
 		"examples/ssobff/walkthrough_test.go",

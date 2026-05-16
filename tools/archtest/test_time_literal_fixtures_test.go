@@ -21,9 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
@@ -33,37 +31,22 @@ import (
 // Tests=true so that *_test.go files participate in the type check.
 func runTestTimeFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, true, nil, "./...")
-	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
-	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
-
 	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !fileroles.IsTestCode(rel) {
+					continue
+				}
+				// Fixtures live in their own ad-hoc module rooted at fixtureDir;
+				// passing fixtureDir as modRoot to fileroles.Rel produces clean
+				// relative paths that exercise the *_test.go include rule.
+				violations = append(violations,
+					scanProdDurationAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			// Fixtures live in their own ad-hoc module rooted at fixtureDir;
-			// passing fixtureDir as modRoot to fileroles.Rel produces clean
-			// relative paths that exercise the *_test.go include rule.
-			rel, ok := fileroles.Rel(fixtureDir, abs)
-			if !ok || !fileroles.IsTestCode(rel) {
-				continue
-			}
-
-			violations = append(violations,
-				scanProdDurationAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
-
+			return nil
+		})
 	sort.Strings(violations)
 	return violations
 }

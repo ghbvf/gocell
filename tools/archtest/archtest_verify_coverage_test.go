@@ -35,7 +35,6 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,8 +42,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // TestArchtestVerifyCoverage01 runs both arms of the invariant:
@@ -220,32 +217,36 @@ func (e *dryRunError) Error() string {
 // `func TestX(t *testing.T)` declarations and returns the set of names.
 func scanArchtestTopLevelTestNames(t *testing.T, repoRoot string) map[string]struct{} {
 	t.Helper()
-	scope := scanner.DirsScope(repoRoot, []string{"tools/archtest"}, scanner.IncludeTests())
+	scope := DirsScope(repoRoot, []string{"tools/archtest"}, IncludeTests())
 
 	names := map[string]struct{}{}
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		// Only the archtest top-level Go package (matches the script's
-		// `./tools/archtest` non-recursive package selector). Subpackages
-		// like internal/scanner and internal/typeseval have their own
-		// `go test ./tools/archtest/internal/...` entry.
-		if filepath.ToSlash(filepath.Dir(fc.Rel)) != "tools/archtest" {
-			return
+	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+			// Only the archtest top-level Go package (matches the script's
+			// `./tools/archtest` non-recursive package selector). Subpackages
+			// like internal/scanner and internal/typeseval have their own
+			// `go test ./tools/archtest/internal/...` entry.
+			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
+				continue
+			}
+			if !strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+				if fd.Recv != nil { // method — not a Test* function
+					return
+				}
+				if fd.Name == nil || !strings.HasPrefix(fd.Name.Name, "Test") {
+					return
+				}
+				if !isStandardTestSignature(fd.Type) {
+					return
+				}
+				names[fd.Name.Name] = struct{}{}
+			})
 		}
-		if !strings.HasSuffix(fc.Rel, "_test.go") {
-			return
-		}
-		scanner.EachInSubtree[ast.FuncDecl](fc.File, func(fd *ast.FuncDecl) {
-			if fd.Recv != nil { // method — not a Test* function
-				return
-			}
-			if fd.Name == nil || !strings.HasPrefix(fd.Name.Name, "Test") {
-				return
-			}
-			if !isStandardTestSignature(fd.Type) {
-				return
-			}
-			names[fd.Name.Name] = struct{}{}
-		})
+		return nil
 	})
 	return names
 }

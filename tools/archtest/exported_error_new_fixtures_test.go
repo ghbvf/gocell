@@ -9,6 +9,7 @@
 package archtest
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -17,10 +18,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 // runExportedErrorNewFixtureScan loads the fixture package at fixtureDir
@@ -28,32 +25,17 @@ import (
 // using the same walk + predicates as TestExportedErrorNew.
 func runExportedErrorNewFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, nil, "./...")
-	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
-	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
-
 	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				for _, d := range scanExportedErrorNewASTDiags(p.Fset, f, rel, p.TypesInfo) {
+					violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
+				}
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			rel, ok := fileroles.Rel(fixtureDir, abs)
-			if !ok {
-				continue
-			}
-			violations = append(violations, scanExportedErrorNewAST(p.Fset, file, rel, p.TypesInfo)...)
-		}
-	})
-
+			return nil
+		})
 	sort.Strings(violations)
 	return violations
 }

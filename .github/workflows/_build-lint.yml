@@ -302,6 +302,7 @@ jobs:
 
       - name: Verify archtest shard ${{ matrix.shard }}
         env:
+          # SYNC: must match hack/verify-archtest.sh default SHARD_COUNT
           SHARD_COUNT: 16
           SHARD_TARGET: ${{ matrix.shard }}
           TIMEOUT: 5m

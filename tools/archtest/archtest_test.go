@@ -480,31 +480,6 @@ func loadModule(t *testing.T, root string) (*kerneldepgraph.Graph, *typeseval.Pr
 	return depgraph.FromPackages(module, all), resolver
 }
 
-// filterPkgsByPathPrefix returns the subset of pkgs whose PkgPath equals or
-// starts with any of the given prefixes (a prefix may be the exact package
-// path or a directory like "<module>/adapters/" with trailing slash).
-//
-// Tests that scope to a slice of the module (kernel/lifecycle + adapters/,
-// adapters/ + cmd/corebundle, etc.) use this to filter the cached module-
-// wide load from typeseval.SharedResolver instead of running a second
-// packages.Load with a narrower pattern set. Reuses the cache that
-// TestLayeringRules already populates.
-func filterPkgsByPathPrefix(pkgs []*packages.Package, prefixes ...string) []*packages.Package {
-	out := pkgs[:0:0]
-	for _, p := range pkgs {
-		if p == nil {
-			continue
-		}
-		for _, prefix := range prefixes {
-			if p.PkgPath == strings.TrimSuffix(prefix, "/") || strings.HasPrefix(p.PkgPath, prefix) {
-				out = append(out, p)
-				break
-			}
-		}
-	}
-	return out
-}
-
 // --- integration test (real go/packages data via depgraph) ---
 
 func TestLayeringRules(t *testing.T) {

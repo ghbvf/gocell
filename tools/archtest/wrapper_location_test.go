@@ -32,10 +32,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // wrapperFunctionsCanonical is the closed set of wrapper functions whose
@@ -123,34 +119,29 @@ func canonicalCalledFunc(info *types.Info, call *ast.CallExpr) string {
 	return pkg.Path() + "." + fn.Name()
 }
 
-func scanWrapperViolations(root string, pkgs []*packages.Package) []wrapperViolation {
+// scanWrapperViolationsFromPass inspects all files in p for wrapper function
+// calls that originate from non-allowlisted locations.
+func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
+	if p.TypesInfo == nil {
+		return nil
+	}
 	var out []wrapperViolation
-	for _, pkg := range pkgs {
-		if pkg.TypesInfo == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			absPath := pkg.Fset.Position(file.Pos()).Filename
-			rel, err := filepath.Rel(root, absPath)
-			if err != nil {
-				continue
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			canon := canonicalCalledFunc(p.TypesInfo, call)
+			if !wrapperFunctionsCanonical[canon] {
+				return
 			}
-			relSlash := filepath.ToSlash(rel)
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				canon := canonicalCalledFunc(pkg.TypesInfo, call)
-				if !wrapperFunctionsCanonical[canon] {
-					return
-				}
-				if isWrapperCallerAllowed(relSlash) {
-					return
-				}
-				out = append(out, wrapperViolation{
-					File:     relSlash,
-					Line:     pkg.Fset.Position(call.Pos()).Line,
-					FuncName: canon,
-				})
+			if isWrapperCallerAllowed(rel) {
+				return
+			}
+			out = append(out, wrapperViolation{
+				File:     rel,
+				Line:     p.Fset.Position(call.Pos()).Line,
+				FuncName: canon,
 			})
-		}
+		})
 	}
 	return out
 }
@@ -185,12 +176,14 @@ func wrapperFunctionsList() string {
 // the sibling ScannerDetectsViolation test.
 func TestCellRawInfraWrapperLocation01_RealRepoClean(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	modulePath := readModulePath(t, root)
-	resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, nil)
-	require.NoError(t, err)
 
-	violations := scanWrapperViolations(root, resolver.Production())
+	var violations []wrapperViolation
+	RunTypedProduction(t, TypedOpts{Tests: false},
+		func(p *Pass) []Diagnostic {
+			violations = append(violations, scanWrapperViolationsFromPass(p)...)
+			return nil
+		})
+
 	for _, v := range violations {
 		t.Errorf("CELL-RAW-INFRA-WRAPPER-LOCATION-01: %s:%d calls %s — caller not in composition-root allowlist (%s). Allowed wrappers: %s.",
 			v.File, v.Line, v.FuncName, allowlistDescription(), wrapperFunctionsList())
@@ -209,12 +202,15 @@ func TestCellRawInfraWrapperLocation01_RealRepoClean(t *testing.T) {
 // hand-crafted AST cannot satisfy go/types canonical-name resolution.
 func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"},
-		"./tools/archtest/internal/wrapfixture/violation")
-	require.NoError(t, err)
 
-	violations := scanWrapperViolations(root, resolver.Packages())
+	var violations []wrapperViolation
+	RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+		[]string{"./tools/archtest/internal/wrapfixture/violation"},
+		func(p *Pass) []Diagnostic {
+			violations = append(violations, scanWrapperViolationsFromPass(p)...)
+			return nil
+		})
+
 	require.NotEmpty(t, violations, "scanner must detect wrap calls from non-allowlisted fixture path")
 
 	got := map[string]string{}
@@ -262,12 +258,15 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 // allowlist stays a closed set — not an "entire directory" exemption.
 func TestCellRawInfraWrapperLocation01_RejectsKernelCellSibling(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"},
-		"./tools/archtest/internal/wrapfixture/kernelcellsibling")
-	require.NoError(t, err)
 
-	violations := scanWrapperViolations(root, resolver.Packages())
+	var violations []wrapperViolation
+	RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+		[]string{"./tools/archtest/internal/wrapfixture/kernelcellsibling"},
+		func(p *Pass) []Diagnostic {
+			violations = append(violations, scanWrapperViolationsFromPass(p)...)
+			return nil
+		})
+
 	require.NotEmpty(t, violations,
 		"scanner must detect WrapForCell call from non-allowlisted kernel/cell sibling fixture")
 

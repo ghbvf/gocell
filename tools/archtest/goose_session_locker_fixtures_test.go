@@ -23,9 +23,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const fixtureGooseImportPath = "fixturetest/goose_session_locker/internal/goose"
@@ -39,17 +36,36 @@ func TestGooseSessionLocker01_Fixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "goose_session_locker_fixtures")
 
-	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, nil, "./...")
-	require.NoError(t, err, "packages.Load fixture")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
 	allowlist := map[string]string{
 		"adapters/postgres/schema_guard.go": "fixture mirror of production read-only allowlist entry",
 	}
 
-	violations, allowlistHits := scanGooseSessionLocker(
-		pkgs, fixtureDir, fixtureGooseImportPath, allowlist,
-	)
+	var violations []gooseLockerViolation
+	allowlistHits := map[string]string{}
+
+	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				fileViolations := scanGooseSessionLockerFile(p.Fset, f, rel, p.TypesInfo, fixtureGooseImportPath)
+				if len(fileViolations) == 0 {
+					continue
+				}
+				if reason, exempt := allowlist[rel]; exempt {
+					allowlistHits[rel] = reason
+					continue
+				}
+				violations = append(violations, fileViolations...)
+			}
+			return nil
+		})
+
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].rel != violations[j].rel {
+			return violations[i].rel < violations[j].rel
+		}
+		return violations[i].line < violations[j].line
+	})
 
 	gotViolations := make([]string, 0, len(violations))
 	for _, v := range violations {

@@ -9,9 +9,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // findIntegrationTagViolations walks rootDir and returns the relative paths (from
@@ -27,7 +24,7 @@ import (
 //
 // Parse failures are treated as violations (conservative / fail-closed strategy).
 func findIntegrationTagViolations(rootDir string) ([]string, error) {
-	scope := scanner.ModuleScope(rootDir, scanner.IncludeTests())
+	scope := ModuleScope(rootDir, IncludeTests())
 	files, err := scope.Files()
 	if err != nil {
 		return nil, err
@@ -64,7 +61,7 @@ func findIntegrationTagViolations(rootDir string) ([]string, error) {
 // alone — otherwise the file is just an integration test by another name
 // and would be better off as *_integration_test.go.
 func findRealTagViolations(rootDir string) ([]string, error) {
-	scope := scanner.ModuleScope(rootDir, scanner.IncludeTests())
+	scope := ModuleScope(rootDir, IncludeTests())
 	files, err := scope.Files()
 	if err != nil {
 		return nil, err
@@ -103,7 +100,7 @@ func findRealTagViolations(rootDir string) ([]string, error) {
 // such as `integration_cluster`. Files matching `_real_test.go` that pass
 // under any of those scopes are violations.
 func fileHasStricterThanIntegrationTag(path string) (bool, error) {
-	expr, err := typeseval.ParseBuildConstraint(path)
+	expr, err := ParseBuildConstraint(path)
 	if err != nil {
 		return false, err
 	}
@@ -113,9 +110,9 @@ func fileHasStricterThanIntegrationTag(path string) (bool, error) {
 	// Three independent evals — each catches a different class of non-stricter file.
 	// All three must be false for the file to genuinely require an opt-in tag beyond
 	// integration / toolchain defaults.
-	withIntegrationCtx := expr.Eval(typeseval.BuildContextPredicate("integration"))
+	withIntegrationCtx := expr.Eval(BuildContextPredicate("integration"))
 	withoutAny := expr.Eval(func(_ string) bool { return false })
-	withDefaultCtx := expr.Eval(typeseval.BuildContextPredicate())
+	withDefaultCtx := expr.Eval(BuildContextPredicate())
 	return !withIntegrationCtx && !withoutAny && !withDefaultCtx, nil
 }
 

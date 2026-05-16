@@ -38,12 +38,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 const (
@@ -77,13 +71,34 @@ func TestGooseSessionLocker01(t *testing.T) {
 
 	root := findModuleRoot(t)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, "./adapters/postgres/...")
-	require.NoError(t, err, "packages.Load adapters/postgres/...")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
+	var violations []gooseLockerViolation
+	allowlistedHits := map[string]string{}
 
-	violations, allowlistedHits := scanGooseSessionLocker(
-		pkgs, root, gooseImportPathProd, gooseSessionLockerAllowlist,
-	)
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/postgres/..."},
+		func(p *Pass) []Diagnostic {
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				fileViolations := scanGooseSessionLockerFile(p.Fset, f, rel, p.TypesInfo, gooseImportPathProd)
+				if len(fileViolations) == 0 {
+					continue
+				}
+				if reason, exempt := gooseSessionLockerAllowlist[rel]; exempt {
+					allowlistedHits[rel] = reason
+					continue
+				}
+				violations = append(violations, fileViolations...)
+			}
+			return nil
+		})
+
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].rel != violations[j].rel {
+			return violations[i].rel < violations[j].rel
+		}
+		return violations[i].line < violations[j].line
+	})
+
+	_ = root
 
 	for rel, reason := range allowlistedHits {
 		t.Logf("%s: allowlist hit %s — %s", ruleGooseSessionLocker01, rel, reason)
@@ -102,62 +117,6 @@ func TestGooseSessionLocker01(t *testing.T) {
 		ruleGooseSessionLocker01)
 }
 
-// scanGooseSessionLocker walks pkgs and returns (violations, allowlistHits).
-//
-// The matcher is type-driven: each CallExpr.Fun is resolved via
-// info.ObjectOf to a *types.Func; only those whose Pkg().Path() equals
-// gooseImportPath are considered. A NewProvider call without a sibling
-// WithSessionLocker(...) call argument from the same package is a violation.
-//
-// allowlist is keyed on repo-relative path (forward-slash, relative to
-// modRoot). modRoot is the path used to compute file rel-paths.
-func scanGooseSessionLocker(
-	pkgs []*packages.Package,
-	modRoot string,
-	gooseImportPath string,
-	allowlist map[string]string,
-) ([]gooseLockerViolation, map[string]string) {
-	var violations []gooseLockerViolation
-	allowlistedHits := map[string]string{}
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
-			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
-
-			rel, ok := fileroles.Rel(modRoot, abs)
-			if !ok {
-				continue
-			}
-
-			fileViolations := scanGooseSessionLockerFile(p.Fset, file, rel, p.TypesInfo, gooseImportPath)
-			if len(fileViolations) == 0 {
-				continue
-			}
-			if reason, exempt := allowlist[rel]; exempt {
-				allowlistedHits[rel] = reason
-				continue
-			}
-			violations = append(violations, fileViolations...)
-		}
-	})
-
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].rel != violations[j].rel {
-			return violations[i].rel < violations[j].rel
-		}
-		return violations[i].line < violations[j].line
-	})
-	return violations, allowlistedHits
-}
-
 // scanGooseSessionLockerFile inspects a single file and returns violations.
 func scanGooseSessionLockerFile(
 	fset *token.FileSet,
@@ -168,7 +127,7 @@ func scanGooseSessionLockerFile(
 ) []gooseLockerViolation {
 	var out []gooseLockerViolation
 
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isGooseFuncCall(info, call, gooseImportPath, "NewProvider") {
 			return
 		}

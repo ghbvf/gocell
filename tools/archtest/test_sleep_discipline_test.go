@@ -40,16 +40,9 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"sort"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -68,68 +61,48 @@ func TestTestSleepDiscipline(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackages(root, true, typeseval.FlatNonDefaultTags(), patterns...)
-	require.NoError(t, err, "packages.Load failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
-	var violations []string
-	visited := map[string]bool{}
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
+	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !fileroles.IsTestCode(rel) {
+					continue
+				}
+				d = append(d, scanTestSleepDisciplineDiags(p.Fset, f, rel)...)
 			}
-			abs := p.GoFiles[i]
-			if visited[abs] {
-				continue
-			}
-			visited[abs] = true
+			return d
+		})
 
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok || !fileroles.IsTestCode(rel) {
-				continue
-			}
-
-			violations = append(violations, scanTestSleepDiscipline(p.Fset, file, rel)...)
-		}
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"TEST-SLEEP-DISCIPLINE-01: every time.Sleep in test code must justify "+
-			"itself with `//archtest:allow:test-sleep <reason>` on the same line. "+
-			"Prefer require.Eventually for state-polling waits. "+
-			"ref: docs/plans/202605011500-029-master-roadmap.md G6")
+	Report(t, "TEST-SLEEP-DISCIPLINE-01", diags)
 }
 
-// scanTestSleepDiscipline walks a parsed file's AST for `time.Sleep(...)`
+// scanTestSleepDisciplineDiags walks a parsed file's AST for `time.Sleep(...)`
 // CallExpr nodes. Each call must be accompanied by a same-line allow
 // comment with a non-empty reason; otherwise it is reported as a violation.
-func scanTestSleepDiscipline(fset *token.FileSet, file *ast.File, rel string) []string {
+func scanTestSleepDisciplineDiags(fset *token.FileSet, file *ast.File, rel string) []Diagnostic {
 	allowedLines := allowMarkerLines(fset, file)
 
-	var violations []string
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isTimeSleepCall(call) {
 			return
 		}
-		// Match against the line of the closing `)` so multi-line calls
-		// can place the marker on the trailing-paren line. Common case
-		// (single-line call) collapses to the call's start line.
 		line := fset.Position(call.Rparen).Line
 		if allowedLines[line] {
 			return
 		}
-		violations = append(violations, fmt.Sprintf(
-			"%s:%d: time.Sleep without %s <reason>",
-			rel, fset.Position(call.Pos()).Line, sleepAllowMarker,
-		))
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: fset.Position(call.Pos()).Line,
+			Message: fmt.Sprintf(
+				"time.Sleep without %s <reason>. "+
+					"Prefer require.Eventually for state-polling waits. "+
+					"ref: docs/plans/202605011500-029-master-roadmap.md G6",
+				sleepAllowMarker),
+		})
 	})
-	return violations
+	return out
 }
 
 // isTimeSleepCall reports whether call is `time.Sleep(...)`. The check is

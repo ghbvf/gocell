@@ -32,13 +32,10 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // productionLoaderFunnelAllowlist names the (file::function) pairs that may
@@ -54,35 +51,37 @@ var productionLoaderFunnelAllowlist = map[string]string{
 func TestProductionLoaderFunnel01(t *testing.T) {
 	t.Parallel()
 	repoRoot := findModuleRoot(t)
-	scope := scanner.DirsScope(repoRoot, []string{"tools/archtest"}, scanner.IncludeTests())
+	scope := DirsScope(repoRoot, []string{"tools/archtest"}, IncludeTests())
 
 	type violation struct {
 		Key string
 	}
 	var violations []violation
 
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		if filepath.ToSlash(filepath.Dir(fc.Rel)) != "tools/archtest" {
-			return
+	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
+				continue
+			}
+			if !strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+				if fd.Body == nil || fd.Name == nil {
+					return
+				}
+				if !funcDeclCallsBannedRealRepoLoader(f, fd) {
+					return
+				}
+				key := rel + "::" + fd.Name.Name
+				if _, ok := productionLoaderFunnelAllowlist[key]; ok {
+					return
+				}
+				violations = append(violations, violation{Key: key})
+			})
 		}
-		if !strings.HasSuffix(fc.Rel, "_test.go") {
-			return
-		}
-		rel := filepath.ToSlash(fc.Rel)
-		f := fc.File
-		scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-			if fd.Body == nil || fd.Name == nil {
-				return
-			}
-			if !funcDeclCallsBannedRealRepoLoader(f, fd) {
-				return
-			}
-			key := rel + "::" + fd.Name.Name
-			if _, ok := productionLoaderFunnelAllowlist[key]; ok {
-				return
-			}
-			violations = append(violations, violation{Key: key})
-		})
+		return nil
 	})
 
 	sort.Slice(violations, func(i, j int) bool { return violations[i].Key < violations[j].Key })
@@ -140,7 +139,7 @@ func funcDeclCallsBannedRealRepoLoader(f *ast.File, fd *ast.FuncDecl) bool {
 		return false
 	}
 	var found bool
-	scanner.EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 		if found {
 			return
 		}
@@ -177,7 +176,7 @@ func funcBodyHasAllPatternLiteral(body *ast.BlockStmt) bool {
 		return false
 	}
 	var found bool
-	scanner.EachInSubtree[ast.BasicLit](body, func(lit *ast.BasicLit) {
+	EachInSubtree[ast.BasicLit](body, func(lit *ast.BasicLit) {
 		if !found && lit.Value == `"./..."` {
 			found = true
 		}
@@ -233,7 +232,7 @@ func callExprFunIsFindModuleRoot(e ast.Expr) bool {
 // `root := findModuleRoot(t)` assignment in the same file.
 func fileBindsIdentFromFindModuleRoot(f *ast.File, name string) bool {
 	var matched bool
-	scanner.EachInSubtree[ast.AssignStmt](f, func(as *ast.AssignStmt) {
+	EachInSubtree[ast.AssignStmt](f, func(as *ast.AssignStmt) {
 		if matched {
 			return
 		}

@@ -30,10 +30,7 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/tools/go/packages"
-
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // INVARIANT: SCANNER-FRAMEWORK-USAGE-01
@@ -110,37 +107,24 @@ import (
 //
 // New rules MUST go through the scanner framework + EachInSubtree/EachInChildren.
 func TestScannerFrameworkUsage01(t *testing.T) {
-	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-
 	var diags []scanner.Diagnostic
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil {
-			t.Fatalf("typeseval.SharedResolver returned nil package " +
-				"(SharedResolver invariant broken)")
-		}
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			t.Fatalf("package %q loaded without TypesInfo/Fset "+
-				"(SharedResolver misconfigured — full type info is required "+
-				"for forbiddenWalkRefs/forbiddenAstListTypeAssertions)", pkg.PkgPath)
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			// Only flag top-level archtest test files (tools/archtest/<file>_test.go).
-			// Subpackages under tools/archtest/internal/ are out of scope.
-			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
-				continue
+	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				// Only flag top-level archtest test files (tools/archtest/<file>_test.go).
+				// Subpackages under tools/archtest/internal/ are out of scope.
+				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
+					continue
+				}
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				diags = append(diags, forbiddenWalkRefs(p.TypesInfo, p.Fset, file, rel)...)
+				diags = append(diags, forbiddenAstListTypeAssertions(p.TypesInfo, p.Fset, file, rel)...)
 			}
-			if !strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			diags = append(diags, forbiddenWalkRefs(pkg.TypesInfo, pkg.Fset, file, rel)...)
-			diags = append(diags, forbiddenAstListTypeAssertions(pkg.TypesInfo, pkg.Fset, file, rel)...)
-		}
-	}
+			return nil
+		})
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-01", diags)
 }
 
@@ -160,28 +144,22 @@ func TestScannerFrameworkUsage01(t *testing.T) {
 // own live scan (parent-dir filter at line 120) so the banned calls there
 // do not pollute the production rule.
 func TestScannerFrameworkUsage01_InspectorMethodBanLive(t *testing.T) {
-	root := findModuleRoot(t)
-	// includeTests=false: the inspectorredfixture package has no _test.go files
+	// Tests=false: the inspectorredfixture package has no _test.go files
 	// so loading tests would only add no-op work. The archtest_fixture build
 	// tag is required because inspector_red.go is gated behind it (sister
 	// fixture convention — see wrapfixture/violation, rawparamfixture); without
 	// the tag packages.Load returns an empty package and the test fails red on
 	// got=0 want=4.
-	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"}, "./tools/archtest/internal/inspectorredfixture")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-
 	var diags []scanner.Diagnostic
-	for _, pkg := range resolver.Packages() {
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			diags = append(diags, forbiddenWalkRefs(pkg.TypesInfo, pkg.Fset, file, rel)...)
-		}
-	}
+	RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+		[]string{"./tools/archtest/internal/inspectorredfixture"},
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				diags = append(diags, forbiddenWalkRefs(p.TypesInfo, p.Fset, file, rel)...)
+			}
+			return nil
+		})
 
 	const wantHits = 4
 	if len(diags) != wantHits {
@@ -276,7 +254,7 @@ var forbiddenMethodSymbols = map[string][]string{
 //
 // Signature: minimal type-info dependency `(*types.Info, *token.FileSet,
 // *ast.File, rel)`. Production callers pass (pkg.TypesInfo, pkg.Fset, file,
-// pkgFileRel(...)); fixture callers pass (minimalCheck.Info, fset, file,
+// p.Rel(file)); fixture callers pass (minimalCheck.Info, fset, file,
 // "fake.go"). Same pure function for both — fixture/prod cannot drift.
 //
 // Iteration uses scanner.EachInSubtree (dogfood — the rule that enforces the
@@ -317,7 +295,7 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 	// (2b) SelectorExpr scan: path A.2 (qualified call) + path A' (receiver
 	// method).
 	scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if path, name, ok := typeseval.ResolvePackageRef(info, sel); ok {
+		if path, name, ok := ResolvePackageRef(info, sel); ok {
 			if symbols, banned := forbiddenWalkSymbols[path]; banned && contains(symbols, name) {
 				out = append(out, scanner.Diagnostic{
 					Rel:     rel,
@@ -335,7 +313,7 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 		// all these AST shapes (the prior NamedTypeImportPath walker only saw
 		// sel.X's static type and missed promoted/named-def cases — closed by
 		// PR469-review-round-2).
-		if fn, ok := typeseval.ResolveMethodCall(info, sel); ok {
+		if fn, ok := ResolveMethodCall(info, sel); ok {
 			if methods, banned := forbiddenMethodSymbols[fn.Pkg().Path()]; banned && contains(methods, fn.Name()) {
 				out = append(out, scanner.Diagnostic{
 					Rel:     rel,
@@ -351,7 +329,7 @@ func forbiddenWalkRefs(info *types.Info, fset *token.FileSet, file *ast.File, re
 		if selSels[id] {
 			return
 		}
-		path, name, ok := typeseval.ResolvePackageRef(info, id)
+		path, name, ok := ResolvePackageRef(info, id)
 		if !ok {
 			return
 		}
@@ -693,24 +671,6 @@ func isStarAstNodeType(info *types.Info, expr ast.Expr) bool {
 		return false
 	}
 	return obj.Pkg().Path() == "go/ast"
-}
-
-// pkgFileRel returns the file path relative to modRoot for a *ast.File whose
-// position is owned by pkg.Fset.
-func pkgFileRel(modRoot string, pkg *packages.Package, file *ast.File) string {
-	pos := pkg.Fset.Position(file.Pos())
-	if pos.Filename == "" {
-		return ""
-	}
-	abs, err := filepath.Abs(pos.Filename)
-	if err != nil {
-		return filepath.ToSlash(pos.Filename)
-	}
-	rel, err := filepath.Rel(modRoot, abs)
-	if err != nil {
-		return filepath.ToSlash(abs)
-	}
-	return filepath.ToSlash(rel)
 }
 
 // runFixture parses src, type-checks it via importer.Default(), and runs the
@@ -1388,32 +1348,22 @@ func _(file *ast.File, other []ast.Decl) {
 //	     documents that the MAIN detector (forbiddenClosureDoneSentinel) by
 //	     design returns 0 hits for the BS3 shape.
 func TestScannerFrameworkUsage02(t *testing.T) {
-	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-
 	var diags []scanner.Diagnostic
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil {
-			t.Fatalf("typeseval.SharedResolver returned nil package " +
-				"(SharedResolver invariant broken)")
-		}
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			t.Fatalf("package %q loaded without TypesInfo/Fset", pkg.PkgPath)
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
-				continue
+	// Tests:true required — _test.go files are the scan target of USAGE-02.
+	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
+					continue
+				}
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				diags = append(diags, forbiddenClosureDoneSentinel(p.TypesInfo, p.Fset, file, rel)...)
 			}
-			if !strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			diags = append(diags, forbiddenClosureDoneSentinel(pkg.TypesInfo, pkg.Fset, file, rel)...)
-		}
-	}
+			return nil
+		})
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02", diags)
 }
 
@@ -1460,7 +1410,7 @@ func monitoredEachInChildrenCallee(info *types.Info, call *ast.CallExpr) bool {
 	default:
 		return false
 	}
-	path, name, ok := typeseval.ResolvePackageRef(info, base)
+	path, name, ok := ResolvePackageRef(info, base)
 	if !ok || name != "EachInChildren" {
 		return false
 	}
@@ -1579,27 +1529,27 @@ func loadFixture02(t *testing.T, caseName string, detector usage02Detector) []sc
 		t.Fatalf("usage02FixturesRelDir %q does not exist under module root %q: %v",
 			usage02FixturesRelDir, root, err)
 	}
-	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
 	target := usage02FixturesRelDir + "/" + caseName + ".go"
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if rel != target {
-				continue
+	var result []scanner.Diagnostic
+	found := false
+	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if rel != target {
+					continue
+				}
+				result = detector(p.TypesInfo, p.Fset, file, rel)
+				found = true
 			}
-			return detector(pkg.TypesInfo, pkg.Fset, file, rel)
-		}
+			return nil
+		})
+	if !found {
+		t.Fatalf("loadFixture02: fixture not found at %s; ensure the file exists "+
+			"in tools/archtest/internal/usage02fixtures/ and the package is reachable "+
+			"via ./tools/archtest/...", target)
 	}
-	t.Fatalf("loadFixture02: fixture not found at %s; ensure the file exists "+
-		"in tools/archtest/internal/usage02fixtures/ and the package is reachable "+
-		"via ./tools/archtest/...", target)
-	return nil
+	return result
 }
 
 // TestScannerFrameworkUsage02_Fixture locks forbiddenClosureDoneSentinel to
@@ -1855,27 +1805,21 @@ func enclosingFuncBody(file *ast.File, call *ast.CallExpr) ast.Node {
 // callback is a non-functional shape (cannot implement find-first) and is
 // reported as a BS3 diagnostic here.
 func TestScannerFrameworkUsage02_BlindSpotReverse(t *testing.T) {
-	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
 	var diags []scanner.Diagnostic
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
-				continue
+	RunTyped(t, TypedOpts{Tests: true}, []string{"./tools/archtest/..."},
+		func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if filepath.ToSlash(filepath.Dir(rel)) != "tools/archtest" {
+					continue
+				}
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				diags = append(diags, closureDoneSentinelBlindSpots(p.TypesInfo, p.Fset, file, rel)...)
 			}
-			if !strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			diags = append(diags, closureDoneSentinelBlindSpots(pkg.TypesInfo, pkg.Fset, file, rel)...)
-		}
-	}
+			return nil
+		})
 	if len(diags) != 0 {
 		t.Errorf("SCANNER-FRAMEWORK-USAGE-02 blind-spot shape present in "+
 			"production (rule would silently miss it); migrate to "+

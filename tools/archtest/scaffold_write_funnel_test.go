@@ -68,9 +68,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // bannedOSWriteSelectors is the closed set of os package functions whose
@@ -157,44 +154,34 @@ func canonicalOSWriteCall(info *types.Info, call *ast.CallExpr) string {
 func TestScaffoldWriteFunnel_NoDirectOSWrites(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	resolver, err := typeseval.SharedResolver(root, false, nil,
+	diags := RunTyped(t, TypedOpts{}, []string{
 		"./tools/codegen/...",
 		"./kernel/assembly/...",
 		"./cmd/gocell/app/...",
-	)
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
-
-	var diags []scanner.Diagnostic
-	for _, pkg := range resolver.Packages() {
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			absPath := pkg.Fset.Position(file.Pos()).Filename
-			rel, err := filepath.Rel(root, absPath)
-			if err != nil {
-				continue
-			}
-			rel = filepath.ToSlash(rel)
+		var out []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if !scaffoldFunnelPred(rel) {
 				continue
 			}
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				name := canonicalOSWriteCall(pkg.TypesInfo, call)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				name := canonicalOSWriteCall(p.TypesInfo, call)
 				if name == "" {
 					return
 				}
-				diags = append(diags, scanner.Diagnostic{
+				out = append(out, Diagnostic{
 					Rel:  rel,
-					Line: pkg.Fset.Position(call.Pos()).Line,
+					Line: p.Fset.Position(call.Pos()).Line,
 					Message: "SCAFFOLD-WRITE-FUNNEL-01: direct os." + name +
 						" call — must funnel through pkg/pathsafe.WritePlannedFiles",
 				})
 			})
 		}
-	}
-	scanner.Report(t, "SCAFFOLD-WRITE-FUNNEL-01", diags)
+		return out
+	})
+	Report(t, "SCAFFOLD-WRITE-FUNNEL-01", diags)
 }

@@ -28,13 +28,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 const (
@@ -50,31 +43,19 @@ const (
 func TestPromCellLabelFunnel(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-
-	pkgs, errs, err := typeseval.LoadPackages(root, false, nil,
-		"./adapters/prometheus/...")
-	require.NoError(t, err, "LoadPackages failed")
-	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
-
 	var violations []string
-
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/prometheus/..."}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
+		}
 		// Only scan the production package itself; skip the *_test variant
 		// the test-loader synthesizes (its PkgPath ends with ".test" or has
 		// the `_test` suffix).
-		if p.PkgPath != promAdapterPkgPath {
-			return
+		if p.Pkg.Path() != promAdapterPkgPath {
+			return nil
 		}
-		for i, file := range p.Syntax {
-			if i >= len(p.GoFiles) {
-				continue
-			}
-			abs := p.GoFiles[i]
-			rel, ok := fileroles.Rel(root, abs)
-			if !ok {
-				continue
-			}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			// Skip the funnel definition file (it reads its own `id` parameter,
 			// not a HookEvent.CellID) and any test file.
 			if strings.HasSuffix(rel, "_test.go") {
@@ -83,10 +64,9 @@ func TestPromCellLabelFunnel(t *testing.T) {
 			if filepath.Base(rel) == cellLabelDefnFile {
 				continue
 			}
-
-			violations = append(violations,
-				scanPromCellLabelFunnel(p, file, rel)...)
+			violations = append(violations, scanPromCellLabelFunnel(p, file, rel)...)
 		}
+		return nil
 	})
 
 	sort.Strings(violations)
@@ -105,7 +85,7 @@ func TestPromCellLabelFunnel(t *testing.T) {
 // `ident.Name == "promCellLabel"`) would let a same-name local variable
 // bypass the funnel, which is why the Hard property requires type
 // resolution (charter §1 form uniqueness).
-func scanPromCellLabelFunnel(p *packages.Package, file *ast.File, rel string) []string {
+func scanPromCellLabelFunnel(p *Pass, file *ast.File, rel string) []string {
 	approved := approvedCellIDArgs(p.TypesInfo, file)
 
 	var violations []string
@@ -131,7 +111,7 @@ func scanPromCellLabelFunnel(p *packages.Package, file *ast.File, rel string) []
 // `promCellLabel` variable does NOT register as an approved call site.
 func approvedCellIDArgs(info *types.Info, file *ast.File) map[*ast.SelectorExpr]struct{} {
 	out := map[*ast.SelectorExpr]struct{}{}
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isPromFunnelCall(info, call.Fun) {
 			return
 		}
@@ -185,7 +165,7 @@ func cellIDSelectorExprs(info *types.Info, file *ast.File) map[*ast.SelectorExpr
 	if info == nil {
 		return out
 	}
-	scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if sel.Sel == nil || sel.Sel.Name != "CellID" {
 			return
 		}

@@ -20,15 +20,19 @@ package archtest
 
 import (
 	"go/ast"
+	"go/constant"
+	"go/token"
 	"go/types"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // typeMethodSet collects every exported method (own + promoted) on every
@@ -57,44 +61,35 @@ func (s *typeMethodSet) has(qualified, methodName string) bool {
 	return false
 }
 
-// collectMethodSets loads patterns under modRoot with full type info and
-// records every exported method (own or promoted) on every exported named type.
-// Keys are qualified by import path so types from different packages with the
-// same simple name do not collide.
-func collectMethodSets(t *testing.T, modRoot string, patterns ...string) *typeMethodSet {
-	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(modRoot, false, nil, patterns...)
-	require.NoError(t, err, "packages.Load")
-	require.Empty(t, errs, "package load errors: %v", errs)
-
-	s := newTypeMethodSet()
-	for _, pkg := range pkgs {
-		if pkg.Types == nil {
+// accumulateMethodSet accumulates every exported method (own or promoted) on
+// every exported named type in p.Pkg into s. Keys are qualified by import path
+// so types from different packages with the same simple name do not collide.
+// Called once per Pass inside RunTyped/RunTypedDir.
+func accumulateMethodSet(p *Pass, s *typeMethodSet) {
+	if p.Pkg == nil {
+		return
+	}
+	scope := p.Pkg.Scope()
+	for _, name := range scope.Names() {
+		if !ast.IsExported(name) {
 			continue
 		}
-		scope := pkg.Types.Scope()
-		for _, name := range scope.Names() {
-			if !ast.IsExported(name) {
-				continue
-			}
-			tn, ok := scope.Lookup(name).(*types.TypeName)
-			if !ok {
-				continue
-			}
-			named, ok := tn.Type().(*types.Named)
-			if !ok {
-				continue
-			}
-			qualified := pkg.PkgPath + "." + name
-			ms := types.NewMethodSet(types.NewPointer(named))
-			for sel := range ms.Methods() {
-				if sel.Obj().Exported() {
-					s.add(qualified, sel.Obj().Name())
-				}
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok {
+			continue
+		}
+		named, ok := tn.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		qualified := p.Pkg.Path() + "." + name
+		ms := types.NewMethodSet(types.NewPointer(named))
+		for sel := range ms.Methods() {
+			if sel.Obj().Exported() {
+				s.add(qualified, sel.Obj().Name())
 			}
 		}
 	}
-	return s
 }
 
 // isManagedResource returns true when qualified type carries the full
@@ -121,8 +116,12 @@ func exposesHealthCheckerMethod(s *typeMethodSet, qualified string) bool {
 // HealthCheckers() also implements the full ManagedResource contract
 // (Checkers + Worker + Close), counting promoted methods from embedded fields.
 func TestHealthCheckersImpliesManagedResource(t *testing.T) {
-	root := findModuleRoot(t)
-	s := collectMethodSets(t, root, "./runtime/...", "./adapters/...")
+	s := newTypeMethodSet()
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."},
+		func(p *Pass) []Diagnostic {
+			accumulateMethodSet(p, s)
+			return nil
+		})
 
 	var violations []string
 	for qualified := range s.methods {
@@ -157,7 +156,12 @@ func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 // are still flagged (checkers_only.Bad must be flagged).
 func TestHealthAggregation_FixtureRegression(t *testing.T) {
 	fixturesRoot := filepath.Join(findArchTestDir(t), "testdata", "health_agg_fixtures")
-	s := collectMethodSets(t, fixturesRoot, "./promoted_ok", "./checkers_only", "./base")
+	s := newTypeMethodSet()
+	RunTypedDir(t, fixturesRoot, TypedOpts{Tests: false}, []string{"./promoted_ok", "./checkers_only", "./base"},
+		func(p *Pass) []Diagnostic {
+			accumulateMethodSet(p, s)
+			return nil
+		})
 
 	const promotedOkApp = "healthaggfixtures/promoted_ok.App"
 	require.True(t, exposesHealthCheckerMethod(s, promotedOkApp),
@@ -169,4 +173,85 @@ func TestHealthAggregation_FixtureRegression(t *testing.T) {
 	require.True(t, exposesHealthCheckerMethod(s, checkersOnlyBad))
 	assert.False(t, isManagedResource(s, checkersOnlyBad),
 		"Bad declares only Checkers() — must remain flagged as missing Worker/Close")
+}
+
+var adapterReadyProbeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*_ready$`)
+
+// adapterCheckerNameViolationsFromPass scans all files in a Pass for Checkers()
+// methods on exported receiver types and validates each probe name.
+func adapterCheckerNameViolationsFromPass(fset *token.FileSet, files []*ast.File, info *types.Info, rel string) []string {
+	var violations []string
+	for _, file := range files {
+		scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			if fn.Name.Name != "Checkers" || fn.Recv == nil || len(fn.Recv.List) == 0 {
+				return
+			}
+			recv := scanner.ReceiverTypeName(fn.Recv.List[0].Type)
+			if recv == "" || !ast.IsExported(recv) {
+				return
+			}
+			for _, name := range checkerNamesFromFuncPass(fset, info, fn) {
+				if !adapterReadyProbeNamePattern.MatchString(name) {
+					violations = append(violations, rel+"."+recv+" Checkers probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
+				}
+			}
+		})
+	}
+	return violations
+}
+
+func checkerNamesFromFuncPass(_ *token.FileSet, info *types.Info, fn *ast.FuncDecl) []string {
+	var names []string
+	scanner.EachInSubtree[ast.KeyValueExpr](fn.Body, func(kv *ast.KeyValueExpr) {
+		tv, ok := info.Types[kv.Key]
+		if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+			return
+		}
+		names = append(names, constant.StringVal(tv.Value))
+	})
+	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HealthToCheckers" || len(call.Args) == 0 {
+			return
+		}
+		obj, ok := info.Uses[sel.Sel].(*types.Func)
+		if !ok || !strings.HasSuffix(obj.Pkg().Path(), "adapters/adapterutil") {
+			return
+		}
+		name, ok := constStringValue(info, call.Args[0])
+		if !ok {
+			return
+		}
+		names = append(names, name)
+	})
+	return names
+}
+
+// healthCheckerCallNameViolationsFromPass scans all files in a Pass for
+// WithHealthChecker call sites and validates each probe name.
+func healthCheckerCallNameViolationsFromPass(_ *token.FileSet, files []*ast.File, info *types.Info, rel string) []string {
+	var violations []string
+	for _, file := range files {
+		scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			if selectorName(call.Fun) != "WithHealthChecker" || len(call.Args) == 0 {
+				return
+			}
+			name, ok := constStringValue(info, call.Args[0])
+			if !ok {
+				return
+			}
+			if !adapterReadyProbeNamePattern.MatchString(name) {
+				violations = append(violations, rel+" bootstrap.WithHealthChecker probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
+			}
+		})
+	}
+	return violations
+}
+
+func constStringValue(info *types.Info, expr ast.Expr) (string, bool) {
+	tv, ok := info.Types[expr]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(tv.Value), true
 }

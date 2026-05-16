@@ -4,7 +4,7 @@
 > 主轴权威源：[`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md) §1  
 > 历史归档：[`docs/backlog/archive/`](backlog/archive/)
 >
-> 基线：`origin/develop @ 4079754b`（2026-05-15；含 PR #481/#482/#483/#484/#485/#486/#487/#488/#490/#492/#493/#494/#495/#496/#497/#498/#499/#500/#507 + plan 034 S4d/S4e ✅ (PR #494) + plan 040 阶段 1 ✅ / 1.5 ✅ (#495) / 1.6 ✅ (#500) / 阶段 2 全部 ✅ (PR-2 #496 / PR-3 #493 / PR-4 #498 / PR-5 #497) / 阶段 3 PR-6 ✅ (#500) / 阶段 3 PR-7 ✅ (#507) + Stage 1.7 RunTypedProduction shipped）
+> 基线：`refactor/593-archtest-pass-consolidated`（2026-05-16；含 PR #481/#482/#483/#484/#485/#486/#487/#488/#490/#492/#493/#494/#495/#496/#497/#498/#499/#500/#507/#511/#522 + plan 034 S4d/S4e ✅ (PR #494) + plan 040 阶段 1 ✅ / 1.5 ✅ (#495) / 1.6 ✅ (#500) / 阶段 2 全部 ✅ / 阶段 3 全部 ✅ (#500/#507/#522) / LegacyAllowlist 已清零 (PR #522) + Stage 1.8 FindFirstChild+USAGE-02 (#511)）
 
 ---
 

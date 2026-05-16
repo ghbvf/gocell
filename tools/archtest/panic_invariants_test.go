@@ -17,10 +17,8 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"go/types"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -28,12 +26,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 // INVARIANT: PANIC-REDACT-01
@@ -48,51 +40,54 @@ import (
 // Wave 3: all violations remediated; white-list stays empty permanently.
 func TestPanicLogMustUseRedactAny(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.ModuleScope(root,
-		scanner.ExcludeRels("tools/archtest/doc.go"),
+	scope := ModuleScope(root,
+		ExcludeRels("tools/archtest/doc.go"),
 	)
 
-	var diags []scanner.Diagnostic
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(t *testing.T, fc scanner.FileContext) {
-		scanner.EachInSubtree[ast.CallExpr](fc.File, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Any" {
-				return
-			}
-			ident, ok := sel.X.(*ast.Ident)
-			if !ok || ident.Name != "slog" {
-				return
-			}
-			if len(call.Args) < 2 {
-				return
-			}
-			// First arg must be string literal "panic".
-			lit, ok := call.Args[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING || lit.Value != `"panic"` {
-				return
-			}
-			// Second arg must be a call to redaction.RedactAny(...).
-			arg := call.Args[1]
-			argCall, ok := arg.(*ast.CallExpr)
-			if !ok {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    fc.Fset.Position(call.Pos()).Line,
-					Message: `slog.Any("panic", X) must wrap X with redaction.RedactAny(...)`,
-				})
-				return
-			}
-			argSel, ok := argCall.Fun.(*ast.SelectorExpr)
-			if !ok || argSel.Sel.Name != "RedactAny" {
-				diags = append(diags, scanner.Diagnostic{
-					Rel:     fc.Rel,
-					Line:    fc.Fset.Position(call.Pos()).Line,
-					Message: `slog.Any("panic", X) must wrap X with redaction.RedactAny(...)`,
-				})
-			}
-		})
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var out []Diagnostic
+		for _, f := range p.Files {
+			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Any" {
+					return
+				}
+				ident, ok := sel.X.(*ast.Ident)
+				if !ok || ident.Name != "slog" {
+					return
+				}
+				if len(call.Args) < 2 {
+					return
+				}
+				// First arg must be string literal "panic".
+				lit, ok := call.Args[0].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING || lit.Value != `"panic"` {
+					return
+				}
+				// Second arg must be a call to redaction.RedactAny(...).
+				arg := call.Args[1]
+				argCall, ok := arg.(*ast.CallExpr)
+				if !ok {
+					out = append(out, Diagnostic{
+						Rel:     p.Rel(f),
+						Line:    p.Fset.Position(call.Pos()).Line,
+						Message: `slog.Any("panic", X) must wrap X with redaction.RedactAny(...)`,
+					})
+					return
+				}
+				argSel, ok := argCall.Fun.(*ast.SelectorExpr)
+				if !ok || argSel.Sel.Name != "RedactAny" {
+					out = append(out, Diagnostic{
+						Rel:     p.Rel(f),
+						Line:    p.Fset.Position(call.Pos()).Line,
+						Message: `slog.Any("panic", X) must wrap X with redaction.RedactAny(...)`,
+					})
+				}
+			})
+		}
+		return out
 	})
-	scanner.Report(t, "PANIC-REDACT-01", diags)
+	Report(t, "PANIC-REDACT-01", diags)
 }
 
 // INVARIANT: PANIC-REGISTERED-01
@@ -179,7 +174,7 @@ func scanFileForPanicViolations(
 ) []panicRegisteredViolation {
 	var violations []panicRegisteredViolation
 
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isPanicCallExpr(call) {
 			return
 		}
@@ -332,11 +327,19 @@ func isPanicCallExpr(call *ast.CallExpr) bool {
 
 // shouldSkipForPanicRegistered returns true for paths that must not be
 // scanned by TestPanicRegistered (test files, generated code, testdata, etc.).
+// Mirrors fileroles.IsProductionCode exclusions for paths that RunTyped may
+// surface but PANIC-REGISTERED-01 should not gate.
 func shouldSkipForPanicRegistered(rel string) bool {
 	switch {
 	case strings.HasSuffix(rel, "_test.go"):
 		return true
 	case strings.HasPrefix(rel, "vendor/"):
+		return true
+	case strings.HasPrefix(rel, "generated/"):
+		return true
+	case strings.HasPrefix(rel, "examples/"):
+		return true
+	case strings.HasPrefix(rel, "tools/archtest/"):
 		return true
 	case strings.HasPrefix(rel, "worktrees/"):
 		return true
@@ -345,8 +348,6 @@ func shouldSkipForPanicRegistered(rel string) bool {
 	case strings.HasPrefix(rel, "node_modules/"):
 		return true
 	case strings.Contains(rel, "/testdata/") || strings.HasPrefix(rel, "testdata/"):
-		return true
-	case rel == "tools/archtest/doc.go":
 		return true
 	}
 	return false
@@ -358,34 +359,27 @@ func shouldSkipForPanicRegistered(rel string) bool {
 func TestPanicRegistered(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	modulePath := readModulePath(t, root)
 	seen := make(map[string]struct{}) // dedup violations by "rel:line:msg"
 	var violations []panicRegisteredViolation
 
-	for _, tagGroup := range typeseval.KnownNonDefaultTags() {
+	for _, tagGroup := range KnownNonDefaultTags() {
 		// skip archtest_fixture — fixtures intentionally violate rules
 		if containsTag(tagGroup, "archtest_fixture") {
 			continue
 		}
-		// LoadProductionPackages is the PRODUCTION-LOADER-FUNNEL-01-approved
-		// entry point; .All() explicitly returns generated/ packages since
-		// PANIC-REGISTERED-01 covers both hand-written and codegen-emitted
-		// panic sites (Wave 2 — single funnel, no generated/ exemption).
-		resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, tagGroup)
-		require.NoError(t, err, "LoadProductionPackages failed for tags %v", tagGroup)
-
-		pkgs := resolver.All()
-		packages.Visit(pkgs, nil, func(p *packages.Package) {
-			for i, file := range p.Syntax {
-				if i >= len(p.GoFiles) {
-					continue
-				}
-				abs := p.GoFiles[i]
-				rel, ok := fileroles.Rel(root, abs)
-				if !ok || !fileroles.IsProductionCode(rel) {
-					continue
-				}
+		// RunTyped with "./..." loads the whole module; the rule scans
+		// hand-written production panic sites only. shouldSkipForPanicRegistered
+		// excludes generated/, examples/, tools/archtest/, testdata/, _test.go
+		// (mirroring fileroles.IsProductionCode) at the file level. generated/
+		// is intentionally excluded — codegen templates are the single source
+		// guaranteeing emitted panics use panicregister.Approved, so scanning
+		// them would be redundant (no enforcement gap).
+		_ = RunTyped(t, TypedOpts{Tags: tagGroup}, []string{"./..."}, func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
 				if shouldSkipForPanicRegistered(rel) {
 					continue
 				}
@@ -398,6 +392,7 @@ func TestPanicRegistered(t *testing.T) {
 					violations = append(violations, v)
 				}
 			}
+			return nil
 		})
 	}
 
@@ -436,9 +431,6 @@ func containsTag(group []string, tag string) bool {
 func TestPanicRegisteredScannerFixtures(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	fixtureBase := filepath.Join(root, "tools", "archtest", "testdata", "panic_registered_fixtures")
-
 	cases := []struct {
 		dir       string
 		wantLines []int // empty = GREEN (0 violations); non-empty = RED with these line numbers
@@ -472,29 +464,20 @@ func TestPanicRegisteredScannerFixtures(t *testing.T) {
 		t.Run(tc.dir, func(t *testing.T) {
 			t.Parallel()
 
-			fixtureDir := filepath.Join(fixtureBase, tc.dir)
-			// Load using module root so imports of panicregister/errcode resolve.
-			pkgs, errs, err := typeseval.LoadPackages(root, false, nil,
-				"./tools/archtest/testdata/panic_registered_fixtures/"+tc.dir)
-			require.NoError(t, err, "LoadPackages failed for fixture %s", tc.dir)
-			require.Empty(t, errs, "package load errors for fixture %s: %v", tc.dir, errs)
-			require.NotEmpty(t, pkgs, "no packages loaded for fixture %s", tc.dir)
+			fixturePattern := "./tools/archtest/testdata/panic_registered_fixtures/" + tc.dir
 
 			var violations []panicRegisteredViolation
-			for _, p := range pkgs {
-				for i, file := range p.Syntax {
-					if i >= len(p.GoFiles) {
-						continue
-					}
-					abs := p.GoFiles[i]
-					rel, ok := fileroles.Rel(fixtureDir, abs)
-					if !ok {
-						// File is outside the fixture dir (e.g. an imported dep); skip.
-						continue
-					}
+			// Load using module root so imports of panicregister/errcode resolve.
+			_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
+				if p.TypesInfo == nil || p.Fset == nil {
+					return nil
+				}
+				for _, file := range p.Files {
+					rel := p.Rel(file)
 					violations = append(violations, scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel)...)
 				}
-			}
+				return nil
+			})
 
 			var gotLines []int
 			for _, v := range violations {

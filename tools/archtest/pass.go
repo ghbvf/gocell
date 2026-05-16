@@ -44,9 +44,9 @@ type Pass struct {
 	Fset *token.FileSet
 
 	// Files is the slice of parsed files for this Pass. In AST-only mode
-	// ([Run]) this is exactly one file per Pass invocation; in typed mode
-	// ([RunTyped]) this is the dedup'd set of files belonging to one
-	// loaded package.
+	// ([Run]) this is ALL in-scope files in a single Pass invocation; in
+	// typed mode ([RunTyped]) this is the dedup'd set of files belonging to
+	// one loaded package.
 	Files []*ast.File
 
 	// Pkg is the go/types package descriptor — exposes Name / Path / Imports /

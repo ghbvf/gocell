@@ -25,17 +25,12 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/token"
 	"go/types"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const (
@@ -61,33 +56,30 @@ var bannedSessionStoreMethods = map[string]struct{}{
 // all collapse to the same *types.Func identity.
 func TestSessionrefreshNoSessionStoreMutation_01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil, "./cells/accesscore/slices/sessionrefresh/...")
-	require.NoError(t, err, "typeseval.SharedResolver")
 
 	var violations []string
-	for _, pkg := range resolver.Packages() {
-		if pkg == nil {
-			t.Fatalf("typeseval.SharedResolver returned nil package " +
-				"(SharedResolver invariant broken)")
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./cells/accesscore/slices/sessionrefresh/..."}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
 		}
-		if pkg.PkgPath != sessionrefreshPkgPath {
+		if p.Pkg.Path() != sessionrefreshPkgPath {
 			// Sibling subpackages (currently none) are out of scope; this
 			// keeps the rule's blast radius pinned to the slice's own code.
-			continue
+			return nil
 		}
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			t.Fatalf("package %q loaded without TypesInfo/Fset "+
-				"(SharedResolver misconfigured)", pkg.PkgPath)
-		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			violations = append(violations, scanSessionrefreshFile(pkg.Fset, file, pkg.TypesInfo, rel)...)
+			ds = append(ds, scanSessionrefreshFile(p, file, rel)...)
 		}
+		return ds
+	})
+
+	for _, d := range diags {
+		violations = append(violations, d.Message)
 	}
 
 	sort.Strings(violations)
@@ -109,14 +101,13 @@ func TestSessionrefreshNoSessionStoreMutation_01(t *testing.T) {
 // in bannedSessionStoreMethods. EachInSubtree[ast.CallExpr] traverses the
 // full file tree — nested function literals and closures are covered.
 func scanSessionrefreshFile(
-	fset *token.FileSet,
+	p *Pass,
 	file *ast.File,
-	info *types.Info,
 	rel string,
-) []string {
-	var violations []string
+) []Diagnostic {
+	var ds []Diagnostic
 
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil {
 			return
@@ -125,7 +116,7 @@ func scanSessionrefreshFile(
 		if _, banned := bannedSessionStoreMethods[methodName]; !banned {
 			return
 		}
-		fn, ok := typeseval.ResolveMethodCall(info, sel)
+		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
 		if !ok {
 			return
 		}
@@ -143,13 +134,17 @@ func scanSessionrefreshFile(
 		if !ok || named.Obj().Name() != sessionStoreInterfaceTyp {
 			return
 		}
-		line := fset.Position(call.Pos()).Line
-		violations = append(violations, fmt.Sprintf(
-			"%s:%d: SESSIONREFRESH-NO-SESSION-CREATE-01: forbidden session.Store.%s call from refresh path",
-			rel, line, methodName))
+		line := p.Fset.Position(call.Pos()).Line
+		ds = append(ds, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: fmt.Sprintf(
+				"%s:%d: SESSIONREFRESH-NO-SESSION-CREATE-01: forbidden session.Store.%s call from refresh path",
+				rel, line, methodName),
+		})
 	})
 
-	return violations
+	return ds
 }
 
 // receiverNamedType unwraps pointer / alias layers to recover the *types.Named

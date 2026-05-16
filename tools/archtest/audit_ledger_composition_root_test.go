@@ -33,16 +33,11 @@ package archtest
 
 import (
 	"go/ast"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // ledgerImportSuffix is the module-relative path of the ledger package.
@@ -71,69 +66,55 @@ type ledgerHit struct {
 	name string
 }
 
-// scanLedgerCompositionRootViolations walks call expressions and records
+// scanLedgerCompositionRootPass walks a single Pass and records
 // invocations of forbidden ledger constructors outside the allowlist.
 //
 // When restrictScopeDirs is true (real-repo invariant), only packages whose
 // module-relative path starts with /cells/, /runtime/, or /adapters/ are
 // scanned; cmd/* and examples/* are exempted because they own their own
 // composition roots and are the legitimate construction sites. When false
-// (fixture detection test), all supplied packages are scanned so a fixture
+// (fixture detection test), all supplied files are scanned so a fixture
 // living under tools/archtest/internal/ still produces hits.
-//
-// The bool flag mirrors the precedent shape used by
-// scanPackagesForRawPublicOption in cell_public_option_param_test.go — both
-// gate "real-repo path filtering" off when called from a fixture-scoped
-// SharedResolver load whose `pkgs` argument is itself narrowed to the
-// fixture package, so the false branch is safe only when the caller has
-// already restricted the package set.
-func scanLedgerCompositionRootViolations(root, modulePath string, pkgs []*packages.Package, restrictScopeDirs bool) []ledgerHit {
+func scanLedgerCompositionRootPass(p *Pass, modulePath string, restrictScopeDirs bool) []ledgerHit {
 	var hits []ledgerHit
 	ledgerImportPath := modulePath + ledgerImportSuffix
 
-	for _, pkg := range pkgs {
-		if pkg == nil || pkg.TypesInfo == nil {
+	if p.TypesInfo == nil || p.Pkg == nil {
+		return nil
+	}
+	pkgSuffix := strings.TrimPrefix(p.Pkg.Path(), modulePath)
+	if ledgerCompositionRootAllowlist[pkgSuffix] {
+		return nil
+	}
+	if restrictScopeDirs {
+		if strings.HasPrefix(pkgSuffix, "/cmd/") || strings.HasPrefix(pkgSuffix, "/examples/") {
+			return nil
+		}
+		if !strings.HasPrefix(pkgSuffix, "/cells/") &&
+			!strings.HasPrefix(pkgSuffix, "/runtime/") &&
+			!strings.HasPrefix(pkgSuffix, "/adapters/") {
+			return nil
+		}
+	}
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
-		pkgSuffix := strings.TrimPrefix(pkg.PkgPath, modulePath)
-		if ledgerCompositionRootAllowlist[pkgSuffix] {
-			continue
-		}
-		if restrictScopeDirs {
-			if strings.HasPrefix(pkgSuffix, "/cmd/") || strings.HasPrefix(pkgSuffix, "/examples/") {
-				continue
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+			if !ok || pkgPath != ledgerImportPath {
+				return
 			}
-			if !strings.HasPrefix(pkgSuffix, "/cells/") &&
-				!strings.HasPrefix(pkgSuffix, "/runtime/") &&
-				!strings.HasPrefix(pkgSuffix, "/adapters/") {
-				continue
+			if !ledgerForbidden[name] {
+				return
 			}
-		}
-		for _, file := range pkg.Syntax {
-			absPath := pkg.Fset.Position(file.Pos()).Filename
-			if strings.HasSuffix(absPath, "_test.go") {
-				continue
-			}
-			rel, err := filepath.Rel(root, absPath)
-			if err != nil {
-				continue
-			}
-			relSlash := filepath.ToSlash(rel)
-			scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				pkgPath, name, ok := typeseval.ResolvePackageRef(pkg.TypesInfo, call.Fun)
-				if !ok || pkgPath != ledgerImportPath {
-					return
-				}
-				if !ledgerForbidden[name] {
-					return
-				}
-				hits = append(hits, ledgerHit{
-					file: relSlash,
-					line: pkg.Fset.Position(call.Pos()).Line,
-					name: name,
-				})
+			hits = append(hits, ledgerHit{
+				file: rel,
+				line: p.Fset.Position(call.Pos()).Line,
+				name: name,
 			})
-		}
+		})
 	}
 	return hits
 }
@@ -143,10 +124,11 @@ func TestAuditLedgerProtocol_CompositionRootOnly(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
 
-	resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, nil)
-	require.NoError(t, err)
-
-	hits := scanLedgerCompositionRootViolations(root, modulePath, resolver.Production(), true)
+	var hits []ledgerHit
+	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		hits = append(hits, scanLedgerCompositionRootPass(p, modulePath, true)...)
+		return nil
+	})
 
 	for _, h := range hits {
 		t.Logf("AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01: %s:%d calls ledger.%s "+
@@ -175,11 +157,14 @@ func TestAuditLedgerProtocol_ScannerCatchesAliasBypass(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	resolver, err := typeseval.SharedResolver(root, false, []string{"archtest_fixture"},
-		"./tools/archtest/internal/auditledgerfixture")
-	require.NoError(t, err)
 
-	hits := scanLedgerCompositionRootViolations(root, modulePath, resolver.Packages(), false)
+	var hits []ledgerHit
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+		[]string{"./tools/archtest/internal/auditledgerfixture"},
+		func(p *Pass) []Diagnostic {
+			hits = append(hits, scanLedgerCompositionRootPass(p, modulePath, false)...)
+			return nil
+		})
 
 	require.Len(t, hits, 1,
 		"fixture must yield exactly 1 violation: AliasedMustNewProtocol uses "+

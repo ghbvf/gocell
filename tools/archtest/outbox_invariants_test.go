@@ -41,13 +41,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 // ---------------------------------------------------------------------------
@@ -121,8 +117,8 @@ func TestOutboxLeaseIDCAS01(t *testing.T) {
 // relay_writeback.go) cannot escape this gate by file rename.
 func TestOutboxMarkReturnsBool01(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"runtime/outbox"},
-		scanner.MatchRels(func(rel string) bool {
+	scope := DirsScope(root, []string{"runtime/outbox"},
+		MatchRels(func(rel string) bool {
 			return strings.HasPrefix(filepath.Base(rel), "relay") &&
 				filepath.ToSlash(filepath.Dir(rel)) == "runtime/outbox"
 		}),
@@ -135,33 +131,35 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 	}
 
 	hits := 0
-	scanner.EachFile(t, scope, parser.SkipObjectResolution, func(_ *testing.T, fc scanner.FileContext) {
-		path := fc.AbsPath
-		_ = path
-		hits++
-		scanner.EachInSubtree[ast.AssignStmt](fc.File, func(assign *ast.AssignStmt) {
-			if len(assign.Rhs) != 1 || len(assign.Lhs) != 2 {
-				return
-			}
-			call, ok := assign.Rhs[0].(*ast.CallExpr)
-			if !ok {
-				return
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil {
-				return
-			}
-			if !wantTargets[sel.Sel.Name] {
-				return
-			}
-			if id, ok := assign.Lhs[0].(*ast.Ident); ok && id.Name == "_" {
-				pos := fc.Fset.Position(assign.Pos())
-				t.Errorf("OUTBOX-MARK-RETURNS-BOOL-01: %s:%d: %s call discards "+
-					"the updated-bool return; bind it and skip stats counting "+
-					"on false (B2-A-05 stale-lease guard)",
-					fc.Rel, pos.Line, sel.Sel.Name)
-			}
-		})
+	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			hits++
+			rel := p.Rel(f)
+			EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
+				if len(assign.Rhs) != 1 || len(assign.Lhs) != 2 {
+					return
+				}
+				call, ok := assign.Rhs[0].(*ast.CallExpr)
+				if !ok {
+					return
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel == nil {
+					return
+				}
+				if !wantTargets[sel.Sel.Name] {
+					return
+				}
+				if id, ok := assign.Lhs[0].(*ast.Ident); ok && id.Name == "_" {
+					pos := p.Fset.Position(assign.Pos())
+					t.Errorf("OUTBOX-MARK-RETURNS-BOOL-01: %s:%d: %s call discards "+
+						"the updated-bool return; bind it and skip stats counting "+
+						"on false (B2-A-05 stale-lease guard)",
+						rel, pos.Line, sel.Sel.Name)
+				}
+			})
+		}
+		return nil
 	})
 	if hits == 0 {
 		t.Fatal("OUTBOX-MARK-RETURNS-BOOL-01: no runtime/outbox/relay*.go files found")
@@ -193,7 +191,7 @@ func TestOutboxMetadataMaxBytes01(t *testing.T) {
 	// the helper call.
 	chunkCallsEncoder := false
 
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil || fn.Body == nil {
 			return
 		}
@@ -201,7 +199,7 @@ func TestOutboxMetadataMaxBytes01(t *testing.T) {
 		if !want && fn.Name.Name != "writeBatchChunk" {
 			return
 		}
-		scanner.EachInSubtree[ast.Ident](fn.Body, func(id *ast.Ident) {
+		EachInSubtree[ast.Ident](fn.Body, func(id *ast.Ident) {
 			if want && id.Name == "MaxMetadataBytes" {
 				required[fn.Name.Name] = true
 			}
@@ -236,11 +234,11 @@ func readSQLConstants(t *testing.T, path string) map[string]string {
 	}
 
 	consts := make(map[string]string)
-	scanner.EachInSubtree[ast.GenDecl](f, func(gd *ast.GenDecl) {
+	EachInSubtree[ast.GenDecl](f, func(gd *ast.GenDecl) {
 		if gd.Tok != token.CONST {
 			return
 		}
-		scanner.EachInSubtree[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+		EachInSubtree[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for i, name := range vs.Names {
 				if i >= len(vs.Values) {
 					continue
@@ -303,11 +301,11 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 
 	const constName = "MaxPayloadBytes"
 	var declared bool
-	scanner.EachInSubtree[ast.GenDecl](f, func(gd *ast.GenDecl) {
+	EachInSubtree[ast.GenDecl](f, func(gd *ast.GenDecl) {
 		if gd.Tok != token.CONST {
 			return
 		}
-		scanner.EachInSubtree[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+		EachInSubtree[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for _, name := range vs.Names {
 				if name.Name == constName {
 					declared = true
@@ -325,7 +323,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 
 	// Walk Entry.Validate body for any reference to MaxPayloadBytes.
 	var validate *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if validate != nil {
 			return
 		}
@@ -347,7 +345,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	// must drive an actual size check, otherwise the cap is decorative
 	// ("`_ = MaxPayloadBytes`" would have passed an ident-only scan).
 	var compared bool
-	scanner.EachInSubtree[ast.BinaryExpr](validate.Body, func(bin *ast.BinaryExpr) {
+	EachInSubtree[ast.BinaryExpr](validate.Body, func(bin *ast.BinaryExpr) {
 		if compared {
 			return
 		}
@@ -421,7 +419,7 @@ func TestOutboxHandleResultNoReceiptField(t *testing.T) {
 		receiptLine  int
 		receiptField string
 	)
-	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Name == nil || ts.Name.Name != "HandleResult" {
 			return
 		}
@@ -481,7 +479,7 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	}
 
 	var handle *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "handleFailedEntry" && fd.Recv != nil {
 			handle = fd
 		}
@@ -494,7 +492,7 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	// MarkDead. The LHS first ident MUST NOT be `_` — discarding the updated
 	// bool collapses the lost-lease branch into an uncounted writeback.
 	var violations []token.Pos
-	scanner.EachInSubtree[ast.AssignStmt](handle.Body, func(assign *ast.AssignStmt) {
+	EachInSubtree[ast.AssignStmt](handle.Body, func(assign *ast.AssignStmt) {
 		if len(assign.Rhs) != 1 {
 			return
 		}
@@ -548,7 +546,7 @@ func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 	}
 
 	var hasLost bool
-	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Name.Name != "PollCycleResult" {
 			return
 		}
@@ -727,7 +725,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 	// are scanned on the full file.
 
 	// FuncDecl-level checks and BinaryExpr within each function body.
-	scanner.EachInSubtree[ast.FuncDecl](file, func(enclosing *ast.FuncDecl) {
+	EachInSubtree[ast.FuncDecl](file, func(enclosing *ast.FuncDecl) {
 		if isWithOutboxWriterFunc(enclosing) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRuleWriterAdapter,
@@ -746,7 +744,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 		}
 		// OUTBOX-SERVICE-01: BinaryExpr nil checks scoped within the function body
 		// so enclosing context is available for isConstructorFailFast.
-		scanner.EachInSubtree[ast.BinaryExpr](enclosing, func(expr *ast.BinaryExpr) {
+		EachInSubtree[ast.BinaryExpr](enclosing, func(expr *ast.BinaryExpr) {
 			if isTxRunnerNilComparison(expr) && !isConstructorFailFast(enclosing) {
 				violations = append(violations, outboxServiceViolation{
 					Rule: outboxServiceRuleTxRunnerNil,
@@ -762,7 +760,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 	})
 	// File-wide checks for node types that can appear both inside and outside
 	// function bodies (struct fields, top-level var/const, expressions).
-	scanner.EachInSubtree[ast.CallExpr](file, func(expr *ast.CallExpr) {
+	EachInSubtree[ast.CallExpr](file, func(expr *ast.CallExpr) {
 		if isDirectPublishCall(expr) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRuleDirectPublish,
@@ -780,7 +778,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 			})
 		}
 	})
-	scanner.EachInSubtree[ast.SelectorExpr](file, func(expr *ast.SelectorExpr) {
+	EachInSubtree[ast.SelectorExpr](file, func(expr *ast.SelectorExpr) {
 		if isOutboxPublisherSelector(expr) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRulePublisherMode,
@@ -798,7 +796,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 			})
 		}
 	})
-	scanner.EachInSubtree[ast.Field](file, func(expr *ast.Field) {
+	EachInSubtree[ast.Field](file, func(expr *ast.Field) {
 		if hasPublisherModeState(expr.Names) || isPublishFailureModeExpr(expr.Type) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRulePublisherMode,
@@ -808,7 +806,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 			})
 		}
 	})
-	scanner.EachInSubtree[ast.Ident](file, func(expr *ast.Ident) {
+	EachInSubtree[ast.Ident](file, func(expr *ast.Ident) {
 		if isPublisherModeIdent(expr) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRulePublisherMode,
@@ -884,7 +882,7 @@ func isConstructorFailFast(fn *ast.FuncDecl) bool {
 	// branch must not be whitelisted just because some inner block contains a
 	// fail-fast pattern. FindFirstChild visits only direct children of fn.Body
 	// (depth-1, identical semantics to EachInChildren).
-	_, matched := scanner.FindFirstChild[ast.IfStmt](fn.Body, isFailFastReturn)
+	_, matched := FindFirstChild[ast.IfStmt](fn.Body, isFailFastReturn)
 	return matched
 }
 
@@ -912,7 +910,7 @@ func isFailFastReturn(stmt *ast.IfStmt) bool {
 	// is not the unconditional fail-fast pattern we whitelist.
 	// FindFirstChild visits only direct children of stmt.Body (depth-1, identical
 	// semantics to EachInChildren).
-	_, found := scanner.FindFirstChild[ast.ReturnStmt](stmt.Body, func(ret *ast.ReturnStmt) bool {
+	_, found := FindFirstChild[ast.ReturnStmt](stmt.Body, func(ret *ast.ReturnStmt) bool {
 		return len(ret.Results) == 2 && isNilIdent(ret.Results[0]) && !isNilIdent(ret.Results[1])
 	})
 	return found
@@ -1060,10 +1058,21 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode (loads production packages module-wide, ~5-10s)")
 	}
-	root := findModuleRoot(t)
 
-	violations, err := checkOutboxTopicFailOpenRule(root)
-	require.NoError(t, err)
+	var violations []outboxTopicViolation
+	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if skipOutboxTopicProductionScan(rel) {
+				continue
+			}
+			violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, p.TypesInfo)...)
+		}
+		return nil
+	})
 
 	if len(violations) > 0 {
 		t.Logf("Found %d OUTBOX-TOPIC-FAILOPEN-01 violation(s):", len(violations))
@@ -1079,65 +1088,25 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 			"unset (= Default, falls through to Cell ctor default = FailClosed).")
 }
 
-// checkOutboxTopicFailOpenRule loads module packages with full type info and
-// scans production Go files for OUTBOX-TOPIC-FAILOPEN-01 violations.
-func checkOutboxTopicFailOpenRule(root string) ([]outboxTopicViolation, error) {
-	r, err := typeseval.SharedResolver(root, false, nil, prodscan.Patterns(root)...)
-	if err != nil {
-		return nil, err
-	}
-	var violations []outboxTopicViolation
-	for _, p := range r.Packages() {
-		pkgViolations, err := scanPackage(root, p)
-		if err != nil {
-			return nil, err
-		}
-		violations = append(violations, pkgViolations...)
-	}
-	return violations, nil
-}
-
-// scanPackage scans all non-test Go files in a loaded package for violations.
-// packages.Package.Syntax is aligned with GoFiles via Fset.Position.
-func scanPackage(root string, p *packages.Package) ([]outboxTopicViolation, error) {
-	var violations []outboxTopicViolation
-	for _, file := range p.Syntax {
-		absPath := p.Fset.Position(file.Pos()).Filename
-		if strings.HasSuffix(absPath, "_test.go") {
-			continue
-		}
-		rel, err := filepath.Rel(root, absPath)
-		if err != nil {
-			return nil, fmt.Errorf("filepath.Rel: %w", err)
-		}
-		rel = filepath.ToSlash(rel)
-		if skipOutboxTopicProductionScan(rel) {
-			continue
-		}
-		violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, p)...)
-	}
-	return violations, nil
-}
-
 // scanOutboxTopicFailOpenAST is the core AST-matching routine. Given a parsed
-// file, fileset, and the owning package (for TypesInfo lookup), it returns
-// every outbox.Entry composite literal that opts into FailurePolicyFailOpen
-// with a Topic or EventType matching the security-sensitive prefix regex.
+// file, fileset, types.Info and a file label, it returns every outbox.Entry
+// composite literal that opts into FailurePolicyFailOpen with a Topic or
+// EventType matching the security-sensitive prefix regex.
 //
-// Topic/EventType field values are evaluated via typeseval.EvaluateConstString,
+// Topic/EventType field values are evaluated via EvaluateConstString,
 // covering BasicLit, same-package const Ident, and cross-package SelectorExpr.
-func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, pkg *packages.Package) []outboxTopicViolation {
+func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, info *types.Info) []outboxTopicViolation {
 	var violations []outboxTopicViolation
-	scanner.EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
-		if !isOutboxEntryLiteral(pkg, lit) {
+	EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
+		if !isOutboxEntryLiteral(info, lit) {
 			return
 		}
-		policy := extractFailurePolicy(pkg, lit)
+		policy := extractFailurePolicy(info, lit)
 		if policy.safe() {
 			return
 		}
-		topic := extractStringField(pkg, lit, outboxTopicEntryField)
-		eventType := extractStringField(pkg, lit, outboxTopicEventTypeField)
+		topic := extractStringField(info, lit, outboxTopicEntryField)
+		eventType := extractStringField(info, lit, outboxTopicEventTypeField)
 		route := effectiveOutboxRoute(topic, eventType)
 
 		switch {
@@ -1163,11 +1132,11 @@ func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel s
 // isOutboxEntryLiteral matches real kernel/outbox.Entry composite literals by
 // type identity. Import aliases and type aliases are resolved by go/types;
 // unrelated Entry structs are rejected even when they share field names.
-func isOutboxEntryLiteral(pkg *packages.Package, lit *ast.CompositeLit) bool {
-	if pkg.TypesInfo == nil || lit.Type == nil {
+func isOutboxEntryLiteral(info *types.Info, lit *ast.CompositeLit) bool {
+	if info == nil || lit.Type == nil {
 		return false
 	}
-	tv, ok := pkg.TypesInfo.Types[lit.Type]
+	tv, ok := info.Types[lit.Type]
 	if !ok {
 		return false
 	}
@@ -1202,18 +1171,18 @@ func effectiveOutboxRoute(topic, eventType outboxTopicFieldValue) outboxTopicFie
 // EachInChildren visits only lit's direct children, so a same-named field
 // nested inside a sub-struct (e.g. `Spec: SubSpec{Topic:"a"}`) does not
 // pollute lit's reading.
-func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName string) outboxTopicFieldValue {
+func extractStringField(info *types.Info, lit *ast.CompositeLit, fieldName string) outboxTopicFieldValue {
 	// FindFirstChild visits only lit's direct children (depth-1, identical
 	// semantics to EachInChildren), so a same-named field nested inside a
 	// sub-struct does not pollute lit's reading.
-	kv, ok := scanner.FindFirstChild[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) bool {
+	kv, ok := FindFirstChild[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) bool {
 		id, isID := kv.Key.(*ast.Ident)
 		return isID && id.Name == fieldName
 	})
 	if !ok {
 		return outboxTopicFieldValue{}
 	}
-	value, vok := typeseval.EvaluateConstString(pkg.TypesInfo, kv.Value)
+	value, vok := EvaluateConstString(info, kv.Value)
 	return outboxTopicFieldValue{present: true, ok: vok, value: value}
 }
 
@@ -1298,23 +1267,24 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 	}
 
 	for _, c := range cases {
+		c := c
 		t.Run(c.pattern, func(t *testing.T) {
-			r, err := typeseval.SharedResolver(fixturesRoot, false, nil, c.pattern)
-			require.NoError(t, err, "load fixture package %s", c.pattern)
+			t.Parallel()
 
 			var violations []outboxTopicViolation
-			for _, p := range r.Packages() {
-				for _, file := range p.Syntax {
-					absPath := p.Fset.Position(file.Pos()).Filename
-					if strings.HasSuffix(absPath, "_test.go") {
+			_ = RunTypedDir(t, fixturesRoot, TypedOpts{}, []string{c.pattern}, func(p *Pass) []Diagnostic {
+				if p.TypesInfo == nil || p.Fset == nil {
+					return nil
+				}
+				for _, file := range p.Files {
+					rel := p.Rel(file)
+					if strings.HasSuffix(rel, "_test.go") {
 						continue
 					}
-					rel, err := filepath.Rel(fixturesRoot, absPath)
-					require.NoError(t, err)
-					rel = filepath.ToSlash(rel)
-					violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, p)...)
+					violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, p.TypesInfo)...)
 				}
-			}
+				return nil
+			})
 
 			if c.wantMatch {
 				assert.NotEmpty(t, violations, "fixture %q should trigger OUTBOX-TOPIC-FAILOPEN-01", c.pattern)
@@ -1331,20 +1301,20 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 //
 // EachInChildren visits only lit's direct children, so a FailurePolicy buried
 // inside a nested struct is not hoisted to lit's level.
-func extractFailurePolicy(pkg *packages.Package, lit *ast.CompositeLit) outboxFailurePolicyStatus {
+func extractFailurePolicy(info *types.Info, lit *ast.CompositeLit) outboxFailurePolicyStatus {
 	// FindFirstChild visits only lit's direct children (depth-1, identical
 	// semantics to EachInChildren), so a FailurePolicy buried inside a nested
 	// struct is not hoisted to lit's level.
-	kv, ok := scanner.FindFirstChild[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) bool {
+	kv, ok := FindFirstChild[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) bool {
 		key, isID := kv.Key.(*ast.Ident)
 		return isID && key.Name == outboxTopicForbiddenPolicyField
 	})
 	if !ok {
 		return outboxPolicyAbsent
 	}
-	if isOutboxFailOpenConst(pkg.TypesInfo, kv.Value) {
+	if isOutboxFailOpenConst(info, kv.Value) {
 		return outboxPolicyKnownFailOpen
-	} else if isKnownOutboxFailurePolicyConst(pkg.TypesInfo, kv.Value) {
+	} else if isKnownOutboxFailurePolicyConst(info, kv.Value) {
 		return outboxPolicyKnownOther
 	}
 	return outboxPolicyUnknown
@@ -1453,10 +1423,10 @@ func TestMetadataLimitsSingleSource(t *testing.T) {
 	}
 	var hits []hit
 
-	// scanner.ModuleScope auto-skips vendor/testdata/worktrees/generated/.git/node_modules.
+	// ModuleScope auto-skips vendor/testdata/worktrees/generated/.git/node_modules.
 	// kernel/metautil (canonical home) and tools/archtest/ are excluded via rel-prefix
 	// check inside the loop — these are directory prefixes, not exact file paths.
-	scope := scanner.ModuleScope(repoRoot)
+	scope := ModuleScope(repoRoot)
 	allFiles, err := scope.Files()
 	require.NoError(t, err, "enumerate repo files")
 
@@ -1478,11 +1448,11 @@ func TestMetadataLimitsSingleSource(t *testing.T) {
 		if file == nil {
 			continue
 		}
-		scanner.EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
+		EachInSubtree[ast.GenDecl](file, func(gen *ast.GenDecl) {
 			if gen.Tok != token.CONST {
 				return
 			}
-			scanner.EachInSubtree[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
+			EachInSubtree[ast.ValueSpec](gen, func(vs *ast.ValueSpec) {
 				for _, name := range vs.Names {
 					if _, bad := forbidden[name.Name]; !bad {
 						continue
@@ -1579,7 +1549,7 @@ func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 		seen    = make(map[string]struct{})
 		unknown []string
 	)
-	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
 		if ts.Name == nil || ts.Name.Name != "HandleResult" {
 			return
 		}
@@ -1700,34 +1670,28 @@ var handleResultLiteralAllowlist = map[string]struct{}{
 // Closes PR445-FU-PACKAGEALIASES-TYPE-AWARE-01 for this rule.
 func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	modulePath := readModulePath(t, root)
-
-	resolver, err := typeseval.LoadProductionPackages(root, modulePath, false, nil)
-	if err != nil {
-		t.Fatalf("typeseval.LoadProductionPackages: %v", err)
-	}
 
 	const outboxImportPath = "github.com/ghbvf/gocell/kernel/outbox"
 
 	var violations []string
-	for _, pkg := range resolver.Production() {
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	_ = RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
+		for _, file := range p.Files {
+			rel := p.Rel(file)
 			// Explicit kernel-internal allowlist remains in force; the
 			// production-package partition has already filtered codegen
-			// output at the package level (see LoadProductionPackages), so
+			// output at the package level (via RunTypedProduction), so
 			// no per-file generated/ skip is needed here.
 			if _, ok := handleResultLiteralAllowlist[rel]; ok {
 				continue
 			}
 			violations = append(violations,
-				scanForHandleResultLiterals(pkg, file, rel, outboxImportPath)...)
+				scanForHandleResultLiterals(p.Fset, p.TypesInfo, file, rel, outboxImportPath)...)
 		}
-	}
+		return nil
+	})
 
 	sort.Strings(violations)
 	for _, v := range violations {
@@ -1756,38 +1720,33 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 // loader layer) doesn't silently mask the need for IsGeneratedRelPath.
 func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-
-	resolver, err := typeseval.SharedResolver(root, false, nil, "./...")
-	if err != nil {
-		t.Fatalf("typeseval.SharedResolver: %v", err)
-	}
 
 	var generatedFiles []string
-	for _, pkg := range resolver.Packages() {
-		if pkg.TypesInfo == nil || pkg.Fset == nil {
-			continue
+	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
 		}
-		for _, file := range pkg.Syntax {
-			rel := pkgFileRel(root, pkg, file)
-			if typeseval.IsGeneratedRelPath(rel) {
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if IsGeneratedRelPath(rel) {
 				generatedFiles = append(generatedFiles, rel)
 			}
 		}
-	}
+		return nil
+	})
 
 	if len(generatedFiles) == 0 {
-		t.Fatalf("anchor invalidated: SharedResolver(./...) loaded 0 generated/ files; " +
+		t.Fatalf("anchor invalidated: RunTyped(./...) loaded 0 generated/ files; " +
 			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
 			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
 			"before removing the IsGeneratedRelPath skip")
 	}
-	t.Logf("anchor: SharedResolver(./...) loaded %d generated/ files — Wave 3's IsGeneratedRelPath must skip these", len(generatedFiles))
+	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — Wave 3's IsGeneratedRelPath must skip these", len(generatedFiles))
 }
 
 // scanForHandleResultLiterals scans file for HandleResult composite literals.
 // Returns "<rel>:<line>" diagnostics. Files that neither import kernel/outbox
-// nor declare package outbox produce no hits. Type-aware via pkg.TypesInfo.
+// nor declare package outbox produce no hits. Type-aware via info.
 //
 // Coverage:
 //   - qualified literal `outbox.HandleResult{}` — *ast.SelectorExpr resolved
@@ -1799,9 +1758,9 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 //     in package outbox) AND dot-imported use (`import . "outbox"`). The
 //     latter closes the prior path A.3 bypass — symmetric with the PR-SH1
 //     caller-side migration to typeseval.ResolvePackageRef for function refs.
-func scanForHandleResultLiterals(pkg *packages.Package, file *ast.File, rel, outboxImportPath string) []string {
+func scanForHandleResultLiterals(fset *token.FileSet, info *types.Info, file *ast.File, rel, outboxImportPath string) []string {
 	var hits []string
-	scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+	EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 		var id *ast.Ident
 		switch tn := cl.Type.(type) {
 		case *ast.SelectorExpr:
@@ -1817,11 +1776,11 @@ func scanForHandleResultLiterals(pkg *packages.Package, file *ast.File, rel, out
 		default:
 			return
 		}
-		obj, ok := pkg.TypesInfo.Uses[id].(*types.TypeName)
+		obj, ok := info.Uses[id].(*types.TypeName)
 		if !ok || obj.Pkg() == nil || obj.Pkg().Path() != outboxImportPath {
 			return
 		}
-		pos := pkg.Fset.Position(cl.Pos())
+		pos := fset.Position(cl.Pos())
 		hits = append(hits, fmt.Sprintf("%s:%d: HandleResult{} literal (resolved to %s)", rel, pos.Line, outboxImportPath))
 	})
 	return hits

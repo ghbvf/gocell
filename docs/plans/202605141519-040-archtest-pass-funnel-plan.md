@@ -1,6 +1,6 @@
 # archtest 入口合并方案：Pass-Driver 范式 + 零二次返工迁移
 
-**最后更新**：2026-05-16（Stage 1.8 façade 完备性 + USAGE-02 升 Hard，吸收 037 PR #505）
+**最后更新**：2026-05-16（Stage 1.8 façade 完备性 + USAGE-02 升 Hard，吸收 037 PR #505；PR #522 consolidated-batch 清零 LegacyAllowlist，F1-F3 ADR/plan 真理源同步）
 
 ## 进度状态
 
@@ -12,8 +12,8 @@
 | **1.7 — RunTypedProduction production-only façade** | 1 | ✅ PR #507 (2026-05-16) | auth_bootstrap 迁移需要 production-only package set；随 PR-7 同 ship |
 | **1.8 — FindFirstChild façade + USAGE-02 升 Hard** | 1 | 🔄 本 PR (2026-05-16) | 吸收 037 PR #505 治理产物；不计入 Stage 3 实质迁移进度 |
 | 2 — A 类 EachFile 主题分批迁移 | 4 | ✅ 全部 ship | PR-2 ✅ #496 (metadata)；PR-3 ✅ #493 (contract/codegen)；PR-4 ✅ #498 (observability)；PR-5 ✅ #497 (lifecycle/errcode) |
-| 3 — E 类 for-range 主题分批迁移 | 5 | 🔄 PR-6 ✅ #500 (clock，含 Stage 1.6)；PR-7 ✅ #507 (errcode + auth_bootstrap，含 Stage 1.7)；余 PR-8 ~ PR-10 待起 | 与阶段 2 并行；前置 = 阶段 1.5 |
-| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ⏳ 等阶段 3 全部 ship（阶段 2 已完成；阶段 1.8 façade 完备） | — |
+| 3 — E 类 for-range 主题分批迁移 | 5→3 | ✅ PR-8~10 合并入 PR #522 consolidated-batch 交付（2026-05-16）| PR-6 ✅ #500；PR-7 ✅ #507；余 37 文件合并为单一 PR #522（实测文件数 37 > 原估 27；shared-helper 图谱强耦合导致 batch 非独立，consolidated 更可行）；LegacyAllowlist 已清零 |
+| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ✅ LegacyAllowlist 已清零（PR #522）；余 archtestmeta 包删除 + depguard yaml 收尾（独立 Stage 4 PR） | — |
 
 **阶段 1.8 ship 摘要（本 PR，2026-05-16）**：
 
@@ -123,6 +123,26 @@
 - `pass_test.go` 加 `// INVARIANT: ARCHTEST-PASS-DRIVER-UNIT-01` 合成 anchor（参 `helpers_test.go ARCHTEST-HELPERS-01` 范本）
 
 **当前 LegacyAllowlist 总数**：54 文件（53 baseline + 1 PR #490 派生），等阶段 2/3 PR 一一删除。
+
+## 实施纪要：consolidated 执行调整（PR #522，2026-05-16）
+
+原计划 Stage 3 余量分 3 批（PR-8 / PR-9 / PR-10）各自独立迁移约 9 个文件，Stage 4 清零。实际执行中发现如下结构性约束导致 3-PR 计划无法独立执行：
+
+**为何 3 PR 合并为 1**：
+
+1. **shared-helper 图谱强耦合**：PR-9 尝试单批迁移时，因多个迁移文件共享同一组 `internal/typeseval` helper，allowlist 三向同步断言（`TestPassFunnelGuardListSync`）要求 yaml-exempt ↔ LegacyAllowlist ↔ packages-importers 三集合同步更新，导致任何一批"中间态"都不满足同步断言。各批并非独立事务——必须整批或跨批同时更新 yaml + Go allowlist + 删文件条目，实际 PR-9 级联到 46 个文件。
+2. **3 个 ESCALATE 条目跨批共享**：`archtest_test.go`（reclassify 为永久豁免）、`governance_rules_invariants_test.go` 与 `scanner_framework_usage_test.go`（真迁移）三个原计划标注为 ESCALATE 的条目与剩余文件存在共享 helper 依赖，分批后每批都需要先解决这三个条目的状态，不如一次性处理。
+3. **LegacyAllowlist 提前清零比 Stage 4 边界更干净**：若分三批合并，Stage 4 仍需单独 PR 删 `archtestmeta` 包；consolidated 执行后 Stage 4 只剩包删除 + yaml 收尾，边界清晰。
+
+**PR #522 实际迁移结果**：
+
+- 实际迁移文件数：37（原估 27，差异来自 plan 未计入 `archtest_test.go` reclassify 和多出的 dual-class 文件）
+- `archtest_test.go`：从 LegacyAllowlist 移至 `passFunnelPermanentExempt`（永久豁免）；理由：`checkCellPublicAPIAdapterTypes`（LAYER-10）经 `depgraph.FromPackages([]*packages.Package)` 用类型化输入，Pass funnel 隐藏 `.Syntax` 使该形态结构性不可表达；backlog `ARCHTEST-LAYER10-PASS-MIGRATION-01` 跟踪后续是否可消除该永久豁免
+- `governance_rules_invariants_test.go`：真迁移完成，LegacyAllowlist 条目删除
+- `scanner_framework_usage_test.go`：真迁移完成，LegacyAllowlist 条目删除
+- LegacyAllowlist 清零：PR #522 merge 后 `archtestmeta.LegacyAllowlist` 为空
+
+**Stage 4 边界**：`archtestmeta` 包删除 + `.golangci.yml` allowlist 段收尾（保留 3 个永久豁免 glob）。独立 Stage 4 PR 待排期。
 
 ## Context
 
@@ -242,10 +262,10 @@ linters-settings:
         files: ["tools/archtest/*_test.go"]
         deny:
           - pkg: "golang.org/x/tools/go/packages"
-          - pkg: "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-          - pkg: "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
         # allowlist exception: 30 legacy files (synchronized with LegacyAllowlist)
 ```
+
+**注**：`internal/scanner` 和 `internal/typeseval` 从未加入 depguard deny 列表（上方示例为原始草稿，实际未实施）。这两个包的 walk/resolve helper（`EachInSubtree`、`EachInChildren`、`ResolvePackageRef`、`EvaluateConstString` 等）允许业务 archtest 直接 import 和使用；symbol 级别的精确拦截（`EachFile`、`LoadPackages`、`SharedResolver` 等）由元治理 archtest 防线 #3 通过 `*types.Info` resolve 完成，lint 路径级别只封 `golang.org/x/tools/go/packages` 这个 load-bearing INV-1 重构原语。见 ADR §Why-depguard。
 
 允许暂存 allowlist 在 yaml 注释 + Go 代码两处冗余声明，Stage-4 清零时一并删。
 
@@ -282,7 +302,7 @@ linters-settings:
 
 - **PR-6**: `clock_invariants_test.go`（8 typed-load site：5 主树 RunTyped + 3 fixture-scan RunTypedDir；含 Stage 1.6 框架补全，单 PR）— ✅ shipped as PR #500
 - **PR-7**: `errcode_invariants_test.go` + `auth_bootstrap_invariants_test.go`（含 Stage 1.7 RunTypedProduction 框架补全）— ✅ shipped as PR #507
-- **PR-8 ~ PR-10**: 其余 27 个文件分 3 批
+- **PR-8 ~ PR-10 → PR #522 consolidated-batch** ✅ shipped 2026-05-16: 原估 27 个文件，实测 37 文件（PR-9 单批级联 46 文件，证明各批之间 shared-helper 图谱强耦合，batch 非独立）。三路并行评估后决策合并为单一 PR #522 顺序迁移。3 个 ESCALATE 条目同 PR 处理：`archtest_test.go` reclassify 为永久豁免（加入 `passFunnelPermanentExempt`）；`governance_rules_invariants_test.go` 与 `scanner_framework_usage_test.go` 真迁移完成（LegacyAllowlist 删除条目）。LegacyAllowlist 清零。
 
 每 PR 范式同阶段 2：业务文件首次 + 唯一改写，`typeseval.LoadPackages` → `archtest.RunTyped` / `RunTypedProduction`，import 切换 + allowlist 删除一次完成。
 
