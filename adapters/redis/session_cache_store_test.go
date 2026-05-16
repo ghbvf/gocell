@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -127,7 +128,7 @@ func TestCachingSessionStore_Get_CacheHit(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
 	view := newTestView()
-	payload, err := json.Marshal(view)
+	payload, err := json.Marshal(entryFromView(view))
 	require.NoError(t, err)
 	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
 
@@ -237,7 +238,7 @@ func TestCachingSessionStore_Revoke_DeletesCache(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
 	view := newTestView()
-	payload, err := json.Marshal(view)
+	payload, err := json.Marshal(entryFromView(view))
 	require.NoError(t, err)
 	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
 
@@ -288,7 +289,7 @@ func TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
 	view := newTestView()
-	payload, err := json.Marshal(view)
+	payload, err := json.Marshal(entryFromView(view))
 	require.NoError(t, err)
 	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
 	inner := &fakeSessionStore{}
@@ -333,4 +334,71 @@ func TestCachingSessionStore_Get_NilViewFromInner_DoesNotPopulate(t *testing.T) 
 	cmd := mock.Get(context.Background(), scsCachedKey)
 	_, err = cmd.Result()
 	assert.Error(t, err, "nil view must not be cached")
+}
+
+// TestCachingSessionStore_Revoke_FollowedByGet_FallsThroughToInner — defends
+// the security path: after Revoke the next Get must not return a stale view
+// from cache. This is the single-session-revoke variant of the safety
+// argument used in the type godoc.
+func TestCachingSessionStore_Revoke_FollowedByGet_FallsThroughToInner(t *testing.T) {
+	t.Parallel()
+	mock := newMockCmdable()
+	view := newTestView()
+	payload, err := json.Marshal(entryFromView(view))
+	require.NoError(t, err)
+	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
+
+	// Inner reports the revoked view after Revoke.
+	revokedAt := time.Now().UTC()
+	revokedView := &session.ValidateView{
+		ID:                view.ID,
+		SubjectID:         view.SubjectID,
+		RevokedAt:         &revokedAt,
+		AuthzEpochAtIssue: view.AuthzEpochAtIssue,
+	}
+	inner := &fakeSessionStore{view: revokedView}
+	store := newTestCachingStore(t, inner, mock)
+
+	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
+	assert.Equal(t, 1, inner.revokeCalls)
+
+	got, err := store.Get(context.Background(), scsTestSID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.NotNil(t, got.RevokedAt, "Get after Revoke must reflect revoked state, not stale cache")
+	assert.Equal(t, 1, inner.getCalls, "Get after Revoke must fall through to inner")
+}
+
+// TestCachingSessionStore_Get_ConcurrentAccess — exercises the read-through
+// hot path under concurrent goroutines so `go test -race` would surface any
+// data race in the wrapper's internals (lazy populate writeback, in
+// particular).
+func TestCachingSessionStore_Get_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+	mock := newMockCmdable()
+	inner := &fakeSessionStore{view: newTestView()}
+	store := newTestCachingStore(t, inner, mock)
+
+	const goroutines = 16
+	const iters = 32
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			ctx := context.Background()
+			for j := 0; j < iters; j++ {
+				got, err := store.Get(ctx, scsTestSID)
+				if err != nil {
+					t.Errorf("Get error under concurrency: %v", err)
+					return
+				}
+				if got == nil {
+					t.Errorf("Get returned nil under concurrency")
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

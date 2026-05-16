@@ -149,14 +149,16 @@ var funnelAllowlistPathPrefixes = []string{
 	"runtime/auth/refresh/",
 	// adapters/postgres session store + refresh store implementations.
 	"adapters/postgres/",
-	// adapters/redis hosts session.Store decorator implementations
+	// adapters/redis hosts a single session.Store decorator implementation
 	// (CachingSessionStore — AUTH-CACHE-01). The decorator delegates
 	// RevokeForSubject to its inner store verbatim; cache invalidation is
 	// intentionally NOT performed there — the wrapper relies on the co-tx
 	// user.AuthzEpoch bump (executed by credentialinvalidate.Apply) +
 	// sessionvalidate's epoch invariant to neutralize stale cached views.
-	// This is the same role the adapters/postgres/ entry plays for PG store.
-	"adapters/redis/",
+	// The allowlist is narrowed to the single file (not the whole package) so
+	// any future *.go added under adapters/redis/ that names RevokeForSubject
+	// directly is caught — only this decorator is permitted.
+	"adapters/redis/session_cache_store.go",
 	// accesscore internal mem implementations.
 	"cells/accesscore/internal/mem/",
 	"cells/accesscore/internal/adapters/postgres/",
