@@ -121,8 +121,18 @@ start=$(date +%s)
 fail=0
 
 # ---------------------------------------------------------------------------
-# Tier 1 — gofumpt, scoped to the changed .go files. ~ms. Always when .go
-# changed. This is the exact gate that failed CI #525.
+# Tier 1 — gofumpt, scoped to the changed .go files. Always when .go changed.
+# This is the exact gate that failed CI #525.
+#
+# Single-source via `go run mvdan.cc/gofumpt`: this resolves the gofumpt
+# version from the repo go.mod (pinned to match the version vendored by the
+# golangci-lint release the CI formatter gate uses — see
+# hack/lib/golangci-lint.sh). An ambient `gofumpt` on $PATH is NOT consulted:
+# host-installed versions drift from the CI-enforced ruleset, producing
+# "local hook passes / CI red" (or the reverse). go.mod is the only SoR;
+# there is no separate hook-side version constant to keep in sync.
+# Cost: ~ms once the gofumpt binary is in the Go build cache; the first run
+# after a cache wipe compiles it (~2-3s, within the header's warm-cache scope).
 # ---------------------------------------------------------------------------
 if [[ ${go_changed} -eq 1 ]]; then
     fmt_targets=()
@@ -130,13 +140,16 @@ if [[ ${go_changed} -eq 1 ]]; then
         [[ -n "${f}" && -f "${f}" ]] && fmt_targets+=("${f}")
     done < <(printf '%s\n' "${go_files}" | grep -E '\.go$' || true)
     if [[ ${#fmt_targets[@]} -gt 0 ]]; then
-        # Fail-closed if gofumpt is absent: a missing formatter must not
-        # silently skip the gate (no-soft-fallback). `2>/dev/null` would
-        # swallow "command not found" into an empty drift string and pass.
-        if ! command -v gofumpt >/dev/null 2>&1; then
-            note "gofumpt not found — install: go install mvdan.cc/gofumpt@latest"
+        # Fail-closed: a non-zero exit from `go run` (go toolchain absent,
+        # module/build failure, gofumpt internal error) must block the push,
+        # not silently skip the gate (no-soft-fallback). gofumpt -l exits 0
+        # and lists drifting files on stdout, so a non-zero here is always a
+        # tooling failure, never "found drift".
+        if ! drift="$(go run mvdan.cc/gofumpt -l "${fmt_targets[@]}" 2>&1)"; then
+            note "gofumpt gate failed to run (go run mvdan.cc/gofumpt):"
+            printf '%s\n' "${drift}" | sed 's/^/    /' >&2
             fail=1
-        elif drift="$(gofumpt -l "${fmt_targets[@]}")" && [[ -n "${drift}" ]]; then
+        elif [[ -n "${drift}" ]]; then
             note "formatter drift (run: make fmt):"
             printf '%s\n' "${drift}" | sed 's/^/    /' >&2
             fail=1
