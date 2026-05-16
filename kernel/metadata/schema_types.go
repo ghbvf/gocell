@@ -22,6 +22,18 @@ type HTTPTransportMeta struct {
 	// When set, the generated handler emits the corresponding auth.Route flags
 	// instead of the default Policy-only wiring. Omit for standard authenticated routes.
 	Auth HTTPAuthMeta `yaml:"auth,omitempty" json:"auth,omitempty"`
+	// Ownership declares object-level authorization subject/resource paths.
+	// Required when auth.serviceOwned=true (governance FMT-32 enforces presence).
+	Ownership *HTTPOwnershipMeta `yaml:"ownership,omitempty" json:"ownership,omitempty"`
+}
+
+// HTTPOwnershipMeta declares object-level authorization subject/resource paths.
+// Required when auth.serviceOwned=true (governance FMT-32 + schema if/then enforces this).
+// Pointer field tri-state: nil = block absent, non-nil with empty fields = declared but
+// incomplete; both forms are rejected by FMT-32.
+type HTTPOwnershipMeta struct {
+	SubjectPath  string `yaml:"subjectPath"  json:"subjectPath"`
+	ResourcePath string `yaml:"resourcePath" json:"resourcePath"`
 }
 
 // HTTPAuthMeta carries route-level authentication override flags for contractgen.

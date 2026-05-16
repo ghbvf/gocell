@@ -229,7 +229,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 | 项 | trigger | backlog 锚点 |
 |---|---|---|
 | HANDLER-POLICY-TYPEAWARE-SCANNER-01 | scanner 误报/漏报触发 | charter §4 |
-| SERVICEOWNED-OWNERSHIP-GUARD-01 | `auth.serviceOwned` endpoint > 1 | charter §4 |
+| SERVICEOWNED-OWNERSHIP-GUARD-01 | `auth.serviceOwned` endpoint > 1 → **037 PR-A3（worktree 584 实现中）**：schema if/then + FMT-32（Batch-1/2a）+ archtest（Batch-2b）+ session/delete 迁移（Batch-3）已实现，待 merge | charter §4 |
 | B-FLOOR-FOLLOWUP §2.5/§4 | contract.yaml status ↔ adapter typed return 漂移事故首现 | charter §4 |
 | AUTH-COMBO-ARCHTEST-DOUBLE-DEFENSE | `hasFMT27AuthModeConflict` 被重新 inline 化 | charter §4 |
 | TEST-POLLING-DETERMINISM typed marker | 第二次 race CI flake / 进入下一治理批 / 339 站点新增违反 | charter §4 |

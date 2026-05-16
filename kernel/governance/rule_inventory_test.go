@@ -79,7 +79,7 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 // kernel/governance/*.go. Update this list whenever a rule is added /
 // renamed / removed.
 //
-// Total: 82 IDs across 11 series.
+// Total: 83 IDs across 11 series.
 func goldenRuleIDs() []string {
 	return []string{
 		// ADV — advisory warnings (rules_misc_advisory.go).
@@ -100,7 +100,7 @@ func goldenRuleIDs() []string {
 		// strict-mode orchestrator is in rules_misc_strict.go)
 		"DOC-NAME-01",
 
-		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..31
+		// FMT — format / structural (rules_fmt.go for FMT-01..15, 24, 26..32
 		// + strict-mode FMT-16/17/19/A1/C1 + FMT-20..23/25 in
 		// rules_misc_strict.go; FMT-19 implementation in rules_misc_advisory.go).
 		"FMT-01", "FMT-02", "FMT-03", "FMT-04", "FMT-05",
@@ -114,6 +114,7 @@ func goldenRuleIDs() []string {
 		"FMT-16", "FMT-17", "FMT-19",
 		"FMT-20", "FMT-21", "FMT-22", "FMT-23", "FMT-24", "FMT-25",
 		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30", "FMT-31",
+		"FMT-32",
 		"FMT-A1", "FMT-C1",
 
 		// OUTGUARD — outbox durability (rules_misc_advisory.go)

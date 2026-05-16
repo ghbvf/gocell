@@ -192,6 +192,7 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateFMT09, v.validateFMT10, v.validateFMT11, v.validateFMT12,
 		v.validateFMT13, v.validateFMT14, v.validateFMT15, v.validateFMT24, v.validateFMT26,
 		v.validateFMT27, v.validateFMT28, v.validateFMT29, v.validateFMT30, v.validateFMT31,
+		v.validateFMT32,
 		v.validateFMTA1,
 		v.validateFMTC1,
 		v.validateADV01, v.validateADV03, v.validateADV04, v.validateADV05,
