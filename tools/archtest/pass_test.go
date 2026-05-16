@@ -31,7 +31,6 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/archtestmeta"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
@@ -199,7 +198,7 @@ func TestRunTyped_typedPassShape(t *testing.T) {
 		}
 		return nil
 	}
-	RunTyped(t, TypedOpts{Tests: false, Tags: []string{archtestmeta.FixtureBuildTag}},
+	RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
 	if calls == 0 {
 		t.Errorf("RunTyped invoked rule 0 times; expected ≥ 1 (fixture has 1 file)")
@@ -217,7 +216,7 @@ func TestRunTyped_dedupesAcrossPackageVariants(t *testing.T) {
 		}
 		return nil
 	}
-	RunTyped(t, TypedOpts{Tests: true, Tags: []string{archtestmeta.FixtureBuildTag}},
+	RunTypedFixture(t, FixtureOpts{Tests: true},
 		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
 	for f, count := range seenAcrossPasses {
 		if count > 1 {
@@ -385,7 +384,7 @@ func TestRunTyped_CommentsRegressionLock(t *testing.T) {
 		}
 		return nil
 	}
-	RunTyped(t, TypedOpts{Tests: false, Tags: []string{archtestmeta.FixtureBuildTag}},
+	RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
 	if !foundComments {
 		t.Fatalf("STOP: RunTyped path does NOT deliver comments — plan fact #2 is falsified; do not proceed with implementation")
@@ -450,7 +449,7 @@ func TestRunTyped_AbsResolvesModuleAbsolutePath(t *testing.T) {
 		}
 		return nil
 	}
-	RunTyped(t, TypedOpts{Tests: false, Tags: []string{archtestmeta.FixtureBuildTag}},
+	RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
 }
 
@@ -603,7 +602,7 @@ func TestResolveHelpersReExported(t *testing.T) {
 	// as calling typeseval directly on the same inputs.
 	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(
-		root, false, []string{archtestmeta.FixtureBuildTag},
+		root, false, []string{"archtest_fixture"},
 		"./tools/archtest/internal/passfunnelfixture")
 	if err != nil {
 		t.Fatalf("SharedResolver: %v", err)
@@ -1198,7 +1197,7 @@ func TestRunTyped_delegatesToRunTypedDir(t *testing.T) {
 		}
 		return nil
 	}
-	RunTyped(t, TypedOpts{Tests: false, Tags: []string{archtestmeta.FixtureBuildTag}},
+	RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/passfunnelfixture"}, rule)
 	if calls == 0 {
 		t.Errorf("RunTyped (delegation) invoked rule 0 times; expected ≥ 1")

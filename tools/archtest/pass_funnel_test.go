@@ -9,17 +9,20 @@ package archtest
 //
 // All four rules forbid archtest tools/archtest/<file>_test.go from
 // reaching the legacy entry points directly. Authors must use archtest.Run
-// (AST-only) / archtest.RunTyped (typed) via the Pass-Driver paradigm, and
-// must call the façade helper functions in archtest.ResolvePackageRef /
-// ResolveMethodCall / EvaluateConstString / FlatNonDefaultTags /
-// KnownNonDefaultTags / Pass.IsFileInScope / Pass.IsGenerated instead of
-// importing internal/typeseval directly.
+// (AST-only) / archtest.RunTyped (typed) / archtest.RunTypedFixture (fixture
+// packages) / archtest.RunTypedProduction (production-only) via the
+// Pass-Driver paradigm, and must call the façade helper functions in
+// archtest.ResolvePackageRef / ResolveMethodCall / EvaluateConstString /
+// FlatNonDefaultTags / KnownNonDefaultTags / Pass.IsFileInScope /
+// Pass.IsGenerated instead of importing internal/typeseval directly.
 // See docs/architecture/202605141519-adr-archtest-pass-funnel.md.
 //
-// Stage 2/3 migration completed in PR #522; LegacyAllowlist is now empty.
-// The archtestmeta package is retained to support the TestPassFunnelGuardListSync
-// cross-validation logic; Stage-4 cleanup (package deletion) is a separate
-// follow-up task once all downstream references are removed.
+// Stage 2/3 migration completed in PR #522; LegacyAllowlist was cleared to
+// zero. Stage 4 (this PR) deletes the archtestmeta package entirely and
+// collapses TestPassFunnelGuardListSync to a single equality assertion
+// against passFunnelPermanentExempt (3-entry Medium funnel — mechanical sync
+// via double-declaration in Go map + .golangci.yml negative globs, enforced
+// by exact-equality assertion).
 
 import (
 	"fmt"
@@ -31,11 +34,10 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/tools/go/packages"
 	cmp "github.com/google/go-cmp/cmp"
+	"golang.org/x/tools/go/packages"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/archtestmeta"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
@@ -79,8 +81,20 @@ const (
 //
 // These exemptions survive stage-4 cleanup. They are checked by both
 // the production PASS-FUNNEL detectors (skip these files entirely) AND
-// TestPassFunnelGuardListSync (treats them as "expected yaml exemptions
-// even though they are absent from archtestmeta.LegacyAllowlist").
+// TestPassFunnelGuardListSync (exact-equality assertions: yaml-exempt ==
+// passFunnelPermanentExempt AND packages-import == passFunnelPermanentExempt).
+//
+// AI-rebust grade: Medium. The 3-entry set is structurally necessary (these
+// files implement or directly test the funnel machinery; type system cannot
+// distinguish rule implementation from rule violator). Mechanical sync is
+// enforced via double-declaration: Go map literal here AND matching
+// "!**/tools/archtest/<file>" negative globs in .golangci.yml. Drift between
+// the two declarations is detected by TestPassFunnelGuardListSync's exact
+// equality assertions (failing CI on any single-sided addition or removal).
+// Upgrading to Hard is infeasible without creating a new package boundary
+// (archtestself) that adds complexity without security gain — see ADR
+// docs/architecture/202605141519-adr-archtest-pass-funnel.md
+// §passFunnelPermanentExempt.
 var passFunnelPermanentExempt = map[string]bool{
 	"tools/archtest/pass_funnel_test.go": true,
 	"tools/archtest/pass_test.go":        true,
@@ -97,8 +111,11 @@ type passFunnelTarget struct {
 
 // loadPassFunnelTargets resolves the archtest tree once via SharedResolver
 // (shared with scanner_framework_usage_test.go's same load), filters to
-// tools/archtest/<file>_test.go direct children, and applies self + legacy
-// allowlist exemptions. The returned slice is what the three rules consume.
+// tools/archtest/<file>_test.go direct children, and applies the permanent
+// self-exemption set. Stage 4 removed the LegacyAllowlist filter; all
+// migration-period scaffold entries were cleared in PR #522 and the
+// archtestmeta package deleted in Stage 4. The returned slice is what the
+// three rules consume.
 func loadPassFunnelTargets(t *testing.T) []passFunnelTarget {
 	t.Helper()
 	root := findModuleRoot(t)
@@ -122,9 +139,6 @@ func loadPassFunnelTargets(t *testing.T) []passFunnelTarget {
 				continue
 			}
 			if passFunnelPermanentExempt[rel] {
-				continue
-			}
-			if archtestmeta.LegacyAllowlist[rel] {
 				continue
 			}
 			// Dedup across the regular + ".test" synthetic packages
@@ -327,8 +341,8 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 //
 // Detection: SelectorExpr / bare Ident walk + typeseval.ResolvePackageRef
 // resolves call/value-ref targets via go/types (covers qualified, alias,
-// dot-import forms). Exempt: self file + pass_test.go (permanent) +
-// archtestmeta.LegacyAllowlist (stage 2/3 migration window).
+// dot-import forms). Exempt: passFunnelPermanentExempt (3 framework files,
+// permanent; LegacyAllowlist deleted in Stage 4).
 //
 // AI-rebust: Medium (see diagsResolveHelpers godoc for full evidence).
 func TestPassFunnelResolve01(t *testing.T) {
@@ -349,8 +363,9 @@ func TestPassFunnelResolve01(t *testing.T) {
 //
 // Detection: SelectorExpr / bare Ident walk + typeseval.ResolvePackageRef
 // resolves call targets via go/types (covers qualified `scanner.EachFile`,
-// dot-imported bare `EachFile`, and aliased forms). Exempt: self file +
-// archtestmeta.LegacyAllowlist.
+// dot-imported bare `EachFile`, and aliased forms). Exempt:
+// passFunnelPermanentExempt (3 framework files, permanent; LegacyAllowlist
+// deleted in Stage 4).
 func TestPassFunnelEachFile01(t *testing.T) {
 	targets := loadPassFunnelTargets(t)
 	var diags []scanner.Diagnostic
@@ -559,13 +574,13 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 // The per-form assertions below encode this distinction with an exact count
 // for ImportBan (== 3) that would drop to 2 if the TypeName fix were reverted.
 //
-// The fixture is loaded with the [archtestmeta.FixtureBuildTag] build tag
-// (a sister convention to inspectorredfixture etc.); without the tag the
+// The fixture is loaded with the "archtest_fixture" build tag (single source:
+// RunTypedFixture helper in tools/archtest/fixture.go); without the tag the
 // fixture is invisible and packages.Load returns an empty *.Syntax slice.
 func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(
-		root, false, []string{archtestmeta.FixtureBuildTag},
+		root, false, []string{"archtest_fixture"},
 		"./tools/archtest/internal/passfunnelfixture")
 	if err != nil {
 		t.Fatalf("typeseval.SharedResolver: %v", err)

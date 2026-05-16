@@ -13,7 +13,18 @@
 | **1.8 — FindFirstChild façade + USAGE-02 升 Hard** | 1 | ✅ PR #511 (2026-05-16) | 吸收 037 PR #505 治理产物（含 F6 同包裸调用 post-merge review 闭环）；不计入 Stage 3 实质迁移进度 |
 | 2 — A 类 EachFile 主题分批迁移 | 4 | ✅ 全部 ship | PR-2 ✅ #496 (metadata)；PR-3 ✅ #493 (contract/codegen)；PR-4 ✅ #498 (observability)；PR-5 ✅ #497 (lifecycle/errcode) |
 | 3 — E 类 for-range 主题分批迁移 | 5→3 | ✅ PR-8~10 合并入 PR #522 consolidated-batch 交付（2026-05-16）| PR-6 ✅ #500；PR-7 ✅ #507；余 37 文件合并为单一 PR #522（实测文件数 37 > 原估 27；shared-helper 图谱强耦合导致 batch 非独立，consolidated 更可行）；LegacyAllowlist 已清零 |
-| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ✅ LegacyAllowlist 已清零（PR #522）；余 archtestmeta 包删除 + depguard yaml 收尾（独立 Stage 4 PR） | — |
+| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ✅ PR #PENDING (2026-05-17) | — |
+
+**阶段 4 ship 摘要（PR #PENDING，2026-05-17）**：
+
+- **删除 `tools/archtest/internal/archtestmeta/` 整个包**（迁移期 scaffold 终结；LegacyAllowlist 已在 PR #522 清零）
+- **新增 `RunTypedFixture` + `FixtureOpts` typed funnel**（Hard 范本：业务调用方在 type system 上无法表达"传 Tags 加载 fixture"——编译失败；`FixtureOpts` 不含 Tags 字段）
+- **`TestPassFunnelGuardListSync` 单一等式简化**：删旧 (A)(B)(C) 三段 LegacyAllowlist 交叉验证；改为 `yamlExempt == passFunnelPermanentExempt` 和 `packagesImport == passFunnelPermanentExempt` 两条精确等式断言（`maps.Equal` + `cmp.Diff`）
+- **`passFunnelPermanentExempt` Medium 评级显式声明**：godoc 加 AI-rebust Medium 评级说明 + mechanical sync via double-declaration + 不升 Hard 的 ADR-mandated 理由
+- **`.golangci.yml` 收尾**：删除迁移期注释块（archtestmeta.LegacyAllowlist / 27 files / stage 2/3 PRs migrating 等历史话术）；保留 deny 规则 + 3 个永久 self-exemption + ADR §Termination criteria 引用
+- **`ai-collab.md` §载体决策原则**：第 3 条路由改写为公开 façade 引导；加防误判说明（既有文件直接 import `internal/scanner` / `internal/typeseval` helper 合法）；新增 §Hard 范本条目「typed function choice with input-struct field exclusion」
+- **5 处注释更新**：`resolve.go` / `adapter_error_classification_test.go` / `passfunnelfixture/redfixture.go` / `basesliceredfixture/base_slice_literal.go` / `basesliceredfixture/slice_meta_literal.go`——删 archtestmeta 引用，改指 `RunTypedFixture` / `FixtureOpts`
+- **静态反向锁 `TestArchtestmetaPackageDeleted`**：防 scaffold 回退（`os.Stat` 断言目录不存在）
 
 **阶段 1.8 ship 摘要（本 PR，2026-05-16）**：
 
@@ -342,11 +353,11 @@ linters-settings:
 
 | 原则 | 符合性 | 说明 |
 |------|-------|------|
-| **彻底** | ✅ | 阶段 4 删 allowlist + scanner/typeseval 全部 internal 化，0 残留 |
-| **不向后兼容** | ✅ | 阶段 1 不引入"deprecated 旧 API 还能用"的过渡通道；scanner.EachFile 在 archtest 包外被 depguard 立即封锁，allowlist 是有终结点的迁移清单（todo list），不是兼容垫片 |
-| **0 二次返工** | ✅ | 业务文件只在它的语义迁移 PR 中被 touch 一次（import + API + 语义同 commit）；Stage 1.6 双入口设计 D1 + Stage 1.7 RunTypedProduction 明确保护已 ship PR 调用点不被迫返工 |
-| **优雅简洁** | ✅ | Pass + Rule + Run/RunTyped/RunTypedDir/RunTypedProduction 四个核心入口；对标 go/analysis；helper 函数零额外发明 |
-| **AI HARD** | ✅ | 三重防线组合 Hard：(1) Pass.Pkg 不暴露 `*packages.Package` 让 INV-1 形态在新代码中编译失败；(2) depguard 锁住 packages 直接 import；(3) 元治理 archtest type-aware 拦截存量入口（含 LoadProductionPackages） |
+| **彻底** | ✅ | 阶段 4 已完成：archtestmeta 包整体删除，LegacyAllowlist 过滤逻辑清零，depguard yaml 迁移期注释收尾，TestArchtestmetaPackageDeleted 静态反向锁防回退（PR #PENDING 2026-05-17） |
+| **不向后兼容** | ✅ | 无 deprecation 别名、无 FixtureBuildTag re-export、无双路径并存；archtestmeta 整体删除不留过渡通道 |
+| **0 二次返工** | ✅ | 业务文件只在它的语义迁移 PR 中被 touch 一次；Stage 1.6 双入口设计 D1 + Stage 1.7 RunTypedProduction 明确保护已 ship PR 调用点；RunTypedFixture 收口 fixture 加载，6 处调用一次完成迁移 |
+| **优雅简洁** | ✅ | Pass + Rule + Run/RunTyped/RunTypedDir/RunTypedProduction/RunTypedFixture 五个核心入口；TestPassFunnelGuardListSync 三段合并为两条单一等式断言 |
+| **AI HARD** | ✅ | 三重防线 + 新 Hard 范本：(1) Pass.Pkg 不暴露 `*packages.Package` 让 INV-1 形态在新代码中编译失败；(2) depguard 锁住 packages 直接 import（终态仅 3 个 self-exemption）；(3) 元治理 archtest type-aware 拦截存量入口；(4) `RunTypedFixture + FixtureOpts{Tests}` 不含 Tags 字段——业务调用方在 type system 上无法表达"自传 build tag" |
 
 ## 关键设计决策
 

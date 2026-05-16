@@ -39,8 +39,8 @@
 //
 // The meta-archtest PASS-FUNNEL-RESOLVE-01 in pass_funnel_test.go bans
 // business *_test.go files from calling the eight typeseval helpers or
-// scanner.ImportBan directly. Files in archtestmeta.LegacyAllowlist are
-// temporarily exempt during the Stage 2/3 migration window.
+// scanner.ImportBan directly. Files in passFunnelPermanentExempt (3 framework
+// files) are permanently exempt; LegacyAllowlist deleted in Stage 4.
 package archtest
 
 import (

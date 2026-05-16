@@ -30,10 +30,13 @@
 2. **type system**——Go interface / typed struct 让违反不可表达（Hard）；PII / 安全语义并存 archtest 双重防线
 3. **archtest 平铺兜底**，按规则真值类型选工具：
    - 路径级 import ban → `.golangci.yml` `depguard`
-   - 跨包归属 / 传递闭包 → `kernel/depgraph`，复用 `tools/archtest/internal/typeseval.SharedResolver`
-   - 需要类型信息（receiver type / interface 实现 / exported API 类型 / 表达式求值结果，含 const 拼接、跨包 Ident、untyped const）→ 在 `tools/archtest/internal/typeseval` 加/复用 helper（`EvaluateConstString` 已覆盖 BasicLit/Ident/SelectorExpr/BinaryExpr；扩节点类型时在同包加 helper）
-   - 纯 AST 模式 → `tools/archtest/internal/scanner`
-   - 元数据 / YAML 派生 → `scanner.EachContentFile` + 解析
+   - 跨包归属 / 传递闭包 → `kernel/depgraph`（archtest 内若需要 typed load，走 `archtest.RunTyped` / `archtest.RunTypedProduction` 公开 façade）
+   - 需要类型信息（receiver type / interface 实现 / exported API 类型 / 表达式求值结果，含 const 拼接、跨包 Ident、untyped const）→ `archtest.{ResolvePackageRef, ResolveMethodCall, EvaluateConstString, FlatNonDefaultTags, KnownNonDefaultTags}` + `Pass.{IsFileInScope, IsGenerated}` 公开 façade（扩节点类型时在 `internal/typeseval` 加 helper 并经 façade 暴露）
+   - 纯 AST 模式 → `archtest.Run` + `archtest.{EachInSubtree, EachInChildren, FindFirstChild}` walk helper
+   - 加载 fixture 子包 → `archtest.RunTypedFixture` typed funnel（`FixtureOpts` 不含 Tags 字段）
+   - 元数据 / YAML 派生 → `archtest.EachContentFile` + 解析
+
+> **防误判**：以上路由是写**新** archtest 的指引。既有 archtest 直接 import `internal/scanner` / `internal/typeseval` 的 walk + resolve helper（如 `EachInSubtree`、`ResolvePackageRef`）合法，由 ADR `202605141519` §163 明确允许，不需要批量重构。被禁用的是 `scanner.EachFile` / `typeseval.LoadPackages` / `SharedResolver` / `LoadProductionPackages` / `EachFileInPackage` 等 INV-1 / load-bearing 符号，由 PASS-FUNNEL 元治理 archtest 类型化拦截。
 
 **工具选定后强制盲区自检**：作者在 archtest 测试函数 godoc 列出所选工具 godoc 声明范围外的 AST 形态（与 package-doc `// INVARIANT:` 分离），并对每项添加反向自检测试，断言其在 production AST 不出现。盲区清单 + 反向自检测试是 Hard/Medium 评级的前置举证材料。
 
@@ -53,6 +56,8 @@
 - **typed function call as Hard funnel for unbounded operations** — when an operation accepts `any` at the Go type level (e.g., `panic(any)`), you can still reach Hard by routing every call site through a single typed-marker function. Range: `panic(panicregister.Approved(reason, value))` is the only approved panic shape in production GoCell code; archtest `PANIC-REGISTERED-01` enforces (a) panic arg = `*ast.CallExpr` with Fun resolving via `*types.Info` to `pkg/panicregister.Approved`, (b) reason = `*ast.BasicLit` STRING. Hard property comes from "form uniqueness": picking any other shape (bare panic, different callee name, non-literal reason) fails archtest in CI — there is no "looks like Approved but isn't" gray zone. Honest caveat: Go's `panic` keyword accepts `any` so `panic(rawValue)` compiles; the enforcement is archtest-bound, not compile-time. The charter §1 definition of "typed function call" Hard does not require compile-time blocking, only form uniqueness + archtest fail-on-deviation — which is the highest grade reachable in Go for this rule shape.
 
 - **string-typed concept funnel**（设计范本，GoCell 内尚无严格 ship 实例）— 字符串承载独立语义（rule code / error code / event topic 等）时：(1) `type FooCode string` 把语义类型化，API 签名收口；(2) 值定义集中在 `*codes.go`，archtest 守声明位置；(3) 构造/比较点用 `*types.Info` 检查实参 resolve 到声明集合。形态锁 vs 值求值依 §3 工具原则选。
+
+- **typed function choice with input-struct field exclusion** — typed function choice 范本的升级形态。`RunTypedFixture(t, opts FixtureOpts, patterns, rule)` + 专用 `FixtureOpts struct { Tests bool }`（**不含 Tags 字段**）让"加载 fixture 时业务自传 build tag"在 type system 上不可表达——编译失败。不仅 function name 选择参与 type system 约束，连 input struct 字段集也参与。**适用条件**（三条同时满足才适用，日常 fixture loader 不引用）：(a) framework 收口 build tag / 加载 mode 等横切关注点，业务无控制权诉求；(b) 业务调用方无需感知该字段（不是仅默认值，是结构上不该出现）；(c) 同一加载模式被 ≥3 处调用复用。ref: `tools/archtest/fixture.go`。
 
 ## archtest 文件命名
 

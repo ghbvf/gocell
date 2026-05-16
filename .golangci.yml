@@ -420,21 +420,11 @@ linters:
           #     that archtest authors are encouraged to use.
           #
           # See docs/architecture/202605141519-adr-archtest-pass-funnel.md
-          # and docs/plans/202605141519-040-archtest-pass-funnel-plan.md.
+          # §Termination criteria for the terminal state.
           #
-          # Migration exemption: negative globs below list every archtest
-          # file that imports packages directly as of stage-1 baseline (27
-          # files). These are a subset of archtestmeta.LegacyAllowlist
-          # (53 files) — the broader allowlist drives the symbol-level
-          # PASS-FUNNEL meta-archtest. Stage 2/3 PRs migrating a file MUST
-          # remove its entry from BOTH this depguard glob (if it imports
-          # packages) AND archtestmeta.LegacyAllowlist. The
-          # TestPassFunnelGuardListSync archtest cross-validates the two
-          # lists at test time (fail-loud on drift).
-          #
-          # pass_funnel_test.go is exempt PERMANENTLY (it implements the
-          # PASS-FUNNEL meta-archtest and must import the package it
-          # forbids; survives stage-4 cleanup).
+          # Stage 4 terminal state: only 3 permanent self-exemptions remain
+          # (passFunnelPermanentExempt). TestPassFunnelGuardListSync enforces
+          # exact equality between these globs and passFunnelPermanentExempt.
           list-mode: lax
           files:
             - "**/tools/archtest/*_test.go"
