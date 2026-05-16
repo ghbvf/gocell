@@ -1,4 +1,5 @@
 .PHONY: build check-build test fmt verify validate generate cover clean \
+        install-hooks \
         up down \
         test-integration \
         test-integration-cluster \
@@ -49,6 +50,14 @@ fmt:
 # ref: kubernetes/kubernetes hack/make-rules/verify.sh
 verify:
 	bash hack/make-rules/verify.sh
+
+# install-hooks points git at the tracked hack/githooks/ dir (per-repo
+# config, shared across all worktrees of this repo). Run once after clone
+# and after `git worktree add`. The pre-push hook runs the fast CI subset
+# (gofumpt / build+vet / codegen staleness) AI co-authors most often skip.
+install-hooks:
+	git config core.hooksPath hack/githooks
+	@echo "core.hooksPath -> hack/githooks (pre-push active)"
 
 validate:
 	go run ./cmd/gocell validate
