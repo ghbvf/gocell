@@ -66,7 +66,9 @@ func ReceiverTypeName(expr ast.Expr) string {
 // is encoded in the function name itself. This is the only allowed depth-1
 // early-return shape in archtest rules — enforced by SCANNER-FRAMEWORK-USAGE-02.
 //
-// Wrapper around [scanner.FindFirstChild].
+// Wrapper around [scanner.FindFirstChild] — the only call path to scanner for
+// archtest authors. Pure delegation, no behavior change. After 040 Stage 4
+// seals internal/scanner, this façade is the only reachable path.
 func FindFirstChild[S any, N interface {
 	*S
 	ast.Node

@@ -24,6 +24,7 @@ import (
 	"go/printer"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1415,6 +1416,12 @@ func TestScannerFrameworkUsage02(t *testing.T) {
 
 // eachInChildrenCalleeSel returns the SelectorExpr `<pkg>.EachInChildren`
 // from a generic call's Fun (IndexExpr / IndexListExpr base), or nil.
+//
+// This is a syntactic fast-path skip (not a fallback): if the selector name
+// is not "EachInChildren", the call is provably not the monitored idiom and
+// nil short-circuits the whole detector. Callee-identity authority rests
+// with isMonitoredEachInChildren (typeseval, single Hard path) — a typeseval
+// miss causes a false negative (rule under-fires), never silent acceptance.
 func eachInChildrenCalleeSel(call *ast.CallExpr) *ast.SelectorExpr {
 	base := call.Fun
 	switch idx := base.(type) {
@@ -1555,6 +1562,13 @@ type usage02Detector func(*types.Info, *token.FileSet, *ast.File, string) []scan
 func loadFixture02(t *testing.T, caseName string, detector usage02Detector) []scanner.Diagnostic {
 	t.Helper()
 	root := findModuleRoot(t)
+	// Preflight: fail fast with a single message when the fixture directory
+	// constant drifts from the on-disk layout, instead of N copies of "fixture
+	// not found" once per sub-case.
+	if _, err := os.Stat(filepath.Join(root, usage02FixturesRelDir)); err != nil {
+		t.Fatalf("usage02FixturesRelDir %q does not exist under module root %q: %v",
+			usage02FixturesRelDir, root, err)
+	}
 	resolver, err := typeseval.SharedResolver(root, true, nil, "./tools/archtest/...")
 	if err != nil {
 		t.Fatalf("typeseval.SharedResolver: %v", err)
