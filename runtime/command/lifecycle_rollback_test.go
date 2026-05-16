@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
-	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 )
@@ -16,7 +15,7 @@ import (
 // rollbackStopBudget caps how long the rollback Stop call waits for the
 // sweeper goroutine to exit. The fast-path (ticker has not fired) returns
 // immediately; the slow path (ticker mid-tick) returns after the current
-// runTick completes. 2s is generous for slow CI.
+// SweepTick completes. 2s is generous for slow CI.
 const rollbackStopBudget = 2 * time.Second
 
 // TestSweeperLifecycle_StartupFailRollback simulates the bootstrap LIFO
@@ -25,36 +24,25 @@ const rollbackStopBudget = 2 * time.Second
 // goroutine MUST exit cleanly within the stop budget, leaving no
 // background work running.
 //
-// PR 441 review F3-C decision (ADR 202605102000-adr-lifecycle-hook-ctx-
-// semantics.md): SweeperLifecycle.Start uses context.WithCancel(
-// context.Background()) — the worker ctx is intentionally derived from
-// background, NOT from the OnStart-supplied startup-deadline ctx
-// (matches uber-go/fx hook semantics + cell.LifecycleHook.StartTimeout
-// design). The contract this test pins: bootstrap-orchestrated OnStop
-// is the sole worker-cancel path, and OnStop must always be called
-// during rollback (LIFO invariant of `runtime/bootstrap`).
+// C.2 owner-ctx contract: SweeperLifecycle.Start derives worker runCtx from
+// the owner ctx (controller-runtime Runnable.Start semantics). This test
+// pins the rollback path: bootstrap-orchestrated OnStop is the sole explicit
+// worker-cancel path; the owner ctx also provides an implicit cancel.
 //
-// goleak verifies no sweeper goroutine survives past Stop. If a future
-// refactor decouples worker cancellation from OnStop (or moves to
-// owner-ctx propagation per backlog LIFECYCLE-OWNER-CTX-PROPAGATION-01),
-// the contract being tested here changes — that change should ship with
-// an updated ADR + this test rewritten, not silently relaxed.
+// goleak verifies no sweeper goroutine survives past Stop.
 func TestSweeperLifecycle_StartupFailRollback(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	q := commandtest.NewInMemQueue()
-	sw, err := kcommand.NewSweeper(q, q, clock.Real(),
-		kcommand.WithSweeperInterval(time.Hour)) // long interval — no tick fires during this test
+	sw, err := kcommand.NewSweeper(q, q) // C.1: no clock arg
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("devicecommand.sweeper", sw, clock.Real())
+	lc := NewSweeperLifecycle("devicecommand.sweeper", sw, time.Hour) // long interval — no tick fires
 
 	// Step 1: simulate cell A startup completing (Start returns prompt).
-	// Per uber-go/fx hook semantics, OnStart's ctx is the startup deadline;
-	// SweeperLifecycle copies the ctx-deadline pattern by returning quickly
-	// after spawning the worker goroutine (no select on the OnStart ctx).
-	startCtx, startCancel := context.WithTimeout(context.Background(), rollbackStopBudget)
-	defer startCancel()
-	require.NoError(t, lc.Start(startCtx))
+	ownerCtx, ownerCancel := context.WithCancel(context.Background())
+	defer ownerCancel()
+
+	require.NoError(t, lc.Start(ownerCtx))
 
 	// Step 2: simulate bootstrap detecting cell B's OnStart failure and
 	// reversing LIFO. Cell A's OnStop is the rollback step.
