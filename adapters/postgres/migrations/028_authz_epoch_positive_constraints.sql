@@ -70,6 +70,9 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
+-- lock_timeout is set AFTER the GUC gate by design: the fail-closed path
+-- (RAISE EXCEPTION above) does not reach any DDL, so a timeout is only
+-- needed once we know the rollback is authorized.
 SET LOCAL lock_timeout = '5s';
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive;
 ALTER TABLE users ALTER COLUMN authz_epoch SET DEFAULT 0;
