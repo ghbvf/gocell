@@ -24,6 +24,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -120,7 +121,15 @@ func Run(t *testing.T, factory Factory, protocol *session.Protocol) {
 	}
 
 	t.Run("Create_Get", func(t *testing.T) { runCreateGet(t, factory) })
-	t.Run("Get_NotFound", func(t *testing.T) { runGetNotFound(t, factory) })
+	t.Run("Get_NotFound", func(t *testing.T) {
+		store, _, cleanup := factory(t)
+		defer cleanup()
+		got, err := store.Get(context.Background(), "missing-id")
+		if got != nil {
+			t.Errorf("expected nil session on miss, got %+v", got)
+		}
+		errcodetest.AssertCode(t, err, errcode.ErrSessionNotFound)
+	})
 	t.Run("Create_DuplicateID", func(t *testing.T) { runCreateDuplicateID(t, factory) })
 	t.Run("Revoke_Direct", func(t *testing.T) { runRevokeDirect(t, factory) })
 	t.Run("Revoke_Idempotent", func(t *testing.T) { runRevokeIdempotent(t, factory) })
@@ -188,18 +197,6 @@ func runCreateGet(t *testing.T, factory Factory) {
 	if got.RevokedAt != nil {
 		t.Errorf("RevokedAt: got %v, want nil", got.RevokedAt)
 	}
-}
-
-// runGetNotFound — missing IDs return ErrSessionNotFound (errcode.Code).
-func runGetNotFound(t *testing.T, factory Factory) {
-	store, _, cleanup := factory(t)
-	defer cleanup()
-
-	got, err := store.Get(context.Background(), "missing-id")
-	if got != nil {
-		t.Errorf("expected nil session on miss, got %+v", got)
-	}
-	assertErrCode(t, err, errcode.ErrSessionNotFound)
 }
 
 // runCreateDuplicateID — duplicate Session.ID is rejected with

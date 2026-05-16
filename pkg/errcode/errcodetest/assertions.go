@@ -55,11 +55,13 @@ func AssertCode(t testing.TB, err error, expected errcode.Code) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("errcodetest.AssertCode: expected error with Code=%s, got nil", expected)
+		return
 	}
 	var ec *errcode.Error
 	if !errors.As(err, &ec) {
 		t.Fatalf("errcodetest.AssertCode: expected *errcode.Error chain "+
 			"with Code=%s, got %T: %v", expected, err, err)
+		return
 	}
 	if ec.Code != expected {
 		t.Errorf("errcodetest.AssertCode: Code mismatch — want %s, got %s "+
@@ -113,17 +115,20 @@ func AssertWireCode(t testing.TB, rec *httptest.ResponseRecorder, expectedStatus
 	if rec.Code != expectedStatus {
 		t.Fatalf("errcodetest.AssertWireCode: HTTP status mismatch — "+
 			"want %d, got %d; body=%q", expectedStatus, rec.Code, rec.Body.String())
+		return
 	}
 	body := rec.Body.Bytes()
 	if len(body) == 0 {
 		t.Fatalf("errcodetest.AssertWireCode: response body is empty; "+
 			"expected wire envelope with Code=%s", expected)
+		return
 	}
 	var env wireEnvelope
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&env); err != nil {
 		t.Fatalf("errcodetest.AssertWireCode: body is not the wire "+
 			"envelope shape: %v; body=%q", err, string(body))
+		return
 	}
 	if env.Error.Code != string(expected) {
 		t.Errorf("errcodetest.AssertWireCode: error.code mismatch — "+
