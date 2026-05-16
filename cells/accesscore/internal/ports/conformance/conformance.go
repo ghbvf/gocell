@@ -153,7 +153,10 @@ func isConflictErr(err error) bool {
 // ─── sub-tests ────────────────────────────────────────────────────────────────
 
 // conformGetByIDForUpdateNoTx: without ambient tx:
-//   - PG (RequiresAmbientTx=true): returns ErrInternal
+//   - PG (RequiresAmbientTx=true): returns ErrInternal (KindInternal) — the
+//     assertion fires before any row lookup, so the envelope is intentionally
+//     distinct from ErrAuthUserNotFound to prevent caller probing for IDs
+//     via no-tx invocations.
 //   - mem (RequiresAmbientTx=false): returns user (per-call lock)
 func conformGetByIDForUpdateNoTx(t *testing.T, factory UserRepoFactory, features Features) {
 	t.Helper()
@@ -200,6 +203,12 @@ func conformGetByIDForUpdateWithTx(t *testing.T, factory UserRepoFactory) {
 }
 
 // conformGetByUsernameForUpdateNoTx: parallel to conformGetByIDForUpdateNoTx.
+//
+// PG no-ambient-tx returns ErrInternal (KindInternal) rather than
+// ErrAuthUserNotFound: SELECT...FOR UPDATE must be issued inside an explicit
+// tx, and the assertion fires before any row lookup. The error envelope is
+// intentionally distinct from "user not found" so callers cannot use no-tx
+// invocations to probe for username existence.
 func conformGetByUsernameForUpdateNoTx(t *testing.T, factory UserRepoFactory, features Features) {
 	t.Helper()
 	repo, txRunner, cleanup := factory(t)
@@ -507,7 +516,9 @@ func conformGetByIDForUpdateLockContention(t *testing.T, factory UserRepoFactory
 	// Within quickGracePeriod the contender must still be blocked.
 	select {
 	case <-contenderDone:
-		t.Errorf("GetByIDForUpdate_LockContention: contender returned in %v without holder release; expected to block on lock", time.Since(contenderStart))
+		t.Errorf(
+			"GetByIDForUpdate_LockContention: contender returned in %v without holder release; "+
+				"expected to block on lock", time.Since(contenderStart))
 	case <-time.After(quickGracePeriod):
 		// Expected: contender is still blocked waiting for holder.
 	}
