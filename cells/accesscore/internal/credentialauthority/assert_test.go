@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // activeUser builds an active *domain.User with the given PasswordVersion.
@@ -83,7 +84,7 @@ func TestAssert(t *testing.T) {
 			name: "pin_pass_matching_version",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 7) },
 			checks: func() []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.WithPasswordVersionPin{Expected: 7}}
+				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 7))}
 			},
 			wantNil: true,
 		},
@@ -91,7 +92,7 @@ func TestAssert(t *testing.T) {
 			name: "pin_fail_stale_version",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 8) },
 			checks: func() []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.WithPasswordVersionPin{Expected: 7}}
+				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 7))}
 			},
 			wantKind: errcode.KindPermissionDenied,
 			wantCode: errcode.ErrAuthUserNotActive,
@@ -100,7 +101,7 @@ func TestAssert(t *testing.T) {
 			name: "not_revoked_pass_nil",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
 			checks: func() []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.WithSessionNotRevoked{RevokedAt: nil}}
+				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(&session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: nil, AuthzEpochAtIssue: 1})}
 			},
 			wantNil: true,
 		},
@@ -109,7 +110,7 @@ func TestAssert(t *testing.T) {
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
 			checks: func() []credentialauthority.Check {
 				ts := now
-				return []credentialauthority.Check{credentialauthority.WithSessionNotRevoked{RevokedAt: &ts}}
+				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(&session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: &ts, AuthzEpochAtIssue: 1})}
 			},
 			wantKind: errcode.KindPermissionDenied,
 			wantCode: errcode.ErrAuthUserNotActive,
@@ -118,7 +119,7 @@ func TestAssert(t *testing.T) {
 			name: "compose_issue_path_baseline_plus_pin",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 3) },
 			checks: func() []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.WithPasswordVersionPin{Expected: 3}}
+				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 3))}
 			},
 			wantNil: true,
 		},
@@ -126,9 +127,27 @@ func TestAssert(t *testing.T) {
 			name: "compose_validate_path_baseline_plus_not_revoked",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
 			checks: func() []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.WithSessionNotRevoked{RevokedAt: nil}}
+				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(&session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: nil, AuthzEpochAtIssue: 1})}
 			},
 			wantNil: true,
+		},
+		{
+			name: "not_revoked_nil_view_fails_closed",
+			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
+			checks: func() []credentialauthority.Check {
+				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(nil)}
+			},
+			wantKind: errcode.KindPermissionDenied,
+			wantCode: errcode.ErrAuthUserNotActive,
+		},
+		{
+			name: "snapshot_password_version_nil_user_fails",
+			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
+			checks: func() []credentialauthority.Check {
+				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(nil)}
+			},
+			wantKind: errcode.KindPermissionDenied,
+			wantCode: errcode.ErrAuthUserNotActive,
 		},
 		{
 			name:     "nil_user_returns_KindInvalid",
@@ -153,7 +172,7 @@ func TestAssert(t *testing.T) {
 			// before variadic). Asserts code is baseline reason, not check reason.
 			user: lockedUser,
 			checks: func() []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.WithPasswordVersionPin{Expected: 1}}
+				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 1))}
 			},
 			wantKind: errcode.KindPermissionDenied,
 			wantCode: errcode.ErrAuthUserNotActive,

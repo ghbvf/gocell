@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -290,7 +291,26 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
+	// Two Assert call sites (read-side Hard funnel, ADR §A11):
+	// 1. baseline (CanAuthenticate) first → dedicated 403 ErrAuthUserNotActive
+	//    so an authenticated refresh caller learns "account no longer active"
+	//    (semantically distinct from "invalid token").
+	// 2. session-revoked second → uniform 401 ErrAuthRefreshFailed.
+	//
+	// Order matters: every Assert call runs the baseline as its first inline
+	// check, so the session-gate Assert would also fail with baseline if a
+	// suspended user reaches it. By running rejectIfUserNotActive first the
+	// baseline failure maps to the dedicated 403 wire response; by the time
+	// rejectIfSessionRevoked runs, baseline is known to pass.
+	//
+	// The funnel returns the same KindPermissionDenied/ErrAuthUserNotActive
+	// envelope for both failures; the wire-level translation is decided BY
+	// CALL SITE, not by inspecting err contents ("callers must not branch on
+	// err" contract).
 	if err := s.rejectIfUserNotActive(ctx, user, sess.ID); err != nil {
+		return dto.TokenPair{}, err
+	}
+	if err := s.rejectIfSessionRevoked(ctx, user, sess); err != nil {
 		return dto.TokenPair{}, err
 	}
 
@@ -462,9 +482,11 @@ func authRefreshRejected() *errcode.Error {
 	return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthRefreshFailed, errMsgInvalidRefreshToken)
 }
 
-// verifySession checks that the session backing a rotated token is live and
-// cascade-revokes the refresh chain if it is not. Extracted from Refresh to
-// stay within the cognitive-complexity budget (F4/F5).
+// verifySession looks up the session row for a presented refresh token. It
+// handles infra-error and not-found classes here (cascade-revoke on not-found);
+// the session-revoked gate is enforced downstream by credentialauthority.Assert
+// alongside the user-status baseline so both checks live in one funnel. F4/F5
+// extracted from Refresh to keep cognitive complexity within budget.
 func (s *Service) verifySession(ctx context.Context, sessionID string) (*session.ValidateView, error) {
 	sess, err := s.sessionStore.Get(ctx, sessionID)
 	if err != nil {
@@ -475,13 +497,6 @@ func (s *Service) verifySession(ctx context.Context, sessionID string) (*session
 		}
 		// F4: cascade-revoke on not-found; log the revoke error if it fails.
 		if err := s.cascadeRevoke(ctx, sessionID, "session-not-found"); err != nil {
-			return nil, err
-		}
-		return nil, authRefreshRejected()
-	}
-	if sess.RevokedAt != nil {
-		// F4: cascade-revoke on already-revoked session.
-		if err := s.cascadeRevoke(ctx, sessionID, "revoked-session"); err != nil {
 			return nil, err
 		}
 		return nil, authRefreshRejected()
@@ -513,16 +528,50 @@ func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) e
 	return nil
 }
 
-// rejectIfUserNotActive cascade-revokes the refresh chain and returns
-// ErrAuthUserNotActive (403) when the user is not in the 'active' state
-// (suspended / locked). S4.0 fail-closed: a non-active user must not obtain
-// a fresh access token; the cascade-revoke ensures subsequent rotation
-// attempts immediately fail rather than keep returning new tokens.
-// domain.User.CanAuthenticate() is the single source of truth shared with
-// sessionlogin and sessionvalidate. Extracted to keep refreshInTx cognitive
-// complexity ≤ 15 (.golangci.yml gocognit + sonar go:S3776).
+// rejectIfSessionRevoked routes the session-revoked gate through
+// credentialauthority.Assert (read-side Hard funnel, ADR §A11). On failure
+// it cascade-revokes the refresh chain and returns the uniform 401
+// (ErrAuthRefreshFailed) — matching the pre-migration behavior where a
+// revoked session collapses into "invalid refresh token" without leaking
+// the specific revocation reason.
+//
+// Note: this Assert also runs the baseline (CanAuthenticate) check, but a
+// caller-not-active failure surfacing here is treated like
+// session-revoked — uniform 401. The dedicated 403 baseline path lives in
+// rejectIfUserNotActive below; ordering matters and is documented at the
+// refreshInTx call site.
+func (s *Service) rejectIfSessionRevoked(ctx context.Context, user *domain.User, sess *session.ValidateView) error {
+	assertErr := credentialauthority.Assert(user,
+		credentialauthority.SessionNotRevoked(sess))
+	if assertErr == nil {
+		return nil
+	}
+	if cascadeErr := s.cascadeRevoke(ctx, sess.ID, "revoked-session"); cascadeErr != nil {
+		return cascadeErr
+	}
+	return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthRefreshFailed,
+		errMsgInvalidRefreshToken,
+		errcode.WithInternal("session-refresh: credentialauthority session gate failed: "+assertErr.Error()))
+}
+
+// rejectIfUserNotActive routes the baseline (user.CanAuthenticate via the
+// funnel's implicit check) gate. On failure it cascade-revokes the refresh
+// chain and returns the dedicated 403 (ErrAuthUserNotActive) — distinct
+// from the uniform 401 used elsewhere because a refresh call is already
+// authenticated (the caller proved holding a valid refresh token), so the
+// signal "your account is no longer active" is semantically valuable to the
+// admin/UI consumer of /refresh. S4.0 fail-closed: a non-active user must
+// not obtain a fresh access token; the cascade-revoke ensures subsequent
+// rotation attempts immediately fail rather than keep returning new tokens.
+//
+// The two-Assert-call pattern (session-revoked + baseline) is intentional:
+// each Assert call site owns ONE wire-level translation (per the funnel's
+// "callers MUST NOT branch on err" contract). The session-revoked gate
+// runs first because a revoked session is the cheaper rejection (no
+// account-status semantics leak); the baseline runs second so a still-live
+// session with a now-suspended user gets the dedicated 403.
 func (s *Service) rejectIfUserNotActive(ctx context.Context, user *domain.User, sessionID string) error {
-	if user.CanAuthenticate() {
+	if err := credentialauthority.Assert(user); err == nil {
 		return nil
 	}
 	if err := s.cascadeRevoke(ctx, sessionID, "user-not-active"); err != nil {

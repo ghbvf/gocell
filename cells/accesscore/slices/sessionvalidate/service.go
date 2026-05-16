@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -147,13 +148,6 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		s.logSessionLookupError(sid, claims.Subject, err)
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	if view.RevokedAt != nil {
-		s.logger.Warn("session-validate: revoked session used",
-			slog.String("sid", sid),
-			slog.String("subject", claims.Subject))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
-	}
-
 	// Defense-in-depth: confirm the live session row owner matches the JWT sub.
 	// Without this check, a signing-path bug that bound a sid to the wrong
 	// subject (e.g. sessionmint reuse-after-rotation regression) would let one
@@ -188,15 +182,19 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	// P1.3 defense-in-depth: epoch match alone is insufficient when the user
-	// became non-active after the token was issued. CanAuthenticate fails closed
-	// for any non-active status (suspended, locked, or any future state).
-	// Uniform 401 — same envelope as all other enforceSessionState rejections
-	// (防枚举: account status must not be distinguishable from token invalidity).
-	if !user.CanAuthenticate() {
-		s.logger.Warn("session-validate: user not active",
+	// Credentialauthority funnel: baseline (CanAuthenticate) + session-revoked
+	// are checked together (read-side Hard funnel, ADR §A11). Folding both gates
+	// into one Assert means revoked-session and non-active-user collapse to the
+	// same uniform 401 (ErrAuthInvalidToken) — same envelope as all other
+	// enforceSessionState rejections (防枚举). Slice MUST NOT branch on err to
+	// discover which check failed; specific reason carried via WithInternal for
+	// slog only. validate is read-only — no cascade side effect.
+	if assertErr := credentialauthority.Assert(user,
+		credentialauthority.SessionNotRevoked(view)); assertErr != nil {
+		s.logger.Warn("session-validate: credentialauthority assert failed",
 			slog.String("subject", claims.Subject),
-			slog.String("status", string(user.Status())))
+			slog.String("sid", sid),
+			slog.Any("error", assertErr))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 	if user.AuthzEpoch() != view.AuthzEpochAtIssue {
