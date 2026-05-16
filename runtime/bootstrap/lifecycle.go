@@ -256,6 +256,48 @@ func (lc *lifecycle) rollback(ctx context.Context) []error {
 	return errs
 }
 
+// hookPhase holds the resolved metadata for a single runHook invocation.
+type hookPhase struct {
+	fn       func(context.Context) error
+	timeout  time.Duration
+	startMsg string
+	okMsg    string
+	errMsg   string
+	isStart  bool
+}
+
+// resolveHookPhase extracts fn, timeout, and log-message labels from h for
+// the start or stop direction. Extracted to keep runHook under the ≤15
+// cognitive-complexity limit.
+func (lc *lifecycle) resolveHookPhase(h Hook, isStart bool) hookPhase {
+	if isStart {
+		t := h.StartTimeout
+		if t == 0 {
+			t = lc.defaultStart
+		}
+		return hookPhase{
+			fn:       h.OnStart,
+			timeout:  t,
+			startMsg: "hook.start",
+			okMsg:    "hook.start_ok",
+			errMsg:   "hook.start_err",
+			isStart:  true,
+		}
+	}
+	t := h.StopTimeout
+	if t == 0 {
+		t = lc.defaultStop
+	}
+	return hookPhase{
+		fn:       h.OnStop,
+		timeout:  t,
+		startMsg: "hook.stop",
+		okMsg:    "hook.stop_ok",
+		errMsg:   "hook.stop_err",
+		isStart:  false,
+	}
+}
+
 // runHook executes either OnStart (isStart=true) or OnStop (isStart=false) for h.
 //
 // OnStart path (isStart=true): ctx is passed directly to fn — it is the long-lived
@@ -266,83 +308,70 @@ func (lc *lifecycle) rollback(ctx context.Context) []error {
 // OnStop path (isStart=false): applyTimeout(StopTimeout) is applied as before.
 // Logs before/after each call.
 func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
-	var fn func(context.Context) error
-	var hookTimeout time.Duration
-	var startMsg, okMsg, errMsg string
-
-	if isStart {
-		fn = h.OnStart
-		hookTimeout = h.StartTimeout
-		if hookTimeout == 0 {
-			hookTimeout = lc.defaultStart
-		}
-		startMsg = "hook.start"
-		okMsg = "hook.start_ok"
-		errMsg = "hook.start_err"
-	} else {
-		fn = h.OnStop
-		hookTimeout = h.StopTimeout
-		if hookTimeout == 0 {
-			hookTimeout = lc.defaultStop
-		}
-		startMsg = "hook.stop"
-		okMsg = "hook.stop_ok"
-		errMsg = "hook.stop_err"
-	}
-
-	if fn == nil {
+	p := lc.resolveHookPhase(h, isStart)
+	if p.fn == nil {
 		return nil
 	}
 
-	lc.logger.LogAttrs(ctx, slog.LevelInfo, startMsg, hookIdentityAttrs(h)...)
+	lc.logger.LogAttrs(ctx, slog.LevelInfo, p.startMsg, hookIdentityAttrs(h)...)
 
-	var hookCtx context.Context
-	var cancel context.CancelFunc
-	if isStart {
-		// OnStart receives the owner ctx directly (no timeout wrapping).
-		// The hook spawns its own worker goroutine and returns promptly.
-		// StartTimeout is retained as a slow-start warning threshold only.
-		hookCtx = ctx
-		cancel = func() {}
-	} else {
-		hookCtx, cancel = lc.applyTimeout(ctx, hookTimeout)
-	}
+	hookCtx, cancel := lc.hookContext(ctx, p)
 	defer cancel()
 
 	t0 := lc.clock.Now()
-	err := fn(hookCtx)
+	err := p.fn(hookCtx)
 	elapsed := lc.clock.Since(t0)
 
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			attrs := append(hookIdentityAttrs(h),
-				slog.String("phase", startMsg),
-				slog.Duration("elapsed", elapsed),
-				slog.Any("error", err))
-			lc.logger.LogAttrs(ctx, slog.LevelError, "hook.timeout", attrs...)
-		} else {
-			attrs := append(hookIdentityAttrs(h),
-				slog.Duration("elapsed", elapsed),
-				slog.Any("error", err))
-			lc.logger.LogAttrs(ctx, slog.LevelError, errMsg, attrs...)
-		}
+		lc.logHookError(ctx, h, p, elapsed, err)
 		return err
 	}
 
-	if isStart && hookTimeout > 0 {
-		threshold := hookTimeout * hookSlowNumerator / hookSlowDenominator
+	lc.logHookOK(ctx, h, p, elapsed)
+	return nil
+}
+
+// hookContext returns the context and cancel func for the hook invocation.
+// OnStart receives the owner ctx directly (no timeout wrapping); StartTimeout
+// is retained as a slow-start warning threshold only.
+// OnStop applies applyTimeout(StopTimeout).
+func (lc *lifecycle) hookContext(ctx context.Context, p hookPhase) (context.Context, context.CancelFunc) {
+	if p.isStart {
+		return ctx, func() {}
+	}
+	return lc.applyTimeout(ctx, p.timeout)
+}
+
+// logHookError emits the appropriate error log for a failed hook.
+func (lc *lifecycle) logHookError(ctx context.Context, h Hook, p hookPhase, elapsed time.Duration, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		attrs := append(hookIdentityAttrs(h),
+			slog.String("phase", p.startMsg),
+			slog.Duration("elapsed", elapsed),
+			slog.Any("error", err))
+		lc.logger.LogAttrs(ctx, slog.LevelError, "hook.timeout", attrs...)
+	} else {
+		attrs := append(hookIdentityAttrs(h),
+			slog.Duration("elapsed", elapsed),
+			slog.Any("error", err))
+		lc.logger.LogAttrs(ctx, slog.LevelError, p.errMsg, attrs...)
+	}
+}
+
+// logHookOK emits the ok log and optionally the slow-start warning.
+func (lc *lifecycle) logHookOK(ctx context.Context, h Hook, p hookPhase, elapsed time.Duration) {
+	if p.isStart && p.timeout > 0 {
+		threshold := p.timeout * hookSlowNumerator / hookSlowDenominator
 		if elapsed >= threshold {
 			attrs := append(hookIdentityAttrs(h),
 				slog.Duration("elapsed", elapsed),
-				slog.Duration("timeout", hookTimeout),
+				slog.Duration("timeout", p.timeout),
 				slog.Duration("threshold", threshold))
 			lc.logger.LogAttrs(ctx, slog.LevelWarn, "hook.start_slow", attrs...)
 		}
 	}
-
 	okAttrs := append(hookIdentityAttrs(h), slog.Duration("elapsed", elapsed))
-	lc.logger.LogAttrs(ctx, slog.LevelInfo, okMsg, okAttrs...)
-	return nil
+	lc.logger.LogAttrs(ctx, slog.LevelInfo, p.okMsg, okAttrs...)
 }
 
 // hookIdentityAttrs returns the identity slog.Attrs for h: always "name",

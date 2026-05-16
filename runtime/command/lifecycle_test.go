@@ -14,6 +14,7 @@ import (
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // errSweepTickMock is a SweepTicker mock that returns an error from SweepTick.
@@ -38,10 +39,10 @@ func (m *okSweepTickMock) SweepTick(_ context.Context, _ time.Time) error {
 }
 
 // shortInterval is a small ticker interval that causes rapid tick firing in tests.
-const shortInterval = 5 * time.Millisecond
+const shortInterval = testtime.D5ms
 
 // tickWait is how long to wait for at least one tick in tests.
-const tickWait = 500 * time.Millisecond
+const tickWait = testtime.D500ms
 
 // TestSweeperLifecycle_NoClockField_NewSignature verifies that NewSweeperLifecycle
 // no longer requires a clock parameter (C.1: control-plane clock decoupled).
@@ -58,7 +59,7 @@ func TestSweeperLifecycle_NoClockField_NewSignature(t *testing.T) {
 // TestSweeperLifecycle_StartDoesNotDeadlock verifies the frozen-fake-clock
 // deadlock regression: old code used l.clk().NewTimerAt for the startup probe;
 // injecting a frozen fake clock and not Advancing it would block forever.
-// New code uses real time for the startup probe — Start must return within ~100ms.
+// New code uses real time for the startup probe — Start must return within ~500ms.
 //
 // This is the core C.1 deadlock regression test.
 func TestSweeperLifecycle_StartDoesNotDeadlock(t *testing.T) {
@@ -70,7 +71,7 @@ func TestSweeperLifecycle_StartDoesNotDeadlock(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q)
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("no-deadlock", sw, time.Hour) // long interval — no tick fires
+	lc := NewSweeperLifecycle("no-deadlock", sw, testtime.D1h) // long interval — no tick fires
 
 	ownerCtx, ownerCancel := context.WithCancel(context.Background())
 	defer ownerCancel()
@@ -83,11 +84,11 @@ func TestSweeperLifecycle_StartDoesNotDeadlock(t *testing.T) {
 	// The point of this test is that Start doesn't block indefinitely (old behavior
 	// with a frozen clock would block forever). 500ms is well below any reasonable
 	// human-observable delay.
-	assert.Less(t, elapsed, 500*time.Millisecond,
+	assert.Less(t, elapsed, testtime.D500ms,
 		"Start must not block: startup probe uses real time, not an injected clock")
 
 	// Clean up
-	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
 	defer cancel()
 	require.NoError(t, lc.Stop(stopCtx))
 }
@@ -106,17 +107,12 @@ func TestSweeperLifecycle_TickerDrivesSweepTick(t *testing.T) {
 
 	require.NoError(t, lc.Start(ownerCtx))
 
-	// Wait for at least one SweepTick call
-	deadline := time.Now().Add(tickWait)
-	for time.Now().Before(deadline) {
-		if mock.calls.Load() >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	assert.GreaterOrEqual(t, mock.calls.Load(), int32(1), "SweepTick must be called at least once")
+	// Wait for at least one SweepTick call via require.Eventually.
+	require.Eventually(t, func() bool {
+		return mock.calls.Load() >= 1
+	}, tickWait, testtime.D1ms, "SweepTick must be called at least once")
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
 	defer cancel()
 	require.NoError(t, lc.Stop(stopCtx))
 }
@@ -136,17 +132,12 @@ func TestSweeperLifecycle_SweepTickErrorLogged(t *testing.T) {
 
 	require.NoError(t, lc.Start(ownerCtx))
 
-	// Wait for at least one SweepTick call (which returns error)
-	deadline := time.Now().Add(tickWait)
-	for time.Now().Before(deadline) {
-		if mock.calls.Load() >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	assert.GreaterOrEqual(t, mock.calls.Load(), int32(1), "SweepTick must be called even when error returned")
+	// Wait for at least one SweepTick call (which returns error) via require.Eventually.
+	require.Eventually(t, func() bool {
+		return mock.calls.Load() >= 1
+	}, tickWait, testtime.D1ms, "SweepTick must be called even when error returned")
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
 	defer cancel()
 	require.NoError(t, lc.Stop(stopCtx))
 }
@@ -160,7 +151,7 @@ func TestSweeperLifecycle_OwnerCtxCancelExitsWorker(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q)
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("owner-ctx-test", sw, time.Hour)
+	lc := NewSweeperLifecycle("owner-ctx-test", sw, testtime.D1h)
 
 	ownerCtx, ownerCancel := context.WithCancel(context.Background())
 
@@ -170,7 +161,7 @@ func TestSweeperLifecycle_OwnerCtxCancelExitsWorker(t *testing.T) {
 	ownerCancel()
 
 	// Stop should succeed quickly (goroutine already exited via owner cancel)
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer stopCancel()
 	require.NoError(t, lc.Stop(stopCtx))
 	// goleak verifies no goroutine survives
@@ -185,14 +176,14 @@ func TestSweeperLifecycle_OnStop_GracefulExit(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q)
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("stop-test", sw, time.Hour) // long interval — no tick fires
+	lc := NewSweeperLifecycle("stop-test", sw, testtime.D1h) // long interval — no tick fires
 
 	ownerCtx, ownerCancel := context.WithCancel(context.Background())
 	defer ownerCancel()
 
 	require.NoError(t, lc.Start(ownerCtx))
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	require.NoError(t, lc.Stop(stopCtx))
 	require.NoError(t, lc.Stop(stopCtx), "Stop must be idempotent")
@@ -204,7 +195,7 @@ func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	sw, err := kcommand.NewSweeper(q, q)
 	require.NoError(t, err)
-	lc := NewSweeperLifecycle("devicecommand.sweeper", sw, time.Hour)
+	lc := NewSweeperLifecycle("devicecommand.sweeper", sw, testtime.D1h)
 
 	hook := lc.Hook()
 	assert.Equal(t, "devicecommand.sweeper", hook.Name)
@@ -238,16 +229,12 @@ func TestSweeperLifecycle_SweepErrorCounter(t *testing.T) {
 
 	require.NoError(t, lc.Start(ownerCtx))
 
-	// Wait for at least one error tick
-	deadline := time.Now().Add(tickWait)
-	for time.Now().Before(deadline) {
-		if mock.calls.Load() >= 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	// Wait for at least one error tick via require.Eventually.
+	require.Eventually(t, func() bool {
+		return mock.calls.Load() >= 1
+	}, tickWait, testtime.D1ms, "SweepTick error tick must fire at least once")
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
 	defer cancel()
 	require.NoError(t, lc.Stop(stopCtx))
 

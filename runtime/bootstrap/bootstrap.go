@@ -453,7 +453,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go —
 	//      internalCtx=WithCancel(ctx) → Runnable.Start, then cancel before Stop.
 	// ref: uber-go/fx internal/lifecycle/lifecycle.go — numStarted LIFO rollback.
-	b.ownerCtx, b.ownerCancel = context.WithCancel(runCtx)
+	b.ownerCtx, b.ownerCancel = context.WithCancel(runCtx) //nolint:gosec // G118: called on Start failure and LIFO teardown (C.2)
 
 	if err := b.lifecycle.Start(b.ownerCtx); err != nil {
 		b.ownerCancel() // release before returning

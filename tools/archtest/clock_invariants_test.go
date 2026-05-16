@@ -81,16 +81,18 @@ const clockViaSliceAllowMarker = "//archtest:allow:clock-injection:via-slice"
 //     text is silently ignored (same rule as clockViaSliceAllowMarker).
 const clockControlPlaneAllowMarker = "//archtest:allow:clock-injection:control-plane"
 
-// clockControlPlaneAllowedFuncs returns the set of FuncDecl names whose doc
-// comment group contains a valid clockControlPlaneAllowMarker with a
+// clockControlPlaneAllowedFuncs returns the set of FuncDecl name-positions
+// whose doc comment group contains a valid clockControlPlaneAllowMarker with a
 // non-empty reason. Only the outermost FuncDecl (package-level function) is
 // considered; methods are also included if their doc carries the marker.
+//
+// Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
+// direct children of *ast.File, so depth=1 is correct and sufficient.
 func clockControlPlaneAllowedFuncs(fset *token.FileSet, file *ast.File) map[string]bool {
 	out := map[string]bool{}
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Doc == nil {
-			continue
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Doc == nil {
+			return
 		}
 		for _, c := range fd.Doc.List {
 			text := strings.TrimSpace(c.Text)
@@ -101,28 +103,32 @@ func clockControlPlaneAllowedFuncs(fset *token.FileSet, file *ast.File) map[stri
 			if rest == "" {
 				continue
 			}
-			// Use the position of the func keyword as the unique key.
+			// Use the position of the func name as the unique key.
 			key := fset.Position(fd.Name.Pos()).String()
 			out[key] = true
 		}
-	}
+	})
 	return out
 }
 
 // enclosingFuncDeclKey returns the position-string key for the nearest
 // enclosing *ast.FuncDecl that contains pos, or "" if pos is not inside any
 // FuncDecl. The key matches the format produced by clockControlPlaneAllowedFuncs.
+//
+// Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
+// direct children of *ast.File; no nested function literal can be a top-level
+// FuncDecl, so depth=1 is correct.
 func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) string {
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
+	result := ""
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if result != "" || fd.Body == nil {
+			return
 		}
 		if fd.Body.Pos() <= pos && pos <= fd.Body.End() {
-			return fset.Position(fd.Name.Pos()).String()
+			result = fset.Position(fd.Name.Pos()).String()
 		}
-	}
-	return ""
+	})
+	return result
 }
 
 // clockCallsiteAllowedLines returns the set of source line numbers in file

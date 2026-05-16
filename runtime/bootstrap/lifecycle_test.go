@@ -252,7 +252,7 @@ func TestLifecycle_OnStart_NoTimeoutEnforced(t *testing.T) {
 				return nil
 			}
 		},
-		OnStop: func(_ context.Context) error { return nil },
+		OnStop:       func(_ context.Context) error { return nil },
 		StartTimeout: lifecycleHookTimeout, // 50ms — informational only, NOT enforced
 	})
 

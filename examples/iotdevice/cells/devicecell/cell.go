@@ -101,16 +101,16 @@ func WithClock(clk clock.Clock) Option {
 // +cell:listener:ref=cell.InternalListener,prefix=
 type DeviceCell struct {
 	*cell.BaseCell
-	deviceRepo         domain.DeviceRepository
-	publisher          outbox.CellPublisher
-	emitter            outbox.Emitter // set during initInternal; retained for Probes
-	cursorCodec        *query.CursorCodec
-	logger             *slog.Logger
-	metricsProvider    metrics.Provider
-	commandQueue       commandQueueStore
-	commandSweeper     *commandruntime.SweeperLifecycle
-	sweepErrorCounter  metrics.CounterVec // optional; injected at composition root for C.3 observability
-	clk                clock.Clock        // injected from reg.Config during initInternal
+	deviceRepo        domain.DeviceRepository
+	publisher         outbox.CellPublisher
+	emitter           outbox.Emitter // set during initInternal; retained for Probes
+	cursorCodec       *query.CursorCodec
+	logger            *slog.Logger
+	metricsProvider   metrics.Provider
+	commandQueue      commandQueueStore
+	commandSweeper    *commandruntime.SweeperLifecycle
+	sweepErrorCounter metrics.CounterVec // optional; injected at composition root for C.3 observability
+	clk               clock.Clock        // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler
