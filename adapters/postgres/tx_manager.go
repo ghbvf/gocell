@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
@@ -79,7 +78,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	// Start a new top-level transaction.
 	tx, err := tm.pool.Begin(ctx)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: begin tx", err)
+		return classifyPGError(err, ErrAdapterPGConnect, "begin tx")
 	}
 
 	txCtx := CtxWithTx(ctx, tx)
@@ -114,7 +113,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: commit tx", err)
+		return classifyPGError(err, ErrAdapterPGConnect, "commit tx")
 	}
 	return nil
 }
@@ -125,8 +124,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	spName := fmt.Sprintf("sp_%d", depth)
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf("SAVEPOINT %s", spName)); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres: savepoint create failed", err,
-			errcode.WithInternal(fmt.Sprintf("savepoint=%s", spName)))
+		return classifyPGError(err, ErrAdapterPGQuery, fmt.Sprintf("savepoint create savepoint=%s", spName))
 	}
 
 	nestedCtx := withSavepointDepth(ctx, depth+1)
@@ -160,8 +158,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	}
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf("RELEASE SAVEPOINT %s", spName)); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres: savepoint release failed", err,
-			errcode.WithInternal(fmt.Sprintf("savepoint=%s", spName)))
+		return classifyPGError(err, ErrAdapterPGQuery, fmt.Sprintf("savepoint release savepoint=%s", spName))
 	}
 	return nil
 }
