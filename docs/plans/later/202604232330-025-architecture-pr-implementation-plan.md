@@ -3,6 +3,7 @@
 > 基线: `develop @ 34499ef5`（2026-04-28）
 > 状态: Wave 1 / Wave 2 / **Wave 2.5 全部清零**；🎯 v1.0 发布硬约束已在 2026-04-25 全部达成。
 > **2026-04-28 更新**：Wave 2.5 残余 PR-CFG-4 / PR-CFG-6 已迁入 `docs/plans/202604260058-l4-virtual-taco.md`（CFG-4 → PR-CFG-L 独立 / CFG-6 → PR-CFG-M.M.3 吸收）；Wave 2.5 板块从本 plan 完全清零。本 plan 此后只承载 Wave 3 / Wave 4 新模块路线图。
+> **2026-05-16 更新**：经 develop @ `67f5ce917` 核实，Wave 3 PR-A36/A37/A38 + Wave 4 PR-A22 已由后续 PR 完成（A36 ✅ PR#359 D1 / A37 ✅ PR#357 J1 / A38 ✅ PR#352 K#01 / A22 ✅ PR#441），按本 plan 约定从开放项删除并回灌已完工索引。剩余 OPEN 收敛为 5 条：Wave 3 PR-A15/A16/A17 + Wave 4 PR-A24/A33。
 >
 > **完整历史版本（含 Wave 1-2 已完工 PR 详情、13 轮 round 更新、所有完工 PR 描述）已归档**：
 > [`docs/plans/archive/202604232330-025-architecture-pr-implementation-plan.md`](archive/202604232330-025-architecture-pr-implementation-plan.md)
@@ -19,10 +20,10 @@
 
 | Wave | 剩余 OPEN |
 |---|---|
-| **Wave 3** | PR-A15 / A16 / A17 / A36 / A37 / A38 |
-| **Wave 4** | PR-A22 / A24 / A33 |
+| **Wave 3** | PR-A15 / A16 / A17 |
+| **Wave 4** | PR-A24 / A33 |
 
-> Wave 1 / Wave 2 / **Wave 2.5 全部清零** / Wave 3 已完工（A14b/A18/A35）/ Wave 4 已完工（A19/A20/A23）/ won't-do（PR-CFG-5）—— 全部从本 plan 删除。
+> Wave 1 / Wave 2 / **Wave 2.5 全部清零** / Wave 3 已完工（A14b/A18/A35/**A36 ✅ PR#359 D1**/**A37 ✅ PR#357 J1**/**A38 ✅ PR#352 K#01**）/ Wave 4 已完工（A19/A20/A23/**A22 ✅ PR#441**）/ won't-do（PR-CFG-5）—— 全部从本 plan 删除。
 >
 > **Wave 2.5 关闭索引**（2026-04-28）：
 > - **PR-CFG-1** READYZ-RELAY-PROBE-FORWARD-01 — ✅ 2026-04-27 复核关闭（relay 已独立 ManagedResource 注册，最小修已过期）
@@ -30,7 +31,7 @@
 > - **PR-CFG-5** — won't-do
 > - **PR-CFG-6** OUTBOX-EMIT-FAILOPEN-DROP-COUNTER-01 — ➡️ 迁入 `202604260058-l4-virtual-taco.md` 作为 **PR-CFG-M.M.3** 吸收（与 archtest 加固批共用 packages.Load + go/types 范式）
 
-### Wave 3 残余（6 PR）
+### Wave 3 残余（3 PR）
 
 #### PR-A15 KERNEL/WEBHOOK + WM-32 mTLS（P2, Cx3, ~3d）
 
@@ -55,45 +56,11 @@
 **文件面**：`runtime/scheduler/`（新） + 可能 `adapters/rabbitmq/delayed.go`。
 **风险**：中；分布式协调依赖 Redis/etcd；测试桩需覆盖。
 
-#### PR-A36 HTTP-METRICS-LABEL-REALIGN（P2, 🟠 多 cell assembly 部署前触发，~4h）
-
-**问题**：`runtime/bootstrap/bootstrap_phases.go:675-683` `cellID := b.assemblyID`（fallback 到 `b.assembly.ID()` 再到 `"default"`）；`runtime/observability/metrics/provider_collector.go` label `"cell"` 值取自 `cfg.CellID`。多 cell assembly（如 corebundle 含 access/audit/config 三 cell）下所有 HTTP 指标会贴同一 `cell="corebundle"`，按 cell 维度 dashboard/告警会误归因。
-
-**主线**：
-- **Step 1 最小兼容**（2h）：provider_collector 输出两个 label — `assembly`（保留现有值）+ `cell`（暂时 = assembly，保留 dashboard 兼容性）；或直接把 `cell` 重命名为 `assembly` 并发 dashboard migration note
-- **Step 2 真解**（2h）：`router.Route` 注册时把 owning cell 写入 request context；`middleware/metrics.go` 从 ctx 读取 cell；`NewProviderCollector` 配置改为 `AssemblyID string, CellResolver func(*http.Request) string`
-
-**文件面**：`runtime/bootstrap/bootstrap_phases.go` + `runtime/observability/metrics/provider_collector.go` + `runtime/http/router/router.go` + `runtime/http/middleware/metrics.go` + `runtime/http/middleware/metrics_wiring_test.go`。
-**ref**：Kratos request labels（operation/kind/code/reason 分层）、go-zero HTTP metrics（path/method/code 不混服务名）、OpenTelemetry Resource vs Semantic-attr 分层。
-
-#### PR-A37 DEVTOOLS-METADATA-EXPORT（Cx2, ~1d，🟡 解锁 gocell-web 自包含构建）
-
-**主线**：`gocell export metadata [--format=json|yaml] [--out=<path>] [--include-deps] [--root=<dir>]` 子命令——复用 `kernel/metadata.NewParser` 解析全部元数据 → 顶层结构 `{schemaVersion, generatedAt, cells, slices, contracts, assemblies, journeys, journeyStatuses, cellDependencyGraph}`。`cellDependencyGraph` 复用 `kernel/governance.DependencyChecker.buildDependencyGraph()`。
-**部署模式**：静态导出优先——gocell-web Dockerfile build 阶段执行 `gocell export metadata --include-deps --out=public/metadata.json`，前端改 `fetch('/metadata.json')`，零 CORS、零 live endpoint 部署耦合。
-**文件面**：`cmd/gocell/app/export.go`（新）+ `kernel/metadata/export.go`（新）+ `kernel/metadata/export_test.go`（新 golden）+ `kernel/governance/depcheck.go`（暴露 `Graph()` helper）+ `docs/guides/devtools-metadata-export.md`（新）。
-**对标**：`kubectl get -o json` / `helm show all` / goda `pkgs -json`。
-**依赖**：无（PR-A38 是可选增强）。
-
-#### PR-A38 TOOLS/DEPGRAPH（Cx3, ~1.5-2d，🟡 v1.0 后做，goda-like 包级图）
-
-**主线**：新模块 `tools/depgraph/`（**严禁放 `kernel/`**——`golang.org/x/tools/go/packages` 违反 kernel 依赖约束）。API：`Load(rootDir, opts) (*Graph, error)` → `Graph{Nodes []PkgNode, Edges []PkgEdge}`；`PkgNode` 含 `ImportPath / Layer / CellID / Files / LinesApprox`；输出 JSON（被 PR-A37 `--include-deps` 消费）+ DOT。
-**搭车（可选）**：`LAYER-GO-IMPORT-01` governance rule — 用 depgraph 数据替换/增强 `tools/archtest/` 现有 file-level string scan，做"传递闭包"级校验；本搭车不在主线，留作 follow-up（避免 review 失焦）。
-**ADR 决策点**：模块归属 `tools/depgraph/` ✅；导出粒度包级 ✅；缓存策略 in-memory（首次 ~3-10s）。
-**文件面**：`tools/depgraph/{depgraph,graph,layer}.go` + 测试 + `cmd/depgraph/main.go`（独立 CLI 可选）+ `cmd/gocell/app/export.go`（PR-A37 `--include-deps` 实现）+ `docs/guides/depgraph.md`（新）。
-**对标**：`loov/goda` reach/cut/nodes 不复刻；本 PR 仅提供"加载 + 输出图"基座。
-**依赖**：PR-A37 落地（PR-A38 是 PR-A37 `--include-deps` 提供方）。
-
 ---
 
-### Wave 4 残余（3 PR）
+### Wave 4 残余（2 PR）
 
 > **PR-A21 AL-04 Auth JWT 依赖评估** — 已移除（2026-05-01）。结论 won't-do：JWT 是事实标准、无第二个 provider；搭车的 T5 AUTH-SIGNER-01 解除 "golang-jwt v6 发布" 这条不可控的 gating（`crypto.Signer` 是 stdlib，jwt/v5 已 type-assert 支持），改为按 caller 需 HSM/KMS/EC 时独立 ship，详见 backlog T5 + 029 §四。
-
-#### PR-A22 Cell ISP 拆分（~1.5d）
-
-**主线**：`LATER-ARCH-1 CELL-IFACE-ISP-SPLIT-01` 12 方法基础接口 → `Cell` + `CellLifecycle` + `CellMetadata`。
-**文件面**：`kernel/cell/` + 所有 `cells/*/cell.go`。
-**风险**：高；接口破坏性变更，所有 cell + examples 需同步更新（分阶段迁移）。
 
 #### PR-A24 DURABLE-TYPE + G-6 + kernel/replay + rollback（~2d）
 
@@ -148,57 +115,38 @@
 ## 高风险 PR 清单（仅列剩余 OPEN）
 
 - **PR-A15** KERNEL/WEBHOOK（Cx3，需 SSRF 安全评审 + HMAC 签名 ADR）
-- **PR-A22** Cell ISP 拆分（破坏性，所有 cell + examples 同步）
 - **PR-A24** DURABLE-TYPE + G-6 + replay/rollback（v1.1 长期债打包）
 - **PR-A33** REFRESH-OPAQUE-POLISH（X12/X13/X14；X13 partition 涉及数据迁移）
+
+> PR-A22 Cell ISP（原破坏性高风险项）✅ PR#441 已完成，移出本清单。
 
 ---
 
 ## Lane 并行执行计划
 
-> 10 条 OPEN 项按文件域 + 主题分 4 条 lane，lane 内串行、lane 间并行。文件域不重叠才能开 worktree 并行；下方 Sprint batch 已按冲突避让。
-> Wave 2.5 残余的 L1 Config / L2 Outbox lane 已迁出本 plan（CFG-4 / CFG-6 → l4-virtual-taco PR-CFG-L / PR-CFG-M）；本节只承载 Wave 3 / Wave 4 lane。
+> 5 条 OPEN 项按文件域 + 主题分 2 条 lane，lane 内串行、lane 间并行。文件域不重叠才能开 worktree 并行。
+> 2026-05-16 收敛：原 L3 DevTools（A37→A38→A36）+ L4 Architecture（A22）lane 已全部完工删除；Wave 2.5 残余 L1 Config / L2 Outbox lane 早已迁出（CFG-4 / CFG-6 → l4-virtual-taco PR-CFG-L / PR-CFG-M）。
 
-### 4 条 lane（剩余开放项）
+### 2 条 lane（剩余开放项）
 
 | Lane | 任务链 | 主要文件域 | 备注 |
 |---|---|---|---|
 | **L1 Auth / Refresh** | PR-A33 | `adapters/postgres/refresh_store.go` + migrations 010/011/012 | A33 X12+X13+X14 一批（PR-A21 已移除，见 Wave 4 残余说明） |
 | **L2 Kernel 新模块** | PR-A15 ‖ PR-A16 ‖ PR-A17 → PR-A24 | `kernel/webhook/` / `kernel/reconcile/` / `runtime/scheduler/` / `kernel/replay/` / `kernel/rollback/` | A15/A16/A17 文件域不重叠可三路并行；A24 v1.1 长期债打包 |
-| **L3 DevTools / Tooling** | PR-A37 → PR-A38 → PR-A36 | `cmd/gocell/app/export.go` + `kernel/metadata/export.go` + `tools/depgraph/` + `runtime/observability/metrics/provider_collector.go` + `runtime/http/middleware/metrics.go` | 串行：A38 是 A37 `--include-deps` 提供方；A36 HTTP metrics label realign（多 cell assembly 部署前触发，🟠） |
-| **L4 Architecture (破坏性)** | PR-A22 Cell ISP | `kernel/cell/` + 所有 `cells/*/cell.go` + examples | 🔴 高风险；独占审，禁止与 L1/L2 同 batch（cells/* 大面积冲突） |
 
 ### 推荐执行 Sprint
 
 > 默认双人 worktree 并行；单人按 sprint 拉成 1.6×。每 sprint ~5 个净工作日窗口，含 review 往返。
 
-#### Sprint 1（~1d 净）— DX 短链路
+#### Sprint 1（~1d 净）— Auth Refresh 收口
 
 | worktree | PR | 工时 | 文件域 | 冲突检查 |
 |---|---|---|---|---|
-| A | **PR-A37** DEVTOOLS-METADATA-EXPORT | 1d | `cmd/gocell/` + `kernel/metadata/export.go` | 单 lane |
+| A | **PR-A33** REFRESH-OPAQUE-POLISH | 1d | `adapters/postgres/refresh_store.go` + migrations | L1 独立 lane，与 L2 无重叠 |
 
-**原则**：A37 是 gocell-web 自包含构建解锁。（原 worktree B PR-A21 已移除，见 Wave 4 残余说明）
+**原则**：A33 lane 独立可与 Sprint 2 部分并行（不同文件域）；X13 partition 涉及数据迁移，建议单独 staging 演练。
 
-#### Sprint 2（~2-2.5d 净）— Tooling 收口
-
-| worktree | PR | 工时 | 文件域 | 依赖 |
-|---|---|---|---|---|
-| A | **PR-A38** TOOLS/DEPGRAPH | 1.5-2d | `tools/depgraph/`（新） | PR-A37（Sprint 1）已合 |
-| A→ | **PR-A36** HTTP-METRICS-LABEL-REALIGN | 4h | `runtime/observability/metrics/provider_collector.go` + `runtime/http/middleware/metrics.go` + `runtime/bootstrap/bootstrap_phases.go` | 多 cell assembly 部署前触发；与 A38 同 lane 串行 |
-
-**原则**：A38 + A36 同 lane 串行（都触 runtime tooling）；多 cell assembly 部署窗口决定 A36 是否需提前。
-
-#### Sprint 3（~2-3d 净）— Wave 4 长期债打头阵
-
-| worktree | PR | 工时 | 文件域 | 冲突检查 |
-|---|---|---|---|---|
-| A | **PR-A33** REFRESH-OPAQUE-POLISH | 1d | `adapters/postgres/refresh_store.go` + migrations | 与 B 无重叠 |
-| B | **PR-A22** Cell ISP 拆分 | 1.5d | `kernel/cell/` + 所有 `cells/*/cell.go` | 🔴 独占审；🚫 禁止与任何 cells/* 修改同 batch |
-
-**原则**：A22 是破坏性变更，所有 cell 同步迁移；同 sprint 不安排其他触 cells/* 的 PR；A33 lane 独立可并行。
-
-#### Sprint 4（~5-7d 净）— Kernel 新模块批
+#### Sprint 2（~5-7d 净）— Kernel 新模块批
 
 | worktree | PR | 工时 | 文件域 | 依赖 |
 |---|---|---|---|---|
@@ -211,24 +159,18 @@
 
 ### 冲突避让矩阵（关键交叉）
 
-| PR-A | PR-B | 冲突点 | 解决 |
-|---|---|---|---|
-| PR-A22 | PR-A15/A16/A17 | A22 改 `cells/*/cell.go`，A16 写 example cell，A17 可能加 cell-side scheduler hook | A22 必须独占 sprint，禁止与任何写 cells/* 的 PR 同窗口 |
-| PR-A37 | PR-A38 | A38 是 A37 `--include-deps` 提供方 | 严格串行（Sprint 1 → Sprint 2） |
-| PR-A38 | PR-A36 | 都触 runtime tooling | 同 lane 串行（Sprint 2 worktree A） |
+> 原 A22×A15/A16/A17（cells/* 大面积冲突）+ A37×A38 + A38×A36 交叉均随对应 PR 完工消解。当前剩余 5 PR 文件域两两不重叠（L1 `adapters/postgres/` ↔ L2 `kernel/` 新模块；A15/A16/A17 各自新建独立子树），无需冲突避让；A24 排 L2 lane 末尾顺序串行即可。
 
 ### 时间线（双人并行估算）
 
 | Sprint | 净工时 | 含 buffer 1.4× | 累计 |
 |---|---|---|---|
-| Sprint 1 | ~2d | ~2.8d | 2.8d |
-| Sprint 2 | ~2.5d | ~3.5d | 6.3d |
-| Sprint 3 | ~2.5d | ~3.5d | 9.8d |
-| Sprint 4 | ~7d | ~10d | **19.8d（~4 周）** |
+| Sprint 1 | ~1d | ~1.4d | 1.4d |
+| Sprint 2 | ~7d | ~10d | **~11.4d（~2.3 周）** |
 
-> Sprint 1+2 完成即可宣布 v1.0 后短链路（DX + tooling + auth 评估）全部清零；Sprint 3+4 是 v1.1 节奏，可与 026 plan / Wave 5+ 工作交错。
+> Sprint 1（A33）可与 Sprint 2 部分并行（L1↔L2 文件域不重叠）。Sprint 2 是 v1.1 节奏，可与 026 plan / Wave 5+ 工作交错。
 > Wave 2.5 残余 L 与 M 由 `202604260058-l4-virtual-taco.md` 负责，与本 plan 完全独立可并行。
-> 单人场景把上表 ×1.6 → ~6.4 周。
+> 单人场景把上表 ×1.6 → ~3.7 周。
 
 ---
 
