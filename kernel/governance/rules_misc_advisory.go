@@ -369,9 +369,22 @@ func (v *Validator) validateSliceConsistencyContractUsages() []ValidationResult 
 		if !hasPublishRole(s.ContractUsages) {
 			continue
 		}
-		// The parser now rejects empty ConsistencyLevel; defensively skip if
-		// any (e.g. in-memory ProjectMeta fixtures) reach this point.
+		// The parser now rejects empty ConsistencyLevel for real YAML files.
+		// In-memory ProjectMeta fixtures (e.g. governance unit tests) may
+		// reach this point without a parser — report an error so they don't
+		// silently bypass the publish lower-bound check.
 		if s.ConsistencyLevel == "" {
+			results = append(results, v.newResult(
+				codeSLICECONSISTENCY02, SeverityError, IssueInvalid,
+				sliceFile(s),
+				"consistencyLevel",
+				fmt.Sprintf(
+					"slice %q has role=publish but consistencyLevel is empty; "+
+						"in-memory ProjectMeta must declare consistencyLevel for governance check; "+
+						"fix: set consistencyLevel to L2|L3|L4",
+					s.ID,
+				),
+			))
 			continue
 		}
 		level, err := cellvocab.ParseLevel(s.ConsistencyLevel)
@@ -387,7 +400,7 @@ func (v *Validator) validateSliceConsistencyContractUsages() []ValidationResult 
 				fmt.Sprintf(
 					"slice %q declares contractUsages with role=publish but consistencyLevel=%q; "+
 						"publishing events requires the L2 OutboxFact invariant (transactional outbox); "+
-						"fix: raise consistencyLevel to L2 or higher",
+						"fix: raise consistencyLevel to L2|L3|L4",
 					s.ID, s.ConsistencyLevel,
 				),
 			))
@@ -419,11 +432,14 @@ func hasPublishRole(usages []metadata.ContractUsage) bool {
 // Rationale: slice.consistencyLevel allows a cell to host slices with weaker
 // guarantees (e.g., a L2 cell with an L1 slice that doesn't emit events);
 // upgrading would silently break the cell-level contract.
+//
+// Pair with SLICE-CONSISTENCY-02, which enforces the lower bound (publish role → ≥L2).
 func (v *Validator) validateSliceConsistency() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		if s.ConsistencyLevel == "" {
-			// empty means inherit cell — always valid
+			// Parser rejects empty consistencyLevel; this branch handles in-memory
+			// ProjectMeta fixtures constructed without a parser (e.g., governance unit tests).
 			continue
 		}
 		sliceLevel, err := cellvocab.ParseLevel(s.ConsistencyLevel)

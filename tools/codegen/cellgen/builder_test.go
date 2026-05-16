@@ -346,6 +346,12 @@ func TestBuildSliceSpec_NoSubscribesStillEmitsMeta(t *testing.T) {
 	if !strings.Contains(spec.RenderedMetaLiteral, `ConsistencyLevel: "L0"`) {
 		t.Errorf("rendered literal missing ConsistencyLevel: %q", spec.RenderedMetaLiteral)
 	}
+	if !strings.Contains(spec.RenderedMetaLiteral, `BelongsToCell:    "demo"`) {
+		t.Errorf("rendered literal missing BelongsToCell: %q", spec.RenderedMetaLiteral)
+	}
+	// ContractUsages is omitted from the literal when empty (renderSliceMetaLiteral
+	// only emits it for non-empty slices). This fixture has no usages, so the field
+	// is absent — that is the correct, compact representation.
 }
 
 func TestBuildSliceSpec_SubscribesProduceHandlerInterface(t *testing.T) {

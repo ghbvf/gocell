@@ -203,6 +203,12 @@ func TestValidateSliceConsistencyContractUsages(t *testing.T) {
 			},
 			wantErrorCount: 1,
 		},
+		{
+			name:           "publish + empty level — error",
+			sliceLevel:     "",
+			usages:         []metadata.ContractUsage{{Contract: "event.x.v1", Role: "publish"}},
+			wantErrorCount: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

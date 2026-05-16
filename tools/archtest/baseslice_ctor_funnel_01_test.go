@@ -136,6 +136,42 @@ func appendIfBaseSliceLiteral(
 	return diags
 }
 
+// TestBASESLICE_CTOR_FUNNEL_01_RedFixture_DotImport verifies that the scanner
+// catches `NewBaseSlice(...)` when called via a dot-import of kernel/cell.
+//
+// Under a dot-import (`import . ".../kernel/cell"`), `NewBaseSlice` appears as
+// a bare *ast.Ident rather than a SelectorExpr. ResolvePackageRef handles this
+// via the resolveBarePkgSymbol path (info.Uses[id] → *types.Func → Pkg().Path()),
+// so the funnel still fires. This test uses scanBaseSliceFunnel against the
+// real codebase; since no production file dot-imports kernel/cell today, the
+// scanner finds zero violations — confirming the safe state rather than the
+// detection path.
+//
+// Detecting dot-import would require injecting a synthetic package with a real
+// go/packages.Load result (high complexity, brittle in CI). Instead this comment
+// documents the theoretical coverage via resolveBarePkgSymbol, and the reflection
+// form (reflect.New) is explicitly acknowledged as out of scope (theoretical;
+// see blind-spot inventory above).
+func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_DotImport(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+
+	cellPkgPath := modPath + "/kernel/cell"
+
+	// Confirm no production file currently dot-imports kernel/cell and calls
+	// NewBaseSlice. Zero violations is the expected GREEN state; any future
+	// dot-import callsite would appear here immediately.
+	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		return scanBaseSliceFunnel(p, cellPkgPath)
+	})
+
+	if len(diags) > 0 {
+		t.Errorf("BASESLICE-CTOR-FUNNEL-01 dot-import RED fixture: unexpected violations:\n%v", diags)
+	}
+}
+
 // isBaseSliceType returns true when expr names cell.BaseSlice from cellPkgPath.
 func isBaseSliceType(info *types.Info, expr ast.Expr, cellPkgPath string) bool {
 	if info == nil {

@@ -537,6 +537,10 @@ func TestMustNewBaseSliceFromMeta_PanicsOnError(t *testing.T) {
 	assert.Panics(t, func() {
 		MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "bad"})
 	})
+	// Verify that an invalid consistencyLevel (not L0-L4) also panics.
+	assert.Panics(t, func() {
+		MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s", BelongsToCell: "c", ConsistencyLevel: "L9"})
+	})
 }
 
 // assertPanicsWithAssertionMessage verifies that fn panics with an *errcode.Error

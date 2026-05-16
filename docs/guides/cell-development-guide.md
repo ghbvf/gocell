@@ -306,7 +306,10 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
     }
     svc := myslice.NewService(c.repo, c.logger)
     c.handler = myslice.NewHandler(svc)
-    c.AddSlice(cell.NewBaseSlice("myslice", "mycell", cell.L1))
+    // slice.yaml is the SoR for consistency level; gocell generate cell
+    // emits slice_gen.go containing SliceMetadata(), which is the funnel
+    // for constructing BaseSlice values.
+    c.AddSlice(cell.MustNewBaseSliceFromMeta(myslicepkg.SliceMetadata()))
     return nil
 }
 ```
