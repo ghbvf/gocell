@@ -19,7 +19,7 @@ import (
 
 func TestCONTRACTENDPOINTTESTMAPPING01_Happy(t *testing.T) {
 	// 1 active HTTP contract + 1 slice verify.contract contains .serve → no result.
-	pm := minimalHTTPProject("accesscore", "http.auth.login.v1")
+	pm := minimalHTTPProject("http.auth.login.v1")
 	addServeToSlice(pm, "accesscore/session-login", "http.auth.login.v1")
 
 	val := NewValidator(pm, "", clock.Real())
@@ -29,7 +29,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_Happy(t *testing.T) {
 
 func TestCONTRACTENDPOINTTESTMAPPING01_MissingServe(t *testing.T) {
 	// 1 active HTTP contract + slice verify.contract does NOT contain .serve → 1 error.
-	pm := minimalHTTPProject("accesscore", "http.auth.login.v1")
+	pm := minimalHTTPProject("http.auth.login.v1")
 	// Do NOT add a serve entry to any slice.
 
 	val := NewValidator(pm, "", clock.Real())
@@ -48,7 +48,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_MissingServe(t *testing.T) {
 
 func TestCONTRACTENDPOINTTESTMAPPING01_ExamplesExempt(t *testing.T) {
 	// contract.File starts with "examples/" → exempt regardless of slice coverage.
-	pm := minimalHTTPProject("accesscore", "http.auth.login.v1")
+	pm := minimalHTTPProject("http.auth.login.v1")
 	pm.Contracts["http.auth.login.v1"].File = "examples/todoorder/contracts/http/auth/login/v1/contract.yaml"
 	pm.Contracts["http.auth.login.v1"].Dir = "examples/todoorder/contracts/http/auth/login/v1"
 	// No serve entry added — should still produce no findings.
@@ -60,7 +60,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_ExamplesExempt(t *testing.T) {
 
 func TestCONTRACTENDPOINTTESTMAPPING01_NonActiveExempt(t *testing.T) {
 	// lifecycle = "experimental" → exempt.
-	pm := minimalHTTPProject("accesscore", "http.auth.login.v1")
+	pm := minimalHTTPProject("http.auth.login.v1")
 	pm.Contracts["http.auth.login.v1"].Lifecycle = "experimental"
 	// No serve entry added.
 
@@ -71,7 +71,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_NonActiveExempt(t *testing.T) {
 
 func TestCONTRACTENDPOINTTESTMAPPING01_NonHTTPExempt(t *testing.T) {
 	// kind = "event" → exempt (event contracts are handled by ADV-06).
-	pm := minimalHTTPProject("accesscore", "http.auth.login.v1")
+	pm := minimalHTTPProject("http.auth.login.v1")
 	pm.Contracts["http.auth.login.v1"].Kind = "event"
 	// No serve entry added.
 
@@ -84,7 +84,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_NonHTTPExempt(t *testing.T) {
 // a refactor that removes the rule from rules() would let per-method tests still pass
 // while the rule no longer fires in the real validate pipeline.
 func TestCONTRACTENDPOINTTESTMAPPING01_Integrated(t *testing.T) {
-	pm := minimalHTTPProject("accesscore", "http.auth.login.v1")
+	pm := minimalHTTPProject("http.auth.login.v1")
 	// No serve entry → expect the rule to fire via ValidateStrict.
 
 	val := NewValidator(pm, "", clock.Real())
@@ -100,9 +100,13 @@ func TestCONTRACTENDPOINTTESTMAPPING01_Integrated(t *testing.T) {
 // helpers specific to this rule's tests
 // =============================================================================
 
-// minimalHTTPProject returns a ProjectMeta with one active HTTP contract owned
-// by cellID and one slice in that cell, with no verify.contract serve entries.
-func minimalHTTPProject(cellID, contractID string) *metadata.ProjectMeta {
+// minimalHTTPProject returns a ProjectMeta with one active HTTP contract
+// owned by the platform "accesscore" cell and one slice in that cell, with no
+// verify.contract serve entries. The cell ID is intentionally fixed — tests
+// vary only contractID; widening to multiple cells would require a richer
+// fixture and is not needed for this rule's coverage.
+func minimalHTTPProject(contractID string) *metadata.ProjectMeta {
+	const cellID = "accesscore"
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
 			cellID: {

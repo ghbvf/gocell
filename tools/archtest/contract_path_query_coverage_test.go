@@ -11,8 +11,10 @@
 // Tool: RunTypedProduction (040 Pass-Driver) for test files — uses
 // *types.Info.Uses to resolve MustRejectPathParam / MustRejectQueryParam
 // receiver calls to the *contracttest.Contract type, ensuring the rule cannot
-// be bypassed by renaming an import alias. YAML scanning uses os/filepath.Walk
-// to build the ground-truth set from contracts/http/**. NOT registered in
+// be bypassed by renaming an import alias. YAML scanning uses
+// scanner.EachContentFile (tools/archtest/internal/scanner) to build the
+// ground-truth set from contracts/http/**, satisfying
+// SCANNER-FRAMEWORK-USAGE-01. NOT registered in
 // internal/archtestmeta.LegacyAllowlist.
 //
 // Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"):
@@ -53,6 +55,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // contractPQPkgPath is the import path of the contracttest package whose
@@ -170,7 +174,10 @@ func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 	}
 
 	// Build the requirements from the fixture contracts root.
-	fixtureReqs := buildContractPQRequirementsFromRoot(t, fixtureContractsRoot)
+	_ = fixtureContractsRoot
+	fixtureRelDir := filepath.Join("tools", "archtest", "contract_path_query_coverage_fixtures",
+		"red_missing_reject", "contracts", "http")
+	fixtureReqs := buildContractPQRequirementsFromRelDir(t, root, fixtureRelDir)
 	require.NotEmpty(t, fixtureReqs, "fixture must have at least one contract with path/queryParams")
 
 	// The fixture test file does NOT call MustRejectPathParam, so coverage is empty.
@@ -194,33 +201,30 @@ func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 // --- Helpers ---
 
 // buildContractPQRequirements scans contracts/http/**  in the module root.
-func buildContractPQRequirements(t testing.TB, moduleRoot string) []contractPQParamInfo {
+func buildContractPQRequirements(t *testing.T, moduleRoot string) []contractPQParamInfo {
 	t.Helper()
-	contractsRoot := filepath.Join(moduleRoot, "contracts", "http")
-	return buildContractPQRequirementsFromRoot(t, contractsRoot)
+	return buildContractPQRequirementsFromRelDir(t, moduleRoot, filepath.Join("contracts", "http"))
 }
 
-// buildContractPQRequirementsFromRoot scans httpContractsRoot/**  for active
-// HTTP contracts that declare pathParams or queryParams.
-func buildContractPQRequirementsFromRoot(t testing.TB, httpContractsRoot string) []contractPQParamInfo {
+// buildContractPQRequirementsFromRelDir scans <moduleRoot>/<relDir>/** for
+// active HTTP contracts that declare pathParams or queryParams. Uses
+// scanner.EachContentFile (SCANNER-FRAMEWORK-USAGE-01 funnel) for YAML
+// discovery so the rule cannot bypass the framework via os/filepath.Walk.
+func buildContractPQRequirementsFromRelDir(t *testing.T, moduleRoot, relDir string) []contractPQParamInfo {
 	t.Helper()
 	var result []contractPQParamInfo
-	err := filepath.Walk(httpContractsRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || filepath.Base(path) != "contract.yaml" {
-			return nil
-		}
-		req, ok := parseContractPQRequirement(t, path)
+	scope := scanner.DirsScope(moduleRoot, []string{relDir},
+		scanner.MatchRels(func(rel string) bool {
+			return filepath.Base(rel) == "contract.yaml"
+		}),
+	)
+	scanner.EachContentFile(t, scope, []string{".yaml"}, func(t *testing.T, fc scanner.ContentContext) {
+		t.Helper()
+		req, ok := parseContractPQRequirementFromBytes(t, fc.AbsPath, fc.Bytes)
 		if ok {
 			result = append(result, req)
 		}
-		return nil
 	})
-	if err != nil {
-		t.Fatalf("CONTRACT-PATH-QUERY-COVERAGE-01: walk %s: %v", httpContractsRoot, err)
-	}
 	return result
 }
 
@@ -237,14 +241,10 @@ type contractPQYAML struct {
 	} `yaml:"endpoints"`
 }
 
-// parseContractPQRequirement parses one contract.yaml and returns a requirement
-// if the contract is active and has path/queryParams.
-func parseContractPQRequirement(t testing.TB, path string) (contractPQParamInfo, bool) {
+// parseContractPQRequirementFromBytes parses one contract.yaml byte buffer and
+// returns a requirement if the contract is active and has path/queryParams.
+func parseContractPQRequirementFromBytes(t *testing.T, path string, data []byte) (contractPQParamInfo, bool) {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("CONTRACT-PATH-QUERY-COVERAGE-01: read %s: %v", path, err)
-	}
 	var cy contractPQYAML
 	if err := yaml.Unmarshal(data, &cy); err != nil {
 		t.Fatalf("CONTRACT-PATH-QUERY-COVERAGE-01: parse %s: %v", path, err)
