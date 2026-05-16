@@ -4,7 +4,16 @@
 // for the PROD-CLOCK-INJECTION-01 invariant. Each subpackage under
 // testdata/prod_clock_injection_fixtures/ exercises one bypass path
 // (alias / dot-import / function-value reference / struct field assign /
-// each forbidden time symbol) or the canonical injected-Clock pass shape.
+// each forbidden time symbol), the canonical injected-Clock pass shape, or
+// the function-level control-plane marker carve-out.
+//
+// Control-plane marker self-checks (per ai-collab.md §"盲区自检"):
+//   - control_plane_marker_passes: GREEN — FuncDecls with doc-comment marker
+//     produce 0 violations.
+//   - control_plane_no_marker_violates: RED — inline body comment (not doc)
+//     is NOT recognized; time.NewTicker is still flagged (1 violation).
+//   - control_plane_closure_violates: RED — a non-exempt function containing
+//     a closure that calls time.NewTicker is still flagged (1 violation).
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 package archtest
@@ -67,6 +76,17 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 		{"since_violates", []int{8}},
 		{"until_violates", []int{8}},
 		{"newtimer_violates", []int{8}},
+
+		// Function-level control-plane marker carve-out self-checks
+		// (per ai-collab.md §"盲区自检" / PROD-CLOCK-INJECTION-01 godoc).
+		//
+		// GREEN: FuncDecls with valid doc-comment marker produce 0 violations.
+		{"control_plane_marker_passes", nil},
+		// RED: inline body comment (not doc comment group) is NOT recognized;
+		// time.NewTicker is still flagged.
+		{"control_plane_no_marker_violates", []int{16}},
+		// RED: non-exempt function with closure calling time.NewTicker is flagged.
+		{"control_plane_closure_violates", []int{22}},
 	}
 
 	for _, tc := range cases {

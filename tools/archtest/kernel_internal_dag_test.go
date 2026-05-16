@@ -63,7 +63,7 @@ var allowedKernelEdges = map[string][]string{
 	"cell":          {"cellvocab", "clock", "contractspec", "metadata", "observability", "outbox", "persistence"},
 	"cellvocab":     nil,
 	"clock":         nil,
-	"command":       {"clock", "metautil"},
+	"command":       {"metautil"},
 	"contractspec":  {"cellvocab", "metadata"},
 	"crypto":        nil,
 	"ctxkeys":       nil,
