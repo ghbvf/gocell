@@ -54,7 +54,7 @@ func TestConfigCore_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, recorder))
-	assert.Equal(t, 6, len(c.OwnedSlices()), "should have 6 slices")
+	assert.Equal(t, 7, len(c.OwnedSlices()), "should have 7 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))

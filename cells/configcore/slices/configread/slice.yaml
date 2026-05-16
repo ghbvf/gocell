@@ -6,15 +6,12 @@ contractUsages:
     role: serve
   - contract: http.config.list.v1
     role: serve
-  - contract: http.config.internal.get.v1
-    role: serve
 verify:
   unit:
     - unit.configread.service
   contract:
     - contract.http.config.get.v1.serve
     - contract.http.config.list.v1.serve
-    - contract.http.config.internal.get.v1.serve
   waivers: []
 
 allowedFiles:

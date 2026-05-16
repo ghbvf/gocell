@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configread"
+	"github.com/ghbvf/gocell/cells/configcore/slices/configreadinternal"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configsubscribe"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configwrite"
 	"github.com/ghbvf/gocell/cells/configcore/slices/featureflag"
@@ -200,8 +201,10 @@ type ConfigCore struct {
 	writeHandler *configwrite.Handler
 
 	// +slice:route:slice=configread,subPath=/config
-	// +slice:route:slice=configread,listener=cell.InternalListener,subPath=/config,method=RegisterInternalRoutes
 	readHandler *configread.Handler
+
+	// +slice:route:slice=configreadinternal,listener=cell.InternalListener,subPath=/config
+	readInternalHandler *configreadinternal.Handler
 
 	// +slice:route:slice=configpublish,subPath=/config
 	publishHandler *configpublish.Handler

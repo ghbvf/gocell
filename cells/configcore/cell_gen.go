@@ -78,7 +78,7 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 				}
 			}
 			mux.Route("/config", func(s cell.RouteMux) {
-				captureErr(c.readHandler.RegisterInternalRoutes(s))
+				captureErr(c.readInternalHandler.RegisterRoutes(s))
 			})
 			return firstErr
 		},

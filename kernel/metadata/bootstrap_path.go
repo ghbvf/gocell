@@ -41,3 +41,34 @@ func IsBootstrapPath(path string) bool {
 func IsInternalHTTPPath(path string) bool {
 	return path == "/internal/v1" || strings.HasPrefix(path, "/internal/v1/")
 }
+
+// IsPublicHTTPPath reports whether path targets the public-facing HTTP
+// listener (the internet-exposed API surface). The classification covers all
+// versioned public API prefixes — /api/vN — without locking to a specific
+// version number, because the trust-boundary concern (public internet vs.
+// internal control-plane) is version-agnostic: any path under /api/* is
+// reachable by external principals and subject to the public-listener auth
+// chain.
+//
+// Contrast with IsInternalHTTPPath, which is locked to /internal/v1 because
+// internal path versioning is tightly controlled and version-specific router
+// wiring matters. The public oracle is deliberately version-agnostic.
+//
+// Accepted:
+//
+//	/api
+//	/api/v1/config/{key}
+//	/api/v2/users
+//
+// Rejected (fail-closed):
+//
+//	""                     (empty string)
+//	"/apix/v1/foo"        (prefix must be /api/ or exactly /api, not /apix)
+//	"/internal/v1/foo"    (internal listener, not public)
+//	"/healthz"            (framework probe, no trust-boundary flag)
+//
+// ref: FMT-33 SLICE-HTTP-VISIBILITY-SEGREGATION-01; symmetric counterpart to
+// IsInternalHTTPPath for the public trust boundary.
+func IsPublicHTTPPath(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/")
+}
