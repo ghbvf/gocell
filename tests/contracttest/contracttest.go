@@ -665,6 +665,9 @@ func compileInlineParamSchema(t testing.TB, name string, param metadata.ParamSch
 	}
 
 	compiler := jsonschema.NewCompiler()
+	// Enable format assertions so that format: "uuid" constraints are enforced.
+	// Without this, format is treated as an annotation only (JSON Schema default).
+	compiler.AssertFormat()
 	url := "mem:///param/" + name
 	if err := compiler.AddResource(url, doc); err != nil {
 		t.Fatalf("contracttest: compileInlineParamSchema %q: add resource: %v", name, err)

@@ -60,6 +60,24 @@ func newContractMux(svc *Service) http.Handler {
 	return mux
 }
 
+// TestHttpConfigPublishV1_PathParamConstraints asserts that the key path param
+// schema rejects empty string (violates minLength: 1).
+func TestHttpConfigPublishV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+}
+
+// TestHttpConfigRollbackV1_PathParamConstraints asserts that the key path param
+// schema rejects empty string (violates minLength: 1).
+func TestHttpConfigRollbackV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+}
+
 // --- HTTP contract test ---
 
 func TestHttpConfigPublishV1Serve(t *testing.T) {

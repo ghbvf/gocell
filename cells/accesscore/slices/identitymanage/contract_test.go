@@ -170,6 +170,26 @@ func createUserForContractTest(t *testing.T, handler http.Handler, contract *con
 	return response.Data.ID
 }
 
+// TestHttpAuthUserPathParamConstraints asserts that the id path param (format: uuid)
+// schema rejects non-UUID strings for all user management contracts.
+func TestHttpAuthUserPathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	contracts := []string{
+		"http.auth.user.get.v1",
+		"http.auth.user.update.v1",
+		"http.auth.user.patch.v1",
+		"http.auth.user.delete.v1",
+		"http.auth.user.lock.v1",
+		"http.auth.user.unlock.v1",
+		"http.auth.user.change-password.v1",
+	}
+	for _, id := range contracts {
+		c := contracttest.LoadByID(t, root, id)
+		c.ValidatePathParam(t, "id", "550e8400-e29b-41d4-a716-446655440000")
+		c.MustRejectPathParam(t, "id", "not-a-uuid") // violates format: uuid
+	}
+}
+
 func TestHttpAuthUserCreateV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.user.create.v1")

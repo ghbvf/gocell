@@ -66,6 +66,18 @@ func testProtocol() *ledger.Protocol {
 	return p
 }
 
+// TestHttpAuditListV1_QueryParamConstraints asserts that the limit query param
+// rejects 0 (minimum: 1) and 501 (maximum: 500), and the cursor param rejects
+// values exceeding maxLength: 4096.
+func TestHttpAuditListV1_QueryParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
+	c.ValidateQueryParam(t, "limit", "1")
+	c.MustRejectQueryParam(t, "limit", "0")                         // violates minimum: 1
+	c.MustRejectQueryParam(t, "limit", "501")                       // violates maximum: 500
+	c.MustRejectQueryParam(t, "cursor", string(make([]byte, 4097))) // violates maxLength: 4096
+}
+
 func TestHttpAuditListV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
