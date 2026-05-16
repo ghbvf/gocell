@@ -37,6 +37,12 @@ import (
 // enabled. Recommended value 30s; see .env.example.
 const envSessionCacheTTL = "GOCELL_SESSION_CACHE_TTL"
 
+// sessionCacheTTLMax bounds GOCELL_SESSION_CACHE_TTL. See
+// adapters/redis.CachingSessionStore §Threat model — the cache TTL is the
+// security floor for stale-after-revoke; values >30s widen the window beyond
+// the documented threat model and are rejected as a wiring misconfiguration.
+const sessionCacheTTLMax = 30 * time.Second
+
 // sessionCacheNamespace is the Redis key namespace under which session cache
 // entries live. Per the per-cell adapters/redis convention, the owning cell
 // ID is used directly: final Redis keys look like
@@ -259,6 +265,7 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 //
 //   - GOCELL_SESSION_CACHE_TTL unset or empty → return inner unchanged.
 //   - TTL parse failure or non-positive → slog.Warn + return inner unchanged.
+//   - TTL >30s → fail-fast with ErrValidationFailed (wiring misconfig, not env issue).
 //   - No Redis client constructed (Redis envs not set) → slog.Warn + return
 //     inner unchanged.
 //   - Cache primitive construction fails → propagate as startup error
@@ -289,6 +296,11 @@ func wrapSessionStoreWithCache(inner session.Store, shared *SharedDeps, logger *
 		logger.Warn("accesscore: session cache disabled — GOCELL_SESSION_CACHE_TTL must be positive",
 			slog.String("value", raw))
 		return inner, nil
+	}
+	if ttl > sessionCacheTTLMax {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"accesscore: GOCELL_SESSION_CACHE_TTL exceeds documented maximum",
+			errcode.WithInternal(fmt.Sprintf("GOCELL_SESSION_CACHE_TTL=%s exceeds max %s", ttl, sessionCacheTTLMax)))
 	}
 	if shared.RedisClient == nil {
 		logger.Warn("accesscore: session cache disabled — GOCELL_SESSION_CACHE_TTL set but no Redis client " +

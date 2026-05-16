@@ -8,29 +8,34 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // CachingSessionStore is a read-through Redis cache decorator over a
 // runtime/auth/session.Store. The wrapped (inner) store remains the system of
-// record; the Redis cache only accelerates Get and is invalidated on single-
-// session Revoke. Construction-time fail-fast ensures wiring misconfigurations
-// surface at startup, not at the first request.
+// record; the Redis cache only accelerates Get. Construction-time fail-fast
+// ensures wiring misconfigurations surface at startup, not at the first request.
 //
 // Behavior summary (T5/AUTH-CACHE-01 plan):
 //
-//   - Get: cache hit → unmarshal sessionCacheEntry → return. Miss / Redis
-//     error / corrupt JSON → slog.Warn + fall through to inner.Get; on success
-//     the view is lazily populated into the cache (Set error is also
-//     swallowed).
+//   - Get: cache hit → unmarshal sessionCacheEntry → entry.validate(id). On
+//     validation failure: slog.Warn + best-effort async cache.Delete + fall
+//     through to inner.Get. Miss / Redis error / corrupt JSON → slog.Warn +
+//     fall through to inner.Get. On inner success the view is lazily populated
+//     into the cache (Set error is also swallowed).
 //   - Create: delegated to inner. No cache write — the first Get after Create
 //     primes the cache via the read-through path (avoids "created then revoked"
 //     edge thinking and removes a method's worth of code).
-//   - Revoke: inner.Revoke then cache.Delete. Delete is always attempted
-//     (idempotent) even if the inner call surfaced no row; this defends
-//     against a previous lazy populate leaving a stale active view. A Delete
-//     failure is logged at Error (not Warn) because the resulting stale-cache
-//     window has security implications — see §Threat model.
+//   - Revoke: delegates to inner only. Cache invalidation is intentionally
+//     omitted — stale-cache window is bounded by the cache TTL (≤
+//     GOCELL_SESSION_CACHE_TTL, max 30s enforced at wiring). The in-transaction
+//     cache.Delete pattern was removed in the third-round review because it
+//     raced with concurrent re-population from the still-uncommitted PG row,
+//     potentially extending the stale window to 2×TTL. See backlog
+//     AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01 for the kernel AfterCommit
+//     primitive upgrade path required to reach 0-staleness.
+//     Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
 //   - RevokeForSubject: delegated to inner with NO cache operation. The only
 //     caller is credentialinvalidate.Apply (archtest
 //     CREDENTIAL-INVALIDATE-FUNNEL-01) which co-tx bumps users.authz_epoch.
@@ -39,6 +44,7 @@ import (
 //     401). user.AuthzEpoch is intentionally NOT cached — see backlog
 //     AUTH-CACHE-SUBJECT-REVERSE-INDEX-01 for the upgrade path required
 //     before that invariant relaxes.
+//     Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
 //   - RepoReady: delegated to inner. Redis liveness is independently surfaced
 //     by adapters/redis Client.Checkers (probe redis_ready).
 //
@@ -49,16 +55,18 @@ import (
 //
 // # Threat model
 //
-//   - Stale-cache revoke window: when inner.Revoke succeeds but cache.Delete
-//     fails (Redis blip), a stale entry with RevokedAt=nil persists. Single-
-//     session sessionlogout does NOT bump user.AuthzEpoch, so the epoch
-//     invariant in sessionvalidate.go does not catch this case — the
-//     compromised token remains valid until the cache TTL elapses (≤
-//     GOCELL_SESSION_CACHE_TTL). Mitigation: keep TTL short (≤ 30s
-//     recommended) and treat the slog.Error emitted on Delete failure as a
-//     security signal. RevokeForSubject paths (driven by
-//     credentialinvalidate.Apply) are NOT affected because the co-tx epoch
-//     bump catches stale views regardless of cache state.
+//   - Stale-cache revoke window: by design, single-session sessionlogout's
+//     revocation propagates to cache state only after the existing cache
+//     entry's TTL elapses (≤ GOCELL_SESSION_CACHE_TTL, max 30s). The in-
+//     transaction cache.Delete pattern was removed in the third-round review
+//     (PR #524 → fix PR) because it raced with concurrent re-population from
+//     the still-uncommitted PG row, potentially extending the stale window to
+//     2×TTL. Single-session sessionlogout does NOT bump user.AuthzEpoch, so
+//     the epoch invariant in sessionvalidate.go does not catch this case —
+//     the TTL is the security floor. Mitigation: keep TTL short (max 30s,
+//     enforced at wiring by wrapSessionStoreWithCache). RevokeForSubject
+//     paths (driven by credentialinvalidate.Apply) are NOT affected because
+//     the co-tx epoch bump catches stale views regardless of cache state.
 //   - Redis keyspace enumeration: cache keys take the form
 //     accesscore:session:<rawSessionID>; anyone with redis-cli KEYS / SCAN
 //     access can enumerate active session identifiers. Operators MUST gate
@@ -73,7 +81,7 @@ import (
 // ref: alexedwards/scs redisstore/redisstore.go@master (PEXPIREAT object-level
 // expiry alignment — we use fixed Duration TTL because ValidateView hides
 // ExpiresAt by design, see runtime/auth/session.Session.ExpiresAt godoc).
-// ref: go-redis/cache cache.go@v9 (fail-open + delete-on-write model).
+// ref: go-redis/cache cache.go@v9 (fail-open model).
 type CachingSessionStore struct {
 	inner  session.Store
 	cache  *Cache
@@ -115,6 +123,22 @@ func (e sessionCacheEntry) toView() *session.ValidateView {
 	}
 }
 
+// validate enforces the wire-schema invariants the producer (lazyPopulate)
+// upholds: ID must match the requested id, SubjectID must be non-empty,
+// AuthzEpochAtIssue must be positive. Failure → fall through to inner.
+func (e sessionCacheEntry) validate(wantID string) error {
+	if e.ID != wantID {
+		return errors.New("session-cache: id mismatch")
+	}
+	if e.SubjectID == "" {
+		return errors.New("session-cache: empty SubjectID")
+	}
+	if e.AuthzEpochAtIssue <= 0 {
+		return errors.New("session-cache: non-positive AuthzEpochAtIssue")
+	}
+	return nil
+}
+
 // NewCachingSessionStore constructs a CachingSessionStore. All three core
 // dependencies are mandatory; nil inner / nil cache / non-positive ttl fail
 // fast with errcode.ErrValidationFailed. Wiring layer is responsible for the
@@ -122,7 +146,7 @@ func (e sessionCacheEntry) toView() *session.ValidateView {
 // this constructor; ttl ≤ 0 → also do not call it). logger may be nil; the
 // default slog logger is used in that case.
 func NewCachingSessionStore(inner session.Store, cache *Cache, ttl time.Duration, logger *slog.Logger) (*CachingSessionStore, error) {
-	if inner == nil {
+	if validation.IsNilInterface(inner) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"redis: NewCachingSessionStore requires non-nil inner session.Store")
 	}
@@ -160,7 +184,14 @@ func (s *CachingSessionStore) Get(ctx context.Context, id string) (*session.Vali
 	if raw, err := s.cache.Get(ctx, key); err == nil && raw != "" {
 		var entry sessionCacheEntry
 		if jerr := json.Unmarshal([]byte(raw), &entry); jerr == nil {
-			return entry.toView(), nil
+			if verr := entry.validate(id); verr == nil {
+				return entry.toView(), nil
+			} else {
+				s.logger.Warn("session-cache: invalid cached entry; falling through",
+					slog.String("sid", id),
+					slog.Any("error", verr))
+				go func() { _ = s.cache.Delete(context.WithoutCancel(ctx), key) }()
+			}
 		} else {
 			s.logger.Warn("session-cache: corrupt cached entry; falling through",
 				slog.String("sid", id),
@@ -200,29 +231,33 @@ func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view
 	}
 }
 
-// Revoke invokes inner.Revoke and then unconditionally deletes the cache
-// entry. The Delete runs even when inner returned an error (e.g. infra
-// failure) so a previously cached active view does not linger; Delete errors
-// are swallowed and **logged at Error** because the residual stale-cache
-// window is a security signal (a revoked session may keep validating for up
-// to s.ttl when the path bypasses credentialinvalidate.Apply — see §Threat
-// model). Operators should treat the slog.Error line as a paging-worthy event
-// and verify Redis health. If inner returned an error, that error propagates
-// so callers (sessionvalidate, sessionlogout) preserve their existing
-// semantics.
+// Revoke delegates to inner. Cache invalidation is intentionally omitted —
+// stale-cache window is bounded by the cache TTL (≤ GOCELL_SESSION_CACHE_TTL,
+// max 30s). Symmetric with RevokeForSubject; both rely on the cache TTL as
+// the security floor rather than in-transaction Redis DEL (which races with
+// concurrent re-population from the still-uncommitted PG row, potentially
+// extending the stale window to 2×TTL).
+// See backlog AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01 for the kernel
+// AfterCommit primitive upgrade path required to reach 0-staleness.
+//
+// Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: this
+// method body MUST be exactly one ReturnStmt delegating to inner with the
+// same name.
 func (s *CachingSessionStore) Revoke(ctx context.Context, id string) error {
-	innerErr := s.inner.Revoke(ctx, id)
-	if delErr := s.cache.Delete(ctx, sessionCacheKey+id); delErr != nil && !errors.Is(delErr, context.Canceled) {
-		s.logger.Error("session-cache: delete after revoke failed; stale view may persist until TTL",
-			slog.String("sid", id),
-			slog.Duration("ttl", s.ttl),
-			slog.Any("error", delErr))
-	}
-	return innerErr
+	return s.inner.Revoke(ctx, id)
 }
 
-// RevokeForSubject delegates to inner. Cache invalidation is intentionally
-// omitted — see the type godoc and backlog AUTH-CACHE-SUBJECT-REVERSE-INDEX-01.
+// RevokeForSubject delegates to inner. Cache invalidation is omitted by
+// design — the cached ValidateView's AuthzEpochAtIssue is compared by
+// sessionvalidate.go against the live user.AuthzEpoch (bumped co-tx by
+// credentialinvalidate.Apply); mismatch → 401 fail-closed regardless of
+// cache state. user.AuthzEpoch is intentionally NOT cached — see backlog
+// AUTH-CACHE-SUBJECT-REVERSE-INDEX-01 for the upgrade path required before
+// that invariant relaxes.
+//
+// Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: this
+// method body MUST be exactly one ReturnStmt delegating to inner with the
+// same name.
 func (s *CachingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
 	return s.inner.RevokeForSubject(ctx, subjectID, event)
 }

@@ -237,9 +237,15 @@ func TestCachingSessionStore_Create_DoesNotTouchCache(t *testing.T) {
 	assert.Error(t, err, "cache must be untouched after Create")
 }
 
-// TestCachingSessionStore_Revoke_DeletesCache — after revoke, the cache entry
-// is gone so the next Get falls through to inner.
-func TestCachingSessionStore_Revoke_DeletesCache(t *testing.T) {
+// TestCachingSessionStore_Revoke_DoesNotTouchCache — Revoke delegates to
+// inner only; cache must remain untouched (TTL-floor contract, see type godoc
+// §Threat model and archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01).
+//
+// Symmetric with TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache:
+// both Revoke and RevokeForSubject rely on the cache TTL as the security
+// floor, not in-transaction Redis DEL. The TTL is bounded at max 30s by
+// wrapSessionStoreWithCache (wiring-time fail-fast).
+func TestCachingSessionStore_Revoke_DoesNotTouchCache(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
 	view := newTestView()
@@ -253,23 +259,11 @@ func TestCachingSessionStore_Revoke_DeletesCache(t *testing.T) {
 	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
 	assert.Equal(t, int64(1), inner.revokeCalls.Load())
 
-	// Cache entry must be gone.
+	// Cache entry must still be present — wrapper must not have invalidated.
 	cmd := mock.Get(context.Background(), scsCachedKey)
-	_, err = cmd.Result()
-	assert.Error(t, err, "cache entry should be deleted after Revoke")
-}
-
-// TestCachingSessionStore_Revoke_RedisDown_StillSucceeds — cache.Delete error
-// is swallowed; inner.Revoke return value drives the wrapper's return.
-func TestCachingSessionStore_Revoke_RedisDown_StillSucceeds(t *testing.T) {
-	t.Parallel()
-	mock := newMockCmdable()
-	mock.delErr = errors.New("redis: connection refused")
-	inner := &fakeSessionStore{}
-	store := newTestCachingStore(t, inner, mock)
-
-	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
-	assert.Equal(t, int64(1), inner.revokeCalls.Load())
+	val, err := cmd.Result()
+	require.NoError(t, err, "cache entry must still exist after Revoke (TTL-floor contract)")
+	assert.NotEmpty(t, val)
 }
 
 // TestCachingSessionStore_Revoke_InnerError_Propagates — inner errors flow
@@ -289,7 +283,16 @@ func TestCachingSessionStore_Revoke_InnerError_Propagates(t *testing.T) {
 
 // TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache — cache layer
 // receives no Del / Get; only inner is invoked. Defends the epoch-fallback
-// invariant from the plan.
+// contract: after RevokeForSubject the cached ValidateView's AuthzEpochAtIssue
+// is compared by sessionvalidate.go against the live user.AuthzEpoch (bumped
+// co-tx by credentialinvalidate.Apply); mismatch → 401 fail-closed regardless
+// of cache state. See ADR docs/architecture/202605101400-adr-credential-
+// session-protocol.md §A8 and archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
+//
+// Symmetric with TestCachingSessionStore_Revoke_DoesNotTouchCache: from the
+// third-round review both Revoke and RevokeForSubject are pure inner delegates
+// with no cache operations. The cache TTL (max 30s) is the security floor for
+// both paths.
 func TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
@@ -339,39 +342,6 @@ func TestCachingSessionStore_Get_NilViewFromInner_DoesNotPopulate(t *testing.T) 
 	cmd := mock.Get(context.Background(), scsCachedKey)
 	_, err = cmd.Result()
 	assert.Error(t, err, "nil view must not be cached")
-}
-
-// TestCachingSessionStore_Revoke_FollowedByGet_FallsThroughToInner — defends
-// the security path: after Revoke the next Get must not return a stale view
-// from cache. This is the single-session-revoke variant of the safety
-// argument used in the type godoc.
-func TestCachingSessionStore_Revoke_FollowedByGet_FallsThroughToInner(t *testing.T) {
-	t.Parallel()
-	mock := newMockCmdable()
-	view := newTestView()
-	payload, err := json.Marshal(entryFromView(view))
-	require.NoError(t, err)
-	require.NoError(t, mock.Set(context.Background(), scsCachedKey, string(payload), scsTestTTL).Err())
-
-	// Inner reports the revoked view after Revoke.
-	revokedAt := time.Now().UTC()
-	revokedView := &session.ValidateView{
-		ID:                view.ID,
-		SubjectID:         view.SubjectID,
-		RevokedAt:         &revokedAt,
-		AuthzEpochAtIssue: view.AuthzEpochAtIssue,
-	}
-	inner := &fakeSessionStore{view: revokedView}
-	store := newTestCachingStore(t, inner, mock)
-
-	require.NoError(t, store.Revoke(context.Background(), scsTestSID))
-	assert.Equal(t, int64(1), inner.revokeCalls.Load())
-
-	got, err := store.Get(context.Background(), scsTestSID)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.NotNil(t, got.RevokedAt, "Get after Revoke must reflect revoked state, not stale cache")
-	assert.Equal(t, int64(1), inner.getCalls.Load(), "Get after Revoke must fall through to inner")
 }
 
 // TestCachingSessionStore_Get_ConcurrentAccess — exercises the read-through
