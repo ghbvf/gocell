@@ -3,6 +3,7 @@ package errcode
 import (
 	"context"
 	"errors"
+	"net"
 	"slices"
 )
 
@@ -95,32 +96,88 @@ func IsDomainNotFound(err error, codes ...Code) bool {
 	return slices.Contains(codes, ec.Code)
 }
 
-// IsTransient reports whether err, or any error in its Unwrap chain, carries
-// the ErrKeyProviderTransient code. It is the canonical predicate for routing
-// KeyProvider failures in EventBus handlers:
+// WrapInfra is the single typed funnel for producing a transient (retry-safe)
+// infrastructure error. It is the ONLY constructor that sets the private
+// Error.transient marker — adapter classifiers (classifyPGError /
+// classifyRedisError / classifyS3Error) route their transient branch through
+// it so that IsTransient can recognize the result.
+//
+// Behavior:
+//   - Kind = KindUnavailable (HTTP 503 "retry after a brief delay")
+//   - Category = CategoryInfra
+//   - Code = the caller's operation code (e.g. ERR_ADAPTER_PG_QUERY) — there
+//     is no parallel ErrAdapter*Transient code set; transient-vs-permanent is
+//     the single Kind+marker axis, queryable in metrics by Kind.
+//   - the private transient marker is set true
+//
+// The const-literal restriction documented on New applies to message.
+//
+// Funnel double-lock (per .claude/rules/gocell/ai-collab.md "Funnel 双向锁"):
+//   - upstream Hard: a transient adapter error is producible only via this
+//     function; the marker field is unexported so no package outside errcode
+//     can set it.
+//   - downstream Hard: IsTransient's *Error positive branch keys only on the
+//     marker, never on a code string.
+//
+// archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 enforces both sides.
+//
+// ref: jackc/pgx pgconn SafeToRetry; aws/aws-sdk-go-v2 aws/retry RetryableError.
+func WrapInfra(code Code, message string, cause error, opts ...Option) *Error {
+	e := Wrap(KindUnavailable, code, message, cause, opts...)
+	e.Category = CategoryInfra
+	e.transient = true
+	return e
+}
+
+// IsTransient reports whether err is a transient (retry-safe) condition that
+// an EventBus handler should Requeue rather than Reject:
 //
 //	if errcode.IsTransient(err) {
 //	    return outbox.Requeue(err)
 //	}
-//	return outbox.Reject(err)
+//	return outbox.Reject(outbox.NewPermanentError(err))
 //
-// Transient conditions map to Vault HTTP 503 / 429 / 408 / 499 (sealed,
-// rate-limited, request timeout). All other KeyProvider errors are permanent
-// (400 / 403 / 404) and must be routed to DispositionReject → DLX.
+// It returns true when, anywhere in the Unwrap chain:
+//   - an *Error carries the WrapInfra transient marker (the single recognized
+//     *Error signal — downstream Hard: a transient-looking code constructed
+//     via New/Wrap without WrapInfra is NOT transient); or
+//   - the error is context.DeadlineExceeded (a deadline may succeed on retry);
+//     context.Canceled is deliberately NOT transient (the caller gave up); or
+//   - a net.Error reports Timeout()==true (modern replacement for the
+//     deprecated net.Error.Temporary(), golang/go #45729); or
+//   - an error implements interface{ RetryableError() bool } returning true
+//     (the pgconn.SafeToRetry / aws-sdk-go-v2 RetryableError idiom, letting
+//     raw SDK errors be recognized before adapter wrapping).
 //
-// Returns false for nil. Uses errors.As so it correctly traverses chains
-// produced by fmt.Errorf("…: %w", err).
-//
-// ref: aws/aws-encryption-sdk-python src/aws_encryption_sdk/exceptions.py
+// Returns false for nil. Uses errors.As/Is so it traverses chains produced by
+// fmt.Errorf("…: %w", err).
 func IsTransient(err error) bool {
 	if err == nil {
 		return false
 	}
+
 	var ec *Error
-	if !errors.As(err, &ec) {
-		return false
+	if errors.As(err, &ec) && ec.transient {
+		return true
 	}
-	return ec.Code == ErrKeyProviderTransient
+
+	// context.Canceled is intentionally excluded: a canceled parent context
+	// means the work is no longer wanted; retrying is pointless.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	var retryable interface{ RetryableError() bool }
+	if errors.As(err, &retryable) {
+		return retryable.RetryableError()
+	}
+
+	return false
 }
 
 // IsExpected4xx reports whether err maps to an HTTP 400-499 response code.

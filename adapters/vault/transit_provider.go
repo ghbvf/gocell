@@ -996,7 +996,11 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 // ref: hashicorp/vault api/logical.go — *vaultapi.ResponseError status codes
 func classifyVaultError(err error, permanentCode errcode.Code, permanentMsg string) error {
 	if isTransientVaultError(err) {
-		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrKeyProviderTransient,
+		// WrapInfra is the single transient-marker funnel (post-206): it sets
+		// KindUnavailable + CategoryInfra + the private transient marker that
+		// errcode.IsTransient keys on. No dual truth source — the old
+		// Wrap(KindUnavailable, ErrKeyProviderTransient, …) shape is gone.
+		return errcode.WrapInfra(errcode.ErrKeyProviderTransient,
 			"vault-transit: transient error", err,
 			errcode.WithInternal(permanentMsg))
 	}

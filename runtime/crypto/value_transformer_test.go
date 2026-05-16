@@ -331,8 +331,8 @@ func (h *transientErrorHandle) ID() string { return "transient-key" }
 
 // Encrypt returns ErrKeyProviderTransient — simulating a Vault 503 or network timeout.
 func (h *transientErrorHandle) Encrypt(_ context.Context, _, _ []byte) (crypto.EncryptResult, error) {
-	return crypto.EncryptResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient,
-		"vault: service unavailable (503)")
+	return crypto.EncryptResult{}, errcode.WrapInfra(errcode.ErrKeyProviderTransient,
+		"vault: service unavailable (503)", nil)
 }
 
 func (h *transientErrorHandle) Decrypt(_ context.Context, _, _, _, _ []byte) ([]byte, error) {

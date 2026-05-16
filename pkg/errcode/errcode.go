@@ -820,6 +820,14 @@ type Error struct {
 	Details         []slog.Attr
 	Cause           error
 	Category        Category
+
+	// transient is the private retry-disposition marker. It is the single
+	// recognized signal for IsTransient's *Error positive branch (downstream
+	// Hard: "looks transient but didn't pass WrapInfra" is type-inexpressible
+	// outside this package). It is set ONLY by WrapInfra — never by New, Wrap,
+	// Assertion, or any Option. archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
+	// statically asserts no other assignment site exists in pkg/errcode.
+	transient bool
 }
 
 // FindAttr returns the first detail attribute whose Key matches key, or the
