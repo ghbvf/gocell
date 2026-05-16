@@ -28,18 +28,27 @@ Reference: `docs/architecture/metadata-model-v3.md`, `gocell validate`.
 All errors returned from the adapter's public API must use `pkg/errcode` and
 follow the three-way classification:
 
-| Class | Code | When |
-|-------|------|------|
-| Permanent / not-found | `ErrKeyProvider*NotFound`, `ErrConfigKeyMissing` | 4xx from external system, missing resource |
-| Transient | `ErrKeyProviderTransient` | 5xx, network timeout, sealed vault |
-| Config missing | `ErrConfigKeyMissing` | Required env var absent at startup |
+| Class | Constructor | When |
+|-------|-------------|------|
+| Permanent / not-found | `errcode.Wrap(KindInternal, <opCode>, …)` | 4xx from external system, missing resource, schema/marshal |
+| Transient | **`errcode.WrapInfra(<opCode>, …, cause)`** | 5xx / 429 / 408, network timeout, ctx deadline, server-recovering states |
+| Config missing | `errcode.New(<code>, …)` | Required env var absent at startup |
 
 Rules:
 - Never wrap with bare `fmt.Errorf(...)` that loses errcode identity.
-- Return the `classifyVaultReadError(err)` (or equivalent classifier) output
-  directly — do not re-wrap with an additional `fmt.Errorf("... : %w", err)`.
-- The `isTransientVaultError` / `classifyVaultError` pattern is the canonical
-  implementation; copy the structure, not the strings.
+- The transient class **must** go through the single funnel
+  `errcode.WrapInfra` (sets `KindUnavailable` + `CategoryInfra` + the private
+  transient marker that `errcode.IsTransient` keys on). Do **not** hand-build
+  `errcode.Wrap(KindUnavailable, …)` for a transient — archtest
+  `ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01` enforces the funnel (Hard
+  double-lock; ADR `docs/architecture/202605161800-adr-adapter-error-classification.md`).
+- Return the `classify{Adapter}Error(err)` output directly — do not re-wrap
+  with an additional `fmt.Errorf("… : %w", err)`.
+- The `classifyVaultError` / `classifyPGError` / `classifyRedisError` /
+  `classifyS3Error` pattern is the canonical implementation; copy the
+  structure, not the strings. There is no per-adapter `ErrAdapter*Transient`
+  code — reuse the operation code; transient-vs-permanent is the Kind+marker
+  axis.
 
 Sample: `adapters/vault/transit_provider.go::classifyVaultError`,
 `classifyVaultReadError`, `NewTransitKeyProviderFromEnv`.
