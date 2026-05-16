@@ -223,6 +223,9 @@ func (c *ConfigCore) initPublishSlice() error {
 func (c *ConfigCore) initSubscribeSlice() {
 	c.subscribeSvc = configsubscribe.NewService(c.logger,
 		configsubscribe.WithConfigEventCollector(c.configEventCollector),
+		configsubscribe.WithClock(c.clk),
+		configsubscribe.WithTombstoneTTL(c.tombstoneTTL),
+		configsubscribe.WithEventbusCacheCollector(c.cacheCollector),
 	)
 	c.AddSlice(cell.NewBaseSlice("configsubscribe", "configcore", cellvocab.L3))
 }

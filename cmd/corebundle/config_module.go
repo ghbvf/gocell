@@ -147,6 +147,7 @@ func (m ConfigCoreModule) Provide(
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
 		configcore.WithConfigEventCollector(shared.ConfigEventCollector),
+		configcore.WithEventbusCacheCollector(shared.EventbusCacheCollector),
 		configcore.WithCASProtocol(casProto),
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...) //archtest:allow:clock-injection:via-slice WithClock in baseOpts

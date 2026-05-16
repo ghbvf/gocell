@@ -94,6 +94,9 @@ func (d *SharedDeps) validateCore() []error {
 	if d.ConfigEventCollector == nil {
 		missing("ConfigEventCollector")
 	}
+	if d.EventbusCacheCollector == nil {
+		missing("EventbusCacheCollector")
+	}
 	if d.ConsumerClaimer == nil {
 		missing("ConsumerClaimer")
 	}

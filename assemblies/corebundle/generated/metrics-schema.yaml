@@ -188,6 +188,15 @@ metrics:
         - disposition
         - result
       file: cmd/corebundle/shared_deps_build.go
+    - name: eventbus_cache_tombstone_evicted_total
+      fqName: gocell_eventbus_cache_tombstone_evicted_total
+      namespace: gocell
+      type: counter
+      help: Total number of subscriber-cache tombstone entries evicted by TTL garbage collection, partitioned by owning cell and slice.
+      labels:
+        - cell
+        - slice
+      file: runtime/observability/metrics/eventbus_cache.go
     - name: hook_observer_dropped_total
       fqName: gocell_hook_observer_dropped_total
       namespace: gocell
