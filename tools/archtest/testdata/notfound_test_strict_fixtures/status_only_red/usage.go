@@ -1,6 +1,6 @@
 // Package status_only_red proves that a _NotFound HTTP handler test asserting
 // only http.StatusNotFound (no errcodetest.AssertWireCode call) is rejected.
-// Line 17 is flagged.
+// Line 14 is flagged.
 package status_only_red
 
 import (

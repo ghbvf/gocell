@@ -11,12 +11,11 @@
 // pkg/panicregister.Approved + PANIC-REGISTERED-01).
 //
 // Upstream funnel enforcement (archtest POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01)
-// lands in the immediate follow-up PR (docs/backlog/cap-14-tooling.md:18 —
-// R2-P3 PR-b 212-pg-notfound-archtest). Until that PR merges, the funnel is
-// downstream-Hard (calling AssertCode/AssertWireCode is type-bound) but
-// upstream-Soft (a _NotFound test can currently still write inline assertions
-// without being rejected). This is an ai-collab.md §"Funnel 双向锁评级"
-// transitional form, registered explicitly to prevent silent carry-over.
+// lands together with this package via R2-P3 PR-b
+// (branch 213-pg-notfound-archtest). Once PR-b is merged, the funnel is
+// downstream-Hard (calling AssertCode/AssertWireCode is type-bound) AND
+// upstream-Hard (a _NotFound test missing the funnel call fails archtest CI),
+// forming a closed-loop funnel per ai-collab.md §"Funnel 双向锁评级".
 //
 // Per pkg/ layering: the package depends only on the standard library and
 // pkg/errcode (a sibling of this package). It does not import third-party

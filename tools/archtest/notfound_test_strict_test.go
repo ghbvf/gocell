@@ -29,6 +29,10 @@ package archtest
 //     funnel calls in PR-b). Future PRs introducing one must extend the
 //     funnel callee allowlist in this file plus register a function-level
 //     carve-out in ADR docs/architecture/202605121800-adr-archtest-carveout-narrow.md.
+//     Any new approved funnel callee added to notFoundFunnelExpectedArgIdx must
+//     be registered in ADR docs/architecture/202605121800-adr-archtest-carveout-narrow.md
+//     registry table within the same PR; ERRCODE-CARVEOUT-ADR-CONSISTENCY-01
+//     Hard守卫 will reject silent map mutations.
 //   - Generic test functions `Test*[T]_NotFound`: not exercised; revisit
 //     if a first instance lands.
 //   - Cross-package re-export of the funnel: if any package re-declares
@@ -37,6 +41,13 @@ package archtest
 //     only via ADR-tracked PR.
 //   - Panic-based NotFound tests: out of scope. NotFound is an
 //     error-return semantic; panic shape is governed by PANIC-REGISTERED-01.
+//   - Non-testing.T `.Run` methods: `isTRunCall` matches any `*.Run(...)`
+//     selector by name. Custom types with a `Run(string, fn) bool/error`
+//     signature whose first arg is a `_NotFound` string literal would be
+//     flagged as if they were `t.Run`. The current corpus has no such
+//     type; if a future PR adds one, either rename the method to avoid
+//     collision or extend isTRunCall to type-resolve the receiver to
+//     testing.TB via *types.Info.
 
 import (
 	"fmt"
@@ -221,7 +232,7 @@ func scanFileForNotFoundViolations(
 			Line: fset.Position(pos).Line,
 			Name: name,
 			Reason: fmt.Sprintf(
-				"%s missing typed funnel: every test whose name ends in _NotFound "+
+				"[POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01] %s missing typed funnel: every test whose name ends in _NotFound "+
 					"must contain at least one call to errcodetest.AssertCode or "+
 					"errcodetest.AssertWireCode with a typed errcode.Err*NotFound "+
 					"expected argument (selector form, not BasicLit). See cap-14:18.",
@@ -344,7 +355,7 @@ func notFoundDiagsFromPass(p *Pass) []notFoundViolation {
 // test) and emits a violation for each _NotFound test site that does not
 // contain at least one compliant errcodetest funnel call.
 //
-// All 27 strict `_NotFound$` sites in the corpus already route through the
+// All strict `_NotFound$` sites in the corpus already route through the
 // funnel after PR-a (211-pg-notfound-test-migration) and PR-b's storetest
 // inline migration (runtime/audit/ledger/storetest/suite.go +
 // runtime/auth/session/storetest/suite.go); this test must pass.
@@ -497,6 +508,8 @@ func TestNotFoundTestStrict_RegexPredicates(t *testing.T) {
 			"NotATest_NotFound",           // missing Test prefix
 			"TestFoo_notfound",            // lowercase
 			"helper_NotFound",             // missing Test prefix
+			"",                            // empty string
+			"NotFound",                    // no Test prefix, no _ separator
 		}
 		for _, name := range accept {
 			assert.True(t, notFoundFuncNamePattern.MatchString(name),
@@ -520,6 +533,8 @@ func TestNotFoundTestStrict_RegexPredicates(t *testing.T) {
 			"GetByKey",                     // no _NotFound suffix
 			"_NotFound",                    // leading underscore only
 			"GetByKey_notfound",            // lowercase
+			"",                             // empty string
+			"NotFound",                     // no _ separator
 		}
 		for _, name := range accept {
 			assert.True(t, notFoundTRunNamePattern.MatchString(name),
@@ -555,4 +570,28 @@ func TestNotFoundTestStrict_RegexPredicates(t *testing.T) {
 				"codePattern should reject %q", code)
 		}
 	})
+}
+
+func TestShouldSkipForNotFoundStrict(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		rel  string
+		skip bool
+	}{
+		{"tools/archtest/testdata/notfound_test_strict_fixtures/missing_funnel_red/usage.go", true},
+		{"vendor/foo/bar.go", true},
+		{"worktrees/211/foo.go", true},
+		{".git/info/exclude.go", true},
+		{"node_modules/foo.go", true},
+		{"testdata/bar.go", true},
+		{"runtime/auth/session/storetest/suite.go", false},
+		{"cells/configcore/slices/configread/handler_test.go", false},
+		{"pkg/errcode/errcodetest/assertions.go", false},
+	}
+	for _, tc := range cases {
+		got := shouldSkipForNotFoundStrict(tc.rel)
+		if got != tc.skip {
+			t.Errorf("shouldSkipForNotFoundStrict(%q) = %t, want %t", tc.rel, got, tc.skip)
+		}
+	}
 }

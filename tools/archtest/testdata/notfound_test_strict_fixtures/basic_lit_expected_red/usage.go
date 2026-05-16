@@ -1,7 +1,7 @@
 // Package basic_lit_expected_red proves that a _NotFound test calling
 // errcodetest.AssertCode with a string literal expected (rather than a typed
 // errcode.Code SelectorExpr) is rejected, even when the literal happens to
-// match the NotFound pattern. Line 16 is flagged.
+// match the NotFound pattern. Line 15 is flagged.
 package basic_lit_expected_red
 
 import (

@@ -24,7 +24,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest" // test funnel; storetest is testing-helper package, errcodetest import is intentional (not a test-only import in a non-_test.go file)
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -525,6 +525,13 @@ func runTS4D1GetRoundtripsEpoch(t *testing.T, factory Factory) {
 	}
 }
 
+// NOTE: assertErrCode is reserved for non-_NotFound assertions
+// (ErrSessionConflict, ErrValidationFailed). Any t.Run("..._NotFound", ...)
+// table case MUST call errcodetest.AssertCode directly — POSTGRES-NOTFOUND-
+// TEST-OTHER-ERROR-MIXUP-ARCHTEST-01 archtest detects funnel calls at the
+// _NotFound t.Run body level only; routing through this helper would be a
+// cross-function wrapper that escapes detection (godoc-declared blind spot).
+//
 // assertErrCode asserts err wraps an *errcode.Error with the given Code.
 // Centralized here so storetest cases stay focused on protocol semantics.
 func assertErrCode(t *testing.T, err error, want errcode.Code) {

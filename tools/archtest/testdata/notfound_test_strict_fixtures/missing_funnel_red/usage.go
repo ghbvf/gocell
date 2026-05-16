@@ -1,5 +1,5 @@
 // Package missing_funnel_red proves that a _NotFound test missing any
-// errcodetest funnel call is rejected. Line 15 is flagged.
+// errcodetest funnel call is rejected. Line 12 is flagged.
 package missing_funnel_red
 
 import (
