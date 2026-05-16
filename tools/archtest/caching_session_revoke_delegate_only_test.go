@@ -71,12 +71,27 @@ const cachingStoreInnerField = "inner"
 // (*CachingSessionStore).RevokeForSubject in adapters/redis must each be a
 // single-statement pure delegate to s.inner.<SameMethodName>(args...).
 //
-// Current production code at session_cache_store.go:213-222 has a multi-
-// statement Revoke body (inner.Revoke + cache.Delete), so this test FAILS on
-// develop tip — that is the intentional RED state before the GREEN fix.
+// Production code at adapters/redis/session_cache_store.go satisfies this
+// invariant post-GREEN; the four RED fixtures below mirror the rejected
+// forms so the scanner's detection mechanism is itself verified.
 //
-// RED fixture verification: four fixture packages each represent a distinct
-// violation; all must be detected by the scanner.
+// RED fixture verification — each fixture package embodies one violation
+// class; all four MUST be detected by scanRevokeDelegateViolations:
+//
+//   - F1 (testdata/.../f1_multi_stmt_red): Revoke body contains a second
+//     statement before the return (logs/side-effects). Detects multi-stmt
+//     bodies.
+//   - F2 (testdata/.../f2_cache_delete_red): Revoke body calls
+//     s.cache.Delete before delegating. Detects the historical Q1-A failure
+//     mode this PR's #533 third-round review removed (in-tx cache.Delete
+//     race vs PG commit).
+//   - F3 (testdata/.../f3_cache_set_red): Revoke body calls s.cache.Set.
+//     Detects any cache-side write injected into the revoke path (would
+//     equally race vs PG commit; symmetrical with F2).
+//   - F4 (testdata/.../f4_wrong_delegate_red): Revoke body delegates to a
+//     differently-named inner method (e.g. RevokeForSubject). Detects
+//     same-method-name invariant breakage that would silently route revoke
+//     semantics to the wrong sink.
 func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 	t.Parallel()
 
