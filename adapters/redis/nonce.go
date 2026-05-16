@@ -81,9 +81,8 @@ func (s *NonceStore) CheckAndMark(ctx context.Context, nonce string) error {
 	key := s.ns.apply(nonce)
 	ok, err := s.rdb.SetNX(ctx, key, "1", s.ttl).Result()
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			"redis nonce store: SET NX failed", err,
-			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
+		return classifyRedisError(err, ErrAdapterRedisSet,
+			fmt.Sprintf("key=%s", key))
 	}
 	if !ok {
 		return auth.ErrNonceReused

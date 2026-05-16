@@ -213,9 +213,8 @@ func (c *Client) headBucket(ctx context.Context) error {
 		Bucket: aws.String(c.config.Bucket),
 	})
 	if err != nil {
-		wrapped := error(errcode.Wrap(errcode.KindInternal, ErrAdapterS3Health,
-			"s3: health check failed", err,
-			errcode.WithDetails(slog.String("bucket", c.config.Bucket))))
+		wrapped := classifyS3Error(err, ErrAdapterS3Health,
+			fmt.Sprintf("bucket=%s", c.config.Bucket))
 		c.state.Store(&wrapped)
 		return wrapped
 	}
@@ -247,9 +246,8 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 		ContentType: aws.String(contentType),
 	})
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterS3Upload,
-			"s3: upload failed", err,
-			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
+		return classifyS3Error(err, ErrAdapterS3Upload,
+			fmt.Sprintf("key=%s", key))
 	}
 	slog.Debug("s3: object uploaded", slog.String("key", key), slog.Int("size", len(data)))
 	return nil
@@ -271,9 +269,8 @@ func (c *Client) Health(ctx context.Context) error {
 		Bucket: aws.String(c.config.Bucket),
 	})
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterS3Health,
-			"s3: health check failed", err,
-			errcode.WithDetails(slog.String("bucket", c.config.Bucket)))
+		return classifyS3Error(err, ErrAdapterS3Health,
+			fmt.Sprintf("bucket=%s", c.config.Bucket))
 	}
 	return nil
 }

@@ -57,9 +57,8 @@ func (c *Cache) Get(ctx context.Context, key string) (string, error) {
 		if errors.Is(err, goredis.Nil) {
 			return "", nil
 		}
-		return "", errcode.Wrap(errcode.KindInternal, ErrAdapterRedisGet,
-			"redis: cache get failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalKeyFmt, prefixed)))
+		return "", classifyRedisError(err, ErrAdapterRedisGet,
+			fmt.Sprintf(internalKeyFmt, prefixed))
 	}
 	return val, nil
 }
@@ -69,9 +68,8 @@ func (c *Cache) Get(ctx context.Context, key string) (string, error) {
 func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Duration) error {
 	prefixed := c.ns.apply(key)
 	if err := c.rdb.Set(ctx, prefixed, value, ttl).Err(); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			"redis: cache set failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalKeyFmt, prefixed)))
+		return classifyRedisError(err, ErrAdapterRedisSet,
+			fmt.Sprintf(internalKeyFmt, prefixed))
 	}
 	return nil
 }
@@ -81,9 +79,8 @@ func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Dura
 func (c *Cache) Delete(ctx context.Context, key string) error {
 	prefixed := c.ns.apply(key)
 	if err := c.rdb.Del(ctx, prefixed).Err(); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisDelete,
-			"redis: cache delete failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalKeyFmt, prefixed)))
+		return classifyRedisError(err, ErrAdapterRedisDelete,
+			fmt.Sprintf(internalKeyFmt, prefixed))
 	}
 	return nil
 }
@@ -98,9 +95,8 @@ func GetJSON[T any](ctx context.Context, c *Cache, key string) (T, error) {
 		if errors.Is(err, goredis.Nil) {
 			return zero, nil
 		}
-		return zero, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisGet,
-			"redis: cache get json failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalKeyFmt, prefixed)))
+		return zero, classifyRedisError(err, ErrAdapterRedisGet,
+			fmt.Sprintf(internalKeyFmt, prefixed))
 	}
 	var result T
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
@@ -122,9 +118,8 @@ func SetJSON[T any](ctx context.Context, c *Cache, key string, value T, ttl time
 			errcode.WithInternal(fmt.Sprintf(internalKeyFmt, prefixed)))
 	}
 	if err := c.rdb.Set(ctx, prefixed, string(data), ttl).Err(); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			"redis: cache set json failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalKeyFmt, prefixed)))
+		return classifyRedisError(err, ErrAdapterRedisSet,
+			fmt.Sprintf(internalKeyFmt, prefixed))
 	}
 	return nil
 }

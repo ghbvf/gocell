@@ -189,8 +189,8 @@ func (c *IdempotencyClaimer) Claim(
 
 	res, err := c.rdb.Eval(ctx, claimScript, []string{doneKey, leaseKey}, token, leaseMs).Result()
 	if err != nil {
-		return 0, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			"redis: idempotency claim failed", err)
+		return 0, nil, classifyRedisError(err, ErrAdapterRedisSet,
+			"idempotency claim")
 	}
 
 	code, ok := res.(int64)
@@ -247,8 +247,8 @@ func (r *redisReceipt) Commit(ctx context.Context) error {
 	doneMs := max(r.doneTTL.Milliseconds(), 1)
 	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneMs).Result()
 	if err != nil {
-		r.commitErr = errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			"redis: idempotency commit failed", err)
+		r.commitErr = classifyRedisError(err, ErrAdapterRedisSet,
+			"idempotency commit")
 		return r.commitErr
 	}
 	code, ok := res.(int64)
@@ -275,8 +275,8 @@ func (r *redisReceipt) Release(ctx context.Context) error {
 	}
 	res, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
 	if err != nil {
-		r.releaseErr = errcode.Wrap(errcode.KindInternal, ErrAdapterRedisDelete,
-			"redis: idempotency release failed", err)
+		r.releaseErr = classifyRedisError(err, ErrAdapterRedisDelete,
+			"idempotency release")
 		return r.releaseErr
 	}
 	code, ok := res.(int64)
@@ -300,7 +300,7 @@ func (r *redisReceipt) Extend(ctx context.Context, ttl time.Duration) error {
 	ttlMs := max(ttl.Milliseconds(), 1)
 	res, err := r.rdb.Eval(ctx, extendScript, []string{r.leaseKey}, r.token, ttlMs).Result()
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet, "redis claimer: extend lease", err)
+		return classifyRedisError(err, ErrAdapterRedisSet, "idempotency extend lease")
 	}
 	code, ok := res.(int64)
 	if !ok || code == 0 {
