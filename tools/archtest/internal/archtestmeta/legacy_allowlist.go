@@ -73,6 +73,7 @@ var LegacyAllowlist = map[string]bool{
 	"tools/archtest/ci_integration_discovery_invariants_test.go":     true, // Stage 1.5: uses ParseBuildConstraint/FlatNonDefaultTags
 	"tools/archtest/credential_invalidate_funnel_invariants_test.go": true,
 	"tools/archtest/domain_authz_mutation_funnel_invariants_test.go": true,
+	"tools/archtest/reconstitute_user_caller_allowlist_test.go":      true,
 	"tools/archtest/eval_predicate_centralization_test.go":           true,
 	"tools/archtest/exported_error_new_fixtures_test.go":             true,
 	"tools/archtest/goose_session_locker_fixtures_test.go":           true,

@@ -29,16 +29,18 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// securityTestBcryptCost is the bcrypt cost used for seeding test user hashes in
-// security tests. It mirrors domain.BcryptCost so that timing-normalization tests
-// reflect the same hash cost relationship as production: dummyBcryptHash (cost=12)
-// vs user hash (cost=12). Using a lower cost would invert the relative timing
-// (dummy slower than real hash), making the tests misleading about the actual
-// timing oracle risk.
+// securityTestBcryptCost is the bcrypt cost used to seed test user password
+// hashes in this file. It is set to bcrypt.MinCost (=4) to keep the security
+// test suite under ~1s wall-time, since these tests only assert call counts
+// and error envelopes (no wall-clock timing assertions).
 //
-// Accept the associated test slowdown (~250 ms per bcrypt call) as the correct
-// tradeoff: correctness of timing assertions outweighs test speed.
-const securityTestBcryptCost = domain.BcryptCost
+// The comparator (bcrypt.CompareHashAndPassword) reads the cost embedded in
+// the stored hash, so comparison cost also drops — this is intentional and
+// does not affect the security property under test (path coverage of the
+// login-failure code branches, not bcrypt strength).
+//
+// ref: cells/accesscore/slices/identitymanage/service_test.go::seedUserWithHash
+const securityTestBcryptCost = bcrypt.MinCost
 
 // countingComparer is a test-only passwordComparer that counts how many times
 // it is called and delegates to bcrypt.CompareHashAndPassword.
