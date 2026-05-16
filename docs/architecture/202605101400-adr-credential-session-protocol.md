@@ -358,7 +358,7 @@ session row: {
 -- index: (jti) UNIQUE, (user_id, revoked_at)
 ```
 
-JWT validate 路径（S4d 形态，A8 row SoR + A7 access JWT 不含 epoch claim）：
+JWT validate 路径（S4d 形态：§A8 row SoR + access JWT 不含 authz_epoch claim — S4d 决议；§A7 段在 FU-1 删除，row SoR 已是唯一真值，无平行 §A7 原文）：
 
 ```
 parse JWT → verify signature
@@ -557,7 +557,8 @@ sealed `FingerprintMode` 当前仅含 `FingerprintJTIRef` 单实现。未来 opa
 ## 3. Threat Model 覆盖矩阵
 
 > S4d 重跑（2026-05-15）：A1 RETRACTED + A8 row provenance + A9 RequirePasswordReset
-> funnel + A7 access JWT 删 epoch claim。S4e 重跑（PR #494，2026-05-15）：
+> funnel + access JWT 不再携带 authz_epoch claim（S4d 决议；§A7 段已在 FU-1 删除）。
+> S4e 重跑（PR #494，2026-05-15）：
 > authzmutate Hard funnel 闭合 + P2.b stale-epoch 路径修正。RC-A 重跑（2026-05-15）：
 > RoleRevoked 死代码删除 + §A10 co-tx atomicity Medium 天花板显式锁定。每行重新评估（按
 > ai-collab.md §"ADR amendment 重跑威胁矩阵" 规则）。`Row SoR` 列代替原 `AuthzEpoch`

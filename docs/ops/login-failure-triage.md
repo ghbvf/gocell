@@ -27,13 +27,16 @@ operators cannot infer the cause from a captured response.
 ## Internal text templates
 
 `errcode.WithInternal` payloads — recorded by the framework's HTTP middleware
-into `slog` `internal` field at `Error` level, never serialized to the wire.
+(`pkg/httputil.log4xx`) as `slog.String("internal", ...)` on the public-facing
+4xx log record. The log line uses `slog.Warn` with msg `"error (4xx)"` (label
+comes from the generated handler's `writeErrcodeError` call site; "error" is
+the default label). The `internal` field is never serialized to the wire.
 
 | # | Template | Source | When emitted |
 |---|----------|--------|--------------|
-| 1 | `user lookup failed: <repo-error>` | `sessionlogin.Login` post-fetch branch | Username not found, OR repo returned an error (DB unreachable / row corrupt). Both collapse to 401 for enumeration safety; the `<repo-error>` string distinguishes them. |
+| 1 | `user lookup failed: <repo-error>` | `sessionlogin.Login` post-fetch branch | Username not found OR repo returned an error (DB unreachable / row corrupt). Both collapse to 401 for enumeration safety. `<repo-error>` is the repository error's Error() text (e.g. `"not found"`); it does NOT embed the attempted username — to recover the username use access logs / request-body logging if enabled. |
 | 2 | `account not active (user_id=<uuid> status=<status> bcrypt_ok=<bool>)` | `sessionlogin.Login` non-active branch | User exists but `CanAuthenticate()` is false (status ∈ {locked, suspended}). `bcrypt_ok` indicates whether the password was correct — useful for distinguishing "right password but account locked" from "wrong password on locked account". |
-| 3 | *(no WithInternal — message-only)* | `sessionlogin.Login` bcrypt-mismatch branch | User exists and is active, but bcrypt compare failed (wrong password). Identifiable in slog by `code=ERR_AUTH_LOGIN_FAILED` with empty `internal` field. |
+| 3 | *(no WithInternal — message-only)* | `sessionlogin.Login` bcrypt-mismatch branch | User exists and is active, but bcrypt compare failed (wrong password). Identifiable in slog by `code=ERR_AUTH_LOGIN_FAILED` with the `internal` field **absent** (jq: `.internal == null`). |
 | 4 | `account deactivated in race window (in-tx check): user=<username>` | `sessionlogin.loginInTx` in-tx re-check | User passed the pre-tx active check but was locked/suspended concurrently before the tx FOR UPDATE re-fetch. Rare race; if frequent, investigate concurrent admin-side write contention. |
 
 ## slog query recipes
@@ -42,35 +45,48 @@ into `slog` `internal` field at `Error` level, never serialized to the wire.
 
 ```bash
 kubectl logs deployment/accesscore --since=5m \
-  | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED") | "\(.time) reason=\(.internal // "wrong_password") user_agent=\(.user_agent // "-")"'
+  | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED") |
+           "\(.time) request_id=\(.request_id // "-") reason=\(.internal // "wrong_password")"'
 ```
+
+Top-level slog fields on the 4xx record: `time`, `level` (`WARN`), `msg`
+(`"error (4xx)"` by default), `code`, `status`, optionally `internal`,
+`request_id`, `trace_id`, `span_id` (see `pkg/httputil.log4xx` + `AppendCorrelationAttrs`).
+The wire-side `user_agent` is in the ingress / access log, not this slog
+record — join via `request_id`.
 
 ### "Distinguish missing-user vs wrong-password vs inactive"
 
-The `internal` field is the discriminator:
+The `internal` field is the discriminator (absent for the wrong-password
+branch — Template #3 has no `WithInternal`):
 
 ```bash
 kubectl logs deployment/accesscore --since=15m \
   | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED") |
-      if   .internal | startswith("user lookup failed")    then "missing_user"
-      elif .internal | startswith("account not active")    then "inactive"
-      elif .internal | startswith("account deactivated")   then "race_window"
-      else "wrong_password"
+      if   .internal == null                                then "wrong_password"
+      elif .internal | startswith("user lookup failed")     then "missing_user_or_repo_error"
+      elif .internal | startswith("account not active")     then "inactive"
+      elif .internal | startswith("account deactivated")    then "race_window"
+      else "unknown"
       end' \
   | sort | uniq -c | sort -rn
 ```
 
-### "Find brute-force attempts on a specific user"
+### "Inspect repo-error texts on the missing-user/repo-failure branch"
 
-`user lookup failed: <username not found>` exposes attempted usernames in the
-server log only:
+Template #1 records the repository error text, not the attempted username.
+Use this to spot DB-side issues (e.g. `"context deadline exceeded"`,
+`"connection refused"`) hiding behind the uniform 401:
 
 ```bash
 kubectl logs deployment/accesscore --since=1h \
   | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED" and (.internal // "" | startswith("user lookup failed"))) | .internal' \
-  | grep -oE 'user lookup failed: .*$' \
   | sort | uniq -c | sort -rn | head -20
 ```
+
+For per-username brute-force triage, correlate the 401 timestamps with
+ingress / access logs where the request body or username is preserved
+(`request_id` in the slog record matches the access log line).
 
 ### "Find lockout / suspension hits"
 
