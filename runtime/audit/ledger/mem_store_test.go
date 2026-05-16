@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -324,13 +325,7 @@ func TestMemStore_GetBySeq_NotFound(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	_, err = store.GetBySeq(context.Background(), 999)
-	if err == nil {
-		t.Fatal("expected error for missing seqNo")
-	}
-	var coded *errcode.Error
-	if !errors.As(err, &coded) {
-		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-	}
+	errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
 }
 
 // TestMemStore_Idempotency_DuplicateContent: appending the same payload twice

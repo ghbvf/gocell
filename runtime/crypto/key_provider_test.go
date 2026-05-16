@@ -3,13 +3,13 @@ package crypto_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
@@ -154,11 +154,7 @@ func TestKeyProvider_ByID_NotFound(t *testing.T) {
 	p := newFakeKeyProvider()
 
 	_, err := p.ByID(ctx, "nonexistent")
-	require.Error(t, err)
-
-	var errcode_ *errcode.Error
-	require.True(t, errors.As(err, &errcode_))
-	assert.Equal(t, errcode.ErrKeyProviderKeyNotFound, errcode_.Code)
+	errcodetest.AssertCode(t, err, errcode.ErrKeyProviderKeyNotFound)
 }
 
 // ---------------------------------------------------------------------------

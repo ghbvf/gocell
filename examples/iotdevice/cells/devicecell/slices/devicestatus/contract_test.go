@@ -14,6 +14,8 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -70,5 +72,5 @@ func TestHttpDeviceStatusV1Serve_NotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
 	h.ServeHTTP(rec, req)
-	require.NotEqual(t, c.HTTP.SuccessStatus, rec.Code, "non-existent device must not return success")
+	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrDeviceNotFound)
 }

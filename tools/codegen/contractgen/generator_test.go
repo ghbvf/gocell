@@ -379,9 +379,9 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 
 // --- Error path tests ---------------------------------------------------------
 
-// TestGenerate_OnlyContract_NotFound verifies error when ScopeContracts id
+// TestGenerate_OnlyContract_OnMissingContract_FailsWithNotFoundMessage verifies error when ScopeContracts id
 // does not exist in the project.
-func TestGenerate_OnlyContract_NotFound(t *testing.T) {
+func TestGenerate_OnlyContract_OnMissingContract_FailsWithNotFoundMessage(t *testing.T) {
 	t.Parallel()
 	p := &metadata.ProjectMeta{Contracts: map[string]*metadata.ContractMeta{}}
 	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeContracts([]string{"http.does.not.exist.v1"})})
@@ -553,8 +553,8 @@ func TestRenderContractArtifacts_CodegenFalse(t *testing.T) {
 	}
 }
 
-// TestRenderContractArtifacts_NotFound verifies error when contract id missing.
-func TestRenderContractArtifacts_NotFound(t *testing.T) {
+// TestRenderContractArtifacts_OnMissingContract_FailsWithNotFoundMessage verifies error when contract id missing.
+func TestRenderContractArtifacts_OnMissingContract_FailsWithNotFoundMessage(t *testing.T) {
 	t.Parallel()
 	p := &metadata.ProjectMeta{Contracts: map[string]*metadata.ContractMeta{}}
 	_, err := RenderContractArtifacts(t.TempDir(), p, "http.ghost.v1")

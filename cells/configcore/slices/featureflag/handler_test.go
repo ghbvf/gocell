@@ -19,6 +19,8 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -190,7 +192,7 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/missing", nil)
 	handler.ServeHTTP(w, asAdminFlag(req))
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrFlagNotFound)
 }
 
 func TestHandler_HandleEvaluate_OK(t *testing.T) {
@@ -250,7 +252,7 @@ func TestHandler_HandleEvaluate_NotFound(t *testing.T) {
 	handler.ServeHTTP(w, asAdminFlag(req))
 
 	// Service returns ErrFlagNotFound -> 404.
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrFlagNotFound)
 }
 
 func TestHandler_HandleList_InvalidLimit(t *testing.T) {

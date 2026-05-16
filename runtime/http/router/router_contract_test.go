@@ -255,7 +255,7 @@ func TestGroup_MiddlewareIsolation(t *testing.T) {
 
 // --- 404 / 405 Table-Driven -----------------------------------------------
 
-func TestRouter_NotFound(t *testing.T) {
+func TestRouter_UnmatchedRoute_Returns404(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real()))
 	r.Handle("GET /exists", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

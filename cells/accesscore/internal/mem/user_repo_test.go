@@ -2,6 +2,7 @@ package mem
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -99,11 +101,10 @@ func TestUserRepo_UpdatePassword_NotFound(t *testing.T) {
 	repo := NewStore(clock.Real()).UserRepository()
 
 	_, err := repo.UpdatePassword(ctx, "usr-nonexistent", "$2a$12$newhash", false, 0)
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	var ce *errcode.Error
-	require.ErrorAs(t, err, &ce)
+	require.True(t, errors.As(err, &ce))
 	assert.Equal(t, errcode.KindNotFound, ce.Kind)
-	assert.Equal(t, errcode.ErrAuthUserNotFound, ce.Code)
 }
 
 func TestUserRepo_UpdatePassword_ResetRequiredFlag(t *testing.T) {
@@ -160,11 +161,10 @@ func TestUserRepo_BumpAuthzEpoch_NotFound(t *testing.T) {
 	repo := NewStore(clock.Real()).UserRepository()
 
 	_, err := repo.BumpAuthzEpoch(ctx, "usr-nonexistent")
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	var ce *errcode.Error
-	require.ErrorAs(t, err, &ce)
+	require.True(t, errors.As(err, &ce))
 	assert.Equal(t, errcode.KindNotFound, ce.Kind)
-	assert.Equal(t, errcode.ErrAuthUserNotFound, ce.Code)
 }
 
 func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
