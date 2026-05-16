@@ -114,8 +114,13 @@ func TestIsDomainNotFound(t *testing.T) {
 }
 
 func TestIsTransientAndExpected4xx(t *testing.T) {
-	assert.True(t, IsTransient(New(KindUnavailable, ErrKeyProviderTransient, "vault sealed")))
-	assert.True(t, IsTransient(fmt.Errorf("wrap: %w", New(KindUnavailable, ErrKeyProviderTransient, "vault sealed"))))
+	// Post-206: transient classification is the WrapInfra marker, not the
+	// ErrKeyProviderTransient code string. Constructing the code via New
+	// alone no longer makes it transient (downstream Hard).
+	sealed := WrapInfra(ErrKeyProviderTransient, "vault sealed", errors.New("sealed"))
+	assert.True(t, IsTransient(sealed))
+	assert.True(t, IsTransient(fmt.Errorf("wrap: %w", sealed)))
+	assert.False(t, IsTransient(New(KindUnavailable, ErrKeyProviderTransient, "vault sealed")))
 	assert.False(t, IsTransient(New(KindInternal, ErrKeyProviderEncryptFailed, "encrypt failed")))
 
 	assert.True(t, IsExpected4xx(New(KindInvalid, ErrValidationFailed, "bad")))

@@ -205,6 +205,7 @@ linters:
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/adapters
             - github.com/aws/aws-sdk-go-v2
+            - github.com/aws/smithy-go
             - github.com/coder/websocket
             - github.com/coreos/go-oidc
             - github.com/google/uuid

@@ -228,6 +228,92 @@ func TestService_HandleEvent_AppendFails_Requeue(t *testing.T) {
 	assert.False(t, errors.As(result.Err, &permErr), "transient persist error must NOT be PermanentError")
 }
 
+// TestService_HandleEvent_AppendFails_Classified verifies the disposition
+// 收口: a positively-classified transient store error is Requeued (retry),
+// while a positively-permanent error short-circuits to Reject → DLX instead
+// of blind-Requeuing and burning the whole retry budget.
+func TestService_HandleEvent_AppendFails_Classified(t *testing.T) {
+	cases := []struct {
+		name        string
+		storeErr    error
+		wantDisp    outbox.Disposition
+		wantPermErr bool
+	}{
+		{
+			name: "transient WrapInfra (PG serialization) → Requeue",
+			storeErr: errcode.WrapInfra(errcode.Code("ERR_ADAPTER_PG_QUERY"),
+				"serialization failure", errors.New("40001")),
+			wantDisp: outbox.DispositionRequeue,
+		},
+		{
+			name: "positively-permanent validation error → Reject → DLX",
+			storeErr: errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"audit schema drift", errcode.WithCategory(errcode.CategoryValidation)),
+			wantDisp:    outbox.DispositionReject,
+			wantPermErr: true,
+		},
+		{
+			// context.Canceled is infra (IsInfraError true) and NOT transient
+			// → predicate !IsTransient && !IsInfraError == false → Requeue.
+			// Locks the fail-closed direction: a future change to the
+			// predicate that drops the IsInfraError clause would wrongly
+			// Reject canceled-context store failures.
+			name:     "context.Canceled (infra, not transient) → Requeue",
+			storeErr: context.Canceled,
+			wantDisp: outbox.DispositionRequeue,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProtocol(t)
+			realStore, err := ledger.NewMemStore(p, clock.Real())
+			require.NoError(t, err)
+			spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+			svc := newService(t, spec, &failingStore{Store: realStore, err: tc.storeErr}, p)
+
+			entry := outbox.Entry{
+				ID:        "evt-cls",
+				EventType: "event.user.created.v1",
+				Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
+			}
+			result := svc.HandleEvent(context.Background(), entry)
+			assert.Equal(t, tc.wantDisp, result.Disposition)
+
+			var permErr *outbox.PermanentError
+			assert.Equal(t, tc.wantPermErr, errors.As(result.Err, &permErr))
+		})
+	}
+}
+
+// TestService_HandleEvent_DuplicateReplay_Ack verifies the idempotent-replay
+// contract: redelivering the same entry (same content/EventID fingerprint)
+// makes ledger.Append return errcode.ErrAuditLedgerAlreadyExists, which the
+// handler must treat as an idempotent SUCCESS → Ack (not Requeue, not DLX).
+func TestService_HandleEvent_DuplicateReplay_Ack(t *testing.T) {
+	p := newTestProtocol(t)
+	realStore, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	svc := newService(t, spec, realStore, p)
+
+	entry := outbox.Entry{
+		ID:        "evt-dup",
+		EventType: "event.user.created.v1",
+		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
+	}
+
+	first := svc.HandleEvent(context.Background(), entry)
+	require.Equal(t, outbox.DispositionAck, first.Disposition, "first append must succeed")
+
+	// Redelivery of the identical entry → ErrAuditLedgerAlreadyExists → Ack.
+	second := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, second.Disposition,
+		"idempotent replay must Ack, not Requeue/Reject")
+	var permErr *outbox.PermanentError
+	assert.False(t, errors.As(second.Err, &permErr),
+		"idempotent replay must not be a PermanentError")
+}
+
 // TestService_HandleEvent_Happy verifies the full happy path: ledger.Append +
 // outbox.Emit run inside the same RunInTx block (L2 OutboxFact pattern). We
 // observe the emit by injecting a recording emitter.

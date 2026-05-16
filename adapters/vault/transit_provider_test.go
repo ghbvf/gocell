@@ -501,15 +501,15 @@ func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 	}{
 		{
 			name:     "503 Service Unavailable",
-			vaultErr: errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault: 503 service unavailable"),
+			vaultErr: errcode.WrapInfra(errcode.ErrKeyProviderTransient, "vault: 503 service unavailable", nil),
 		},
 		{
 			name:     "429 Too Many Requests",
-			vaultErr: errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault: 429 rate limited"),
+			vaultErr: errcode.WrapInfra(errcode.ErrKeyProviderTransient, "vault: 429 rate limited", nil),
 		},
 		{
 			name:     "408 Request Timeout",
-			vaultErr: errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault: 408 request timeout"),
+			vaultErr: errcode.WrapInfra(errcode.ErrKeyProviderTransient, "vault: 408 request timeout", nil),
 		},
 	}
 	for _, tc := range transientCases {
@@ -806,9 +806,13 @@ func TestIsTransientVaultError_ContextError(t *testing.T) {
 			wantTrans: true,
 		},
 		{
-			name:      "context.Canceled → transient",
+			// Post-206 unified semantic: context.Canceled is NOT transient
+			// (the caller gave up; retrying is pointless) — consistent with
+			// errcode.IsTransient and grpc-ecosystem retry defaults. Falls
+			// through step-4 (not a net error) → permanent.
+			name:      "context.Canceled → NOT transient (caller gave up)",
 			err:       context.Canceled,
-			wantTrans: true,
+			wantTrans: false,
 		},
 		{
 			name: "net.OpError → transient",
@@ -833,7 +837,7 @@ func TestIsTransientVaultError_ContextError(t *testing.T) {
 		},
 		{
 			name:      "errcode.ErrKeyProviderTransient → transient",
-			err:       errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "rate limited"),
+			err:       errcode.WrapInfra(errcode.ErrKeyProviderTransient, "rate limited", nil),
 			wantTrans: true,
 		},
 	}
@@ -1274,7 +1278,7 @@ func TestTokenRenewalWorker_Start_HandlesDoneWithError(t *testing.T) {
 		done <- w.Start(ctx)
 	}()
 
-	injectedErr := errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault: token renewal failed")
+	injectedErr := errcode.WrapInfra(errcode.ErrKeyProviderTransient, "vault: token renewal failed", nil)
 	fw.doneCh <- injectedErr
 
 	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking re-auth; no started observable

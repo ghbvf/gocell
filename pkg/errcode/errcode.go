@@ -398,11 +398,18 @@ const (
 	// ErrKeyProviderKeyNotFound / ErrKeyProviderRotateFailed, which signal
 	// permanent conditions (400 Bad Request, 403 Forbidden, 404 Not Found).
 	//
-	// EventBus Disposition routing:
-	//   - ErrKeyProviderTransient → DispositionRequeue (back-off retry)
-	//   - All other KeyProvider errors → DispositionReject (DLX)
+	// EventBus Disposition routing is driven by the WrapInfra transient
+	// marker, NOT by this code string (post-206). An error carries transient
+	// semantics only when constructed via WrapInfra (which sets the private
+	// Error.transient marker that IsTransient keys on):
 	//
-	// Use IsTransient to check the full error chain.
+	//   - WrapInfra(ErrKeyProviderTransient, …) → IsTransient true → Requeue
+	//   - New/Wrap(KindUnavailable, ErrKeyProviderTransient, …) → IsTransient
+	//     FALSE (no marker) → not transient. Do not hand-build this code and
+	//     expect Requeue; route through WrapInfra (vault.classifyVaultError).
+	//
+	// Use IsTransient(err) to check the full error chain — never compare
+	// against this code string for disposition.
 	//
 	// ref: aws/aws-encryption-sdk-python src/aws_encryption_sdk/exceptions.py
 	// (GenerateKeyError / DecryptKeyError transient vs permanent split).
@@ -829,6 +836,14 @@ type Error struct {
 	Details         []slog.Attr
 	Cause           error
 	Category        Category
+
+	// transient is the private retry-disposition marker. It is the single
+	// recognized signal for IsTransient's *Error positive branch (downstream
+	// Hard: "looks transient but didn't pass WrapInfra" is type-inexpressible
+	// outside this package). It is set ONLY by WrapInfra — never by New, Wrap,
+	// Assertion, or any Option. archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
+	// statically asserts no other assignment site exists in pkg/errcode.
+	transient bool
 }
 
 // FindAttr returns the first detail attribute whose Key matches key, or the

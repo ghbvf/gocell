@@ -61,7 +61,7 @@ const fakeNonce = "FAKENC123456" // 12 bytes
 
 func (f *fakeValueTransformer) Encrypt(_ context.Context, plaintext, aad []byte) (crypto.EncryptResult, error) {
 	if f.failEncrypt {
-		return crypto.EncryptResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "fake: forced encrypt failure")
+		return crypto.EncryptResult{}, errcode.WrapInfra(errcode.ErrKeyProviderTransient, "fake: forced encrypt failure", nil)
 	}
 	// Fake cipher: XOR each byte with 0x55.
 	ct := make([]byte, len(plaintext))
@@ -1026,7 +1026,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 
 	t.Run("cryptoOpError direct — ErrConfigEncryptFailed transient", func(t *testing.T) {
 		repo := newConfigRepositoryFromDBTX(&mockDB{})
-		transient := errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault sealed")
+		transient := errcode.WrapInfra(errcode.ErrKeyProviderTransient, "vault sealed", nil)
 		ec := repo.cryptoOpError(errcode.ErrConfigEncryptFailed, "Encrypt", "key=foo", transient)
 		require.NotNil(t, ec)
 		assert.Equal(t, errcode.ErrConfigEncryptFailed, ec.Code)

@@ -3,6 +3,7 @@ package errcode
 import (
 	"context"
 	"errors"
+	"net"
 	"slices"
 )
 
@@ -95,32 +96,103 @@ func IsDomainNotFound(err error, codes ...Code) bool {
 	return slices.Contains(codes, ec.Code)
 }
 
-// IsTransient reports whether err, or any error in its Unwrap chain, carries
-// the ErrKeyProviderTransient code. It is the canonical predicate for routing
-// KeyProvider failures in EventBus handlers:
+// WrapInfra is the single typed funnel for producing a transient (retry-safe)
+// infrastructure error. It is the ONLY constructor that sets the private
+// Error.transient marker — adapter classifiers (classifyPGError /
+// classifyRedisError / classifyS3Error) route their transient branch through
+// it so that IsTransient can recognize the result.
+//
+// Behavior:
+//   - Kind = KindUnavailable (HTTP 503 "retry after a brief delay")
+//   - Category = CategoryInfra
+//   - Code = the caller's operation code (e.g. ERR_ADAPTER_PG_QUERY) — there
+//     is no parallel ErrAdapter*Transient code set; transient-vs-permanent is
+//     the single Kind+marker axis, queryable in metrics by Kind.
+//   - the private transient marker is set true
+//
+// The const-literal restriction documented on New applies to message.
+//
+// Funnel double-lock (per .claude/rules/gocell/ai-collab.md "Funnel 双向锁"):
+//   - upstream Hard: a transient adapter error is producible only via this
+//     function; the marker field is unexported so no package outside errcode
+//     can set it.
+//   - downstream Hard: IsTransient's *Error positive branch keys only on the
+//     marker, never on a code string.
+//
+// archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 enforces both sides.
+//
+// ref: jackc/pgx pgconn SafeToRetry; aws/aws-sdk-go-v2 aws/retry RetryableError.
+func WrapInfra(code Code, message string, cause error, opts ...Option) *Error {
+	e := Wrap(KindUnavailable, code, message, cause, opts...)
+	e.Category = CategoryInfra
+	e.transient = true
+	return e
+}
+
+// IsTransient reports whether err is a transient (retry-safe) condition that
+// an EventBus handler should Requeue rather than Reject:
 //
 //	if errcode.IsTransient(err) {
 //	    return outbox.Requeue(err)
 //	}
-//	return outbox.Reject(err)
+//	return outbox.Reject(outbox.NewPermanentError(err))
 //
-// Transient conditions map to Vault HTTP 503 / 429 / 408 / 499 (sealed,
-// rate-limited, request timeout). All other KeyProvider errors are permanent
-// (400 / 403 / 404) and must be routed to DispositionReject → DLX.
+// Classification is two-tier and the outer tier is authoritative:
 //
-// Returns false for nil. Uses errors.As so it correctly traverses chains
-// produced by fmt.Errorf("…: %w", err).
+//  1. If the chain contains any *errcode.Error, the OUTERMOST one's WrapInfra
+//     transient marker is the final answer — return ec.transient and stop.
+//     A re-wrap via Wrap/New is a deliberate RE-CLASSIFICATION: the outer
+//     layer owns the disposition decision, so an inner WrapInfra marker does
+//     NOT leak through an outer permanent re-wrap (e.g. configcore
+//     cryptoOpError re-wraps a vault-transient cause as a config-layer
+//     KindInternal error and is routed via IsInfraError, not IsTransient).
+//     Raw recognizers (tier 2) are NOT consulted once the error is classified
+//     — a classified-permanent error stays permanent even if some inner cause
+//     looks network-ish. This is the open-source consensus (gRPC/AWS SDK v2/
+//     Kratos: the boundary classifier's decision wins; re-wrap = re-classify)
+//     and keeps the WrapInfra funnel single-sourced.
+//  2. Only when the chain contains NO *errcode.Error (a raw, un-classified
+//     low-level error) are these recognized as transient:
+//     - context.DeadlineExceeded (a deadline may not recur on retry);
+//     context.Canceled is NOT transient (the caller gave up);
+//     - net.Error with Timeout()==true (modern replacement for the
+//     deprecated net.Error.Temporary(), golang/go #45729);
+//     - interface{ RetryableError() bool } == true (pgconn.SafeToRetry /
+//     aws-sdk-go-v2 RetryableError idiom for raw SDK errors).
 //
-// ref: aws/aws-encryption-sdk-python src/aws_encryption_sdk/exceptions.py
+// errors.As binds the outermost *Error (fmt.Errorf("…: %w", WrapInfra(…))
+// still yields the WrapInfra *Error as the first — and only — *Error, so
+// fmt-wrapping is transparent; only an outer errcode.Wrap/New re-classifies).
+//
+// Returns false for nil.
 func IsTransient(err error) bool {
 	if err == nil {
 		return false
 	}
+
+	// Tier 1: a classified *errcode.Error is authoritative (outermost wins).
 	var ec *Error
-	if !errors.As(err, &ec) {
-		return false
+	if errors.As(err, &ec) {
+		return ec.transient
 	}
-	return ec.Code == ErrKeyProviderTransient
+
+	// Tier 2: raw, un-classified low-level error only.
+	// context.Canceled is intentionally excluded (caller gave up).
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	var retryable interface{ RetryableError() bool }
+	if errors.As(err, &retryable) {
+		return retryable.RetryableError()
+	}
+
+	return false
 }
 
 // IsExpected4xx reports whether err maps to an HTTP 400-499 response code.
