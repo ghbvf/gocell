@@ -200,6 +200,39 @@ func (v *Validator) rules() { v.e.newResult("IFACE-07") }
 			expected: nil,
 		},
 		{
+			name: "embedded_locator_outer_receiver_ignored_RED",
+			// Reviewer follow-up RED (post-PR #521 commit baba2a6f2):
+			// the marker-based owner gate (types.Implements) is defeated
+			// by Go method-set promotion via embedding. Validator embeds
+			// locator by value (mirroring kernel/governance/validate.go),
+			// so *Validator's method set INHERITS *locator's marker
+			// method — types.Implements(*Validator, emitterIface) returns
+			// true. If the outer receiver adds an emitter-shaped method
+			// (fakeEmit here), the pre-fix predicate incorrectly accepts
+			// it and captures "EMBED-PROMO-09" into reachable IDs.
+			//
+			// This fixture pins the actual R2-P1 invariant ("only
+			// *locator is an emitter holder") — the original
+			// non_marker_receiver_with_emitter_shape RED used Helper
+			// (no embedding) and missed this promotion path entirely.
+			// Post-fix (types.Identical-based owner gate, scoped to the
+			// locator type only) the predicate rejects fakeEmit because
+			// recvNamed=Validator is not identical to locator.
+			source: `package fixture
+type RuleCode string
+type ValidationResult struct{ Code RuleCode }
+type validationResultEmitter interface { isValidationResultEmitter() }
+type locator struct{}
+func (*locator) isValidationResultEmitter()              {}
+func (l *locator) newResult(s RuleCode) ValidationResult { return ValidationResult{} }
+type Validator struct{ locator }
+func (v *Validator) rules()                              { _ = v.fakeEmit("EMBED-PROMO-09") }
+func (v *Validator) fakeEmit(s RuleCode) ValidationResult { return ValidationResult{} }
+`,
+			roots:    []funcKey{{recv: "Validator", name: "rules"}},
+			expected: nil,
+		},
+		{
 			name: "non_marker_receiver_with_emitter_shape_ignored_RED",
 			// R2-P1 marker upgrade RED proof: perfect emitter shape
 			// (RuleCode arg 0 + ValidationResult return + same-package
