@@ -139,35 +139,38 @@ func clockControlPlaneAllowedFuncs(fset *token.FileSet, file *ast.File) map[stri
 //  2. A method (receiver FuncDecl) declared inside a file-scope var init block:
 //     not possible in Go syntax; not a blind spot.
 //
-// Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
+// Uses FindFirstChild[ast.FuncDecl](file, ...) — top-level FuncDecls are
 // direct children of *ast.File; no nested function literal can be a top-level
 // FuncDecl, so depth=1 is correct.
+//
+// The closure-check in step 2 uses EachInSubtree outside any EachInChildren
+// callback, so no sentinel flag is held inside an EachInChildren closure
+// (SCANNER-FRAMEWORK-USAGE-02 compliant).
 func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) string {
-	result := ""
-	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-		if result != "" || fd.Body == nil {
-			return
-		}
-		// pos must be within this FuncDecl's body.
-		if !(fd.Body.Pos() <= pos && pos <= fd.Body.End()) {
-			return
-		}
-		// pos is inside fd.Body. Now check it is NOT inside a nested FuncLit.
-		// EachInSubtree[ast.FuncLit](fd.Body, ...) walks all FuncLits at any depth.
-		insideClosure := false
-		EachInSubtree[ast.FuncLit](fd.Body, func(fl *ast.FuncLit) {
-			if insideClosure || fl.Body == nil {
-				return
-			}
-			if fl.Body.Pos() <= pos && pos <= fl.Body.End() {
-				insideClosure = true
-			}
-		})
-		if !insideClosure {
-			result = fset.Position(fd.Name.Pos()).String()
+	// Step 1: find the top-level FuncDecl whose body spans pos. FindFirstChild
+	// stops at depth=1 — correct because top-level FuncDecls are direct children
+	// of *ast.File and there is at most one enclosing FuncDecl per pos.
+	fd, ok := FindFirstChild[ast.FuncDecl](file, func(fd *ast.FuncDecl) bool {
+		return fd.Body != nil && fd.Body.Pos() <= pos && pos <= fd.Body.End()
+	})
+	if !ok {
+		return ""
+	}
+	// Step 2: reject pos if it falls inside a nested FuncLit body (closure).
+	// EachInSubtree[ast.FuncLit] walks all FuncLits at any depth inside fd.Body.
+	// The insideClosure flag is held outside any EachInChildren callback, so this
+	// is not the USAGE-02 forbidden pattern (USAGE-02 only monitors
+	// EachInChildren callbacks; this is a stand-alone EachInSubtree call).
+	insideClosure := false
+	EachInSubtree[ast.FuncLit](fd.Body, func(fl *ast.FuncLit) {
+		if fl.Body != nil && fl.Body.Pos() <= pos && pos <= fl.Body.End() {
+			insideClosure = true
 		}
 	})
-	return result
+	if insideClosure {
+		return ""
+	}
+	return fset.Position(fd.Name.Pos()).String()
 }
 
 // clockCallsiteAllowedLines returns the set of source line numbers in file
