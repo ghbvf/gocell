@@ -1,6 +1,6 @@
 # archtest 入口合并方案：Pass-Driver 范式 + 零二次返工迁移
 
-**最后更新**：2026-05-16（Stage 3 PR-7 ✅ PR #507 + Stage 1.7 RunTypedProduction ship）
+**最后更新**：2026-05-16（Stage 1.8 façade 完备性 + USAGE-02 升 Hard，吸收 037 PR #505）
 
 ## 进度状态
 
@@ -10,9 +10,27 @@
 | **1.5 — Pass 框架完备化 + 单路径 enforcement** | 1 | ✅ PR #495 (2026-05-15) | Stage 2/3/dual 全后续 PR 零框架返工前置；见下方摘要 |
 | **1.6 — RunTypedDir fixture-module driver 补全** | 1 | ✅ PR #500 (2026-05-15) | Stage-1.5 漏盘点 standalone fixture-module 扫描；随 PR-6 同 ship |
 | **1.7 — RunTypedProduction production-only façade** | 1 | ✅ PR #507 (2026-05-16) | auth_bootstrap 迁移需要 production-only package set；随 PR-7 同 ship |
+| **1.8 — FindFirstChild façade + USAGE-02 升 Hard** | 1 | 🔄 本 PR (2026-05-16) | 吸收 037 PR #505 治理产物；不计入 Stage 3 实质迁移进度 |
 | 2 — A 类 EachFile 主题分批迁移 | 4 | ✅ 全部 ship | PR-2 ✅ #496 (metadata)；PR-3 ✅ #493 (contract/codegen)；PR-4 ✅ #498 (observability)；PR-5 ✅ #497 (lifecycle/errcode) |
 | 3 — E 类 for-range 主题分批迁移 | 5 | 🔄 PR-6 ✅ #500 (clock，含 Stage 1.6)；PR-7 ✅ #507 (errcode + auth_bootstrap，含 Stage 1.7)；余 PR-8 ~ PR-10 待起 | 与阶段 2 并行；前置 = 阶段 1.5 |
-| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ⏳ 等阶段 3 全部 ship（阶段 2 已完成） | — |
+| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ⏳ 等阶段 3 全部 ship（阶段 2 已完成；阶段 1.8 façade 完备） | — |
+
+**阶段 1.8 ship 摘要（本 PR，2026-05-16）**：
+
+> **根因**：037 治理项 PR #505 引入 `scanner.FindFirstChild` 和 `SCANNER-FRAMEWORK-USAGE-02`，但 (i) `tools/archtest/walk.go` 未补 `FindFirstChild` façade 出口，Stage 4 封 internal/scanner 后业务侧无路可走；(ii) USAGE-02 检测器 typeseval target 仅 `scannerPkgPath.EachInChildren`，040 façade 端态 `archtest.EachInChildren` 上写出 done/found sentinel 会 silent miss；(iii) PR #505 fixture pipeline 走 inline-source + `empty := &types.Info{}` 启用 syntactic fallback（`scannerLocalName` + `id.Name == ...` 分支）——typeseval 主路径 + syntactic 兜底并存，是 PR #505 godoc AI-rebust 评级（form-ban Medium = Go ceiling，与 fallback 不同轴）未覆盖到的 Soft 盲点。Stage 4 封 internal/scanner 前一次性补齐 façade + 升 Hard，不留 follow-up。
+
+- 新增 `archtest.FindFirstChild[S,N]` walk.go 薄委托（040 façade 端态完备性收尾；Scope 构造 façade 已在 PR #507 / 更早 PR 中补齐）
+- `SCANNER-FRAMEWORK-USAGE-02` 升 Hard：删 `scannerLocalName` 函数 + `isScannerEachInChildren` 的 syntactic 分支；改名 `isScannerEachInChildren` → `isMonitoredEachInChildren`，参数去 `file *ast.File`；typeseval target 扩到 `{scannerPkgPath, archtestPkgPath}`（双 callee，archtest.EachInChildren 是 scanner.EachInChildren 的薄 façade，两者形态等价禁用 sentinel）
+- fixture pipeline 升 typed：原 `TestScannerFrameworkUsage02_Fixture` 的 6 个 inline-source case + `TestScannerFrameworkUsage02_BlindSpotForwardFixtures` 的 3 个 BS forward fixture 全部转 `tools/archtest/internal/usage02fixtures/<case>.go` 真实 Go 文件；新 helper `loadFixture02(caseName, detector)` 复用 `typeseval.SharedResolver` typed 加载，与 live scan 同源；fixture 与 live 共用同一 `*types.Info` 来源，pure detector 不分叉。fixture 子包路径深一级，被 USAGE-02 live filter（`Dir(rel) == "tools/archtest"` && `_test.go` 后缀）自动排除，无自检测循环
+- fixture 案例增 archtest 形态：`red_archtest_done_sentinel.go`（archtest.EachInChildren + sentinel，必 RED → typeseval 解析至 archtestPkgPath.EachInChildren → 命中 1 hit）+ `green_archtest_findfirstchild.go`（archtest.FindFirstChild → 0 hits），共 9 个 fixture 子包
+- 040 plan façade 列表更新：walk.go = `EachInSubtree / EachInChildren / FindFirstChild / StringLitValue / ReceiverTypeName`（共 5 个，FindFirstChild 是本 Stage 新增）；scope.go = `Scope/ScopeOption/FileContext/Diagnostic` type alias + `ModuleScope/DirsScope/IncludeTests/ExcludeRels/MatchRels/IncludeTestdata/IncludeGenerated/Report`（已在 Stage 1.7 PR #507 中补齐，不在本 Stage 改动范围）
+- AI-rebust 评级：USAGE-02 检测器升至 typeseval 单路径 Hard（删 fallback）；fixture-live 同源 typed pipeline Hard；上游 form-ban Medium "Go ceiling"（PR #505 godoc 原文延续，与 fallback Soft 是不同轴）；syntactic fallback Soft 盲点关闭
+- **Stage 2/3 迁移 checklist 增条**：业务测试 import 切换时，`scanner.FindFirstChild` 必须随 `scanner.*` → `archtest.*` 切换一并改成 `archtest.FindFirstChild`，单文件一次迁移完成不留半态
+- **验证**：`go build ./...` 绿；`go test ./tools/archtest/...` 全绿（含新加 USAGE-02 fixture cases）；`hack/verify-archtest.sh` 16 shard PASS；golangci-lint 0 issues；既有 24 处 `scanner.FindFirstChild` 调用点 + 9 处 USAGE-02 迁移点不退化（fixture 子包路径过滤排除）
+
+**设计决策 D1（Stage 1.8）— 删 syntactic fallback 而非扩 fallback 集合**：
+
+> 用户原议案（PR-505 args 字面）建议扩 fallback 识别集合 `OR(scanner, archtest)`，让 inline-source fixture 也能测 archtest 形态。这是在 PR #505 既有 Soft 兜底之上扩集合——违反 ai-collab.md §"Review checklist"对既有 Soft 的处理原则（"优先讨论升级到 Hard/Medium，而非在 Soft 层打补丁"）。本 Stage 选择把 fixture pipeline 一次升 typed，删 syntactic fallback、扩 typeseval target，让 USAGE-02 检测器只剩单一 Hard 路径。代价是 fixture 不能用 inline source（必须 testdata typed module 或 internal 子包），收益是 fixture-live 同源 anti-drift 形态对齐 typeseval Hard，无双轨。
 
 **阶段 1.7 ship 摘要（2026-05-16，随 Stage 3 PR-7 同 ship）**：
 
