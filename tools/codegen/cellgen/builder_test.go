@@ -310,18 +310,41 @@ func TestBuildCellSpec_NoListenersWithRouteMountFails(t *testing.T) {
 	}
 }
 
-func TestBuildSliceSpec_NoSubscribesReturnsNil(t *testing.T) {
+// TestBuildSliceSpec_NoSubscribesStillEmitsMeta asserts the new always-emit
+// behaviour: every slice produces a SliceGenSpec carrying the sliceMeta
+// literal (the SoR for cell.MustNewBaseSliceFromMeta), even when no event
+// subscriptions are declared. The handler interface block is rendered
+// conditionally by slice.tmpl when Handlers is non-empty.
+func TestBuildSliceSpec_NoSubscribesStillEmitsMeta(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+	slc := &metadata.SliceMeta{
+		ID:               "alpha",
+		BelongsToCell:    "demo",
+		ConsistencyLevel: "L0",
+		Dir:              "alpha",
+		File:             "cells/demo/slices/alpha/slice.yaml",
+	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 
 	spec, err := BuildSliceSpec(p, "demo", "alpha", markergen.WireBundle{})
 	if err != nil {
 		t.Fatalf("BuildSliceSpec: %v", err)
 	}
-	if spec != nil {
-		t.Errorf("expected nil spec for slice without subscribes")
+	if spec == nil {
+		t.Fatalf("expected non-nil spec for slice without subscribes")
+	}
+	if len(spec.Handlers) != 0 {
+		t.Errorf("expected no handlers, got %d", len(spec.Handlers))
+	}
+	if spec.RenderedMetaLiteral == "" {
+		t.Errorf("expected sliceMeta literal to be rendered")
+	}
+	if !strings.Contains(spec.RenderedMetaLiteral, `ID:               "alpha"`) {
+		t.Errorf("rendered literal missing ID: %q", spec.RenderedMetaLiteral)
+	}
+	if !strings.Contains(spec.RenderedMetaLiteral, `ConsistencyLevel: "L0"`) {
+		t.Errorf("rendered literal missing ConsistencyLevel: %q", spec.RenderedMetaLiteral)
 	}
 }
 

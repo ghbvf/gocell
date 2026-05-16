@@ -158,6 +158,11 @@ func TestRenderSlice_ProducesServiceInterface(t *testing.T) {
 		Package: "subs",
 		CellID:  "demo",
 		SliceID: "subs",
+		RenderedMetaLiteral: `&metadata.SliceMeta{
+	ID:               "subs",
+	BelongsToCell:    "demo",
+	ConsistencyLevel: "L2",
+}`,
 		Handlers: []SliceHandlerSpec{
 			{MethodName: "HandleAlpha", ContractID: "event.alpha.v1"},
 			{MethodName: "HandleBeta", ContractID: "event.beta.v1"},
@@ -191,8 +196,11 @@ func TestGenerate_DryRunDoesNotWriteFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if len(res.Generated) != 1 {
-		t.Errorf("Generated = %v, want 1 entry", res.Generated)
+	// Two entries: cells/demo/cell_gen.go + cells/demo/slices/alpha/slice_gen.go
+	// (every slice always emits slice_gen.go now — the typed sliceMeta is the
+	// funnel SoR for cell.MustNewBaseSliceFromMeta).
+	if len(res.Generated) != 2 {
+		t.Errorf("Generated = %v, want 2 entries", res.Generated)
 	}
 	if _, err := os.Stat(filepath.Join(root, "cells", "demo", "cell_gen.go")); !os.IsNotExist(err) {
 		t.Errorf("DryRun should not write file; err = %v", err)
@@ -207,8 +215,9 @@ func TestGenerate_VerifyDriftWhenFileMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if len(res.Drifted) != 1 {
-		t.Errorf("expected one drifted file, got %v", res.Drifted)
+	// Two missing files: cell_gen.go + slice_gen.go (always emitted).
+	if len(res.Drifted) != 2 {
+		t.Errorf("expected two drifted files, got %v", res.Drifted)
 	}
 }
 
@@ -420,7 +429,7 @@ func buildSyntheticProject() *metadata.ProjectMeta {
 		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo"),
 	}
 	slc := &metadata.SliceMeta{
-		ID: "alpha", BelongsToCell: "demo", Dir: "alpha",
+		ID: "alpha", BelongsToCell: "demo", ConsistencyLevel: "L2", Dir: "alpha",
 		File: "cells/demo/slices/alpha/slice.yaml",
 	}
 	contract := &metadata.ContractMeta{

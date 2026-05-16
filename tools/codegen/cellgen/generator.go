@@ -160,9 +160,10 @@ func generateOneCell(
 		if err != nil {
 			return err
 		}
-		if sliceSpec == nil {
-			continue
-		}
+		// Every slice produces a slice_gen.go now — sliceMeta literal is the
+		// SoR consumed by cell.MustNewBaseSliceFromMeta. BuildSliceSpec only
+		// returns nil under a contract violation (project nil / slice not
+		// found), both of which surface as explicit errors above.
 		slice := project.Slices[cell.ID+"/"+sid]
 		errPrefix := "cellgen generate: render slice " + cell.ID + "/" + sid
 		if err := renderAndWrite(root, "slice.tmpl", sliceSpec, sliceGenPath(root, slice), opts, res, errPrefix); err != nil {
@@ -255,9 +256,6 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		sliceSpec, err := BuildSliceSpec(project, cellID, sid, bundle)
 		if err != nil {
 			return nil, err
-		}
-		if sliceSpec == nil {
-			continue
 		}
 		slice := project.Slices[cellID+"/"+sid]
 		sliceAbs := sliceGenPath(root, slice)
