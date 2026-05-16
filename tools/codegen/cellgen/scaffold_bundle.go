@@ -202,7 +202,7 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 		plan = append(plan, items...)
 	}
 	if withEvents {
-		items, err := planEventExampleArtifacts(realRoot, spec, cellNoDash, sliceID)
+		items, err := planEventExampleArtifacts(realRoot, spec, cellNoDash, sliceID, withHTTP)
 		if err != nil {
 			return nil, err
 		}
@@ -279,10 +279,13 @@ func planHTTPExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sl
 }
 
 // planEventExampleArtifacts renders the event slice + contract pair and returns
-// them as PlannedFiles. When spec.WithBoth, uses a separate event slice ID.
-func planEventExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sliceID string) ([]pathsafe.PlannedFile, error) {
+// them as PlannedFiles. When withHTTP is true (an HTTP slice is also present),
+// uses a distinct event sliceID (cellNoDash+"eventexample") to avoid duplicate
+// AbsPath collisions — gating on withHTTP rather than spec.WithBoth unifies the
+// WithBoth path and the WithHTTP&&WithEvents path under one rule.
+func planEventExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sliceID string, withHTTP bool) ([]pathsafe.PlannedFile, error) {
 	eventSliceID := sliceID
-	if spec.WithBoth {
+	if withHTTP {
 		eventSliceID = cellNoDash + "eventexample"
 	}
 	bd := bundleData{

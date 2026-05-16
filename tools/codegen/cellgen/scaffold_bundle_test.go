@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
 
 // TestScaffoldCellBundle_HTTP is a RED test for K#09 cellgen.ScaffoldCellBundle:
@@ -582,6 +583,70 @@ func TestScaffoldSpec_Validate_AcceptsL2WithEvents(t *testing.T) {
 	}
 	if err := ScaffoldCellBundle(dir, spec); err != nil {
 		t.Fatalf("expected no error for L2+WithEvents, got: %v", err)
+	}
+}
+
+// TestPlanEventExampleArtifacts_HTTPAndEvents_DistinctSliceID is a RED test for
+// SCAFFOLD-BUNDLE-VARIANT-DUPLICATE-PATH-01. When WithHTTP=true and
+// WithEvents=true (WithBoth=false), the event slice must use a distinct sliceID
+// (cellNoDash+"eventexample") instead of the same sliceID as the HTTP slice.
+// The old code only assigned the distinct ID when WithBoth=true, causing both
+// HTTP and event slices to write under the same directory → duplicate AbsPath.
+func TestPlanEventExampleArtifacts_HTTPAndEvents_DistinctSliceID(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	spec := ScaffoldSpec{
+		CellID:           "myhttpcell",
+		StructName:       "MyHTTPCell",
+		Package:          "myhttpcell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2", // events require >= L2
+		WithHTTP:         true,
+		WithEvents:       true,
+		// WithBoth intentionally false — this is the degenerate "both flags" path
+	}
+
+	realRoot, err := pathsafe.ResolveRoot(dir)
+	if err != nil {
+		t.Fatalf("ResolveRoot: %v", err)
+	}
+	plan, err := planCellBundle(realRoot, spec)
+	if err != nil {
+		t.Fatalf("planCellBundle: %v", err)
+	}
+
+	// Assert no duplicate AbsPath entries.
+	seen := make(map[string]int)
+	for _, f := range plan {
+		seen[f.AbsPath]++
+	}
+	for path, count := range seen {
+		if count > 1 {
+			t.Errorf("duplicate AbsPath in plan: %s (count=%d)", path, count)
+		}
+	}
+
+	// Assert that the HTTP and event slices have distinct directories.
+	var httpSliceDir, eventSliceDir string
+	for _, f := range plan {
+		rel, _ := filepath.Rel(realRoot, f.AbsPath)
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "cells/myhttpcell/slices/myhttpcellexample/") {
+			httpSliceDir = "cells/myhttpcell/slices/myhttpcellexample"
+		}
+		if strings.HasPrefix(rel, "cells/myhttpcell/slices/myhttpcelleventexample/") {
+			eventSliceDir = "cells/myhttpcell/slices/myhttpcelleventexample"
+		}
+	}
+	if httpSliceDir == "" {
+		t.Errorf("HTTP slice dir cells/myhttpcell/slices/myhttpcellexample not found in plan")
+	}
+	if eventSliceDir == "" {
+		t.Errorf("event slice dir cells/myhttpcell/slices/myhttpcelleventexample not found in plan")
 	}
 }
 
