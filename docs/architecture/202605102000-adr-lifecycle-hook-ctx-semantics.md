@@ -1,14 +1,17 @@
 # ADR: cell.LifecycleHook.OnStart ctx 语义 — owner ctx（controller-runtime 范式）
 
 > Status: Partially Superseded
-> Superseded-by: `202605170000-adr-control-plane-business-plane-decouple.md`（§D1 RETRACTED, §D3 RESOLVED, §Consequences 依赖前提段重写）
+> Superseded-by: `202605170000-adr-control-plane-business-plane-decouple.md`（§D1 RETRACTED, §D3 RESOLVED）
 > Date: 2026-05-10
-> Updated: 2026-05-17（§D1 RETRACTED / §D3 RESOLVED / §Consequences 重写，见 supersede ADR）
+> Updated: 2026-05-17（§D1 RETRACTED / §D3 RESOLVED / §Consequences 重写；
+>   strikethrough prose physically removed per ai-collab.md single-truth-source rule）
 > Implementation: PR #441 第二轮 review F3-C（runtime/command/lifecycle_rollback_test.go 集成测试）
 
 ## Context
 
-`cell.LifecycleHook.OnStart(ctx context.Context) error` 当前由 bootstrap phase6 调用并传入 startup-budget ctx（来自 `LifecycleHook.StartTimeout` 字段）。`runtime/command.SweeperLifecycle.Start` 实现（PR #441 之前）：
+`cell.LifecycleHook.OnStart(ctx context.Context) error` 当前由 bootstrap phase6
+调用并传入 startup-budget ctx（来自 `LifecycleHook.StartTimeout` 字段）。
+`runtime/command.SweeperLifecycle.Start` 实现（PR #441 之前）：
 
 ```go
 func (l *SweeperLifecycle) Start(_ context.Context) error {
@@ -22,71 +25,74 @@ func (l *SweeperLifecycle) Start(_ context.Context) error {
 }
 ```
 
-worker goroutine 用 `context.Background()` 派生的 runCtx 跑，**与 OnStart 传入的 ctx 完全脱钩**。
+worker goroutine 用 `context.Background()` 派生的 runCtx 跑，**与 OnStart 传入的
+ctx 完全脱钩**。
 
-PR 441 第二轮 review 的运维席位将此标记为 P1：**启动失败/回滚时 worker 生命周期失配**。论据：controller-runtime `manager.Start(ctx)` 把调用方 ctx 贯穿所有 internal worker；Uber Fx OnStart 与回滚 OnStop 共享启动预算 ctx；GoCell 这条独立 background 派生违背业界主流。
-
-激进自审：`cell.LifecycleHook.StartTimeout` 字段的存在表明 OnStart ctx 设计语义就是 **startup deadline**（短生命周期，启动完成立刻 cancel）。如果 worker 从 OnStart ctx 派生，OnStart 一返回 worker 就被 cancel —— 行为退化为"启动一次就死"，与 uber-go/fx hook 语义一致。所以 background 派生是**正确的**，与 `cell.LifecycleHook` 协议匹配。
-
-但运维席位的另一层关切真实存在：bootstrap LIFO rollback 路径下，worker goroutine 的取消通道必须可靠。当前实现里 worker 仅由 `Stop()` 内的 `cancel()` 触发退出 —— 如果 bootstrap 在 LIFO 反向遍历时漏调 OnStop（理论上不会，但 silent 假设），worker 永远活。
+PR 441 第二轮 review 的运维席位将此标记为 P1：**启动失败/回滚时 worker 生命周期失
+配**。论据：controller-runtime `manager.Start(ctx)` 把调用方 ctx 贯穿所有 internal
+worker；GoCell 这条独立 background 派生违背业界主流，且 rollback 路径下 worker
+取消通道的可靠性是隐式假设（仅依赖 LIFO OnStop 调用，无独立取消路径）。
 
 ## Decision
 
-### D1. ~~维持 `context.WithCancel(context.Background())` 作为 worker ctx 的派生源~~ **[RETRACTED]**
+### D1. [RETRACTED] — 已被 `202605170000-adr-control-plane-business-plane-decouple.md` §D-B 取代
 
-> **RETRACTED**（2026-05-17，superseded by `202605170000-adr-control-plane-business-plane-decouple.md` §D-B）
->
-> 原 D1 决定"维持 Background() 派生"已被推翻。实际落地如下：
->
-> `cell.LifecycleHook.OnStart(ctx)` 的 ctx 语义重定义为**长生命 owner ctx**，对齐
-> controller-runtime `Runnable.Start(managerCtx)` 范式。bootstrap 在 `Run()` 内从
-> `runCtx`（assembly 运行期 ctx）派生 `ownerCtx`，并传入 `lifecycle.Start(ownerCtx)`；
-> `runHook(isStart=true)` 直接将 ownerCtx 透传给 `OnStart`，不再 `applyTimeout(StartTimeout)` 包裹。
->
-> 原 D1 中保留 Background() 派生的三点理由（协议一致性、零实测泄漏、不引入预设需求）
-> 均已因 backlog `LIFECYCLE-OWNER-CTX-PROPAGATION-01` 触发条件成立而失效：
-> `LIFECYCLE-CLOCK-CONTROL-PLANE-DECOUPLE-01`（C.1 startup-probe deadlock）与
-> `LIFECYCLE-OWNER-CTX-PROPAGATION-01`（C.2 worker ctx 脱钩）共享同一根因，
-> 同束实施。
->
-> **StartTimeout 语义降级**：字段保留，但仅作 hook 自身探针窗口预算（informational），
-> runner 不再将其强制为 OnStart ctx deadline。
+原 D1 决定"维持 Background() 派生"已被推翻。实际落地：
+
+`cell.LifecycleHook.OnStart(ctx)` 的 ctx 语义重定义为**长生命 owner ctx**，对齐
+controller-runtime `Runnable.Start(managerCtx)` 范式。bootstrap 在 `Run()` 内从
+`runCtx`（assembly 运行期 ctx）派生 `ownerCtx`，并传入 `lifecycle.Start(ownerCtx)`；
+`runHook(isStart=true)` 直接将 ownerCtx 透传给 `OnStart`，不再 `applyTimeout(StartTimeout)` 包裹。
+
+原 D1 中保留 Background() 派生的三点理由（协议一致性、零实测泄漏、不引入预设需求）
+均已因 backlog `LIFECYCLE-OWNER-CTX-PROPAGATION-01` 触发条件成立而失效：
+`LIFECYCLE-CLOCK-CONTROL-PLANE-DECOUPLE-01`（C.1 startup-probe deadlock）与
+`LIFECYCLE-OWNER-CTX-PROPAGATION-01`（C.2 worker ctx 脱钩）共享同一根因，同束实施。
+
+**StartTimeout 语义降级**：字段保留，但仅作 hook 自身探针窗口预算（informational），
+runner 不再将其强制为 OnStart ctx deadline。
 
 ### D2. 加 `TestSweeperLifecycle_StartupFailRollback` 集成测试钉死 rollback 契约
 
-在 `runtime/command/lifecycle_rollback_test.go` 模拟 bootstrap LIFO rollback 路径：OnStart → OnStop（启动后立即触发回滚）→ goleak 验证 worker goroutine 干净退出。
+在 `runtime/command/lifecycle_rollback_test.go` 模拟 bootstrap LIFO rollback 路径：
+OnStart → OnStop（启动后立即触发回滚）→ goleak 验证 worker goroutine 干净退出。
 
-**新语义下重验通过**（2026-05-17）：`TestSweeperLifecycle_StartupFailRollback` 在 owner ctx 语义下仍通过 —— rollback LIFO 正确执行，goleak 无 goroutine 泄漏。worker 现在额外响应 ownerCancel，使得 rollback 更可靠（两条取消路径：ownerCancel + OnStop cancel）。
+**新语义下重验通过**（2026-05-17）：`TestSweeperLifecycle_StartupFailRollback` 在 owner
+ctx 语义下仍通过 —— rollback LIFO 正确执行，goleak 无 goroutine 泄漏。worker 现在额外
+响应 ownerCancel，使得 rollback 更可靠（两条取消路径：ownerCancel + OnStop cancel）。
 
-如果未来 refactor 让 worker 的取消通道脱离 OnStop（或漏调 OnStop），该测试仍会 fail。这是 D2"零实测泄漏"论据的反向防护。
+如果未来 refactor 让 worker 的取消通道脱离 OnStop（或漏调 OnStop），该测试仍会 fail。
 
-### D3. ~~长期改造留 backlog `LIFECYCLE-OWNER-CTX-PROPAGATION-01`~~ **[RESOLVED]**
+### D3. [RESOLVED] — `LIFECYCLE-OWNER-CTX-PROPAGATION-01` 已在 PR #212 核销
 
-> **RESOLVED**（2026-05-17，本 PR #212 落地）
->
-> backlog `LIFECYCLE-OWNER-CTX-PROPAGATION-01` 已在本 PR 核销：
-> - `cell.LifecycleHook.OnStart(ctx)` 语义已重定义为 owner ctx（见 D1 RETRACTED 重写）
-> - `runtime/command.SweeperLifecycle.Start(ownerCtx)` 从 ownerCtx 派生 runCtx
-> - `cells/accesscore/refresh_gc.go` OnStart 透传 ownerCtx 给 `gc_worker.Start(ctx)`
-> - `runtime/auth/refresh/gc_worker.go` 删除 `context.WithoutCancel` 自 re-root
->
-> 详见 `202605170000-adr-control-plane-business-plane-decouple.md` §D-B。
+backlog `LIFECYCLE-OWNER-CTX-PROPAGATION-01` 已在本 PR 核销：
+
+- `cell.LifecycleHook.OnStart(ctx)` 语义已重定义为 owner ctx（见 D1 RETRACTED 重写）
+- `runtime/command.SweeperLifecycle.Start(ownerCtx)` 从 ownerCtx 派生 runCtx
+- `cells/accesscore/refresh_gc.go` OnStart 透传 ownerCtx 给 `gc_worker.Start(ctx)`
+- `runtime/auth/refresh/gc_worker.go` 删除 `context.WithoutCancel` 自 re-root
+
+详见 `202605170000-adr-control-plane-business-plane-decouple.md` §D-B。
 
 ## Consequences
 
 正面（更新后语义）：
+
 - OnStart ctx = owner ctx（long-lived）：hook 可响应 assembly 关停 ∪ OnStop，两条取消路径都可用
 - ownerCancel 先于 lifecycle.Stop 执行，worker goroutine 在 OnStop 调用前已退出，OnStop channel-wait 立即返回
 - 集成测试 `TestSweeperLifecycle_StartupFailRollback` 钉死 rollback 契约，新语义下重验通过
 
 负面/取舍（更新后语义）：
-- OnStart 不再有 runner 强制的 StartTimeout deadline；hook 必须自带快速探针（如 SweeperLifecycle 的 50 ms `controlPlaneProbeTimer`）
-- StartTimeout 降为 informational（slow-start warning threshold）；若 hook 自己不实现探针就直接阻塞，会无限期占用 lifecycle.Start
-- `_ context.Context` 形式的 OnStart ctx 忽略已被消除 —— 但 hook 实现者必须理解 ctx 是 owner ctx（不是用于派生超时上下文）
 
-~~bootstrap LIFO rollback 完整性是隐式契约（runtime/bootstrap 单独保证），lifecycle hook 协议层不可见~~（已更新：ownerCancel 提供独立的协议层可见取消通道）
+- OnStart 不再有 runner 强制的 StartTimeout deadline；hook 必须自带快速探针（如
+  SweeperLifecycle 的 50 ms `controlPlaneProbeTimer`）
+- StartTimeout 降为 informational（slow-start warning threshold）；若 hook 自己不实现
+  探针就直接阻塞，会无限期占用 lifecycle.Start
+- `_ context.Context` 形式的 OnStart ctx 忽略已被消除 —— hook 实现者必须理解 ctx 是
+  owner ctx（不是用于派生超时上下文）
 
-~~`runtime/bootstrap` 的 LIFO 完整性由 `runtime/bootstrap` 包内 phase 编排逻辑保证；如未来改 Stop 调用策略（例如并行 Stop 跳过某些 cell），需同步审查本 ADR §D1 依赖前提是否仍成立。~~（已更新：本依赖前提已消除。OnStop 调用策略变更不影响 ownerCancel → worker 退出路径的正确性。OnStop 仅负责有序排空，不再是唯一取消通道。）
+ownerCancel 提供独立的协议层可见取消通道；OnStop 调用策略变更不影响
+ownerCancel → worker 退出路径的正确性。OnStop 仅负责有序排空，不再是唯一取消通道。
 
 ## ref
 
