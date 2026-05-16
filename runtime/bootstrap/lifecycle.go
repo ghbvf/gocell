@@ -80,9 +80,15 @@ type Hook struct {
 	OnStart func(ctx context.Context) error // nil = no-op
 
 	// OnStop carries a context with StopTimeout deadline applied by the runner.
-	OnStop       func(ctx context.Context) error // nil = no-op
-	StartTimeout time.Duration                   // hook self-declared probe budget (not enforced by runner)
-	StopTimeout  time.Duration                   // 0=use default, <0=no timeout
+	OnStop func(ctx context.Context) error // nil = no-op
+	// StartTimeout is the hook's self-declared probe budget. Informational only —
+	// the runner does NOT enforce it as an OnStart ctx deadline (see ADR
+	// 202605102000 §D1 RETRACTED). Used only for slow-start warning threshold.
+	// Previously the runner applied context.WithTimeout(StartTimeout) to OnStart;
+	// that behavior was retracted when OnStart ctx was redefined as owner ctx
+	// (superseded by ADR 202605170000 §D-B).
+	StartTimeout time.Duration
+	StopTimeout  time.Duration // 0=use default, <0=no timeout
 }
 
 // Lifecycle manages an ordered Hook sequence.

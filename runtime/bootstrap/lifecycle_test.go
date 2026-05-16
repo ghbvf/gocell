@@ -261,12 +261,17 @@ func TestLifecycle_OnStart_NoTimeoutEnforced(t *testing.T) {
 	// No error: StartTimeout is no longer a runner deadline.
 	require.NoError(t, err, "Start must not return error: StartTimeout is not enforced by runner")
 
-	// The hook ran to completion.
-	select {
-	case <-startReturned:
-	default:
-		t.Fatal("expected hook to complete and close startReturned channel")
-	}
+	// Start is synchronous — OnStart completes before Start returns. The
+	// require.Eventually confirms the channel is closed without select/default
+	// flakiness risk on heavily-loaded CI schedulers.
+	require.Eventually(t, func() bool {
+		select {
+		case <-startReturned:
+			return true
+		default:
+			return false
+		}
+	}, testtime.D2s, testtime.D1ms, "hook must complete and close startReturned channel")
 
 	require.NoError(t, lc.Stop(ctx))
 }

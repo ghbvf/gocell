@@ -160,11 +160,18 @@ func NewSweeper(scanner ActiveScanner, queue Queue, opts ...SweeperOption) (*Swe
 	return s, nil
 }
 
-// SweepTick executes a single sweep: read non-terminal entries, compute
-// expirations, terminate each via Queue.Ack(AckTimeout). All errors
-// (scanner error + all Ack errors) are aggregated via errors.Join and returned
-// to the caller. The caller (control plane) is responsible for logging and
-// metrics.
+// SweepTick executes a single sweep: read non-terminal entries via
+// ScanActive, compute expirations via SweepOnce, terminate each expired entry
+// via Queue.Ack(AckTimeout).
+//
+// Error semantics:
+//   - ScanActive error: immediately short-circuits the tick and returns the
+//     scan error. No Ack calls are made (partial-tick risk is avoided).
+//   - Ack errors (scan succeeded): all Ack errors from the full transition set
+//     are aggregated via errors.Join and returned. A single Ack failure does
+//     not abort remaining Ack calls.
+//
+// The caller (control plane) is responsible for logging and metrics.
 //
 // Two head guards close the literal-construction attack surface:
 //

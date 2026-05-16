@@ -267,6 +267,53 @@ func (a *mockAckQueue) Calls() []ackCall {
 
 var _ command.Queue = (*mockAckQueue)(nil)
 
+// mockAckQueuePartialFail returns an error only for the entry whose CommandID
+// matches failID; other calls succeed. Used by TestSweepTick_MixedAckErrors.
+type mockAckQueuePartialFail struct {
+	mu     sync.Mutex
+	calls  int
+	failID string
+	err    error
+}
+
+func (a *mockAckQueuePartialFail) Ack(_ context.Context, id string, _ command.AckReason, _ time.Time) error {
+	a.mu.Lock()
+	a.calls++
+	a.mu.Unlock()
+	if id == a.failID {
+		return a.err
+	}
+	return nil
+}
+
+func (a *mockAckQueuePartialFail) CallCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.calls
+}
+
+func (a *mockAckQueuePartialFail) Enqueue(context.Context, command.Entry, command.EnqueueOptions) error {
+	return errors.New("unused")
+}
+
+func (a *mockAckQueuePartialFail) Dequeue(context.Context, string, int, time.Duration) ([]command.Entry, error) {
+	return nil, errors.New("unused")
+}
+
+func (a *mockAckQueuePartialFail) Report(context.Context, string, time.Time) error {
+	return errors.New("unused")
+}
+
+func (a *mockAckQueuePartialFail) ExtendLease(context.Context, string, time.Duration, time.Time) error {
+	return errors.New("unused")
+}
+
+func (a *mockAckQueuePartialFail) Cancel(context.Context, string, time.Time) error {
+	return errors.New("unused")
+}
+
+var _ command.Queue = (*mockAckQueuePartialFail)(nil)
+
 // ---------------------------------------------------------------------------
 // SweepTick tests (new API — B1-a: replaces runTick/Start)
 // ---------------------------------------------------------------------------
@@ -336,8 +383,9 @@ func TestSweepTick_MultipleAckErrors(t *testing.T) {
 	assert.Equal(t, 2, q.CallCount())
 }
 
-// TestSweepTick_MixedErrors verifies scanner error AND Ack errors are all joined.
-func TestSweepTick_MixedErrors(t *testing.T) {
+// TestSweepTick_ScannerErrorShortCircuits verifies that when scanner returns
+// an error, SweepTick returns that error immediately and makes no Ack calls.
+func TestSweepTick_ScannerErrorShortCircuits(t *testing.T) {
 	t.Parallel()
 	scanErr := errors.New("scan failed")
 	scanner := &mockScanner{err: scanErr}
@@ -350,8 +398,41 @@ func TestSweepTick_MixedErrors(t *testing.T) {
 	got := s.SweepTick(context.Background(), now)
 	require.Error(t, got)
 	assert.ErrorIs(t, got, scanErr)
-	// No Ack calls when scanner fails
+	// No Ack calls when scanner fails (short-circuit).
 	assert.Equal(t, 0, q.CallCount())
+}
+
+// TestSweepTick_MixedAckErrors verifies that when scanner succeeds and returns
+// multiple entries, but some Ack calls fail, the errors are aggregated via
+// errors.Join. Successful Ack calls are not aborted by a failed one.
+func TestSweepTick_MixedAckErrors(t *testing.T) {
+	t.Parallel()
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	e1 := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: testtime.D1min,
+	}, created)
+	e2 := command.NewEntry("cmd-2", "dev-2", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: testtime.D1min,
+	}, created)
+	e3 := command.NewEntry("cmd-3", "dev-3", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: testtime.D1min,
+	}, created)
+	scanner := &mockScanner{entries: []command.Entry{e1, e2, e3}}
+
+	// cmd-2 Ack fails; cmd-1 and cmd-3 succeed.
+	ackErr := errors.New("cmd-2 ack rejected")
+	q := &mockAckQueuePartialFail{failID: "cmd-2", err: ackErr}
+
+	s, err := command.NewSweeper(scanner, q)
+	require.NoError(t, err)
+
+	now := created.Add(testtime.D5min) // all past deadline
+	got := s.SweepTick(context.Background(), now)
+	// Only the Ack error for cmd-2 is returned; scan was successful.
+	require.Error(t, got)
+	assert.ErrorIs(t, got, ackErr)
+	// All 3 Ack calls were made (scan error does not abort remaining calls).
+	assert.Equal(t, 3, q.CallCount())
 }
 
 // TestSweepTick_NoExpiredEntries verifies nil error when nothing expires.
@@ -453,20 +534,6 @@ func TestSweepTick_FilterPropagated(t *testing.T) {
 	assert.Equal(t, filter, scanner.lastFilter)
 }
 
-// TestSweeper_StartZeroValueLiteralRejected closes the zero-value literal
-// attack surface via SweepTick (Start is removed; SweepTick is the new API).
-func TestSweeper_StartZeroValueLiteralRejected(t *testing.T) {
-	t.Parallel()
-	var s command.Sweeper
-	// SweepTick has the built guard now
-	err := s.SweepTick(context.Background(), time.Now())
-	require.Error(t, err, "zero-value Sweeper.SweepTick must fail-closed instead of panicking")
-}
-
-// TestSweeper_StartNilReceiverRejected pins the nil-receiver branch on SweepTick.
-func TestSweeper_StartNilReceiverRejected(t *testing.T) {
-	t.Parallel()
-	var s *command.Sweeper
-	err := s.SweepTick(context.Background(), time.Now())
-	require.Error(t, err, "nil-receiver Sweeper.SweepTick must fail-closed")
-}
+// TestSweeper_StartZeroValueLiteralRejected and TestSweeper_StartNilReceiverRejected
+// were removed as duplicates of TestSweepTick_ZeroValueLiteralReturnsError and
+// TestSweepTick_NilReceiverReturnsError (same assertions, same code paths).

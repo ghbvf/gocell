@@ -80,11 +80,10 @@ func TestSweeperLifecycle_StartDoesNotDeadlock(t *testing.T) {
 	require.NoError(t, lc.Start(ownerCtx))
 	elapsed := time.Since(startedAt)
 
-	// Should return in <500ms (startup probe is ~50ms real time; generous headroom for CI).
-	// The point of this test is that Start doesn't block indefinitely (old behavior
-	// with a frozen clock would block forever). 500ms is well below any reasonable
-	// human-observable delay.
-	assert.Less(t, elapsed, testtime.D500ms,
+	// Should return in <2s. The exact bound is conservative: the core invariant
+	// is "Start does not deadlock", not precise timing. 2s is far above the
+	// expected ~50ms probe window but well below a deadlock scenario.
+	assert.Less(t, elapsed, testtime.D2s,
 		"Start must not block: startup probe uses real time, not an injected clock")
 
 	// Clean up

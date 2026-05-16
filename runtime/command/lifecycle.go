@@ -3,6 +3,7 @@ package command
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // defaultCommandSweeperInterval is the default ticker period when callers do
@@ -29,22 +31,39 @@ const startProbeTimeout = 50 * time.Millisecond
 // controlPlaneTicker creates a real-time ticker for control-plane scheduling.
 // All stdlib time.NewTicker calls in this package are funneled here.
 //
-// Carve-out: control-plane ticker must use real time; fake-clock injection
-// reintroduces the startup-deadlock regression (C.1 fix in this PR).
-// Hard upgrade: backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// Carve-out rationale: control-plane scheduling (sweeper ticker interval) must
+// use real wall-clock time. Injecting a fake clock into the control-plane ticker
+// reintroduces the startup-deadlock regression fixed in C.1: a frozen fake clock
+// with no Advance calls blocks Start() permanently.
 //
-//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1
+// AI-rebust grade: Medium (comment-guard carve-out). Hard upgrade path:
+// backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+//
+// Do NOT add new functions with this marker to bypass the Hard upgrade.
+// New time.* calls here require updating the backlog item and explicit review.
+//
+// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
+//
+//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1 (CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
 func controlPlaneTicker(interval time.Duration) *time.Ticker {
 	return time.NewTicker(interval)
 }
 
-// controlPlaneProbeTimer creates a real-time timer for the startup probe
-// window. All stdlib time.NewTimer calls in this package are funneled here.
+// controlPlaneProbeTimer creates a real-time timer for the startup probe window.
+// All stdlib time.NewTimer calls in this package are funneled here.
 //
-// Carve-out: same rationale as controlPlaneTicker (C.1).
-// Hard upgrade: backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// Carve-out rationale: the 50 ms startup probe must use real time. A fake clock
+// probe that is never advanced would deadlock Start() (same root cause as C.1).
 //
-//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1
+// AI-rebust grade: Medium (comment-guard carve-out). Hard upgrade path:
+// backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+//
+// Do NOT add new functions with this marker to bypass the Hard upgrade.
+// New time.* calls here require updating the backlog item and explicit review.
+//
+// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
+//
+//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1 (CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
 func controlPlaneProbeTimer(d time.Duration) *time.Timer {
 	return time.NewTimer(d)
 }
@@ -158,8 +177,8 @@ func (l *SweeperLifecycle) Hook() cell.LifecycleHook {
 // //archtest:allow:clock-injection:control-plane). Backlog:
 // CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
 func (l *SweeperLifecycle) Start(ownerCtx context.Context) error {
-	if l == nil || l.Sweeper == nil {
-		return &lifecycleError{"runtime/command: sweeper lifecycle requires non-nil Sweeper"}
+	if l == nil || validation.IsNilInterface(l.Sweeper) {
+		return fmt.Errorf("runtime/command: sweeper lifecycle requires non-nil Sweeper")
 	}
 
 	interval := l.Interval
@@ -342,9 +361,3 @@ func (l *SweeperLifecycle) logger() *slog.Logger {
 	}
 	return slog.Default()
 }
-
-// lifecycleError is an internal error type that avoids using errors.New at
-// package scope (complies with EXPORTED-ERROR-NEW-01).
-type lifecycleError struct{ msg string }
-
-func (e *lifecycleError) Error() string { return e.msg }
