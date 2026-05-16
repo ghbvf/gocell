@@ -1602,10 +1602,14 @@ func TestRefresh_Reuse_TriggersInvalidatorApply(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
 	// reuseRefreshStore simulates a refresh store that returns ErrReused on Rotate.
+	// detachedSpy is wired as the inner Store of reuseStore so that any
+	// RevokeSessionDetached call on the service's refreshStore actually reaches
+	// the spy counter (previously detachedSpy wrapped innerStore directly and was
+	// never injected into the service path — a phantom assertion).
 	innerStore := newTestRefreshStore()
-	reuseStore := &reuseOnRotateRefreshStore{Store: innerStore, subjectID: "usr-reuse", sessionID: "sess-reuse"}
-	spy := &spyInvalidator{}
 	detachedSpy := &spyRefreshStore{Store: innerStore}
+	reuseStore := &reuseOnRotateRefreshStore{Store: detachedSpy, subjectID: "usr-reuse", sessionID: "sess-reuse"}
+	spy := &spyInvalidator{}
 
 	svc := MustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
 		spy,
