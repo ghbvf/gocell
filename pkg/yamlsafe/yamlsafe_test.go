@@ -209,10 +209,10 @@ func TestNeedsQuoting_PlainStyleIndicators(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name         string
-		raw          string
-		wantQuoted   bool
-		roundTrip    bool // if true, also verify yaml round-trip preserves raw
+		name       string
+		raw        string
+		wantQuoted bool
+		roundTrip  bool // if true, also verify yaml round-trip preserves raw
 	}{
 		{
 			name:       "dash_space_sequence_indicator",
