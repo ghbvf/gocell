@@ -55,7 +55,7 @@ func TestAssert(t *testing.T) {
 	tests := []struct {
 		name     string
 		user     func(t *testing.T) *domain.User
-		checks   func() []credentialauthority.Check
+		checks   func(t *testing.T) []credentialauthority.Check
 		wantKind errcode.Kind
 		wantCode errcode.Code
 		wantNil  bool
@@ -63,27 +63,27 @@ func TestAssert(t *testing.T) {
 		{
 			name:    "baseline_pass_active_user",
 			user:    func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks:  func() []credentialauthority.Check { return nil },
+			checks:  func(t *testing.T) []credentialauthority.Check { return nil },
 			wantNil: true,
 		},
 		{
 			name:     "baseline_fail_locked_user",
 			user:     lockedUser,
-			checks:   func() []credentialauthority.Check { return nil },
+			checks:   func(t *testing.T) []credentialauthority.Check { return nil },
 			wantKind: errcode.KindPermissionDenied,
 			wantCode: errcode.ErrAuthUserNotActive,
 		},
 		{
 			name:     "baseline_fail_suspended_user",
 			user:     suspendedUser,
-			checks:   func() []credentialauthority.Check { return nil },
+			checks:   func(t *testing.T) []credentialauthority.Check { return nil },
 			wantKind: errcode.KindPermissionDenied,
 			wantCode: errcode.ErrAuthUserNotActive,
 		},
 		{
 			name: "pin_pass_matching_version",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 7) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 7))}
 			},
 			wantNil: true,
@@ -91,7 +91,7 @@ func TestAssert(t *testing.T) {
 		{
 			name: "pin_fail_stale_version",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 8) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 7))}
 			},
 			wantKind: errcode.KindPermissionDenied,
@@ -100,7 +100,7 @@ func TestAssert(t *testing.T) {
 		{
 			name: "not_revoked_pass_nil",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				view := &session.ValidateView{ID: "s1", SubjectID: "u1", AuthzEpochAtIssue: 1}
 				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
 			},
@@ -109,7 +109,7 @@ func TestAssert(t *testing.T) {
 		{
 			name: "not_revoked_fail_nonnil",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				ts := now
 				view := &session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: &ts, AuthzEpochAtIssue: 1}
 				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
@@ -120,7 +120,7 @@ func TestAssert(t *testing.T) {
 		{
 			name: "compose_issue_path_baseline_plus_pin",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 3) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 3))}
 			},
 			wantNil: true,
@@ -128,7 +128,7 @@ func TestAssert(t *testing.T) {
 		{
 			name: "compose_validate_path_baseline_plus_not_revoked",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				view := &session.ValidateView{ID: "s1", SubjectID: "u1", AuthzEpochAtIssue: 1}
 				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
 			},
@@ -137,7 +137,7 @@ func TestAssert(t *testing.T) {
 		{
 			name: "not_revoked_nil_view_fails_closed",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(nil)}
 			},
 			wantKind: errcode.KindPermissionDenied,
@@ -146,7 +146,7 @@ func TestAssert(t *testing.T) {
 		{
 			name: "snapshot_password_version_nil_user_fails",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(nil)}
 			},
 			wantKind: errcode.KindPermissionDenied,
@@ -155,14 +155,14 @@ func TestAssert(t *testing.T) {
 		{
 			name:     "nil_user_returns_KindInvalid",
 			user:     func(t *testing.T) *domain.User { return nil },
-			checks:   func() []credentialauthority.Check { return nil },
+			checks:   func(t *testing.T) []credentialauthority.Check { return nil },
 			wantKind: errcode.KindInvalid,
 			wantCode: errcode.ErrValidationFailed,
 		},
 		{
 			name: "nil_check_in_variadic_returns_KindInvalid",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				return []credentialauthority.Check{nil}
 			},
 			wantKind: errcode.KindInvalid,
@@ -174,7 +174,7 @@ func TestAssert(t *testing.T) {
 			// baseline must reject before the Check.apply runs (order: baseline
 			// before variadic). Asserts code is baseline reason, not check reason.
 			user: lockedUser,
-			checks: func() []credentialauthority.Check {
+			checks: func(t *testing.T) []credentialauthority.Check {
 				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 1))}
 			},
 			wantKind: errcode.KindPermissionDenied,
@@ -187,7 +187,7 @@ func TestAssert(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			user := tc.user(t)
-			err := credentialauthority.Assert(user, tc.checks()...)
+			err := credentialauthority.Assert(user, tc.checks(t)...)
 			if tc.wantNil {
 				if err != nil {
 					t.Fatalf("Assert returned error %v, want nil", err)

@@ -494,6 +494,79 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 	}
 }
 
+// TestService_Refresh_TwoAssertOrdering_RevokedSession_BaselineFailFirst locks
+// the two-Assert call order in refreshInTx (baseline first via
+// rejectIfUserNotActive → 403; session-revoked second via rejectIfSessionRevoked
+// → 401). When both gates would trigger simultaneously (revoked session AND
+// non-active user), the baseline-first ordering MUST surface 403
+// ErrAuthUserNotActive, not 401 ErrAuthRefreshFailed. Reversing the call order
+// would make this test red.
+//
+// This locks the documented "ordering matters" constraint at refreshInTx
+// (service.go ~310) and rejectIfUserNotActive's godoc.
+func TestService_Refresh_TwoAssertOrdering_RevokedSession_BaselineFailFirst(t *testing.T) {
+	svc, sessionStore, userRepo := newTestServiceWithUserRepo(t)
+
+	// User is suspended → baseline gate fails.
+	u, err := domain.NewUser("ordering-user", "ordering@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = "usr-ordering"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+	u.SetStatus(domain.StatusSuspended, time.Now())
+	require.NoError(t, userRepo.Update(context.Background(), u))
+
+	// Session is also revoked → session-revoked gate would fail.
+	sess := newTestSession(u.ID, "sess-ordering")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+	require.NoError(t, sessionStore.Revoke(context.Background(), sess.ID))
+
+	wireToken, _, issueErr := svc.refreshStore.Issue(context.Background(), sess.ID, u.ID, int64(1))
+	require.NoError(t, issueErr)
+
+	_, err = svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err, "refresh must reject both-gates-failing case")
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	// Baseline-first ordering: 403 ErrAuthUserNotActive (rejectIfUserNotActive
+	// surfaces before rejectIfSessionRevoked).
+	assert.Equal(t, errcode.ErrAuthUserNotActive, ec.Code,
+		"baseline gate must run first; reversing call order would yield ErrAuthRefreshFailed")
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
+		"baseline-fail kind must be KindPermissionDenied (403), not KindUnauthenticated (401)")
+}
+
+// TestService_Refresh_TwoAssertOrdering_BaselineOnly_Returns403 verifies the
+// converse: an active user with a revoked session — only the session-revoked
+// gate fails, baseline passes — surfaces 401 ErrAuthRefreshFailed (preserved
+// by the existing test, named explicitly here for ordering completeness).
+func TestService_Refresh_TwoAssertOrdering_SessionRevokedOnly_Returns401(t *testing.T) {
+	svc, sessionStore, userRepo := newTestServiceWithUserRepo(t)
+
+	// User is active → baseline passes.
+	u, err := domain.NewUser("active-user", "active-ordering@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = "usr-active-revoked-sess"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	// Session revoked → only session-revoked gate fails.
+	sess := newTestSession(u.ID, "sess-active-revoked")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+	require.NoError(t, sessionStore.Revoke(context.Background(), sess.ID))
+
+	wireToken, _, issueErr := svc.refreshStore.Issue(context.Background(), sess.ID, u.ID, int64(1))
+	require.NoError(t, issueErr)
+
+	_, err = svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"session-revoked path must surface uniform 401 ErrAuthRefreshFailed")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+}
+
 func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	sessionStore := &countingSessionStore{Store: newTestSessionStore(t)}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}

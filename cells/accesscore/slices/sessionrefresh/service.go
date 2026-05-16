@@ -564,12 +564,23 @@ func (s *Service) rejectIfSessionRevoked(ctx context.Context, user *domain.User,
 // not obtain a fresh access token; the cascade-revoke ensures subsequent
 // rotation attempts immediately fail rather than keep returning new tokens.
 //
-// The two-Assert-call pattern (session-revoked + baseline) is intentional:
+// The two-Assert-call pattern (baseline + session-revoked) is intentional:
 // each Assert call site owns ONE wire-level translation (per the funnel's
-// "callers MUST NOT branch on err" contract). The session-revoked gate
-// runs first because a revoked session is the cheaper rejection (no
-// account-status semantics leak); the baseline runs second so a still-live
-// session with a now-suspended user gets the dedicated 403.
+// "callers MUST NOT branch on err" contract). The baseline gate runs FIRST
+// (this function) so a still-live session with a now-suspended user
+// surfaces the dedicated 403; the session-revoked gate runs second
+// (rejectIfSessionRevoked) for any remaining revoked-row case → uniform
+// 401. Ordering matters: every Assert runs baseline internally as the
+// first inline check, so running session-revoked first would translate a
+// suspended-user failure under the session-revoked envelope (401 instead
+// of 403). The refreshInTx call site documents this constraint.
+//
+// Cascade scope is session-scoped only (cascadeRevoke against this
+// sessionID); user-wide invalidation (epoch bump + RevokeForSubject) is
+// not triggered here because "non-active user" is not a security event —
+// account status changed via authzmutate which already ran the trifecta.
+// Reuse-attack and stale-epoch paths route through invalidator.Apply for
+// the user-wide cascade; this baseline gate is only refresh-chain cleanup.
 func (s *Service) rejectIfUserNotActive(ctx context.Context, user *domain.User, sessionID string) error {
 	if err := credentialauthority.Assert(user); err == nil {
 		return nil
