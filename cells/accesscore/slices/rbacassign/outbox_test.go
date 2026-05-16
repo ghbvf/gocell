@@ -18,24 +18,10 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // --- stubs ---
-
-type stubOutboxWriter struct {
-	entries []outbox.Entry
-	err     error
-}
-
-func (s *stubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
-	if s.err != nil {
-		return s.err
-	}
-	s.entries = append(s.entries, e)
-	return nil
-}
 
 type stubTxRunner struct {
 	calls int
@@ -62,7 +48,7 @@ func (r *trackingSessionStore) RevokeForSubject(ctx context.Context, subjectID s
 // RevokeForSubject calls through the funnel.
 // Returns the shared mem.Store so callers can seed active users for effective-admin
 // invariant tests (S4.0).
-func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *mem.Store, *trackingSessionStore) {
+func newDurableTestService(t testing.TB, ow *testutil.RecordingWriter, tx *stubTxRunner) (*Service, *mem.Store, *trackingSessionStore) {
 	t.Helper()
 	store := mem.NewStore(clock.Real())
 	store.RoleRepository().SeedRole(&domain.Role{
@@ -85,7 +71,7 @@ func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner)
 // operation inside a transaction, and does NOT call sessionStore.RevokeForSubject
 // (HIGH-3: Assign is additive; the funnel is not called).
 func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
-	ow := &stubOutboxWriter{}
+	ow := &testutil.RecordingWriter{}
 	tx := &stubTxRunner{}
 	svc, _, sessionStore := newDurableTestService(t, ow, tx)
 
@@ -93,12 +79,15 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 	require.NoError(t, err)
 
 	// Exactly one outbox entry.
-	require.Len(t, ow.entries, 1)
-	assert.Equal(t, dto.TopicRoleAssigned, ow.entries[0].EventType)
+	require.Len(t, ow.Entries, 1)
+	assert.Equal(t, dto.TopicRoleAssigned, ow.Entries[0].EventType)
+	// event_id must be derived by the emitter (UUID v4); used by downstream
+	// consumers as the idempotency key "{ConsumerGroup}:{entry.ID}".
+	assert.NotEmpty(t, ow.Entries[0].ID, "emitter must derive a non-empty event_id")
 
 	// Payload unmarshal.
 	var evt dto.RoleChangedEvent
-	require.NoError(t, json.Unmarshal(ow.entries[0].Payload, &evt))
+	require.NoError(t, json.Unmarshal(ow.Entries[0].Payload, &evt))
 	assert.Equal(t, "alice", evt.UserID)
 	assert.Equal(t, "admin", evt.RoleID)
 	assert.Equal(t, dto.ActionAssigned, evt.Action)
@@ -115,7 +104,7 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 // exactly one outbox entry, runs inside a transaction, and calls the credential
 // invalidation funnel (which calls sessionStore.RevokeForSubject) atomically.
 func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
-	ow := &stubOutboxWriter{}
+	ow := &testutil.RecordingWriter{}
 	tx := &stubTxRunner{}
 	svc, store, sessionStore := newDurableTestService(t, ow, tx)
 
@@ -126,11 +115,12 @@ func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 	err := svc.Revoke(context.Background(), "alice", "admin")
 	require.NoError(t, err)
 
-	require.Len(t, ow.entries, 1)
-	assert.Equal(t, dto.TopicRoleRevoked, ow.entries[0].EventType)
+	require.Len(t, ow.Entries, 1)
+	assert.Equal(t, dto.TopicRoleRevoked, ow.Entries[0].EventType)
+	assert.NotEmpty(t, ow.Entries[0].ID, "emitter must derive a non-empty event_id")
 
 	var evt dto.RoleChangedEvent
-	require.NoError(t, json.Unmarshal(ow.entries[0].Payload, &evt))
+	require.NoError(t, json.Unmarshal(ow.Entries[0].Payload, &evt))
 	assert.Equal(t, "alice", evt.UserID)
 	assert.Equal(t, "admin", evt.RoleID)
 	assert.Equal(t, dto.ActionRevoked, evt.Action)
@@ -149,7 +139,7 @@ func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 // of the role write. This test only covers error-propagation, not rollback.
 func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 	outboxErr := errors.New("outbox write failed")
-	ow := &stubOutboxWriter{err: outboxErr}
+	ow := &testutil.RecordingWriter{Err: outboxErr}
 	tx := &stubTxRunner{}
 	svc, _, _ := newDurableTestService(t, ow, tx)
 
@@ -158,14 +148,14 @@ func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 	assert.ErrorIs(t, err, outboxErr, "original outbox error must be in the chain")
 
 	// outbox entries are empty because Write returned error before appending.
-	assert.Empty(t, ow.entries)
+	assert.Empty(t, ow.Entries)
 }
 
 // TestService_Assign_DoesNotCallFunnel asserts that Assign never calls
 // sessionStore.RevokeForSubject (HIGH-3: Assign is additive, funnel not called).
 // Revoke DOES call the funnel, so this test uses only Assign.
 func TestService_Assign_DoesNotCallFunnel(t *testing.T) {
-	ow := &stubOutboxWriter{}
+	ow := &testutil.RecordingWriter{}
 	tx := &stubTxRunner{}
 	svc, _, sessionStore := newDurableTestService(t, ow, tx)
 
@@ -180,15 +170,15 @@ func TestService_Assign_DoesNotCallFunnel(t *testing.T) {
 // event.role.assigned.v1 fact. Prevents a false positive in downstream
 // consumers (e.g., audit log duplicates, unnecessary session invalidation).
 func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
-	ow := &stubOutboxWriter{}
+	ow := &testutil.RecordingWriter{}
 	tx := &stubTxRunner{}
 	svc, _, sessionStore := newDurableTestService(t, ow, tx)
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
-	require.Len(t, ow.entries, 1, "first assign must publish exactly one event")
+	require.Len(t, ow.Entries, 1, "first assign must publish exactly one event")
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
-	assert.Len(t, ow.entries, 1, "repeat assign must not publish a second event")
+	assert.Len(t, ow.Entries, 1, "repeat assign must not publish a second event")
 	assert.Equal(t, 0, sessionStore.revokeCalls,
 		"durable mode repeat assign must not call session revoke either")
 }
@@ -199,7 +189,7 @@ func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
 // and unnecessary session invalidation for a user whose sessions should not
 // be affected.
 func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
-	ow := &stubOutboxWriter{}
+	ow := &testutil.RecordingWriter{}
 	tx := &stubTxRunner{}
 	svc, store, sessionStore := newDurableTestService(t, ow, tx)
 
@@ -210,7 +200,7 @@ func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
 	assignActiveAdmin(t, store, "carol")
 
 	require.NoError(t, svc.Revoke(context.Background(), "alice", "admin"))
-	assert.Empty(t, ow.entries, "revoke of non-member must not publish any event")
+	assert.Empty(t, ow.Entries, "revoke of non-member must not publish any event")
 	assert.Equal(t, 0, sessionStore.revokeCalls,
 		"durable mode revoke of non-member must not call session revoke")
 }
