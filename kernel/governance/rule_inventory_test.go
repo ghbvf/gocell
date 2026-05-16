@@ -50,7 +50,7 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 	t.Parallel()
 
 	fset := token.NewFileSet()
-	files, typesInfo := loadGovernancePackageWithTypes(t, fset, ".")
+	files, typesInfo, pkg := loadGovernancePackageWithTypes(t, fset, ".")
 
 	funcIdx := buildFuncIndex(files)
 
@@ -61,7 +61,8 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 			"public methods on Validator")
 	}
 
-	actual := runReachabilityBFS(t, fset, files, typesInfo, funcIdx, roots)
+	gate := resolveEmitterGate(t, pkg.Scope())
+	actual := runReachabilityBFS(t, fset, files, typesInfo, funcIdx, roots, gate)
 	golden := goldenRuleIDs()
 
 	if diff := symmetricDiff(golden, actual); len(diff) > 0 {
@@ -197,7 +198,7 @@ type funcKey struct {
 // dir must contain the governance package (the test's CWD when called
 // with "."). The cost (~1-2s first call) is paid once; subsequent test
 // runs share Go build cache.
-func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir string) ([]*ast.File, *types.Info) {
+func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir string) ([]*ast.File, *types.Info, *types.Package) {
 	t.Helper()
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -224,6 +225,9 @@ func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir strin
 	if pkg.TypesInfo == nil {
 		t.Fatalf("governance package has nil TypesInfo")
 	}
+	if pkg.Types == nil {
+		t.Fatalf("governance package has nil Types")
+	}
 
 	// Filter test files: rule_inventory_test.go and rule_inventory_bfs_test.go
 	// must not appear in the BFS sweep (they would self-reference the helpers).
@@ -247,9 +251,55 @@ func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir strin
 		files = append(files, f)
 	}
 	if len(files) == 0 {
-		t.Fatalf("no governance .go files parsed via packages.Load in %q", absDir)
+		t.Fatalf("no governance .go files parsed via governance.Load in %q", absDir)
 	}
-	return files, pkg.TypesInfo
+	return files, pkg.TypesInfo, pkg.Types
+}
+
+// emitterGate bundles the three type-system objects the
+// signatureMatchesValidationResultEmitter predicate needs. Resolved once
+// at BFS start from the loaded package's scope so the predicate body
+// itself contains zero string anchors — every comparison goes through
+// go/types Identical on pointer-equal type objects.
+//
+// locatorType pins the SOLE legitimate emitter-holder receiver (see
+// emitter_invariant.go for rationale). Method promotion via embedding
+// inherits *locator's method set into the outer Validator /
+// DependencyChecker types, but their named types remain distinct from
+// locator's; types.Identical(recvNamed, locatorType) is structurally
+// immune to that promotion path.
+type emitterGate struct {
+	ruleCodeType         types.Type // governance.RuleCode (or fixture's RuleCode)
+	validationResultType types.Type // governance.ValidationResult
+	locatorType          types.Type // governance.locator (the sole emitter holder)
+}
+
+// resolveEmitterGate populates an emitterGate from the loaded package's
+// top-level scope. Fail-fast on any missing identifier — go/types' loader
+// boundary has no compile-time type-reference mechanism, but compile-time
+// witnesses in emitter_invariant.go ensure rename of any of these three
+// names fails build before this lookup ever runs in production. For
+// fixture packages, the fixture source must declare matching identifiers
+// (it is a closed synthetic package, decoupled from governance renames).
+func resolveEmitterGate(t *testing.T, scope *types.Scope) emitterGate {
+	t.Helper()
+	rcObj := scope.Lookup("RuleCode")
+	if rcObj == nil {
+		t.Fatalf("emitter gate: scope.Lookup(\"RuleCode\") returned nil")
+	}
+	vrObj := scope.Lookup("ValidationResult")
+	if vrObj == nil {
+		t.Fatalf("emitter gate: scope.Lookup(\"ValidationResult\") returned nil")
+	}
+	locObj := scope.Lookup("locator")
+	if locObj == nil {
+		t.Fatalf("emitter gate: scope.Lookup(\"locator\") returned nil")
+	}
+	return emitterGate{
+		ruleCodeType:         rcObj.Type(),
+		validationResultType: vrObj.Type(),
+		locatorType:          locObj.Type(),
+	}
 }
 
 // scanPackageConstStrings collects package-level `const NAME = "literal"`
@@ -390,6 +440,7 @@ type bfsContext struct {
 	funcIdx   map[funcKey]*ast.FuncDecl
 	constMap  map[string]string
 	inferred  map[*ast.CompositeLit]struct{}
+	gate      emitterGate
 
 	reachable map[string]struct{}
 	queue     []funcKey
@@ -499,7 +550,7 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 		return
 	}
 	sig := fn.Type().(*types.Signature)
-	if !signatureMatchesValidationResultEmitter(sig, recvNamed) {
+	if !signatureMatchesValidationResultEmitter(sig, recvNamed, c.gate) {
 		return
 	}
 	if id := c.resolveID(x.Args[0]); id != "" {
@@ -510,16 +561,24 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 // signatureMatchesValidationResultEmitter reports whether sig is a method
 // with the canonical emitter shape:
 //
-//	(receiver recvNamed) (ruleID RuleCode, ...) ValidationResult
+//	(receiver *locator) (ruleID RuleCode, ...) ValidationResult
 //
-// where recvNamed and ValidationResult belong to the same package. This is
-// the type-system definition of "ValidationResult emitter", independent of
-// any method-name convention.
+// All three gates are type-system based via types.Identical on pointer-
+// equal *types.Type objects; predicate body contains zero string anchors:
+//  1. param 0 type-identical to gate.ruleCodeType
+//  2. result 0 type-identical to gate.validationResultType
+//  3. recvNamed type-identical to gate.locatorType (the sole legitimate
+//     emitter holder)
 //
-// The RuleCode named type (not plain string) is the distinguishing marker:
-// helpers like docNamingResult(file string, ...) share the same structural
-// shape but take a plain string at param 0, so they are correctly excluded.
-func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *types.Named) bool {
+// History: an earlier R2-P1 draft used a sealed marker interface +
+// types.Implements as the owner gate. Reviewer F-1 caught that method
+// promotion via embedding inherits *locator's marker method into
+// *Validator / *DependencyChecker method sets, so types.Implements
+// returned true on those outer types too — defeating "only *locator".
+// types.Identical on the named type is structurally immune to method
+// promotion (named types remain distinct regardless of which methods
+// they inherit). See emitter_invariant.go for the full threat model.
+func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *types.Named, gate emitterGate) bool {
 	// Variadic emitters are not a canonical shape — a format-string
 	// emitter like `newResultf(fmt string, args ...any) ValidationResult`
 	// has a string at param 0 but x.Args[0] is the format template, not a
@@ -531,21 +590,20 @@ func signatureMatchesValidationResultEmitter(sig *types.Signature, recvNamed *ty
 	if sig.Params().Len() < 1 || sig.Results().Len() != 1 {
 		return false
 	}
-	// Param 0 must be the RuleCode named type (not plain string). This
-	// distinguishes rule emitters (newResult, newScopedResult, newResultAt)
-	// from helpers whose first param is a plain file path (docNamingResult).
-	p0Named, ok := sig.Params().At(0).Type().(*types.Named)
-	if !ok || p0Named.Obj().Name() != "RuleCode" {
+	if !types.Identical(sig.Params().At(0).Type(), gate.ruleCodeType) {
 		return false
 	}
-	if p0Named.Obj().Pkg() == nil || p0Named.Obj().Pkg().Path() != recvNamed.Obj().Pkg().Path() {
+	if !types.Identical(sig.Results().At(0).Type(), gate.validationResultType) {
 		return false
 	}
-	r0, ok := sig.Results().At(0).Type().(*types.Named)
-	if !ok || r0.Obj().Name() != "ValidationResult" {
-		return false
-	}
-	return recvNamed.Obj().Pkg().Path() == r0.Obj().Pkg().Path()
+	// Owner gate: receiver must be type-identical to *locator's named
+	// type. Promoted emitter methods on outer receivers (Validator,
+	// DependencyChecker via embedding) resolve to recvNamed=locator
+	// through typeutil.StaticCallee (which follows method declaration,
+	// not selector context), so legitimate v.newResult(...) call sites
+	// still pass; only directly-declared emitter-shape methods on
+	// non-locator receivers are rejected.
+	return types.Identical(recvNamed, gate.locatorType)
 }
 
 // captureCodeFields walks one CompositeLit and records the rule ID from
@@ -663,6 +721,7 @@ func runReachabilityBFS(
 	typesInfo *types.Info,
 	funcIdx map[funcKey]*ast.FuncDecl,
 	roots []funcKey,
+	gate emitterGate,
 ) []string {
 	t.Helper()
 	ctx := &bfsContext{
@@ -672,6 +731,7 @@ func runReachabilityBFS(
 		funcIdx:   funcIdx,
 		constMap:  scanPackageConstStrings(files),
 		inferred:  collectInferredVRLits(files),
+		gate:      gate,
 	}
 	return ctx.run(roots)
 }
