@@ -22,6 +22,7 @@ import (
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	authpkg "github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
@@ -279,7 +280,7 @@ func TestHub_Send_NotFound(t *testing.T) {
 	defer server.Close()
 
 	err := hub.Send(context.Background(), "nonexistent", []byte("test"))
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrWSConnNotFound)
 }
 
 func TestHub_StopClosesConnections(t *testing.T) {

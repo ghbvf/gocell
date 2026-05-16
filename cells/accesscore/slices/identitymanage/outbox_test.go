@@ -19,6 +19,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -159,7 +161,7 @@ func TestHandler_Lock_NotFound(t *testing.T) {
 	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/lock", strings.NewReader("{}")))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrAuthUserNotFound)
 }
 
 func TestHandler_Unlock_NotFound(t *testing.T) {
@@ -168,7 +170,7 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/unlock", strings.NewReader("{}")))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrAuthUserNotFound)
 }
 
 // --- outbox/tx service tests ---

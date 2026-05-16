@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -205,7 +206,7 @@ func TestHandler_HandleUpdate_NotFound(t *testing.T) {
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
 }
 
 func TestHandler_HandleUpdate_BadJSON(t *testing.T) {
@@ -244,7 +245,7 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
 }
 
 // --- sensitive value redaction tests (#27o) ---

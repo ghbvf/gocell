@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -204,10 +205,7 @@ func TestInMemQueue_Report_NotFound(t *testing.T) {
 	t.Parallel()
 	q := commandtest.NewInMemQueue()
 	err := q.Report(context.Background(), "cmd-nonexistent", time.Now())
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCommandNotFound, ecErr.Code)
+	errcodetest.AssertCode(t, err, errcode.ErrCommandNotFound)
 }
 
 func TestInMemQueue_Ack_InvalidReason(t *testing.T) {
@@ -548,11 +546,8 @@ func TestInMemQueue_GetCommand_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	got, err := q.GetCommand(ctx, "cmd-nonexistent")
-	require.Error(t, err)
 	assert.Nil(t, got)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCommandNotFound, ecErr.Code)
+	errcodetest.AssertCode(t, err, errcode.ErrCommandNotFound)
 }
 
 func TestInMemQueue_ScanActive_Filtering(t *testing.T) {

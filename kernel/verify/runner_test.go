@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 )
 
 func TestParseSliceKey(t *testing.T) {
@@ -48,10 +49,10 @@ func TestVerifySlice_NotFound(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{},
 	}, t.TempDir())
 	_, err := r.VerifySlice(context.Background(), "cell/missing")
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrSliceNotFound)
+	// retained for Details assertion — errors.As fills ecErrSlice for assertDetailString.
 	var ecErrSlice *errcode.Error
 	require.True(t, errors.As(err, &ecErrSlice))
-	assert.Contains(t, ecErrSlice.Message, "not found")
 	assertDetailString(t, ecErrSlice, "slice", "cell/missing")
 }
 
@@ -60,10 +61,10 @@ func TestVerifyCell_NotFound(t *testing.T) {
 		Cells: map[string]*metadata.CellMeta{},
 	}, t.TempDir())
 	_, err := r.VerifyCell(context.Background(), "missing")
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrCellNotFound)
+	// retained for Details assertion — errors.As fills ecErrCell for assertDetailString.
 	var ecErrCell *errcode.Error
 	require.True(t, errors.As(err, &ecErrCell))
-	assert.Contains(t, ecErrCell.Message, "not found")
 	assertDetailString(t, ecErrCell, "cell", "missing")
 }
 
@@ -72,10 +73,10 @@ func TestRunJourney_NotFound(t *testing.T) {
 		Journeys: map[string]*metadata.JourneyMeta{},
 	}, t.TempDir())
 	_, err := r.RunJourney(context.Background(), "missing")
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrJourneyNotFound)
+	// retained for Details assertion — errors.As fills ecErrJourney for assertDetailString.
 	var ecErrJourney *errcode.Error
 	require.True(t, errors.As(err, &ecErrJourney))
-	assert.Contains(t, ecErrJourney.Message, "not found")
 	assertDetailString(t, ecErrJourney, "journey", "missing")
 }
 

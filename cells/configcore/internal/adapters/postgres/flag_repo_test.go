@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -249,10 +250,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		repo := newFlagRepositoryFromDBTX(db)
 
 		_, err := repo.GetByKey(context.Background(), "missing")
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
+		errcodetest.AssertCode(t, err, errcode.ErrFlagNotFound)
 	})
 
 	t.Run("GetByKey_OtherError_Returns_ErrFlagRepoQuery", func(t *testing.T) {
@@ -275,10 +273,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		repo := newFlagRepositoryFromDBTX(db)
 
 		_, err := repo.Toggle(context.Background(), "missing", 1, true)
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
+		errcodetest.AssertCode(t, err, errcode.ErrFlagNotFound)
 	})
 
 	t.Run("Update_NotFound", func(t *testing.T) {
@@ -288,10 +283,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		repo := newFlagRepositoryFromDBTX(db)
 
 		_, err := repo.Update(context.Background(), "missing", 1, false, 0, "")
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
+		errcodetest.AssertCode(t, err, errcode.ErrFlagNotFound)
 	})
 
 	t.Run("Delete_NotFound", func(t *testing.T) {
@@ -301,10 +293,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		repo := newFlagRepositoryFromDBTX(db)
 
 		_, err := repo.Delete(context.Background(), "missing", 1)
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
+		errcodetest.AssertCode(t, err, errcode.ErrFlagNotFound)
 	})
 }
 

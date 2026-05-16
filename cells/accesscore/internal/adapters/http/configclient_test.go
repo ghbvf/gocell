@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -70,11 +71,7 @@ func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 	ring := newTestRing(t)
 	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
 	_, err := client.GetEntry(context.Background(), "missing.key")
-	require.Error(t, err)
-
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code)
+	errcodetest.AssertCode(t, err, errcode.ErrConfigNotFound)
 }
 
 func TestHTTPConfigGetter_GetEntry_SensitiveEntry(t *testing.T) {

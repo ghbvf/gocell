@@ -19,6 +19,8 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -85,7 +87,7 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, configBasePath+"/missing-key", nil)
 	handler.ServeHTTP(w, asAdmin(req))
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
 }
 
 func TestHandler_HandleList_OK(t *testing.T) {

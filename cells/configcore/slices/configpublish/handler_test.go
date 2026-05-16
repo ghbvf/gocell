@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -158,7 +159,7 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/missing/publish", nil))
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	errcodetest.AssertWireCode(t, w, http.StatusNotFound, errcode.ErrConfigNotFound)
 }
 
 // PR#155 followup F1 (Cx2, P1): publish + rollback are high-risk write operations

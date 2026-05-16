@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -359,8 +360,7 @@ func TestOrderCell_RouteGetOrder_NotFound(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	// 404 is the correct domain response for a nonexistent order.
-	assert.Equal(t, http.StatusNotFound, rec.Code,
-		"GET /api/v1/orders/{id} should return 404 for nonexistent order")
+	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrOrderNotFound)
 }
 
 // TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole verifies that the

@@ -508,8 +508,8 @@ func TestLoadCellImports_NonExistentDir(t *testing.T) {
 	// Non-fatal (empty dir) is also fine — just assert no panic.
 }
 
-// TestCheckL0ImportsForSingleCell_NotFound verifies error when cell not in project.
-func TestCheckL0ImportsForSingleCell_NotFound(t *testing.T) {
+// TestCheckL0ImportsForSingleCell_OnMissingCell_FailsWithNotFoundMessage verifies error when cell not in project.
+func TestCheckL0ImportsForSingleCell_OnMissingCell_FailsWithNotFoundMessage(t *testing.T) {
 	root := t.TempDir()
 	project := &metadata.ProjectMeta{
 		Cells:      map[string]*metadata.CellMeta{},

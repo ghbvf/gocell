@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 )
 
 // testProject returns a ProjectMeta with realistic test data:
@@ -178,12 +179,8 @@ func TestContractRegistry_Provider(t *testing.T) {
 func TestContractRegistry_Provider_NotFound(t *testing.T) {
 	reg := registry.NewContractRegistry(testProject())
 	got, err := reg.Provider("nonexistent")
-	require.Error(t, err)
 	assert.Equal(t, "", got)
-
-	var ec *errcode.Error
-	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, errcode.ErrContractNotFound, ec.Code)
+	errcodetest.AssertCode(t, err, errcode.ErrContractNotFound)
 }
 
 func TestContractRegistry_Consumers(t *testing.T) {
@@ -210,12 +207,8 @@ func TestContractRegistry_Consumers(t *testing.T) {
 func TestContractRegistry_Consumers_NotFound(t *testing.T) {
 	reg := registry.NewContractRegistry(testProject())
 	got, err := reg.Consumers("nonexistent")
-	require.Error(t, err)
 	assert.Nil(t, got)
-
-	var ec *errcode.Error
-	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, errcode.ErrContractNotFound, ec.Code)
+	errcodetest.AssertCode(t, err, errcode.ErrContractNotFound)
 }
 
 func TestContractRegistry_AllIDs(t *testing.T) {

@@ -88,7 +88,7 @@ func TestCollectFromCellFile(t *testing.T) {
 	}
 }
 
-func TestCollectFromCellFile_NotFound(t *testing.T) {
+func TestCollectFromCellFile_OnMissingFile_ReturnsError(t *testing.T) {
 	t.Parallel()
 	_, err := CollectFromCellFile("/nonexistent/path/cell.go")
 	if err == nil {

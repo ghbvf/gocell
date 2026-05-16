@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
@@ -354,11 +355,10 @@ func TestConfigRepository_Update_NotFound(t *testing.T) {
 	repo := newConfigRepositoryFromDBTX(seqDB)
 
 	_, err := repo.Update(context.Background(), "missing", 1, "v")
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
 	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"Update not-found must have Category=CategoryDomain")
 	assert.Contains(t, ec.InternalMessage, opUpdate,
@@ -396,11 +396,10 @@ func TestConfigRepository_UpdateForRollback_NotFound(t *testing.T) {
 	repo := newConfigRepositoryFromDBTX(db)
 
 	_, err := repo.UpdateForRollback(context.Background(), "missing", 1, "v", false)
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
 	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"UpdateForRollback not-found must have Category=CategoryDomain")
 	require.False(t, errcode.IsInfraError(err),
@@ -435,11 +434,10 @@ func TestConfigRepository_Delete_NotFound(t *testing.T) {
 	repo := newConfigRepositoryFromDBTX(db)
 
 	_, err := repo.Delete(context.Background(), "missing", 1)
-	require.Error(t, err)
+	errcodetest.AssertCode(t, err, errcode.ErrConfigRepoNotFound)
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
 	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"Delete not-found must have Category=CategoryDomain")
 	require.False(t, errcode.IsInfraError(err),
