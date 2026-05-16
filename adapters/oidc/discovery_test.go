@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // mockOIDCServer returns a test server that mimics OIDC discovery endpoints.
@@ -221,7 +222,7 @@ func TestProvider_ConcurrentReadDuringSlowRefresh(t *testing.T) {
 	release := func() { releaseOnce.Do(func() { close(released) }) }
 	defer release() // always unblock so the server handler/goroutine exits.
 
-	refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 30*time.Second)
+	refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), testtime.CtxLong)
 	defer cancelRefresh()
 	refreshDone := make(chan struct{})
 	go func() {
@@ -234,7 +235,7 @@ func TestProvider_ConcurrentReadDuringSlowRefresh(t *testing.T) {
 	// readers.
 	require.Eventually(t, func() bool {
 		return inflight.Load() >= 1
-	}, 5*time.Second, 5*time.Millisecond, "refresh must reach the blocked discovery call")
+	}, testtime.EventuallyLong, testtime.FastPoll, "refresh must reach the blocked discovery call")
 
 	// 50 concurrent readers must each return the old provider immediately.
 	const readers = 50
@@ -250,7 +251,7 @@ func TestProvider_ConcurrentReadDuringSlowRefresh(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	require.Less(t, time.Since(start), 2*time.Second,
+	require.Less(t, time.Since(start), testtime.EventuallyDefault,
 		"reads must not block on the stuck refresh (lock-free atomic.Pointer)")
 
 	release()
