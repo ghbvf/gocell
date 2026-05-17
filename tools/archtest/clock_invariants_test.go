@@ -457,8 +457,11 @@ func TestClockInjectionCallsite(t *testing.T) {
 	Report(t, "CLOCK-INJECTION-TEST-CALLSITE-01", diags)
 }
 
-// runClockCallsiteFixtureScan loads a fixture directory and returns violations.
-func runClockCallsiteFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
+// runClockCallsiteFixtureScan loads a fixture directory, scans test files for
+// callsite violations, and asserts the diagnostic count matches the
+// spec.Violation() markers declared inline in the fixture (via
+// archtest.AssertDiagnosticCount).
+func runClockCallsiteFixtureScan(t *testing.T, fixtureDir, ruleID string) {
 	t.Helper()
 
 	// Phase 1: collect ctors from the fixture module.
@@ -473,8 +476,8 @@ func runClockCallsiteFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 			return nil
 		})
 
-	// Phase 2: scan test files for callsite violations.
-	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+	// Phase 2: scan test files for callsite violations + assert count.
+	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -484,11 +487,14 @@ func runClockCallsiteFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 				}
 				d = append(d, scanClockCallsiteAST(p.Fset, f, rel, p.TypesInfo, ctors)...)
 			}
-			return d
+			AssertDiagnosticCount(t, ruleID, p, d)
+			return nil
 		})
 }
 
 // TestClockInjectionCallsiteFixtures validates fixture-based regression cases.
+// Expected violation counts are declared inline in each fixture via
+// spec.Violation() calls; the helper asserts via AssertDiagnosticCount.
 func TestClockInjectionCallsiteFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -498,21 +504,11 @@ func TestClockInjectionCallsiteFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := root + "/tools/archtest/testdata/clock_injection_callsite_fixtures"
 
-	cases := []struct {
-		pkg           string
-		wantViolCount int
-	}{
-		{"compliant", 0},
-		{"violates", 1},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.pkg, func(t *testing.T) {
+	for _, pkg := range []string{"compliant", "violates"} {
+		pkg := pkg
+		t.Run(pkg, func(t *testing.T) {
 			t.Parallel()
-			got := runClockCallsiteFixtureScan(t, base+"/"+tc.pkg)
-			assert.Equal(t, tc.wantViolCount, len(got),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.pkg, tc.wantViolCount, len(got), got)
+			runClockCallsiteFixtureScan(t, base+"/"+pkg, "CLOCK-INJECTION-TEST-CALLSITE-01")
 		})
 	}
 }
@@ -788,27 +784,29 @@ func matchedKernelClockReal(info *types.Info, ident *ast.Ident) bool {
 	return fn.Name() == "Real"
 }
 
-// runLeafFallbackFixtureScan loads the fixture package at fixtureDir and
-// returns the sorted slice of violation Diagnostics using the same predicate
-// as TestKernelClockLeafFallback (scanLeafRealCallsAST). The whitelist is
+// runLeafFallbackFixtureScan loads the fixture package at fixtureDir, scans
+// for leaf-fallback violations, and asserts the diagnostic count matches the
+// spec.Violation() markers declared inline in the fixture. The whitelist is
 // intentionally NOT applied here — every fixture path is treated as
 // production code so the gate's detection logic is the only thing under test.
-func runLeafFallbackFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
+func runLeafFallbackFixtureScan(t *testing.T, fixtureDir, ruleID string) {
 	t.Helper()
-	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
 				d = append(d, scanLeafRealCallsAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
-			return d
+			AssertDiagnosticCount(t, ruleID, p, d)
+			return nil
 		})
 }
 
 // TestKernelClockLeafFallbackFixtures runs the KERNEL-CLOCK-LEAF-FALLBACK-01
-// scanner over each fixture subpackage and asserts the expected violation
-// count. Mirrors TestProdClockInjectionFixtures (sibling gate).
+// scanner over each fixture subpackage and asserts the diagnostic count matches
+// the spec.Violation() markers declared inline in each fixture's .go file.
+// Mirrors TestProdClockInjectionFixtures (sibling gate).
 func TestKernelClockLeafFallbackFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -818,25 +816,14 @@ func TestKernelClockLeafFallbackFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := root + "/tools/archtest/testdata/clock_leaf_fallback_fixtures"
 
-	cases := []struct {
-		pkg          string
-		wantViolReps int // expected number of (file:line) violation reports
-	}{
-		// Positive — must produce 0 violations.
-		{"compliant", 0},
-		// Negative — exercises three call shapes (direct, alias, nil-fallback).
-		// Each produces one (file:line) report (selector + alias + body all on
-		// distinct lines), so 3 reports total.
-		{"violates", 3},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.pkg, func(t *testing.T) {
+	// "compliant": 0 violations (no spec.Violation() markers in fixture)
+	// "violates":  3 violations (direct + alias + nil-fallback, each with
+	//             a spec.Violation() marker inline in usage.go)
+	for _, pkg := range []string{"compliant", "violates"} {
+		pkg := pkg
+		t.Run(pkg, func(t *testing.T) {
 			t.Parallel()
-			got := runLeafFallbackFixtureScan(t, base+"/"+tc.pkg)
-			assert.Equal(t, tc.wantViolReps, len(got),
-				"fixture %s: expected %d violation report(s), got %d: %v",
-				tc.pkg, tc.wantViolReps, len(got), got)
+			runLeafFallbackFixtureScan(t, base+"/"+pkg, "KERNEL-CLOCK-LEAF-FALLBACK-01")
 		})
 	}
 }

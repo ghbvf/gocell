@@ -59,14 +59,17 @@
 //     Honest scope declaration: this is an accepted Soft gap; broader detection
 //     deferred to backlog FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01.
 //
-//   - plain int count field (e.g., `wantViolCount int`, `wantViolReps int`) —
-//     NOT detected: element type is Ident "int" (not ArrayType), so
-//     isIntSliceType returns false. This form is the anti-pattern used in
-//     clock_invariants_test.go::TestClockInjectionCallsiteFixtures
-//     (wantViolCount int) and ::TestKernelClockLeafFallbackFixtures
-//     (wantViolReps int). Honest scope declaration: not detected by current
-//     Medium funnel; migration to spec.Violation() + AssertDiagnosticCount
-//     deferred to backlog FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01.
+//   - plain int count field (e.g., `wantViolCount int`) — NOT detected:
+//     element type is Ident "int" (not ArrayType), so isIntSliceType returns
+//     false. This form is the anti-pattern used in
+//     errcode_invariants_test.go::TestDetailsSlogAttrFixtures,
+//     errcode_message_const_fixtures_test.go, and
+//     span_record_error_redact_test.go. Honest scope declaration: not
+//     detected by current Medium funnel; migration to spec.Violation() +
+//     AssertDiagnosticCount deferred to backlog
+//     FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01. (clock_invariants_test.go's
+//     TestClockInjectionCallsiteFixtures + TestKernelClockLeafFallbackFixtures
+//     also used this form before PR557; closed in PR557 A1 fix.)
 //
 // Self-exempt: this funnel file has Run callees + a "testdata" literal but
 // lacks any wantLines-style int field — naturally not triggered. The
