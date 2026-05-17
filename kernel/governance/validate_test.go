@@ -60,6 +60,17 @@ func validProject() *metadata.ProjectMeta {
 				Dir:              "sharedcrypto",
 				File:             "cells/sharedcrypto/cell.yaml",
 			},
+			"configcore": {
+				ID:               "configcore",
+				Type:             "core",
+				ConsistencyLevel: "L3",
+				DurabilityMode:   "durable",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_config_core"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.configcore.startup"}},
+				Dir:              "configcore",
+				File:             "cells/configcore/cell.yaml",
+			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
