@@ -303,9 +303,22 @@ lint_gate() {
 #                               under go_changed.
 # ---------------------------------------------------------------------------
 if [[ ${go_changed} -eq 1 ]]; then
+    # fmt_targets excludes testdata/: hand-crafted fixture files routinely
+    # encode line-number assertions in surrounding test/godoc (e.g.
+    # tools/archtest/testdata/notfound_test_strict_fixtures/nested_funclit_red/
+    # usage.go documents "fn at line 17" and the companion test
+    # TestNotFoundTestStrictFixtures/nested_funclit_red hard-codes expected
+    # violation lines = [17]). gofumpt-canonical import grouping shifts these
+    # lines and breaks the line-pinned assertions. CI's gofumpt step skips
+    # testdata/ via the same convention; mirroring that here aligns the hook
+    # with CI and prevents "hook red / CI green" on develop-into-PR-branch
+    # merge that brings testdata fixtures into the diff window.
     fmt_targets=()
     while IFS= read -r f; do
-        [[ -n "${f}" && -f "${f}" ]] && fmt_targets+=("${f}")
+        [[ -z "${f}" || ! -f "${f}" ]] && continue
+        # Skip any testdata/ path component (matches /testdata/ and leading testdata/).
+        [[ "${f}" == */testdata/* || "${f}" == testdata/* ]] && continue
+        fmt_targets+=("${f}")
     done < <(printf '%s\n' "${go_files}" | grep -E '\.go$' || true)
     [[ ${#fmt_targets[@]} -gt 0 ]] && \
         run_bg "gofumpt formatter (run: make fmt)" gofumpt_gate "${fmt_targets[@]}"
