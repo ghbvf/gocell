@@ -35,7 +35,8 @@
 // and serving as a smoke-check for COUNT-MATCH detection.
 //
 // ref: .claude/rules/gocell/ai-collab.md §"Hard 范本" entries 2 & 4
-//      .claude/rules/gocell/ai-collab.md §"Funnel 双向锁评级"
+//
+//	.claude/rules/gocell/ai-collab.md §"Funnel 双向锁评级"
 package archtest
 
 import (
@@ -161,7 +162,9 @@ func TestFixturespecCountMatchEnforced(t *testing.T) {
 				Rel:  rel,
 				Line: p.Fset.Position(hardcodedFieldNode.Pos()).Line,
 				Message: fmt.Sprintf(
-					"file uses hardcoded line int field %q in a fixture-binding test (loader callee present) but does not call archtest.AssertDiagnosticCount or archtest.NoDiagnosticAssertion — migrate to fixturespec.Violation",
+					"file uses hardcoded line int field %q in a fixture-binding test "+
+						"(loader callee present) but does not call archtest.AssertDiagnosticCount "+
+						"or archtest.NoDiagnosticAssertion — migrate to fixturespec.Violation",
 					hardcodedField),
 			})
 		}
