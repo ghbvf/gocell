@@ -51,12 +51,6 @@ func WithMinIOVolume(name, target string) MinIORunOption {
 	}
 }
 
-// WithMinIOContainerOption passes an arbitrary ContainerCustomizer through to
-// tcminio.Run. Reserve for cases not covered by typed options.
-func WithMinIOContainerOption(opt testcontainers.ContainerCustomizer) MinIORunOption {
-	return func(c *minioRunConfig) { c.containerOpts = append(c.containerOpts, opt) }
-}
-
 // MinIORunOptions returns the resolved []testcontainers.ContainerCustomizer
 // (shared image readiness wait strategy plus any caller-supplied opts).
 // It does NOT call tcminio.Run — caller invokes tcminio.Run themselves with

@@ -368,6 +368,13 @@ const (
 	kindSymlink
 )
 
+// errMsgForceOverwriteKindGate is the human-readable message used by both
+// captureOriginal (live writePass) and forceOverwritePreflightPass (dry-run +
+// pre-write) when they reject a non-restorable inode kind (directories,
+// devices, pipes, sockets). Single source keeps the two rejection paths
+// consistent and avoids the MESSAGE-CONST-LITERAL-01 string-duplication smell.
+const errMsgForceOverwriteKindGate = "pathsafe: ForceOverwrite supports regular files and symlinks only"
+
 // writeRecord pairs the written path with the captured original-inode state
 // needed to make ForceOverwrite plans transactional. The default zero value
 // is {kindNone}, matching the non-ForceOverwrite case where rollback only
@@ -408,7 +415,7 @@ func captureOriginal(path string) (writeRecord, error) {
 	mode := info.Mode()
 	if !forceOverwriteRestorable(mode) {
 		return writeRecord{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"pathsafe: ForceOverwrite supports regular files and symlinks only",
+			errMsgForceOverwriteKindGate,
 			errcode.WithDetails(slog.String("path", path)))
 	}
 	if mode.IsRegular() {
@@ -484,7 +491,7 @@ func forceOverwritePreflightPass(plan []PlannedFile) error {
 		}
 		if !forceOverwriteRestorable(info.Mode()) {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"pathsafe: ForceOverwrite supports regular files and symlinks only",
+				errMsgForceOverwriteKindGate,
 				errcode.WithDetails(slog.String("path", f.AbsPath)))
 		}
 	}
