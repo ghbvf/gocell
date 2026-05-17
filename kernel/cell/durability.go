@@ -2,6 +2,7 @@ package cell
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -53,8 +54,9 @@ func ParseDurabilityMode(s string) (DurabilityMode, error) {
 		return DurabilityDurable, nil
 	default:
 		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cell.ParseDurabilityMode: must be \"demo\" or \"durable\"",
-			errcode.WithInternal(fmt.Sprintf("got=%q", s)))
+			`cell.ParseDurabilityMode: must be "demo" or "durable"`,
+			errcode.WithDetails(slog.String("got", s)),
+		)
 	}
 }
 

@@ -3,6 +3,7 @@ package cell
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -196,8 +197,12 @@ func (b *BaseCell) Init(_ context.Context, reg Registry) error {
 			"cell durability mode mismatch: cell.yaml declares durabilityMode "+
 				"that does not match assembly runtime; "+
 				"fix: align cell.yaml or set GOCELL_CELL_ADAPTER_MODE",
-			errcode.WithInternal(fmt.Sprintf("cell=%q declared=%s runtime=%s",
-				b.meta.ID, b.requiredMode, reg.DurabilityMode())))
+			errcode.WithDetails(
+				slog.String("cell", b.meta.ID),
+				slog.String("declared", b.requiredMode.String()),
+				slog.String("runtime", reg.DurabilityMode().String()),
+			),
+		)
 	}
 	// Reset shutdown context from previous lifecycle to avoid stale cancellation.
 	if b.shutdownCancel != nil {

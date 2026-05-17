@@ -346,6 +346,9 @@ func exprContainsField(expr ast.Expr, fieldName string) bool {
 // a "DurabilityMode:" field assignment in the CellMeta literal, confirming that
 // the cellgen funnel renders the field. This is a simple string-content check
 // on the golden file.
+//
+// AI-rebust grade: Soft (golden-file string check). Upgrade path tracked in
+// docs/backlog/cap-14-tooling.md::CELLMETA-INCLUDES-DURABILITYMODE-01-HARD-UPGRADE.
 func TestCellmetaIncludesDurabilityMode(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -433,6 +436,9 @@ func TestCellDurabilityFunnel_ReverseBlindSpot_NoBaseCellInitOverride(t *testing
 // TestCellDurabilityFunnel_ReverseBlindSpot_NoModeCheckHelper asserts that
 // kernel/cell does not define a standalone helper function that performs the
 // mode comparison (which would hide the BinaryExpr from FUNNEL-01's body scan).
+//
+// AI-rebust grade: Soft (name-substring check). Upgrade path tracked in
+// docs/backlog/cap-14-tooling.md::CELLMETA-MODECHECK-HELPER-REVERSE-SELFCHECK-HARD-UPGRADE.
 func TestCellDurabilityFunnel_ReverseBlindSpot_NoModeCheckHelper(t *testing.T) {
 	t.Parallel()
 

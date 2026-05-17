@@ -214,8 +214,7 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 			TxRunner:     c.txRunner,
 			Logger:       c.logger,
 		},
-		PreResolved:      c.emitter,
-		ConsistencyLevel: c.ConsistencyLevel(),
+		PreResolved: c.emitter,
 	})
 	if err != nil {
 		return err

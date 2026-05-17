@@ -58,8 +58,7 @@ func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 			MetricsProvider:   c.metricsProvider,
 			Clock:             c.clk,
 		},
-		PreResolved:      c.emitter,
-		ConsistencyLevel: c.ConsistencyLevel(),
+		PreResolved: c.emitter,
 	})
 	if err != nil {
 		return err

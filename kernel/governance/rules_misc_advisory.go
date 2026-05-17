@@ -296,7 +296,8 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 				"durabilityMode",
 				fmt.Sprintf(
 					"cell %q has no durabilityMode; all cells must declare durabilityMode: demo or durable; "+
-						"fix: add durabilityMode: demo or durabilityMode: durable to the cell.yaml",
+						"fix: add durabilityMode: demo or durabilityMode: durable to the cell.yaml "+
+						"(use demo for examples/tests, durable for production assemblies)",
 					c.ID),
 			))
 			continue
@@ -308,7 +309,8 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 				"durabilityMode",
 				fmt.Sprintf(
 					"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
-						"fix: set durabilityMode to demo or durable in the cell.yaml",
+						"fix: set durabilityMode to demo or durable in the cell.yaml "+
+						"(use demo for examples/tests, durable for production assemblies)",
 					c.ID, c.DurabilityMode),
 			))
 		}

@@ -627,12 +627,13 @@ func TestNewBaseSliceFromMeta_EmptyVerifyAndAllowedFiles(t *testing.T) {
 
 func TestBaseCell_Init_DurabilityAlignment(t *testing.T) {
 	tests := []struct {
-		name            string
-		metaDurability  string // empty triggers construction error
-		regMode         DurabilityMode
-		wantNewErr      bool // expect NewBaseCell to fail
-		wantInitErr     bool // expect Init to fail
-		wantErrContains string
+		name           string
+		metaDurability string // empty triggers construction error
+		regMode        DurabilityMode
+		wantNewErr     bool // expect NewBaseCell to fail
+		wantInitErr    bool // expect Init to fail
+		wantDeclared   string
+		wantRuntime    string
 	}{
 		{
 			name:           "durable+Durable ok",
@@ -654,7 +655,8 @@ func TestBaseCell_Init_DurabilityAlignment(t *testing.T) {
 			regMode:         DurabilityDemo,
 			wantNewErr:      false,
 			wantInitErr:     true,
-			wantErrContains: "declared=durable runtime=demo",
+			wantDeclared:    "durable",
+			wantRuntime:     "demo",
 		},
 		{
 			name:            "demo+Durable mismatch",
@@ -662,7 +664,8 @@ func TestBaseCell_Init_DurabilityAlignment(t *testing.T) {
 			regMode:         DurabilityDurable,
 			wantNewErr:      false,
 			wantInitErr:     true,
-			wantErrContains: "declared=demo runtime=durable",
+			wantDeclared:    "demo",
+			wantRuntime:     "durable",
 		},
 		{
 			name:           "empty durabilityMode construction error",
@@ -694,12 +697,22 @@ func TestBaseCell_Init_DurabilityAlignment(t *testing.T) {
 			initErr := c.Init(context.Background(), reg)
 			if tt.wantInitErr {
 				require.Error(t, initErr)
-				if tt.wantErrContains != "" {
-					assert.Contains(t, initErr.Error(), tt.wantErrContains)
-				}
 				var ecErr *errcode.Error
 				require.True(t, errors.As(initErr, &ecErr))
 				assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code)
+				if tt.wantDeclared != "" {
+					attr, ok := ecErr.FindAttr("declared")
+					assert.True(t, ok, "expected 'declared' detail attr in errcode.Error")
+					assert.Equal(t, tt.wantDeclared, attr.Value.String())
+				}
+				if tt.wantRuntime != "" {
+					attr, ok := ecErr.FindAttr("runtime")
+					assert.True(t, ok, "expected 'runtime' detail attr in errcode.Error")
+					assert.Equal(t, tt.wantRuntime, attr.Value.String())
+				}
+				// Confirm 'cell' detail is present.
+				_, ok := ecErr.FindAttr("cell")
+				assert.True(t, ok, "expected 'cell' detail attr in errcode.Error")
 			} else {
 				require.NoError(t, initErr)
 			}
