@@ -6,6 +6,22 @@
 //
 // Wave 1 (RED): stubs in violation_marker.go return -1 / Fatalf; tests below
 // fail. Wave 2 (GREEN): real impl, tests pass.
+//
+// Blind spot / honest scope declaration:
+// NoDiagnosticAssertion() is a typed opt-out; it is a Hard marker in the
+// sense that FIXTURESPEC-COUNT-MATCH-ENFORCED-01 resolves the callee via
+// *types.Info (not a comment or name convention). However, calling it in a
+// diagnostic-binding test silently exempts that test from AssertDiagnosticCount
+// enforcement — AI can misuse it to bypass the funnel. Mitigation: misuse is
+// visible in the diff (a NoDiagnosticAssertion call in a real diagnostic test
+// is detectable by human review; the call site must be in the test file body,
+// not hidden in generated code). This is the canonical opt-out mechanism for
+// tests that genuinely do not bind to diagnostic output (e.g., framework-shape
+// or plumbing tests); see fixturespec_funnel_test.go for examples.
+// Future Hard upgrade path: backlog FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01
+// tracks converting the upstream to Hard (every fixture-binding test must call
+// AssertDiagnosticCount or NoDiagnosticAssertion regardless of field names),
+// which would close the remaining Soft gap.
 package archtest
 
 import (

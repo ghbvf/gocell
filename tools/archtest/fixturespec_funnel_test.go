@@ -1,4 +1,5 @@
-// INVARIANT: FIXTURESPEC-VIOLATION-CALLER-ALLOWLIST-01
+// invariants:
+//   - INVARIANT: FIXTURESPEC-VIOLATION-CALLER-ALLOWLIST-01
 //   - INVARIANT: FIXTURESPEC-COUNT-MATCH-ENFORCED-01
 //
 // fixturespec_funnel_test.go — funnel double-lock for the fixturespec.Violation
@@ -9,6 +10,28 @@
 //     CallExpr resolving (via *types.Info) to fixturespec.Violation outside
 //     testdata/ is a violation. Hard form: (callee resolved via
 //     *types.Info, file location filter) — identity check, not name match.
+//
+//     Blind spot inventory (CALLER-ALLOWLIST-01):
+//     Charter §"工具选定后强制盲区自检" requires listing all AST forms outside
+//     the tool's declared scope plus honest declarations for covered forms.
+//
+//   - alias import (`import v "…/fixturespec"; v.Violation()`) — covered:
+//     ResolvePackageRef resolves the callee via *types.Info.Uses, which maps
+//     the aliased selector to the canonical (pkgPath, name) pair regardless of
+//     the local alias name. No separate fixture needed.
+//
+//   - dot-import (`import . "…/fixturespec"; Violation()`) — covered:
+//     *types.Info.Uses resolves the bare Ident to the canonical package path.
+//     ResolvePackageRef handles this via the Ident → *types.Func path.
+//     No separate fixture needed.
+//
+//   - func-value (`f := spec.Violation; f()`) — covered: ResolvePackageRef
+//     is called on call.Fun for each *ast.CallExpr; a func-value indirect call
+//     (`f()`) produces a CallExpr whose Fun is an Ident resolved through
+//     *types.Info.Uses to the original *types.Func. Covered by the same
+//     *types.Info sweep. No separate fixture needed.
+//     Honest scope declaration: all three forms are covered by ResolvePackageRef
+//     via *types.Info; no blind-spot fixture is required for CALLER-ALLOWLIST-01.
 //
 //   - Upstream Medium (COUNT-MATCH-ENFORCED-01): regression guard against
 //     the *specific* hardcoded-fixture-line-number anti-pattern. Fires only
@@ -27,6 +50,23 @@
 //     The downstream Hard + Medium upstream combination is the explicitly-
 //     allowed transitional pattern per charter §"Funnel 双向锁评级"; the
 //     backlog reference here ties the upgrade path to a named follow-up.
+//
+//     Blind spot inventory (COUNT-MATCH-ENFORCED-01):
+//
+//   - aliased []int type (`type Lines []int; wantLines Lines`) — NOT detected
+//     by isIntSliceType, which only matches the literal *ast.ArrayType with Elt
+//     Ident "int". Renamed or aliased element types escape the field-type check.
+//     Honest scope declaration: this is an accepted Soft gap; broader detection
+//     deferred to backlog FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01.
+//
+//   - plain int count field (e.g., `wantViolCount int`, `wantViolReps int`) —
+//     NOT detected: element type is Ident "int" (not ArrayType), so
+//     isIntSliceType returns false. This form is the anti-pattern used in
+//     clock_invariants_test.go::TestClockInjectionCallsiteFixtures
+//     (wantViolCount int) and ::TestKernelClockLeafFallbackFixtures
+//     (wantViolReps int). Honest scope declaration: not detected by current
+//     Medium funnel; migration to spec.Violation() + AssertDiagnosticCount
+//     deferred to backlog FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01.
 //
 // Self-exempt: this funnel file has Run callees + a "testdata" literal but
 // lacks any wantLines-style int field — naturally not triggered. The
@@ -56,11 +96,13 @@ const (
 	noDiagnosticAssertionName    = "NoDiagnosticAssertion"
 )
 
-// hardcodedLineFieldNames is the closed set of field names that constitute
-// the legacy "hardcoded fixture line number" anti-pattern. Detection by name
-// is Soft per charter; the rule is a regression guard, not a Hard upstream
-// enforcement (which is tracked separately as backlog
-// FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01).
+// hardcodedLineFieldNames is the targeted set of field names that constitute
+// the legacy "hardcoded fixture line number" anti-pattern (covers the
+// PR604-identified 10 files). Detection by name is Soft per charter; the rule
+// is a regression guard, not a Hard upstream enforcement (which is tracked
+// separately as backlog FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01). Note:
+// int-count variants like wantViolCount/wantViolReps (element type int, not
+// []int) escape via different element type — tracked by the same backlog item.
 var hardcodedLineFieldNames = map[string]bool{
 	"wantLines":     true,
 	"wantLine":      true,

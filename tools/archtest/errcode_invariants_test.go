@@ -598,7 +598,7 @@ import ` + errcodeImport + `
 		src       string
 		rel       string
 		carveOuts map[carveOut]struct{}
-		wantLines []int // nil or empty = expect no hits
+		wantLines []int // nil or empty = expect no hits; inline AST unit test (go/parser.ParseFile, not fixture-based)
 	}{
 		{
 			name: "carved func: errcode.Error literal suppressed",

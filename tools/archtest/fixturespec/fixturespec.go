@@ -6,6 +6,13 @@
 //
 // Usage in a fixture .go file:
 //
+// There are two fixture-loading patterns, each with a different build-tag
+// requirement:
+//
+// Pattern A — RunTypedFixture (fixture shares main module, own sub-package):
+// The fixture .go file must carry the build tag so it is excluded from
+// normal ./... builds but included when RunTypedFixture passes the tag:
+//
 //	//go:build archtest_fixture
 //	package mypanicfixture
 //
@@ -15,6 +22,23 @@
 //	    spec.Violation()  // expect one diagnostic from the rule under test
 //	    panic("foo")
 //	}
+//
+// Pattern B — RunTypedDir (fixture has its own go.mod, standalone module):
+// The fixture .go file does NOT need the build tag because RunTypedDir loads
+// the fixture directory as a standalone module; it is never part of the main
+// module's ./... graph:
+//
+//	package mypanicfixture
+//
+//	import spec "github.com/ghbvf/gocell/tools/archtest/fixturespec"
+//
+//	func bad() {
+//	    spec.Violation()  // expect one diagnostic from the rule under test
+//	    panic("foo")
+//	}
+//
+// Most fixtures added in PR604 use Pattern B (RunTypedDir with own go.mod).
+// Use Pattern A only when the fixture must share types with the main module.
 //
 // Companion: the archtest test file calls archtest.AssertDiagnosticCount
 // after running the rule against the fixture; that helper counts callees
@@ -28,13 +52,16 @@
 // two meta-archtest rules in tools/archtest/fixturespec_funnel_test.go:
 //
 //   - FIXTURESPEC-VIOLATION-CALLER-ALLOWLIST-01 (downstream Hard):
-//     callers of fixturespec.Violation must live in a file with
-//     //go:build archtest_fixture under tools/archtest/testdata/.
+//     callers of fixturespec.Violation must live in fixture .go files under
+//     tools/archtest/testdata/. The build tag is NOT part of the enforcement
+//     predicate — path location is the binding check. RunTypedDir-loaded
+//     fixtures (standalone go.mod, no build tag) satisfy this equally.
 //
-//   - FIXTURESPEC-COUNT-MATCH-ENFORCED-01 (upstream Hard):
+//   - FIXTURESPEC-COUNT-MATCH-ENFORCED-01 (upstream Medium):
 //     every fixture-loading test func (calls archtest.RunTypedDir /
-//     RunTypedFixture, or RunTyped/Run with a "testdata" path arg) must
-//     contain a callee resolving to archtest.AssertDiagnosticCount.
+//     RunTypedFixture, or RunTyped/Run with a "testdata" path arg) that also
+//     has a wantLines-style []int field must contain a callee resolving to
+//     archtest.AssertDiagnosticCount or archtest.NoDiagnosticAssertion.
 package fixturespec
 
 // Violation marks the call site as expecting exactly one diagnostic from

@@ -54,6 +54,11 @@ func CountViolationMarkers(pass *Pass) int {
 // via t.Errorf so the failure prints the actual diagnostics for triage.
 // ruleID is included in the failure message.
 //
+// When got < want (rule produced fewer diagnostics than markers), the failure
+// message also lists each spec.Violation() marker position that has no
+// corresponding got Diagnostic, to help identify which fixture call sites
+// the rule missed.
+//
 // Single, focused assertion: every fixture-loading test must route through
 // this helper. Enforced by meta-archtest FIXTURESPEC-COUNT-MATCH-ENFORCED-01
 // (upstream Hard).
@@ -74,6 +79,21 @@ func AssertDiagnosticCount(t testing.TB, ruleID string, pass *Pass, got []Diagno
 	for _, d := range sorted {
 		fmt.Fprintf(&b, "\n    %s:%d: %s", d.Rel, d.Line, d.Message)
 	}
+	// When we have fewer diagnostics than markers, list marker positions so
+	// the author can see which spec.Violation() calls the rule missed.
+	if len(got) < want && pass != nil && pass.TypesInfo != nil && pass.Fset != nil {
+		b.WriteString("\n  marker positions with no matching diagnostic:")
+		for _, f := range pass.Files {
+			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+				pkgPath, name, ok := ResolvePackageRef(pass.TypesInfo, call.Fun)
+				if !ok || pkgPath != fixturespecViolationPkgPath || name != fixturespecViolationName {
+					return
+				}
+				pos := pass.Fset.Position(call.Pos())
+				fmt.Fprintf(&b, "\n    marker at %s:%d — no diagnostic", pos.Filename, pos.Line)
+			})
+		}
+	}
 	t.Errorf("%s: diagnostic count mismatch — got %d, want %d (markers via fixturespec.Violation in fixture pkg):%s",
 		ruleID, len(got), want, b.String())
 }
@@ -93,6 +113,11 @@ func AssertDiagnosticCount(t testing.TB, ruleID string, pass *Pass, got []Diagno
 // — the equivalent of "注释豁免 → typed marker" per charter §"Soft → Hard
 // 改造方向". The reviewability burden shifts from the rule (no longer fires)
 // to the marker call site (visible diff, named function).
+//
+// See fixturespec_funnel_test.go for the canonical meta-archtest usage
+// (TestFixturespecViolationCallerAllowlist and TestFixturespecCountMatchEnforced
+// each call NoDiagnosticAssertion() as they are funnel self-tests that verify
+// the enforcement mechanism itself, not fixture diagnostic content).
 //
 // Runtime: deliberately a no-op.
 func NoDiagnosticAssertion() {}

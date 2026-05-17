@@ -82,6 +82,7 @@ func TestTestTimeLiteralFixtures(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.pkg, func(t *testing.T) {
+			t.Parallel()
 			fixtureDir := filepath.Join(fixturesBase, tc.pkg)
 			runTestTimeFixtureScan(t, fixtureDir)
 		})
