@@ -37,8 +37,9 @@ func newMinioRunConfig(opts []MinIORunOption) *minioRunConfig {
 // WithMinIOVolume mounts a named volume at the container target path and, when
 // used with StartMinIOContainer, registers RemoveVolumes on cleanup. Callers
 // of StartMinIOContainer MUST NOT register their own Terminate cleanup; the
-// helper handles Terminate + RemoveVolumes. Callers of RunMinIOContainer own
-// container lifetime themselves; the cleanupVolumes hint is ignored.
+// helper handles Terminate + RemoveVolumes. Callers that invoke tcminio.Run
+// directly own container lifetime themselves and must handle RemoveVolumes
+// in their own cleanup path; the cleanupVolumes hint is informational only.
 func WithMinIOVolume(name, target string) MinIORunOption {
 	return func(c *minioRunConfig) {
 		c.containerOpts = append(c.containerOpts,
@@ -56,27 +57,29 @@ func WithMinIOContainerOption(opt testcontainers.ContainerCustomizer) MinIORunOp
 	return func(c *minioRunConfig) { c.containerOpts = append(c.containerOpts, opt) }
 }
 
-// RunMinIOContainer is the raw primitive: it runs a MinIO testcontainer with
-// the shared image pin and readiness wait strategy, and returns the container
-// alongside any error from tcminio.Run. Caller owns container lifetime.
+// MinIORunOptions returns the resolved []testcontainers.ContainerCustomizer
+// (shared image readiness wait strategy plus any caller-supplied opts).
+// It does NOT call tcminio.Run — caller invokes tcminio.Run themselves with
+// these options, so the caller's own function carries the
+// testutil.RequireDocker(t) guard (INTEGRATION-DOCKER-GUARD archtest).
 //
-// Used by TestMain-scoped package-shared containers; tests that want
-// per-test container lifecycle should use StartMinIOContainer (which
-// registers t.Cleanup automatically and performs the RequireDocker skip).
-func RunMinIOContainer(ctx context.Context, opts ...MinIORunOption) (*tcminio.MinioContainer, error) {
+// Used by TestMain-scoped package-shared containers (e.g. sharedMinIOContainer)
+// where container lifetime is owned outside any single test t. Per-test
+// containers should use StartMinIOContainer which handles RequireDocker +
+// t.Cleanup automatically.
+func MinIORunOptions(opts ...MinIORunOption) []testcontainers.ContainerCustomizer {
 	cfg := newMinioRunConfig(opts)
-	return runWithConfig(ctx, cfg)
+	return resolveContainerOpts(cfg)
 }
 
-func runWithConfig(ctx context.Context, cfg *minioRunConfig) (*tcminio.MinioContainer, error) {
-	allOpts := append([]testcontainers.ContainerCustomizer{
+func resolveContainerOpts(cfg *minioRunConfig) []testcontainers.ContainerCustomizer {
+	return append([]testcontainers.ContainerCustomizer{
 		testcontainers.WithAdditionalWaitStrategy(
 			wait.ForHTTP("/minio/health/live").
 				WithPort("9000").
 				WithStartupTimeout(minioStartupTimeout),
 		),
 	}, cfg.containerOpts...)
-	return tcminio.Run(ctx, MinIOImage, allOpts...)
 }
 
 // StartMinIOContainer starts a MinIO testcontainer and registers all cleanup
@@ -93,7 +96,7 @@ func StartMinIOContainer(t *testing.T, ctx context.Context, opts ...MinIORunOpti
 	RequireDocker(t)
 
 	cfg := newMinioRunConfig(opts)
-	container, err := runWithConfig(ctx, cfg)
+	container, err := tcminio.Run(ctx, MinIOImage, resolveContainerOpts(cfg)...)
 
 	// Register cleanup before checking err: tcminio.Run can return a non-nil
 	// container alongside a non-nil error (Inspect failure after a successful

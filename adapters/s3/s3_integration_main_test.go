@@ -8,10 +8,10 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -32,14 +32,15 @@ var (
 // integration bucket is created idempotently on first use.
 //
 // Container lifetime is owned by TestMain (not the first caller's t), so we
-// call testutil.RunMinIOContainer (raw primitive without t.Cleanup) rather
-// than testutil.StartMinIOContainer.
+// call tcminio.Run directly with testutil.MinIORunOptions rather than
+// testutil.StartMinIOContainer (which registers t.Cleanup). This function's
+// own RequireDocker(t) up top satisfies INTEGRATION-DOCKER-GUARD archtest.
 func sharedMinIOContainer(t *testing.T) *tcminio.MinioContainer {
 	t.Helper()
 	testutil.RequireDocker(t)
 	sharedCtrOnce.Do(func() {
 		ctx := context.Background()
-		ctr, runErr := testutil.RunMinIOContainer(ctx)
+		ctr, runErr := tcminio.Run(ctx, testutil.MinIOImage, testutil.MinIORunOptions()...)
 		if ctr != nil {
 			sharedCtr = ctr // keep ref for TestMain Terminate even if subsequent steps fail
 		}
@@ -64,7 +65,7 @@ func sharedMinIOContainer(t *testing.T) *tcminio.MinioContainer {
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if sharedCtr != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 		_ = sharedCtr.Terminate(ctx)
 		cancel()
 	}
