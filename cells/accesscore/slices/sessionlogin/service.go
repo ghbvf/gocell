@@ -284,10 +284,15 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		// R4: log only preUser.ID and preUser.Status() — NOT the full struct which
 		// contains PasswordHash. Using %v on *domain.User would leak the hash into
 		// slog/trace via errcode Internal (PR #501 RC-E, R4 fix).
+		//
+		// P2-C fix: bcrypt_ok was previously logged here, which leaked
+		// "password matched" truth for inactive/locked accounts and let
+		// attackers verify credentials against a disabled account. The
+		// bcryptErr value is intentionally NOT logged.
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("credentialauthority: pre-bcrypt baseline fail (user_id=%s status=%v bcrypt_ok=%v)",
-				preUser.ID, preUser.Status(), bcryptErr == nil)))
+			errcode.WithInternal(fmt.Sprintf("credentialauthority: pre-bcrypt baseline fail (user_id=%s status=%v)",
+				preUser.ID, preUser.Status())))
 	case bcryptErr != nil:
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials)
@@ -347,7 +352,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 func (s *Service) loginInTx(
 	txCtx context.Context,
 	username, sessionID string,
-	pwVersionPin credentialauthority.WithPasswordVersionPin,
+	pwVersionPin credentialauthority.Check,
 ) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
 	if err != nil {
@@ -355,10 +360,11 @@ func (s *Service) loginInTx(
 	}
 	// Credentialauthority funnel: baseline (CanAuthenticate) re-check after the
 	// FOR UPDATE lock closes the concurrent-deactivation race (C1), and
-	// WithPasswordVersionPin re-checks the version captured pre-bcrypt to detect
-	// a concurrent ChangePassword that committed inside the race window (P1.1).
-	// Both failure classes collapse to the uniform 401 with internal reason; the
-	// caller may not branch on err to discover which check failed (防枚举).
+	// the password-version pin re-checks the version captured pre-bcrypt to
+	// detect a concurrent ChangePassword that committed inside the race window
+	// (P1.1). Both failure classes collapse to the uniform 401 with internal
+	// reason; the caller may not branch on err to discover which check failed
+	// (防枚举).
 	if err := credentialauthority.Assert(user, pwVersionPin); err != nil {
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
@@ -574,6 +580,12 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // exists — so the specific error code surfaces the actual reason for the
 // admin/UI to handle. The 401 enumeration-collapse design lives only on the
 // public Login endpoint where any unauthenticated requester can probe.
+//
+// Wire envelope note (#11): after the §A11 funnel rewrite the
+// credentialauthority.Assert returns a unified message string
+// ("credential not authoritative") for both baseline and version-pin
+// failures. The errcode Kind+Code (403 / ErrAuthUserNotActive) is what
+// the admin/UI consumer pattern-matches on — message text is opaque.
 //
 // Returns dto.TokenPair (internal/dto, value not pointer) so this method
 // implements the identitymanage.TokenIssuer interface without a cross-slice

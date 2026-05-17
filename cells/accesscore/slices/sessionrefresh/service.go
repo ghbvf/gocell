@@ -183,6 +183,18 @@ func MustNewService(
 // ErrAuthRefreshUnavailable so clients do not confuse an outage with invalid
 // credentials.
 //
+// 检查顺序 (ADR §A11 重写 + §A12 wire-uniformity):
+//
+//  1. refreshStore.Peek + verifySession
+//  2. **session-state inline check (RevokedAt)** — revoked → cascadeRevoke +
+//     uniform 401 ErrAuthRefreshFailed; user is never loaded.
+//  3. subject-mismatch check
+//  4. fetchUserForRefresh (user lookup)
+//  5. rejectIfUserNotActive — 403 ErrAuthUserNotActive (semantically distinct
+//     from "invalid token")
+//  6. rejectIfStaleEpoch
+//  7. mint + rotate
+//
 // Presenting an access JWT (or any string that does not parse as the opaque
 // selector.verifier wire format) fails ParseOpaque inside refresh.Store and
 // returns refresh.ErrRejected — the same fail-closed behavior the access-token
@@ -280,6 +292,25 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
+
+	// Session-state inline check — must run BEFORE any user lookup so a
+	// revoked session never escalates to 403 (user-not-active) or 503
+	// (userRepo outage). Owner package: this file is in the
+	// SESSION-REVOKED-FIELD-ACCESS-01 allowlist
+	// (cells/accesscore/slices/sessionrefresh/), so the direct
+	// sess.RevokedAt read is legitimate. cascadeRevoke clears the refresh
+	// chain so subsequent attempts immediately reject (post-§A11
+	// wire-uniformity 防枚举, ADR §A12).
+	if sess.RevokedAt != nil {
+		if cascadeErr := s.cascadeRevoke(ctx, sess.ID, "revoked-session"); cascadeErr != nil {
+			return dto.TokenPair{}, cascadeErr
+		}
+		s.logger.Warn("session-refresh: revoked session rejected",
+			slog.String("session_id", sess.ID),
+			slog.String("subject_id", presented.SubjectID))
+		return dto.TokenPair{}, authRefreshRejected()
+	}
+
 	if sess.SubjectID != presented.SubjectID {
 		if err := s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch"); err != nil {
 			return dto.TokenPair{}, err
@@ -291,26 +322,14 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
-	// Two Assert call sites (read-side Hard funnel, ADR §A11):
-	// 1. baseline (CanAuthenticate) first → dedicated 403 ErrAuthUserNotActive
-	//    so an authenticated refresh caller learns "account no longer active"
-	//    (semantically distinct from "invalid token").
-	// 2. session-revoked second → uniform 401 ErrAuthRefreshFailed.
-	//
-	// Order matters: every Assert call runs the baseline as its first inline
-	// check, so the session-gate Assert would also fail with baseline if a
-	// suspended user reaches it. By running rejectIfUserNotActive first the
-	// baseline failure maps to the dedicated 403 wire response; by the time
-	// rejectIfSessionRevoked runs, baseline is known to pass.
-	//
-	// The funnel returns the same KindPermissionDenied/ErrAuthUserNotActive
-	// envelope for both failures; the wire-level translation is decided BY
-	// CALL SITE, not by inspecting err contents ("callers must not branch on
-	// err" contract).
+	// User-bound credentialauthority funnel (ADR §A11 重写后, user-bound
+	// only). Session-revoked already rejected above. Baseline
+	// (CanAuthenticate) failure surfaces as 403 ErrAuthUserNotActive —
+	// distinct from the uniform 401 above because a still-live session
+	// with a now-suspended user is semantically "account state changed,"
+	// not "invalid token." cascadeRevoke clears the refresh chain so
+	// subsequent rotation attempts fail immediately.
 	if err := s.rejectIfUserNotActive(ctx, user, sess.ID); err != nil {
-		return dto.TokenPair{}, err
-	}
-	if err := s.rejectIfSessionRevoked(ctx, user, sess); err != nil {
 		return dto.TokenPair{}, err
 	}
 
@@ -484,8 +503,8 @@ func authRefreshRejected() *errcode.Error {
 
 // verifySession looks up the session row for a presented refresh token. It
 // handles infra-error and not-found classes here (cascade-revoke on not-found);
-// the session-revoked gate is enforced downstream by credentialauthority.Assert
-// alongside the user-status baseline so both checks live in one funnel. F4/F5
+// the session-revoked gate is enforced INLINE in refreshInTx (ADR §A11 重写
+// 后, session-state 独立 funnel SESSION-REVOKED-FIELD-ACCESS-01). F4/F5
 // extracted from Refresh to keep cognitive complexity within budget.
 func (s *Service) verifySession(ctx context.Context, sessionID string) (*session.ValidateView, error) {
 	sess, err := s.sessionStore.Get(ctx, sessionID)
@@ -528,52 +547,22 @@ func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) e
 	return nil
 }
 
-// rejectIfSessionRevoked routes the session-revoked gate through
-// credentialauthority.Assert (read-side Hard funnel, ADR §A11). On failure
-// it cascade-revokes the refresh chain and returns the uniform 401
-// (ErrAuthRefreshFailed) — matching the pre-migration behavior where a
-// revoked session collapses into "invalid refresh token" without leaking
-// the specific revocation reason.
-//
-// Note: this Assert also runs the baseline (CanAuthenticate) check, but a
-// caller-not-active failure surfacing here is treated like
-// session-revoked — uniform 401. The dedicated 403 baseline path lives in
-// rejectIfUserNotActive below; ordering matters and is documented at the
-// refreshInTx call site.
-func (s *Service) rejectIfSessionRevoked(ctx context.Context, user *domain.User, sess *session.ValidateView) error {
-	assertErr := credentialauthority.Assert(user,
-		credentialauthority.SessionNotRevoked(sess))
-	if assertErr == nil {
-		return nil
-	}
-	if cascadeErr := s.cascadeRevoke(ctx, sess.ID, "revoked-session"); cascadeErr != nil {
-		return cascadeErr
-	}
-	return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthRefreshFailed,
-		errMsgInvalidRefreshToken,
-		errcode.WithInternal("session-refresh: credentialauthority session gate failed: "+assertErr.Error()))
-}
-
 // rejectIfUserNotActive routes the baseline (user.CanAuthenticate via the
 // funnel's implicit check) gate. On failure it cascade-revokes the refresh
 // chain and returns the dedicated 403 (ErrAuthUserNotActive) — distinct
-// from the uniform 401 used elsewhere because a refresh call is already
-// authenticated (the caller proved holding a valid refresh token), so the
-// signal "your account is no longer active" is semantically valuable to the
-// admin/UI consumer of /refresh. S4.0 fail-closed: a non-active user must
-// not obtain a fresh access token; the cascade-revoke ensures subsequent
-// rotation attempts immediately fail rather than keep returning new tokens.
+// from the uniform 401 used by the session-revoked path because a refresh
+// call is already authenticated (the caller proved holding a valid refresh
+// token), so the signal "your account is no longer active" is semantically
+// valuable to the admin/UI consumer of /refresh. S4.0 fail-closed: a
+// non-active user must not obtain a fresh access token; the cascade-revoke
+// ensures subsequent rotation attempts immediately fail rather than keep
+// returning new tokens.
 //
-// The two-Assert-call pattern (baseline + session-revoked) is intentional:
-// each Assert call site owns ONE wire-level translation (per the funnel's
-// "callers MUST NOT branch on err" contract). The baseline gate runs FIRST
-// (this function) so a still-live session with a now-suspended user
-// surfaces the dedicated 403; the session-revoked gate runs second
-// (rejectIfSessionRevoked) for any remaining revoked-row case → uniform
-// 401. Ordering matters: every Assert runs baseline internally as the
-// first inline check, so running session-revoked first would translate a
-// suspended-user failure under the session-revoked envelope (401 instead
-// of 403). The refreshInTx call site documents this constraint.
+// Ordering note (ADR §A11 重写): session-revoked is now checked INLINE in
+// refreshInTx **before** the user is even loaded, so by the time this
+// function runs the session is known not-revoked and the user is known
+// fetched. The two-Assert-call pattern of the pre-§A11 form is collapsed
+// to a single user-bound Assert; revoked sessions never reach here.
 //
 // Cascade scope is session-scoped only (cascadeRevoke against this
 // sessionID); user-wide invalidation (epoch bump + RevokeForSubject) is

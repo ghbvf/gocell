@@ -8,7 +8,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // activeUser builds an active *domain.User with the given PasswordVersion.
@@ -49,8 +48,6 @@ func rebuild(t *testing.T, status domain.UserStatus, pwVersion int64) *domain.Us
 
 func TestAssert(t *testing.T) {
 	t.Parallel()
-
-	now := time.Now().UTC()
 
 	tests := []struct {
 		name     string
@@ -98,50 +95,12 @@ func TestAssert(t *testing.T) {
 			wantCode: errcode.ErrAuthUserNotActive,
 		},
 		{
-			name: "not_revoked_pass_nil",
-			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func(t *testing.T) []credentialauthority.Check {
-				view := &session.ValidateView{ID: "s1", SubjectID: "u1", AuthzEpochAtIssue: 1}
-				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
-			},
-			wantNil: true,
-		},
-		{
-			name: "not_revoked_fail_nonnil",
-			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func(t *testing.T) []credentialauthority.Check {
-				ts := now
-				view := &session.ValidateView{ID: "s1", SubjectID: "u1", RevokedAt: &ts, AuthzEpochAtIssue: 1}
-				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
-			},
-			wantKind: errcode.KindPermissionDenied,
-			wantCode: errcode.ErrAuthUserNotActive,
-		},
-		{
 			name: "compose_issue_path_baseline_plus_pin",
 			user: func(t *testing.T) *domain.User { return activeUser(t, 3) },
 			checks: func(t *testing.T) []credentialauthority.Check {
 				return []credentialauthority.Check{credentialauthority.SnapshotPasswordVersion(activeUser(t, 3))}
 			},
 			wantNil: true,
-		},
-		{
-			name: "compose_validate_path_baseline_plus_not_revoked",
-			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func(t *testing.T) []credentialauthority.Check {
-				view := &session.ValidateView{ID: "s1", SubjectID: "u1", AuthzEpochAtIssue: 1}
-				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(view)}
-			},
-			wantNil: true,
-		},
-		{
-			name: "not_revoked_nil_view_fails_closed",
-			user: func(t *testing.T) *domain.User { return activeUser(t, 1) },
-			checks: func(t *testing.T) []credentialauthority.Check {
-				return []credentialauthority.Check{credentialauthority.SessionNotRevoked(nil)}
-			},
-			wantKind: errcode.KindPermissionDenied,
-			wantCode: errcode.ErrAuthUserNotActive,
 		},
 		{
 			name: "snapshot_password_version_nil_user_fails",
