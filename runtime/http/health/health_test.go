@@ -71,8 +71,11 @@ func withSlogCapture(t *testing.T) *captureHandler {
 // records carry only status/reason; verbose records add cells/dependencies/
 // adapters. We return the first record whose dependencies attr is non-nil.
 //
-// Return type is map[string]SlogDependencyEntry (typed) — the slog payload
-// shape is owned by readyzResult.logUnhealthy, not arbitrary map[string]any.
+// Return type is map[string]SlogDependencyEntry. logDiagnostics emits the
+// dependencies attr as slog.Group("dependencies", slog.Any(name, entry)...).
+// Inside the Group each sub-attr's raw Value.Any() is the original
+// SlogDependencyEntry (handler.Resolve calls LogValue for serialization, but
+// the unresolved Value.Any() in capture path retains the original instance).
 func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]SlogDependencyEntry {
 	t.Helper()
 	const (
@@ -91,12 +94,22 @@ func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]SlogD
 			}
 			return true
 		})
-		deps, ok := depsAttr.Any().(map[string]SlogDependencyEntry)
-		if ok && deps != nil {
-			return deps
+		if depsAttr.Kind() != slog.KindGroup {
+			continue
+		}
+		out := make(map[string]SlogDependencyEntry, len(depsAttr.Group()))
+		for _, sub := range depsAttr.Group() {
+			entry, ok := sub.Value.Any().(SlogDependencyEntry)
+			if !ok {
+				continue
+			}
+			out[sub.Key] = entry
+		}
+		if len(out) > 0 {
+			return out
 		}
 	}
-	t.Fatalf("no verbose %q slog record with non-nil typed %q map; capture had %d records",
+	t.Fatalf("no verbose %q slog record with non-empty %q Group; capture had %d records",
 		recMsg, attrKey, len(capture.snapshot()))
 	return nil
 }
@@ -1490,7 +1503,7 @@ func TestReadyz_VerboseDegraded_SlogCapturesRedactedError(t *testing.T) {
 	assert.Equal(t, "degraded", data["status"], "body status must be 'degraded'")
 
 	// slog channel d: the "readyz degraded" Info record must carry the
-	// dependencies map with the redacted ErrorMsg.
+	// dependencies Group with the redacted ErrorMsg per entry.
 	const diagMsg = "readyz degraded"
 	var diagEntry SlogDependencyEntry
 	var found bool
@@ -1499,18 +1512,20 @@ func TestReadyz_VerboseDegraded_SlogCapturesRedactedError(t *testing.T) {
 			continue
 		}
 		r.Attrs(func(a slog.Attr) bool {
-			if a.Key == "dependencies" {
-				deps, ok := a.Value.Any().(map[string]SlogDependencyEntry)
-				if ok {
-					e, exists := deps["cache"]
-					if exists {
-						diagEntry = e
-						found = true
-					}
-				}
-				return false
+			if a.Key != "dependencies" || a.Value.Kind() != slog.KindGroup {
+				return true
 			}
-			return true
+			for _, sub := range a.Value.Group() {
+				if sub.Key != "cache" {
+					continue
+				}
+				e, ok := sub.Value.Any().(SlogDependencyEntry)
+				if ok {
+					diagEntry = e
+					found = true
+				}
+			}
+			return false
 		})
 		if found {
 			break

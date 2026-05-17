@@ -80,11 +80,13 @@ func NewCapture(t *testing.T) *CaptureHandler {
 // issuing a single verbose request, so multiple "readyz unhealthy" records
 // accumulate. Non-verbose records carry only status/reason; verbose records
 // add cells/dependencies/adapters. We return the first record whose
-// dependencies attr is non-nil — that is the verbose 503.
+// dependencies attr is a non-empty slog.Group — that is the verbose 503.
 //
-// Return type is map[string]health.SlogDependencyEntry (typed) — the slog
-// payload shape is owned by health.readyzResult.logUnhealthy, not arbitrary
-// map[string]any.
+// Return type is map[string]health.SlogDependencyEntry. The slog payload
+// shape is slog.Group("dependencies", slog.Any(name, entry)...) per
+// (*readyzResult).logDiagnostics — handlers call entry.LogValue() during
+// resolve, but inside the Group each sub-attr's raw Value (.Any()) still
+// holds the original SlogDependencyEntry. This helper unwraps that.
 func ReadyzUnhealthyDeps(t *testing.T, capture *CaptureHandler) map[string]health.SlogDependencyEntry {
 	t.Helper()
 	const (
@@ -95,20 +97,12 @@ func ReadyzUnhealthyDeps(t *testing.T, capture *CaptureHandler) map[string]healt
 		if r.Message != recMsg {
 			continue
 		}
-		var depsAttr slog.Value
-		r.Attrs(func(a slog.Attr) bool {
-			if a.Key == attrKey {
-				depsAttr = a.Value
-				return false
-			}
-			return true
-		})
-		deps, ok := depsAttr.Any().(map[string]health.SlogDependencyEntry)
-		if ok && deps != nil {
+		deps := unwrapDependenciesGroup(r, attrKey)
+		if len(deps) > 0 {
 			return deps
 		}
 	}
-	t.Fatalf("no verbose %q slog record with non-nil typed %q map; capture had %d records",
+	t.Fatalf("no verbose %q slog record with a non-empty %q Group; capture had %d records",
 		recMsg, attrKey, len(capture.Snapshot()))
 	return nil
 }
@@ -126,22 +120,37 @@ func HasReadyzDependencyStatus(capture *CaptureHandler, depName, status string) 
 		if r.Message != recMsg {
 			continue
 		}
-		var depsAttr slog.Value
-		r.Attrs(func(a slog.Attr) bool {
-			if a.Key == attrKey {
-				depsAttr = a.Value
-				return false
-			}
-			return true
-		})
-		deps, ok := depsAttr.Any().(map[string]health.SlogDependencyEntry)
-		if !ok {
-			continue
-		}
-		probe, ok := deps[depName]
-		if ok && probe.Status() == status {
+		deps := unwrapDependenciesGroup(r, attrKey)
+		if entry, ok := deps[depName]; ok && entry.Status() == status {
 			return true
 		}
 	}
 	return false
+}
+
+// unwrapDependenciesGroup walks the "dependencies" slog.Group inside a
+// "readyz unhealthy" record and returns a typed map keyed by dep name.
+// Returns nil when the record has no dependencies attr or the attr is not a
+// Group (e.g. non-verbose record).
+func unwrapDependenciesGroup(r slog.Record, attrKey string) map[string]health.SlogDependencyEntry {
+	var depsAttr slog.Value
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == attrKey {
+			depsAttr = a.Value
+			return false
+		}
+		return true
+	})
+	if depsAttr.Kind() != slog.KindGroup {
+		return nil
+	}
+	out := make(map[string]health.SlogDependencyEntry, len(depsAttr.Group()))
+	for _, sub := range depsAttr.Group() {
+		entry, ok := sub.Value.Any().(health.SlogDependencyEntry)
+		if !ok {
+			continue
+		}
+		out[sub.Key] = entry
+	}
+	return out
 }

@@ -14,7 +14,11 @@
 //
 //	construct redactedErrorMsg values only via newRedactedErrorMsg. Any other
 //	type conversion `redactedErrorMsg(x)` outside newRedactedErrorMsg's function
-//	body fails this gate (downstream Hard, archtest forward rule below).
+//	body fails this gate (downstream Hard, archtest forward rule below). There
+//	is NO testing-only exported constructor — healthtest unit tests assert
+//	against SlogDependencyEntry{} zero value plumbing; semantic value tests
+//	live in the health package's own white-box tests where they exercise a
+//	real Handler.
 //
 //	Upstream Hard is enforced by the Go type system, not archtest:
 //	  - SlogDependencyEntry's three fields (status / durationMs / errorMsg)
@@ -25,6 +29,9 @@
 //	    bypass — and using reflect inside the health package would itself be
 //	    the bug under investigation, which a fresh code review (not archtest)
 //	    is the appropriate gate for.
+//	  - There is no exported testing-only constructor — round-4 PR #552
+//	    introduced one (NewSlogDependencyEntryForTesting) and round-5 removed
+//	    it after review surfaced that any production package could call it.
 //
 // HEALTH-VERBOSE-SCAN-COVERAGE-01 — sanity gate: asserts the archtest scope
 //
@@ -57,54 +64,20 @@ import (
 	"fmt"
 	"go/ast"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-// sortedAllowlistFuncs returns the keys of m as a deterministic sorted slice
-// — used in archtest Diagnostic messages so the allowed-callsite list renders
-// consistently regardless of map iteration order. Local-scoped helper rather
-// than reusing sortedKeys (clock_invariants_test.go) because that one takes
-// map[string]bool with different semantics.
-func sortedAllowlistFuncs(m map[string]struct{}) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
 const (
-	ruleHealthVerboseWireShapeFrozen = "HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01"
-	ruleHealthRedactedErrorMsgFunnel = "HEALTH-REDACTED-ERROR-MSG-FUNNEL-01"
-	ruleHealthVerboseScanCoverage    = "HEALTH-VERBOSE-SCAN-COVERAGE-01"
-	healthPackageRelativeRoot        = "runtime/http/health"
-	healthVerboseShapeName           = "verboseDependencyEntry"
-	healthRedactedErrorMsgTypeName   = "redactedErrorMsg"
+	ruleHealthVerboseWireShapeFrozen     = "HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01"
+	ruleHealthRedactedErrorMsgFunnel     = "HEALTH-REDACTED-ERROR-MSG-FUNNEL-01"
+	ruleHealthVerboseScanCoverage        = "HEALTH-VERBOSE-SCAN-COVERAGE-01"
+	healthPackageRelativeRoot            = "runtime/http/health"
+	healthVerboseShapeName               = "verboseDependencyEntry"
+	healthRedactedErrorMsgTypeName       = "redactedErrorMsg"
+	healthRedactedErrorMsgFunnelFuncName = "newRedactedErrorMsg"
 )
-
-// healthRedactedErrorMsgFunnelAllowedFuncs is the closed set of function
-// names that may contain a `redactedErrorMsg(...)` conversion CallExpr.
-//
-// Production funnel (single source of truth):
-//   - newRedactedErrorMsg — the production producer, routes through
-//     pkg/redaction.RedactString before construction.
-//
-// Test-only opt-out (deliberately exported via "ForTesting" name suffix):
-//   - NewSlogDependencyEntryForTesting — used by runtime/http/health/healthtest
-//     unit tests to assemble expected slog payloads without spinning up a
-//     full Handler. The "ForTesting" suffix is the human-readable opt-out
-//     marker; cross-package callers are immediately obvious in code review.
-//     The Hard funnel claim is preserved by (a) the suffix convention, and
-//     (b) this allowlist being the single source of truth (any new entry
-//     here is reviewer-visible).
-var healthRedactedErrorMsgFunnelAllowedFuncs = map[string]struct{}{
-	"newRedactedErrorMsg":              {},
-	"NewSlogDependencyEntryForTesting": {},
-}
 
 // healthVerboseWireAllowedFields is the verbatim field set of
 // runtime/http/health.verboseDependencyEntry. Adding a field requires
@@ -226,13 +199,13 @@ func TestHealthRedactedErrorMsgFunnel(t *testing.T) {
 					if !ok || ident.Name != healthRedactedErrorMsgTypeName {
 						return
 					}
-					if _, allowed := healthRedactedErrorMsgFunnelAllowedFuncs[fnName]; !allowed {
+					if fnName != healthRedactedErrorMsgFunnelFuncName {
 						ds = append(ds, Diagnostic{
 							Rel:  p.Rel(f),
 							Line: p.Fset.Position(call.Pos()).Line,
 							Message: fmt.Sprintf(
-								"redactedErrorMsg(...) conversion inside func %s; only %v may construct redactedErrorMsg values",
-								fnName, sortedAllowlistFuncs(healthRedactedErrorMsgFunnelAllowedFuncs),
+								"redactedErrorMsg(...) conversion inside func %s; only %s may construct redactedErrorMsg values",
+								fnName, healthRedactedErrorMsgFunnelFuncName,
 							),
 						})
 					}
@@ -251,8 +224,8 @@ func TestHealthRedactedErrorMsgFunnel(t *testing.T) {
 						Line: p.Fset.Position(call.Pos()).Line,
 						Message: fmt.Sprintf(
 							"redactedErrorMsg(...) conversion in package-level GenDecl initializer (blind-spot c); "+
-								"only %v may construct redactedErrorMsg values",
-							sortedAllowlistFuncs(healthRedactedErrorMsgFunnelAllowedFuncs),
+								"only %s may construct redactedErrorMsg values",
+							healthRedactedErrorMsgFunnelFuncName,
 						),
 					})
 				})

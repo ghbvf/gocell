@@ -1,14 +1,22 @@
 package health
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // TestNewRedactedErrorMsg_NilReturnsEmpty verifies the nil-input sentinel path.
@@ -60,31 +68,58 @@ func TestNewRedactedErrorMsg_NonNilRoutesThroughRedaction(t *testing.T) {
 	}
 }
 
-// TestSlogDependencyEntry_Accessors verifies the three read-only accessor
-// methods return the underlying field values verbatim.
-func TestSlogDependencyEntry_Accessors(t *testing.T) {
-	e := NewSlogDependencyEntryForTesting("unhealthy", 123, "connection refused")
-	assert.Equal(t, "unhealthy", e.Status())
-	assert.Equal(t, int64(123), e.DurationMs())
-	assert.Equal(t, "connection refused", e.ErrorMsg())
-}
-
-// TestSlogDependencyEntry_ZeroValue verifies the zero value has empty
-// accessors — used as the "healthy probe with no error" sentinel shape.
-func TestSlogDependencyEntry_ZeroValue(t *testing.T) {
+// TestSlogDependencyEntry_ZeroValueAccessors verifies the three read-only
+// accessor methods on the zero value return zero-value strings/int.
+func TestSlogDependencyEntry_ZeroValueAccessors(t *testing.T) {
 	var e SlogDependencyEntry
 	assert.Equal(t, "", e.Status())
 	assert.Equal(t, int64(0), e.DurationMs())
 	assert.Equal(t, "", e.ErrorMsg())
 }
 
+// TestSlogDependencyEntry_AccessorsViaRealHandler builds a real probe path
+// (in-memory assembly + one failing checker) and asserts the produced
+// SlogDependencyEntry's accessors return the expected values. White-box test
+// (package health) so it can construct via the production funnel without an
+// exported testing constructor.
+func TestSlogDependencyEntry_AccessorsViaRealHandler(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-acc", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	h := New(asm, clock.Real())
+	h.SetVerboseToken(testVerboseToken)
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error {
+		return errors.New("connection refused password=secret")
+	}))
+
+	capture := withSlogCapture(t)
+	rec := httptest.NewRecorder()
+	req := newVerboseRequest("/readyz?verbose=true")
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	deps := readyzUnhealthyDeps(t, capture)
+	require.Contains(t, deps, "db")
+	entry := deps["db"]
+	assert.Equal(t, "unhealthy", entry.Status())
+	assert.Greater(t, entry.DurationMs(), int64(-1), "duration must be non-negative")
+	errMsg := entry.ErrorMsg()
+	assert.Contains(t, errMsg, "<REDACTED>", "ErrorMsg must contain redaction mask for password=...")
+	assert.NotContains(t, errMsg, "secret", "raw password value must not appear")
+}
+
 // TestSlogDependencyEntry_LogValue verifies LogValue emits a GroupValue with
-// snake_case attr keys (status / duration_ms / error_msg). This is the path
-// that fires when SlogDependencyEntry is passed individually as a slog.Any
-// argument (rather than wrapped in a map — see struct godoc caveat).
+// snake_case attr keys (status / duration_ms / error_msg). The LogValue path
+// is what slog handlers call during resolve when each entry is passed via
+// slog.Any inside a slog.Group("dependencies", ...) — see logDiagnostics.
 func TestSlogDependencyEntry_LogValue(t *testing.T) {
-	e := NewSlogDependencyEntryForTesting("degraded", 42, "drop ratio exceeded")
-	v := e.LogValue()
+	// Construct via the production funnel — same path as aggregateProbeResults.
+	entry := SlogDependencyEntry{
+		status:     "degraded",
+		durationMs: 42,
+		errorMsg:   newRedactedErrorMsg(errors.New("drop ratio exceeded")),
+	}
+	v := entry.LogValue()
 	require.Equal(t, slog.KindGroup, v.Kind(), "LogValue must return GroupValue")
 
 	got := make(map[string]any, 3)
@@ -96,24 +131,46 @@ func TestSlogDependencyEntry_LogValue(t *testing.T) {
 	assert.Equal(t, "drop ratio exceeded", got["error_msg"])
 }
 
-// TestSlogDependencyEntry_LogValueEmitsSnakeCaseViaJSONHandler verifies the
-// end-to-end JSON-handler path through slog: when an entry is passed
-// individually via slog.Any, the JSON output uses snake_case keys courtesy
-// of LogValue → GroupValue with snake_case attrs.
-func TestSlogDependencyEntry_LogValueEmitsSnakeCaseViaJSONHandler(t *testing.T) {
-	var buf strings.Builder
-	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler is the end-to-end
+// integration test that proves the architectural fix (round-5): logDiagnostics
+// uses slog.Group("dependencies", slog.Any(name, entry)...), and JSON handler
+// emits the dep payload with snake_case fields by calling LogValue during
+// resolve. Pre-round-5 this would have emitted "dependencies":{"db":{}}
+// because slog.Any(map) bypassed LogValue and json.Marshal can't see
+// unexported fields.
+func TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	e := NewSlogDependencyEntryForTesting("unhealthy", 99, "deadline exceeded")
-	logger.Info("probe", slog.Any("dep", e))
+	asm := assembly.New(assembly.Config{ID: "test-json", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	h := New(asm, clock.Real())
+	h.SetVerboseToken(testVerboseToken)
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error {
+		return errors.New("connection refused")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req.Header.Set(VerboseAuthHeader, testVerboseToken)
+	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	out := buf.String()
+	// Locate the readyz unhealthy record (last one — preceded by other slog
+	// records from probe setup).
+	require.Contains(t, out, `"msg":"readyz unhealthy"`)
+	require.Contains(t, out, `"dependencies":{`, "dependencies must be a JSON object (slog.Group)")
+	require.Contains(t, out, `"db":{`, "db dep must be a sub-object (LogValue GroupValue)")
 	assert.Contains(t, out, `"status":"unhealthy"`)
-	assert.Contains(t, out, `"duration_ms":99`)
-	assert.Contains(t, out, `"error_msg":"deadline exceeded"`)
-	// Negative check: must NOT use exported Go field names (the unexported
-	// fields don't exist for reflection on this code path because LogValue
-	// fires first).
+	assert.Contains(t, out, `"duration_ms":`)
+	assert.Contains(t, out, `"error_msg":"connection refused"`)
+	// Negative: must NOT emit empty objects (round-4 bug shape) or CamelCase
+	// fields (the unexported-field fallback shape).
+	assert.NotContains(t, out, `"db":{}`)
 	assert.NotContains(t, out, `"Status"`)
 	assert.NotContains(t, out, `"DurationMs"`)
 	assert.NotContains(t, out, `"ErrorMsg"`)
@@ -129,4 +186,8 @@ func TestVerboseDependencyEntry_JSONShape(t *testing.T) {
 	got := string(buf)
 	assert.Equal(t, `{"status":"healthy","duration_ms":7}`, got,
 		"wire shape must be exactly {status, duration_ms} — no error field")
+
+	// Sanity: wire body must not mention "error" or "error_msg".
+	assert.False(t, strings.Contains(got, "error"),
+		"verboseDependencyEntry JSON serialization must not contain any error field")
 }

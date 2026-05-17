@@ -566,9 +566,20 @@ func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog
 		attrs = append(attrs, a)
 	}
 	if r.verbose {
+		// `dependencies` is emitted as slog.Group rather than slog.Any(map):
+		// inside a Group, each SlogDependencyEntry passes through slog.Any
+		// where the handler calls Value.Resolve() → entry.LogValue() →
+		// GroupValue with snake_case fields. This is the ONLY shape that
+		// gives consistent snake_case output across JSON / text / logfmt
+		// handlers; slog.Any(map) is opaque-blob and bypasses LogValue.
+		// See verbose_shape.go godoc and ADR 202605171200 §2 D6.
+		depAttrs := make([]any, 0, len(r.slogDependencies))
+		for name, entry := range r.slogDependencies {
+			depAttrs = append(depAttrs, slog.Any(name, entry))
+		}
 		attrs = append(attrs,
 			slog.Any("cells", r.cells),
-			slog.Any("dependencies", r.slogDependencies),
+			slog.Group("dependencies", depAttrs...),
 			slog.Any("adapters", r.adapters),
 		)
 	}

@@ -70,34 +70,69 @@ func TestNewCapture_RedirectsSlogDefaultAndRestoresOnCleanup(t *testing.T) {
 	assert.Same(t, prev, slog.Default(), "NewCapture t.Cleanup must restore prior default")
 }
 
-// TestReadyzUnhealthyDeps_FindsVerboseRecord verifies the helper finds the
-// first "readyz unhealthy" record with a non-nil typed dependencies map and
-// returns it, skipping non-verbose records that lack the dependencies attr.
-func TestReadyzUnhealthyDeps_FindsVerboseRecord(t *testing.T) {
+// TestReadyzUnhealthyDeps_FindsGroupRecord verifies the helper plumbing:
+// given a slog record with a "readyz unhealthy" msg + "dependencies" slog.Group
+// whose sub-attrs are SlogDependencyEntry-valued, the helper returns the
+// typed map keyed by dep name.
+//
+// SlogDependencyEntry has unexported fields and no exported testing
+// constructor (by design — see verbose_shape.go godoc). This unit test
+// asserts ONLY plumbing correctness using zero-value entries: the helper
+// must walk the Group structure and return a map with the right keys and
+// the right value type. Semantic content (Status/ErrorMsg actual values)
+// is exercised in the health package's own white-box tests via a real
+// Handler.
+func TestReadyzUnhealthyDeps_FindsGroupRecord(t *testing.T) {
 	h := &CaptureHandler{}
 	logger := slog.New(h)
 
-	// Non-verbose record: status/reason only (no dependencies map).
+	// Non-verbose record: status/reason only (no dependencies group).
 	logger.Warn("readyz unhealthy",
 		slog.String("status", "unhealthy"),
 		slog.String("reason", "readiness_failed"),
 	)
 
-	// Verbose record: typed dependencies map present.
-	deps := map[string]health.SlogDependencyEntry{
-		"db": health.NewSlogDependencyEntryForTesting("unhealthy", 12, "connection refused"),
-	}
+	// Verbose record: dependencies as slog.Group with SlogDependencyEntry
+	// zero-value sub-attrs (zero-value is acceptable for plumbing test).
 	logger.Warn("readyz unhealthy",
 		slog.String("status", "unhealthy"),
 		slog.String("reason", "readiness_failed"),
-		slog.Any("dependencies", deps),
+		slog.Group("dependencies",
+			slog.Any("db", health.SlogDependencyEntry{}),
+			slog.Any("redis", health.SlogDependencyEntry{}),
+		),
 	)
 
 	got := ReadyzUnhealthyDeps(t, h)
+	require.Len(t, got, 2)
 	require.Contains(t, got, "db")
-	assert.Equal(t, "unhealthy", got["db"].Status())
-	assert.Equal(t, int64(12), got["db"].DurationMs())
-	assert.Equal(t, "connection refused", got["db"].ErrorMsg())
+	require.Contains(t, got, "redis")
+	// Zero-value plumbing: accessors return zero defaults.
+	assert.Equal(t, "", got["db"].Status())
+	assert.Equal(t, int64(0), got["db"].DurationMs())
+	assert.Equal(t, "", got["db"].ErrorMsg())
+}
+
+// TestReadyzUnhealthyDeps_SkipsNonGroupAttr verifies the helper skips
+// records where "dependencies" attr is not a Group (e.g. an Any with a
+// non-Group value) — protects against false matches if logDiagnostics
+// regresses back to slog.Any(map).
+func TestReadyzUnhealthyDeps_SkipsNonGroupAttr(t *testing.T) {
+	h := &CaptureHandler{}
+	logger := slog.New(h)
+
+	// Wrong shape: slog.Any with a map value (round-4 regression form).
+	logger.Warn("readyz unhealthy",
+		slog.Any("dependencies", map[string]any{"db": "wrong-shape"}),
+	)
+	// Right shape: slog.Group.
+	logger.Warn("readyz unhealthy",
+		slog.Group("dependencies", slog.Any("ok", health.SlogDependencyEntry{})),
+	)
+
+	got := ReadyzUnhealthyDeps(t, h)
+	require.Len(t, got, 1, "helper must skip non-Group dependencies attr and find the Group one")
+	require.Contains(t, got, "ok")
 }
 
 // TestHasReadyzDependencyStatus verifies match and no-match paths against
@@ -106,16 +141,20 @@ func TestHasReadyzDependencyStatus(t *testing.T) {
 	h := &CaptureHandler{}
 	logger := slog.New(h)
 
-	deps := map[string]health.SlogDependencyEntry{
-		"db":    health.NewSlogDependencyEntryForTesting("unhealthy", 1, "down"),
-		"redis": health.NewSlogDependencyEntryForTesting("healthy", 2, ""),
-	}
-	logger.Warn("readyz unhealthy", slog.Any("dependencies", deps))
+	// Zero-value entries: Status() returns "" — assert against "".
+	logger.Warn("readyz unhealthy",
+		slog.Group("dependencies",
+			slog.Any("db", health.SlogDependencyEntry{}),
+			slog.Any("redis", health.SlogDependencyEntry{}),
+		),
+	)
 
-	assert.True(t, HasReadyzDependencyStatus(h, "db", "unhealthy"))
-	assert.True(t, HasReadyzDependencyStatus(h, "redis", "healthy"))
-	assert.False(t, HasReadyzDependencyStatus(h, "db", "healthy"), "wrong status must not match")
-	assert.False(t, HasReadyzDependencyStatus(h, "missing", "healthy"), "missing key must not match")
+	assert.True(t, HasReadyzDependencyStatus(h, "db", ""),
+		"zero-value entry's Status() is empty string; match on '' must succeed")
+	assert.False(t, HasReadyzDependencyStatus(h, "db", "unhealthy"),
+		"wrong status must not match")
+	assert.False(t, HasReadyzDependencyStatus(h, "missing", ""),
+		"missing key must not match")
 }
 
 // TestHasReadyzDependencyStatus_NoRecord verifies the helper returns false when
