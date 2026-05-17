@@ -7,11 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,14 +61,19 @@ func withSlogCapture(t *testing.T) *captureHandler {
 
 // readyzUnhealthyDeps fetches the verbose-breakdown dependencies map from
 // the captured "readyz unhealthy" slog records. Tests assert on this rather
-// than on the 503 wire body because K#08 5xx redaction strips Details from
-// the public envelope; verbose breakdown lives only in server-side logs.
+// than on the 503 wire body because:
+//   - K#08 5xx redaction strips Details from the public envelope.
+//   - PR391-HEALTH-VERBOSE-REDACTION-01 / ADR 202605171200 forbid error text
+//     on wire entirely; full (redacted) error lives only in slog channel d.
 //
 // Multiple "readyz unhealthy" records may accumulate (e.g. when a test
 // polls /readyz non-verbose before issuing the verbose request). Non-verbose
 // records carry only status/reason; verbose records add cells/dependencies/
 // adapters. We return the first record whose dependencies attr is non-nil.
-func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[string]any {
+//
+// Return type is map[string]slogDependencyEntry (typed) — the slog payload
+// shape is owned by readyzResult.logUnhealthy, not arbitrary map[string]any.
+func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]slogDependencyEntry {
 	t.Helper()
 	const (
 		recMsg  = "readyz unhealthy"
@@ -88,12 +91,12 @@ func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[s
 			}
 			return true
 		})
-		deps, ok := depsAttr.Any().(map[string]map[string]any)
+		deps, ok := depsAttr.Any().(map[string]slogDependencyEntry)
 		if ok && deps != nil {
 			return deps
 		}
 	}
-	t.Fatalf("no verbose %q slog record with non-nil %q map; capture had %d records",
+	t.Fatalf("no verbose %q slog record with non-nil typed %q map; capture had %d records",
 		recMsg, attrKey, len(capture.snapshot()))
 	return nil
 }
@@ -308,10 +311,10 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmqEntry, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present")
-	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
+	assert.Equal(t, "healthy", rabbitmqEntry.Status, "rabbitmq checker should be healthy")
 	postgresEntry, ok := deps["postgres"]
 	require.True(t, ok, "postgres entry must be present")
-	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
+	assert.Equal(t, "unhealthy", postgresEntry.Status, "postgres checker should be unhealthy")
 }
 
 func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
@@ -387,6 +390,12 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 	dbEntry, ok := deps["db"].(map[string]any)
 	require.True(t, ok, "db dependency must be a map")
 	assert.Equal(t, "healthy", dbEntry["status"])
+	// Wire shape is frozen to {status, duration_ms} per ADR 202605171200 §3
+	// (channel a vs d separation); no error_msg / error key on wire.
+	_, hasErr := dbEntry["error"]
+	assert.False(t, hasErr, "wire dependency entry must not carry error key (channel d slog only)")
+	_, hasErrMsg := dbEntry["error_msg"]
+	assert.False(t, hasErrMsg, "wire dependency entry must not carry error_msg key (channel d slog only)")
 }
 
 func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
@@ -881,11 +890,10 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	slowEntry, ok := deps["slow"]
 	require.True(t, ok, "slow entry must be present")
-	assert.Equal(t, "timeout", slowEntry["status"], "exceeded-deadline probe must be status=timeout")
-	errStr, hasErr := slowEntry["error"].(string)
-	require.True(t, hasErr, "timeout probe must include error field")
-	assert.Contains(t, errStr, "deadline exceeded",
-		"error field must mention 'deadline exceeded'")
+	assert.Equal(t, "timeout", slowEntry.Status, "exceeded-deadline probe must be status=timeout")
+	require.NotEmpty(t, slowEntry.ErrorMsg, "timeout probe must include ErrorMsg in slog channel d")
+	assert.Contains(t, string(slowEntry.ErrorMsg), "deadline exceeded",
+		"ErrorMsg must mention 'deadline exceeded'")
 }
 
 // TestReadyz_IndependentOfRequestCtx verifies that /readyz probes are NOT
@@ -960,151 +968,30 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	panicEntry, ok := deps["panicking"]
 	require.True(t, ok, "panicking entry must be present")
-	assert.Equal(t, "unhealthy", panicEntry["status"])
+	assert.Equal(t, "unhealthy", panicEntry.Status)
 }
 
-// TestTruncateErrMsg verifies the truncateErrMsg helper across boundary cases.
-func TestTruncateErrMsg(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		max     int
-		want    string
-		wantLen int // expected len(result); -1 means check want exactly
-	}{
-		{
-			name:  "empty string",
-			input: "",
-			max:   512,
-			want:  "",
-		},
-		{
-			name:  "short string below limit",
-			input: "connection refused",
-			max:   512,
-			want:  "connection refused",
-		},
-		{
-			name:    "exactly at limit — no truncation",
-			input:   string(make([]byte, 512)),
-			max:     512,
-			wantLen: 512,
-		},
-		{
-			name:    "one byte over limit — truncated with ellipsis",
-			input:   string(make([]byte, 513)),
-			max:     512,
-			wantLen: 515, // 512 + len("...")
-		},
-		{
-			name:    "long string well over limit",
-			input:   string(make([]byte, 1024)),
-			max:     512,
-			wantLen: 515,
-		},
-		{
-			name:  "truncated suffix is '...'",
-			input: "abcdefghij",
-			max:   5,
-			want:  "abcde...",
-		},
-		{
-			name:  "zero max emits ellipsis",
-			input: "abcdefghij",
-			max:   0,
-			want:  "...",
-		},
-		{
-			name: "multi-byte UTF-8 within limit — no truncation",
-			// "日本語" is 9 bytes (3 bytes per rune); 9 < 512 so no truncation.
-			input: "日本語",
-			max:   512,
-			want:  "日本語",
-		},
-		{
-			name:  "multi-byte UTF-8 truncated at rune boundary",
-			input: "😀extra",
-			max:   3,
-			want:  "😀ex...",
-		},
-		{
-			name:  "multi-byte UTF-8 max counts runes",
-			input: "日本語abc",
-			max:   4,
-			want:  "日本語a...",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := truncateErrMsg(tt.input, tt.max)
-			// Exact-match cases are those that set `want` or use the
-			// empty-in / empty-out identity; length-based cases use
-			// `wantLen`. Either side may be set; they are mutually
-			// exclusive per fixture definition above.
-			if tt.want != "" || tt.input == "" {
-				assert.Equal(t, tt.want, got)
-			}
-			if tt.wantLen > 0 {
-				assert.Equal(t, tt.wantLen, len(got),
-					"expected len=%d, got len=%d (value=%q)", tt.wantLen, len(got), got)
-			}
-			// Truncated results must end with "..."
-			if len([]rune(tt.input)) > tt.max {
-				assert.True(t, len(got) >= 3 && got[len(got)-3:] == "...",
-					"truncated result must end with '...'; got %q", got)
-			}
-			assert.True(t, utf8.ValidString(got), "truncated result must remain valid UTF-8")
-		})
-	}
-}
-
-// TestReadyz_VerboseError_LongErrTruncated is an end-to-end HTTP test that
-// verifies truncateErrMsg is applied to probe errors in /readyz?verbose output.
-// A checker returning a 600-byte error message must produce an "error" field
-// in the JSON response that is at most 515 bytes (512 + "...") and ends with "...".
-func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-truncate", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	require.NoError(t, asm.Start(context.Background()))
-	defer func() { _ = asm.Stop(context.Background()) }()
-
-	// Construct a 600-byte error message — well over the 512-byte limit.
-	longMsg := string(make([]byte, 600))
-	for i := range []byte(longMsg) {
-		longMsg = longMsg[:i] + "x" + longMsg[i+1:]
-	}
-	longMsg = fmt.Sprintf("%0600d", 0) // 600 ASCII digits
-
-	h := New(asm, clock.Real())
-	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("noisy", func(_ context.Context) error {
-		return fmt.Errorf("%s", longMsg)
-	}))
-
-	capture := withSlogCapture(t)
-	rec := httptest.NewRecorder()
-	req := newVerboseRequest("/readyz?verbose=true")
-	h.ReadyzHandler().ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	errObj := errorBody(t, rec)
-	assertReadyzServiceUnavailable(t, errObj)
-
-	deps := readyzUnhealthyDeps(t, capture)
-	noisyEntry, ok := deps["noisy"]
-	require.True(t, ok, "noisy entry must be present")
-
-	errField, ok := noisyEntry["error"].(string)
-	require.True(t, ok, "error field must be a string")
-
-	const maxWithEllipsis = maxVerboseErrLen + 3 // 512 + len("...")
-	assert.LessOrEqual(t, len(errField), maxWithEllipsis,
-		"error field must be at most %d bytes; got %d", maxWithEllipsis, len(errField))
-	assert.True(t, len(errField) >= 3 && errField[len(errField)-3:] == "...",
-		"truncated error must end with '...'; got %q", errField)
-}
-
-func TestReadyz_VerboseError_RedactsBeforeTruncating(t *testing.T) {
+// TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog enforces the
+// four-channel split (ADR 202605171200): for 503 verbose responses,
+// dependencies are stripped from the wire envelope entirely (K#08 5xx
+// details := []); the full redacted error lives only in channel d
+// ops-diagnostics slog. So the wire-side assertions are:
+//
+//   - the canonical errcode 503 envelope is intact (code + message + empty details)
+//   - the wire body MUST NOT contain the raw secret sentinel
+//   - the wire body MUST NOT contain the redaction mask either (channel d
+//     ownership is exclusive — if the mask appeared on wire, error text leaked)
+//
+// And the slog-side assertion is:
+//
+//   - typed channel d dependencies[name].ErrorMsg carries the redacted error
+//     via the newRedactedErrorMsg funnel
+//
+// Supersedes the pre-ADR pair (TestReadyz_VerboseError_LongErrTruncated +
+// TestReadyz_VerboseError_RedactsBeforeTruncating): truncation on wire is
+// gone (wire has no error text to truncate), and redaction-before-truncate
+// is now redaction-into-typed-newtype enforced by archtest funnel.
+func TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-redact-verbose", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
@@ -1122,19 +1009,70 @@ func TestReadyz_VerboseError_RedactsBeforeTruncating(t *testing.T) {
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.False(t, strings.Contains(rec.Body.String(), leakSentinel),
-		"verbose readyz body must not leak raw probe secrets")
+
+	// Wire body: must not contain sentinel or redaction mask. (Channel a/b/c
+	// envelope contains the JSON keys "error" / "code" / "message" / "details"
+	// by construction; assertions below target leak surfaces, not envelope keys.)
+	wireBody := rec.Body.String()
+	assert.NotContains(t, wireBody, leakSentinel,
+		"verbose readyz wire body must not leak raw probe secrets")
+	assert.NotContains(t, wireBody, "<REDACTED>",
+		"verbose readyz wire body must not contain redaction mask either — channel d ownership is exclusive; mask on wire would mean error text leaked from slog into wire")
 
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
 
+	// slog channel d: full redacted error text via typed redactedErrorMsg funnel.
 	deps := readyzUnhealthyDeps(t, capture)
 	sensitiveEntry, ok := deps["sensitive"]
-	require.True(t, ok, "sensitive entry must be present")
-	errField, ok := sensitiveEntry["error"].(string)
-	require.True(t, ok, "error field must be a string")
-	assert.Contains(t, errField, "<REDACTED>")
-	assert.NotContains(t, errField, leakSentinel)
+	require.True(t, ok, "sensitive entry must be present in slog dependencies")
+	errMsg := string(sensitiveEntry.ErrorMsg)
+	assert.Contains(t, errMsg, "<REDACTED>",
+		"slog channel d ErrorMsg must contain the redaction mask")
+	assert.NotContains(t, errMsg, leakSentinel,
+		"slog channel d ErrorMsg must have the raw sentinel masked")
+}
+
+// TestReadyz_VerbosePanicSecret_RedactedInSlog is the panic-path analog of
+// TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog: a probe
+// panic carrying a secret-shaped string must (a) not leak to wire, and
+// (b) reach slog channel d only after passing through the redaction funnel.
+func TestReadyz_VerbosePanicSecret_RedactedInSlog(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-panic-redact", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	const leakSentinel = "panic-leak-sentinel-c91d"
+	h := New(asm, clock.Real(), WithDeadline(testtime.D2s))
+	h.SetVerboseToken(testVerboseToken)
+	require.NoError(t, h.RegisterChecker("panicking", func(_ context.Context) error {
+		panic(fmt.Sprintf("auth-key=%s session-token=%s", leakSentinel, leakSentinel))
+	}))
+
+	capture := withSlogCapture(t)
+	rec := httptest.NewRecorder()
+	req := newVerboseRequest("/readyz?verbose=true")
+	require.NotPanics(t, func() {
+		h.ReadyzHandler().ServeHTTP(rec, req)
+	})
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	wireBody := rec.Body.String()
+	assert.NotContains(t, wireBody, leakSentinel,
+		"panic-derived probe error must not leak to wire body")
+	assert.NotContains(t, wireBody, "<REDACTED>",
+		"wire body must not contain redaction mask either — channel d ownership is exclusive")
+
+	deps := readyzUnhealthyDeps(t, capture)
+	panicEntry, ok := deps["panicking"]
+	require.True(t, ok, "panicking entry must be present in slog dependencies")
+	assert.Equal(t, "unhealthy", panicEntry.Status)
+	errMsg := string(panicEntry.ErrorMsg)
+	assert.Contains(t, errMsg, "<REDACTED>",
+		"slog channel d ErrorMsg must contain the redaction mask for panic-derived errors")
+	assert.NotContains(t, errMsg, leakSentinel,
+		"slog channel d ErrorMsg must have the raw panic secret masked")
 }
 
 // TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline verifies the
@@ -1216,12 +1154,11 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	stuck, ok := deps["stuck"]
 	require.True(t, ok, "stuck probe must be present in verbose dependencies")
-	assert.Equal(t, "timeout", stuck["status"],
+	assert.Equal(t, "timeout", stuck.Status,
 		"uncooperative probe must be surfaced as status=timeout (not unhealthy)")
-	errStr, hasErr := stuck["error"].(string)
-	require.True(t, hasErr, "timeout probe must include error string")
-	assert.Contains(t, errStr, "deadline",
-		"timeout probe error must mention deadline; got %q", errStr)
+	require.NotEmpty(t, stuck.ErrorMsg, "timeout probe must include ErrorMsg in slog channel d")
+	assert.Contains(t, string(stuck.ErrorMsg), "deadline",
+		"timeout probe ErrorMsg must mention deadline; got %q", stuck.ErrorMsg)
 }
 
 // TestWriteJSON_WriteError verifies that writeJSON logs an slog.Error when the
@@ -1257,9 +1194,11 @@ func (f *failWriter) Header() http.Header         { return f.header }
 func (f *failWriter) WriteHeader(code int)        { f.code = code }
 func (f *failWriter) Write(_ []byte) (int, error) { return 0, fmt.Errorf("simulated write failure") }
 
-// TestReadyz_VerboseDependencies_StructuredOutput verifies the new structured
-// dependency format: each entry is a map with "status", "duration_ms" fields
-// (and optionally "error" for non-healthy probes).
+// TestReadyz_VerboseDependencies_StructuredOutput verifies the typed slog
+// dependency format per ADR 202605171200 channel d: each entry is a
+// slogDependencyEntry struct with Status, DurationMs, and ErrorMsg fields.
+// Healthy probes have empty ErrorMsg (omitted on JSON serialization via
+// the json:",omitempty" tag); unhealthy probes carry the redacted error.
 func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-structured", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
@@ -1275,8 +1214,8 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
-	// 503 wire envelope is canonical (empty details); verbose breakdown
-	// rides on the slog "readyz unhealthy" record per K#08 5xx redaction.
+	// 503 wire envelope is canonical (empty details); typed verbose breakdown
+	// rides on the slog "readyz unhealthy" record per K#08 + ADR 202605171200.
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
 
@@ -1284,18 +1223,14 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 
 	okEntry, ok := deps["ok-probe"]
 	require.True(t, ok, "ok-probe must be present")
-	assert.Equal(t, "healthy", okEntry["status"])
-	_, hasDur := okEntry["duration_ms"]
-	assert.True(t, hasDur, "duration_ms must be present")
-	_, hasErr := okEntry["error"]
-	assert.False(t, hasErr, "healthy probe must not have error field")
+	assert.Equal(t, "healthy", okEntry.Status)
+	assert.Empty(t, okEntry.ErrorMsg, "healthy probe must have empty ErrorMsg")
 
 	failEntry, ok := deps["fail-probe"]
 	require.True(t, ok, "fail-probe must be present")
-	assert.Equal(t, "unhealthy", failEntry["status"])
-	errStr, hasErr := failEntry["error"].(string)
-	assert.True(t, hasErr, "unhealthy probe must include error field")
-	assert.Contains(t, errStr, "disk full")
+	assert.Equal(t, "unhealthy", failEntry.Status)
+	assert.NotEmpty(t, failEntry.ErrorMsg, "unhealthy probe must include ErrorMsg")
+	assert.Contains(t, string(failEntry.ErrorMsg), "disk full")
 }
 
 // --- Three-state (healthy / degraded / unhealthy) tests (PR-A49 B4) ---
@@ -1441,6 +1376,9 @@ func TestReadyz_DegradedAggregatesFromCellHealth(t *testing.T) {
 
 // TestReadyz_VerboseExposesDegradedDependency verifies that when a probe returns
 // a wrapped cell.ErrDegraded, the verbose body dependency entry has status="degraded".
+// Per ADR 202605171200 wire shape is frozen — error text never appears on wire,
+// even for degraded probes (no behavioral difference between healthy/degraded
+// at the wire shape level; only the status string changes).
 func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-verbose-degraded", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
@@ -1465,8 +1403,12 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	require.True(t, ok, "outbox-failopen-rate.configcore must be present in dependencies")
 	assert.Equal(t, "degraded", entry["status"],
 		"verbose dependency entry status must be 'degraded'")
+	// Wire shape per ADR 202605171200 §3: error text belongs to channel d (slog),
+	// not the wire body — even degraded probes carry only status + duration on wire.
 	_, hasErr := entry["error"]
-	assert.True(t, hasErr, "degraded dependency must include error field")
+	assert.False(t, hasErr, "wire dependency entry must not carry error key (channel d slog only)")
+	_, hasErrMsg := entry["error_msg"]
+	assert.False(t, hasErrMsg, "wire dependency entry must not carry error_msg key (channel d slog only)")
 }
 
 // TestReadyz_HealthyAllAcrossBoard verifies the sanity check: all healthy → HTTP 200
