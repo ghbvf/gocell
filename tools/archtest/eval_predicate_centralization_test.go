@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -399,7 +399,7 @@ func TestEvalPredicateCentralizationFixtures(t *testing.T) {
 			wantLines := append([]int(nil), tc.wantLines...)
 			sort.Ints(wantLines)
 
-			require.Equal(t, wantLines, gotLines,
+			assert.Equal(t, wantLines, gotLines,
 				"fixture %s: violation lines mismatch (got: %+v)", tc.dir, violations)
 		})
 	}

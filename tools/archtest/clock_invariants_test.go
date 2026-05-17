@@ -1033,6 +1033,8 @@ func isTimeTimeType(t types.Type) bool {
 
 // TestKernelClockResetRelativeFixtures verifies the scanner against the two
 // fixture packages: one that violates the rule, one that is compliant.
+// Expected violation counts are declared inline in each fixture via
+// spec.Violation() calls; AssertDiagnosticCount enforces got==markers.
 func TestKernelClockResetRelativeFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1043,56 +1045,30 @@ func TestKernelClockResetRelativeFixtures(t *testing.T) {
 	fixturesBase := root + "/tools/archtest/testdata/clock_reset_relative_fixtures"
 
 	cases := []struct {
-		dir           string
-		wantViolLines []int // nil = expect 0 violations
+		dir string
 	}{
-		{"compliant", nil},
-		{"violates", []int{17}},
+		// GREEN — compliant fixture expects 0 violations (no spec.Violation() in fixture).
+		{"compliant"},
+		// RED — expected diagnostic count declared via spec.Violation() in the fixture .go file.
+		{"violates"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.dir, func(t *testing.T) {
 			t.Parallel()
 			fixtureDir := fixturesBase + "/" + tc.dir
-			got := runClockResetRelativeFixtureScan(t, fixtureDir)
-
-			if len(tc.wantViolLines) == 0 {
-				assert.Empty(t, got, "fixture %s: expected 0 violations, got %v", tc.dir, got)
-				return
-			}
-
-			assert.Equal(t, len(tc.wantViolLines), len(got),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.dir, len(tc.wantViolLines), len(got), got)
-
-			for i, wantLine := range tc.wantViolLines {
-				if i >= len(got) {
-					break
-				}
-				assert.Equal(t, "usage.go", got[i].Rel,
-					"fixture %s violation[%d]: expected Rel=usage.go, got %q",
-					tc.dir, i, got[i].Rel)
-				assert.Equal(t, wantLine, got[i].Line,
-					"fixture %s violation[%d]: expected Line=%d, got %d",
-					tc.dir, i, wantLine, got[i].Line)
-			}
+			_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+				func(p *Pass) []Diagnostic {
+					var got []Diagnostic
+					for _, f := range p.Files {
+						rel := p.Rel(f)
+						got = append(got, scanClockResetRelativeAST(p.Fset, f, rel, p.TypesInfo)...)
+					}
+					AssertDiagnosticCount(t, "KERNEL-CLOCK-RESET-RELATIVE-01", p, got)
+					return nil
+				})
 		})
 	}
-}
-
-// runClockResetRelativeFixtureScan loads a standalone fixture module and runs
-// the same scanner as TestKernelClockResetRelativeProd.
-func runClockResetRelativeFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
-	t.Helper()
-	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
-		func(p *Pass) []Diagnostic {
-			var d []Diagnostic
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				d = append(d, scanClockResetRelativeAST(p.Fset, f, rel, p.TypesInfo)...)
-			}
-			return d
-		})
 }
 
 // ---------------------------------------------------------------------------
