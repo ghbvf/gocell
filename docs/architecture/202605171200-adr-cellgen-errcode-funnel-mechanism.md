@@ -6,11 +6,11 @@
 > ref: docs/plans/202605162000-037r2-wave4-advance-round2.md §R2-P5;
 >      docs/backlog/cap-14-tooling.md L44 `CELLGEN-ERRCODE-FUNNEL-HARDEN`;
 >      .claude/rules/gocell/ai-collab.md §"typed function call as Hard funnel for unbounded operations";
->      tools/archtest/panic_registered_test.go（对偶范本 PANIC-REGISTERED-01）
+>      tools/archtest/panic_invariants_test.go（对偶范本 PANIC-REGISTERED-01；INVARIANT ID 来自旧文件名 panic_registered_test.go，文件按章程 §archtest 文件命名「同主题规则 ≥ 3 → *_invariants_test.go」重命名）
 
 ## Context
 
-`tools/codegen/cellgen/` 包负责生成 cell/slice scaffold 与运行时元数据 literal。PR#557 完成 cellgen 全包 errcode 迁移：50+ 处 error 构造均走 `errcode.New / errcode.Wrap / errcode.Assertion`，0 处 `fmt.Errorf / errors.New / pkg/errors`。
+`tools/codegen/cellgen/` 包负责生成 cell/slice scaffold 与运行时元数据 literal。PR #453（`refactor(cellgen): PR442 follow-up — housekeeping (cellgen errcode + CI + docs)`，merged 2026-05-11）完成 cellgen 全包 errcode 迁移：50+ 处 error 构造均走 `errcode.New / errcode.Wrap / errcode.Assertion`，0 处 `fmt.Errorf / errors.New / pkg/errors`。（备注：backlog `cap-14-tooling.md:44` 原文写「PR#557」是事实错误，本 ADR 以 GitHub merged PR 号为准）
 
 当前 enforcement archtest `CELLGEN-SCAFFOLD-ERRCODE-FUNNEL-01`（`tools/archtest/cellgen_errcode_funnel_test.go` L57-71）用纯 AST identifier 匹配（`SelectorExpr.X.Name == "fmt" && Sel.Name == "Errorf"`）单点禁 `fmt.Errorf`：
 
@@ -45,7 +45,7 @@ backlog `cap-14-tooling.md` L44 提出两个 Hard 升级候选：
 4. **章程 §"typed function call as Hard funnel for unbounded operations"**（`.claude/rules/gocell/ai-collab.md`）：
    > Hard property comes from "form uniqueness": picking any other shape... fails archtest in CI... The charter §1 definition of "typed function call" Hard does not require compile-time blocking, only form uniqueness + archtest fail-on-deviation — which is the highest grade reachable in Go for this rule shape.
 
-5. **PANIC-REGISTERED-01 范本结构**（`tools/archtest/panic_registered_test.go`）：
+5. **PANIC-REGISTERED-01 范本结构**（`tools/archtest/panic_invariants_test.go`）：
    - 扫所有 `panic(arg)` site
    - arg 必须是 `*ast.CallExpr` 且 callee 经 `types.Info.Uses` 解析到 `pkg/panicregister.Approved`
    - 不在白名单内的 panic 形态（bare panic、其他 callee、非字面量 reason）archtest fail
@@ -80,40 +80,74 @@ backlog 原案 2 提出新建 cellgen 专属 typed Error wrapper（如 `func cel
 
 ### D5. 选 (c'') 白名单 form uniqueness（对偶 PANIC-REGISTERED-01）
 
-重写 `tools/archtest/cellgen_errcode_funnel_test.go` 为白名单 form uniqueness archtest，与 PANIC-REGISTERED-01 严格对偶：
+重写 `tools/archtest/cellgen_errcode_funnel_test.go` 为 **types.Info-driven 白名单 form uniqueness archtest**，与 PANIC-REGISTERED-01 严格对偶。**不依赖 callee name pattern 匹配**——name pattern 设计在 v1 草案中曾被使用，被 review 发现漏 dot import / 裸 Ident / function-valued re-export 三类 escape，且容易漏白名单成员（如 `Assertion` 不含 `New/Wrap/Error` 子串），故彻底改为按 callee 解析对象 + result type 双重判定：
 
 ```
-对 cellgen 包内任一 *ast.CallExpr，如果：
-  (1) callee 的 Sel.Name 命中 error-constructor pattern：
-      ^(New|Newf|Wrap|Wrapf|Errorf|Errf|MustNew|.*Error)$
-      （覆盖业界惯例命名 + cellgen 实际使用集 + 常见第三方 lib）
-  AND
-  (2) callee 类型签名（via *types.Info）的 result tuple 至少一个 type
-      assignable to `error` interface
-      （过滤误伤：strings.NewReader / http.NewRequest 等不返 error 的 New）
-THEN 强制：
-  (3) callee 解析到的 *types.Func.Pkg().Path() 必须 ∈
-      {"github.com/ghbvf/gocell/pkg/errcode"}
-ELSE
-  archtest fail("cellgen: error constructor outside errcode funnel: <pos>")
+对 cellgen 包内任一 *ast.CallExpr c：
+
+STEP 1 — callee 解析（覆盖所有 import 形态）：
+  根据 c.Fun 形态用 *types.Info 解析到 callee object：
+    a. SelectorExpr (pkg.Func / x.Method)：types.Info.Uses[sel.Sel] →
+       *types.Func 或 *types.Var
+    b. Ident（裸函数名 / dot import 后的裸函数名）：
+       types.Info.Uses[ident] → *types.Func 或 *types.Var
+    c. 其他形态（FuncLit、ParenExpr、IndexExpr 泛型实例化等）：递归
+       拆解到底层 callee
+
+STEP 2 — 仅看 error 构造点（result type 触发判定）：
+  callee 的 Signature.Results() 含至少一个 type 满足
+  types.Implements(t, errorInterface) — 即可赋值给 `error`
+  若 callee 不返回 error → skip（非 error 构造，无需检查）
+
+STEP 3 — 白名单 form uniqueness 强制：
+  callee 必须是 *types.Func 且 callee.Pkg().Path() ∈
+    {"github.com/ghbvf/gocell/pkg/errcode"}
+  自动覆盖 errcode 包内任何当前/未来公开 callable（New / Wrap /
+  Assertion / 未来新增），无需手动维护白名单成员
+  否则 archtest fail("cellgen: error constructor outside errcode funnel:
+    <pos>: callee=<resolved-name> from <pkg>")
+
+STEP 4 — function-valued re-export 显式拒绝：
+  STEP 1 解析到 *types.Var（如 `var ErrNew = errors.New` 后调用
+  `ErrNew(msg)`，callee 是 var 而非 func）→ archtest fail
+  ("cellgen: error constructor via function-valued variable forbidden:
+  <pos>: var=<name>")
+  rationale: 间接寻址通道是 AI 创新 escape 的主要面，cellgen 包内
+  无此模式（grep 验证），显式 fail-closed
 ```
+
+为什么放弃 name pattern：v1 草案 `^(New|Newf|Wrap|Wrapf|Errorf|Errf|MustNew|.*Error)$` 有三类硬错：
+
+1. **漏白名单成员**：cellgen 现用 `errcode.Assertion`（`literal_printer.go` 4 处），`Assertion` 不含 `New/Wrap/Error/Errorf` 任何子串，pattern 不命中 → 自身白名单成员都被排除
+2. **漏 dot import / 裸 Ident**：`import . "fmt"` 后 `Errorf(msg)` 是 `*ast.Ident` 不是 `*ast.SelectorExpr`，根本不进入 `Sel.Name` 检查路径
+3. **漏 function-valued re-export**：`var ErrNew = errors.New; ErrNew(msg)` callee 是 Ident 解析到 var，绕过 name pattern + types.Info func 检查
+
+types.Info-driven 设计同时解决三类问题：(1) 白名单按 pkg.Path() 检查，errcode 包内所有 callable 自动入白名单；(2) callee 解析覆盖 SelectorExpr/Ident/FuncLit 等所有 ast 形态；(3) STEP 4 显式禁 var 通道。
 
 **反向自检 RED fixture 覆盖面**（章程 §AI-rebust 三档分级 ≥ Hard 必备）：
 
-1. `fmt.Errorf("...")` — 黑名单原型，失败位置 = 调用点 callsite
-2. `fmtx "fmt"` alias import + `fmtx.Errorf("...")` — alias 绕过，失败位置 = 调用点 callsite（types.Info 解析覆盖 alias）
-3. `errors.New("...")` — stdlib 另一 escape route，失败位置 = 调用点 callsite
-4. cellgen 包内自建 wrapper `func newErr(msg string) error { return errors.New(msg) }` — AI 创新 escape。**失败位置 = wrapper 定义体内的 `errors.New` 调用**，不是外层 `newErr(...)` 调用点（外层 callee `newErr` 命中 pattern 但 result type 检查通过；funnel 仍需要 wrapper 定义内的最终构造点命中——`errors.New` 同时满足 name pattern + 返回 error，被覆盖）
+1. `fmt.Errorf("...")` — normal SelectorExpr import，失败位置 = 调用点
+2. `fmtx "fmt"` alias import + `fmtx.Errorf("...")` — alias SelectorExpr，失败位置 = 调用点（types.Info 解析覆盖 alias）
+3. `import . "fmt"` + `Errorf("...")` — dot import，callee 是裸 Ident，失败位置 = 调用点（STEP 1.b 覆盖）
+4. `errors.New("...")` — stdlib 另一 escape route，失败位置 = 调用点
+5. `import . "errors"` + `New("...")` — dot import 第二 lib，失败位置 = 调用点
+6. `var ErrNew = errors.New` + 调用 `ErrNew("...")` — function-valued var re-export，失败位置 = 调用点（STEP 4 显式 fail）
+7. cellgen 包内自建 wrapper `func newErr(msg string) error { return errors.New(msg) }` — AI 创新 escape。**失败位置 = wrapper 定义体内的 `errors.New` 调用**（errors.New result type 含 error，pkg.Path 不在白名单）；外层 `newErr(...)` 调用点 result type 含 error 但 callee.Pkg().Path() == "github.com/.../tools/codegen/cellgen"（也不在白名单）→ 外层调用点同样 fail；任一处先报都构成 Hard 覆盖
 
 每个 fixture 应证明 archtest fail，从而验证白名单覆盖未知形态而非仅已知 escape。
 
-**Hard 覆盖完备性论证**：cellgen 包内任何最终构造 error 的语义（不透传现有 error）必然落入两类：(A) 直接调用 `errcode.{New,Wrap,Assertion}` — 落白名单内 ✅；(B) 调用任何其他 callable 间接构造 — 该 callable 的定义体内必然有最终构造点，最终构造点 callee name 必然命中 pattern（业界惯例：构造 error 必经 `New|Errorf|Wrap|...`），被 archtest 在 callable 定义处拦截。除反射动态构造（盲区清单 §D5 末尾）外无第三类。
+**Hard 覆盖完备性论证**（types.Info-driven 设计）：cellgen 包内任何最终构造 error 的语义（不透传现有 error）必然产生 CallExpr 且 callee 返回类型含 `error`，被 STEP 2 触发。该 CallExpr 的 callee 经 STEP 1 解析后必然落入以下三类：
+- (A) `*types.Func` 且 pkg.Path() == `pkg/errcode` — 白名单内 ✅
+- (B) `*types.Func` 且 pkg.Path() ≠ `pkg/errcode`（含 cellgen 包内自建 helper）— STEP 3 fail
+- (C) `*types.Var`（function-valued 变量）— STEP 4 fail
+
+除反射动态构造（盲区清单见下）外无第四类。
 
 **盲区清单**（章程 §"工具选定后强制盲区自检"，Hard 评级前置举证）：
 
-- **反射动态构造 error**：通过 `reflect.MakeFunc` 等动态生成返回 `error` 的 callable，archtest 无法在 AST 层识别其内部 escape。cellgen 包当前无此模式（grep 验证），接受为已知遗留风险；未来若 cellgen 引入反射 codegen，扩 archtest 加 reflect 包 import ban。
-- **build-tag 隔离的非默认 file**：archtest scope 当前包含 `tools/codegen/cellgen/*.go`（excluding `*_test.go`），若新增 build-tag 文件需同步检查 scope 覆盖。已由 `ARCHTEST-VERIFY-COVERAGE-01` 守护 archtest 注册一致性。
-- **wrapper 名不含 error-constructor pattern 但定义体内的最终构造仍被命中**：见 fixture 4 论证；这不是盲区，是 Hard 覆盖路径。明文澄清避免 P5.1 实施者把此场景误判为遗漏。
+- **反射动态构造 error**：通过 `reflect.MakeFunc` / `reflect.Value.Call` 等动态生成返回 `error` 的 callable，CallExpr 的 callee 类型在静态 AST 层不可解析为具名 `*types.Func`（多解析为 `*types.Var` 走 STEP 4 fail，但 `reflect.Value.Call(...).Interface().(error)` 路径无 CallExpr 直接产 error）。cellgen 包当前无此模式（grep 验证 `reflect.MakeFunc` / `reflect.Value.Call` 均不出现），接受为已知遗留风险；未来若 cellgen 引入反射 codegen，扩 archtest 加 reflect 包 import ban
+- **build-tag 隔离的非默认 file**：archtest scope 当前包含 `tools/codegen/cellgen/*.go`（excluding `*_test.go`），若新增 build-tag 文件需同步检查 scope 覆盖。已由 `ARCHTEST-VERIFY-COVERAGE-01` 守护 archtest 注册一致性
+- **interface method call 返回 error**：如 `var x SomeInterface; x.Method() error`。当前 cellgen 包内无此调用形态返回 error（grep 验证）；若未来出现，STEP 1.a 解析到 `*types.Func`（interface method），pkg.Path 不在白名单则 fail，与 (B) 同处理
 
 ### D6. AI-rebust 评级 = Hard
 
