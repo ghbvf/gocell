@@ -5,11 +5,25 @@
 // fixturespec_funnel_test.go — funnel double-lock for the fixturespec.Violation
 // typed marker.
 //
-//   - Downstream Hard (CALLER-ALLOWLIST-01): callers of fixturespec.Violation
-//     must reside in fixture .go files under tools/archtest/testdata/. Any
-//     CallExpr resolving (via *types.Info) to fixturespec.Violation outside
-//     testdata/ is a violation. Hard form: (callee resolved via
-//     *types.Info, file location filter) — identity check, not name match.
+//   - Downstream Hard (CALLER-ALLOWLIST-01): every reference to
+//     fixturespec.Violation outside tools/archtest/testdata/ is a violation,
+//     and the only approved marker form *anywhere* is the direct call
+//     `fixturespec.Violation()`. Two complementary checks:
+//
+//     (a) CallExpr-allowlist (call-site location): any CallExpr resolving
+//     via *types.Info to fixturespec.Violation outside testdata/ → diagnostic.
+//     (b) Value-position form-uniqueness via detectFixturespecValuePosition
+//     (see violation_marker.go): any SelectorExpr or bare Ident that
+//     resolves to fixturespec.Violation and does NOT occupy CallExpr.Fun
+//     position → diagnostic. Applied everywhere (no testdata exception);
+//     the production ./... scan does not see testdata anyway, but the
+//     value-position scan is also exercised against the func_value_red
+//     fixture via RunTypedDir to lock the bypass form on the funnel side.
+//
+//     Hard form (combined): (callee resolved via *types.Info → pkgPath+name
+//     identity) AND (call-fun vs value-position discrimination). Form
+//     uniqueness — picking any other shape (`f := spec.Violation; f()`,
+//     `register(spec.Violation)`, `m["x"] = spec.Violation`) fails archtest.
 //
 //     Blind spot inventory (CALLER-ALLOWLIST-01):
 //     Charter §"工具选定后强制盲区自检" requires listing all AST forms outside
@@ -25,31 +39,37 @@
 //     ResolvePackageRef handles this via the Ident → *types.Func path.
 //     No separate fixture needed.
 //
-//   - func-value (`f := spec.Violation; f()`) — covered: ResolvePackageRef
-//     is called on call.Fun for each *ast.CallExpr; a func-value indirect call
-//     (`f()`) produces a CallExpr whose Fun is an Ident resolved through
-//     *types.Info.Uses to the original *types.Func. Covered by the same
-//     *types.Info sweep. No separate fixture needed.
-//     Honest scope declaration: all three forms are covered by ResolvePackageRef
-//     via *types.Info; no blind-spot fixture is required for CALLER-ALLOWLIST-01.
+//   - value-position (`f := spec.Violation; f()`,
+//     `register(spec.Violation)`, etc.) — REJECTED, not "covered" — the
+//     SelectorExpr `spec.Violation` resolves to fixturespec.Violation via
+//     *types.Info but does not occupy CallExpr.Fun position; the
+//     subsequent `f()` resolves to *types.Var (not *types.Func) and
+//     ResolvePackageRef intentionally returns false (see
+//     call_target_test.go::TestResolvePackageRef_FuncValueVar). PR #557
+//     review caught the bypass; PR #557 review fix-1 closes it by adding
+//     detectFixturespecValuePosition. RED fixture:
+//     testdata/fixturespec_funnel_fixtures/func_value_red/usage.go.
 //
 //   - Upstream Medium (COUNT-MATCH-ENFORCED-01): regression guard against
-//     the *specific* hardcoded-fixture-line-number anti-pattern. Fires only
-//     on files that combine BOTH (a) a Run/RunTyped/RunTypedDir/RunTypedFixture
-//     callee resolved via *types.Info AND (b) a struct field named one of
-//     wantLines/wantLine/wantViolLine/wantViolLines/expectedLine/expectedLines
-//     with element type int. If both, file must contain a CallExpr resolved
-//     via *types.Info to archtest.AssertDiagnosticCount OR archtest.NoDiagnosticAssertion.
+//     the *specific* hardcoded-fixture-line-number anti-pattern. Per-
+//     FuncDecl (PR #557 review fix-6), with 1-hop helper expansion. A
+//     FuncDecl is flagged when (a) its body or a 1-hop-called local
+//     FuncDecl body contains a Run/RunTyped/RunTypedDir/RunTypedFixture
+//     callee resolved via *types.Info AND (b) declares a struct field
+//     named one of wantLines/wantLine/wantViolLine/wantViolLines/
+//     expectedLine/expectedLines with element type []int AND (c) does
+//     NOT contain a call resolving to archtest.AssertDiagnosticCount or
+//     archtest.NoDiagnosticAssertion (inline or via 1-hop helper).
 //
-//     Honest rating: this combined-trigger form is **Medium upstream**, not
-//     Hard — the field-name component is Soft (name convention) per charter
-//     §"Soft → Hard 改造方向". It is a transitional regression guard targeted
-//     at the originally-observed 10 files; broader Hard upstream coverage
-//     (every fixture-loading test must call the assertion or opt-out) is
-//     tracked as backlog item FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01.
-//     The downstream Hard + Medium upstream combination is the explicitly-
-//     allowed transitional pattern per charter §"Funnel 双向锁评级"; the
-//     backlog reference here ties the upgrade path to a named follow-up.
+//     Honest rating: still **Medium upstream** post-fix-6 — the field-name
+//     list is Soft (name convention) and the []int element-type check
+//     misses aliased slice types + plain int count variants. fix-6 closed
+//     the *file→FuncDecl* granularity hole (one inline assert no longer
+//     exempts adjacent FuncDecls), but the Soft field-name spine remains.
+//     Broader Hard upstream coverage tracked at backlog item
+//     FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01. The Hard downstream +
+//     Medium upstream combination is the explicitly-allowed transitional
+//     pattern per charter §"Funnel 双向锁评级".
 //
 //     Blind spot inventory (COUNT-MATCH-ENFORCED-01):
 //
@@ -71,15 +91,24 @@
 //     TestClockInjectionCallsiteFixtures + TestKernelClockLeafFallbackFixtures
 //     also used this form before PR557; closed in PR557 A1 fix.)
 //
-// Self-exempt: this funnel file has Run callees + a "testdata" literal but
-// lacks any wantLines-style int field — naturally not triggered. The
-// downstream rule above also calls NoDiagnosticAssertion() at the top of
-// each test func, redundantly proving the typed-marker opt-out path works
-// and serving as a smoke-check for COUNT-MATCH detection.
+//   - cardinality-only assertion semantics — AssertDiagnosticCount enforces
+//     len(got)==CountViolationMarkers(pass) and nothing more. A regression
+//     that drops one real diagnostic + adds one spurious diagnostic leaves
+//     len(got) unchanged and passes silently. Position/message binding
+//     (analogue of x/tools/analysistest `// want "regex"` markers) is the
+//     Hard upgrade tracked at backlog item
+//     FIXTURESPEC-DIAGNOSTIC-POSITION-BINDING-01 (PR #557 review fix-5).
+//
+// Self-exempt: this funnel file has Run callees but no wantLines-style
+// field inside any FuncDecl — naturally not triggered. The downstream rule
+// above also calls NoDiagnosticAssertion() at the top of each test func,
+// redundantly proving the typed-marker opt-out path works and serving as
+// a smoke-check for COUNT-MATCH detection.
 //
 // ref: .claude/rules/gocell/ai-collab.md §"Hard 范本" entries 2 & 4
 //
 //	.claude/rules/gocell/ai-collab.md §"Funnel 双向锁评级"
+//	docs/plans/202605101839-029-master-roadmap.md PR #557 review (fix-1/4/6)
 package archtest
 
 import (

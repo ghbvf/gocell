@@ -64,6 +64,20 @@ func CountViolationMarkers(pass *Pass) int {
 // Single, focused assertion: every fixture-loading test must route through
 // this helper. Enforced by meta-archtest FIXTURESPEC-COUNT-MATCH-ENFORCED-01
 // (upstream Hard).
+//
+// Fail-loud on nil TypesInfo (PR #557 review fix-4): a Pass without TypesInfo
+// (AST-only Run) cannot resolve the marker count via go/types; len(got)==0==want
+// would silently pass. Fail loud via t.Fatalf so authors switch to RunTyped /
+// RunTypedDir / RunTypedFixture or convert the test to a Diagnostic position
+// assertion.
+//
+// Cardinality-only semantics (PR #557 review P1-1): this helper enforces
+// only len(got) == CountViolationMarkers(pass); the Rel / Line / Message
+// fields of got are never compared to authoritative expected positions.
+// A regression that drops one true diagnostic and emits one spurious
+// diagnostic near it leaves len unchanged and passes silently. Position
+// binding (analogue of x/tools/analysistest `// want "regex"` markers) is
+// the Hard upgrade tracked at backlog FIXTURESPEC-DIAGNOSTIC-POSITION-BINDING-01.
 func AssertDiagnosticCount(t testing.TB, ruleID string, pass *Pass, got []Diagnostic) {
 	t.Helper()
 	if pass == nil || pass.TypesInfo == nil {
