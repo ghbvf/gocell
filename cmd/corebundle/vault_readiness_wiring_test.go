@@ -209,7 +209,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	probe, ok := deps["fake_key_provider_ready"]
 	require.True(t, ok, "fake_key_provider_ready must appear in slog breakdown")
-	assert.Equal(t, "unhealthy", probe["status"],
+	assert.Equal(t, "unhealthy", probe.Status(),
 		"fake_key_provider_ready must appear in slog breakdown as unhealthy")
 
 	cancel()

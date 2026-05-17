@@ -38,6 +38,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
+	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -146,113 +147,22 @@ func assertReadyzServiceUnavailable(t *testing.T, body map[string]any) {
 	assert.Empty(t, details, "5xx details must be empty per K#08 redaction policy; verbose breakdown lives in slog")
 }
 
-// captureHandler records every slog event passed to it so tests can assert
-// on the verbose breakdown that K#08 5xx redaction keeps off the wire.
-//
-// NOTE: simplified implementation — WithAttrs/WithGroup do not propagate
-// pre-filled attrs / groups (return self). Adequate for tests that only
-// need to capture top-level slog.Error events; not safe for code paths
-// that rely on slog.With(...) propagation.
-type captureHandler struct {
-	mu      sync.Mutex
-	records []slog.Record
-}
-
-func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
-func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.records = append(h.records, r.Clone())
-	return nil
-}
-func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
-
-// snapshot returns a defensive copy of recorded events.
-func (h *captureHandler) snapshot() []slog.Record {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	out := make([]slog.Record, len(h.records))
-	copy(out, h.records)
-	return out
-}
-
 // withSlogCapture redirects slog.Default for the duration of the test and
-// returns a handle the test can query to assert on captured events.
-func withSlogCapture(t *testing.T) *captureHandler {
+// returns a *healthtest.CaptureHandler the test can query to assert on captured events.
+func withSlogCapture(t *testing.T) *healthtest.CaptureHandler {
 	t.Helper()
-	h := &captureHandler{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(h))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return h
+	return healthtest.NewCapture(t)
 }
 
 // readyzUnhealthyDeps fetches the verbose-breakdown dependencies map from
-// the captured "readyz unhealthy" slog records. Tests assert on this rather
-// than on the 503 wire body because K#08 5xx redaction strips Details from
-// the public envelope; verbose breakdown lives only in server-side logs.
-//
-// Bootstrap integration tests typically poll /readyz (non-verbose) before
-// issuing a single verbose request, so multiple "readyz unhealthy" records
-// accumulate. Non-verbose records carry only status/reason; verbose records
-// add cells/dependencies/adapters. We return the first record whose
-// dependencies attr is non-nil — that is the verbose 503.
-func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[string]any {
+// the captured "readyz unhealthy" slog records. See healthtest.ReadyzUnhealthyDeps.
+func readyzUnhealthyDeps(t *testing.T, capture *healthtest.CaptureHandler) map[string]health.SlogDependencyEntry {
 	t.Helper()
-	const (
-		recMsg  = "readyz unhealthy"
-		attrKey = "dependencies"
-	)
-	for _, r := range capture.snapshot() {
-		if r.Message != recMsg {
-			continue
-		}
-		var depsAttr slog.Value
-		r.Attrs(func(a slog.Attr) bool {
-			if a.Key == attrKey {
-				depsAttr = a.Value
-				return false
-			}
-			return true
-		})
-		deps, ok := depsAttr.Any().(map[string]map[string]any)
-		if ok && deps != nil {
-			return deps
-		}
-	}
-	t.Fatalf("no verbose %q slog record with non-nil %q map; capture had %d records",
-		recMsg, attrKey, len(capture.snapshot()))
-	return nil
+	return healthtest.ReadyzUnhealthyDeps(t, capture)
 }
 
-func captureHasReadyzDependencyStatus(capture *captureHandler, depName, status string) bool {
-	const (
-		recMsg  = "readyz unhealthy"
-		attrKey = "dependencies"
-	)
-	for _, r := range capture.snapshot() {
-		if r.Message != recMsg {
-			continue
-		}
-		var depsAttr slog.Value
-		r.Attrs(func(a slog.Attr) bool {
-			if a.Key == attrKey {
-				depsAttr = a.Value
-				return false
-			}
-			return true
-		})
-		deps, ok := depsAttr.Any().(map[string]map[string]any)
-		if !ok {
-			continue
-		}
-		probe, ok := deps[depName]
-		if ok && probe["status"] == status {
-			return true
-		}
-	}
-	return false
+func captureHasReadyzDependencyStatus(capture *healthtest.CaptureHandler, depName, status string) bool {
+	return healthtest.HasReadyzDependencyStatus(capture, depName, status)
 }
 
 // testCell is a minimal Cell for bootstrap testing.
@@ -874,7 +784,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmq, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
-	assert.Equal(t, "unhealthy", rabbitmq["status"])
+	assert.Equal(t, "unhealthy", rabbitmq.Status())
 
 	cancel()
 	select {
@@ -1169,10 +1079,10 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmqEntry, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
-	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
+	assert.Equal(t, "healthy", rabbitmqEntry.Status(), "rabbitmq checker should be healthy")
 	postgresEntry, ok := deps["postgres"]
 	require.True(t, ok, "postgres entry must be present in slog breakdown")
-	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
+	assert.Equal(t, "unhealthy", postgresEntry.Status(), "postgres checker should be unhealthy")
 
 	cancel()
 	select {

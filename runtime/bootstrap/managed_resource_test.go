@@ -582,7 +582,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in slog breakdown")
 	pollProbe := deps["outbox-relay-poll"]
-	assert.Equal(t, "unhealthy", pollProbe["status"], "outbox-relay-poll: status must be unhealthy")
+	assert.Equal(t, "unhealthy", pollProbe.Status(), "outbox-relay-poll: status must be unhealthy")
 
 	// Phase 2: store recovers — budget resets — /readyz must return 200.
 	store.setClaimErr(nil)

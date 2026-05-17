@@ -29,7 +29,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,13 +43,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/logutil"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/runtime/http/health/probequery"
 )
-
-// maxVerboseErrLen is the maximum length of a probe error string included in
-// /readyz?verbose output. Error strings exceeding this limit are truncated
-// with an ellipsis to bound response size and limit accidental exposure of
-// long, potentially sensitive diagnostic messages.
-const maxVerboseErrLen = 512
 
 const (
 	// defaultHealthDeadline is the default readiness probe execution deadline.
@@ -81,6 +75,11 @@ const (
 // Checker stored inside Handler honors ctx.Done regardless of the inner
 // implementation's cooperativeness. See wrapCtxSafe for the full contract.
 //
+// probe error 不上 wire（仅入 server slog），但 fail-closed 的 redaction 仅对
+// 结构化 key=value 形式生效（password / token / DSN 等 key 已注册）；见
+// ProbeResult.Err godoc 的示例格式。未使用结构化格式的裸 secret 仍可能泄漏到
+// slog 后端，应在 probe 实现中主动规避。
+//
 // ref: k8s.io/apiserver/pkg/server/healthz — HealthChecker interface with ctx.
 type Checker = func(context.Context) error
 
@@ -88,9 +87,23 @@ type Checker = func(context.Context) error
 type ProbeResult struct {
 	Status   string        // "healthy" | "degraded" | "unhealthy" | "timeout"
 	Duration time.Duration // wall-clock time spent inside the probe
-	// Err is exposed in /readyz?verbose output (truncated to maxVerboseErrLen).
-	// Probe implementations MUST NOT include connection strings, tokens, or
-	// other secrets in the error message.
+	// Err carries the probe error text. It is NEVER serialized to the wire
+	// (verbose 503 body is frozen to {status, duration_ms} per ADR
+	// 202605171200 §3); it reaches operators only via channel d
+	// (slog "readyz unhealthy" record) after passing through the
+	// newRedactedErrorMsg funnel. Probe implementations may include any
+	// diagnostic text — pkg/redaction.RedactString masks structured
+	// secrets (password=…, token=…, DSN) before the value crosses into
+	// slog backends, but unstructured secret material should still be
+	// avoided defensively.
+	//
+	// 示例：
+	//   fmt.Errorf("dial: %w", err)                         // 安全（无 secret 字段）
+	//   fmt.Errorf("dsn=postgres://u:p@host/db ping fail")  // 安全（dsn= key 触发 pkg/redaction）
+	//   fmt.Errorf("connect to %s", dsn)                    // ⚠ 不安全（无 key 锚，regex 不识别；裸 secret 进 slog）
+	//   panic(fmt.Sprintf("api-key=%s expired", key))       // 安全（api-key= key 触发）
+	//
+	// 见 ADR docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md §3 threat matrix。
 	Err error // non-nil when Status != "healthy"
 }
 
@@ -255,13 +268,23 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 // per singleflight pass and shared by every concurrent request that joined
 // the same key. The struct owns its data — adapter info is snapshotted
 // under Handler.mu inside computeReadyz so writeTo runs lock-free.
+//
+// dependencies and slogDependencies are intentionally separated views per
+// ADR 202605171200 four-channel model:
+//   - dependencies = wire view (channel a body fragment in 200 verbose, OR
+//     stripped to nil in 503 per K#08); typed verboseDependencyEntry has
+//     no error text by construction
+//   - slogDependencies = channel d view (server-side slog only); typed
+//     SlogDependencyEntry carries the full redacted error via the
+//     newRedactedErrorMsg funnel
 type readyzResult struct {
-	overall      string // "healthy" | "degraded" | "unhealthy"
-	verbose      bool
-	cells        map[string]string         // nil when !verbose
-	dependencies map[string]map[string]any // nil when !verbose
-	adapters     map[string]string         // nil when !verbose or no adapter info registered
-	reason       string                    // optional low-cardinality reason for unhealthy 503 details
+	overall          string // "healthy" | "degraded" | "unhealthy"
+	verbose          bool
+	cells            map[string]string                 // nil when !verbose
+	dependencies     map[string]verboseDependencyEntry // nil when !verbose (wire view)
+	slogDependencies map[string]SlogDependencyEntry    // nil when !verbose (channel d)
+	adapters         map[string]string                 // nil when !verbose or no adapter info registered
+	reason           string                            // optional low-cardinality reason for unhealthy 503 details
 }
 
 // ReadyzHandler returns an http.HandlerFunc for the /readyz readiness endpoint.
@@ -359,17 +382,18 @@ func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	h.mu.RUnlock()
 
 	results := h.runProbesParallel(checkersCopy)
-	probeOverall, dependencies := h.aggregateProbeResults(results, verbose)
+	agg := h.aggregateProbeResults(results, verbose)
 	worst := rankStatus(cellOverall)
-	if r := rankStatus(probeOverall); r > worst {
+	if r := rankStatus(agg.Overall); r > worst {
 		worst = r
 	}
 	return readyzResult{
-		overall:      statusFromRank(worst),
-		verbose:      verbose,
-		cells:        cells,
-		dependencies: dependencies,
-		adapters:     adapters,
+		overall:          statusFromRank(worst),
+		verbose:          verbose,
+		cells:            cells,
+		dependencies:     agg.Wire,
+		slogDependencies: agg.SlogDiag,
+		adapters:         adapters,
 	}
 }
 
@@ -403,14 +427,47 @@ func (h *Handler) aggregateCellHealth(verbose bool) (string, map[string]string) 
 	return statusFromRank(worst), cells
 }
 
-// aggregateProbeResults converts ProbeResult map to verbose dependency output.
-// Returns (overall, dependencies) where overall is the worst-case status
+// probeAggregate is the typed return value of aggregateProbeResults. It
+// bundles the worst-case overall status together with the two parallel views
+// of the probe outcome (wire shape and slog ops-diagnostics shape) into a
+// single struct so callers do not depend on positional tuple ordering.
+type probeAggregate struct {
+	// Overall is the worst-case status across all probe results:
+	// "healthy" | "degraded" | "unhealthy".
+	Overall string
+	// Wire is the public HTTP body fragment (channel a); typed
+	// verboseDependencyEntry is frozen to {status, duration_ms}, no error text.
+	// nil when verbose is false.
+	Wire map[string]verboseDependencyEntry
+	// SlogDiag is the ops-diagnostics slog payload (channel d); typed
+	// SlogDependencyEntry carries the redacted error via newRedactedErrorMsg.
+	// nil when verbose is false.
+	SlogDiag map[string]SlogDependencyEntry
+}
+
+// aggregateProbeResults converts ProbeResult map into a probeAggregate per
+// ADR 202605171200 four-channel model:
+//
+//   - Wire: map[name]verboseDependencyEntry — public payload, frozen to
+//     {Status, DurationMs}; no error text by construction.
+//   - SlogDiag: map[name]SlogDependencyEntry — ops-diagnostics (channel d);
+//     ErrorMsg is typed redactedErrorMsg, produced only via the
+//     newRedactedErrorMsg funnel which routes through pkg/redaction.RedactString.
+//
+// Both views are nil when verbose is false. Overall is the worst-case status
 // across all probe results: healthy(0) < degraded(1) < unhealthy(2).
-// dependencies is nil when verbose is false.
-func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose bool) (string, map[string]map[string]any) {
-	var dependencies map[string]map[string]any
+//
+// ref: k8s.io/apiserver/pkg/server/healthz healthz.go:274-275 — wire vs klog
+// double-buffer separation; GoCell uses redaction in place of K8s "reason
+// withheld" but preserves the same wire-no-text invariant.
+func (h *Handler) aggregateProbeResults(
+	results map[string]ProbeResult, verbose bool,
+) probeAggregate {
+	var wire map[string]verboseDependencyEntry
+	var slogDiag map[string]SlogDependencyEntry
 	if verbose {
-		dependencies = make(map[string]map[string]any, len(results))
+		wire = make(map[string]verboseDependencyEntry, len(results))
+		slogDiag = make(map[string]SlogDependencyEntry, len(results))
 	}
 	worst := 0 // healthy
 	for name, pr := range results {
@@ -418,82 +475,127 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 			worst = r
 		}
 		if verbose {
-			entry := map[string]any{
-				"status":      pr.Status,
-				"duration_ms": pr.Duration.Milliseconds(),
+			wire[name] = verboseDependencyEntry{
+				Status:     pr.Status,
+				DurationMs: pr.Duration.Milliseconds(),
 			}
-			if pr.Err != nil {
-				entry["error"] = truncateErrMsg(redaction.RedactString(pr.Err.Error()), maxVerboseErrLen)
+			slogDiag[name] = SlogDependencyEntry{
+				status:     pr.Status,
+				durationMs: pr.Duration.Milliseconds(),
+				errorMsg:   newRedactedErrorMsg(pr.Err),
 			}
-			dependencies[name] = entry
 		}
 	}
-	return statusFromRank(worst), dependencies
+	return probeAggregate{
+		Overall:  statusFromRank(worst),
+		Wire:     wire,
+		SlogDiag: slogDiag,
+	}
 }
 
 // writeTo serializes the readyz result.
 //
 //	200 → {"data": {"status":"healthy"|"degraded", ...verbose fields}}
+//	      verbose fields use typed verboseDependencyEntry — wire shape is
+//	      {status, duration_ms}, no error text per ADR 202605171200 §3
 //	503 → canonical errcode envelope via httputil.WriteError; details is
 //	      the empty array per K#08 5xx redaction policy. Verbose breakdown
-//	      (cells/dependencies/adapters) and the readiness reason are emitted
-//	      to server-side slog so operators can diagnose without relying on
-//	      the public wire body.
+//	      (cells/typed slogDependencies/adapters) and the readiness reason
+//	      are emitted to server-side slog (channel d) so operators can
+//	      diagnose without relying on the public wire body.
 //
 // degraded maps to HTTP 200 — a degraded service (fail-open) should NOT
 // trigger pod eviction; operators monitor degraded via the response body
 // status field or the underlying Prometheus counter.
 // ref: envoyproxy/envoy admin /ready — DEGRADED returns 200.
-// ref: k8s.io/apiserver/pkg/server/healthz — failed checks do not surface in
-// the 503 body; verbose breakdown is operator-only.
+// ref: k8s.io/apiserver/pkg/server/healthz healthz.go:274-275 — wire/klog
+// double-buffer separation; full error text never leaves the server.
 func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 	body := r.verboseFields()
 	body["status"] = r.overall
 	switch r.overall {
-	case "healthy", "degraded":
-		// HTTP 200 — degraded does NOT trigger pod eviction.
+	case "healthy":
+		writeJSON(w, http.StatusOK, envelopeData(body))
+	case "degraded":
+		// HTTP 200 — degraded does NOT trigger pod eviction (fail-open semantic).
+		// ref: envoyproxy/envoy admin /ready — DEGRADED returns 200.
+		// Emit channel d ops-diagnostics at Info level so operators can observe
+		// degraded dependency ErrorMsg without triggering a warn-level alert.
+		r.logDiagnostics(slog.LevelInfo, "readyz degraded")
 		writeJSON(w, http.StatusOK, envelopeData(body))
 	default: // "unhealthy"
 		reason := r.reason
 		if reason == "" {
 			reason = readyzReasonReadinessFailed
 		}
-		r.logUnhealthy(reason)
+		r.logDiagnostics(slog.LevelWarn, "readyz unhealthy", slog.String("reason", reason))
 		writeReadyz503(ctx, w, r.overall, reason)
 	}
 }
 
-// logUnhealthy emits the readiness breakdown to slog so operators retain the
-// diagnostic data that previously lived in the 503 wire body. Public 503
-// responses always carry an empty details array (K#08 5xx strip).
+// logDiagnostics emits the channel d (ops-diagnostics) breakdown to slog so
+// operators retain the diagnostic data per ADR 202605171200 §3. Public
+// responses always carry no error text on wire (D1 decision).
 //
-// Level is Warn per observability.md: an unhealthy dependency is a degraded
-// run condition (the system itself isn't broken — a downstream is). Error
-// level is reserved for "影响正确性" (DB write failure, ACK loss, state
-// machine violation, security event); a failed readiness probe doesn't fit.
+// The slogDependencies map (not the wire dependencies) is what gets logged
+// — its typed SlogDependencyEntry.ErrorMsg field carries the redacted error
+// text via the newRedactedErrorMsg funnel (HEALTH-REDACTED-ERROR-MSG-FUNNEL-01),
+// while the wire dependencies map carries only {status, duration_ms} per
+// HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01.
+//
+// level controls the slog emit level:
+//   - slog.LevelWarn for "unhealthy" (downstream hard failure)
+//   - slog.LevelInfo for "degraded"  (fail-open, operators monitor but no alert)
+//
+// extra carries caller-specific attrs (e.g. "reason" for the unhealthy path).
+// degraded callers pass no extra attrs.
+//
+// This covers both degraded (HTTP 200) and unhealthy (HTTP 503) paths, ensuring
+// slog channel d captures probe ErrorMsg regardless of the HTTP status code.
+// Previously only the unhealthy path called this function, so degraded probe
+// ErrorMsg was silently dropped (F3 / PR #552 review finding).
 //
 // Cells/dependencies/adapters maps are appended only on verbose probes so
 // that high-frequency k8s readiness probes (typically every 5s) don't spam
 // log backends with full breakdown when only status/reason are actionable.
-func (r readyzResult) logUnhealthy(reason string) {
+func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog.Attr) {
 	attrs := []any{
 		slog.String("status", r.overall),
-		slog.String("reason", reason),
+	}
+	for _, a := range extra {
+		attrs = append(attrs, a)
 	}
 	if r.verbose {
+		// `dependencies` is emitted as slog.Group rather than slog.Any(map):
+		// inside a Group, each SlogDependencyEntry passes through slog.Any
+		// where the handler calls Value.Resolve() → entry.LogValue() →
+		// GroupValue with snake_case fields. This is the ONLY shape that
+		// gives consistent snake_case output across JSON / text / logfmt
+		// handlers; slog.Any(map) is opaque-blob and bypasses LogValue.
+		// See verbose_shape.go godoc and ADR 202605171200 §2 D6.
+		depAttrs := make([]any, 0, len(r.slogDependencies))
+		for name, entry := range r.slogDependencies {
+			depAttrs = append(depAttrs, slog.Any(name, entry))
+		}
 		attrs = append(attrs,
 			slog.Any("cells", r.cells),
-			slog.Any("dependencies", r.dependencies),
+			slog.Group("dependencies", depAttrs...),
 			slog.Any("adapters", r.adapters),
 		)
 	}
-	slog.Warn("readyz unhealthy", attrs...)
+	slog.Log(context.Background(), level, msg, attrs...)
 }
 
 // writeReadyz503 emits the canonical errcode 503 envelope shared with all
 // other framework error responses. status/reason ride along on WithInternal
 // for server-side logs only — the wire body is a 5xx-stripped errcode where
 // details is the empty array.
+//
+// ctx 是 request 上下文（非 probe ctx），用于 request_id 透传到 errcode 响应
+// envelope（httputil.WriteError → ctxkeys.RequestIDFrom）。与 probe 用的
+// context.WithTimeout(context.Background(), h.deadline)（runProbesParallel 内
+// derive）是不同生命周期 — 后者保证 kubelet 断开不取消 in-flight probe，前者
+// 用于把请求级关联 ID 带到错误响应。
 func writeReadyz503(ctx context.Context, w http.ResponseWriter, status, reason string) {
 	httputil.WriteError(ctx, w, errcode.New(
 		errcode.KindUnavailable,
@@ -572,6 +674,17 @@ func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration, clk cl
 	defer func() {
 		pr.Duration = clk.Since(start)
 		if r := recover(); r != nil {
+			// Mirror wrap.go:probePanicError — emit slog.Warn immediately so
+			// non-verbose k8s readiness probes also surface the panic event
+			// (verbose-only channel d slog is conditional on ?verbose=true).
+			// Without this, an infrastructure-level panic inside runOneProbe
+			// — distinct from probe-fn panics caught by wrapCtxSafe — would
+			// produce a silent 503 with no diagnostic trace on non-verbose
+			// probes. Redaction applies (panicV may contain probe-derived
+			// secrets in pathological cases).
+			slog.Warn("health: runOneProbe panicked",
+				slog.Any("panic", redaction.RedactAny(r)),
+			)
 			pr.Status = "unhealthy"
 			pr.Err = fmt.Errorf("panic: %v", r)
 		}
@@ -609,7 +722,7 @@ func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration, clk cl
 //
 // See docs/ops/readyz.md for the full state table.
 func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
-	if !readyzVerbose(r) {
+	if !probequery.Verbose(r) {
 		return false, false
 	}
 	h.mu.RLock()
@@ -656,46 +769,6 @@ func (h *Handler) sendVerboseDenied(w http.ResponseWriter, r *http.Request) {
 		errcode.ErrReadyzVerboseDenied,
 		"verbose output requires a matching X-Readyz-Token header",
 	)
-}
-
-// readyzVerbose returns true when the request opts in to detailed output.
-// Accepted forms: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
-// All other values (false, yes, debug, …) are treated as non-verbose.
-func readyzVerbose(r *http.Request) bool {
-	values, ok := r.URL.Query()["verbose"]
-	if !ok {
-		return false
-	}
-	// url.ParseQuery always yields at least [""] when the key is present,
-	// so we iterate values directly without a separate len==0 guard.
-	for _, value := range values {
-		normalized := strings.TrimSpace(strings.ToLower(value))
-		switch normalized {
-		case "", "1", "true":
-			return true
-		}
-	}
-	return false
-}
-
-// truncateErrMsg limits msg to max runes, appending "..." when truncated.
-// Used to bound error strings written into /readyz?verbose output so that
-// a single verbose entry cannot carry unbounded diagnostic text.
-func truncateErrMsg(msg string, max int) string {
-	if msg == "" {
-		return ""
-	}
-	if max <= 0 {
-		return "..."
-	}
-	runes := 0
-	for idx := range msg {
-		if runes == max {
-			return msg[:idx] + "..."
-		}
-		runes++
-	}
-	return msg
 }
 
 // envelopeData wraps a success payload in the project-standard
