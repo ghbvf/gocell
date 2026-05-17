@@ -8,9 +8,28 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+// stdoutCaptureMu / stderrCaptureMu serialize os.Stdout / os.Stderr
+// redirection. captureStdout/captureStderr mutate process-global file
+// descriptors; without serialization two t.Parallel() tests racing on the
+// same stream clobber each other's pipe (one test's restore reverts the
+// fd while another is still printing → empty capture). Independent mutexes
+// per stream avoid cross-stream deadlock; same-stream nested capture is not
+// a pattern any test uses.
+//
+// WARNING: nested same-stream capture DEADLOCKS — sync.Mutex is not
+// re-entrant. Calling captureStdout inside a captureStdout callback (or
+// captureStderr inside captureStderr) will block forever waiting for a lock
+// the outer call already holds. Cross-stream nesting (captureStdout inside
+// captureStderr or vice-versa) is safe because they use independent mutexes.
+var (
+	stdoutCaptureMu sync.Mutex
+	stderrCaptureMu sync.Mutex
 )
 
 func TestPrintUsage(t *testing.T) {
@@ -538,6 +557,8 @@ func TestPrintTargetList(t *testing.T) {
 // captureStdout runs fn with os.Stdout redirected into a string.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
+	stdoutCaptureMu.Lock()
+	defer stdoutCaptureMu.Unlock()
 	orig := os.Stdout
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -561,6 +582,8 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
+	stderrCaptureMu.Lock()
+	defer stderrCaptureMu.Unlock()
 	orig := os.Stderr
 	r, w, err := os.Pipe()
 	if err != nil {

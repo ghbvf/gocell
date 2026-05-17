@@ -373,30 +373,32 @@ func TestScaffoldCell_ConflictError(t *testing.T) {
 	}
 }
 
-// TestScaffoldCell_DryRun verifies that ScaffoldCell with DryRun=true renders
-// templates (catching template/input errors) but does not write any files.
-func TestScaffoldCell_DryRun(t *testing.T) {
-	t.Run("no files written when no conflict", func(t *testing.T) {
+// TestScaffoldCell_WritesFiles verifies that ScaffoldCell writes cell.go and
+// cell.yaml to disk, and that a second call with the same target returns a
+// conflict error. (Dry-run semantics were removed from ScaffoldCell in D7 —
+// dry-run is now a CLI + WritePlannedFiles concern via PlanCellBundleScaffold.)
+func TestScaffoldCell_WritesFiles(t *testing.T) {
+	t.Run("writes cell.go and cell.yaml", func(t *testing.T) {
 		dir := t.TempDir()
 		spec := ScaffoldSpec{
-			CellID:     "drycell",
-			StructName: "DryCell",
-			Package:    "drycell",
+			CellID:     "writecell",
+			StructName: "WriteCell",
+			Package:    "writecell",
 			ModulePath: "github.com/example/app",
 			OwnerTeam:  "platform",
 			OwnerRole:  "cell-owner",
-			DryRun:     true,
 		}
-		if err := ScaffoldCell(dir, "cells/drycell", spec); err != nil {
-			t.Fatalf("ScaffoldCell DryRun: %v", err)
+		if err := ScaffoldCell(dir, "cells/writecell", spec); err != nil {
+			t.Fatalf("ScaffoldCell: %v", err)
 		}
-		cellGoPath := filepath.Join(dir, "cells", "drycell", "cell.go")
-		if _, err := os.Stat(cellGoPath); err == nil {
-			t.Error("DryRun=true must not write cell.go")
+		for _, rel := range []string{"cells/writecell/cell.go", "cells/writecell/cell.yaml"} {
+			if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+				t.Errorf("ScaffoldCell must write %s: %v", rel, err)
+			}
 		}
 	})
 
-	t.Run("conflict detected in dry-run", func(t *testing.T) {
+	t.Run("conflict detected on second call", func(t *testing.T) {
 		dir := t.TempDir()
 		spec := ScaffoldSpec{
 			CellID:     "conflictcell",
@@ -406,42 +408,17 @@ func TestScaffoldCell_DryRun(t *testing.T) {
 			OwnerTeam:  "platform",
 			OwnerRole:  "cell-owner",
 		}
-		// First live call creates files.
+		// First call creates files.
 		if err := ScaffoldCell(dir, "cells/conflictcell", spec); err != nil {
 			t.Fatalf("first ScaffoldCell: %v", err)
 		}
-		// Second call with DryRun must still detect conflict.
-		spec.DryRun = true
+		// Second call must detect conflict.
 		err := ScaffoldCell(dir, "cells/conflictcell", spec)
 		if err == nil {
-			t.Fatal("expected conflict error in dry-run, got nil")
+			t.Fatal("expected conflict error on second call, got nil")
 		}
 		if !strings.Contains(err.Error(), "already exists") {
 			t.Errorf("expected 'already exists' in error, got: %v", err)
-		}
-	})
-
-	t.Run("dry-run renders templates and validates cell.go syntax", func(t *testing.T) {
-		dir := t.TempDir()
-		spec := ScaffoldSpec{
-			CellID:     "rendercell",
-			StructName: "RenderCell",
-			Package:    "rendercell",
-			ModulePath: "github.com/example/app",
-			OwnerTeam:  "platform",
-			OwnerRole:  "cell-owner",
-			DryRun:     true,
-		}
-		// Dry-run must succeed (templates are valid).
-		if err := ScaffoldCell(dir, "cells/rendercell", spec); err != nil {
-			t.Fatalf("DryRun render validation failed: %v", err)
-		}
-		// No files must be written.
-		if _, err := os.Stat(filepath.Join(dir, "cells", "rendercell", "cell.go")); err == nil {
-			t.Error("DryRun=true must not write cell.go")
-		}
-		if _, err := os.Stat(filepath.Join(dir, "cells", "rendercell", "cell.yaml")); err == nil {
-			t.Error("DryRun=true must not write cell.yaml")
 		}
 	})
 }
