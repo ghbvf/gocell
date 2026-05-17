@@ -37,6 +37,27 @@ func (m DurabilityMode) String() string {
 	}
 }
 
+// ParseDurabilityMode converts a cell.yaml durabilityMode string to the typed
+// DurabilityMode enum. Parsing is case-sensitive and rejects trailing/leading
+// whitespace — cell.yaml must declare exactly "demo" or "durable".
+//
+// Empty string is treated as an error (single source: cell.yaml must declare
+// durabilityMode explicitly; no implicit default).
+//
+// ref: kernel/cell/durability.go String() — bijective inverse
+func ParseDurabilityMode(s string) (DurabilityMode, error) {
+	switch s {
+	case "demo":
+		return DurabilityDemo, nil
+	case "durable":
+		return DurabilityDurable, nil
+	default:
+		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cell.ParseDurabilityMode: must be \"demo\" or \"durable\"",
+			errcode.WithInternal(fmt.Sprintf("got=%q", s)))
+	}
+}
+
 // Nooper is a marker interface for test/demo-only implementations.
 // Types that implement Nooper are rejected by CheckNotNoop when the
 // assembly runs in DurabilityDurable mode.

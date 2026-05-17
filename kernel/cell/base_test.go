@@ -22,6 +22,7 @@ func TestBaseCellLifecycle(t *testing.T) {
 		ID:               "auth-core",
 		Type:             "core",
 		ConsistencyLevel: "L2",
+		DurabilityMode:   "durable",
 		Owner:            metadata.OwnerMeta{Team: "platform", Role: "owner"},
 		Schema:           metadata.SchemaMeta{Primary: "auth"},
 		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke_auth"}},
@@ -54,6 +55,7 @@ func TestBaseCellAccessors(t *testing.T) {
 		ID:               "configcore",
 		Type:             "support",
 		ConsistencyLevel: "L1",
+		DurabilityMode:   "demo",
 		Owner:            metadata.OwnerMeta{Team: "infra", Role: "maintainer"},
 	}
 	c := MustNewBaseCell(meta)
@@ -68,7 +70,7 @@ func TestBaseCellAccessors(t *testing.T) {
 }
 
 func TestBaseCellSlicesAndContracts(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "test-cell"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "test-cell", DurabilityMode: "demo"})
 
 	// Initially empty.
 	assert.Empty(t, c.OwnedSlices())
@@ -95,7 +97,7 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 }
 
 func TestBaseCellSlicesAndContractsReturnCopy(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "copy-test"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "copy-test", DurabilityMode: "demo"})
 	s := MustNewBaseSliceFromMeta(&metadata.SliceMeta{ID: "s1", BelongsToCell: "copy-test", ConsistencyLevel: "L0"})
 	c.AddSlice(s)
 	pc := NewBaseContract("pc1", cellvocab.ContractHTTP, "copy-test", cellvocab.L1)
@@ -118,7 +120,7 @@ func TestBaseCellSlicesAndContractsReturnCopy(t *testing.T) {
 }
 
 func TestBaseCellReadyStates(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "r"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "r", DurabilityMode: "durable"})
 
 	// New: not ready.
 	assert.False(t, c.Ready())
@@ -141,7 +143,7 @@ func TestBaseCellReadyStates(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseCellDoubleInit(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "dbl-init"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "dbl-init", DurabilityMode: "durable"})
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
 
 	err := c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable))
@@ -152,7 +154,7 @@ func TestBaseCellDoubleInit(t *testing.T) {
 }
 
 func TestBaseCellStartWithoutInit(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "no-init"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "no-init", DurabilityMode: "demo"})
 
 	err := c.Start(context.Background())
 	require.Error(t, err)
@@ -162,7 +164,7 @@ func TestBaseCellStartWithoutInit(t *testing.T) {
 }
 
 func TestBaseCellDoubleStart(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "dbl-start"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "dbl-start", DurabilityMode: "durable"})
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 
@@ -174,14 +176,14 @@ func TestBaseCellDoubleStart(t *testing.T) {
 }
 
 func TestBaseCellStopWithoutStart(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "no-start"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "no-start", DurabilityMode: "demo"})
 
 	// Stop on a brand-new cell is a no-op.
 	require.NoError(t, c.Stop(context.Background()))
 }
 
 func TestBaseCellInitThenStopSkipStart(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "init-stop"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "init-stop", DurabilityMode: "durable"})
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
 
 	// Stop from initialized is a no-op.
@@ -189,7 +191,7 @@ func TestBaseCellInitThenStopSkipStart(t *testing.T) {
 }
 
 func TestBaseCellRestart(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "restart"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "restart", DurabilityMode: "durable"})
 
 	// Full lifecycle.
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
@@ -207,7 +209,7 @@ func TestBaseCellRestart(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseCellShutdownCtx(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "ctx-test"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "ctx-test", DurabilityMode: "durable"})
 
 	// Before Start, ShutdownCtx should return context.Background().
 	ctx := c.ShutdownCtx()
@@ -228,7 +230,7 @@ func TestBaseCellShutdownCtx(t *testing.T) {
 }
 
 func TestBaseCellConcurrentHealthReady(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "concurrent"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "concurrent", DurabilityMode: "durable"})
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 
@@ -252,7 +254,7 @@ func TestBaseCellConcurrentHealthReady(t *testing.T) {
 }
 
 func TestBaseCellConcurrentAddAndRead(t *testing.T) {
-	c := MustNewBaseCell(&metadata.CellMeta{ID: "race-add"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "race-add", DurabilityMode: "demo"})
 
 	const n = 100
 	done := make(chan struct{})
@@ -445,6 +447,7 @@ func TestBaseCell_Metadata_Isolation(t *testing.T) {
 		ID:               "iso",
 		Type:             "core",
 		ConsistencyLevel: "L1",
+		DurabilityMode:   "demo",
 		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.iso.startup"}},
 		L0Dependencies:   []metadata.L0DepMeta{{Cell: "shared", Reason: "ok"}},
 	}
@@ -651,7 +654,7 @@ func TestBaseCell_Init_DurabilityAlignment(t *testing.T) {
 			regMode:         DurabilityDemo,
 			wantNewErr:      false,
 			wantInitErr:     true,
-			wantErrContains: "durability mode mismatch",
+			wantErrContains: "declared=durable runtime=demo",
 		},
 		{
 			name:            "demo+Durable mismatch",
@@ -659,7 +662,7 @@ func TestBaseCell_Init_DurabilityAlignment(t *testing.T) {
 			regMode:         DurabilityDurable,
 			wantNewErr:      false,
 			wantInitErr:     true,
-			wantErrContains: "durability mode mismatch",
+			wantErrContains: "declared=demo runtime=durable",
 		},
 		{
 			name:           "empty durabilityMode construction error",

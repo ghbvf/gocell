@@ -211,15 +211,5 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 		outcome = resolved
 	}
 
-	if !outcome.Durable && in.ConsistencyLevel >= cellvocab.L2 {
-		logger := in.Logger
-		if logger == nil {
-			logger = slog.Default()
-		}
-		logger.Warn(in.CellID+": running without outboxWriter+txRunner, transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", in.CellID),
-			slog.Int("consistency_level", int(in.ConsistencyLevel)),
-			slog.String("durability_mode", in.Mode.String()))
-	}
 	return outcome, nil
 }

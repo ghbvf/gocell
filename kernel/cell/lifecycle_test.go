@@ -21,7 +21,7 @@ type hookCell struct {
 
 func newHookCell() *hookCell {
 	return &hookCell{
-		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: "hook-cell", Type: "core"}),
+		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: "hook-cell", Type: "core", DurabilityMode: "demo"}),
 	}
 }
 
@@ -53,7 +53,7 @@ type partialHookCell struct {
 
 func newPartialHookCell(id string) *partialHookCell {
 	return &partialHookCell{
-		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", DurabilityMode: "demo"}),
 	}
 }
 
@@ -122,7 +122,7 @@ func TestAfterStopper_TypeAssertion(t *testing.T) {
 }
 
 func TestLifecycleHook_NegativeTypeAssertion(t *testing.T) {
-	plain := MustNewBaseCell(&metadata.CellMeta{ID: "plain-cell"})
+	plain := MustNewBaseCell(&metadata.CellMeta{ID: "plain-cell", DurabilityMode: "demo"})
 	var c Cell = plain
 
 	_, ok1 := c.(BeforeStarter)

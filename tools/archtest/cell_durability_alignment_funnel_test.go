@@ -471,4 +471,3 @@ func TestCellDurabilityFunnel_ReverseBlindSpot_NoModeCheckHelper(t *testing.T) {
 		"ReverseBlindSpot B2: kernel/cell must not define a standalone mode-check "+
 			"helper; alignment must be inline in BaseCell.Init: %v", violations)
 }
-

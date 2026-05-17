@@ -334,32 +334,6 @@ func TestResolveCellEmitter(t *testing.T) {
 		}
 	})
 
-	t.Run("preresolved_demo_non_durable_warn_at_L2", func(t *testing.T) {
-		t.Parallel()
-		logger, buf := captureLogger()
-		outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-			EmitterConfig: cell.EmitterConfig{
-				CellID: "testcell",
-				Mode:   cell.DurabilityDemo,
-				Logger: logger,
-			},
-			PreResolved:      nonDurableEmitter{},
-			ConsistencyLevel: cellvocab.L2,
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if outcome.Durable {
-			t.Fatal("expected non-durable outcome")
-		}
-		if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
-			t.Fatalf("expected non-durable warn log, got: %q", buf.String())
-		}
-		if !strings.Contains(buf.String(), "durability_mode=demo") {
-			t.Fatalf("expected durability_mode=demo in log, got: %q", buf.String())
-		}
-	})
-
 	t.Run("preresolved_demo_no_warn_below_L2", func(t *testing.T) {
 		t.Parallel()
 		logger, buf := captureLogger()
@@ -382,7 +356,7 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("delegates_to_resolve_emitter_on_demo", func(t *testing.T) {
 		t.Parallel()
-		logger, buf := captureLogger()
+		logger, _ := captureLogger()
 		outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
 			EmitterConfig: cell.EmitterConfig{
 				CellID:            "testcell",
@@ -403,9 +377,6 @@ func TestResolveCellEmitter(t *testing.T) {
 		}
 		if outcome.Durable {
 			t.Fatal("expected non-durable DirectEmitter")
-		}
-		if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
-			t.Fatalf("expected non-durable warn for non-durable demo path, got: %q", buf.String())
 		}
 	})
 
