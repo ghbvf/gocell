@@ -266,7 +266,13 @@ lint_gate() {
         printf 'golangci-lint gate: %s not found locally (run: git fetch origin develop)\n' "${BASE_BRANCH}"
         return 1
     fi
-    "${bin}" run "--new-from-merge-base=${BASE_BRANCH}"
+    # --timeout overrides golangci-lint's 60s default; PR-mode on a
+    # multi-commit merge-base..HEAD range (especially after a develop sync)
+    # routinely exceeds 60s on cold-cache. CI's golangci-lint-action carries
+    # its own action-level timeout, so this command-line flag aligns the
+    # local hook with CI behaviour. 10m matches the value used in
+    # _build-lint.yml's runner job.
+    "${bin}" run "--new-from-merge-base=${BASE_BRANCH}" --timeout=10m
 }
 
 # ---------------------------------------------------------------------------
