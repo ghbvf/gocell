@@ -179,20 +179,26 @@ if [[ ${force_all} -eq 1 ]]; then
 else
     go_files="$(printf '%s\n' "${changed}" | grep -E '\.go$' || true)"
     [[ -n "${go_files}" ]] && go_changed=1 || go_changed=0
-    if printf '%s\n' "${changed}" | grep -E "${test_code_re}" | grep -qvE "${test_code_excl}"; then
-        test_code_changed=1
-    else
-        test_code_changed=0
-    fi
+    # NEVER pipe into `grep -q` here. `grep -q` exits on the first match,
+    # closing the pipe; on a large changeset (>~64KB of paths — routine for
+    # a multi-commit merge-base..HEAD range) the upstream producer is still
+    # writing and dies with SIGPIPE (exit 141). Under `set -o pipefail`
+    # that makes the whole pipeline non-zero, the `if` false, and the gate
+    # is SILENTLY SKIPPED — a fail-OPEN false-negative that defeats the
+    # gate's purpose and contradicts the hook's fail-closed contract
+    # (reproduced: status=141 every trial at ~420KB). Instead capture the
+    # full (no -q) match into a var with `|| true` (neutralises pipefail
+    # when there is legitimately no match) and test emptiness.
+    test_hits="$(printf '%s\n' "${changed}" | grep -E "${test_code_re}" | grep -vE "${test_code_excl}" || true)"
+    [[ -n "${test_hits}" ]] && test_code_changed=1 || test_code_changed=0
     # Codegen sources: schema / contract|cell|slice|assembly yaml / any
     # template, plus the generators and the staleness verifier themselves
-    # (tools/codegen, tools/generatedverify, cmd/gocell). A miss here only
-    # degrades to "CI catches it" — the hook is an aid, not the SoT.
-    if printf '%s\n' "${changed}" | grep -qE '(\.schema\.json|/(cell|slice|assembly|contract)\.yaml|\.tmpl|tools/codegen/.*\.go|tools/generatedverify/.*\.go|cmd/gocell/.*\.go)$'; then
-        codegen_changed=1
-    else
-        codegen_changed=0
-    fi
+    # (tools/codegen, tools/generatedverify, cmd/gocell). Same no-`grep -q`
+    # rule as above (this site previously used `grep -qE` and had the
+    # identical SIGPIPE false-negative). A miss here only degrades to "CI
+    # catches it" — the hook is an aid, not the SoT.
+    codegen_hits="$(printf '%s\n' "${changed}" | grep -E '(\.schema\.json|/(cell|slice|assembly|contract)\.yaml|\.tmpl|tools/codegen/.*\.go|tools/generatedverify/.*\.go|cmd/gocell/.*\.go)$' || true)"
+    [[ -n "${codegen_hits}" ]] && codegen_changed=1 || codegen_changed=0
 fi
 
 start=$(date +%s)
