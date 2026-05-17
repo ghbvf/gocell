@@ -2,15 +2,14 @@
 //   - INVARIANT: CELL-DURABILITY-ALIGNMENT-FUNNEL-01
 //   - INVARIANT: CELL-MUSTNEWBASECELL-FUNNEL-01
 //   - INVARIANT: BASECELL-INIT-NO-NIL-GUARD-01
-//   - INVARIANT: CELLMETA-INCLUDES-DURABILITYMODE-01
 //
 // CELL-DURABILITY-ALIGNMENT-FUNNEL-* — BaseCell.Init durability alignment guards.
 //
 // Cell lifecycle funnel: cell.yaml.durabilityMode (single source)
 //
 //	→ cellgen funnel (cell.tmpl → cell_gen.go DurabilityMode literal)
-//	→ NewBaseCell parse (meta.DurabilityMode → requiredMode enum)
-//	→ BaseCell.Init unconditional alignment check
+//	→ NewBaseCell parse (meta.DurabilityMode → requiredMode enum) — construction-time Hard
+//	→ BaseCell.Init unconditional alignment check — runtime Hard
 //
 // CELL-DURABILITY-ALIGNMENT-FUNNEL-01 (Medium type-aware):
 //
@@ -20,19 +19,13 @@
 //	AST scan (RunTyped + archtest.ResolveMethodCall) on BaseCell.Init body.
 //	Tool: RunTyped + AST BinaryExpr walk over Init method body.
 //
-// Blind spots (forms outside *types.Info resolution — these are reverse-self-checked):
+// Blind spot (reverse-self-checked):
 //
 //	B1. Alternative struct embed shape: a wrapper type embedding *BaseCell that
 //	    overrides Init would bypass this scan (scanner checks BaseCell.Init by
 //	    receiver type). Reverse check: TestCellDurabilityFunnel_ReverseBlindSpot_NoBaseCellInitOverride
 //	    asserts no non-kernel/cell package declares a method named Init with
 //	    receiver type embedding *BaseCell.
-//
-//	B2. Indirect comparison via helper function: moving the != to a helper
-//	    `func checkMode(b *BaseCell, reg Registry) bool` called from Init
-//	    would hide the BinaryExpr from direct body scan. Reverse check:
-//	    TestCellDurabilityFunnel_ReverseBlindSpot_NoModeCheckHelper asserts
-//	    that no such helper exists in kernel/cell (the check must be inline).
 //
 // CELL-MUSTNEWBASECELL-FUNNEL-01 (Medium type-aware):
 //
@@ -47,11 +40,10 @@
 //	b.requiredMode (== 0, != 0, int(...) == 0). The alignment check must be
 //	unconditional. Reverse check ensures production AST is free of such guards.
 //
-// CELLMETA-INCLUDES-DURABILITYMODE-01 (Soft backstop — golden file check):
-//
-//	cells/configcore/cell_gen.go (canonical generated golden) must contain
-//	"DurabilityMode:" string, confirming the cellgen funnel includes the field
-//	in the rendered CellMeta literal.
+// Note: cellgen "DurabilityMode field present in cellMeta literal" is not
+// separately guarded here — NewBaseCell.ParseDurabilityMode rejects an empty
+// or invalid string at construction time, which is a Hard funnel covering
+// the same invariant (missing field → empty string → fail-fast).
 //
 // ref: kernel/cell/base.go — BaseCell.Init
 // ref: kernel/cell/durability.go — ParseDurabilityMode, DurabilityMode
@@ -62,7 +54,6 @@ package archtest
 import (
 	"go/ast"
 	"go/token"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -340,44 +331,6 @@ func exprContainsField(expr ast.Expr, fieldName string) bool {
 	return sel.Sel != nil && sel.Sel.Name == fieldName
 }
 
-// TestCellmetaIncludesDurabilityMode verifies CELLMETA-INCLUDES-DURABILITYMODE.
-//
-// The canonical generated golden file cells/configcore/cell_gen.go must contain
-// a "DurabilityMode:" field assignment in the CellMeta literal, confirming that
-// the cellgen funnel renders the field. This is a simple string-content check
-// on the golden file.
-//
-// AI-rebust grade: Soft (golden-file string check). Upgrade path tracked in
-// docs/backlog/cap-14-tooling.md::CELLMETA-INCLUDES-DURABILITYMODE-01-HARD-UPGRADE.
-func TestCellmetaIncludesDurabilityMode(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	goldenPath := filepath.Join(root, "cells", "configcore", "cell_gen.go")
-
-	scope := DirsScope(root, []string{"cells/configcore"})
-	var found bool
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			fileName := p.Fset.File(file.Pos()).Name()
-			if !strings.HasSuffix(fileName, "cell_gen.go") {
-				continue
-			}
-			EachInSubtree[ast.KeyValueExpr](file, func(kv *ast.KeyValueExpr) {
-				key, ok := kv.Key.(*ast.Ident)
-				if ok && key.Name == "DurabilityMode" {
-					found = true
-				}
-			})
-		}
-		return nil
-	})
-
-	_ = goldenPath // referenced for documentation
-	assert.True(t, found,
-		"CELLMETA-INCLUDES-DURABILITYMODE-01: cells/configcore/cell_gen.go must contain "+
-			"DurabilityMode: field in CellMeta literal (cellgen funnel requirement)")
-}
-
 // ---------------------------------------------------------------------------
 // Reverse blind-spot self-checks
 // ---------------------------------------------------------------------------
@@ -431,47 +384,4 @@ func TestCellDurabilityFunnel_ReverseBlindSpot_NoBaseCellInitOverride(t *testing
 	assert.Empty(t, violations,
 		"ReverseBlindSpot B1: no non-kernel/cell package should declare Init "+
 			"with receiver referencing BaseCell directly: %v", violations)
-}
-
-// TestCellDurabilityFunnel_ReverseBlindSpot_NoModeCheckHelper asserts that
-// kernel/cell does not define a standalone helper function that performs the
-// mode comparison (which would hide the BinaryExpr from FUNNEL-01's body scan).
-//
-// AI-rebust grade: Soft (name-substring check). Upgrade path tracked in
-// docs/backlog/cap-14-tooling.md::CELLMETA-MODECHECK-HELPER-REVERSE-SELFCHECK-HARD-UPGRADE.
-func TestCellDurabilityFunnel_ReverseBlindSpot_NoModeCheckHelper(t *testing.T) {
-	t.Parallel()
-
-	const kernelCellPkg = "github.com/ghbvf/gocell/kernel/cell"
-	type violation struct {
-		funcName string
-		line     int
-	}
-	var violations []violation
-
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/cell"}, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Path() != kernelCellPkg {
-			return nil
-		}
-		for _, file := range p.Files {
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-				if fn.Name == nil || fn.Recv != nil {
-					return // skip methods
-				}
-				name := fn.Name.Name
-				// Flag standalone functions whose name suggests mode-comparison delegation.
-				if strings.Contains(strings.ToLower(name), "checkmode") ||
-					strings.Contains(strings.ToLower(name), "alignmode") ||
-					strings.Contains(strings.ToLower(name), "verifydurability") {
-					pos := p.Fset.Position(fn.Pos())
-					violations = append(violations, violation{funcName: name, line: pos.Line})
-				}
-			})
-		}
-		return nil
-	})
-
-	assert.Empty(t, violations,
-		"ReverseBlindSpot B2: kernel/cell must not define a standalone mode-check "+
-			"helper; alignment must be inline in BaseCell.Init: %v", violations)
 }

@@ -184,7 +184,7 @@ func (b *BaseCell) ConsumedContracts() []Contract {
 // must match the mode declared in cell.yaml (parsed into requiredMode at
 // construction). Mismatch is a fail-fast error — fix: align cell.yaml or
 // set GOCELL_CELL_ADAPTER_MODE to the correct topology.
-func (b *BaseCell) Init(_ context.Context, reg Registry) error {
+func (b *BaseCell) Init(ctx context.Context, reg Registry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state != cellStateNew && b.state != cellStateStopped {
