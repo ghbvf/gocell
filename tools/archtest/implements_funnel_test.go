@@ -54,10 +54,23 @@
 //     whether the reference is a local `:=` or a package-level `var`;
 //     `func_value_red` exercises the equivalent Uses entry. Honest scope
 //     declaration, no separate fixture needed.
-//   - files behind non-default build tags — TestTypesutilImplementsFunnel01
-//     loops KnownNonDefaultTags() (default + integration + e2e + …),
-//     identical boundary to PANIC-REGISTERED-01. archtest_fixture group is
-//     skipped (fixtures intentionally violate).
+//   - *_test.go files — IN SCOPE. TestTypesutilImplementsFunnel01 uses
+//     RunTypedProduction with Tests:true so test-variant packages (every
+//     *_test.go) are scanned. This is the critical surface, not a blind
+//     spot: the 6 callsites R2-P2 PR-a consolidated all lived in
+//     tools/archtest/*_test.go, so a test-file-excluding scope would make
+//     the rule toothless. Guarded structurally by the sawTestFile
+//     assertion in the test.
+//   - files behind non-default build tags (//go:build integration / e2e
+//     / …) — accepted boundary, NOT a meaningful gap for this symbol
+//     class. go/types.Implements is the Go type-checker API; it appears
+//     only in default-build static-analysis / tooling code (the 6 real
+//     callsites + the funnel are all default-build). Runtime code behind
+//     build tags does not import go/types to call Implements. The scan
+//     deliberately does NOT fan out over KnownNonDefaultTags() (unlike
+//     PANIC-REGISTERED-01, where panic() genuinely occurs in tagged
+//     code) — that fan-out would add N redundant whole-module type loads
+//     for ~zero coverage. Honest scope declaration.
 //   - testdata/ RED fixtures (this rule's own intentional-violation
 //     fixtures) — NOT covered by the implementsFunnelFileRel allowlist;
 //     they are excluded from the production scan because
@@ -86,11 +99,10 @@
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
 	"go/types"
-	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -152,32 +164,49 @@ func collectImplementsFunnelViolations(p *Pass) []Diagnostic {
 
 // TestTypesutilImplementsFunnel01 enforces the rule module-wide. After
 // R2-P2 PR-a (#540) consolidated all 6 call sites into the funnel file,
-// this test must pass with zero violations. It loops KnownNonDefaultTags()
-// so integration/e2e-gated production files are also covered (same
-// boundary as PANIC-REGISTERED-01), skipping the archtest_fixture group
-// (fixtures intentionally violate).
+// this test must pass with zero violations.
+//
+// CRITICAL — Tests:true is mandatory, not optional. The 6 consolidated
+// callsites all live in tools/archtest/*_test.go (archtest rules ARE test
+// files). With Tests:false, RunTypedProduction never loads any *_test.go,
+// so re-inlining a raw go/types.Implements in any _test.go would NOT turn
+// this rule red — the funnel would be toothless exactly where the original
+// duplication lived. Tests:true loads test-variant packages so every
+// *_test.go is in scope; sawTestFile below is a structural regression
+// guard that fails loud if a future edit silently flips the scope back to
+// Tests:false (the gap would otherwise be invisible — the scan would stay
+// vacuously green).
+//
+// A single RunTypedProduction (default tags, Tests:true) replaces the
+// earlier per-KnownNonDefaultTags loop: go/types.Implements is a
+// compile-time go/types type-checker primitive that only appears in
+// default-build tooling code (the 6 real callsites + the funnel are all
+// default-build), so a per-build-tag fan-out adds ~zero coverage while
+// driving N redundant whole-module type loads — see the build-tag bullet
+// in the blind-spot inventory for the honest scope declaration. (This
+// differs from PANIC-REGISTERED-01, which loops tags because panic()
+// genuinely occurs in build-tag-gated runtime code.)
 func TestTypesutilImplementsFunnel01(t *testing.T) {
 	t.Parallel()
 
-	seen := make(map[string]struct{})
 	var violations []Diagnostic
+	sawTestFile := false
 
-	for _, tagGroup := range KnownNonDefaultTags() {
-		if slices.Contains(tagGroup, "archtest_fixture") {
-			continue
-		}
-		_ = RunTypedProduction(t, TypedOpts{Tests: false, Tags: tagGroup}, func(p *Pass) []Diagnostic {
-			for _, d := range collectImplementsFunnelViolations(p) {
-				key := fmt.Sprintf("%s:%d", d.Rel, d.Line)
-				if _, dup := seen[key]; dup {
-					continue
-				}
-				seen[key] = struct{}{}
-				violations = append(violations, d)
+	_ = RunTypedProduction(t, TypedOpts{Tests: true}, func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			if strings.HasSuffix(p.Rel(f), "_test.go") {
+				sawTestFile = true
 			}
-			return nil
-		})
-	}
+		}
+		violations = append(violations, collectImplementsFunnelViolations(p)...)
+		return nil
+	})
+
+	require.True(t, sawTestFile,
+		"%s scope regression: Tests:true must surface *_test.go — the 6 "+
+			"consolidated callsites are archtest test files; a Tests:false "+
+			"scope would make the funnel toothless. See function godoc.",
+		ruleTypesutilImplementsFunnel01)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].Rel != violations[j].Rel {
