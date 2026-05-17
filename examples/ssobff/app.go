@@ -69,6 +69,11 @@ func ssobffBootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailOb
 }
 
 // SSOBFFApp is the shared ssobff composition root used by main and tests.
+//
+// Single-pod demo only: the idempotency claimer is in-memory
+// (idempotency.NewInMemClaimer). Multi-pod deployments require a Redis-backed
+// claimer to guarantee at-most-once event processing across replicas. See
+// backlog item SSOBFF-REDIS-CLAIMER-UPGRADE for the upgrade path.
 type SSOBFFApp struct {
 	bootstrap          *bootstrap.Bootstrap
 	primaryListenAddr  string
@@ -343,7 +348,7 @@ func buildSSOBFFAuditCore(
 	}
 	// WARNING: demo key only. Production deployments must inject from a secret manager.
 	protocol, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("ssobff-dev-hmac-key-32-bytes!!!!")),
+		ledger.WithChainHMAC([]byte("ssobff-dev-hmac-key-32-bytes!!!!")), // #nosec G101 -- demo fixture, never used in production
 		ledger.WithNamespace(ns),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
@@ -472,6 +477,7 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 }
 
 func newSSOBFFJWT() (*auth.JWTIssuer, *auth.JWTVerifier, error) {
+	slog.Warn("ssobff: generating in-process JWT key — tokens become invalid on restart; do not use for multi-pod deployment")
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	if err != nil {
