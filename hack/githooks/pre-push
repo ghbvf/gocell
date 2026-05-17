@@ -2,12 +2,16 @@
 # hack/githooks/pre-push — fast local approximation of the CI gates that AI
 # co-authors most often forget to run before pushing (fresh-instance, no
 # memory: ai-collab.md §1). It is NOT a full `make verify` — only the
-# subset that is (a) deterministic offline, (b) sub-10s on a warm build
-# cache, (c) high "forgot to run" rate. Slow / infra-bound gates (full
-# golangci-lint, go test, archtest, integration testcontainers) stay in CI.
+# subset that is (a) deterministic offline, (b) sub-10s on a WARM cache,
+# (c) high "forgot to run" rate. Infra-bound gates (go test against
+# testcontainers, the full archtest 16-shard matrix) stay in CI. Two
+# carved-out exceptions ride the parallel fan-out: the single archtest
+# rule TEST-TIME-LITERAL-01 (deviation 4) and CI-faithful golangci-lint
+# (deviation 5). Both are ~free when warm because the fan-out cost is
+# max(gate), not the sum — see deviations 4/5 for the cold-cache caveat.
 #
-# Not a 1:1 CI mirror — three deliberate deviations:
-#   - Tier 1 runs `go run mvdan.cc/gofumpt` (version resolved from the repo
+# Not a 1:1 CI mirror — five deliberate deviations:
+#   - The gofumpt gate runs `go run mvdan.cc/gofumpt` (version resolved from the repo
 #     go.mod) rather than an ambient $PATH `gofumpt`. A host-installed
 #     gofumpt drifts from the version the CI formatter gate enforces
 #     (golangci-lint's vendored copy — see hack/lib/golangci-lint.sh),
@@ -27,11 +31,61 @@
 #     build). The other three commands do mirror real CI steps
 #     (_build-lint.yml: go build ./... / go vet ./... / go vet -tags=e2e
 #     ./tests/e2e/...).
+#   - One archtest rule — `go test -run ^TestTestTimeLiteralConst$
+#     ./tools/archtest` (TEST-TIME-LITERAL-01) — runs even though the
+#     header otherwise keeps archtest in CI. It qualifies on all three
+#     inclusion criteria: pure offline AST/type analysis (deterministic),
+#     ~6-7s on a warm cache (a `go/packages` typed full-module load — NOT
+#     the ~1-2s the test's own comment claims, which counts only the AST
+#     walk), and a repeatedly-forgotten failure mode for AI co-authors who
+#     add a `time.Duration` literal in a *_test.go without hoisting it to a
+#     package-level const. To stay within the sub-10s budget it rides the
+#     single parallel fan-out (see "Execution" below) and is gated on
+#     test-code file changes (test_code_re), so a non-test push pays ~0
+#     and a test-code push pays ~max(build/vet, archtest) ≈ 7-9s, not the
+#     sum. The rest of the archtest matrix (process-isolated 16-shard,
+#     4GB+ RSS) stays in CI — this is a single ~7s test function, not the
+#     suite. run_bg isolates each job's output to its own logfile, so
+#     parallel execution does not interleave failure logs.
+#   - golangci-lint runs CI-faithfully —
+#     `golangci-lint run --new-from-merge-base=origin/develop` with the
+#     version pinned by hack/lib/golangci-lint.sh (the project's single
+#     source of truth, reviewer-synced with _build-lint.yml; NOT go.mod
+#     like gofumpt — golangci-lint is not a go.mod tool dependency).
+#     Three honest caveats: (a) MEASURED cost is ~7s warm but ~295s
+#     (~5min) COLD — i.e. after `go clean -cache`, a dependency bump, or
+#     first use before golangci-lint's own ~/.cache is populated. This
+#     breaches the sub-10s budget in the cold case; it is accepted
+#     because the analysis is unavoidable work the push will incur in CI
+#     regardless — running it here shifts it earlier AND warms the cache
+#     for every subsequent push, and it rides the parallel fan-out so the
+#     warm steady state adds ≈0 wall time (7s alongside build/vet's ~7s).
+#     (b) base-ref is hard-pinned to origin/develop; PRs targeting
+#     main/release/* are linted against develop's merge-base, not their
+#     real target — a tolerated drift (develop is the integration branch
+#     for the overwhelming majority of PRs; the rare cross-target case is
+#     re-checked by PR-CI's own `--new-from-merge-base=origin/<base>`).
+#     (c) push-mode CI (ci.yml) runs golangci-lint with NO new-issues
+#     filter (full); this hook mirrors PR-mode CI (the gate that actually
+#     blocks merges), so it is intentionally *less* strict than push-CI,
+#     never more — it cannot produce "hook red / CI green". Resolution of
+#     the pinned binary failing (toolchain/install error) is fail-closed
+#     (run_bg sees non-zero → push blocked), per no-soft-fallback.
 #
-# Cost control: every tier is gated on whether this push actually touches
-# the files that tier protects. A docs-only push pays ~0; a .go push pays
-# ~6-9s (build/vet run in parallel on warm cache); a schema/contract push
-# additionally pays the codegen staleness probe.
+# Execution: every gate is independent (no shared mutable state; the Go
+# build/test cache is concurrency-safe across parallel `go` invocations),
+# so all of them — gofumpt / build×2 / vet×2 / archtest / golangci-lint /
+# codegen-verify — run in a SINGLE parallel fan-out behind one wait
+# barrier. Wall cost is ~max(slowest gate), not the sum of serial tiers.
+# Each gate is still change-gated: a docs-only push launches nothing
+# (~0s); a .go push on a WARM cache pays ~max(build/vet/archtest/lint) ≈
+# 7-9s; a .go push on a COLD cache is dominated by golangci-lint
+# (~5min measured, see deviation 5 — unavoidable CI work, paid once,
+# then warm); a schema/contract push additionally runs the codegen
+# staleness probe in the same fan-out (no extra wall time unless it is
+# the slowest job). The "Tier N" labels below are kept only as stable
+# gate identities for cross-references; they no longer imply serial
+# ordering.
 #
 # Honest scope (ai-collab grading): this is Medium AI-rebust — `git push
 # --no-verify` bypasses it and a fresh clone/worktree without
@@ -59,8 +113,9 @@ BASE_BRANCH="origin/develop"
 note() { printf '  pre-push: %s\n' "$1" >&2; }
 
 # run_bg launches a command detached, capturing combined output to a temp
-# file; wait/collect happens in Tier 2. Defined at top level (not inside
-# the tier `if`) so it is declared once, alongside note().
+# file; wait/collect happens at the single fan-out barrier below. Defined
+# at top level (not inside a gate `if`) so it is declared once, alongside
+# note().
 pids=() ; names=() ; logs=()
 run_bg() {
     local name="$1"; shift
@@ -105,13 +160,30 @@ for r in "${ranges[@]}"; do
     changed+=$'\n'"$(git diff --name-only --diff-filter=ACMR "${r}" 2>/dev/null || true)"
 done
 
+# test_code_re mirrors tools/internal/fileroles.IsTestCode (the canonical
+# classifier TEST-TIME-LITERAL-01 scans): *_test.go / **/conformance.go /
+# the six **/<x>test/ helper trees, minus the hard exclusions
+# (tools/archtest/, vendor/, generated/, any testdata/). A bash regex is a
+# deliberate approximation — a miss only degrades to "CI catches it" (header
+# philosophy: the hook is an aid, not the SoT). The gate itself still scans
+# the WHOLE module's test code; this trigger only decides whether *this push*
+# is likely to have introduced a new test-time literal worth the ~2s probe.
+test_code_re='(_test\.go|/conformance\.go|/(locktest|outboxtest|storetest|healthtest|contracttest|commandtest)/)'
+test_code_excl='^(tools/archtest/|vendor/|generated/)|/testdata/|^testdata/'
+
 if [[ ${force_all} -eq 1 ]]; then
     go_files="$(git ls-files '*.go')"
     go_changed=1
     codegen_changed=1
+    test_code_changed=1
 else
     go_files="$(printf '%s\n' "${changed}" | grep -E '\.go$' || true)"
     [[ -n "${go_files}" ]] && go_changed=1 || go_changed=0
+    if printf '%s\n' "${changed}" | grep -E "${test_code_re}" | grep -qvE "${test_code_excl}"; then
+        test_code_changed=1
+    else
+        test_code_changed=0
+    fi
     # Codegen sources: schema / contract|cell|slice|assembly yaml / any
     # template, plus the generators and the staleness verifier themselves
     # (tools/codegen, tools/generatedverify, cmd/gocell). A miss here only
@@ -126,77 +198,126 @@ fi
 start=$(date +%s)
 fail=0
 
+# gofumpt_gate wraps `go run mvdan.cc/gofumpt -l` so it is usable under
+# run_bg, whose only failure signal is the subshell exit code. gofumpt -l
+# exits 0 even when it FINDS drift (it just prints the file list), so a
+# naive run_bg would treat drift as success. This wrapper collapses both
+# block-worthy outcomes into a non-zero return while keeping the precise
+# operator hint:
+#   - `go run` itself non-zero (toolchain absent, module/build failure,
+#     gofumpt internal error) → tooling failure, fail-closed (no-soft-
+#     fallback: never silently skip the gate).
+#   - `go run` zero + non-empty stdout → formatter drift.
+# The caller pre-filters to existing files (`-f`), so a non-zero exit is
+# unambiguously a tooling failure, never "found drift". Output goes to
+# stdout (run_bg captures it to the job's isolated logfile).
+# `go run mvdan.cc/gofumpt` pins the version via go.mod (header deviation
+# 1: go.mod is the only SoR, no PATH ambient). Cost: warm ~200ms; cold
+# gofumpt compile +~2-3s; first-ever module download +~1-2s — still well
+# under the build/vet cost that dominates a cold-cache push.
+gofumpt_gate() {
+    local out
+    if ! out="$(go run mvdan.cc/gofumpt -l "$@" 2>&1)"; then
+        printf 'gofumpt gate failed to run (go run mvdan.cc/gofumpt):\n%s\n' "${out}"
+        return 1
+    fi
+    if [[ -n "${out}" ]]; then
+        printf 'formatter drift (run: make fmt):\n%s\n' "${out}"
+        return 1
+    fi
+    return 0
+}
+
+# lint_gate runs CI-faithful golangci-lint in PR mode
+# (`--new-from-merge-base=origin/develop`). See header deviation 5 for the
+# measured cost (warm ~7s / cold ~5min), the base-ref pin rationale, and
+# why mirroring PR-mode (not push-mode) CI cannot produce "hook red / CI
+# green". The binary version is resolved through the project's single
+# source of truth — hack/lib/golangci-lint.sh, reviewer-synced with
+# _build-lint.yml — NOT go.mod (golangci-lint is not a go.mod tool dep,
+# unlike gofumpt; this is the one place the no-PATH-ambient rule routes
+# through the lib instead of `go run`). Fail-closed: any sourcing /
+# resolver / install error returns non-zero so run_bg blocks the push
+# (no-soft-fallback — never silently skip the gate).
+lint_gate() {
+    local bin
+    # shellcheck source=/dev/null
+    if ! source "${ROOT}/hack/lib/golangci-lint.sh" 2>/dev/null; then
+        printf 'golangci-lint gate: cannot source hack/lib/golangci-lint.sh\n'
+        return 1
+    fi
+    if ! bin="$(gocell::golangci_lint::ensure)"; then
+        printf 'golangci-lint gate: version resolve/install failed (hack/lib/golangci-lint.sh)\n'
+        return 1
+    fi
+    "${bin}" run "--new-from-merge-base=${BASE_BRANCH}"
+}
+
 # ---------------------------------------------------------------------------
-# Tier 1 — gofumpt, scoped to the changed .go files. Always when .go changed.
-# This is the exact gate that failed CI #525.
+# Single parallel fan-out. Every gate below is independent (no shared
+# mutable state; the Go build/test cache is concurrency-safe across
+# parallel `go` invocations), so they are launched together via run_bg and
+# joined at ONE wait barrier. Wall cost ≈ max(slowest gate), not the sum.
+# Each gate stays change-gated; "Tier N" labels are kept only as stable
+# cross-reference identities (header "Execution") and no longer imply
+# ordering.
 #
-# `go run mvdan.cc/gofumpt` pins the version via go.mod (rationale: see the
-# first header deviation — go.mod is the only SoR, no PATH ambient).
-# Cost has two independent cache layers:
-#   - Go build cache (GOCACHE) warm  → ~200ms (module-graph load + cached
-#     binary dispatch; not literally sub-millisecond).
-#   - gofumpt binary not yet compiled → +~2-3s one-time compile.
-#   - GOMODCACHE missing the module   → +~1-2s source download (first ever).
-# Warm steady state is ~200ms; a cold gofumpt compile is still well under
-# the Tier 2 build/vet cost that dominates a cold-cache push.
+#   Tier 1  gofumpt           — formatter drift on the changed .go files
+#                               (the exact gate that failed CI #525).
+#   Tier 2  build/vet ×4      — whole-module compile + vet; integration
+#                               and e2e tags are the header-documented
+#                               deliberate CI-structure deviations.
+#   Tier 5  golangci-lint     — CI-faithful PR-mode lint
+#                               (--new-from-merge-base=origin/develop);
+#                               warm ~7s, cold ~5min (deviation 5).
+#   Tier 4  TEST-TIME-LITERAL-01 — one archtest rule, only when a
+#                               test-code .go file changed (test_code_re
+#                               mirrors fileroles.IsTestCode;
+#                               test_code_changed=1 ⇒ go_changed=1 since
+#                               every test-code path is a .go file).
+#   Tier 3  codegen staleness — only when a codegen *source* changed; can
+#                               fire with go_changed=0 (schema/tmpl-only
+#                               push), so it has its own gate, not nested
+#                               under go_changed.
 # ---------------------------------------------------------------------------
 if [[ ${go_changed} -eq 1 ]]; then
     fmt_targets=()
     while IFS= read -r f; do
         [[ -n "${f}" && -f "${f}" ]] && fmt_targets+=("${f}")
     done < <(printf '%s\n' "${go_files}" | grep -E '\.go$' || true)
-    if [[ ${#fmt_targets[@]} -gt 0 ]]; then
-        # Fail-closed: a non-zero exit from `go run` (go toolchain absent,
-        # module/build failure, gofumpt internal error) must block the push,
-        # not silently skip the gate (no-soft-fallback). gofumpt -l exits 0
-        # and lists drifting files on stdout; the `-f` existence pre-filter
-        # above guarantees no missing-file path reaches gofumpt, so a
-        # non-zero here is unambiguously a tooling failure, never "found
-        # drift".
-        if ! drift="$(go run mvdan.cc/gofumpt -l "${fmt_targets[@]}" 2>&1)"; then
-            note "gofumpt gate failed to run (go run mvdan.cc/gofumpt):"
-            printf '%s\n' "${drift}" | sed 's/^/    /' >&2
-            fail=1
-        elif [[ -n "${drift}" ]]; then
-            note "formatter drift (run: make fmt):"
-            printf '%s\n' "${drift}" | sed 's/^/    /' >&2
-            fail=1
-        fi
-    fi
-fi
+    [[ ${#fmt_targets[@]} -gt 0 ]] && \
+        run_bg "gofumpt formatter (run: make fmt)" gofumpt_gate "${fmt_targets[@]}"
 
-# ---------------------------------------------------------------------------
-# Tier 2 — compile + vet. Whole-module (Go type-checks transitively), so
-# run the four in parallel. integration/e2e tags: see header note on the
-# deliberate deviation from CI step structure.
-# ---------------------------------------------------------------------------
-if [[ ${go_changed} -eq 1 ]]; then
     run_bg "go build ./..."                        go build ./...
     run_bg "go build -tags=integration ./..."      go build -tags=integration ./...
     run_bg "go vet ./..."                          go vet ./...
     run_bg "go vet -tags=e2e ./tests/e2e/..."      go vet -tags=e2e ./tests/e2e/...
-    for i in "${!pids[@]}"; do
-        if ! wait "${pids[$i]}"; then
-            note "FAIL: ${names[$i]}"
-            sed 's/^/    /' "${logs[$i]}" >&2
-            fail=1
-        fi
-        rm -f "${logs[$i]}"
-    done
-fi
 
-# ---------------------------------------------------------------------------
-# Tier 3 — codegen staleness. Only when a codegen *source* changed
-# (schema/contract/cell/slice/assembly/tmpl/generator). "schema changed,
-# forgot make generate" class. Verifies the working tree (see header).
-# ---------------------------------------------------------------------------
-if [[ ${codegen_changed} -eq 1 ]]; then
-    if ! out="$(go run ./cmd/gocell verify generated 2>&1)"; then
-        note "stale codegen artifacts (run: make generate):"
-        printf '%s\n' "${out}" | sed 's/^/    /' >&2
-        fail=1
+    run_bg "golangci-lint (CI-faithful; run: make fmt / fix lint)" lint_gate
+
+    if [[ ${test_code_changed} -eq 1 ]]; then
+        run_bg "TEST-TIME-LITERAL-01 (go test -run ^TestTestTimeLiteralConst\$ ./tools/archtest)" \
+            go test -count=1 -run '^TestTestTimeLiteralConst$' ./tools/archtest
     fi
 fi
+
+if [[ ${codegen_changed} -eq 1 ]]; then
+    run_bg "stale codegen artifacts (run: make generate)" \
+        go run ./cmd/gocell verify generated
+fi
+
+# Single wait barrier for the whole fan-out. Empty pids (docs-only push)
+# → no-op, fail stays 0. run_bg captured each job's combined output to its
+# own logfile, so this loop prints failures one job at a time without
+# interleaving.
+for i in "${!pids[@]}"; do
+    if ! wait "${pids[$i]}"; then
+        note "FAIL: ${names[$i]}"
+        sed 's/^/    /' "${logs[$i]}" >&2
+        fail=1
+    fi
+    rm -f "${logs[$i]}"
+done
 
 elapsed=$(( $(date +%s) - start ))
 if [[ ${fail} -ne 0 ]]; then
