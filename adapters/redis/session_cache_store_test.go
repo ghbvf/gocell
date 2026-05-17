@@ -280,10 +280,13 @@ func TestCachingSessionStore_Create_DoesNotTouchCache(t *testing.T) {
 // inner only; cache must remain untouched (TTL-floor contract, see type godoc
 // §Threat model and archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01).
 //
-// Symmetric with TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache:
-// both Revoke and RevokeForSubject rely on the cache TTL as the security
-// floor, not in-transaction Redis DEL. The TTL is bounded at max 30s by
-// wrapSessionStoreWithCache (wiring-time fail-fast).
+// Security floor for single-session Revoke is the cache TTL (max 30s, wiring
+// fail-fast) because single-session sessionlogout does NOT bump
+// user.AuthzEpoch. Mechanically the body shape matches
+// TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache (both pure inner
+// delegates with no cache ops), but the security-floor reasoning is asymmetric:
+// RevokeForSubject relies on the co-tx epoch bump, not the TTL — see that
+// test's godoc.
 func TestCachingSessionStore_Revoke_DoesNotTouchCache(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
@@ -332,10 +335,12 @@ func TestCachingSessionStore_Revoke_InnerError_Propagates(t *testing.T) {
 // of cache state. See ADR docs/architecture/202605101400-adr-credential-
 // session-protocol.md §A8 and archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
 //
-// Symmetric with TestCachingSessionStore_Revoke_DoesNotTouchCache: from the
-// third-round review both Revoke and RevokeForSubject are pure inner delegates
-// with no cache operations. The cache TTL (max 30s) is the security floor for
-// both paths.
+// Mechanically the body shape matches
+// TestCachingSessionStore_Revoke_DoesNotTouchCache (both pure inner delegates
+// with no cache ops, from the third-round review), but the security-floor
+// reasoning is asymmetric: single-session Revoke relies on the TTL because no
+// epoch bump fires; RevokeForSubject relies on the co-tx epoch bump and is
+// TTL-independent.
 func TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache(t *testing.T) {
 	t.Parallel()
 	mock := newMockCmdable()
@@ -431,12 +436,13 @@ func TestCachingSessionStore_Get_ConcurrentAccess(t *testing.T) {
 //
 //   - json-unmarshal path: the stored value is not valid JSON (or parses to a
 //     type that cannot be assigned to sessionCacheEntry). json.Unmarshal returns
-//     a non-nil jerr — the wrapper logs "corrupt cached entry" and falls through.
+//     a non-nil jerr — the wrapper logs "bad cached entry" with kind=corrupt
+//     and falls through.
 //
 //   - validate path: json.Unmarshal succeeds but entry.validate(id) rejects the
 //     entry because of a field-level invariant violation (mismatched ID, empty
 //     SubjectID, zero AuthzEpochAtIssue, or revoked entry). The wrapper logs
-//     "invalid cached entry" and falls through.
+//     "bad cached entry" with kind=invalid and falls through.
 //
 // In both paths Get must: (1) fall through to inner.Get (inner.getCalls == 1),
 // (2) return the view from inner, and (3) not surface the bad cache entry.

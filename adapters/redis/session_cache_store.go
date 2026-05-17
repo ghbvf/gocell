@@ -58,19 +58,24 @@ import (
 // # Threat model
 //
 //   - Stale-cache revoke window: by design, single-session sessionlogout's
-//     revocation propagates to cache state only after the existing cache
-//     entry's TTL elapses (up to GOCELL_SESSION_CACHE_TTL, ≤30s by wiring).
-//     The stale window is bounded by the remaining TTL at Revoke time, not
-//     always 30s. The in-transaction cache.Delete pattern was removed in the
-//     third-round review (PR #524 → fix PR) because it raced with concurrent
-//     re-population from the still-uncommitted PG row, potentially extending
-//     the stale window to 2×TTL. Single-session sessionlogout does NOT bump
-//     user.AuthzEpoch, so the epoch invariant in sessionvalidate.go does not
-//     catch this case — the TTL is the security floor. Mitigation: keep TTL
-//     short (≤ GOCELL_SESSION_CACHE_TTL, ≤30s enforced at wiring by
+//     revocation propagates to cache state only after the cache entry expires
+//     (up to GOCELL_SESSION_CACHE_TTL, ≤30s by wiring). The upper bound is
+//     one full TTL, NOT the remaining TTL at Revoke time: a Get that arrives
+//     during the brief window between inner Revoke fetching pre-revoke state
+//     and the row commit becoming visible causes lazyPopulate to write a
+//     fresh full-TTL entry, resetting the clock. The in-transaction
+//     cache.Delete pattern was removed in the third-round review (PR #524 →
+//     fix PR) because it raced with concurrent re-population from the
+//     still-uncommitted PG row, potentially extending the stale window to
+//     2×TTL. Single-session sessionlogout does NOT bump user.AuthzEpoch, so
+//     the epoch invariant in sessionvalidate.go does not catch this case —
+//     the TTL is the security floor here. Mitigation: keep TTL short
+//     (≤ GOCELL_SESSION_CACHE_TTL, ≤30s enforced at wiring by
 //     wrapSessionStoreWithCache). RevokeForSubject paths (driven by
-//     credentialinvalidate.Apply) are NOT affected because the co-tx epoch
-//     bump catches stale views regardless of cache state.
+//     credentialinvalidate.Apply) have an independent security floor — the
+//     co-tx user.AuthzEpoch bump fails the cached AuthzEpochAtIssue check in
+//     sessionvalidate.go regardless of cache state, so the TTL bound above
+//     does NOT apply to that path.
 //   - Redis keyspace enumeration: cache keys take the form
 //     accesscore:session:<rawSessionID>; anyone with redis-cli KEYS / SCAN
 //     access can enumerate active session identifiers. Operators MUST gate
@@ -87,8 +92,9 @@ import (
 // For high-security scenarios requiring instant logout effect (e.g. session
 // compromise response), DO NOT enable this cache (leave GOCELL_SESSION_CACHE_TTL
 // empty) or configure an extremely short TTL (e.g. 5s). The stale-cache window
-// after a single-session Revoke is bounded by the remaining TTL at the time of
-// revocation — with a 5s TTL the maximum exposure is 5s. See backlog
+// after a single-session Revoke is bounded by one full cache TTL (lazyPopulate
+// can refresh the entry just before Revoke commits — see §Threat model) — with
+// a 5s TTL the maximum exposure is 5s. See backlog
 // AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01 for the sub-TTL invalidation upgrade
 // path (kernel AfterCommit primitive) that would reduce this window to near-zero
 // without the 2×TTL race described in the Stale-cache revoke window threat above.
@@ -204,42 +210,9 @@ func (s *CachingSessionStore) Create(ctx context.Context, sess *session.Session)
 // TTL window. Delete errors are logged at Warn and ignored (best-effort).
 func (s *CachingSessionStore) Get(ctx context.Context, id string) (*session.ValidateView, error) {
 	key := sessionCacheKey + id
-
-	if raw, err := s.cache.Get(ctx, key); err == nil && raw != "" {
-		var entry sessionCacheEntry
-		if jerr := json.Unmarshal([]byte(raw), &entry); jerr == nil {
-			if verr := entry.validate(id); verr == nil {
-				return entry.toView(), nil
-			} else {
-				// validate fail: invalid entry — fall through + synchronous DEL to
-				// prevent repeated hits on a known-bad cache entry.
-				s.logger.Warn("session-cache: invalid cached entry; falling through",
-					slog.String("sid", id),
-					slog.Any("error", verr))
-				if delErr := s.cache.Delete(ctx, key); delErr != nil {
-					s.logger.Warn("session-cache: failed to clean invalid entry",
-						slog.String("sid", id),
-						slog.Any("error", delErr))
-				}
-			}
-		} else {
-			// unmarshal fail: corrupt entry — fall through + synchronous DEL to
-			// prevent repeated hits on a corrupt cache entry.
-			s.logger.Warn("session-cache: corrupt cached entry; falling through",
-				slog.String("sid", id),
-				slog.Any("error", jerr))
-			if delErr := s.cache.Delete(ctx, key); delErr != nil {
-				s.logger.Warn("session-cache: failed to clean corrupt entry",
-					slog.String("sid", id),
-					slog.Any("error", delErr))
-			}
-		}
-	} else if err != nil {
-		s.logger.Warn("session-cache: get failed; falling through",
-			slog.String("sid", id),
-			slog.Any("error", err))
+	if view := s.readCacheEntry(ctx, key, id); view != nil {
+		return view, nil
 	}
-
 	view, err := s.inner.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -248,6 +221,51 @@ func (s *CachingSessionStore) Get(ctx context.Context, id string) (*session.Vali
 		s.lazyPopulate(ctx, key, view, id)
 	}
 	return view, nil
+}
+
+// readCacheEntry attempts the cache read. Returns the cached ValidateView on
+// a clean hit, nil on miss / cache error / corrupt entry / invalid entry.
+// Corrupt and invalid entries are synchronously DEL'd before returning nil
+// so the next Get within the same TTL window does not re-hit the same bad
+// key. All cache-side errors are fail-safe — they only ever degrade to a
+// cache miss, never propagate to the caller.
+func (s *CachingSessionStore) readCacheEntry(ctx context.Context, key, id string) *session.ValidateView {
+	raw, err := s.cache.Get(ctx, key)
+	if err != nil {
+		s.logger.Warn("session-cache: get failed; falling through",
+			slog.String("sid", id),
+			slog.Any("error", err))
+		return nil
+	}
+	if raw == "" {
+		return nil
+	}
+	var entry sessionCacheEntry
+	if jerr := json.Unmarshal([]byte(raw), &entry); jerr != nil {
+		s.evictBadEntry(ctx, key, id, "corrupt", jerr)
+		return nil
+	}
+	if verr := entry.validate(id); verr != nil {
+		s.evictBadEntry(ctx, key, id, "invalid", verr)
+		return nil
+	}
+	return entry.toView()
+}
+
+// evictBadEntry logs a fall-through warning for a corrupt or invalid cache
+// entry, then synchronously DELs the key. Both the log and the DEL are
+// best-effort; DEL errors are logged at Warn and otherwise ignored.
+func (s *CachingSessionStore) evictBadEntry(ctx context.Context, key, id, kind string, cause error) {
+	s.logger.Warn("session-cache: bad cached entry; falling through",
+		slog.String("sid", id),
+		slog.String("kind", kind),
+		slog.Any("error", cause))
+	if delErr := s.cache.Delete(ctx, key); delErr != nil {
+		s.logger.Warn("session-cache: failed to clean bad cached entry",
+			slog.String("sid", id),
+			slog.String("kind", kind),
+			slog.Any("error", delErr))
+	}
 }
 
 // lazyPopulate writes the freshly-fetched view back into Redis. Marshal or
@@ -273,11 +291,15 @@ func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view
 }
 
 // Revoke delegates to inner. Cache invalidation is intentionally omitted —
-// stale-cache window is bounded by the cache TTL (≤ GOCELL_SESSION_CACHE_TTL,
-// max 30s). Symmetric with RevokeForSubject; both rely on the cache TTL as
-// the security floor rather than in-transaction Redis DEL (which races with
-// concurrent re-population from the still-uncommitted PG row, potentially
-// extending the stale window to 2×TTL).
+// stale-cache window is bounded by one full cache TTL (≤ GOCELL_SESSION_CACHE_TTL,
+// max 30s); see type godoc §Threat model for why the bound is full-TTL rather
+// than remaining-TTL at Revoke time. Single-session sessionlogout does NOT
+// bump user.AuthzEpoch, so the TTL is the security floor for this path —
+// distinct from RevokeForSubject, where the epoch bump catches stale views
+// regardless of cache state. The in-transaction cache.Delete pattern was
+// rejected in the third-round review because it races with concurrent
+// re-population from the still-uncommitted PG row, potentially extending
+// the stale window to 2×TTL.
 // See backlog AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01 for the kernel
 // AfterCommit primitive upgrade path required to reach 0-staleness.
 //
