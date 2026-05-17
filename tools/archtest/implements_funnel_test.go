@@ -230,8 +230,11 @@ func TestTypesutilImplementsFunnel01(t *testing.T) {
 // TestTypesutilImplementsFunnel01_Fixtures is the reverse self-check
 // mandated by charter §"工具选定后强制盲区自检": it proves the detector
 // actually fires for every reference form listed in the blind-spot
-// inventory. RED fixtures must report a violation on the exact ident line;
-// the GREEN fixture (routes through the funnel) must report zero.
+// inventory. RED fixtures must report a violation; the GREEN fixture
+// (routes through the funnel) must report zero. Expected violation counts
+// are declared inline in each fixture via spec.Violation() calls (one per
+// expected diagnostic); the test calls AssertDiagnosticCount to enforce
+// got==CountViolationMarkers(pass).
 //
 // Each fixture pattern is non-recursive (RunTyped, not RunTypedDir) so
 // RunTyped yields exactly the fixture package as a Pass (deps are loaded
@@ -246,14 +249,17 @@ func TestTypesutilImplementsFunnel01_Fixtures(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		dir       string
-		wantLines []int // nil = GREEN (0 violations)
+		dir string
 	}{
-		{"selector_call_red", []int{9}},
-		{"dot_import_red", []int{9}},
-		{"aliased_import_red", []int{10}},
-		{"func_value_red", []int{13}},
-		{"approved_wrapper_green", nil},
+		// RED cases — expected diagnostic count declared via spec.Violation()
+		// in the fixture .go file (one call per expected violation).
+		{"selector_call_red"},
+		{"dot_import_red"},
+		{"aliased_import_red"},
+		{"func_value_red"},
+
+		// GREEN case — expect 0 violations (no spec.Violation() in fixture).
+		{"approved_wrapper_green"},
 	}
 
 	for _, tc := range cases {
@@ -263,25 +269,16 @@ func TestTypesutilImplementsFunnel01_Fixtures(t *testing.T) {
 
 			pattern := "./tools/archtest/testdata/typesutil_implements_fixtures/" + tc.dir
 
-			var gotLines []int
 			scanned := false
 			_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
 				if len(p.Files) > 0 {
 					scanned = true
 				}
-				for _, d := range collectImplementsFunnelViolations(p) {
-					gotLines = append(gotLines, d.Line)
-				}
+				got := collectImplementsFunnelViolations(p)
+				AssertDiagnosticCount(t, ruleTypesutilImplementsFunnel01, p, got)
 				return nil
 			})
 			require.True(t, scanned, "fixture %s: no package loaded (path renamed?)", tc.dir)
-			sort.Ints(gotLines)
-
-			wantLines := append([]int(nil), tc.wantLines...)
-			sort.Ints(wantLines)
-
-			assert.Equal(t, wantLines, gotLines,
-				"fixture %s: violation lines mismatch", tc.dir)
 		})
 	}
 }

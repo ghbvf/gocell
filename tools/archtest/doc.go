@@ -82,4 +82,56 @@
 // prints every anchor + file + line + theme to stdout. Persisted
 // `docs/audit/archtest-inventory.md` and its drift gate were removed in
 // PR-A' (2026-05-10); the archtest gate above is the single source.
+//
+// # Fixture-based violation count assertions
+//
+// As of PR #557, archtest uses a typed marker pattern for expressing expected
+// diagnostic counts in fixture-based tests. The pattern replaces hardcoded
+// wantLines []int slice fields:
+//
+//  1. The fixture .go file imports fixturespec and calls spec.Violation() once
+//     per expected diagnostic from the rule under test:
+//
+//     import spec "github.com/ghbvf/gocell/tools/archtest/fixturespec"
+//
+//     func bad() {
+//     spec.Violation() // one expected diagnostic
+//     panic("foo")    // the actual violation pattern
+//     }
+//
+//  2. The archtest test function calls AssertDiagnosticCount inside the rule
+//     closure, after collecting got diagnostics:
+//
+//     RunTypedDir(t, fixtureDir, TypedOpts{}, []string{"./..."},
+//     func(p *Pass) []Diagnostic {
+//     got := myRule(p)
+//     archtest.AssertDiagnosticCount(t, "MY-RULE-01", p, got)
+//     return nil
+//     })
+//
+//  3. Tests that load fixtures but deliberately do not bind to diagnostic
+//     output (framework-shape or plumbing tests) call NoDiagnosticAssertion()
+//     instead, as a typed opt-out:
+//
+//     func TestMyFrameworkShape(t *testing.T) {
+//     NoDiagnosticAssertion() // not fixture-binding
+//     ...
+//     }
+//
+// AssertDiagnosticCount counts fixturespec.Violation() callees in the fixture
+// package (via *types.Info) and asserts len(got) equals that count. When got
+// < want, the failure output also prints each marker position to help identify
+// which call sites the rule missed.
+//
+// Meta-archtest enforcement:
+//   - FIXTURESPEC-VIOLATION-CALLER-ALLOWLIST-01 (downstream Hard, fixturespec_funnel_test.go):
+//     fixturespec.Violation callers must reside in tools/archtest/testdata/.
+//   - FIXTURESPEC-COUNT-MATCH-ENFORCED-01 (upstream Medium, fixturespec_funnel_test.go):
+//     fixture-loading test files with a wantLines-style []int field must call
+//     AssertDiagnosticCount or NoDiagnosticAssertion.
+//
+// Fixtures loaded via RunTypedDir use standalone go.mod modules and do NOT
+// need the //go:build archtest_fixture build tag. Fixtures loaded via
+// RunTypedFixture share the main module and DO need the tag.
+// See tools/archtest/fixturespec/fixturespec.go for full pattern documentation.
 package archtest

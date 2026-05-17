@@ -4,12 +4,17 @@
 // info.Uses sweep catches it because the Implements ident still resolves to
 // the go/types.Implements *types.Func. 1 violation expected — this fixture
 // is the evidence that the sweep structurally subsumes the CallExpr-walk
-// blind spot.
+// blind spot (declared via spec.Violation()).
 package func_value_red
 
-import "go/types"
+import (
+	"go/types"
+
+	spec "github.com/ghbvf/gocell/tools/archtest/fixturespec"
+)
 
 func register() any {
+	spec.Violation()
 	f := types.Implements
 	return f
 }

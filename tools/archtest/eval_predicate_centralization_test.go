@@ -23,8 +23,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -342,8 +340,8 @@ func isAllFalseSentinelFuncLit(fl *ast.FuncLit) bool {
 //
 // is a synthetic single-file Go package that demonstrates one canonical
 // shape (GREEN, 0 violations expected) or one violation shape (RED, the
-// expected violation line(s) listed in the table below). Loading goes
-// through RunTyped with full types.Info so the type-aware
+// expected diagnostic count declared via spec.Violation() in the fixture).
+// Loading goes through RunTypedDir with full types.Info so the type-aware
 // detection paths (isConstraintExprEvalCall via ResolveMethodCall;
 // isBuildContextPredicateCallee via ResolvePackageRef) are exercised the
 // same way as the main test.
@@ -359,18 +357,17 @@ func TestEvalPredicateCentralizationFixtures(t *testing.T) {
 		"eval_predicate_centralization_fixtures")
 
 	cases := []struct {
-		dir       string
-		wantLines []int // empty / nil = GREEN; non-empty = RED with these line numbers
+		dir string
 	}{
-		// GREEN — Form A and Form B canonical shapes accepted.
-		{"form_a_good", nil},
-		{"form_b_good", nil},
+		// GREEN — Form A and Form B canonical shapes accepted (no spec.Violation in fixture).
+		{"form_a_good"},
+		{"form_b_good"},
 		// RED — hand-rolled predicate (most common drift form).
-		{"inline_predicate_red", []int{10}},
+		{"inline_predicate_red"},
 		// RED — var binding indirection (arg is Ident, not CallExpr / FuncLit).
-		{"var_binding_red", []int{10}},
+		{"var_binding_red"},
 		// RED — FuncLit body has multi-statement, fails sentinel single-stmt check.
-		{"funclit_multi_stmt_red", []int{9}},
+		{"funclit_multi_stmt_red"},
 	}
 
 	for _, tc := range cases {
@@ -379,28 +376,22 @@ func TestEvalPredicateCentralizationFixtures(t *testing.T) {
 			t.Parallel()
 
 			fixtureDir := filepath.Join(fixtureBase, tc.dir)
-			var violations []evalPredicateViolation
 			RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
 				func(p *Pass) []Diagnostic {
+					var got []Diagnostic
 					for _, f := range p.Files {
 						rel := p.Rel(f)
-						violations = append(violations,
-							scanFileForEvalPredicateViolations(p.Fset, f, p.TypesInfo, rel)...)
+						for _, v := range scanFileForEvalPredicateViolations(p.Fset, f, p.TypesInfo, rel) {
+							got = append(got, Diagnostic{
+								Rel:     v.Rel,
+								Line:    v.Line,
+								Message: v.Form,
+							})
+						}
 					}
+					AssertDiagnosticCount(t, "EVAL-PREDICATE-CENTRALIZATION-01", p, got)
 					return nil
 				})
-
-			var gotLines []int
-			for _, v := range violations {
-				gotLines = append(gotLines, v.Line)
-			}
-			sort.Ints(gotLines)
-
-			wantLines := append([]int(nil), tc.wantLines...)
-			sort.Ints(wantLines)
-
-			require.Equal(t, wantLines, gotLines,
-				"fixture %s: violation lines mismatch (got: %+v)", tc.dir, violations)
 		})
 	}
 }

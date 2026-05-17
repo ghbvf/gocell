@@ -1,9 +1,15 @@
 // Package until_violates is a fixture for archtest negative case:
-// verifies that time.Until is flagged: 1 violation expected.
+// verifies that time.Until is flagged:
+// 1 violation expected (declared via spec.Violation()).
 package until_violates
 
-import "time"
+import (
+	"time"
+
+	spec "github.com/ghbvf/gocell/tools/archtest/fixturespec"
+)
 
 func remaining(t time.Time) time.Duration {
+	spec.Violation()
 	return time.Until(t)
 }
