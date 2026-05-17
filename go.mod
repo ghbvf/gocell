@@ -23,6 +23,7 @@ require (
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/stretchr/testify v1.11.1
+	github.com/testcontainers/testcontainers-go/modules/minio v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/vault v0.42.0
 	go.opentelemetry.io/contrib/propagators/b3 v1.43.0
 	go.opentelemetry.io/otel v1.43.0

@@ -67,6 +67,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // contractServiceIfaceSet holds the two visibility buckets of Service interfaces
@@ -205,18 +207,16 @@ func checkPassForVisibilityViolations(pass *Pass, ifaceSet *contractServiceIface
 			if !ok {
 				return
 			}
-			ptrNamed := types.NewPointer(named)
-
 			// Collect which contract categories this type satisfies.
 			var pubHits []string
 			for canon, iface := range pub {
-				if types.Implements(named, iface) || types.Implements(ptrNamed, iface) {
+				if typesutil.ImplementsInterface(named, iface) {
 					pubHits = append(pubHits, strings.TrimSuffix(canon, ".Service"))
 				}
 			}
 			var intlHits []string
 			for canon, iface := range intl {
-				if types.Implements(named, iface) || types.Implements(ptrNamed, iface) {
+				if typesutil.ImplementsInterface(named, iface) {
 					intlHits = append(intlHits, strings.TrimSuffix(canon, ".Service"))
 				}
 			}

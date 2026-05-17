@@ -317,7 +317,7 @@ func selectContractIDsByScope(p *metadata.ProjectMeta, opts Options) ([]string, 
 	case ScopeContracts:
 		return selectByContractList(p, []string(s))
 	case ScopeCell:
-		return selectByCellID(p, string(s))
+		return selectByCellID(p, string(s)), nil
 	default:
 		// Unknown Scope implementation — treat as ScopeAll.
 		return selectAllCodegenContracts(p)
@@ -354,9 +354,18 @@ func selectByContractList(p *metadata.ProjectMeta, ids []string) ([]string, erro
 	return out, nil
 }
 
+// ContractIDsForCell returns all Codegen=true contract IDs owned by cellID
+// (server or publisher). The returned slice is sorted for deterministic output.
+// Thin exported wrapper around selectByCellID for cross-package callers
+// (notably cellgen stage_render.go). No OS calls — safe in depguard scaffold-os-ban scope.
+// Has no fallible path; returns a plain slice.
+func ContractIDsForCell(p *metadata.ProjectMeta, cellID string) []string {
+	return selectByCellID(p, cellID)
+}
+
 // selectByCellID returns all Codegen=true contracts whose server/publisher
-// cell matches cellID.
-func selectByCellID(p *metadata.ProjectMeta, cellID string) ([]string, error) {
+// cell matches cellID. Has no fallible path; returns a plain slice.
+func selectByCellID(p *metadata.ProjectMeta, cellID string) []string {
 	var ids []string
 	for id, c := range p.Contracts {
 		if !c.Codegen {
@@ -371,7 +380,7 @@ func selectByCellID(p *metadata.ProjectMeta, cellID string) ([]string, error) {
 		}
 	}
 	sort.Strings(ids)
-	return ids, nil
+	return ids
 }
 
 // relFromRoot converts an absolute path under root into a slash-separated

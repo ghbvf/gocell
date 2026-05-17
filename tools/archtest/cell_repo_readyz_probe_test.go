@@ -94,6 +94,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // repoReadyzCellPkgPath is the import path of kernel/cell.
@@ -423,7 +424,7 @@ func collectRepoHealthProberImpls(pkg *types.Package, iface *types.Interface, im
 		if _, isIface := t.Underlying().(*types.Interface); isIface {
 			continue
 		}
-		if types.Implements(t, iface) || types.Implements(types.NewPointer(t), iface) {
+		if typesutil.ImplementsInterface(t, iface) {
 			implSet[pkg.Path()+"."+name] = true
 		}
 	}

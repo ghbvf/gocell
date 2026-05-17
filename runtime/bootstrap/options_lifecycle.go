@@ -31,10 +31,39 @@ func WithLifecycle(fn func(lc Lifecycle)) Option {
 }
 
 // WithLifecycleDefaultStartTimeout overrides the per-hook default StartTimeout.
-// Zero value retains DefaultStartTimeout (30s). Negative disables default timeout
-// (hooks without own StartTimeout will block indefinitely).
+// Zero value retains DefaultStartTimeout (30s).
+//
+// Since ADR 202605170000 §D-B, StartTimeout is NOT enforced as an OnStart ctx
+// deadline — it is only the slow-start warning threshold (warn when an OnStart
+// elapses ≥ 80% of it). A hook whose OnStart never returns is bounded by the
+// orchestration-layer backstop (caller ctx + WithStartupTimeout), not by this
+// value. Negative therefore only disables the slow-start warning; it does NOT
+// remove a startup deadlock backstop. The actual startup deadlock backstop is
+// WithStartupTimeout (orchestration-layer); this option only affects the
+// slow-start warning threshold.
 func WithLifecycleDefaultStartTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) { b.defaultStartTimeout = d }
+}
+
+// WithStartupTimeout sets the whole-Start orchestration budget. Bootstrap.Run
+// supervises lifecycle.Start in a goroutine and aborts if it has not completed
+// when EITHER the caller ctx is canceled OR this budget elapses; on abort it
+// cancels ownerCtx (unblocking a wedged OnStart) then rolls back, returning
+// ErrBootstrapStartupTimeout (timer path) or the caller ctx error.
+//
+// This is the deadlock backstop for the ADR 202605170000 §D-B contract
+// (OnStart = owner ctx, no per-hook deadline): without it a hook whose OnStart
+// never returns would wedge Run() forever (review P1-1).
+//
+// Zero retains DefaultStartupTimeout (30s). Negative disables the timer — the
+// caller ctx remains the abort path (matches controller-runtime mgr.Start,
+// which is unblocked only by its caller ctx). It is NOT a per-hook SLA; the
+// per-hook slow-start warning is WithLifecycleDefaultStartTimeout.
+//
+// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go — Start
+// returns when the caller ctx is canceled.
+func WithStartupTimeout(d time.Duration) Option {
+	return func(b *Bootstrap) { b.startupTimeout = d }
 }
 
 // WithLifecycleDefaultStopTimeout mirrors WithLifecycleDefaultStartTimeout for StopTimeout.

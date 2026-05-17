@@ -604,3 +604,90 @@ func TestWritePlannedFiles_PlanContainmentPass_EscapesRoot(t *testing.T) {
 		t.Fatal("WritePlannedFiles(AbsPath escapes root): want error, got nil")
 	}
 }
+
+// TestWritePlannedFiles_ForceOverwrite_DryRunLiveParity is the F2
+// conformance lock: for every ForceOverwrite target inode kind, dry-run and
+// live must agree on accept/reject. Before the forceOverwritePreflightPass
+// single-source gate, dry-run returned after conflictPass (which skips
+// ForceOverwrite entries) and never reached the captureOriginal kind check,
+// so a directory/device squatting a generated path passed dry-run but failed
+// live. The shared forceOverwriteRestorable predicate makes drift
+// unrepresentable; this test pins the observable contract.
+func TestWritePlannedFiles_ForceOverwrite_DryRunLiveParity(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("inode-kind / symlink semantics differ on windows")
+	}
+
+	cases := []struct {
+		name       string
+		setup      func(t *testing.T, abs string)
+		wantReject bool
+	}{
+		{
+			name:       "absent",
+			setup:      func(t *testing.T, abs string) {},
+			wantReject: false,
+		},
+		{
+			name: "regular_file",
+			setup: func(t *testing.T, abs string) {
+				if err := os.WriteFile(abs, []byte("// old\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantReject: false,
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, abs string) {
+				if err := os.Symlink(filepath.Join(t.TempDir(), "x"), abs); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantReject: false,
+		},
+		{
+			name: "directory",
+			setup: func(t *testing.T, abs string) {
+				if err := os.Mkdir(abs, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantReject: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Two independent roots so the live write of one case cannot
+			// perturb the dry-run of another.
+			dryRoot := resolveRealRoot(t)
+			liveRoot := resolveRealRoot(t)
+
+			mk := func(root string) []pathsafe.PlannedFile {
+				abs := filepath.Join(root, "generated", "stamp.go")
+				if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				tc.setup(t, abs)
+				return []pathsafe.PlannedFile{
+					{AbsPath: abs, Content: []byte("// regenerated\n"), ForceOverwrite: true},
+				}
+			}
+
+			dryErr := pathsafe.WritePlannedFiles(dryRoot, mk(dryRoot), true /* dryRun */)
+			liveErr := pathsafe.WritePlannedFiles(liveRoot, mk(liveRoot), false)
+
+			if (dryErr != nil) != (liveErr != nil) {
+				t.Fatalf("dry-run/live parity broken for %s: dryErr=%v liveErr=%v",
+					tc.name, dryErr, liveErr)
+			}
+			if (dryErr != nil) != tc.wantReject {
+				t.Fatalf("%s: wantReject=%v but dryErr=%v", tc.name, tc.wantReject, dryErr)
+			}
+		})
+	}
+}

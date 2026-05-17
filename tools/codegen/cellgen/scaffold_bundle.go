@@ -1,8 +1,9 @@
-// scaffold_bundle.go implements K#09 ScaffoldCellBundle: a one-shot scaffold
-// orchestrator that produces a compilable + testable cell skeleton in a
-// single call. Composes ScaffoldCell (cell.yaml + cell.go) with
-// ScaffoldExampleSlice (slice.yaml + service.go + service_test.go) and
-// ScaffoldExampleContract (contract.yaml + JSON schemas).
+// scaffold_bundle.go implements K#09 PlanCellBundleScaffold: a one-shot scaffold
+// planner that returns a merged []pathsafe.PlannedFile covering a compilable +
+// testable cell skeleton. Composes planCell (cell.yaml + cell.go) with
+// planHTTPExampleArtifacts / planEventExampleArtifacts (slice.yaml + service.go +
+// service_test.go + contract.yaml + JSON schemas). When SkipGenerate is false,
+// appendDerivedCodegenStaged (stage_render.go) appends derived codegen files.
 //
 // The resulting bundle layout (HTTP variant):
 //
@@ -55,7 +56,7 @@ var contractBundleTemplate = template.Must(template.New("scaffold-contract.tmpl"
 	ParseFS(templateFS, "templates/scaffold-contract.tmpl"))
 
 // bundleData is the shared template context for slice + contract bundle
-// templates. Computed once in ScaffoldCellBundle from a ScaffoldSpec.
+// templates. Computed once in planCellBundle from a ScaffoldSpec.
 type bundleData struct {
 	CellID         string
 	SlicePackage   string // SliceID with no dashes (Go package name)
@@ -65,45 +66,42 @@ type bundleData struct {
 	ListenerMarker string // K#05 cell:listener marker; sourced from ListenerMarker const
 }
 
-// ScaffoldCellBundle is the K#09 one-shot scaffold orchestrator. It composes
-// ScaffoldCell + ScaffoldExampleSlice + ScaffoldExampleContract; on dry-run
-// every template renders (catching errors) and conflict detection runs but
-// no files are written.
+// PlanCellBundleScaffold is the K#09 one-shot scaffold planner. It produces a
+// merged []pathsafe.PlannedFile covering:
+//   - skeleton files (cell.go, cell.yaml, slice artifacts, contract artifacts)
+//     with ForceOverwrite=false — conflict detection rejects pre-existing files.
+//   - when spec.SkipGenerate is false: derived codegen files (cell_gen.go,
+//     generated/contracts/.../types_gen.go, iface_gen.go, handler_gen.go)
+//     with ForceOverwrite=true — always regenerated without conflict.
 //
 // Defaults: when neither WithHTTP nor WithEvents is set, WithHTTP applies.
 // WithBoth produces both an HTTP contract and an event contract.
 //
-// Writes are atomic: all files are planned first, then written in a single
-// pathsafe.WritePlannedFiles call. On failure the entire bundle is rolled back.
-func ScaffoldCellBundle(root string, spec ScaffoldSpec) error {
-	if err := validateScaffoldSpec(spec); err != nil {
-		return err
-	}
-
-	realRoot, err := pathsafe.ResolveRoot(root)
-	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold bundle: validation failed", err)
-	}
-
-	plan, err := planCellBundle(realRoot, spec)
-	if err != nil {
-		return err
-	}
-
-	// Return WritePlannedFiles error directly: pathsafe already returns a
-	// structured *errcode.Error (ErrConflict for file-exists, ErrInternal for
-	// OS errors) so re-wrapping would clobber the Code.
-	return pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun)
-}
-
-// PlanCellBundleForDryRun is the exported equivalent of planCellBundle,
-// allowing callers (e.g. scaffoldCell dry-run in cmd/gocell/app) to enumerate
-// the full file list without writing anything. realRoot must be the output of
-// pathsafe.ResolveRoot.
+// realRoot must be the output of pathsafe.ResolveRoot. The returned plan is
+// written by the caller via a single pathsafe.WritePlannedFiles call, ensuring
+// all-or-nothing atomicity across skeleton + derived files.
 //
-// Applies the same default + consistency-level validation as ScaffoldCellBundle.
-func PlanCellBundleForDryRun(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error) {
-	return planCellBundle(realRoot, spec)
+// Mirrors kernel/assembly.Generator.PlanAssemblyScaffold + appendGeneratedFiles.
+func PlanCellBundleScaffold(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error) {
+	if err := validateScaffoldSpec(spec); err != nil {
+		return nil, err
+	}
+
+	skeletonPlan, err := planCellBundle(realRoot, spec)
+	if err != nil {
+		return nil, err
+	}
+
+	if spec.SkipGenerate {
+		return skeletonPlan, nil
+	}
+
+	// Ephemeral staging: write skeleton into a temp dir (via pathsafe funnel),
+	// parse metadata, render derived artifacts in-memory, rebase to realRoot.
+	// The staging lifecycle (MkdirTemp + RemoveAll) is encapsulated in
+	// appendDerivedCodegenStaged (stage_render.go) — os calls are not in
+	// scaffold_bundle.go which is in the depguard scaffold-os-ban list.
+	return appendDerivedCodegenStaged(realRoot, spec.CellID, skeletonPlan)
 }
 
 // minCellConsistencyLevel returns the minimum cell consistency level required
@@ -202,7 +200,7 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 		plan = append(plan, items...)
 	}
 	if withEvents {
-		items, err := planEventExampleArtifacts(realRoot, spec, cellNoDash, sliceID)
+		items, err := planEventExampleArtifacts(realRoot, spec, cellNoDash, sliceID, withHTTP)
 		if err != nil {
 			return nil, err
 		}
@@ -279,10 +277,15 @@ func planHTTPExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sl
 }
 
 // planEventExampleArtifacts renders the event slice + contract pair and returns
-// them as PlannedFiles. When spec.WithBoth, uses a separate event slice ID.
-func planEventExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sliceID string) ([]pathsafe.PlannedFile, error) {
+// them as PlannedFiles. When withHTTP is true (an HTTP slice is also present),
+// uses a distinct event sliceID (cellNoDash+"eventexample") to avoid duplicate
+// AbsPath collisions — gating on withHTTP rather than spec.WithBoth unifies the
+// WithBoth path and the WithHTTP&&WithEvents path under one rule.
+func planEventExampleArtifacts(
+	realRoot string, spec ScaffoldSpec, cellNoDash, sliceID string, withHTTP bool,
+) ([]pathsafe.PlannedFile, error) {
 	eventSliceID := sliceID
-	if spec.WithBoth {
+	if withHTTP {
 		eventSliceID = cellNoDash + "eventexample"
 	}
 	bd := bundleData{
