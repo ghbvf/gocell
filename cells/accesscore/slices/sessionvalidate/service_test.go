@@ -883,3 +883,55 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 		})
 	}
 }
+
+// TestEnforce_RevokedSession_UserRepoUnavailable_Returns401_Uniform locks
+// the P1-A regression: when a session is revoked AND the userRepo is
+// unavailable (would normally surface 503 ErrAuthServiceUnavailable), the
+// revoke prong MUST fire first and return uniform 401 ErrAuthInvalidToken.
+//
+// Before §A11 rewrite the funnel folded SessionNotRevoked into the
+// user-bound Assert, which required userRepo.GetByID to succeed before
+// revoke could be checked. A revoked session + transient userRepo outage
+// therefore leaked as 503, signaling to an attacker both "the session
+// exists" and "the user lookup is the bottleneck" (side channel).
+//
+// After the rewrite session-state checks run inline after sessionStore.Get,
+// independent of any user-bound logic, so userRepo.GetByID never runs for
+// a revoked session and the wire envelope stays uniform 401.
+func TestEnforce_RevokedSession_UserRepoUnavailable_Returns401_Uniform(t *testing.T) {
+	store := newTestStore(t)
+
+	// Seed a revoked session.
+	revokedAt := time.Now()
+	require.NoError(t, store.Create(context.Background(), &session.Session{
+		ID:                "sess-revoked-userrepo-down",
+		SubjectID:         "usr-revoked-503",
+		JTI:               "jti-revoked-userrepo-down",
+		AuthzEpochAtIssue: 1,
+		ExpiresAt:         time.Now().Add(time.Hour),
+		CreatedAt:         time.Now(),
+		RevokedAt:         &revokedAt,
+	}))
+
+	// userRepo would surface 503 if it were reached.
+	infraErr := errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "user store down")
+	svc := newSvcWithUserRepo(t, store, &capturingUserRepo{getErr: infraErr})
+
+	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-revoked-503", 1, time.Hour,
+		"sess-revoked-userrepo-down")
+	require.NoError(t, err)
+
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, verifyErr)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, verifyErr, &ec)
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+		"revoked session must surface 401, not 503 — userRepo outage must "+
+			"NOT leak through once the session is revoked (ADR §A12).")
+	assert.Equal(t, errcode.ErrAuthInvalidToken, ec.Code,
+		"revoked-with-userRepo-outage must collapse to ErrAuthInvalidToken, "+
+			"not ErrAuthServiceUnavailable (single-envelope 防枚举).")
+	assert.Contains(t, verifyErr.Error(), errMsgAuthFailed,
+		"wire message must remain the uniform errMsgAuthFailed.")
+}
