@@ -28,7 +28,7 @@ func scaffoldBundleSkip(t *testing.T, root string, spec ScaffoldSpec) error {
 	if err != nil {
 		return err
 	}
-	return pathsafe.WritePlannedFiles(realRoot, plan, false)
+	return pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
 }
 
 // TestScaffoldCellBundle_HTTP is a RED test for K#09 cellgen.ScaffoldCellBundle:
@@ -162,7 +162,7 @@ func TestScaffoldCellBundle_DryRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanCellBundleScaffold: %v", err)
 	}
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, true); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), true); err != nil {
 		t.Fatalf("WritePlannedFiles dry-run: %v", err)
 	}
 	// In dry-run, the cell directory must not exist.
@@ -444,47 +444,13 @@ func TestScaffoldCellBundle_AtomicRollback_OnContainmentFail(t *testing.T) {
 	}
 }
 
-// TestScaffoldCellBundle_RejectKebabCellID verifies that ScaffoldCellBundle
-// rejects a kebab-case CellID ("test-cell") with an error mentioning "kebab"
-// or "dash" rather than silently stripping the dash and writing "testcell".
-//
-// RED: current implementation silently strips dashes via strings.ReplaceAll in
-// planCellBundle, so ScaffoldCellBundle("test-cell") writes cells/test-cell/
-// but uses "testcell" as the Go package name — an inconsistency. The exported
-// API should reject kebab up-front with a clear error.
-func TestScaffoldCellBundle_RejectKebabCellID(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	spec := ScaffoldSpec{
-		CellID:           "test-cell", // kebab: must be rejected
-		StructName:       "TestCell",
-		Package:          "testcell",
-		ModulePath:       "github.com/ghbvf/gocell",
-		OwnerTeam:        "platform",
-		OwnerRole:        "cell-owner",
-		Type:             "core",
-		ConsistencyLevel: "L1",
-		WithHTTP:         true,
-	}
-	err := scaffoldBundleSkip(t, dir, spec)
-	if err == nil {
-		t.Fatal("scaffoldBundleSkip(kebab CellID): want error, got nil")
-	}
-	// Error must mention kebab or dash so the message is actionable.
-	msg := err.Error()
-	if !strings.Contains(msg, "kebab") && !strings.Contains(msg, "dash") &&
-		!strings.Contains(msg, "-") {
-		t.Errorf("error must mention kebab/dash; got: %v", err)
-	}
-	// No files must be written.
-	if _, statErr := os.Stat(filepath.Join(dir, "cells", "test-cell")); statErr == nil {
-		t.Error("cells/test-cell must not exist after rejection")
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, "cells", "testcell")); statErr == nil {
-		t.Error("cells/testcell (silently stripped) must not exist after rejection")
-	}
-}
+// Kebab-CellID rejection coverage moved upstream:
+// kernel/scaffoldid_test.go.TestParse_Reject `dash` case asserts
+// scaffoldid.Parse("test-cell") returns ErrValidationFailed, and
+// ScaffoldSpec.CellID is typed (scaffoldid.ScaffoldID) so a kebab string
+// cannot reach the cellgen funnel without first failing at the cmd-flag
+// boundary's scaffoldid.Parse call (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01).
+// The previous ScaffoldCellBundle-level reject test is no longer applicable.
 
 // TestScaffoldCellBundle_BundleDefaultIsHTTP verifies that when neither
 // WithHTTP nor WithEvents is set, default is HTTP.
@@ -754,7 +720,7 @@ func TestPlanCellBundleScaffold_MergedPlan(t *testing.T) {
 		found := false
 		for _, f := range plan {
 			if f.AbsPath == abs {
-				if f.ForceOverwrite {
+				if f.IsForceOverwrite() {
 					t.Errorf("skeleton file %s must have ForceOverwrite=false", rel)
 				}
 				found = true
@@ -776,7 +742,7 @@ func TestPlanCellBundleScaffold_MergedPlan(t *testing.T) {
 		found := false
 		for _, f := range plan {
 			if f.AbsPath == abs {
-				if !f.ForceOverwrite {
+				if !f.IsForceOverwrite() {
 					t.Errorf("derived file %s must have ForceOverwrite=true", rel)
 				}
 				found = true
@@ -927,7 +893,7 @@ func TestPlanCellBundle_WithBothFlags_DupGuardIsBackstop(t *testing.T) {
 		Type:             "core",
 		ConsistencyLevel: "L2",
 	}
-	cellNoDash := strings.ReplaceAll(spec.CellID, "-", "")
+	cellNoDash := strings.ReplaceAll(spec.CellID.String(), "-", "")
 	sliceID := cellNoDash + "example"
 
 	// HTTP artifacts.
@@ -963,9 +929,11 @@ func TestPlanCellBundle_WithBothFlags_DupGuardIsBackstop(t *testing.T) {
 	if len(dups) == 0 {
 		t.Fatal("expected duplicate AbsPath entries with old same-sliceID behavior; got none — dup-guard backstop not exercised")
 	}
-	// Verify WritePlannedFiles rejects the duplicate plan (dup-guard backstop).
-	if err := pathsafe.WritePlannedFiles(realRoot, combined, true /* dryRun */); err == nil {
-		t.Error("WritePlannedFiles must reject duplicate AbsPath plan; got nil error")
+	// Verify NewPlanSet rejects the duplicate plan (dup-guard now lifted to
+	// type-system Hard at PlanSet construction time —
+	// PATHSAFE-PLANSET-TYPED-HARD-01).
+	if _, err := pathsafe.NewPlanSet(combined); err == nil {
+		t.Error("NewPlanSet must reject duplicate AbsPath plan; got nil error")
 	}
 }
 

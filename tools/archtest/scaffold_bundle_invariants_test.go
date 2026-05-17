@@ -68,7 +68,7 @@ func scaffoldSmokeBundle(t *testing.T, root string) error {
 	if err != nil {
 		return err
 	}
-	return pathsafe.WritePlannedFiles(realRoot, plan, false)
+	return pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
 }
 
 // TestScaffoldBundle_CellMarkerEmbedded asserts that PlanCellBundleScaffold

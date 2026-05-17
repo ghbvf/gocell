@@ -41,11 +41,15 @@ import (
 //
 // Pre: realRoot is the output of ResolveRoot.
 func WriteFile(realRoot, absPath string, content []byte, mode os.FileMode) error {
-	return WritePlannedFiles(realRoot, []PlannedFile{{
+	ps, err := NewPlanSet([]PlannedFile{{
 		AbsPath:  absPath,
 		Content:  content,
 		FileMode: mode,
-	}}, false)
+	}})
+	if err != nil {
+		return err
+	}
+	return WritePlannedFiles(realRoot, ps, false)
 }
 
 // WriteFileForce writes content to absPath, overwriting any existing file.
@@ -99,18 +103,50 @@ const (
 // Mode encodes file vs Go-source (Go-source files MAY round-trip through
 // codegen.FormatGoSource at the caller before constructing PlannedFile —
 // pathsafe is content-neutral by design).
+//
+// The forceOverwrite field is package-private (PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01):
+// callers outside pkg/pathsafe cannot set it via struct-literal; the only
+// public path that produces a force-overwrite entry is DerivedOverwrite.
+// This makes "regenerate semantics opted into by accident" unrepresentable
+// at the type level.
 type PlannedFile struct {
-	AbsPath  string
-	Content  []byte
-	DirMode  os.FileMode // optional; defaults 0o755 (per helm/helm chartutil; F12)
-	FileMode os.FileMode // optional; defaults 0o644 (per helm/helm chartutil; F12)
-	// ForceOverwrite, when true, instructs WritePlannedFiles to bypass the
-	// conflictPass "file already exists" rejection for this entry and instead
-	// replace the existing inode (Remove → O_EXCL|O_NOFOLLOW recreate). Used by
-	// codegen-regenerate flows where derived artifacts intentionally overwrite
-	// previous output. O_NOFOLLOW is preserved: a leaf symlink at the target
-	// path is still removed (not followed) before the fresh file is written.
-	ForceOverwrite bool
+	AbsPath        string
+	Content        []byte
+	DirMode        os.FileMode // optional; defaults 0o755 (per helm/helm chartutil; F12)
+	FileMode       os.FileMode // optional; defaults 0o644 (per helm/helm chartutil; F12)
+	forceOverwrite bool        // set only via DerivedOverwrite (see godoc)
+}
+
+// IsForceOverwrite reports whether this PlannedFile was constructed via
+// DerivedOverwrite (force-overwrite semantics). The setter (DerivedOverwrite)
+// is the only public path that produces such an entry; this getter exists for
+// test introspection so plan-builder regression tests can assert that derived
+// artifacts are routed through the typed constructor. Production code MUST
+// NOT branch on this getter — the flag is package-private precisely so flow
+// control belongs to pathsafe itself.
+//
+// For production introspection of derived-vs-skeleton routing, use
+// DerivedOverwrite at construction time and route through WritePlannedFiles —
+// the PlanSet boundary is the single decision point.
+func (f PlannedFile) IsForceOverwrite() bool { return f.forceOverwrite }
+
+// DerivedOverwrite is the SOLE public constructor that returns a PlannedFile
+// with force-overwrite semantics: when fed to WritePlannedFiles, the entry
+// bypasses conflictPass "file already exists" rejection and instead replaces
+// the existing inode (Remove → O_EXCL|O_NOFOLLOW recreate). O_NOFOLLOW is
+// preserved: a leaf symlink at the target path is still removed (not followed)
+// before the fresh file is written.
+//
+// pathsafe remains content-neutral; callers MUST enforce any content-source
+// gate at the call site (e.g. cellgen's planDerivedArtifact runs
+// governance.IsGoCellGenerated before invoking DerivedOverwrite; archtest
+// SCAFFOLD-DERIVED-FORCEOVERWRITE-01 statically guards the cellgen call site).
+func DerivedOverwrite(absPath string, content []byte) PlannedFile {
+	return PlannedFile{
+		AbsPath:        absPath,
+		Content:        content,
+		forceOverwrite: true,
+	}
 }
 
 // ResolveRoot returns root resolved through filepath.EvalSymlinks so that
@@ -212,14 +248,46 @@ func checkSymlinkContained(symlinkPath, realRoot, targetRel, sep string) error {
 	return nil
 }
 
-// PlannedPaths returns the absolute target paths in plan order. Callers use
-// this to surface dry-run output without parsing PlannedFile structs.
-func PlannedPaths(plan []PlannedFile) []string {
-	if len(plan) == 0 {
+// PlanSet is the typed container of PlannedFile entries accepted by
+// WritePlannedFiles. The internal slice is package-private, so the only way
+// to obtain a PlanSet is through NewPlanSet (PATHSAFE-PLANSET-TYPED-HARD-01).
+// This lifts the "no duplicate AbsPath in plan" invariant from a runtime
+// Medium guard (the previous duplicatePass) to a type-system Hard guarantee:
+// the WritePlannedFiles signature alone proves that no caller-supplied plan
+// containing duplicates ever enters the funnel.
+type PlanSet struct {
+	items []PlannedFile
+}
+
+// NewPlanSet constructs a PlanSet, validating the plan content. Returns
+// ErrConflict if any two entries share the same AbsPath. The input slice is
+// defensively copied so post-construction caller mutation cannot break the
+// invariant.
+func NewPlanSet(items []PlannedFile) (PlanSet, error) {
+	seen := make(map[string]struct{}, len(items))
+	for _, f := range items {
+		if _, dup := seen[f.AbsPath]; dup {
+			return PlanSet{}, errcode.New(errcode.KindConflict, errcode.ErrConflict,
+				"pathsafe: duplicate AbsPath in plan",
+				errcode.WithDetails(slog.String("absPath", f.AbsPath)))
+		}
+		seen[f.AbsPath] = struct{}{}
+	}
+	copied := append([]PlannedFile(nil), items...)
+	return PlanSet{items: copied}, nil
+}
+
+// Len reports the number of plan entries.
+func (ps PlanSet) Len() int { return len(ps.items) }
+
+// Paths returns the absolute target paths in plan order. Callers use this to
+// surface dry-run output without exposing the underlying slice.
+func (ps PlanSet) Paths() []string {
+	if len(ps.items) == 0 {
 		return []string{}
 	}
-	paths := make([]string, len(plan))
-	for i, f := range plan {
+	paths := make([]string, len(ps.items))
+	for i, f := range ps.items {
 		paths[i] = f.AbsPath
 	}
 	return paths
@@ -227,12 +295,12 @@ func PlannedPaths(plan []PlannedFile) []string {
 
 // WritePlannedFiles is the SINGLE filesystem write entry for scaffold/codegen.
 //
-//  1. Each plan[i].AbsPath is lexically verified against realRoot via
+//  1. Each entry's AbsPath is lexically verified against realRoot via
 //     planContainmentPass (path-prefix only); authoritative symlink
 //     rejection happens at writePass via the fd-anchored openat(O_NOFOLLOW)
 //     chain (unix) or O_EXCL leaf write (windows advisory).
 //  2. Each AbsPath must not already exist (conflict detection over the
-//     FULL plan — no partial-write semantics). ForceOverwrite entries are
+//     FULL plan — no partial-write semantics). DerivedOverwrite entries are
 //     exempt here but still pass the forceOverwritePreflightPass inode-kind
 //     gate so dry-run rejects exactly what live would (F2 parity).
 //  3. dryRun returns nil after steps 1-2 succeed (validation only, no write).
@@ -241,17 +309,17 @@ func PlannedPaths(plan []PlannedFile) []string {
 //     this call (best-effort rollback). Returns the original error wrapped
 //     with the rollback outcome.
 //
-// Pre: realRoot is the output of ResolveRoot. plan may be empty (no-op).
+// Pre: realRoot is the output of ResolveRoot. ps may be empty (no-op).
 //
 // AI-Hard contract: this is the only function in the project allowed to call
 // os.MkdirAll / os.WriteFile in scaffold paths. All other call sites are
-// statically rejected by archtest SCAFFOLD-WRITE-FUNNEL-01.
-func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
+// statically rejected by archtest SCAFFOLD-WRITE-FUNNEL-01. The second
+// parameter is PlanSet (not []PlannedFile) so the dup-reject invariant is
+// established at the type boundary (PATHSAFE-PLANSET-TYPED-HARD-01).
+func WritePlannedFiles(realRoot string, ps PlanSet, dryRun bool) error {
+	plan := ps.items
 	if len(plan) == 0 {
 		return nil
-	}
-	if err := duplicatePass(plan); err != nil {
-		return err
 	}
 	if err := planContainmentPass(realRoot, plan); err != nil {
 		return err
@@ -266,28 +334,6 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 		return nil
 	}
 	return writePass(realRoot, plan)
-}
-
-// duplicatePass rejects plans containing two entries with the same AbsPath.
-// Runs before planContainmentPass so dry-run callers also fail-closed on dup
-// plans (the develop @ 41fc70074 dry-run silently accepted duplicates because
-// O_EXCL only fired at writePass time). A plan-content invariant, not a
-// filesystem-state check.
-//
-// Backlog: PATHSAFE-PLANSET-TYPED-HARD-01 (cap-14) — upgrade to
-// type-system Hard via PlanSet newtype + dup-reject in constructor,
-// scheduled with Lane E typed-scaffold-ID single-source收编.
-func duplicatePass(plan []PlannedFile) error {
-	seen := make(map[string]struct{}, len(plan))
-	for _, f := range plan {
-		if _, dup := seen[f.AbsPath]; dup {
-			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
-				"pathsafe: duplicate AbsPath in plan",
-				errcode.WithDetails(slog.String("absPath", f.AbsPath)))
-		}
-		seen[f.AbsPath] = struct{}{}
-	}
-	return nil
 }
 
 // planContainmentPass verifies that every AbsPath in plan is **lexically**
@@ -333,7 +379,7 @@ func planContainmentPass(realRoot string, plan []PlannedFile) error {
 // writePass via syscall O_EXCL|O_NOFOLLOW at the actual write call.
 func conflictPass(plan []PlannedFile) error {
 	for _, f := range plan {
-		if f.ForceOverwrite {
+		if f.forceOverwrite {
 			continue
 		}
 		info, err := os.Lstat(f.AbsPath)
@@ -476,7 +522,7 @@ func forceOverwriteRestorable(mode os.FileMode) bool {
 // leaf symlink is classified as symlink, not its (possibly absent) target.
 func forceOverwritePreflightPass(plan []PlannedFile) error {
 	for _, f := range plan {
-		if !f.ForceOverwrite {
+		if !f.forceOverwrite {
 			continue
 		}
 		info, err := os.Lstat(f.AbsPath)
@@ -520,7 +566,7 @@ func writePass(realRoot string, plan []PlannedFile) error {
 			fileMode = defaultFileMode
 		}
 		record := writeRecord{path: f.AbsPath, originalKind: kindNone}
-		if f.ForceOverwrite {
+		if f.forceOverwrite {
 			captured, err := captureOriginal(f.AbsPath)
 			if err != nil {
 				return rollbackWrites(written, createdDirs, err)
@@ -529,7 +575,7 @@ func writePass(realRoot string, plan []PlannedFile) error {
 		}
 		if err := secureMkdirAllAndWrite(
 			realRoot, f.AbsPath, f.Content, dirMode, fileMode,
-			f.ForceOverwrite, &createdDirs,
+			f.forceOverwrite, &createdDirs,
 		); err != nil {
 			return rollbackWrites(written, createdDirs, err)
 		}

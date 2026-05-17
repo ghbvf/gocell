@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
@@ -43,7 +44,7 @@ func scaffoldAssembly(root string, args []string) error {
 		return err
 	}
 
-	cellList, err := validateAssemblyFlags(*id, *cells, *team, *role)
+	asmID, cellList, err := validateAssemblyFlags(*id, *cells, *team, *role)
 	if err != nil {
 		return err
 	}
@@ -59,7 +60,7 @@ func scaffoldAssembly(root string, args []string) error {
 	}
 
 	spec := assembly.AssemblyScaffoldSpec{
-		ID:           *id,
+		ID:           asmID,
 		Cells:        cellList,
 		OwnerTeam:    *team,
 		OwnerRole:    *role,
@@ -78,12 +79,16 @@ func scaffoldAssembly(root string, args []string) error {
 		return fmt.Errorf("scaffold assembly: resolve project root: %w", err)
 	}
 
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return fmt.Errorf("scaffold assembly: build plan: %w", err)
+	}
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return fmt.Errorf("scaffold assembly: write files: %w", err)
 	}
 
 	if *dryRun {
-		for _, p := range pathsafe.PlannedPaths(plan) {
+		for _, p := range ps.Paths() {
 			rel, _ := filepath.Rel(realRoot, p)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
@@ -117,22 +122,23 @@ func scaffoldAssembly(root string, args []string) error {
 //
 // ref: kubernetes/apimachinery pkg/util/validation/validation.go — single
 // exported helper IsDNS1123Label invoked from CLI, scaffold, and admission.
-func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
+func validateAssemblyFlags(id, cells, team, role string) (scaffoldid.ScaffoldID, []scaffoldid.ScaffoldID, error) {
 	if id == "" {
-		return nil, fmt.Errorf("--id is required")
+		return "", nil, fmt.Errorf("--id is required")
 	}
 	if cells == "" {
-		return nil, fmt.Errorf("--cells is required")
+		return "", nil, fmt.Errorf("--cells is required")
 	}
 	if team == "" {
-		return nil, fmt.Errorf("--team is required")
+		return "", nil, fmt.Errorf("--team is required")
 	}
 	if role == "" {
-		return nil, fmt.Errorf("--role is required")
+		return "", nil, fmt.Errorf("--role is required")
 	}
-	if !metadata.MatchAssemblyID(id) {
-		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"--id does not match metadata AssemblyIDPattern",
+	asmID, err := scaffoldid.Parse(id)
+	if err != nil {
+		return "", nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"--id does not match metadata AssemblyIDPattern", err,
 			errcode.WithDetails(
 				slog.String("flag", "--id"),
 				slog.String("pattern", metadata.AssemblyIDPattern),
@@ -141,23 +147,25 @@ func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
 				id, metadata.AssemblyIDPattern)))
 	}
 	if !metadata.IsValidMetadataText(team) {
-		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+		return "", nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--team contains forbidden control characters",
 			errcode.WithInternal(fmt.Sprintf("flag=--team value=%q", team)))
 	}
 	if !metadata.IsValidMetadataText(role) {
-		return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+		return "", nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--role contains forbidden control characters",
 			errcode.WithInternal(fmt.Sprintf("flag=--role value=%q", role)))
 	}
-	cellList := splitAndTrim(cells, ",")
-	if len(cellList) == 0 {
-		return nil, fmt.Errorf("--cells must list at least one cell")
+	rawCells := splitAndTrim(cells, ",")
+	if len(rawCells) == 0 {
+		return "", nil, fmt.Errorf("--cells must list at least one cell")
 	}
-	for _, c := range cellList {
-		if !metadata.MatchCellID(c) {
-			return nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-				"--cells[] entry does not match metadata CellIDPattern",
+	cellList := make([]scaffoldid.ScaffoldID, 0, len(rawCells))
+	for _, c := range rawCells {
+		parsed, err := scaffoldid.Parse(c)
+		if err != nil {
+			return "", nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+				"--cells[] entry does not match metadata CellIDPattern", err,
 				errcode.WithDetails(
 					slog.String("flag", "--cells[]"),
 					slog.String("pattern", metadata.CellIDPattern),
@@ -165,8 +173,9 @@ func validateAssemblyFlags(id, cells, team, role string) ([]string, error) {
 				errcode.WithInternal(fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
 					c, metadata.CellIDPattern)))
 		}
+		cellList = append(cellList, parsed)
 	}
-	return cellList, nil
+	return asmID, cellList, nil
 }
 
 // splitAndTrim splits s by sep and trims whitespace from each segment;

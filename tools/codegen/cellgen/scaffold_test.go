@@ -181,7 +181,7 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			targetDir := filepath.Join("cells", tc.spec.CellID)
+			targetDir := filepath.Join("cells", tc.spec.CellID.String())
 
 			if err := ScaffoldCell(dir, targetDir, tc.spec); err != nil {
 				t.Fatalf("ScaffoldCell() error = %v", err)

@@ -101,7 +101,7 @@ func PlanCellBundleScaffold(realRoot string, spec ScaffoldSpec) ([]pathsafe.Plan
 	// The staging lifecycle (MkdirTemp + RemoveAll) is encapsulated in
 	// appendDerivedCodegenStaged (stage_render.go) — os calls are not in
 	// scaffold_bundle.go which is in the depguard scaffold-os-ban list.
-	return appendDerivedCodegenStaged(realRoot, spec.CellID, skeletonPlan)
+	return appendDerivedCodegenStaged(realRoot, spec.CellID.String(), skeletonPlan)
 }
 
 // minCellConsistencyLevel returns the minimum cell consistency level required
@@ -189,7 +189,10 @@ func planCellBundle(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile,
 	plan = append(plan, cellItems...)
 
 	withHTTP, withEvents := resolveBundleVariants(spec)
-	cellNoDash := strings.ReplaceAll(spec.CellID, "-", "")
+	// spec.CellID is scaffoldid.ScaffoldID — pattern ^[a-z][a-z0-9]+$ rules
+	// out dashes at construction, so the legacy dash-stripping is now a no-op
+	// kept as defense-in-depth in case the type ever loosens.
+	cellNoDash := strings.ReplaceAll(spec.CellID.String(), "-", "")
 	sliceID := cellNoDash + "example"
 
 	if withHTTP {
@@ -233,7 +236,7 @@ func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.yaml failed", err)
 	}
 
-	targetDir := filepath.Join("cells", spec.CellID)
+	targetDir := filepath.Join("cells", spec.CellID.String())
 	absDir, err := pathsafe.ContainPath(realRoot, targetDir)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: bundle plan failed", err)
@@ -258,7 +261,7 @@ func resolveBundleVariants(spec ScaffoldSpec) (withHTTP, withEvents bool) {
 // them as PlannedFiles.
 func planHTTPExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sliceID string) ([]pathsafe.PlannedFile, error) {
 	bd := bundleData{
-		CellID:         spec.CellID,
+		CellID:         spec.CellID.String(),
 		SlicePackage:   sliceID,
 		SliceID:        sliceID,
 		SliceRole:      "serve",
@@ -289,7 +292,7 @@ func planEventExampleArtifacts(
 		eventSliceID = cellNoDash + "eventexample"
 	}
 	bd := bundleData{
-		CellID:         spec.CellID,
+		CellID:         spec.CellID.String(),
 		SlicePackage:   eventSliceID,
 		SliceID:        eventSliceID,
 		SliceRole:      "publish",

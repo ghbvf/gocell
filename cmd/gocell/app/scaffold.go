@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"unicode"
 
+	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/pkg/yamlsafe"
@@ -302,10 +303,13 @@ func reportScaffold(r scaffoldReport) {
 
 // scaffoldCellInputs groups the parsed flag values for buildScaffoldCellSpec.
 // Introduced to replace the 11-parameter signature that exceeded the Sonar
-// cognitive-complexity cap (max 7 params per function).
+// cognitive-complexity cap (max 7 params per function). ID is typed
+// (scaffoldid.ScaffoldID) so it is validated at flag-parsing time via
+// scaffoldid.Parse before reaching the spec.
 type scaffoldCellInputs struct {
-	ID, ResolvedStruct, Package, ModulePath, OwnerTeam, OwnerRole, CellType, Level string
-	WithHTTP, WithEvents, WithBoth                                                 bool
+	ID                                                                         scaffoldid.ScaffoldID
+	ResolvedStruct, Package, ModulePath, OwnerTeam, OwnerRole, CellType, Level string
+	WithHTTP, WithEvents, WithBoth                                             bool
 }
 
 // buildScaffoldCellSpec constructs a cellgen.ScaffoldSpec from the parsed
@@ -400,8 +404,12 @@ func scaffoldCell(root string, args []string) error {
 		return fmt.Errorf("scaffold cell: read module path: %w", err)
 	}
 
+	cellID, err := scaffoldid.Parse(*id)
+	if err != nil {
+		return err
+	}
 	spec := buildScaffoldCellSpec(scaffoldCellInputs{
-		ID:             *id,
+		ID:             cellID,
 		ResolvedStruct: resolvedStruct,
 		Package:        *id,
 		ModulePath:     mod,
@@ -425,12 +433,16 @@ func scaffoldCell(root string, args []string) error {
 		return err
 	}
 
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return err
+	}
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return err
 	}
 
 	if *dryRun {
-		for _, p := range pathsafe.PlannedPaths(plan) {
+		for _, p := range ps.Paths() {
 			rel, _ := filepath.Rel(realRoot, p)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
@@ -552,15 +564,19 @@ func scaffoldSlice(root string, args []string) error {
 		return fmt.Errorf(errFmtScaffoldSlice, err)
 	}
 	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return fmt.Errorf(errFmtScaffoldSlice, err)
+	}
 
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths.
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return fmt.Errorf(errFmtScaffoldSlice, err)
 	}
 
 	if *dryRun {
-		for _, absPath := range pathsafe.PlannedPaths(plan) {
+		for _, absPath := range ps.Paths() {
 			rel, _ := filepath.Rel(root, absPath)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
@@ -612,15 +628,19 @@ func scaffoldContract(root string, args []string) error {
 	}
 
 	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return fmt.Errorf(errFmtScaffoldContract, err)
+	}
 
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths. On dry-run it returns nil or a conflict/containment error.
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return fmt.Errorf(errFmtScaffoldContract, err)
 	}
 
 	if *dryRun {
-		for _, absPath := range pathsafe.PlannedPaths(plan) {
+		for _, absPath := range ps.Paths() {
 			rel, _ := filepath.Rel(root, absPath)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
@@ -679,15 +699,19 @@ func scaffoldJourney(root string, args []string) error {
 	}
 
 	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return fmt.Errorf(errFmtScaffoldJourney, err)
+	}
 
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths.
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return fmt.Errorf(errFmtScaffoldJourney, err)
 	}
 
 	if *dryRun {
-		for _, absPath := range pathsafe.PlannedPaths(plan) {
+		for _, absPath := range ps.Paths() {
 			rel, _ := filepath.Rel(root, absPath)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}

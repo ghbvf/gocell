@@ -195,7 +195,7 @@ func TestForceOverwritePreflightPass_RejectsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := forceOverwritePreflightPass([]PlannedFile{
-		{AbsPath: dir, Content: []byte("x"), ForceOverwrite: true},
+		{AbsPath: dir, Content: []byte("x"), forceOverwrite: true},
 	})
 	if err == nil {
 		t.Fatal("forceOverwritePreflightPass(dir target): want rejection, got nil")
@@ -220,7 +220,7 @@ func TestForceOverwritePreflightPass_LstatNonNotExist(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := forceOverwritePreflightPass([]PlannedFile{
-		{AbsPath: filepath.Join(parentFile, "child"), ForceOverwrite: true},
+		{AbsPath: filepath.Join(parentFile, "child"), forceOverwrite: true},
 	})
 	if err == nil {
 		t.Fatal("forceOverwritePreflightPass(path under non-dir parent): want error, got nil")
@@ -244,7 +244,7 @@ func TestForceOverwritePreflightPass_SkipsNonForceEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := forceOverwritePreflightPass([]PlannedFile{
-		{AbsPath: dir, Content: []byte("x"), ForceOverwrite: false},
+		{AbsPath: dir, Content: []byte("x"), forceOverwrite: false},
 	}); err != nil {
 		t.Fatalf("forceOverwritePreflightPass(non-force dir): want nil, got %v", err)
 	}

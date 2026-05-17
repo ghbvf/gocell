@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
@@ -82,8 +83,8 @@ l0Dependencies: []
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	spec := AssemblyScaffoldSpec{
-		ID:        "myassembly",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("myassembly"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 		Deploy:    "k8s",
@@ -93,7 +94,7 @@ l0Dependencies: []
 		t.Fatalf("Generator.PlanAssemblyScaffold: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, false); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("WritePlannedFiles: %v", err)
 	}
 
@@ -171,32 +172,36 @@ func TestGenerator_Scaffold_ValidationErrors(t *testing.T) {
 	}{
 		{
 			name:    "empty_id",
-			spec:    AssemblyScaffoldSpec{Cells: []string{"examplecell"}, OwnerTeam: "t", OwnerRole: "r"},
+			spec:    AssemblyScaffoldSpec{Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerTeam: "t", OwnerRole: "r"},
 			wantSub: "ID is required",
 		},
 		{
 			name:    "empty_cells",
-			spec:    AssemblyScaffoldSpec{ID: "asm", OwnerTeam: "t", OwnerRole: "r"},
+			spec:    AssemblyScaffoldSpec{ID: scaffoldid.ScaffoldID("asm"), OwnerTeam: "t", OwnerRole: "r"},
 			wantSub: "at least one cell",
 		},
 		{
 			name:    "empty_team",
-			spec:    AssemblyScaffoldSpec{ID: "asm", Cells: []string{"examplecell"}, OwnerRole: "r"},
+			spec:    AssemblyScaffoldSpec{ID: scaffoldid.ScaffoldID("asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerRole: "r"},
 			wantSub: "OwnerTeam is required",
 		},
 		{
 			name:    "empty_role",
-			spec:    AssemblyScaffoldSpec{ID: "asm", Cells: []string{"examplecell"}, OwnerTeam: "t"},
+			spec:    AssemblyScaffoldSpec{ID: scaffoldid.ScaffoldID("asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerTeam: "t"},
 			wantSub: "OwnerRole is required",
 		},
 		{
-			name:    "invalid_deploy",
-			spec:    AssemblyScaffoldSpec{ID: "asm", Cells: []string{"examplecell"}, OwnerTeam: "t", OwnerRole: "r", Deploy: "podman"},
+			name: "invalid_deploy",
+			spec: AssemblyScaffoldSpec{
+				ID:        scaffoldid.ScaffoldID("asm"),
+				Cells:     []scaffoldid.ScaffoldID{"examplecell"},
+				OwnerTeam: "t", OwnerRole: "r", Deploy: "podman",
+			},
 			wantSub: `deploy="podman"`,
 		},
 		{
 			name:    "unknown_cell",
-			spec:    AssemblyScaffoldSpec{ID: "asm", Cells: []string{"nope"}, OwnerTeam: "t", OwnerRole: "r"},
+			spec:    AssemblyScaffoldSpec{ID: scaffoldid.ScaffoldID("asm"), Cells: []scaffoldid.ScaffoldID{"nope"}, OwnerTeam: "t", OwnerRole: "r"},
 			wantSub: `cell="nope"`,
 		},
 	}
@@ -223,7 +228,7 @@ func TestGenerator_Scaffold_EmptyProjectRoot(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", "") // empty projectRoot
 
 	_, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID: "asm", Cells: []string{"examplecell"}, OwnerTeam: "t", OwnerRole: "r",
+		ID: scaffoldid.ScaffoldID("asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerTeam: "t", OwnerRole: "r",
 	})
 	if err == nil {
 		t.Fatal("expected error for empty projectRoot, got nil")
@@ -241,14 +246,14 @@ func TestGenerator_Scaffold_DryRun(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID: "dryasm", Cells: []string{"examplecell"},
+		ID: scaffoldid.ScaffoldID("dryasm"), Cells: []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "t", OwnerRole: "r",
 	})
 	if err != nil {
 		t.Fatalf("PlanAssemblyScaffold dry-run: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, true); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), true); err != nil {
 		t.Fatalf("WritePlannedFiles(dryRun=true): %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "assemblies", "dryasm")); err == nil {
@@ -267,7 +272,7 @@ func TestGenerator_Scaffold_ConflictDetection(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	spec := AssemblyScaffoldSpec{
-		ID: "conflict", Cells: []string{"examplecell"},
+		ID: scaffoldid.ScaffoldID("conflict"), Cells: []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "t", OwnerRole: "r",
 	}
 	plan, err := gen.PlanAssemblyScaffold(spec)
@@ -275,7 +280,7 @@ func TestGenerator_Scaffold_ConflictDetection(t *testing.T) {
 		t.Fatalf("first PlanAssemblyScaffold: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, false); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("first WritePlannedFiles: %v", err)
 	}
 
@@ -283,7 +288,7 @@ func TestGenerator_Scaffold_ConflictDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second PlanAssemblyScaffold: %v", err)
 	}
-	err = pathsafe.WritePlannedFiles(realRoot, plan2, false)
+	err = pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan2), false)
 	if err == nil {
 		t.Fatal("expected conflict error on second WritePlannedFiles, got nil")
 	}
@@ -324,15 +329,15 @@ func TestGeneratorScaffold_SymlinkEscape_Asm(t *testing.T) {
 	}
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "symasm",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("symasm"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 	})
 	if err == nil {
 		// If PlanAssemblyScaffold doesn't detect it, WritePlannedFiles should.
 		realRoot, _ := pathsafe.ResolveRoot(root)
-		err = pathsafe.WritePlannedFiles(realRoot, plan, false)
+		err = pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
 	}
 	if err == nil {
 		t.Fatal("Generator.PlanAssemblyScaffold(asm symlink escape): want error, got nil")
@@ -364,14 +369,14 @@ func TestGeneratorScaffold_SymlinkEscape_Cmd(t *testing.T) {
 	}
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "symcmdasm",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("symcmdasm"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 	})
 	if err == nil {
 		realRoot, _ := pathsafe.ResolveRoot(root)
-		err = pathsafe.WritePlannedFiles(realRoot, plan, false)
+		err = pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
 	}
 	if err == nil {
 		t.Fatal("Generator.PlanAssemblyScaffold(cmd symlink escape): want error, got nil")
@@ -399,8 +404,8 @@ func TestGeneratorScaffold_AtomicRollback_OnConflict(t *testing.T) {
 	}
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "conflictasm",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("conflictasm"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 	})
@@ -408,7 +413,7 @@ func TestGeneratorScaffold_AtomicRollback_OnConflict(t *testing.T) {
 		t.Fatalf("PlanAssemblyScaffold: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	err = pathsafe.WritePlannedFiles(realRoot, plan, false)
+	err = pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
 	if err == nil {
 		t.Fatal("Generator(conflict): want error, got nil")
 	}
@@ -457,8 +462,8 @@ l0Dependencies: []
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "myassembly",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("myassembly"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 		Deploy:    "compose",
@@ -467,7 +472,7 @@ l0Dependencies: []
 		t.Fatalf("PlanAssemblyScaffold: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, false); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("WritePlannedFiles: %v", err)
 	}
 
@@ -492,8 +497,8 @@ func TestPlanAssemblyScaffold_FullPlan_SixFiles(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "sixasm",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("sixasm"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 	})
@@ -523,8 +528,8 @@ func TestPlanAssemblyScaffold_SkipGenerate_ThreeFiles(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:           "skipasm",
-		Cells:        []string{"examplecell"},
+		ID:           scaffoldid.ScaffoldID("skipasm"),
+		Cells:        []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam:    "platform",
 		OwnerRole:    "maintainer",
 		SkipGenerate: true,
@@ -555,8 +560,8 @@ func TestPlanAssemblyScaffold_DryRun_NoFilesOnDisk(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "drysixasm",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("drysixasm"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 	})
@@ -564,7 +569,7 @@ func TestPlanAssemblyScaffold_DryRun_NoFilesOnDisk(t *testing.T) {
 		t.Fatalf("PlanAssemblyScaffold: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, true); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), true); err != nil {
 		t.Fatalf("WritePlannedFiles(dryRun=true): %v", err)
 	}
 
@@ -585,8 +590,8 @@ func TestPlanAssemblyScaffold_GeneratedFilesHaveMarker(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "markerasm",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("markerasm"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 	})
@@ -634,8 +639,8 @@ func TestPlanAssemblyScaffold_FullPlan_RollbackOnLastFileConflict(t *testing.T) 
 	}
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "rollbackasm",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("rollbackasm"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 	})
@@ -643,7 +648,7 @@ func TestPlanAssemblyScaffold_FullPlan_RollbackOnLastFileConflict(t *testing.T) 
 		t.Fatalf("PlanAssemblyScaffold: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	err = pathsafe.WritePlannedFiles(realRoot, plan, false)
+	err = pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
 	if err == nil {
 		t.Fatal("expected conflict error, got nil")
 	}
@@ -693,8 +698,8 @@ func TestPlanAssemblyScaffold_RollbackOnMidPlanWriteFailure(t *testing.T) {
 	defer func() { _ = os.Chmod(generatedDir, 0o755) }()
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        "wprollbackasm",
-		Cells:     []string{"examplecell"},
+		ID:        scaffoldid.ScaffoldID("wprollbackasm"),
+		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 	})
@@ -706,7 +711,7 @@ func TestPlanAssemblyScaffold_RollbackOnMidPlanWriteFailure(t *testing.T) {
 	}
 
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	err = pathsafe.WritePlannedFiles(realRoot, plan, false)
+	err = pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
 	if err == nil {
 		t.Fatal("expected write failure (read-only parent dir), got nil")
 	}
@@ -760,8 +765,8 @@ func TestPlanAssemblyScaffold_ConflictDetection_AllSixSlots(t *testing.T) {
 			_ = name
 
 			plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-				ID:        "slotasm",
-				Cells:     []string{"examplecell"},
+				ID:        scaffoldid.ScaffoldID("slotasm"),
+				Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 				OwnerTeam: "platform",
 				OwnerRole: "maintainer",
 			})
@@ -769,7 +774,7 @@ func TestPlanAssemblyScaffold_ConflictDetection_AllSixSlots(t *testing.T) {
 				t.Fatalf("PlanAssemblyScaffold: %v", err)
 			}
 			realRoot, _ := pathsafe.ResolveRoot(root)
-			writeErr := pathsafe.WritePlannedFiles(realRoot, plan, false)
+			writeErr := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
 			if writeErr == nil {
 				t.Fatal("expected conflict error, got nil")
 			}
