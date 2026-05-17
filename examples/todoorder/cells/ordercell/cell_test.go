@@ -187,7 +187,12 @@ func TestOrderCell_DurableModeRejected(t *testing.T) {
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code)
-	assert.Contains(t, err.Error(), "declared=demo")
+	declared, ok := ecErr.FindAttr("declared")
+	require.True(t, ok, "expected 'declared' detail attr")
+	assert.Equal(t, "demo", declared.Value.String())
+	runtimeAttr, ok := ecErr.FindAttr("runtime")
+	require.True(t, ok, "expected 'runtime' detail attr")
+	assert.Equal(t, "durable", runtimeAttr.Value.String())
 }
 
 func TestOrderCell_DemoMode_AllowsNoopWriter(t *testing.T) {
