@@ -99,8 +99,9 @@ func IsDomainNotFound(err error, codes ...Code) bool {
 // WrapInfra is the single typed funnel for producing a transient (retry-safe)
 // infrastructure error. It is the ONLY constructor that sets the private
 // Error.transient marker — adapter classifiers (classifyPGError /
-// classifyRedisError / classifyS3Error) route their transient branch through
-// it so that IsTransient can recognize the result.
+// classifyPGConnectError / classifyRedisError / classifyS3Error /
+// classifyConnectError) route their transient branch through it so that
+// IsTransient can recognize the result.
 //
 // Behavior:
 //   - Kind = KindUnavailable (HTTP 503 "retry after a brief delay")

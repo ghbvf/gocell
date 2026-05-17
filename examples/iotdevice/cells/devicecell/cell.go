@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
@@ -22,7 +21,6 @@ import (
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
-
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
@@ -92,6 +90,19 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 	return func(c *DeviceCell) { c.metricsProvider = mp }
 }
 
+// WithSweepErrorCounter wires a pre-bound CounterVec for C.3 observable sweep
+// errors. The counter must have a "cell" label; it is incremented with
+// Labels{"cell": devicecell.ID()} on every SweepTick error. Leave unset to
+// disable counter tracking (appropriate for demo/test deployments where a full
+// metrics provider is unavailable).
+func WithSweepErrorCounter(cv metrics.CounterVec) Option {
+	return func(c *DeviceCell) {
+		if cv != nil {
+			c.sweepErrorCounter = cv
+		}
+	}
+}
+
 // WithClock sets the clock used by this cell. Must be called before Init.
 func WithClock(clk clock.Clock) Option {
 	return func(c *DeviceCell) { c.clk = clk }
@@ -102,15 +113,16 @@ func WithClock(clk clock.Clock) Option {
 // +cell:listener:ref=cell.InternalListener,prefix=
 type DeviceCell struct {
 	*cell.BaseCell
-	deviceRepo      domain.DeviceRepository
-	publisher       outbox.CellPublisher
-	emitter         outbox.Emitter // set during initInternal; retained for Probes
-	cursorCodec     *query.CursorCodec
-	logger          *slog.Logger
-	metricsProvider metrics.Provider
-	commandQueue    commandQueueStore
-	commandSweeper  *commandruntime.SweeperLifecycle
-	clk             clock.Clock // injected from reg.Config during initInternal
+	deviceRepo        domain.DeviceRepository
+	publisher         outbox.CellPublisher
+	emitter           outbox.Emitter // set during initInternal; retained for Probes
+	cursorCodec       *query.CursorCodec
+	logger            *slog.Logger
+	metricsProvider   metrics.Provider
+	commandQueue      commandQueueStore
+	commandSweeper    *commandruntime.SweeperLifecycle
+	sweepErrorCounter metrics.CounterVec // optional; injected at composition root for C.3 observability
+	clk               clock.Clock        // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler
@@ -297,15 +309,20 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	c.commandHandler = devicecommand.NewHandler(pubSvc)
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	c.commandInternalHandler = devicecommandinternal.NewHandler(intSvc)
-	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue, c.clk,
-		kcommand.WithSweeperInterval(30*time.Second),
-		kcommand.WithSweeperOnError(func(err error) {
-			c.logger.Error("device-command sweeper error", slog.Any("error", err))
-		}))
+	// C.1: kernel Sweeper has no clock field — control-plane tick is real-time
+	// (controlPlaneTicker). Business-plane now (expiry) uses the cell clock
+	// (c.clk) so deadlines stay consistent with command-creation time under a
+	// fake-clock assembly (review P2-2).
+	// C.3: SweepTick errors are logged + counted by SweeperLifecycle.
+	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue)
 	if err != nil {
 		return fmt.Errorf("device-command sweeper: %w", err)
 	}
-	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, c.clk)
+	// interval=0 lets NewSweeperLifecycle apply defaultCommandSweeperInterval (30s).
+	lc := commandruntime.NewSweeperLifecycle("devicecommand.sweeper", sweeper, 0, c.clk)
+	lc.CellID = c.ID()
+	lc.SweepErrorCounter = c.sweepErrorCounter // nil-safe: runLoop guards with != nil
+	c.commandSweeper = lc
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommand.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandinternal.SliceMetadata()))
 

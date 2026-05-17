@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -139,7 +141,7 @@ func checkFileForDirectChannelClose(
 			if recvType == nil {
 				return
 			}
-			if !implementsAMQPChannel(recvType, chanIface) {
+			if !typesutil.ImplementsInterface(recvType, chanIface) {
 				return
 			}
 
@@ -154,20 +156,6 @@ func checkFileForDirectChannelClose(
 			)
 		})
 	})
-}
-
-// implementsAMQPChannel reports whether t (value or pointer) satisfies the
-// AMQPChannel interface. We try both the type itself and a pointer to it,
-// matching how `types.Implements` is used in golang/tools copylock.go: a
-// type satisfies an interface either directly or via its pointer receiver.
-func implementsAMQPChannel(t types.Type, iface *types.Interface) bool {
-	if types.Implements(t, iface) {
-		return true
-	}
-	if _, isPtr := t.(*types.Pointer); !isPtr {
-		return types.Implements(types.NewPointer(t), iface)
-	}
-	return false
 }
 
 // receiverHint reproduces the source-level receiver expression for use in
@@ -261,7 +249,7 @@ func waitAndClose() {
 			if rt == nil {
 				return
 			}
-			if implementsAMQPChannel(rt, chanIface) {
+			if typesutil.ImplementsInterface(rt, chanIface) {
 				flagged[funcName] = true
 			}
 		})

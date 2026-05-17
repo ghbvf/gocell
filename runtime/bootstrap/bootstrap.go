@@ -12,6 +12,7 @@ package bootstrap
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -101,6 +102,7 @@ type Bootstrap struct {
 	// --- lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets ---
 	lifecycle                Lifecycle
 	defaultStartTimeout      time.Duration
+	startupTimeout           time.Duration // whole-Start orchestration backstop; 0→DefaultStartupTimeout, <0→disabled (caller-ctx only)
 	defaultStopTimeout       time.Duration
 	lifecycleRegistrars      []func(Lifecycle)
 	managedResources         []kernellifecycle.ManagedResource
@@ -131,6 +133,17 @@ type Bootstrap struct {
 
 	// --- time source ---
 	clock clock.Clock // required: bootstrap.New panics when WithClock is not applied
+
+	// --- owner ctx: long-lived worker context (controller-runtime pattern) ---
+	// Derived from runCtx (background-derived assembly runtime ctx) in Run(),
+	// before lifecycle.Start. Lifecycle hooks receive this ctx as their OnStart
+	// ctx so workers respond to assembly shutdown (ownerCancel) before lifecycle.Stop
+	// drains them. ownerCancel is invoked in LIFO teardown BEFORE lifecycle.Stop.
+	//
+	// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go —
+	//      internalCtx=WithCancel(ctx) passed to Runnable.Start.
+	ownerCtx    context.Context
+	ownerCancel context.CancelFunc
 }
 
 // namedChecker pairs a readiness probe name with its check function.
@@ -167,7 +180,8 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 		if _, ok := b.listenerConfigs[cell.HealthListener]; !ok {
 			return fmt.Errorf(
 				"bootstrap: WithHealthRoutes(WithMetricsHandler(...)) requires a dedicated HealthListener; " +
-					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener")
+					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener",
+			)
 		}
 	}
 	return nil
@@ -239,7 +253,8 @@ func validateListenerTLSConfig(ref cell.ListenerRef, cfg *tls.Config) error {
 				return fmt.Errorf(
 					"bootstrap: listener %q TLS Certificates[%d] is a zero-value tls.Certificate"+
 						" (no chain, no private key); load a real key pair via tls.LoadX509KeyPair or set GetCertificate",
-					ref.String(), i)
+					ref.String(), i,
+				)
 			}
 		}
 	}
@@ -367,6 +382,13 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 // External ctx cancellation only triggers phase9 to return; workers and the
 // event router continue until their phase10 teardown functions run.
 //
+// Exception (review P1-1): the lifecycle.Start step is additionally supervised
+// by the caller ctx + a startup budget (WithStartupTimeout). A hook whose
+// OnStart never returns would otherwise wedge Run() forever because ownerCtx
+// is background-derived and OnStart carries no per-hook deadline (ADR
+// 202605170000 §D-B). superviseLifecycleStart cancels ownerCtx and rolls back
+// on caller-cancel / budget-exceeded so Run() always makes progress.
+//
 // ref: uber-go/fx app.go (Run/Start/Stop lifecycle, withRollback pattern)
 // ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go (engageStopProcedure LIFO)
 func (b *Bootstrap) Run(ctx context.Context) error {
@@ -425,16 +447,46 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.phase3bDrainLifecycleHooks(s); err != nil {
 		return rollback(err)
 	}
-	// Lifecycle Start — fail-fast; LIFO rollback is handled by Lifecycle itself.
+	// Derive ownerCtx from runCtx (the background-derived assembly runtime ctx).
+	// Lifecycle hooks receive ownerCtx as their OnStart ctx: workers can respond
+	// to ownerCancel for graceful shutdown before lifecycle.Stop drains them.
+	//
+	// LIFO teardown registration order (last-registered runs FIRST in LIFO):
+	//   1. Register lifecycle.Stop teardown first (runs second in LIFO).
+	//   2. Register ownerCancel teardown second (runs first in LIFO).
+	// Result: ownerCancel() → lifecycle.Stop() → asm.Stop → ...
+	// Workers receive ctx cancellation first, then OnStop drain waits.
+	//
 	// Registered after the asm.Stop teardown (phase3) so that lifecycle.Stop
 	// executes before asm.Stop in the LIFO teardown sequence, letting hooks
 	// still access cell resources during shutdown.
+	//
+	// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go —
+	//      internalCtx=WithCancel(ctx) → Runnable.Start, then cancel before Stop.
 	// ref: uber-go/fx internal/lifecycle/lifecycle.go — numStarted LIFO rollback.
-	if err := b.lifecycle.Start(ctx); err != nil {
-		return rollback(fmt.Errorf("bootstrap: lifecycle start: %w", err))
+	b.ownerCtx, b.ownerCancel = context.WithCancel(runCtx)
+
+	// Supervise lifecycle.Start with the caller ctx + startup budget so a hook
+	// whose OnStart never returns cannot wedge Run() (review P1-1). On abort
+	// superviseLifecycleStart cancels ownerCtx (unblocking the wedged OnStart)
+	// and waits for Start to fully unwind before returning.
+	if err := b.superviseLifecycleStart(ctx); err != nil {
+		// On the caller-cancel and budget abort paths superviseLifecycleStart
+		// already called ownerCancel; this call covers the hook-error path where
+		// Start returned a hook error directly. context.CancelFunc is safe to
+		// call repeatedly (idempotent by contract).
+		b.ownerCancel()
+		return rollback(err)
 	}
+	// lifecycle.Stop teardown registered first → runs second in LIFO.
 	s.addTeardown(func(stopCtx context.Context) error {
 		return b.lifecycle.Stop(stopCtx)
+	})
+	// ownerCancel teardown registered second → runs first in LIFO (before lifecycle.Stop).
+	// This signals workers to exit via ctx cancellation before OnStop drains them.
+	s.addTeardown(func(_ context.Context) error {
+		b.ownerCancel()
+		return nil
 	})
 	if err := b.phase4WireAuthAndWatcher(s); err != nil {
 		return rollback(err)
@@ -452,6 +504,122 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 
 	sig := b.phase9AwaitShutdownSignal(ctx, s)
 	return b.phase10OrchestrateShutdown(s, sig)
+}
+
+// startupUnwindGraceTimeout bounds the post-ownerCancel wait for
+// lifecycle.Start to unwind. A ctx-respecting OnStart observes the cancel and
+// returns in microseconds; this window only has to cover a respecting-but-slow
+// unwind (e.g. an in-flight DB ping draining its own deadline). If it elapses
+// the in-flight lifecycle.Start goroutine is abandoned: a ctx-IGNORING OnStart
+// cannot be force-killed in Go — that leaked goroutine is an irreducible
+// residual (see docs/ops/startup-timeout.md). Abandoning it lets Bootstrap.Run
+// make deterministic progress (rollback + return) so the process exits and the
+// orchestrator restarts it, instead of Run() wedging forever on a bare channel
+// receive (the pre-A1-1-amendment behavior). Fixed internal constant, not an
+// operator SLA: it is a safety detach window, not a tuning knob.
+const startupUnwindGraceTimeout = 5 * time.Second
+
+// superviseLifecycleStart runs b.lifecycle.Start(b.ownerCtx) under supervision
+// so a hook whose OnStart never returns cannot wedge Run() (review P1-1).
+//
+// lifecycle.Start runs in its own goroutine; this method selects on:
+//
+//   - start completed → propagate its (possibly nil) error verbatim;
+//   - caller ctx canceled → abortStartupAndUnwind (cancel ownerCtx, bounded
+//     unwind wait, join caller cause);
+//   - startup budget elapsed → same teardown path, cause = ErrBootstrapStartupTimeout.
+//
+// The owner-ctx single-truth contract (ADR 202605170000 §D-B) is preserved:
+// hooks still see exactly one ctx; the bound lives at the orchestration layer,
+// mirroring controller-runtime mgr.Start which is unblocked by its caller ctx.
+func (b *Bootstrap) superviseLifecycleStart(callerCtx context.Context) error {
+	startErr := make(chan error, 1)
+	go func() { startErr <- b.lifecycle.Start(b.ownerCtx) }()
+
+	budgetCh, stopBudget := b.startupBudget()
+	defer stopBudget()
+
+	select {
+	case err := <-startErr:
+		if err != nil {
+			return fmt.Errorf("bootstrap: lifecycle start: %w", err)
+		}
+		return nil
+	case <-callerCtx.Done():
+		return b.abortStartupAndUnwind(
+			fmt.Errorf("bootstrap: startup aborted by caller: %w", callerCtx.Err()),
+			"caller_canceled", startErr,
+		)
+	case <-budgetCh:
+		return b.abortStartupAndUnwind(ErrBootstrapStartupTimeout,
+			"startup_budget_exceeded", startErr)
+	}
+}
+
+// abortStartupAndUnwind is the shared teardown for both abort paths
+// (caller-cancel, budget-elapsed). It cancels ownerCtx to unblock a
+// ctx-respecting wedged OnStart, then waits up to startupUnwindGraceTimeout
+// for lifecycle.Start to unwind. cause is joined into the returned error
+// (context cause on the caller path, ErrBootstrapStartupTimeout on the budget
+// path); reason feeds the structured abort log.
+//
+// Clean path (hook respected ctx): returns errors.Join(cause, unwind) —
+// identical to the pre-amendment behavior, zero observable change.
+//
+// Detach path (hook ignored ctx, grace elapsed): the lifecycle.Start
+// goroutine is abandoned (unkillable in Go) and the method returns so Run()
+// can roll back and exit; the returned error carries cause + an explicit
+// "abandoned" wrap so operators see WHY the process is exiting.
+func (b *Bootstrap) abortStartupAndUnwind(cause error, reason string, startErr <-chan error) error {
+	b.ownerCancel()
+	slog.Default().Error("bootstrap: lifecycle startup aborted",
+		slog.String("reason", reason),
+		slog.Duration("budget", b.startupBudgetDuration()),
+		slog.String("hint", "the last hook.start Info log line identifies the in-flight hook"))
+
+	timer := b.clock.NewTimerAt(b.clock.Now().Add(startupUnwindGraceTimeout))
+	defer timer.Stop()
+	select {
+	case unwind := <-startErr: // Start observed ownerCtx cancel, unwound + rolled back
+		return errors.Join(cause, unwind)
+	case <-timer.C():
+		slog.Default().Error("bootstrap: lifecycle start goroutine abandoned",
+			slog.String("reason", "onstart_ignored_ctx"),
+			slog.Duration("unwind_grace", startupUnwindGraceTimeout),
+			slog.String("hint", "the last hook.start Info log line identifies the ctx-ignoring hook; "+
+				"Run() returns so the process exits and the orchestrator restarts it"))
+		return errors.Join(cause,
+			fmt.Errorf("bootstrap: lifecycle start goroutine abandoned after %s unwind grace (OnStart ignored ctx)", startupUnwindGraceTimeout))
+	}
+}
+
+// startupBudget returns the startup-budget fire channel and a stop func.
+// b.startupTimeout: 0 → DefaultStartupTimeout, <0 → disabled (nil channel
+// never fires; caller ctx remains the sole abort path). Uses the injected
+// clock so tests drive the budget deterministically with a fake clock.
+func (b *Bootstrap) startupBudget() (<-chan time.Time, func()) {
+	d := b.startupBudgetDuration()
+	if d < 0 {
+		// Budget disabled: a nil channel never fires (caller ctx is the sole
+		// abort path).
+		return nil, func() {
+			// Intentional no-op, not an incomplete implementation: no timer
+			// was created when the budget is disabled, so there is nothing
+			// to stop. The stop func exists only to keep one call shape.
+		}
+	}
+	timer := b.clock.NewTimerAt(b.clock.Now().Add(d))
+	return timer.C(), func() { timer.Stop() }
+}
+
+// startupBudgetDuration returns the resolved startup budget duration:
+// 0 → DefaultStartupTimeout, <0 → disabled.
+func (b *Bootstrap) startupBudgetDuration() time.Duration {
+	d := b.startupTimeout
+	if d == 0 {
+		d = DefaultStartupTimeout
+	}
+	return d
 }
 
 // ---------------------------------------------------------------------------

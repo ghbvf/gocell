@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 type adapterExportedType struct {
@@ -149,7 +151,7 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 		if reason := adapterManagedResourceOptOut[typ.ID]; reason != "" {
 			continue
 		}
-		if !implementsManagedResource(typ.Type, managedResource) {
+		if !typesutil.ImplementsInterface(typ.Type, managedResource) {
 			violations = append(violations, typ.ID+" must implement lifecycle.ManagedResource or be listed in adapterManagedResourceOptOut")
 		}
 	}
@@ -214,11 +216,4 @@ func TestRuntimeWebsocketCheckerNamesUseReadySuffix(t *testing.T) {
 
 	sort.Strings(violations)
 	assert.Empty(t, violations, "runtime/websocket ManagedResource probe names must be snake_case and end with _ready")
-}
-
-func implementsManagedResource(typ types.Type, managedResource *types.Interface) bool {
-	if types.Implements(typ, managedResource) {
-		return true
-	}
-	return types.Implements(types.NewPointer(typ), managedResource)
 }

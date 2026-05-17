@@ -111,7 +111,6 @@ kind: http
 ownerCell: mycell
 consistencyLevel: L0
 lifecycle: active
-codegen: true
 endpoints:
   server: mycell
   clients: []          # external callers (cell ids or actor ids); empty = open API

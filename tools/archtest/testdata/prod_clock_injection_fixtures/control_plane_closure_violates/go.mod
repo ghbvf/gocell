@@ -1,0 +1,3 @@
+module fixturetest/prod_clock_injection/control_plane_closure_violates
+
+go 1.22
