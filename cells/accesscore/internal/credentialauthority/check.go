@@ -49,6 +49,9 @@ func (w withPasswordVersionPin) apply(u *domain.User) error {
 	return nil
 }
 
+// checkOK is the sealed-interface marker; the body is empty because the
+// method exists solely to keep external packages from satisfying Check
+// (the unexported method name cannot be declared outside this package).
 func (withPasswordVersionPin) checkOK() {}
 
 // SnapshotPasswordVersion captures the user's current PasswordVersion into

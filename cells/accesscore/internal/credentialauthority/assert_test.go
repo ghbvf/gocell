@@ -147,25 +147,35 @@ func TestAssert(t *testing.T) {
 			t.Parallel()
 			user := tc.user(t)
 			err := credentialauthority.Assert(user, tc.checks(t)...)
-			if tc.wantNil {
-				if err != nil {
-					t.Fatalf("Assert returned error %v, want nil", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("Assert returned nil, want error")
-			}
-			var ec *errcode.Error
-			if !errors.As(err, &ec) {
-				t.Fatalf("error is not *errcode.Error: %T", err)
-			}
-			if ec.Kind != tc.wantKind {
-				t.Errorf("kind = %v, want %v", ec.Kind, tc.wantKind)
-			}
-			if ec.Code != tc.wantCode {
-				t.Errorf("code = %v, want %v", ec.Code, tc.wantCode)
-			}
+			assertAssertResult(t, err, tc.wantNil, tc.wantKind, tc.wantCode)
 		})
+	}
+}
+
+// assertAssertResult applies the wantNil / wantKind / wantCode assertions
+// against an Assert call's return. Extracted from TestAssert's t.Run
+// closure to keep the table-driven test's cognitive complexity within
+// the ≤15 budget (cells/.../check.go contains the funnel implementation;
+// this helper is the test-side mirror).
+func assertAssertResult(t *testing.T, err error, wantNil bool, wantKind errcode.Kind, wantCode errcode.Code) {
+	t.Helper()
+	if wantNil {
+		if err != nil {
+			t.Fatalf("Assert returned error %v, want nil", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("Assert returned nil, want error")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("error is not *errcode.Error: %T", err)
+	}
+	if ec.Kind != wantKind {
+		t.Errorf("kind = %v, want %v", ec.Kind, wantKind)
+	}
+	if ec.Code != wantCode {
+		t.Errorf("code = %v, want %v", ec.Code, wantCode)
 	}
 }

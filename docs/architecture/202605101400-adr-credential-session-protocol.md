@@ -10,7 +10,7 @@
 
 ---
 
-## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15；PR #501 RC-A/B/C/D/E 闭环（RoleRevoked 死代码 + §A10 Medium 天花板锁定 + schema_guard CHECK 注册 + login error path 归一化 + Reconstitute params + storetest const）；2026-05-16；Wave 5 P1-1 authzmutator.ApplyInTx 单入口 Hard funnel；2026-05-17；2026-05-17 — §A11 重写：session-revoke 出 funnel + 上游 4 勿一 Hard 化 + 新增 §A13 wire-uniformity 防枚举载体（PR #542 P1-A/P1-B/P2-A/P2-B/P2-C 闭环））
+## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15；PR #501 RC-A/B/C/D/E 闭环（RoleRevoked 死代码 + §A10 Medium 天花板锁定 + schema_guard CHECK 注册 + login error path 归一化 + Reconstitute params + storetest const）；2026-05-16；Wave 5 P1-1 authzmutator.ApplyInTx 单入口 Hard funnel；2026-05-17；2026-05-17 — §A11 重写：session-revoke 出 funnel + 上游 4 勿一 Hard 化 + 新增 §A13 wire-uniformity 防枚举载体（PR #542 P1-A/P1-B/P2-A/P2-B/P2-C 闭环）；2026-05-17 Wave 4 — value-capture detector 升级到 typed-parent-check（form uniqueness）+ scope 扩到 cells/+cmd/+runtime/ + TYPESUTIL-IMPLEMENTS-FUNNEL-01 合规 + Sonar TestAssert 复杂度 20→1 + checkOK godoc）
 
 S4b PR 落地后实际实现与 §2/§3 描述出现漂移。**S4d (PR S4d) 之后实际行为以本节 +
 §A8 / §D1 / §D2 / §D4.2 同 PR 重写后的描述为准。** 与 amendment 矛盾的原文段落
@@ -368,10 +368,18 @@ INVARIANT: `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01`：
 - **上游 Hard sealed-by-name**（P1-B）：扫 credentialauthority 包内每个 named
   struct，凡实现 `Check` interface 必须 unexported（首字母小写）。阻止包外
   零值构造 concrete Check 绕过工厂函数。
-- **上游 Hard value-capture**（P2-B）：扫 3 slice 目录的 AssignStmt RHS、
-  ValueSpec value、CallExpr 实参，禁止 `credentialauthority.Assert` 或
-  `domain.(*User).CanAuthenticate` 被取函数值（fn := pkg.X / var fn = .. /
-  helper(pkg.X)）。
+- **上游 Hard typed callee reference**（P2-B，Wave 4 升级）：扫 `cells/` +
+  `cmd/` + `runtime/` 全 production scope（与 downstream caller allowlist 同
+  scope），对每个 SelectorExpr typed-resolve 到 `credentialauthority.Assert`
+  或 `domain.(*User).CanAuthenticate`，**只要不在 CallExpr.Fun 位置就是违规**
+  （typed-parent-check 单点判定）。**没有 syntactic context 枚举**：
+  AssignStmt RHS / ValueSpec / CallExpr arg / **ReturnStmt** / SendStmt /
+  IndexExpr / CompositeLit element 等所有 Go expression 位置均自动覆盖，
+  符合 ai-collab.md §"Hard 范本：typed function call as Hard funnel" 的
+  form uniqueness 要求。Wave 4 之前 Soft 形态（按 3 类 syntactic context
+  枚举 + scope 限 3 slice）已废弃。`types.Implements` 调用走
+  `tools/typesutil.ImplementsInterface` funnel（`TYPESUTIL-IMPLEMENTS-FUNNEL-01`
+  守卫，archtest 内禁止裸 `types.Implements`）。
 - **Blind-spot 反向自检** 4 件套：method-value 赋值（EachInSubtree 覆盖链式
   形态 `obj.GetUser().CanAuthenticate`）、`reflect.MethodByName`、
   `reflect.FieldByName(PasswordVersion)`、`unsafe` 导入。

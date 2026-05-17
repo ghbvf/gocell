@@ -120,6 +120,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // ─── package path / symbol constants ────────────────────────────────────
@@ -714,10 +716,12 @@ func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 			if _, ok := named.Underlying().(*types.Struct); !ok {
 				continue
 			}
-			// Pointer-receiver methods are on *T; value-receiver on T.
-			// Check both because Go method sets differ.
-			if !types.Implements(named, checkIface) &&
-				!types.Implements(types.NewPointer(named), checkIface) {
+			// typesutil.ImplementsInterface covers both value receiver
+			// (types.Implements(named,...)) and pointer receiver
+			// (types.Implements(*named,...)) so a concrete struct with
+			// pointer-only methods is correctly flagged. Required by
+			// TYPESUTIL-IMPLEMENTS-FUNNEL-01.
+			if !typesutil.ImplementsInterface(named, checkIface) {
 				continue
 			}
 			if !isExportedName(name) {
@@ -773,28 +777,48 @@ func stripModuleRoot(abs string) string {
 	return abs
 }
 
-// ─── Upstream prong: function-value capture (P2-B) ───────────────────────
+// ─── Upstream prong: typed callee reference (P2-B Hard) ─────────────────
 
-// TestCredentialAuthorityAssertFunnel_UpstreamValueCapture_04 asserts that
-// slice-package production files do NOT capture
-// credentialauthority.Assert or domain.(*User).CanAuthenticate as a
-// function value (AssignStmt RHS, ValueSpec value, or CallExpr argument).
-// Direct CallExpr detection (Upstream_02) only sees the call site itself;
-// function-value capture defers the call to an Ident site where receiver
-// resolution is unrecoverable.
+// TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04 enforces
+// that funnel-protected callees (credentialauthority.Assert and
+// domain.(*User).CanAuthenticate) are NEVER referenced at any position
+// other than the direct CallExpr.Fun slot. Function-value capture in any
+// expression context (AssignStmt RHS / ValueSpec / CallExpr argument /
+// ReturnStmt / SendStmt / IndexExpr / CompositeLit element / ...) defeats
+// the downstream caller-allowlist funnel: a saved function value can be
+// passed to a callee outside the allowlist and invoked via an Ident, where
+// caller identity is no longer recoverable.
 //
-// Hard rating: every Ident / SelectorExpr considered is type-resolved
-// via *types.Info — name-based shape matching is impossible to game.
+// Hard rating (ai-collab.md §"Hard 范本：typed function call as Hard funnel
+// for unbounded operations"):
+//   - Form uniqueness: any SelectorExpr typed-resolved to the funnel
+//     callee that is NOT at CallExpr.Fun position is reported. No
+//     syntactic-context enumeration — every Go expression position is
+//     covered by the single typed-parent check, so adding new syntactic
+//     contexts in future Go versions cannot reopen the bypass.
+//   - Full scope: cells/ + cmd/ + runtime/. Identical to the downstream
+//     caller allowlist scope, so the two prongs cover the same surface
+//     from complementary directions (Upstream_01 sees direct calls,
+//     Upstream_04 sees every other reference).
 //
-// RED fixture: testdata/value_capture_red.
-func TestCredentialAuthorityAssertFunnel_UpstreamValueCapture_04(t *testing.T) {
+// Why a single typed-parent check replaces the previous three
+// syntactic-context scans (AssignStmt/ValueSpec/CallArg) AND the missing
+// ReturnStmt/CompositeLit/SendStmt cases: Go's first-class function
+// values can appear in any expression slot. Enumerating syntactic
+// contexts can never close the form-uniqueness gap. The CallExpr.Fun
+// positions are pre-collected into a set; every SelectorExpr resolving
+// to a funnel callee that is NOT in that set is a violation, regardless
+// of syntactic context.
+//
+// RED fixture: testdata/value_capture_red (multiple forms; ≥ 1 total).
+func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
 	_ = RunTyped(t, TypedOpts{}, []string{
-		"./cells/accesscore/slices/sessionlogin/...",
-		"./cells/accesscore/slices/sessionrefresh/...",
-		"./cells/accesscore/slices/sessionvalidate/...",
+		"./cells/...",
+		"./cmd/...",
+		"./runtime/...",
 	}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
@@ -804,10 +828,7 @@ func TestCredentialAuthorityAssertFunnel_UpstreamValueCapture_04(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			if !isInSliceFunnelScope(rel) {
-				continue
-			}
-			violations = append(violations, scanFunnelValueCapture(p, file, rel)...)
+			violations = append(violations, scanFunnelCalleeReferences(p, file, rel)...)
 		}
 		return nil
 	})
@@ -817,114 +838,140 @@ func TestCredentialAuthorityAssertFunnel_UpstreamValueCapture_04(t *testing.T) {
 		t.Log(v)
 	}
 	assert.Empty(t, violations,
-		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (value-capture): slice "+
-			"production code captured credentialauthority.Assert or "+
-			"domain.(*User).CanAuthenticate as a function value (AssignStmt / "+
-			"ValueSpec / call argument), defeating the direct-CallExpr funnel. "+
-			"Call the function directly at the use site.")
+		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (typed callee reference): "+
+			"production code referenced credentialauthority.Assert or "+
+			"domain.(*User).CanAuthenticate at a non-direct-call position "+
+			"(function-value capture), defeating the caller-allowlist funnel. "+
+			"Call the function directly at the use site; do not save it as a "+
+			"value or pass it as an argument.")
 
-	verifyValueCaptureRedFixtureDetectedPerBucket(
+	verifyFunnelCalleeReferenceRedFixtureDetected(
 		t,
 		"./cells/accesscore/internal/credentialauthority/testdata/value_capture_red",
-		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 value-capture RED fixture",
+		"CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 callee-reference RED fixture",
 	)
 }
 
-// scanFunnelValueCapture flags AssignStmt RHS, ValueSpec values, and
-// CallExpr arguments that resolve via *types.Info to the funnel-protected
-// callees (credentialauthority.Assert, domain.(*User).CanAuthenticate).
-func scanFunnelValueCapture(p *Pass, file *ast.File, rel string) []string {
-	var out []string
-
-	check := func(expr ast.Expr, kind string) {
-		if expr == nil {
-			return
-		}
-		// Direct CallExpr is already covered by Upstream_02; only flag
-		// non-call references (i.e., the function value itself).
-		if _, isCall := expr.(*ast.CallExpr); isCall {
-			return
-		}
-		if pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, expr); ok {
-			if pkgPath == credAuthorityPkgPath && name == credAuthorityFnName {
-				pos := p.Fset.Position(expr.Pos())
-				out = append(out, fmt.Sprintf(
-					"%s:%d: %s captures credentialauthority.Assert as function value",
-					rel, pos.Line, kind,
-				))
-				return
-			}
-		}
-		if sel, ok := expr.(*ast.SelectorExpr); ok && sel.Sel != nil &&
-			sel.Sel.Name == credCanAuthenticate {
-			fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-			if ok && fn.Pkg() != nil && fn.Pkg().Path() == domainUserPkg {
-				pos := p.Fset.Position(sel.Pos())
-				out = append(out, fmt.Sprintf(
-					"%s:%d: %s captures domain.(*User).CanAuthenticate as method value",
-					rel, pos.Line, kind,
-				))
-			}
-		}
-	}
-
-	// (1) AssignStmt: fn := pkg.X / fn := obj.Method
-	EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-		for _, rhs := range assign.Rhs {
-			check(rhs, "AssignStmt")
-		}
-	})
-
-	// (2) ValueSpec: var fn = pkg.X
-	EachInSubtree[ast.ValueSpec](file, func(spec *ast.ValueSpec) {
-		for _, v := range spec.Values {
-			check(v, "ValueSpec")
-		}
-	})
-
-	// (3) CallExpr argument: someHelper(pkg.X)
+// scanFunnelCalleeReferences flags every SelectorExpr that typed-resolves
+// to a funnel-protected callee (credentialauthority.Assert or
+// domain.(*User).CanAuthenticate) and is NOT at CallExpr.Fun position.
+//
+// Implementation: pass 1 collects the AST node identity of every
+// CallExpr.Fun in the file into directCallFuns. Pass 2 walks every
+// SelectorExpr; if it resolves to a funnel callee and is NOT in
+// directCallFuns, it is a value-capture violation.
+//
+// This single check covers every Go expression position uniformly:
+// AssignStmt RHS, ValueSpec value, CallExpr argument, ReturnStmt result,
+// SendStmt value, IndexExpr, CompositeLit element, KeyValueExpr value,
+// type-assertion expr, type-conversion arg — all are non-CallExpr.Fun
+// positions and produce a violation. No syntactic-context enumeration.
+func scanFunnelCalleeReferences(p *Pass, file *ast.File, rel string) []string {
+	directCallFuns := map[ast.Expr]struct{}{}
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		// Skip the very call we are passing args to (handled by direct-call
-		// detector or unrelated).
-		for _, arg := range call.Args {
-			check(arg, "CallArg")
-		}
+		directCallFuns[call.Fun] = struct{}{}
 	})
 
+	var out []string
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if _, isDirect := directCallFuns[sel]; isDirect {
+			return
+		}
+		callee, ok := resolveFunnelCallee(p.TypesInfo, sel)
+		if !ok {
+			return
+		}
+		line := p.Fset.Position(sel.Pos()).Line
+		out = append(out, fmt.Sprintf(
+			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (typed callee reference): "+
+				"%s referenced as value (not direct call) — bypasses "+
+				"caller allowlist via deferred invocation",
+			rel, line, callee,
+		))
+	})
 	return out
 }
 
-func verifyValueCaptureRedFixtureDetectedPerBucket(t *testing.T, pattern, label string) {
+// resolveFunnelCallee reports whether sel typed-resolves to a funnel-
+// protected callee and returns a human-readable identifier for the
+// violation message. Covers two callees:
+//
+//   - credentialauthority.Assert — package-qualified function reference,
+//     resolved via *types.Info.Uses[sel.Sel].
+//   - domain.(*User).CanAuthenticate — method selector, resolved via
+//     *types.Info.Selections[sel] (handles value or pointer receiver
+//     and embedded promotion uniformly).
+func resolveFunnelCallee(info *types.Info, sel *ast.SelectorExpr) (string, bool) {
+	if sel.Sel == nil {
+		return "", false
+	}
+	// Method selector first — *types.Info.Selections covers method values.
+	if selection := info.Selections[sel]; selection != nil {
+		if fn, ok := selection.Obj().(*types.Func); ok {
+			if isFunnelMethod(fn) {
+				return "domain.(*User).CanAuthenticate", true
+			}
+		}
+	}
+	// Package-qualified function reference: *types.Info.Uses[sel.Sel]
+	// returns the referenced *types.Func.
+	if obj := info.Uses[sel.Sel]; obj != nil {
+		if fn, ok := obj.(*types.Func); ok {
+			if isFunnelPackageFunc(fn) {
+				return "credentialauthority.Assert", true
+			}
+		}
+	}
+	return "", false
+}
+
+func isFunnelPackageFunc(fn *types.Func) bool {
+	if fn.Pkg() == nil {
+		return false
+	}
+	return fn.Pkg().Path() == credAuthorityPkgPath && fn.Name() == credAuthorityFnName
+}
+
+func isFunnelMethod(fn *types.Func) bool {
+	if fn.Pkg() == nil || fn.Pkg().Path() != domainUserPkg || fn.Name() != credCanAuthenticate {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	recvType := sig.Recv().Type()
+	if ptr, isPtr := recvType.(*types.Pointer); isPtr {
+		recvType = ptr.Elem()
+	}
+	named, ok := recvType.(*types.Named)
+	if !ok {
+		return false
+	}
+	return named.Obj().Name() == domainUserType
+}
+
+// verifyFunnelCalleeReferenceRedFixtureDetected asserts that the RED
+// fixture produces ≥ 1 violation. Per-bucket counting no longer applies:
+// typed-parent-check treats every non-CallExpr.Fun reference uniformly
+// regardless of syntactic context, so the meaningful self-check is
+// "detector fires at all," not "detector fires per syntactic shape."
+func verifyFunnelCalleeReferenceRedFixtureDetected(t *testing.T, pattern, label string) {
 	t.Helper()
-	var assignHits, valueSpecHits, callArgHits int
+	var found int
 	_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
 		for _, file := range p.Files {
-			for _, v := range scanFunnelValueCapture(p, file, label) {
-				switch {
-				case strings.Contains(v, "AssignStmt"):
-					assignHits++
-				case strings.Contains(v, "ValueSpec"):
-					valueSpecHits++
-				case strings.Contains(v, "CallArg"):
-					callArgHits++
-				}
-			}
+			found += len(scanFunnelCalleeReferences(p, file, label))
 		}
 		return nil
 	})
-	assert.GreaterOrEqual(t, assignHits, 1,
-		"RED fixture self-check FAILED (AssignStmt bucket): %s — expected "+
-			"≥ 1 AssignStmt violation, got 0.",
-		label)
-	assert.GreaterOrEqual(t, valueSpecHits, 1,
-		"RED fixture self-check FAILED (ValueSpec bucket): %s — expected "+
-			"≥ 1 ValueSpec violation, got 0.",
-		label)
-	assert.GreaterOrEqual(t, callArgHits, 1,
-		"RED fixture self-check FAILED (CallArg bucket): %s — expected "+
-			"≥ 1 CallArg violation, got 0.",
+	assert.GreaterOrEqual(t, found, 1,
+		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
+			"Check that the fixture references credentialauthority.Assert or "+
+			"domain.(*User).CanAuthenticate as a function value (any non-call "+
+			"expression position).",
 		label)
 }

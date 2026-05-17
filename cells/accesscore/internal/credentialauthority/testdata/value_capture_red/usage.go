@@ -1,12 +1,18 @@
 // Package value_capture_red is a RED fixture for
-// CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (value-capture prong, P2-B). It
-// captures credentialauthority.Assert and domain.(*User).CanAuthenticate
-// as function values in all three forms the archtest must detect:
+// CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (typed callee reference prong,
+// P2-B Hard). It captures credentialauthority.Assert and
+// domain.(*User).CanAuthenticate as function values in multiple
+// expression positions the archtest must detect:
+//
 //   - AssignStmt RHS:  fn := pkg.Func
 //   - ValueSpec value: var fn = pkg.Func
 //   - CallExpr arg:    helper(pkg.Func)
+//   - ReturnStmt:      return pkg.Func / return obj.Method
 //
-// Each form must produce at least one violation (per-bucket counting).
+// Per-bucket counting NO LONGER applies — typed-parent-check treats every
+// non-CallExpr.Fun reference uniformly, so the only meaningful self-check
+// is "≥ 1 violation total." Multiple forms are kept for documentation +
+// regression coverage (catching detector bugs that miss a position).
 //
 // LOCATION RATIONALE: the fixture imports
 // cells/accesscore/internal/credentialauthority + .../internal/domain,
@@ -61,4 +67,17 @@ func badCallArgAssert() {
 // argument. The archtest must flag this.
 func badCallArgCanAuth(u *domain.User) {
 	invokeBool(u.CanAuthenticate)
+}
+
+// badReturnCanAuth returns a CanAuthenticate method value from a function.
+// The archtest must flag the ReturnStmt position (typed-parent-check
+// covers it without dedicated ReturnStmt enumeration).
+func badReturnCanAuth(u *domain.User) func() bool {
+	return u.CanAuthenticate
+}
+
+// badReturnAssert returns credentialauthority.Assert as a function value.
+// Same form coverage as badReturnCanAuth, on the package-function side.
+func badReturnAssert() func(*domain.User, ...credentialauthority.Check) error {
+	return credentialauthority.Assert
 }
