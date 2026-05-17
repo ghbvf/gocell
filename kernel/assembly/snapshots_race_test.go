@@ -37,7 +37,7 @@ func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		id := "fast-" + string(rune('a'+i))
 		require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: id, Type: "core", ConsistencyLevel: "L0",
+			ID: id, Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0",
 		})))
 	}
 
@@ -45,7 +45,7 @@ func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
 	initGate := make(chan struct{})
 	require.NoError(t, a.Register(&configMutatingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: "blocking", Type: "core", ConsistencyLevel: "L0",
+			ID: "blocking", Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0",
 		}),
 		onInit: func(_ cell.Registry) error {
 			<-initGate
@@ -147,7 +147,7 @@ func registerGatedInitCell(t *testing.T, a *CoreAssembly, initGate <-chan struct
 	enteredInit := make(chan struct{})
 	require.NoError(t, a.Register(&configMutatingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: "gated", Type: "core", ConsistencyLevel: "L0",
+			ID: "gated", Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0",
 		}),
 		onInit: func(_ cell.Registry) error {
 			close(enteredInit)
@@ -164,7 +164,7 @@ func registerSlowInitCells(t *testing.T, a *CoreAssembly, count int) {
 		id := fmt.Sprintf("slow-%02d", i)
 		require.NoError(t, a.Register(&configMutatingCell{
 			BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-				ID: id, Type: "core", ConsistencyLevel: "L0",
+				ID: id, Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0",
 			}),
 			onInit: func(_ cell.Registry) error {
 				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep yield between Init completions to widen the race window against internal readers
@@ -267,7 +267,7 @@ func registerConcurrentRaceCells(t *testing.T, a *CoreAssembly, count int) []str
 	for i := 0; i < count; i++ {
 		id := "c-" + string(rune('a'+i))
 		require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: id, Type: "core", ConsistencyLevel: "L0",
+			ID: id, Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0",
 		})))
 		ids = append(ids, id)
 	}
