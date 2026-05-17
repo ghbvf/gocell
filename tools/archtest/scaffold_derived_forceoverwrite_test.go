@@ -48,6 +48,7 @@
 //     archtest accepts that planDerivedArtifact is the trusted gatekeeper —
 //     a Lane-E successor that splits the gate from the constructor must
 //     re-validate this assumption.
+//     Tracked: backlog SCAFFOLD-DERIVED-FORCEOVERWRITE-GATE-SPLIT-BACKLOG (cap-14)
 package archtest
 
 import (

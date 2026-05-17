@@ -258,7 +258,7 @@ func TestWritePlannedFiles_SingleFile(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		{AbsPath: abs, Content: []byte("id: mycell\n")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err != nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("WritePlannedFiles(single): unexpected error: %v", err)
 	}
 	data, err := os.ReadFile(abs) //nolint:gosec // tempdir test fixture
@@ -289,7 +289,7 @@ func TestWritePlannedFiles_MultiFile(t *testing.T) {
 			Content: []byte(f.content),
 		})
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err != nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("WritePlannedFiles(multi): unexpected error: %v", err)
 	}
 	for _, f := range files {
@@ -311,7 +311,7 @@ func TestWritePlannedFiles_DryRunNoWrite(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		{AbsPath: abs, Content: []byte("id: drycell\n")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), true); err != nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), true); err != nil {
 		t.Fatalf("WritePlannedFiles(dry-run): unexpected error: %v", err)
 	}
 	// dry-run 不写文件
@@ -339,7 +339,7 @@ func TestWritePlannedFiles_ConflictMidPlanRejectsAll(t *testing.T) {
 		{AbsPath: filepath.Join(root, "cells", "mycell", "cell.go"), Content: []byte("package mycell\n")},
 		{AbsPath: conflictAbs, Content: []byte("id: mycell\n")}, // 冲突
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(conflict): want error, got nil")
 	}
 	// atomic：冲突前的 cell.go 不应存在（whole-plan rejection）
@@ -371,7 +371,7 @@ func TestWritePlannedFiles_ContainmentFailMidPlanRejectsAll(t *testing.T) {
 		{AbsPath: filepath.Join(root, "cells", "goodcell", "cell.yaml"), Content: []byte("id: goodcell\n")},
 		{AbsPath: filepath.Join(root, "cells", "escape", "evil.yaml"), Content: []byte("pwned")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(containment fail): want error, got nil")
 	}
 	// atomic：outside 内不应有任何文件
@@ -405,7 +405,7 @@ func TestWritePlannedFiles_MkdirFailureRollback(t *testing.T) {
 		{AbsPath: filepath.Join(root, "cells", "mycell", "cell.yaml"), Content: []byte("id: mycell\n")},
 		{AbsPath: filepath.Join(readonlyParent, "sub", "file.yaml"), Content: []byte("data")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(mkdir fail): want error, got nil")
 	}
 	// rollback：已写的 cell.yaml 应不存在
@@ -434,7 +434,7 @@ func TestWritePlannedFiles_WriteFailureRollback(t *testing.T) {
 		{AbsPath: filepath.Join(root, "contracts", "http", "mycell", "v1", "contract.yaml"), Content: []byte("id: x\n")},
 		{AbsPath: conflictPath, Content: []byte("id: mycell\n")}, // 写入会失败（目标是目录）
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(write fail): want error, got nil")
 	}
 	// rollback：已写的 contract.yaml 应不存在
@@ -477,7 +477,7 @@ func TestWritePlannedFiles_RejectLeafSymlinkDangling(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		{AbsPath: leafLink, Content: []byte("id: leafsymcell\n")},
 	}
-	err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false)
+	err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false)
 	if err == nil {
 		t.Fatal("WritePlannedFiles(dangling leaf symlink): want error, got nil")
 	}
@@ -526,7 +526,7 @@ func TestWritePlannedFiles_RejectLeafSymlinkNonDangling(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		{AbsPath: leafLink, Content: []byte("id: symlinkcell\n")},
 	}
-	err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false)
+	err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false)
 	if err == nil {
 		t.Fatal("WritePlannedFiles(non-dangling leaf symlink): want error, got nil")
 	}
@@ -576,7 +576,7 @@ func TestWritePlannedFiles_RollbackOnPartialWriteFailure_WriteStageFail(t *testi
 		{AbsPath: blockedFile, Content: []byte("id: badcell\n")},
 	}
 
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan2), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan2), false); err == nil {
 		t.Fatal("WritePlannedFiles(write-stage failure): want error, got nil")
 	}
 

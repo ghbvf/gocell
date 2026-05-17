@@ -18,23 +18,35 @@ import (
 
 func TestParse_Accept(t *testing.T) {
 	t.Parallel()
-	cases := []string{
-		"foo",
-		"foocell",
-		"abc123",
-		"a1",
-		"orderprocessor",
+	cases := []struct {
+		raw  string
+		note string
+	}{
+		{"foo", ""},
+		{"foocell", ""},
+		{"abc123", ""},
+		{"a1", ""},
+		{"ab", "shortest all-letter valid ID (2 chars)"},
+		{"orderprocessor", ""},
+		// AssemblyIDPattern (^[a-z][a-z0-9]+$) has no upper length limit by
+		// design; this case verifies the current accept behavior so any future
+		// upper-limit addition shows up as a test failure requiring explicit review.
+		{strings.Repeat("a", 200), "no upper-length limit in AssemblyIDPattern"},
 	}
-	for _, raw := range cases {
-		raw := raw
-		t.Run(raw, func(t *testing.T) {
+	for _, tc := range cases {
+		tc := tc
+		name := tc.raw
+		if len(name) > 20 {
+			name = name[:20] + "..."
+		}
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := scaffoldid.Parse(raw)
+			got, err := scaffoldid.Parse(tc.raw)
 			if err != nil {
-				t.Fatalf("Parse(%q): unexpected err: %v", raw, err)
+				t.Fatalf("Parse(%q): unexpected err: %v", tc.raw, err)
 			}
-			if string(got) != raw {
-				t.Fatalf("Parse(%q) = %q, want %q", raw, string(got), raw)
+			if string(got) != tc.raw {
+				t.Fatalf("Parse(%q) = %q, want %q", tc.raw, string(got), tc.raw)
 			}
 		})
 	}

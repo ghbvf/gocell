@@ -49,6 +49,8 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"strings"
 	"testing"
@@ -78,6 +80,96 @@ func callsScaffoldIDConversion(info *types.Info, call *ast.CallExpr) bool {
 		return false
 	}
 	return true
+}
+
+// buildScaffoldIDConversionInfo constructs a synthetic *types.Info that maps
+// the ScaffoldID selector ident in a `scaffoldid.ScaffoldID("raw")` CallExpr to
+// a *types.TypeName in the scaffoldid package. Used by the reverse self-check.
+func buildScaffoldIDConversionInfo(sel *ast.SelectorExpr) *types.Info {
+	scaffoldPkg := types.NewPackage(scaffoldidPkgPath, "scaffoldid")
+	tn := types.NewTypeName(token.NoPos, scaffoldPkg, scaffoldIDType, nil)
+	info := &types.Info{
+		Uses: map[*ast.Ident]types.Object{
+			sel.Sel: tn,
+		},
+	}
+	return info
+}
+
+// TestScaffoldIDFunnel_DetectsCastOutsidePackage is the blind-spot reverse
+// self-check declared in the file godoc. It constructs inline AST + types.Info
+// fixtures to verify that callsScaffoldIDConversion returns true for a genuine
+// `scaffoldid.ScaffoldID("raw")` cast and false for an unrelated call
+// (e.g. `fmt.Sprintf("raw")`), so the archtest cannot silently pass by
+// walking an empty or wrongly-constructed AST.
+func TestScaffoldIDFunnel_DetectsCastOutsidePackage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("detects_cast", func(t *testing.T) {
+		t.Parallel()
+		// Parse `scaffoldid.ScaffoldID("raw")` as a standalone expression.
+		fset := token.NewFileSet()
+		src := `package x; import "github.com/ghbvf/gocell/kernel/scaffoldid"; var v = scaffoldid.ScaffoldID("raw")`
+		file, err := parser.ParseFile(fset, "x.go", src, 0)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		// Locate the ScaffoldID CallExpr and its SelectorExpr.
+		var found *ast.CallExpr
+		ast.Inspect(file, func(n ast.Node) bool {
+			if found != nil {
+				return false
+			}
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && sel.Sel != nil && sel.Sel.Name == scaffoldIDType {
+				found = call
+			}
+			return found == nil
+		})
+		if found == nil {
+			t.Fatal("fixture did not contain a scaffoldid.ScaffoldID CallExpr")
+		}
+		sel := found.Fun.(*ast.SelectorExpr)
+		info := buildScaffoldIDConversionInfo(sel)
+
+		if !callsScaffoldIDConversion(info, found) {
+			t.Error("callsScaffoldIDConversion must return true for scaffoldid.ScaffoldID(...) with matching types.Info")
+		}
+	})
+
+	t.Run("ignores_unrelated_call", func(t *testing.T) {
+		t.Parallel()
+		// Parse `fmt.Sprintf("raw")` — a SelectorExpr CallExpr that is NOT a
+		// ScaffoldID conversion.
+		fset := token.NewFileSet()
+		src := `package x; import "fmt"; var _ = fmt.Sprintf("raw")`
+		file, err := parser.ParseFile(fset, "x.go", src, 0)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		var found *ast.CallExpr
+		ast.Inspect(file, func(n ast.Node) bool {
+			if found != nil {
+				return false
+			}
+			if call, ok := n.(*ast.CallExpr); ok {
+				found = call
+			}
+			return true
+		})
+		if found == nil {
+			t.Fatal("fixture did not contain a CallExpr")
+		}
+		// Empty types.Info — no Uses entry for fmt.Sprintf selector.
+		info := &types.Info{Uses: map[*ast.Ident]types.Object{}}
+		if callsScaffoldIDConversion(info, found) {
+			t.Error("callsScaffoldIDConversion must return false for fmt.Sprintf call")
+		}
+	})
 }
 
 // TestScaffoldIDFunnel_OnlyInScaffoldidPackage asserts that every

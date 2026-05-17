@@ -83,7 +83,7 @@ l0Dependencies: []
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	spec := AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("myassembly"),
+		ID:        mustID(t, "myassembly"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -177,23 +177,23 @@ func TestGenerator_Scaffold_ValidationErrors(t *testing.T) {
 		},
 		{
 			name:    "empty_cells",
-			spec:    AssemblyScaffoldSpec{ID: scaffoldid.ScaffoldID("asm"), OwnerTeam: "t", OwnerRole: "r"},
+			spec:    AssemblyScaffoldSpec{ID: mustID(t, "asm"), OwnerTeam: "t", OwnerRole: "r"},
 			wantSub: "at least one cell",
 		},
 		{
 			name:    "empty_team",
-			spec:    AssemblyScaffoldSpec{ID: scaffoldid.ScaffoldID("asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerRole: "r"},
+			spec:    AssemblyScaffoldSpec{ID: mustID(t, "asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerRole: "r"},
 			wantSub: "OwnerTeam is required",
 		},
 		{
 			name:    "empty_role",
-			spec:    AssemblyScaffoldSpec{ID: scaffoldid.ScaffoldID("asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerTeam: "t"},
+			spec:    AssemblyScaffoldSpec{ID: mustID(t, "asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerTeam: "t"},
 			wantSub: "OwnerRole is required",
 		},
 		{
 			name: "invalid_deploy",
 			spec: AssemblyScaffoldSpec{
-				ID:        scaffoldid.ScaffoldID("asm"),
+				ID:        mustID(t, "asm"),
 				Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 				OwnerTeam: "t", OwnerRole: "r", Deploy: "podman",
 			},
@@ -201,7 +201,7 @@ func TestGenerator_Scaffold_ValidationErrors(t *testing.T) {
 		},
 		{
 			name:    "unknown_cell",
-			spec:    AssemblyScaffoldSpec{ID: scaffoldid.ScaffoldID("asm"), Cells: []scaffoldid.ScaffoldID{"nope"}, OwnerTeam: "t", OwnerRole: "r"},
+			spec:    AssemblyScaffoldSpec{ID: mustID(t, "asm"), Cells: []scaffoldid.ScaffoldID{"nope"}, OwnerTeam: "t", OwnerRole: "r"},
 			wantSub: `cell="nope"`,
 		},
 	}
@@ -228,7 +228,7 @@ func TestGenerator_Scaffold_EmptyProjectRoot(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", "") // empty projectRoot
 
 	_, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID: scaffoldid.ScaffoldID("asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerTeam: "t", OwnerRole: "r",
+		ID: mustID(t, "asm"), Cells: []scaffoldid.ScaffoldID{"examplecell"}, OwnerTeam: "t", OwnerRole: "r",
 	})
 	if err == nil {
 		t.Fatal("expected error for empty projectRoot, got nil")
@@ -246,7 +246,7 @@ func TestGenerator_Scaffold_DryRun(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID: scaffoldid.ScaffoldID("dryasm"), Cells: []scaffoldid.ScaffoldID{"examplecell"},
+		ID: mustID(t, "dryasm"), Cells: []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "t", OwnerRole: "r",
 	})
 	if err != nil {
@@ -272,7 +272,7 @@ func TestGenerator_Scaffold_ConflictDetection(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	spec := AssemblyScaffoldSpec{
-		ID: scaffoldid.ScaffoldID("conflict"), Cells: []scaffoldid.ScaffoldID{"examplecell"},
+		ID: mustID(t, "conflict"), Cells: []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "t", OwnerRole: "r",
 	}
 	plan, err := gen.PlanAssemblyScaffold(spec)
@@ -329,7 +329,7 @@ func TestGeneratorScaffold_SymlinkEscape_Asm(t *testing.T) {
 	}
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("symasm"),
+		ID:        mustID(t, "symasm"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -369,7 +369,7 @@ func TestGeneratorScaffold_SymlinkEscape_Cmd(t *testing.T) {
 	}
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("symcmdasm"),
+		ID:        mustID(t, "symcmdasm"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -404,7 +404,7 @@ func TestGeneratorScaffold_AtomicRollback_OnConflict(t *testing.T) {
 	}
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("conflictasm"),
+		ID:        mustID(t, "conflictasm"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -462,7 +462,7 @@ l0Dependencies: []
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("myassembly"),
+		ID:        mustID(t, "myassembly"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -497,7 +497,7 @@ func TestPlanAssemblyScaffold_FullPlan_SixFiles(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("sixasm"),
+		ID:        mustID(t, "sixasm"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -528,7 +528,7 @@ func TestPlanAssemblyScaffold_SkipGenerate_ThreeFiles(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:           scaffoldid.ScaffoldID("skipasm"),
+		ID:           mustID(t, "skipasm"),
 		Cells:        []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam:    "platform",
 		OwnerRole:    "maintainer",
@@ -560,7 +560,7 @@ func TestPlanAssemblyScaffold_DryRun_NoFilesOnDisk(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("drysixasm"),
+		ID:        mustID(t, "drysixasm"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -590,7 +590,7 @@ func TestPlanAssemblyScaffold_GeneratedFilesHaveMarker(t *testing.T) {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("markerasm"),
+		ID:        mustID(t, "markerasm"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -639,7 +639,7 @@ func TestPlanAssemblyScaffold_FullPlan_RollbackOnLastFileConflict(t *testing.T) 
 	}
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("rollbackasm"),
+		ID:        mustID(t, "rollbackasm"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -698,7 +698,7 @@ func TestPlanAssemblyScaffold_RollbackOnMidPlanWriteFailure(t *testing.T) {
 	defer func() { _ = os.Chmod(generatedDir, 0o755) }()
 
 	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("wprollbackasm"),
+		ID:        mustID(t, "wprollbackasm"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -765,7 +765,7 @@ func TestPlanAssemblyScaffold_ConflictDetection_AllSixSlots(t *testing.T) {
 			_ = name
 
 			plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-				ID:        scaffoldid.ScaffoldID("slotasm"),
+				ID:        mustID(t, "slotasm"),
 				Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 				OwnerTeam: "platform",
 				OwnerRole: "maintainer",

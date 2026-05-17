@@ -52,6 +52,7 @@ func Parse(raw string) (ScaffoldID, error) {
 			errcode.WithDetails(
 				slog.String("id", raw),
 				slog.String("pattern", metadata.AssemblyIDPattern),
+				slog.String("hint", "lowercase letters and digits only, at least 2 chars, no dashes / underscores / dots"),
 			))
 	}
 	return ScaffoldID(raw), nil

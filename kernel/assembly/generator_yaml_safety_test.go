@@ -102,7 +102,7 @@ func renderInjectionAssemblyYAML(t *testing.T, team, role string) []byte {
 	root, pm := scaffoldTestProject(t)
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 	spec := AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("myassembly"),
+		ID:        mustID(t, "myassembly"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: team,
 		OwnerRole: role,
@@ -196,7 +196,7 @@ func TestScaffoldAssembly_YAMLScalarFile_ColonInOwner(t *testing.T) {
 	const injectedTeam = "ops:malicious-key: pwned"
 
 	spec := AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("myassembly"),
+		ID:        mustID(t, "myassembly"),
 		Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 		OwnerTeam: injectedTeam,
 		OwnerRole: "maintainer",

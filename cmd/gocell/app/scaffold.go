@@ -5,12 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 	"unicode"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
@@ -220,7 +222,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"[--type=core|edge|support] [--level=L0..L4]",
 			"[--with-http] [--with-events] [--with-both]",
 			"[--skip-generate] [--dry-run]",
-			"Note: --id must not contain '-' (use nodash identifiers).",
+			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldCell(root, a) },
 	},
@@ -229,7 +231,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 		help: []string{
 			"Create cells/<cellID>/slices/<id>/slice.yaml.",
 			"--id=<id> --cell=<cellID> [--dry-run]",
-			"Note: --id must not contain '-' (use nodash identifiers).",
+			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldSlice(root, a) },
 	},
@@ -256,7 +258,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
 			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
 			"[--deploy=k8s|compose|binary] (default: k8s) [--skip-generate] [--dry-run]",
-			"Note: --id must not contain '-' (use nodash identifiers; min 2 chars).",
+			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldAssembly(root, a) },
 	},
@@ -406,7 +408,14 @@ func scaffoldCell(root string, args []string) error {
 
 	cellID, err := scaffoldid.Parse(*id)
 	if err != nil {
-		return err
+		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"--id does not match metadata AssemblyIDPattern", err,
+			errcode.WithDetails(
+				slog.String("flag", "--id"),
+				slog.String("pattern", metadata.AssemblyIDPattern),
+			),
+			errcode.WithInternal(fmt.Sprintf("flag=--id value=%q pattern=%s",
+				*id, metadata.AssemblyIDPattern)))
 	}
 	spec := buildScaffoldCellSpec(scaffoldCellInputs{
 		ID:             cellID,

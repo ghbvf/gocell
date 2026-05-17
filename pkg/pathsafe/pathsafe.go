@@ -125,9 +125,9 @@ type PlannedFile struct {
 // NOT branch on this getter — the flag is package-private precisely so flow
 // control belongs to pathsafe itself.
 //
-// For production introspection of derived-vs-skeleton routing, use
-// DerivedOverwrite at construction time and route through WritePlannedFiles —
-// the PlanSet boundary is the single decision point.
+// For production introspection of derived-vs-skeleton routing, use DerivedOverwrite
+// at construction time and route through WritePlannedFiles — the PlanSet boundary
+// is the single decision point.
 func (f PlannedFile) IsForceOverwrite() bool { return f.forceOverwrite }
 
 // DerivedOverwrite is the SOLE public constructor that returns a PlannedFile

@@ -38,6 +38,8 @@
 //     that bypasses NewPlanSet's dup-reject. The archtest does NOT scan for
 //     this; it is covered conceptually by code review that any mutating
 //     method on PlanSet must run dup-reject.
+//     This blind spot is left to code review: any new exported mutating method
+//     on PlanSet must run dup-reject in its body, mirroring NewPlanSet's invariant.
 package archtest
 
 import (

@@ -25,7 +25,7 @@ func projectWithCell(id string) *metadata.ProjectMeta {
 	}
 }
 
-// ID and Cells pattern coverage moved to kernel/scaffoldid_test.go
+// ID and Cells pattern coverage moved to kernel/scaffoldid/scaffoldid_test.go
 // TestParse_Reject / TestParse_Accept: scaffoldid.Parse is the SINGLE source
 // of identifier-pattern validation, and AssemblyScaffoldSpec.ID /
 // AssemblyScaffoldSpec.Cells are typed (scaffoldid.ScaffoldID) so the
@@ -70,7 +70,7 @@ func TestValidateAssemblyScaffoldSpec_OwnerTextRule(t *testing.T) {
 			project := projectWithCell("examplecell")
 			gen := NewGenerator(project, "github.com/ghbvf/gocell", t.TempDir())
 			spec := AssemblyScaffoldSpec{
-				ID:        scaffoldid.ScaffoldID("myassembly"),
+				ID:        mustID(t, "myassembly"),
 				Cells:     []scaffoldid.ScaffoldID{"examplecell"},
 				OwnerTeam: tc.team,
 				OwnerRole: tc.role,

@@ -53,7 +53,7 @@ func TestAssemblyMetaSynthesisFieldGuard(t *testing.T) {
 	t.Parallel()
 
 	spec := AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("myasm"),
+		ID:        mustID(t, "myasm"),
 		Cells:     []scaffoldid.ScaffoldID{"mycell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
@@ -149,7 +149,7 @@ func TestAssemblyMetaSynthesisFieldGuard_DefaultK8sDerivation(t *testing.T) {
 	t.Parallel()
 
 	spec := AssemblyScaffoldSpec{
-		ID:        scaffoldid.ScaffoldID("myasm"),
+		ID:        mustID(t, "myasm"),
 		Cells:     []scaffoldid.ScaffoldID{"mycell"},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
