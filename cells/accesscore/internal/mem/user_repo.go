@@ -17,6 +17,7 @@ var _ ports.UserRepository = (*UserRepository)(nil)
 const (
 	msgUserNotFound   = "user not found"
 	errMsgUsernameFmt = "username=%q"
+	errMsgIDFmt       = "id=%q"
 )
 
 // UserRepository is the in-memory implementation of ports.UserRepository.
@@ -76,7 +77,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, id)))
 	}
 	return cloneUser(u), nil
 }
@@ -128,7 +129,7 @@ func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
 	if !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, user.ID)))
 	}
 
 	// S4.0 effective-admin invariant safety net (parallels migration 024
@@ -236,7 +237,7 @@ func (r *UserRepository) UpdatePassword(
 	if !ok {
 		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
 	}
 	if u.PasswordVersion != expectedPV {
 		return 0, cas.CheckVersionMatch(0, "user", userID)
@@ -279,7 +280,7 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int
 	if !ok {
 		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
 	}
 	newEpoch := u.AuthzEpoch() + 1
 	// Rebuild the stored user with the bumped epoch.
@@ -316,7 +317,7 @@ func (r *UserRepository) Delete(ctx context.Context, id string) error {
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, id)))
 	}
 
 	// S4.0 effective-admin invariant safety net (parallels migration 024

@@ -78,7 +78,7 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 				return err
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
-			wantInternal: "id=usr-missing",
+			wantInternal: `id="usr-missing"`,
 		},
 		{
 			name: "get by username",
@@ -101,7 +101,7 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 				return repo.Update(ctx, u)
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
-			wantInternal: "id=usr-missing",
+			wantInternal: `id="usr-missing"`,
 		},
 		{
 			name: "delete",
@@ -109,7 +109,7 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 				return repo.Delete(ctx, "usr-missing")
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
-			wantInternal: "id=usr-missing",
+			wantInternal: `id="usr-missing"`,
 		},
 	}
 
@@ -434,6 +434,13 @@ func TestRoleRepository_EffectiveAdminExists(t *testing.T) {
 			UpdatedAt:    now,
 		})
 		require.NoError(t, err)
+		// Bypass UserRepository.Update to inject a locked-status user with an
+		// admin role. Going through Update would trigger the effective-admin guard
+		// (removing the last active admin is refused), and domain.NewUser always
+		// produces active users — so there is no public API path to reach this
+		// state. Direct map writes are the only option here; this test lives in
+		// package mem to exercise the read-side EffectiveAdminExists predicate.
+		// NOTE: if Store's internal map layout changes, update this seed block too.
 		store.mu.Lock()
 		store.usersByID["locked-admin"] = lockedUser
 		store.byName["locked-admin"] = lockedUser
