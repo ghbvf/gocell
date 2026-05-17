@@ -18,6 +18,8 @@ func testContractsRoot(t testing.TB) string {
 	return filepath.Join(filepath.Dir(thisFile), "testdata", "contracts")
 }
 
+// --- pathParams (string type) ---
+
 // TestValidatePathParam_Valid asserts that a valid value passes the path param schema.
 func TestValidatePathParam_Valid(t *testing.T) {
 	t.Parallel()
@@ -37,6 +39,13 @@ func TestMustRejectPathParam_TooShort(t *testing.T) {
 
 // TestMustRejectPathParam_TooLong asserts that a value exceeding maxLength: 10
 // is rejected.
+//
+// Critical regression guard (PR #543 review F1): paramValueToJSON used to sniff
+// "12345678901" as a base-10 integer and emit a JSON number, which a string-typed
+// schema then rejected via type-mismatch. That gave a false-green test — even
+// removing maxLength, the assertion would still pass. After F1, "12345678901"
+// against a string-typed schema is always a JSON string; rejection here proves
+// the maxLength bound is what's being checked, not the conversion bug.
 func TestMustRejectPathParam_TooLong(t *testing.T) {
 	t.Parallel()
 	root := testContractsRoot(t)
@@ -44,24 +53,34 @@ func TestMustRejectPathParam_TooLong(t *testing.T) {
 	c.MustRejectPathParam(t, "key", "12345678901") // 11 chars > 10
 }
 
+// TestValidatePathParam_NumericLooking_String covers the F1 regression at the
+// validate path: a numeric-looking string ("12345") must validate against a
+// string-typed schema as a JSON string (it is well within minLength=1 /
+// maxLength=10). If paramValueToJSON ever reverts to content-sniffing and emits
+// the value as a JSON number, schema.Validate fails with a type mismatch and
+// this test errors.
+func TestValidatePathParam_NumericLooking_String(t *testing.T) {
+	t.Parallel()
+	root := testContractsRoot(t)
+	c := LoadByID(t, root, "http.test.pathparams.v1")
+	c.ValidatePathParam(t, "key", "12345")
+}
+
 // TestValidatePathParam_UnknownName asserts that an unknown param name causes
-// t.Errorf (we verify this by expecting the error sentinel via a sub-test
-// that calls ValidatePathParam on an undeclared name, which should produce an
-// error; here we test the known-name happy path instead).
+// t.Errorf.
 func TestValidatePathParam_UnknownName(t *testing.T) {
-	// This test deliberately uses a sub-test with a fake *testing.T to capture
-	// the error without failing the outer test.
 	t.Parallel()
 	root := testContractsRoot(t)
 	c := LoadByID(t, root, "http.test.pathparams.v1")
 
-	// Verify that unknown param name produces a test failure.
 	inner := &captureT{T: t}
 	c.ValidatePathParam(inner, "nonexistent", "hello")
 	if !inner.failed {
 		t.Errorf("ValidatePathParam with unknown name should have called t.Errorf")
 	}
 }
+
+// --- queryParams (integer type) ---
 
 // TestValidateQueryParam_Valid asserts that integer "1" passes the query param schema.
 func TestValidateQueryParam_Valid(t *testing.T) {
@@ -88,11 +107,23 @@ func TestMustRejectQueryParam_AboveMaximum(t *testing.T) {
 }
 
 // TestMustRejectQueryParam_WrongType asserts that a non-integer value is rejected.
+// Under the schema-driven paramValueToJSON, "notanumber" fails strconv.ParseInt
+// and falls back to a JSON string, which the integer schema rejects on type.
 func TestMustRejectQueryParam_WrongType(t *testing.T) {
 	t.Parallel()
 	root := testContractsRoot(t)
 	c := LoadByID(t, root, "http.test.queryparams.v1")
 	c.MustRejectQueryParam(t, "limit", "notanumber")
+}
+
+// TestMustRejectQueryParam_FloatAgainstInteger asserts that "1.5" is rejected
+// by an integer schema. ParseInt fails (no decimal), so the value falls back to
+// a JSON string and the integer schema rejects on type.
+func TestMustRejectQueryParam_FloatAgainstInteger(t *testing.T) {
+	t.Parallel()
+	root := testContractsRoot(t)
+	c := LoadByID(t, root, "http.test.queryparams.v1")
+	c.MustRejectQueryParam(t, "limit", "1.5")
 }
 
 // TestMustRejectQueryParam_UnknownName asserts that an unknown query param name
@@ -108,6 +139,36 @@ func TestMustRejectQueryParam_UnknownName(t *testing.T) {
 		t.Errorf("MustRejectQueryParam with unknown name should have called t.Errorf")
 	}
 }
+
+// --- queryParams (boolean type) ---
+
+// TestValidateQueryParam_BooleanTrue asserts that "true" passes a boolean schema.
+func TestValidateQueryParam_BooleanTrue(t *testing.T) {
+	t.Parallel()
+	root := testContractsRoot(t)
+	c := LoadByID(t, root, "http.test.boolparams.v1")
+	c.ValidateQueryParam(t, "enabled", "true")
+}
+
+// TestValidateQueryParam_BooleanFalse asserts that "false" passes a boolean schema.
+func TestValidateQueryParam_BooleanFalse(t *testing.T) {
+	t.Parallel()
+	root := testContractsRoot(t)
+	c := LoadByID(t, root, "http.test.boolparams.v1")
+	c.ValidateQueryParam(t, "enabled", "false")
+}
+
+// TestMustRejectQueryParam_BooleanWrongValue asserts that "notbool" is rejected
+// by a boolean schema. ParseBool fails so the value falls back to a JSON string,
+// which the boolean schema rejects on type.
+func TestMustRejectQueryParam_BooleanWrongValue(t *testing.T) {
+	t.Parallel()
+	root := testContractsRoot(t)
+	c := LoadByID(t, root, "http.test.boolparams.v1")
+	c.MustRejectQueryParam(t, "enabled", "notbool")
+}
+
+// --- compileInlineParamSchema guards ---
 
 // TestCompileInlineParamSchema_RejectsUnsupportedType asserts that
 // compileInlineParamSchema calls t.Fatal when given a type not in the
@@ -127,41 +188,58 @@ func TestCompileInlineParamSchema_RejectsUnsupportedType(t *testing.T) {
 	}()
 }
 
-// TestParamValueToJSON_RejectsNaNInf asserts that NaN/Inf values fall back to
-// JSON strings rather than returning bare "NaN"/"Inf" bytes that would be
-// invalid JSON numbers and cause silent misclassification in schema rejection.
-func TestParamValueToJSON_RejectsNaNInf(t *testing.T) {
+// --- paramValueToJSON type-driven conversion matrix ---
+
+// TestParamValueToJSON_TypeDriven asserts that paramValueToJSON dispatches on
+// ParamSchema.Type, not on string content sniffing. Each case asserts the exact
+// JSON token bytes that come out so a regression to the old content-sniffing
+// implementation fails immediately.
+func TestParamValueToJSON_TypeDriven(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		input string
-		// wantJSONString: the result should be a JSON-encoded string (quoted),
-		// not the raw value as a JSON number token.
-		wantJSONString bool
+		name     string
+		schema   metadata.ParamSchema
+		value    string
+		wantJSON string
 	}{
-		{"Inf", true},
-		{"+Inf", true},
-		{"-Inf", true},
-		{"NaN", true},
-		// Sanity: plain integers and floats still produce JSON numbers.
-		{"42", false},
-		{"3.14", false},
+		// string → always JSON string, even when content looks numeric or bool.
+		{"string/text", metadata.ParamSchema{Type: "string"}, "hello", `"hello"`},
+		{"string/numeric-content", metadata.ParamSchema{Type: "string"}, "12345", `"12345"`},
+		{"string/float-content", metadata.ParamSchema{Type: "string"}, "3.14", `"3.14"`},
+		{"string/bool-content", metadata.ParamSchema{Type: "string"}, "true", `"true"`},
+		{"string/empty", metadata.ParamSchema{Type: "string"}, "", `""`},
+
+		// integer → JSON number on ParseInt success, JSON string fallback otherwise.
+		{"integer/positive", metadata.ParamSchema{Type: "integer"}, "42", `42`},
+		{"integer/negative", metadata.ParamSchema{Type: "integer"}, "-1", `-1`},
+		{"integer/zero", metadata.ParamSchema{Type: "integer"}, "0", `0`},
+		{"integer/non-integer", metadata.ParamSchema{Type: "integer"}, "1.5", `"1.5"`},
+		{"integer/text", metadata.ParamSchema{Type: "integer"}, "notanumber", `"notanumber"`},
+
+		// number → JSON number on finite ParseFloat success, JSON string fallback otherwise.
+		{"number/float", metadata.ParamSchema{Type: "number"}, "3.14", `3.14`},
+		{"number/integer-looking", metadata.ParamSchema{Type: "number"}, "42", `42`},
+		{"number/NaN", metadata.ParamSchema{Type: "number"}, "NaN", `"NaN"`},
+		{"number/Inf", metadata.ParamSchema{Type: "number"}, "Inf", `"Inf"`},
+		{"number/+Inf", metadata.ParamSchema{Type: "number"}, "+Inf", `"+Inf"`},
+		{"number/-Inf", metadata.ParamSchema{Type: "number"}, "-Inf", `"-Inf"`},
+		{"number/text", metadata.ParamSchema{Type: "number"}, "notanumber", `"notanumber"`},
+
+		// boolean → "true"/"false" on ParseBool success, JSON string fallback otherwise.
+		{"boolean/true", metadata.ParamSchema{Type: "boolean"}, "true", `true`},
+		{"boolean/false", metadata.ParamSchema{Type: "boolean"}, "false", `false`},
+		{"boolean/1", metadata.ParamSchema{Type: "boolean"}, "1", `true`},
+		{"boolean/0", metadata.ParamSchema{Type: "boolean"}, "0", `false`},
+		{"boolean/text", metadata.ParamSchema{Type: "boolean"}, "yes", `"yes"`},
 	}
 	for _, tc := range cases {
 		tc := tc
-		t.Run(tc.input, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := paramValueToJSON(tc.input)
-			if !ok {
-				t.Fatalf("paramValueToJSON(%q) returned ok=false, want a JSON token", tc.input)
-			}
-			isQuoted := len(got) >= 2 && got[0] == '"' && got[len(got)-1] == '"'
-			if tc.wantJSONString && !isQuoted {
-				t.Errorf("paramValueToJSON(%q) = %s, want a JSON string (quoted); "+
-					"NaN/Inf must not be emitted as bare JSON number tokens", tc.input, got)
-			}
-			if !tc.wantJSONString && isQuoted {
-				t.Errorf("paramValueToJSON(%q) = %s, want a JSON number (unquoted)", tc.input, got)
+			got := string(paramValueToJSON(tc.schema, tc.value))
+			if got != tc.wantJSON {
+				t.Errorf("paramValueToJSON(%+v, %q) = %s, want %s", tc.schema, tc.value, got, tc.wantJSON)
 			}
 		})
 	}

@@ -141,6 +141,14 @@ func TestContractPathQueryCoverage01(t *testing.T) {
 // self-check (ai-collab.md §"工具选定后强制盲区自检"): a fixture package with
 // build tag archtest_fixture declares a contract with pathParams but has no
 // MustRejectPathParam call; the rule MUST report it as uncovered.
+//
+// This test runs the SAME scanner pipeline the production rule uses
+// (RunTyped + attributePQCoverageFromFile + computePQFailures), so any
+// regression in attributePQCoverageFromFile / extractLoadByIDVars /
+// isContractPQReceiverMethod / isContractPQFunc that would silently mark the
+// fixture as covered immediately fails this assertion. The previous form (PR
+// PR-W6-1) only fed empty maps to computePQFailures, leaving the four scanner
+// helpers above with no reverse fixture coverage — fixed per review F3.
 func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -162,11 +170,29 @@ func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 	fixtureReqs := buildContractPQRequirementsFromRelDir(t, root, fixtureRelDir)
 	require.NotEmpty(t, fixtureReqs, "fixture must have at least one contract with path/queryParams")
 
-	// The fixture test file does NOT call MustRejectPathParam, so both coverage
-	// maps are empty — simulate this by passing empty maps.
-	emptyPath := make(map[string]bool)
-	emptyQuery := make(map[string]bool)
-	failures := computePQFailures(fixtureReqs, emptyPath, emptyQuery)
+	// Run the real scanner against the fixture package: same attribute helpers
+	// used by TestContractPathQueryCoverage01.
+	pathParamCovered := make(map[string]bool)
+	queryParamCovered := make(map[string]bool)
+	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_missing_reject/..."
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
+		[]string{fixturePattern}, func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				attributePQCoverageFromFile(file, p.TypesInfo, pathParamCovered, queryParamCovered)
+			}
+			return nil
+		})
+
+	// Fixture deliberately calls ValidatePathParam (not MustRejectPathParam),
+	// so the per-receiver-method dispatch in attributePQCoverageFromFile must
+	// leave both maps empty for the fixture contract ID. Any silent acceptance
+	// of ValidatePathParam as coverage, or a receiver-type check that resolves
+	// to the wrong package, would mark the contract covered and fail this
+	// assertion.
+	failures := computePQFailures(fixtureReqs, pathParamCovered, queryParamCovered)
 	require.NotEmpty(t, failures,
 		"CONTRACT-PATH-QUERY-COVERAGE-01 reverse self-check: fixture must produce ≥1 missing-reject failure "+
 			"(fixture contract has pathParams but no MustRejectPathParam call)")
