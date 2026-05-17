@@ -62,16 +62,24 @@ func newRedactedErrorMsg(err error) redactedErrorMsg {
 	return redactedErrorMsg(redaction.RedactString(err.Error()))
 }
 
-// slogDependencyEntry is the ops-diagnostics shape for a probe result.
-// Emitted under slog.Any("dependencies", map[string]slogDependencyEntry{...})
-// in (*readyzResult).logUnhealthy. The ErrorMsg field is typed
-// redactedErrorMsg so the type system guarantees every value has already
-// passed through the redaction funnel before reaching slog backends.
+// SlogDependencyEntry is the ops-diagnostics shape (channel d) for a single
+// probe result inside the slog "readyz unhealthy" record. It is exported so
+// out-of-package tests (cmd/corebundle, runtime/bootstrap) can type-assert
+// `depsAttr.Any().(map[string]health.SlogDependencyEntry)`. The struct is
+// emitted under slog.Any("dependencies", map[string]SlogDependencyEntry{...})
+// in (*readyzResult).logUnhealthy.
+//
+// ErrorMsg is typed redactedErrorMsg (unexported) so the type system
+// guarantees every value has already passed through the newRedactedErrorMsg
+// funnel — pkg/redaction.RedactString — before reaching slog backends.
+// External readers may convert to string via `string(e.ErrorMsg)` (the
+// conversion expression names string, not the unexported source type, so it
+// compiles cleanly from any package).
 //
 // JSON tags enable slog.JSONHandler to serialize snake_case keys consistent
 // with the wire shape; other log handlers (logfmt, custom) fall back to
 // reflected field names.
-type slogDependencyEntry struct {
+type SlogDependencyEntry struct {
 	Status     string           `json:"status"`
 	DurationMs int64            `json:"duration_ms"`
 	ErrorMsg   redactedErrorMsg `json:"error_msg,omitempty"`

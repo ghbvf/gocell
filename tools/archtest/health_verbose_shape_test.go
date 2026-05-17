@@ -17,17 +17,17 @@
 //	body fails this gate. Hard funnel: combined with the type being unexported,
 //	no external package can construct a redactedErrorMsg by any shape.
 //
-// HEALTH-VERBOSE-SCAN-COVERAGE-01 — fail-closed coverage gate. Asserts the
+// HEALTH-VERBOSE-SCAN-COVERAGE-01 — sanity gate: asserts the archtest scope
 //
-//	walker used by the two Hard rules above enumerates every non-test .go file
-//	under runtime/http/health/ (recursive). A future sub-package or filename
-//	quirk that drops files out of the scan would silently bypass the gates;
-//	this test catches the slip.
+//	used by the two Hard rules above enumerates the canonical files where the
+//	target types live (verbose_shape.go + health.go), so a future file move
+//	that relocates the types outside this scope is surfaced before silently
+//	dropping the gates.
 //
 // Blind-spot inventory (charter §3 mandatory) for HEALTH-REDACTED-ERROR-MSG-FUNNEL-01:
 //
 //	(a) untyped string literal conversion via assignment to ErrorMsg field
-//	    (e.g. `slogDependencyEntry{ErrorMsg: "raw"}`) — empty literal "" is
+//	    (e.g. `SlogDependencyEntry{ErrorMsg: "raw"}`) — empty literal "" is
 //	    the documented nil sentinel, any non-empty literal indicates bypass.
 //	    Reverse-checked by TestHealthRedactedErrorMsgFunnelLiteralReverse.
 //	(b) reflect-based construction — requires reflect.Value.Convert on the
@@ -40,16 +40,11 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"io/fs"
 	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -60,7 +55,7 @@ const (
 	healthVerboseShapeName               = "verboseDependencyEntry"
 	healthRedactedErrorMsgTypeName       = "redactedErrorMsg"
 	healthRedactedErrorMsgFunnelFuncName = "newRedactedErrorMsg"
-	healthSlogEntryTypeName              = "slogDependencyEntry"
+	healthSlogEntryTypeName              = "SlogDependencyEntry"
 )
 
 // healthVerboseWireAllowedFields is the verbatim field set of
@@ -73,54 +68,63 @@ var healthVerboseWireAllowedFields = map[string]struct{}{
 	"DurationMs": {},
 }
 
+// healthScope returns the DirsScope used by all three HEALTH-VERBOSE-* gates.
+// Single source of truth: the SCAN-COVERAGE test verifies this scope resolves
+// the canonical files where the target types live.
+func healthScope(t *testing.T) Scope {
+	t.Helper()
+	return DirsScope(findModuleRoot(t), []string{healthPackageRelativeRoot})
+}
+
 // TestHealthVerboseWireShapeFrozen enforces HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01.
 func TestHealthVerboseWireShapeFrozen(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	pkgDir := filepath.Join(root, healthPackageRelativeRoot)
-	fset := token.NewFileSet()
-
 	var (
-		found   bool
-		seen    = make(map[string]struct{})
-		unknown []string
+		found bool
+		seen  = make(map[string]struct{})
 	)
-	require.NoError(t, eachHealthProductionFile(pkgDir, func(path string) error {
-		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
-		}
-		EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-			if ts.Name == nil || ts.Name.Name != healthVerboseShapeName {
-				return
-			}
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok || st.Fields == nil {
-				return
-			}
-			found = true
-			for _, field := range st.Fields.List {
-				if len(field.Names) == 0 {
-					line := fset.Position(field.Type.Pos()).Line
-					unknown = append(unknown, fmt.Sprintf("%s:%d: <embedded field>", rel, line))
-					continue
+	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, f := range p.Files {
+			EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+				if ts.Name == nil || ts.Name.Name != healthVerboseShapeName {
+					return
 				}
-				for _, name := range field.Names {
-					seen[name.Name] = struct{}{}
-					if _, ok := healthVerboseWireAllowedFields[name.Name]; !ok {
-						line := fset.Position(name.Pos()).Line
-						unknown = append(unknown, fmt.Sprintf("%s:%d: %s", rel, line, name.Name))
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok || st.Fields == nil {
+					return
+				}
+				found = true
+				for _, field := range st.Fields.List {
+					if len(field.Names) == 0 {
+						ds = append(ds, Diagnostic{
+							Rel:     p.Rel(f),
+							Line:    p.Fset.Position(field.Type.Pos()).Line,
+							Message: "<embedded field> — wire shape forbids embedded fields (channel d owns error text)",
+						})
+						continue
+					}
+					for _, name := range field.Names {
+						seen[name.Name] = struct{}{}
+						if _, ok := healthVerboseWireAllowedFields[name.Name]; !ok {
+							ds = append(ds, Diagnostic{
+								Rel:  p.Rel(f),
+								Line: p.Fset.Position(name.Pos()).Line,
+								Message: fmt.Sprintf("%s — field not in allowlist; the wire shape carries no error text by design "+
+									"(channel d ops-diagnostics owns it). Adding a field requires updating "+
+									"healthVerboseWireAllowedFields and amending ADR "+
+									"docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md §3+§6", name.Name),
+							})
+						}
 					}
 				}
-			}
-		})
-		return nil
-	}))
+			})
+		}
+		return ds
+	})
+
+	Report(t, ruleHealthVerboseWireShapeFrozen, diags)
 
 	if !found {
 		t.Fatalf("%s: %s struct definition not found under %s — if the type was relocated, "+
@@ -128,25 +132,12 @@ func TestHealthVerboseWireShapeFrozen(t *testing.T) {
 			ruleHealthVerboseWireShapeFrozen, healthVerboseShapeName, healthPackageRelativeRoot)
 	}
 
-	var missing []string
 	for k := range healthVerboseWireAllowedFields {
 		if _, ok := seen[k]; !ok {
-			missing = append(missing, k)
+			t.Errorf("%s: required field %s missing from %s.%s — removing a field changes the wire payload; "+
+				"review ADR 202605171200",
+				ruleHealthVerboseWireShapeFrozen, k, healthPackageRelativeRoot, healthVerboseShapeName)
 		}
-	}
-
-	sort.Strings(unknown)
-	sort.Strings(missing)
-	for _, u := range unknown {
-		t.Errorf("%s: %s — field not in allowlist; the wire shape carries no error text by "+
-			"design (channel d ops-diagnostics owns it). Adding a field requires updating "+
-			"healthVerboseWireAllowedFields and amending ADR "+
-			"docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md §3+§6",
-			ruleHealthVerboseWireShapeFrozen, u)
-	}
-	for _, m := range missing {
-		t.Errorf("%s: required field %s missing from %s.%s — removing a field changes the wire payload; review ADR 202605171200",
-			ruleHealthVerboseWireShapeFrozen, m, healthPackageRelativeRoot, healthSlogEntryTypeName)
 	}
 }
 
@@ -154,206 +145,126 @@ func TestHealthVerboseWireShapeFrozen(t *testing.T) {
 //
 // Detection (pure AST, no go/types — scope is one directory, the type being
 // unexported closes the package boundary):
-//  1. Walk every non-test .go file under runtime/http/health/ recursively.
-//  2. For each file, traverse FuncDecls. Inside each function body, find every
-//     *ast.CallExpr whose Fun is *ast.Ident{Name: "redactedErrorMsg"}.
+//  1. Walk every non-test .go file under runtime/http/health/ recursively via
+//     archtest.Run + DirsScope.
+//  2. For each file, traverse top-level FuncDecls (direct children of *ast.File).
+//     Inside each function body, find every *ast.CallExpr whose Fun is
+//     *ast.Ident{Name: "redactedErrorMsg"}.
 //  3. Assert the enclosing FuncDecl.Name is "newRedactedErrorMsg".
 func TestHealthRedactedErrorMsgFunnel(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	pkgDir := filepath.Join(root, healthPackageRelativeRoot)
-	fset := token.NewFileSet()
-
-	var violations []string
-	require.NoError(t, eachHealthProductionFile(pkgDir, func(path string) error {
-		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
-		}
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			fnName := ""
-			if fd.Name != nil {
-				fnName = fd.Name.Name
-			}
-			EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-				ident, ok := call.Fun.(*ast.Ident)
-				if !ok || ident.Name != healthRedactedErrorMsgTypeName {
+	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, f := range p.Files {
+			EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+				if fd.Body == nil {
 					return
 				}
-				if fnName != healthRedactedErrorMsgFunnelFuncName {
-					line := fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: redactedErrorMsg(...) conversion inside %s; only %s may construct redactedErrorMsg values",
-						rel, line, fnName, healthRedactedErrorMsgFunnelFuncName,
-					))
+				fnName := ""
+				if fd.Name != nil {
+					fnName = fd.Name.Name
 				}
+				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+					ident, ok := call.Fun.(*ast.Ident)
+					if !ok || ident.Name != healthRedactedErrorMsgTypeName {
+						return
+					}
+					if fnName != healthRedactedErrorMsgFunnelFuncName {
+						ds = append(ds, Diagnostic{
+							Rel:  p.Rel(f),
+							Line: p.Fset.Position(call.Pos()).Line,
+							Message: fmt.Sprintf(
+								"redactedErrorMsg(...) conversion inside %s; only %s may construct redactedErrorMsg values",
+								fnName, healthRedactedErrorMsgFunnelFuncName,
+							),
+						})
+					}
+				})
 			})
 		}
-		return nil
-	}))
+		return ds
+	})
 
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Errorf("%s: %s", ruleHealthRedactedErrorMsgFunnel, v)
-	}
+	Report(t, ruleHealthRedactedErrorMsgFunnel, diags)
 }
 
 // TestHealthRedactedErrorMsgFunnelLiteralReverse is the blind-spot reverse
 // self-check for HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 case (a): asserts that
-// no slogDependencyEntry composite literal in runtime/http/health/ sets
+// no SlogDependencyEntry composite literal in runtime/http/health/ sets
 // ErrorMsg to a non-empty string literal (which would bypass the funnel via
 // untyped const conversion). Empty literal "" is allowed as the documented
 // nil sentinel.
 func TestHealthRedactedErrorMsgFunnelLiteralReverse(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	pkgDir := filepath.Join(root, healthPackageRelativeRoot)
-	fset := token.NewFileSet()
-
-	var violations []string
-	require.NoError(t, eachHealthProductionFile(pkgDir, func(path string) error {
-		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
+	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, f := range p.Files {
+			EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+				ident, ok := cl.Type.(*ast.Ident)
+				if !ok || ident.Name != healthSlogEntryTypeName {
+					return
+				}
+				EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+					keyIdent, ok := kv.Key.(*ast.Ident)
+					if !ok || keyIdent.Name != "ErrorMsg" {
+						return
+					}
+					lit, ok := kv.Value.(*ast.BasicLit)
+					if !ok {
+						// Not a literal — typed call result (newRedactedErrorMsg etc).
+						// The forward TestHealthRedactedErrorMsgFunnel covers the
+						// conversion-side rule; here we only watch literal bypass.
+						return
+					}
+					if lit.Kind == token.STRING && lit.Value != `""` {
+						ds = append(ds, Diagnostic{
+							Rel:  p.Rel(f),
+							Line: p.Fset.Position(lit.Pos()).Line,
+							Message: fmt.Sprintf(
+								"(literal reverse self-check): SlogDependencyEntry.ErrorMsg literal %s — only "+
+									"\"\" sentinel or newRedactedErrorMsg(...) result is allowed",
+								lit.Value,
+							),
+						})
+					}
+				})
+			})
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
-		}
-		EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
-			ident, ok := cl.Type.(*ast.Ident)
-			if !ok || ident.Name != healthSlogEntryTypeName {
-				return
-			}
-			for _, elt := range cl.Elts {
-				kv, ok := elt.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-				keyIdent, ok := kv.Key.(*ast.Ident)
-				if !ok || keyIdent.Name != "ErrorMsg" {
-					continue
-				}
-				lit, ok := kv.Value.(*ast.BasicLit)
-				if !ok {
-					// Not a literal — typed call result (newRedactedErrorMsg etc).
-					// The forward TestHealthRedactedErrorMsgFunnel covers the
-					// conversion-side rule; here we only watch literal bypass.
-					continue
-				}
-				if lit.Kind == token.STRING && lit.Value != `""` {
-					line := fset.Position(lit.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: slogDependencyEntry.ErrorMsg literal %s — only \"\" sentinel or newRedactedErrorMsg(...) result is allowed",
-						rel, line, lit.Value,
-					))
-				}
-			}
-		})
-		return nil
-	}))
+		return ds
+	})
 
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Errorf("%s (literal reverse self-check): %s", ruleHealthRedactedErrorMsgFunnel, v)
-	}
+	Report(t, ruleHealthRedactedErrorMsgFunnel, diags)
 }
 
 // TestHealthVerboseScanCoverage enforces HEALTH-VERBOSE-SCAN-COVERAGE-01.
 //
-// Compares the file set yielded by eachHealthProductionFile (the walker the
-// two Hard rules above consume) against a ground-truth walk over the same
-// directory tree using only filename predicate "non-test .go". A mismatch
-// indicates the walker silently drops files due to a sub-package quirk,
-// build tag, or filename oddity — which would let a future bypass slip past
-// the Hard rules without warning.
+// Sanity gate: the DirsScope built by healthScope must enumerate the canonical
+// files where the target types live (verbose_shape.go declares
+// verboseDependencyEntry + redactedErrorMsg + SlogDependencyEntry + the funnel
+// function; health.go is the typical caller). If any of these moves out of
+// runtime/http/health/ silently, the Hard rules above would still pass
+// vacuously — this test catches that class of regression.
 func TestHealthVerboseScanCoverage(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	pkgDir := filepath.Join(root, healthPackageRelativeRoot)
-
-	var scanned []string
-	require.NoError(t, eachHealthProductionFile(pkgDir, func(path string) error {
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
+	seen := make(map[string]struct{})
+	_ = Run(t, healthScope(t), func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			seen[p.Rel(f)] = struct{}{}
 		}
-		scanned = append(scanned, rel)
 		return nil
-	}))
-
-	var truth []string
-	require.NoError(t, filepath.WalkDir(pkgDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		base := d.Name()
-		if !strings.HasSuffix(base, ".go") || strings.HasSuffix(base, "_test.go") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
-		}
-		truth = append(truth, rel)
-		return nil
-	}))
-
-	sort.Strings(scanned)
-	sort.Strings(truth)
-	assert.Equal(t, truth, scanned,
-		"%s: eachHealthProductionFile must enumerate every non-test .go file under %s; "+
-			"missing files would silently bypass HEALTH-VERBOSE-* gates",
-		ruleHealthVerboseScanCoverage, healthPackageRelativeRoot)
-
-	// Defense in depth: ground-truth set must include the canonical files
-	// where the Hard rules expect to find their targets. A future file move
-	// that relocates these out of the directory would fail this assertion
-	// before reaching the Hard rules themselves.
-	requireContains(t, truth, filepath.Join(healthPackageRelativeRoot, "verbose_shape.go"))
-	requireContains(t, truth, filepath.Join(healthPackageRelativeRoot, "health.go"))
-}
-
-// eachHealthProductionFile walks runtime/http/health/ recursively and invokes
-// visit on every non-test .go file. Single source of truth for the file set
-// scanned by HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01 and
-// HEALTH-REDACTED-ERROR-MSG-FUNNEL-01.
-func eachHealthProductionFile(pkgDir string, visit func(path string) error) error {
-	return filepath.WalkDir(pkgDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		base := d.Name()
-		if !strings.HasSuffix(base, ".go") || strings.HasSuffix(base, "_test.go") {
-			return nil
-		}
-		return visit(path)
 	})
-}
 
-func requireContains(t *testing.T, items []string, want string) {
-	t.Helper()
-	for _, item := range items {
-		if item == want {
-			return
-		}
+	required := []string{
+		filepath.ToSlash(filepath.Join(healthPackageRelativeRoot, "verbose_shape.go")),
+		filepath.ToSlash(filepath.Join(healthPackageRelativeRoot, "health.go")),
 	}
-	t.Fatalf("expected %q in %v", want, items)
+	for _, want := range required {
+		_, ok := seen[want]
+		assert.True(t, ok,
+			"%s: archtest DirsScope must enumerate %s; missing files would let HEALTH-VERBOSE-* gates pass vacuously",
+			ruleHealthVerboseScanCoverage, want)
+	}
 }

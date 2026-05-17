@@ -190,15 +190,19 @@ func withSlogCapture(t *testing.T) *captureHandler {
 
 // readyzUnhealthyDeps fetches the verbose-breakdown dependencies map from
 // the captured "readyz unhealthy" slog records. Tests assert on this rather
-// than on the 503 wire body because K#08 5xx redaction strips Details from
-// the public envelope; verbose breakdown lives only in server-side logs.
+// than on the 503 wire body because:
+//   - K#08 5xx redaction strips Details from the public envelope.
+//   - PR391-HEALTH-VERBOSE-REDACTION-01 / ADR 202605171200 forbid error text
+//     on wire entirely; full (redacted) error lives only in slog channel d.
 //
 // Bootstrap integration tests typically poll /readyz (non-verbose) before
 // issuing a single verbose request, so multiple "readyz unhealthy" records
 // accumulate. Non-verbose records carry only status/reason; verbose records
 // add cells/dependencies/adapters. We return the first record whose
 // dependencies attr is non-nil — that is the verbose 503.
-func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[string]any {
+//
+// Return type is map[string]health.SlogDependencyEntry (typed).
+func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]health.SlogDependencyEntry {
 	t.Helper()
 	const (
 		recMsg  = "readyz unhealthy"
@@ -216,12 +220,12 @@ func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[s
 			}
 			return true
 		})
-		deps, ok := depsAttr.Any().(map[string]map[string]any)
+		deps, ok := depsAttr.Any().(map[string]health.SlogDependencyEntry)
 		if ok && deps != nil {
 			return deps
 		}
 	}
-	t.Fatalf("no verbose %q slog record with non-nil %q map; capture had %d records",
+	t.Fatalf("no verbose %q slog record with non-nil typed %q map; capture had %d records",
 		recMsg, attrKey, len(capture.snapshot()))
 	return nil
 }
@@ -243,12 +247,12 @@ func captureHasReadyzDependencyStatus(capture *captureHandler, depName, status s
 			}
 			return true
 		})
-		deps, ok := depsAttr.Any().(map[string]map[string]any)
+		deps, ok := depsAttr.Any().(map[string]health.SlogDependencyEntry)
 		if !ok {
 			continue
 		}
 		probe, ok := deps[depName]
-		if ok && probe["status"] == status {
+		if ok && probe.Status == status {
 			return true
 		}
 	}
@@ -874,7 +878,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmq, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
-	assert.Equal(t, "unhealthy", rabbitmq["status"])
+	assert.Equal(t, "unhealthy", rabbitmq.Status)
 
 	cancel()
 	select {
@@ -1169,10 +1173,10 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmqEntry, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
-	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
+	assert.Equal(t, "healthy", rabbitmqEntry.Status, "rabbitmq checker should be healthy")
 	postgresEntry, ok := deps["postgres"]
 	require.True(t, ok, "postgres entry must be present in slog breakdown")
-	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
+	assert.Equal(t, "unhealthy", postgresEntry.Status, "postgres checker should be unhealthy")
 
 	cancel()
 	select {

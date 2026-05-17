@@ -262,14 +262,14 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 //     stripped to nil in 503 per K#08); typed verboseDependencyEntry has
 //     no error text by construction
 //   - slogDependencies = channel d view (server-side slog only); typed
-//     slogDependencyEntry carries the full redacted error via the
+//     SlogDependencyEntry carries the full redacted error via the
 //     newRedactedErrorMsg funnel
 type readyzResult struct {
 	overall          string // "healthy" | "degraded" | "unhealthy"
 	verbose          bool
 	cells            map[string]string                 // nil when !verbose
 	dependencies     map[string]verboseDependencyEntry // nil when !verbose (wire view)
-	slogDependencies map[string]slogDependencyEntry    // nil when !verbose (channel d)
+	slogDependencies map[string]SlogDependencyEntry    // nil when !verbose (channel d)
 	adapters         map[string]string                 // nil when !verbose or no adapter info registered
 	reason           string                            // optional low-cardinality reason for unhealthy 503 details
 }
@@ -419,7 +419,7 @@ func (h *Handler) aggregateCellHealth(verbose bool) (string, map[string]string) 
 //
 //   - wire: map[name]verboseDependencyEntry — public payload, frozen to
 //     {Status, DurationMs}; no error text by construction.
-//   - slog: map[name]slogDependencyEntry — ops-diagnostics (channel d);
+//   - slog: map[name]SlogDependencyEntry — ops-diagnostics (channel d);
 //     ErrorMsg is typed redactedErrorMsg, produced only via the
 //     newRedactedErrorMsg funnel which routes through pkg/redaction.RedactString.
 //
@@ -431,10 +431,10 @@ func (h *Handler) aggregateCellHealth(verbose bool) (string, map[string]string) 
 // withheld" but preserves the same wire-no-text invariant.
 func (h *Handler) aggregateProbeResults(
 	results map[string]ProbeResult, verbose bool,
-) (overall string, wire map[string]verboseDependencyEntry, slogDiag map[string]slogDependencyEntry) {
+) (overall string, wire map[string]verboseDependencyEntry, slogDiag map[string]SlogDependencyEntry) {
 	if verbose {
 		wire = make(map[string]verboseDependencyEntry, len(results))
-		slogDiag = make(map[string]slogDependencyEntry, len(results))
+		slogDiag = make(map[string]SlogDependencyEntry, len(results))
 	}
 	worst := 0 // healthy
 	for name, pr := range results {
@@ -446,7 +446,7 @@ func (h *Handler) aggregateProbeResults(
 				Status:     pr.Status,
 				DurationMs: pr.Duration.Milliseconds(),
 			}
-			slogDiag[name] = slogDependencyEntry{
+			slogDiag[name] = SlogDependencyEntry{
 				Status:     pr.Status,
 				DurationMs: pr.Duration.Milliseconds(),
 				ErrorMsg:   newRedactedErrorMsg(pr.Err),
@@ -495,7 +495,7 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 // responses always carry an empty details array (K#08 5xx strip).
 //
 // The slogDependencies map (not the wire dependencies) is what gets logged
-// — its typed slogDependencyEntry.ErrorMsg field carries the redacted error
+// — its typed SlogDependencyEntry.ErrorMsg field carries the redacted error
 // text via the newRedactedErrorMsg funnel (HEALTH-REDACTED-ERROR-MSG-FUNNEL-01),
 // while the wire dependencies map carries only {status, duration_ms} per
 // HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01.

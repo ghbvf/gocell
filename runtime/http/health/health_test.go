@@ -71,9 +71,9 @@ func withSlogCapture(t *testing.T) *captureHandler {
 // records carry only status/reason; verbose records add cells/dependencies/
 // adapters. We return the first record whose dependencies attr is non-nil.
 //
-// Return type is map[string]slogDependencyEntry (typed) — the slog payload
+// Return type is map[string]SlogDependencyEntry (typed) — the slog payload
 // shape is owned by readyzResult.logUnhealthy, not arbitrary map[string]any.
-func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]slogDependencyEntry {
+func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]SlogDependencyEntry {
 	t.Helper()
 	const (
 		recMsg  = "readyz unhealthy"
@@ -91,7 +91,7 @@ func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]slogD
 			}
 			return true
 		})
-		deps, ok := depsAttr.Any().(map[string]slogDependencyEntry)
+		deps, ok := depsAttr.Any().(map[string]SlogDependencyEntry)
 		if ok && deps != nil {
 			return deps
 		}
@@ -1200,7 +1200,7 @@ func (f *failWriter) Write(_ []byte) (int, error) { return 0, fmt.Errorf("simula
 
 // TestReadyz_VerboseDependencies_StructuredOutput verifies the typed slog
 // dependency format per ADR 202605171200 channel d: each entry is a
-// slogDependencyEntry struct with Status, DurationMs, and ErrorMsg fields.
+// SlogDependencyEntry struct with Status, DurationMs, and ErrorMsg fields.
 // Healthy probes have empty ErrorMsg (omitted on JSON serialization via
 // the json:",omitempty" tag); unhealthy probes carry the redacted error.
 func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
