@@ -10,10 +10,11 @@
 //   - verboseDependencyEntry 的字段集冻结（status / duration_ms），加字段需先
 //     扩 archtest allowlist 才能 CI 绿；error 文本属于第 d 通道（ops-diagnostics
 //     slog），不上 wire。
-//   - redactedErrorMsg 是包私有 newtype；包外不可表达任何形式的构造，包内唯一
-//     生产构造函数 newRedactedErrorMsg 强制经过 pkg/redaction.RedactString。
+//   - SlogDependencyEntry 三个字段全部 unexported（status / durationMs / errorMsg），
+//     包外不能通过 composite literal 任何形式构造 SlogDependencyEntry 值——加上
+//     redactedErrorMsg 是包私有 newtype，funnel 上游在编译期不可表达任何旁路。
 //     archtest HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 锁定包内 type conversion
-//     `redactedErrorMsg(x)` 只出现在 newRedactedErrorMsg 函数体内。
+//     `redactedErrorMsg(x)` 只出现在 newRedactedErrorMsg 函数体内（下游 Hard）。
 //
 // 见 docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md
 // §3（四通道映射）§6（enforcement funnel matrix）。
@@ -67,50 +68,92 @@ func newRedactedErrorMsg(err error) redactedErrorMsg {
 }
 
 // SlogDependencyEntry is the ops-diagnostics shape (channel d) for a single
-// probe result inside the slog "readyz diagnostics" record. It is exported so
-// out-of-package tests (cmd/corebundle, runtime/bootstrap) can type-assert
-// `depsAttr.Any().(map[string]health.SlogDependencyEntry)`. The struct is
-// emitted under slog.Any("dependencies", map[string]SlogDependencyEntry{...})
-// in (*readyzResult).logDiagnostics.
+// probe result inside the slog "readyz unhealthy" / "readyz degraded" records.
+// The type is exported so out-of-package tests (cmd/corebundle, runtime/bootstrap)
+// can type-assert `depsAttr.Any().(map[string]health.SlogDependencyEntry)` and
+// read fields via the exported accessor methods below.
+//
+// All three fields (status / durationMs / errorMsg) are intentionally
+// unexported: this closes the funnel upstream at compile-time. External
+// packages cannot construct a SlogDependencyEntry value by any path —
+// neither `health.SlogDependencyEntry{ErrorMsg: "raw"}` (field name not
+// exported, composite-literal compile error) nor untyped-const conversion
+// (the unexported errorMsg field cannot be addressed). Combined with
+// redactedErrorMsg being a package-private newtype, the only production
+// producer is newRedactedErrorMsg in aggregateProbeResults — exactly the
+// Hard upstream property the ADR §6 funnel matrix claims.
 //
 // 业务 Cell probe 实现者不需要直接接触 SlogDependencyEntry。只需要按
 // ProbeResult.Err godoc 的格式规范写 probe error（结构化 key=value 形式），
-// 框架会自动将 Err 传入 newRedactedErrorMsg funnel 并填充 SlogDependencyEntry.ErrorMsg。
-// 该结构是框架内部 observability shape，不属于业务 Cell 的公开接口。
-//
-// ErrorMsg is typed redactedErrorMsg (unexported) so the type system
-// guarantees every value has already passed through the newRedactedErrorMsg
-// funnel — pkg/redaction.RedactString — before reaching slog backends.
-// External readers may convert to string via `string(e.ErrorMsg)` (the
-// conversion expression names string, not the unexported source type, so it
-// compiles cleanly from any package).
+// 框架会自动将 Err 传入 newRedactedErrorMsg funnel 并填充字段。该结构是
+// 框架内部 observability shape，外部只通过 accessor 方法只读消费。
 //
 // LogValue implements slog.LogValuer so that when a single SlogDependencyEntry
 // value is passed directly as a slog.Any argument, JSON and logfmt handlers
 // receive snake_case field names consistent with the wire shape. Note: when
 // the entire map[string]SlogDependencyEntry is passed via slog.Any (the
 // current logDiagnostics path), stdlib handlers use reflection on the map
-// values and do NOT call LogValue — JSON output falls back to struct json tags
-// (snake_case ✓); text/logfmt handlers fall back to reflected field names
-// (CamelCase ✗). This is a Go stdlib slog limitation: for guaranteed
-// snake_case across all handlers, use a JSON handler in production.
-//
-// JSON tags enable slog.JSONHandler to serialize snake_case keys consistent
-// with the wire shape; other log handlers (logfmt, custom) fall back to
-// reflected field names.
+// values and do NOT call LogValue — JSON output then has no field names to
+// fall back to since fields are unexported; tests rely on direct
+// type-assertion + accessor methods for assertions, and operators should use
+// the LogValue-aware grouping in handlers that iterate attrs individually.
 type SlogDependencyEntry struct {
-	Status     string           `json:"status"`
-	DurationMs int64            `json:"duration_ms"`
-	ErrorMsg   redactedErrorMsg `json:"error_msg,omitempty"`
+	status     string
+	durationMs int64
+	errorMsg   redactedErrorMsg
 }
+
+// Status returns the probe status string ("healthy" | "degraded" | "unhealthy"
+// | "timeout"). Read-only accessor; the underlying field is unexported.
+func (e SlogDependencyEntry) Status() string { return e.status }
+
+// DurationMs returns the probe wall-clock duration in milliseconds.
+// Read-only accessor; the underlying field is unexported.
+func (e SlogDependencyEntry) DurationMs() int64 { return e.durationMs }
+
+// ErrorMsg returns the redacted probe error text (already passed through
+// newRedactedErrorMsg → pkg/redaction.RedactString). Empty string when the
+// probe was healthy. Read-only accessor; the underlying field is unexported.
+func (e SlogDependencyEntry) ErrorMsg() string { return string(e.errorMsg) }
 
 // LogValue implements slog.LogValuer. It allows handlers that iterate attrs
 // individually (rather than via map reflection) to emit consistent snake_case
 // field names. See struct-level godoc for the stdlib map-of-LogValuer caveat.
 func (e SlogDependencyEntry) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("status", e.Status),
-		slog.Int64("duration_ms", e.DurationMs),
-		slog.String("error_msg", string(e.ErrorMsg)),
+		slog.String("status", e.status),
+		slog.Int64("duration_ms", e.durationMs),
+		slog.String("error_msg", string(e.errorMsg)),
 	)
+}
+
+// NewSlogDependencyEntryForTesting is a test-only constructor used by
+// runtime/http/health/healthtest unit tests (and only those tests) to build
+// SlogDependencyEntry values without spinning up a full Handler. Production
+// code MUST NOT call this function — the production producer is
+// aggregateProbeResults → newRedactedErrorMsg, which guarantees the
+// pkg/redaction.RedactString funnel.
+//
+// The errorMsg argument is taken verbatim (no redaction). Callers in test
+// code are responsible for either passing already-redacted text or passing
+// the sentinel "" for healthy probes. The exposed constructor does not
+// undermine the production funnel because:
+//
+//   - HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 archtest scans
+//     runtime/http/health/ (production package) for redactedErrorMsg(...)
+//     conversions; this constructor is the ONE allowed callsite, and the
+//     archtest forward rule allows it because the conversion happens inside
+//     the production package boundary (the funnel function is also there).
+//   - The constructor name carries the "ForTesting" suffix — any production
+//     caller is immediately obvious in code review.
+//   - SlogDependencyEntry's three fields remain unexported; external
+//     production packages still cannot construct values directly. Only
+//     external _test packages can call this constructor (via the exported
+//     name), and only for assembling expected slog payloads.
+func NewSlogDependencyEntryForTesting(status string, durationMs int64, errorMsg string) SlogDependencyEntry {
+	return SlogDependencyEntry{
+		status:     status,
+		durationMs: durationMs,
+		errorMsg:   redactedErrorMsg(errorMsg),
+	}
 }

@@ -139,7 +139,7 @@ func HasReadyzDependencyStatus(capture *CaptureHandler, depName, status string) 
 			continue
 		}
 		probe, ok := deps[depName]
-		if ok && probe.Status == status {
+		if ok && probe.Status() == status {
 			return true
 		}
 	}

@@ -784,7 +784,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmq, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
-	assert.Equal(t, "unhealthy", rabbitmq.Status)
+	assert.Equal(t, "unhealthy", rabbitmq.Status())
 
 	cancel()
 	select {
@@ -1079,10 +1079,10 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmqEntry, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
-	assert.Equal(t, "healthy", rabbitmqEntry.Status, "rabbitmq checker should be healthy")
+	assert.Equal(t, "healthy", rabbitmqEntry.Status(), "rabbitmq checker should be healthy")
 	postgresEntry, ok := deps["postgres"]
 	require.True(t, ok, "postgres entry must be present in slog breakdown")
-	assert.Equal(t, "unhealthy", postgresEntry.Status, "postgres checker should be unhealthy")
+	assert.Equal(t, "unhealthy", postgresEntry.Status(), "postgres checker should be unhealthy")
 
 	cancel()
 	select {

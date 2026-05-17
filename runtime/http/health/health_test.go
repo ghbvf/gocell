@@ -311,10 +311,10 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmqEntry, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present")
-	assert.Equal(t, "healthy", rabbitmqEntry.Status, "rabbitmq checker should be healthy")
+	assert.Equal(t, "healthy", rabbitmqEntry.Status(), "rabbitmq checker should be healthy")
 	postgresEntry, ok := deps["postgres"]
 	require.True(t, ok, "postgres entry must be present")
-	assert.Equal(t, "unhealthy", postgresEntry.Status, "postgres checker should be unhealthy")
+	assert.Equal(t, "unhealthy", postgresEntry.Status(), "postgres checker should be unhealthy")
 }
 
 func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
@@ -522,33 +522,6 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	// non-verbose unhealthy 503 cannot expose cells/dependencies because the
 	// canonical envelope mandates an empty details array regardless of
 	// verbose mode (K#08 5xx redaction is unconditional).
-}
-
-func TestReadyzVerboseQueryParsing(t *testing.T) {
-	tests := []struct {
-		name    string
-		url     string
-		wantVal bool
-	}{
-		{name: "absent", url: "/readyz", wantVal: false},
-		{name: "bare flag", url: "/readyz?verbose", wantVal: true},
-		{name: "empty value", url: "/readyz?verbose=", wantVal: true},
-		{name: "one", url: "/readyz?verbose=1", wantVal: true},
-		{name: "true", url: "/readyz?verbose=true", wantVal: true},
-		{name: "TRUE mixed case", url: "/readyz?verbose=TRUE", wantVal: true},
-		{name: "false", url: "/readyz?verbose=false", wantVal: false},
-		{name: "zero", url: "/readyz?verbose=0", wantVal: false},
-		{name: "two", url: "/readyz?verbose=2", wantVal: false},
-		{name: "yes not supported", url: "/readyz?verbose=yes", wantVal: false},
-		{name: "unknown not supported", url: "/readyz?verbose=debug", wantVal: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
-			assert.Equal(t, tt.wantVal, readyzVerbose(req))
-		})
-	}
 }
 
 func TestRegisterChecker_DuplicateReturnsError(t *testing.T) {
@@ -890,9 +863,9 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	slowEntry, ok := deps["slow"]
 	require.True(t, ok, "slow entry must be present")
-	assert.Equal(t, "timeout", slowEntry.Status, "exceeded-deadline probe must be status=timeout")
-	require.NotEmpty(t, slowEntry.ErrorMsg, "timeout probe must include ErrorMsg in slog channel d")
-	assert.Contains(t, string(slowEntry.ErrorMsg), "deadline exceeded",
+	assert.Equal(t, "timeout", slowEntry.Status(), "exceeded-deadline probe must be status=timeout")
+	require.NotEmpty(t, slowEntry.ErrorMsg(), "timeout probe must include ErrorMsg in slog channel d")
+	assert.Contains(t, slowEntry.ErrorMsg(), "deadline exceeded",
 		"ErrorMsg must mention 'deadline exceeded'")
 }
 
@@ -968,9 +941,9 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	panicEntry, ok := deps["panicking"]
 	require.True(t, ok, "panicking entry must be present")
-	assert.Equal(t, "unhealthy", panicEntry.Status)
-	assert.NotEmpty(t, panicEntry.ErrorMsg, "panic probe must populate slog channel d ErrorMsg")
-	assert.Contains(t, string(panicEntry.ErrorMsg), "something went very wrong",
+	assert.Equal(t, "unhealthy", panicEntry.Status())
+	assert.NotEmpty(t, panicEntry.ErrorMsg(), "panic probe must populate slog channel d ErrorMsg")
+	assert.Contains(t, panicEntry.ErrorMsg(), "something went very wrong",
 		"plain-string panic text must reach slog channel d unredacted (no sensitive key prefix)")
 }
 
@@ -1030,7 +1003,7 @@ func TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog(t *testing.T) 
 	deps := readyzUnhealthyDeps(t, capture)
 	sensitiveEntry, ok := deps["sensitive"]
 	require.True(t, ok, "sensitive entry must be present in slog dependencies")
-	errMsg := string(sensitiveEntry.ErrorMsg)
+	errMsg := sensitiveEntry.ErrorMsg()
 	assert.Contains(t, errMsg, "<REDACTED>",
 		"slog channel d ErrorMsg must contain the redaction mask")
 	assert.NotContains(t, errMsg, leakSentinel,
@@ -1074,8 +1047,8 @@ func TestReadyz_VerbosePanicSecret_RedactedInSlog(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	panicEntry, ok := deps["panicking"]
 	require.True(t, ok, "panicking entry must be present in slog dependencies")
-	assert.Equal(t, "unhealthy", panicEntry.Status)
-	errMsg := string(panicEntry.ErrorMsg)
+	assert.Equal(t, "unhealthy", panicEntry.Status())
+	errMsg := panicEntry.ErrorMsg()
 	assert.Contains(t, errMsg, "<REDACTED>",
 		"slog channel d ErrorMsg must contain the redaction mask for panic-derived errors")
 	assert.NotContains(t, errMsg, leakSentinel,
@@ -1132,8 +1105,8 @@ func TestReadyz_VerboseError_UnknownKeyReachesSlogUnredacted(t *testing.T) {
 	slogDeps := readyzUnhealthyDeps(t, capture)
 	probeEntry, ok := slogDeps["unknown-key-probe"]
 	require.True(t, ok, "unknown-key-probe entry must be present in slog dependencies")
-	assert.Equal(t, "unhealthy", probeEntry.Status)
-	assert.Contains(t, string(probeEntry.ErrorMsg), bareToken,
+	assert.Equal(t, "unhealthy", probeEntry.Status())
+	assert.Contains(t, probeEntry.ErrorMsg(), bareToken,
 		"ADR §3 ⚠ blind-spot: bare token without key anchor is NOT redacted in slog channel d; "+
 			"probe authors must use key=value form for secrets to be masked")
 }
@@ -1217,11 +1190,11 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	deps := readyzUnhealthyDeps(t, capture)
 	stuck, ok := deps["stuck"]
 	require.True(t, ok, "stuck probe must be present in verbose dependencies")
-	assert.Equal(t, "timeout", stuck.Status,
+	assert.Equal(t, "timeout", stuck.Status(),
 		"uncooperative probe must be surfaced as status=timeout (not unhealthy)")
-	require.NotEmpty(t, stuck.ErrorMsg, "timeout probe must include ErrorMsg in slog channel d")
-	assert.Contains(t, string(stuck.ErrorMsg), "deadline",
-		"timeout probe ErrorMsg must mention deadline; got %q", stuck.ErrorMsg)
+	require.NotEmpty(t, stuck.ErrorMsg(), "timeout probe must include ErrorMsg in slog channel d")
+	assert.Contains(t, stuck.ErrorMsg(), "deadline",
+		"timeout probe ErrorMsg must mention deadline; got %q", stuck.ErrorMsg())
 }
 
 // TestWriteJSON_WriteError verifies that writeJSON logs an slog.Error when the
@@ -1286,14 +1259,14 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 
 	okEntry, ok := deps["ok-probe"]
 	require.True(t, ok, "ok-probe must be present")
-	assert.Equal(t, "healthy", okEntry.Status)
-	assert.Empty(t, okEntry.ErrorMsg, "healthy probe must have empty ErrorMsg")
+	assert.Equal(t, "healthy", okEntry.Status())
+	assert.Empty(t, okEntry.ErrorMsg(), "healthy probe must have empty ErrorMsg")
 
 	failEntry, ok := deps["fail-probe"]
 	require.True(t, ok, "fail-probe must be present")
-	assert.Equal(t, "unhealthy", failEntry.Status)
-	assert.NotEmpty(t, failEntry.ErrorMsg, "unhealthy probe must include ErrorMsg")
-	assert.Contains(t, string(failEntry.ErrorMsg), "disk full")
+	assert.Equal(t, "unhealthy", failEntry.Status())
+	assert.NotEmpty(t, failEntry.ErrorMsg(), "unhealthy probe must include ErrorMsg")
+	assert.Contains(t, failEntry.ErrorMsg(), "disk full")
 }
 
 // --- Three-state (healthy / degraded / unhealthy) tests (PR-A49 B4) ---
@@ -1544,8 +1517,8 @@ func TestReadyz_VerboseDegraded_SlogCapturesRedactedError(t *testing.T) {
 		}
 	}
 	require.True(t, found, "slog must emit a %q Info record with a 'cache' dependencies entry", diagMsg)
-	assert.Equal(t, "degraded", diagEntry.Status, "slog channel d entry status must be 'degraded'")
-	errMsg := string(diagEntry.ErrorMsg)
+	assert.Equal(t, "degraded", diagEntry.Status(), "slog channel d entry status must be 'degraded'")
+	errMsg := diagEntry.ErrorMsg()
 	assert.Contains(t, errMsg, "<REDACTED>",
 		"slog channel d ErrorMsg must contain the redaction mask for the degraded error")
 	assert.NotContains(t, errMsg, leakSentinel,

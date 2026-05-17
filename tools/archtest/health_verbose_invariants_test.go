@@ -14,8 +14,17 @@
 //
 //	construct redactedErrorMsg values only via newRedactedErrorMsg. Any other
 //	type conversion `redactedErrorMsg(x)` outside newRedactedErrorMsg's function
-//	body fails this gate. Hard funnel: combined with the type being unexported,
-//	no external package can construct a redactedErrorMsg by any shape.
+//	body fails this gate (downstream Hard, archtest forward rule below).
+//
+//	Upstream Hard is enforced by the Go type system, not archtest:
+//	  - SlogDependencyEntry's three fields (status / durationMs / errorMsg)
+//	    are unexported, so external packages cannot construct a value via
+//	    composite literal by any path (field name not exported → compile error).
+//	  - redactedErrorMsg is a package-private newtype; external packages
+//	    cannot name the type, so reflect.Value.Convert is the only theoretical
+//	    bypass — and using reflect inside the health package would itself be
+//	    the bug under investigation, which a fresh code review (not archtest)
+//	    is the appropriate gate for.
 //
 // HEALTH-VERBOSE-SCAN-COVERAGE-01 — sanity gate: asserts the archtest scope
 //
@@ -26,44 +35,76 @@
 //
 // Blind-spot inventory (charter §3 mandatory) for HEALTH-REDACTED-ERROR-MSG-FUNNEL-01:
 //
-//	(a) untyped string literal conversion via assignment to ErrorMsg field
-//	    (e.g. `SlogDependencyEntry{ErrorMsg: "raw"}`) — empty literal "" is
-//	    the documented nil sentinel, any non-empty literal indicates bypass.
-//	    Reverse-checked by TestHealthRedactedErrorMsgFunnelLiteralReverse.
-//	(b) reflect-based construction — requires reflect.Value.Convert on the
-//	    redactedErrorMsg type; the type being unexported makes this impossible
-//	    to reach from outside the package, and using reflect within the
-//	    package would itself be the bug being investigated. No additional
-//	    archtest needed — the package boundary closes the upstream side.
+//	(a) composite-literal ErrorMsg field assignment from outside the health
+//	    package — used to bypass via untyped const conversion before this PR.
+//	    NOW compile-time forbidden by unexported field name; no archtest
+//	    needed (the Go compiler is the gate).
+//	(b) reflect-based construction of redactedErrorMsg — requires
+//	    reflect.Value.Convert on the unexported type. The type being
+//	    unexported makes this impossible to reach from outside the package;
+//	    using reflect within the package is the bug being investigated.
+//	    No archtest can usefully gate this; code review is the appropriate
+//	    backstop.
 //	(c) package-level GenDecl initializer containing `redactedErrorMsg(...)` —
-//	    e.g. `var _ = redactedErrorMsg("bypass")` in a var/const block. The
-//	    forward scan in TestHealthRedactedErrorMsgFunnel walks FuncDecl.Body
-//	    nodes only (EachInChildren[ast.FuncDecl] → EachInSubtree inside body),
-//	    so a call expression nested in a GenDecl ValueSpec.Values RHS is outside
-//	    the FuncDecl.Body scan subtree and would be silently ignored.
-//	    Reverse-checked by TestHealthRedactedErrorMsgFunnelPackageLevelVarReverse.
+//	    e.g. `var _ = redactedErrorMsg("bypass")` in a var/const block.
+//	    Caught by package-level GenDecl scan added to the forward rule
+//	    (TestHealthRedactedErrorMsgFunnel walks both FuncDecl.Body AND
+//	    GenDecl subtrees), so package-level bypass produces the same
+//	    Diagnostic as inside-function bypass.
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"go/token"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
+// sortedAllowlistFuncs returns the keys of m as a deterministic sorted slice
+// — used in archtest Diagnostic messages so the allowed-callsite list renders
+// consistently regardless of map iteration order. Local-scoped helper rather
+// than reusing sortedKeys (clock_invariants_test.go) because that one takes
+// map[string]bool with different semantics.
+func sortedAllowlistFuncs(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 const (
-	ruleHealthVerboseWireShapeFrozen     = "HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01"
-	ruleHealthRedactedErrorMsgFunnel     = "HEALTH-REDACTED-ERROR-MSG-FUNNEL-01"
-	ruleHealthVerboseScanCoverage        = "HEALTH-VERBOSE-SCAN-COVERAGE-01"
-	healthPackageRelativeRoot            = "runtime/http/health"
-	healthVerboseShapeName               = "verboseDependencyEntry"
-	healthRedactedErrorMsgTypeName       = "redactedErrorMsg"
-	healthRedactedErrorMsgFunnelFuncName = "newRedactedErrorMsg"
-	healthSlogEntryTypeName              = "SlogDependencyEntry"
+	ruleHealthVerboseWireShapeFrozen = "HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01"
+	ruleHealthRedactedErrorMsgFunnel = "HEALTH-REDACTED-ERROR-MSG-FUNNEL-01"
+	ruleHealthVerboseScanCoverage    = "HEALTH-VERBOSE-SCAN-COVERAGE-01"
+	healthPackageRelativeRoot        = "runtime/http/health"
+	healthVerboseShapeName           = "verboseDependencyEntry"
+	healthRedactedErrorMsgTypeName   = "redactedErrorMsg"
 )
+
+// healthRedactedErrorMsgFunnelAllowedFuncs is the closed set of function
+// names that may contain a `redactedErrorMsg(...)` conversion CallExpr.
+//
+// Production funnel (single source of truth):
+//   - newRedactedErrorMsg — the production producer, routes through
+//     pkg/redaction.RedactString before construction.
+//
+// Test-only opt-out (deliberately exported via "ForTesting" name suffix):
+//   - NewSlogDependencyEntryForTesting — used by runtime/http/health/healthtest
+//     unit tests to assemble expected slog payloads without spinning up a
+//     full Handler. The "ForTesting" suffix is the human-readable opt-out
+//     marker; cross-package callers are immediately obvious in code review.
+//     The Hard funnel claim is preserved by (a) the suffix convention, and
+//     (b) this allowlist being the single source of truth (any new entry
+//     here is reviewer-visible).
+var healthRedactedErrorMsgFunnelAllowedFuncs = map[string]struct{}{
+	"newRedactedErrorMsg":              {},
+	"NewSlogDependencyEntryForTesting": {},
+}
 
 // healthVerboseWireAllowedFields is the verbatim field set of
 // runtime/http/health.verboseDependencyEntry. Adding a field requires
@@ -118,8 +159,8 @@ func TestHealthVerboseWireShapeFrozen(t *testing.T) {
 							ds = append(ds, Diagnostic{
 								Rel:  p.Rel(f),
 								Line: p.Fset.Position(name.Pos()).Line,
-								Message: fmt.Sprintf("%s — field not in allowlist; the wire shape carries no error text by design "+
-									"(channel d ops-diagnostics owns it). Adding a field requires updating "+
+								Message: fmt.Sprintf("%s — field not in allowlist; the wire shape carries no error text by "+
+									"design (channel d ops-diagnostics owns it). Adding a field requires updating "+
 									"healthVerboseWireAllowedFields and amending ADR "+
 									"docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md §3+§6", name.Name),
 							})
@@ -148,22 +189,30 @@ func TestHealthVerboseWireShapeFrozen(t *testing.T) {
 	}
 }
 
-// TestHealthRedactedErrorMsgFunnel enforces HEALTH-REDACTED-ERROR-MSG-FUNNEL-01.
+// TestHealthRedactedErrorMsgFunnel enforces HEALTH-REDACTED-ERROR-MSG-FUNNEL-01
+// (downstream Hard).
 //
 // Detection (pure AST, no go/types — scope is one directory, the type being
 // unexported closes the package boundary):
 //  1. Walk every non-test .go file under runtime/http/health/ recursively via
 //     archtest.Run + DirsScope.
-//  2. For each file, traverse top-level FuncDecls (direct children of *ast.File).
-//     Inside each function body, find every *ast.CallExpr whose Fun is
-//     *ast.Ident{Name: "redactedErrorMsg"}.
-//  3. Assert the enclosing FuncDecl.Name is "newRedactedErrorMsg".
+//  2. For each file, scan ALL CallExpr subtrees from BOTH top-level FuncDecls
+//     (function bodies) AND top-level GenDecls (var/const initializers) —
+//     covering blind-spot inventory case (c).
+//  3. For each CallExpr whose Fun is *ast.Ident{Name: "redactedErrorMsg"}
+//     (a type-conversion call), assert the enclosing function (if any) is
+//     "newRedactedErrorMsg". CallExprs inside GenDecl initializers have no
+//     enclosing FuncDecl — they fail unconditionally.
+//
+// Upstream Hard is enforced by the Go type system (unexported fields + newtype),
+// not by additional archtest — see file-header blind-spot inventory (a) and (b).
 func TestHealthRedactedErrorMsgFunnel(t *testing.T) {
 	t.Parallel()
 
 	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {
+			// (1) FuncDecl.Body scan — in-function conversions.
 			EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 				if fd.Body == nil {
 					return
@@ -177,65 +226,35 @@ func TestHealthRedactedErrorMsgFunnel(t *testing.T) {
 					if !ok || ident.Name != healthRedactedErrorMsgTypeName {
 						return
 					}
-					if fnName != healthRedactedErrorMsgFunnelFuncName {
+					if _, allowed := healthRedactedErrorMsgFunnelAllowedFuncs[fnName]; !allowed {
 						ds = append(ds, Diagnostic{
 							Rel:  p.Rel(f),
 							Line: p.Fset.Position(call.Pos()).Line,
 							Message: fmt.Sprintf(
-								"redactedErrorMsg(...) conversion inside %s; only %s may construct redactedErrorMsg values",
-								fnName, healthRedactedErrorMsgFunnelFuncName,
+								"redactedErrorMsg(...) conversion inside func %s; only %v may construct redactedErrorMsg values",
+								fnName, sortedAllowlistFuncs(healthRedactedErrorMsgFunnelAllowedFuncs),
 							),
 						})
 					}
 				})
 			})
-		}
-		return ds
-	})
 
-	Report(t, ruleHealthRedactedErrorMsgFunnel, diags)
-}
-
-// TestHealthRedactedErrorMsgFunnelLiteralReverse is the blind-spot reverse
-// self-check for HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 case (a): asserts that
-// no SlogDependencyEntry composite literal in runtime/http/health/ sets
-// ErrorMsg to a non-empty string literal (which would bypass the funnel via
-// untyped const conversion). Empty literal "" is allowed as the documented
-// nil sentinel.
-func TestHealthRedactedErrorMsgFunnelLiteralReverse(t *testing.T) {
-	t.Parallel()
-
-	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
-		var ds []Diagnostic
-		for _, f := range p.Files {
-			EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
-				ident, ok := cl.Type.(*ast.Ident)
-				if !ok || ident.Name != healthSlogEntryTypeName {
-					return
-				}
-				EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
-					keyIdent, ok := kv.Key.(*ast.Ident)
-					if !ok || keyIdent.Name != "ErrorMsg" {
+			// (2) GenDecl subtree scan — blind-spot (c) package-level initializers.
+			EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+				EachInSubtree[ast.CallExpr](gd, func(call *ast.CallExpr) {
+					ident, ok := call.Fun.(*ast.Ident)
+					if !ok || ident.Name != healthRedactedErrorMsgTypeName {
 						return
 					}
-					lit, ok := kv.Value.(*ast.BasicLit)
-					if !ok {
-						// Not a literal — typed call result (newRedactedErrorMsg etc).
-						// The forward TestHealthRedactedErrorMsgFunnel covers the
-						// conversion-side rule; here we only watch literal bypass.
-						return
-					}
-					if lit.Kind == token.STRING && lit.Value != `""` {
-						ds = append(ds, Diagnostic{
-							Rel:  p.Rel(f),
-							Line: p.Fset.Position(lit.Pos()).Line,
-							Message: fmt.Sprintf(
-								"(literal reverse self-check): SlogDependencyEntry.ErrorMsg literal %s — only "+
-									"\"\" sentinel or newRedactedErrorMsg(...) result is allowed",
-								lit.Value,
-							),
-						})
-					}
+					ds = append(ds, Diagnostic{
+						Rel:  p.Rel(f),
+						Line: p.Fset.Position(call.Pos()).Line,
+						Message: fmt.Sprintf(
+							"redactedErrorMsg(...) conversion in package-level GenDecl initializer (blind-spot c); "+
+								"only %v may construct redactedErrorMsg values",
+							sortedAllowlistFuncs(healthRedactedErrorMsgFunnelAllowedFuncs),
+						),
+					})
 				})
 			})
 		}
@@ -274,55 +293,4 @@ func TestHealthVerboseScanCoverage(t *testing.T) {
 			"%s: archtest DirsScope must enumerate %s; missing files would let HEALTH-VERBOSE-* gates pass vacuously",
 			ruleHealthVerboseScanCoverage, want)
 	}
-}
-
-// TestHealthRedactedErrorMsgFunnelPackageLevelVarReverse is the blind-spot
-// reverse self-check for HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 case (c):
-// asserts that no package-level var/const GenDecl initializer in
-// runtime/http/health/ calls redactedErrorMsg(...) directly in a ValueSpec
-// RHS expression.
-//
-// The forward scan TestHealthRedactedErrorMsgFunnel uses
-// EachInChildren[ast.FuncDecl] → EachInSubtree inside FuncDecl.Body, which
-// does not visit GenDecl initializers at the package level. This test closes
-// that blind spot by walking GenDecls at the file top level and recursively
-// searching their ValueSpec Values for redactedErrorMsg CallExprs.
-//
-// Expected outcome: zero matches in production code. Any match is a
-// violation — var/const initializers bypass the FuncDecl.Body scan.
-func TestHealthRedactedErrorMsgFunnelPackageLevelVarReverse(t *testing.T) {
-	t.Parallel()
-
-	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
-		var ds []Diagnostic
-		for _, f := range p.Files {
-			// Walk top-level GenDecls (var/const blocks). For each GenDecl, scan
-			// its entire subtree for redactedErrorMsg CallExprs. A GenDecl subtree
-			// contains only ValueSpecs + their initializer Expr trees — no FuncDecl
-			// nesting is possible at package level — so EachInSubtree correctly
-			// captures the initializer-RHS shape that the forward FuncDecl scan misses.
-			EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
-				EachInSubtree[ast.CallExpr](gd, func(call *ast.CallExpr) {
-					ident, ok := call.Fun.(*ast.Ident)
-					if !ok || ident.Name != healthRedactedErrorMsgTypeName {
-						return
-					}
-					ds = append(ds, Diagnostic{
-						Rel:  p.Rel(f),
-						Line: p.Fset.Position(call.Pos()).Line,
-						Message: fmt.Sprintf(
-							"(package-level var reverse self-check, blind-spot c): "+
-								"redactedErrorMsg(...) in GenDecl initializer — "+
-								"forward FuncDecl.Body scan would not catch this; "+
-								"only %s may construct redactedErrorMsg values",
-							healthRedactedErrorMsgFunnelFuncName,
-						),
-					})
-				})
-			})
-		}
-		return ds
-	})
-
-	Report(t, ruleHealthRedactedErrorMsgFunnel, diags)
 }

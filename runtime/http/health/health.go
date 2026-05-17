@@ -29,7 +29,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,6 +43,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/logutil"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/runtime/http/health/probequery"
 )
 
 const (
@@ -480,9 +480,9 @@ func (h *Handler) aggregateProbeResults(
 				DurationMs: pr.Duration.Milliseconds(),
 			}
 			slogDiag[name] = SlogDependencyEntry{
-				Status:     pr.Status,
-				DurationMs: pr.Duration.Milliseconds(),
-				ErrorMsg:   newRedactedErrorMsg(pr.Err),
+				status:     pr.Status,
+				durationMs: pr.Duration.Milliseconds(),
+				errorMsg:   newRedactedErrorMsg(pr.Err),
 			}
 		}
 	}
@@ -579,6 +579,12 @@ func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog
 // other framework error responses. status/reason ride along on WithInternal
 // for server-side logs only — the wire body is a 5xx-stripped errcode where
 // details is the empty array.
+//
+// ctx 是 request 上下文（非 probe ctx），用于 request_id 透传到 errcode 响应
+// envelope（httputil.WriteError → ctxkeys.RequestIDFrom）。与 probe 用的
+// context.WithTimeout(context.Background(), h.deadline)（runProbesParallel 内
+// derive）是不同生命周期 — 后者保证 kubelet 断开不取消 in-flight probe，前者
+// 用于把请求级关联 ID 带到错误响应。
 func writeReadyz503(ctx context.Context, w http.ResponseWriter, status, reason string) {
 	httputil.WriteError(ctx, w, errcode.New(
 		errcode.KindUnavailable,
@@ -657,6 +663,17 @@ func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration, clk cl
 	defer func() {
 		pr.Duration = clk.Since(start)
 		if r := recover(); r != nil {
+			// Mirror wrap.go:probePanicError — emit slog.Warn immediately so
+			// non-verbose k8s readiness probes also surface the panic event
+			// (verbose-only channel d slog is conditional on ?verbose=true).
+			// Without this, an infrastructure-level panic inside runOneProbe
+			// — distinct from probe-fn panics caught by wrapCtxSafe — would
+			// produce a silent 503 with no diagnostic trace on non-verbose
+			// probes. Redaction applies (panicV may contain probe-derived
+			// secrets in pathological cases).
+			slog.Warn("health: runOneProbe panicked",
+				slog.Any("panic", redaction.RedactAny(r)),
+			)
 			pr.Status = "unhealthy"
 			pr.Err = fmt.Errorf("panic: %v", r)
 		}
@@ -694,7 +711,7 @@ func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration, clk cl
 //
 // See docs/ops/readyz.md for the full state table.
 func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
-	if !readyzVerbose(r) {
+	if !probequery.Verbose(r) {
 		return false, false
 	}
 	h.mu.RLock()
@@ -741,26 +758,6 @@ func (h *Handler) sendVerboseDenied(w http.ResponseWriter, r *http.Request) {
 		errcode.ErrReadyzVerboseDenied,
 		"verbose output requires a matching X-Readyz-Token header",
 	)
-}
-
-// readyzVerbose returns true when the request opts in to detailed output.
-// Accepted forms: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
-// All other values (false, yes, debug, …) are treated as non-verbose.
-func readyzVerbose(r *http.Request) bool {
-	values, ok := r.URL.Query()["verbose"]
-	if !ok {
-		return false
-	}
-	// url.ParseQuery always yields at least [""] when the key is present,
-	// so we iterate values directly without a separate len==0 guard.
-	for _, value := range values {
-		normalized := strings.TrimSpace(strings.ToLower(value))
-		switch normalized {
-		case "", "1", "true":
-			return true
-		}
-	}
-	return false
 }
 
 // envelopeData wraps a success payload in the project-standard
