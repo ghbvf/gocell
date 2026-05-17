@@ -1,17 +1,30 @@
-// INVARIANT: CONTRACT-PATH-QUERY-COVERAGE-01
+// Package archtest enforces param-level executable contract test coverage.
+//
+//   - INVARIANT: CONTRACT-PATH-QUERY-COVERAGE-01
+//   - INVARIANT: CONTRACT-PATH-QUERY-PARAM-NAME-LITERAL-01
 //
 // CONTRACT-PATH-QUERY-COVERAGE-01 — every active HTTP contract that declares
 // pathParams or queryParams must have at least one MustRejectPathParam or
-// MustRejectQueryParam call site in the corresponding cells/**/contract_test.go.
+// MustRejectQueryParam call site in the corresponding cells/**/contract_test.go
+// for EVERY declared param name. Coverage is tracked per
+// (contractID, kind, paramName); a contract declaring three query params with
+// only one MustRejectQueryParam call site fires two diagnostics (one per
+// uncovered param). Previously coverage was a contract-level boolean — review
+// F2 fixed.
 //
-// This rule ensures that param-schema constraints are not merely declared in
-// contract.yaml but are actually executed as rejected test cases, so schema
-// drift (e.g. removing a minLength) immediately breaks CI.
+// CONTRACT-PATH-QUERY-PARAM-NAME-LITERAL-01 — the second argument to every
+// Validate{Path,Query}Param / MustReject{Path,Query}Param call must resolve
+// to a compile-time constant string via typeseval.EvaluateConstString. Without
+// this, a `c.MustRejectQueryParam(t, paramName, "0")` with `paramName` bound
+// to a runtime variable would let the COVERAGE-01 attribution mistake the
+// abstract variable name for a covered parameter, sneaking past the per-param
+// gate. Form mirrors MESSAGE-CONST-LITERAL-01 and CONTRACTTEST-LOADBYID-LITERAL-01.
 //
 // Tool: RunTypedProduction (040 Pass-Driver) for test files — uses
-// *types.Info.Uses to resolve MustRejectPathParam / MustRejectQueryParam
-// receiver calls to the *contracttest.Contract type, ensuring the rule cannot
-// be bypassed by renaming an import alias. YAML scanning uses
+// *types.Info.Uses to resolve MustReject{Path,Query}Param / Validate{Path,Query}Param
+// receiver calls to the *contracttest.Contract type, and
+// typeseval.EvaluateConstString to fold const idents / selectors / binary
+// expressions in argument positions. YAML scanning uses
 // scanner.EachContentFile (tools/archtest/internal/scanner) to build the
 // ground-truth set from contracts/http/**, satisfying
 // SCANNER-FRAMEWORK-USAGE-01. NOT registered in
@@ -19,29 +32,42 @@
 //
 // Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"):
 //
-//  1. Contract ID discovered only via string literal in LoadByID call. A call
-//     like c := LoadByID(t, root, computedID) where computedID is not a literal
-//     will NOT be associated with the contract. Compensation: archtest
-//     CONTRACTTEST-LOADBYID-LITERAL-01 (in tools/archtest/contracttest_loadbyid_literal_test.go)
-//     locks all LoadByID calls to literal strings; non-literal form fails that rule.
+//  1. Contract ID discovered only via LoadByID call sites whose third argument
+//     resolves to a compile-time constant string. A call like
+//     c := LoadByID(t, root, computedID) with computedID a runtime expression
+//     is rejected by CONTRACTTEST-LOADBYID-LITERAL-01 (sibling rule), so the
+//     compensation is enforced upstream and we do not need to scan for runtime
+//     IDs here.
 //
-//  2. MustRejectPathParam / MustRejectQueryParam called on a *Contract variable
-//     loaded in an outer function scope (e.g. passed as argument) rather than
-//     via a LoadByID call visible in the same function. The per-variable
-//     association tracks LoadByID assignments and MustReject calls within the
-//     same function body; cross-function use remains a blind spot.
-//     Compensation: contract tests conventionally use a single c per test
-//     function; code review.
+//  2. MustReject{Path,Query}Param called on a *Contract variable loaded in an
+//     outer function scope (e.g. passed as argument) rather than via a LoadByID
+//     call visible in the same function. The per-variable association tracks
+//     LoadByID assignments and MustReject calls within the same function body;
+//     cross-function use remains a blind spot. Compensation: contract tests
+//     conventionally use a single c per test function; code review.
 //
-//  3. MustRejectPathParam call inside a helper function that is not visible to
-//     the file-level scan. Compensation: the TypesInfo receiver-type check
-//     catches all call sites regardless of nesting depth within the scanned
-//     package.
+//  3. MustReject{Path,Query}Param call inside a helper function that is not
+//     visible to the file-level scan. Compensation: the TypesInfo
+//     receiver-type check catches all call sites regardless of nesting depth
+//     within the scanned package.
 //
-// Reverse self-check: TestContractPathQueryCoverage01_FixtureMissingReject
-// loads a fixture package (archtest_fixture build tag) whose contract declares
-// pathParams but has no MustRejectPathParam call; the rule MUST report it as
-// uncovered.
+// Reverse self-checks:
+//
+//   - TestContractPathQueryCoverage01_FixtureMissingReject — fixture has
+//     pathParams but never calls MustRejectPathParam; the rule MUST report
+//     each declared param as uncovered.
+//   - TestContractPathQueryCoverage01_FixtureParamPartial — fixture declares
+//     two query params (limit, cursor) but only calls
+//     MustRejectQueryParam(t, "limit", ...); the rule MUST report the
+//     uncovered param (cursor) and MUST NOT report the covered one.
+//   - TestContractPathQueryParamNameLiteral01_RedComputedParamName — fixture
+//     calls MustRejectQueryParam(t, paramName, ...) with paramName a runtime
+//     variable; PARAM-NAME-LITERAL-01 MUST flag it.
+//
+// AI Hard upgrade backlog: cap-14
+// CONTRACT-PATH-QUERY-COVERAGE-HARD-CODEGEN-01 — derive each MustReject*Param
+// stub from contract.yaml at codegen time so a missing param is an
+// unrepresentable build outcome.
 package archtest
 
 import (
@@ -51,7 +77,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
 	"testing"
 
@@ -65,115 +91,133 @@ import (
 // Contract methods are being checked.
 const contractPQPkgPath = "github.com/ghbvf/gocell/tests/contracttest"
 
-// contractPQMethodPathParam is the method that proves pathParams coverage.
-const contractPQMethodPathParam = "MustRejectPathParam"
-
-// contractPQMethodQueryParam is the method that proves queryParams coverage.
-const contractPQMethodQueryParam = "MustRejectQueryParam"
+// Method names locked by this rule. ValidateXxxParam is also tracked for
+// PARAM-NAME-LITERAL-01 (a runtime-named ValidateXxxParam call is the same
+// kind of bypass risk as a runtime-named MustRejectXxxParam call).
+const (
+	contractPQMethodMustRejectPath  = "MustRejectPathParam"
+	contractPQMethodMustRejectQuery = "MustRejectQueryParam"
+	contractPQMethodValidatePath    = "ValidatePathParam"
+	contractPQMethodValidateQuery   = "ValidateQueryParam"
+)
 
 // contractPQLoadByID is the function name used to associate a contract ID with
 // a test file.
 const contractPQLoadByID = "LoadByID"
 
-// contractPQParamInfo holds the path/query param coverage requirement for one
-// contract.
+// pqParamKind tags a coverage entry as path or query.
+type pqParamKind string
+
+const (
+	pqKindPath  pqParamKind = "pathParam"
+	pqKindQuery pqParamKind = "queryParam"
+)
+
+// contractPQParamInfo holds the per-param coverage requirement for one contract.
+// PathParamNames / QueryParamNames are the sorted list of declared param names
+// (from contract.yaml endpoints.http.{path,query}Params keys); each name is an
+// independent coverage obligation.
 type contractPQParamInfo struct {
-	ID         string
-	HasPath    bool
-	HasQuery   bool
-	ServerCell string
-	FilePath   string // absolute path to contract.yaml
+	ID              string
+	PathParamNames  []string
+	QueryParamNames []string
+	ServerCell      string
+	FilePath        string // absolute path to contract.yaml
 }
 
-// TestContractPathQueryCoverage01 asserts that every active HTTP contract with
-// pathParams or queryParams declarations has at least one MustRejectPathParam
-// or MustRejectQueryParam call site in a cells/**/contract_test.go file whose
-// LoadByID call references that contract ID.
-//
-// Coverage is tracked at per-variable granularity: each LoadByID assignment
-// (c := contracttest.LoadByID(t, root, "<lit>")) establishes a mapping from
-// variable name to contract ID within its enclosing function body. Only
-// MustReject calls whose receiver is that same variable are attributed to the
-// associated contract, preventing false coverage when a file loads contract A
-// and contract B but calls MustRejectPathParam only for A.
+// pqCoverage records which (contractID, paramKind, paramName) tuples were
+// covered by at least one MustReject{Path,Query}Param call.
+type pqCoverage struct {
+	path  map[string]map[string]bool // path[contractID][paramName] = true
+	query map[string]map[string]bool // query[contractID][paramName] = true
+}
+
+func newPQCoverage() *pqCoverage {
+	return &pqCoverage{
+		path:  make(map[string]map[string]bool),
+		query: make(map[string]map[string]bool),
+	}
+}
+
+func (c *pqCoverage) mark(kind pqParamKind, contractID, paramName string) {
+	target := c.path
+	if kind == pqKindQuery {
+		target = c.query
+	}
+	inner, ok := target[contractID]
+	if !ok {
+		inner = make(map[string]bool)
+		target[contractID] = inner
+	}
+	inner[paramName] = true
+}
+
+func (c *pqCoverage) covered(kind pqParamKind, contractID, paramName string) bool {
+	target := c.path
+	if kind == pqKindQuery {
+		target = c.query
+	}
+	return target[contractID][paramName]
+}
+
+// TestContractPathQueryCoverage01 asserts that every (contractID, paramKind,
+// paramName) tuple declared in an active HTTP contract has at least one
+// MustReject{Path,Query}Param call site in a cells/**/contract_test.go file
+// whose LoadByID variable is bound to that contract ID and whose second
+// argument resolves (via EvaluateConstString) to that paramName.
 func TestContractPathQueryCoverage01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	// --- True Source A: scan contracts/http for active contracts with path/queryParams ---
 	wantCoverage := buildContractPQRequirements(t, root)
 	if len(wantCoverage) == 0 {
 		t.Log("CONTRACT-PATH-QUERY-COVERAGE-01: no active HTTP contracts with path/queryParams found")
 		return
 	}
 
-	// --- True Source B: scan cells/**/contract_test.go for MustReject calls ---
-	// pathParamCovered[contractID] = true  if MustRejectPathParam was found
-	// queryParamCovered[contractID] = true if MustRejectQueryParam was found
-	pathParamCovered := make(map[string]bool)
-	queryParamCovered := make(map[string]bool)
-
+	coverage := newPQCoverage()
 	_ = RunTypedProduction(t, TypedOpts{Tests: true}, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
-		// Only process files in cells/**/contract_test.go.
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if !isCellsContractTestFile(rel) {
 				continue
 			}
-			// Per-function-body association: build loadByIDVars for each
-			// top-level function, then mark coverage by receiver variable name.
-			attributePQCoverageFromFile(file, p.TypesInfo, pathParamCovered, queryParamCovered)
+			attributePQCoverageFromFile(file, p.TypesInfo, coverage)
 		}
 		return nil
 	})
 
-	// --- Assert coverage ---
-	failures := computePQFailures(wantCoverage, pathParamCovered, queryParamCovered)
+	failures := computePQFailures(wantCoverage, coverage)
 	for _, f := range failures {
 		t.Errorf("CONTRACT-PATH-QUERY-COVERAGE-01: %s", f)
 	}
 }
 
-// TestContractPathQueryCoverage01_FixtureMissingReject is the reverse
-// self-check (ai-collab.md §"工具选定后强制盲区自检"): a fixture package with
-// build tag archtest_fixture declares a contract with pathParams but has no
-// MustRejectPathParam call; the rule MUST report it as uncovered.
-//
-// This test runs the SAME scanner pipeline the production rule uses
-// (RunTyped + attributePQCoverageFromFile + computePQFailures), so any
-// regression in attributePQCoverageFromFile / extractLoadByIDVars /
-// isContractPQReceiverMethod / isContractPQFunc that would silently mark the
-// fixture as covered immediately fails this assertion. The previous form (PR
-// PR-W6-1) only fed empty maps to computePQFailures, leaving the four scanner
-// helpers above with no reverse fixture coverage — fixed per review F3.
+// TestContractPathQueryCoverage01_FixtureMissingReject — reverse self-check:
+// fixture has pathParams but never calls MustRejectPathParam. With per-param
+// granularity the rule MUST report every declared param as uncovered.
 func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	// Fixture contracts root: tools/archtest/contract_path_query_coverage_fixtures/red_missing_reject/contracts
 	fixtureContractsRoot := filepath.Join(root,
 		"tools", "archtest", "contract_path_query_coverage_fixtures",
 		"red_missing_reject", "contracts")
 
-	// Verify that the fixture contract file exists.
 	fixtureContractFile := filepath.Join(fixtureContractsRoot, "http", "test", "paramcoverage", "v1", "contract.yaml")
 	if _, err := os.Stat(fixtureContractFile); err != nil {
 		t.Fatalf("fixture contract not found at %s: %v", fixtureContractFile, err)
 	}
 
-	// Build the requirements from the fixture contracts root.
 	fixtureRelDir := filepath.Join("tools", "archtest", "contract_path_query_coverage_fixtures",
 		"red_missing_reject", "contracts", "http")
 	fixtureReqs := buildContractPQRequirementsFromRelDir(t, root, fixtureRelDir)
 	require.NotEmpty(t, fixtureReqs, "fixture must have at least one contract with path/queryParams")
 
-	// Run the real scanner against the fixture package: same attribute helpers
-	// used by TestContractPathQueryCoverage01.
-	pathParamCovered := make(map[string]bool)
-	queryParamCovered := make(map[string]bool)
+	coverage := newPQCoverage()
 	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_missing_reject/..."
 	_ = RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
 		[]string{fixturePattern}, func(p *Pass) []Diagnostic {
@@ -181,43 +225,168 @@ func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 				return nil
 			}
 			for _, file := range p.Files {
-				attributePQCoverageFromFile(file, p.TypesInfo, pathParamCovered, queryParamCovered)
+				attributePQCoverageFromFile(file, p.TypesInfo, coverage)
 			}
 			return nil
 		})
 
-	// Fixture deliberately calls ValidatePathParam (not MustRejectPathParam),
-	// so the per-receiver-method dispatch in attributePQCoverageFromFile must
-	// leave both maps empty for the fixture contract ID. Any silent acceptance
-	// of ValidatePathParam as coverage, or a receiver-type check that resolves
-	// to the wrong package, would mark the contract covered and fail this
-	// assertion.
-	failures := computePQFailures(fixtureReqs, pathParamCovered, queryParamCovered)
+	failures := computePQFailures(fixtureReqs, coverage)
 	require.NotEmpty(t, failures,
 		"CONTRACT-PATH-QUERY-COVERAGE-01 reverse self-check: fixture must produce ≥1 missing-reject failure "+
 			"(fixture contract has pathParams but no MustRejectPathParam call)")
 }
 
+// TestContractPathQueryCoverage01_FixtureParamPartial — reverse self-check for
+// the per-param granularity: fixture declares two query params (limit, cursor)
+// but only MustRejectQueryParam("limit", ...). The rule MUST flag "cursor" as
+// uncovered AND MUST NOT flag "limit". This is the F2 regression guard — the
+// previous contract-level boolean form would have silently passed because
+// "limit" sets the contract's queryParamCovered=true bucket.
+func TestContractPathQueryCoverage01_FixtureParamPartial(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	fixtureRelDir := filepath.Join("tools", "archtest", "contract_path_query_coverage_fixtures",
+		"red_param_partial", "contracts", "http")
+	fixtureReqs := buildContractPQRequirementsFromRelDir(t, root, fixtureRelDir)
+	require.NotEmpty(t, fixtureReqs, "red_param_partial fixture must have at least one contract")
+	// Sanity: ensure the fixture really has both query params we expect.
+	var req contractPQParamInfo
+	for _, r := range fixtureReqs {
+		if r.ID == "http.test.paramcoverage-partial.v1" {
+			req = r
+			break
+		}
+	}
+	require.NotEmpty(t, req.ID, "fixture must declare http.test.paramcoverage-partial.v1")
+	require.ElementsMatch(t, []string{"limit", "cursor"}, req.QueryParamNames,
+		"fixture must declare exactly two query params (limit, cursor)")
+
+	coverage := newPQCoverage()
+	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_param_partial/..."
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
+		[]string{fixturePattern}, func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				attributePQCoverageFromFile(file, p.TypesInfo, coverage)
+			}
+			return nil
+		})
+
+	failures := computePQFailures([]contractPQParamInfo{req}, coverage)
+	require.Len(t, failures, 1,
+		"reverse self-check: exactly one param (cursor) should be flagged uncovered; got: %v", failures)
+	assert := require.New(t)
+	assert.Contains(failures[0], "cursor",
+		"missing failure must reference param name `cursor`; got: %s", failures[0])
+	assert.NotContains(failures[0], `param "limit"`,
+		"covered param `limit` must NOT be flagged; got: %s", failures[0])
+}
+
+// TestContractPathQueryParamNameLiteral01 asserts that every Validate{Path,Query}Param
+// / MustReject{Path,Query}Param call site supplies a compile-time constant
+// string as the param-name argument (call.Args[0]). Runtime expressions are
+// rejected via typeseval.EvaluateConstString — same enforcement shape as
+// CONTRACTTEST-LOADBYID-LITERAL-01.
+func TestContractPathQueryParamNameLiteral01(t *testing.T) {
+	t.Parallel()
+
+	diags := RunTypedProduction(t, TypedOpts{Tests: true}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
+		}
+		return scanContractPQParamNameViolations(p)
+	})
+
+	Report(t, "CONTRACT-PATH-QUERY-PARAM-NAME-LITERAL-01", diags)
+}
+
+// TestContractPathQueryParamNameLiteral01_RedComputedParamName — reverse
+// self-check: fixture passes a runtime variable as the param-name argument
+// to MustRejectQueryParam. The rule MUST flag it.
+func TestContractPathQueryParamNameLiteral01_RedComputedParamName(t *testing.T) {
+	t.Parallel()
+
+	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_param_name_computed/..."
+	diags := RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
+		[]string{fixturePattern},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			return scanContractPQParamNameViolations(p)
+		},
+	)
+
+	require.NotEmpty(t, diags,
+		"CONTRACT-PATH-QUERY-PARAM-NAME-LITERAL-01 reverse self-check: fixture must produce ≥1 violation "+
+			"(fixture calls MustRejectQueryParam with a runtime variable as param name)")
+}
+
+// scanContractPQParamNameViolations walks every call to a *contracttest.Contract
+// Validate/MustReject{Path,Query}Param method and emits a diagnostic when the
+// first argument (the param name) does not resolve to a compile-time const.
+func scanContractPQParamNameViolations(p *Pass) []Diagnostic {
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil {
+				return
+			}
+			name := sel.Sel.Name
+			if !isContractPQParamMethodName(name) {
+				return
+			}
+			if !isContractPQReceiverMethod(sel, p.TypesInfo, name) {
+				return
+			}
+			if len(call.Args) < 2 {
+				return
+			}
+			// call signature: Validate/MustReject*Param(t, paramName, value)
+			// arg[1] is paramName.
+			if _, ok := EvaluateConstString(p.TypesInfo, call.Args[1]); ok {
+				return // compliant
+			}
+			pos := p.Fset.Position(call.Args[1].Pos())
+			diags = append(diags, Diagnostic{
+				Rel:  p.Rel(file),
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"CONTRACT-PATH-QUERY-PARAM-NAME-LITERAL-01: %s param-name argument must be a compile-time constant string; got runtime expression",
+					name,
+				),
+			})
+		})
+	}
+	return diags
+}
+
 // --- Core logic helpers ---
 
-// computePQFailures returns the list of failure messages for contracts that
-// declare pathParams/queryParams but lack the corresponding MustReject call.
-// Extracted so both the main rule and the reverse self-check run the same
-// assertion logic.
-func computePQFailures(wantCoverage []contractPQParamInfo, pathParamCovered, queryParamCovered map[string]bool) []string {
+// computePQFailures returns one failure per uncovered (contractID, paramKind,
+// paramName) tuple. The per-param granularity is the F2 fix.
+func computePQFailures(wantCoverage []contractPQParamInfo, coverage *pqCoverage) []string {
 	var failures []string
 	for _, req := range wantCoverage {
-		if req.HasPath && !pathParamCovered[req.ID] {
-			failures = append(failures, fmt.Sprintf(
-				"contract %q (server: %s) has pathParams but no MustRejectPathParam call site in cells/**/contract_test.go",
-				req.ID, req.ServerCell,
-			))
+		for _, name := range req.PathParamNames {
+			if !coverage.covered(pqKindPath, req.ID, name) {
+				failures = append(failures, fmt.Sprintf(
+					"contract %q (server: %s) pathParam %q has no MustRejectPathParam call site in cells/**/contract_test.go",
+					req.ID, req.ServerCell, name,
+				))
+			}
 		}
-		if req.HasQuery && !queryParamCovered[req.ID] {
-			failures = append(failures, fmt.Sprintf(
-				"contract %q (server: %s) has queryParams but no MustRejectQueryParam call site in cells/**/contract_test.go",
-				req.ID, req.ServerCell,
-			))
+		for _, name := range req.QueryParamNames {
+			if !coverage.covered(pqKindQuery, req.ID, name) {
+				failures = append(failures, fmt.Sprintf(
+					"contract %q (server: %s) queryParam %q has no MustRejectQueryParam call site in cells/**/contract_test.go",
+					req.ID, req.ServerCell, name,
+				))
+			}
 		}
 	}
 	return failures
@@ -225,42 +394,37 @@ func computePQFailures(wantCoverage []contractPQParamInfo, pathParamCovered, que
 
 // attributePQCoverageFromFile walks the top-level function declarations in
 // file. For each function body it builds a per-variable map of
-// (varName → contractID) from LoadByID assignments, then marks
-// pathParamCovered / queryParamCovered for the contract associated with each
-// MustReject receiver variable.
-//
-// This per-variable granularity ensures that a file loading contract A and
-// contract B only marks A as covered when MustRejectPathParam is called on
-// the variable bound to A, not on the variable bound to B.
-func attributePQCoverageFromFile(
-	file *ast.File,
-	info *types.Info,
-	pathParamCovered map[string]bool,
-	queryParamCovered map[string]bool,
-) {
+// (varName → contractID) from LoadByID assignments, then marks coverage per
+// (contractID, paramKind, paramName) for each MustReject* call where the
+// receiver variable is bound to a known contract and the first argument
+// resolves to a const string param name.
+func attributePQCoverageFromFile(file *ast.File, info *types.Info, coverage *pqCoverage) {
 	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
-		// Build varName → contractID map for this function body.
 		loadByIDVars := extractLoadByIDVars(fn.Body, info)
 		if len(loadByIDVars) == 0 {
 			return
 		}
-		// Scan MustReject calls and attribute coverage per receiver variable.
 		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel == nil {
 				return
 			}
 			name := sel.Sel.Name
-			if name != contractPQMethodPathParam && name != contractPQMethodQueryParam {
+			var kind pqParamKind
+			switch name {
+			case contractPQMethodMustRejectPath:
+				kind = pqKindPath
+			case contractPQMethodMustRejectQuery:
+				kind = pqKindQuery
+			default:
 				return
 			}
 			if !isContractPQReceiverMethod(sel, info, name) {
 				return
 			}
-			// Receiver must be a plain identifier bound to a LoadByID variable.
 			recv, ok := sel.X.(*ast.Ident)
 			if !ok {
 				return
@@ -269,31 +433,29 @@ func attributePQCoverageFromFile(
 			if !found {
 				return
 			}
-			switch name {
-			case contractPQMethodPathParam:
-				pathParamCovered[contractID] = true
-			case contractPQMethodQueryParam:
-				queryParamCovered[contractID] = true
+			if len(call.Args) < 2 {
+				return
 			}
+			// Param name (arg[1]) must resolve to a const string. If it does
+			// not, PARAM-NAME-LITERAL-01 reports it independently; here we
+			// simply skip — silently marking unknown-name coverage would
+			// re-introduce the F2 contract-level boolean bypass.
+			paramName, ok := EvaluateConstString(info, call.Args[1])
+			if !ok {
+				return
+			}
+			coverage.mark(kind, contractID, paramName)
 		})
 	})
 }
 
-// extractLoadByIDVars scans a function body for variable assignments of the
-// forms:
-//
-//	c := contracttest.LoadByID(t, root, "<literal>")   // short declaration
-//	c  = contracttest.LoadByID(t, root, "<literal>")   // reassignment
-//
-// and returns a map from variable name to contract ID. When a variable is
-// reassigned multiple times, the last assignment wins (later MustReject calls
-// in the same function will be attributed to the latest contract).
-// Uses *types.Info to confirm the callee is contracttest.LoadByID; only
-// string literal third arguments are recorded.
+// extractLoadByIDVars scans a function body for LoadByID variable assignments
+// and returns a map from variable name to contract ID. Reassignment: last
+// wins. Uses EvaluateConstString (single-source const evaluator) for the
+// third argument, matching CONTRACTTEST-LOADBYID-LITERAL-01's accepted form.
 func extractLoadByIDVars(body *ast.BlockStmt, info *types.Info) map[string]string {
 	result := make(map[string]string)
 	EachInSubtree[ast.AssignStmt](body, func(assign *ast.AssignStmt) {
-		// Accept both short declarations (:=) and regular assignments (=).
 		if assign.Tok != token.DEFINE && assign.Tok != token.ASSIGN {
 			return
 		}
@@ -311,12 +473,8 @@ func extractLoadByIDVars(body *ast.BlockStmt, info *types.Info) map[string]strin
 		if !isContractPQFunc(call.Fun, info, contractPQLoadByID) {
 			return
 		}
-		lit, ok := call.Args[2].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return
-		}
-		id, err := strconv.Unquote(lit.Value)
-		if err != nil {
+		id, ok := EvaluateConstString(info, call.Args[2])
+		if !ok {
 			return
 		}
 		result[varIdent.Name] = id
@@ -325,6 +483,17 @@ func extractLoadByIDVars(body *ast.BlockStmt, info *types.Info) map[string]strin
 }
 
 // --- Helpers ---
+
+// isContractPQParamMethodName returns true for the four method names that
+// PARAM-NAME-LITERAL-01 governs.
+func isContractPQParamMethodName(name string) bool {
+	switch name {
+	case contractPQMethodMustRejectPath, contractPQMethodMustRejectQuery,
+		contractPQMethodValidatePath, contractPQMethodValidateQuery:
+		return true
+	}
+	return false
+}
 
 // buildContractPQRequirements scans contracts/http/**  in the module root.
 func buildContractPQRequirements(t *testing.T, moduleRoot string) []contractPQParamInfo {
@@ -369,6 +538,7 @@ type contractPQYAML struct {
 
 // parseContractPQRequirementFromBytes parses one contract.yaml byte buffer and
 // returns a requirement if the contract is active and has path/queryParams.
+// Both param-name lists are sorted for stable diagnostic ordering.
 func parseContractPQRequirementFromBytes(t *testing.T, path string, data []byte) (contractPQParamInfo, bool) {
 	t.Helper()
 	var cy contractPQYAML
@@ -381,18 +551,30 @@ func parseContractPQRequirementFromBytes(t *testing.T, path string, data []byte)
 	if cy.Endpoints.HTTP == nil {
 		return contractPQParamInfo{}, false
 	}
-	hasPath := len(cy.Endpoints.HTTP.PathParams) > 0
-	hasQuery := len(cy.Endpoints.HTTP.QueryParams) > 0
-	if !hasPath && !hasQuery {
+	pathNames := sortedMapKeys(cy.Endpoints.HTTP.PathParams)
+	queryNames := sortedMapKeys(cy.Endpoints.HTTP.QueryParams)
+	if len(pathNames) == 0 && len(queryNames) == 0 {
 		return contractPQParamInfo{}, false
 	}
 	return contractPQParamInfo{
-		ID:         cy.ID,
-		HasPath:    hasPath,
-		HasQuery:   hasQuery,
-		ServerCell: cy.Endpoints.Server,
-		FilePath:   path,
+		ID:              cy.ID,
+		PathParamNames:  pathNames,
+		QueryParamNames: queryNames,
+		ServerCell:      cy.Endpoints.Server,
+		FilePath:        path,
 	}, true
+}
+
+func sortedMapKeys(m map[string]any) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // isCellsContractTestFile reports whether the module-relative slash path
