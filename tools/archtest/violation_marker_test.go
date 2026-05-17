@@ -88,6 +88,25 @@ func TestCountViolationMarkers_ASTOnlyPass(t *testing.T) {
 		"AST-only Pass (no TypesInfo) must yield count 0, got %d", got)
 }
 
+// TestAssertDiagnosticCount_FailsLoudOnNilTypesInfo is the Wave 1 RED test
+// for fix-4 (P2-2). AssertDiagnosticCount currently delegates to
+// CountViolationMarkers, which silently returns 0 for a Pass without
+// TypesInfo. With len(got)==0==want, the assertion returns without failing
+// — silent false-green when an author wires AST-only Run + AssertDiagnosticCount
+// (a programmer error: the marker count cannot be computed without types).
+//
+// Wave 2 GREEN: AssertDiagnosticCount fail-loud on nil pass/TypesInfo via
+// t.Fatalf, regardless of len(got). The CountViolationMarkers helper itself
+// keeps the silent-0 contract (it is callable in any context), but the
+// fixture-binding assertion is the funnel and must not stay silent.
+func TestAssertDiagnosticCount_FailsLoudOnNilTypesInfo(t *testing.T) {
+	t.Parallel()
+	probe := &countTestProbe{TB: t}
+	AssertDiagnosticCount(probe, "TEST-FAIL-LOUD-01", &Pass{}, nil)
+	assert.True(t, probe.failed,
+		"AssertDiagnosticCount must fail loud on nil TypesInfo; silent 0==0 false-green is forbidden")
+}
+
 // TestAssertDiagnosticCount_Match asserts the helper passes silently when
 // len(got) equals the marker count for the loaded fixture.
 func TestAssertDiagnosticCount_Match(t *testing.T) {

@@ -3,6 +3,8 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
+	"go/types"
 	"sort"
 	"strings"
 	"testing"
@@ -121,3 +123,28 @@ func AssertDiagnosticCount(t testing.TB, ruleID string, pass *Pass, got []Diagno
 //
 // Runtime: deliberately a no-op.
 func NoDiagnosticAssertion() {}
+
+// detectFixturespecValuePosition returns one Diagnostic per AssignStmt /
+// ValueSpec / RangeStmt RHS that references fixturespec.Violation as a value
+// rather than calling it directly. The bypass form `f := spec.Violation; f()`
+// is invisible to ResolvePackageRef when applied at the CallExpr `f()` site
+// (info.Uses[f] is *types.Var, not *types.Func), so CountViolationMarkers
+// silently counts 0 and the existing CALLER-ALLOWLIST-01 sweep emits no
+// diagnostic for the indirect call.
+//
+// AI-rebust Hard: by enumerating the AssignStmt/ValueSpec value-position
+// sites and resolving each Ident/SelectorExpr in the RHS via *types.Info,
+// the bypass form is rejected at its declaration site — form-uniqueness for
+// the marker is restored. There is no testdata exception: the only
+// approved use of fixturespec.Violation is a direct call `spec.Violation()`,
+// regardless of file location.
+//
+// Wave 1 stub: returns nil — RED tests assert non-empty. Wave 2 GREEN
+// implements the real detection.
+func detectFixturespecValuePosition(info *types.Info, fset *token.FileSet, f *ast.File, rel string) []Diagnostic {
+	_ = info
+	_ = fset
+	_ = f
+	_ = rel
+	return nil
+}

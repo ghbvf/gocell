@@ -86,8 +86,12 @@ import (
 	"fmt"
 	"go/ast"
 	"go/types"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -303,4 +307,123 @@ func fileHasAssertOrOptOut(info *types.Info, f *ast.File) bool {
 		}
 	})
 	return ok
+}
+
+// scanFuncDeclsMissingAssertOrOptOut returns the *ast.FuncDecl entries in f
+// that match the FuncDecl-level form of the COUNT-MATCH-ENFORCED-01 anti-
+// pattern: the FuncDecl body contains a fixture-loader callee AND declares
+// a hardcoded line int slice field, AND does NOT contain a call to
+// archtest.AssertDiagnosticCount / archtest.NoDiagnosticAssertion (directly
+// OR via 1-hop call to another FuncDecl in the same file whose body contains
+// the assert/opt-out).
+//
+// fix-6 motivation: the file-level rule in TestFixturespecCountMatchEnforced
+// exempts every FuncDecl in a file whenever any one of them calls the
+// assertion or opt-out. A single migrated test in the file silently exempts
+// adjacent unmigrated tests still on the wantLines anti-pattern.
+//
+// AI-rebust: collapsing the satisfaction scope from file → FuncDecl removes
+// the cross-FuncDecl bleed. 1-hop helper-call expansion keeps idiomatic
+// "test calls runFixtureScan helper" patterns valid.
+//
+// Wave 1 stub: returns nil — RED tests assert non-empty for the mixed-red
+// fixture's `runA` FuncDecl. Wave 2 GREEN implements the real per-FuncDecl
+// scan + 1-hop expansion.
+func scanFuncDeclsMissingAssertOrOptOut(info *types.Info, f *ast.File) []*ast.FuncDecl {
+	_ = info
+	_ = f
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Wave 1 (RED) tests for fix-1 / fix-4 / fix-6.
+//
+// Each test asserts the Wave 2 GREEN behavior against the current Wave 1
+// stub or broken behavior. Expected to FAIL at runtime in the Wave 1 commit
+// and to PASS in Wave 2.
+// ---------------------------------------------------------------------------
+
+// TestFixturespecViolationValuePositionDetected_Red is the Wave 1 RED test
+// for fix-1 (form-uniqueness for the fixturespec.Violation marker).
+//
+// Loads the func_value_red fixture which contains:
+//   - line 16: spec.Violation()             — direct call form (the marker)
+//   - line 17: f := spec.Violation          — value-position assignment form
+//   - line 18: f()                          — indirect call (info.Uses[f]
+//     is *types.Var; ResolvePackageRef returns false)
+//
+// detectFixturespecValuePosition must emit ≥1 Diagnostic for the line-17
+// assignment so the funnel becomes form-unique. Wave 1 stub returns nil →
+// assertion fails → RED. Wave 2 implements the real scan → GREEN.
+func TestFixturespecViolationValuePositionDetected_Red(t *testing.T) {
+	t.Parallel()
+	NoDiagnosticAssertion() // funnel meta-archtest; not fixture-binding
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
+		"fixturespec_funnel_fixtures", "func_value_red")
+
+	var diags []Diagnostic
+	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				diags = append(diags,
+					detectFixturespecValuePosition(p.TypesInfo, p.Fset, f, p.Rel(f))...)
+			}
+			return nil
+		})
+	require.GreaterOrEqual(t, len(diags), 1,
+		"detectFixturespecValuePosition must catch `f := spec.Violation` "+
+			"assignment form in func_value_red fixture (got %d diagnostics)",
+		len(diags))
+}
+
+// TestFixturespecCountMatchEnforced_FuncDeclLevel_Red is the Wave 1 RED test
+// for fix-6 (FuncDecl-level granularity of COUNT-MATCH-ENFORCED-01).
+//
+// Loads the funcdecl_mixed_red fixture whose usage.go contains:
+//   - runA: tcA{wantLines:[]int{...}} + archtest.RunTyped call, NO inline
+//     AssertDiagnosticCount or NoDiagnosticAssertion.
+//   - runB: archtest.RunTyped + archtest.AssertDiagnosticCount inline.
+//
+// The current file-level rule exempts both FuncDecls (runB's assert covers
+// the file). FuncDecl-level scanFuncDeclsMissingAssertOrOptOut must flag
+// runA only. Wave 1 stub returns nil → assertion fails → RED. Wave 2
+// implements the per-FuncDecl scan with 1-hop helper expansion → GREEN.
+func TestFixturespecCountMatchEnforced_FuncDeclLevel_Red(t *testing.T) {
+	t.Parallel()
+	NoDiagnosticAssertion() // funnel meta-archtest; not fixture-binding
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
+		"fixturespec_funnel_fixtures", "funcdecl_mixed_red")
+
+	var flagged []string
+	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				for _, fd := range scanFuncDeclsMissingAssertOrOptOut(p.TypesInfo, f) {
+					if fd.Name != nil {
+						flagged = append(flagged, fd.Name.Name)
+					}
+				}
+			}
+			return nil
+		})
+	assert.Contains(t, flagged, "runA",
+		"FuncDecl-level rule must flag runA (hardcoded wantLines + loader callee + no inline assert)")
+	assert.NotContains(t, flagged, "runB",
+		"must NOT flag runB (has inline AssertDiagnosticCount)")
 }
