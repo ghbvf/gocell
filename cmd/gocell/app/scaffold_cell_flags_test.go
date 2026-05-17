@@ -52,11 +52,13 @@ func TestValidateScaffoldCellFlags(t *testing.T) {
 			id:   "billingcell", team: "squad", role: "",
 			wantErr: true, wantSubstr: "--role is required",
 		},
-		{
-			name: "id with control char rejected by validateScaffoldID",
-			id:   "bill\ncell", team: "squad", role: "cell-owner",
-			wantErr: true, wantSubstr: "control characters",
-		},
+		// --id pattern rejection (control-char, kebab-case, etc.) is now
+		// enforced downstream in scaffoldCell via scaffoldid.Parse —
+		// validateScaffoldCellFlags only checks required-field presence and
+		// free-text fields. Pattern test coverage lives in
+		// pkg/scaffoldid/scaffoldid_test.go.TestParse_Reject; the
+		// scaffoldCell-level integration is covered by
+		// scaffold_path_traversal_test.go and scaffold_yaml_injection_test.go.
 		{
 			// 341-343: free-text --team with a newline must be rejected by
 			// validateScaffoldText (YAML-injection guard).
@@ -70,16 +72,6 @@ func TestValidateScaffoldCellFlags(t *testing.T) {
 			name: "role with newline rejected by validateScaffoldText",
 			id:   "billingcell", team: "squad", role: "cell-owner\ninjected: field",
 			wantErr: true, wantSubstr: "control characters",
-		},
-		{
-			// 355-358: kebab-case cell IDs are rejected (no-dash identifier
-			// convention, aligned with scaffoldSlice). The error must be a
-			// structured *errcode.Error carrying ErrScaffoldInvalidOpts so the
-			// CLI surfaces a stable code rather than a bare fmt.Errorf string.
-			name: "kebab-case id rejected",
-			id:   "billing-cell", team: "squad", role: "cell-owner",
-			wantErr: true, wantSubstr: "must not contain '-'",
-			wantCode: ErrScaffoldInvalidOpts,
 		},
 	}
 

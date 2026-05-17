@@ -368,22 +368,17 @@ func validateScaffoldCellFlags(id, team, role string) error {
 	if role == "" {
 		return fmt.Errorf("--role is required")
 	}
-	// Round-7: control-char + path-traversal guard.
-	if err := validateScaffoldID(id, "--id"); err != nil {
-		return err
-	}
 	if err := validateScaffoldText(team, "--team"); err != nil {
 		return err
 	}
 	if err := validateScaffoldText(role, "--role"); err != nil {
 		return err
 	}
-	// F11: reject kebab-case cell IDs (aligned with scaffoldSlice behavior).
-	if strings.Contains(id, "-") {
-		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"scaffold cell: --id must not contain '-'; use no-dash identifier",
-			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", id, strings.ReplaceAll(id, "-", ""))))
-	}
+	// --id is validated downstream by scaffoldCell via scaffoldid.Parse —
+	// the typed funnel (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01) is a strict
+	// superset of the legacy validateScaffoldID path-traversal /
+	// control-char / no-dash checks (AssemblyIDPattern ^[a-z][a-z0-9]+$
+	// physically excludes all of them). Pre-Parse is unnecessary.
 	return nil
 }
 
