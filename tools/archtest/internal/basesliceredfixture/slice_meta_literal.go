@@ -2,7 +2,9 @@
 
 // Package basesliceredfixture contains intentionally-violating forms for the
 // BASESLICE-CTOR-FUNNEL-01 archtest detector. Gated by the archtest_fixture
-// build tag (must agree with archtestmeta.FixtureBuildTag).
+// build tag (must agree with the literal value of archtest.FixtureBuildTag
+// declared in tools/archtest/fixture.go; Go build-directive syntax cannot
+// reference a Go constant, so this file hard-codes the tag literal).
 //
 // This file exercises RED shape 3: a metadata.SliceMeta{...} composite literal
 // in non-generated production code, which bypasses the codegen funnel

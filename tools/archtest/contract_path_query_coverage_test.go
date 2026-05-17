@@ -219,7 +219,7 @@ func TestContractPathQueryCoverage01_FixtureMissingReject(t *testing.T) {
 
 	coverage := newPQCoverage()
 	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_missing_reject/..."
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
+	_ = RunTypedFixture(t, FixtureOpts{Tests: true},
 		[]string{fixturePattern}, func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -264,7 +264,7 @@ func TestContractPathQueryCoverage01_FixtureParamPartial(t *testing.T) {
 
 	coverage := newPQCoverage()
 	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_param_partial/..."
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
+	_ = RunTypedFixture(t, FixtureOpts{Tests: true},
 		[]string{fixturePattern}, func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -310,7 +310,7 @@ func TestContractPathQueryParamNameLiteral01_RedComputedParamName(t *testing.T) 
 	t.Parallel()
 
 	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_param_name_computed/..."
-	diags := RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t, FixtureOpts{Tests: true},
 		[]string{fixturePattern},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {

@@ -317,7 +317,7 @@ func TestYAMLQuoteFunnel_DetectsAliasBypass(t *testing.T) {
 	var diags []Diagnostic
 	found := false
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/yamlquotefixture/"},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != yamlquotefixturePkgPath {
@@ -359,7 +359,7 @@ func TestYAMLQuoteFunnel_DetectsLiteralBypass(t *testing.T) {
 	var diags []Diagnostic
 	found := false
 
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/yamlquotefixture/"},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != yamlquotefixturePkgPath {

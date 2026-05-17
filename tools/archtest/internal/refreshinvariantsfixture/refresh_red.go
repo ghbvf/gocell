@@ -6,7 +6,8 @@
 //
 // Gated by the archtest_fixture build tag; production builds never see this
 // file. The fixture is loaded by TestRefreshCrossStoreTX01_RedFixtureDetected
-// via typeseval.SharedResolver with tags=[]string{"archtest_fixture"}.
+// via archtest.RunTypedFixture (which injects the archtest_fixture tag
+// inside its body).
 //
 // # Violation shapes
 //

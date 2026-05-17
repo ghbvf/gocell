@@ -17,7 +17,7 @@
 //     list — keep it in sync with the godoc.
 //
 // Tool: archtest.RunTypedProduction (040 Pass-Driver) + *types.Info call /
-// field resolution. NOT registered in internal/archtestmeta.LegacyAllowlist.
+// field resolution. NOT exempted (uses archtest.Pass façade per ADR 040 stage-4 terminal state).
 //
 // Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"), each with a
 // compensating argument and/or reverse self-check fixture:
@@ -134,7 +134,7 @@ func TestAdapterErrorClassificationTransient01_FixturePattern(t *testing.T) {
 	fixturePkgPath := modPath + "/tools/archtest/internal/transientmarkerfixture"
 	fixturePattern := "./tools/archtest/internal/transientmarkerfixture/..."
 
-	diags := RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{fixturePattern},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != fixturePkgPath {
