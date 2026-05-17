@@ -27,7 +27,8 @@ func TestValidateScaffoldCellFlags(t *testing.T) {
 		team       string
 		role       string
 		wantErr    bool
-		wantSubstr string // substring expected in err.Error() when wantErr
+		wantSubstr string       // substring expected in err.Error() when wantErr
+		wantCode   errcode.Code // zero value means: do not check code
 	}{
 		{
 			name: "valid no-dash id",
@@ -62,11 +63,21 @@ func TestValidateScaffoldCellFlags(t *testing.T) {
 			wantErr: true, wantSubstr: "control characters",
 		},
 		{
+			// Symmetric to the --team newline case: --role is also a free-text
+			// field validated by validateScaffoldText (YAML-injection guard).
+			name: "role with newline rejected by validateScaffoldText",
+			id:   "billingcell", team: "squad", role: "cell-owner\ninjected: field",
+			wantErr: true, wantSubstr: "control characters",
+		},
+		{
 			// 355-358: kebab-case cell IDs are rejected (no-dash identifier
-			// convention, aligned with scaffoldSlice).
+			// convention, aligned with scaffoldSlice). The error must be a
+			// structured *errcode.Error carrying ErrScaffoldInvalidOpts so the
+			// CLI surfaces a stable code rather than a bare fmt.Errorf string.
 			name: "kebab-case id rejected",
 			id:   "billing-cell", team: "squad", role: "cell-owner",
 			wantErr: true, wantSubstr: "must not contain '-'",
+			wantCode: ErrScaffoldInvalidOpts,
 		},
 	}
 
@@ -80,10 +91,12 @@ func TestValidateScaffoldCellFlags(t *testing.T) {
 					t.Fatalf("validateScaffoldCellFlags(%q,%q,%q): want error, got nil",
 						tc.id, tc.team, tc.role)
 				}
-				// errcode.Error.Error() prefers InternalMessage (which carries
-				// field=/id= debug context, not the human message), so match
-				// against the const-literal Message for structured errors and
-				// fall back to Error() for plain fmt.Errorf required-field errors.
+				// errcode.Error.Error() returns InternalMessage when WithInternal
+				// was used (it carries field=/id= debug context, not the human-
+				// readable Message). validateScaffoldText errors carry WithInternal,
+				// so we must read ec.Message to match the const-literal human text.
+				// Plain fmt.Errorf required-field errors have no *errcode.Error, so
+				// err.Error() is used as the fallback.
 				msg := err.Error()
 				var ec *errcode.Error
 				if errors.As(err, &ec) {
@@ -92,6 +105,14 @@ func TestValidateScaffoldCellFlags(t *testing.T) {
 				if !strings.Contains(msg, tc.wantSubstr) {
 					t.Errorf("err message = %q, want substring %q", msg, tc.wantSubstr)
 				}
+				if tc.wantCode != "" {
+					if ec == nil {
+						t.Fatalf("expected *errcode.Error for code check, got %T (%v)", err, err)
+					}
+					if ec.Code != tc.wantCode {
+						t.Errorf("err code = %q, want %q", ec.Code, tc.wantCode)
+					}
+				}
 				return
 			}
 			if err != nil {
@@ -99,23 +120,5 @@ func TestValidateScaffoldCellFlags(t *testing.T) {
 					tc.id, tc.team, tc.role, err)
 			}
 		})
-	}
-}
-
-// The kebab rejection must be a structured errcode.Error carrying
-// ErrScaffoldInvalidOpts so the CLI surfaces a stable code, not a bare
-// fmt.Errorf string.
-func TestValidateScaffoldCellFlags_KebabIsStructured(t *testing.T) {
-	t.Parallel()
-	err := validateScaffoldCellFlags("billing-cell", "squad", "cell-owner")
-	if err == nil {
-		t.Fatal("kebab id: want error, got nil")
-	}
-	var ec *errcode.Error
-	if !errors.As(err, &ec) {
-		t.Fatalf("kebab id error must be *errcode.Error, got %T (%v)", err, err)
-	}
-	if ec.Code != ErrScaffoldInvalidOpts {
-		t.Errorf("kebab id error code = %q, want %q", ec.Code, ErrScaffoldInvalidOpts)
 	}
 }

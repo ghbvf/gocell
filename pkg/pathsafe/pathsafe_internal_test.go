@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -110,8 +111,6 @@ func TestCollectMissingDirs_EACCESReturnsError(t *testing.T) {
 // fails under a concurrent inode-swap (TOCTOU) which cannot be forced
 // deterministically. It is a defensive Wrap with no behavioral logic.
 
-const errMsgKindGate = "regular files and symlinks only"
-
 // captureOriginal must reject a non-restorable inode kind (directory) so that
 // live writePass fails before the destructive write — covers the
 // forceOverwriteRestorable gate inside captureOriginal.
@@ -125,14 +124,19 @@ func TestCaptureOriginal_RejectsNonRestorableKind(t *testing.T) {
 	if err == nil {
 		t.Fatal("captureOriginal(directory): want rejection error, got nil")
 	}
-	if !strings.Contains(err.Error(), errMsgKindGate) {
+	if !strings.Contains(err.Error(), errMsgForceOverwriteKindGate) {
 		t.Errorf("captureOriginal(directory): err = %v, want kind-gate rejection", err)
 	}
 }
 
 // captureOriginal must Wrap an lstat failure that is NOT os.IsNotExist
 // (here ENOTDIR: a path component is a regular file, not a directory).
+// errcode.Error.Unwrap() returns the Cause, so errors.Is can chain through to
+// syscall.ENOTDIR on unix. The syscall constant is unix-only — skip on Windows.
 func TestCaptureOriginal_LstatNonNotExist(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("syscall.ENOTDIR is a unix-only sentinel")
+	}
 	t.Parallel()
 	root := t.TempDir()
 	parentFile := filepath.Join(root, "afile")
@@ -146,6 +150,11 @@ func TestCaptureOriginal_LstatNonNotExist(t *testing.T) {
 	}
 	if errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("ENOTDIR misclassified as not-exist: err=%v", err)
+	}
+	// Positive assertion: errcode.Error.Unwrap() chains to the underlying
+	// syscall error; ENOTDIR must be reachable via errors.Is.
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("expected syscall.ENOTDIR in error chain, got err=%v", err)
 	}
 }
 
@@ -191,14 +200,19 @@ func TestForceOverwritePreflightPass_RejectsDirectory(t *testing.T) {
 	if err == nil {
 		t.Fatal("forceOverwritePreflightPass(dir target): want rejection, got nil")
 	}
-	if !strings.Contains(err.Error(), errMsgKindGate) {
+	if !strings.Contains(err.Error(), errMsgForceOverwriteKindGate) {
 		t.Errorf("forceOverwritePreflightPass(dir target): err = %v, want kind-gate rejection", err)
 	}
 }
 
 // forceOverwritePreflightPass must Wrap an lstat failure that is NOT
 // os.IsNotExist (ENOTDIR: a path component is a regular file).
+// errcode.Error.Unwrap() returns the Cause, so errors.Is can chain through to
+// syscall.ENOTDIR on unix. The syscall constant is unix-only — skip on Windows.
 func TestForceOverwritePreflightPass_LstatNonNotExist(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("syscall.ENOTDIR is a unix-only sentinel")
+	}
 	t.Parallel()
 	root := t.TempDir()
 	parentFile := filepath.Join(root, "afile")
@@ -213,6 +227,11 @@ func TestForceOverwritePreflightPass_LstatNonNotExist(t *testing.T) {
 	}
 	if errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("ENOTDIR misclassified as not-exist: err=%v", err)
+	}
+	// Positive assertion: errcode.Error.Unwrap() chains to the underlying
+	// syscall error; ENOTDIR must be reachable via errors.Is.
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Errorf("expected syscall.ENOTDIR in error chain, got err=%v", err)
 	}
 }
 
