@@ -430,6 +430,8 @@ func buildCells(
 	require.NoError(t, err)
 	configCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
 	require.NoError(t, err)
+	accessCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
+	require.NoError(t, err)
 
 	ac := accesscore.NewAccessCore(append(pg.storeOpts,
 		accesscore.WithClock(clock.Real()),
@@ -439,6 +441,7 @@ func buildCells(
 		accesscore.WithTxManager(persistence.WrapForCell(pg.txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(a.bootstrapMW),
+		accesscore.WithCursorCodec(accessCursorCodec),
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
 	cc := configcore.NewConfigCore(
