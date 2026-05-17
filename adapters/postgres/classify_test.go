@@ -13,8 +13,9 @@ import (
 )
 
 // pgTimeoutErr is a net.Error stub whose Timeout()=true; used to exercise the
-// classifyPGError net.Error.Timeout() branch (pgxpool surfaces *net.OpError
-// for dial-level timeouts when ConnectTimeout fires).
+// net.Error.Timeout() branch in isRetryablePGError and classifyPGConnectError
+// (pgxpool surfaces *net.OpError for dial-level timeouts when ConnectTimeout
+// fires).
 type pgTimeoutErr struct{}
 
 func (pgTimeoutErr) Error() string   { return "i/o timeout" }
@@ -91,6 +92,11 @@ func TestIsRetryablePGError(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "net.Error Timeout()=true",
+			err:  pgTimeoutErr{},
+			want: true,
+		},
+		{
 			name: "context.Canceled — NOT transient",
 			err:  context.Canceled,
 			want: false,
@@ -123,12 +129,117 @@ func TestIsRetryablePGError(t *testing.T) {
 	}
 }
 
-// TestClassifyPGError verifies that classifyPGError routes transient errors
-// through errcode.WrapInfra (IsTransient == true) and permanent errors through
-// errcode.Wrap (IsTransient == false). Timeout-class errors carry the distinct
-// ErrAdapterPGConnectTimeout code (Wave-4-B ADAPTER-CONNECT-BUDGET-01).
+// TestClassifyPGError verifies the non-connect classification funnel: every
+// branch (transient via WrapInfra, permanent via Wrap) keeps the caller's
+// permanentCode and never substitutes ErrAdapterPGConnectTimeout — the
+// ConnectTimeout substitution lives in [classifyPGConnectError] (see
+// TestClassifyPGConnectError).
+//
+// opCode is parameterized per case so timeout-class causes can be exercised
+// under a non-connect code (ErrAdapterPGQuery), proving that picking
+// classifyPGError on a savepoint/query caller keeps the query-domain code
+// instead of relabeling it ConnectTimeout.
 func TestClassifyPGError(t *testing.T) {
-	const opCode = ErrAdapterPGConnect
+	const opMsg = "op"
+
+	tests := []struct {
+		name          string
+		err           error
+		opCode        errcode.Code
+		wantTransient bool
+	}{
+		{
+			name:          "serialization_failure 40001 → transient",
+			err:           &pgconn.PgError{Code: "40001"},
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: true,
+		},
+		{
+			name:          "deadlock_detected 40P01 → transient",
+			err:           &pgconn.PgError{Code: "40P01"},
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: true,
+		},
+		{
+			name:          "connection_failure 08006 → transient",
+			err:           &pgconn.PgError{Code: "08006"},
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: true,
+		},
+		{
+			name:          "connection_does_not_exist 08003 → transient",
+			err:           &pgconn.PgError{Code: "08003"},
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: true,
+		},
+		{
+			name:          "unique_violation 23505 → permanent",
+			err:           &pgconn.PgError{Code: "23505"},
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: false,
+		},
+		{
+			name:          "invalid_password 28P01 → permanent",
+			err:           &pgconn.PgError{Code: "28P01"},
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: false,
+		},
+		{
+			name:          "invalid_catalog_name 3D000 → permanent",
+			err:           &pgconn.PgError{Code: "3D000"},
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: false,
+		},
+		{
+			// Query-scope timeout MUST stay under the caller's code; picking
+			// classifyPGError on a savepoint/query caller must not relabel
+			// timeouts as ConnectTimeout.
+			name:          "context.DeadlineExceeded under query scope → transient, query code preserved",
+			err:           context.DeadlineExceeded,
+			opCode:        ErrAdapterPGQuery,
+			wantTransient: true,
+		},
+		{
+			// Same guarantee for net.Error.Timeout()=true.
+			name:          "net.Error Timeout()=true under query scope → transient, query code preserved",
+			err:           pgTimeoutErr{},
+			opCode:        ErrAdapterPGQuery,
+			wantTransient: true,
+		},
+		{
+			name:          "context.Canceled → permanent",
+			err:           context.Canceled,
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: false,
+		},
+		{
+			name:          "plain error → permanent",
+			err:           errors.New("unknown error"),
+			opCode:        ErrAdapterPGConnect,
+			wantTransient: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyPGError(tt.err, tt.opCode, opMsg)
+			assert.Equal(t, tt.wantTransient, errcode.IsTransient(got),
+				"IsTransient mismatch for %q", tt.name)
+			var ec *errcode.Error
+			require := assert.New(t)
+			require.ErrorAs(got, &ec, "classify result must be *errcode.Error")
+			assert.Equal(t, tt.opCode, ec.Code,
+				"classifyPGError must preserve caller's opCode for %q (no ConnectTimeout substitution outside the connect funnel)", tt.name)
+		})
+	}
+}
+
+// TestClassifyPGConnectError verifies the connect-class classification funnel:
+// timeout-class causes get the dedicated ErrAdapterPGConnectTimeout code while
+// every other disposition delegates to classifyPGError under ErrAdapterPGConnect.
+// The split is the upstream "typed function choice" Hard guarantee — connect
+// callers select this funnel by name to opt into the ConnectTimeout substitution.
+func TestClassifyPGConnectError(t *testing.T) {
 	const opMsg = "op"
 
 	tests := []struct {
@@ -137,48 +248,6 @@ func TestClassifyPGError(t *testing.T) {
 		wantTransient bool
 		wantCode      errcode.Code
 	}{
-		{
-			name:          "serialization_failure 40001 → transient",
-			err:           &pgconn.PgError{Code: "40001"},
-			wantTransient: true,
-			wantCode:      ErrAdapterPGConnect,
-		},
-		{
-			name:          "deadlock_detected 40P01 → transient",
-			err:           &pgconn.PgError{Code: "40P01"},
-			wantTransient: true,
-			wantCode:      ErrAdapterPGConnect,
-		},
-		{
-			name:          "connection_failure 08006 → transient",
-			err:           &pgconn.PgError{Code: "08006"},
-			wantTransient: true,
-			wantCode:      ErrAdapterPGConnect,
-		},
-		{
-			name:          "connection_does_not_exist 08003 → transient",
-			err:           &pgconn.PgError{Code: "08003"},
-			wantTransient: true,
-			wantCode:      ErrAdapterPGConnect,
-		},
-		{
-			name:          "unique_violation 23505 → permanent",
-			err:           &pgconn.PgError{Code: "23505"},
-			wantTransient: false,
-			wantCode:      ErrAdapterPGConnect,
-		},
-		{
-			name:          "invalid_password 28P01 → permanent",
-			err:           &pgconn.PgError{Code: "28P01"},
-			wantTransient: false,
-			wantCode:      ErrAdapterPGConnect,
-		},
-		{
-			name:          "invalid_catalog_name 3D000 → permanent",
-			err:           &pgconn.PgError{Code: "3D000"},
-			wantTransient: false,
-			wantCode:      ErrAdapterPGConnect,
-		},
 		{
 			name:          "context.DeadlineExceeded → transient ConnectTimeout code",
 			err:           context.DeadlineExceeded,
@@ -192,14 +261,20 @@ func TestClassifyPGError(t *testing.T) {
 			wantCode:      ErrAdapterPGConnectTimeout,
 		},
 		{
-			name:          "context.Canceled → permanent",
-			err:           context.Canceled,
+			name:          "connection_failure 08006 → transient (delegates to classifyPGError, Connect code)",
+			err:           &pgconn.PgError{Code: "08006"},
+			wantTransient: true,
+			wantCode:      ErrAdapterPGConnect,
+		},
+		{
+			name:          "unique_violation 23505 → permanent (delegates to classifyPGError, Connect code)",
+			err:           &pgconn.PgError{Code: "23505"},
 			wantTransient: false,
 			wantCode:      ErrAdapterPGConnect,
 		},
 		{
-			name:          "plain error → permanent",
-			err:           errors.New("unknown error"),
+			name:          "context.Canceled → permanent (caller abandoned, no ConnectTimeout substitution)",
+			err:           context.Canceled,
 			wantTransient: false,
 			wantCode:      ErrAdapterPGConnect,
 		},
@@ -207,7 +282,7 @@ func TestClassifyPGError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifyPGError(tt.err, opCode, opMsg)
+			got := classifyPGConnectError(tt.err, opMsg)
 			assert.Equal(t, tt.wantTransient, errcode.IsTransient(got),
 				"IsTransient mismatch for %q", tt.name)
 			var ec *errcode.Error

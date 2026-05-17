@@ -52,6 +52,7 @@ func sqlStateClassPrefix(code string) string {
 //   - errors.As → *pgconn.PgError with SQLSTATE 40P01 (deadlock_detected)
 //   - errors.As → *pgconn.PgError whose class prefix == "08" (connection_exception)
 //   - errors.Is  → context.DeadlineExceeded
+//   - errors.As → net.Error with Timeout() == true (network-level timeout)
 //
 // Returns false for:
 //   - context.Canceled  — the caller abandoned the work; retry is pointless
@@ -85,6 +86,16 @@ func isRetryablePGError(err error) bool {
 		return true
 	}
 
+	// net.Error.Timeout() — transport-level timeout (e.g. *net.OpError from
+	// pgx dial when a network-level deadline fires). Retry is safe; the
+	// dedicated ConnectTimeout code substitution lives in
+	// classifyPGConnectError. For non-connect callers this stays transient
+	// under the caller-supplied code (savepoint / query semantics preserved).
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		return false
@@ -105,9 +116,21 @@ func isRetryablePGError(err error) bool {
 }
 
 // classifyPGError routes a raw PostgreSQL error to a transient or permanent
-// errcode. The caller supplies the errcode.Code and a string context that
-// describes the operation (used as errcode.WithInternal text for server-side
-// logs — NOT placed in message, which must be a const literal per
+// errcode for **non-connect** call paths (query / commit / savepoint). For
+// connect-class call paths (pool init ping / pool health / TxManager Begin)
+// use [classifyPGConnectError] instead — it adds the dedicated
+// ErrAdapterPGConnectTimeout substitution that this funnel intentionally does
+// not perform.
+//
+// The split is the "typed function choice" Hard pattern (.claude/rules/gocell/
+// ai-collab.md §3): picking the wrong funnel name yields the wrong error code
+// at the call site, with no runtime fallback. archtest
+// ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 verifies both function bodies
+// route their transient branch through errcode.WrapInfra.
+//
+// The caller supplies the errcode.Code and a string context that describes
+// the operation (used as errcode.WithInternal text for server-side logs —
+// NOT placed in message, which must be a const literal per
 // MESSAGE-CONST-LITERAL-01).
 //
 // Transient branch (isRetryablePGError == true):
@@ -118,18 +141,10 @@ func isRetryablePGError(err error) bool {
 // WrapInfra sets KindUnavailable + CategoryInfra + the private transient
 // marker, enabling errcode.IsTransient to recognize the result. The caller's
 // operation code is reused (no separate ErrAdapterPGTransient constant).
-//
-// Timeout sub-branch (Wave-4-B ADAPTER-CONNECT-BUDGET-01):
-//
-//	errcode.WrapInfra(ErrAdapterPGConnectTimeout, "postgres: connect timeout", err,
-//	    errcode.WithInternal(opContext))
-//
-// When err carries a network-level timeout signal (`context.DeadlineExceeded`
-// or `net.Error.Timeout()=true` — typically *net.OpError surfaced from
-// pgxpool's dial path when Config.ConnectTimeout fires), we substitute the
-// distinct ErrAdapterPGConnectTimeout code so operators can route timeout
-// alerts independently from generic connect failures (refused/reset/etc.).
-// Still transient (consumer Requeue path); only the code differs.
+// Timeout-class causes (context.DeadlineExceeded, net.Error.Timeout() == true)
+// stay transient under the caller's code — they do not get coerced to
+// ErrAdapterPGConnectTimeout because non-connect callers must keep their own
+// semantic code (ErrAdapterPGQuery for savepoint, etc.).
 //
 // Permanent branch (default, fail-closed):
 //
@@ -143,11 +158,6 @@ func isRetryablePGError(err error) bool {
 // ref: jackc/pgx pgconn SafeToRetry
 // ref: archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
 func classifyPGError(err error, permanentCode errcode.Code, opContext string) error {
-	if isConnectTimeout(err) {
-		return errcode.WrapInfra(ErrAdapterPGConnectTimeout,
-			"postgres: connect timeout", err,
-			errcode.WithInternal(opContext))
-	}
 	if isRetryablePGError(err) {
 		return errcode.WrapInfra(permanentCode,
 			"postgres: transient error", err,
@@ -158,14 +168,50 @@ func classifyPGError(err error, permanentCode errcode.Code, opContext string) er
 		errcode.WithInternal(opContext))
 }
 
+// classifyPGConnectError is the dedicated funnel for **connect-class** call
+// paths (pool init ping / pool health / TxManager Begin). Network-level
+// timeouts get the distinct ErrAdapterPGConnectTimeout code so operators can
+// route ConnectTimeout alerts independently from generic connect/query
+// failures. Non-timeout errors delegate to [classifyPGError] with
+// ErrAdapterPGConnect so the transient/permanent disposition stays single-
+// sourced.
+//
+// Timeout sub-branch (Wave-4-B ADAPTER-CONNECT-BUDGET-01):
+//
+//	errcode.WrapInfra(ErrAdapterPGConnectTimeout, "postgres: connect timeout", err,
+//	    errcode.WithInternal(opContext))
+//
+// Triggered by context.DeadlineExceeded or net.Error.Timeout() == true —
+// typically *net.OpError surfaced from pgxpool's dial path when
+// Config.ConnectTimeout fires.
+//
+// Non-connect callers (commit / savepoint / query) MUST use [classifyPGError]
+// directly; picking this funnel would relabel their own timeout-class errors
+// with the wrong ConnectTimeout code.
+//
+// ref: jackc/pgx pgconn SafeToRetry
+// ref: archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
+func classifyPGConnectError(err error, opContext string) error {
+	if isConnectTimeout(err) {
+		return errcode.WrapInfra(ErrAdapterPGConnectTimeout,
+			"postgres: connect timeout", err,
+			errcode.WithInternal(opContext))
+	}
+	return classifyPGError(err, ErrAdapterPGConnect, opContext)
+}
+
 // isConnectTimeout reports whether err carries a network-level timeout signal:
 //   - errors.Is(err, context.DeadlineExceeded)
 //   - any error in the chain implementing net.Error with Timeout() == true
 //
-// Used by classifyPGError to substitute ErrAdapterPGConnectTimeout for the
-// generic transient code. context.Canceled is NOT a timeout — caller-abandoned
-// work is handled by the upstream isRetryablePGError check (returns false →
-// permanent fail-closed) and never enters this function.
+// Used ONLY by classifyPGConnectError to substitute ErrAdapterPGConnectTimeout
+// for the generic transient code; non-connect callers must not invoke this
+// helper directly (the typed-funnel split is the upstream guardrail). The
+// retry-vs-permanent disposition for non-connect callers already handles
+// timeout-class errors via isRetryablePGError (DeadlineExceeded + net.Error
+// timeout, both return true → caller's permanentCode under WrapInfra).
+// context.Canceled is NOT a timeout — caller-abandoned work is filtered out
+// by isRetryablePGError before this helper is consulted.
 func isConnectTimeout(err error) bool {
 	if err == nil {
 		return false

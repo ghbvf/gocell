@@ -121,7 +121,7 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, classifyPGError(err, ErrAdapterPGConnect, "initial ping")
+		return nil, classifyPGConnectError(err, "initial ping")
 	}
 
 	slog.Info("postgres pool connected",
@@ -145,7 +145,7 @@ func (p *Pool) Health(ctx context.Context) error {
 	defer cancel()
 
 	if err := p.inner.Ping(ctx); err != nil {
-		return classifyPGError(err, ErrAdapterPGConnect, "health check")
+		return classifyPGConnectError(err, "health check")
 	}
 	return nil
 }
