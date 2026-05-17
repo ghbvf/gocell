@@ -4,6 +4,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -13,7 +14,6 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -69,28 +69,66 @@ func newIntegrationConfig(endpoint, user, pass string) Config {
 	}
 }
 
+// startWorkerWithTickProof starts the client's background worker, poisons
+// state with a sentinel, and waits for the worker to clear it back to nil.
+// This is the only correct shape for "prove the worker actually ticked"
+// assertions in integration tests: reading Checkers directly is a false
+// positive because s3.New's synchronous probe (adapters/s3/s3.go:208) already
+// stored nil in state.
+//
+// The helper also owns worker lifecycle (independent ctx + Stop/Close
+// cleanup) to keep ctx shape consistent across worker call sites.
+//
+// AI-rebust rating: Medium (typed function call funnel, 4 call sites must
+// route through this helper). No archtest guard while call sites stay ≤ 4.
+func startWorkerWithTickProof(t *testing.T, ctx context.Context, client *Client, timeout time.Duration) {
+	t.Helper()
+	w := client.Worker()
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	t.Cleanup(func() {
+		workerCancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D5s)
+		defer stopCancel()
+		_ = w.Stop(stopCtx)
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D5s)
+		defer closeCancel()
+		_ = client.Close(closeCtx)
+	})
+	go func() { _ = w.Start(workerCtx) }()
+
+	sentinel := errors.New("worker-tick-proof-sentinel: must be cleared by worker")
+	client.state.Store(&sentinel)
+
+	checkers := client.Checkers()
+	require.Contains(t, checkers, ReadyProbeName)
+	require.Eventually(t, func() bool {
+		return checkers[ReadyProbeName](ctx) == nil
+	}, timeout, testtime.SlowPoll,
+		"s3_ready should clear worker-tick-proof sentinel once worker probes healthy MinIO")
+}
+
 // TestIntegration_S3_UploadHealthHappy verifies the happy-path:
 //   - s3.New succeeds (sync HeadBucket probe passes)
 //   - Upload stores an object without error
 //   - Health() returns nil (live HeadBucket call)
 //   - Checkers()["s3_ready"] returns nil (atomic state read, no network)
 //
-// Not t.Parallel(): per-test independent MinIO container is heavyweight
-// (~3s startup + RAM/disk), running concurrently on a CI runner risks
-// resource contention. Integration tests are bound by docker daemon
-// throughput, not Go scheduler parallelism.
+// Uses the package-shared MinIO container (TestMain) since this test does not
+// require Stop/Start cycles. Upload key is randomized to avoid collisions when
+// future tests share the same bucket.
+//
+// Not t.Parallel(): the shared container is process-wide; running concurrently
+// against the same bucket is safe today but parallel hygiene would require
+// per-test bucket isolation, which is over-engineering at 3 tests.
 func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 	ctx := context.Background()
 
-	// No persistent volume needed — this test does not survive stop/start.
-	ctr := testutil.StartMinIOContainer(t, ctx)
-	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
+	ctr := sharedMinIOContainer(t)
 
 	connStr, err := ctr.ConnectionString(ctx)
 	require.NoError(t, err, "get minio connection string")
 
 	endpoint := buildEndpoint(connStr)
-	createBucket(t, ctx, endpoint, ctr.Username, ctr.Password)
 
 	cfg := newIntegrationConfig(endpoint, ctr.Username, ctr.Password)
 	client, err := New(ctx, cfg)
@@ -101,8 +139,9 @@ func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 		_ = client.Close(closeCtx)
 	})
 
-	// Upload a small object.
-	assert.NoError(t, client.Upload(ctx, "test-key", []byte("hello"), "text/plain"),
+	// Random key avoids collisions if future tests share this bucket.
+	key := fmt.Sprintf("happy-%d", time.Now().UnixNano())
+	assert.NoError(t, client.Upload(ctx, key, []byte("hello"), "text/plain"),
 		"Upload should succeed")
 
 	// Direct health check (live HeadBucket network call).
@@ -126,21 +165,15 @@ func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 // finds the bucket on recovery — without it MinIO would lose in-memory state and
 // return NoSuchBucket (permanent), masking the transient→recovery path.
 //
-// Not t.Parallel(): per-test independent MinIO container is heavyweight
-// (~3s startup + RAM/disk), running concurrently on a CI runner risks
-// resource contention. Integration tests are bound by docker daemon
-// throughput, not Go scheduler parallelism.
+// Not t.Parallel(): owns a dedicated container and performs Stop/Start —
+// incompatible with the package-shared container used by happy-path tests.
 func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 	ctx := context.Background()
 
 	volumeName := fmt.Sprintf("s3-integ-restart-%d", time.Now().UnixNano())
 
 	ctr := testutil.StartMinIOContainer(t, ctx,
-		testcontainers.WithMounts(
-			testcontainers.VolumeMount(volumeName, "/data"),
-		),
-	)
-	t.Cleanup(func() { _ = ctr.Terminate(ctx, testcontainers.RemoveVolumes(volumeName)) })
+		testutil.WithMinIOVolume(volumeName, "/data"))
 
 	connStr, err := ctr.ConnectionString(ctx)
 	require.NoError(t, err)
@@ -190,18 +223,17 @@ func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 		"Health on new client should succeed after container restart")
 }
 
-// TestIntegration_S3_WorkerTickStateTracksContainer verifies that the background
-// health-probe worker updates the atomic state as the container goes down and
-// comes back up.
+// TestIntegration_S3_WorkerTickStateTracksContainer verifies that the
+// background health-probe worker updates the atomic state as the container
+// goes down and comes back up.
 //
 // After container restart Docker may reassign the host port, so recovery is
-// verified by constructing a new client (with the fresh endpoint) and confirming
-// its Checkers()["s3_ready"] flips to nil after the first worker tick.
+// verified by constructing a new client (with the fresh endpoint) and using
+// startWorkerWithTickProof to poison state and confirm the new client's
+// worker tick clears it.
 //
-// Not t.Parallel(): per-test independent MinIO container is heavyweight
-// (~3s startup + RAM/disk), running concurrently on a CI runner risks
-// resource contention. Integration tests are bound by docker daemon
-// throughput, not Go scheduler parallelism.
+// Not t.Parallel(): owns a dedicated container and performs Stop/Start —
+// incompatible with the package-shared container used by happy-path tests.
 func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -209,15 +241,7 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	volumeName := fmt.Sprintf("s3-integ-worker-%d", time.Now().UnixNano())
 
 	ctr := testutil.StartMinIOContainer(t, ctx,
-		testcontainers.WithMounts(
-			testcontainers.VolumeMount(volumeName, "/data"),
-		),
-	)
-	t.Cleanup(func() {
-		termCtx, termCancel := context.WithTimeout(context.Background(), testtime.D10s)
-		defer termCancel()
-		_ = ctr.Terminate(termCtx, testcontainers.RemoveVolumes(volumeName))
-	})
+		testutil.WithMinIOVolume(volumeName, "/data"))
 
 	connStr, err := ctr.ConnectionString(ctx)
 	require.NoError(t, err)
@@ -229,24 +253,10 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	client, err := New(ctx, cfg)
 	require.NoError(t, err, "s3.New for worker test")
 
-	// Start the background health worker.
-	w := client.Worker()
-	workerCtx, workerCancel := context.WithCancel(ctx)
-	t.Cleanup(func() {
-		workerCancel()
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D5s)
-		defer stopCancel()
-		_ = w.Stop(stopCtx)
-	})
-	go func() { _ = w.Start(workerCtx) }()
+	// Initial healthy wait: poison state, prove worker tick clears it.
+	startWorkerWithTickProof(t, ctx, client, testtime.EventuallyLong)
 
-	// Wait for the worker to observe a healthy state on its first tick.
 	checkers := client.Checkers()
-	require.Contains(t, checkers, ReadyProbeName)
-	require.Eventually(t, func() bool {
-		return checkers[ReadyProbeName](ctx) == nil
-	}, testtime.EventuallyLong, testtime.SlowPoll,
-		"s3_ready should be nil once worker probes healthy MinIO")
 
 	// Stop the container. Worker tick will call HeadBucket and update state to
 	// non-nil. We assert the probe becomes non-nil.
@@ -259,8 +269,8 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 		"s3_ready should flip to non-nil error while container is stopped")
 
 	// Restart the container. Docker may reassign the host port, so we construct
-	// a new client against the fresh endpoint and start its worker to verify
-	// the recovery path.
+	// a new client against the fresh endpoint and start its worker via the
+	// helper (poison + tick proof) to verify the recovery path.
 	require.NoError(t, ctr.Start(ctx), "restart container for worker test")
 
 	newConnStr, err := ctr.ConnectionString(ctx)
@@ -271,21 +281,5 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	newClient, err := New(ctx, newCfg)
 	require.NoError(t, err, "s3.New on fresh endpoint after restart")
 
-	newW := newClient.Worker()
-	go func() { _ = newW.Start(ctx) }()
-	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D5s)
-		defer stopCancel()
-		_ = newW.Stop(stopCtx)
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D5s)
-		defer closeCancel()
-		_ = newClient.Close(closeCtx)
-	})
-
-	newCheckers := newClient.Checkers()
-	require.Contains(t, newCheckers, ReadyProbeName)
-	require.Eventually(t, func() bool {
-		return newCheckers[ReadyProbeName](ctx) == nil
-	}, testtime.EventuallyExtraLong, testtime.SlowPoll,
-		"s3_ready on new client should recover to nil after container restart")
+	startWorkerWithTickProof(t, ctx, newClient, testtime.EventuallyExtraLong)
 }

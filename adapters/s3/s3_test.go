@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -79,20 +80,51 @@ func newTestClient(cfg Config, mock bucketHeader) *Client {
 // recordingTransport to sequence responses across calls.
 type stepFn func() (*http.Response, error)
 
+// capturedRequest records the shape of one HTTP call: method, URL path, and
+// Content-Type header. Used by Upload/Health tests to assert the SDK is making
+// the expected S3 operation (PUT vs HEAD, correct bucket/key path, default
+// Content-Type) instead of only counting calls.
+type capturedRequest struct {
+	Method      string
+	Path        string
+	ContentType string
+}
+
 // recordingTransport implements aws.HTTPClient by replaying a sequence
 // of responses. calls is incremented atomically per Do(); when calls > len(steps),
 // the last step is reused so steady-state failure tests don't need padding.
+// Each call's request shape is captured under mu for later snapshot().
 type recordingTransport struct {
-	calls atomic.Int64
-	steps []stepFn
+	mu       sync.Mutex
+	requests []capturedRequest
+	calls    atomic.Int64
+	steps    []stepFn
 }
 
 func (t *recordingTransport) Do(req *http.Request) (*http.Response, error) {
 	n := int(t.calls.Add(1)) - 1
+	t.mu.Lock()
+	t.requests = append(t.requests, capturedRequest{
+		Method:      req.Method,
+		Path:        req.URL.Path,
+		ContentType: req.Header.Get("Content-Type"),
+	})
+	t.mu.Unlock()
 	if n >= len(t.steps) {
 		n = len(t.steps) - 1
 	}
 	return t.steps[n]()
+}
+
+// snapshot returns a copy of captured requests under lock. Safe to call after
+// the SDK calls have completed; calling concurrently with in-flight calls
+// races with append but the copy itself is locked.
+func (t *recordingTransport) snapshot() []capturedRequest {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]capturedRequest, len(t.requests))
+	copy(out, t.requests)
+	return out
 }
 
 // respondStatus returns a stepFn yielding *http.Response with the given HTTP
@@ -649,6 +681,7 @@ func TestUpload_403Permanent(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
 	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected")
+	assertUploadRequestShape(t, tr, "obj/key", "application/octet-stream")
 }
 
 // TestUpload_5xxTransient verifies that a 503 ServiceUnavailable response from
@@ -666,6 +699,7 @@ func TestUpload_5xxTransient(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
 	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected")
+	assertUploadRequestShape(t, tr, "obj/key", "application/octet-stream")
 }
 
 // TestUpload_TimeoutTransient verifies that a network-level timeout during
@@ -683,6 +717,7 @@ func TestUpload_TimeoutTransient(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
 	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected (NopRetryer disables retry)")
+	assertUploadRequestShape(t, tr, "obj/key", "application/octet-stream")
 }
 
 // TestUpload_RecoveryAfter5xx verifies the recovery sequence: the first Upload
@@ -709,6 +744,16 @@ func TestUpload_RecoveryAfter5xx(t *testing.T) {
 	require.NoError(t, err2, "second call must succeed after recovery")
 
 	assert.EqualValues(t, 2, tr.calls.Load(), "exactly 2 HTTP calls expected across both Upload invocations")
+	got := tr.snapshot()
+	require.Len(t, got, 2)
+	for i, req := range got {
+		assert.Equal(t, http.MethodPut, req.Method,
+			"call %d: Upload must use PUT", i)
+		assert.Contains(t, req.Path, "/test-bucket/obj/key",
+			"call %d: path-style: /{bucket}/{key}", i)
+		assert.Equal(t, "application/octet-stream", req.ContentType,
+			"call %d: default Content-Type when not specified", i)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -730,6 +775,7 @@ func TestHealth_403Permanent(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Health, ec.Code)
 	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected")
+	assertHealthRequestShape(t, tr)
 }
 
 // TestHealth_5xxTransient verifies that a 503 ServiceUnavailable response
@@ -747,6 +793,7 @@ func TestHealth_5xxTransient(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Health, ec.Code)
 	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected")
+	assertHealthRequestShape(t, tr)
 }
 
 // TestHealth_TimeoutTransient verifies that a network-level timeout during
@@ -764,6 +811,7 @@ func TestHealth_TimeoutTransient(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Health, ec.Code)
 	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected (NopRetryer disables retry)")
+	assertHealthRequestShape(t, tr)
 }
 
 // ---------------------------------------------------------------------------
@@ -891,4 +939,57 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
 	defer stopCancel()
 	require.NoError(t, w.Stop(stopCtx))
+}
+
+// ---------------------------------------------------------------------------
+// Request-shape assertion helpers (F4)
+// ---------------------------------------------------------------------------
+
+// assertUploadRequestShape asserts that the most recent captured HTTP call
+// performed by Upload is a PUT to "/test-bucket/{key}" with the expected
+// Content-Type. The test bucket comes from validConfig() (= "test-bucket").
+// path-style URL is enforced by newTestClientWithSDK (UsePathStyle=true).
+func assertUploadRequestShape(t *testing.T, tr *recordingTransport, key, contentType string) {
+	t.Helper()
+	got := tr.snapshot()
+	require.NotEmpty(t, got, "no HTTP calls captured")
+	last := got[len(got)-1]
+	assert.Equal(t, http.MethodPut, last.Method, "Upload must use PUT")
+	assert.Contains(t, last.Path, "/test-bucket/"+key,
+		"path-style: /{bucket}/{key}")
+	assert.Equal(t, contentType, last.ContentType,
+		"Content-Type must match Upload arg (empty arg defaults to application/octet-stream)")
+}
+
+// assertHealthRequestShape asserts that the most recent captured HTTP call
+// performed by Health is a HEAD request against "/test-bucket" (or a path
+// containing the bucket name). aws-sdk-go-v2 may append a trailing slash or
+// query string; Contains keeps the assertion robust to SDK formatting drift
+// while still catching bucket/method drift.
+func assertHealthRequestShape(t *testing.T, tr *recordingTransport) {
+	t.Helper()
+	got := tr.snapshot()
+	require.NotEmpty(t, got, "no HTTP calls captured")
+	last := got[len(got)-1]
+	assert.Equal(t, http.MethodHead, last.Method, "Health uses HeadBucket → HEAD")
+	assert.Contains(t, last.Path, "/test-bucket",
+		"HeadBucket path: /{bucket}")
+}
+
+// ---------------------------------------------------------------------------
+// F3 — Ops contract literal anchor
+// ---------------------------------------------------------------------------
+
+// TestReadyProbeName_LiteralAnchor locks the "s3_ready" string contract.
+// production Checkers + all tests reference ReadyProbeName; without this
+// anchor a const-value rename drifts silently.
+//
+// AI-rebust rating: Soft (string convention). Hard upgrade path:
+// backlog OPS-CONTRACT-STRING-FUNNEL-01 (typed `ReadyProbeName string`
+// declaration-site funnel + archtest).
+//
+// ref: .claude/rules/gocell/observability.md「Readyz Probe 命名」
+func TestReadyProbeName_LiteralAnchor(t *testing.T) {
+	assert.Equal(t, "s3_ready", ReadyProbeName,
+		"ReadyProbeName is an ops contract — dashboards/alerts depend on this literal")
 }
