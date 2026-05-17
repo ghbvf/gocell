@@ -43,8 +43,16 @@ func adminCtxForService() context.Context {
 var minimalStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 // simpleTxRunner is a test-only pass-through TxRunner. It injects the mem-tx
-// sentinel so GetByIDForUpdate / GetByUsernameForUpdate succeed when called
-// through authzmutate paths that use a mem.Store repository.
+// token via mem.WithTxContext (holdsLock=false) so GetByIDForUpdate /
+// GetByUsernameForUpdate take the in-tx code path on a mem.Store repository.
+//
+// Since PR fix/238 holdsLock=false does NOT bypass store.mu: every repo
+// method still takes its per-call lock, so this runner is race-safe even
+// under concurrent goroutines (no more "concurrent map writes"). It does
+// NOT provide cross-method atomicity (GetByID→…→UpdatePassword are
+// independently locked); tests needing a whole-closure atomic tx must wire
+// mem.Store.TxRunner() instead. See ADR
+// docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
 type simpleTxRunner struct{}
 
 func (simpleTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
@@ -836,9 +844,42 @@ func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
 	assert.Equal(t, errcode.ErrVersionConflict, ce.Code)
 }
 
-// TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds verifies that when
-// two goroutines race to change the same user's password, exactly one wins and
-// the other receives ErrVersionConflict. Uses a counting tx to gate concurrency.
+// TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds is the live
+// regression for the mem tx lock-ownership fix (archtest
+// MEM-TX-LOCK-OWNERSHIP-01; ADR
+// docs/architecture/202605171846-adr-mem-tx-lock-ownership.md).
+//
+// It deliberately wires simpleTxRunner — a foreign TxRunner that injects
+// mem.WithTxContext (holdsLock=false), the exact shape that, under the old
+// bool sentinel, made repo methods skip locking with no lock held and
+// produced `fatal error: concurrent map writes` (the PR #552 CI flake). With
+// the typed *memTxToken, holdsLock=false forces every repo method onto its
+// per-call store.mu, so two goroutines mutating the same user can never race
+// the maps.
+//
+// What this test guards (race-safe invariants — NOT timing-dependent):
+//
+//   - never `fatal error: concurrent map writes` / DATA RACE under -race
+//     (the lock-ownership fix itself);
+//   - exactly one ChangePassword succeeds;
+//   - the loser fails with a *legitimate* race outcome. Per-call locking does
+//     NOT give cross-method atomicity (GetByID → bcrypt → UpdatePassword are
+//     three independently-locked steps), so the loser is either
+//     ErrVersionConflict (its GetByID snapshotted version 0 before the winner
+//     committed → CAS rejects) OR ErrAuthOldPasswordIncorrect (its GetByID ran
+//     after the winner committed → reads the new hash, bcrypt of the old
+//     password fails). Both are correct under the mem model; asserting only
+//     ErrVersionConflict would itself be a latent flake.
+//   - the stored password_version advances to exactly 1 (one mutation total).
+//
+// The STRONG exactly-once CAS-conflict property under true concurrency (both
+// txs read version 0, exactly one gets ErrVersionConflict) is a real-MVCC
+// property and is covered by the real-DB counterpart
+// TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG
+// (service_pg_integration_test.go, //go:build integration). The mem store's
+// only concurrency primitive is the all-or-nothing store.mu; it cannot model
+// "two txs both read v0 then one CAS-fails" without cross-method atomicity,
+// and that is by design — see the ADR.
 func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
 
@@ -859,8 +900,6 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 		WithTokenIssuer(stub), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 
-	// Both goroutines will read PasswordVersion=0 from the same snapshot but
-	// only one UpdatePassword call will win; the second will get ErrVersionConflict.
 	type result struct{ err error }
 	results := make(chan result, 2)
 
@@ -883,35 +922,29 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	r2 := <-results
 
 	var (
-		successes        int
-		versionConflicts int
-		loginFailures    int
+		successes  int
+		raceLosers int
 	)
 	for _, r := range []result{r1, r2} {
 		if r.err == nil {
 			successes++
-		} else {
-			var ce *errcode.Error
-			if errors.As(r.err, &ce) && ce.Code == errcode.ErrVersionConflict {
-				versionConflicts++
-			} else {
-				loginFailures++
-			}
+			continue
 		}
-	}
-	// CAS semantics: exactly one goroutine must succeed and the other must
-	// receive ErrVersionConflict. Any loginFailure indicates a test defect
-	// (unexpected error classification — the race path should always resolve
-	// to ErrVersionConflict, not ErrAuthOldPasswordIncorrect, when reads are
-	// interleaved after the CAS guard is in place).
-	if loginFailures > 0 {
-		t.Fatalf("unexpected loginFailure(s) in concurrent ChangePassword test: successes=%d versionConflicts=%d loginFailures=%d",
-			successes, versionConflicts, loginFailures)
+		var ce *errcode.Error
+		require.ErrorAs(t, r.err, &ce,
+			"concurrent ChangePassword loser must be a classified *errcode.Error, got %v", r.err)
+		// Both are legitimate per-call-locked race outcomes; see godoc.
+		require.Containsf(t,
+			[]errcode.Code{errcode.ErrVersionConflict, errcode.ErrAuthOldPasswordIncorrect},
+			ce.Code,
+			"concurrent ChangePassword loser must be ErrVersionConflict or "+
+				"ErrAuthOldPasswordIncorrect, got %s", ce.Code)
+		raceLosers++
 	}
 	assert.Equal(t, 1, successes, "exactly one concurrent ChangePassword must succeed")
-	assert.Equal(t, 1, versionConflicts, "exactly one concurrent ChangePassword must yield ErrVersionConflict")
+	assert.Equal(t, 1, raceLosers, "exactly one concurrent ChangePassword must lose the race")
 
-	// Version must have advanced.
+	// Exactly one mutation applied — version advances to exactly 1.
 	got, err := repo.GetByID(context.Background(), "usr-cas-race")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), got.PasswordVersion, "version must be exactly 1 after exactly one success")

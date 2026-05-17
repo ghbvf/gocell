@@ -67,9 +67,12 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 
 	// Stub issuer — ChangePassword needs IssueForUser after the tx. The stub
 	// returns an empty token pair (sufficient for race testing).
-	// Use the store-bound TxRunner so concurrent goroutines are serialized via
-	// the store mutex (simpleTxRunner injects the sentinel without holding the
-	// lock, which causes concurrent map writes under -race).
+	// Use the store-bound TxRunner so the whole ChangePassword closure runs
+	// under store.mu (cross-method atomicity), which this test's epoch /
+	// revocation terminal assertions require. Since PR fix/238 simpleTxRunner
+	// is itself race-SAFE (holdsLock=false → per-call lock; no more concurrent
+	// map writes) but only Store.TxRunner() gives cross-method atomicity. See
+	// ADR docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
 	svc, err := NewService(userRepo, inv, slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithClock(clock.Real()),
@@ -165,9 +168,10 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 	refreshStore := newIdentityRefreshStore()
 	inv := newInvalidator(t, userRepo, sessionStore, refreshStore)
 
-	// Use the store-bound TxRunner to serialize concurrent mutations via the
-	// store mutex (simpleTxRunner does not hold the lock, which races under
-	// concurrent access).
+	// Use the store-bound TxRunner for cross-method atomicity (whole closure
+	// under store.mu), which the epoch-positive terminal assertion needs.
+	// simpleTxRunner is race-safe since PR fix/238 (per-call lock) but does
+	// not serialize across methods. ADR 202605171846-adr-mem-tx-lock-ownership.
 	svc, err := NewService(userRepo, inv, slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithClock(clock.Real()),
