@@ -250,6 +250,16 @@ lint_gate() {
         printf 'golangci-lint gate: version resolve/install failed (hack/lib/golangci-lint.sh)\n'
         return 1
     fi
+    # --new-from-merge-base needs the base ref present locally. Surface the
+    # actionable hint here rather than letting golangci-lint emit a raw git
+    # error (operator-hint parity with the gofumpt/codegen gates). Still
+    # fail-closed: missing base blocks the push — it never falls back to a
+    # full-repo lint (that would flag every pre-existing issue and block
+    # unconditionally) nor silently skips (no-soft-fallback).
+    if ! git rev-parse --verify --quiet "${BASE_BRANCH}^{commit}" >/dev/null; then
+        printf 'golangci-lint gate: %s not found locally (run: git fetch origin develop)\n' "${BASE_BRANCH}"
+        return 1
+    fi
     "${bin}" run "--new-from-merge-base=${BASE_BRANCH}"
 }
 
