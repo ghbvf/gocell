@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -225,38 +224,56 @@ func TestLifecycle_StopBestEffort_ErrorsCollected(t *testing.T) {
 	assert.Equal(t, want, stopCalls, "stop order")
 }
 
-// TestLifecycle_PerHookStartTimeout — hook blocks 100ms, StartTimeout=50ms →
-// Start returns error containing context.DeadlineExceeded; rollback runs for
-// the hooks that succeeded (none in this test, only hook failed).
-func TestLifecycle_PerHookStartTimeout(t *testing.T) {
+// TestLifecycle_OnStart_NoTimeoutEnforced verifies that StartTimeout is NOT
+// enforced by the lifecycle runner (supersedes ADR 202605102000 §D1).
+//
+// Old behavior: OnStart wrapped in context.WithTimeout(StartTimeout) — a hook
+// that blocked past StartTimeout would receive DeadlineExceeded from ctx.Done().
+//
+// New behavior: OnStart receives the owner ctx directly. A hook that takes
+// longer than StartTimeout still succeeds — the StartTimeout is informational
+// (used only for the slow-start warning). Hooks must return promptly on their
+// own (spawn goroutine + synchronous probe, then return).
+func TestLifecycle_OnStart_NoTimeoutEnforced(t *testing.T) {
 	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 
-	var stopCalled atomic.Bool
+	startReturned := make(chan struct{})
 	_ = lc.Append(Hook{
 		Name: "blocker",
 		OnStart: func(ctx context.Context) error {
-			// Block longer than the per-hook timeout.
+			// Block for longer than StartTimeout (100ms > 50ms).
+			// Under old semantics this would cause DeadlineExceeded.
+			// Under new semantics the hook completes normally.
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(lifecycleBlockHook):
+			case <-time.After(lifecycleBlockHook): // 100ms
+				close(startReturned)
 				return nil
 			}
 		},
-		OnStop: func(_ context.Context) error {
-			stopCalled.Store(true)
-			return nil
-		},
-		StartTimeout: lifecycleHookTimeout,
+		OnStop:       func(_ context.Context) error { return nil },
+		StartTimeout: lifecycleHookTimeout, // 50ms — informational only, NOT enforced
 	})
 
 	ctx := context.Background()
 	err := lc.Start(ctx)
-	require.Error(t, err, "Start should return error on timeout")
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	// No error: StartTimeout is no longer a runner deadline.
+	require.NoError(t, err, "Start must not return error: StartTimeout is not enforced by runner")
 
-	// Hook never succeeded → its OnStop must NOT be called by rollback.
-	assert.False(t, stopCalled.Load(), "OnStop of failed hook must not be called during rollback")
+	// Start is synchronous — OnStart completes before Start returns. The
+	// require.Eventually confirms the channel is closed without select/default
+	// flakiness risk on heavily-loaded CI schedulers.
+	require.Eventually(t, func() bool {
+		select {
+		case <-startReturned:
+			return true
+		default:
+			return false
+		}
+	}, testtime.D2s, testtime.D1ms, "hook must complete and close startReturned channel")
+
+	require.NoError(t, lc.Stop(ctx))
 }
 
 // TestLifecycle_PerHookStopTimeoutIndependent — OnStop blocks 200ms with
@@ -523,6 +540,181 @@ func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
 	require.NoError(t, lc.Start(context.Background()))
 	rec := findLifecycleLogRecord(t, &buf, "hook.start_slow")
 	assert.Nil(t, rec, "negative StartTimeout must skip hook.start_slow, got %v", rec)
+}
+
+// TestLifecycle_StartFailure_FailedHookGoroutineCancelledBeforeRollback pins
+// the review P1-2 contract: when a hook's OnStart spawns a goroutine bound to
+// its OnStart ctx and then returns an error, that goroutine MUST observe
+// cancellation BEFORE any already-started sibling's OnStop runs during the
+// LIFO rollback. Before the fix, lifecycle.Start ran the internal rollback
+// while the failed hook's worker was still alive (ownerCancel only happened
+// later in bootstrap, after Start returned).
+func TestLifecycle_StartFailure_FailedHookGoroutineCancelledBeforeRollback(t *testing.T) {
+	cStartErr := errors.New("C start failed")
+
+	cWorkerCtxDone := make(chan struct{}) // closed when C's spawned goroutine sees ctx cancel
+	var wg sync.WaitGroup
+
+	var aStopSawCWorkerExited bool
+
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
+	require.NoError(t, lc.Append(Hook{
+		Name:    "A",
+		OnStart: func(_ context.Context) error { return nil },
+		OnStop: func(_ context.Context) error {
+			// By the time A.OnStop runs in rollback, the failed hook C's
+			// goroutine must already be canceled (workCancel ran first).
+			select {
+			case <-cWorkerCtxDone:
+				aStopSawCWorkerExited = true
+			case <-time.After(testtime.D1s):
+				aStopSawCWorkerExited = false
+			}
+			return nil
+		},
+	}))
+	require.NoError(t, lc.Append(Hook{
+		Name: "C",
+		OnStart: func(ctx context.Context) error {
+			// Failed hook spawns its own worker bound to the OnStart ctx,
+			// then fails — exactly the P1-2 scenario.
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-ctx.Done()
+				close(cWorkerCtxDone)
+			}()
+			return cStartErr
+		},
+		OnStop: func(_ context.Context) error {
+			t.Error("C.OnStop must not run (failed hook)")
+			return nil
+		},
+	}))
+
+	startErr := lc.Start(context.Background())
+	require.ErrorIs(t, startErr, cStartErr)
+	wg.Wait() // C's goroutine exited (proves workCtx was canceled)
+
+	assert.True(t, aStopSawCWorkerExited,
+		"failed hook C's goroutine must be canceled BEFORE sibling A.OnStop runs (P1-2)")
+}
+
+// TestLifecycle_OnStartCtx_IsChildOfStartCtx pins the §D-B "OnStart = owner ctx"
+// contract: the ctx delivered to OnStart must be a child of the ctx passed to
+// Start(parentCtx). Canceling parentCtx after Start returns must cancel the
+// captured OnStart ctx — proving the lineage, NOT a startup timeout.
+//
+// This is distinct from TestLifecycle_OnStart_NoTimeoutEnforced (which pins "no
+// deadline applied"); here we pin the ctx-parent relationship.
+func TestLifecycle_OnStartCtx_IsChildOfStartCtx(t *testing.T) {
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
+
+	var capturedCtx context.Context
+	require.NoError(t, lc.Append(Hook{
+		Name: "ctx-capture",
+		OnStart: func(ctx context.Context) error {
+			capturedCtx = ctx
+			return nil
+		},
+		OnStop: func(_ context.Context) error { return nil },
+	}))
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+
+	require.NoError(t, lc.Start(parentCtx))
+	require.NotNil(t, capturedCtx, "OnStart must receive a non-nil ctx")
+
+	// Before parent cancel: capturedCtx must not be done.
+	select {
+	case <-capturedCtx.Done():
+		t.Fatal("capturedCtx must not be done before parentCtx is canceled")
+	default:
+	}
+
+	// Cancel parent — the OnStart ctx (workCtx, a child of parentCtx) must
+	// observe the cancellation.
+	parentCancel()
+	require.Eventually(t, func() bool {
+		select {
+		case <-capturedCtx.Done():
+			return true
+		default:
+			return false
+		}
+	}, testtime.D1s, testtime.D1ms,
+		"OnStart ctx must be Done after parentCtx is canceled (§D-B lineage contract)")
+
+	_ = lc.Stop(context.Background())
+}
+
+// TestLifecycle_StartFailure_WorkCtxCancelledBeforeAOnStop_ThreeHooks extends
+// P1-2 coverage with a 3-hook variant: A succeeds and spawns a goroutine on
+// its OnStart ctx, B succeeds, C fails. The test asserts that A's spawned
+// goroutine is canceled BEFORE A.OnStop runs — proving workCancel cancels the
+// shared workCtx for ALL started hooks before LIFO rollback, not just the failed
+// hook.
+func TestLifecycle_StartFailure_WorkCtxCancelledBeforeAOnStop_ThreeHooks(t *testing.T) {
+	cStartErr := errors.New("C start failed")
+
+	aWorkerDone := make(chan struct{}) // closed when A's goroutine exits (ctx canceled)
+	var aStopSawWorkerExited bool
+
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
+
+	// Hook A: succeeds, spawns a goroutine bound to its OnStart ctx.
+	require.NoError(t, lc.Append(Hook{
+		Name: "A",
+		OnStart: func(ctx context.Context) error {
+			go func() {
+				<-ctx.Done()
+				close(aWorkerDone)
+			}()
+			return nil
+		},
+		OnStop: func(_ context.Context) error {
+			// A.OnStop runs during LIFO rollback. By this point workCancel must
+			// have already fired, so A's goroutine must already be done.
+			select {
+			case <-aWorkerDone:
+				aStopSawWorkerExited = true
+			case <-time.After(testtime.D1s):
+				aStopSawWorkerExited = false
+			}
+			return nil
+		},
+	}))
+
+	// Hook B: succeeds, no goroutine — verifies workCancel covers all started hooks.
+	require.NoError(t, lc.Append(Hook{
+		Name:    "B",
+		OnStart: func(_ context.Context) error { return nil },
+		OnStop:  func(_ context.Context) error { return nil },
+	}))
+
+	// Hook C: fails — triggers LIFO rollback of A and B.
+	require.NoError(t, lc.Append(Hook{
+		Name:    "C",
+		OnStart: func(_ context.Context) error { return cStartErr },
+		OnStop: func(_ context.Context) error {
+			t.Error("C.OnStop must not run (failed hook)")
+			return nil
+		},
+	}))
+
+	startErr := lc.Start(context.Background())
+	require.ErrorIs(t, startErr, cStartErr)
+
+	// A's goroutine must have exited (workCtx was canceled before LIFO rollback).
+	select {
+	case <-aWorkerDone:
+	case <-time.After(testtime.D1s):
+		t.Fatal("A's goroutine did not exit after workCtx was canceled")
+	}
+
+	assert.True(t, aStopSawWorkerExited,
+		"A's spawned goroutine must be canceled BEFORE A.OnStop runs during LIFO rollback (P1-2 three-hook variant)")
 }
 
 func findLifecycleLogRecord(t *testing.T, buf *bytes.Buffer, msg string) map[string]any {
