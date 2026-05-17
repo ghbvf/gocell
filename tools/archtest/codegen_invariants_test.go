@@ -310,7 +310,7 @@ func requireRealGeneratedFile(t *testing.T, root, path, contractID string) {
 	info, err := os.Lstat(path)
 	switch {
 	case err != nil && os.IsNotExist(err):
-		t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q has codegen=true but missing %s; run `gocell generate contract %s`",
+		t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q is codegen-enabled but missing %s; run `gocell generate contract %s`",
 			contractID, rel, contractID)
 	case err != nil:
 		t.Errorf("CODEGEN-CONTRACT-GEN-01: lstat %s: %v", rel, err)
