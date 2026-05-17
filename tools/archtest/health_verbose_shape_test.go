@@ -123,7 +123,8 @@ func TestHealthVerboseWireShapeFrozen(t *testing.T) {
 	}))
 
 	if !found {
-		t.Fatalf("%s: %s struct definition not found under %s — if the type was relocated, update this test's hardcoded type name + relative root along with the move",
+		t.Fatalf("%s: %s struct definition not found under %s — if the type was relocated, "+
+			"update this test's hardcoded type name + relative root along with the move",
 			ruleHealthVerboseWireShapeFrozen, healthVerboseShapeName, healthPackageRelativeRoot)
 	}
 
@@ -137,7 +138,10 @@ func TestHealthVerboseWireShapeFrozen(t *testing.T) {
 	sort.Strings(unknown)
 	sort.Strings(missing)
 	for _, u := range unknown {
-		t.Errorf("%s: %s — field not in allowlist; the wire shape carries no error text by design (channel d ops-diagnostics owns it). Adding a field requires updating healthVerboseWireAllowedFields and amending ADR docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md §3+§6",
+		t.Errorf("%s: %s — field not in allowlist; the wire shape carries no error text by "+
+			"design (channel d ops-diagnostics owns it). Adding a field requires updating "+
+			"healthVerboseWireAllowedFields and amending ADR "+
+			"docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md §3+§6",
 			ruleHealthVerboseWireShapeFrozen, u)
 	}
 	for _, m := range missing {
@@ -312,7 +316,8 @@ func TestHealthVerboseScanCoverage(t *testing.T) {
 	sort.Strings(scanned)
 	sort.Strings(truth)
 	assert.Equal(t, truth, scanned,
-		"%s: eachHealthProductionFile must enumerate every non-test .go file under %s; missing files would silently bypass HEALTH-VERBOSE-* gates",
+		"%s: eachHealthProductionFile must enumerate every non-test .go file under %s; "+
+			"missing files would silently bypass HEALTH-VERBOSE-* gates",
 		ruleHealthVerboseScanCoverage, healthPackageRelativeRoot)
 
 	// Defense in depth: ground-truth set must include the canonical files

@@ -1017,7 +1017,8 @@ func TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog(t *testing.T) 
 	assert.NotContains(t, wireBody, leakSentinel,
 		"verbose readyz wire body must not leak raw probe secrets")
 	assert.NotContains(t, wireBody, "<REDACTED>",
-		"verbose readyz wire body must not contain redaction mask either — channel d ownership is exclusive; mask on wire would mean error text leaked from slog into wire")
+		"verbose readyz wire body must not contain redaction mask either — channel d "+
+			"ownership is exclusive; mask on wire would mean error text leaked from slog into wire")
 
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
@@ -1046,7 +1047,10 @@ func TestReadyz_VerbosePanicSecret_RedactedInSlog(t *testing.T) {
 	h := New(asm, clock.Real(), WithDeadline(testtime.D2s))
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, h.RegisterChecker("panicking", func(_ context.Context) error {
-		panic(fmt.Sprintf("auth-key=%s session-token=%s", leakSentinel, leakSentinel))
+		// Use api-key / password — keys present in pkg/redaction.sensitiveKeyPattern.
+		// Demonstrates that the funnel applies to panic-derived errors the same way
+		// it does to ordinary probe errors.
+		panic(fmt.Sprintf("api-key=%s password=%s", leakSentinel, leakSentinel))
 	}))
 
 	capture := withSlogCapture(t)

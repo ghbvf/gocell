@@ -94,6 +94,23 @@ ref: hashicorp/vault `audit log_raw=false` 默认；golang/go `net/url.URL.Redac
 - 4 个公开构造函数返回 `(*T, error)`，body 顶部强制 `if err := ns.Validate(); err != nil { return nil, err }`，由 archtest `REDIS-KEY-NAMESPACE-01` 静态守卫。
 - 扩 Redis primitive 时同步进 `tools/archtest/redis_key_namespace_test.go` 的 `redisConstructors` 列表。
 
+## Readyz Verbose 四通道（HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01 + HEALTH-REDACTED-ERROR-MSG-FUNNEL-01）
+
+`/readyz?verbose` 路径的 dependency 信息分四通道，与上文 errcode 三层（Message / Details / Internal）并列：
+
+| 通道 | 载体 | wire 体 | server-side slog | 脱敏机制 |
+|------|------|--------|-----------------|---------|
+| a. Message | `errcode.Message` const literal | ✓ | ✓ | 不需要 |
+| b. Details | `errcode.Details` `[]slog.Attr` | 4xx ✓ / 5xx strip | ✓ | runtime 字段为低敏感 |
+| c. Internal | `errcode.WithInternal` | ✗ | ✓ | server-only |
+| **d. Ops-Diagnostics** | handler-side `slog.Warn` typed payload | ✗ | ✓ | **typed funnel + archtest** |
+
+readyz 各字段归属：
+- wire body `dependencies[*]` (200 verbose) — 类型 `verboseDependencyEntry{Status, DurationMs}`，字段集冻结（`HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01`）。**wire 上不携带 error 文本**——对齐 Kubernetes apiserver healthz.go:274-275 wire/klog 双 buffer 分离。
+- slog `dependencies` — 类型 `map[string]slogDependencyEntry`，其中 `ErrorMsg` 字段类型 = `redactedErrorMsg`（包私有 newtype）。唯一构造路径是 `newRedactedErrorMsg(err) → pkg/redaction.RedactString(err.Error())`，由 `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01` archtest 锁定（包内 conversion CallExpr 必在 funnel 函数体内 + 反向 fixture 锁字面量字段赋值；类型 unexported 关闭上游包外构造可能）。
+
+详见 ADR `docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md`。
+
 ## Audit Payload Redaction（auditcore S7）
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：
