@@ -22,8 +22,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/config"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 )
 
 // stubKeySet is a minimal in-memory key provider/store for tests.
