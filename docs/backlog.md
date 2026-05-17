@@ -87,6 +87,8 @@
 | WM-32 | **mTLS 中间件** — 现状: 缺；修复: 加 TLS 构建器 + HTTP 证书提取钩子（折中：大规模环境 mTLS 卸载在 K8s/Service Mesh 解决，框架仅提供构建器） | feat | P2/Cx2 | 🟡 | V1.1 启动 | `runtime/http/middleware/` | backlog_later §7 WM-32（4/6 票）|
 | B2-T-08 | **Config publish 失败码声明不完整** — 现状: contract 缺部分失败码声明；修复: 补 4xx/5xx 完整声明 | bug | P2/Cx1 | 🟡 | — | `contracts/http/config/publish/v1/contract.yaml` | backlog2 §8 B2-T-08 |
 | J-04 | **CONTRACT-SCHEMA-NAMING-NORMALIZE** — (a) api-versioning.md 写 `pageSize`，contract 实际用 `limit`（规则与代码漂移）；(b) event headers `event_id`(snake_case) 与 cell-patterns.md "camelCase" 冲突；修复: 改规则文档 + 与 J-03 v1→v2 演练搭车统一 envelope | bug | P1/Cx1 | 🟡 | 与 J-03 同 PR | `.claude/rules/gocell/` + `contracts/` | 030 §3 J-04 |
+| READYZ-PROBE-FAILURE-METRIC-01 | **Readyz probe 失败 Prometheus counter** — 现状: 四通道模型落地后 wire 简化，operator 唯一诊断信号是 slog；缺 `readyz_probe_failures_total{name=...}` 细粒度告警，无法在不解析 slog 的情况下触发 PagerDuty 等告警规则；修复: `runtime/http/health` 暴露 prometheus counter，与 `_ready` 命名约束对齐 | feat | P2/Cx2 | 🟡 | 监控有需求时 | `runtime/http/health/` | ADR 202605171200 §3 / PR #552 review C8 |
+| FOUR-CHANNEL-HANDLER-EXTENSION-01 | **第二个 handler 引入 ops-diagnostics 通道 d 时的扩展协议** — 现状: 四通道模型已在 readyz handler 落地（ADR 202605171200）；当第二个 handler 引入 ops-diagnostics 通道 d（典型场景: recovery middleware panic dump / outbox last_error sanitize / auditquery payload redaction）时，需在 ADR §6 funnel matrix 追加条目，并对齐 typed redacted 包装类型 + archtest funnel 形态；修复: 在 ADR 202605171200 §5 §6 补充扩展协议说明 | doc | P3/Cx2 | 🟢 | 新增 handler 引入时 | `docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md` §5 §6 | PR #552 review C9 |
 
 ---
 

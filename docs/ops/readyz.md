@@ -149,19 +149,49 @@ level=WARN msg="readyz unhealthy"
   cells={accesscore=healthy, auditcore=degraded}
   dependencies={postgres_ready={status=healthy, duration_ms=3},
                 rabbitmq_ready={status=unhealthy, duration_ms=12,
-                                error="connection refused"}}
+                                error_msg="<REDACTED>"}}
   adapters={storage=postgres, eventbus=rabbitmq}
 ```
 
 Operators who need the full breakdown for an outage correlate 503s with
 the structured slog record via the standard log pipeline; if the triggering
 probes were non-verbose, hit `/readyz?verbose=true` manually with the
-operator token to elicit a verbose record. Probe `error` strings written
-into `dependencies[*].error` are run through `pkg/redaction.RedactString`
-(so DSNs / tokens / passwords are masked) and truncated to 512 bytes
-before the slog record is emitted. Probe implementations should still
-avoid putting secrets in their error messages as a defense-in-depth
-measure.
+operator token to elicit a verbose record.
+
+`dependencies[*].error` 字段在 ADR 202605171200 后已从 wire 响应体中完全移除。
+slog 通道（ops-diagnostics 通道 d）使用 typed `SlogDependencyEntry`，其 `ErrorMsg`
+字段（json tag `error_msg,omitempty`）经 `pkg/redaction.RedactString` 脱敏后才写入
+slog——脱敏后的字符串不再截断（slog 落盘容量不是问题；截断只在 wire 才必要，wire 不携带
+error 文本就无需截断）。Probe 实现仍应避免在 error message 中硬编码裸 secret，作为
+纵深防御。
+
+## 操作员诊断 cookbook
+
+### JSON handler（`-log-format=json`）
+
+```bash
+# 过滤所有 readyz unhealthy 事件并展示 dependencies 字段
+kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy") | .dependencies'
+```
+
+示例输出：
+
+```json
+{
+  "postgres_ready": {"status": "healthy", "duration_ms": 3},
+  "rabbitmq_ready": {"status": "unhealthy", "duration_ms": 12, "error_msg": "dial tcp: connection refused"}
+}
+```
+
+### Text handler（`-log-format=text`，默认）
+
+```bash
+# 过滤 readyz unhealthy 行，结合 grep 定位 dependencies 字段
+kubectl logs <pod> | grep "readyz unhealthy"
+```
+
+输出为结构化 key=value 文本，`dependencies` 字段包含各 probe 的 status 和脱敏后的
+`error_msg`。如需 pretty-print，可将日志 format 切换为 JSON（见上）。
 
 ### Waiving the verbose endpoint
 

@@ -23,7 +23,11 @@
 // pkg/redaction.RedactString 替代纯切断，保留运维诊断 + 删除敏感子串。
 package health
 
-import "github.com/ghbvf/gocell/pkg/redaction"
+import (
+	"log/slog"
+
+	"github.com/ghbvf/gocell/pkg/redaction"
+)
 
 // verboseDependencyEntry is the wire shape for /readyz?verbose body
 // dependencies entries. Field set is intentionally minimal: status + duration
@@ -63,11 +67,16 @@ func newRedactedErrorMsg(err error) redactedErrorMsg {
 }
 
 // SlogDependencyEntry is the ops-diagnostics shape (channel d) for a single
-// probe result inside the slog "readyz unhealthy" record. It is exported so
+// probe result inside the slog "readyz diagnostics" record. It is exported so
 // out-of-package tests (cmd/corebundle, runtime/bootstrap) can type-assert
 // `depsAttr.Any().(map[string]health.SlogDependencyEntry)`. The struct is
 // emitted under slog.Any("dependencies", map[string]SlogDependencyEntry{...})
-// in (*readyzResult).logUnhealthy.
+// in (*readyzResult).logDiagnostics.
+//
+// 业务 Cell probe 实现者不需要直接接触 SlogDependencyEntry。只需要按
+// ProbeResult.Err godoc 的格式规范写 probe error（结构化 key=value 形式），
+// 框架会自动将 Err 传入 newRedactedErrorMsg funnel 并填充 SlogDependencyEntry.ErrorMsg。
+// 该结构是框架内部 observability shape，不属于业务 Cell 的公开接口。
 //
 // ErrorMsg is typed redactedErrorMsg (unexported) so the type system
 // guarantees every value has already passed through the newRedactedErrorMsg
@@ -76,6 +85,16 @@ func newRedactedErrorMsg(err error) redactedErrorMsg {
 // conversion expression names string, not the unexported source type, so it
 // compiles cleanly from any package).
 //
+// LogValue implements slog.LogValuer so that when a single SlogDependencyEntry
+// value is passed directly as a slog.Any argument, JSON and logfmt handlers
+// receive snake_case field names consistent with the wire shape. Note: when
+// the entire map[string]SlogDependencyEntry is passed via slog.Any (the
+// current logDiagnostics path), stdlib handlers use reflection on the map
+// values and do NOT call LogValue — JSON output falls back to struct json tags
+// (snake_case ✓); text/logfmt handlers fall back to reflected field names
+// (CamelCase ✗). This is a Go stdlib slog limitation: for guaranteed
+// snake_case across all handlers, use a JSON handler in production.
+//
 // JSON tags enable slog.JSONHandler to serialize snake_case keys consistent
 // with the wire shape; other log handlers (logfmt, custom) fall back to
 // reflected field names.
@@ -83,4 +102,15 @@ type SlogDependencyEntry struct {
 	Status     string           `json:"status"`
 	DurationMs int64            `json:"duration_ms"`
 	ErrorMsg   redactedErrorMsg `json:"error_msg,omitempty"`
+}
+
+// LogValue implements slog.LogValuer. It allows handlers that iterate attrs
+// individually (rather than via map reflection) to emit consistent snake_case
+// field names. See struct-level godoc for the stdlib map-of-LogValuer caveat.
+func (e SlogDependencyEntry) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("status", e.Status),
+		slog.Int64("duration_ms", e.DurationMs),
+		slog.String("error_msg", string(e.ErrorMsg)),
+	)
 }

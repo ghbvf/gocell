@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-05-17
-- Tracks: PR391-HEALTH-VERBOSE-REDACTION-01（backlog.md cap-04，P1/Cx2 🟠 发布前安全收口）
+- Tracks: PR391-HEALTH-VERBOSE-REDACTION-01（backlog item 在本 PR 同步移除，曾位于 backlog.md cap-04 HTTP 入站处理小节）
 - Builds on: ADR `202605051730-adr-errcode-message-pii-safety.md`（errcode 三层 redaction：Message / Details / Internal）；PR #391 review security finding
 - Implemented by: PR #fix/222-pr391-health-verbose-redaction
 
@@ -92,9 +92,10 @@ archtest 锁形态"双保险。
 | `error.details` (5xx 时 `[]`) | b | strip on 5xx (K#08) | — |
 | `internal_reason` (e.g. "readyz status=unhealthy reason=readiness_failed") | c | `errcode.WithInternal` | — |
 | slog `cells` map (`map[cellID]status`) | d | `slog.Any` | status 字符串本身非敏感 |
-| slog `dependencies` map (`map[name]slogDependencyEntry`) | d | `slog.Any` | **ErrorMsg 字段类型 = `redactedErrorMsg`，由 `newRedactedErrorMsg` funnel 强制 `pkg/redaction.RedactString`** |
+| slog `dependencies` map (`map[name]slogDependencyEntry`) | d | `slog.Any` | **ErrorMsg 字段类型 = `redactedErrorMsg`，由 `newRedactedErrorMsg` funnel 强制 `pkg/redaction.RedactString`**；适用于 degraded（Info 级）和 unhealthy（Warn 级）两条路径 |
 | slog `adapters` map (`map[role]info`) | d | `slog.Any` | adapter info 是部署期声明（in-memory / postgres / redis 等），无 runtime secret |
-| wire body `dependencies[*]` (200 verbose) | a body fragment | `map[name]verboseDependencyEntry` | struct 字段集冻结无 error → wire 上**结构性**无 error 文本 |
+| wire body `dependencies[*]` (200 verbose) | a body fragment | `map[name]verboseDependencyEntry` | struct 字段集冻结无 error → wire 上**结构性**无 error 文本；适用于 degraded 和 healthy 200 响应 |
+| degraded 路径 slog level | d | `slog.LevelInfo` | `logDiagnostics(slog.LevelInfo, "readyz degraded")` — 操作员关注但不触发告警；unhealthy 路径用 `slog.LevelWarn` |
 
 ### D4 — RETRACTS：旧 `health.go:426` 设计
 
@@ -120,18 +121,42 @@ slog[name] = slogDependencyEntry{
 `truncateErrMsg` helper + `maxVerboseErrLen` 常量随 wire-error-text 一并删除——
 slog 落盘容量不是问题，截断只在 wire 才有必要，wire 不发 error 文本就无需截断。
 
+### D5 — `logUnhealthy` → `logDiagnostics` 重命名（PR #552 F3 修复）
+
+`logUnhealthy` 只在 "unhealthy" 路径调用，导致 degraded probe 的 ErrorMsg 静默丢失：
+`writeTo` 走 "degraded" → HTTP 200 分支但不触发 channel d slog，`slogDependencies` 的
+ErrorMsg 从未被 operator 看到（F3 / PR #552 review P1 finding）。
+
+修复：
+
+1. `logUnhealthy` 重命名为 `logDiagnostics(level slog.Level, msg string, extra ...slog.Attr)`，
+   level 参数区分 unhealthy（`slog.LevelWarn`）和 degraded（`slog.LevelInfo`）。
+2. `writeTo` 在 "degraded" 路径也调用 `logDiagnostics`，确保 channel d 覆盖两种非健康状态。
+3. unhealthy 路径额外传 `slog.String("reason", reason)` attr，保持既有 reason 字段。
+
 ## §3 Threat Matrix
 
 | Secret 形态 | 通道 a/b/c 暴露面 | 通道 d 暴露面 | 备注 |
 |------------|-----------------|--------------|------|
 | `password=hunter2`（结构化 key=value） | ✗ wire 不带文本 | ✓ funnel 经 RedactString，masked | 框架对齐 |
 | `Authorization: Bearer eyJh...` | ✗ wire 不带文本 | ✓ funnel masked | authorizationPattern 覆盖到 EOL |
+| `Authorization: Basic <b64>`（HTTP Basic） | ✗ wire 不带文本 | ✓ funnel masked | 同 `authorizationPattern` 覆盖到 EOL，key 匹配大小写不敏感 |
 | 裸 JWT 子串（无 key 上下文，例 `expired token eyJhbGci...`）| ✗ wire 不带文本 | ⚠ funnel 不识别（regex 需要 key 锚），泄漏到 slog | 接受面：仅 server-side slog；与所有 regex-based redaction 同盲区；后续可加针对裸 base64url JWT 的 pattern |
+| mTLS / TLS 证书 PEM 块（无 key 上下文，如 `-----BEGIN CERTIFICATE-----\n...`） | ✗ wire 不带文本 | ⚠ funnel 不识别（regex 需要 key 锚），泄漏到 slog | 接受面同上；PEM 块本身是证书（公钥），私钥（`-----BEGIN RSA PRIVATE KEY-----`）若无 key 锚同样盲区；纵深：probe 应避免在 error 中输出完整 PEM |
 | 裸 UUID API key（如 `failed to authenticate: 7a3c-...`）| ✗ wire 不带文本 | ⚠ 同上 | 接受面同上 |
 | panic %v 含 secret | ✗ wire 不带文本（即便 runOneProbe wrap 成 `fmt.Errorf("panic: %v", panicV)` 也走 funnel） | ✓ funnel 适用，redacted | wrap.go:probePanicError 走 newRedactedErrorMsg 同路径 |
 | `connection_string=...;Pwd=...;` 拼到 error message | ✗ wire 不带文本 | ✓ connectionStringPattern 整段消费到 \S+ 边界 | fail-closed 不在 ;/,断 |
 
 ⚠ 项是"已知盲区"（regex 类 redaction 共有），不在本 ADR 范围内解决；通过通道 a/b 完全不下发文本兜底——即便 d 通道 mask 漏，wire 仍不携带任何文本。
+
+### SIEM/ELK fingerprint 风险
+
+mask 后 `<REDACTED>` 是固定字面量，value 长度信息丢失。SIEM/ELK 转发场景下：
+- 原始 secret 文本不出现在日志流中（key 保留，value 被替换），不存在通过日志泄漏 secret 的路径。
+- `<REDACTED>` 字面量长度恒定，不能反推原始 value 长度，不构成旁信道。
+- 对 SIEM 告警规则而言，`error_msg` 含 `<REDACTED>` 是正常形态（表示 secret 已被 mask），不是告警信号。
+
+综合结论：SIEM/ELK 转发场景下无额外 fingerprint 风险，属已知接受非威胁。
 
 ## §4 Enforcement Funnel Matrix
 
