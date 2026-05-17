@@ -20,7 +20,7 @@ import (
 func TestCONTRACTENDPOINTTESTMAPPING01_Happy(t *testing.T) {
 	// 1 active HTTP contract + 1 slice verify.contract contains .serve → no result.
 	pm := minimalHTTPProject()
-	addServeToSlice(pm, "accesscore/session-login", "http.auth.login.v1")
+	addServeToSlice(pm, "http.auth.login.v1")
 
 	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
@@ -97,7 +97,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_NonHTTPExempt(t *testing.T) {
 func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeMissingContract(t *testing.T) {
 	pm := minimalHTTPProject()
 	// Slice declares a serve entry pointing at a contract that does not exist.
-	addServeToSlice(pm, "accesscore/session-login", "http.does.not.exist.v1")
+	addServeToSlice(pm, "http.does.not.exist.v1")
 
 	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
@@ -133,7 +133,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonHTTPContract(t *testing.T) {
 		Dir:       "contracts/event/session/created/v1",
 		File:      "contracts/event/session/created/v1/contract.yaml",
 	}
-	addServeToSlice(pm, "accesscore/session-login", eventID)
+	addServeToSlice(pm, eventID)
 
 	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
@@ -157,7 +157,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonActiveContract(t *testing.T)
 	pm := minimalHTTPProject()
 	// Demote the existing contract to deprecated lifecycle.
 	pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
-	addServeToSlice(pm, "accesscore/session-login", "http.auth.login.v1")
+	addServeToSlice(pm, "http.auth.login.v1")
 
 	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
@@ -193,7 +193,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesContract(t *testing.T) 
 		Dir:  "examples/todoorder/contracts/http/todo/order/create/v1",
 		File: "examples/todoorder/contracts/http/todo/order/create/v1/contract.yaml",
 	}
-	addServeToSlice(pm, "accesscore/session-login", exampleID)
+	addServeToSlice(pm, exampleID)
 
 	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
@@ -436,10 +436,16 @@ func minimalHTTPProject() *metadata.ProjectMeta {
 	}
 }
 
-// addServeToSlice appends "contract.<contractID>.serve" to the named slice's
-// verify.contract list.
-func addServeToSlice(pm *metadata.ProjectMeta, sliceKey, contractID string) {
-	s := pm.Slices[sliceKey]
+// minimalProjectSliceKey is the single slice key produced by minimalHTTPProject;
+// every test in this file targets that fixture's only slice, so addServeToSlice
+// hardcodes it rather than accepting a parameter (was unparam-flagged in CI:
+// all 5 call sites passed the same literal).
+const minimalProjectSliceKey = "accesscore/session-login"
+
+// addServeToSlice appends "contract.<contractID>.serve" to
+// minimalHTTPProject's session-login slice verify.contract list.
+func addServeToSlice(pm *metadata.ProjectMeta, contractID string) {
+	s := pm.Slices[minimalProjectSliceKey]
 	if s == nil {
 		return
 	}

@@ -146,9 +146,10 @@ func scanLoadByIDLiteralViolations(p *Pass) []Diagnostic {
 			}
 			pos := p.Fset.Position(call.Args[2].Pos())
 			diags = append(diags, Diagnostic{
-				Rel:     p.Rel(file),
-				Line:    pos.Line,
-				Message: "CONTRACTTEST-LOADBYID-LITERAL-01: contracttest.LoadByID third argument must be a compile-time constant string; got runtime expression",
+				Rel:  p.Rel(file),
+				Line: pos.Line,
+				Message: "CONTRACTTEST-LOADBYID-LITERAL-01: contracttest.LoadByID third argument " +
+					"must be a compile-time constant string; got runtime expression",
 			})
 		})
 	}

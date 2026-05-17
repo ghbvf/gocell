@@ -110,90 +110,153 @@ func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []
 
 // ctmSliceToContract implements direction B: for each verify.contract entry
 // of the form "contract.<id>.serve", every predicate in the 5-step contract
-// check (existence, kind=http, lifecycle=active, non-examples, server match)
-// must hold; each failure emits a distinct diagnostic. The previous form used
-// !isActiveHTTPPlatformContract(c) as a "skip" filter for direction B, which
-// silently passed dangling references, role/lifecycle drift, and platform-slice-
-// serving-examples-contract cases (review F4).
+// check (existence, kind=http, lifecycle=active, examples arrow, server match)
+// must hold; each failure emits a distinct diagnostic via a dedicated helper.
+// The previous monolithic form used !isActiveHTTPPlatformContract(c) as a
+// "skip" filter for direction B, silently passing dangling references,
+// role/lifecycle drift, and platform-slice-serving-examples-contract cases
+// (review F4); the per-check helpers below were extracted to keep cognitive
+// complexity ≤ 15 per CLAUDE.md while preserving distinct ; fix: clauses.
 func (v *Validator) ctmSliceToContract() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		for i, entry := range s.Verify.Contract {
-			contractID := extractServeContractID(entry)
-			if contractID == "" {
-				continue
+			if r, ok := v.ctmEvaluateServeEntry(s, i, entry); ok {
+				results = append(results, r)
 			}
-			fieldPath := fmt.Sprintf("verify.contract[%d]", i)
-			c, exists := v.project.Contracts[contractID]
-			if !exists || c == nil {
-				results = append(results, v.newResult(
-					codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueRefNotFound,
-					sliceFile(s), fieldPath,
-					fmt.Sprintf(
-						"slice %q declares verify.contract %q (.serve role) but contract %q does not exist; "+
-							"fix: remove this entry, fix the contract ID typo, or add the missing contract.yaml",
-						s.ID, entry, contractID,
-					),
-				))
-				continue
-			}
-			if c.Kind != "http" {
-				results = append(results, v.newResult(
-					codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
-					sliceFile(s), fieldPath,
-					fmt.Sprintf(
-						"slice %q declares verify.contract %q (.serve role) but contract %q kind is %q (must be \"http\"); "+
-							"fix: remove this entry; event contracts use ADV-06 (endpoints.subscribers) not .serve",
-						s.ID, entry, contractID, c.Kind,
-					),
-				))
-				continue
-			}
-			if c.Lifecycle != "active" {
-				results = append(results, v.newResult(
-					codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
-					sliceFile(s), fieldPath,
-					fmt.Sprintf(
-						"slice %q declares verify.contract %q (.serve role) but contract %q lifecycle is %q (must be \"active\"); "+
-							"fix: remove this entry, or promote the contract to lifecycle: active",
-						s.ID, entry, contractID, c.Lifecycle,
-					),
-				))
-				continue
-			}
-			// Examples self-serving (examples slice → examples contract within
-			// the same example project) is allowed because examples are
-			// permitted to depend on all layers (CLAUDE.md "依赖规则"). Only
-			// forbid platform-slice → examples-contract; that direction would
-			// invert the allowed dependency arrow.
-			if strings.HasPrefix(c.File, "examples/") && !strings.HasPrefix(sliceFile(s), "examples/") {
-				results = append(results, v.newResult(
-					codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueForbidden,
-					sliceFile(s), fieldPath,
-					fmt.Sprintf(
-						"slice %q declares verify.contract %q (.serve role) but contract %q lives under examples/ (%s); "+
-							"fix: remove this entry — platform slices must not serve example contracts (examples depend on platform, not the reverse)",
-						s.ID, entry, contractID, c.File,
-					),
-				))
-				continue
-			}
-			if c.Endpoints.Server == s.BelongsToCell {
-				continue
-			}
-			results = append(results, v.newResult(
-				codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
-				sliceFile(s), fieldPath,
-				fmt.Sprintf(
-					"slice %q declares verify.contract %q (.serve role) but contract's endpoints.server (%s) ≠ slice's belongsToCell (%s); "+
-						"fix: remove this entry or change the slice's belongsToCell to match, "+
-						"or update contract %q endpoints.server to %q",
-					s.ID, entry, c.Endpoints.Server, s.BelongsToCell, contractID, s.BelongsToCell,
-				),
-			))
 		}
 	}
 	return results
+}
+
+// ctmEvaluateServeEntry runs the 5-step contract check sequentially and
+// returns the first failure. Returns (zero, false) when the entry is not a
+// .serve role or all 5 checks pass.
+func (v *Validator) ctmEvaluateServeEntry(s *metadata.SliceMeta, i int, entry string) (ValidationResult, bool) {
+	contractID := extractServeContractID(entry)
+	if contractID == "" {
+		return ValidationResult{}, false
+	}
+	fieldPath := fmt.Sprintf("verify.contract[%d]", i)
+	c := v.project.Contracts[contractID]
+	if r, bad := v.ctmCheckContractExists(s, c, fieldPath, entry, contractID); bad {
+		return r, true
+	}
+	if r, bad := v.ctmCheckKindHTTP(s, c, fieldPath, entry, contractID); bad {
+		return r, true
+	}
+	if r, bad := v.ctmCheckLifecycleActive(s, c, fieldPath, entry, contractID); bad {
+		return r, true
+	}
+	if r, bad := v.ctmCheckExamplesArrow(s, c, fieldPath, entry, contractID); bad {
+		return r, true
+	}
+	return v.ctmCheckServerMatch(s, c, fieldPath, entry, contractID)
+}
+
+// ctmCheckContractExists is direction B step 1: the referenced contract must
+// exist in the project.
+func (v *Validator) ctmCheckContractExists(
+	s *metadata.SliceMeta, c *metadata.ContractMeta,
+	fieldPath, entry, contractID string,
+) (ValidationResult, bool) {
+	if c != nil {
+		return ValidationResult{}, false
+	}
+	return v.newResult(
+		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueRefNotFound,
+		sliceFile(s), fieldPath,
+		fmt.Sprintf(
+			"slice %q declares verify.contract %q (.serve role) but contract %q does not exist; "+
+				"fix: remove this entry, fix the contract ID typo, or add the missing contract.yaml",
+			s.ID, entry, contractID,
+		),
+	), true
+}
+
+// ctmCheckKindHTTP is direction B step 2: .serve role is HTTP-only;
+// event contracts use ADV-06 (endpoints.subscribers).
+func (v *Validator) ctmCheckKindHTTP(
+	s *metadata.SliceMeta, c *metadata.ContractMeta,
+	fieldPath, entry, contractID string,
+) (ValidationResult, bool) {
+	if c.Kind == "http" {
+		return ValidationResult{}, false
+	}
+	return v.newResult(
+		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+		sliceFile(s), fieldPath,
+		fmt.Sprintf(
+			"slice %q declares verify.contract %q (.serve role) but contract %q kind is %q (must be \"http\"); "+
+				"fix: remove this entry; event contracts use ADV-06 (endpoints.subscribers) not .serve",
+			s.ID, entry, contractID, c.Kind,
+		),
+	), true
+}
+
+// ctmCheckLifecycleActive is direction B step 3: serve coverage is required
+// only for lifecycle: active contracts.
+func (v *Validator) ctmCheckLifecycleActive(
+	s *metadata.SliceMeta, c *metadata.ContractMeta,
+	fieldPath, entry, contractID string,
+) (ValidationResult, bool) {
+	if c.Lifecycle == "active" {
+		return ValidationResult{}, false
+	}
+	return v.newResult(
+		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+		sliceFile(s), fieldPath,
+		fmt.Sprintf(
+			"slice %q declares verify.contract %q (.serve role) but contract %q lifecycle is %q (must be \"active\"); "+
+				"fix: remove this entry, or promote the contract to lifecycle: active",
+			s.ID, entry, contractID, c.Lifecycle,
+		),
+	), true
+}
+
+// ctmCheckExamplesArrow is direction B step 4: examples self-serving (examples
+// slice → examples contract within the same example project) is allowed
+// because examples are permitted to depend on all layers (CLAUDE.md "依赖
+// 规则"); platform-slice → examples-contract is forbidden because that would
+// invert the allowed dependency arrow.
+func (v *Validator) ctmCheckExamplesArrow(
+	s *metadata.SliceMeta, c *metadata.ContractMeta,
+	fieldPath, entry, contractID string,
+) (ValidationResult, bool) {
+	if !strings.HasPrefix(c.File, "examples/") || strings.HasPrefix(sliceFile(s), "examples/") {
+		return ValidationResult{}, false
+	}
+	return v.newResult(
+		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueForbidden,
+		sliceFile(s), fieldPath,
+		fmt.Sprintf(
+			"slice %q declares verify.contract %q (.serve role) but contract %q lives under examples/ (%s); "+
+				"fix: remove this entry — platform slices must not serve example contracts (examples depend on platform, not the reverse)",
+			s.ID, entry, contractID, c.File,
+		),
+	), true
+}
+
+// ctmCheckServerMatch is direction B step 5: contract.endpoints.server must
+// equal slice.belongsToCell. Mismatch means the slice claims coverage for a
+// contract it does not own.
+func (v *Validator) ctmCheckServerMatch(
+	s *metadata.SliceMeta, c *metadata.ContractMeta,
+	fieldPath, entry, contractID string,
+) (ValidationResult, bool) {
+	if c.Endpoints.Server == s.BelongsToCell {
+		return ValidationResult{}, false
+	}
+	return v.newResult(
+		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+		sliceFile(s), fieldPath,
+		fmt.Sprintf(
+			"slice %q declares verify.contract %q (.serve role) but contract's endpoints.server (%s) ≠ slice's belongsToCell (%s); "+
+				"fix: remove this entry or change the slice's belongsToCell to match, "+
+				"or update contract %q endpoints.server to %q",
+			s.ID, entry, c.Endpoints.Server, s.BelongsToCell, contractID, s.BelongsToCell,
+		),
+	), true
 }
 
 // buildCandidateSliceHint returns a "; candidate slices: ..." suffix listing
