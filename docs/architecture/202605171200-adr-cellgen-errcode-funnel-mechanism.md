@@ -100,12 +100,20 @@ ELSE
 
 **反向自检 RED fixture 覆盖面**（章程 §AI-rebust 三档分级 ≥ Hard 必备）：
 
-1. `fmt.Errorf("...")` — 黑名单原型
-2. `fmtx "fmt"` alias import + `fmtx.Errorf("...")` — alias 绕过
-3. `errors.New("...")` — stdlib 另一 escape route
-4. cellgen 包内自建 wrapper `func newErr(msg string) error { return errors.New(msg) }` 调用点 — AI 创新 escape
+1. `fmt.Errorf("...")` — 黑名单原型，失败位置 = 调用点 callsite
+2. `fmtx "fmt"` alias import + `fmtx.Errorf("...")` — alias 绕过，失败位置 = 调用点 callsite（types.Info 解析覆盖 alias）
+3. `errors.New("...")` — stdlib 另一 escape route，失败位置 = 调用点 callsite
+4. cellgen 包内自建 wrapper `func newErr(msg string) error { return errors.New(msg) }` — AI 创新 escape。**失败位置 = wrapper 定义体内的 `errors.New` 调用**，不是外层 `newErr(...)` 调用点（外层 callee `newErr` 命中 pattern 但 result type 检查通过；funnel 仍需要 wrapper 定义内的最终构造点命中——`errors.New` 同时满足 name pattern + 返回 error，被覆盖）
 
 每个 fixture 应证明 archtest fail，从而验证白名单覆盖未知形态而非仅已知 escape。
+
+**Hard 覆盖完备性论证**：cellgen 包内任何最终构造 error 的语义（不透传现有 error）必然落入两类：(A) 直接调用 `errcode.{New,Wrap,Assertion}` — 落白名单内 ✅；(B) 调用任何其他 callable 间接构造 — 该 callable 的定义体内必然有最终构造点，最终构造点 callee name 必然命中 pattern（业界惯例：构造 error 必经 `New|Errorf|Wrap|...`），被 archtest 在 callable 定义处拦截。除反射动态构造（盲区清单 §D5 末尾）外无第三类。
+
+**盲区清单**（章程 §"工具选定后强制盲区自检"，Hard 评级前置举证）：
+
+- **反射动态构造 error**：通过 `reflect.MakeFunc` 等动态生成返回 `error` 的 callable，archtest 无法在 AST 层识别其内部 escape。cellgen 包当前无此模式（grep 验证），接受为已知遗留风险；未来若 cellgen 引入反射 codegen，扩 archtest 加 reflect 包 import ban。
+- **build-tag 隔离的非默认 file**：archtest scope 当前包含 `tools/codegen/cellgen/*.go`（excluding `*_test.go`），若新增 build-tag 文件需同步检查 scope 覆盖。已由 `ARCHTEST-VERIFY-COVERAGE-01` 守护 archtest 注册一致性。
+- **wrapper 名不含 error-constructor pattern 但定义体内的最终构造仍被命中**：见 fixture 4 论证；这不是盲区，是 Hard 覆盖路径。明文澄清避免 P5.1 实施者把此场景误判为遗漏。
 
 ### D6. AI-rebust 评级 = Hard
 
@@ -114,7 +122,10 @@ ELSE
 - **form uniqueness**：cellgen 包内任何 error constructor callee 必须 ∈ `pkg/errcode`，集合外形态 archtest 全部 fail — 无灰色地带
 - **archtest fail-on-deviation**：任何偏离立即 CI 红
 - **诚实声明**：编译期不可阻止（Go 允许任何包定义任何 callable），enforcement 完全依赖 archtest。这是 Go 语言中 "error 构造点 funnel" 此类规则形态可达到的最高评级
-- **funnel 双向锁评级**（§Funnel 双向锁评级）：上游 Hard（cellgen 包内任何 error construct callsite 必须落入白名单）+ 下游 Hard（pkg/errcode funnel 集合本身已由 ERRCODE-KIND-LITERAL-01 + MESSAGE-CONST-LITERAL-01 + DETAILS-SLOG-ATTR-01 锁定）— 闭环 funnel
+- **funnel 双向锁评级**（§Funnel 双向锁评级）：
+  - **上游 Hard**：cellgen 包内任何 error construct callsite 必须落入白名单。**评级依据章程 §"typed function call as Hard funnel for unbounded operations"**：「form uniqueness + archtest fail-on-deviation 是 Go 语言中此类规则形态可达最高级，不要求编译期阻止」（与 PANIC-REGISTERED-01 同源认定）。本案上游不采用「典型形态 = sealed interface + 字段私有化」（章程 §Funnel 双向锁评级第一项典型形态）——sealed interface 适用于「funnel API 接受任意载荷」（如 panic(any)），cellgen errcode 的 funnel API 是 `errcode.{New,Wrap,Assertion}` 三个 typed function，载荷已被类型签名锁定，无需 sealed interface
+  - **下游 Hard**：`pkg/errcode` funnel 集合本身由 ERRCODE-KIND-LITERAL-01 + MESSAGE-CONST-LITERAL-01 + DETAILS-SLOG-ATTR-01 锁定（三档 archtest 形态锁，与 ADR `202605051730-adr-errcode-message-pii-safety.md` 一致）
+  - **闭环**：上游白名单 + 下游 funnel 内容锁 — 集合外不能进 + 集合内必须经过 funnel 双向 Hard
 
 ## Rejected alternatives
 
