@@ -20,7 +20,7 @@ var cellMeta = &metadata.CellMeta{
 	ID:               "devicecell",
 	Type:             "edge",
 	ConsistencyLevel: "L4",
-	DurabilityMode:   "durable",
+	DurabilityMode:   "demo",
 	Owner:            metadata.OwnerMeta{Team: "examples", Role: "device-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "devices"},
 	Verify: metadata.CellVerifyMeta{Smoke: []string{

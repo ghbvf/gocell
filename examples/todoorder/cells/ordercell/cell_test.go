@@ -173,54 +173,21 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	}
 }
 
-func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
+// TestOrderCell_DurableModeRejected verifies that Init fails fast when the
+// assembly runtime mode (DurabilityDurable) does not match the cell.yaml
+// declaration (durabilityMode: demo). Examples cells are demo-only; this
+// alignment check is enforced by BaseCell.Init.
+func TestOrderCell_DurableModeRejected(t *testing.T) {
 	c := NewOrderCell(
 		WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
-	var ecErrNoopWriter *errcode.Error
-	require.True(t, errors.As(err, &ecErrNoopWriter))
-	assert.Contains(t, ecErrNoopWriter.Message+" "+ecErrNoopWriter.InternalMessage, "durable mode")
-}
-
-// TestOrderCell_DurableMode_RejectsMissingCursorCodec locks the fail-fast
-// behavior introduced with RunMode wiring: a durable assembly that forgets
-// to inject a production cursor codec must not silently fall back to the
-// public demo key baked into the source tree.
-func TestOrderCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
-	c := NewOrderCell(
-		WithRepository(mem.NewOrderRepository()),
-		WithOutboxWriter(outbox.WrapWriterForCell(&orderRecordingWriter{})),
-		WithTxManager(persistence.WrapForCell(orderLocalTxRunner{})),
-	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
-	require.Error(t, err)
 	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
-	assert.Contains(t, err.Error(), "cursor codec")
-}
-
-// orderRecordingWriter is a non-Nooper outbox.Writer for durable-mode tests
-// that need a legitimate writer to pass CheckNotNoop but don't exercise
-// actual outbox flow.
-type orderRecordingWriter struct{ entries []outbox.Entry }
-
-func (w *orderRecordingWriter) Write(_ context.Context, e outbox.Entry) error {
-	w.entries = append(w.entries, e)
-	return nil
-}
-
-// orderLocalTxRunner is a non-Nooper persistence.TxRunner test double that
-// simply invokes the fn directly. Durable-mode CheckNotNoop rejects
-// persistence.NoopTxRunner but accepts any other type implementing the
-// interface, so this exists to isolate the cursor-codec fail-fast test.
-type orderLocalTxRunner struct{}
-
-func (orderLocalTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code)
+	assert.Contains(t, err.Error(), "declared=demo")
 }
 
 func TestOrderCell_DemoMode_AllowsNoopWriter(t *testing.T) {

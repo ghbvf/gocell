@@ -1,6 +1,7 @@
 id: demo
 type: core
 consistencyLevel: L1
+durabilityMode: demo
 owner:
   team: demo
   role: cell-owner
