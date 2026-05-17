@@ -110,7 +110,6 @@ type PlannedFile struct {
 	// codegen-regenerate flows where derived artifacts intentionally overwrite
 	// previous output. O_NOFOLLOW is preserved: a leaf symlink at the target
 	// path is still removed (not followed) before the fresh file is written.
-	// Zero value (false) is the default and matches pre-A-API behavior.
 	ForceOverwrite bool
 }
 
@@ -466,10 +465,10 @@ func forceOverwriteRestorable(mode os.FileMode) bool {
 // both dry-run and live (before any write), so:
 //
 //   - dry-run rejects exactly the ForceOverwrite targets live would reject
-//     (closes the pre-PR#544 gap where dry-run returned after conflictPass —
-//     which skips ForceOverwrite entries — and never reached the
-//     captureOriginal kind check, so a dir/device squatting a generated path
-//     passed dry-run but failed live);
+//     (without this gate, dry-run returned after conflictPass — which skips
+//     ForceOverwrite entries — and never reached the captureOriginal kind
+//     check, so a dir/device squatting a generated path passed dry-run but
+//     failed live);
 //   - live fails before the FIRST write instead of mid-plan, preserving the
 //     all-or-nothing contract symmetrically with conflictPass.
 //

@@ -1,9 +1,9 @@
 package pathsafe
 
-// Internal (package pathsafe) tests for Lane A unexported helpers:
-//   - collectMissingDirs (A9): EACCES on intermediate parent must propagate
-//     as a non-nil error, not be swallowed as "directory exists / break".
-//   - captureOriginal / forceOverwritePreflightPass (#544 ForceOverwrite
+// Internal (package pathsafe) tests for unexported helpers:
+//   - collectMissingDirs: EACCES on intermediate parent must propagate as a
+//     non-nil error, not be swallowed as "directory exists / break".
+//   - captureOriginal / forceOverwritePreflightPass (ForceOverwrite
 //     inode-kind gate): error/rejection branches the public-API tests cannot
 //     reach (lstat ENOTDIR, non-restorable inode kind, unreadable regular
 //     file).
@@ -99,12 +99,12 @@ func TestCollectMissingDirs_EACCESReturnsError(t *testing.T) {
 	}
 }
 
-// --- #544 ForceOverwrite inode-kind gate: error/rejection branches ---
+// --- ForceOverwrite inode-kind gate: error/rejection branches ---
 //
 // These exercise captureOriginal (live writePass capture) and
 // forceOverwritePreflightPass (dry-run + pre-write) failure paths that the
-// public WritePlannedFiles tests cannot deterministically drive, lifting the
-// #544 new-code coverage of pkg/pathsafe over the 80% gate.
+// public WritePlannedFiles tests cannot deterministically drive, keeping
+// new-code coverage of pkg/pathsafe over the 80% gate.
 //
 // The Readlink failure branch in captureOriginal is intentionally not
 // exercised: once Lstat classified the inode as a symlink, os.Readlink only
