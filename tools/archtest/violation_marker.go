@@ -1,6 +1,12 @@
 package archtest
 
-import "testing"
+import (
+	"fmt"
+	"go/ast"
+	"sort"
+	"strings"
+	"testing"
+)
 
 // fixturespecViolationPkgPath / fixturespecViolationName identify the
 // canonical (pkgPath, name) pair of the Violation marker function. Single
@@ -24,27 +30,69 @@ const (
 // (pkgPath, name) equality against the fixturespecViolation* constants
 // above. Name aliasing, dot imports, and qualified selectors all converge
 // on the same identity pair — see ResolvePackageRef godoc.
-//
-// STUB: Wave 1 returns -1 sentinel so the unit test fails RED until Wave 2.
 func CountViolationMarkers(pass *Pass) int {
 	if pass == nil || pass.TypesInfo == nil {
 		return 0
 	}
-	return -1
+	count := 0
+	for _, f := range pass.Files {
+		EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+			pkgPath, name, ok := ResolvePackageRef(pass.TypesInfo, call.Fun)
+			if !ok {
+				return
+			}
+			if pkgPath == fixturespecViolationPkgPath && name == fixturespecViolationName {
+				count++
+			}
+		})
+	}
+	return count
 }
 
-// AssertDiagnosticCount asserts len(got) equals CountViolationMarkers(pass),
-// reporting both sets (with file:line for each got Diagnostic) on mismatch.
-// ruleID is included in the failure message for triage.
+// AssertDiagnosticCount asserts len(got) equals CountViolationMarkers(pass).
+// On mismatch it reports both sets (with file:line for each got Diagnostic)
+// via t.Errorf so the failure prints the actual diagnostics for triage.
+// ruleID is included in the failure message.
 //
 // Single, focused assertion: every fixture-loading test must route through
 // this helper. Enforced by meta-archtest FIXTURESPEC-COUNT-MATCH-ENFORCED-01
 // (upstream Hard).
-//
-// STUB: Wave 1 calls t.Fatalf with "not implemented" so callers RED until
-// Wave 2.
 func AssertDiagnosticCount(t testing.TB, ruleID string, pass *Pass, got []Diagnostic) {
 	t.Helper()
-	t.Fatalf("archtest.AssertDiagnosticCount: not implemented (Wave 1 stub; rule=%s, len(got)=%d)",
-		ruleID, len(got))
+	want := CountViolationMarkers(pass)
+	if len(got) == want {
+		return
+	}
+	sorted := append([]Diagnostic(nil), got...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Rel != sorted[j].Rel {
+			return sorted[i].Rel < sorted[j].Rel
+		}
+		return sorted[i].Line < sorted[j].Line
+	})
+	var b strings.Builder
+	for _, d := range sorted {
+		fmt.Fprintf(&b, "\n    %s:%d: %s", d.Rel, d.Line, d.Message)
+	}
+	t.Errorf("%s: diagnostic count mismatch — got %d, want %d (markers via fixturespec.Violation in fixture pkg):%s",
+		ruleID, len(got), want, b.String())
 }
+
+// NoDiagnosticAssertion is a typed opt-out marker for test functions that
+// LOAD a fixture (via RunTypedDir / RunTypedFixture / RunTyped or Run with
+// a testdata path) but DELIBERATELY do not assert against the rule's
+// diagnostic output — e.g., framework-shape tests that verify Pass.Pkg /
+// Pass.TypesInfo / Pass.Files plumbing rather than diagnostic content.
+//
+// Calling this in a test file satisfies FIXTURESPEC-COUNT-MATCH-ENFORCED-01
+// in place of AssertDiagnosticCount. Use only for tests that genuinely
+// do not bind to diagnostic output; misuse (silently exempting a real
+// diagnostic-binding test) regresses the funnel to Soft.
+//
+// AI-rebust: this is a Hard typed marker (callee resolved via *types.Info)
+// — the equivalent of "注释豁免 → typed marker" per charter §"Soft → Hard
+// 改造方向". The reviewability burden shifts from the rule (no longer fires)
+// to the marker call site (visible diff, named function).
+//
+// Runtime: deliberately a no-op.
+func NoDiagnosticAssertion() {}
