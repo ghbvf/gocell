@@ -9,9 +9,10 @@
 package nested_funclit_red
 
 import (
+	"testing"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
-	"testing"
 )
 
 func TestFoo_NotFound(t *testing.T) {
