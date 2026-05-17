@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -106,8 +107,24 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 // that follow a successful JWT verification. Tokens missing the sid claim are
 // rejected when sessionStore is configured (fail-closed).
 //
-// Two sequential reads are performed under READ COMMITTED isolation with no
-// snapshot guarantee (plan decision HIGH-4 — no read-only tx wrap).
+// 检查顺序 (ADR §A11 重写 + §A12 wire-uniformity):
+//
+//  1. sessionStore.Get — 返回 view 或 infra/not-found 错误
+//  2. **session-state inline 检查** (RevokedAt != nil) — revoked 直接返回
+//     uniform 401, **不再调用 userRepo.GetByID**. Session-state 检查由
+//     独立 funnel SESSION-REVOKED-FIELD-ACCESS-01 管 (allowlisted), 不再
+//     塞进 credentialauthority funnel.
+//  3. sid/subject 匹配
+//  4. userRepo.GetByID — 此时 session 已确认未 revoked, infra/not-found
+//     可以单独路由 (503 / 401 uniform).
+//  5. credentialauthority.Assert(user) — user-bound 凭证检查 (baseline
+//     CanAuthenticate; 此 service 暂无 PasswordVersion 校验需求).
+//  6. authz_epoch 匹配 — user epoch vs session row epoch.
+//
+// 关键不变量: 一旦 RevokedAt 命中, wire envelope 必然是 uniform 401
+// ErrAuthInvalidToken — user 状态 / userRepo 可用性都不能改变这个结论
+// (P1-A 单 envelope 防枚举: revoked + inactive / revoked + repoErr /
+// revoked alone 全部同 401, 同 errcode, 同 slog 字段集合).
 //
 // JTI is NOT compared. The JWT `jti` claim is per-token uniqueness for
 // RFC 9068 §2.2.4 compliance + observability/log correlation; refresh keeps
@@ -123,8 +140,7 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 // the account is no longer eligible. This closes the P1.3 attack window
 // (matching-epoch-but-non-active). Uniform 401 (ErrAuthInvalidToken) is
 // returned for all CanAuthenticate failures — same envelope as revoked-session
-// and epoch-mismatch paths (防枚举: status must not be distinguishable from
-// token invalidity).
+// and epoch-mismatch paths.
 func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
 	sid := claims.SessionID
 	if sid == "" {
@@ -133,7 +149,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
-	// 1) Session row exists and is not revoked.
+	// 1) Session row exists.
 	view, err := s.sessionStore.Get(ctx, sid)
 	if err != nil {
 		if errcode.IsInfraError(err) {
@@ -147,19 +163,24 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		s.logSessionLookupError(sid, claims.Subject, err)
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
+
+	// 2) Session-state inline check — **must run before userRepo.GetByID**.
+	// Owner package: this file is in the SESSION-REVOKED-FIELD-ACCESS-01
+	// allowlist (cells/accesscore/slices/sessionvalidate/), so the direct
+	// view.RevokedAt read is legitimate.
 	if view.RevokedAt != nil {
-		s.logger.Warn("session-validate: revoked session used",
-			slog.String("sid", sid),
-			slog.String("subject", claims.Subject))
+		s.logger.Warn("session-validate: session revoked",
+			slog.String("subject", claims.Subject),
+			slog.String("sid", sid))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
-	// Defense-in-depth: confirm the live session row owner matches the JWT sub.
-	// Without this check, a signing-path bug that bound a sid to the wrong
+	// 3) Defense-in-depth: confirm the live session row owner matches the JWT
+	// sub. Without this check, a signing-path bug that bound a sid to the wrong
 	// subject (e.g. sessionmint reuse-after-rotation regression) would let one
 	// subject's claims authenticate as another live sid's owner. The sid index
 	// is unique so SubjectID is authoritative; mismatch indicates a token
-	// reused across subjects and must be rejected uniformly (防枚举).
+	// reused across subjects and must be rejected uniformly.
 	if view.SubjectID != claims.Subject {
 		s.logger.Warn("session-validate: sid/subject mismatch",
 			slog.String("sid", sid),
@@ -168,12 +189,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
-	// 2) Epoch invariant: user.authz_epoch must exactly match the epoch stored on
-	// the session row (view.AuthzEpochAtIssue). S4d moves the epoch source of truth
-	// from the JWT claim to the session/refresh rows — the claim is no longer
-	// written. Using != ensures fail-closed on any mismatch: if a credential event
-	// bumped user.authz_epoch after this session was issued, the row captures the
-	// stale epoch and the comparison rejects. (Finding #2, S4d row provenance)
+	// 4) User lookup. Session is confirmed not-revoked at this point.
 	user, err := s.userRepo.GetByID(ctx, claims.Subject)
 	if err != nil {
 		if errcode.IsInfraError(err) {
@@ -188,17 +204,25 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	// P1.3 defense-in-depth: epoch match alone is insufficient when the user
-	// became non-active after the token was issued. CanAuthenticate fails closed
-	// for any non-active status (suspended, locked, or any future state).
-	// Uniform 401 — same envelope as all other enforceSessionState rejections
-	// (防枚举: account status must not be distinguishable from token invalidity).
-	if !user.CanAuthenticate() {
-		s.logger.Warn("session-validate: user not active",
+
+	// 5) User-bound credentialauthority funnel: baseline (CanAuthenticate)
+	// only — session-revoked is handled by step 2 above. Failure collapses to
+	// uniform 401 ErrAuthInvalidToken matching all other rejection paths.
+	if assertErr := credentialauthority.Assert(user); assertErr != nil {
+		s.logger.Warn("session-validate: credentialauthority assert failed",
 			slog.String("subject", claims.Subject),
-			slog.String("status", string(user.Status())))
+			slog.String("sid", sid),
+			slog.Any("error", assertErr))
 		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
+
+	// 6) Epoch invariant: user.authz_epoch must exactly match the epoch
+	// stored on the session row (view.AuthzEpochAtIssue). S4d moves the
+	// epoch source of truth from the JWT claim to the session/refresh
+	// rows — the claim is no longer written. Using != ensures fail-closed
+	// on any mismatch: if a credential event bumped user.authz_epoch after
+	// this session was issued, the row captures the stale epoch and the
+	// comparison rejects. (Finding #2, S4d row provenance.)
 	if user.AuthzEpoch() != view.AuthzEpochAtIssue {
 		s.logger.Warn("session-validate: authz epoch mismatch",
 			slog.String("subject", claims.Subject),

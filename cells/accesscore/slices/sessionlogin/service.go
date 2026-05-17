@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -238,7 +239,8 @@ type LoginInput struct {
 // mismatch causes loginInTx to return ErrAuthLoginFailed, closing the
 // old-password-mints-new-epoch-session race.
 func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrAuthLoginInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrAuthLoginInvalidInput,
 		validation.F("username", input.Username),
 		validation.F("password", input.Password),
 	); err != nil {
@@ -277,15 +279,20 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
 			errcode.WithInternal(fmt.Sprintf("user lookup failed: %v", userLookupErr)))
-	case !preUser.CanAuthenticate():
+	case credentialauthority.Assert(preUser) != nil:
 		// C1: inactive account → same 401 as bad password. Real reason in WithInternal.
 		// R4: log only preUser.ID and preUser.Status() — NOT the full struct which
 		// contains PasswordHash. Using %v on *domain.User would leak the hash into
 		// slog/trace via errcode Internal (PR #501 RC-E, R4 fix).
+		//
+		// P2-C fix: bcrypt_ok was previously logged here, which leaked
+		// "password matched" truth for inactive/locked accounts and let
+		// attackers verify credentials against a disabled account. The
+		// bcryptErr value is intentionally NOT logged.
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("account not active (user_id=%s status=%v bcrypt_ok=%v)",
-				preUser.ID, preUser.Status(), bcryptErr == nil)))
+			errcode.WithInternal(fmt.Sprintf("credentialauthority: pre-bcrypt baseline fail (user_id=%s status=%v)",
+				preUser.ID, preUser.Status())))
 	case bcryptErr != nil:
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials)
@@ -293,19 +300,22 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 
 	// Pin the PasswordVersion from the pre-bcrypt snapshot. loginInTx will
 	// re-check this against the FOR UPDATE locked row to detect a concurrent
-	// ChangePassword committed in the race window (P1.1).
-	preVersion := preUser.PasswordVersion
+	// ChangePassword committed in the race window (P1.1). The snapshot is
+	// captured through credentialauthority.SnapshotPasswordVersion so this
+	// slice file never reads domain.User.PasswordVersion directly (Hard
+	// funnel CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream prong).
+	pwVersionPin := credentialauthority.SnapshotPasswordVersion(preUser)
 
 	// Re-fetch inside tx with FOR UPDATE to pin authz_epoch atomically.
 	// If the user was deactivated between the pre-check and the tx, the
-	// CanAuthenticate guard inside loginInTx rejects it — no silent
-	// credential issuance. The transactional body is extracted to keep
+	// credentialauthority.Assert baseline inside loginInTx rejects it — no
+	// silent credential issuance. The transactional body is extracted to keep
 	// Login's cognitive complexity within the CLAUDE.md ≤15 budget after
 	// S4d added the FOR UPDATE re-fetch + post-check.
 	sessionID := uuid.NewString()
 	var pair dto.TokenPair
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		p, err := s.loginInTx(txCtx, input.Username, sessionID, preVersion)
+		p, err := s.loginInTx(txCtx, input.Username, sessionID, pwVersionPin)
 		if err != nil {
 			return err
 		}
@@ -328,33 +338,37 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // users.authz_epoch between the snapshot read and the session/refresh
 // INSERTs (S4d §D2; PR #490 review P1-#3 fix).
 //
-// preVersion is the PasswordVersion captured from the pre-bcrypt snapshot.
-// If the locked row's PasswordVersion differs, a concurrent ChangePassword
-// committed in the race window — the old password must be rejected (P1.1).
+// pwVersionPin is the opaque WithPasswordVersionPin Check captured from the
+// pre-bcrypt snapshot via credentialauthority.SnapshotPasswordVersion. If
+// the locked row's PasswordVersion differs from the captured value, a
+// concurrent ChangePassword committed in the race window — the old password
+// must be rejected (P1.1).
 //
 // R3 error classification: only credential-domain errors (user not found:
 // KindNotFound) are collapsed into the opaque 401 ErrAuthLoginFailed.
 // Infrastructure errors (KindInternal, KindUnavailable, etc.) are passed
 // through as-is to preserve their HTTP status (5xx / 503), preventing
 // infra faults from being silently disguised as authentication failures.
-func (s *Service) loginInTx(txCtx context.Context, username, sessionID string, preVersion int64) (dto.TokenPair, error) {
+func (s *Service) loginInTx(
+	txCtx context.Context,
+	username, sessionID string,
+	pwVersionPin credentialauthority.Check,
+) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
 	if err != nil {
 		return dto.TokenPair{}, classifyForUpdateErr(err)
 	}
-	// C1: concurrent deactivation race — account was active at pre-bcrypt check but
-	// was locked/suspended before the FOR UPDATE lock. Return the same 401 error as
-	// other failure paths to prevent account-status enumeration. Real reason in logs.
-	if !user.CanAuthenticate() {
+	// Credentialauthority funnel: baseline (CanAuthenticate) re-check after the
+	// FOR UPDATE lock closes the concurrent-deactivation race (C1), and
+	// the password-version pin re-checks the version captured pre-bcrypt to
+	// detect a concurrent ChangePassword that committed inside the race window
+	// (P1.1). Both failure classes collapse to the uniform 401 with internal
+	// reason; the caller may not branch on err to discover which check failed
+	// (防枚举).
+	if err := credentialauthority.Assert(user, pwVersionPin); err != nil {
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("account deactivated in race window (in-tx check): user=%s", username)))
-	}
-	// P1.1: reject if a concurrent ChangePassword committed between the pre-bcrypt
-	// snapshot and this FOR UPDATE lock. Uniform message prevents version enumeration.
-	if user.PasswordVersion != preVersion {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
-			errMsgInvalidCredentials)
+			errcode.WithInternal(fmt.Sprintf("credentialauthority: in-tx assert failed (user=%s): %v", username, err)))
 	}
 
 	minted, err := sessionmint.MintAccess(txCtx, sessionmint.Deps{
@@ -567,6 +581,12 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // admin/UI to handle. The 401 enumeration-collapse design lives only on the
 // public Login endpoint where any unauthenticated requester can probe.
 //
+// Wire envelope note (#11): after the §A11 funnel rewrite the
+// credentialauthority.Assert returns a unified message string
+// ("credential not authoritative") for both baseline and version-pin
+// failures. The errcode Kind+Code (403 / ErrAuthUserNotActive) is what
+// the admin/UI consumer pattern-matches on — message text is opaque.
+//
 // Returns dto.TokenPair (internal/dto, value not pointer) so this method
 // implements the identitymanage.TokenIssuer interface without a cross-slice
 // import (F-ARCH-1). Value type makes (nil, nil) unrepresentable.
@@ -575,9 +595,8 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser get user: %w", err)
 	}
-	if !user.CanAuthenticate() {
-		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
-			"account is not active")
+	if err := credentialauthority.Assert(user); err != nil {
+		return dto.TokenPair{}, err
 	}
 
 	sessionID := uuid.NewString()
