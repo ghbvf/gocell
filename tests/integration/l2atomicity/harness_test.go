@@ -260,10 +260,10 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 	pgOutboxStore := adapterpg.NewOutboxStore(pg.pool.DB(), clock.Real())
 	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
 
-	// DurabilityDemo only describes the assembly construction mode; the
-	// relay above is the durable bridge between PG outbox_entries and the
-	// in-process eventbus.
-	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	// DurabilityDurable matches the cell.yaml declarations of accesscore /
+	// configcore / auditcore (all durable). The PG outbox relay above is the
+	// durable bridge between PG outbox_entries and the in-process eventbus.
+	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))

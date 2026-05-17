@@ -198,9 +198,13 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
+	// DurabilityDurable matches the cell.yaml declarations of accesscore /
+	// configcore / auditcore (all durable). In-memory stores are acceptable
+	// here because this test validates caller-cell HMAC/RequireCallerCell
+	// enforcement only — no durable store behaviour is under test.
 	asm := assembly.New(assembly.Config{
 		ID:             "caller-cell-test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: cell.DurabilityDurable,
 		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(ac))
