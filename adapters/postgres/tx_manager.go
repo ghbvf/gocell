@@ -78,7 +78,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	// Start a new top-level transaction.
 	tx, err := tm.pool.Begin(ctx)
 	if err != nil {
-		return classifyPGError(err, ErrAdapterPGConnect, "begin tx")
+		return classifyPGConnectError(err, "begin tx")
 	}
 
 	txCtx := CtxWithTx(ctx, tx)

@@ -15,9 +15,11 @@ import (
 )
 
 // testAMQPBlackholeURL is the RFC 5737 TEST-NET-1 address used for
-// ConnectTimeout fast-fail tests. String concat defeats gosec G101 false-positive
-// on test fixture URLs (not real credentials; gosec does not flag this form).
-var testAMQPBlackholeURL = "amqp://guest:" + "guest@192.0.2.1:5672/"
+// ConnectTimeout fast-fail tests. TEST-NET-1 (192.0.2.0/24) is
+// documentation-only and never routed on the public internet.
+//
+//nolint:gosec // G101: fake fixture URL, not real credentials
+var testAMQPBlackholeURL = "amqp://guest:guest@192.0.2.1:5672/"
 
 // connectTimeoutBlackholeBudget is the upper bound for the blackhole dial
 // to fail. The configured ConnectTimeout (testtime.D200ms) plus error
@@ -40,6 +42,16 @@ const connectTimeoutDefaultExpected = testtime.D5s
 // Mirrors adapters/postgres pool TestNewPool_ConnectTimeout_Blackhole.
 func TestNewConnection_ConnectTimeout_Blackhole(t *testing.T) {
 	t.Parallel()
+	if testing.Short() {
+		// Depends on RFC 5737 TEST-NET-1 (192.0.2.0/24) being silently
+		// blackholed by the egress path so the dial sits waiting for the
+		// configured ConnectTimeout to fire. Firewalls / sandboxes that
+		// ICMP-reject would short-circuit the dial with connection-refused
+		// and never exercise the timeout branch — skip there. Classification
+		// logic is exhaustively covered by table tests
+		// (TestClassifyDialError / TestClassifyConnectError) without network.
+		t.Skip("blackhole timeout test depends on packet drop to RFC 5737 TEST-NET-1; skipped in -short mode")
+	}
 
 	start := time.Now()
 	_, err := NewConnection(Config{
@@ -55,11 +67,10 @@ func TestNewConnection_ConnectTimeout_Blackhole(t *testing.T) {
 
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr), "error must wrap *errcode.Error, got %T: %v", err, err)
-	// Either ErrAdapterAMQPConnect (transient classification) or ErrAdapterAMQPConnectPermanent
-	// is acceptable — but timeout from blackhole is transient by amqp091 classification.
-	assert.True(t,
-		ecErr.Code == ErrAdapterAMQPConnect || ecErr.Code == ErrAdapterAMQPConnectPermanent,
-		"expected AMQP connect errcode, got %s", ecErr.Code)
+	assert.Equal(t, ErrAdapterAMQPConnectTimeout, ecErr.Code,
+		"blackhole dial must carry distinct timeout code, not the generic connect code")
+	assert.True(t, errcode.IsTransient(err),
+		"blackhole dial timeout must classify as transient (consumer Requeue path)")
 
 	// The underlying cause must surface a net.Error with Timeout()=true,
 	// proving amqp.DefaultDial(timeout) actually fired (not OS default).

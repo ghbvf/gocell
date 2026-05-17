@@ -501,7 +501,12 @@ func TestNewConnection_RecoverableDialError(t *testing.T) {
 		"recoverable dial error should return generic ErrAdapterAMQPConnect")
 }
 
-func TestConnection_Health_Closed(t *testing.T) {
+// TestConnection_Health_ConnRaceWindow simulates the "StateConnected but the
+// underlying conn flipped IsClosed before the reconnect goroutine could mark
+// Disconnected" race. The disposition is transient (errHealthReconnecting)
+// because the reconnect goroutine will resolve it; only explicit
+// Connection.Close() yields the non-transient terminal errHealthClosed.
+func TestConnection_Health_ConnRaceWindow(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	mockConn.mu.Lock()
@@ -510,7 +515,27 @@ func TestConnection_Health_Closed(t *testing.T) {
 
 	err := conn.Health(context.Background())
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_RECONNECTING",
+		"race window must route to reconnecting code, not terminal closed")
+	assert.True(t, errcode.IsTransient(err),
+		"race window is transient — reconnect goroutine will recover")
+}
+
+// TestConnection_Health_AfterExplicitClose verifies Connection.Close() latches
+// the c.closed sentinel and Health returns errHealthClosed
+// (ErrAdapterAMQPClosed, non-transient) — the terminal lifecycle signal that
+// subscribers must fail-fast on.
+func TestConnection_Health_AfterExplicitClose(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	require.NoError(t, conn.Close(context.Background()))
+
+	err := conn.Health(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CLOSED",
+		"explicit Close must yield the dedicated terminal code")
+	assert.False(t, errcode.IsTransient(err),
+		"explicit Close is terminal — must NOT be transient (no retry)")
 }
 
 func TestConnection_AcquireChannel(t *testing.T) {
@@ -521,7 +546,12 @@ func TestConnection_AcquireChannel(t *testing.T) {
 	assert.NotNil(t, ch)
 }
 
-func TestConnection_AcquireChannel_ConnectionClosed(t *testing.T) {
+// TestConnection_AcquireChannel_ConnRaceWindow exercises the race-window path:
+// underlying conn.IsClosed() is true while c.closed is still false (the
+// reconnect goroutine has not yet flipped state). AcquireChannel returns
+// transient ErrAdapterAMQPConnect so subscribers retry — distinct from the
+// terminal explicit-Close path covered by AfterExplicitClose below.
+func TestConnection_AcquireChannel_ConnRaceWindow(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	mockConn.mu.Lock()
@@ -530,7 +560,28 @@ func TestConnection_AcquireChannel_ConnectionClosed(t *testing.T) {
 
 	_, err := conn.AcquireChannel()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT",
+		"race window must route to transient connect code")
+	assert.True(t, errcode.IsTransient(err),
+		"race window is transient — subscriber retries")
+}
+
+// TestConnection_AcquireChannel_AfterExplicitClose verifies AcquireChannel
+// returns the terminal errHealthClosed (ErrAdapterAMQPClosed, non-transient)
+// after Connection.Close() — closes the asymmetry where AcquireChannel
+// previously returned transient under the same lifecycle state as Health()'s
+// non-transient errHealthClosed.
+func TestConnection_AcquireChannel_AfterExplicitClose(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	require.NoError(t, conn.Close(context.Background()))
+
+	_, err := conn.AcquireChannel()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CLOSED",
+		"explicit Close must yield the dedicated terminal code (matches Health())")
+	assert.False(t, errcode.IsTransient(err),
+		"explicit Close is terminal — AcquireChannel must NOT be transient")
 }
 
 func TestConnection_ReleaseChannel_PoolFull(t *testing.T) {
@@ -940,150 +991,6 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 	defer cancel()
 	waitErr := conn.WaitConnected(ctx)
 	require.NoError(t, waitErr, "WaitConnected should succeed with unbounded reconnect attempts (A.1)")
-}
-
-func TestIsPermanentDialError(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{
-			name: "nil error",
-			err:  nil,
-			want: false,
-		},
-		{
-			name: "AMQP ACCESS_REFUSED (403) — auth failure",
-			err:  &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false},
-			want: true,
-		},
-		{
-			name: "AMQP NOT_FOUND (404) — vhost does not exist",
-			err:  &amqp.Error{Code: 404, Reason: "NOT_FOUND", Server: true, Recover: false},
-			want: true,
-		},
-		{
-			name: "AMQP NOT_ALLOWED (530) — connection not allowed",
-			err:  &amqp.Error{Code: 530, Reason: "NOT_ALLOWED", Server: true, Recover: false},
-			want: true,
-		},
-		{
-			name: "AMQP connection.forced (320) — recoverable",
-			err:  &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Server: true, Recover: true},
-			want: false,
-		},
-		{
-			name: "AMQP frame error (501) — recoverable",
-			err:  &amqp.Error{Code: 501, Reason: "FRAME_ERROR", Server: true, Recover: true},
-			want: false,
-		},
-		{
-			// Locks the Server=true gate for permanent classification.
-			// amqp091-go locally synthesizes Server=false / Recover=false for
-			// mid-handshake TCP resets; these must remain transient so broker
-			// restarts do not flip the connection to terminal.
-			name: "AMQP 501 Server=false Recover=false (amqp091-go local synthesis) — recoverable",
-			err:  &amqp.Error{Code: 501, Reason: "read: connection reset by peer", Server: false, Recover: false},
-			want: false,
-		},
-		// amqp091-go package sentinels — Server=false default-zero, must hit
-		// the sentinel branch (errors.Is) ahead of the structural Server check.
-		// These are the real-world "credentials revoked / vhost gone" P0 paths.
-		{
-			name: "amqp.ErrSASL sentinel — permanent",
-			err:  amqp.ErrSASL,
-			want: true,
-		},
-		{
-			name: "amqp.ErrCredentials sentinel (P0 revoked credentials) — permanent",
-			err:  amqp.ErrCredentials,
-			want: true,
-		},
-		{
-			name: "amqp.ErrVhost sentinel — permanent",
-			err:  amqp.ErrVhost,
-			want: true,
-		},
-		{
-			name: "wrapped amqp.ErrCredentials (errors.Is via fmt.Errorf %w) — permanent",
-			err:  fmt.Errorf("dial tune: %w", amqp.ErrCredentials),
-			want: true,
-		},
-		{
-			name: "amqp.ErrSyntax sentinel — permanent",
-			err:  amqp.ErrSyntax,
-			want: true,
-		},
-		{
-			name: "amqp.ErrFrame sentinel — permanent",
-			err:  amqp.ErrFrame,
-			want: true,
-		},
-		{
-			name: "amqp.ErrCommandInvalid sentinel — permanent",
-			err:  amqp.ErrCommandInvalid,
-			want: true,
-		},
-		{
-			name: "amqp.ErrUnexpectedFrame sentinel — permanent",
-			err:  amqp.ErrUnexpectedFrame,
-			want: true,
-		},
-		{
-			name: "net.OpError (connection refused) — recoverable",
-			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
-			want: false,
-		},
-		{
-			name: "generic error — defaults to recoverable",
-			err:  errors.New("some unknown error"),
-			want: false,
-		},
-		{
-			name: "wrapped AMQP permanent error",
-			err:  fmt.Errorf("dial: %w", &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}),
-			want: true,
-		},
-		// Plain errors from amqp091-go pre-handshake failures (U2).
-		{
-			name: "URI parse failure — permanent",
-			err:  errors.New("AMQP URI must start with amqp:// or amqps://"),
-			want: true,
-		},
-		{
-			name: "unsupported auth mechanism — permanent",
-			err:  errors.New("unsupported auth mechanism EXTERNAL: no credentials provided"),
-			want: true,
-		},
-		{
-			name: "x509 certificate error — permanent",
-			err:  errors.New("x509: certificate signed by unknown authority"),
-			want: true,
-		},
-		{
-			name: "TLS handshake error — permanent",
-			err:  errors.New("tls: first record does not look like a TLS handshake"),
-			want: true,
-		},
-		{
-			name: "wrapped URI parse failure — permanent",
-			err:  fmt.Errorf("dial: %w", errors.New("AMQP URI scheme must be amqp:// or amqps://")),
-			want: true,
-		},
-		{
-			name: "generic unknown error — recoverable",
-			err:  errors.New("some transient hiccup"),
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isPermanentDialError(tt.err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }
 
 func TestSanitizeURL(t *testing.T) {
@@ -3587,14 +3494,35 @@ func TestIsRecoverableAMQPError(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "ErrAdapterAMQPConnect errcode",
-			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "connection not available"),
+			// Wave-4-B: AcquireChannel "connection not available" / "open
+			// channel" + Health errHealthNeverConnected sentinel are now
+			// produced via errcode.WrapInfra (transient) — the recoverable
+			// signal is errcode.IsTransient, not the code string.
+			name: "ErrAdapterAMQPConnect via WrapInfra (transient)",
+			err:  errcode.WrapInfra(ErrAdapterAMQPConnect, "connection not available", nil),
 			want: true,
 		},
 		{
-			name: "ErrAdapterAMQPReconnecting errcode",
-			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnecting, "reconnecting"),
+			// Wave-4-B: errHealthReconnecting sentinel is now WrapInfra.
+			name: "ErrAdapterAMQPReconnecting via WrapInfra (transient)",
+			err:  errcode.WrapInfra(ErrAdapterAMQPReconnecting, "reconnecting", nil),
 			want: true,
+		},
+		{
+			// ErrAdapterAMQPConnectTimeout is produced by classifyConnectError for
+			// net.Error.Timeout()==true dials. It is always WrapInfra → transient,
+			// so subscribers must Requeue (retry path), not Reject.
+			name: "ErrAdapterAMQPConnectTimeout via WrapInfra (transient)",
+			err:  errcode.WrapInfra(ErrAdapterAMQPConnectTimeout, "rabbitmq: dial timeout", nil),
+			want: true,
+		},
+		{
+			// errHealthClosed uses dedicated ErrAdapterAMQPClosed via
+			// errcode.New(KindInternal) — explicit Close() does not self-heal;
+			// subscribers must NOT retry on this terminal lifecycle signal.
+			name: "ErrAdapterAMQPClosed via New(KindInternal) — explicit Close terminal, NOT recoverable",
+			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPClosed, "rabbitmq: connection is closed"),
+			want: false,
 		},
 	}
 
@@ -4107,6 +4035,7 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 		name     string
 		state    ConnectionPhase
 		conn     AMQPConnection
+		closed   bool
 		permErr  error
 		wantCode errcode.Code
 		wantNil  bool
@@ -4118,10 +4047,13 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			// errHealthNeverConnected uses ErrAdapterAMQPNeverConnected (distinct
+			// from ErrAdapterAMQPConnect) so operators can distinguish "never
+			// successfully dialed" from connection-available or connection-closed.
 			name:     "StateConnecting never connected",
 			state:    StateConnecting,
 			conn:     nil,
-			wantCode: ErrAdapterAMQPConnect,
+			wantCode: ErrAdapterAMQPNeverConnected,
 		},
 		{
 			name:     "StateDisconnected reconnecting",
@@ -4136,6 +4068,24 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 			permErr:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "bad creds"),
 			wantCode: ErrAdapterAMQPConnectPermanent,
 		},
+		{
+			// Explicit Close latches c.closed; Health must yield the terminal
+			// ErrAdapterAMQPClosed regardless of phase, conn, or permErr.
+			name:     "explicit Close latched (c.closed=true) supersedes everything",
+			state:    StateConnected,
+			conn:     mockConn,
+			closed:   true,
+			wantCode: ErrAdapterAMQPClosed,
+		},
+		{
+			// Race window: state=StateConnected but underlying conn==nil
+			// (reconnect goroutine has not flipped state yet). Must be
+			// transient ErrAdapterAMQPReconnecting, not terminal closed.
+			name:     "StateConnected with nil conn (race window) → reconnecting",
+			state:    StateConnected,
+			conn:     nil,
+			wantCode: ErrAdapterAMQPReconnecting,
+		},
 	}
 
 	for _, tt := range tests {
@@ -4148,6 +4098,7 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 				clock:        clock.Real(),
 				state:        tt.state,
 				conn:         tt.conn,
+				closed:       tt.closed,
 				permanentErr: tt.permErr,
 			}
 
