@@ -91,6 +91,180 @@ func TestCONTRACTENDPOINTTESTMAPPING01_NonHTTPExempt(t *testing.T) {
 	assert.Empty(t, got, "non-HTTP (event) contracts must not trigger this rule")
 }
 
+// TestCONTRACTENDPOINTTESTMAPPING01_SliceServeMissingContract guards direction B
+// (slice → contract) case 1: slice declares "contract.X.serve" but contract X
+// does not exist in the project. Previously silent — review F4 fixed.
+func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeMissingContract(t *testing.T) {
+	pm := minimalHTTPProject()
+	// Slice declares a serve entry pointing at a contract that does not exist.
+	addServeToSlice(pm, "accesscore/session-login", "http.does.not.exist.v1")
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	// One direction B failure (missing contract) and one direction A failure
+	// (the existing real contract http.auth.login.v1 still has no serve).
+	require.GreaterOrEqual(t, len(got), 1)
+	var found bool
+	for _, r := range got {
+		if r.IssueType == IssueRefNotFound &&
+			strings.Contains(r.Message, "http.does.not.exist.v1") &&
+			strings.Contains(r.Message, "does not exist") &&
+			strings.Contains(r.Message, "; fix:") {
+			assert.Equal(t, SeverityError, r.Severity)
+			assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", r.File)
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "direction B must report missing contract; got: %v", got)
+}
+
+// TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonHTTPContract guards direction B
+// case 2: slice's .serve entry references an event-kind contract. The .serve role
+// is HTTP-only; event contracts use ADV-06.
+func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonHTTPContract(t *testing.T) {
+	pm := minimalHTTPProject()
+	const eventID = "event.session.created.v1"
+	pm.Contracts[eventID] = &metadata.ContractMeta{
+		ID:        eventID,
+		Kind:      "event",
+		Lifecycle: "active",
+		Endpoints: metadata.EndpointsMeta{Server: "accesscore"},
+		Dir:       "contracts/event/session/created/v1",
+		File:      "contracts/event/session/created/v1/contract.yaml",
+	}
+	addServeToSlice(pm, "accesscore/session-login", eventID)
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	var found bool
+	for _, r := range got {
+		if r.IssueType == IssueMismatch &&
+			strings.Contains(r.Message, eventID) &&
+			strings.Contains(r.Message, `kind is "event"`) &&
+			strings.Contains(r.Message, "; fix:") {
+			assert.Equal(t, SeverityError, r.Severity)
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "direction B must report non-HTTP kind; got: %v", got)
+}
+
+// TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonActiveContract guards
+// direction B case 3: slice's .serve entry references a deprecated contract.
+func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonActiveContract(t *testing.T) {
+	pm := minimalHTTPProject()
+	// Demote the existing contract to deprecated lifecycle.
+	pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
+	addServeToSlice(pm, "accesscore/session-login", "http.auth.login.v1")
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	var found bool
+	for _, r := range got {
+		if r.IssueType == IssueMismatch &&
+			strings.Contains(r.Message, "http.auth.login.v1") &&
+			strings.Contains(r.Message, `lifecycle is "deprecated"`) &&
+			strings.Contains(r.Message, "; fix:") {
+			assert.Equal(t, SeverityError, r.Severity)
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "direction B must report non-active lifecycle; got: %v", got)
+}
+
+// TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesContract guards direction B
+// case 4: platform slice's .serve entry references a contract under examples/.
+// Platform must not serve example contracts (CLAUDE.md "依赖规则": examples
+// depend on platform, not the reverse).
+func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesContract(t *testing.T) {
+	pm := minimalHTTPProject()
+	const exampleID = "http.todo.order.create.v1"
+	pm.Contracts[exampleID] = &metadata.ContractMeta{
+		ID:        exampleID,
+		Kind:      "http",
+		Lifecycle: "active",
+		Endpoints: metadata.EndpointsMeta{Server: "ordercell",
+			HTTP: &metadata.HTTPTransportMeta{Method: "POST", Path: "/api/v1/orders", SuccessStatus: 201}},
+		Dir:  "examples/todoorder/contracts/http/todo/order/create/v1",
+		File: "examples/todoorder/contracts/http/todo/order/create/v1/contract.yaml",
+	}
+	addServeToSlice(pm, "accesscore/session-login", exampleID)
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	var found bool
+	for _, r := range got {
+		if r.IssueType == IssueForbidden &&
+			strings.Contains(r.Message, exampleID) &&
+			strings.Contains(r.Message, "examples/") &&
+			strings.Contains(r.Message, "; fix:") {
+			assert.Equal(t, SeverityError, r.Severity)
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "direction B must reject platform .serve of examples/ contract; got: %v", got)
+}
+
+// TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesSelf asserts that an
+// examples slice serving an examples contract within the same project is
+// allowed. The platform→examples direction is the forbidden one
+// (TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesContract above);
+// examples→examples must remain legal because examples may depend on all
+// layers (CLAUDE.md "依赖规则").
+func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesSelf(t *testing.T) {
+	pm := minimalHTTPProject()
+	const exampleCell = "ordercell"
+	pm.Cells[exampleCell] = &metadata.CellMeta{
+		ID:               exampleCell,
+		Type:             "core",
+		ConsistencyLevel: "L1",
+		Owner:            metadata.OwnerMeta{Team: "demo", Role: "cell-owner"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.ordercell.startup"}},
+		Dir:              "examples/todoorder/cells/" + exampleCell,
+		File:             "examples/todoorder/cells/" + exampleCell + "/cell.yaml",
+	}
+	const exampleContract = "http.todo.order.create.v1"
+	pm.Contracts[exampleContract] = &metadata.ContractMeta{
+		ID:        exampleContract,
+		Kind:      "http",
+		Lifecycle: "active",
+		Endpoints: metadata.EndpointsMeta{
+			Server: exampleCell,
+			HTTP:   &metadata.HTTPTransportMeta{Method: "POST", Path: "/api/v1/orders", SuccessStatus: 201},
+		},
+		Dir:  "examples/todoorder/contracts/http/todo/order/create/v1",
+		File: "examples/todoorder/contracts/http/todo/order/create/v1/contract.yaml",
+	}
+	// Examples slice serving the examples contract within the same project.
+	pm.Slices[exampleCell+"/ordercreate"] = &metadata.SliceMeta{
+		ID:            "ordercreate",
+		BelongsToCell: exampleCell,
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: exampleContract, Role: "serve"},
+		},
+		Verify: metadata.SliceVerifyMeta{
+			Unit:     []string{"unit.ordercreate.service"},
+			Contract: []string{"contract." + exampleContract + ".serve"},
+		},
+		AllowedFiles: []string{"examples/todoorder/cells/" + exampleCell + "/slices/ordercreate/**"},
+		Dir:          "ordercreate",
+		CellDir:      "examples/todoorder/cells/" + exampleCell,
+		File:         "examples/todoorder/cells/" + exampleCell + "/slices/ordercreate/slice.yaml",
+	}
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	for _, r := range got {
+		// Allowed: examples → examples self-serve must not produce a finding.
+		assert.NotContains(t, r.Message, exampleContract,
+			"examples slice → examples contract must not be flagged; got: %s", r.Message)
+	}
+}
+
 // TestCONTRACTENDPOINTTESTMAPPING01_SliceServeServerMismatch guards direction B
 // (slice → contract): a slice declares "contract.X.serve" in verify.contract but
 // contract X's endpoints.server is a different cell than the slice's belongsToCell.

@@ -11,10 +11,27 @@ package governance
 //	verify.contract entry with the ".serve" role suffix: "contract.<contractID>.serve".
 //
 //	Direction B (slice → contract): when a slice declares "contract.<id>.serve" in
-//	verify.contract, the referenced contract must exist, have kind == "http",
-//	lifecycle == "active", and its endpoints.server must equal the slice's
-//	belongsToCell. Otherwise the slice claims coverage for a contract it does not
-//	own or that does not require coverage.
+//	verify.contract, the referenced contract must satisfy ALL of the following.
+//	Each predicate failure produces its own diagnostic so the developer sees
+//	the precise root cause instead of a silent skip:
+//	  1. The contract must exist in v.project.Contracts. A dangling .serve
+//	     entry (typo, removed contract, or unmerged change) was previously
+//	     silent — review F4 closed it.
+//	  2. The contract's kind must be "http". Event contracts handled by ADV-06
+//	     should not appear in a .serve entry; this catches a slice declaring a
+//	     subscribe contract under the wrong role.
+//	  3. The contract's lifecycle must be "active". A slice declaring serve
+//	     coverage for a deprecated / experimental contract signals stale or
+//	     out-of-order migration; the entry should be removed or the lifecycle
+//	     updated.
+//	  4. If the contract lives under examples/, the slice MUST also live under
+//	     examples/. Examples self-serving (examples slice → examples contract
+//	     within the same example project) is allowed because examples are
+//	     permitted to depend on all layers (CLAUDE.md "依赖规则"); platform
+//	     slice → examples contract is forbidden because that direction would
+//	     invert the allowed dependency arrow.
+//	  5. The contract's endpoints.server must equal the slice's belongsToCell.
+//	     Mismatch means the slice claims coverage for a contract it does not own.
 //
 //	This is the HTTP-serve direction complement of ADV-06 (which checks the
 //	event-subscribe direction). Both rules close the same gap from opposite
@@ -92,8 +109,12 @@ func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []
 }
 
 // ctmSliceToContract implements direction B: for each verify.contract entry
-// of the form "contract.<id>.serve", the referenced contract must exist, be an
-// active HTTP contract, and its endpoints.server must equal the slice's belongsToCell.
+// of the form "contract.<id>.serve", every predicate in the 5-step contract
+// check (existence, kind=http, lifecycle=active, non-examples, server match)
+// must hold; each failure emits a distinct diagnostic. The previous form used
+// !isActiveHTTPPlatformContract(c) as a "skip" filter for direction B, which
+// silently passed dangling references, role/lifecycle drift, and platform-slice-
+// serving-examples-contract cases (review F4).
 func (v *Validator) ctmSliceToContract() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
@@ -102,8 +123,59 @@ func (v *Validator) ctmSliceToContract() []ValidationResult {
 			if contractID == "" {
 				continue
 			}
-			c := v.project.Contracts[contractID]
-			if !isActiveHTTPPlatformContract(c) {
+			fieldPath := fmt.Sprintf("verify.contract[%d]", i)
+			c, exists := v.project.Contracts[contractID]
+			if !exists || c == nil {
+				results = append(results, v.newResult(
+					codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueRefNotFound,
+					sliceFile(s), fieldPath,
+					fmt.Sprintf(
+						"slice %q declares verify.contract %q (.serve role) but contract %q does not exist; "+
+							"fix: remove this entry, fix the contract ID typo, or add the missing contract.yaml",
+						s.ID, entry, contractID,
+					),
+				))
+				continue
+			}
+			if c.Kind != "http" {
+				results = append(results, v.newResult(
+					codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+					sliceFile(s), fieldPath,
+					fmt.Sprintf(
+						"slice %q declares verify.contract %q (.serve role) but contract %q kind is %q (must be \"http\"); "+
+							"fix: remove this entry; event contracts use ADV-06 (endpoints.subscribers) not .serve",
+						s.ID, entry, contractID, c.Kind,
+					),
+				))
+				continue
+			}
+			if c.Lifecycle != "active" {
+				results = append(results, v.newResult(
+					codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+					sliceFile(s), fieldPath,
+					fmt.Sprintf(
+						"slice %q declares verify.contract %q (.serve role) but contract %q lifecycle is %q (must be \"active\"); "+
+							"fix: remove this entry, or promote the contract to lifecycle: active",
+						s.ID, entry, contractID, c.Lifecycle,
+					),
+				))
+				continue
+			}
+			// Examples self-serving (examples slice → examples contract within
+			// the same example project) is allowed because examples are
+			// permitted to depend on all layers (CLAUDE.md "依赖规则"). Only
+			// forbid platform-slice → examples-contract; that direction would
+			// invert the allowed dependency arrow.
+			if strings.HasPrefix(c.File, "examples/") && !strings.HasPrefix(sliceFile(s), "examples/") {
+				results = append(results, v.newResult(
+					codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueForbidden,
+					sliceFile(s), fieldPath,
+					fmt.Sprintf(
+						"slice %q declares verify.contract %q (.serve role) but contract %q lives under examples/ (%s); "+
+							"fix: remove this entry — platform slices must not serve example contracts (examples depend on platform, not the reverse)",
+						s.ID, entry, contractID, c.File,
+					),
+				))
 				continue
 			}
 			if c.Endpoints.Server == s.BelongsToCell {
@@ -111,8 +183,7 @@ func (v *Validator) ctmSliceToContract() []ValidationResult {
 			}
 			results = append(results, v.newResult(
 				codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
-				sliceFile(s),
-				fmt.Sprintf("verify.contract[%d]", i),
+				sliceFile(s), fieldPath,
 				fmt.Sprintf(
 					"slice %q declares verify.contract %q (.serve role) but contract's endpoints.server (%s) ≠ slice's belongsToCell (%s); "+
 						"fix: remove this entry or change the slice's belongsToCell to match, "+
