@@ -130,7 +130,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)...) //archtest:allow:clock-injection:via-slice buildAccessCorePGOptions + WithClock prepended; spread prevents direct positional arg
-	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...)
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...) //archtest:allow:clock-injection:via-slice WithClock is inside buildConfigCorePGOptions; spread prevents direct positional arg
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
@@ -346,7 +346,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)...) //archtest:allow:clock-injection:via-slice buildAccessCorePGOptions + WithClock prepended; spread prevents direct positional arg
-	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...)
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...) //archtest:allow:clock-injection:via-slice WithClock is inside buildConfigCorePGOptions; spread prevents direct positional arg
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
@@ -573,7 +573,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)...) //archtest:allow:clock-injection:via-slice buildAccessCorePGOptions + WithClock prepended; spread prevents direct positional arg
-	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...)
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...) //archtest:allow:clock-injection:via-slice WithClock is inside buildConfigCorePGOptions; spread prevents direct positional arg
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),

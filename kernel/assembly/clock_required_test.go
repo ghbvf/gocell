@@ -86,8 +86,12 @@ func TestAssemblyStart_SnapshotsPopulatedAfterStart(t *testing.T) {
 	})
 	t.Cleanup(a.Shutdown)
 
-	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0"})))
-	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c2", Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0"})))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
+		ID: "c1", Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0",
+	})))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
+		ID: "c2", Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0",
+	})))
 	require.NoError(t, a.Start(context.Background()))
 	t.Cleanup(func() { _ = a.Stop(context.Background()) })
 
@@ -112,7 +116,9 @@ func TestAssemblyStart_SnapshotsCopy(t *testing.T) {
 	})
 	t.Cleanup(a.Shutdown)
 
-	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0"})))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
+		ID: "c1", Type: "core", DurabilityMode: "demo", ConsistencyLevel: "L0",
+	})))
 	require.NoError(t, a.Start(context.Background()))
 	t.Cleanup(func() { _ = a.Stop(context.Background()) })
 

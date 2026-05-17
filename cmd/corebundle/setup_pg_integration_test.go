@@ -131,7 +131,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
-	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pool, txMgr, eb, configCursorCodec)...)
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pool, txMgr, eb, configCursorCodec)...) //archtest:allow:clock-injection:via-slice WithClock is inside buildConfigCorePGOptions; spread prevents direct positional arg
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
@@ -433,7 +433,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
-	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pool, txMgr, eb, configCursorCodec)...)
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pool, txMgr, eb, configCursorCodec)...) //archtest:allow:clock-injection:via-slice WithClock is inside buildConfigCorePGOptions; spread prevents direct positional arg
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),

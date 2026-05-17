@@ -371,24 +371,6 @@ func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 	}
 }
 
-// buildBootstrapFromShared is the test-path assembly helper, equivalent to the
-// production run() flow. It owns the PrimaryListener registration so the JWT
-// policy (PolicyJWTFromAssembly) is wired with the assembly that BuildApp
-// constructs internally. Tests supply the primary net.Listener and any extra
-// options (typically WithListener for InternalListener/HealthListener,
-// WithManagedResource, etc.). Uses memory topology and AccessCoreModule with
-// a fast-bcrypt option.
-func buildBootstrapFromShared(
-	t *testing.T, shared *SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option,
-) (*bootstrap.Bootstrap, error) {
-	t.Helper()
-	return buildBootstrapFromSharedWithModules(t, shared, primaryLn, []CellModule{
-		ConfigCoreModule{},
-		AccessCoreModule{},
-		AuditCoreModule{},
-	}, nil, extra...)
-}
-
 // buildBootstrapFromSharedWithModules is the generic test-path assembly helper.
 // It accepts an explicit module list, allowing infrastructure tests to use
 // lightweight fake modules (e.g. okCellModule) without requiring real PG-backed
@@ -769,4 +751,3 @@ func TestBuildBootstrap_PostgresTopology_FakePoolResource(t *testing.T) {
 	// Fake PG resource must be closed during shutdown.
 	assert.True(t, fakePG.closeCalled, "fakeManagedResource.Close() must be called during shutdown")
 }
-

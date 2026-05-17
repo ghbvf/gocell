@@ -18,6 +18,24 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
+// buildBootstrapFromShared is the test-path assembly helper, equivalent to the
+// production run() flow. It owns the PrimaryListener registration so the JWT
+// policy (PolicyJWTFromAssembly) is wired with the assembly that BuildApp
+// constructs internally. Tests supply the primary net.Listener and any extra
+// options (typically WithListener for InternalListener/HealthListener,
+// WithManagedResource, etc.). Uses memory topology and AccessCoreModule with
+// a fast-bcrypt option.
+func buildBootstrapFromShared(
+	t *testing.T, shared *SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option,
+) (*bootstrap.Bootstrap, error) {
+	t.Helper()
+	return buildBootstrapFromSharedWithModules(t, shared, primaryLn, []CellModule{
+		ConfigCoreModule{},
+		AccessCoreModule{},
+		AuditCoreModule{},
+	}, nil, extra...)
+}
+
 // TestBuildBootstrap_AssemblyHasAllCells verifies that BuildApp registers
 // configcore, accesscore, and auditcore in durable (postgres) mode. We check
 // via health + /readyz which would fail if any cell fails to init.

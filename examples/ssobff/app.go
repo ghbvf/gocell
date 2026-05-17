@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/ghbvf/gocell/adapters/ratelimit"
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
@@ -178,7 +178,7 @@ func WithSSOBFFListener(ref cell.ListenerRef, ln net.Listener) SSOBFFAppOption {
 // database. DATABASE_URL (or WithSSOBFFDatabaseURL option) must be set.
 //
 // On startup, all pending migrations are applied automatically so the schema
-// is always up to date before any cell initialises.
+// is always up to date before any cell initializes.
 //
 // ref: uber-go/fx app.go — single app factory shared by production and tests.
 // Deviates by keeping explicit typed construction instead of DI reflection.
@@ -205,26 +205,9 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}
 
 	ctx := context.Background()
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: cfg.databaseURL})
+	pool, err := newSSOBFFPool(ctx, cfg.databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("ssobff: create PG pool: %w", err)
-	}
-
-	// Apply all pending migrations before cells initialise. Fail-fast on error
-	// so schema drift is visible at startup rather than deep in request paths.
-	migrationsFS, err := adapterpg.MigrationsFS()
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: get migrations FS: %w", err)
-	}
-	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: create migrator: %w", err)
-	}
-	if err := migrator.Up(ctx); err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: run migrations: %w", err)
+		return nil, err
 	}
 
 	txMgr := adapterpg.NewTxManager(pool)
@@ -262,46 +245,16 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		session.WithRevokeOnAll(),
 	)
 
-	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
+	accessStorageOpts, err := buildSSOBFFAccessCoreStorageOpts(pool, txMgr, ssobffSessionProto)
 	if err != nil {
 		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: accesspg.NewDeps: %w", err)
-	}
-	pgUserRepo, err := accesspg.NewUserRepository(pgDeps)
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: accesspg.NewUserRepository: %w", err)
-	}
-	pgRoleRepo, err := accesspg.NewRoleRepository(pgDeps)
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: accesspg.NewRoleRepository: %w", err)
-	}
-	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: accesspg.NewSetupLock: %w", err)
-	}
-	pgSessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, ssobffSessionProto, clock.Real())
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: adapterpg.NewSessionStore: %w", err)
-	}
-	pgRefreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), nil)
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: adapterpg.NewRefreshStore: %w", err)
+		return nil, err
 	}
 
 	pgOutboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 
-	ac := accesscore.NewAccessCore(
+	ac := accesscore.NewAccessCore(append(accessStorageOpts,
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithUserRepository(pgUserRepo),
-		accesscore.WithRoleRepository(pgRoleRepo),
-		accesscore.WithSessionStore(pgSessionStore),
-		accesscore.WithRefreshStore(pgRefreshStore),
-		accesscore.WithSetupLock(pgSetupLock),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -310,7 +263,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 		accesscore.WithLogger(cfg.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
-	)
+	)...)
 
 	// Demo only: HMAC and cursor keys are public source constants. Production
 	// deployments must inject fresh secrets from a secret manager.
@@ -320,33 +273,24 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, err
 	}
 
-	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
+	configStorageOpts, err := buildSSOBFFConfigCoreStorageOpts(pool)
 	if err != nil {
 		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: create config cursor codec: %w", err)
+		return nil, err
 	}
-	configStorageOpt, err := configpg.WithPool(pool.DB(), clock.Real())
-	if err != nil {
-		_ = pool.Close(ctx)
-		return nil, fmt.Errorf("ssobff: configpg.WithPool: %w", err)
-	}
-	cc := configcore.NewConfigCore(
+	cc := configcore.NewConfigCore(append(configStorageOpts,
 		configcore.WithClock(clock.Real()),
-		configStorageOpt,
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		configcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
-		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(cfg.logger),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
-	)
+	)...)
 
 	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
-	for _, registerErr := range []error{asm.Register(ac), asm.Register(auc), asm.Register(cc)} {
-		if registerErr != nil {
-			_ = pool.Close(ctx)
-			return nil, fmt.Errorf("ssobff: register cell: %w", registerErr)
-		}
+	if err := registerSSOBFFCells(asm, ac, auc, cc); err != nil {
+		_ = pool.Close(ctx)
+		return nil, err
 	}
 	cb, err := outbox.NewConsumerBase(
 		idempotency.NewInMemClaimer(clock.Real()),
@@ -383,7 +327,12 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 // ledger.Protocol is owned by the composition root; cells never hold the raw
 // HMAC key. Mirrors cmd/corebundle/audit_module.go durable path but uses
 // in-source demo HMAC key (production deployments must inject from a secret manager).
-func buildSSOBFFAuditCore(logger *slog.Logger, eb outbox.Publisher, pool *adapterpg.Pool, txMgr *adapterpg.TxManager) (*auditcore.AuditCore, error) {
+func buildSSOBFFAuditCore(
+	logger *slog.Logger,
+	eb outbox.Publisher,
+	pool *adapterpg.Pool,
+	txMgr *adapterpg.TxManager,
+) (*auditcore.AuditCore, error) {
 	cursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
@@ -416,6 +365,99 @@ func buildSSOBFFAuditCore(logger *slog.Logger, eb outbox.Publisher, pool *adapte
 		auditcore.WithLogger(logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	), nil
+}
+
+// registerSSOBFFCells registers all three platform cells into the assembly.
+// Returns the first registration error encountered.
+func registerSSOBFFCells(asm *assembly.CoreAssembly, cells ...cell.Cell) error {
+	for _, c := range cells {
+		if err := asm.Register(c); err != nil {
+			return fmt.Errorf("ssobff: register cell: %w", err)
+		}
+	}
+	return nil
+}
+
+// newSSOBFFPool opens a PG pool and runs all pending migrations. Callers own
+// the pool; pool.Close must be called if any subsequent step fails.
+// Extracted to keep NewSSOBFFApp below gocognit ≤ 15.
+func newSSOBFFPool(ctx context.Context, databaseURL string) (*adapterpg.Pool, error) {
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: databaseURL})
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: create PG pool: %w", err)
+	}
+	// Apply all pending migrations before cells initialize. Fail-fast on error
+	// so schema drift is visible at startup rather than deep in request paths.
+	migrationsFS, err := adapterpg.MigrationsFS()
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: get migrations FS: %w", err)
+	}
+	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: create migrator: %w", err)
+	}
+	if err := migrator.Up(ctx); err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: run migrations: %w", err)
+	}
+	return pool, nil
+}
+
+// buildSSOBFFConfigCoreStorageOpts constructs the PG storage option and cursor
+// codec for configcore. Extracted to keep NewSSOBFFApp below gocognit ≤ 15.
+func buildSSOBFFConfigCoreStorageOpts(pool *adapterpg.Pool) ([]configcore.Option, error) {
+	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: create config cursor codec: %w", err)
+	}
+	storageOpt, err := configpg.WithPool(pool.DB(), clock.Real())
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: configpg.WithPool: %w", err)
+	}
+	return []configcore.Option{storageOpt, configcore.WithCursorCodec(configCursorCodec)}, nil
+}
+
+// buildSSOBFFAccessCoreStorageOpts constructs all PG-backed repository/store
+// options required by accesscore. Extracted to keep NewSSOBFFApp below the
+// gocognit ≤ 15 limit.
+func buildSSOBFFAccessCoreStorageOpts(
+	pool *adapterpg.Pool,
+	txMgr *adapterpg.TxManager,
+	sessionProto *session.Protocol,
+) ([]accesscore.Option, error) {
+	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: accesspg.NewDeps: %w", err)
+	}
+	userRepo, err := accesspg.NewUserRepository(pgDeps)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: accesspg.NewUserRepository: %w", err)
+	}
+	roleRepo, err := accesspg.NewRoleRepository(pgDeps)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: accesspg.NewRoleRepository: %w", err)
+	}
+	setupLock, err := accesspg.NewSetupLock(pgDeps)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: accesspg.NewSetupLock: %w", err)
+	}
+	sessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: adapterpg.NewSessionStore: %w", err)
+	}
+	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: adapterpg.NewRefreshStore: %w", err)
+	}
+	return []accesscore.Option{
+		accesscore.WithUserRepository(userRepo),
+		accesscore.WithRoleRepository(roleRepo),
+		accesscore.WithSetupLock(setupLock),
+		accesscore.WithSessionStore(sessionStore),
+		accesscore.WithRefreshStore(refreshStore),
+	}, nil
 }
 
 func defaultSSOBFFAppConfig() *ssobffAppConfig {
