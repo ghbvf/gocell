@@ -198,7 +198,7 @@ func TestStaticKeyProvider_NilHMACKeyRingReturnsError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- keystest.MustNewKeyProvider tests live in runtime/auth/authtest/keys_test.go. ---
+// --- keystest.MustNewKeyProvider tests live in runtime/auth/keystest/keys_test.go. ---
 
 // --- helpers ---
 
