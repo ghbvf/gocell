@@ -70,7 +70,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 			"+ JSON schemas. <contractID> | --all [--dry-run | --verify].",
 			"--verify reports drift without writing; --dry-run prints",
 			"would-write paths without writing.",
-			"Prerequisite: set codegen: true in the contract.yaml.",
+			"Default: codegen on; set codegen: false to opt out.",
 			"CI: commit *_gen.go files and run with --verify.",
 		},
 		run: func(_ context.Context, a []string) error { return generateContract(a) },
