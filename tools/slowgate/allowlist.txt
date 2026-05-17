@@ -139,18 +139,3 @@ github.com/ghbvf/gocell/tools/archtest	TestUserRepoConformanceEnrollment
 # evidence for backlog ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01 (cap-14:14)
 # Hard upgrade — see that entry's Trigger column for cumulative count.
 github.com/ghbvf/gocell/tools/archtest	TestCellRepoReadyzProbe
-
-# type-graph-load: contract path/query param coverage scan — RunTypedProduction
-# with Tests: true walks all cells/**/contract_test.go to verify every active
-# HTTP contract that declares pathParams/queryParams has a corresponding
-# MustReject{Path,Query}Param call. Same scaling pattern as other type-graph
-# scans (TestErrcodeMessageConstLiteral / TestClockInjectionCallsite); added
-# pre-emptively on PR-W6-1 in line with the type-graph-load convention.
-github.com/ghbvf/gocell/tools/archtest	TestContractPathQueryCoverage01
-
-# type-graph-load: contracttest LoadByID literal compensation scan —
-# RunTypedProduction with Tests: true resolves contracttest.LoadByID via
-# *types.Info.Uses across all cells/**/contract_test.go to enforce the third
-# argument is a string literal (blind-spot 1 compensation for
-# CONTRACT-PATH-QUERY-COVERAGE-01). Same scaling pattern as above.
-github.com/ghbvf/gocell/tools/archtest	TestContracttestLoadByIDLiteral01
