@@ -18,18 +18,20 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+type scaffoldCellFlagsCase struct {
+	name       string
+	id         string
+	team       string
+	role       string
+	wantErr    bool
+	wantSubstr string       // substring expected in the human message when wantErr
+	wantCode   errcode.Code // zero value means: do not check code
+}
+
 func TestValidateScaffoldCellFlags(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name       string
-		id         string
-		team       string
-		role       string
-		wantErr    bool
-		wantSubstr string       // substring expected in err.Error() when wantErr
-		wantCode   errcode.Code // zero value means: do not check code
-	}{
+	tests := []scaffoldCellFlagsCase{
 		{
 			name: "valid no-dash id",
 			id:   "billingcell", team: "squad", role: "cell-owner",
@@ -85,40 +87,55 @@ func TestValidateScaffoldCellFlags(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateScaffoldCellFlags(tc.id, tc.team, tc.role)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("validateScaffoldCellFlags(%q,%q,%q): want error, got nil",
-						tc.id, tc.team, tc.role)
-				}
-				// errcode.Error.Error() returns InternalMessage when WithInternal
-				// was used (it carries field=/id= debug context, not the human-
-				// readable Message). validateScaffoldText errors carry WithInternal,
-				// so we must read ec.Message to match the const-literal human text.
-				// Plain fmt.Errorf required-field errors have no *errcode.Error, so
-				// err.Error() is used as the fallback.
-				msg := err.Error()
-				var ec *errcode.Error
-				if errors.As(err, &ec) {
-					msg = ec.Message
-				}
-				if !strings.Contains(msg, tc.wantSubstr) {
-					t.Errorf("err message = %q, want substring %q", msg, tc.wantSubstr)
-				}
-				if tc.wantCode != "" {
-					if ec == nil {
-						t.Fatalf("expected *errcode.Error for code check, got %T (%v)", err, err)
-					}
-					if ec.Code != tc.wantCode {
-						t.Errorf("err code = %q, want %q", ec.Code, tc.wantCode)
-					}
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("validateScaffoldCellFlags(%q,%q,%q): unexpected error: %v",
-					tc.id, tc.team, tc.role, err)
-			}
+			runScaffoldCellFlagsCase(t, tc)
 		})
+	}
+}
+
+// runScaffoldCellFlagsCase dispatches a single table case to keep the test
+// loop body flat (cognitive complexity guard, CLAUDE.md ≤ 15).
+func runScaffoldCellFlagsCase(t *testing.T, tc scaffoldCellFlagsCase) {
+	t.Helper()
+	err := validateScaffoldCellFlags(tc.id, tc.team, tc.role)
+	if !tc.wantErr {
+		if err != nil {
+			t.Fatalf("validateScaffoldCellFlags(%q,%q,%q): unexpected error: %v",
+				tc.id, tc.team, tc.role, err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("validateScaffoldCellFlags(%q,%q,%q): want error, got nil",
+			tc.id, tc.team, tc.role)
+	}
+	assertScaffoldCellFlagsError(t, tc, err)
+}
+
+// assertScaffoldCellFlagsError checks the human message and (optionally) the
+// structured error code of a rejection.
+//
+// errcode.Error.Error() returns InternalMessage when WithInternal was used
+// (it carries field=/id= debug context, not the human-readable Message).
+// validateScaffoldText errors carry WithInternal, so we must read ec.Message
+// to match the const-literal human text. Plain fmt.Errorf required-field
+// errors have no *errcode.Error, so err.Error() is the fallback.
+func assertScaffoldCellFlagsError(t *testing.T, tc scaffoldCellFlagsCase, err error) {
+	t.Helper()
+	msg := err.Error()
+	var ec *errcode.Error
+	if errors.As(err, &ec) {
+		msg = ec.Message
+	}
+	if !strings.Contains(msg, tc.wantSubstr) {
+		t.Errorf("err message = %q, want substring %q", msg, tc.wantSubstr)
+	}
+	if tc.wantCode == "" {
+		return
+	}
+	if ec == nil {
+		t.Fatalf("expected *errcode.Error for code check, got %T (%v)", err, err)
+	}
+	if ec.Code != tc.wantCode {
+		t.Errorf("err code = %q, want %q", ec.Code, tc.wantCode)
 	}
 }
