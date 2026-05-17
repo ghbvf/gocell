@@ -13,6 +13,12 @@ const (
 	// ErrAdapterPGConnect indicates a connection or pool initialization failure.
 	ErrAdapterPGConnect errcode.Code = "ERR_ADAPTER_PG_CONNECT"
 
+	// ErrAdapterPGConnectTimeout indicates a connection attempt exceeded the
+	// adapter-level ConnectTimeout budget (default 5s). Distinct from
+	// ErrAdapterPGConnect so operators can route timeout-vs-refusal differently;
+	// always routed via errcode.WrapInfra → IsTransient(err) == true.
+	ErrAdapterPGConnectTimeout errcode.Code = "ERR_ADAPTER_PG_CONNECT_TIMEOUT"
+
 	// ErrAdapterPGQuery indicates a query execution failure.
 	ErrAdapterPGQuery errcode.Code = "ERR_ADAPTER_PG_QUERY"
 

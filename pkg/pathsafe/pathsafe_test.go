@@ -137,8 +137,18 @@ func containPathCases() []containPathCase {
 			wantErr: true,
 		},
 		{
-			name:    "abs_path",
-			setup:   func(t *testing.T) (string, string) { return resolved(t), "/etc/passwd" },
+			name: "abs_path",
+			setup: func(t *testing.T) (string, string) {
+				abs := "/etc/passwd"
+				if runtime.GOOS == "windows" {
+					// Windows absolute paths require a volume; POSIX-style
+					// "/etc/passwd" is treated as relative by filepath.IsAbs
+					// on Windows, so use a volume-rooted path to exercise the
+					// same "caller passed an absolute path" rejection branch.
+					abs = `C:\Windows\System32\drivers\etc\hosts`
+				}
+				return resolved(t), abs
+			},
 			wantErr: true,
 		},
 		{

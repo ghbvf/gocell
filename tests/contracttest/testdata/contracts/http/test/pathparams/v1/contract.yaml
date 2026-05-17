@@ -1,0 +1,17 @@
+id: http.test.pathparams.v1
+kind: http
+ownerCell: test
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: test
+  http:
+    method: GET
+    path: /api/v1/test/{key}
+    pathParams:
+      key:
+        type: string
+        minLength: 1
+        maxLength: 10
+    successStatus: 200
+    noContent: false

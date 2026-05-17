@@ -44,14 +44,20 @@ Per-adapter `classify{Postgres,Redis,S3}Error` stay in their adapter packages
 (they need `pgconn` / go-redis / smithy SDK types; adapters cannot depend on
 each other) and route their transient branch through `errcode.WrapInfra`,
 modeled on the pre-existing `adapters/vault.classifyVaultError` precedent.
+Wave-4-B (PR #541) added `adapters/rabbitmq.classifyConnectError` to the
+in-scope set; postgres followed with `classifyPGConnectError` as a typed
+sub-funnel for the connect-class call path (pool ping / health / TxManager
+Begin) to scope the `ErrAdapterPGConnectTimeout` substitution away from
+shared `classifyPGError` callers (commit / savepoint / query).
 
 Adapter transient inventory:
 
 | Adapter | Transient when |
 |---------|----------------|
-| postgres | `pgconn.SafeToRetry`; SQLSTATE `40001` / `40P01`; class `08*`; ctx deadline |
+| postgres | `pgconn.SafeToRetry`; SQLSTATE `40001` / `40P01`; class `08*`; ctx deadline; `net.Error.Timeout()` |
 | redis | net timeout / ctx deadline / `i/o timeout`; server-recovering `CLUSTERDOWN` / `LOADING` / `TRYAGAIN` / `MASTERDOWN` |
 | s3 | HTTP 429 / 408 / 5xx; net timeout / ctx deadline |
+| rabbitmq | dial `net.Error.Timeout()` (substituted to `ErrAdapterAMQPConnectTimeout`); unclassified dial failures (fail-open transient under `ErrAdapterAMQPConnect`); `AcquireChannel` race-window (`conn.IsClosed()` but `c.closed=false`); `Health()` race-window (StateConnected with nil/closed conn). Explicit `Connection.Close()` (`c.closed=true`) is non-transient terminal `ErrAdapterAMQPClosed`. |
 
 Consumer demonstrator: the auditcore appender now Requeues a positively-
 transient error, Rejects a positively-permanent classified error
@@ -65,7 +71,7 @@ losing an event on a transient blip. Mirrors the `configreceive` precedent.
 |------|-----------|-------|
 | Upstream | transient marker producible only via `WrapInfra`; the field is unexported (Go type system forbids any package outside `pkg/errcode` from setting it) + archtest locks the in-package writer to func `WrapInfra` | **Hard** (type system + form-uniqueness archtest, the `panicregister.Approved` 范本) |
 | Downstream | `IsTransient`'s `*Error` positive branch keys only on the private marker — a transient-looking code built via `New`/`Wrap` is type-inexpressibly not transient | **Hard** |
-| Adapter routing presence | archtest `RunTypedProduction` resolves (via `*types.Info`) that each of postgres/redis/s3 calls `errcode.WrapInfra` | **Medium→Hard** (type-aware, fail-on-deviation) |
+| Adapter routing presence | archtest `RunTypedProduction` resolves (via `*types.Info`) that each of postgres/redis/s3/rabbitmq calls `errcode.WrapInfra` | **Medium→Hard** (type-aware, fail-on-deviation) |
 
 Declared blind spot (compensated, not silent): archtest does **not** enforce
 that *every* adapter error site calls its `classify…`. An unclassified error

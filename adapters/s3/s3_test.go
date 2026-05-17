@@ -3,10 +3,17 @@ package s3
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,6 +67,139 @@ func newTestClient(cfg Config, mock bucketHeader) *Client {
 		config:     cfg,
 		clk:        cfg.Clock,
 		head:       mock,
+		stopCh:     make(chan struct{}),
+		workerDone: make(chan struct{}),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Transport-mock helpers for failure injection tests
+// ---------------------------------------------------------------------------
+
+// stepFn returns a single mocked HTTP response or error. Used by
+// recordingTransport to sequence responses across calls.
+type stepFn func() (*http.Response, error)
+
+// capturedRequest records the shape of one HTTP call: method, URL path, and
+// Content-Type header. Used by Upload/Health tests to assert the SDK is making
+// the expected S3 operation (PUT vs HEAD, correct bucket/key path, default
+// Content-Type) instead of only counting calls.
+type capturedRequest struct {
+	Method      string
+	Path        string
+	ContentType string
+}
+
+// recordingTransport implements aws.HTTPClient by replaying a sequence
+// of responses. calls is incremented atomically per Do(); when calls > len(steps),
+// the last step is reused so steady-state failure tests don't need padding.
+// Each call's request shape is captured under mu for later snapshot().
+type recordingTransport struct {
+	mu       sync.Mutex
+	requests []capturedRequest
+	calls    atomic.Int64
+	steps    []stepFn
+}
+
+func (t *recordingTransport) Do(req *http.Request) (*http.Response, error) {
+	n := int(t.calls.Add(1)) - 1
+	t.mu.Lock()
+	t.requests = append(t.requests, capturedRequest{
+		Method:      req.Method,
+		Path:        req.URL.Path,
+		ContentType: req.Header.Get("Content-Type"),
+	})
+	t.mu.Unlock()
+	if n >= len(t.steps) {
+		n = len(t.steps) - 1
+	}
+	return t.steps[n]()
+}
+
+// snapshot returns a copy of captured requests under lock. Safe to call after
+// the SDK calls have completed; calling concurrently with in-flight calls
+// races with append but the copy itself is locked.
+func (t *recordingTransport) snapshot() []capturedRequest {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]capturedRequest, len(t.requests))
+	copy(out, t.requests)
+	return out
+}
+
+// respondStatus returns a stepFn yielding *http.Response with the given HTTP
+// status and a minimal S3 XML error body identifying the S3 error code.
+func respondStatus(httpCode int, s3Code string) stepFn {
+	body := `<?xml version="1.0" encoding="UTF-8"?><Error><Code>` + s3Code +
+		`</Code><Message>injected</Message><RequestId>test</RequestId></Error>`
+	return func() (*http.Response, error) {
+		return &http.Response{
+			StatusCode: httpCode,
+			Status:     http.StatusText(httpCode),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     http.Header{"Content-Type": []string{"application/xml"}},
+		}, nil
+	}
+}
+
+// respondNetError returns a stepFn yielding a network-level timeout error.
+// The wrapped *fakeNetError reports Timeout()==true, triggering the
+// net.Error.Timeout() branch of classifyS3Error (transient classification).
+func respondNetError() stepFn {
+	return func() (*http.Response, error) {
+		return nil, &url.Error{Op: "Post", URL: "http://injected", Err: &fakeNetError{timeout: true}}
+	}
+}
+
+// respondSuccess returns a stepFn yielding HTTP 200 with an empty body —
+// used as the recovery step in sequences like [503, 200].
+func respondSuccess() stepFn {
+	return func() (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 200,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     http.Header{},
+		}, nil
+	}
+}
+
+// newTestClientWithSDK builds a *Client backed by a real *awss3.Client whose
+// HTTPClient is the supplied transport.
+//
+// SDK auto-retry is disabled (RetryMaxAttempts=1, NopRetryer) so that exactly
+// one injected HTTP response produces exactly one classifyS3Error invocation.
+// This is the contract that failure-injection tests depend on: if retry were
+// enabled, tr.calls.Load() would be > 1 and assertions like
+// assert.EqualValues(t, 1, tr.calls.Load()) would fail non-deterministically.
+//
+// Production New() retains the SDK default retry policy; this helper is
+// strictly test-only.
+//
+// ref: aws-sdk-go-v2 aws/retry NopRetryer
+func newTestClientWithSDK(t *testing.T, cfg Config, tr aws.HTTPClient) *Client {
+	t.Helper()
+	if cfg.HealthInterval == 0 {
+		cfg.HealthInterval = defaultS3HealthInterval
+	}
+	awsCfg := aws.Config{
+		Region: cfg.Region,
+		Credentials: credentials.NewStaticCredentialsProvider(
+			cfg.AccessKeyID, cfg.SecretAccessKey, "",
+		),
+		HTTPClient:       tr,
+		RetryMaxAttempts: 1,
+		Retryer:          func() aws.Retryer { return aws.NopRetryer{} },
+	}
+	s3c := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
+		o.BaseEndpoint = aws.String(cfg.Endpoint)
+		o.UsePathStyle = true
+	})
+	return &Client{
+		config:     cfg,
+		clk:        cfg.Clock,
+		s3:         s3c,
+		head:       s3c,
 		stopCh:     make(chan struct{}),
 		workerDone: make(chan struct{}),
 	}
@@ -232,8 +372,8 @@ func TestCheckers_ReadyWhenStateHealthy(t *testing.T) {
 	c := newTestClient(validConfig(), mock)
 	// state is nil (healthy by default after zero-value)
 	checkers := c.Checkers()
-	require.Contains(t, checkers, "s3_ready")
-	require.NoError(t, checkers["s3_ready"](context.Background()))
+	require.Contains(t, checkers, ReadyProbeName)
+	require.NoError(t, checkers[ReadyProbeName](context.Background()))
 }
 
 func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
@@ -245,8 +385,8 @@ func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
 	c.state.Store(&sentinel)
 
 	checkers := c.Checkers()
-	require.Contains(t, checkers, "s3_ready")
-	err := checkers["s3_ready"](context.Background())
+	require.Contains(t, checkers, ReadyProbeName)
+	err := checkers[ReadyProbeName](context.Background())
 	require.Error(t, err)
 	assert.Equal(t, sentinel, err)
 }
@@ -258,7 +398,7 @@ func TestCheckers_NoNetworkCall(t *testing.T) {
 	c := newTestClient(validConfig(), mock)
 	checkers := c.Checkers()
 
-	_ = checkers["s3_ready"](context.Background())
+	_ = checkers[ReadyProbeName](context.Background())
 	assert.EqualValues(t, 0, mock.callCount.Load(), "Checkers probe must not call HeadBucket")
 }
 
@@ -320,7 +460,7 @@ func TestWorker_UpdatesStateOnError(t *testing.T) {
 	checkers := c.Checkers()
 	var lastErr error
 	require.Eventually(t, func() bool {
-		lastErr = checkers["s3_ready"](context.Background())
+		lastErr = checkers[ReadyProbeName](context.Background())
 		return lastErr != nil
 	}, testtime.D250ms, testtime.FastPoll)
 
@@ -361,7 +501,7 @@ func TestWorker_StateBecomesHealthyAfterRecovery(t *testing.T) {
 	checkers := c.Checkers()
 	var lastErr error
 	require.Eventually(t, func() bool {
-		lastErr = checkers["s3_ready"](context.Background())
+		lastErr = checkers[ReadyProbeName](context.Background())
 		return callN.Load() >= 2 && lastErr == nil
 	}, testtime.D300ms, testtime.FastPoll)
 
@@ -519,4 +659,337 @@ func TestNew_SDKAccessorAvailable(t *testing.T) {
 	// That is correct: callers going through New() get a non-nil SDK().
 	// This test verifies SDK() does not panic.
 	_ = client.SDK()
+}
+
+// ---------------------------------------------------------------------------
+// B.1 Upload 故障注入 — 4 用例
+// ---------------------------------------------------------------------------
+
+// TestUpload_403Permanent verifies that a 403 AccessDenied response from S3 is
+// classified as a permanent (non-transient) error with code ErrAdapterS3Upload.
+// SDK auto-retry is disabled via NopRetryer so exactly 1 HTTP call is made.
+func TestUpload_403Permanent(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{respondStatus(403, "AccessDenied")}}
+	c := newTestClientWithSDK(t, validConfig(), tr)
+
+	err := c.Upload(context.Background(), "obj/key", []byte("data"), "")
+	require.Error(t, err)
+
+	assert.False(t, errcode.IsTransient(err), "403 must be classified permanent")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
+	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected")
+	assertUploadRequestShape(t, tr, "obj/key", "application/octet-stream")
+}
+
+// TestUpload_5xxTransient verifies that a 503 ServiceUnavailable response from
+// S3 is classified as transient, triggering retry-eligible handling in the caller.
+func TestUpload_5xxTransient(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{respondStatus(503, "ServiceUnavailable")}}
+	c := newTestClientWithSDK(t, validConfig(), tr)
+
+	err := c.Upload(context.Background(), "obj/key", []byte("data"), "")
+	require.Error(t, err)
+
+	assert.True(t, errcode.IsTransient(err), "503 must be classified transient")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
+	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected")
+	assertUploadRequestShape(t, tr, "obj/key", "application/octet-stream")
+}
+
+// TestUpload_TimeoutTransient verifies that a network-level timeout during
+// Upload is classified as transient (net.Error.Timeout()==true branch).
+func TestUpload_TimeoutTransient(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{respondNetError()}}
+	c := newTestClientWithSDK(t, validConfig(), tr)
+
+	err := c.Upload(context.Background(), "obj/key", []byte("data"), "")
+	require.Error(t, err)
+
+	assert.True(t, errcode.IsTransient(err), "network timeout must be classified transient")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
+	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected (NopRetryer disables retry)")
+	assertUploadRequestShape(t, tr, "obj/key", "application/octet-stream")
+}
+
+// TestUpload_RecoveryAfter5xx verifies the recovery sequence: the first Upload
+// call returns a transient 503 error, the second call succeeds (HTTP 200).
+// Transport call count must be exactly 2 across both Upload invocations.
+func TestUpload_RecoveryAfter5xx(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{
+		respondStatus(503, "ServiceUnavailable"),
+		respondSuccess(),
+	}}
+	c := newTestClientWithSDK(t, validConfig(), tr)
+
+	// First call — must fail as transient.
+	err1 := c.Upload(context.Background(), "obj/key", []byte("data"), "")
+	require.Error(t, err1)
+	assert.True(t, errcode.IsTransient(err1), "first call (503) must be transient")
+	var ec *errcode.Error
+	require.ErrorAs(t, err1, &ec)
+	assert.Equal(t, ErrAdapterS3Upload, ec.Code)
+
+	// Second call — must succeed (recovery).
+	err2 := c.Upload(context.Background(), "obj/key", []byte("data"), "")
+	require.NoError(t, err2, "second call must succeed after recovery")
+
+	assert.EqualValues(t, 2, tr.calls.Load(), "exactly 2 HTTP calls expected across both Upload invocations")
+	got := tr.snapshot()
+	require.Len(t, got, 2)
+	for i, req := range got {
+		assert.Equal(t, http.MethodPut, req.Method,
+			"call %d: Upload must use PUT", i)
+		assert.Contains(t, req.Path, "/test-bucket/obj/key",
+			"call %d: path-style: /{bucket}/{key}", i)
+		assert.Equal(t, "application/octet-stream", req.ContentType,
+			"call %d: default Content-Type when not specified", i)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B.2 Health 故障注入 — 3 用例
+// ---------------------------------------------------------------------------
+
+// TestHealth_403Permanent verifies that a 403 AccessDenied response during
+// Health() is classified as permanent with code ErrAdapterS3Health.
+func TestHealth_403Permanent(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{respondStatus(403, "AccessDenied")}}
+	c := newTestClientWithSDK(t, validConfig(), tr)
+
+	err := c.Health(context.Background())
+	require.Error(t, err)
+
+	assert.False(t, errcode.IsTransient(err), "403 must be classified permanent")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterS3Health, ec.Code)
+	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected")
+	assertHealthRequestShape(t, tr)
+}
+
+// TestHealth_5xxTransient verifies that a 503 ServiceUnavailable response
+// during Health() is classified as transient with code ErrAdapterS3Health.
+func TestHealth_5xxTransient(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{respondStatus(503, "ServiceUnavailable")}}
+	c := newTestClientWithSDK(t, validConfig(), tr)
+
+	err := c.Health(context.Background())
+	require.Error(t, err)
+
+	assert.True(t, errcode.IsTransient(err), "503 must be classified transient")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterS3Health, ec.Code)
+	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected")
+	assertHealthRequestShape(t, tr)
+}
+
+// TestHealth_TimeoutTransient verifies that a network-level timeout during
+// Health() is classified as transient (net.Error.Timeout()==true branch).
+func TestHealth_TimeoutTransient(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{respondNetError()}}
+	c := newTestClientWithSDK(t, validConfig(), tr)
+
+	err := c.Health(context.Background())
+	require.Error(t, err)
+
+	assert.True(t, errcode.IsTransient(err), "network timeout must be classified transient")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterS3Health, ec.Code)
+	assert.EqualValues(t, 1, tr.calls.Load(), "exactly 1 HTTP call expected (NopRetryer disables retry)")
+	assertHealthRequestShape(t, tr)
+}
+
+// ---------------------------------------------------------------------------
+// B.3 Worker tick 故障注入 — 3 用例
+// ---------------------------------------------------------------------------
+
+// TestWorker_Tick403_StateUnhealthyPermanent verifies that when the background
+// health ticker receives a 403 AccessDenied from S3, the Client state is marked
+// unhealthy with a permanent (non-transient) error.
+//
+// recordingTransport reuses the last step when calls > len(steps); Worker
+// tick tests do NOT assert tr.calls.Load() because the ticker invokes Do()
+// repeatedly during Eventually polling. The state-machine transition is the
+// authoritative truth-table assertion here.
+func TestWorker_Tick403_StateUnhealthyPermanent(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{respondStatus(403, "AccessDenied")}}
+	cfg := validConfig()
+	cfg.HealthInterval = testtime.D50ms
+
+	c := newTestClientWithSDK(t, cfg, tr)
+	w := c.Worker()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = w.Start(ctx) }()
+
+	checkers := c.Checkers()
+	var stateErr error
+	require.Eventually(t, func() bool {
+		stateErr = checkers[ReadyProbeName](context.Background())
+		return stateErr != nil
+	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 403 tick")
+
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
+	defer stopCancel()
+	require.NoError(t, w.Stop(stopCtx))
+
+	assert.False(t, errcode.IsTransient(stateErr), "403 tick error must be permanent (non-transient)")
+}
+
+// TestWorker_Tick5xx_StateUnhealthyTransient verifies that when the background
+// health ticker receives a 503 ServiceUnavailable from S3, the Client state is
+// marked unhealthy with a transient error.
+//
+// recordingTransport reuses the last step when calls > len(steps); Worker
+// tick tests do NOT assert tr.calls.Load() because the ticker invokes Do()
+// repeatedly during Eventually polling. The state-machine transition is the
+// authoritative truth-table assertion here.
+func TestWorker_Tick5xx_StateUnhealthyTransient(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{respondStatus(503, "ServiceUnavailable")}}
+	cfg := validConfig()
+	cfg.HealthInterval = testtime.D50ms
+
+	c := newTestClientWithSDK(t, cfg, tr)
+	w := c.Worker()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = w.Start(ctx) }()
+
+	checkers := c.Checkers()
+	var stateErr error
+	require.Eventually(t, func() bool {
+		stateErr = checkers[ReadyProbeName](context.Background())
+		return stateErr != nil
+	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 503 tick")
+
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
+	defer stopCancel()
+	require.NoError(t, w.Stop(stopCtx))
+
+	assert.True(t, errcode.IsTransient(stateErr), "503 tick error must be transient")
+}
+
+// TestWorker_TickTimeoutThenRecovery verifies the full recovery cycle: the
+// health ticker first receives two timeout errors (state → unhealthy/transient),
+// then two successes (state → healthy/nil).
+//
+// recordingTransport reuses the last step when calls > len(steps); Worker
+// tick tests do NOT assert tr.calls.Load() because the ticker invokes Do()
+// repeatedly during Eventually polling. The state-machine transition is the
+// authoritative truth-table assertion here.
+func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
+	t.Parallel()
+	tr := &recordingTransport{steps: []stepFn{
+		respondNetError(), // tick 1 — timeout, unhealthy
+		respondNetError(), // tick 2 — timeout, still unhealthy
+		respondSuccess(),  // tick 3 — recovery
+		respondSuccess(),  // tick 4+ — steady healthy
+	}}
+	cfg := validConfig()
+	cfg.HealthInterval = testtime.D50ms
+
+	c := newTestClientWithSDK(t, cfg, tr)
+	w := c.Worker()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = w.Start(ctx) }()
+
+	checkers := c.Checkers()
+
+	// Phase 1: wait for state to become unhealthy with a transient error.
+	var stateErr error
+	require.Eventually(t, func() bool {
+		stateErr = checkers[ReadyProbeName](context.Background())
+		return stateErr != nil
+	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after timeout ticks")
+	assert.True(t, errcode.IsTransient(stateErr), "timeout tick error must be transient")
+
+	// Phase 2: wait for state to recover to healthy (nil).
+	// Budget widened to D500ms to absorb CI scheduler jitter between ticks 2 and 3.
+	require.Eventually(t, func() bool {
+		return checkers[ReadyProbeName](context.Background()) == nil
+	}, testtime.D500ms, testtime.FastPoll, "state must recover to healthy after success ticks")
+
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
+	defer stopCancel()
+	require.NoError(t, w.Stop(stopCtx))
+}
+
+// ---------------------------------------------------------------------------
+// Request-shape assertion helpers (F4)
+// ---------------------------------------------------------------------------
+
+// assertUploadRequestShape asserts that the most recent captured HTTP call
+// performed by Upload is a PUT to "/test-bucket/{key}" with the expected
+// Content-Type. The test bucket comes from validConfig() (= "test-bucket").
+// path-style URL is enforced by newTestClientWithSDK (UsePathStyle=true).
+func assertUploadRequestShape(t *testing.T, tr *recordingTransport, key, contentType string) {
+	t.Helper()
+	got := tr.snapshot()
+	require.NotEmpty(t, got, "no HTTP calls captured")
+	last := got[len(got)-1]
+	assert.Equal(t, http.MethodPut, last.Method, "Upload must use PUT")
+	assert.Contains(t, last.Path, "/test-bucket/"+key,
+		"path-style: /{bucket}/{key}")
+	assert.Equal(t, contentType, last.ContentType,
+		"Content-Type must match Upload arg (empty arg defaults to application/octet-stream)")
+}
+
+// assertHealthRequestShape asserts that the most recent captured HTTP call
+// performed by Health is a HEAD request against "/test-bucket" (or a path
+// containing the bucket name). aws-sdk-go-v2 may append a trailing slash or
+// query string; Contains keeps the assertion robust to SDK formatting drift
+// while still catching bucket/method drift.
+func assertHealthRequestShape(t *testing.T, tr *recordingTransport) {
+	t.Helper()
+	got := tr.snapshot()
+	require.NotEmpty(t, got, "no HTTP calls captured")
+	last := got[len(got)-1]
+	assert.Equal(t, http.MethodHead, last.Method, "Health uses HeadBucket → HEAD")
+	assert.Contains(t, last.Path, "/test-bucket",
+		"HeadBucket path: /{bucket}")
+}
+
+// ---------------------------------------------------------------------------
+// F3 — Ops contract literal anchor
+// ---------------------------------------------------------------------------
+
+// TestReadyProbeName_LiteralAnchor locks the "s3_ready" string contract.
+// production Checkers + all tests reference ReadyProbeName; without this
+// anchor a const-value rename drifts silently.
+//
+// AI-rebust rating: Soft (string convention). Hard upgrade path:
+// backlog OPS-CONTRACT-STRING-FUNNEL-01 (typed `ReadyProbeName string`
+// declaration-site funnel + archtest).
+//
+// ref: .claude/rules/gocell/observability.md「Readyz Probe 命名」
+func TestReadyProbeName_LiteralAnchor(t *testing.T) {
+	assert.Equal(t, "s3_ready", ReadyProbeName,
+		"ReadyProbeName is an ops contract — dashboards/alerts depend on this literal")
 }

@@ -37,6 +37,12 @@ import (
 // enabled. Recommended value 30s; see .env.example.
 const envSessionCacheTTL = "GOCELL_SESSION_CACHE_TTL"
 
+// sessionCacheTTLMax bounds GOCELL_SESSION_CACHE_TTL. See
+// adapters/redis.CachingSessionStore §Threat model — the cache TTL is the
+// security floor for stale-after-revoke; values >30s widen the window beyond
+// the documented threat model and are rejected as a wiring misconfiguration.
+const sessionCacheTTLMax = 30 * time.Second
+
 // sessionCacheNamespace is the Redis key namespace under which session cache
 // entries live. Per the per-cell adapters/redis convention, the owning cell
 // ID is used directly: final Redis keys look like
@@ -140,7 +146,8 @@ func (m AccessCoreModule) Provide(
 			return nil, nil, nil, fmt.Errorf("accesscore: refreshmem.New: %w", err)
 		}
 		innerSessionStore = sessionMemStore
-		accessOpts = append(accessOpts,
+		accessOpts = append(
+			accessOpts,
 			accesscore.WithUserRepository(userMemStore.UserRepository()),
 			accesscore.WithRoleRepository(userMemStore.RoleRepository()),
 			accesscore.WithRefreshStore(refreshMemStore),
@@ -231,7 +238,8 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
 	}
-	accessOpts = append(accessOpts,
+	accessOpts = append(
+		accessOpts,
 		accesscore.WithUserRepository(pgUserRepo),
 		accesscore.WithRoleRepository(pgRoleRepo),
 		accesscore.WithSetupLock(pgSetupLock),
@@ -247,7 +255,8 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 	// in log-only mode.
 	if shared.InternalGuard != nil {
 		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
-		accessOpts = append(accessOpts,
+		accessOpts = append(
+			accessOpts,
 			configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring, shared.Clock),
 		)
 	}
@@ -259,6 +268,7 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 //
 //   - GOCELL_SESSION_CACHE_TTL unset or empty → return inner unchanged.
 //   - TTL parse failure or non-positive → slog.Warn + return inner unchanged.
+//   - TTL >30s → fail-fast with ErrValidationFailed (wiring misconfig, not env issue).
 //   - No Redis client constructed (Redis envs not set) → slog.Warn + return
 //     inner unchanged.
 //   - Cache primitive construction fails → propagate as startup error
@@ -290,6 +300,11 @@ func wrapSessionStoreWithCache(inner session.Store, shared *SharedDeps, logger *
 			slog.String("value", raw))
 		return inner, nil
 	}
+	if ttl > sessionCacheTTLMax {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"accesscore: GOCELL_SESSION_CACHE_TTL exceeds documented maximum",
+			errcode.WithInternal(fmt.Sprintf("GOCELL_SESSION_CACHE_TTL=%s exceeds max %s", ttl, sessionCacheTTLMax)))
+	}
 	if shared.RedisClient == nil {
 		logger.Warn("accesscore: session cache disabled — GOCELL_SESSION_CACHE_TTL set but no Redis client " +
 			"configured (set GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS)")
@@ -305,7 +320,8 @@ func wrapSessionStoreWithCache(inner session.Store, shared *SharedDeps, logger *
 	}
 	logger.Info("accesscore: session cache enabled",
 		slog.Duration("ttl", ttl),
-		slog.String("namespace", string(sessionCacheNamespace)))
+		slog.String("namespace", string(sessionCacheNamespace)),
+		slog.String("inner_store", fmt.Sprintf("%T", inner)))
 	return wrapped, nil
 }
 

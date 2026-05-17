@@ -76,6 +76,9 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 // the JWT cryptographic check.
 //
 // ref: go-kratos/kratos transport/http/server.go — options applied before server start.
+//
+// See docs/ops/listener-topology.md for the deployment topology, threat boundaries,
+// and single-listener migration guide that consume these declarations.
 func WithListener(ref cell.ListenerRef, addr string, authChain []cell.ListenerAuth, opts ...ListenerOption) Option {
 	return func(b *Bootstrap) {
 		if b.listenerConfigs == nil {

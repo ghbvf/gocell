@@ -59,9 +59,10 @@ type ScaffoldSpec struct {
 	// ConsistencyLevel is the cell consistency level. Must be one of validConsistencyLevels.
 	// Defaults to "L1" when empty.
 	ConsistencyLevel string
-	// DryRun, when true, renders all templates (validating their output) and
-	// performs conflict detection but does not write any files to disk.
-	DryRun bool
+	// SkipGenerate, when true, skips the appended cellgen/contractgen derived
+	// artifacts from PlanCellBundleScaffold. The resulting plan contains only
+	// skeleton files. Mirrors assembly.AssemblyScaffoldSpec.SkipGenerate semantics.
+	SkipGenerate bool
 	// WithHTTP, WithEvents, WithBoth control K#09 ScaffoldCellBundle's contract
 	// variant. WithHTTP produces an HTTP request/response contract (default
 	// when none of the three flags are set). WithEvents produces an event
@@ -99,11 +100,6 @@ l0Dependencies: []
 // ScaffoldCell renders a new cell skeleton at root/<targetDir> with stub
 // markers, cell.yaml, and the K#05 marker conventions in place. Returns an
 // error if any output file already exists (caller must remove first).
-//
-// When spec.DryRun is true, templates are rendered (validating output) and
-// conflict detection is performed, but no files are written. This allows
-// callers to validate inputs and detect path conflicts in CI without mutating
-// the filesystem, while still catching template/input errors early.
 //
 // Generated files:
 //   - <root>/<targetDir>/cell.go  — struct + stub markers + initInternal hook
@@ -157,7 +153,7 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	// structured *errcode.Error (ErrConflict for file-exists, ErrInternal for
 	// OS errors) so re-wrapping would clobber the Code and lose the caller's
 	// ability to errors.As to ErrConflict.
-	return pathsafe.WritePlannedFiles(realRoot, plan, spec.DryRun)
+	return pathsafe.WritePlannedFiles(realRoot, plan, false)
 }
 
 // validateScaffoldSpec returns an error if any required field is missing or

@@ -40,6 +40,10 @@ var pendingSort = []query.SortColumn{
 // repeatedly while still making abuse and accidental long leases bounded.
 const MaxLeaseExtension = time.Hour
 
+// errLookupDeviceFmt wraps a device-lookup failure; shared by Enqueue,
+// Dequeue, and ScanActive (CLAUDE.md: 同义字符串 ≥ 3 次抽常量).
+const errLookupDeviceFmt = "device-command: lookup device: %w"
+
 // commandQueueStore combines the Queue facade with the ActiveScanner lookup
 // needed for ownership checks, sweeper scans, and internal ops views.
 // commandtest.InMemQueue satisfies this interface; a postgres adapter would
@@ -162,7 +166,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 
 	// Verify device exists.
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
-		return command.Entry{}, fmt.Errorf("device-command: lookup device: %w", err)
+		return command.Entry{}, fmt.Errorf(errLookupDeviceFmt, err)
 	}
 
 	if payload == "" {
@@ -198,7 +202,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 // This is the poll endpoint used by devices in the L4 latent model.
 func (s *Service) Dequeue(ctx context.Context, deviceID string, limit int, lease time.Duration) ([]command.Entry, error) {
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
-		return nil, fmt.Errorf("device-command: lookup device: %w", err)
+		return nil, fmt.Errorf(errLookupDeviceFmt, err)
 	}
 	if limit <= 0 {
 		limit = query.DefaultPageSize
@@ -293,7 +297,7 @@ func (s *Service) ScanActive(
 ) (query.PageResult[command.Entry], error) {
 	if filter.DeviceID != "" {
 		if _, err := s.deviceRepo.GetByID(ctx, filter.DeviceID); err != nil {
-			return query.PageResult[command.Entry]{}, fmt.Errorf("device-command: lookup device: %w", err)
+			return query.PageResult[command.Entry]{}, fmt.Errorf(errLookupDeviceFmt, err)
 		}
 	}
 	sliceName := s.sliceName

@@ -81,6 +81,35 @@ func decodeRoleListPage(t *testing.T, rec *httptest.ResponseRecorder) roleListPa
 	return page
 }
 
+// TestHttpAuthRoleListV1_ParamConstraints asserts that every declared
+// path/query param has at least one reject case
+// (CONTRACT-PATH-QUERY-COVERAGE-01 per-param granularity):
+//   - userID path (format: uuid) rejects non-UUID strings;
+//   - limit query rejects values out of range (minimum: 1, maximum: 500);
+//   - cursor query rejects values exceeding maxLength: 4096.
+func TestHttpAuthRoleListV1_ParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.auth.role.list.v1")
+	c.ValidatePathParam(t, "userID", "550e8400-e29b-41d4-a716-446655440000")
+	c.MustRejectPathParam(t, "userID", "not-a-uuid") // violates format: uuid
+	c.ValidateQueryParam(t, "limit", "1")
+	c.MustRejectQueryParam(t, "limit", "0")                         // violates minimum: 1
+	c.MustRejectQueryParam(t, "limit", "501")                       // violates maximum: 500
+	c.MustRejectQueryParam(t, "cursor", string(make([]byte, 4097))) // violates maxLength: 4096
+}
+
+// TestHttpAuthRoleCheckV1_PathParamConstraints asserts that the roleName path
+// param schema rejects empty string (violates minLength: 1), and the userID
+// path param rejects non-UUID strings.
+func TestHttpAuthRoleCheckV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.auth.role.check.v1")
+	c.ValidatePathParam(t, "userID", "550e8400-e29b-41d4-a716-446655440000")
+	c.MustRejectPathParam(t, "userID", "not-a-uuid") // violates format: uuid
+	c.ValidatePathParam(t, "roleName", "admin")
+	c.MustRejectPathParam(t, "roleName", "") // violates minLength: 1
+}
+
 func TestHttpAuthRoleListV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.role.list.v1")

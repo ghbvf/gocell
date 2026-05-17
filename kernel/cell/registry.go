@@ -293,8 +293,35 @@ type SubscriptionValidatorAdder interface {
 type LifecycleHook struct {
 	// Name is a diagnostic identifier used in slog fields. Must be non-empty
 	// when passed to Registry.Lifecycle.
-	Name         string
-	OnStart      func(ctx context.Context) error
+	Name string
+
+	// OnStart is called by bootstrap during lifecycle.Start. The ctx parameter
+	// is the long-lived owner ctx (controller-runtime Runnable.Start semantics):
+	// it remains live for the entire assembly run and is canceled only when the
+	// assembly begins shutdown. This supersedes ADR 202605102000 §D1, which
+	// described ctx as a startup-deadline ctx.
+	//
+	// Expected OnStart shape:
+	//   1. Spawn the long-running worker goroutine passing the owner ctx.
+	//   2. Run a fast synchronous readiness probe (e.g. 50 ms timer).
+	//   3. Return nil on success or a non-nil error to abort startup and trigger
+	//      LIFO rollback. The failed hook's OnStop is NOT called by rollback.
+	//
+	// Returning without spawning a goroutine is fine for hooks that do all their
+	// work synchronously. Blocking indefinitely in OnStart is not allowed — the
+	// hook must return promptly so the startup sequence can continue.
+	//
+	// StartTimeout is no longer enforced as an OnStart runner deadline; it is
+	// retained as a hook self-declared probe window budget (informational only).
+	// Supersedes ADR 202605102000 §D1.
+	//
+	// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go — Runnable.Start
+	//      receives the manager context (long-lived owner ctx); returns when ctx done.
+	OnStart func(ctx context.Context) error
+
+	// OnStop is called by bootstrap during lifecycle.Stop, with a context that
+	// carries StopTimeout as deadline. OnStop cancels the worker (if not already
+	// canceled via owner ctx) and waits for it to exit.
 	OnStop       func(ctx context.Context) error
 	StartTimeout time.Duration
 	StopTimeout  time.Duration

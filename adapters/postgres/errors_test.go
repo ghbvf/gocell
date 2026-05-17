@@ -14,6 +14,7 @@ import (
 func TestErrorCodes_Prefix(t *testing.T) {
 	codes := []errcode.Code{
 		ErrAdapterPGConnect,
+		ErrAdapterPGConnectTimeout,
 		ErrAdapterPGQuery,
 		ErrAdapterPGMigrate,
 		ErrAdapterPGNoTx,
@@ -33,6 +34,7 @@ func TestErrorCodes_Prefix(t *testing.T) {
 func TestErrorCodes_Unique(t *testing.T) {
 	codes := []errcode.Code{
 		ErrAdapterPGConnect,
+		ErrAdapterPGConnectTimeout,
 		ErrAdapterPGQuery,
 		ErrAdapterPGMigrate,
 		ErrAdapterPGNoTx,

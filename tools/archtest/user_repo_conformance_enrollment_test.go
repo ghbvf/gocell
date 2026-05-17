@@ -47,6 +47,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // INVARIANT: USERREPO-CONFORMANCE-ENROLLMENT-01
@@ -331,7 +332,7 @@ func collectUserRepoImpls(pkg *types.Package, iface *types.Interface, implSet, i
 		if _, isIface := t.Underlying().(*types.Interface); isIface {
 			continue
 		}
-		if types.Implements(t, iface) || types.Implements(types.NewPointer(t), iface) {
+		if typesutil.ImplementsInterface(t, iface) {
 			key := pkg.Path() + "." + name
 			implSet[key] = true
 			implPkgSet[pkg.Path()] = true

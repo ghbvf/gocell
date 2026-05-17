@@ -233,7 +233,9 @@ func PlannedPaths(plan []PlannedFile) []string {
 //     rejection happens at writePass via the fd-anchored openat(O_NOFOLLOW)
 //     chain (unix) or O_EXCL leaf write (windows advisory).
 //  2. Each AbsPath must not already exist (conflict detection over the
-//     FULL plan — no partial-write semantics).
+//     FULL plan — no partial-write semantics). ForceOverwrite entries are
+//     exempt here but still pass the forceOverwritePreflightPass inode-kind
+//     gate so dry-run rejects exactly what live would (F2 parity).
 //  3. dryRun returns nil after steps 1-2 succeed (validation only, no write).
 //  4. Otherwise: mkdir all required directories, write all files, then
 //     on the FIRST failure remove every file and directory created during
@@ -256,6 +258,9 @@ func WritePlannedFiles(realRoot string, plan []PlannedFile, dryRun bool) error {
 		return err
 	}
 	if err := conflictPass(plan); err != nil {
+		return err
+	}
+	if err := forceOverwritePreflightPass(plan); err != nil {
 		return err
 	}
 	if dryRun {
@@ -401,8 +406,12 @@ func captureOriginal(path string) (writeRecord, error) {
 			errcode.WithInternal(fmt.Sprintf("path=%s", path)))
 	}
 	mode := info.Mode()
-	switch {
-	case mode.IsRegular():
+	if !forceOverwriteRestorable(mode) {
+		return writeRecord{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"pathsafe: ForceOverwrite supports regular files and symlinks only",
+			errcode.WithDetails(slog.String("path", path)))
+	}
+	if mode.IsRegular() {
 		// path already passed planContainmentPass + caller-side ContainPath;
 		// this read is the capture-for-rollback step (path-based; rollback
 		// is not a TOCTOU boundary — see rollbackWrites godoc).
@@ -418,23 +427,68 @@ func captureOriginal(path string) (writeRecord, error) {
 			originalBytes: content,
 			originalMode:  mode.Perm(),
 		}, nil
-	case mode&os.ModeSymlink != 0:
-		target, readErr := os.Readlink(path)
-		if readErr != nil {
-			return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-				"pathsafe: readlink original for ForceOverwrite capture", readErr,
-				errcode.WithInternal(fmt.Sprintf("path=%s", path)))
-		}
-		return writeRecord{
-			path:           path,
-			originalKind:   kindSymlink,
-			originalTarget: target,
-		}, nil
-	default:
-		return writeRecord{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"pathsafe: ForceOverwrite supports regular files and symlinks only",
-			errcode.WithDetails(slog.String("path", path)))
 	}
+	// Guaranteed symlink: forceOverwriteRestorable already rejected every
+	// other inode kind above (single source for the kind gate).
+	target, readErr := os.Readlink(path)
+	if readErr != nil {
+		return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"pathsafe: readlink original for ForceOverwrite capture", readErr,
+			errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+	}
+	return writeRecord{
+		path:           path,
+		originalKind:   kindSymlink,
+		originalTarget: target,
+	}, nil
+}
+
+// forceOverwriteRestorable reports whether an existing inode of the given
+// mode at a ForceOverwrite target can be coherently captured and rolled back
+// (regular file or symlink). Directories / devices / pipes / sockets cannot
+// and must be rejected pre-write. This is the SINGLE source for the
+// ForceOverwrite inode-kind gate: captureOriginal (live writePass) and
+// forceOverwritePreflightPass (dry-run + pre-write) both consult it, so
+// dry-run can never accept a target that live would reject (F2 parity).
+func forceOverwriteRestorable(mode os.FileMode) bool {
+	return mode.IsRegular() || mode&os.ModeSymlink != 0
+}
+
+// forceOverwritePreflightPass runs the captureOriginal inode-kind gate over
+// every ForceOverwrite entry WITHOUT the destructive capture. It runs for
+// both dry-run and live (before any write), so:
+//
+//   - dry-run rejects exactly the ForceOverwrite targets live would reject
+//     (closes the pre-PR#544 gap where dry-run returned after conflictPass —
+//     which skips ForceOverwrite entries — and never reached the
+//     captureOriginal kind check, so a dir/device squatting a generated path
+//     passed dry-run but failed live);
+//   - live fails before the FIRST write instead of mid-plan, preserving the
+//     all-or-nothing contract symmetrically with conflictPass.
+//
+// Absent target → ok (writePass records kindNone). Lstat (not Stat) so a
+// leaf symlink is classified as symlink, not its (possibly absent) target.
+func forceOverwritePreflightPass(plan []PlannedFile) error {
+	for _, f := range plan {
+		if !f.ForceOverwrite {
+			continue
+		}
+		info, err := os.Lstat(f.AbsPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"pathsafe: lstat ForceOverwrite target (preflight)", err,
+				errcode.WithInternal(fmt.Sprintf("path=%s", f.AbsPath)))
+		}
+		if !forceOverwriteRestorable(info.Mode()) {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"pathsafe: ForceOverwrite supports regular files and symlinks only",
+				errcode.WithDetails(slog.String("path", f.AbsPath)))
+		}
+	}
+	return nil
 }
 
 // writePass executes the plan via the platform-specific secureMkdirAllAndWrite

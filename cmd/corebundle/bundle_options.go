@@ -135,6 +135,9 @@ func defaultRuntimeOptions(
 // returns an error rather than a nil guard in all adapter modes when
 // GOCELL_SERVICE_SECRET is unset, so SharedDeps.Validate fails fast before
 // this function is reached with a nil guard.
+//
+// See docs/ops/listener-topology.md for the deployment topology, threat boundaries,
+// and single-listener migration guide that frame this auth-chain composition.
 func buildInternalAuthChain(guard *internalGuard) []cell.ListenerAuth {
 	return []cell.ListenerAuth{cell.MustNewAuthServiceToken(guard.NonceStore(), guard.ring)}
 }

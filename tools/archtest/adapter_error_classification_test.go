@@ -8,11 +8,13 @@
 //     func WrapInfra. The field is unexported (Go type system forbids any
 //     package outside pkg/errcode from setting it at all); this archtest adds
 //     the in-package lock so no future New/Wrap/Assertion/Option sets it.
-//   - Upstream Hard: each in-scope adapter (postgres / redis / s3) declares a
-//     classify…Error function WHOSE BODY routes through errcode.WrapInfra —
-//     verified by type-aware call resolution scoped to that function (a stray
-//     or dead-code WrapInfra call elsewhere in the package does NOT satisfy
-//     it), so dropping/bypassing an adapter's classifier fails CI.
+//   - Upstream Hard: each in-scope adapter (postgres / redis / s3 / rabbitmq)
+//     declares a classify…Error function WHOSE BODY routes through
+//     errcode.WrapInfra — verified by type-aware call resolution scoped to
+//     that function (a stray or dead-code WrapInfra call elsewhere in the
+//     package does NOT satisfy it), so dropping/bypassing an adapter's
+//     classifier fails CI. The wantAdapters map below is the authoritative
+//     list — keep it in sync with the godoc.
 //
 // Tool: archtest.RunTypedProduction (040 Pass-Driver) + *types.Info call /
 // field resolution. NOT exempted (uses archtest.Pass façade per ADR 040 stage-4 terminal state).
@@ -94,6 +96,7 @@ func TestAdapterErrorClassificationTransient01(t *testing.T) {
 		modPath + "/adapters/postgres": false,
 		modPath + "/adapters/redis":    false,
 		modPath + "/adapters/s3":       false,
+		modPath + "/adapters/rabbitmq": false,
 	}
 	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {

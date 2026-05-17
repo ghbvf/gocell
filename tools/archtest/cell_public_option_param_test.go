@@ -44,6 +44,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // expectedRawParamFixtureViolations is the number of CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01
@@ -226,7 +228,10 @@ func canonicalFromType(t types.Type, forbiddenIfaces map[string]*types.Interface
 			if fIface == nil || fIface == iface {
 				continue
 			}
-			if types.Implements(t, fIface) {
+			// ImplementsInterfaceExact (value-only, no pointer fallback):
+			// t here is often itself *types.Interface (anonymous-interface
+			// param); a synthetic pointer-to-interface check is meaningless.
+			if typesutil.ImplementsInterfaceExact(t, fIface) {
 				return canon
 			}
 		}

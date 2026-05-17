@@ -8,6 +8,36 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
+// TestHttpConfigFlagsListV1_QueryParamConstraints asserts that the cursor query
+// param schema rejects values exceeding maxLength: 4096, and the limit query
+// param rejects 0 (minimum: 1) and 501 (maximum: 500).
+func TestHttpConfigFlagsListV1_QueryParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.flags.list.v1")
+	c.MustRejectQueryParam(t, "cursor", string(make([]byte, 4097))) // violates maxLength: 4096
+	c.ValidateQueryParam(t, "limit", "1")
+	c.MustRejectQueryParam(t, "limit", "0")   // violates minimum: 1
+	c.MustRejectQueryParam(t, "limit", "501") // violates maximum: 500
+}
+
+// TestHttpConfigFlagsGetV1_PathParamConstraints asserts that the key path param
+// schema rejects empty string (violates minLength: 1).
+func TestHttpConfigFlagsGetV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.flags.get.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+}
+
+// TestHttpConfigFlagsEvaluateV1_PathParamConstraints asserts that the key path
+// param schema rejects empty string (violates minLength: 1).
+func TestHttpConfigFlagsEvaluateV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.flags.evaluate.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+}
+
 func TestHttpConfigFlagsListV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.flags.list.v1")

@@ -1,0 +1,16 @@
+id: http.test.boolparams.v1
+kind: http
+ownerCell: test
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: test
+  http:
+    method: GET
+    path: /api/v1/test/bool
+    queryParams:
+      enabled:
+        type: boolean
+        required: false
+    successStatus: 200
+    noContent: false

@@ -31,6 +31,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest" // test funnel; storetest is testing-helper package, errcodetest import is intentional (not a test-only import in a non-_test.go file)
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -130,7 +131,12 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Verify_FullRange", func(t *testing.T) { runVerifyFullRange(t, factory) })
 	t.Run("Verify_TamperedHash", func(t *testing.T) { runVerifyTamperedHash(t, factory, protocol) })
 	t.Run("Verify_TamperedPrevHash", func(t *testing.T) { runVerifyTamperedPrevHash(t, factory, protocol) })
-	t.Run("GetBySeq_NotFound", func(t *testing.T) { runGetBySeqNotFound(t, factory) })
+	t.Run("GetBySeq_NotFound", func(t *testing.T) {
+		store, _, cleanup := factory(t)
+		defer cleanup()
+		_, err := store.GetBySeq(context.Background(), 9999)
+		errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
+	})
 	t.Run("Query_ByFilters", func(t *testing.T) { runQueryByFilters(t, factory) })
 	t.Run("Append_MultiKey_Payload_RoundTrip", func(t *testing.T) { runAppendMultiKeyPayloadRoundTrip(t, factory) })
 	t.Run("Query_Ordering_TimestampDesc_IDAsc", func(t *testing.T) { runQueryOrderingTimestampDescIDAsc(t, factory) })
@@ -492,21 +498,6 @@ func runVerifyTamperedPrevHash(t *testing.T, factory Factory, protocol *ledger.P
 	_ = protocol // used for documentation; hash recomputation is in runVerifyTamperedHash
 }
 
-// runGetBySeqNotFound: missing seqNo returns errcode error.
-func runGetBySeqNotFound(t *testing.T, factory Factory) {
-	store, _, cleanup := factory(t)
-	defer cleanup()
-
-	_, err := store.GetBySeq(context.Background(), 9999)
-	if err == nil {
-		t.Fatal("expected error for missing seqNo")
-	}
-	var coded *errcode.Error
-	if !errors.As(err, &coded) {
-		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-	}
-}
-
 // runQueryByFilters: Query returns only entries matching the filter.
 func runQueryByFilters(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
@@ -646,6 +637,13 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 	}
 }
 
+// NOTE: assertErrCode is reserved for non-_NotFound assertions
+// (ErrAuditLedgerAlreadyExists, ErrValidationFailed). Any t.Run("..._NotFound", ...)
+// table case MUST call errcodetest.AssertCode directly — POSTGRES-NOTFOUND-
+// TEST-OTHER-ERROR-MIXUP-ARCHTEST-01 archtest detects funnel calls at the
+// _NotFound t.Run body level only; routing through this helper would be a
+// cross-function wrapper that escapes detection (godoc-declared blind spot).
+//
 // assertErrCode asserts err wraps an *errcode.Error with the given Code.
 func assertErrCode(t *testing.T, err error, want errcode.Code) {
 	t.Helper()

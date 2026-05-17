@@ -6,7 +6,7 @@
 > - 客户端收到 setup 端点的 `410 Gone` 时该如何处理？
 > - 日常如何区分 setup 端点的 `400` / `401` / `409` / `410`？
 >
-> 运维侧的部署细节（env 变量、Docker / K8s 配置、密码重置流程）见 [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md)。
+> 运维侧的部署细节（env 变量、Docker / K8s 配置、密码重置流程）见 [`docs/ops/first-run-setup.md`](../ops/first-run-setup.md)。
 > 安全边界 ADR 见 [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md)。
 
 ---
@@ -221,7 +221,7 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
 
 ## 8. 相关文档
 
-- [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md) — 环境变量配置、Docker / K8s 部署细节、密码重置流程
+- [`docs/ops/first-run-setup.md`](../ops/first-run-setup.md) — 环境变量配置、Docker / K8s 部署细节、密码重置流程
 - [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md) — 安全边界 ADR（D1–D5）
 - [`contracts/http/auth/setup/admin/v1/contract.yaml`](../../contracts/http/auth/setup/admin/v1/contract.yaml) — setup admin 端点契约（含 400 / 401 / 409 / 410 声明）
 - [`contracts/http/auth/setup/status/v1/contract.yaml`](../../contracts/http/auth/setup/status/v1/contract.yaml) — setup status 端点契约
