@@ -328,7 +328,7 @@ with `GOCELL_STATE_DIR`. `cmd/corebundle` defaults to interactive first-run setu
 `GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE=bootstrap` for headless bootstrap, or leave it empty /
 `interactive` to use `POST /api/v1/access/setup/admin`. Interactive setup passwords are 8-72
 printable ASCII bytes. Unknown mode values fail fast at startup. See
-`docs/operations/first-run-setup.md` for details.
+`docs/ops/first-run-setup.md` for details.
 
 ## Runtime Modes
 
