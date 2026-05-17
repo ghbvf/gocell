@@ -104,26 +104,66 @@ const cachingStoreInnerField = "inner"
 func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 	t.Parallel()
 
-	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/redis/..."}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
+	// Single packages.Load over production + all 7 RED fixtures. Per-Pass
+	// dispatch by pkg path: each RunTyped call carries ~3s of toolchain
+	// overhead on GHA 2-CPU runners, so collapsing 8 separate loads into 1
+	// keeps the test under the 20s slowgate budget as the fixture set grows.
+	fixtureRoot := "./tools/archtest/testdata/caching_session_revoke_fixtures"
+	fixtureCases := []struct {
+		label string
+		dir   string
+	}{
+		{"F1_multi_stmt", "f1_multi_stmt_red"},
+		{"F2_cache_delete", "f2_cache_delete_red"},
+		{"F3_cache_set", "f3_cache_set_red"},
+		{"F4_wrong_delegate", "f4_wrong_delegate_red"},
+		{"F5_wrong_receiver", "f5_wrong_receiver_red"},
+		{"F6_wrong_args", "f6_wrong_args_red"},
+		{"F7_cache_in_arg", "f7_cache_in_arg_red"},
+	}
+	patterns := make([]string, 0, 1+len(fixtureCases))
+	patterns = append(patterns, "./adapters/redis/...")
+	for _, fix := range fixtureCases {
+		patterns = append(patterns, fixtureRoot+"/"+fix.dir)
+	}
+
+	const prodPkgSuffix = "/adapters/redis"
+	var prodViolations []string
+	fixtureViolationCount := make(map[string]int, len(fixtureCases))
+
+	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+		if p.Fset == nil || p.Pkg == nil {
 			return nil
 		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
+		pkgPath := p.Pkg.Path()
+		if strings.HasSuffix(pkgPath, prodPkgSuffix) {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				prodViolations = append(prodViolations, scanRevokeDelegateViolations(p, file, rel)...)
+			}
+			return nil
+		}
+		for _, fix := range fixtureCases {
+			if !strings.HasSuffix(pkgPath, "/"+fix.dir) {
 				continue
 			}
-			violations = append(violations, scanRevokeDelegateViolations(p, file, rel)...)
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				fixtureViolationCount[fix.dir] += len(scanRevokeDelegateViolations(p, file, rel))
+			}
+			break
 		}
 		return nil
 	})
 
-	sort.Strings(violations)
-	for _, v := range violations {
+	sort.Strings(prodViolations)
+	for _, v := range prodViolations {
 		t.Log(v)
 	}
-	assert.Empty(t, violations,
+	assert.Empty(t, prodViolations,
 		"CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: (*CachingSessionStore).Revoke and "+
 			"(*CachingSessionStore).RevokeForSubject must each be a single-statement body "+
 			"of the form `return s.inner.<SameMethodName>(args...)`. "+
@@ -131,21 +171,12 @@ func TestCachingSessionRevokeDelegateOnly_01(t *testing.T) {
 			"This rule locks Q1=B (Revoke no cache.Delete) and Q2=α (RevokeForSubject no cache op) "+
 			"from the third-round review plan.")
 
-	// RED fixture verification: each of the four fixture packages must have ≥ 1 detected violation.
-	fixtureRoot := "./tools/archtest/testdata/caching_session_revoke_fixtures"
-	for _, fix := range []struct {
-		name    string
-		pattern string
-	}{
-		{"F1_multi_stmt", fixtureRoot + "/f1_multi_stmt_red"},
-		{"F2_cache_delete", fixtureRoot + "/f2_cache_delete_red"},
-		{"F3_cache_set", fixtureRoot + "/f3_cache_set_red"},
-		{"F4_wrong_delegate", fixtureRoot + "/f4_wrong_delegate_red"},
-		{"F5_wrong_receiver", fixtureRoot + "/f5_wrong_receiver_red"},
-		{"F6_wrong_args", fixtureRoot + "/f6_wrong_args_red"},
-		{"F7_cache_in_arg", fixtureRoot + "/f7_cache_in_arg_red"},
-	} {
-		verifyRevokeDelegateRedFixture(t, fix.name, fix.pattern)
+	// RED fixture self-check: each of the seven fixture packages must have ≥ 1 detected violation.
+	for _, fix := range fixtureCases {
+		require.GreaterOrEqual(t, fixtureViolationCount[fix.dir], 1,
+			"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
+				"Check that the fixture file has the correct deviation and is type-checkable.",
+			fix.label)
 	}
 }
 
@@ -299,28 +330,6 @@ func checkRevokeDelegateBody(body *ast.BlockStmt, methodName string, recvName st
 		return fmt.Sprintf("callee has %d plain-ident arg(s); want %d (some args are non-Ident expressions)", i, len(paramNames))
 	}
 	return ""
-}
-
-// verifyRevokeDelegateRedFixture loads fixtureName and asserts ≥ 1 violation
-// is detected. Fixture load failure is hard-fail: a fixture that stops
-// compiling silently disables the RED self-check.
-func verifyRevokeDelegateRedFixture(t *testing.T, label, pattern string) {
-	t.Helper()
-	var found int
-	_ = RunTyped(t, TypedOpts{Tests: false}, []string{pattern}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			found += len(scanRevokeDelegateViolations(p, file, rel))
-		}
-		return nil
-	})
-	require.GreaterOrEqual(t, found, 1,
-		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
-			"Check that the fixture file has the correct deviation and is type-checkable.",
-		label)
 }
 
 // ─── Blind-spot self-check tests ────────────────────────────────────────────

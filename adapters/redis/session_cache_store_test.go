@@ -580,15 +580,12 @@ func TestCachingSessionStore_Get_CorruptCacheEntry_DeletesAndFallsThrough(t *tes
 			"inner.getCalls==2 means corrupt entry was NOT deleted")
 }
 
-// TestNewCachingSessionStore_TypedNilInner_Rejected — T3 RED test.
+// TestNewCachingSessionStore_TypedNilInner_Rejected — T3.
 //
 // A typed-nil session.Store interface (concrete type is non-nil, pointer value
 // is nil) must be rejected at construction time with errcode.ErrValidationFailed.
-//
-// Current code (session_cache_store.go:125) uses `inner == nil` which evaluates
-// to false for typed-nil interfaces — the nil-pointer panic is deferred to the
-// first method call. This test FAILS on develop tip — that is the intentional
-// RED state. The GREEN fix replaces the check with validation.IsNilInterface(inner).
+// NewCachingSessionStore uses validation.IsNilInterface(inner) so a typed-nil
+// fails the constructor instead of deferring a nil-pointer panic to first use.
 func TestNewCachingSessionStore_TypedNilInner_Rejected(t *testing.T) {
 	t.Parallel()
 	cache := mustNewCacheFromCmdable(t, newMockCmdable())
