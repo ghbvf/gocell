@@ -605,12 +605,15 @@ func (refreshUnavailableUserRepo) Delete(_ context.Context, _ string) error     
 func (refreshUnavailableUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }
+
 func (refreshUnavailableUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
 	return 0, nil
 }
+
 func (refreshUnavailableUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
+
 func (refreshUnavailableUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
