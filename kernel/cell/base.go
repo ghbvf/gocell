@@ -3,7 +3,6 @@ package cell
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -68,10 +67,6 @@ type BaseCell struct {
 	consumed []Contract
 	state    cellState
 
-	// requiredMode is parsed from meta.DurabilityMode at construction time.
-	// BaseCell.Init compares this against reg.DurabilityMode() and fails if mismatch.
-	requiredMode DurabilityMode
-
 	// shutdownCtx is created in Start and canceled in Stop.
 	// Goroutines spawned by the cell should use this context instead of
 	// context.Background() so they are properly canceled on shutdown.
@@ -116,15 +111,10 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 		}
 		level = lv
 	}
-	requiredMode, err := ParseDurabilityMode(meta.DurabilityMode)
-	if err != nil {
-		return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
-	}
 	return &BaseCell{
-		meta:         meta.Clone(),
-		cellType:     cellType,
-		level:        level,
-		requiredMode: requiredMode,
+		meta:     meta.Clone(),
+		cellType: cellType,
+		level:    level,
 	}, nil
 }
 
@@ -180,30 +170,13 @@ func (b *BaseCell) ConsumedContracts() []Contract {
 }
 
 // Init prepares the cell. Only allowed from the new or stopped state.
-// Performs an unconditional durability alignment check: reg.DurabilityMode()
-// must match the mode declared in cell.yaml (parsed into requiredMode at
-// construction; missing field defaults to DurabilityDemo, see ParseDurabilityMode).
-// Mismatch is a fail-fast error — fix: align cell.yaml durabilityMode with the
-// assembly's DurabilityMode (either change cell.yaml or change the assembly mode).
-func (b *BaseCell) Init(ctx context.Context, reg Registry) error {
+func (b *BaseCell) Init(_ context.Context, _ Registry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state != cellStateNew && b.state != cellStateStopped {
 		return errcode.New(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 			"cell Init requires state new or stopped",
 			errcode.WithInternal(fmt.Sprintf("cell=%q state=%d", b.meta.ID, b.state)))
-	}
-	if reg.DurabilityMode() != b.requiredMode {
-		return errcode.New(errcode.KindInvalid, errcode.ErrCellInvalidConfig,
-			"cell durability mode mismatch: cell.yaml declared mode does not match "+
-				"assembly runtime mode; "+
-				"fix: align cell.yaml durabilityMode with the assembly's DurabilityMode",
-			errcode.WithDetails(
-				slog.String("cell", b.meta.ID),
-				slog.String("declared", b.requiredMode.String()),
-				slog.String("runtime", reg.DurabilityMode().String()),
-			),
-		)
 	}
 	// Reset shutdown context from previous lifecycle to avoid stale cancellation.
 	if b.shutdownCancel != nil {

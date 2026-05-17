@@ -262,10 +262,11 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 	pgOutboxStore := adapterpg.NewOutboxStore(pg.pool.DB(), clock.Real())
 	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
 
-	// DurabilityDurable matches the cell.yaml declarations of accesscore /
-	// configcore / auditcore (all durable). The PG outbox relay above is the
-	// durable bridge between PG outbox_entries and the in-process eventbus.
-	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
+	// PG outbox relay above is the durable bridge between PG outbox_entries
+	// and the in-process eventbus. Assembly runs DurabilityDemo (matches
+	// develop baseline before PR-CFG-L2-DIVERGENCE introduced runtime alignment);
+	// noop tx/writer in configcore/auditcore is accepted under Demo mode.
+	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -433,8 +434,6 @@ func buildCells(
 	require.NoError(t, err)
 	configCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
 	require.NoError(t, err)
-	accessCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
-	require.NoError(t, err)
 
 	ac := accesscore.NewAccessCore(append(pg.storeOpts,
 		accesscore.WithClock(clock.Real()),
@@ -444,7 +443,6 @@ func buildCells(
 		accesscore.WithTxManager(persistence.WrapForCell(pg.txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(a.bootstrapMW),
-		accesscore.WithCursorCodec(accessCursorCodec),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
 	cc := configcore.NewConfigCore(

@@ -2,7 +2,6 @@ package cell
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -35,35 +34,6 @@ func (m DurabilityMode) String() string {
 		return "durable"
 	default:
 		return "unset"
-	}
-}
-
-// ParseDurabilityMode converts a cell.yaml durabilityMode string to the typed
-// DurabilityMode enum. Parsing is case-sensitive and rejects trailing/leading
-// whitespace — cell.yaml must declare exactly "demo" or "durable" when set.
-//
-// Empty string defaults to DurabilityDemo (fail-safe defaulting, K8s API
-// defaulting same pattern as PodSpec.RestartPolicy default "Always"). Rationale:
-// "cell.yaml missing durabilityMode" is equivalent to declaring demo — production
-// assemblies running DurabilityDurable will still fail-fast at BaseCell.Init
-// alignment, so this default cannot silently downgrade durability guarantees.
-// L2+ cells should still declare durabilityMode explicitly (OUTGUARD-01 advisory).
-//
-// ref: kernel/cell/durability.go String() — partial inverse (empty defaults)
-// ref: K8s API defaulting (PodSpec.RestartPolicy / DNSPolicy) — missing-field semantics
-func ParseDurabilityMode(s string) (DurabilityMode, error) {
-	switch s {
-	case "":
-		return DurabilityDemo, nil
-	case "demo":
-		return DurabilityDemo, nil
-	case "durable":
-		return DurabilityDurable, nil
-	default:
-		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			`cell.ParseDurabilityMode: must be "demo" or "durable"`,
-			errcode.WithDetails(slog.String("got", s)),
-		)
 	}
 }
 

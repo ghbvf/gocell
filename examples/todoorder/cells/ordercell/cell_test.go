@@ -173,28 +173,6 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	}
 }
 
-// TestOrderCell_DurableModeRejected verifies that Init fails fast when the
-// assembly runtime mode (DurabilityDurable) does not match the cell.yaml
-// declaration (durabilityMode: demo). Examples cells are demo-only; this
-// alignment check is enforced by BaseCell.Init.
-func TestOrderCell_DurableModeRejected(t *testing.T) {
-	c := NewOrderCell(
-		WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(demoTxRunner{})),
-	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code)
-	declared, ok := ecErr.FindAttr("declared")
-	require.True(t, ok, "expected 'declared' detail attr")
-	assert.Equal(t, "demo", declared.Value.String())
-	runtimeAttr, ok := ecErr.FindAttr("runtime")
-	require.True(t, ok, "expected 'runtime' detail attr")
-	assert.Equal(t, "durable", runtimeAttr.Value.String())
-}
-
 func TestOrderCell_DemoMode_AllowsNoopWriter(t *testing.T) {
 	c := NewOrderCell(
 		WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),

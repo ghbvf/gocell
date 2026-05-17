@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -154,14 +155,18 @@ func isNooperDep(dep any) bool {
 }
 
 // CellEmitterInputs bundles the Cell-side inputs for ResolveCellEmitter.
-// Embeds EmitterConfig and adds the pre-resolved emitter knob (WithEmitter)
-// shared by every Cell's Init-time emitter resolution.
+// Embeds EmitterConfig and adds the two knobs shared by every Cell's
+// Init-time emitter resolution: the pre-resolved emitter (WithEmitter) and
+// the Cell's consistency level (for the cellvocab.L2 non-durable Warn).
 type CellEmitterInputs struct {
 	EmitterConfig
 	// PreResolved is the emitter set directly via Cell.WithEmitter(e).
 	// When non-nil, ResolveCellEmitter skips ResolveEmitter and validates that
 	// durable mode requires a durable PreResolved (ReportDurable==true).
 	PreResolved outbox.Emitter
+	// ConsistencyLevel is the owning Cell's consistency level; used to decide
+	// whether the cellvocab.L2 non-durable Warn log fires.
+	ConsistencyLevel cellvocab.Level
 }
 
 // ResolveCellEmitter is the Cell-side wrapper around ResolveEmitter that
@@ -172,6 +177,9 @@ type CellEmitterInputs struct {
 //  2. PreResolved + durable mode requires a durable emitter; otherwise returns
 //     ErrCellMissingOutbox.
 //  3. Otherwise delegate to ResolveEmitter.
+//  4. When the resolved emitter is non-durable and the Cell's consistency
+//     level is cellvocab.L2 or higher, emit a Warn explaining the degraded atomicity
+//     guarantee. The log carries cell, consistency_level, durability_mode.
 //
 // Callers read outcome.Durable from the return value for any
 // composition-root decision that depends on the resolved durability mode.
@@ -203,5 +211,15 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 		outcome = resolved
 	}
 
+	if !outcome.Durable && in.ConsistencyLevel >= cellvocab.L2 {
+		logger := in.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Warn(in.CellID+": running without outboxWriter+txRunner, transactional atomicity not guaranteed (demo mode)",
+			slog.String("cell", in.CellID),
+			slog.Int("consistency_level", int(in.ConsistencyLevel)),
+			slog.String("durability_mode", in.Mode.String()))
+	}
 	return outcome, nil
 }

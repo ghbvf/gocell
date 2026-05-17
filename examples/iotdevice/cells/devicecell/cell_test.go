@@ -20,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -345,28 +344,6 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// TestDeviceCell_DurableModeRejected verifies that Init fails fast when the
-// assembly runtime mode (DurabilityDurable) does not match the cell.yaml
-// declaration (durabilityMode: demo). Examples cells are demo-only; this
-// alignment check is enforced by BaseCell.Init.
-func TestDeviceCell_DurableModeRejected(t *testing.T) {
-	c := NewDeviceCell(
-		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
-		WithClock(clock.Real()),
-	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code)
-	declared, ok := ecErr.FindAttr("declared")
-	require.True(t, ok, "expected 'declared' detail attr")
-	assert.Equal(t, "demo", declared.Value.String())
-	runtimeAttr, ok := ecErr.FindAttr("runtime")
-	require.True(t, ok, "expected 'runtime' detail attr")
-	assert.Equal(t, "durable", runtimeAttr.Value.String())
-}
 
 func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
 	// Uses DurabilityDemo (not DurabilityDurable) because InMemQueue is not
