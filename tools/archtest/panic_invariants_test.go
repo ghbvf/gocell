@@ -363,8 +363,10 @@ func TestPanicRegistered(t *testing.T) {
 	var violations []panicRegisteredViolation
 
 	for _, tagGroup := range KnownNonDefaultTags() {
-		// skip archtest_fixture — fixtures intentionally violate rules
-		if containsTag(tagGroup, "archtest_fixture") {
+		// skip archtest_fixture — fixtures intentionally violate rules.
+		// Tag identity uses FixtureBuildTag const (single source: fixture.go);
+		// PASS-FUNNEL-FIXTURE-TAG-01 forbids the bare literal at this call site.
+		if containsTag(tagGroup, FixtureBuildTag) {
 			continue
 		}
 		// RunTyped with "./..." loads the whole module; the rule scans

@@ -267,8 +267,8 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 // # AI-rebust: Medium
 //
 // Detection is type-aware (typeseval.ResolvePackageRef via *types.Info) and
-// covers all three import forms (qualified, alias, dot-import). The allowlist
-// is single-source (LegacyAllowlist) with cross-validation in
+// covers all three import forms (qualified, alias, dot-import). The exempt
+// set is single-source (passFunnelPermanentExempt) with cross-validation in
 // TestPassFunnelGuardListSync. Not Hard because Go allows arbitrary aliasing;
 // the detector requires *types.Info resolve rather than string-matching, so
 // it cannot be bypassed by renaming an import alias.

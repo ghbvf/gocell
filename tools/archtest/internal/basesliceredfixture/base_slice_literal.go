@@ -2,8 +2,9 @@
 
 // Package basesliceredfixture contains intentionally-violating forms for the
 // BASESLICE-CTOR-FUNNEL-01 archtest detector. Gated by the archtest_fixture
-// build tag (must agree with the "archtest_fixture" literal (single source:
-// RunTypedFixture helper in tools/archtest/fixture.go)).
+// build tag (must agree with the literal value of archtest.FixtureBuildTag
+// declared in tools/archtest/fixture.go; Go build-directive syntax cannot
+// reference a Go constant, so this file hard-codes the tag literal).
 //
 // This file exercises RED shape 2: a &cell.BaseSlice{} composite literal,
 // which sidesteps both the typed funnel and the metadata projection.

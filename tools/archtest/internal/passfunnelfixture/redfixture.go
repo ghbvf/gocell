@@ -4,11 +4,12 @@
 // point usages that exercise the PASS-FUNNEL-* meta-archtest detectors in
 // pass_funnel_test.go. Gated by the archtest_fixture build tag (kept as
 // a literal here because Go's //go:build syntax cannot reference Go
-// constants — must agree with the "archtest_fixture" literal (single source:
-// RunTypedFixture helper in tools/archtest/fixture.go)).
+// constants — must agree with the literal value of archtest.FixtureBuildTag
+// declared in tools/archtest/fixture.go).
 //
 // TestPassFunnel_FixtureCoverage loads this package with the
-// archtest_fixture tag via typeseval.SharedResolver and asserts each rule
+// archtest_fixture tag via typeseval.SharedResolver (framework self-test
+// exempt from PASS-FUNNEL-LOADPACKAGES-01) and asserts each rule
 // detector emits ≥ 1 diagnostic. Removing or modifying any of the
 // reference lines below turns one of the coverage assertions red — locking
 // the rule pipeline at the live-AST level rather than the data-snapshot
