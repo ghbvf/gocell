@@ -3,45 +3,20 @@
 // exported_error_new_fixtures_test.go — fixture-based regression tests for
 // EXPORTED-ERROR-NEW-01. Each subpackage under
 // testdata/exported_error_new_fixtures/ exercises one positive or boundary
-// case for the gate.
+// case for the gate. Expected violation counts are declared inline in each
+// fixture via spec.Violation() calls (one per expected diagnostic); the test
+// calls AssertDiagnosticCount to enforce got==CountViolationMarkers(pass).
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md G2
 package archtest
 
 import (
-	"fmt"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// runExportedErrorNewFixtureScan loads the fixture package at fixtureDir
-// and returns the sorted slice of "file.go:line: ..." violation strings
-// using the same walk + predicates as TestExportedErrorNew.
-func runExportedErrorNewFixtureScan(t *testing.T, fixtureDir string) []string {
-	t.Helper()
-	var violations []string
-	RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
-		func(p *Pass) []Diagnostic {
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				for _, d := range scanExportedErrorNewASTDiags(p.Fset, f, rel, p.TypesInfo) {
-					violations = append(violations, fmt.Sprintf("%s:%d: %s", d.Rel, d.Line, d.Message))
-				}
-			}
-			return nil
-		})
-	sort.Strings(violations)
-	return violations
-}
-
 // TestExportedErrorNewFixtures runs the gate scanner over each fixture
-// subpackage and asserts the expected violation lines.
+// subpackage and asserts the expected violation count via AssertDiagnosticCount.
 func TestExportedErrorNewFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -52,58 +27,35 @@ func TestExportedErrorNewFixtures(t *testing.T) {
 	fixturesBase := filepath.Join(root, "tools", "archtest", "testdata", "exported_error_new_fixtures")
 
 	cases := []struct {
-		pkg          string
-		wantViolLine []int // expected violation lines; nil = expect 0 violations
+		pkg string
 	}{
 		// Positive — must produce 0 violations.
-		{"unexported_var_passes", nil},
-		{"func_local_passes", nil},
-		{"errcode_wrap_passes", nil},
-		{"short_err_name_passes", nil},
+		{"unexported_var_passes"},
+		{"func_local_passes"},
+		{"errcode_wrap_passes"},
+		{"short_err_name_passes"},
 
-		// Negative — must produce exact violations.
-		{"exported_var_violates", []int{7}},
-		{"multiple_specs_violates", []int{9, 10}},
-		{"aliased_import_violates", []int{8}},
+		// Negative — expected diagnostic count declared via spec.Violation()
+		// in the fixture .go file (one call per expected violation).
+		{"exported_var_violates"},
+		{"multiple_specs_violates"},
+		{"aliased_import_violates"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.pkg, func(t *testing.T) {
 			t.Parallel()
 			fixtureDir := filepath.Join(fixturesBase, tc.pkg)
-			got := runExportedErrorNewFixtureScan(t, fixtureDir)
-
-			if len(tc.wantViolLine) == 0 {
-				assert.Empty(t, got,
-					"fixture %s: expected 0 violations, got %v", tc.pkg, got)
-				return
-			}
-
-			gotLines := violationLines(t, got)
-			wantLines := append([]int(nil), tc.wantViolLine...)
-			sort.Ints(gotLines)
-			sort.Ints(wantLines)
-			assert.Equal(t, wantLines, gotLines,
-				"fixture %s: expected violations on lines %v, got %v (raw: %v)",
-				tc.pkg, wantLines, gotLines, got)
+			RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+				func(p *Pass) []Diagnostic {
+					var got []Diagnostic
+					for _, f := range p.Files {
+						rel := p.Rel(f)
+						got = append(got, scanExportedErrorNewASTDiags(p.Fset, f, rel, p.TypesInfo)...)
+					}
+					AssertDiagnosticCount(t, "EXPORTED-ERROR-NEW-01", p, got)
+					return nil
+				})
 		})
 	}
-}
-
-// violationLines extracts the line number from "<rel-path>:<line>: ..." entries.
-// The rel-path prefix may include subdirectories if a fixture grows multiple files;
-// [^:]+ matches any non-colon prefix so the regex stays correct regardless of filename.
-var fixtureLineRe = regexp.MustCompile(`^[^:]+:(\d+):`)
-
-func violationLines(t *testing.T, raw []string) []int {
-	t.Helper()
-	out := make([]int, 0, len(raw))
-	for _, s := range raw {
-		m := fixtureLineRe.FindStringSubmatch(s)
-		require.Lenf(t, m, 2, "violation line did not match expected prefix: %q", s)
-		n, err := strconv.Atoi(m[1])
-		require.NoError(t, err)
-		out = append(out, n)
-	}
-	return out
 }
