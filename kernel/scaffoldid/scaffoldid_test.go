@@ -125,3 +125,51 @@ func TestScaffoldID_String(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, "foocell")
 	}
 }
+
+// IsZero reports whether the ScaffoldID carries a value. The zero value
+// (ScaffoldID{}) returns true; any value produced by Parse returns false.
+// This is the canonical check for "spec field was not set via flag binding".
+func TestScaffoldID_IsZero(t *testing.T) {
+	t.Parallel()
+	var zero scaffoldid.ScaffoldID
+	if !zero.IsZero() {
+		t.Error("ScaffoldID{}.IsZero() = false, want true")
+	}
+	if zero.String() != "" {
+		t.Errorf("zero ScaffoldID.String() = %q, want \"\"", zero.String())
+	}
+	parsed, err := scaffoldid.Parse("foocell")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if parsed.IsZero() {
+		t.Error("non-zero ScaffoldID.IsZero() = true, want false")
+	}
+}
+
+// MustParse returns a typed ScaffoldID for known-valid input — mirror of
+// regexp.MustCompile / template.Must. Used for package-level fixture vars.
+func TestMustParse_AcceptsValid(t *testing.T) {
+	t.Parallel()
+	id := scaffoldid.MustParse("foocell")
+	if id.String() != "foocell" {
+		t.Errorf("MustParse(%q).String() = %q, want %q", "foocell", id.String(), "foocell")
+	}
+}
+
+// MustParse panics for invalid input via the panicregister.Approved funnel
+// (PANIC-REGISTERED-01). Test fixtures rely on this fail-fast so a typo'd
+// literal surfaces immediately, not as a silent zero value.
+func TestMustParse_PanicsOnInvalid(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("MustParse(invalid) should panic, but did not")
+		}
+		// The panic payload is wrapped via panicregister.Approved → the value
+		// is the inner errcode.Assertion. Just assert recovery; the exact
+		// payload shape is covered by PANIC-REGISTERED-01 archtest.
+	}()
+	_ = scaffoldid.MustParse("Bad-ID")
+}
