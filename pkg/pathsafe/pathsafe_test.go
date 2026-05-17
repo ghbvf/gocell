@@ -1187,21 +1187,27 @@ type forceOverwriteParityCase struct {
 	wantReject bool
 }
 
-func setupRegularFile(t *testing.T, abs string) {
+// parity-case helpers — prefix disambiguates from setupSymlinkInRoot /
+// setupSymlinkOutOfRoot (TestContainPath fixtures) which have a different
+// signature and a different semantic domain.
+
+func parityCaseSetupAbsent(t *testing.T, _ string) { t.Helper() }
+
+func parityCaseSetupRegularFile(t *testing.T, abs string) {
 	t.Helper()
 	if err := os.WriteFile(abs, []byte("// old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func setupSymlink(t *testing.T, abs string) {
+func parityCaseSetupSymlink(t *testing.T, abs string) {
 	t.Helper()
 	if err := os.Symlink(filepath.Join(t.TempDir(), "x"), abs); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func setupDirectory(t *testing.T, abs string) {
+func parityCaseSetupDirectory(t *testing.T, abs string) {
 	t.Helper()
 	if err := os.Mkdir(abs, 0o755); err != nil {
 		t.Fatal(err)
@@ -1211,10 +1217,11 @@ func setupDirectory(t *testing.T, abs string) {
 // runForceOverwriteParityCase exercises one ForceOverwrite kind in dry and
 // live modes and asserts the two outcomes agree. Extracted from
 // TestWritePlannedFiles_ForceOverwrite_DryRunLiveParity to keep cognitive
-// complexity below the project limit.
+// complexity below the project limit. Parallelism is controlled by the
+// caller (`t.Parallel()` in the t.Run inline func) — this helper only owns
+// the per-case execution logic.
 func runForceOverwriteParityCase(t *testing.T, tc forceOverwriteParityCase) {
 	t.Helper()
-	t.Parallel()
 
 	// Two independent roots so the live write of one case cannot perturb
 	// the dry-run of another.
@@ -1258,13 +1265,16 @@ func TestWritePlannedFiles_ForceOverwrite_DryRunLiveParity(t *testing.T) {
 		t.Skip("inode-kind / symlink semantics differ on windows")
 	}
 	cases := []forceOverwriteParityCase{
-		{name: "absent", setup: func(*testing.T, string) {}, wantReject: false},
-		{name: "regular_file", setup: setupRegularFile, wantReject: false},
-		{name: "symlink", setup: setupSymlink, wantReject: false},
-		{name: "directory", setup: setupDirectory, wantReject: true},
+		{name: "absent", setup: parityCaseSetupAbsent, wantReject: false},
+		{name: "regular_file", setup: parityCaseSetupRegularFile, wantReject: false},
+		{name: "symlink", setup: parityCaseSetupSymlink, wantReject: false},
+		{name: "directory", setup: parityCaseSetupDirectory, wantReject: true},
 	}
 	for _, tc := range cases {
 		tc := tc
-		t.Run(tc.name, func(t *testing.T) { runForceOverwriteParityCase(t, tc) })
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runForceOverwriteParityCase(t, tc)
+		})
 	}
 }
