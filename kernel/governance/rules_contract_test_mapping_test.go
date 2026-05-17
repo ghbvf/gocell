@@ -186,8 +186,10 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesContract(t *testing.T) 
 		ID:        exampleID,
 		Kind:      "http",
 		Lifecycle: "active",
-		Endpoints: metadata.EndpointsMeta{Server: "ordercell",
-			HTTP: &metadata.HTTPTransportMeta{Method: "POST", Path: "/api/v1/orders", SuccessStatus: 201}},
+		Endpoints: metadata.EndpointsMeta{
+			Server: "ordercell",
+			HTTP:   &metadata.HTTPTransportMeta{Method: "POST", Path: "/api/v1/orders", SuccessStatus: 201},
+		},
 		Dir:  "examples/todoorder/contracts/http/todo/order/create/v1",
 		File: "examples/todoorder/contracts/http/todo/order/create/v1/contract.yaml",
 	}

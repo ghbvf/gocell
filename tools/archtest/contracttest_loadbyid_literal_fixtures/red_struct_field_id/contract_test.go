@@ -3,6 +3,7 @@
 // Package redstructfieldid_test is a RED fixture for
 // CONTRACTTEST-LOADBYID-LITERAL-01. It exercises two regressions in a single
 // fixture:
+//
 //   - same-package bare LoadByID detection (the *ast.Ident branch of
 //     isLoadByIDCall) — to make this fixture trigger the same-package code
 //     path, the call goes through a tiny shim that imports tests/contracttest
@@ -13,6 +14,7 @@
 //     A real same-package case lives in tests/contracttest/error_response_test.go
 //     after the F5 fix and is enforced by the main rule; this fixture proves
 //     the EvaluateConstString rejection of struct-field-access arguments.
+//
 //   - EvaluateConstString rejection of runtime field access (tt.contractID).
 //
 // The archtest MUST report ≥1 violation against the table case below.
