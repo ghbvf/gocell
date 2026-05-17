@@ -25,6 +25,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -2613,7 +2614,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -2712,7 +2713,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3122,7 +3123,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3170,7 +3171,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 		// F3: public routes are declared via auth.MustMount(Public:true) in the cell.
@@ -3234,7 +3235,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3283,7 +3284,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3315,7 +3316,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3348,7 +3349,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 		// F3: public routes declared via auth.MustMount(Public:true) in authProviderCell.
@@ -3716,7 +3717,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
 		WithShutdownTimeout(testtime.D2s),
@@ -3864,7 +3865,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -4320,7 +4321,7 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})}),
+			[]cell.ListenerAuth{celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 

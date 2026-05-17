@@ -47,6 +47,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -145,7 +146,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	}, intClock, nil)
 	require.NoError(t, err)
 
-	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	ks, _, _ := authtest.MustNewKeySet(clock.Real())
 
 	require.NotEmpty(t, cfg.verifierAuds, "loginAndGetPair: verifierAuds must not be empty; use withVerifierAuds(\"gocell\") or similar")
 

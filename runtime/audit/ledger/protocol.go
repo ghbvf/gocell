@@ -9,7 +9,6 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -302,18 +301,4 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 			"audit ledger protocol: idempotency mode required (use WithIdempotency)")
 	}
 	return p, nil
-}
-
-// MustNewProtocol is the composition-root convenience wrapper around
-// NewProtocol. It panics on validation failure to surface misconfiguration at
-// process startup. Use only from cmd/* (composition root); cells must consume
-// an injected *Protocol.
-func MustNewProtocol(opts ...Option) *Protocol {
-	p, err := NewProtocol(opts...)
-	if err != nil {
-		// B 类 panic（参数约定违反，编程错误）：composition-root 静态字面量配错；
-		// Must* 是 fail-fast 包装，在进程启动时立刻暴露配置错误。
-		panic(panicregister.Approved("audit-ledger-protocol-init", errcode.Assertion("audit-ledger: protocol construction failed: %v", err)))
-	}
-	return p
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 )
 
 // setTestJWTKeyEnv installs a PEM-encoded RSA key pair into GOCELL_JWT_PRIVATE_KEY /
@@ -34,7 +35,7 @@ import (
 // Returns nothing: state is restored by t.Setenv at the end of the test.
 func setTestJWTKeyEnv(t *testing.T) {
 	t.Helper()
-	priv, pub := auth.MustGenerateTestKeyPair()
+	priv, pub := authtest.MustGenerateKeyPair()
 	privPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(priv),
@@ -164,7 +165,7 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongKey(t *testing.T) {
 
 	// Build a completely independent keyset — deps.verifier has no public key
 	// matching this kid, so verification must fail at the signature step.
-	strangerKS, _, _ := auth.MustNewTestKeySet(clock.Real())
+	strangerKS, _, _ := authtest.MustNewKeySet(clock.Real())
 	stranger, err := auth.NewJWTIssuer(strangerKS, "prod-iss", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)

@@ -50,12 +50,14 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -178,7 +180,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// --- Step 5: Assemble cells ---
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := authtest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
@@ -242,7 +244,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithClock(asm.Clock()),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
@@ -498,7 +500,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// --- Step 5: Assemble cells ---
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := authtest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
@@ -562,7 +564,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithClock(asm.Clock()),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),

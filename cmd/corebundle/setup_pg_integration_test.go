@@ -27,6 +27,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -34,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -92,7 +94,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := authtest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
@@ -163,7 +165,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -404,7 +406,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		mw:         func(h http.Handler) http.Handler { return h },
 	}
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := authtest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
@@ -476,7 +478,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
 			buildInternalAuthChain(internalGuardForHarness),

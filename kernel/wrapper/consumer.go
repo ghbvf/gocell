@@ -8,8 +8,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -70,7 +68,8 @@ func defaultEventSpanName(spec contractspec.ContractSpec) string {
 //
 // Returns a non-nil error when fn is nil, spec.Kind != "event", or
 // spec.Validate fails. Callers that want to fail-fast at composition time
-// should use MustWrapConsumer.
+// should propagate the error to bootstrap; tests use the local wrapOrFatal
+// helper in wrapper_test (no production Must variant exists).
 func WrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) (ConsumerFunc, error) {
 	if fn == nil {
 		return nil, fmt.Errorf("wrapper.WrapConsumer: fn must not be nil")
@@ -123,18 +122,6 @@ func WrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) (C
 		span.End()
 		return res
 	}, nil
-}
-
-// MustWrapConsumer is the composition-root fail-fast variant of WrapConsumer.
-// It panics when WrapConsumer returns an error. Suitable for static wiring
-// where the spec is a build-time literal; use WrapConsumer directly when the
-// spec is data-driven.
-func MustWrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) ConsumerFunc {
-	c, err := WrapConsumer(tr, spec, fn)
-	if err != nil {
-		panic(panicregister.Approved("wrapper-consumer-init", errcode.Assertion("wrapper: consumer: %v", err)))
-	}
-	return c
 }
 
 // recordErr calls span.RecordError on the redacted form of err, falling back

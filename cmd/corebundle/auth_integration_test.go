@@ -21,6 +21,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -28,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/state/cas"
@@ -57,7 +59,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set up JWT key pair (same as main.go dev mode).
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := authtest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
@@ -123,7 +125,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
@@ -268,7 +270,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	require.NoError(t, err)
 
 	// JWT key pair for auth middleware.
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := authtest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "guard-test", testtime.D15min, clock.Real(),
@@ -349,11 +351,11 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// cell.Policy (round-3 collapse) and resolves the verifier lazily at phase4.
 	_ = guard // guard is superseded by PolicyServiceToken below
 	internalLn := newCorebundleLocalListener(t)
-	internalAuthChain := []cell.ListenerAuth{cell.MustNewAuthServiceToken(nonceStore, ring)}
+	internalAuthChain := []cell.ListenerAuth{celltest.MustAuthServiceToken(nonceStore, ring)}
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain,
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -518,7 +520,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 
 	// JWT key pair.
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := authtest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "health-test", testtime.D15min, clock.Real(),
@@ -580,7 +582,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),
 		withCorebundleTestInternalListener(t, internalLn),
 		// HealthListener declared explicitly — /healthz, /readyz move here.

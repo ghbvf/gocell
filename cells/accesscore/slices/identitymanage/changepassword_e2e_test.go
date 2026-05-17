@@ -45,13 +45,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // e2eTestKeySet holds a key pair shared across the e2e test.
-var e2eTestKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
+var e2eTestKeySet, _, _ = authtest.MustNewKeySet(clock.Real())
 
 // e2eIssuer is used by the login service.
 // WithIssuerAudiencesFromSlice(["gocell"]) must match the e2eVerifier's

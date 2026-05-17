@@ -4,6 +4,8 @@
 package sessiontest
 
 import (
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -19,13 +21,17 @@ import (
 // function rather than re-implementing the option list and tripping the
 // archtest.
 //
-// Panics on misconfiguration the same way MustNewProtocol does: this helper
-// is meant for tests where a non-recoverable Protocol setup is a programmer
-// error, not a runtime path.
+// Panics on misconfiguration: this helper is meant for tests where a
+// non-recoverable Protocol setup is a programmer error, not a runtime path.
 func Protocol() *session.Protocol {
-	return session.MustNewProtocol(
+	p, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	if err != nil {
+		panic(panicregister.Approved("sessiontest-protocol-init",
+			errcode.Assertion("sessiontest: protocol construction failed: %v", err)))
+	}
+	return p
 }

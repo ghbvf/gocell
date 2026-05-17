@@ -16,7 +16,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // MinRSAKeyBits is the minimum RSA key size accepted by the auth package.
@@ -249,28 +248,21 @@ func (ks *KeySet) PruneExpired() {
 	ks.verificationKeys = remaining
 }
 
-// MustGenerateTestKeyPair generates a 2048-bit RSA key pair for testing and
-// examples. It panics on error, following the Go test helper convention.
-// Production code should use LoadKeySetFromEnv to load keys from configuration.
-func MustGenerateTestKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
+// GenerateRSAKeyPair generates a 2048-bit RSA key pair. Returns an error
+// when the RNG fails (effectively never on normal systems, but the API is
+// error-first so dev-mode composition roots can propagate the failure
+// instead of panicking). Test code should prefer `runtime/auth/authtest`
+// helpers which wrap this with the test-fixture convenience semantics.
+//
+// Production callers must NOT rely on this for persistent keys —
+// ephemeral keys invalidate all issued tokens on process restart. Use
+// LoadKeySetFromEnv to load persistent RSA material from configuration.
+func GenerateRSAKeyPair() (*rsa.PrivateKey, *rsa.PublicKey, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		panic(panicregister.Approved("auth-test-rsa-keypair", errcode.Assertion("auth: failed to generate test RSA key pair: %v", err)))
+		return nil, nil, fmt.Errorf("auth: generate RSA key pair: %w", err)
 	}
-	return priv, &priv.PublicKey
-}
-
-// MustNewTestKeySet creates a KeySet from a freshly generated 2048-bit RSA
-// key pair. It panics on error. Intended for test setup and examples only.
-// clk is the clock used for key expiry checks; pass clock.Real() from the
-// composition root or clockmock.New(...) for time-controlled tests.
-func MustNewTestKeySet(clk clock.Clock) (*KeySet, *rsa.PrivateKey, *rsa.PublicKey) {
-	priv, pub := MustGenerateTestKeyPair()
-	ks, err := NewKeySet(priv, pub, clk)
-	if err != nil {
-		panic(panicregister.Approved("auth-test-keyset", errcode.Assertion("auth: failed to create test key set: %v", err)))
-	}
-	return ks, priv, pub
+	return priv, &priv.PublicKey, nil
 }
 
 // LoadRSAKeyPairFromPEM parses PEM-encoded RSA private and public keys.

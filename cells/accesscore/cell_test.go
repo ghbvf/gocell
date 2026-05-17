@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -60,7 +61,7 @@ var _ outbox.Writer = durableOutboxWriter{}
 const testPassword = "secret123"
 
 var (
-	testKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
+	testKeySet, _, _ = authtest.MustNewKeySet(clock.Real())
 	testIssuer       = mustIssuer(testKeySet)
 	testVerifier     = mustVerifier(testKeySet)
 	testCursorCodec  = mustCursorCodec()

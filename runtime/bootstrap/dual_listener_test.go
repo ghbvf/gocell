@@ -22,6 +22,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -125,7 +126,7 @@ func testInternalAuthChain(t *testing.T) ([]cell.ListenerAuth, *auth.HMACKeyRing
 	require.NoError(t, err)
 	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	return []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)}, ring
+	return []cell.ListenerAuth{celltest.MustAuthServiceToken(store, ring)}, ring
 }
 
 func getWithServiceToken(t *testing.T, rawURL string, ring *auth.HMACKeyRing) *http.Response {

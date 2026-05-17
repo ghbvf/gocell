@@ -142,6 +142,7 @@ var testFixturePkgPrefixes = []string{
 	"runtime/auth/authtest",
 	"runtime/audit/ledger/storetest",
 	"cells/internal/testoutbox",
+	"kernel/cell/celltest",
 	// tools/archtest/testdata fixtures used by other archtests (panic_registered etc.)
 	"tools/archtest/testdata",
 }

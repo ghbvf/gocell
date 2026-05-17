@@ -67,12 +67,15 @@ func (AuditCoreModule) Provide(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("auditcore namespace: %w", err)
 	}
-	protocol := ledger.MustNewProtocol(
+	protocol, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(hmacKey),
 		ledger.WithNamespace(auditNamespace),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("auditcore ledger protocol: %w", err)
+	}
 	// F7: Zero the HMAC key local variable after Protocol construction.
 	// WithChainHMAC already zeroes the caller's slice internally; this is a
 	// belt-and-suspenders clear for any residual local reference.

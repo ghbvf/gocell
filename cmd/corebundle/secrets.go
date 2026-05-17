@@ -27,7 +27,10 @@ func loadKeySet(adapterMode string, clk clock.Clock) (*auth.KeySet, error) {
 		return nil, fmt.Errorf("real adapter mode requires JWT key env vars: %w", err)
 	}
 	// Dev mode: ephemeral keys (acceptable for development only).
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey, err := auth.GenerateRSAKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("dev mode ephemeral key pair: %w", err)
+	}
 	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
 	return auth.NewKeySet(privKey, pubKey, clk)
 }

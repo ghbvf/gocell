@@ -39,7 +39,8 @@ func TestHTTPHandler_WritesContractIDIntoContext(t *testing.T) {
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen, _ = ctxkeys.ContractIDFrom(r.Context())
 	})
-	h := wrapper.MustHTTPHandler(loginSpec(), inner)
+	h, err := wrapper.HTTPHandler(loginSpec(), inner)
+	require.NoError(t, err)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	assert.Equal(t, "http.auth.login.v1", seen)
@@ -52,7 +53,8 @@ func TestHTTPHandler_AppendsContractAttrsToCarrier(t *testing.T) {
 	t.Parallel()
 	carrier := &wrapper.AttrCarrier{}
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {})
-	h := wrapper.MustHTTPHandler(loginSpec(), inner)
+	h, err := wrapper.HTTPHandler(loginSpec(), inner)
+	require.NoError(t, err)
 
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil).
 		WithContext(wrapper.WithAttrCarrier(context.Background(), carrier))
@@ -79,7 +81,8 @@ func TestHTTPHandler_NoCarrier_StillInvokesInner(t *testing.T) {
 		called = true
 		w.WriteHeader(200)
 	})
-	h := wrapper.MustHTTPHandler(loginSpec(), inner)
+	h, err := wrapper.HTTPHandler(loginSpec(), inner)
+	require.NoError(t, err)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -117,16 +120,6 @@ func TestHTTPHandler_ReturnsErrorOnNonHTTPKind(t *testing.T) {
 		ID: "event.x.v1", Kind: cellvocab.ContractEvent, Transport: "amqp", Topic: "x",
 	}, okHandler(200))
 	require.Error(t, err)
-}
-
-// TestMustHTTPHandler_PanicsOnNilHandler asserts the Must wrapper panics on
-// the same misuse where HTTPHandler returns error.
-func TestMustHTTPHandler_PanicsOnNilHandler(t *testing.T) {
-	t.Parallel()
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on nil handler")
-	}()
-	_ = wrapper.MustHTTPHandler(loginSpec(), nil)
 }
 
 // TestAttrCarrier_Nil_ReturnsCtxUnchanged ensures WithAttrCarrier(nil) is a

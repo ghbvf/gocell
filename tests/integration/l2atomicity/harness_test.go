@@ -27,6 +27,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -36,6 +37,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -375,7 +377,7 @@ func buildAuthLayer(t *testing.T) *authLayer {
 	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := authtest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
@@ -480,10 +482,10 @@ func runBootstrap(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(a.nonceStore, a.ring)},
+			[]cell.ListenerAuth{celltest.MustAuthServiceToken(a.nonceStore, a.ring)},
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),

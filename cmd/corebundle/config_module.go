@@ -136,9 +136,12 @@ func (m ConfigCoreModule) Provide(
 
 	// CAS protocol: declares the version-field name and conflict policy used by
 	// all 6 CAS write paths in configcore (config Update/Delete/Rollback +
-	// flag Update/Toggle/Delete). MustNewProtocol is the composition-root-only
+	// flag Update/Toggle/Delete). NewProtocol is the composition-root-only
 	// constructor (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces this).
-	casProto := cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))
+	casProto, err := cas.NewProtocol(cas.WithVersionField(configcore.VersionField))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("configcore cas protocol: %w", err)
+	}
 
 	baseOpts := []configcore.Option{
 		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
