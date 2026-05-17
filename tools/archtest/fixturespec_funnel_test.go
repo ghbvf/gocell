@@ -95,7 +95,7 @@
 //     len(got)==CountViolationMarkers(pass) and nothing more. A regression
 //     that drops one real diagnostic + adds one spurious diagnostic leaves
 //     len(got) unchanged and passes silently. Position/message binding
-//     (analogue of x/tools/analysistest `// want "regex"` markers) is the
+//     (analog of x/tools/analysistest `// want "regex"` markers) is the
 //     Hard upgrade tracked at backlog item
 //     FIXTURESPEC-DIAGNOSTIC-POSITION-BINDING-01 (PR #557 review fix-5).
 //
@@ -222,7 +222,7 @@ func TestFixturespecViolationCallerAllowlist(t *testing.T) {
 // PR #557 review fix-6: satisfaction scope was collapsed from file to
 // FuncDecl with 1-hop helper expansion. A single migrated test in the file
 // no longer exempts adjacent unmigrated tests; helpers that share an assert
-// across a TestX/runHelper pair are still recognised via the 1-hop walk.
+// across a TestX/runHelper pair are still recognized via the 1-hop walk.
 // Per-FuncDecl logic lives in scanFuncDeclsMissingAssertOrOptOut so it can
 // be unit-tested independently of the loader-bound rule.
 func TestFixturespecCountMatchEnforced(t *testing.T) {
@@ -264,63 +264,12 @@ func TestFixturespecCountMatchEnforced(t *testing.T) {
 	Report(t, "FIXTURESPEC-COUNT-MATCH-ENFORCED-01", diags)
 }
 
-// fileHasFixtureLoader reports whether f contains at least one CallExpr
-// whose callee resolves (via info) to one of the four archtest fixture-load
-// entries (Run / RunTyped / RunTypedDir / RunTypedFixture).
-func fileHasFixtureLoader(info *types.Info, f *ast.File) bool {
-	var found bool
-	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
-		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-		if !ok || pkgPath != archtestPkgPath {
-			return
-		}
-		switch name {
-		case fixtureLoaderRun, fixtureLoaderRunTyped,
-			fixtureLoaderRunTypedDir, fixtureLoaderRunTypedFixture:
-			found = true
-		}
-	})
-	return found
-}
-
-// findHardcodedLineField walks f for *ast.StructType field declarations
-// whose name ∈ hardcodedLineFieldNames AND whose Type is `[]int`. Returns
-// the matched name + the field's *ast.Field node, or ("", nil) if absent.
-// Caller derives line via fset.Position(node.Pos()).Line.
-//
-// The `[]int` shape check accepts only the literal slice-of-int form
-// (ArrayType with no Len + Ident Elt "int"). Aliased types (`type Lines
-// []int`; `wantLines Lines`) are intentionally not matched — broader
-// detection is the Hard upgrade tracked in backlog
-// FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01.
-func findHardcodedLineField(f *ast.File) (string, *ast.Field) {
-	var name string
-	var node *ast.Field
-	EachInSubtree[ast.StructType](f, func(st *ast.StructType) {
-		if name != "" || st.Fields == nil {
-			return
-		}
-		for _, field := range st.Fields.List {
-			if !isIntSliceType(field.Type) {
-				continue
-			}
-			for _, ident := range field.Names {
-				if hardcodedLineFieldNames[ident.Name] {
-					name = ident.Name
-					node = field
-					return
-				}
-			}
-		}
-	})
-	return name, node
-}
-
 // isIntSliceType reports whether expr denotes the literal `[]int` type
-// (ArrayType with no Len + element type Ident "int").
+// (ArrayType with no Len + element type Ident "int"). Shared between the
+// FuncDecl-level scanner and the structural shape check for hardcoded line
+// fields. Aliased types (`type Lines []int`; `wantLines Lines`) are
+// intentionally not matched — broader detection is the Hard upgrade
+// tracked in backlog FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01.
 func isIntSliceType(expr ast.Expr) bool {
 	arr, ok := expr.(*ast.ArrayType)
 	if !ok || arr.Len != nil {
@@ -328,25 +277,6 @@ func isIntSliceType(expr ast.Expr) bool {
 	}
 	ident, ok := arr.Elt.(*ast.Ident)
 	return ok && ident.Name == "int"
-}
-
-// fileHasAssertOrOptOut reports whether f contains a CallExpr whose callee
-// resolves to archtest.AssertDiagnosticCount or archtest.NoDiagnosticAssertion.
-func fileHasAssertOrOptOut(info *types.Info, f *ast.File) bool {
-	var ok bool
-	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		if ok {
-			return
-		}
-		pkgPath, name, resolved := ResolvePackageRef(info, call.Fun)
-		if !resolved || pkgPath != archtestPkgPath {
-			return
-		}
-		if name == assertDiagnosticCountName || name == noDiagnosticAssertionName {
-			ok = true
-		}
-	})
-	return ok
 }
 
 // scanFuncDeclsMissingAssertOrOptOut returns the *ast.FuncDecl entries in f

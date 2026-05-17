@@ -76,7 +76,7 @@ func CountViolationMarkers(pass *Pass) int {
 // fields of got are never compared to authoritative expected positions.
 // A regression that drops one true diagnostic and emits one spurious
 // diagnostic near it leaves len unchanged and passes silently. Position
-// binding (analogue of x/tools/analysistest `// want "regex"` markers) is
+// binding (analog of x/tools/analysistest `// want "regex"` markers) is
 // the Hard upgrade tracked at backlog FIXTURESPEC-DIAGNOSTIC-POSITION-BINDING-01.
 func AssertDiagnosticCount(t testing.TB, ruleID string, pass *Pass, got []Diagnostic) {
 	t.Helper()
