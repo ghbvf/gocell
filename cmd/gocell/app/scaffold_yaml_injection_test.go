@@ -47,9 +47,7 @@ func TestScaffoldSlice_YAMLSafeQuote_ColonInCellID(t *testing.T) {
 	if err != nil {
 		// If validateScaffoldID is tightened, the test simply skips by checking
 		// the error message — acceptable RED behavior.
-		if strings.Contains(err.Error(), "path traversal") ||
-			strings.Contains(err.Error(), "forbidden") ||
-			strings.Contains(err.Error(), "invalid") {
+		if isValidatorRejection(err) {
 			t.Skipf("validateScaffoldID rejected colon — YAML injection test not applicable: %v", err)
 		}
 		t.Fatalf("scaffoldSlice(evil:abc cell): %v", err)
@@ -101,9 +99,7 @@ func TestScaffoldContract_YAMLSafeQuote_BraceInOwner(t *testing.T) {
 		"--owner={evil}",
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "path traversal") ||
-			strings.Contains(err.Error(), "forbidden") ||
-			strings.Contains(err.Error(), "invalid") {
+		if isValidatorRejection(err) {
 			t.Skipf("validateScaffoldID rejected brace — YAML injection test not applicable: %v", err)
 		}
 		t.Fatalf("scaffoldContract({evil} owner): %v", err)
@@ -148,7 +144,7 @@ func TestScaffoldJourney_YAMLSafeQuote_ColonInGoal(t *testing.T) {
 		"--cells=mycell",
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "forbidden") || strings.Contains(err.Error(), "invalid") {
+		if isValidatorRejection(err) {
 			t.Skipf("validateScaffoldText rejected colon in goal: %v", err)
 		}
 		t.Fatalf("scaffoldJourney(colon goal): %v", err)
@@ -192,7 +188,7 @@ func TestScaffoldAssembly_YAMLSafeQuote_ColonInTeam(t *testing.T) {
 		"--role=maintainer",
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "forbidden") || strings.Contains(err.Error(), "invalid") {
+		if isValidatorRejection(err) {
 			t.Skipf("validation rejected colon in team: %v", err)
 		}
 		t.Fatalf("scaffoldAssembly(colon team): %v", err)
@@ -221,4 +217,30 @@ func TestScaffoldAssembly_YAMLSafeQuote_ColonInTeam(t *testing.T) {
 	if teamVal != teamWithColon {
 		t.Errorf("owner.team = %v, want %q\ncontent:\n%s", teamVal, teamWithColon, data)
 	}
+}
+
+// isValidatorRejection reports whether err comes from any flag-validation layer
+// that pre-empts the scaffold render — covering both the legacy
+// validateScaffoldID / validateScaffoldText paths and the upgraded
+// scaffoldid.Parse typed funnel (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). YAML
+// injection fixtures use this to skip when the input is rejected upstream
+// before the inline template would have a chance to emit the unsafe scalar.
+func isValidatorRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"path traversal",
+		"forbidden",
+		"invalid",
+		"AssemblyIDPattern",
+		"ERR_SCAFFOLD_INVALID_OPTS",
+		"ERR_VALIDATION_FAILED",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }

@@ -19,7 +19,7 @@ import (
 func TestScaffoldCell_OutputIsGofumptClean(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:     "fmtcell",
+		CellID:     mustID(t, "fmtcell"),
 		StructName: "FmtCell",
 		Package:    "fmtcell",
 		ModulePath: "github.com/example/myproject",

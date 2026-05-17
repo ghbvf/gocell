@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/registry"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/yamlsafe"
 )
 
@@ -114,11 +115,15 @@ type modulesContext struct {
 // single PlanAssemblyScaffold method composes the full assembly bundle without a new
 // subpackage.
 type AssemblyScaffoldSpec struct {
-	// ID is the assembly identifier (e.g. "myassembly"). Required.
-	ID string
+	// ID is the assembly identifier (e.g. "myassembly"). Required. Typed so the
+	// (^[a-z][a-z0-9]+$) constraint is established at construction time via
+	// scaffoldid.Parse — callers cannot supply an unvalidated raw string
+	// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01).
+	ID scaffoldid.ScaffoldID
 	// Cells lists the cell IDs that compose this assembly, in startup order.
-	// Each entry must reference an existing cells/{cellID}/cell.yaml.
-	Cells []string
+	// Each entry must reference an existing cells/{cellID}/cell.yaml. Typed
+	// for the same reason as ID.
+	Cells []scaffoldid.ScaffoldID
 	// OwnerTeam, OwnerRole identify the maintainers of this assembly.
 	// Both required; written verbatim to assembly.yaml owner.
 	OwnerTeam string
@@ -256,7 +261,7 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 // Each cell in spec.Cells must exist in g.project.Cells.
 //
 // K#10 derived files are produced by in-memory injection of a synthesized
-// metadata.AssemblyMeta into g.project.Assemblies[spec.ID] before calling
+// metadata.AssemblyMeta into g.project.Assemblies[spec.ID.String()] before calling
 // GenerateModulesGen / GenerateEntrypoint / GenerateBoundary; injection is
 // reverted before return so the Generator stays idempotent across calls.
 //
@@ -281,8 +286,8 @@ func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.
 			"assembly.Generator.PlanAssemblyScaffold: resolve project root", err)
 	}
 
-	asmDir := filepath.Join("assemblies", spec.ID)
-	cmdDir := filepath.Join("cmd", spec.ID)
+	asmDir := filepath.Join("assemblies", spec.ID.String())
+	cmdDir := filepath.Join("cmd", spec.ID.String())
 
 	templateFiles := []scaffoldAssemblyFile{
 		{Path: filepath.Join(asmDir, "assembly.yaml"), Template: "scaffold-assembly-yaml.tpl"},
@@ -313,13 +318,13 @@ func (g *Generator) appendGeneratedFiles(
 ) ([]pathsafe.PlannedFile, error) {
 	// In-memory inject synthesized AssemblyMeta so Generate* see the new assembly.
 	synth := synthesizeAssemblyMeta(spec)
-	prior, hadPrior := g.project.Assemblies[spec.ID]
-	g.project.Assemblies[spec.ID] = synth
+	prior, hadPrior := g.project.Assemblies[spec.ID.String()]
+	g.project.Assemblies[spec.ID.String()] = synth
 	defer func() {
 		if hadPrior {
-			g.project.Assemblies[spec.ID] = prior
+			g.project.Assemblies[spec.ID.String()] = prior
 		} else {
-			delete(g.project.Assemblies, spec.ID)
+			delete(g.project.Assemblies, spec.ID.String())
 		}
 	}()
 
@@ -334,7 +339,7 @@ func (g *Generator) appendGeneratedFiles(
 	}
 
 	for _, d := range derived {
-		content, gerr := d.gen(spec.ID)
+		content, gerr := d.gen(spec.ID.String())
 		if gerr != nil {
 			return nil, gerr
 		}
@@ -362,8 +367,8 @@ func (g *Generator) appendGeneratedFiles(
 // without populating it here (or exempting it with a documented reason)
 // fails CI.
 //
-// Build.Binary defaults to spec.ID, matching the entrypoint path's ID
-// component (cmd/{spec.ID}/main.go). Build.DeployTemplate mirrors
+// Build.Binary defaults to spec.ID.String(), matching the entrypoint path's ID
+// component (cmd/{spec.ID.String()}/main.go). Build.DeployTemplate mirrors
 // kernel/metadata.deriveAssembly: an empty spec.Deploy (or "k8s") derives
 // to "k8s" — the same value the parser fills in when reading the on-disk
 // assembly.yaml where the build block is omitted for the k8s default. This
@@ -374,7 +379,7 @@ func (g *Generator) appendGeneratedFiles(
 // (zero yamlsafe.Scalar signals "omit block from yaml via {{if .DeployTemplate}}"),
 // which is a template-render-side concern and is unaffected by this change.
 //
-// Entrypoint is always derived as "cmd/{spec.ID}/main.go" — the scaffold
+// Entrypoint is always derived as "cmd/{spec.ID.String()}/main.go" — the scaffold
 // template writes main.go at that path, so the synthesized meta stays aligned.
 func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 	deployTemplate := spec.Deploy
@@ -385,16 +390,20 @@ func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 		// which the boundary sourceFingerprint depends on.
 		deployTemplate = "k8s"
 	}
+	cellsAsString := make([]string, len(spec.Cells))
+	for i, c := range spec.Cells {
+		cellsAsString[i] = c.String()
+	}
 	return &metadata.AssemblyMeta{
-		ID:    spec.ID,
-		Cells: append([]string(nil), spec.Cells...),
+		ID:    spec.ID.String(),
+		Cells: cellsAsString,
 		Owner: metadata.OwnerMeta{
 			Team: spec.OwnerTeam,
 			Role: spec.OwnerRole,
 		},
 		Build: metadata.BuildMeta{
-			Entrypoint:     filepath.Join("cmd", spec.ID, "main.go"),
-			Binary:         spec.ID,
+			Entrypoint:     filepath.Join("cmd", spec.ID.String(), "main.go"),
+			Binary:         spec.ID.String(),
 			DeployTemplate: deployTemplate,
 		},
 	}
@@ -417,11 +426,11 @@ type scaffoldAssemblyFile struct {
 // ref: pkg/yamlsafe.Quote — single funnel enforced by archtest
 // YAML-QUOTE-FUNNEL-01.
 func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAssemblyContext, error) {
-	helperName, err := assemblyRunHelperName(spec.ID)
+	helperName, err := assemblyRunHelperName(spec.ID.String())
 	if err != nil {
 		return scaffoldAssemblyContext{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"assembly id has no identifier characters", err,
-			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, spec.ID)))
+			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, spec.ID.String())))
 	}
 
 	// deployTemplate is a typed-Scalar sentinel: zero value `Scalar("")`
@@ -437,22 +446,23 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 	cellModuleEntries := make([]scaffoldAssemblyCellEntry, 0, len(spec.Cells))
 	quotedCells := make([]yamlsafe.Scalar, 0, len(spec.Cells))
 	for _, cellID := range spec.Cells {
-		cellMeta := g.cells.Get(cellID)
+		cellIDStr := cellID.String()
+		cellMeta := g.cells.Get(cellIDStr)
 		// Cell existence already validated; fall back to cellID when
 		// GoStructName is unset so legacy cells still produce a compilable stub.
-		structName := cellID
+		structName := cellIDStr
 		if cellMeta != nil && !cellMeta.GoStructName.IsZero() {
 			structName = cellMeta.GoStructName.String()
 		}
 		cellModuleEntries = append(cellModuleEntries, scaffoldAssemblyCellEntry{
 			Name: structName + "Module",
-			ID:   cellID,
+			ID:   cellIDStr,
 		})
-		quotedCells = append(quotedCells, yamlsafe.Quote(cellID))
+		quotedCells = append(quotedCells, yamlsafe.Quote(cellIDStr))
 	}
 
 	return scaffoldAssemblyContext{
-		ID:             yamlsafe.Quote(spec.ID),
+		ID:             yamlsafe.Quote(spec.ID.String()),
 		Cells:          quotedCells,
 		OwnerTeam:      yamlsafe.Quote(spec.OwnerTeam),
 		OwnerRole:      yamlsafe.Quote(spec.OwnerRole),
@@ -490,30 +500,21 @@ func (g *Generator) renderAssemblyScaffoldFiles(
 	return plan, nil
 }
 
-// validateAssemblyScaffoldSpec checks required fields, syntactic identifier
-// rules, and verifies that every cell in spec.Cells exists in the parsed
-// project. Identifier and free-text rules are routed through kernel/metadata
-// single-source helpers (MatchAssemblyID, MatchCellID, IsValidMetadataText)
-// — there is no kernel-internal mirror; the metadata package is the sole
-// declaration site.
-//
-// AssemblyIDPattern / CellIDPattern (`^[a-z][a-z0-9]+$`) physically exclude
-// path separators (`/`, `\`), traversal sequences (`.`, `..`), and control
-// characters (`\n`, `\r`, `\x00`) — the legacy validateAssemblyPathComponent
-// defensive layer was redundant and has been removed.
+// validateAssemblyScaffoldSpec checks required fields and verifies that every
+// cell in spec.Cells exists in the parsed project. Identifier pattern
+// validation is no longer performed here: spec.ID and spec.Cells[] are typed
+// (scaffoldid.ScaffoldID), so the AssemblyIDPattern (`^[a-z][a-z0-9]+$`)
+// constraint is established at construction time via scaffoldid.Parse
+// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). Free-text rules (OwnerTeam /
+// OwnerRole) still route through kernel/metadata.IsValidMetadataText —
+// the metadata package is the sole declaration site.
 //
 // ref: kubernetes/apimachinery pkg/util/validation/validation.go —
 // IsDNS1123Label single-helper validation; same pattern applied here.
 func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error {
-	if spec.ID == "" {
+	if spec.ID.IsZero() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: ID is required")
-	}
-	if !metadata.MatchAssemblyID(spec.ID) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"assembly scaffold: ID does not match metadata AssemblyIDPattern",
-			errcode.WithInternal(fmt.Sprintf("field=ID value=%q pattern=%s",
-				spec.ID, metadata.AssemblyIDPattern)))
 	}
 	if len(spec.Cells) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -542,17 +543,15 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 			"assembly scaffold: --deploy must be one of [k8s compose binary]",
 			errcode.WithInternal(fmt.Sprintf("deploy=%q", spec.Deploy)))
 	}
+	// spec.Cells is []scaffoldid.ScaffoldID — the AssemblyIDPattern
+	// (^[a-z][a-z0-9]+$) is identical to CellIDPattern, so a typed entry has
+	// already passed pattern validation at scaffoldid.Parse time. We still
+	// verify each cell exists in the parsed project.
 	for _, cellID := range spec.Cells {
-		if !metadata.MatchCellID(cellID) {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"assembly scaffold: Cells[] entry does not match metadata CellIDPattern",
-				errcode.WithInternal(fmt.Sprintf("field=Cells[] value=%q pattern=%s",
-					cellID, metadata.CellIDPattern)))
-		}
-		if g.cells.Get(cellID) == nil {
+		if g.cells.Get(cellID.String()) == nil {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"assembly scaffold: --cells references unknown cell",
-				errcode.WithInternal(fmt.Sprintf("cell=%q", cellID)))
+				errcode.WithInternal(fmt.Sprintf("cell=%q", cellID.String())))
 		}
 	}
 	return nil

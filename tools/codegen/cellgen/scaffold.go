@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
@@ -39,8 +40,11 @@ var validConsistencyLevels = []string{"L0", "L1", "L2", "L3", "L4"}
 
 // ScaffoldSpec holds the inputs required to render a new cell skeleton.
 type ScaffoldSpec struct {
-	// CellID is the cell identifier (e.g. "foocell").
-	CellID string
+	// CellID is the cell identifier (e.g. "foocell"). Typed so the
+	// (^[a-z][a-z0-9]+$) constraint is established at construction time via
+	// scaffoldid.Parse — callers cannot supply an unvalidated raw string
+	// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01).
+	CellID scaffoldid.ScaffoldID
 	// StructName is the Go struct name (e.g. "FooCell").
 	StructName string
 	// Package is the Go package name (e.g. "foocell").
@@ -153,7 +157,11 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	// structured *errcode.Error (ErrConflict for file-exists, ErrInternal for
 	// OS errors) so re-wrapping would clobber the Code and lose the caller's
 	// ability to errors.As to ErrConflict.
-	return pathsafe.WritePlannedFiles(realRoot, plan, false)
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return err
+	}
+	return pathsafe.WritePlannedFiles(realRoot, ps, false)
 }
 
 // validateScaffoldSpec returns an error if any required field is missing or
@@ -179,13 +187,20 @@ func validateScaffoldSpec(spec ScaffoldSpec) error {
 	return validateEnumFields(spec)
 }
 
-// validateIdentifierFields validates CellID, StructName, and Package fields.
+// validateIdentifierFields validates StructName and Package fields.
+// CellID is now typed (scaffoldid.ScaffoldID) and validated at construction
+// via scaffoldid.Parse; the path-traversal / no-dash checks are subsumed by
+// the AssemblyIDPattern (`^[a-z][a-z0-9]+$`) the Parse funnel enforces.
 func validateIdentifierFields(spec ScaffoldSpec) error {
+	if spec.CellID.IsZero() {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"scaffold cell: required field missing",
+			errcode.WithDetails(slog.String("field", "CellID")))
+	}
 	idents := []struct {
 		name  string
 		value string
 	}{
-		{"CellID", spec.CellID},
 		{"StructName", spec.StructName},
 		{"Package", spec.Package},
 	}
@@ -200,13 +215,6 @@ func validateIdentifierFields(spec ScaffoldSpec) error {
 				"scaffold cell: field contains path traversal or separator",
 				errcode.WithDetails(slog.String("field", f.name)))
 		}
-	}
-	// CellID must not contain '-' (kebab-case). Silent dash-stripping is
-	// removed; callers must provide a no-dash identifier up front.
-	if strings.Contains(spec.CellID, "-") {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"scaffold cell: CellID must not contain '-' (use no-dash identifier)",
-			errcode.WithDetails(slog.String("cellID", spec.CellID)))
 	}
 	return nil
 }

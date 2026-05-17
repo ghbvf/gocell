@@ -101,7 +101,7 @@ Round-2 silently rewrote `--id=test-cell` to package `testcell` via `strings.Rep
 
 | Round-2 ID | Round-4 outcome |
 |------------|-----------------|
-| F8/F9 SCAFFOLD-DRY-RUN-COMPLETE-INVENTORY | dry-run prints the full plan via `pathsafe.PlannedPaths` |
+| F8/F9 SCAFFOLD-DRY-RUN-COMPLETE-INVENTORY | dry-run prints the full plan via `(pathsafe.PlanSet).Paths()` (was `pathsafe.PlannedPaths(plan)` pre-PR #555 PlanSet typed funnel) |
 | F10 SCAFFOLD-HELP-COMPLETE | help.go synced for `--with-{http,events,both,skip-generate}` + `scaffold assembly` |
 | F11 SCAFFOLD-KEBAB-MIGRATION-DOC | resolved by rejection at validation; no migration-doc needed |
 | F12 SCAFFOLD-FILE-PERMISSION-ALIGN | `PlannedFile` defaults `0o644`/`0o755` |
