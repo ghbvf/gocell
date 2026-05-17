@@ -1225,29 +1225,32 @@ func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
 	base := root + "/tools/archtest/testdata/errorfirsttypednilfixture"
 
 	cases := []struct {
-		dir      string
-		wantViol bool // true = expect ≥1 violation; false = expect 0
+		dir string
 	}{
-		{"constructor_interface_without_isnil_violates", true},
-		{"constructor_interface_with_isnil_passes", false},
-		{"optional_interface_with_isnil_passes", false},
-		{"non_error_constructor_passes", false},
-		{"non_constructor_function_passes", false},
-		{"isnil_result_discarded_violates", true},
-		{"isnil_inside_non_if_call_violates", true},
-		{"if_cond_no_return_violates", true},
-		{"then_in_goroutine_violates", true},
-		{"and_compound_violates", true},
-		{"pointer_param_nil_guard_passes", false},
-		{"or_compound_isnil_passes", false},
-		{"map_param_nil_guard_passes", false},
-		{"chan_param_nil_guard_passes", false},
-		{"func_param_nil_guard_passes", false},
-		{"slice_param_passes", false},
-		{"then_in_defer_violates", true},
-		{"aliased_validation_violates", true},
-		{"unnamed_param_passes", false},
-		{"blank_param_passes", false},
+		// RED cases — expected diagnostic count declared via spec.Violation()
+		// in the fixture .go file (one call per expected violation).
+		{"constructor_interface_without_isnil_violates"},
+		{"isnil_result_discarded_violates"},
+		{"isnil_inside_non_if_call_violates"},
+		{"if_cond_no_return_violates"},
+		{"then_in_goroutine_violates"},
+		{"and_compound_violates"},
+		{"then_in_defer_violates"},
+		{"aliased_validation_violates"},
+
+		// GREEN cases — expect 0 violations (no spec.Violation() in fixture).
+		{"constructor_interface_with_isnil_passes"},
+		{"optional_interface_with_isnil_passes"},
+		{"non_error_constructor_passes"},
+		{"non_constructor_function_passes"},
+		{"pointer_param_nil_guard_passes"},
+		{"or_compound_isnil_passes"},
+		{"map_param_nil_guard_passes"},
+		{"chan_param_nil_guard_passes"},
+		{"func_param_nil_guard_passes"},
+		{"slice_param_passes"},
+		{"unnamed_param_passes"},
+		{"blank_param_passes"},
 	}
 
 	for _, tc := range cases {
@@ -1255,23 +1258,16 @@ func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
 		t.Run(tc.dir, func(t *testing.T) {
 			t.Parallel()
 			fixtureDir := base + "/" + tc.dir
-			got := RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+			RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
 				func(p *Pass) []Diagnostic {
-					var out []Diagnostic
+					var got []Diagnostic
 					for _, file := range p.Files {
 						rel := p.Rel(file)
-						out = append(out, scanTypedNilGuardsInFile(p.Fset, p.TypesInfo, file, rel)...)
+						got = append(got, scanTypedNilGuardsInFile(p.Fset, p.TypesInfo, file, rel)...)
 					}
-					return out
+					AssertDiagnosticCount(t, "ERROR-FIRST-TYPED-NIL-01", p, got)
+					return nil
 				})
-
-			if tc.wantViol {
-				assert.NotEmpty(t, got,
-					"fixture %s: expected ≥1 violation, got 0", tc.dir)
-			} else {
-				assert.Empty(t, got,
-					"fixture %s: expected 0 violations, got %d: %v", tc.dir, len(got), got)
-			}
 		})
 	}
 }
