@@ -66,6 +66,13 @@ func CountViolationMarkers(pass *Pass) int {
 // (upstream Hard).
 func AssertDiagnosticCount(t testing.TB, ruleID string, pass *Pass, got []Diagnostic) {
 	t.Helper()
+	if pass == nil || pass.TypesInfo == nil {
+		t.Fatalf("%s: AssertDiagnosticCount requires a typed Pass (TypesInfo != nil); "+
+			"AST-only Run is incompatible with marker-count assertion — use RunTyped/"+
+			"RunTypedDir/RunTypedFixture, or convert this test to a Diagnostic position "+
+			"assertion if you intentionally want AST-only mode", ruleID)
+		return
+	}
 	want := CountViolationMarkers(pass)
 	if len(got) == want {
 		return
@@ -139,12 +146,60 @@ func NoDiagnosticAssertion() {}
 // approved use of fixturespec.Violation is a direct call `spec.Violation()`,
 // regardless of file location.
 //
-// Wave 1 stub: returns nil — RED tests assert non-empty. Wave 2 GREEN
-// implements the real detection.
+// Implementation: build the set of expression nodes that occupy CallExpr.Fun
+// position (direct-call site) and the set of *ast.Ident nodes that are the
+// SelectorExpr.Sel child (avoiding double-counting when both the SelectorExpr
+// and its inner Sel-Ident resolve to fixturespec.Violation). Then walk every
+// SelectorExpr + every bare Ident (for dot-import support) and emit one
+// Diagnostic per node that (a) is not in call-fun position and (b) resolves
+// via *types.Info to fixturespec.Violation. Direct calls and indirect
+// (f()) calls are both naturally excluded — direct via the callFun set,
+// indirect because info.Uses[f] is *types.Var (ResolvePackageRef returns
+// false for vars).
 func detectFixturespecValuePosition(info *types.Info, fset *token.FileSet, f *ast.File, rel string) []Diagnostic {
-	_ = info
-	_ = fset
-	_ = f
-	_ = rel
-	return nil
+	if info == nil || fset == nil || f == nil {
+		return nil
+	}
+	callFun := make(map[ast.Expr]struct{})
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		callFun[call.Fun] = struct{}{}
+	})
+	selSel := make(map[*ast.Ident]struct{})
+	EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
+		if sel.Sel != nil {
+			selSel[sel.Sel] = struct{}{}
+		}
+	})
+
+	var diags []Diagnostic
+	emit := func(node ast.Expr) {
+		if _, isCallFun := callFun[node]; isCallFun {
+			return
+		}
+		pkgPath, name, ok := ResolvePackageRef(info, node)
+		if !ok || pkgPath != fixturespecViolationPkgPath || name != fixturespecViolationName {
+			return
+		}
+		pos := fset.Position(node.Pos())
+		diags = append(diags, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"fixturespec.Violation referenced as value at %s:%d; only "+
+					"`fixturespec.Violation()` direct call is approved (the value-position "+
+					"bypass `f := spec.Violation; f()` is invisible to ResolvePackageRef "+
+					"because info.Uses[f] is *types.Var)",
+				pos.Filename, pos.Line),
+		})
+	}
+	EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
+		emit(sel)
+	})
+	EachInSubtree[ast.Ident](f, func(id *ast.Ident) {
+		if _, isSel := selSel[id]; isSel {
+			return
+		}
+		emit(id)
+	})
+	return diags
 }

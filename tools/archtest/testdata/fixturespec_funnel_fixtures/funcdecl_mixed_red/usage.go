@@ -22,12 +22,16 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest"
 )
 
-type tcA struct {
-	wantLines []int
-}
-
 func runA() {
-	_ = tcA{wantLines: []int{1, 2}}
+	// Inline anonymous struct mirrors the real table-driven test anti-pattern:
+	// the wantLines []int field lives inside the FuncDecl body, exactly the
+	// shape FIXTURESPEC-COUNT-MATCH-ENFORCED-01 targets.
+	cases := []struct {
+		wantLines []int
+	}{
+		{wantLines: []int{1, 2}},
+	}
+	_ = cases
 	archtest.RunTyped(nil, archtest.TypedOpts{}, nil, func(p *archtest.Pass) []archtest.Diagnostic {
 		return nil
 	})

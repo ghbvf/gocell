@@ -156,6 +156,12 @@ func TestFixturespecViolationCallerAllowlist(t *testing.T) {
 						rel),
 				})
 			})
+			// PR #557 review fix-1: value-position bypass detection. Catches
+			// `f := spec.Violation` / value-position references that the
+			// CallExpr-only walk above misses. Applied everywhere (no testdata
+			// exception); ./... already excludes testdata so this is uniform
+			// with the call-site filter above.
+			diags = append(diags, detectFixturespecValuePosition(p.TypesInfo, p.Fset, f, rel)...)
 		}
 		return diags
 	}
@@ -183,6 +189,13 @@ func TestFixturespecViolationCallerAllowlist(t *testing.T) {
 // match combined). Charter §"Funnel 双向锁评级" allows Medium upstream +
 // Hard downstream as transitional with backlog upgrade — tracked at
 // FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01.
+//
+// PR #557 review fix-6: satisfaction scope was collapsed from file to
+// FuncDecl with 1-hop helper expansion. A single migrated test in the file
+// no longer exempts adjacent unmigrated tests; helpers that share an assert
+// across a TestX/runHelper pair are still recognised via the 1-hop walk.
+// Per-FuncDecl logic lives in scanFuncDeclsMissingAssertOrOptOut so it can
+// be unit-tested independently of the loader-bound rule.
 func TestFixturespecCountMatchEnforced(t *testing.T) {
 	t.Parallel()
 	NoDiagnosticAssertion() // funnel meta-archtest; not fixture-binding
@@ -197,25 +210,23 @@ func TestFixturespecCountMatchEnforced(t *testing.T) {
 			if !strings.HasPrefix(rel, "tools/archtest/") || !strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			if !fileHasFixtureLoader(p.TypesInfo, f) {
-				continue
+			for _, fd := range scanFuncDeclsMissingAssertOrOptOut(p.TypesInfo, f) {
+				name := "<anonymous>"
+				if fd.Name != nil {
+					name = fd.Name.Name
+				}
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(fd.Pos()).Line,
+					Message: fmt.Sprintf(
+						"FuncDecl %q uses hardcoded line int field in a fixture-binding "+
+							"test (loader callee present) but does not call "+
+							"archtest.AssertDiagnosticCount or archtest.NoDiagnosticAssertion "+
+							"(neither inline nor via 1-hop local helper) — migrate to "+
+							"fixturespec.Violation",
+						name),
+				})
 			}
-			hardcodedField, hardcodedFieldNode := findHardcodedLineField(f)
-			if hardcodedField == "" {
-				continue
-			}
-			if fileHasAssertOrOptOut(p.TypesInfo, f) {
-				continue
-			}
-			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: p.Fset.Position(hardcodedFieldNode.Pos()).Line,
-				Message: fmt.Sprintf(
-					"file uses hardcoded line int field %q in a fixture-binding test "+
-						"(loader callee present) but does not call archtest.AssertDiagnosticCount "+
-						"or archtest.NoDiagnosticAssertion — migrate to fixturespec.Violation",
-					hardcodedField),
-			})
 		}
 		return diags
 	}
@@ -326,13 +337,118 @@ func fileHasAssertOrOptOut(info *types.Info, f *ast.File) bool {
 // the cross-FuncDecl bleed. 1-hop helper-call expansion keeps idiomatic
 // "test calls runFixtureScan helper" patterns valid.
 //
-// Wave 1 stub: returns nil — RED tests assert non-empty for the mixed-red
-// fixture's `runA` FuncDecl. Wave 2 GREEN implements the real per-FuncDecl
-// scan + 1-hop expansion.
+// Implementation: build a map of local FuncDecls by name for 1-hop expansion.
+// For each FuncDecl in f, compute the three predicates (loader / hardcoded
+// field / assert-opt-out) over the union of (its body + the bodies of any
+// local FuncDecls it directly calls). Flag the FuncDecl iff loader AND field
+// AND NOT assert-opt-out.
 func scanFuncDeclsMissingAssertOrOptOut(info *types.Info, f *ast.File) []*ast.FuncDecl {
-	_ = info
-	_ = f
-	return nil
+	if info == nil || f == nil {
+		return nil
+	}
+	localFuncs := make(map[string]*ast.FuncDecl)
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Name == nil || fd.Body == nil {
+			return
+		}
+		localFuncs[fd.Name.Name] = fd
+	})
+	var flagged []*ast.FuncDecl
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
+		}
+		nodes := []ast.Node{fd.Body}
+		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return
+			}
+			if called, ok := localFuncs[id.Name]; ok && called != fd && called.Body != nil {
+				nodes = append(nodes, called.Body)
+			}
+		})
+		var hasLoader, hasHardcoded, hasAssert bool
+		for _, n := range nodes {
+			if !hasLoader && nodeHasFixtureLoader(info, n) {
+				hasLoader = true
+			}
+			if !hasHardcoded && nodeHasHardcodedLineField(n) {
+				hasHardcoded = true
+			}
+			if !hasAssert && nodeHasAssertOrOptOut(info, n) {
+				hasAssert = true
+			}
+		}
+		if hasLoader && hasHardcoded && !hasAssert {
+			flagged = append(flagged, fd)
+		}
+	})
+	return flagged
+}
+
+// nodeHasFixtureLoader is the *ast.Node-rooted analog of fileHasFixtureLoader,
+// used by scanFuncDeclsMissingAssertOrOptOut to scan a FuncDecl body (or a
+// 1-hop helper body) for loader callees.
+func nodeHasFixtureLoader(info *types.Info, n ast.Node) bool {
+	var found bool
+	EachInSubtree[ast.CallExpr](n, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+		if !ok || pkgPath != archtestPkgPath {
+			return
+		}
+		switch name {
+		case fixtureLoaderRun, fixtureLoaderRunTyped,
+			fixtureLoaderRunTypedDir, fixtureLoaderRunTypedFixture:
+			found = true
+		}
+	})
+	return found
+}
+
+// nodeHasHardcodedLineField is the *ast.Node-rooted analog of
+// findHardcodedLineField, returning bool (no field reference needed at the
+// FuncDecl-level call site).
+func nodeHasHardcodedLineField(n ast.Node) bool {
+	var found bool
+	EachInSubtree[ast.StructType](n, func(st *ast.StructType) {
+		if found || st.Fields == nil {
+			return
+		}
+		for _, field := range st.Fields.List {
+			if !isIntSliceType(field.Type) {
+				continue
+			}
+			for _, ident := range field.Names {
+				if hardcodedLineFieldNames[ident.Name] {
+					found = true
+					return
+				}
+			}
+		}
+	})
+	return found
+}
+
+// nodeHasAssertOrOptOut is the *ast.Node-rooted analog of fileHasAssertOrOptOut.
+func nodeHasAssertOrOptOut(info *types.Info, n ast.Node) bool {
+	var found bool
+	EachInSubtree[ast.CallExpr](n, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+		if !ok || pkgPath != archtestPkgPath {
+			return
+		}
+		if name == assertDiagnosticCountName || name == noDiagnosticAssertionName {
+			found = true
+		}
+	})
+	return found
 }
 
 // ---------------------------------------------------------------------------
