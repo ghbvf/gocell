@@ -182,8 +182,9 @@ func (b *BaseCell) ConsumedContracts() []Contract {
 // Init prepares the cell. Only allowed from the new or stopped state.
 // Performs an unconditional durability alignment check: reg.DurabilityMode()
 // must match the mode declared in cell.yaml (parsed into requiredMode at
-// construction). Mismatch is a fail-fast error — fix: align cell.yaml or
-// set GOCELL_CELL_ADAPTER_MODE to the correct topology.
+// construction; missing field defaults to DurabilityDemo, see ParseDurabilityMode).
+// Mismatch is a fail-fast error — fix: align cell.yaml durabilityMode with the
+// assembly's DurabilityMode (either change cell.yaml or change the assembly mode).
 func (b *BaseCell) Init(ctx context.Context, reg Registry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -194,9 +195,9 @@ func (b *BaseCell) Init(ctx context.Context, reg Registry) error {
 	}
 	if reg.DurabilityMode() != b.requiredMode {
 		return errcode.New(errcode.KindInvalid, errcode.ErrCellInvalidConfig,
-			"cell durability mode mismatch: cell.yaml declares durabilityMode "+
-				"that does not match assembly runtime; "+
-				"fix: align cell.yaml or set GOCELL_CELL_ADAPTER_MODE",
+			"cell durability mode mismatch: cell.yaml declared mode does not match "+
+				"assembly runtime mode; "+
+				"fix: align cell.yaml durabilityMode with the assembly's DurabilityMode",
 			errcode.WithDetails(
 				slog.String("cell", b.meta.ID),
 				slog.String("declared", b.requiredMode.String()),

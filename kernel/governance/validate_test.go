@@ -4740,26 +4740,25 @@ func TestOUTGUARD01(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "L0 cell without durabilityMode — error (all cells required)",
+			name: "L0 cell without durabilityMode — no error (L0/L1 optional, K8s defaulting)",
 			setup: func(pm *metadata.ProjectMeta) {
-				// OUTGUARD-01 now requires durabilityMode on ALL cells including L0.
 				pm.Cells["accesscore"].DurabilityMode = "durable"
 				pm.Cells["auditcore"].DurabilityMode = "durable"
 				pm.Cells["sharedcrypto"].DurabilityMode = ""
 			},
+			wantCount: 0,
+		},
+		{
+			name: "mixed — only L2+ cell missing durabilityMode errors",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["accesscore"].DurabilityMode = "durable"
+				pm.Cells["auditcore"].DurabilityMode = ""    // L2 — error
+				pm.Cells["sharedcrypto"].DurabilityMode = "" // L0 — allowed (defaults to demo)
+			},
 			wantCount: 1,
 		},
 		{
-			name: "mixed — all cells without durabilityMode error",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["accesscore"].DurabilityMode = "durable"
-				pm.Cells["auditcore"].DurabilityMode = ""    // L2, error
-				pm.Cells["sharedcrypto"].DurabilityMode = "" // L0, also error now
-			},
-			wantCount: 2,
-		},
-		{
-			name: "L1 cell without durabilityMode — error (all cells required)",
+			name: "L1 cell without durabilityMode — no error (L0/L1 optional)",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].DurabilityMode = "durable"
 				pm.Cells["auditcore"].DurabilityMode = "durable"
@@ -4767,13 +4766,13 @@ func TestOUTGUARD01(t *testing.T) {
 					ID:               "l1-cell",
 					Type:             "core",
 					ConsistencyLevel: "L1",
-					// No DurabilityMode — should now produce an error.
+					// No DurabilityMode — L1 allowed to omit; ParseDurabilityMode defaults to demo.
 					Owner:  metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
 					Schema: metadata.SchemaMeta{Primary: "cell_l1"},
 					Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},
 				}
 			},
-			wantCount: 1,
+			wantCount: 0,
 		},
 		{
 			name: "L1 cell with durabilityMode — no error",

@@ -668,10 +668,20 @@ func TestBaseCell_Init_DurabilityAlignment(t *testing.T) {
 			wantRuntime:    "durable",
 		},
 		{
-			name:           "empty durabilityMode construction error",
+			name:           "empty durabilityMode defaults to demo, Durable mismatch",
 			metaDurability: "",
 			regMode:        DurabilityDurable,
-			wantNewErr:     true,
+			wantNewErr:     false,
+			wantInitErr:    true,
+			wantDeclared:   "demo",
+			wantRuntime:    "durable",
+		},
+		{
+			name:           "empty durabilityMode defaults to demo, Demo ok",
+			metaDurability: "",
+			regMode:        DurabilityDemo,
+			wantNewErr:     false,
+			wantInitErr:    false,
 		},
 		{
 			name:           "invalid durabilityMode construction error",

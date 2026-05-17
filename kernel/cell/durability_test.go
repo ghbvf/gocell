@@ -106,7 +106,7 @@ func TestParseDurabilityMode(t *testing.T) {
 	}{
 		{name: "demo", input: "demo", want: DurabilityDemo, wantErr: false},
 		{name: "durable", input: "durable", want: DurabilityDurable, wantErr: false},
-		{name: "empty", input: "", want: 0, wantErr: true},
+		{name: "empty defaults to demo (K8s defaulting)", input: "", want: DurabilityDemo, wantErr: false},
 		{name: "banana", input: "banana", want: 0, wantErr: true},
 		{name: "DEMO uppercase", input: "DEMO", want: 0, wantErr: true},
 		{name: "durable trailing space", input: "durable ", want: 0, wantErr: true},

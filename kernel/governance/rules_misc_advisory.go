@@ -274,31 +274,49 @@ func (v *Validator) adv06SliceToContract() []ValidationResult {
 // OUTGUARD-01 (formerly rules_outbox.go)
 // =============================================================================
 
-// validateOUTGUARD01 checks that all cells declare a durabilityMode in their
-// cell.yaml regardless of consistency level. BaseCell.Init enforces runtime
-// alignment between cell.yaml durabilityMode and the assembly's actual mode;
-// this governance rule catches missing declarations before runtime does.
-//
-// Required on all cells (L0-L4): BaseCell.Init always performs the alignment
-// check unconditionally. A cell without durabilityMode will fail construction
-// (ParseDurabilityMode returns error for empty string).
+// validateOUTGUARD01 checks that L2+ cells declare a durabilityMode in their
+// cell.yaml. L2+ cells use the transactional outbox pattern and should
+// explicitly declare "demo" or "durable" so BaseCell.Init alignment + runtime
+// CheckNotNoop apply the correct enforcement. L0/L1 cells may omit the field —
+// ParseDurabilityMode defaults missing values to DurabilityDemo (K8s API
+// defaulting), and BaseCell.Init still performs the alignment check
+// unconditionally so production assemblies cannot silently downgrade.
 //
 // ref: K8s apimachinery validation — required field checks
-// ref: kernel/cell/durability.go — ParseDurabilityMode, CheckNotNoop
+// ref: kernel/cell/durability.go — ParseDurabilityMode (K8s defaulting), CheckNotNoop
 // ref: kernel/cell/base.go — BaseCell.Init unconditional alignment check
+// ref: backlog SCHEMA-REQUIRED-DURABILITYMODE-HARD-UPGRADE — promote to schema required when adoption is universal
 func (v *Validator) validateOUTGUARD01() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
+		if !isL2OrHigher(c.ConsistencyLevel) {
+			// L0/L1 may omit durabilityMode (ParseDurabilityMode defaults to demo);
+			// only validate value when explicitly set.
+			if c.DurabilityMode != "" && !isValidDurabilityMode(c.DurabilityMode) {
+				results = append(results, v.newResult(
+					codeOUTGUARD01, SeverityError, IssueInvalid,
+					cellFile(c),
+					"durabilityMode",
+					fmt.Sprintf(
+						"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
+							"fix: set durabilityMode to demo or durable in the cell.yaml "+
+							"(use demo for examples/tests, durable for production assemblies)",
+						c.ID, c.DurabilityMode),
+				))
+			}
+			continue
+		}
 		if c.DurabilityMode == "" {
 			results = append(results, v.newResult(
 				codeOUTGUARD01, SeverityError, IssueRequired,
 				cellFile(c),
 				"durabilityMode",
 				fmt.Sprintf(
-					"cell %q has no durabilityMode; all cells must declare durabilityMode: demo or durable; "+
+					"cell %q declares %s consistency but has no durabilityMode; "+
+						"L2+ cells must declare durabilityMode: demo or durable; "+
 						"fix: add durabilityMode: demo or durabilityMode: durable to the cell.yaml "+
 						"(use demo for examples/tests, durable for production assemblies)",
-					c.ID),
+					c.ID, c.ConsistencyLevel),
 			))
 			continue
 		}
