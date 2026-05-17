@@ -6,8 +6,9 @@ package archtest
 //   - INVARIANT: PASS-FUNNEL-LOADPACKAGES-01
 //   - INVARIANT: PASS-FUNNEL-PACKAGES-IMPORT-01
 //   - INVARIANT: PASS-FUNNEL-RESOLVE-01
+//   - INVARIANT: PASS-FUNNEL-FIXTURE-TAG-01
 //
-// All four rules forbid archtest tools/archtest/<file>_test.go from
+// The first four rules forbid archtest tools/archtest/<file>_test.go from
 // reaching the legacy entry points directly. Authors must use archtest.Run
 // (AST-only) / archtest.RunTyped (typed) / archtest.RunTypedFixture (fixture
 // packages) / archtest.RunTypedProduction (production-only) via the
@@ -15,7 +16,18 @@ package archtest
 // archtest.ResolvePackageRef / ResolveMethodCall / EvaluateConstString /
 // FlatNonDefaultTags / KnownNonDefaultTags / Pass.IsFileInScope /
 // Pass.IsGenerated instead of importing internal/typeseval directly.
-// See docs/architecture/202605141519-adr-archtest-pass-funnel.md.
+//
+// PASS-FUNNEL-FIXTURE-TAG-01 closes the façade-bypass leg of the
+// archtest_fixture funnel: RunTypedFixture's outward Hard (FixtureOpts has
+// no Tags field) prevents typed expression of "load fixture with custom
+// tag" in business call sites, but RunTyped still accepts arbitrary Tags,
+// so a business archtest could in principle pass []string{"archtest_fixture"}
+// to RunTyped / typeseval.SharedResolver directly and bypass RunTypedFixture.
+// The rule rejects any BasicLit STRING "archtest_fixture" in business
+// archtest *_test.go (passFunnelPermanentExempt scope), driving load sites
+// through RunTypedFixture and tag-identity sites through
+// archtest.FixtureBuildTag (the typed-reference accessor declared in
+// fixture.go). See docs/architecture/202605141519-adr-archtest-pass-funnel.md.
 //
 // Stage 2/3 migration completed in PR #522; LegacyAllowlist was cleared to
 // zero. Stage 4 (this PR) deletes the archtestmeta package entirely and
@@ -27,6 +39,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"maps"
 	"os"
 	"path/filepath"
@@ -326,6 +339,96 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 	)
 }
 
+// diagsFixtureTagBypass is the pure detector for PASS-FUNNEL-FIXTURE-TAG-01.
+//
+// It walks BasicLit nodes in tgt.file and reports every STRING literal whose
+// unquoted value equals "archtest_fixture". The literal is the only AST form
+// through which a business archtest *_test.go can express the fixture build
+// tag — once detected, all paths to "load fixture by passing []string{...}"
+// (façade bypass of RunTypedFixture) and "test for fixture tag in code"
+// (bypass of archtest.FixtureBuildTag typed reference) are closed.
+//
+// # AI-rebust: archtest-bound form-uniqueness Hard
+//
+// Charter §1 注脚 "typed function call as Hard funnel for unbounded
+// operations" (panic(any) range, ai-collab.md) establishes that
+// archtest-bound form-uniqueness without compile-time blocking is the
+// highest grade reachable in Go for rule shapes where the language permits
+// any value: panic(any), build tag string, etc. This rule meets that bar:
+//
+//   - Form uniqueness: the literal `"archtest_fixture"` is the only AST
+//     shape that carries the tag name into a business *_test.go file. The
+//     accompanying funnel pieces are:
+//       (i) RunTypedFixture's FixtureOpts has no Tags field — `RunTypedFixture
+//           (t, FixtureOpts{Tags: ...}, ...)` is a compile error (outward
+//           Hard, downstream funnel side).
+//       (ii) fixture.go declares the literal exactly once inside the
+//           framework (`Tags: []string{"archtest_fixture"}` in
+//           RunTypedFixture's body) and exports `FixtureBuildTag` as a
+//           typed string const for Go-code paths that need to identify the
+//           tag.
+//       (iii) This rule (upstream funnel side) rejects any *_test.go
+//           BasicLit STRING with the literal — driving load sites through
+//           RunTypedFixture and identity sites through FixtureBuildTag.
+//   - No "looks like Approved but isn't" gray zone: BasicLit STRING Kind +
+//     unquoted == "archtest_fixture" is a clean predicate; any other shape
+//     (Ident → const reference, SelectorExpr → exported const) passes
+//     because it is NOT a literal carrying the tag value at this call site.
+//
+// # Blind spots (accepted, mirroring PASS-FUNNEL-LOADPACKAGES-01)
+//
+//   - String concatenation: `"archtest" + "_fixture"` produces two BasicLit
+//     STRING nodes whose values are "archtest" and "_fixture"; neither
+//     matches the predicate. Accepted — no realistic author writes this
+//     shape to disguise a tag literal. Same grade as the cross-func var
+//     escape accepted by diagsLoadPackages / diagsResolveHelpers.
+//   - %s formatted strings: `fmt.Sprintf("archtest_%s", "fixture")` —
+//     BasicLit values are "archtest_%s" and "fixture", neither matches.
+//     Same accepted gap as above; no realistic shape.
+//   - Reflect / runtime string construction: outside Go static AST scope
+//     by definition; the entire archtest framework operates on
+//     compile-time AST + types.Info.
+//
+// # Per-form fixture coverage
+//
+// internal/passfunnelfixture/redfixture.go includes a single bare-literal
+// `_ = "archtest_fixture"` line. TestPassFunnel_FixtureCoverage asserts
+// ≥1 PASS-FUNNEL-FIXTURE-TAG-01 diagnostic from the fixture; removing the
+// line fails the lock. The literal is intentionally NOT placed in any
+// realistic shape (no CallExpr arg, no CompositeLit element) because the
+// detector predicate is shape-agnostic — any BasicLit STRING with the
+// matching value fires, regardless of surrounding AST context.
+//
+// # Exempt
+//
+// passFunnelPermanentExempt (3 framework files: pass_funnel_test.go +
+// pass_test.go + archtest_test.go) — these implement or directly test the
+// funnel machinery and must reference the literal by structural necessity.
+// fixture.go is excluded from the scan automatically because
+// loadPassFunnelTargets filters to *_test.go files (line 138).
+func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
+	const tagLiteral = `"archtest_fixture"`
+	fset := tgt.pkg.Fset
+	var diags []scanner.Diagnostic
+	scanner.EachInSubtree[ast.BasicLit](tgt.file, func(lit *ast.BasicLit) {
+		if lit.Kind != token.STRING {
+			return
+		}
+		if lit.Value != tagLiteral {
+			return
+		}
+		diags = append(diags, scanner.Diagnostic{
+			Rel:  tgt.rel,
+			Line: fset.Position(lit.Pos()).Line,
+			Message: "use archtest.RunTypedFixture (fixture-load path) or " +
+				"archtest.FixtureBuildTag (typed-reference path) instead of " +
+				`bare "archtest_fixture" literal — façade-bypass funnel closure ` +
+				"(PASS-FUNNEL-FIXTURE-TAG-01)",
+		})
+	})
+	return diags
+}
+
 // TestPassFunnelResolve01 — PASS-FUNNEL-RESOLVE-01.
 //
 // Archtest tools/archtest/<file>_test.go must NOT call the 8 typeseval helper
@@ -413,6 +516,38 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 		diags = append(diags, diagsPackagesImport(tgt)...)
 	}
 	scanner.Report(t, "PASS-FUNNEL-PACKAGES-IMPORT-01", diags)
+}
+
+// TestPassFunnelFixtureTagBypass01 — PASS-FUNNEL-FIXTURE-TAG-01.
+//
+// Archtest tools/archtest/<file>_test.go must NOT contain a bare STRING
+// literal "archtest_fixture". The literal is the only AST form through
+// which a business archtest can carry the fixture build tag into a call
+// site (either as a Tags slice element passed to RunTyped /
+// typeseval.SharedResolver to bypass RunTypedFixture, or as a comparison
+// target to identify the fixture tag group). Authors must:
+//
+//   - For fixture loading: call archtest.RunTypedFixture(t, FixtureOpts{...},
+//     patterns, rule). FixtureOpts deliberately lacks a Tags field, so the
+//     build tag stays inside the framework body.
+//   - For tag-identity tests (e.g., skipping the fixture tag group from a
+//     module-wide RunTyped scan): reference archtest.FixtureBuildTag, the
+//     typed string const exported by fixture.go.
+//
+// Detection: BasicLit STRING walk with unquoted-value equality on
+// "archtest_fixture". Exempt: passFunnelPermanentExempt (3 framework
+// files); fixture.go is filtered out by loadPassFunnelTargets's
+// *_test.go suffix check.
+//
+// AI-rebust: archtest-bound form-uniqueness Hard (see diagsFixtureTagBypass
+// godoc for full evidence and accepted blind spots).
+func TestPassFunnelFixtureTagBypass01(t *testing.T) {
+	targets := loadPassFunnelTargets(t)
+	var diags []scanner.Diagnostic
+	for _, tgt := range targets {
+		diags = append(diags, diagsFixtureTagBypass(tgt)...)
+	}
+	scanner.Report(t, "PASS-FUNNEL-FIXTURE-TAG-01", diags)
 }
 
 // TestPassFunnelGuardListSync — ARCHTEST-PASS-FUNNEL guards alignment.
@@ -721,6 +856,18 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 			"(qualified L123 + alias L124 + dot-import L125 must each trip the detector; "+
 			"exact-count regression lock — reverting TypeName fix drops to 2)",
 			scannerImportBanCount, wantImportBanCount)
+	}
+
+	// PASS-FUNNEL-FIXTURE-TAG-01 coverage: the fixture file contains a single
+	// bare-literal `_ = "archtest_fixture"` line, so the detector must emit
+	// ≥1 diagnostic. Removing the literal from redfixture.go fails this lock.
+	var fixtureTagDiags []scanner.Diagnostic
+	for _, tgt := range fixtureTargets {
+		fixtureTagDiags = append(fixtureTagDiags, diagsFixtureTagBypass(tgt)...)
+	}
+	if len(fixtureTagDiags) == 0 {
+		t.Errorf("PASS-FUNNEL-FIXTURE-TAG-01 detector found 0 diagnostics on red fixture; " +
+			"detector likely regressed (or `_ = \"archtest_fixture\"` line removed from redfixture.go)")
 	}
 }
 

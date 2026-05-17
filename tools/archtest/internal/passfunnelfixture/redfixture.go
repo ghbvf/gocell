@@ -128,4 +128,15 @@ var (
 	_ = scanner.ImportBan{} // qualified (value reference, zero-value struct literal)
 	_ = sn.ImportBan{}      // alias-import
 	_ = ImportBan{}         // dot-import (bare Ident from `. "…/scanner"` above)
+
+	// PASS-FUNNEL-FIXTURE-TAG-01 violation: a bare STRING literal
+	// "archtest_fixture" appearing in business archtest code is the only
+	// supported bypass route around RunTypedFixture's outward-Hard
+	// FixtureOpts (which has no Tags field). The detector walks BasicLit
+	// nodes in business *_test.go files (passFunnelPermanentExempt scope)
+	// and rejects any such literal — authors must reference
+	// archtest.FixtureBuildTag (Go-code path) or use RunTypedFixture
+	// (fixture-load path); fixture.go itself stays the literal's sole
+	// declaration site.
+	_ = "archtest_fixture" //nolint:gosimple // RED fixture: bare literal is the entire detector trigger.
 )
