@@ -2,7 +2,7 @@
 //   - INVARIANT: CELL-DURABILITY-ALIGNMENT-FUNNEL-01
 //   - INVARIANT: CELL-MUSTNEWBASECELL-FUNNEL-01
 //   - INVARIANT: BASECELL-INIT-NO-NIL-GUARD-01
-//   - INVARIANT: CELLMETA-INCLUDES-DURABILITYMODE
+//   - INVARIANT: CELLMETA-INCLUDES-DURABILITYMODE-01
 //
 // CELL-DURABILITY-ALIGNMENT-FUNNEL-* — BaseCell.Init durability alignment guards.
 //
@@ -17,7 +17,7 @@
 //	BaseCell.Init must contain an unconditional BinaryExpr comparing
 //	b.requiredMode with reg.DurabilityMode() using !=, and the then-block
 //	must return errcode.New(...) or equivalent. Detection uses type-aware
-//	AST scan (RunTyped + typeseval.ResolveMethodCall) on BaseCell.Init body.
+//	AST scan (RunTyped + archtest.ResolveMethodCall) on BaseCell.Init body.
 //	Tool: RunTyped + AST BinaryExpr walk over Init method body.
 //
 // Blind spots (forms outside *types.Info resolution — these are reverse-self-checked):
@@ -47,7 +47,7 @@
 //	b.requiredMode (== 0, != 0, int(...) == 0). The alignment check must be
 //	unconditional. Reverse check ensures production AST is free of such guards.
 //
-// CELLMETA-INCLUDES-DURABILITYMODE (Soft backstop — golden file check):
+// CELLMETA-INCLUDES-DURABILITYMODE-01 (Soft backstop — golden file check):
 //
 //	cells/configcore/cell_gen.go (canonical generated golden) must contain
 //	"DurabilityMode:" string, confirming the cellgen funnel includes the field
@@ -67,8 +67,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 // TestCellDurabilityAlignmentFunnel01_BaseCellInitContainsCheck verifies
@@ -152,7 +150,7 @@ func TestCellDurabilityAlignmentFunnel01_BaseCellInitContainsCheck(t *testing.T)
 					if !ok {
 						return
 					}
-					fn2, ok := typeseval.ResolveMethodCall(p.TypesInfo, callSel)
+					fn2, ok := ResolveMethodCall(p.TypesInfo, callSel)
 					if !ok {
 						return
 					}
@@ -373,7 +371,7 @@ func TestCellmetaIncludesDurabilityMode(t *testing.T) {
 
 	_ = goldenPath // referenced for documentation
 	assert.True(t, found,
-		"CELLMETA-INCLUDES-DURABILITYMODE: cells/configcore/cell_gen.go must contain "+
+		"CELLMETA-INCLUDES-DURABILITYMODE-01: cells/configcore/cell_gen.go must contain "+
 			"DurabilityMode: field in CellMeta literal (cellgen funnel requirement)")
 }
 
