@@ -424,7 +424,13 @@ func (lc *lifecycle) hookContext(ctx context.Context, p hookPhase) (context.Cont
 		// OnStart receives workCtx (child of the Start ctx = ownerCtx). It is
 		// the single owner-lifetime ctx (ADR 202605170000 §D-B); the only
 		// extra cancellation trigger vs ownerCtx is start-failure teardown.
-		return lc.workCtx, func() {}
+		return lc.workCtx, func() {
+			// Intentional no-op, not an incomplete implementation:
+			// workCtx's lifetime is owned by Start/Stop via workCancel.
+			// runHook defers this CancelFunc; if it canceled workCtx, the
+			// first OnStart's deferred cancel would tear down the shared
+			// owner ctx before later hooks (and their workers) even start.
+		}
 	}
 	return lc.applyTimeout(ctx, p.timeout)
 }

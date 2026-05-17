@@ -36,12 +36,22 @@ type superviseFakeLifecycle struct {
 	startedCh        chan struct{}
 	immediateErr     error
 	blockUntilCancel bool
+	// ignoreCtxRelease, when non-nil, models the irreducible-residual shape:
+	// an OnStart that ignores ctx entirely and only returns when this channel
+	// is closed (the test closes it in Cleanup so the abandoned goroutine does
+	// not survive the test — but superviseLifecycleStart must have already
+	// returned via the detach path BEFORE that, which is what the test pins).
+	ignoreCtxRelease chan struct{}
 }
 
 func (f *superviseFakeLifecycle) Append(Hook) error { return nil }
 
 func (f *superviseFakeLifecycle) Start(ctx context.Context) error {
 	close(f.startedCh)
+	if f.ignoreCtxRelease != nil {
+		<-f.ignoreCtxRelease // never selects on ctx.Done() — ctx is ignored
+		return f.immediateErr
+	}
 	if !f.blockUntilCancel {
 		return f.immediateErr
 	}
@@ -54,7 +64,6 @@ func (f *superviseFakeLifecycle) Stop(context.Context) error { return nil }
 func newSuperviseBootstrap(t *testing.T, lc Lifecycle, fc *clockmock.FakeClock, startupTimeout time.Duration) *Bootstrap {
 	t.Helper()
 	b := &Bootstrap{lifecycle: lc, clock: fc, startupTimeout: startupTimeout}
-	//nolint:gosec // G118: released via the t.Cleanup below (gosec lostcancel cannot see a cleanup-registered cancel call)
 	b.ownerCtx, b.ownerCancel = context.WithCancel(context.Background())
 	t.Cleanup(b.ownerCancel) // ensure ctx released even on the happy path
 	return b
@@ -123,4 +132,51 @@ func TestSuperviseLifecycleStart_StartupBudgetElapsed(t *testing.T) {
 	require.True(t, closed, "superviseLifecycleStart goroutine did not return")
 	require.Error(t, got)
 	assert.ErrorIs(t, got, ErrBootstrapStartupTimeout)
+}
+
+// TestSuperviseLifecycleStart_CtxIgnoringHookDetaches pins the residual
+// boundary: an OnStart that ignores ctx entirely and never returns CANNOT be
+// force-killed in Go (the leaked goroutine is irreducible). The backstop's
+// contract is narrower — it guarantees Bootstrap.Run still makes deterministic
+// progress: after the budget fires and ownerCancel() does not unblock the
+// ctx-ignoring hook, the startupUnwindGraceTimeout elapses, the in-flight
+// lifecycle.Start goroutine is ABANDONED, and superviseLifecycleStart returns
+// (so Run() rolls back + exits and the orchestrator restarts the process)
+// rather than wedging forever on a bare <-startErr (pre-amendment behavior).
+func TestSuperviseLifecycleStart_CtxIgnoringHookDetaches(t *testing.T) {
+	fc := clockmock.New(time.Unix(0, 0))
+	release := make(chan struct{})
+	// Close release in Cleanup so the deliberately-abandoned Start goroutine
+	// exits with the test process instead of leaking — the assertion below
+	// proves superviseLifecycleStart already returned via the detach path
+	// while this channel was still open (i.e. the hook never observed ctx).
+	t.Cleanup(func() { close(release) })
+	fl := &superviseFakeLifecycle{startedCh: make(chan struct{}), ignoreCtxRelease: release}
+	b := newSuperviseBootstrap(t, fl, fc, superviseBudget)
+
+	resultCh := make(chan error, 1)
+	go func() { resultCh <- b.superviseLifecycleStart(context.Background()) }()
+
+	<-fl.startedCh
+	// Advance past the startup budget AND the post-cancel unwind grace; the
+	// ctx-ignoring hook stays blocked on `release` the whole time, so the only
+	// way superviseLifecycleStart returns is the detach (grace-timer) branch.
+	var got error
+	var closed bool
+	require.Eventually(t, func() bool {
+		fc.Advance(superviseBudgetOvershoot + startupUnwindGraceTimeout)
+		select {
+		case err := <-resultCh:
+			got, closed = err, true
+			return true
+		default:
+			return false
+		}
+	}, testtime.D1s, testtime.D1ms, "supervisor never detached the ctx-ignoring Start goroutine")
+
+	require.True(t, closed, "superviseLifecycleStart did not return — Run() would wedge on a ctx-ignoring hook")
+	require.Error(t, got)
+	assert.ErrorIs(t, got, ErrBootstrapStartupTimeout, "budget cause must be joined")
+	assert.Contains(t, got.Error(), "abandoned", "error must explain WHY Run is exiting")
+	assert.Contains(t, got.Error(), "OnStart ignored ctx")
 }

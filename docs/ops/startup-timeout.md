@@ -27,18 +27,44 @@ races it against two abort signals:
 
 When either fires, `superviseLifecycleStart` calls `ownerCancel()`, which
 delivers a cancellation signal to the wedged hook's `workCtx` (a child of
-`ownerCtx`). It then blocks on `<-startErr`, waiting for `lifecycle.Start` to
-unwind. Once `lifecycle.Start` returns (hooks that observed the cancellation
-exit; hooks that ignored it keep the unwind blocked), `Run` performs LIFO
-rollback and returns the error.
+`ownerCtx`). It then waits for `lifecycle.Start` to unwind, **bounded by
+`startupUnwindGraceTimeout` (a fixed 5s internal constant — not a tuning
+knob)**:
 
-**Important:** the backstop unblocks `Run()` only if the wedged hook's `OnStart`
-eventually observes `workCtx` cancellation. A hook that unconditionally blocks
-forever — ignoring ctx entirely — keeps both `lifecycle.Start` and the
-`superviseLifecycleStart` drain wait permanently blocked, so `Run()` does not
-return. That degenerate case is a bug in the offending hook (all `OnStart`
-implementations must respect ctx); the backstop is not a substitute for
-ctx-aware hook implementations.
+- **The hook respects ctx** (the common case, including a hook that is merely
+  slow to drain): it observes the cancellation and returns within the grace
+  window. `Run` performs LIFO rollback and returns the abort error. This path
+  is unchanged from before the A1-1 amendment.
+- **The hook ignores ctx entirely** (never selects on `ctx.Done()`): the grace
+  window elapses, the in-flight `lifecycle.Start` goroutine is **abandoned**,
+  and `superviseLifecycleStart` returns anyway. `Run` rolls back and returns,
+  so the process exits and the orchestrator (e.g. a Kubernetes Deployment)
+  restarts it.
+
+**Important — the irreducible residual:** Go cannot force-kill a goroutine
+that ignores ctx. The abandoned `lifecycle.Start` goroutine (and the
+ctx-ignoring `OnStart` it is parked in) leaks until the process exits. The
+backstop does NOT eliminate that leak — no mechanism in Go can. What it *does*
+guarantee is that `Run()` itself stays bounded: a ctx-ignoring hook can no
+longer wedge the orchestration layer forever (the pre-amendment behaviour was
+a bare unbounded `<-startErr`). A ctx-ignoring `OnStart` is still a bug in the
+offending hook (all `OnStart` implementations MUST respect ctx); the backstop
+converts it from "silent permanent hang" into "logged abort + clean process
+exit + orchestrator restart", not into a substitute for ctx-aware hooks.
+
+When the grace window elapses on a ctx-ignoring hook, the framework logs an
+additional structured line:
+
+```
+ERROR bootstrap: lifecycle start goroutine abandoned
+  reason=onstart_ignored_ctx
+  unwind_grace=5s
+  hint="the last hook.start Info log line identifies the ctx-ignoring hook; ..."
+```
+
+and the returned error is `ErrBootstrapStartupTimeout` joined with an explicit
+`lifecycle start goroutine abandoned after 5s unwind grace (OnStart ignored
+ctx)` wrap.
 
 This backstop fires **before** `Run()` enters its main serving loop, so it is
 completely orthogonal to `WithShutdownTimeout` / `terminationGracePeriodSeconds`
