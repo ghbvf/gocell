@@ -618,6 +618,92 @@ func TestNewBaseSliceFromMeta_EmptyVerifyAndAllowedFiles(t *testing.T) {
 	assert.Nil(t, s.AllowedFiles(), "AllowedFiles must be nil when not set in meta")
 }
 
+// ---------------------------------------------------------------------------
+// BaseCell.Init durability alignment
+// ---------------------------------------------------------------------------
+
+func TestBaseCell_Init_DurabilityAlignment(t *testing.T) {
+	tests := []struct {
+		name            string
+		metaDurability  string // empty triggers construction error
+		regMode         DurabilityMode
+		wantNewErr      bool // expect NewBaseCell to fail
+		wantInitErr     bool // expect Init to fail
+		wantErrContains string
+	}{
+		{
+			name:           "durable+Durable ok",
+			metaDurability: "durable",
+			regMode:        DurabilityDurable,
+			wantNewErr:     false,
+			wantInitErr:    false,
+		},
+		{
+			name:           "demo+Demo ok",
+			metaDurability: "demo",
+			regMode:        DurabilityDemo,
+			wantNewErr:     false,
+			wantInitErr:    false,
+		},
+		{
+			name:            "durable+Demo mismatch",
+			metaDurability:  "durable",
+			regMode:         DurabilityDemo,
+			wantNewErr:      false,
+			wantInitErr:     true,
+			wantErrContains: "durability mode mismatch",
+		},
+		{
+			name:            "demo+Durable mismatch",
+			metaDurability:  "demo",
+			regMode:         DurabilityDurable,
+			wantNewErr:      false,
+			wantInitErr:     true,
+			wantErrContains: "durability mode mismatch",
+		},
+		{
+			name:           "empty durabilityMode construction error",
+			metaDurability: "",
+			regMode:        DurabilityDurable,
+			wantNewErr:     true,
+		},
+		{
+			name:           "invalid durabilityMode construction error",
+			metaDurability: "banana",
+			regMode:        DurabilityDurable,
+			wantNewErr:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := &metadata.CellMeta{
+				ID:             "alignment-test",
+				DurabilityMode: tt.metaDurability,
+			}
+			c, err := NewBaseCell(meta)
+			if tt.wantNewErr {
+				require.Error(t, err, "expected NewBaseCell to fail for meta.DurabilityMode=%q", tt.metaDurability)
+				return
+			}
+			require.NoError(t, err)
+
+			reg := NewRegistryRecorder(nil, tt.regMode)
+			initErr := c.Init(context.Background(), reg)
+			if tt.wantInitErr {
+				require.Error(t, initErr)
+				if tt.wantErrContains != "" {
+					assert.Contains(t, initErr.Error(), tt.wantErrContains)
+				}
+				var ecErr *errcode.Error
+				require.True(t, errors.As(initErr, &ecErr))
+				assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code)
+			} else {
+				require.NoError(t, initErr)
+			}
+		})
+	}
+}
+
 // assertPanicsWithAssertionMessage verifies that fn panics with an *errcode.Error
 // whose Message field equals wantMsg. Used to test Must* wrappers that now panic
 // with errcode.Assertion(...) instead of bare strings.

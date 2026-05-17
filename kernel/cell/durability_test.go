@@ -96,3 +96,31 @@ func TestValidateMode(t *testing.T) {
 	assert.Error(t, ValidateMode(DurabilityMode(99)))
 	assert.Error(t, ValidateMode(DurabilityMode(-1)))
 }
+
+func TestParseDurabilityMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    DurabilityMode
+		wantErr bool
+	}{
+		{name: "demo", input: "demo", want: DurabilityDemo, wantErr: false},
+		{name: "durable", input: "durable", want: DurabilityDurable, wantErr: false},
+		{name: "empty", input: "", want: 0, wantErr: true},
+		{name: "banana", input: "banana", want: 0, wantErr: true},
+		{name: "DEMO uppercase", input: "DEMO", want: 0, wantErr: true},
+		{name: "durable trailing space", input: "durable ", want: 0, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseDurabilityMode(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, DurabilityMode(0), got)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
