@@ -38,13 +38,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
 // scaffoldSmokeSpec is the ScaffoldSpec reused by both invariant tests.
 var scaffoldSmokeSpec = cellgen.ScaffoldSpec{
-	CellID:           "smokecell",
+	CellID:           scaffoldid.MustParse("smokecell"),
 	StructName:       "SmokeCell",
 	Package:          "smokecell",
 	ModulePath:       "github.com/ghbvf/gocell",

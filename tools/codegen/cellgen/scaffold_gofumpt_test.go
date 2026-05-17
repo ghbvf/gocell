@@ -9,6 +9,7 @@ import (
 
 	gofumpt "mvdan.cc/gofumpt/format"
 
+	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
@@ -19,7 +20,7 @@ import (
 func TestScaffoldCell_OutputIsGofumptClean(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:     "fmtcell",
+		CellID:     scaffoldid.MustParse("fmtcell"),
 		StructName: "FmtCell",
 		Package:    "fmtcell",
 		ModulePath: "github.com/example/myproject",

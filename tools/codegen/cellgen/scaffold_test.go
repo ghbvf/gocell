@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
@@ -17,7 +18,7 @@ import (
 func TestScaffoldCell_GeneratesFiles(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:     "foocell",
+		CellID:     scaffoldid.MustParse("foocell"),
 		StructName: "FooCell",
 		Package:    "foocell",
 		ModulePath: "github.com/example/myproject",
@@ -46,7 +47,7 @@ func TestScaffoldCell_GeneratesFiles(t *testing.T) {
 func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:     "barcell",
+		CellID:     scaffoldid.MustParse("barcell"),
 		StructName: "BarCell",
 		Package:    "barcell",
 		ModulePath: "github.com/example/myproject",
@@ -70,7 +71,7 @@ func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
 func TestScaffoldCell_CellYAMLContainsGoStructName(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:     "bazcore",
+		CellID:     scaffoldid.MustParse("bazcore"),
 		StructName: "BazCore",
 		Package:    "bazcore",
 		ModulePath: "github.com/example/myproject",
@@ -97,7 +98,7 @@ func TestScaffoldCell_CellYAMLContainsGoStructName(t *testing.T) {
 func TestScaffoldCell_CellYAMLContainsOwnerRole(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:     "rolecell",
+		CellID:     scaffoldid.MustParse("rolecell"),
 		StructName: "RoleCell",
 		Package:    "rolecell",
 		ModulePath: "github.com/example/myproject",
@@ -131,7 +132,7 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 		{
 			name: "basic cell",
 			spec: ScaffoldSpec{
-				CellID:     "mycore",
+				CellID:     scaffoldid.MustParse("mycore"),
 				StructName: "MyCore",
 				Package:    "mycore",
 				ModulePath: "github.com/example/app",
@@ -157,7 +158,7 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 		{
 			name: "cell with hyphenated-like naming avoided",
 			spec: ScaffoldSpec{
-				CellID:     "iotdevice",
+				CellID:     scaffoldid.MustParse("iotdevice"),
 				StructName: "IoTDevice",
 				Package:    "iotdevice",
 				ModulePath: "github.com/acme/iot",
@@ -241,7 +242,7 @@ func TestScaffoldCell_TypeAndLevelRendered(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			spec := ScaffoldSpec{
-				CellID:           "typecell",
+				CellID:           scaffoldid.MustParse("typecell"),
 				StructName:       "TypeCell",
 				Package:          "typecell",
 				ModulePath:       "github.com/example/app",
@@ -282,7 +283,7 @@ func TestScaffoldCell_TypeWhitelistRejected(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			spec := ScaffoldSpec{
-				CellID:     "typecell",
+				CellID:     scaffoldid.MustParse("typecell"),
 				StructName: "TypeCell",
 				Package:    "typecell",
 				ModulePath: "github.com/example/app",
@@ -322,7 +323,7 @@ func TestScaffoldCell_LevelWhitelistRejected(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			spec := ScaffoldSpec{
-				CellID:           "levelcell",
+				CellID:           scaffoldid.MustParse("levelcell"),
 				StructName:       "LevelCell",
 				Package:          "levelcell",
 				ModulePath:       "github.com/example/app",
@@ -350,7 +351,7 @@ func TestScaffoldCell_LevelWhitelistRejected(t *testing.T) {
 func TestScaffoldCell_ConflictError(t *testing.T) {
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:     "existing",
+		CellID:     scaffoldid.MustParse("existing"),
 		StructName: "Existing",
 		Package:    "existing",
 		ModulePath: "github.com/example/app",
@@ -381,7 +382,7 @@ func TestScaffoldCell_WritesFiles(t *testing.T) {
 	t.Run("writes cell.go and cell.yaml", func(t *testing.T) {
 		dir := t.TempDir()
 		spec := ScaffoldSpec{
-			CellID:     "writecell",
+			CellID:     scaffoldid.MustParse("writecell"),
 			StructName: "WriteCell",
 			Package:    "writecell",
 			ModulePath: "github.com/example/app",
@@ -401,7 +402,7 @@ func TestScaffoldCell_WritesFiles(t *testing.T) {
 	t.Run("conflict detected on second call", func(t *testing.T) {
 		dir := t.TempDir()
 		spec := ScaffoldSpec{
-			CellID:     "conflictcell",
+			CellID:     scaffoldid.MustParse("conflictcell"),
 			StructName: "ConflictCell",
 			Package:    "conflictcell",
 			ModulePath: "github.com/example/app",
@@ -439,7 +440,7 @@ func TestScaffoldCell_RejectsSymlinkBreakout(t *testing.T) {
 	}
 
 	err := ScaffoldCell(root, "cells/evil", ScaffoldSpec{
-		CellID:     "evil",
+		CellID:     scaffoldid.MustParse("evil"),
 		StructName: "Evil",
 		Package:    "evil",
 		ModulePath: "example.com/test",
@@ -520,7 +521,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "missing StructName",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
 				OwnerTeam:  "platform",
@@ -537,7 +538,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "missing Package",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				ModulePath: "github.com/example/app",
 				OwnerTeam:  "platform",
@@ -554,7 +555,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "missing ModulePath",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				OwnerTeam:  "platform",
@@ -571,7 +572,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "missing OwnerTeam",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
@@ -588,7 +589,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "missing OwnerRole",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
@@ -605,7 +606,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "OwnerTeam with newline (YAML injection)",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
@@ -623,7 +624,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "OwnerTeam with colon-space (YAML injection)",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
@@ -641,7 +642,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "OwnerTeam with braces (YAML flow mapping injection)",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
@@ -659,7 +660,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "OwnerTeam with path traversal",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
@@ -677,7 +678,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "OwnerRole with YAML injection",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
@@ -695,7 +696,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "invalid ModulePath with backslash",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: `github.com\example\app`,
@@ -713,7 +714,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 		{
 			name: "invalid ModulePath with dotdot",
 			spec: ScaffoldSpec{
-				CellID:     "foo",
+				CellID:     scaffoldid.MustParse("foo"),
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/../evil",

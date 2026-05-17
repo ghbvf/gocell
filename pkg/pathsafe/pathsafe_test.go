@@ -619,7 +619,7 @@ func TestWritePlannedFiles_ForceOverwrite_OverwritesExistingFile(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		pathsafe.DerivedOverwrite(abs, []byte("// regenerated\n")),
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err != nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("WritePlannedFiles(ForceOverwrite=true over existing): unexpected error: %v", err)
 	}
 	data, err := os.ReadFile(abs) //nolint:gosec // R2-approved: G304 — tempdir test fixture, path constructed in-test
@@ -656,7 +656,7 @@ func TestWritePlannedFiles_ForceOverwrite_ReplacesLeafSymlinkWithoutFollow(t *te
 	plan := []pathsafe.PlannedFile{
 		pathsafe.DerivedOverwrite(leafLink, []byte("// regenerated\n")),
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err != nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("WritePlannedFiles(ForceOverwrite over leaf symlink): unexpected error: %v", err)
 	}
 	// Outside target must NOT have been written through the symlink.
@@ -708,7 +708,7 @@ func TestWritePlannedFiles_ParentSymlink_DirectParent(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		{AbsPath: filepath.Join(symDir, "cell.yaml"), Content: []byte("id: symdir\n")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(direct parent is symlink): want error, got nil")
 	}
 	// File must NOT have been written through the symlink into realDir.
@@ -739,7 +739,7 @@ func TestWritePlannedFiles_ParentSymlink_Intermediate(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		{AbsPath: filepath.Join(symCells, "mycell", "cell.yaml"), Content: []byte("id: mycell\n")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(intermediate parent is symlink): want error, got nil")
 	}
 	if _, statErr := os.Stat(filepath.Join(realCells, "mycell")); statErr == nil {
@@ -785,7 +785,7 @@ func TestWritePlannedFiles_EACCESRollbackCleansCreatedDirs(t *testing.T) {
 		{AbsPath: goodFile, Content: []byte("id: good\n")},
 		{AbsPath: blockedFile, Content: []byte("id: bad\n")},
 	}
-	err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false)
+	err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false)
 	if err == nil {
 		t.Fatal("WritePlannedFiles(EACCES intermediate parent): want error, got nil")
 	}
@@ -860,7 +860,7 @@ func TestWritePass_TOCTOURaceWindow_PostContainmentPreSwap(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		{AbsPath: targetAbs, Content: []byte("id: racetest\n")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles post-ContainPath-pre-write swap: want error, got nil")
 	}
 
@@ -988,7 +988,7 @@ func TestWritePlannedFiles_ForceOverwrite_RollbackRestoresOriginalRegular(t *tes
 		pathsafe.DerivedOverwrite(f0, []byte("// new content\n")),
 		{AbsPath: filepath.Join(blocked, "sub", "fail.go"), Content: []byte("// fail\n")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(P1 fails): want error, got nil")
 	}
 
@@ -1047,7 +1047,7 @@ func TestWritePlannedFiles_ForceOverwrite_RollbackRestoresOriginalSymlink(t *tes
 		pathsafe.DerivedOverwrite(s0, []byte("// overwrite\n")),
 		{AbsPath: filepath.Join(blocked, "sub", "fail.go"), Content: []byte("// fail\n")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(P1 fails): want error, got nil")
 	}
 
@@ -1088,7 +1088,7 @@ func TestWritePlannedFiles_ForceOverwrite_RejectsUnsupportedOriginalKind(t *test
 	plan := []pathsafe.PlannedFile{
 		pathsafe.DerivedOverwrite(dirAtLeaf, []byte("// data\n")),
 	}
-	err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false)
+	err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false)
 	if err == nil {
 		t.Fatal("WritePlannedFiles(ForceOverwrite over directory): want error, got nil")
 	}
@@ -1113,7 +1113,7 @@ func TestWritePlannedFiles_PlanContainmentPass_EscapesRoot(t *testing.T) {
 	plan := []pathsafe.PlannedFile{
 		{AbsPath: filepath.Join(t.TempDir(), "outside.yaml"), Content: []byte("id: x\n")},
 	}
-	if err := pathsafe.WritePlannedFiles(root, testNewPlanSet(t, plan), false); err == nil {
+	if err := pathsafe.WritePlannedFiles(root, mustPlanSet(t, plan), false); err == nil {
 		t.Fatal("WritePlannedFiles(AbsPath escapes root): want error, got nil")
 	}
 }
@@ -1180,8 +1180,8 @@ func runForceOverwriteParityCase(t *testing.T, tc forceOverwriteParityCase) {
 		}
 	}
 
-	dryErr := pathsafe.WritePlannedFiles(dryRoot, testNewPlanSet(t, mk(dryRoot)), true)
-	liveErr := pathsafe.WritePlannedFiles(liveRoot, testNewPlanSet(t, mk(liveRoot)), false)
+	dryErr := pathsafe.WritePlannedFiles(dryRoot, mustPlanSet(t, mk(dryRoot)), true)
+	liveErr := pathsafe.WritePlannedFiles(liveRoot, mustPlanSet(t, mk(liveRoot)), false)
 
 	if (dryErr != nil) != (liveErr != nil) {
 		t.Fatalf("dry-run/live parity broken for %s: dryErr=%v liveErr=%v",

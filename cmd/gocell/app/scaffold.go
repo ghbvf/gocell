@@ -507,16 +507,30 @@ func validateSliceScaffoldFlags(id, cellID, level string) error {
 	if cellID == "" {
 		return fmt.Errorf("--cell is required")
 	}
-	if err := validateScaffoldID(id, "--id"); err != nil {
-		return err
+	// --id and --cell share the AssemblyIDPattern (^[a-z][a-z0-9]+$) — route
+	// through the single-source scaffoldid.Parse funnel
+	// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). The legacy validateScaffoldID
+	// path-traversal / control-char check is subsumed (Parse pattern is a
+	// strict superset of path-traversal rejection).
+	if _, err := scaffoldid.Parse(id); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold slice: --id does not match AssemblyIDPattern", err,
+			errcode.WithDetails(
+				slog.String("flag", "--id"),
+				slog.String("pattern", metadata.AssemblyIDPattern),
+			),
+			errcode.WithInternal(fmt.Sprintf("flag=--id value=%q pattern=%s",
+				id, metadata.AssemblyIDPattern)))
 	}
-	if err := validateScaffoldID(cellID, "--cell"); err != nil {
-		return err
-	}
-	if strings.Contains(id, "-") {
-		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"scaffold slice: --id must not contain '-'; use no-dash identifier",
-			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", id, strings.ReplaceAll(id, "-", ""))))
+	if _, err := scaffoldid.Parse(cellID); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold slice: --cell does not match AssemblyIDPattern", err,
+			errcode.WithDetails(
+				slog.String("flag", "--cell"),
+				slog.String("pattern", metadata.AssemblyIDPattern),
+			),
+			errcode.WithInternal(fmt.Sprintf("flag=--cell value=%q pattern=%s",
+				cellID, metadata.AssemblyIDPattern)))
 	}
 	if !validSliceLevels[level] {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
@@ -776,6 +790,24 @@ func renderInlineSliceYAML(id, cellID, level string) ([]byte, error) {
 // filled in. Mirrors the 5 deferred kind=command contracts.
 // ID, Kind, and OwnerCell are wrapped with yamlsafe.Quote so YAML-meta
 // characters in user input cannot inject extra fields or break scalar parsing.
+//
+// NOTE: standalone `gocell scaffold contract` and the bundled
+// `gocell scaffold cell --with-http/--with-events` emit different
+// contract.yaml shapes:
+//
+//   - standalone (this template): writes `codegen: false` explicitly because
+//     the empty draft has no schemaRefs yet. Edit-then-`codegen: true` is the
+//     intended flow.
+//   - bundled (cellgen.planExampleContract): omits the codegen: field entirely
+//     so the parser default (codegen: true) drives derived generation. The
+//     bundled flow ships with concrete request/response schemas already, so
+//     `codegen: false` would be wrong. archtest
+//     SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 locks the bundled shape.
+//
+// The two paths are NOT a regression — they encode different user intents
+// (empty draft vs. compilable example). Do not merge them without first
+// proving the bundled flow can also emit `codegen: false` without breaking
+// the immediate-compile guarantee.
 var inlineContractYAMLTpl = template.Must(template.New("contract-yaml").Parse(`id: {{.ID}}
 kind: {{.Kind}}
 ownerCell: {{.OwnerCell}}

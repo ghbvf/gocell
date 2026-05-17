@@ -124,20 +124,20 @@ func scaffoldAssembly(root string, args []string) error {
 // exported helper IsDNS1123Label invoked from CLI, scaffold, and admission.
 func validateAssemblyFlags(id, cells, team, role string) (scaffoldid.ScaffoldID, []scaffoldid.ScaffoldID, error) {
 	if id == "" {
-		return "", nil, fmt.Errorf("--id is required")
+		return scaffoldid.ScaffoldID{}, nil, fmt.Errorf("--id is required")
 	}
 	if cells == "" {
-		return "", nil, fmt.Errorf("--cells is required")
+		return scaffoldid.ScaffoldID{}, nil, fmt.Errorf("--cells is required")
 	}
 	if team == "" {
-		return "", nil, fmt.Errorf("--team is required")
+		return scaffoldid.ScaffoldID{}, nil, fmt.Errorf("--team is required")
 	}
 	if role == "" {
-		return "", nil, fmt.Errorf("--role is required")
+		return scaffoldid.ScaffoldID{}, nil, fmt.Errorf("--role is required")
 	}
 	asmID, err := scaffoldid.Parse(id)
 	if err != nil {
-		return "", nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+		return scaffoldid.ScaffoldID{}, nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--id does not match metadata AssemblyIDPattern", err,
 			errcode.WithDetails(
 				slog.String("flag", "--id"),
@@ -147,24 +147,24 @@ func validateAssemblyFlags(id, cells, team, role string) (scaffoldid.ScaffoldID,
 				id, metadata.AssemblyIDPattern)))
 	}
 	if !metadata.IsValidMetadataText(team) {
-		return "", nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+		return scaffoldid.ScaffoldID{}, nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--team contains forbidden control characters",
 			errcode.WithInternal(fmt.Sprintf("flag=--team value=%q", team)))
 	}
 	if !metadata.IsValidMetadataText(role) {
-		return "", nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+		return scaffoldid.ScaffoldID{}, nil, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--role contains forbidden control characters",
 			errcode.WithInternal(fmt.Sprintf("flag=--role value=%q", role)))
 	}
 	rawCells := splitAndTrim(cells, ",")
 	if len(rawCells) == 0 {
-		return "", nil, fmt.Errorf("--cells must list at least one cell")
+		return scaffoldid.ScaffoldID{}, nil, fmt.Errorf("--cells must list at least one cell")
 	}
 	cellList := make([]scaffoldid.ScaffoldID, 0, len(rawCells))
 	for _, c := range rawCells {
 		parsed, err := scaffoldid.Parse(c)
 		if err != nil {
-			return "", nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			return scaffoldid.ScaffoldID{}, nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 				"--cells[] entry does not match metadata CellIDPattern", err,
 				errcode.WithDetails(
 					slog.String("flag", "--cells[]"),

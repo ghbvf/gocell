@@ -512,7 +512,7 @@ func (g *Generator) renderAssemblyScaffoldFiles(
 // ref: kubernetes/apimachinery pkg/util/validation/validation.go —
 // IsDNS1123Label single-helper validation; same pattern applied here.
 func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error {
-	if spec.ID == "" {
+	if spec.ID.IsZero() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: ID is required")
 	}

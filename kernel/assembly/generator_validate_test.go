@@ -71,7 +71,7 @@ func TestValidateAssemblyScaffoldSpec_OwnerTextRule(t *testing.T) {
 			gen := NewGenerator(project, "github.com/ghbvf/gocell", t.TempDir())
 			spec := AssemblyScaffoldSpec{
 				ID:        mustID(t, "myassembly"),
-				Cells:     []scaffoldid.ScaffoldID{"examplecell"},
+				Cells:     []scaffoldid.ScaffoldID{scaffoldid.MustParse("examplecell")},
 				OwnerTeam: tc.team,
 				OwnerRole: tc.role,
 			}

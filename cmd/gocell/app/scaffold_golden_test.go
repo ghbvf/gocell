@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
@@ -22,7 +23,7 @@ func TestScaffoldCell_GoldenCellGo(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := cellgen.ScaffoldSpec{
-		CellID:           "goldcell",
+		CellID:           scaffoldid.MustParse("goldcell"),
 		StructName:       "GoldCell",
 		Package:          "goldcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -78,7 +79,7 @@ func TestScaffoldCell_GoldenCellYAML(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := cellgen.ScaffoldSpec{
-		CellID:           "goldcell",
+		CellID:           scaffoldid.MustParse("goldcell"),
 		StructName:       "GoldCell",
 		Package:          "goldcell",
 		ModulePath:       "github.com/ghbvf/gocell",

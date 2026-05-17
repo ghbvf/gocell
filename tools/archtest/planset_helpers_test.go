@@ -1,3 +1,10 @@
+// planset_helpers_test.go — shared archtest fixture helpers reused by
+// archtest funnel tests that exercise pathsafe.PlanSet construction and
+// scaffoldid.ScaffoldID validation.
+//
+// invariants asserted in this file (none — pure helper module):
+//   - INVARIANT: PATHSAFE-PLANSET-FUNNEL-01 (shared mustPlanSet helper)
+//   - INVARIANT: SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01 (shared mustID helper)
 package archtest
 
 import (

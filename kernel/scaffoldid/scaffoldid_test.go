@@ -45,8 +45,8 @@ func TestParse_Accept(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse(%q): unexpected err: %v", tc.raw, err)
 			}
-			if string(got) != tc.raw {
-				t.Fatalf("Parse(%q) = %q, want %q", tc.raw, string(got), tc.raw)
+			if got.String() != tc.raw {
+				t.Fatalf("Parse(%q) = %q, want %q", tc.raw, got.String(), tc.raw)
 			}
 		})
 	}

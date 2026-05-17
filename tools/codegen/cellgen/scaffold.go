@@ -192,7 +192,7 @@ func validateScaffoldSpec(spec ScaffoldSpec) error {
 // via scaffoldid.Parse; the path-traversal / no-dash checks are subsumed by
 // the AssemblyIDPattern (`^[a-z][a-z0-9]+$`) the Parse funnel enforces.
 func validateIdentifierFields(spec ScaffoldSpec) error {
-	if spec.CellID == "" {
+	if spec.CellID.IsZero() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold cell: required field missing",
 			errcode.WithDetails(slog.String("field", "CellID")))

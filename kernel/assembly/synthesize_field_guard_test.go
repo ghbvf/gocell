@@ -54,7 +54,7 @@ func TestAssemblyMetaSynthesisFieldGuard(t *testing.T) {
 
 	spec := AssemblyScaffoldSpec{
 		ID:        mustID(t, "myasm"),
-		Cells:     []scaffoldid.ScaffoldID{"mycell"},
+		Cells:     []scaffoldid.ScaffoldID{scaffoldid.MustParse("mycell")},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 		Deploy:    "binary", // pick non-default so DeployTemplate is non-zero
@@ -150,7 +150,7 @@ func TestAssemblyMetaSynthesisFieldGuard_DefaultK8sDerivation(t *testing.T) {
 
 	spec := AssemblyScaffoldSpec{
 		ID:        mustID(t, "myasm"),
-		Cells:     []scaffoldid.ScaffoldID{"mycell"},
+		Cells:     []scaffoldid.ScaffoldID{scaffoldid.MustParse("mycell")},
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 		Deploy:    "", // empty → must derive to "k8s" mirroring parser
