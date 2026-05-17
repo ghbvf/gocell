@@ -29,7 +29,7 @@ import (
 // optimistic-concurrency control on config entries and feature flags.
 // Composition root uses this constant when wiring cas.Protocol:
 //
-//	cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))
+//	cas.NewProtocol(cas.WithVersionField(configcore.VersionField))
 const VersionField = "version"
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
@@ -137,7 +137,7 @@ func WithClock(clk clock.Clock) Option {
 // WithCASProtocol sets the CAS protocol declaration for this Cell. Required in
 // durable mode — initInternal() fails fast if nil. Both bare-nil and typed-nil
 // *cas.Protocol values are rejected via sticky sentinel. Composition root
-// constructs via cas.MustNewProtocol (CAS-PROTOCOL-COMPOSITION-ROOT-01);
+// constructs via cas.NewProtocol (CAS-PROTOCOL-COMPOSITION-ROOT-01);
 // tests may inject a test-scoped *cas.Protocol.
 //
 // ref: runtime/http/router WithRateLimiter — same strong-dependency wiring

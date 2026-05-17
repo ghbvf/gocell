@@ -96,11 +96,17 @@ func main() {
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
+	jwtPlan, err := cell.NewAuthJWT(jwtVerifier)
+	if err != nil {
+		logger.Error("todoorder: invalid JWT auth plan", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ":8082",
-			[]cell.ListenerAuth{cell.MustNewAuthJWT(jwtVerifier)}),
+			[]cell.ListenerAuth{jwtPlan}),
 		bootstrap.WithListener(cell.InternalListener, ":9082", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	)

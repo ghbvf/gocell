@@ -37,12 +37,12 @@ func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error 
 
 	if c.casProtocolNil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"configcore: typed-nil *cas.Protocol rejected; use cas.MustNewProtocol(cas.WithVersionField(\"version\")) in composition root")
+			"configcore: typed-nil *cas.Protocol rejected; use cas.NewProtocol(cas.WithVersionField(\"version\")) in composition root")
 	}
 	if c.casProtocol == nil && reg.DurabilityMode() == cell.DurabilityDurable {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"configcore durable mode requires a CAS protocol; "+
-				"use WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(\"version\"))) in composition root")
+				"use WithCASProtocol(cas.NewProtocol(cas.WithVersionField(\"version\"))) in composition root")
 	}
 
 	// WithInMemoryDefaults defers repo construction to here so c.clk is available.

@@ -16,7 +16,6 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/logutil"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
@@ -42,8 +41,8 @@ type UpgradeConfig struct {
 	//
 	// AllowedOrigins must be non-empty and must not contain the full
 	// wildcard "*". The error-returning UpgradeHandler rejects invalid
-	// configuration; the MustUpgradeHandler composition-root helper panics
-	// on the same error. Validate normalizes whitespace in-place so that
+	// configuration; UpgradeHandler returns an error for invalid configuration.
+	// Validate normalizes whitespace in-place so that
 	// the slice handed to coder/websocket is the exact one that passed
 	// validation (no trim drift between check and runtime).
 	AllowedOrigins []string
@@ -213,16 +212,6 @@ func acceptUpgradeAndRegister(w http.ResponseWriter, r *http.Request, hub *rtws.
 		slog.String("subject", principal.Subject),
 		slog.String("kind", principal.Kind.String()),
 	)
-}
-
-// MustUpgradeHandler is the static-wiring variant of UpgradeHandler.
-func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
-	handler, err := UpgradeHandler(hub, cfg)
-	if err != nil {
-		panic(panicregister.Approved("websocket-upgrade-handler-init",
-			errcode.Assertion("websocket: upgrade handler construction failed: %v", err)))
-	}
-	return handler
 }
 
 func logUpgradeFailure(r *http.Request, err error) {

@@ -94,6 +94,25 @@ ref: hashicorp/vault `audit log_raw=false` 默认；golang/go `net/url.URL.Redac
 - 4 个公开构造函数返回 `(*T, error)`，body 顶部强制 `if err := ns.Validate(); err != nil { return nil, err }`，由 archtest `REDIS-KEY-NAMESPACE-01` 静态守卫。
 - 扩 Redis primitive 时同步进 `tools/archtest/redis_key_namespace_test.go` 的 `redisConstructors` 列表。
 
+## Readyz Verbose 四通道（HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01 + HEALTH-REDACTED-ERROR-MSG-FUNNEL-01）
+
+`/readyz?verbose` 路径的 dependency 信息分四通道，与上文 errcode 三层（Message / Details / Internal）并列：
+
+| 通道 | 载体 | wire 体 | server-side slog | 脱敏机制 |
+|------|------|--------|-----------------|---------|
+| a. Message | `errcode.Message` const literal | ✓ | ✓ | 不需要 |
+| b. Details | `errcode.Details` `[]slog.Attr` | 4xx ✓ / 5xx strip | ✓ | runtime 字段为低敏感 |
+| c. Internal | `errcode.WithInternal` | ✗ | ✓ | server-only |
+| **d. Ops-Diagnostics** | handler-side `slog.Warn` typed payload | ✗ | ✓ | **typed funnel + archtest** |
+
+readyz 各字段归属：
+- wire body `dependencies[*]` (200 verbose) — 类型 `verboseDependencyEntry{Status, DurationMs}`，字段集冻结（`HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01`）。**wire 上不携带 error 文本**——对齐 Kubernetes apiserver healthz.go:274-275 wire/klog 双 buffer 分离。
+- slog `dependencies` — emit 形式 `slog.Group("dependencies", slog.Any(name, entry)...)` 而非 `slog.Any("dependencies", map)`。前者在 sub-attr resolve 阶段调 SlogDependencyEntry.LogValue() 输出 snake_case GroupValue，所有 handler（JSON / text / logfmt）一致；后者是 opaque blob，JSON handler 在 unexported 字段下会输出 `{}` 丢失所有诊断信息（PR #552 round-4 实测 bug）。SlogDependencyEntry 类型本身导出（供外部 test type-assert 单个 entry），但**三个字段全部 unexported** `status/durationMs/errorMsg`，对外仅 read-only accessor methods `Status()/DurationMs()/ErrorMsg() string`。唯一构造路径是包内 `newRedactedErrorMsg(err) → pkg/redaction.RedactString(err.Error())`，**无 testing-only exported 构造函数**——healthtest unit test 用 zero-value plumbing 测试，语义测试用 real Handler。Hard funnel 两端：**上游 Hard** = unexported 字段 + 无 testing backdoor → Go 编译器即 gate，外部包通过 composite literal 不可表达任何字段赋值；**下游 Hard** = `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01` archtest 锁包内 conversion CallExpr（FuncDecl.Body + GenDecl 双扫）必在 funnel 函数体内。
+
+Handler 直接 `slog.Warn` 的 ops-diagnostics 通道（d）见下方 §"Readyz Verbose 四通道"。
+
+详见 ADR `docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md`。
+
 ## Audit Payload Redaction（auditcore S7）
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：

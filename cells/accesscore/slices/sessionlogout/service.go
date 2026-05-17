@@ -11,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -80,20 +79,6 @@ func NewService(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "sessionlogout: TxRunner required; use WithTxManager")
 	}
 	return s, nil
-}
-
-// MustNewService is the static-wiring variant of NewService.
-func MustNewService(
-	sessionStore session.Store,
-	refreshStore refresh.Store,
-	logger *slog.Logger,
-	opts ...Option,
-) *Service {
-	s, err := NewService(sessionStore, refreshStore, logger, opts...)
-	if err != nil {
-		panic(panicregister.Approved("sessionlogout-invariant", errcode.Assertion("sessionlogout: invariant violated: %v", err)))
-	}
-	return s
 }
 
 // persistRevoke wraps the session update + event emit in a transaction runner.

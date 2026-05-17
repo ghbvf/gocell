@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
 
@@ -23,7 +22,7 @@ func TestRandomToken_LengthAndUniqueness(t *testing.T) {
 
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
-	l := distlock.MustNew(fd, fc)
+	l := mustNewLocker(fd, fc)
 
 	tokens := make(map[string]bool, n)
 	releases := make([]func() error, 0, n)

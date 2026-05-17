@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -99,7 +100,7 @@ func defaultRuntimeOptions(
 	consumerBase *outbox.ConsumerBase,
 	metricsHandler http.Handler,
 	adapterInfo map[string]string,
-) []bootstrap.Option {
+) ([]bootstrap.Option, error) {
 	// PR-A14b: three-listener topology — primary (business routes + JWT auth),
 	// internal (/internal/v1/* + service-token auth), health (/healthz /readyz
 	// /metrics on a dedicated port).
@@ -117,17 +118,25 @@ func defaultRuntimeOptions(
 	// ref: go-kratos/kratos app.go — per-server option pattern.
 	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	if shared.PrimaryHTTPAddr != "" {
+		primaryAuth, err := cell.NewAuthJWTFromAssembly(asm)
+		if err != nil {
+			return nil, fmt.Errorf("primary listener auth: %w", err)
+		}
 		opts = append(opts, bootstrap.WithListener(
 			cell.PrimaryListener, shared.PrimaryHTTPAddr,
-			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+			[]cell.ListenerAuth{primaryAuth},
 		))
 	}
-	opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, buildInternalAuthChain(shared.InternalGuard)))
+	internalChain, err := buildInternalAuthChain(shared.InternalGuard)
+	if err != nil {
+		return nil, fmt.Errorf("internal listener auth: %w", err)
+	}
+	opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalChain))
 	if shared.HealthHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []cell.ListenerAuth{cell.AuthNone{}}))
 	}
 	opts = append(opts, devtoolsOption(shared))
-	return opts
+	return opts, nil
 }
 
 // buildInternalAuthChain constructs the auth chain for the internal listener.
@@ -138,6 +147,10 @@ func defaultRuntimeOptions(
 //
 // See docs/ops/listener-topology.md for the deployment topology, threat boundaries,
 // and single-listener migration guide that frame this auth-chain composition.
-func buildInternalAuthChain(guard *internalGuard) []cell.ListenerAuth {
-	return []cell.ListenerAuth{cell.MustNewAuthServiceToken(guard.NonceStore(), guard.ring)}
+func buildInternalAuthChain(guard *internalGuard) ([]cell.ListenerAuth, error) {
+	plan, err := cell.NewAuthServiceToken(guard.NonceStore(), guard.ring)
+	if err != nil {
+		return nil, fmt.Errorf("build internal auth chain: %w", err)
+	}
+	return []cell.ListenerAuth{plan}, nil
 }

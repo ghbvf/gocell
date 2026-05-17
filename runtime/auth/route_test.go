@@ -222,13 +222,6 @@ func TestMount_ReturnsErrorOnPublicWithPolicy(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestMustMount_PanicsOnNilHandler(t *testing.T) {
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on nil Handler")
-	}()
-	MustMount(newCaptureMux(), Route{Contract: loginContractSpec()})
-}
-
 func TestRequirePolicy_NilReturnsError(t *testing.T) {
 	middleware, err := RequirePolicy(nil)
 	require.Error(t, err)

@@ -6,9 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // HTTPHandler wraps next with contract-id propagation and contract-derived
@@ -36,7 +34,7 @@ import (
 //
 // spec is validated at call time; invalid specs or nil handlers cause a
 // non-nil error to be returned so the caller can choose between fail-fast
-// (use MustHTTPHandler) and graceful refusal at composition time.
+// composition time and graceful refusal at runtime registration.
 //
 // ref: go-kratos/kratos middleware/tracing/tracing.go — the middleware is
 // the single HTTP server span owner; handlers contribute attributes, not
@@ -57,18 +55,6 @@ func HTTPHandler(spec contractspec.ContractSpec, next http.Handler) (http.Handle
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}), nil
-}
-
-// MustHTTPHandler is the composition-root fail-fast variant of HTTPHandler.
-// It panics when HTTPHandler returns an error. Suitable for static wiring
-// where the spec is a build-time literal; use HTTPHandler directly when the
-// spec is data-driven.
-func MustHTTPHandler(spec contractspec.ContractSpec, next http.Handler) http.Handler {
-	h, err := HTTPHandler(spec, next)
-	if err != nil {
-		panic(panicregister.Approved("wrapper-handler-init", errcode.Assertion("wrapper: handler: %v", err)))
-	}
-	return h
 }
 
 func validateHTTPHandlerArgs(spec contractspec.ContractSpec, next http.Handler) error {

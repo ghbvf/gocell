@@ -13,7 +13,37 @@
 | **1.8 — FindFirstChild façade + USAGE-02 升 Hard** | 1 | ✅ PR #511 (2026-05-16) | 吸收 037 PR #505 治理产物（含 F6 同包裸调用 post-merge review 闭环）；不计入 Stage 3 实质迁移进度 |
 | 2 — A 类 EachFile 主题分批迁移 | 4 | ✅ 全部 ship | PR-2 ✅ #496 (metadata)；PR-3 ✅ #493 (contract/codegen)；PR-4 ✅ #498 (observability)；PR-5 ✅ #497 (lifecycle/errcode) |
 | 3 — E 类 for-range 主题分批迁移 | 5→3 | ✅ PR-8~10 合并入 PR #522 consolidated-batch 交付（2026-05-16）| PR-6 ✅ #500；PR-7 ✅ #507；余 37 文件合并为单一 PR #522（实测文件数 37 > 原估 27；shared-helper 图谱强耦合导致 batch 非独立，consolidated 更可行）；LegacyAllowlist 已清零 |
-| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ✅ LegacyAllowlist 已清零（PR #522）；余 archtestmeta 包删除 + depguard yaml 收尾（独立 Stage 4 PR） | — |
+| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ✅ PR #PENDING (2026-05-17) | — |
+
+**阶段 4 ship 摘要（PR #PENDING，2026-05-17）**：
+
+- **删除 `tools/archtest/internal/archtestmeta/` 整个包**（迁移期 scaffold 终结；LegacyAllowlist 已在 PR #522 清零）
+- **新增 `RunTypedFixture` + `FixtureOpts` typed funnel**（Hard 范本：业务调用方在 type system 上无法表达"传 Tags 加载 fixture"——编译失败；`FixtureOpts` 不含 Tags 字段）
+- **`TestPassFunnelGuardListSync` 单一等式简化**：删旧 (A)(B)(C) 三段 LegacyAllowlist 交叉验证；改为 `yamlExempt == passFunnelPermanentExempt` 和 `packagesImport == passFunnelPermanentExempt` 两条精确等式断言（`maps.Equal` + `cmp.Diff`）
+- **`passFunnelPermanentExempt` Medium 评级显式声明**：godoc 加 AI-rebust Medium 评级说明 + mechanical sync via double-declaration + 不升 Hard 的 ADR-mandated 理由
+- **`.golangci.yml` 收尾**：删除迁移期注释块（archtestmeta.LegacyAllowlist / 27 files / stage 2/3 PRs migrating 等历史话术）；保留 deny 规则 + 3 个永久 self-exemption + ADR §Termination criteria 引用
+- **`ai-collab.md` §载体决策原则**：第 3 条路由改写为公开 façade 引导；加防误判说明（既有文件直接 import `internal/scanner` / `internal/typeseval` helper 合法）；新增 §Hard 范本条目「typed function choice with input-struct field exclusion」
+- **5 处注释更新**：`resolve.go` / `adapter_error_classification_test.go` / `passfunnelfixture/redfixture.go` / `basesliceredfixture/base_slice_literal.go` / `basesliceredfixture/slice_meta_literal.go`——删 archtestmeta 引用，改指 `RunTypedFixture` / `FixtureOpts`
+- **静态反向锁 `TestArchtestmetaPackageDeleted`**：防 scaffold 回退（`os.Stat` 断言目录不存在）
+
+**阶段 4 review R1 closure（同 PR post-first-cut commits，2026-05-17，R1 + R1.1 合并叙事）**：
+
+> **根因（R1）**：PR #536 first-cut 把 `RunTypedFixture` + `FixtureOpts` 评为 "Hard 范本"，承诺业务调用方在 type system 上无法表达"传 Tags 加载 fixture"。但实际只锁了下游 outward Hard（FixtureOpts 缺字段致编译失败），**上游 Soft**：`RunTyped` 仍接受任意 Tags，业务可写 `RunTyped(t, TypedOpts{Tags: []string{"archtest_fixture"}}, ...)` 直接绕过 `RunTypedFixture`。review 指出当前 PR 内 `http_contract_visibility_type_segregation_01_test.go:352` 就是活样本，且无 meta-archtest 阻止后续业务复制此形态。ai-collab.md §Review checklist 「新引入 Soft → reject，要求改 ≥ Medium」要求同 PR 内升 Hard，不接受局部 Hard / 全局 Soft 的 ship 形态。
+>
+> **根因（R1.1）**：R1 第一次实现 detector 时只锁 `BasicLit STRING == "archtest_fixture"`，丢掉了 callee 维度——本应同构 §Hard 范本第 2 条 panicregister.Approved 的 (callee, arg) pair 形态，结果退化为 "arg literal value only"。同一 R1 commit 引入的 `archtest.FixtureBuildTag` const 自身成了新绕过路径（业务可写 `RunTyped(t, TypedOpts{Tags: []string{FixtureBuildTag}}, ...)`，BasicLit-only detector 视而不见）。这是典型 "Soft 上 Soft + patch" 反模式。R1.1 同 PR 内 detector 形态重写：升级到 (callee, arg) pair type-aware ban，对齐 panic 范本 Go ceiling Hard 完整形态。
+
+- **新增 `archtest.FixtureBuildTag` 包级 const**（`fixture.go`）：typed-reference 单源，给 Go-code 路径识别 fixture tag（如 `panic_invariants_test.go` 跳过 fixture tag 组）用；`RunTypedFixture` body 改用 `Tags: []string{FixtureBuildTag}`，archtest 源内 "archtest_fixture" 字面量只出现 1 次（const RHS）；godoc 把原 "no FixtureBuildTag const" 论断重写为 "Go build directive 不能引用 const → //go:build 那侧硬编 + Go-code 那侧用 const" 双源 by construction
+- **新增 `PASS-FUNNEL-FIXTURE-TAG-01`**（`pass_funnel_test.go::diagsFixtureTagBypass` + `TestPassFunnelFixtureTagBypass01` + `TestPassFunnel_FixtureCoverage` 4-form per-form 子断言）：**R1.1 终态形态** = type-aware (callee, arg) pair：(i) callee 经 `typeseval.ResolvePackageRef` 解析到 `fixtureTagLoaderSet`（`archtest.{RunTyped, RunTypedProduction, RunTypedDir}` + `typeseval.{SharedResolver, LoadPackages, LoadProductionPackages}`；EachFileInPackage 不接受 tags 不在集合内），(ii) 每个 arg 子树 `ast.Inspect`-walk + `typeseval.EvaluateConstString` 解析到 `"archtest_fixture"`。EvaluateConstString 已实现的解析格栈（BasicLit / Ident → const / SelectorExpr → 跨包 const / BinaryExpr → 拼接）统一覆盖 4 形态，无 per-shape 分支。exempt = 既有 `passFunnelPermanentExempt`（3 entry，fixture.go 由 `*_test.go` 后缀过滤自动排除）。AI-rebust evidence：archtest-bound (callee, arg) form-uniqueness Hard，同构 §Hard 范本第 2 条 panicregister.Approved Go ceiling 形态。Blind spots = 同文件 var escape（Tags arg 是 `*ast.Ident` 解到 var 而非 const）/ cross-func var / reflect / fixtureTagLoaderSet 枚举维护 — 全同 PASS-FUNNEL-LOADPACKAGES-01 / RESOLVE-01 同型 accept 等级
+- **fixture 文件 V' RED 重构**（`internal/passfunnelfixture/redfixture.go`）：删 R1 加的 `_ = "archtest_fixture"` 裸字面量（V 形态 RED，V' 不命中——按"不向后兼容"原则删）；新增 `fixtureTagBypassRedForms` 函数体内 4 个 `typeseval.SharedResolver` 调用，分别覆盖 Form A（BasicLit）/ B（local const Ident，新加 `const localFixtureTag = "archtest_fixture"`）/ C（BinaryExpr 拼接）/ D（跨包 SelectorExpr，新加 `import "github.com/ghbvf/gocell/tools/archtest"` — 无 cycle，archtest 通过 runtime load 加载 fixture 而非 import）；`TestPassFunnel_FixtureCoverage` per-form trip-wire 用 comment-anchored line lookup（`// Form A` 等注释 + 行号 + 1），单 form fixture 删除即对应 form 断言失败
+- **业务 callsite 迁移**：
+  - `http_contract_visibility_type_segregation_01_test.go`：helper `runHTTPContractVisibilityCheck(tags []string, patterns)` → `(fixture bool, patterns)`；fixture=true 走 `RunTypedFixture`，fixture=false 走 `RunTyped`；两 phase 仍共享 SharedResolver cache（与 façade 入口无关）
+  - `panic_invariants_test.go:367`：`containsTag(tagGroup, "archtest_fixture")` → `containsTag(tagGroup, FixtureBuildTag)`（callee 不在 fixtureTagLoaderSet，detector 自然放行）
+- **6 处 fixture 包 godoc 示例文本同步**（`rawparamfixture`/`auditledgerfixture`/`inspectorredfixture`/`wrapfixture/violation`/`sessionprotocolfixture`/`refreshinvariantsfixture`）：示例改为 `archtest.RunTypedFixture(...)` 而非 `typeseval.SharedResolver(..., []string{"archtest_fixture"}, ...)`
+- **3 处 fixture 包 godoc 文字同步**（`basesliceredfixture` × 2 + `passfunnelfixture` × 1）：原 "must agree with the 'archtest_fixture' literal (single source: RunTypedFixture helper)" 改为 "must agree with the literal value of `archtest.FixtureBuildTag`（//go:build 不能引用 const 是结构性 hard-code 理由）"
+- **F2 注释修正**（review 同时发现）：`pass_funnel_test.go:258` 旧 "single-source (LegacyAllowlist)" → "single-source (passFunnelPermanentExempt)"
+- **章程同步（R1.1 终态形态）**：`ai-collab.md` §Hard 范本第 4 条「typed function choice with input-struct field exclusion」末尾追加 **配套要求 — funnel 双向闭锁** 段——以本 R1.1 闭环为先例，明示该范本必须同 PR 内补 meta-archtest 锁 façade 旁路；**形态选择段强制 (callee, arg) pair form-uniqueness**，警告"只锁 BasicLit 字面量值"是常见反模式（同 PR 引入的新 const 自身会成新绕过路径）
+- **ADR amendment 落地必查**：ADR `202605141519` §"PR #536 review R1 amendment — façade bypass closure" 段原地重写为 R1 + R1.1 合并叙事 + 完整三轨威胁矩阵（before R1 / R1 first attempt / R1.1 final）；§Hard-line three-defense 表第 4 行措辞改 type-aware (callee, arg) pair ban；§Termination criteria (d) 同步 — 按 ai-collab.md §"ADR amendment 落地必查" 同 PR 内重写，不留 R1 旧措辞作"历史脉络"
+- **验证**：`go build ./...` 绿；`go test ./tools/archtest/... -count=1` 全绿；`hack/verify-archtest.sh` 16-shard process-isolated PASS（TOTAL=458，旧 457+1 新 `TestPassFunnelFixtureTagBypass01`，由 ARCHTEST-VERIFY-COVERAGE-01 自动 discovery）；业务 archtest *_test.go 内零字面量 `"archtest_fixture"` 残留（仅 fixture.go const RHS / pass.go godoc / passFunnelPermanentExempt 3 文件 + passfunnelfixture redfixture.go 内 V' RED）
 
 **阶段 1.8 ship 摘要（本 PR，2026-05-16）**：
 
@@ -342,11 +372,11 @@ linters-settings:
 
 | 原则 | 符合性 | 说明 |
 |------|-------|------|
-| **彻底** | ✅ | 阶段 4 删 allowlist + scanner/typeseval 全部 internal 化，0 残留 |
-| **不向后兼容** | ✅ | 阶段 1 不引入"deprecated 旧 API 还能用"的过渡通道；scanner.EachFile 在 archtest 包外被 depguard 立即封锁，allowlist 是有终结点的迁移清单（todo list），不是兼容垫片 |
-| **0 二次返工** | ✅ | 业务文件只在它的语义迁移 PR 中被 touch 一次（import + API + 语义同 commit）；Stage 1.6 双入口设计 D1 + Stage 1.7 RunTypedProduction 明确保护已 ship PR 调用点不被迫返工 |
-| **优雅简洁** | ✅ | Pass + Rule + Run/RunTyped/RunTypedDir/RunTypedProduction 四个核心入口；对标 go/analysis；helper 函数零额外发明 |
-| **AI HARD** | ✅ | 三重防线组合 Hard：(1) Pass.Pkg 不暴露 `*packages.Package` 让 INV-1 形态在新代码中编译失败；(2) depguard 锁住 packages 直接 import；(3) 元治理 archtest type-aware 拦截存量入口（含 LoadProductionPackages） |
+| **彻底** | ✅ | 阶段 4 已完成：archtestmeta 包整体删除，LegacyAllowlist 过滤逻辑清零，depguard yaml 迁移期注释收尾，TestArchtestmetaPackageDeleted 静态反向锁防回退（PR #PENDING 2026-05-17） |
+| **不向后兼容** | ✅ | 无 deprecation 别名、无 FixtureBuildTag re-export、无双路径并存；archtestmeta 整体删除不留过渡通道 |
+| **0 二次返工** | ✅ | 业务文件只在它的语义迁移 PR 中被 touch 一次；Stage 1.6 双入口设计 D1 + Stage 1.7 RunTypedProduction 明确保护已 ship PR 调用点；RunTypedFixture 收口 fixture 加载，6 处调用一次完成迁移 |
+| **优雅简洁** | ✅ | Pass + Rule + Run/RunTyped/RunTypedDir/RunTypedProduction/RunTypedFixture 五个核心入口；TestPassFunnelGuardListSync 三段合并为两条单一等式断言 |
+| **AI HARD** | ✅ | 三重防线 + 新 Hard 范本：(1) Pass.Pkg 不暴露 `*packages.Package` 让 INV-1 形态在新代码中编译失败；(2) depguard 锁住 packages 直接 import（终态仅 3 个 self-exemption）；(3) 元治理 archtest type-aware 拦截存量入口；(4) `RunTypedFixture + FixtureOpts{Tests}` 不含 Tags 字段——业务调用方在 type system 上无法表达"自传 build tag" |
 
 ## 关键设计决策
 

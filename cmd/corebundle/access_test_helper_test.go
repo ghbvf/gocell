@@ -28,11 +28,12 @@ func buildAccessCorePGOptions(tb testing.TB, pool *adapterpg.Pool, txMgr *adapte
 	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
 	require.NoError(tb, err, "buildAccessCorePGOptions: NewSetupLock")
 
-	sessionProto := session.MustNewProtocol(
+	sessionProto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	require.NoError(tb, err, "buildAccessCorePGOptions: session.NewProtocol")
 	pgSessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
 	require.NoError(tb, err, "buildAccessCorePGOptions: NewSessionStore")
 	pgRefreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), nil)

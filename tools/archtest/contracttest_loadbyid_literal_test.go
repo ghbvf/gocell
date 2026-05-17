@@ -81,7 +81,7 @@ func TestContracttestLoadByIDLiteral01_RedComputedID(t *testing.T) {
 	t.Parallel()
 
 	fixturePattern := "./tools/archtest/contracttest_loadbyid_literal_fixtures/red_computed_id/..."
-	diags := RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t, FixtureOpts{Tests: true},
 		[]string{fixturePattern},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
@@ -108,7 +108,7 @@ func TestContracttestLoadByIDLiteral01_RedStructFieldID(t *testing.T) {
 	t.Parallel()
 
 	fixturePattern := "./tools/archtest/contracttest_loadbyid_literal_fixtures/red_struct_field_id/..."
-	diags := RunTyped(t, TypedOpts{Tests: true, Tags: []string{"archtest_fixture"}},
+	diags := RunTypedFixture(t, FixtureOpts{Tests: true},
 		[]string{fixturePattern},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {

@@ -163,7 +163,10 @@ func TestEnvKeyProvider_HMACKeyRing_ReturnsSameInstance(t *testing.T) {
 // --- StaticKeyProvider tests ---
 
 func TestStaticKeyProvider_ReturnsProvidedKeySet(t *testing.T) {
-	ks, _, _ := MustNewTestKeySet(clock.Real())
+	priv, pub, err := GenerateRSAKeyPair()
+	require.NoError(t, err)
+	ks, err := NewKeySet(priv, pub, clock.Real())
+	require.NoError(t, err)
 	p := NewStaticKeyProvider(ks, nil)
 
 	got, err := p.RSAKeySet()
@@ -195,22 +198,7 @@ func TestStaticKeyProvider_NilHMACKeyRingReturnsError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- MustNewTestKeyProvider tests ---
-
-func TestMustNewTestKeyProvider_ReturnsValidProvider(t *testing.T) {
-	p := MustNewTestKeyProvider(clock.Real())
-	require.NotNil(t, p)
-
-	ks, err := p.RSAKeySet()
-	require.NoError(t, err)
-	assert.NotNil(t, ks)
-	assert.NotEmpty(t, ks.SigningKeyID())
-
-	ring, err := p.HMACKeyRing()
-	require.NoError(t, err)
-	assert.NotNil(t, ring)
-	assert.True(t, len(ring.Current()) >= MinHMACKeyBytes)
-}
+// --- keystest.MustNewKeyProvider tests live in runtime/auth/keystest/keys_test.go. ---
 
 // --- helpers ---
 

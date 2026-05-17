@@ -1,92 +1,146 @@
 // INVARIANT: CAS-PROTOCOL-COMPOSITION-ROOT-01
+//
+// # CAS-PROTOCOL-COMPOSITION-ROOT-01
+//
+// cas.NewProtocol may only be invoked from cmd/* (composition root) or
+// runtime/state/cas/* (the package itself). Cells, runtime/* (non-cas), and
+// adapters/* must receive an injected *cas.Protocol — not construct one.
+//
+// # AI-rebust: Medium (type-aware)
+//
+// The rule resolves every CallExpr's callee through archtest.ResolvePackageRef,
+// matching by the callee's owning package import path rather than the source-level
+// Ident name. The Soft predecessor matched `sel.X.(*ast.Ident).Name == "cas"` on
+// raw AST and missed two bypass forms:
+//
+//   - aliased import:  `import casPkg "…/runtime/state/cas"; casPkg.NewProtocol(...)`
+//   - dot import:      `import . "…/runtime/state/cas"; NewProtocol(...)`
+//
+// archtest.ResolvePackageRef covers all three callee shapes in one resolution:
+//   - SelectorExpr `pkg.Func` / `alias.Func` → info.Uses[sel.X].(*types.PkgName)
+//   - bare Ident `Func` (dot-import)          → info.Uses[id].(*types.Func)
+//
+// Hard is architecturally unattainable for this rule's shape (caller-allowlist
+// across multiple non-nested roots — cmd/, runtime/state/cas/, examples/):
+// Go's internal/ package mechanic admits only a single owning subtree, so
+// NewProtocol cannot be sealed to permit cmd/ + runtime/state/cas/* simultaneously
+// without reshaping the typed Protocol injection paradigm. See SESSION-PROTOCOL-
+// COMPOSITION-ROOT-01 for the same Hard-barrier analysis.
+//
+// # _test.go scope
+//
+// RunTyped(opts.Tests=false) loads only production-variant packages, so
+// _test.go files are not in pass.Files. The scanner additionally filters by
+// rel suffix for clarity — both gates are conservative.
+//
+// # Blind spots (BS)
+//
+//   - BS-1 Name shadowing: a non-cas package with a top-level function literally
+//     named NewProtocol does NOT match (pkgPath comparison rejects it).
+//     archtest.ResolvePackageRef returns the callee's owning package via
+//     go/types, not the import-site alias.
+//
+//   - BS-2 Function-value indirection: `var fn = cas.NewProtocol; fn(...)` —
+//     the `cas.NewProtocol` reference itself is a SelectorExpr that
+//     ResolvePackageRef would match if it were a CallExpr.Fun. But the subsequent
+//     `fn()` callee is a *types.Var (not *types.Func), so the resolver returns
+//     ok=false. Accepted: the repo has no such pattern; this is the same accepted
+//     blind spot as SESSION-PROTOCOL-COMPOSITION-ROOT-01 BS-2.
+//
+//   - BS-3 Reflection construction: out of scope per ai-collab.md §3.
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
-// CAS-PROTOCOL-COMPOSITION-ROOT-01: cas.NewProtocol /
-// cas.MustNewProtocol may only be invoked from cmd/* (composition root)
-// or runtime/state/cas/* (the package itself + storetest helpers). Cells,
-// runtime/* (non-cas), adapters/*, and tests outside cas/* must
-// receive an injected *cas.Protocol — not construct one.
+const (
+	casProtocolRuleID  = "CAS-PROTOCOL-COMPOSITION-ROOT-01"
+	casPkgImportPath   = "github.com/ghbvf/gocell/runtime/state/cas"
+	casOwnPkgRelPrefix = "runtime/state/cas/"
+	casOwnPkgRelExact  = "runtime/state/cas"
+)
+
+// casProtocolForbidden is the closed set of cas-package constructors banned
+// outside the composition root. (MustNewProtocol was deleted by B2-K-02;
+// only NewProtocol remains.)
+var casProtocolForbidden = map[string]struct{}{
+	"NewProtocol": {},
+}
+
+// TestCASProtocol_CompositionRootOnly enforces CAS-PROTOCOL-COMPOSITION-ROOT-01:
+// cas.NewProtocol may only be invoked from cmd/* (composition root) or
+// runtime/state/cas/* (the package itself). Cells, runtime/* (non-cas), and
+// adapters/* must consume an injected *cas.Protocol — not construct one.
 //
-// This is a Medium AI-rebust archtest (type-aware AST scan of call sites by
-// package path; not a string anchor). Hard is unattainable without removing
-// cas-package import from cells, which would defeat the typed-Go-heavy
-// paradigm (cells must consume the typed Protocol shape).
-//
-// AI 协作章程 .claude/rules/gocell/ai-collab.md: ≥ Medium qualifies for
-// adoption.
+// cmd/ and examples/ are intentionally outside the scan scope:
+//   - cmd/* is the composition root by definition.
+//   - examples/* each carry their own composition root; allowing them mirrors
+//     the AUTH-PLAN-04 / LAYER-09 carve-out for example projects.
 func TestCASProtocol_CompositionRootOnly(t *testing.T) {
-	// Scan cells/, runtime/ (excluding runtime/state/cas/), adapters/.
-	// cmd/ is not scanned — it is the composition root and is naturally allowed
-	// to call cas.NewProtocol / cas.MustNewProtocol.
-	// examples/ is also excluded: it owns its own composition root.
-	root := findModuleRoot(t)
-	casPrefix := "runtime/state/cas/"
-
-	scope := DirsScope(root, []string{"cells", "runtime", "adapters"},
-		MatchRels(func(rel string) bool {
-			rel = filepath.ToSlash(rel)
-			if !strings.HasSuffix(rel, ".go") {
-				return false
-			}
-			if strings.HasSuffix(rel, "_test.go") {
-				return false
-			}
-			// Allowlist: runtime/state/cas/ owns the package itself
-			// (protocol.go and related helpers).
-			return !strings.HasPrefix(rel, casPrefix)
-		}),
+	diags := RunTyped(t,
+		TypedOpts{Tests: false},
+		casProtocolProductionPatterns(),
+		scanCASProtocolViolations,
 	)
+	Report(t, casProtocolRuleID, diags)
+}
 
-	forbidden := map[string]bool{
-		"NewProtocol":     true,
-		"MustNewProtocol": true,
+// casProtocolProductionPatterns returns the package patterns scanned by the
+// production rule (cells / runtime / adapters).
+func casProtocolProductionPatterns() []string {
+	return []string{
+		"./cells/...",
+		"./runtime/...",
+		"./adapters/...",
 	}
+}
 
-	type hit struct {
-		file string
-		line int
-		name string
-	}
-	var hits []hit
-
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return
-				}
-				pkg, ok := sel.X.(*ast.Ident)
-				if !ok || pkg.Name != "cas" {
-					return
-				}
-				if forbidden[sel.Sel.Name] {
-					hits = append(hits, hit{
-						file: p.Rel(file),
-						line: p.Fset.Position(call.Pos()).Line,
-						name: sel.Sel.Name,
-					})
-				}
-			})
+// scanCASProtocolViolations walks every CallExpr in pass.Files, resolves the
+// callee to its (pkgPath, name) tuple via archtest.ResolvePackageRef, and flags
+// hits whose owning package is runtime/state/cas and whose name is in
+// casProtocolForbidden.
+//
+// Two file-level filters apply:
+//
+//   - _test.go suffix: defense-in-depth alongside TypedOpts{Tests: false}.
+//   - rel under "runtime/state/cas/": the package itself owns the constructor.
+//
+// Used by both TestCASProtocol_CompositionRootOnly (production scan, asserts
+// zero diagnostics) and TestCASProtocol_RedFixtureDetected (fixture scan,
+// asserts exactly 3 diagnostics across qualified / aliased / dot-import shapes).
+func scanCASProtocolViolations(p *Pass) []Diagnostic {
+	var out []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
 		}
-		return nil
-	})
-
-	for _, h := range hits {
-		t.Logf("CAS-PROTOCOL-COMPOSITION-ROOT-01: %s:%d calls cas.%s outside cmd/ + runtime/state/cas/",
-			h.file, h.line, h.name)
+		// Exempt the cas package itself and its sub-packages.
+		if rel == casOwnPkgRelExact || strings.HasPrefix(rel, casOwnPkgRelPrefix) {
+			continue
+		}
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+			if !ok || pkgPath != casPkgImportPath {
+				return
+			}
+			if _, banned := casProtocolForbidden[name]; !banned {
+				return
+			}
+			line := p.Fset.Position(call.Pos()).Line
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"cas.%s must only be called from cmd/* (composition root) or runtime/state/cas/*; "+
+						"cells / runtime (non-cas) / adapters must consume an injected *cas.Protocol",
+					name),
+			})
+		})
 	}
-	assert.Empty(t, hits,
-		"CAS-PROTOCOL-COMPOSITION-ROOT-01: cas.NewProtocol / cas.MustNewProtocol "+
-			"must only be called from cmd/* (composition root) or runtime/state/cas/*; "+
-			"cells/runtime/adapters must consume an injected *cas.Protocol")
+	return out
 }

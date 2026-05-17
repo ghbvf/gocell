@@ -651,18 +651,21 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	t.Parallel()
 	key := testHMACKey()
 	// WithChainHMAC zeros the caller's key slice after making an internal copy
-	// (F7: HMAC key zeroing). Save a copy before calling MustNewProtocol so the
+	// (F7: HMAC key zeroing). Save a copy before calling NewProtocol so the
 	// reference HMAC computation below uses the original key bytes.
 	keyCopy := make([]byte, len(key))
 	copy(keyCopy, key)
 
 	ns, _ := ledger.ParseNamespaceID("auditcore")
-	p := ledger.MustNewProtocol(
+	p, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(key),
 		ledger.WithNamespace(ns),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
+	if err != nil {
+		t.Fatalf("NewProtocol: %v", err)
+	}
 
 	fixedNow := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	e := &ledger.Entry{

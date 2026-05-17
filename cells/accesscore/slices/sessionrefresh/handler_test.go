@@ -51,9 +51,10 @@ func setup(t testing.TB) (http.Handler, string) {
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
 
-	svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
+	svc, err := NewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 		withTestInvalidator(userRepo, sessionStore, refreshStore))
+	require.NoError(t, err)
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
@@ -205,7 +206,7 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 	sessionStore := newTestSessionStore(t)
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
-	svc := MustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, store, testIssuer, slog.Default(),
+	svc := mustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
 		withTestInvalidator(userRepo, sessionStore, newTestRefreshStore()))
 	mux := celltest.NewTestMux()

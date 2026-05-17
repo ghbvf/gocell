@@ -151,7 +151,7 @@ func TestScannerFrameworkUsage01_InspectorMethodBanLive(t *testing.T) {
 	// the tag packages.Load returns an empty package and the test fails red on
 	// got=0 want=4.
 	var diags []scanner.Diagnostic
-	RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/inspectorredfixture"},
 		func(p *Pass) []Diagnostic {
 			for _, file := range p.Files {

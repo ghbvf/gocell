@@ -9,6 +9,7 @@ bin/
 dist/
 /gocell
 /ssobff
+/corebundle
 
 # Test
 *.test

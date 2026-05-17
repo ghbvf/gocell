@@ -27,6 +27,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -36,6 +37,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -330,11 +332,12 @@ func buildPGStores(t *testing.T) *pgStores {
 	setupLock, err := accesspg.NewSetupLock(pgDeps)
 	require.NoError(t, err)
 
-	sessionProto := session.MustNewProtocol(
+	sessionProto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	require.NoError(t, err)
 	sessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
 	require.NoError(t, err)
 	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), rand.Reader)
@@ -375,7 +378,7 @@ func buildAuthLayer(t *testing.T) *authLayer {
 	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
@@ -442,7 +445,7 @@ func buildCells(
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(a.bootstrapMW),
 		accesscore.WithCursorCodec(accessCursorCodec),
-		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
+		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -451,7 +454,7 @@ func buildCells(
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
+		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
 	auditHMACKey := mustRandom32Bytes()
 	auditLedgerOpts, auditStore := buildAuditcoreLedgerOpts(t, auditHMACKey)
@@ -483,10 +486,10 @@ func runBootstrap(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(a.nonceStore, a.ring)},
+			[]cell.ListenerAuth{celltest.MustAuthServiceToken(a.nonceStore, a.ring)},
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
@@ -612,4 +615,13 @@ func postSetupAdmin(base string, body *bytes.Reader) (*http.Response, error) {
 	req.SetBasicAuth(bootstrapUsername, bootstrapPassword)
 	req.Header.Set("Content-Type", "application/json")
 	return httpClient.Do(req)
+}
+
+func mustNewCASProtocol(t *testing.T, versionField string) *cas.Protocol {
+	t.Helper()
+	p, err := cas.NewProtocol(cas.WithVersionField(versionField))
+	if err != nil {
+		t.Fatalf("cas.NewProtocol: %v", err)
+	}
+	return p
 }

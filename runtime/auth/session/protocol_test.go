@@ -185,52 +185,50 @@ func TestNewProtocol_WithRevokeOn_Accumulates(t *testing.T) {
 	}
 }
 
-// TestMustNewProtocol_OK: composition-root convenience wrapper succeeds with
-// valid options.
-func TestMustNewProtocol_OK(t *testing.T) {
+// TestNewProtocol_OK: NewProtocol succeeds with valid options.
+func TestNewProtocol_OK(t *testing.T) {
 	t.Parallel()
-	p := session.MustNewProtocol(
+	p, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	if err != nil {
+		t.Fatalf("unexpected error from NewProtocol: %v", err)
+	}
 	if p == nil {
-		t.Fatal("expected non-nil protocol from MustNewProtocol")
+		t.Fatal("expected non-nil protocol from NewProtocol")
 	}
 }
 
-// TestMustNewProtocol_Panic_OnError: composition-root wrapper panics on
-// validation failure (typed-nil fingerprint).
-func TestMustNewProtocol_Panic_OnError(t *testing.T) {
+// TestNewProtocol_Error_OnMissingFingerprint: NewProtocol returns error on
+// validation failure (missing fingerprint).
+func TestNewProtocol_Error_OnMissingFingerprint(t *testing.T) {
 	t.Parallel()
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic from MustNewProtocol when fingerprint missing")
-		}
-		err, ok := r.(error)
-		if !ok {
-			t.Fatalf("expected panic value to be error, got %T: %v", r, r)
-		}
-		if !strings.Contains(err.Error(), "fingerprint") {
-			t.Errorf("expected panic error to mention fingerprint, got %q", err.Error())
-		}
-	}()
-	_ = session.MustNewProtocol(
+	_, err := session.NewProtocol(
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	if err == nil {
+		t.Fatal("expected error from NewProtocol when fingerprint missing")
+	}
+	if !strings.Contains(err.Error(), "fingerprint") {
+		t.Errorf("expected error to mention fingerprint, got %q", err.Error())
+	}
 }
 
 // TestProtocol_AccessorsImmutable: accessors return defensive copies of
 // internal slice fields so callers cannot mutate protocol state post-construction.
 func TestProtocol_AccessorsImmutable(t *testing.T) {
 	t.Parallel()
-	p := session.MustNewProtocol(
+	p, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	if err != nil {
+		t.Fatalf("NewProtocol: %v", err)
+	}
 	got := p.RevokeOn()
 	if len(got) == 0 {
 		t.Fatal("expected non-empty RevokeOn")

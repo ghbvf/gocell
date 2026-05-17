@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 )
 
 // stubIssuer implements TokenIssuer for tests. Per-intent failure injection
@@ -66,7 +67,7 @@ var _ ports.RoleRepository = (*stubRoleRepo)(nil)
 
 func newTestIssuer(t *testing.T) (*auth.JWTIssuer, *auth.KeySet) {
 	t.Helper()
-	keySet, _, _ := auth.MustNewTestKeySet(clock.Real())
+	keySet, _, _ := keystest.MustNewKeySet(clock.Real())
 	issuer, err := auth.NewJWTIssuer(keySet, "gocell-accesscore", auth.DefaultAccessTokenTTL, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)

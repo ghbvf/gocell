@@ -141,27 +141,84 @@ triggering request was verbose:
   `?verbose=true`): slog record additionally carries cells +
   dependencies + adapters maps.
 
-Verbose 503 slog example:
+Verbose 503 slog example（text handler，`-log-format=text` 默认）：
 
 ```
 level=WARN msg="readyz unhealthy"
   status=unhealthy reason=readiness_failed
-  cells={accesscore=healthy, auditcore=degraded}
-  dependencies={postgres_ready={status=healthy, duration_ms=3},
-                rabbitmq_ready={status=unhealthy, duration_ms=12,
-                                error="connection refused"}}
-  adapters={storage=postgres, eventbus=rabbitmq}
+  cells=map[accesscore:healthy auditcore:degraded]
+  dependencies.postgres_ready.status=healthy
+  dependencies.postgres_ready.duration_ms=3
+  dependencies.postgres_ready.error_msg=""
+  dependencies.rabbitmq_ready.status=unhealthy
+  dependencies.rabbitmq_ready.duration_ms=12
+  dependencies.rabbitmq_ready.error_msg="<REDACTED>"
+  adapters=map[storage:postgres eventbus:rabbitmq]
 ```
+
+Verbose 503 slog example（JSON handler，`-log-format=json`）：
+
+```json
+{
+  "level": "WARN",
+  "msg": "readyz unhealthy",
+  "status": "unhealthy",
+  "reason": "readiness_failed",
+  "cells": {"accesscore": "healthy", "auditcore": "degraded"},
+  "dependencies": {
+    "postgres_ready": {"status": "healthy", "duration_ms": 3, "error_msg": ""},
+    "rabbitmq_ready": {"status": "unhealthy", "duration_ms": 12, "error_msg": "<REDACTED>"}
+  },
+  "adapters": {"storage": "postgres", "eventbus": "rabbitmq"}
+}
+```
+
+`dependencies` 字段是 `slog.Group` 而非 `slog.Any(map)`——Group 内每个 sub-attr 的 value
+是 `health.SlogDependencyEntry`（LogValuer），handler 在 Resolve 阶段调
+`SlogDependencyEntry.LogValue()` → `slog.GroupValue(status / duration_ms / error_msg)`。
+所有 handler（JSON / text / logfmt）输出一致的 snake_case 字段；不会因 unexported
+字段而退化到 `{}`（这是 round-4 实测 bug 的形态，round-5 改 `slog.Group` 后修复）。
 
 Operators who need the full breakdown for an outage correlate 503s with
 the structured slog record via the standard log pipeline; if the triggering
 probes were non-verbose, hit `/readyz?verbose=true` manually with the
-operator token to elicit a verbose record. Probe `error` strings written
-into `dependencies[*].error` are run through `pkg/redaction.RedactString`
-(so DSNs / tokens / passwords are masked) and truncated to 512 bytes
-before the slog record is emitted. Probe implementations should still
-avoid putting secrets in their error messages as a defense-in-depth
-measure.
+operator token to elicit a verbose record.
+
+`dependencies[*].error` 字段在 ADR 202605171200 后已从 wire 响应体中完全移除。
+slog 通道（ops-diagnostics 通道 d）使用 typed `SlogDependencyEntry`，其 `errorMsg`
+字段（slog 序列化为 `error_msg`）经 `pkg/redaction.RedactString` 脱敏后才写入
+slog——脱敏后的字符串不再截断（slog 落盘容量不是问题；截断只在 wire 才必要，wire 不携带
+error 文本就无需截断）。Probe 实现仍应避免在 error message 中硬编码裸 secret，作为
+纵深防御。
+
+## 操作员诊断 cookbook
+
+### JSON handler（`-log-format=json`）
+
+```bash
+# 过滤所有 readyz unhealthy 事件并展示 dependencies 字段
+kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy") | .dependencies'
+
+# 进一步定位某个 probe 的 error_msg
+kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy") | .dependencies.rabbitmq_ready.error_msg'
+
+# Grafana / Loki LogQL 查询示例（结构化字段索引）：
+# {app="myapp"} | json | msg = "readyz unhealthy" | dependencies_rabbitmq_ready_status = "unhealthy"
+```
+
+### Text handler（`-log-format=text`，默认）
+
+```bash
+# 过滤 readyz unhealthy 行
+kubectl logs <pod> | grep "readyz unhealthy"
+
+# 提取某个 probe 的 error_msg（key=value 形态）
+kubectl logs <pod> | grep "readyz unhealthy" | grep -oE 'dependencies\.rabbitmq_ready\.error_msg="[^"]*"'
+```
+
+text handler 输出形态是 `dependencies.<probe_name>.<field>=<value>` 而非嵌套 `{}` 块，
+Loki / Grafana 通过 key=value 解析直接索引。如需更结构化的查询能力（嵌套对象路径），
+切换到 JSON handler。
 
 ### Waiving the verbose endpoint
 

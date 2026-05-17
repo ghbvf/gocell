@@ -5,7 +5,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // EnvKeyProviderOption configures EnvKeyProvider behavior.
@@ -118,17 +117,4 @@ func (p *StaticKeyProvider) HMACKeyRing() (*HMACKeyRing, error) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing, "HMAC key ring not configured")
 	}
 	return p.hmacRing, nil
-}
-
-// MustNewTestKeyProvider creates a KeyProvider with ephemeral RSA and HMAC keys
-// for testing. It panics on error, following the Go test helper convention.
-// clk is required; pass clock.Real() from the composition root or a clockmock
-// for time-controlled tests.
-func MustNewTestKeyProvider(clk clock.Clock) KeyProvider {
-	ks, _, _ := MustNewTestKeySet(clk)
-	ring, err := NewHMACKeyRing([]byte("test-hmac-secret-at-least-32-bytes!!"), nil)
-	if err != nil {
-		panic(panicregister.Approved("auth-test-hmac-keyring", errcode.Assertion("auth: failed to create test HMAC key ring: %v", err)))
-	}
-	return NewStaticKeyProvider(ks, ring)
 }

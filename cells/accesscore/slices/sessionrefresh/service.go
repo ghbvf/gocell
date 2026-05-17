@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -159,28 +160,23 @@ func NewService(
 	return s, nil
 }
 
-// MustNewService is the static-wiring variant of NewService.
-func MustNewService(
-	sessionStore session.Store,
-	roleRepo ports.RoleRepository,
-	userRepo ports.UserRepository,
-	refreshStore refresh.Store,
-	issuer *auth.JWTIssuer,
-	logger *slog.Logger,
-	opts ...Option,
-) *Service {
-	s, err := NewService(sessionStore, roleRepo, userRepo, refreshStore, issuer, logger, opts...)
-	if err != nil {
-		panic(panicregister.Approved("sessionrefresh-invariant", errcode.Assertion("sessionrefresh: invariant violated: %v", err)))
-	}
-	return s
-}
-
 // Refresh validates the presented opaque refresh token, checks the backing
 // session and subject, mints a new access JWT, and rotates the refresh token.
 // Token rejection surfaces ErrAuthRefreshFailed; dependency failures surface
 // ErrAuthRefreshUnavailable so clients do not confuse an outage with invalid
 // credentials.
+//
+// 检查顺序 (ADR §A11 重写 + §A12 wire-uniformity):
+//
+//  1. refreshStore.Peek + verifySession
+//  2. **session-state inline check (RevokedAt)** — revoked → cascadeRevoke +
+//     uniform 401 ErrAuthRefreshFailed; user is never loaded.
+//  3. subject-mismatch check
+//  4. fetchUserForRefresh (user lookup)
+//  5. rejectIfUserNotActive — 403 ErrAuthUserNotActive (semantically distinct
+//     from "invalid token")
+//  6. rejectIfStaleEpoch
+//  7. mint + rotate
 //
 // Presenting an access JWT (or any string that does not parse as the opaque
 // selector.verifier wire format) fails ParseOpaque inside refresh.Store and
@@ -279,6 +275,15 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
+
+	// Session-state inline check — must run BEFORE any user lookup so a
+	// revoked session never escalates to 403 (user-not-active) or 503
+	// (userRepo outage). Extracted to rejectIfRevokedSession to keep
+	// refreshInTx cognitive complexity within the ≤15 budget.
+	if err := s.rejectIfRevokedSession(ctx, sess, presented.SubjectID); err != nil {
+		return dto.TokenPair{}, err
+	}
+
 	if sess.SubjectID != presented.SubjectID {
 		if err := s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch"); err != nil {
 			return dto.TokenPair{}, err
@@ -290,6 +295,13 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
+	// User-bound credentialauthority funnel (ADR §A11 重写后, user-bound
+	// only). Session-revoked already rejected above. Baseline
+	// (CanAuthenticate) failure surfaces as 403 ErrAuthUserNotActive —
+	// distinct from the uniform 401 above because a still-live session
+	// with a now-suspended user is semantically "account state changed,"
+	// not "invalid token." cascadeRevoke clears the refresh chain so
+	// subsequent rotation attempts fail immediately.
 	if err := s.rejectIfUserNotActive(ctx, user, sess.ID); err != nil {
 		return dto.TokenPair{}, err
 	}
@@ -462,9 +474,11 @@ func authRefreshRejected() *errcode.Error {
 	return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthRefreshFailed, errMsgInvalidRefreshToken)
 }
 
-// verifySession checks that the session backing a rotated token is live and
-// cascade-revokes the refresh chain if it is not. Extracted from Refresh to
-// stay within the cognitive-complexity budget (F4/F5).
+// verifySession looks up the session row for a presented refresh token. It
+// handles infra-error and not-found classes here (cascade-revoke on not-found);
+// the session-revoked gate is enforced INLINE in refreshInTx (ADR §A11 重写
+// 后, session-state 独立 funnel SESSION-REVOKED-FIELD-ACCESS-01). F4/F5
+// extracted from Refresh to keep cognitive complexity within budget.
 func (s *Service) verifySession(ctx context.Context, sessionID string) (*session.ValidateView, error) {
 	sess, err := s.sessionStore.Get(ctx, sessionID)
 	if err != nil {
@@ -475,13 +489,6 @@ func (s *Service) verifySession(ctx context.Context, sessionID string) (*session
 		}
 		// F4: cascade-revoke on not-found; log the revoke error if it fails.
 		if err := s.cascadeRevoke(ctx, sessionID, "session-not-found"); err != nil {
-			return nil, err
-		}
-		return nil, authRefreshRejected()
-	}
-	if sess.RevokedAt != nil {
-		// F4: cascade-revoke on already-revoked session.
-		if err := s.cascadeRevoke(ctx, sessionID, "revoked-session"); err != nil {
 			return nil, err
 		}
 		return nil, authRefreshRejected()
@@ -513,16 +520,60 @@ func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) e
 	return nil
 }
 
-// rejectIfUserNotActive cascade-revokes the refresh chain and returns
-// ErrAuthUserNotActive (403) when the user is not in the 'active' state
-// (suspended / locked). S4.0 fail-closed: a non-active user must not obtain
-// a fresh access token; the cascade-revoke ensures subsequent rotation
-// attempts immediately fail rather than keep returning new tokens.
-// domain.User.CanAuthenticate() is the single source of truth shared with
-// sessionlogin and sessionvalidate. Extracted to keep refreshInTx cognitive
-// complexity ≤ 15 (.golangci.yml gocognit + sonar go:S3776).
+// rejectIfRevokedSession runs the session-state inline check (RevokedAt)
+// that ADR §A11 重写 moved out of the user-bound funnel. Extracted from
+// refreshInTx to keep that function within the ≤15 cognitive-complexity
+// budget after Wave 2 added the inline revoke + cascadeRevoke + log
+// sequence.
+//
+// Owner package: this file is in the SESSION-REVOKED-FIELD-ACCESS-01
+// allowlist (cells/accesscore/slices/sessionrefresh/), so the direct
+// sess.RevokedAt read is legitimate. cascadeRevoke clears the refresh
+// chain so subsequent rotation attempts immediately fail (post-§A11
+// wire-uniformity 防枚举, ADR §A13).
+//
+// Returns nil when the session is live (refreshInTx continues to the
+// subject-match / user-lookup / Assert / mint+rotate path). Returns a
+// non-nil error when the session is revoked OR when cascadeRevoke
+// surfaced an infra error — caller propagates as-is.
+func (s *Service) rejectIfRevokedSession(ctx context.Context, sess *session.ValidateView, subjectID string) error {
+	if sess.RevokedAt == nil {
+		return nil
+	}
+	if cascadeErr := s.cascadeRevoke(ctx, sess.ID, "revoked-session"); cascadeErr != nil {
+		return cascadeErr
+	}
+	s.logger.Warn("session-refresh: revoked session rejected",
+		slog.String("session_id", sess.ID),
+		slog.String("subject_id", subjectID))
+	return authRefreshRejected()
+}
+
+// rejectIfUserNotActive routes the baseline (user.CanAuthenticate via the
+// funnel's implicit check) gate. On failure it cascade-revokes the refresh
+// chain and returns the dedicated 403 (ErrAuthUserNotActive) — distinct
+// from the uniform 401 used by the session-revoked path because a refresh
+// call is already authenticated (the caller proved holding a valid refresh
+// token), so the signal "your account is no longer active" is semantically
+// valuable to the admin/UI consumer of /refresh. S4.0 fail-closed: a
+// non-active user must not obtain a fresh access token; the cascade-revoke
+// ensures subsequent rotation attempts immediately fail rather than keep
+// returning new tokens.
+//
+// Ordering note (ADR §A11 重写): session-revoked is now checked INLINE in
+// refreshInTx **before** the user is even loaded, so by the time this
+// function runs the session is known not-revoked and the user is known
+// fetched. The two-Assert-call pattern of the pre-§A11 form is collapsed
+// to a single user-bound Assert; revoked sessions never reach here.
+//
+// Cascade scope is session-scoped only (cascadeRevoke against this
+// sessionID); user-wide invalidation (epoch bump + RevokeForSubject) is
+// not triggered here because "non-active user" is not a security event —
+// account status changed via authzmutate which already ran the trifecta.
+// Reuse-attack and stale-epoch paths route through invalidator.Apply for
+// the user-wide cascade; this baseline gate is only refresh-chain cleanup.
 func (s *Service) rejectIfUserNotActive(ctx context.Context, user *domain.User, sessionID string) error {
-	if user.CanAuthenticate() {
+	if err := credentialauthority.Assert(user); err == nil {
 		return nil
 	}
 	if err := s.cascadeRevoke(ctx, sessionID, "user-not-active"); err != nil {

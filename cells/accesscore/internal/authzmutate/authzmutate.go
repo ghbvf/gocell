@@ -8,7 +8,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -44,21 +43,6 @@ func New(
 			"authzmutate: UserRepository required")
 	}
 	return &Mutator{inv: inv, repo: repo}, nil
-}
-
-// MustNew is the composition-root fail-fast wrapper around New. It panics on
-// validation failure to surface misconfiguration at process startup. Use only
-// from cmd/* (composition root) or test helpers.
-func MustNew(
-	inv *credentialinvalidate.Invalidator,
-	repo ports.UserRepository,
-) *Mutator {
-	m, err := New(inv, repo)
-	if err != nil {
-		panic(panicregister.Approved("authzmutate-mustnew",
-			errcode.Assertion("authzmutate: construction failed: %v", err)))
-	}
-	return m
 }
 
 // ApplyInTx executes the mutation within the caller-provided transaction

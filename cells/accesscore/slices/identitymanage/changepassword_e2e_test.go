@@ -45,13 +45,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // e2eTestKeySet holds a key pair shared across the e2e test.
-var e2eTestKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
+var e2eTestKeySet, _, _ = keystest.MustNewKeySet(clock.Real())
 
 // e2eIssuer is used by the login service.
 // WithIssuerAudiencesFromSlice(["gocell"]) must match the e2eVerifier's
@@ -98,11 +99,14 @@ type e2eFixture struct {
 
 func newE2EFixture() *e2eFixture {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	proto := session.MustNewProtocol(
+	proto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	if err != nil {
+		panic("newE2EFixture: session protocol setup failed: " + err.Error())
+	}
 	sessionStore, err := session.NewMemStore(proto, clock.Real())
 	if err != nil {
 		panic("newE2EFixture: session store setup failed: " + err.Error())
@@ -126,12 +130,15 @@ func newE2EFixture() *e2eFixture {
 	// no DB, so a stub that just invokes fn(ctx) satisfies the L2 contract.
 	tx := &stubTxRunner{}
 
-	loginSvc := sessionlogin.MustNewService(
+	loginSvc, err := sessionlogin.NewService(
 		userRepo, sessionStore, roleRepo, refreshStore, e2eIssuer, slog.Default(),
 		sessionlogin.WithClock(clock.Real()),
 		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
 		sessionlogin.WithSessionTTL(time.Hour),
 	)
+	if err != nil {
+		panic("newE2EFixture: loginSvc setup failed: " + err.Error())
+	}
 
 	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
 	if err != nil {

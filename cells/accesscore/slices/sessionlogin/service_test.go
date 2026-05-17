@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -23,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -74,7 +76,7 @@ func (r *trackingSessionStore) Revoke(ctx context.Context, id string) error {
 }
 
 var (
-	testKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
+	testKeySet, _, _ = keystest.MustNewKeySet(clock.Real())
 	testIssuer       *auth.JWTIssuer
 )
 
@@ -112,12 +114,32 @@ func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
 	assert.NotEmpty(t, pair.RefreshToken, "login must issue a non-empty opaque refresh token")
 }
 
+// mustNewService is a test-only construction helper that panics on error.
+// Use it in test functions where *testing.T is not available (e.g. non-test
+// setup functions) or where the construction error would be a programmer mistake.
+func mustNewService(
+	userRepo ports.UserRepository,
+	sessionStore session.Store,
+	roleRepo ports.RoleRepository,
+	refreshStore refresh.Store,
+	issuer *auth.JWTIssuer,
+	logger *slog.Logger,
+	opts ...Option,
+) *Service {
+	s, err := NewService(userRepo, sessionStore, roleRepo, refreshStore, issuer, logger,
+		append([]Option{WithClock(clock.Real())}, opts...)...)
+	if err != nil {
+		panic("mustNewService: " + err.Error())
+	}
+	return s
+}
+
 func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
 	t.Helper()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	return MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
+	return mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
@@ -272,7 +294,7 @@ func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
-	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		WithSessionTTL(time.Hour))
@@ -387,7 +409,7 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour))
@@ -416,7 +438,7 @@ func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSess
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
-	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		WithSessionTTL(time.Hour))
@@ -527,7 +549,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 	seedUser(userRepo, "role-outage", "pass123")
 
 	emitter := &countingEmitter{}
-	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
@@ -554,7 +576,7 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	u, err := userRepo.GetByUsername(context.Background(), "issue-outage")
 	require.NoError(t, err)
 
-	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour))
@@ -593,9 +615,10 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
-		outbox.WithLogger(slog.Default()))
+		outbox.WithLogger(slog.Default()),
+	)
 	require.NoError(t, err)
-	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer,
+	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer,
 		slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
@@ -616,7 +639,7 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 	require.NoError(t, err)
 
 	emitter := &countingEmitter{}
-	svc := MustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
@@ -640,7 +663,7 @@ func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup
 
 	// stubTxRunner (defined in outbox_test.go) is NOT a Nooper — isNoopTx returns false.
 	tx := &stubTxRunner{}
-	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()), WithSessionTTL(time.Hour))
 	seedUser(userRepo, "durable-refresh-fail", "pass123")
 
@@ -673,7 +696,7 @@ func TestCleanupIssuedSession_Revoke_IdempotentOnAbsent(t *testing.T) {
 	// attempt, so Revoke will succeed silently — the important assertion is
 	// that the original refresh error propagates unchanged.
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
-	svc := MustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, store, testIssuer, slog.Default(),
 		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		WithSessionTTL(time.Hour))
@@ -877,7 +900,7 @@ func TestLogin_PasswordVersionRace_OldPasswordRejected(t *testing.T) {
 				lockedUser:     tt.lockedUser,
 			}
 
-			svc := MustNewService(
+			svc := mustNewService(
 				racingRepo,
 				sessionStore,
 				mem.NewStore(clock.Real()).RoleRepository(),
@@ -949,7 +972,7 @@ func TestLoginInTx_InfraError_NotCollapsedTo401(t *testing.T) {
 		forUpdateErr:   infraErr,
 	}
 
-	svc := MustNewService(
+	svc := mustNewService(
 		hybridRepo,
 		testutil.RealSessionRepo(t),
 		store.RoleRepository(),
@@ -989,7 +1012,7 @@ func TestLoginInTx_NotFound_CollapsedTo401(t *testing.T) {
 		forUpdateErr:   notFoundErr,
 	}
 
-	svc := MustNewService(
+	svc := mustNewService(
 		hybridRepo,
 		testutil.RealSessionRepo(t),
 		store.RoleRepository(),
@@ -1028,7 +1051,7 @@ func TestLoginInTx_UnavailableError_NotCollapsedTo401(t *testing.T) {
 		forUpdateErr:   unavailErr,
 	}
 
-	svc := MustNewService(
+	svc := mustNewService(
 		hybridRepo,
 		testutil.RealSessionRepo(t),
 		store.RoleRepository(),
@@ -1103,7 +1126,7 @@ func TestIssueForUser_NonActiveUser_Rejected(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, userRepo.Create(context.Background(), u))
 
-			svc := MustNewService(
+			svc := mustNewService(
 				userRepo,
 				sessionStore,
 				mem.NewStore(clock.Real()).RoleRepository(),

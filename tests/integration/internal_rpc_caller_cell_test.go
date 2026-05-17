@@ -39,6 +39,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -47,6 +48,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -112,7 +114,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = internalLn.Close() })
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "caller-cell-test", testtime.D15min, clock.Real(),
@@ -165,7 +167,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		accesscore.WithCursorCodec(accessCursorCodec),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
-		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
+		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -175,7 +177,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
+		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
 	callerCellAuditNS, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
@@ -217,13 +219,13 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		bootstrap.WithListener(
 			cell.PrimaryListener,
 			primaryLn.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn),
 		),
 		bootstrap.WithListener(
 			cell.InternalListener,
 			internalLn.Addr().String(),
-			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(nonceStore, ring)},
+			[]cell.ListenerAuth{celltest.MustAuthServiceToken(nonceStore, ring)},
 			bootstrap.WithListenerNet(internalLn),
 		),
 		bootstrap.WithPublisher(eb),
@@ -430,4 +432,13 @@ func assertErrCode(t *testing.T, resp *http.Response, wantCode string) {
 		"response body must be JSON error envelope: %s", string(body))
 	assert.Equal(t, wantCode, envelope.Error.Code,
 		"error.code mismatch in response body: %s", string(body))
+}
+
+func mustNewCASProtocol(t *testing.T, versionField string) *cas.Protocol {
+	t.Helper()
+	p, err := cas.NewProtocol(cas.WithVersionField(versionField))
+	if err != nil {
+		t.Fatalf("cas.NewProtocol: %v", err)
+	}
+	return p
 }

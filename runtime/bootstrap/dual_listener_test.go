@@ -22,6 +22,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -97,7 +98,7 @@ func (c *dualListenerCell) Init(ctx context.Context, reg cell.Registry) error {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/test/ping"),
 				Handler:  http.HandlerFunc(c.onPublic),
 				Public:   true,
@@ -109,7 +110,7 @@ func (c *dualListenerCell) Init(ctx context.Context, reg cell.Registry) error {
 		Listener: cell.InternalListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/internal/v1/admin/ping"),
 				Handler:  http.HandlerFunc(c.onInternal),
 			})
@@ -125,7 +126,7 @@ func testInternalAuthChain(t *testing.T) ([]cell.ListenerAuth, *auth.HMACKeyRing
 	require.NoError(t, err)
 	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	return []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)}, ring
+	return []cell.ListenerAuth{celltest.MustAuthServiceToken(store, ring)}, ring
 }
 
 func getWithServiceToken(t *testing.T, rawURL string, ring *auth.HMACKeyRing) *http.Response {
@@ -676,12 +677,12 @@ func (c *duplicateMetaCell) Init(ctx context.Context, reg cell.Registry) error {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: spec,
 				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
 				Public:   true,
 			})
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: spec,
 				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
 				Public:   true,
@@ -1013,7 +1014,7 @@ func (c *middlewareOrderCell) Init(ctx context.Context, reg cell.Registry) error
 		Prefix:     "/api/v1/mwtest",
 		Middleware: []func(http.Handler) http.Handler{mw1, mw2},
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/mwtest/ping"),
 				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
 				Public:   true,

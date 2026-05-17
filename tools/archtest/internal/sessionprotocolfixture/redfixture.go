@@ -1,12 +1,14 @@
 //go:build archtest_fixture
 
 // Package sessionprotocolfixture contains intentionally-violating call sites
-// against runtime/auth/session.NewProtocol / MustNewProtocol that exercise
-// the type-aware detector in session_protocol_composition_root_test.go.
+// against runtime/auth/session.NewProtocol that exercise the type-aware
+// detector in session_protocol_composition_root_test.go. (session.MustNewProtocol
+// was deleted by B2-K-02; only NewProtocol remains.)
 //
 // Gated by the archtest_fixture build tag; production builds never see this
 // file. The fixture is loaded by TestSessionProtocol_RedFixtureDetected via
-// typeseval.SharedResolver with tags=[]string{"archtest_fixture"}.
+// archtest.RunTypedFixture (which injects the archtest_fixture tag inside
+// its body).
 //
 // # Forms covered
 //
@@ -36,10 +38,8 @@ import (
 
 func qualifiedCalls() {
 	_, _ = session.NewProtocol()
-	_ = session.MustNewProtocol()
 }
 
 func aliasedCalls() {
 	_, _ = sess.NewProtocol()
-	_ = sess.MustNewProtocol()
 }

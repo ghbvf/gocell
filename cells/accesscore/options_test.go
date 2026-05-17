@@ -252,7 +252,11 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
-		WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("password_version"))),
+		WithCASProtocol(func() *cas.Protocol {
+			p, err := cas.NewProtocol(cas.WithVersionField("password_version"))
+			require.NoError(t, err)
+			return p
+		}()),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)

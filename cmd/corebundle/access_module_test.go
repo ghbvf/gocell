@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -130,11 +132,32 @@ func TestAccessCoreModule_CASProtocolInjection(t *testing.T) {
 	// panic proves the parameters are valid. The composition root calls exactly
 	// this constructor form (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest guards
 	// that cells never call it directly).
-	proto := cas.MustNewProtocol(cas.WithVersionField("password_version"))
+	proto := mustNewCASProtocol(t, "password_version")
 	require.NotNil(t, proto, "CAS Protocol must be non-nil")
 	assert.Equal(t, "password_version", proto.VersionField(),
 		"CAS Protocol version field must match the DB column name from migration 022")
 	_, isStrictReject := proto.Conflict().(cas.ConflictPolicyStrictReject)
 	assert.True(t, isStrictReject,
 		"default conflict policy must be ConflictPolicyStrictReject (HTTP 409 on mismatch)")
+}
+
+func mustNewCASProtocol(t testing.TB, versionField string) *cas.Protocol {
+	t.Helper()
+	p, err := cas.NewProtocol(cas.WithVersionField(versionField))
+	if err != nil {
+		t.Fatalf("cas.NewProtocol: %v", err)
+	}
+	return p
+}
+
+// mustAuthJWT is the test helper for cell.NewAuthJWT — fail-fast on construction
+// error (typed-nil verifier etc.). Used by unit tests injecting a direct JWT plan
+// for fake-module / okCellModule wiring without going through assembly discovery.
+func mustAuthJWT(t testing.TB, verifier auth.IntentTokenVerifier) cell.AuthJWT {
+	t.Helper()
+	plan, err := cell.NewAuthJWT(verifier)
+	if err != nil {
+		t.Fatalf("cell.NewAuthJWT: %v", err)
+	}
+	return plan
 }

@@ -23,6 +23,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
+// mustNewService is a test-only construction helper that panics on error.
+func mustNewService(sessionStore session.Store, refreshStore refresh.Store, logger *slog.Logger, opts ...Option) *Service {
+	s, err := NewService(sessionStore, refreshStore, logger, opts...)
+	if err != nil {
+		panic("mustNewService: " + err.Error())
+	}
+	return s
+}
+
 func newLogoutRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
 	store, err := refreshmem.New(refresh.Policy{
@@ -44,7 +53,7 @@ type typedNilRefreshStore struct {
 func newTestService(t testing.TB) (*Service, session.Store) {
 	t.Helper()
 	store := testutil.RealSessionRepo(t)
-	return MustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{}))), store
+	return mustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{}))), store
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
@@ -234,7 +243,7 @@ func TestService_Logout_InfraErrorOnGet_ReturnsUnavailable(t *testing.T) {
 		Store: inner,
 		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "session store down"),
 	}
-	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	err := svc.Logout(context.Background(), "sess-infra", "usr-1")
 	require.Error(t, err, "logout must surface infra failures, not squash to not-found")
@@ -256,7 +265,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(),
+	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	err = svc.Logout(context.Background(), "sess-pub", "usr-1")

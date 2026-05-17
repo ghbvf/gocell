@@ -18,7 +18,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -49,19 +48,6 @@ func New(users ports.UserRepository, sessions session.Store, refreshStore refres
 			"credentialinvalidate: refresh.Store required")
 	}
 	return &Invalidator{users: users, sessions: sessions, refresh: refreshStore}, nil
-}
-
-// MustNew is the composition-root fail-fast wrapper around New. It panics on
-// validation failure to surface misconfiguration at process startup. Use only
-// from cmd/* (composition root) or test helpers; cells inject a pre-built *Invalidator.
-func MustNew(users ports.UserRepository, sessions session.Store, refreshStore refresh.Store) *Invalidator {
-	inv, err := New(users, sessions, refreshStore)
-	if err != nil {
-		// B class panic: programmer-error wiring, composition-root misconfiguration.
-		panic(panicregister.Approved("credentialinvalidate-mustnew",
-			errcode.Assertion("credentialinvalidate: construction failed: %v", err)))
-	}
-	return inv
 }
 
 // Apply executes the three credential-revocation operations inside the ambient
