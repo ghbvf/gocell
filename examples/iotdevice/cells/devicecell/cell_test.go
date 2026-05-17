@@ -344,7 +344,6 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-
 func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
 	// Uses DurabilityDemo (not DurabilityDurable) because InMemQueue is not
 	// suitable for durable deployments and Init will reject durable mode.
