@@ -501,7 +501,12 @@ func TestNewConnection_RecoverableDialError(t *testing.T) {
 		"recoverable dial error should return generic ErrAdapterAMQPConnect")
 }
 
-func TestConnection_Health_Closed(t *testing.T) {
+// TestConnection_Health_ConnRaceWindow simulates the "StateConnected but the
+// underlying conn flipped IsClosed before the reconnect goroutine could mark
+// Disconnected" race. The disposition is transient (errHealthReconnecting)
+// because the reconnect goroutine will resolve it; only explicit
+// Connection.Close() yields the non-transient terminal errHealthClosed.
+func TestConnection_Health_ConnRaceWindow(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	mockConn.mu.Lock()
@@ -510,9 +515,27 @@ func TestConnection_Health_Closed(t *testing.T) {
 
 	err := conn.Health(context.Background())
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_RECONNECTING",
+		"race window must route to reconnecting code, not terminal closed")
+	assert.True(t, errcode.IsTransient(err),
+		"race window is transient — reconnect goroutine will recover")
+}
+
+// TestConnection_Health_AfterExplicitClose verifies Connection.Close() latches
+// the c.closed sentinel and Health returns errHealthClosed
+// (ErrAdapterAMQPClosed, non-transient) — the terminal lifecycle signal that
+// subscribers must fail-fast on.
+func TestConnection_Health_AfterExplicitClose(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	require.NoError(t, conn.Close(context.Background()))
+
+	err := conn.Health(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CLOSED",
+		"explicit Close must yield the dedicated terminal code")
 	assert.False(t, errcode.IsTransient(err),
-		"closed connection must NOT be transient — explicit Close() does not self-heal")
+		"explicit Close is terminal — must NOT be transient (no retry)")
 }
 
 func TestConnection_AcquireChannel(t *testing.T) {
@@ -523,7 +546,12 @@ func TestConnection_AcquireChannel(t *testing.T) {
 	assert.NotNil(t, ch)
 }
 
-func TestConnection_AcquireChannel_ConnectionClosed(t *testing.T) {
+// TestConnection_AcquireChannel_ConnRaceWindow exercises the race-window path:
+// underlying conn.IsClosed() is true while c.closed is still false (the
+// reconnect goroutine has not yet flipped state). AcquireChannel returns
+// transient ErrAdapterAMQPConnect so subscribers retry — distinct from the
+// terminal explicit-Close path covered by AfterExplicitClose below.
+func TestConnection_AcquireChannel_ConnRaceWindow(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	mockConn.mu.Lock()
@@ -532,7 +560,28 @@ func TestConnection_AcquireChannel_ConnectionClosed(t *testing.T) {
 
 	_, err := conn.AcquireChannel()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT",
+		"race window must route to transient connect code")
+	assert.True(t, errcode.IsTransient(err),
+		"race window is transient — subscriber retries")
+}
+
+// TestConnection_AcquireChannel_AfterExplicitClose verifies AcquireChannel
+// returns the terminal errHealthClosed (ErrAdapterAMQPClosed, non-transient)
+// after Connection.Close() — closes the asymmetry where AcquireChannel
+// previously returned transient under the same lifecycle state as Health()'s
+// non-transient errHealthClosed.
+func TestConnection_AcquireChannel_AfterExplicitClose(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	require.NoError(t, conn.Close(context.Background()))
+
+	_, err := conn.AcquireChannel()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CLOSED",
+		"explicit Close must yield the dedicated terminal code (matches Health())")
+	assert.False(t, errcode.IsTransient(err),
+		"explicit Close is terminal — AcquireChannel must NOT be transient")
 }
 
 func TestConnection_ReleaseChannel_PoolFull(t *testing.T) {
@@ -3468,11 +3517,11 @@ func TestIsRecoverableAMQPError(t *testing.T) {
 			want: true,
 		},
 		{
-			// errHealthClosed remains errcode.New(KindInternal) because an
-			// explicit Close() does not self-heal; subscribers must NOT retry
-			// on this signal (fail-fast on terminal lifecycle).
-			name: "ErrAdapterAMQPConnect via New(KindInternal) — closed terminal, NOT recoverable",
-			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection is closed"),
+			// errHealthClosed uses dedicated ErrAdapterAMQPClosed via
+			// errcode.New(KindInternal) — explicit Close() does not self-heal;
+			// subscribers must NOT retry on this terminal lifecycle signal.
+			name: "ErrAdapterAMQPClosed via New(KindInternal) — explicit Close terminal, NOT recoverable",
+			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPClosed, "rabbitmq: connection is closed"),
 			want: false,
 		},
 	}
@@ -3986,6 +4035,7 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 		name     string
 		state    ConnectionPhase
 		conn     AMQPConnection
+		closed   bool
 		permErr  error
 		wantCode errcode.Code
 		wantNil  bool
@@ -4018,6 +4068,24 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 			permErr:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "bad creds"),
 			wantCode: ErrAdapterAMQPConnectPermanent,
 		},
+		{
+			// Explicit Close latches c.closed; Health must yield the terminal
+			// ErrAdapterAMQPClosed regardless of phase, conn, or permErr.
+			name:     "explicit Close latched (c.closed=true) supersedes everything",
+			state:    StateConnected,
+			conn:     mockConn,
+			closed:   true,
+			wantCode: ErrAdapterAMQPClosed,
+		},
+		{
+			// Race window: state=StateConnected but underlying conn==nil
+			// (reconnect goroutine has not flipped state yet). Must be
+			// transient ErrAdapterAMQPReconnecting, not terminal closed.
+			name:     "StateConnected with nil conn (race window) → reconnecting",
+			state:    StateConnected,
+			conn:     nil,
+			wantCode: ErrAdapterAMQPReconnecting,
+		},
 	}
 
 	for _, tt := range tests {
@@ -4030,6 +4098,7 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 				clock:        clock.Real(),
 				state:        tt.state,
 				conn:         tt.conn,
+				closed:       tt.closed,
 				permanentErr: tt.permErr,
 			}
 

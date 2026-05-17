@@ -36,10 +36,17 @@ const (
 	ErrAdapterAMQPConnectTimeout errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_TIMEOUT"
 	// ErrAdapterAMQPNeverConnected signals Health() when the connection has never
 	// successfully completed a dial (StateConnecting). Distinct from
-	// ErrAdapterAMQPConnect (which covers connection-available and connection-closed
-	// states) so operators can distinguish "never dialed" from other health states.
+	// ErrAdapterAMQPConnect (transient race window: StateConnected but conn.IsClosed)
+	// and ErrAdapterAMQPClosed (terminal: explicit Connection.Close()).
 	// Always WrapInfra → IsTransient == true (broker may become reachable).
-	ErrAdapterAMQPNeverConnected     errcode.Code = "ERR_ADAPTER_AMQP_NEVER_CONNECTED"
+	ErrAdapterAMQPNeverConnected errcode.Code = "ERR_ADAPTER_AMQP_NEVER_CONNECTED"
+	// ErrAdapterAMQPClosed signals that the Connection has been explicitly closed
+	// via Connection.Close() (c.closed latched to true). Routed via
+	// errcode.New(KindInternal) → IsTransient == false: explicit Close is a
+	// terminal lifecycle decision that will not self-heal — subscribers must NOT
+	// retry. Distinct from ErrAdapterAMQPConnect (transient race window where
+	// reconnect goroutine may recover).
+	ErrAdapterAMQPClosed             errcode.Code = "ERR_ADAPTER_AMQP_CLOSED"
 	ErrAdapterAMQPPublish            errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
 	ErrAdapterAMQPConfirmTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
 	ErrAdapterAMQPSubscribe          errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
@@ -71,25 +78,30 @@ const (
 	defaultRMQConnectTimeout = 5 * time.Second
 )
 
-// Pre-allocated Health() errors to avoid per-call allocation.
+// Pre-allocated Health() / AcquireChannel() errors to avoid per-call allocation.
 //
-// Transient vs permanent distinction (Wave-4-B ADAPTER-CONNECT-BUDGET-01):
-//   - reconnecting / never-connected → transient (broker may recover, subscribers
-//     should retry) → errcode.WrapInfra → IsTransient == true
-//   - closed → permanent (explicit Close, will not self-heal) →
-//     errcode.New(KindInternal) → IsTransient == false
+// Transient vs permanent disposition is the single-source-of-truth via the
+// errcode.WrapInfra marker; subscribers and operators drive retry decisions
+// off errcode.IsTransient rather than keying on code strings.
 //
-// This makes the transient marker (single source of truth) drive subscriber
-// retry decisions; consumer of Health() can use errcode.IsTransient directly
-// instead of keying on code strings.
+//   - reconnecting / never-connected → transient (broker may recover, retry) →
+//     errcode.WrapInfra → IsTransient == true
+//   - closed → terminal (explicit Connection.Close() latched c.closed) →
+//     errcode.New(KindInternal) + dedicated ErrAdapterAMQPClosed →
+//     IsTransient == false; subscribers must NOT retry on this signal
 //
-// errHealthNeverConnected uses ErrAdapterAMQPNeverConnected (distinct from
-// ErrAdapterAMQPConnect) so operators can distinguish "never successfully
-// dialed" from "connection available" / "connection closed" states.
+// The "StateConnected but conn.IsClosed()" race window (reconnect goroutine
+// has not yet flipped state) is intentionally NOT modeled by errHealthClosed
+// — it returns errHealthReconnecting (transient) so the subscriber treats it
+// as a recoverable transient blip rather than a terminal close.
+//
+// Each code is distinct so operators can tell the four health failure modes
+// apart from a single label: never-dialed (NeverConnected), lost-reconnecting
+// (Reconnecting), terminal-close (Closed), unexpected-permanent (ConnectPermanent).
 var (
 	errHealthReconnecting   = errcode.WrapInfra(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting", nil)
 	errHealthNeverConnected = errcode.WrapInfra(ErrAdapterAMQPNeverConnected, "rabbitmq: never connected", nil)
-	errHealthClosed         = errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
+	errHealthClosed         = errcode.New(errcode.KindInternal, ErrAdapterAMQPClosed, "rabbitmq: connection is closed")
 )
 
 // ConnectionPhase represents the lifecycle state of a Connection.
@@ -956,12 +968,22 @@ func (c *Connection) drainChannelPool() {
 //     no-op defensive guard only.
 func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	c.mu.RLock()
+	closed := c.closed
 	permErr := c.permanentErr
 	conn := c.conn
 	c.mu.RUnlock()
 
-	// Terminal state: return permanent error so callers (Publisher, Subscriber)
-	// get a consistent error code instead of generic "connection not available".
+	// Terminal: explicit Connection.Close() — fail-fast with non-transient
+	// errHealthClosed so subscribers stop retrying (matches Health()'s
+	// disposition for the same lifecycle state). Must precede the pool / conn
+	// fast paths so cached pool channels aren't handed out after Close.
+	if closed {
+		return nil, errHealthClosed
+	}
+
+	// Terminal: permanent classification recorded by reconnectWithBackoff
+	// (ErrCredentials / vhost gone / SASL failure). Same code as Health() so
+	// publishers and subscribers get a consistent error.
 	if permErr != nil {
 		return nil, permErr
 	}
@@ -975,8 +997,9 @@ func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	}
 
 	if conn == nil || conn.IsClosed() {
-		// Transient: connection unavailable during reconnect/startup; subscribers
-		// retry via errcode.IsTransient on the AcquireChannel return.
+		// Transient race window: StateConnected but the underlying socket flipped
+		// closed before reconnect goroutine could switch state. Subscribers retry
+		// via errcode.IsTransient on the AcquireChannel return.
 		return nil, errcode.WrapInfra(ErrAdapterAMQPConnect, "rabbitmq: connection not available", nil)
 	}
 
@@ -1056,28 +1079,38 @@ func (c *Connection) CloseEphemeralChannel(ch AMQPChannel) {
 //
 // Error codes returned:
 //   - nil: healthy (StateConnected, live connection, permanentErr cleared)
+//   - ErrAdapterAMQPClosed: explicit Connection.Close() latched c.closed —
+//     terminal lifecycle, non-transient via errcode.New(KindInternal);
+//     subscribers must NOT retry. Highest precedence: returned even if a
+//     prior permanentErr or transient state would otherwise apply.
 //   - ErrAdapterAMQPConnectPermanent: a reconnect dial was classified
 //     permanent and the broker has not accepted us since. The reconnect
 //     goroutine is still trying — if the operator restores creds/vhost, the
 //     next successful dial clears this and Health returns nil again.
 //   - ErrAdapterAMQPReconnecting: lost connection, backoff reconnect in
 //     progress (StateDisconnected) without a recorded permanent
-//     classification.
+//     classification — also returned for the "StateConnected but
+//     conn.IsClosed()" race window (transient: reconnect goroutine will
+//     flip state momentarily).
 //   - ErrAdapterAMQPNeverConnected: StateConnecting — never successfully
 //     completed a dial (transient via WrapInfra, broker may become reachable).
-//   - ErrAdapterAMQPConnect: connection closed unexpectedly (StateConnected
-//     but conn==nil || conn.IsClosed()) — kept non-transient via
-//     errcode.New(KindInternal); explicit Close does not self-heal.
 func (c *Connection) Health(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	c.mu.RLock()
+	closed := c.closed
 	state := c.state
 	conn := c.conn
 	permErr := c.permanentErr
 	c.mu.RUnlock()
 
+	// Explicit Close supersedes every other disposition: once latched, no
+	// reconnect goroutine will recover, so /readyz owes a non-transient
+	// terminal signal and subscribers must fail-fast.
+	if closed {
+		return errHealthClosed
+	}
 	// permanentErr supersedes the phase: a connection in StateDisconnected
 	// with permanentErr set still owes /readyz a 503 because the broker is
 	// rejecting us, even though the reconnect goroutine keeps retrying.
@@ -1093,7 +1126,10 @@ func (c *Connection) Health(ctx context.Context) error {
 		// Fall through to conn.IsClosed() check below.
 	}
 	if conn == nil || conn.IsClosed() {
-		return errHealthClosed
+		// Race window: state flipped to Connected but the socket is already
+		// dead before reconnect goroutine could mark Disconnected. Subscribers
+		// retry via IsTransient; this is NOT a terminal close.
+		return errHealthReconnecting
 	}
 	return nil
 }
