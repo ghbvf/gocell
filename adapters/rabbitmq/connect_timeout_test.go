@@ -43,7 +43,14 @@ const connectTimeoutDefaultExpected = testtime.D5s
 func TestNewConnection_ConnectTimeout_Blackhole(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
-		t.Skip("blackhole timeout test requires network reach to RFC 5737 TEST-NET-1; skipped in -short mode")
+		// Depends on RFC 5737 TEST-NET-1 (192.0.2.0/24) being silently
+		// blackholed by the egress path so the dial sits waiting for the
+		// configured ConnectTimeout to fire. Firewalls / sandboxes that
+		// ICMP-reject would short-circuit the dial with connection-refused
+		// and never exercise the timeout branch — skip there. Classification
+		// logic is exhaustively covered by table tests
+		// (TestClassifyDialError / TestClassifyConnectError) without network.
+		t.Skip("blackhole timeout test depends on packet drop to RFC 5737 TEST-NET-1; skipped in -short mode")
 	}
 
 	start := time.Now()

@@ -599,9 +599,10 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 	clock.MustHaveClock(c.clock, "rabbitmq.NewConnection")
 
 	if err := c.connect(); err != nil {
-		// classifyConnectError reads rawErr (1st arg) for classification BEFORE
-		// sanitizeDialError (2nd arg) is evaluated — Go's left-to-right argument
-		// evaluation guarantees this order. Do not swap arguments.
+		// rawErr (1st arg) must be the un-sanitized error so classifyDialError
+		// can read the *net.OpError / *amqp.Error typed shape. sanitizeDialError
+		// (2nd arg) collapses the chain to a fmt.Errorf string for the outer
+		// envelope, which would defeat classification if passed as rawErr.
 		return nil, classifyConnectError(err, c.sanitizeDialError(err))
 	}
 
@@ -1062,8 +1063,11 @@ func (c *Connection) CloseEphemeralChannel(ch AMQPChannel) {
 //   - ErrAdapterAMQPReconnecting: lost connection, backoff reconnect in
 //     progress (StateDisconnected) without a recorded permanent
 //     classification.
-//   - ErrAdapterAMQPConnect: never connected (StateConnecting) or conn
-//     closed unexpectedly.
+//   - ErrAdapterAMQPNeverConnected: StateConnecting — never successfully
+//     completed a dial (transient via WrapInfra, broker may become reachable).
+//   - ErrAdapterAMQPConnect: connection closed unexpectedly (StateConnected
+//     but conn==nil || conn.IsClosed()) — kept non-transient via
+//     errcode.New(KindInternal); explicit Close does not self-heal.
 func (c *Connection) Health(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err

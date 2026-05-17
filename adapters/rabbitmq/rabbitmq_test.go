@@ -944,13 +944,6 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 	require.NoError(t, waitErr, "WaitConnected should succeed with unbounded reconnect attempts (A.1)")
 }
 
-// TestIsPermanentDialError removed in Wave-4-B (ADAPTER-CONNECT-BUDGET-01):
-// isPermanentDialError helper is being deleted in commit-3 because its bool
-// twin-class abstraction is superseded by classifyDialError's 4-class enum +
-// classifyConnectError funnel. TestClassifyDialError (in
-// connection_runtime_terminal_test.go) covers all sentinels + structural
-// shapes the deleted test exercised.
-
 func TestSanitizeURL(t *testing.T) {
 	tests := []struct {
 		name     string
