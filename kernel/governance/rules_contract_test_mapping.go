@@ -121,8 +121,8 @@ func (v *Validator) ctmSliceToContract() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		for i, entry := range s.Verify.Contract {
-			if r, ok := v.ctmEvaluateServeEntry(s, i, entry); ok {
-				results = append(results, r)
+			if r := v.ctmEvaluateServeEntry(s, i, entry); r != nil {
+				results = append(results, *r)
 			}
 		}
 	}
@@ -130,26 +130,31 @@ func (v *Validator) ctmSliceToContract() []ValidationResult {
 }
 
 // ctmEvaluateServeEntry runs the 5-step contract check sequentially and
-// returns the first failure. Returns (zero, false) when the entry is not a
-// .serve role or all 5 checks pass.
-func (v *Validator) ctmEvaluateServeEntry(s *metadata.SliceMeta, i int, entry string) (ValidationResult, bool) {
+// returns the first failure as a non-nil *ValidationResult. Returns nil when
+// the entry is not a .serve role or all 5 checks pass. The pointer sentinel
+// (rather than (ValidationResult, bool)) avoids constructing empty
+// ValidationResult{} literals, which trip
+// TestGovernanceRuleCodeConstSingleSource — every ValidationResult literal in
+// kernel/governance must include a Code: field, and the empty-zero sentinel
+// would either need a carve-out or violate the rule.
+func (v *Validator) ctmEvaluateServeEntry(s *metadata.SliceMeta, i int, entry string) *ValidationResult {
 	contractID := extractServeContractID(entry)
 	if contractID == "" {
-		return ValidationResult{}, false
+		return nil
 	}
 	fieldPath := fmt.Sprintf("verify.contract[%d]", i)
 	c := v.project.Contracts[contractID]
-	if r, bad := v.ctmCheckContractExists(s, c, fieldPath, entry, contractID); bad {
-		return r, true
+	if r := v.ctmCheckContractExists(s, c, fieldPath, entry, contractID); r != nil {
+		return r
 	}
-	if r, bad := v.ctmCheckKindHTTP(s, c, fieldPath, entry, contractID); bad {
-		return r, true
+	if r := v.ctmCheckKindHTTP(s, c, fieldPath, entry, contractID); r != nil {
+		return r
 	}
-	if r, bad := v.ctmCheckLifecycleActive(s, c, fieldPath, entry, contractID); bad {
-		return r, true
+	if r := v.ctmCheckLifecycleActive(s, c, fieldPath, entry, contractID); r != nil {
+		return r
 	}
-	if r, bad := v.ctmCheckExamplesArrow(s, c, fieldPath, entry, contractID); bad {
-		return r, true
+	if r := v.ctmCheckExamplesArrow(s, c, fieldPath, entry, contractID); r != nil {
+		return r
 	}
 	return v.ctmCheckServerMatch(s, c, fieldPath, entry, contractID)
 }
@@ -159,11 +164,11 @@ func (v *Validator) ctmEvaluateServeEntry(s *metadata.SliceMeta, i int, entry st
 func (v *Validator) ctmCheckContractExists(
 	s *metadata.SliceMeta, c *metadata.ContractMeta,
 	fieldPath, entry, contractID string,
-) (ValidationResult, bool) {
+) *ValidationResult {
 	if c != nil {
-		return ValidationResult{}, false
+		return nil
 	}
-	return v.newResult(
+	r := v.newResult(
 		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueRefNotFound,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
@@ -171,7 +176,8 @@ func (v *Validator) ctmCheckContractExists(
 				"fix: remove this entry, fix the contract ID typo, or add the missing contract.yaml",
 			s.ID, entry, contractID,
 		),
-	), true
+	)
+	return &r
 }
 
 // ctmCheckKindHTTP is direction B step 2: .serve role is HTTP-only;
@@ -179,11 +185,11 @@ func (v *Validator) ctmCheckContractExists(
 func (v *Validator) ctmCheckKindHTTP(
 	s *metadata.SliceMeta, c *metadata.ContractMeta,
 	fieldPath, entry, contractID string,
-) (ValidationResult, bool) {
+) *ValidationResult {
 	if c.Kind == "http" {
-		return ValidationResult{}, false
+		return nil
 	}
-	return v.newResult(
+	r := v.newResult(
 		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
@@ -191,7 +197,8 @@ func (v *Validator) ctmCheckKindHTTP(
 				"fix: remove this entry; event contracts use ADV-06 (endpoints.subscribers) not .serve",
 			s.ID, entry, contractID, c.Kind,
 		),
-	), true
+	)
+	return &r
 }
 
 // ctmCheckLifecycleActive is direction B step 3: serve coverage is required
@@ -199,11 +206,11 @@ func (v *Validator) ctmCheckKindHTTP(
 func (v *Validator) ctmCheckLifecycleActive(
 	s *metadata.SliceMeta, c *metadata.ContractMeta,
 	fieldPath, entry, contractID string,
-) (ValidationResult, bool) {
+) *ValidationResult {
 	if c.Lifecycle == "active" {
-		return ValidationResult{}, false
+		return nil
 	}
-	return v.newResult(
+	r := v.newResult(
 		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
@@ -211,7 +218,8 @@ func (v *Validator) ctmCheckLifecycleActive(
 				"fix: remove this entry, or promote the contract to lifecycle: active",
 			s.ID, entry, contractID, c.Lifecycle,
 		),
-	), true
+	)
+	return &r
 }
 
 // ctmCheckExamplesArrow is direction B step 4: examples self-serving (examples
@@ -222,11 +230,11 @@ func (v *Validator) ctmCheckLifecycleActive(
 func (v *Validator) ctmCheckExamplesArrow(
 	s *metadata.SliceMeta, c *metadata.ContractMeta,
 	fieldPath, entry, contractID string,
-) (ValidationResult, bool) {
+) *ValidationResult {
 	if !strings.HasPrefix(c.File, "examples/") || strings.HasPrefix(sliceFile(s), "examples/") {
-		return ValidationResult{}, false
+		return nil
 	}
-	return v.newResult(
+	r := v.newResult(
 		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueForbidden,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
@@ -234,7 +242,8 @@ func (v *Validator) ctmCheckExamplesArrow(
 				"fix: remove this entry — platform slices must not serve example contracts (examples depend on platform, not the reverse)",
 			s.ID, entry, contractID, c.File,
 		),
-	), true
+	)
+	return &r
 }
 
 // ctmCheckServerMatch is direction B step 5: contract.endpoints.server must
@@ -243,11 +252,11 @@ func (v *Validator) ctmCheckExamplesArrow(
 func (v *Validator) ctmCheckServerMatch(
 	s *metadata.SliceMeta, c *metadata.ContractMeta,
 	fieldPath, entry, contractID string,
-) (ValidationResult, bool) {
+) *ValidationResult {
 	if c.Endpoints.Server == s.BelongsToCell {
-		return ValidationResult{}, false
+		return nil
 	}
-	return v.newResult(
+	r := v.newResult(
 		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
@@ -256,7 +265,8 @@ func (v *Validator) ctmCheckServerMatch(
 				"or update contract %q endpoints.server to %q",
 			s.ID, entry, c.Endpoints.Server, s.BelongsToCell, contractID, s.BelongsToCell,
 		),
-	), true
+	)
+	return &r
 }
 
 // buildCandidateSliceHint returns a "; candidate slices: ..." suffix listing
