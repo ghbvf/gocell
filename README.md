@@ -321,14 +321,15 @@ gocell scaffold assembly --id=bar --cells=foo --team=platform --role=admin --dep
 | [ssobff](examples/ssobff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
 | [iotdevice](examples/iotdevice/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
 
-The `ssobff` example uses the initial admin bootstrap feature. On first run it writes a
-temporary credential file whose location depends on the OS (Linux: `/run/gocell/`, macOS:
-`~/Library/Application Support/gocell/run/`, Windows: `%LOCALAPPDATA%\gocell\run\`). Override
-with `GOCELL_STATE_DIR`. `cmd/corebundle` defaults to interactive first-run setup; set
-`GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE=bootstrap` for headless bootstrap, or leave it empty /
-`interactive` to use `POST /api/v1/access/setup/admin`. Interactive setup passwords are 8-72
-printable ASCII bytes. Unknown mode values fail fast at startup. See
-`docs/ops/first-run-setup.md` for details.
+The `ssobff` example demonstrates the initial admin bootstrap path: an operator
+hits `POST /api/v1/access/setup/admin` on the internal listener, protected by
+HTTP Basic Auth using `GOCELL_BOOTSTRAP_ADMIN_USERNAME` /
+`GOCELL_BOOTSTRAP_ADMIN_PASSWORD` (persistent operator credentials, required at
+startup). The endpoint body carries the actual admin identity (`username` /
+`email` / `password`, 8-72 printable ASCII). See `docs/ops/first-run-setup.md`
+for the env contract and password-reset flow, and
+`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` for the
+security boundary ADR.
 
 ## Runtime Modes
 
