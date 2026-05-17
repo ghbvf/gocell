@@ -52,6 +52,37 @@ func newContractService(t *testing.T) *Service {
 	return svc
 }
 
+// TestHttpConfigFlagsUpdateV1_PathParamConstraints asserts key path param rejects
+// empty string (violates minLength: 1).
+func TestHttpConfigFlagsUpdateV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.flags.update.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+}
+
+// TestHttpConfigFlagsToggleV1_PathParamConstraints asserts key path param rejects
+// empty string (violates minLength: 1).
+func TestHttpConfigFlagsToggleV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.flags.toggle.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+}
+
+// TestHttpConfigFlagsDeleteV1_ParamConstraints asserts key path param rejects
+// empty string (violates minLength: 1), and expectedVersion rejects 0 (minimum: 1)
+// and values above 99999 (maximum).
+func TestHttpConfigFlagsDeleteV1_ParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.flags.delete.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+	c.ValidateQueryParam(t, "expectedVersion", "1")
+	c.MustRejectQueryParam(t, "expectedVersion", "0")      // violates minimum: 1
+	c.MustRejectQueryParam(t, "expectedVersion", "100000") // violates maximum: 99999
+}
+
 // --- Create contract test ---
 
 func TestHttpConfigFlagsCreateV1Serve(t *testing.T) {

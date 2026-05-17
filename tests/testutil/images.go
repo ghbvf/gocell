@@ -14,6 +14,13 @@ const (
 	RabbitMQImage      = "rabbitmq:3.12.14-management-alpine@sha256:0b44fbcc3a4bf22d00090f1353127577dbe1fcb109c41669733a9d7ecf6c3a78"
 	VaultImage         = "hashicorp/vault:1.17@sha256:74a4ab138ab5d64725e89cd9a9c73f7040c7fe49e98b71697b275ca9a69919df"
 	OTelCollectorImage = "otel/opentelemetry-collector:0.123.0@sha256:e5e4a13f0ea98e7ca1d1d809be040180540146888d0d764abd4e1277cba87350"
+
+	// MinIOImage pins the MinIO server image by content digest. MinIO upstream
+	// uses ISO timestamp release tags (RELEASE.YYYY-MM-DDTHH-MM-SSZ) that don't
+	// fit SemVer patterns; the tag segment matches the upstream release cadence
+	// (verified from image labels: release="RELEASE.2025-09-07T16-13-09Z") and
+	// the @sha256 digest is the immutable content reference and authoritative pin.
+	MinIOImage = "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
 )
 
 // RedisClusterTestAddrsEnv is the discovery env consumed by

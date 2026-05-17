@@ -139,3 +139,15 @@ github.com/ghbvf/gocell/tools/archtest	TestUserRepoConformanceEnrollment
 # evidence for backlog ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01 (cap-14:14)
 # Hard upgrade — see that entry's Trigger column for cumulative count.
 github.com/ghbvf/gocell/tools/archtest	TestCellRepoReadyzProbe
+
+# type-graph-load: TYPESUTIL-IMPLEMENTS-FUNNEL-01 scan — single
+# RunTypedProduction with Tests:true over the whole module (test variants
+# included; Tests:true is mandatory because the consolidated callsites are
+# tools/archtest/*_test.go). info.Uses sweep + *types.Func identity
+# resolution against go/types.Implements. Same type-graph-load /
+# 16-shard resolver-cache-loss class as the entries above (whole-module
+# packages.Load with type info ≈ 20–46s on ubuntu-latest 2-CPU); a single
+# load already exceeds the 20s budget, same as the sibling whole-module
+# type-aware scans (TestUserRepoConformanceEnrollment 22.3s,
+# TestCellRepoReadyzProbe 20.43s). R2-P2 PR-b.
+github.com/ghbvf/gocell/tools/archtest	TestTypesutilImplementsFunnel01

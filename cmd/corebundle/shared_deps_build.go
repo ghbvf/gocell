@@ -88,6 +88,9 @@ func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology, clk clo
 //   - health   → `127.0.0.1:9091` (separate loopback port; real-mode
 //     PodIP/Service probes must set a Pod-reachable bind such as `:9091`,
 //     or explicitly opt into same-netns access with GOCELL_HTTP_HEALTH_LOCAL_ONLY=1)
+//
+// See docs/ops/listener-topology.md for the deployment topology, threat boundaries,
+// and single-listener migration guide that consume these envvars.
 func resolveListenerAddrs() (primary, internal, health string) {
 	primary = os.Getenv("GOCELL_HTTP_PRIMARY_ADDR")
 	if primary == "" {

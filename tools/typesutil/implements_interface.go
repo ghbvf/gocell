@@ -24,7 +24,8 @@ import "go/types"
 // so picking the wrong one is not a compile error. The fixture-level guard
 // is the discriminating test case in implements_interface_test.go. The
 // Hard layer (banning raw go/types.Implements outside this file) is
-// TYPESUTIL-IMPLEMENTS-FUNNEL-01, landing in PR-b (see below).
+// enforced by archtest TYPESUTIL-IMPLEMENTS-FUNNEL-01
+// (tools/archtest/implements_funnel_test.go).
 //
 // Edge cases (covered by implements_interface_test.go):
 //   - value-receiver impl / pointer-receiver-only impl via value / via *T
@@ -57,12 +58,12 @@ func ImplementsInterface(t types.Type, iface *types.Interface) bool {
 // CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 anonymous-interface bypass
 // detector, where t is frequently a *types.Interface).
 //
-// Once TYPESUTIL-IMPLEMENTS-FUNNEL-01 lands (PR-b,
-// tools/archtest/implements_funnel_test.go), this file will be the sole
-// sanctioned site for raw go/types.Implements; CI will then reject the raw
-// call anywhere else. Until PR-b merges that ban is NOT yet enforced — do
-// not add new raw go/types.Implements calls outside this file in the
-// interim.
+// This file is the sole sanctioned site for raw go/types.Implements. The
+// archtest TYPESUTIL-IMPLEMENTS-FUNNEL-01
+// (tools/archtest/implements_funnel_test.go) rejects any go/types.Implements
+// reference — call, dot-import, import-alias, or func-value — anywhere
+// else; route every interface-satisfaction check through
+// ImplementsInterface / ImplementsInterfaceExact instead.
 func ImplementsInterfaceExact(t types.Type, iface *types.Interface) bool {
 	if t == nil || iface == nil {
 		return false

@@ -1,4 +1,4 @@
-# GoCell Three-Listener Topology (PR-A14b / PR262)
+# GoCell Three-Listener Topology and Deployment (PR-A14b / PR262)
 
 GoCell runs three independent HTTP listeners. Each listener has a dedicated
 stdlib `*http.ServeMux` root and a typed `[]cell.ListenerAuth` chain — no
@@ -239,3 +239,141 @@ rather than role-based policies:
 
 The `health` listener is reserved for framework-owned endpoints (`/healthz`,
 `/readyz`, `/metrics`). Cells must not declare routes on `cell.HealthListener`.
+
+## Deployment Boundaries
+
+The framework enforces one Hard invariant for the `/internal/v1/*` listener. Everything else operators do at deployment time — port mapping, bind address, NetworkPolicy — is defense-in-depth and lives in [Deployment Recommendations](#deployment-recommendations).
+
+| # | Invariant | Violation | Enforcement |
+|---|-----------|-----------|-------------|
+| 1 | The internal listener MUST mount `cell.AuthServiceToken` (HMAC 4-part token + nonce); the caller-cell allowlist is enforced by `ContractSpec.Clients`. The primary listener mounts JWT. | Any in-cluster client can reach `/internal/v1/*` without authentication. | archtest `SEC-FAIL-CLOSED-06` (rejects `InternalListener` with `cell.AuthNone{}` chain **or** literal `nil` chain) + governance `FMT-31` (`contract.yaml endpoints.clients` non-empty for `/internal/v1/*`) + `auth.Mount` auto-injects `RequireCallerCell` when `Contract.Clients` is non-empty. |
+
+This is the **only fail-closed boundary** the framework enforces for `/internal/v1/*` traffic. LB mapping, the internal-listener bind address, and NetworkPolicy are deployment-side defense-in-depth (see [Deployment Recommendations](#deployment-recommendations)); none of them are code-side enforcement mechanisms — Kubernetes resources do not live in this repository (LB), and corebundle does not reject non-loopback `GOCELL_HTTP_INTERNAL_ADDR` values (internal bind). The AI-collab charter (`.claude/rules/gocell/ai-collab.md` §"AI-rebust 三档分级") prohibits filing such Soft conventions in the invariant table; they appear as recommendations instead.
+
+## Deployment Recommendations
+
+These are operator-side defense-in-depth practices. They are **not enforced by code** — violations are caught (if at all) by the Hard invariant in [Deployment Boundaries](#deployment-boundaries).
+
+| Recommendation | Consequence of violation | Code-side interception |
+|----------------|--------------------------|------------------------|
+| Map only the primary listener (`:8080`) through LB / Ingress. Never expose the internal or health port through `Service type=LoadBalancer` or an Ingress rule. | `/internal/v1/*` is reachable from the public internet, leaving ServiceToken as the last line of defense. | **None** — Kubernetes manifests live outside this repository; archtest cannot enforce. |
+| Bind the internal listener to `127.0.0.1:9090` (default) or a VPC-only network. If `GOCELL_HTTP_INTERNAL_ADDR` is set to a non-loopback address (e.g. `:9090`, `0.0.0.0:9090`), wrap the workload in a NetworkPolicy restricting ingress to authorized caller pods. | Other pods / namespaces in the same cluster can reach `/internal/v1/*` directly, again relying on ServiceToken. | **None** — corebundle has no symmetric reachability check for the internal listener: `cmd/corebundle/shared_deps_validate.go::validateHealthReachability` covers the health bind, but no `validateInternalReachability` exists. The client-side defensive normalization at `cmd/corebundle/access_module.go::internalAddrToBaseURL` documents this misconfiguration window without closing it. The upgrade path is tracked under backlog `BOOTSTRAP-INTERNAL-LOCAL-ONLY-FAIL-FAST-01` (symmetric to `HEALTH_LOCAL_ONLY`). |
+| Bind the health listener to `:9091` for Pod-reachable probes (the default `127.0.0.1:9091` only works for same-netns access). Opt in to loopback in non-test deployments by setting `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1`. | Kubernetes `httpGet` liveness / readiness probes cannot reach the health endpoint. | **Already enforced** — corebundle refuses to start in `real` adapter mode when the health bind is loopback unless `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` is set. This is the template used by the `INTERNAL_LOCAL_ONLY` backlog item. |
+
+## Docker Compose Deployment
+
+Only the primary listener is published on the host. The internal and health listeners stay bound to the **container's** loopback interface (`127.0.0.1`), which is reachable from processes inside the container netns — the container's own `healthcheck`, exec probes, and any sidecar joined to the same netns via `network_mode: "service:gocell"` — but not from Docker's bridge network or the host. Docker port mapping (`-p host:container`) cannot forward host traffic into a container's loopback address, so loopback-bound listeners must not declare a `ports:` mapping at all; the mapping would simply not work.
+
+```yaml
+services:
+  gocell:
+    image: gocell:latest
+    ports:
+      # Only the primary listener is exposed on the host. The internal and health
+      # listeners are intentionally not mapped — they remain reachable only from
+      # processes sharing the container's netns (healthcheck, exec probes, sidecars
+      # joined via `network_mode: "service:gocell"`).
+      - "8080:8080"
+    environment:
+      GOCELL_ADAPTER_MODE: real
+      GOCELL_HTTP_PRIMARY_ADDR: ":8080"
+      GOCELL_HTTP_INTERNAL_ADDR: "127.0.0.1:9090"
+      GOCELL_HTTP_HEALTH_ADDR: "127.0.0.1:9091"
+      GOCELL_HTTP_HEALTH_LOCAL_ONLY: "1"
+      GOCELL_SERVICE_SECRET: "${GOCELL_SERVICE_SECRET}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9091/healthz"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+```
+
+If a sibling container needs to call `/internal/v1/*` (for example, a control-plane Compose service in the same deployment), choose one of two shapes — do **not** mix them:
+
+- **Shared netns**: declare the caller with `network_mode: "service:gocell"`; the caller reaches the listener via `http://127.0.0.1:9090` exactly like an in-container client.
+- **Bridge network**: change the bind to `GOCELL_HTTP_INTERNAL_ADDR=:9090`, then add an explicit Compose network and limit the caller list to authorized services; ServiceToken + caller-cell allowlist remains the fail-closed boundary (see [Deployment Boundaries](#deployment-boundaries)). Publishing the port on the host is still discouraged because Docker bridge isolation is the only thing keeping unrelated host processes off `/internal/v1/*`.
+
+When fronting the stack with a reverse proxy (nginx, Traefik, …), publish only port `8080`; the internal and health ports must never appear in proxy `upstream` blocks.
+
+## Kubernetes NetworkPolicy
+
+When `GOCELL_HTTP_INTERNAL_ADDR` is bound to a Pod-reachable address (any non-loopback bind), wrap the workload with a NetworkPolicy that whitelists only the caller pods declared in `ContractSpec.Clients` for the internal port, while leaving the primary and health ports open to their respective callers.
+
+**Important**: once any NetworkPolicy with `policyTypes: [Ingress]` selects a Pod, ingress traffic not matched by an `ingress` rule in that policy (or a sibling policy that also selects the Pod) is dropped. The single-policy example below therefore must enumerate **all** ports that need to be reachable, not only the internal port.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gocell-listeners
+spec:
+  podSelector:
+    matchLabels:
+      app: gocell
+  policyTypes: [Ingress]
+  ingress:
+    # internal listener — caller-cell allowlist (matches ContractSpec.Clients).
+    - from:
+        - podSelector:
+            matchLabels:
+              gocell.io/caller-cell: accesscore
+        - podSelector:
+            matchLabels:
+              gocell.io/caller-cell: configcore
+      ports:
+        - protocol: TCP
+          port: 9090
+    # primary listener — public business traffic via Ingress / Service.
+    - ports:
+        - protocol: TCP
+          port: 8080
+    # health listener — Kubelet probes and Prometheus scrapes.
+    - ports:
+        - protocol: TCP
+          port: 9091
+```
+
+Two operator-side caveats this example does not encode:
+
+- **Namespace scope**: `podSelector` without an accompanying `namespaceSelector` matches only Pods in the same namespace as the NetworkPolicy. If caller cells run in different namespaces (multi-tenant or per-cell namespacing), each allowlist entry must add `namespaceSelector` (or `namespaceSelector: {}` for all namespaces).
+- **Default-deny baseline**: a stricter posture combines this per-listener allowlist with a namespace-wide default-deny NetworkPolicy that closes everything else; egress restrictions are likewise out of scope here. Kubernetes' own documentation covers default-deny patterns — this file does not duplicate that material.
+
+## Migration from Single-Listener
+
+Workloads built against pre-PR-A14a binaries served `/api/v1/*`, `/internal/v1/*`, `/healthz`, `/readyz`, and `/metrics` from a single port (typically `:8080`). Migration to the three-listener topology is a coordinated env / Service / probe / scrape change:
+
+1. **Env**: set `GOCELL_HTTP_PRIMARY_ADDR`, `GOCELL_HTTP_INTERNAL_ADDR`, and `GOCELL_HTTP_HEALTH_ADDR`. Keep the primary on the same port (`:8080`) so external clients are unaffected; pick internal / health ports the workload host has free.
+2. **Service / Ingress**: drop the single backend port; declare three named container ports as shown in [Helm Migration (PR-A14b)](#helm-migration-pr-a14b) and route Ingress / `Service type=LoadBalancer` traffic only to the `http` (primary) port. Internal traffic stays on a cluster-internal Service or no Service at all.
+3. **Probes**: redirect `livenessProbe` / `readinessProbe` `httpGet.port` from `8080` to the health listener (`9091` typically). See [k8s Liveness / Readiness Probe Migration](#k8s-liveness--readiness-probe-migration).
+4. **Scrape**: move the Prometheus scrape job target from the primary port to the health port (see [Prometheus Scrape Config Migration](#prometheus-scrape-config-migration)).
+5. **Roll-out**: deploy the new binary into a canary pod first. The canary serves `/api/v1/*` on the same external endpoint, so Ingress / Service stays valid throughout the swap; the only externally observable change is that `/healthz` on `:8080` starts returning 404 — which is why the probe swap in step 3 must land before traffic shifts.
+
+If existing Pods cannot expose new container ports during the roll-out (for example, a `hostNetwork` deployment fully shared with another component), keep the legacy fallback path on by **not** declaring a `HealthListener` — the framework remaps `/healthz`, `/readyz`, `/metrics` onto the primary listener (see [Health-listener fallback (test/dev convenience)](#health-listener-fallback-testdev-convenience)). This is intended as a transient escape hatch, not a steady state.
+
+## Troubleshooting
+
+Three failure modes have been observed in real deployments. Each entry links to the section that explains the underlying mechanism.
+
+### `httpGet` probe times out against the health endpoint
+
+**Symptom**: Kubernetes events report `Liveness probe failed: Get http://<pod-ip>:9091/healthz: dial tcp ... connection refused`, even though `/healthz` works from inside the Pod (`kubectl exec -- wget -qO- http://127.0.0.1:9091/healthz`).
+
+**Cause**: The default health bind is `127.0.0.1:9091`, which is unreachable from the kubelet via Pod IP. Same-netns probes (exec probes, sidecars) work; `httpGet` does not.
+
+**Fix**: Set `GOCELL_HTTP_HEALTH_ADDR=:9091` (or any Pod-reachable address). Setting `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` only acknowledges the loopback bind so corebundle does not refuse to start — it does **not** make the endpoint reachable from the kubelet. `LOCAL_ONLY=1` is correct only for same-pod sidecar / exec-probe deployments where the probe runs inside the container netns. See [Health-listener fallback (test/dev convenience)](#health-listener-fallback-testdev-convenience).
+
+### `/internal/v1/*` requests succeed from unrelated pods
+
+**Symptom**: A pod outside the declared `ContractSpec.Clients` allowlist can open TCP to `/internal/v1/*` endpoints; only ServiceToken validation rejects the request.
+
+**Cause**: `GOCELL_HTTP_INTERNAL_ADDR` is set to a non-loopback address (e.g. `:9090`) and no NetworkPolicy is in place, exposing the internal port across the cluster. The framework does not reject this configuration — `cmd/corebundle/shared_deps_validate.go` covers only the health listener (`validateHealthReachability`) and has no symmetric internal check — because ServiceToken + caller-cell allowlist is the fail-closed boundary.
+
+**Fix**: Either restore the loopback bind (`GOCELL_HTTP_INTERNAL_ADDR=127.0.0.1:9090`) or attach a NetworkPolicy as shown in [Kubernetes NetworkPolicy](#kubernetes-networkpolicy). The upgrade path that turns this into a fail-fast condition is tracked under backlog `BOOTSTRAP-INTERNAL-LOCAL-ONLY-FAIL-FAST-01`.
+
+### Service-token authenticated callers receive 401 or 403 from `/internal/v1/*`
+
+**Symptom**: A cell whose service token is correctly minted (HMAC + nonce verified) still receives 401 (`token rejected`) or 403 (`caller cell not allowed`) at the internal listener.
+
+**Cause**: 401 indicates a nonce-replay or HMAC mismatch — confirm the shared secret, nonce-store availability, and clock skew. 403 indicates the caller cell is not in the target endpoint's `ContractSpec.Clients` allowlist, populated from `contract.yaml endpoints.clients` by `tools/codegen/contractgen`.
+
+**Fix**: For 401, inspect `auth.NonceStore` readiness and verify the service-token signing secret matches. For 403, add the calling cell ID to `endpoints.clients` in the relevant `contract.yaml` and re-run codegen. Governance `FMT-31` rejects empty `endpoints.clients` on `/internal/v1/*` paths at the YAML source layer; archtest `SEC-FAIL-CLOSED-06` rejects `internal + AuthNone` listener configurations.

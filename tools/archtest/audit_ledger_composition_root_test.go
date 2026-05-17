@@ -158,7 +158,7 @@ func TestAuditLedgerProtocol_ScannerCatchesAliasBypass(t *testing.T) {
 	modulePath := readModulePath(t, root)
 
 	var hits []ledgerHit
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: []string{"archtest_fixture"}},
+	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/auditledgerfixture"},
 		func(p *Pass) []Diagnostic {
 			hits = append(hits, scanLedgerCompositionRootPass(p, modulePath, false)...)

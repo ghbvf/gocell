@@ -6,34 +6,56 @@ package archtest
 //   - INVARIANT: PASS-FUNNEL-LOADPACKAGES-01
 //   - INVARIANT: PASS-FUNNEL-PACKAGES-IMPORT-01
 //   - INVARIANT: PASS-FUNNEL-RESOLVE-01
+//   - INVARIANT: PASS-FUNNEL-FIXTURE-TAG-01
 //
-// All four rules forbid archtest tools/archtest/<file>_test.go from
+// The first four rules forbid archtest tools/archtest/<file>_test.go from
 // reaching the legacy entry points directly. Authors must use archtest.Run
-// (AST-only) / archtest.RunTyped (typed) via the Pass-Driver paradigm, and
-// must call the façade helper functions in archtest.ResolvePackageRef /
-// ResolveMethodCall / EvaluateConstString / FlatNonDefaultTags /
-// KnownNonDefaultTags / Pass.IsFileInScope / Pass.IsGenerated instead of
-// importing internal/typeseval directly.
-// See docs/architecture/202605141519-adr-archtest-pass-funnel.md.
+// (AST-only) / archtest.RunTyped (typed) / archtest.RunTypedFixture (fixture
+// packages) / archtest.RunTypedProduction (production-only) via the
+// Pass-Driver paradigm, and must call the façade helper functions in
+// archtest.ResolvePackageRef / ResolveMethodCall / EvaluateConstString /
+// FlatNonDefaultTags / KnownNonDefaultTags / Pass.IsFileInScope /
+// Pass.IsGenerated instead of importing internal/typeseval directly.
 //
-// Stage 2/3 migration completed in PR #522; LegacyAllowlist is now empty.
-// The archtestmeta package is retained to support the TestPassFunnelGuardListSync
-// cross-validation logic; Stage-4 cleanup (package deletion) is a separate
-// follow-up task once all downstream references are removed.
+// PASS-FUNNEL-FIXTURE-TAG-01 closes the façade-bypass leg of the
+// archtest_fixture funnel: RunTypedFixture's outward Hard (FixtureOpts has
+// no Tags field) prevents typed expression of "load fixture with custom
+// tag" in business call sites, but RunTyped / typeseval.SharedResolver
+// still accept arbitrary Tags, so a business archtest could in principle
+// pass the archtest_fixture build tag (in any const-resolvable form) to a
+// loader and bypass RunTypedFixture. The rule rejects any
+// (callee, arg) pair where the callee resolves via *types.Info to a member
+// of fixtureTagLoaderSet AND any arg subtree contains an Expr that
+// EvaluateConstString resolves to "archtest_fixture" — catching BasicLit
+// literal / same-pkg const Ident / cross-pkg SelectorExpr / BinaryExpr
+// const-concat uniformly. The (callee, arg) pair shape disambiguates
+// legitimate identity uses (e.g., containsTag(group, FixtureBuildTag) in
+// panic_invariants_test.go — callee not in loader set) from bypass
+// (loader callee + same value resolves). Isomorphic to charter §Hard 范本
+// 第 2 条 panic(panicregister.Approved(reason, value)) form. See
+// docs/architecture/202605141519-adr-archtest-pass-funnel.md.
+//
+// Stage 2/3 migration completed in PR #522; LegacyAllowlist was cleared to
+// zero. Stage 4 (this PR) deletes the archtestmeta package entirely and
+// collapses TestPassFunnelGuardListSync to a single equality assertion
+// against passFunnelPermanentExempt (3-entry Medium funnel — mechanical sync
+// via double-declaration in Go map + .golangci.yml negative globs, enforced
+// by exact-equality assertion).
 
 import (
 	"fmt"
 	"go/ast"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	cmp "github.com/google/go-cmp/cmp"
 	"golang.org/x/tools/go/packages"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/archtestmeta"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
@@ -77,8 +99,20 @@ const (
 //
 // These exemptions survive stage-4 cleanup. They are checked by both
 // the production PASS-FUNNEL detectors (skip these files entirely) AND
-// TestPassFunnelGuardListSync (treats them as "expected yaml exemptions
-// even though they are absent from archtestmeta.LegacyAllowlist").
+// TestPassFunnelGuardListSync (exact-equality assertions: yaml-exempt ==
+// passFunnelPermanentExempt AND packages-import == passFunnelPermanentExempt).
+//
+// AI-rebust grade: Medium. The 3-entry set is structurally necessary (these
+// files implement or directly test the funnel machinery; type system cannot
+// distinguish rule implementation from rule violator). Mechanical sync is
+// enforced via double-declaration: Go map literal here AND matching
+// "!**/tools/archtest/<file>" negative globs in .golangci.yml. Drift between
+// the two declarations is detected by TestPassFunnelGuardListSync's exact
+// equality assertions (failing CI on any single-sided addition or removal).
+// Upgrading to Hard is infeasible without creating a new package boundary
+// (archtestself) that adds complexity without security gain — see ADR
+// docs/architecture/202605141519-adr-archtest-pass-funnel.md
+// §passFunnelPermanentExempt.
 var passFunnelPermanentExempt = map[string]bool{
 	"tools/archtest/pass_funnel_test.go": true,
 	"tools/archtest/pass_test.go":        true,
@@ -95,8 +129,11 @@ type passFunnelTarget struct {
 
 // loadPassFunnelTargets resolves the archtest tree once via SharedResolver
 // (shared with scanner_framework_usage_test.go's same load), filters to
-// tools/archtest/<file>_test.go direct children, and applies self + legacy
-// allowlist exemptions. The returned slice is what the three rules consume.
+// tools/archtest/<file>_test.go direct children, and applies the permanent
+// self-exemption set. Stage 4 removed the LegacyAllowlist filter; all
+// migration-period scaffold entries were cleared in PR #522 and the
+// archtestmeta package deleted in Stage 4. The returned slice is what the
+// three rules consume.
 func loadPassFunnelTargets(t *testing.T) []passFunnelTarget {
 	t.Helper()
 	root := findModuleRoot(t)
@@ -120,9 +157,6 @@ func loadPassFunnelTargets(t *testing.T) []passFunnelTarget {
 				continue
 			}
 			if passFunnelPermanentExempt[rel] {
-				continue
-			}
-			if archtestmeta.LegacyAllowlist[rel] {
 				continue
 			}
 			// Dedup across the regular + ".test" synthetic packages
@@ -224,7 +258,8 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 			Line: tgt.pkg.Fset.Position(imp.Pos()).Line,
 			Message: fmt.Sprintf(
 				"direct import of %q forbidden in archtest *_test.go; use archtest.RunTyped",
-				packagesPkgPath),
+				packagesPkgPath,
+			),
 		})
 	}
 	return diags
@@ -238,8 +273,8 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 // # AI-rebust: Medium
 //
 // Detection is type-aware (typeseval.ResolvePackageRef via *types.Info) and
-// covers all three import forms (qualified, alias, dot-import). The allowlist
-// is single-source (LegacyAllowlist) with cross-validation in
+// covers all three import forms (qualified, alias, dot-import). The exempt
+// set is single-source (passFunnelPermanentExempt) with cross-validation in
 // TestPassFunnelGuardListSync. Not Hard because Go allows arbitrary aliasing;
 // the detector requires *types.Info resolve rather than string-matching, so
 // it cannot be bypassed by renaming an import alias.
@@ -310,6 +345,215 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 	)
 }
 
+// fixtureTagSentinelValue is the build-tag string value the detector rejects
+// when it appears (in any EvaluateConstString-resolvable form) inside a
+// LOADER_SET CallExpr's arg subtree. The value is the same literal that
+// archtest.FixtureBuildTag exports; declaring it as an unexported const
+// inside the framework self-test file lets the detector compare without
+// referencing the exported const (avoiding a circular semantic where the
+// detector itself would carry a "loader-arg bypass" pattern its own rule
+// would flag if this file were not in passFunnelPermanentExempt).
+const fixtureTagSentinelValue = "archtest_fixture"
+
+// fixtureTagLoaderSet enumerates the loader callees (archtest façade +
+// typeseval package-load primitives) whose argument subtrees the detector
+// scans for fixture-tag bypass. EachFileInPackage is intentionally NOT in
+// the set: its signature takes an already-loaded *packages.Package, not
+// build tags, so it cannot be a fixture-tag bypass vector.
+//
+// Adding a new loader API (e.g., a hypothetical `RunTypedFixtureDir`) MUST
+// be reflected here or the rule silently misses the new vector. The
+// detector godoc lists this as an enumeration-maintenance Blind spot
+// (same grade as the banned-symbol list in diagsLoadPackages).
+var fixtureTagLoaderSet = map[string]map[string]bool{
+	archtestPkgPath: {
+		"RunTyped":           true,
+		"RunTypedProduction": true,
+		"RunTypedDir":        true,
+	},
+	typesevalPkgPath: {
+		"SharedResolver":         true,
+		"LoadPackages":           true,
+		"LoadProductionPackages": true,
+	},
+}
+
+// diagsFixtureTagBypass is the pure detector for PASS-FUNNEL-FIXTURE-TAG-01.
+//
+// It walks each CallExpr in tgt.file; whenever the callee resolves via
+// *types.Info (typeseval.ResolvePackageRef) to a member of
+// fixtureTagLoaderSet, it then ast.Inspect-walks every arg subtree and
+// reports every Expr whose EvaluateConstString result equals
+// "archtest_fixture". This catches all four EvaluateConstString-resolvable
+// arg shapes (BasicLit literal / same-pkg const Ident / cross-pkg
+// SelectorExpr / BinaryExpr const-concat) uniformly without per-shape code
+// branches — the helper already encodes the resolution lattice.
+//
+// # AI-rebust: archtest-bound (callee, arg) form-uniqueness Hard
+//
+// Charter §Hard 范本 第 2 条 "typed function call as Hard funnel for
+// unbounded operations" (panic(any) range, ai-collab.md) is the template
+// this rule isomorphs:
+//
+//   - panicregister.Approved: (callee resolves via *types.Info to
+//     panicregister.Approved) AND (reason arg is *ast.BasicLit STRING).
+//   - PASS-FUNNEL-FIXTURE-TAG-01: (callee resolves via *types.Info to a
+//     member of fixtureTagLoaderSet) AND (any arg subtree contains an
+//     Expr whose EvaluateConstString result equals "archtest_fixture").
+//
+// Both rules form-unique on a (callee, arg) pair; both rely on
+// *types.Info resolution (so import aliases / dot-imports / vendor
+// rewrites are immaterial); both have zero "looks like Approved but
+// isn't" gray zone. The arg-side predicate of this rule is *broader*
+// than Approved's BasicLit-only check — it admits any const-resolvable
+// shape — because tag identity in build-tag slices legitimately uses
+// const references (e.g., callers passing archtest.FixtureBuildTag is
+// a semantically distinct *legitimate* form when the callee is, say,
+// `containsTag(...)`, but a bypass form when the callee is a loader).
+// The (callee, arg) pair is what disambiguates legitimate identity
+// from bypass.
+//
+// # Funnel double-lock (per ai-collab.md §Funnel 双向锁评级)
+//
+//   - Downstream / outward Hard: RunTypedFixture's FixtureOpts has no
+//     Tags field; `RunTypedFixture(t, FixtureOpts{Tags: ...}, ...)` is a
+//     compile error (type system, not archtest-bound).
+//   - Upstream / archtest-bound Hard: this rule rejects any loader-call +
+//     arg-resolves-to-archtest_fixture pair regardless of arg shape.
+//
+// Together: business archtest cannot express "load a fixture package
+// (or any package with the fixture build tag activated)" via any
+// reachable AST path — the only legitimate route is RunTypedFixture,
+// whose body injects the tag inside the framework using archtest.
+// FixtureBuildTag (the typed-reference single source).
+//
+// # Blind spots (accepted, same grade as PASS-FUNNEL-LOADPACKAGES-01)
+//
+//   - Tags-arg via *ast.Ident binding to a same-file var (not const):
+//     `var tagSet = []string{FixtureBuildTag}; RunTyped(.., TypedOpts{
+//     Tags: tagSet}, ..)`. The detector ast.Inspect-walks the
+//     CompositeLit "[]string{FixtureBuildTag}" *inside the var decl* —
+//     if the var decl is in the same file, the FixtureBuildTag
+//     SelectorExpr appears as a top-level Expr in the file and is
+//     visited; however, that walk is **not** scoped to a loader CallExpr,
+//     so the detector does NOT fire there. Within the loader CallExpr,
+//     the arg is just an *ast.Ident (the var name), which
+//     EvaluateConstString does not resolve (only const Idents resolve).
+//     Workaround: review-bound. Same accept grade as cross-func var
+//     escape in diagsLoadPackages / diagsResolveHelpers.
+//   - Cross-func var escape: a var assigned in one function and read in
+//     another, or a closure capture, falls outside the AST walk's reach.
+//     Same accept as the sister rules' identical Blind spot.
+//   - Reflect / runtime string construction: outside Go static AST scope
+//     by definition; the entire archtest framework operates on
+//     compile-time AST + types.Info.
+//   - LOADER_SET maintenance: adding a new loader API without updating
+//     fixtureTagLoaderSet silently misses the new vector. Same grade as
+//     the banned-symbol-list maintenance in diagsLoadPackages /
+//     diagsResolveHelpers; review-bound.
+//   - Tag value also passed as a *non-Tags* loader arg (e.g., as a
+//     pattern, modRoot, or modulePath argument that happens to equal
+//     "archtest_fixture"): the detector over-reports here because it
+//     scans ALL arg subtrees of a loader CallExpr, not only the Tags
+//     position. Over-detection is the conservative direction for Hard
+//     (false positives are reviewer-visible; false negatives are silent
+//     bypass). No realistic loader call passes "archtest_fixture" as a
+//     pattern / root / modulePath, so this is theoretical.
+//
+// # Per-form fixture coverage (TestPassFunnel_FixtureCoverage)
+//
+// internal/passfunnelfixture/redfixture.go's fixtureTagBypassRedForms
+// exercises all four EvaluateConstString-resolvable arg shapes against
+// typeseval.SharedResolver (one LOADER_SET callee; the rule predicate
+// is callee-shape-agnostic across the set):
+//
+//   - Form A — BasicLit "archtest_fixture" direct
+//   - Form B — same-pkg const Ident (localFixtureTag)
+//   - Form C — BinaryExpr "archtest" + "_fixture"
+//   - Form D — cross-pkg SelectorExpr archtest.FixtureBuildTag
+//
+// TestPassFunnel_FixtureCoverage asserts each form produces ≥1
+// diagnostic independently (per-form trip-wire); removing any single
+// form's fixture line fails exactly that form's assertion.
+//
+// # Exempt
+//
+// passFunnelPermanentExempt (3 framework files: pass_funnel_test.go +
+// pass_test.go + archtest_test.go) — these implement or directly test the
+// funnel machinery and must reference the literal by structural necessity.
+// fixture.go is excluded from the scan automatically because
+// loadPassFunnelTargets filters to *_test.go files (line 138).
+func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
+	info := tgt.pkg.TypesInfo
+	fset := tgt.pkg.Fset
+	var diags []scanner.Diagnostic
+	// Position-based dedup: a single arg expression may contain nested Exprs
+	// that all resolve to the same const value (e.g. BinaryExpr "X"+"Y" plus
+	// each child Ident if both are typed const), producing multiple
+	// EvaluateConstString hits at descendant positions. Reporting only the
+	// first hit per source position keeps the diagnostic count proportional
+	// to call-site count.
+	scanner.EachInSubtree[ast.CallExpr](tgt.file, func(call *ast.CallExpr) {
+		path, name, ok := typeseval.ResolvePackageRef(info, call.Fun)
+		if !ok {
+			return
+		}
+		names, ok := fixtureTagLoaderSet[path]
+		if !ok || !names[name] {
+			return
+		}
+		// Per-call dedup map: line number ⇒ already-reported. Scoped to this
+		// call so two distinct loader calls on the same line (rare in
+		// well-formatted Go but possible) each report once.
+		reportedLine := make(map[int]bool)
+		report := func(expr ast.Expr) {
+			line := fset.Position(expr.Pos()).Line
+			if reportedLine[line] {
+				return
+			}
+			reportedLine[line] = true
+			diags = append(diags, scanner.Diagnostic{
+				Rel:  tgt.rel,
+				Line: line,
+				Message: "use archtest.RunTypedFixture (fixture-load path) " +
+					"or archtest.FixtureBuildTag (typed-identity path, only " +
+					"outside LOADER_SET callees) instead of feeding the " +
+					"archtest_fixture build tag to " + path + "." + name +
+					" (PASS-FUNNEL-FIXTURE-TAG-01)",
+			})
+		}
+		// EvaluateConstString admits any ast.Expr but a single typed Walker N
+		// must be a concrete *S (the EachInSubtree generic constraint forbids
+		// interface N like *ast.Expr). The four shapes below correspond to
+		// the four EvaluateConstString resolution paths covered by
+		// fixtureTagBypassRedForms (Forms A / B / C / D); enumerating them
+		// explicitly mirrors the fixture's per-form anchor structure.
+		for _, arg := range call.Args {
+			scanner.EachInSubtree[ast.BasicLit](arg, func(lit *ast.BasicLit) {
+				if v, ok := typeseval.EvaluateConstString(info, lit); ok && v == fixtureTagSentinelValue {
+					report(lit)
+				}
+			})
+			scanner.EachInSubtree[ast.Ident](arg, func(id *ast.Ident) {
+				if v, ok := typeseval.EvaluateConstString(info, id); ok && v == fixtureTagSentinelValue {
+					report(id)
+				}
+			})
+			scanner.EachInSubtree[ast.SelectorExpr](arg, func(sel *ast.SelectorExpr) {
+				if v, ok := typeseval.EvaluateConstString(info, sel); ok && v == fixtureTagSentinelValue {
+					report(sel)
+				}
+			})
+			scanner.EachInSubtree[ast.BinaryExpr](arg, func(bin *ast.BinaryExpr) {
+				if v, ok := typeseval.EvaluateConstString(info, bin); ok && v == fixtureTagSentinelValue {
+					report(bin)
+				}
+			})
+		}
+	})
+	return diags
+}
+
 // TestPassFunnelResolve01 — PASS-FUNNEL-RESOLVE-01.
 //
 // Archtest tools/archtest/<file>_test.go must NOT call the 8 typeseval helper
@@ -325,8 +569,8 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 //
 // Detection: SelectorExpr / bare Ident walk + typeseval.ResolvePackageRef
 // resolves call/value-ref targets via go/types (covers qualified, alias,
-// dot-import forms). Exempt: self file + pass_test.go (permanent) +
-// archtestmeta.LegacyAllowlist (stage 2/3 migration window).
+// dot-import forms). Exempt: passFunnelPermanentExempt (3 framework files,
+// permanent; LegacyAllowlist deleted in Stage 4).
 //
 // AI-rebust: Medium (see diagsResolveHelpers godoc for full evidence).
 func TestPassFunnelResolve01(t *testing.T) {
@@ -347,8 +591,9 @@ func TestPassFunnelResolve01(t *testing.T) {
 //
 // Detection: SelectorExpr / bare Ident walk + typeseval.ResolvePackageRef
 // resolves call targets via go/types (covers qualified `scanner.EachFile`,
-// dot-imported bare `EachFile`, and aliased forms). Exempt: self file +
-// archtestmeta.LegacyAllowlist.
+// dot-imported bare `EachFile`, and aliased forms). Exempt:
+// passFunnelPermanentExempt (3 framework files, permanent; LegacyAllowlist
+// deleted in Stage 4).
 func TestPassFunnelEachFile01(t *testing.T) {
 	targets := loadPassFunnelTargets(t)
 	var diags []scanner.Diagnostic
@@ -398,69 +643,72 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 	scanner.Report(t, "PASS-FUNNEL-PACKAGES-IMPORT-01", diags)
 }
 
+// TestPassFunnelFixtureTagBypass01 — PASS-FUNNEL-FIXTURE-TAG-01.
+//
+// Archtest tools/archtest/<file>_test.go must NOT contain a bare STRING
+// literal "archtest_fixture". The literal is the only AST form through
+// which a business archtest can carry the fixture build tag into a call
+// site (either as a Tags slice element passed to RunTyped /
+// typeseval.SharedResolver to bypass RunTypedFixture, or as a comparison
+// target to identify the fixture tag group). Authors must:
+//
+//   - For fixture loading: call archtest.RunTypedFixture(t, FixtureOpts{...},
+//     patterns, rule). FixtureOpts deliberately lacks a Tags field, so the
+//     build tag stays inside the framework body.
+//   - For tag-identity tests (e.g., skipping the fixture tag group from a
+//     module-wide RunTyped scan): reference archtest.FixtureBuildTag, the
+//     typed string const exported by fixture.go.
+//
+// Detection: BasicLit STRING walk with unquoted-value equality on
+// "archtest_fixture". Exempt: passFunnelPermanentExempt (3 framework
+// files); fixture.go is filtered out by loadPassFunnelTargets's
+// *_test.go suffix check.
+//
+// AI-rebust: archtest-bound form-uniqueness Hard (see diagsFixtureTagBypass
+// godoc for full evidence and accepted blind spots).
+func TestPassFunnelFixtureTagBypass01(t *testing.T) {
+	targets := loadPassFunnelTargets(t)
+	var diags []scanner.Diagnostic
+	for _, tgt := range targets {
+		diags = append(diags, diagsFixtureTagBypass(tgt)...)
+	}
+	scanner.Report(t, "PASS-FUNNEL-FIXTURE-TAG-01", diags)
+}
+
 // TestPassFunnelGuardListSync — ARCHTEST-PASS-FUNNEL guards alignment.
 //
-// Cross-validates the three sources of truth that must stay aligned as the
-// stage 2/3 migration drains entries from the migration scaffold:
+// Cross-validates the three sources of truth that must stay in exact
+// alignment after Stage 4 cleanup:
 //
-//   - archtestmeta.LegacyAllowlist (Go map, stage-1 baseline 53 entries)
 //   - .golangci.yml archtest-no-direct-packages-load negative globs
-//     (stage-1 baseline 27 + 1 self-exemption)
+//     (must equal passFunnelPermanentExempt exactly — no migration remnants)
 //   - actual file system: tools/archtest/*_test.go files that directly
-//     import golang.org/x/tools/go/packages
+//     import golang.org/x/tools/go/packages (must also equal
+//     passFunnelPermanentExempt exactly)
 //
-// Invariants enforced (fail-loud on any drift):
+// Invariants (single equality assertions, fail-loud on any drift):
 //
-//   - (A) every depguard yaml exemption (except pass_funnel_test.go self) is
-//     present in archtestmeta.LegacyAllowlist; otherwise the yaml carries a
-//     stale exemption for a file already migrated.
-//   - (B) every archtest *_test.go that imports packages directly has a
-//     matching depguard yaml exemption; otherwise lint will fail in CI on
-//     the full run (not the --new-from-rev mode masking pre-existing diags).
-//   - (C) every depguard yaml exemption (except pass_funnel_test.go self)
-//     actually imports packages; otherwise the yaml carries a redundant
-//     exemption that should have been removed when its file was ported.
+//   - yaml-exempt == passFunnelPermanentExempt: no stale migration exemptions
+//     remain in .golangci.yml, and no new permanent exemptions were added
+//     without updating passFunnelPermanentExempt.
+//   - packages-import == passFunnelPermanentExempt: no files outside the 3
+//     permanent framework files import golang.org/x/tools/go/packages directly.
 //
-// This guard replaces the previous "manual sync" contract from the ADR with
-// a Hard mechanical check. Drift is a test failure, not a reviewer
-// blind-spot.
+// This guard prevents Stage 4 regression: if archtestmeta is accidentally
+// re-introduced or a new file starts importing packages directly, exactly
+// one of these assertions fails with a cmp.Diff showing the drift.
 func TestPassFunnelGuardListSync(t *testing.T) {
 	root := findModuleRoot(t)
 	yamlExempt := loadDepguardArchtestExemptions(t, root)
 	packagesImport := loadPackagesImporters(t)
 
-	// (A) yaml-exempt ∖ passFunnelPermanentExempt ⊆ LegacyAllowlist
-	for rel := range yamlExempt {
-		if passFunnelPermanentExempt[rel] {
-			continue
-		}
-		if !archtestmeta.LegacyAllowlist[rel] {
-			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q is exempted in .golangci.yml "+
-				"archtest-no-direct-packages-load but absent from "+
-				"archtestmeta.LegacyAllowlist (stale exemption)", rel)
-		}
+	if !maps.Equal(yamlExempt, passFunnelPermanentExempt) {
+		t.Errorf("PASS-FUNNEL-GUARD-SYNC: yamlExempt != passFunnelPermanentExempt\n%s",
+			cmp.Diff(passFunnelPermanentExempt, yamlExempt))
 	}
-
-	// (B) packages-import ⊆ yaml-exempt
-	for rel := range packagesImport {
-		if !yamlExempt[rel] {
-			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q imports "+
-				"golang.org/x/tools/go/packages directly but lacks a "+
-				".golangci.yml archtest-no-direct-packages-load exemption "+
-				"(full-repo golangci-lint will fail on this file)", rel)
-		}
-	}
-
-	// (C) yaml-exempt ∖ passFunnelPermanentExempt ⊆ packages-import
-	for rel := range yamlExempt {
-		if passFunnelPermanentExempt[rel] {
-			continue
-		}
-		if !packagesImport[rel] {
-			t.Errorf("PASS-FUNNEL-GUARD-SYNC: %q is exempted in .golangci.yml "+
-				"but does not import golang.org/x/tools/go/packages "+
-				"(redundant exemption — drop the line)", rel)
-		}
+	if !maps.Equal(packagesImport, passFunnelPermanentExempt) {
+		t.Errorf("PASS-FUNNEL-GUARD-SYNC: packagesImport != passFunnelPermanentExempt\n%s",
+			cmp.Diff(passFunnelPermanentExempt, packagesImport))
 	}
 }
 
@@ -586,14 +834,15 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 // The per-form assertions below encode this distinction with an exact count
 // for ImportBan (== 3) that would drop to 2 if the TypeName fix were reverted.
 //
-// The fixture is loaded with the [archtestmeta.FixtureBuildTag] build tag
-// (a sister convention to inspectorredfixture etc.); without the tag the
+// The fixture is loaded with the "archtest_fixture" build tag (single source:
+// RunTypedFixture helper in tools/archtest/fixture.go); without the tag the
 // fixture is invisible and packages.Load returns an empty *.Syntax slice.
 func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	root := findModuleRoot(t)
 	resolver, err := typeseval.SharedResolver(
-		root, false, []string{archtestmeta.FixtureBuildTag},
-		"./tools/archtest/internal/passfunnelfixture")
+		root, false, []string{"archtest_fixture"},
+		"./tools/archtest/internal/passfunnelfixture",
+	)
 	if err != nil {
 		t.Fatalf("typeseval.SharedResolver: %v", err)
 	}
@@ -734,6 +983,96 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 			"exact-count regression lock — reverting TypeName fix drops to 2)",
 			scannerImportBanCount, wantImportBanCount)
 	}
+
+	// PASS-FUNNEL-FIXTURE-TAG-01 per-form coverage: the fixture function
+	// fixtureTagBypassRedForms exercises all 4 EvaluateConstString-resolvable
+	// arg shapes (Form A literal / B same-pkg const Ident / C BinaryExpr
+	// concat / D cross-pkg SelectorExpr archtest.FixtureBuildTag) inside
+	// typeseval.SharedResolver calls. The detector must emit one diagnostic
+	// per form (4 total). The per-form trip-wire below asserts each form
+	// independently — removing any single fixture call line fails exactly
+	// that form's assertion, not just the aggregate count.
+	//
+	// Form identification uses the diagnostic Line number to look up the
+	// fixture source line. The fixture is the only file in the load that
+	// can produce diagsFixtureTagBypass hits (no other RED form exists
+	// elsewhere in the fixture sub-packages, and pass_funnel_test.go +
+	// pass_test.go themselves are in passFunnelPermanentExempt — though
+	// the per-form assertion below scopes by file rel to redfixture.go
+	// for explicitness).
+	const redfixtureRel = "tools/archtest/internal/passfunnelfixture/redfixture.go"
+	var fixtureTagDiags []scanner.Diagnostic
+	for _, tgt := range fixtureTargets {
+		fixtureTagDiags = append(fixtureTagDiags, diagsFixtureTagBypass(tgt)...)
+	}
+	if len(fixtureTagDiags) == 0 {
+		t.Errorf("PASS-FUNNEL-FIXTURE-TAG-01 detector found 0 diagnostics on red fixture; " +
+			"detector likely regressed or fixtureTagBypassRedForms removed from redfixture.go")
+		return
+	}
+	// Look up the source-line numbers of the 4 form anchors in redfixture.go
+	// so the per-form assertions key off the actual file, not hard-coded line
+	// numbers (which drift on unrelated edits). The anchor comments " Form A "
+	// / " Form B " / " Form C " / " Form D " each precede their respective
+	// SharedResolver call by exactly one line.
+	formAnchorLines := lookupFixtureFormAnchorLines(t, fixtureTargets, redfixtureRel)
+	for _, form := range []string{"A", "B", "C", "D"} {
+		anchorLine, ok := formAnchorLines[form]
+		if !ok {
+			t.Errorf("PASS-FUNNEL-FIXTURE-TAG-01 form-anchor lookup: comment "+
+				"' Form %s ' not found in %s — fixture godoc structure changed",
+				form, redfixtureRel)
+			continue
+		}
+		// The SharedResolver call site is on anchorLine+1 (the line immediately
+		// following the form anchor comment).
+		callLine := anchorLine + 1
+		found := false
+		for _, d := range fixtureTagDiags {
+			if d.Rel == redfixtureRel && d.Line == callLine {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("PASS-FUNNEL-FIXTURE-TAG-01 Form %s (line %d in %s) produced "+
+				"0 diagnostics on red fixture; detector regressed for this arg "+
+				"shape OR the fixture line was removed",
+				form, callLine, redfixtureRel)
+		}
+	}
+}
+
+// lookupFixtureFormAnchorLines walks the fixture file's CommentGroups and
+// records the line number of each " Form A " / " Form B " / " Form C " /
+// " Form D " marker comment. The per-form coverage assertion in
+// TestPassFunnel_FixtureCoverage uses these line numbers to key the detector
+// hits off the actual source-positioned fixture lines (anchor + 1), so the
+// assertion remains stable under unrelated fixture edits that shift line
+// numbers but preserve the comment-anchored call structure.
+func lookupFixtureFormAnchorLines(
+	t *testing.T,
+	fixtureTargets []passFunnelTarget,
+	relPath string,
+) map[string]int {
+	t.Helper()
+	out := make(map[string]int)
+	for _, tgt := range fixtureTargets {
+		if tgt.rel != relPath {
+			continue
+		}
+		for _, group := range tgt.file.Comments {
+			for _, c := range group.List {
+				text := c.Text
+				for _, form := range []string{"A", "B", "C", "D"} {
+					if strings.Contains(text, "Form "+form+" ") {
+						out[form] = tgt.pkg.Fset.Position(c.Pos()).Line
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // scanForForbiddenCallees walks tgt.file for any SelectorExpr / bare Ident
@@ -773,7 +1112,8 @@ func scanForForbiddenCallees(
 			Line: fset.Position(sel.Pos()).Line,
 			Message: fmt.Sprintf(
 				"use %s instead of %s.%s",
-				replacement, path, name),
+				replacement, path, name,
+			),
 		})
 	})
 
@@ -795,7 +1135,8 @@ func scanForForbiddenCallees(
 			Line: fset.Position(id.Pos()).Line,
 			Message: fmt.Sprintf(
 				"use %s instead of %s.%s",
-				replacement, path, name),
+				replacement, path, name,
+			),
 		})
 	})
 
@@ -819,4 +1160,23 @@ func pkgFileRel(modRoot string, pkg *packages.Package, file *ast.File) string {
 		return filepath.ToSlash(abs)
 	}
 	return filepath.ToSlash(rel)
+}
+
+// TestArchtestmetaPackageDeleted is a static reverse-lock that fails while
+// tools/archtest/internal/archtestmeta/ still exists on disk. Once Stage 4
+// deletes the package, the test passes permanently and prevents regression
+// (accidental re-introduction of the scaffold directory).
+//
+// RED until the archtestmeta directory is deleted in Stage 4 (this PR).
+func TestArchtestmetaPackageDeleted(t *testing.T) {
+	root := findModuleRoot(t)
+	archtestmetaDir := filepath.Join(root, "tools", "archtest", "internal", "archtestmeta")
+	_, err := os.Stat(archtestmetaDir)
+	if err == nil {
+		t.Errorf("TestArchtestmetaPackageDeleted: directory %q still exists; "+
+			"Stage 4 must delete tools/archtest/internal/archtestmeta/ entirely",
+			archtestmetaDir)
+	} else if !os.IsNotExist(err) {
+		t.Errorf("TestArchtestmetaPackageDeleted: unexpected Stat error: %v", err)
+	}
 }

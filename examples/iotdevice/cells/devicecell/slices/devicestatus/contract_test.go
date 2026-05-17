@@ -42,7 +42,7 @@ func newContractHandler() http.Handler {
 
 func TestDeviceStatusContractSpecMatchesContract(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, contractSpecID)
+	c := contracttest.LoadByID(t, root, "http.device.status.v1")
 	require.NotNil(t, c.HTTP)
 	require.Equal(t, contractSpecID, c.ID)
 	require.Equal(t, contractSpecMethod, c.HTTP.Method)

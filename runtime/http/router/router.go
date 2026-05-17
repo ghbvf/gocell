@@ -1147,7 +1147,7 @@ func (r *Router) mergeExemptMatcher(entries []string) error {
 // meta's METHOD+path (e.g. "POST /api/v1/access/users/{id}/password").
 // The hint is served at request time via WithPasswordResetChangeEndpointHintFn.
 // The "METHOD /path" format matches the wire contract documented in
-// docs/operations/first-run-setup.md (changePasswordEndpoint field).
+// docs/ops/first-run-setup.md (changePasswordEndpoint field).
 func (r *Router) deriveHint() {
 	for _, m := range r.declaredAuthMetas {
 		if m.Method == "POST" && m.PasswordResetExempt {
@@ -1260,6 +1260,9 @@ func not404Handler(w http.ResponseWriter, r *http.Request) {
 // PR-258 RES-5 narrowing: replaces the prior listener-mux Handle 404 +
 // WithPublicPathPrefix("/internal/v1/") + frameworkPrimaryWhitelist triple-
 // mechanism. The new model has a single surface: the predicate.
+//
+// See docs/ops/listener-topology.md for the deployment topology, threat boundaries,
+// and single-listener migration guide that frame this isolation rule.
 func InternalPrefixIsolationResponder() Option {
 	bare := strings.TrimSuffix(internalPathPrefix, "/")
 	predicate := func(r *http.Request) bool {

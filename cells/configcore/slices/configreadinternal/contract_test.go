@@ -13,6 +13,15 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
+// TestHttpConfigInternalGetV1_PathParamConstraints asserts that the key path
+// param schema rejects empty string (violates minLength: 1).
+func TestHttpConfigInternalGetV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.internal.get.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+}
+
 func TestHttpConfigInternalGetV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.internal.get.v1")

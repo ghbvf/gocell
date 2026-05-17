@@ -59,6 +59,29 @@ func newContractMux(svc *Service) http.Handler {
 
 // --- HTTP contract test ---
 
+// TestHttpConfigUpdateV1_PathParamConstraints asserts that the key path param
+// schema rejects empty string (violates minLength: 1).
+func TestHttpConfigUpdateV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.update.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+}
+
+// TestHttpConfigDeleteV1_PathParamConstraints asserts that the key path param
+// schema rejects empty string (violates minLength: 1).
+// TestHttpConfigDeleteV1_QueryParamConstraints asserts that expectedVersion
+// query param schema rejects 0 (violates minimum: 1) and >99999 (maximum).
+func TestHttpConfigDeleteV1_ParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.delete.v1")
+	c.ValidatePathParam(t, "key", "valid-key")
+	c.MustRejectPathParam(t, "key", "") // violates minLength: 1
+	c.ValidateQueryParam(t, "expectedVersion", "1")
+	c.MustRejectQueryParam(t, "expectedVersion", "0")      // violates minimum: 1
+	c.MustRejectQueryParam(t, "expectedVersion", "100000") // violates maximum: 99999
+}
+
 func TestHttpConfigWriteV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.write.v1")

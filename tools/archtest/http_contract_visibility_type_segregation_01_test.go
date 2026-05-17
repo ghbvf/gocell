@@ -243,9 +243,21 @@ func checkPassForVisibilityViolations(pass *Pass, ifaceSet *contractServiceIface
 // patterns must be specific package patterns (not the literal "./...") so that
 // PRODUCTION-LOADER-FUNNEL-01 does not apply. The caller is responsible for
 // passing the right set of patterns.
+//
+// fixture selects the loader façade:
+//   - false → archtest.RunTyped (production scan: real-repo clean check)
+//   - true  → archtest.RunTypedFixture (fixture scan: scanner-catches-violation
+//     check). The archtest_fixture build tag is supplied entirely inside
+//     RunTypedFixture's body; this helper never names the tag literal, in
+//     compliance with PASS-FUNNEL-FIXTURE-TAG-01.
+//
+// Both load paths underneath go through the singleflight-cached
+// SharedResolver, so Phase 1 and Phase 2 share the same type-check universe
+// (types.Implements works correctly across passes) regardless of which
+// façade is selected.
 func runHTTPContractVisibilityCheck(
 	t *testing.T,
-	tags []string,
+	fixture bool,
 	patterns []string,
 ) []httpVisibilityViolation {
 	t.Helper()
@@ -257,24 +269,24 @@ func runHTTPContractVisibilityCheck(
 
 	var violations []httpVisibilityViolation
 
-	// Single RunTyped call covers all patterns. The SharedResolver caches the
-	// packages.Load result, so two RunTyped calls with the same key share the
-	// same type universe — types.Implements works across passes.
-	//
-	// Phase 1 pass: collect contract interfaces.
-	phase1Diags := RunTyped(t, TypedOpts{Tests: false, Tags: tags}, patterns,
-		func(pass *Pass) []Diagnostic {
-			collectIfacesFromPass(pass, ifaceSet)
-			return nil
-		})
-	_ = phase1Diags // Phase 1 never returns diagnostics; only side-effects on ifaceSet.
+	phase1Rule := func(pass *Pass) []Diagnostic {
+		collectIfacesFromPass(pass, ifaceSet)
+		return nil
+	}
+	phase2Rule := func(pass *Pass) []Diagnostic {
+		violations = append(violations, checkPassForVisibilityViolations(pass, ifaceSet)...)
+		return nil
+	}
 
-	// Phase 2 pass: check production struct types (SharedResolver returns cached result).
-	RunTyped(t, TypedOpts{Tests: false, Tags: tags}, patterns,
-		func(pass *Pass) []Diagnostic {
-			violations = append(violations, checkPassForVisibilityViolations(pass, ifaceSet)...)
-			return nil
-		})
+	if fixture {
+		// Fixture scan: archtest_fixture build tag injected by RunTypedFixture body.
+		_ = RunTypedFixture(t, FixtureOpts{Tests: false}, patterns, phase1Rule)
+		RunTypedFixture(t, FixtureOpts{Tests: false}, patterns, phase2Rule)
+	} else {
+		// Production scan: no fixture tag.
+		_ = RunTyped(t, TypedOpts{Tests: false}, patterns, phase1Rule)
+		RunTyped(t, TypedOpts{Tests: false}, patterns, phase2Rule)
+	}
 
 	return violations
 }
@@ -307,7 +319,7 @@ var productionPatterns = []string{
 func TestHTTPContractVisibilityTypeSegregation01_RealRepoClean(t *testing.T) {
 	t.Parallel()
 
-	violations := runHTTPContractVisibilityCheck(t, nil, productionPatterns)
+	violations := runHTTPContractVisibilityCheck(t, false, productionPatterns)
 	for _, v := range violations {
 		t.Errorf(
 			"HTTP-CONTRACT-VISIBILITY-TYPE-SEGREGATION-01: %s:%d type %s "+
@@ -347,11 +359,7 @@ func TestHTTPContractVisibilityTypeSegregation01_ScannerCatchesViolation(t *test
 		"./tools/archtest/testdata/http_contract_visibility_type_segregation/...",
 	}
 
-	violations := runHTTPContractVisibilityCheck(
-		t,
-		[]string{"archtest_fixture"},
-		fixturePatterns,
-	)
+	violations := runHTTPContractVisibilityCheck(t, true, fixturePatterns)
 	if len(violations) == 0 {
 		t.Errorf(
 			"HTTP-CONTRACT-VISIBILITY-TYPE-SEGREGATION-01: fixture scan returned 0 violations — " +
