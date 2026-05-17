@@ -1,6 +1,7 @@
 package cellgen
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -803,13 +804,18 @@ func TestPlanCellBundleScaffold_MergedPlan(t *testing.T) {
 // remains in os.TempDir(). This locks the F2 fix: named return + deferred
 // cleanup inside materializeSkeletonStage.
 func TestMaterializeSkeletonStage_NoLeakOnInnerFailure(t *testing.T) {
-	t.Parallel()
+	// Not parallel: mutates package-level stageTempParent via
+	// isolateStageParent. Confining it to the sequential test phase means no
+	// concurrent materializeSkeletonStage reader can race the var, and the
+	// leak scan is over a private dir so a sibling test's staging dir can
+	// never be misattributed as a leak.
 	if runtime.GOOS == "windows" {
-		t.Skip("os.TempDir() listing semantics differ on windows")
+		t.Skip("temp-dir listing semantics differ on windows")
 	}
 
-	// Snapshot existing stage dirs before the test.
-	stageBefore := listStageDirs(t)
+	stageParent := isolateStageParent(t)
+	// Private parent starts empty; snapshot for symmetry/robustness.
+	stageBefore := listStageDirs(t, stageParent)
 
 	// Feed a skeleton plan that rebases from a realRoot that does NOT match
 	// the AbsPath prefix — filepath.Rel will produce a relative path with ".."
@@ -842,7 +848,7 @@ func TestMaterializeSkeletonStage_NoLeakOnInnerFailure(t *testing.T) {
 	}
 
 	// No new stage dirs should remain after the failure.
-	stageAfter := listStageDirs(t)
+	stageAfter := listStageDirs(t, stageParent)
 	leaked := setDiff(stageAfter, stageBefore)
 	if len(leaked) > 0 {
 		t.Errorf("temp-dir leak: %d gocell-scaffold-stage-* dir(s) remain after inner failure: %v",
@@ -850,20 +856,36 @@ func TestMaterializeSkeletonStage_NoLeakOnInnerFailure(t *testing.T) {
 	}
 }
 
-// listStageDirs returns the set of gocell-scaffold-stage-* entries in os.TempDir().
-func listStageDirs(t *testing.T) map[string]struct{} {
+// listStageDirs returns the set of gocell-scaffold-stage-* entries under
+// parent (the isolated per-test staging parent set by isolateStageParent).
+func listStageDirs(t *testing.T, parent string) map[string]struct{} {
 	t.Helper()
-	entries, err := os.ReadDir(os.TempDir())
+	entries, err := os.ReadDir(parent)
 	if err != nil {
-		t.Fatalf("ReadDir(TempDir): %v", err)
+		t.Fatalf("ReadDir(%s): %v", parent, err)
 	}
 	out := make(map[string]struct{})
 	for _, e := range entries {
 		if e.IsDir() && strings.HasPrefix(e.Name(), "gocell-scaffold-stage-") {
-			out[filepath.Join(os.TempDir(), e.Name())] = struct{}{}
+			out[filepath.Join(parent, e.Name())] = struct{}{}
 		}
 	}
 	return out
+}
+
+// isolateStageParent points materializeSkeletonStage at a private per-test
+// temp parent (via package-level stageTempParent) so leak assertions scan
+// only this test's staging dirs and cannot misattribute a sibling parallel
+// test's gocell-scaffold-stage-* dir as a leak. Callers must NOT be
+// t.Parallel(): the var mutation is confined to the sequential test phase so
+// no concurrent materializeSkeletonStage reader races it. Restored on cleanup.
+func isolateStageParent(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	prev := stageTempParent
+	stageTempParent = dir
+	t.Cleanup(func() { stageTempParent = prev })
+	return dir
 }
 
 // setDiff returns elements in a that are not in b.
@@ -947,15 +969,22 @@ func TestPlanCellBundle_WithBothFlags_DupGuardIsBackstop(t *testing.T) {
 	}
 }
 
-// TestPlanCellBundleScaffold_CrossStageRollback_NoStagingDir asserts that when
-// a derived-file write failure (e.g. ForceOverwrite target is a directory)
-// rolls back skeleton files AND leaves no gocell-scaffold-stage-* dir in TempDir.
-func TestPlanCellBundleScaffold_CrossStageRollback_NoStagingDir(t *testing.T) {
-	t.Parallel()
+// TestPlanCellBundleScaffold_DirAtDerivedPath_PlanTimeReject asserts that a
+// pre-existing directory at a derived ForceOverwrite path is rejected at PLAN
+// time (planDerivedArtifact's governance-gate read fails fast: a directory is
+// neither absent nor a generated file), not deferred to writePass. This is
+// the cellgen-side half of F2's dry-run/live parity: the conflict surfaces
+// from PlanCellBundleScaffold itself, before any plan executes, so dry-run
+// and live agree. Nothing is written to the project tree and no
+// gocell-scaffold-stage-* dir leaks (F3).
+func TestPlanCellBundleScaffold_DirAtDerivedPath_PlanTimeReject(t *testing.T) {
+	// Not parallel: mutates package-level stageTempParent (see
+	// isolateStageParent godoc).
 	if runtime.GOOS == "windows" {
 		t.Skip("MkdirAll on conflict path semantics differ on windows")
 	}
 
+	stageParent := isolateStageParent(t)
 	root := t.TempDir()
 	// Must have go.mod for metadata.NewParser to work inside appendDerivedCodegen.
 	if err := os.WriteFile(filepath.Join(root, "go.mod"),
@@ -977,14 +1006,14 @@ func TestPlanCellBundleScaffold_CrossStageRollback_NoStagingDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Pre-place a directory at the types_gen.go path to cause WritePlannedFiles
-	// to fail when writing the ForceOverwrite derived file.
+	// Pre-place a directory at the derived types_gen.go path. planDerivedArtifact
+	// must reject it at plan-construction time (read → "is a directory").
 	conflictDir := filepath.Join(root, "generated", "contracts", "http", "rollbackstage", "example", "v1", "types_gen.go")
 	if err := os.MkdirAll(conflictDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	stageBefore := listStageDirs(t)
+	stageBefore := listStageDirs(t, stageParent)
 
 	realRoot, err := pathsafe.ResolveRoot(root)
 	if err != nil {
@@ -1003,31 +1032,107 @@ func TestPlanCellBundleScaffold_CrossStageRollback_NoStagingDir(t *testing.T) {
 		WithHTTP:         true,
 	}
 
-	plan, planErr := PlanCellBundleScaffold(realRoot, spec)
-	if planErr != nil {
-		t.Fatalf("PlanCellBundleScaffold: %v", planErr)
-	}
-	writeErr := pathsafe.WritePlannedFiles(realRoot, plan, false)
-	if writeErr == nil {
-		t.Fatal("WritePlannedFiles with conflicting derived path: want error, got nil")
+	_, planErr := PlanCellBundleScaffold(realRoot, spec)
+	if planErr == nil {
+		t.Fatal("PlanCellBundleScaffold with a directory at the derived path: want plan-time error, got nil")
 	}
 
-	// Skeleton files must not exist after rollback.
+	// PlanCellBundleScaffold only stages + plans; it must never write the
+	// skeleton onto the project tree (the plan is never executed here).
 	for _, rel := range []string{
 		"cells/rollbackstage/cell.yaml",
 		"cells/rollbackstage/cell.go",
 		"cells/rollbackstage/slices/rollbackstageexample/slice.yaml",
 	} {
 		if _, statErr := os.Stat(filepath.Join(root, rel)); statErr == nil {
-			t.Errorf("cross-stage rollback: skeleton file must not exist: %s", rel)
+			t.Errorf("plan-time reject must not pollute project tree: %s", rel)
 		}
 	}
 
 	// No staging temp dir must remain.
-	stageAfter := listStageDirs(t)
+	stageAfter := listStageDirs(t, stageParent)
 	leaked := setDiff(stageAfter, stageBefore)
 	if len(leaked) > 0 {
 		t.Errorf("staging temp dir leaked after write failure: %v", leaked)
+	}
+}
+
+// TestPlanCellBundleScaffold_RefusesNonGeneratedDerivedFile is the F1
+// regression lock: a hand-written (non gocell-generated) file pre-placed at a
+// derived-artifact path must NOT be silently overwritten. PR #544 routed
+// derived writes through pathsafe with unconditional ForceOverwrite=true,
+// dropping the governance.IsGoCellGenerated gate the legacy codegen.Write
+// enforced. planDerivedArtifact restores it: PlanCellBundleScaffold must
+// return an error and the pre-existing file content must be untouched.
+func TestPlanCellBundleScaffold_RefusesNonGeneratedDerivedFile(t *testing.T) {
+	// Not parallel: isolateStageParent mutates package-level stageTempParent.
+	if runtime.GOOS == "windows" {
+		t.Skip("temp-dir listing semantics differ on windows")
+	}
+	_ = isolateStageParent(t)
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module github.com/ghbvf/gocell\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	schemaDir := filepath.Join(root, "contracts", "shared", "errors")
+	if err := os.MkdirAll(schemaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realSchemaPath := filepath.Join("..", "..", "..", "contracts", "shared", "errors", "error-response-v1.schema.json")
+	schemaContent, schemaErr := os.ReadFile(realSchemaPath) //nolint:gosec // test fixture
+	if schemaErr != nil {
+		t.Skipf("cannot read shared error schema: %v", schemaErr)
+	}
+	schemaOut := filepath.Join(schemaDir, "error-response-v1.schema.json")
+	if err := os.WriteFile(schemaOut, schemaContent, 0o644); err != nil { //nolint:gosec // tempdir test fixture
+		t.Fatal(err)
+	}
+
+	// Pre-place a HAND-WRITTEN (no gocell header) regular file at a derived
+	// contract artifact path.
+	derivedRel := filepath.Join("generated", "contracts", "http", "guardstage", "example", "v1", "types_gen.go")
+	derivedAbs := filepath.Join(root, derivedRel)
+	if err := os.MkdirAll(filepath.Dir(derivedAbs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handwritten := []byte("package handwritten\n\n// human-authored, NOT generated\n")
+	if err := os.WriteFile(derivedAbs, handwritten, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		t.Fatalf("ResolveRoot: %v", err)
+	}
+	spec := ScaffoldSpec{
+		CellID:           "guardstage",
+		StructName:       "GuardStage",
+		Package:          "guardstage",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		WithHTTP:         true,
+	}
+
+	_, planErr := PlanCellBundleScaffold(realRoot, spec)
+	if planErr == nil {
+		t.Fatal("PlanCellBundleScaffold over a non-generated derived file: want error, got nil")
+	}
+	if !strings.Contains(planErr.Error(), "non-generated") {
+		t.Errorf("error must name the non-generated overwrite refusal; got: %v", planErr)
+	}
+
+	// The hand-written file must be byte-identical (never overwritten).
+	got, readErr := os.ReadFile(derivedAbs) //nolint:gosec // tempdir test fixture, path constructed in-test
+	if readErr != nil {
+		t.Fatalf("read pre-placed file: %v", readErr)
+	}
+	if !bytes.Equal(got, handwritten) {
+		t.Errorf("hand-written file was modified: got %q want %q", got, handwritten)
 	}
 }
 

@@ -15,7 +15,11 @@
 //   - The shared error-response schema is copied into staging as a PlannedFile
 //     so contractgen's relative SchemaRef resolution can find it.
 //   - Derived artifacts are rendered in-memory against the staging tree and
-//     rebased onto realRoot with ForceOverwrite=true before merging.
+//     rebased onto realRoot via planDerivedArtifact, which restores the
+//     governance.IsGoCellGenerated overwrite gate (a pre-existing
+//     non-generated file on realRoot is refused, not silently replaced) and
+//     is the sole ForceOverwrite=true PlannedFile constructor for the derived
+//     path (archtest SCAFFOLD-DERIVED-FORCEOVERWRITE-01).
 //
 // The depguard scaffold-os-ban rule covers files starting with "scaffold" or
 // "generate_" in tools/codegen/cellgen/; stage_render.go IS also scanned by
@@ -36,11 +40,69 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 )
+
+// stageTempParent is the parent directory passed to os.MkdirTemp when
+// materializing the skeleton staging tree. Empty (the default) means
+// os.TempDir() — production behavior is unchanged. Tests override it with an
+// isolated per-test directory so concurrent leak assertions
+// (TestMaterializeSkeletonStage_NoLeakOnInnerFailure / cross-stage rollback)
+// scan only their own staging parent and cannot misattribute a sibling
+// parallel test's gocell-scaffold-stage-* dir as a leak.
+var stageTempParent = ""
+
+// planDerivedArtifact is the SINGLE constructor for a ForceOverwrite derived
+// codegen PlannedFile. It restores the governance gate that the legacy
+// codegen.Write (tools/codegen/writer.go) enforced before PR #544 routed
+// derived writes through the pathsafe single-plan funnel: a file that already
+// exists on realRoot and does NOT carry the gocell generator header
+// (governance.IsGoCellGenerated) is refused, never silently overwritten.
+//
+// relSlashPath is a stageRoot-relative slash path (artifact.Path / RelPath);
+// it is rebased onto realRoot via pathsafe.ContainPath (defense-in-depth
+// parent-symlink walk). ForceOverwrite is set true only when the target is
+// absent or a prior gocell-generated artifact — exactly the codegen-regenerate
+// case. Direct construction of pathsafe.PlannedFile{ForceOverwrite:true} in
+// the derived-append path is statically forbidden by archtest
+// SCAFFOLD-DERIVED-FORCEOVERWRITE-01, which keeps this gate unbypassable
+// (Medium downstream; upstream Hard tracked by backlog
+// PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01).
+func planDerivedArtifact(realRoot, relSlashPath string, content []byte) (pathsafe.PlannedFile, error) {
+	absReal, err := pathsafe.ContainPath(realRoot, filepath.FromSlash(relSlashPath))
+	if err != nil {
+		return pathsafe.PlannedFile{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"scaffold stage: rebase derived artifact", err,
+			errcode.WithDetails(slog.String("artifactPath", relSlashPath)))
+	}
+	existing, readErr := os.ReadFile(absReal) //nolint:gosec // contained path under realRoot (ContainPath above); governance-gate read
+	switch {
+	case readErr == nil:
+		if !governance.IsGoCellGenerated(existing) {
+			return pathsafe.PlannedFile{}, errcode.New(errcode.KindConflict, errcode.ErrConflict,
+				"scaffold stage: refusing to overwrite non-generated file "+
+					"(remove the file or move hand-written code to a sibling location, then re-run scaffold)",
+				errcode.WithDetails(slog.String("artifactPath", relSlashPath)))
+		}
+	case os.IsNotExist(readErr):
+		// Absent → fresh write. ForceOverwrite is still set (uniform plan
+		// entry); pathsafe conflictPass skips it and writePass captureOriginal
+		// records kindNone, identical to a plain create.
+	default:
+		return pathsafe.PlannedFile{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"scaffold stage: stat derived artifact target", readErr,
+			errcode.WithDetails(slog.String("artifactPath", relSlashPath)))
+	}
+	return pathsafe.PlannedFile{
+		AbsPath:        absReal,
+		Content:        content,
+		ForceOverwrite: true,
+	}, nil
+}
 
 // sharedErrorSchemaRelPath is the repo-relative path of the shared error
 // response schema. contractgen BuildContractSpec follows SchemaRef links that
@@ -65,7 +127,7 @@ const sharedErrorSchemaRelPath = "contracts/shared/errors/error-response-v1.sche
 //
 // Returns the resolved staging root path or an error.
 func materializeSkeletonStage(realRoot string, skeletonPlan []pathsafe.PlannedFile) (_ string, err error) {
-	rawStage, mkErr := os.MkdirTemp("", "gocell-scaffold-stage-*")
+	rawStage, mkErr := os.MkdirTemp(stageTempParent, "gocell-scaffold-stage-*")
 	if mkErr != nil {
 		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: create temp dir", mkErr)
@@ -175,19 +237,14 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 				errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
 		}
 		for _, a := range artifacts {
-			// a.Path is stageRoot-relative (slash-separated). Route through
-			// pathsafe.ContainPath for defense-in-depth symlink walk on realRoot.
-			absReal, cerr := pathsafe.ContainPath(realRoot, filepath.FromSlash(a.Path))
-			if cerr != nil {
-				return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-					"scaffold stage: rebase contract artifact", cerr,
-					errcode.WithDetails(slog.String("artifactPath", a.Path)))
+			// a.Path is stageRoot-relative (slash-separated). planDerivedArtifact
+			// rebases onto realRoot (ContainPath defense-in-depth symlink walk)
+			// and enforces the IsGoCellGenerated overwrite gate.
+			pf, perr := planDerivedArtifact(realRoot, a.Path, a.Content)
+			if perr != nil {
+				return nil, perr
 			}
-			mergedPlan = append(mergedPlan, pathsafe.PlannedFile{
-				AbsPath:        absReal,
-				Content:        a.Content,
-				ForceOverwrite: true,
-			})
+			mergedPlan = append(mergedPlan, pf)
 		}
 	}
 
@@ -200,19 +257,14 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 			errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
 	}
 	for _, a := range cellArtifacts {
-		// a.RelPath is stageRoot-relative. Route through ContainPath on realRoot
-		// for defense-in-depth symlink walk.
-		absReal, cerr := pathsafe.ContainPath(realRoot, filepath.FromSlash(a.RelPath))
-		if cerr != nil {
-			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-				"scaffold stage: rebase cell artifact", cerr,
-				errcode.WithDetails(slog.String("relPath", a.RelPath)))
+		// a.RelPath is stageRoot-relative. planDerivedArtifact rebases onto
+		// realRoot (ContainPath defense-in-depth symlink walk) and enforces
+		// the IsGoCellGenerated overwrite gate.
+		pf, perr := planDerivedArtifact(realRoot, a.RelPath, a.Content)
+		if perr != nil {
+			return nil, perr
 		}
-		mergedPlan = append(mergedPlan, pathsafe.PlannedFile{
-			AbsPath:        absReal,
-			Content:        a.Content,
-			ForceOverwrite: true,
-		})
+		mergedPlan = append(mergedPlan, pf)
 	}
 
 	return mergedPlan, nil
