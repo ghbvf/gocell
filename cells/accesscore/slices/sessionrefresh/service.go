@@ -295,20 +295,10 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 
 	// Session-state inline check — must run BEFORE any user lookup so a
 	// revoked session never escalates to 403 (user-not-active) or 503
-	// (userRepo outage). Owner package: this file is in the
-	// SESSION-REVOKED-FIELD-ACCESS-01 allowlist
-	// (cells/accesscore/slices/sessionrefresh/), so the direct
-	// sess.RevokedAt read is legitimate. cascadeRevoke clears the refresh
-	// chain so subsequent attempts immediately reject (post-§A11
-	// wire-uniformity 防枚举, ADR §A12).
-	if sess.RevokedAt != nil {
-		if cascadeErr := s.cascadeRevoke(ctx, sess.ID, "revoked-session"); cascadeErr != nil {
-			return dto.TokenPair{}, cascadeErr
-		}
-		s.logger.Warn("session-refresh: revoked session rejected",
-			slog.String("session_id", sess.ID),
-			slog.String("subject_id", presented.SubjectID))
-		return dto.TokenPair{}, authRefreshRejected()
+	// (userRepo outage). Extracted to rejectIfRevokedSession to keep
+	// refreshInTx cognitive complexity within the ≤15 budget.
+	if err := s.rejectIfRevokedSession(ctx, sess, presented.SubjectID); err != nil {
+		return dto.TokenPair{}, err
 	}
 
 	if sess.SubjectID != presented.SubjectID {
@@ -545,6 +535,35 @@ func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) e
 		slog.String("reason", reason),
 		slog.String("session_id", sessionID))
 	return nil
+}
+
+// rejectIfRevokedSession runs the session-state inline check (RevokedAt)
+// that ADR §A11 重写 moved out of the user-bound funnel. Extracted from
+// refreshInTx to keep that function within the ≤15 cognitive-complexity
+// budget after Wave 2 added the inline revoke + cascadeRevoke + log
+// sequence.
+//
+// Owner package: this file is in the SESSION-REVOKED-FIELD-ACCESS-01
+// allowlist (cells/accesscore/slices/sessionrefresh/), so the direct
+// sess.RevokedAt read is legitimate. cascadeRevoke clears the refresh
+// chain so subsequent rotation attempts immediately fail (post-§A11
+// wire-uniformity 防枚举, ADR §A13).
+//
+// Returns nil when the session is live (refreshInTx continues to the
+// subject-match / user-lookup / Assert / mint+rotate path). Returns a
+// non-nil error when the session is revoked OR when cascadeRevoke
+// surfaced an infra error — caller propagates as-is.
+func (s *Service) rejectIfRevokedSession(ctx context.Context, sess *session.ValidateView, subjectID string) error {
+	if sess.RevokedAt == nil {
+		return nil
+	}
+	if cascadeErr := s.cascadeRevoke(ctx, sess.ID, "revoked-session"); cascadeErr != nil {
+		return cascadeErr
+	}
+	s.logger.Warn("session-refresh: revoked session rejected",
+		slog.String("session_id", sess.ID),
+		slog.String("subject_id", subjectID))
+	return authRefreshRejected()
 }
 
 // rejectIfUserNotActive routes the baseline (user.CanAuthenticate via the

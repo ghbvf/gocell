@@ -955,7 +955,7 @@ func isFunnelMethod(fn *types.Func) bool {
 // fixture produces ≥ 1 violation. Per-bucket counting no longer applies:
 // typed-parent-check treats every non-CallExpr.Fun reference uniformly
 // regardless of syntactic context, so the meaningful self-check is
-// "detector fires at all," not "detector fires per syntactic shape."
+// whether the detector fires at all, not per-syntactic-shape coverage.
 func verifyFunnelCalleeReferenceRedFixtureDetected(t *testing.T, pattern, label string) {
 	t.Helper()
 	var found int

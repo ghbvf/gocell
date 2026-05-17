@@ -52,7 +52,13 @@ func (w withPasswordVersionPin) apply(u *domain.User) error {
 // checkOK is the sealed-interface marker; the body is empty because the
 // method exists solely to keep external packages from satisfying Check
 // (the unexported method name cannot be declared outside this package).
-func (withPasswordVersionPin) checkOK() {}
+func (withPasswordVersionPin) checkOK() {
+	// Intentionally empty — sealed-interface marker. The method exists
+	// purely so the Check interface (which declares checkOK as an
+	// unexported method) is satisfiable only by types declared in this
+	// package. Any body would be dead code at runtime since Assert
+	// never invokes checkOK.
+}
 
 // SnapshotPasswordVersion captures the user's current PasswordVersion into
 // an opaque Check for later validation under FOR UPDATE lock. This is the
