@@ -969,6 +969,9 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	panicEntry, ok := deps["panicking"]
 	require.True(t, ok, "panicking entry must be present")
 	assert.Equal(t, "unhealthy", panicEntry.Status)
+	assert.NotEmpty(t, panicEntry.ErrorMsg, "panic probe must populate slog channel d ErrorMsg")
+	assert.Contains(t, string(panicEntry.ErrorMsg), "something went very wrong",
+		"plain-string panic text must reach slog channel d unredacted (no sensitive key prefix)")
 }
 
 // TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog enforces the
@@ -1077,6 +1080,62 @@ func TestReadyz_VerbosePanicSecret_RedactedInSlog(t *testing.T) {
 		"slog channel d ErrorMsg must contain the redaction mask for panic-derived errors")
 	assert.NotContains(t, errMsg, leakSentinel,
 		"slog channel d ErrorMsg must have the raw panic secret masked")
+}
+
+// TestReadyz_VerboseError_UnknownKeyReachesSlogUnredacted documents the ADR
+// §3 ⚠ blind-spot behavior: error text WITHOUT a recognized sensitive-key
+// prefix (password= / token= / api-key= / …) is NOT redacted by
+// pkg/redaction.RedactString — only key=value / key: value patterns with a
+// matching key are masked.
+//
+// Assertions:
+//  1. Wire body: no error text at all — channel a/b/c never carry probe error
+//     text (wire shape frozen, ADR 202605171200 §3).
+//  2. Slog channel d ErrorMsg: the raw bare-token string IS present unredacted
+//     — the regex has no key anchor, so "bare-token-abc.def.ghi" passes through.
+//
+// This test is machine-level documentation of the accepted blind-spot: callers
+// that embed bare secrets in their probe error messages without using a
+// recognized key prefix will NOT have them redacted in slog channel d.
+// The fix is upstream (probe authors must use key=value form), not in the funnel.
+func TestReadyz_VerboseError_UnknownKeyReachesSlogUnredacted(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-unknown-key", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	// The bare token has no key anchor — pkg/redaction.sensitiveKeyPattern does
+	// not match "bare-token-abc.def.ghi" because the pattern requires a
+	// recognized key name followed by = or : before the value.
+	const bareToken = "bare-token-abc.def.ghi"
+	h := New(asm, clock.Real())
+	h.SetVerboseToken(testVerboseToken)
+	require.NoError(t, h.RegisterChecker("unknown-key-probe", func(_ context.Context) error {
+		return fmt.Errorf("connection to host failed: %s", bareToken)
+	}))
+
+	capture := withSlogCapture(t)
+	rec := httptest.NewRecorder()
+	req := newVerboseRequest("/readyz?verbose=true")
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	// Wire body must not contain the bare token — wire carries no error text at all
+	// (channel a/b/c only, wire shape frozen to {status, duration_ms}).
+	wireBody := rec.Body.String()
+	assert.NotContains(t, wireBody, bareToken,
+		"wire body must not carry any probe error text regardless of redaction outcome")
+
+	// Slog channel d: bare token reaches ErrorMsg unredacted — ADR §3 ⚠ blind spot.
+	// The regex only masks key=value / key: value patterns with a recognized key.
+	// A bare non-key-prefixed string is not masked.
+	slogDeps := readyzUnhealthyDeps(t, capture)
+	probeEntry, ok := slogDeps["unknown-key-probe"]
+	require.True(t, ok, "unknown-key-probe entry must be present in slog dependencies")
+	assert.Equal(t, "unhealthy", probeEntry.Status)
+	assert.Contains(t, string(probeEntry.ErrorMsg), bareToken,
+		"ADR §3 ⚠ blind-spot: bare token without key anchor is NOT redacted in slog channel d; "+
+			"probe authors must use key=value form for secrets to be masked")
 }
 
 // TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline verifies the
@@ -1413,6 +1472,84 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	assert.False(t, hasErr, "wire dependency entry must not carry error key (channel d slog only)")
 	_, hasErrMsg := entry["error_msg"]
 	assert.False(t, hasErrMsg, "wire dependency entry must not carry error_msg key (channel d slog only)")
+}
+
+// TestReadyz_VerboseDegraded_SlogCapturesRedactedError is the degraded-path
+// analog of TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog.
+// It verifies that when a probe returns a wrapped cell.ErrDegraded containing
+// a structured secret (e.g. "password=secret"), the four-channel split holds:
+//
+//   - wire body (HTTP 200): no raw secret, no <REDACTED> mask (channel d exclusive)
+//   - slog channel d (Info level "readyz degraded"): dependencies entry ErrorMsg
+//     carries the redacted error via the newRedactedErrorMsg funnel
+//
+// F3 regression: before this fix, logDiagnostics was not called on the
+// degraded path, so the slog channel d never received the probe ErrorMsg.
+func TestReadyz_VerboseDegraded_SlogCapturesRedactedError(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-degraded-redact", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	const leakSentinel = "degraded-leak-sentinel-7e3a"
+	h := New(asm, clock.Real())
+	h.SetVerboseToken(testVerboseToken)
+	require.NoError(t, h.RegisterChecker("cache", func(_ context.Context) error {
+		return fmt.Errorf("redis check: password=%s: %w", leakSentinel, cell.ErrDegraded)
+	}))
+
+	capture := withSlogCapture(t)
+	rec := httptest.NewRecorder()
+	req := newVerboseRequest("/readyz?verbose=true")
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	// degraded → HTTP 200, not 503.
+	assert.Equal(t, http.StatusOK, rec.Code, "degraded probe must produce HTTP 200")
+
+	// Wire body: status=degraded, but no raw secret and no <REDACTED> mask
+	// (channel d exclusive — mask on wire would indicate error text leaked).
+	wireBody := rec.Body.String()
+	assert.NotContains(t, wireBody, leakSentinel,
+		"degraded readyz wire body must not leak raw probe secrets")
+	assert.NotContains(t, wireBody, "<REDACTED>",
+		"degraded readyz wire body must not contain redaction mask — channel d exclusive")
+
+	data := dataBody(t, rec)
+	assert.Equal(t, "degraded", data["status"], "body status must be 'degraded'")
+
+	// slog channel d: the "readyz degraded" Info record must carry the
+	// dependencies map with the redacted ErrorMsg.
+	const diagMsg = "readyz degraded"
+	var diagEntry SlogDependencyEntry
+	var found bool
+	for _, r := range capture.snapshot() {
+		if r.Message != diagMsg {
+			continue
+		}
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "dependencies" {
+				deps, ok := a.Value.Any().(map[string]SlogDependencyEntry)
+				if ok {
+					e, exists := deps["cache"]
+					if exists {
+						diagEntry = e
+						found = true
+					}
+				}
+				return false
+			}
+			return true
+		})
+		if found {
+			break
+		}
+	}
+	require.True(t, found, "slog must emit a %q Info record with a 'cache' dependencies entry", diagMsg)
+	assert.Equal(t, "degraded", diagEntry.Status, "slog channel d entry status must be 'degraded'")
+	errMsg := string(diagEntry.ErrorMsg)
+	assert.Contains(t, errMsg, "<REDACTED>",
+		"slog channel d ErrorMsg must contain the redaction mask for the degraded error")
+	assert.NotContains(t, errMsg, leakSentinel,
+		"slog channel d ErrorMsg must have the raw sentinel masked")
 }
 
 // TestReadyz_HealthyAllAcrossBoard verifies the sanity check: all healthy → HTTP 200

@@ -35,6 +35,13 @@
 //	    to reach from outside the package, and using reflect within the
 //	    package would itself be the bug being investigated. No additional
 //	    archtest needed — the package boundary closes the upstream side.
+//	(c) package-level GenDecl initializer containing `redactedErrorMsg(...)` —
+//	    e.g. `var _ = redactedErrorMsg("bypass")` in a var/const block. The
+//	    forward scan in TestHealthRedactedErrorMsgFunnel walks FuncDecl.Body
+//	    nodes only (EachInChildren[ast.FuncDecl] → EachInSubtree inside body),
+//	    so a call expression nested in a GenDecl ValueSpec.Values RHS is outside
+//	    the FuncDecl.Body scan subtree and would be silently ignored.
+//	    Reverse-checked by TestHealthRedactedErrorMsgFunnelPackageLevelVarReverse.
 package archtest
 
 import (
@@ -267,4 +274,55 @@ func TestHealthVerboseScanCoverage(t *testing.T) {
 			"%s: archtest DirsScope must enumerate %s; missing files would let HEALTH-VERBOSE-* gates pass vacuously",
 			ruleHealthVerboseScanCoverage, want)
 	}
+}
+
+// TestHealthRedactedErrorMsgFunnelPackageLevelVarReverse is the blind-spot
+// reverse self-check for HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 case (c):
+// asserts that no package-level var/const GenDecl initializer in
+// runtime/http/health/ calls redactedErrorMsg(...) directly in a ValueSpec
+// RHS expression.
+//
+// The forward scan TestHealthRedactedErrorMsgFunnel uses
+// EachInChildren[ast.FuncDecl] → EachInSubtree inside FuncDecl.Body, which
+// does not visit GenDecl initializers at the package level. This test closes
+// that blind spot by walking GenDecls at the file top level and recursively
+// searching their ValueSpec Values for redactedErrorMsg CallExprs.
+//
+// Expected outcome: zero matches in production code. Any match is a
+// violation — var/const initializers bypass the FuncDecl.Body scan.
+func TestHealthRedactedErrorMsgFunnelPackageLevelVarReverse(t *testing.T) {
+	t.Parallel()
+
+	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, f := range p.Files {
+			// Walk top-level GenDecls (var/const blocks). For each GenDecl, scan
+			// its entire subtree for redactedErrorMsg CallExprs. A GenDecl subtree
+			// contains only ValueSpecs + their initializer Expr trees — no FuncDecl
+			// nesting is possible at package level — so EachInSubtree correctly
+			// captures the initializer-RHS shape that the forward FuncDecl scan misses.
+			EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+				EachInSubtree[ast.CallExpr](gd, func(call *ast.CallExpr) {
+					ident, ok := call.Fun.(*ast.Ident)
+					if !ok || ident.Name != healthRedactedErrorMsgTypeName {
+						return
+					}
+					ds = append(ds, Diagnostic{
+						Rel:  p.Rel(f),
+						Line: p.Fset.Position(call.Pos()).Line,
+						Message: fmt.Sprintf(
+							"(package-level var reverse self-check, blind-spot c): "+
+								"redactedErrorMsg(...) in GenDecl initializer — "+
+								"forward FuncDecl.Body scan would not catch this; "+
+								"only %s may construct redactedErrorMsg values",
+							healthRedactedErrorMsgFunnelFuncName,
+						),
+					})
+				})
+			})
+		}
+		return ds
+	})
+
+	Report(t, ruleHealthRedactedErrorMsgFunnel, diags)
 }
