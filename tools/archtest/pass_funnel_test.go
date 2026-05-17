@@ -359,17 +359,17 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 //   - Form uniqueness: the literal `"archtest_fixture"` is the only AST
 //     shape that carries the tag name into a business *_test.go file. The
 //     accompanying funnel pieces are:
-//       (i) RunTypedFixture's FixtureOpts has no Tags field — `RunTypedFixture
-//           (t, FixtureOpts{Tags: ...}, ...)` is a compile error (outward
-//           Hard, downstream funnel side).
-//       (ii) fixture.go declares the literal exactly once inside the
-//           framework (`Tags: []string{"archtest_fixture"}` in
-//           RunTypedFixture's body) and exports `FixtureBuildTag` as a
-//           typed string const for Go-code paths that need to identify the
-//           tag.
-//       (iii) This rule (upstream funnel side) rejects any *_test.go
-//           BasicLit STRING with the literal — driving load sites through
-//           RunTypedFixture and identity sites through FixtureBuildTag.
+//     (i) RunTypedFixture's FixtureOpts has no Tags field — `RunTypedFixture
+//     (t, FixtureOpts{Tags: ...}, ...)` is a compile error (outward
+//     Hard, downstream funnel side).
+//     (ii) fixture.go declares the literal exactly once inside the
+//     framework (`Tags: []string{"archtest_fixture"}` in
+//     RunTypedFixture's body) and exports `FixtureBuildTag` as a
+//     typed string const for Go-code paths that need to identify the
+//     tag.
+//     (iii) This rule (upstream funnel side) rejects any *_test.go
+//     BasicLit STRING with the literal — driving load sites through
+//     RunTypedFixture and identity sites through FixtureBuildTag.
 //   - No "looks like Approved but isn't" gray zone: BasicLit STRING Kind +
 //     unquoted == "archtest_fixture" is a clean predicate; any other shape
 //     (Ident → const reference, SelectorExpr → exported const) passes
