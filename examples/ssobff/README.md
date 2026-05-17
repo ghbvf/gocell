@@ -16,7 +16,7 @@ PostgreSQL is required. Start the bundled Docker Compose stack first (see
 [Docker Infrastructure](#docker-infrastructure)), then:
 
 ```bash
-export DATABASE_URL="postgres://gocell:gocell@localhost:5432/ssobff?sslmode=disable"
+export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"  # database name matches docker-compose.yml POSTGRES_DB=sso_bff
 export GOCELL_SSOBFF_SERVICE_SECRET="$(openssl rand -base64 32)"
 go run ./examples/ssobff
 ```
@@ -40,7 +40,7 @@ export GOCELL_EXAMPLE_POSTGRES_PASSWORD="$(openssl rand -base64 24)"
 export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
 # wait for postgres to become healthy, then set DATABASE_URL
-export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/ssobff?sslmode=disable"
+export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"
 ```
 
 ## First Admin Provisioning
@@ -314,7 +314,7 @@ tracked in the backlog. The current PR provides the middleware primitives.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DATABASE_URL` | (required) | PostgreSQL DSN, e.g. `postgres://user:pass@localhost:5432/ssobff?sslmode=disable`. The process fails fast when absent. |
+| `DATABASE_URL` | (required) | PostgreSQL DSN. With the bundled docker-compose: `postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable`. The process fails fast when absent. |
 | `GOCELL_STATE_DIR` | (per-OS) | Override the directory holding the bootstrap admin credential file. |
 | `GOCELL_SSOBFF_SERVICE_SECRET` | (required) | Internal listener service-token shared secret. ≥ 32 bytes; missing or short value fails the process at startup. |
 | `GOCELL_SSOBFF_PRIMARY_ADDR` | `:8081` | Primary listener bind address (public business API). |

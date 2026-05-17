@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -263,6 +264,15 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	pgOutboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 
+	// P1.5 fix (PR-CFG-L2-DIVERGENCE review): durable mode requires an outbox
+	// relay; without it events stay in outbox_entries pending and subscribers
+	// never receive them. Mirrors cmd/corebundle/bundle_configcore_storage.go
+	// PG path (lines 109-118 + WithManagedResource).
+	pgOutboxStore := adapterpg.NewOutboxStore(pool.DB(), clock.Real())
+	relayCfg := outboxruntime.DefaultRelayConfig()
+	relayCfg.Clock = clock.Real()
+	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
+
 	accessCAS, err := cas.NewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
 	if err != nil {
 		_ = pool.Close(ctx)
@@ -334,6 +344,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(cb),
 		bootstrap.WithManagedResource(pool),
+		bootstrap.WithManagedResource(relayWorker),
 		listenerOption(cell.PrimaryListener, cfg.primary, []cell.ListenerAuth{primaryAuth}),
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
 		listenerOption(cell.HealthListener, cfg.health, []cell.ListenerAuth{cell.AuthNone{}}),
