@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/config"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 )
 
 // stubKeySet is a minimal in-memory key provider/store for tests.
@@ -215,7 +216,7 @@ func TestFromEnv_WithKeys(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
 	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(ks))
 	require.NoError(t, err)
 	assert.NotNil(t, reg.SigningKeyProvider(), "SigningKeyProvider must be set via WithKeys")
@@ -252,7 +253,7 @@ func TestFromEnv_WithEnvClock(t *testing.T) {
 // TestNewJWTIssuerFromRegistry_Success verifies that a Registry with valid keys
 // produces a working JWTIssuer.
 func TestNewJWTIssuerFromRegistry_Success(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
@@ -297,7 +298,7 @@ func TestNewJWTIssuerFromRegistry_NilKeyProv(t *testing.T) {
 // TestNewJWTVerifierFromRegistry_Success verifies that a Registry with valid keys
 // produces a working JWTVerifier.
 func TestNewJWTVerifierFromRegistry_Success(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
@@ -336,7 +337,7 @@ func TestNewJWTVerifierFromRegistry_NilKeyStore(t *testing.T) {
 
 // TestNewJWTVerifierFromRegistry_EmptyAudiences returns an error when Audiences is empty.
 func TestNewJWTVerifierFromRegistry_EmptyAudiences(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: nil, // empty
@@ -553,7 +554,7 @@ func TestNewJWTVerifierFromRegistry_NilRegistry_ErrorCode(t *testing.T) {
 // TestNewJWTVerifierFromRegistry_EmptyAudiences_ErrorCode tightens
 // TestNewJWTVerifierFromRegistry_EmptyAudiences.
 func TestNewJWTVerifierFromRegistry_EmptyAudiences_ErrorCode(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: nil,
@@ -592,7 +593,7 @@ func TestNewJWTIssuerFromRegistry_NilKeyProv_ErrorCode(t *testing.T) {
 // TestNewJWTIssuerVerifierFromRegistry_EndToEnd verifies the full round-trip:
 // issue a token via Registry-constructed issuer, verify with Registry-constructed verifier.
 func TestNewJWTIssuerVerifierFromRegistry_EndToEnd(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell-test",
 		Audiences: []string{"gocell"},

@@ -9,5 +9,4 @@ import . "github.com/ghbvf/gocell/runtime/auth/session"
 
 func dotImportCalls() {
 	_, _ = NewProtocol()
-	_ = MustNewProtocol()
 }

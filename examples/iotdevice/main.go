@@ -86,11 +86,17 @@ func main() {
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
+	jwtPlan, err := cell.NewAuthJWT(jwtVerifier)
+	if err != nil {
+		logger.Error("iotdevice: invalid JWT auth plan", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	app := bootstrap.New(
 		bootstrap.WithClock(clk),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{cell.MustNewAuthJWT(jwtVerifier)}),
+		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{jwtPlan}),
 		bootstrap.WithListener(cell.InternalListener, ":9083", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	)

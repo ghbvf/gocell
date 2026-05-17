@@ -162,7 +162,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	require.NoError(t, c.Init(ctx, rec))
 	snap := rec.Snapshot()
 
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r := mustNewRouter(t)
 	for _, rg := range snap.RouteGroups {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
@@ -441,4 +441,13 @@ func TestDeviceCell_LifecycleHookRegistered(t *testing.T) {
 
 	require.Len(t, snap.LifecycleHooks, 1, "Init must register exactly one lifecycle hook (command sweeper)")
 	assert.Equal(t, "devicecommand.sweeper", snap.LifecycleHooks[0].Name)
+}
+
+func mustNewRouter(t *testing.T) *router.Router {
+	t.Helper()
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+	return r
 }

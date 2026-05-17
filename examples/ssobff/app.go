@@ -174,6 +174,8 @@ func WithSSOBFFListener(ref cell.ListenerRef, ln net.Listener) SSOBFFAppOption {
 //
 // ref: uber-go/fx app.go — single app factory shared by production and tests.
 // Deviates by keeping explicit typed construction instead of DI reflection.
+//
+//nolint:gocognit,cyclop // B2-K-02: 19/15 — 4 fail-fast err branches (linear wiring).
 func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	cfg := defaultSSOBFFAppConfig()
 	for _, opt := range opts {
@@ -217,11 +219,14 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		rlLimiter,
 		ssobffBootstrapAuthFailLogger(cfg.logger),
 	)
-	ssobffSessionProto := session.MustNewProtocol(
+	ssobffSessionProto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: session.NewProtocol: %w", err)
+	}
 	ssobffUserMemStore := accessmem.NewStore(clock.Real())
 	ssobffSessionMemStore, err := session.NewMemStore(ssobffSessionProto, clock.Real())
 	if err != nil {
@@ -236,6 +241,10 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: refreshmem.New: %w", err)
 	}
+	accessCAS, err := cas.NewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: cas.NewProtocol (accesscore): %w", err)
+	}
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithUserRepository(ssobffUserMemStore.UserRepository()),
@@ -247,7 +256,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
-		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
+		accesscore.WithCASProtocol(accessCAS),
 		accesscore.WithLogger(cfg.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
@@ -263,12 +272,16 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: create config cursor codec: %w", err)
 	}
+	configCAS, err := cas.NewProtocol(cas.WithVersionField(configcore.VersionField))
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: cas.NewProtocol (configcore): %w", err)
+	}
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
+		configcore.WithCASProtocol(configCAS),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(cfg.logger),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
@@ -289,13 +302,18 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, fmt.Errorf("ssobff: create consumer base: %w", err)
 	}
 
+	primaryAuth, err := cell.NewAuthJWTFromAssembly(asm)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: primary listener auth plan: %w", err)
+	}
+
 	b := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(cb),
-		listenerOption(cell.PrimaryListener, cfg.primary, []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
+		listenerOption(cell.PrimaryListener, cfg.primary, []cell.ListenerAuth{primaryAuth}),
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
 		listenerOption(cell.HealthListener, cfg.health, []cell.ListenerAuth{cell.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthRouteOptions()...),
@@ -359,8 +377,15 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 	}
 }
 
+// newSSOBFFJWT creates an ephemeral JWT issuer and verifier backed by a freshly
+// generated RSA key pair.
+//
+// Demo only: ephemeral in-process RSA keys; tokens invalidated on restart.
 func newSSOBFFJWT() (*auth.JWTIssuer, *auth.JWTVerifier, error) {
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey, err := auth.GenerateRSAKeyPair()
+	if err != nil {
+		return nil, nil, fmt.Errorf("ssobff: generate RSA key pair: %w", err)
+	}
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create key set: %w", err)

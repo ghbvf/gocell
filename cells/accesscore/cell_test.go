@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -60,7 +61,7 @@ var _ outbox.Writer = durableOutboxWriter{}
 const testPassword = "secret123"
 
 var (
-	testKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
+	testKeySet, _, _ = keystest.MustNewKeySet(clock.Real())
 	testIssuer       = mustIssuer(testKeySet)
 	testVerifier     = mustVerifier(testKeySet)
 	testCursorCodec  = mustCursorCodec()
@@ -495,7 +496,8 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 	require.NoError(t, c.Init(ctx, reg))
 
 	snap := reg.Snapshot()
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		if rg.Listener == cell.PrimaryListener {
 			rg := rg
@@ -583,8 +585,10 @@ func initCellWithRouters(t *testing.T) *cellTestRouters {
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
-	primary := router.MustNew(router.WithRouterClock(clock.Real()))
-	internal := router.MustNew(router.WithRouterClock(clock.Real()))
+	primary, err := router.New(router.WithRouterClock(clock.Real()))
+	require.NoError(t, err)
+	internal, err := router.New(router.WithRouterClock(clock.Real()))
+	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
 		switch rg.Listener {
@@ -849,7 +853,8 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 
 	// Login via HTTP handler to simulate real flow.
 	snap := reg.Snapshot()
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
 		if rg.Listener == cell.PrimaryListener {
@@ -934,7 +939,8 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 
 	// Login via HTTP.
 	snap := reg.Snapshot()
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
 		if rg.Listener == cell.PrimaryListener {
@@ -1107,7 +1113,8 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
 		if rg.Listener == cell.PrimaryListener {

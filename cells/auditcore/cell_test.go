@@ -421,7 +421,7 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	require.NoError(t, c.Init(ctx, recorder))
 
 	snap := recorder.Snapshot()
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r := mustNewRouter(t)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
 		r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -507,7 +507,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			require.NoError(t, c.Init(context.Background(), recorder))
 			snap := recorder.Snapshot()
 
-			r := router.MustNew(router.WithRouterClock(clock.Real()))
+			r := mustNewRouter(t)
 			for _, rg := range snap.RouteGroups {
 				rg := rg
 				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -648,4 +648,13 @@ func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 		"WriterEmitter must not add outbox-failopen-rate checker")
 	assert.Contains(t, snap.HealthCheckers, "audit_ledger_ready",
 		"audit_ledger_ready must always be registered via cell.RegisterRepoReadiness")
+}
+
+func mustNewRouter(t *testing.T) *router.Router {
+	t.Helper()
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+	return r
 }

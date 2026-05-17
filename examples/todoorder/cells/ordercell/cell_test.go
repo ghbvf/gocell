@@ -275,7 +275,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	require.NoError(t, c.Init(ctx, rec))
 	snap := rec.Snapshot()
 
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r := mustNewRouter(t)
 	for _, rg := range snap.RouteGroups {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
@@ -439,4 +439,13 @@ func TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, rec.Code, "route %s %s", tt.method, tt.path)
 		})
 	}
+}
+
+func mustNewRouter(t *testing.T) *router.Router {
+	t.Helper()
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+	return r
 }

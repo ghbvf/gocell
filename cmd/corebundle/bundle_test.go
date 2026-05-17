@@ -14,6 +14,7 @@ import (
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -24,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -57,7 +59,8 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 // called with a non-nil guard.
 func TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken(t *testing.T) {
 	guard := newTestInternalGuard(t)
-	chain := buildInternalAuthChain(guard)
+	chain, err := buildInternalAuthChain(guard)
+	require.NoError(t, err)
 	require.Len(t, chain, 1, "guard must produce a 1-plan chain")
 	_, ok := chain[0].(cell.AuthServiceToken)
 	assert.True(t, ok, "plan must be cell.AuthServiceToken; got %T", chain[0])
@@ -140,9 +143,11 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
 
-	base := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	base, err := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	require.NoError(t, err)
 	shared.RedisClient = new(adapterredis.Client)
-	withRedis := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	withRedis, err := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	require.NoError(t, err)
 
 	// PR-8 OIDC-MR-COMPLETENESS Group C: WithHealthChecker+WithManagedCloser collapsed
 	// into a single WithManagedResource, so redis adds exactly 1 option (not 2).
@@ -213,7 +218,7 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, clock.Real(),
@@ -262,7 +267,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	t.Helper()
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, clock.Real(),
@@ -414,7 +419,7 @@ func buildBootstrapFromShared(
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
 		primaryLn.Addr().String(),
-		[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+		[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
@@ -423,10 +428,12 @@ func buildBootstrapFromShared(
 
 func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap.Option {
 	t.Helper()
+	chain, err := buildInternalAuthChain(newTestInternalGuard(t))
+	require.NoError(t, err)
 	return bootstrap.WithListener(
 		cell.InternalListener,
 		ln.Addr().String(),
-		buildInternalAuthChain(newTestInternalGuard(t)),
+		chain,
 		bootstrap.WithListenerNet(ln),
 	)
 }
@@ -780,4 +787,45 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("full assembly bootstrap did not shut down in time")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// defaultRuntimeOptions / buildInternalAuthChain fault injection
+// ---------------------------------------------------------------------------
+
+// TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly verifies the error path
+// in defaultRuntimeOptions when a non-empty PrimaryHTTPAddr is set and asm is
+// nil. cell.NewAuthJWTFromAssembly rejects nil interfaces, so the function must
+// return an error containing "primary listener auth".
+func TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+	shared.PrimaryHTTPAddr = ":8080" // non-empty → primary listener branch executes
+
+	cb, err := buildConsumerBase(shared)
+	require.NoError(t, err)
+
+	// Pass nil assembly — NewAuthJWTFromAssembly rejects nil via IsNilInterface.
+	_, err = defaultRuntimeOptions(shared, nil, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "primary listener auth",
+		"error must identify which listener auth failed for operator diagnosis")
+}
+
+// TestBuildInternalAuthChain_NoopNonceStoreRejected verifies that
+// buildInternalAuthChain returns an error when the guard's NonceStore has
+// Kind() == NonceStoreKindNoop. cell.NewAuthServiceToken enforces replay
+// protection is not silently disabled.
+func TestBuildInternalAuthChain_NoopNonceStoreRejected(t *testing.T) {
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	guardWithNoop := &internalGuard{
+		ring:       ring,
+		nonceStore: auth.NewNoopNonceStore(),
+		mw:         func(h http.Handler) http.Handler { return h },
+	}
+
+	_, err = buildInternalAuthChain(guardWithNoop)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build internal auth chain",
+		"error must be wrapped with build-site context")
 }

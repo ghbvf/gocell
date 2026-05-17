@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 )
 
 // ─── Compile-time interface assertions ────────────────────────────────────────
@@ -45,10 +46,10 @@ func TestAuthPlan_Describe(t *testing.T) {
 		want string
 	}{
 		{"AuthNone", cell.AuthNone{}, "none"},
-		{"AuthJWT", cell.MustNewAuthJWT(verifier), "jwt"},
-		{"AuthJWTFromAssembly", cell.MustNewAuthJWTFromAssembly(asm), "jwt"},
+		{"AuthJWT", celltest.MustAuthJWT(verifier), "jwt"},
+		{"AuthJWTFromAssembly", celltest.MustAuthJWTFromAssembly(asm), "jwt"},
 		{"AuthMTLS", cell.AuthMTLS{}, "mtls"},
-		{"AuthServiceToken", cell.MustNewAuthServiceToken(store, ring), "service-token"},
+		{"AuthServiceToken", celltest.MustAuthServiceToken(store, ring), "service-token"},
 	}
 
 	for _, tc := range tests {
@@ -108,7 +109,7 @@ func TestMustNewAuthJWT_NilPanics(t *testing.T) {
 			t.Error("expected panic for nil verifier, got none")
 		}
 	}()
-	cell.MustNewAuthJWT(nil)
+	celltest.MustAuthJWT(nil)
 }
 
 func TestNewAuthJWTFromAssembly_NilReturnsError(t *testing.T) {
@@ -133,7 +134,7 @@ func TestMustNewAuthJWTFromAssembly_NilPanics(t *testing.T) {
 			t.Error("expected panic for nil assembly, got none")
 		}
 	}()
-	cell.MustNewAuthJWTFromAssembly(nil)
+	celltest.MustAuthJWTFromAssembly(nil)
 }
 
 func TestNewAuthServiceToken_NilStoreReturnsError(t *testing.T) {
@@ -186,7 +187,7 @@ func TestMustNewAuthServiceToken_NilStorePanics(t *testing.T) {
 			t.Error("expected panic for nil store, got none")
 		}
 	}()
-	cell.MustNewAuthServiceToken(nil, &stubHMACKeyring{})
+	celltest.MustAuthServiceToken(nil, &stubHMACKeyring{})
 }
 
 // shortHMACKeyring intentionally returns a secret below MinHMACKeyBytes to

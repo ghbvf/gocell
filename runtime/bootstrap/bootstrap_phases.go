@@ -38,7 +38,7 @@ import (
 // RES-5 the isolation runs as router early-responder middleware before
 // FinalizeAuth's policy-coverage walk reaches it, so no whitelist hole is
 // needed.
-// Health probes (/healthz, /readyz) are declared via auth.MustMount(Public:true)
+// Health probes (/healthz, /readyz) are declared via auth.Mount(Public:true)
 // inside HealthRouteGroups and do not need any whitelist entry.
 
 // phaseState extends runState with phase-local values that must be shared

@@ -199,23 +199,6 @@ func NewService(
 	return s, nil
 }
 
-// MustNewService is the static-wiring variant of NewService.
-func MustNewService(
-	userRepo ports.UserRepository,
-	sessionStore session.Store,
-	roleRepo ports.RoleRepository,
-	refreshStore refresh.Store,
-	issuer *auth.JWTIssuer,
-	logger *slog.Logger,
-	opts ...Option,
-) *Service {
-	s, err := NewService(userRepo, sessionStore, roleRepo, refreshStore, issuer, logger, opts...)
-	if err != nil {
-		panic(panicregister.Approved("sessionlogin-invariant", errcode.Assertion("sessionlogin: invariant violated: %v", err)))
-	}
-	return s
-}
-
 // LoginInput holds login parameters.
 type LoginInput struct {
 	Username string

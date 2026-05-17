@@ -59,13 +59,13 @@ func (b *Bootstrap) validateAuthJWTFromAssemblyPlan(
 ) error {
 	if validation.IsNilInterface(p.Assembly) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"AuthJWTFromAssembly Assembly must not be nil; construct it with cell.MustNewAuthJWTFromAssembly(asm)",
+			"AuthJWTFromAssembly Assembly must not be nil; construct it with cell.NewAuthJWTFromAssembly(asm)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if !p.IsConstructed() {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"AuthJWTFromAssembly was constructed as a struct literal; "+
-				"use cell.NewAuthJWTFromAssembly(asm) or cell.MustNewAuthJWTFromAssembly(asm)",
+				"use cell.NewAuthJWTFromAssembly(asm)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if b.assemblyCore == nil {
@@ -197,12 +197,12 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 func validateAuthServiceTokenPlan(listener string, position int, p cell.AuthServiceToken) error {
 	if validation.IsNilInterface(p.Store) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"AuthServiceToken Store must not be nil; construct it with cell.MustNewAuthServiceToken(store, ring)",
+			"AuthServiceToken Store must not be nil; construct it with cell.NewAuthServiceToken(store, ring)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if validation.IsNilInterface(p.Ring) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"AuthServiceToken Ring must not be nil; construct it with cell.MustNewAuthServiceToken(store, ring)",
+			"AuthServiceToken Ring must not be nil; construct it with cell.NewAuthServiceToken(store, ring)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if p.Store.Kind() == cell.NonceStoreKindNoop {

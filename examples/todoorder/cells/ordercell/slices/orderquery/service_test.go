@@ -36,7 +36,7 @@ func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 func mustNewService(repo domain.OrderRepository, codec *query.CursorCodec) *Service {
 	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	if err != nil {
-		panic(err)
+		panic("mustNewService: " + err.Error())
 	}
 	return svc
 }

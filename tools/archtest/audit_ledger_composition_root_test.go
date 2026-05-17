@@ -46,8 +46,7 @@ import (
 const ledgerImportSuffix = "/runtime/audit/ledger"
 
 var ledgerForbidden = map[string]bool{
-	"NewProtocol":     true,
-	"MustNewProtocol": true,
+	"NewProtocol": true,
 }
 
 // ledgerCompositionRootAllowlist enumerates package paths exempt from the
@@ -167,12 +166,12 @@ func TestAuditLedgerProtocol_ScannerCatchesAliasBypass(t *testing.T) {
 		})
 
 	require.Len(t, hits, 1,
-		"fixture must yield exactly 1 violation: AliasedMustNewProtocol uses "+
-			"`import auditledger \"<module>/runtime/audit/ledger\"; auditledger.MustNewProtocol(nil)`; "+
+		"fixture must yield exactly 1 violation: AliasedNewProtocol uses "+
+			"`import auditledger \"<module>/runtime/audit/ledger\"; auditledger.NewProtocol(...)`; "+
 			"the prior AST-only pkg.Name == \"ledger\" matcher would silently pass this")
 
 	got := hits[0]
-	assert.Equal(t, "MustNewProtocol", got.name)
+	assert.Equal(t, "NewProtocol", got.name)
 	assert.Contains(t, got.file, "tools/archtest/internal/auditledgerfixture/",
 		"fixture hit must be located in the auditledgerfixture package directory")
 }

@@ -25,6 +25,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -43,6 +44,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
+
+// mustMount is a test helper that calls auth.Mount and panics on error.
+func mustMount(mux cell.RouteHandler, r auth.Route) {
+	if err := auth.Mount(mux, r); err != nil {
+		panic(err)
+	}
+}
 
 // fsnotifySettleDelay is the pause between consecutive file writes in config
 // reload tests. fsnotify may fire multiple events per WriteFile (Write+Chmod);
@@ -2469,7 +2477,7 @@ func (c *httpCell) Init(ctx context.Context, reg cell.Registry) error {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusOK)
@@ -2477,7 +2485,7 @@ func (c *httpCell) Init(ctx context.Context, reg cell.Registry) error {
 				}),
 				Policy: authtest.RequireAuthenticated(),
 			})
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusOK)
@@ -2523,7 +2531,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -2564,7 +2572,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	}
 }
 
-// publicHTTPCell registers routes as public via auth.MustMount(Public:true),
+// publicHTTPCell registers routes as public via mustMount(Public:true),
 // following the F3 pattern where cells own their auth declarations.
 type publicHTTPCell struct {
 	*cell.BaseCell
@@ -2584,7 +2592,7 @@ func (c *publicHTTPCell) Init(ctx context.Context, reg cell.Registry) error {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusOK)
@@ -2592,7 +2600,7 @@ func (c *publicHTTPCell) Init(ctx context.Context, reg cell.Registry) error {
 				}),
 				Public: true,
 			})
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusOK)
@@ -2607,7 +2615,7 @@ func (c *publicHTTPCell) Init(ctx context.Context, reg cell.Registry) error {
 }
 
 func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
-	// F3: public routes are declared via auth.MustMount(Public:true) inside the cell.
+	// F3: public routes are declared via mustMount(Public:true) inside the cell.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
@@ -2622,7 +2630,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -2994,7 +3002,7 @@ func (c *authProviderCell) Init(ctx context.Context, reg cell.Registry) error {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusOK)
@@ -3004,7 +3012,7 @@ func (c *authProviderCell) Init(ctx context.Context, reg cell.Registry) error {
 			})
 			// F3: login is declared as a public route so auth discovery tests can verify
 			// that no-token requests bypass JWT checks on this endpoint.
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusOK)
@@ -3032,7 +3040,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3080,10 +3088,10 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
-		// F3: public routes are declared via auth.MustMount(Public:true) in the cell.
+		// F3: public routes are declared via mustMount(Public:true) in the cell.
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3144,7 +3152,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3193,7 +3201,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3225,7 +3233,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -3258,10 +3266,10 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
-		// F3: public routes declared via auth.MustMount(Public:true) in authProviderCell.
+		// F3: public routes declared via mustMount(Public:true) in authProviderCell.
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3583,7 +3591,7 @@ func (c *traceCapturingCell) Init(ctx context.Context, reg cell.Registry) error 
 		Register: func(mux cell.RouteMux) error {
 			// F3: public/ping is declared public so it creates new trace roots and
 			// rejects client-supplied request IDs.
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					tid, _ := ctxkeys.TraceIDFrom(r.Context())
@@ -3592,7 +3600,7 @@ func (c *traceCapturingCell) Init(ctx context.Context, reg cell.Registry) error 
 				}),
 				Public: true,
 			})
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/protected/ping"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					tid, _ := ctxkeys.TraceIDFrom(r.Context())
@@ -3626,7 +3634,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
 		WithShutdownTimeout(testtime.D2s),
@@ -3746,7 +3754,7 @@ func (c *publicPingAuthCell) Init(ctx context.Context, reg cell.Registry) error 
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
 			// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"),
 				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
 				Public:   true,
@@ -3774,7 +3782,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -4029,9 +4037,9 @@ func (c *duplicateAuthCell) Init(ctx context.Context, reg cell.Registry) error {
 			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
+			mustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
 			// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
+			mustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
 			return nil
 		},
 	})
@@ -4059,7 +4067,7 @@ func (c *protectedAuthCell) Init(ctx context.Context, reg cell.Registry) error {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract("GET", "/api/v1/protected"),
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusOK)
@@ -4202,12 +4210,12 @@ func (c *duplicateInternalCell) Init(ctx context.Context, reg cell.Registry) err
 		Listener: cell.InternalListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract("POST", "/internal/v1/dup-internal"),
 				Handler:  handler,
 			})
 			// Duplicate declaration — must trigger FinalizeAuth error.
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract("POST", "/internal/v1/dup-internal"),
 				Handler:  handler,
 			})
@@ -4230,7 +4238,7 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})}),
+			[]cell.ListenerAuth{celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -4278,13 +4286,13 @@ func (c *duplicateHealthCell) Init(ctx context.Context, reg cell.Registry) error
 		Listener: cell.HealthListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
 				Handler:  handler,
 				Public:   true,
 			})
 			// Duplicate declaration — must trigger FinalizeAuth error.
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
 				Handler:  handler,
 				Public:   true,
@@ -4350,7 +4358,7 @@ func (c *unknownListenerCell) Init(ctx context.Context, reg cell.Registry) error
 		Listener: cell.ListenerRef{}, // zero value — undeclared
 		Prefix:   "/api/v1/unknown",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			mustMount(mux, auth.Route{
 				Contract: testHTTPContract(http.MethodGet, "/api/v1/unknown/ping"),
 				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
 				Public:   true,

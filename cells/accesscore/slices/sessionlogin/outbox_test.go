@@ -100,7 +100,7 @@ func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	ow := &stubOutboxWriter{}
-	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
+	svc := mustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
@@ -120,7 +120,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	tx := &stubTxRunner{}
-	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
+	svc := mustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithTxManager(persistence.WrapForCell(tx)), WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
@@ -161,7 +161,7 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 	// stubTxRunner is NOT a Nooper — isNoopTx(tx) returns false.
 	tx := &stubTxRunner{}
 
-	svc := MustNewService(userRepo, sessionStore, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(emitter),
 		WithTxManager(persistence.WrapForCell(tx)),
 		WithClock(clock.Real()),
@@ -191,7 +191,7 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	// noopTxRunner implements cell.Nooper (Noop()==true) → isNoopTx returns true,
 	// so the service runs explicit session cleanup on emit failure.
 	refreshStore := &cleanupRefreshStoreSpy{Store: newOutboxRefreshStore()}
-	svc := MustNewService(userRepo, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default(),
+	svc := mustNewService(userRepo, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default(),
 		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 

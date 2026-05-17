@@ -130,11 +130,20 @@ func TestAccessCoreModule_CASProtocolInjection(t *testing.T) {
 	// panic proves the parameters are valid. The composition root calls exactly
 	// this constructor form (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest guards
 	// that cells never call it directly).
-	proto := cas.MustNewProtocol(cas.WithVersionField("password_version"))
+	proto := mustNewCASProtocol(t, "password_version")
 	require.NotNil(t, proto, "CAS Protocol must be non-nil")
 	assert.Equal(t, "password_version", proto.VersionField(),
 		"CAS Protocol version field must match the DB column name from migration 022")
 	_, isStrictReject := proto.Conflict().(cas.ConflictPolicyStrictReject)
 	assert.True(t, isStrictReject,
 		"default conflict policy must be ConflictPolicyStrictReject (HTTP 409 on mismatch)")
+}
+
+func mustNewCASProtocol(t *testing.T, versionField string) *cas.Protocol {
+	t.Helper()
+	p, err := cas.NewProtocol(cas.WithVersionField(versionField))
+	if err != nil {
+		t.Fatalf("cas.NewProtocol: %v", err)
+	}
+	return p
 }

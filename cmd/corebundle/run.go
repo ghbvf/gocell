@@ -74,7 +74,10 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 
 	logSinglePodNonceStoreAcknowledgement(shared)
 
-	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts, err := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	if err != nil {
+		return fmt.Errorf("default runtime options: %w", err)
+	}
 	opts = append(opts, cellOpts...)
 
 	return bootstrap.New(opts...).Run(ctx) //archtest:allow:clock-injection:via-slice opts from defaultRuntimeOptions includes WithClock

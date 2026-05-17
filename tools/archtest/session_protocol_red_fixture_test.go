@@ -23,9 +23,9 @@ import (
 //
 // # Coverage matrix
 //
-// The fixture contains 6 banned call sites: 3 callee shapes × 2 banned
-// function names. Each shape exercises a distinct branch of
-// archtest.ResolvePackageRef:
+// The fixture contains 3 banned call sites: 3 callee shapes × 1 banned
+// function name (NewProtocol; MustNewProtocol was deleted by B2-K-02).
+// Each shape exercises a distinct branch of archtest.ResolvePackageRef:
 //
 //	┌────────────────┬─────────────────────────────────────┬──────────────────────────────┐
 //	│ Callee shape   │ AST form                            │ ResolvePackageRef branch     │
@@ -36,9 +36,8 @@ import (
 //	└────────────────┴─────────────────────────────────────┴──────────────────────────────┘
 //
 // All three branches resolve to the same (pkgPath, name) tuple
-// ("github.com/ghbvf/gocell/runtime/auth/session", "NewProtocol" /
-// "MustNewProtocol") — the type-aware rule does not care about the source
-// callee shape.
+// ("github.com/ghbvf/gocell/runtime/auth/session", "NewProtocol") — the
+// type-aware rule does not care about the source callee shape.
 func TestSessionProtocol_RedFixtureDetected(t *testing.T) {
 	diags := RunTypedFixture(t,
 		FixtureOpts{Tests: false},
@@ -50,12 +49,12 @@ func TestSessionProtocol_RedFixtureDetected(t *testing.T) {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
 
-	// 3 callee shapes × 2 banned function names = 6 expected hits. We use
-	// equality (not ≥ 6) so the fixture cannot drift into producing extra
+	// 3 callee shapes × 1 banned function name = 3 expected hits. We use
+	// equality (not ≥ 3) so the fixture cannot drift into producing extra
 	// or fewer violations silently — any change to redfixture.go /
 	// dotimport.go must also update the expected count here.
-	assert.Len(t, diags, 6,
-		"fixture must yield exactly 6 SESSION-PROTOCOL-COMPOSITION-ROOT-01 hits "+
-			"(qualified + aliased + dot × NewProtocol + MustNewProtocol); "+
+	assert.Len(t, diags, 3,
+		"fixture must yield exactly 3 SESSION-PROTOCOL-COMPOSITION-ROOT-01 hits "+
+			"(qualified + aliased + dot × NewProtocol); "+
 			"if the fixture changes intentionally, update the expected count")
 }

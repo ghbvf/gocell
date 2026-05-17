@@ -76,16 +76,6 @@ func CircuitBreaker(cb Allower) (func(http.Handler) http.Handler, error) {
 	}, nil
 }
 
-// MustCircuitBreaker is the composition-root fail-fast variant of
-// CircuitBreaker.
-func MustCircuitBreaker(cb Allower) func(http.Handler) http.Handler {
-	mw, err := CircuitBreaker(cb)
-	if err != nil {
-		panic(panicregister.Approved("circuit-breaker-init", errcode.Assertion("circuit_breaker: %v", err)))
-	}
-	return mw
-}
-
 // circuitBreakerServe is the per-request handler for the CircuitBreaker
 // middleware. Extracted to keep CircuitBreaker's cognitive complexity ≤ 15.
 func circuitBreakerServe(cb Allower, next http.Handler, w http.ResponseWriter, r *http.Request) {
