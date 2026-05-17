@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/ratelimit"
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
+	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -23,8 +25,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -54,6 +54,10 @@ const (
 	ssobffBootstrapPassword = "ssobff-bootstrap-pass-1!"
 )
 
+// ssobffDatabaseURLEnv is the environment variable holding the PostgreSQL DSN.
+// Required: NewSSOBFFApp fails fast when absent.
+const ssobffDatabaseURLEnv = "DATABASE_URL"
+
 // ssobffBootstrapAuthFailLogger returns the onAuthFail observer wired into the
 // demo bootstrap middleware.
 func ssobffBootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailObserver {
@@ -62,15 +66,6 @@ func ssobffBootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailOb
 			slog.String("event", "bootstrap_auth_failed"),
 			slog.String("reason", reason))
 	}
-}
-
-// demoTxRunner is a pass-through TxRunner used in demo mode. It executes fn
-// directly without a database transaction — no L2 atomicity guarantees.
-// Production assemblies inject a real TxRunner (e.g., postgres.TxManager).
-type demoTxRunner struct{}
-
-func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
 }
 
 // SSOBFFApp is the shared ssobff composition root used by main and tests.
@@ -124,6 +119,7 @@ type listenerBinding struct {
 type ssobffAppConfig struct {
 	logger                *slog.Logger
 	internalServiceSecret string
+	databaseURL           string
 	primary               listenerBinding
 	internal              listenerBinding
 	health                listenerBinding
@@ -149,6 +145,14 @@ func WithSSOBFFInternalServiceSecret(secret string) SSOBFFAppOption {
 	}
 }
 
+// WithSSOBFFDatabaseURL overrides the DATABASE_URL env var for tests.
+func WithSSOBFFDatabaseURL(dsn string) SSOBFFAppOption {
+	return func(cfg *ssobffAppConfig) error {
+		cfg.databaseURL = dsn
+		return nil
+	}
+}
+
 // WithSSOBFFListener injects a pre-bound listener for tests.
 func WithSSOBFFListener(ref cell.ListenerRef, ln net.Listener) SSOBFFAppOption {
 	return func(cfg *ssobffAppConfig) error {
@@ -170,7 +174,11 @@ func WithSSOBFFListener(ref cell.ListenerRef, ln net.Listener) SSOBFFAppOption {
 	}
 }
 
-// NewSSOBFFApp builds the ssobff bootstrap app.
+// NewSSOBFFApp builds the ssobff bootstrap app backed by a real PostgreSQL
+// database. DATABASE_URL (or WithSSOBFFDatabaseURL option) must be set.
+//
+// On startup, all pending migrations are applied automatically so the schema
+// is always up to date before any cell initialises.
 //
 // ref: uber-go/fx app.go — single app factory shared by production and tests.
 // Deviates by keeping explicit typed construction instead of DI reflection.
@@ -185,20 +193,51 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		}
 	}
 
+	// Validate service secret before attempting DB connection so that
+	// configuration errors surface with a clear message at startup.
 	internalAuthChain, err := newInternalAuthChain(cfg.internalServiceSecret)
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
 	}
+
+	if cfg.databaseURL == "" {
+		return nil, fmt.Errorf("ssobff: %s must be set", ssobffDatabaseURLEnv)
+	}
+
+	ctx := context.Background()
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: cfg.databaseURL})
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: create PG pool: %w", err)
+	}
+
+	// Apply all pending migrations before cells initialise. Fail-fast on error
+	// so schema drift is visible at startup rather than deep in request paths.
+	migrationsFS, err := adapterpg.MigrationsFS()
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: get migrations FS: %w", err)
+	}
+	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: create migrator: %w", err)
+	}
+	if err := migrator.Up(ctx); err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: run migrations: %w", err)
+	}
+
+	txMgr := adapterpg.NewTxManager(pool)
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	// Demo only: test keys are generated in-process, so tokens do not survive
 	// restart and cannot be verified by another replica.
 	jwtIssuer, jwtVerifier, err := newSSOBFFJWT()
 	if err != nil {
+		_ = pool.Close(ctx)
 		return nil, err
 	}
 
-	var nw outbox.Writer = outbox.NoopWriter{}
 	// Demo deployment runs in interactive mode: no initialadmin lifecycle is
 	// wired (the operator POSTs to /api/v1/access/setup/admin to create the
 	// first admin). Bootstrap credentials are still mandatory — they protect
@@ -222,31 +261,52 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
-	ssobffUserMemStore := accessmem.NewStore(clock.Real())
-	ssobffSessionMemStore, err := session.NewMemStore(ssobffSessionProto, clock.Real())
+
+	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
 	if err != nil {
-		return nil, fmt.Errorf("ssobff: session.NewMemStore: %w", err)
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: accesspg.NewDeps: %w", err)
 	}
-	ssobffRefreshMemStore, err := refreshmem.New(refresh.Policy{
-		ReuseInterval:  2 * time.Second,
-		MaxAge:         7 * 24 * time.Hour,
-		MaxIdle:        refresh.DefaultMaxIdle,
-		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
-	}, clock.Real(), nil)
+	pgUserRepo, err := accesspg.NewUserRepository(pgDeps)
 	if err != nil {
-		return nil, fmt.Errorf("ssobff: refreshmem.New: %w", err)
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: accesspg.NewUserRepository: %w", err)
 	}
+	pgRoleRepo, err := accesspg.NewRoleRepository(pgDeps)
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: accesspg.NewRoleRepository: %w", err)
+	}
+	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: accesspg.NewSetupLock: %w", err)
+	}
+	pgSessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, ssobffSessionProto, clock.Real())
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: adapterpg.NewSessionStore: %w", err)
+	}
+	pgRefreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), nil)
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: adapterpg.NewRefreshStore: %w", err)
+	}
+
+	pgOutboxWriter := adapterpg.NewOutboxWriter(clock.Real())
+
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithUserRepository(ssobffUserMemStore.UserRepository()),
-		accesscore.WithRoleRepository(ssobffUserMemStore.RoleRepository()),
-		accesscore.WithSessionStore(ssobffSessionMemStore),
-		accesscore.WithRefreshStore(ssobffRefreshMemStore),
+		accesscore.WithUserRepository(pgUserRepo),
+		accesscore.WithRoleRepository(pgRoleRepo),
+		accesscore.WithSessionStore(pgSessionStore),
+		accesscore.WithRefreshStore(pgRefreshStore),
+		accesscore.WithSetupLock(pgSetupLock),
 		accesscore.WithBootstrapAuth(bootstrapMW),
-		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
+		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 		accesscore.WithLogger(cfg.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
@@ -254,29 +314,37 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	// Demo only: HMAC and cursor keys are public source constants. Production
 	// deployments must inject fresh secrets from a secret manager.
-	auc, err := buildSSOBFFAuditCore(cfg.logger, eb, nw)
+	auc, err := buildSSOBFFAuditCore(cfg.logger, eb, pool, txMgr)
 	if err != nil {
+		_ = pool.Close(ctx)
 		return nil, err
 	}
 
 	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
 	if err != nil {
+		_ = pool.Close(ctx)
 		return nil, fmt.Errorf("ssobff: create config cursor codec: %w", err)
+	}
+	configStorageOpt, err := configpg.WithPool(pool.DB(), clock.Real())
+	if err != nil {
+		_ = pool.Close(ctx)
+		return nil, fmt.Errorf("ssobff: configpg.WithPool: %w", err)
 	}
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
-		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		configcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
+		configStorageOpt,
+		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
+		configcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(cfg.logger),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	for _, registerErr := range []error{asm.Register(ac), asm.Register(auc), asm.Register(cc)} {
 		if registerErr != nil {
+			_ = pool.Close(ctx)
 			return nil, fmt.Errorf("ssobff: register cell: %w", registerErr)
 		}
 	}
@@ -286,6 +354,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		clock.Real(),
 	)
 	if err != nil {
+		_ = pool.Close(ctx)
 		return nil, fmt.Errorf("ssobff: create consumer base: %w", err)
 	}
 
@@ -295,6 +364,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(cb),
+		bootstrap.WithManagedResource(pool),
 		listenerOption(cell.PrimaryListener, cfg.primary, []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
 		listenerOption(cell.HealthListener, cfg.health, []cell.ListenerAuth{cell.AuthNone{}}),
@@ -309,12 +379,11 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}, nil
 }
 
-// buildSSOBFFAuditCore wires the demo auditcore Cell — ledger.Protocol +
-// MemStore + cursor codec are owned by the composition root; cells never
-// hold the raw HMAC key. Mirrors cmd/corebundle/audit_module.go but uses
-// in-source demo keys (production ssobff deployments must inject from a
-// secret manager).
-func buildSSOBFFAuditCore(logger *slog.Logger, eb outbox.Publisher, nw outbox.Writer) (*auditcore.AuditCore, error) {
+// buildSSOBFFAuditCore wires the ssobff auditcore Cell backed by PostgreSQL —
+// ledger.Protocol is owned by the composition root; cells never hold the raw
+// HMAC key. Mirrors cmd/corebundle/audit_module.go durable path but uses
+// in-source demo HMAC key (production deployments must inject from a secret manager).
+func buildSSOBFFAuditCore(logger *slog.Logger, eb outbox.Publisher, pool *adapterpg.Pool, txMgr *adapterpg.TxManager) (*auditcore.AuditCore, error) {
 	cursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
@@ -333,16 +402,16 @@ func buildSSOBFFAuditCore(logger *slog.Logger, eb outbox.Publisher, nw outbox.Wr
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: build audit protocol: %w", err)
 	}
-	store, err := ledger.NewMemStore(protocol, clock.Real())
+	pgLedgerStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, protocol, clock.Real())
 	if err != nil {
-		return nil, fmt.Errorf("ssobff: build audit store: %w", err)
+		return nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore: %w", err)
 	}
 	return auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithLedgerProtocol(protocol),
-		auditcore.WithLedgerStore(store),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
+		auditcore.WithLedgerStore(pgLedgerStore),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
+		auditcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		auditcore.WithCursorCodec(cursorCodec),
 		auditcore.WithLogger(logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
@@ -353,6 +422,7 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 	return &ssobffAppConfig{
 		logger:                slog.Default(),
 		internalServiceSecret: os.Getenv(ssobffServiceKeyEnv),
+		databaseURL:           os.Getenv(ssobffDatabaseURLEnv),
 		primary:               listenerBinding{addr: envOr("GOCELL_SSOBFF_PRIMARY_ADDR", ":8081")},
 		internal:              listenerBinding{addr: envOr("GOCELL_SSOBFF_INTERNAL_ADDR", "127.0.0.1:9081")},
 		health:                listenerBinding{addr: envOr("GOCELL_SSOBFF_HEALTH_ADDR", "127.0.0.1:9091")},
