@@ -1,9 +1,9 @@
 package pathsafe
 
-// Internal (package pathsafe) tests for Lane A unexported helpers:
-//   - collectMissingDirs (A9): EACCES on intermediate parent must propagate
-//     as a non-nil error, not be swallowed as "directory exists / break".
-//   - captureOriginal / forceOverwritePreflightPass (#544 ForceOverwrite
+// Internal (package pathsafe) tests for unexported helpers:
+//   - collectMissingDirs: EACCES on intermediate parent must propagate as a
+//     non-nil error, not be swallowed as "directory exists / break".
+//   - captureOriginal / forceOverwritePreflightPass (ForceOverwrite
 //     inode-kind gate): error/rejection branches the public-API tests cannot
 //     reach (lstat ENOTDIR, non-restorable inode kind, unreadable regular
 //     file).

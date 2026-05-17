@@ -110,7 +110,6 @@ type PlannedFile struct {
 	// codegen-regenerate flows where derived artifacts intentionally overwrite
 	// previous output. O_NOFOLLOW is preserved: a leaf symlink at the target
 	// path is still removed (not followed) before the fresh file is written.
-	// Zero value (false) is the default and matches pre-A-API behavior.
 	ForceOverwrite bool
 }
 
