@@ -283,6 +283,13 @@ func MustOK() {}
 
 // NewFoo is a normal error-first constructor; must NOT be flagged.
 func NewFoo() (struct{}, error) { return struct{}{}, nil }
+
+// stubT is a fixture type to host a method-receiver Must* declaration.
+type stubT struct{}
+
+// MustMethod is a deliberate method-receiver violation; confirms the rule
+// includes method declarations (no method exemption).
+func (stubT) MustMethod() {}
 `
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "fixture.go", fixtureSrc, 0)
@@ -301,6 +308,6 @@ func NewFoo() (struct{}, error) { return struct{}{}, nil }
 		}
 		hits = append(hits, fd.Name.Name)
 	})
-	require.ElementsMatch(t, []string{"MustViolation", "MustOK"}, hits,
-		"reverse fixture scan must flag both Must* declarations and skip NewFoo")
+	require.ElementsMatch(t, []string{"MustViolation", "MustOK", "MustMethod"}, hits,
+		"reverse fixture scan must flag all Must* declarations (functions and methods) and skip NewFoo")
 }

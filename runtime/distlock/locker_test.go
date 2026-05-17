@@ -78,7 +78,7 @@ func mgr(l distlock.Locker) *distlock.Manager {
 func newTestLocker(fc *clockmock.FakeClock, fd *locktest.FakeDriver) distlock.Locker {
 	l, err := distlock.New(fd, fc)
 	if err != nil {
-		panic(err)
+		panic("newTestLocker: " + err.Error())
 	}
 	return l
 }
@@ -88,7 +88,7 @@ func newTestLocker(fc *clockmock.FakeClock, fd *locktest.FakeDriver) distlock.Lo
 func mustNewLocker(driver distlock.Driver, clk clock.Clock, opts ...distlock.Option) distlock.Locker {
 	l, err := distlock.New(driver, clk, opts...)
 	if err != nil {
-		panic(err)
+		panic("mustNewLocker: " + err.Error())
 	}
 	return l
 }

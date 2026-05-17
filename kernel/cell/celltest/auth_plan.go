@@ -2,6 +2,9 @@
 // constructors. These wrap the error-first cell.NewAuth* with panic-on-error
 // semantics for test fixtures (K8s `resource.MustParse` model).
 //
+// Import path: `github.com/ghbvf/gocell/kernel/cell/celltest`. K8s
+// `httptest.NewRecorder` precedent for test fixture sub-packages.
+//
 // Production composition roots (cmd/, examples/) must propagate errors from
 // cell.NewAuth* directly; this helper exists in the celltest sub-package so
 // the symbol cannot be reached from production code without explicitly

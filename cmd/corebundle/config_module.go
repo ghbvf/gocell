@@ -51,7 +51,7 @@ var configStaleCipherOpts = prom.CounterOpts{
 // Provide fails. It reads configcore-specific environment variables directly
 // via the LoadPGConfig / LoadCursorKeys / LoadConfigCoreKeyProvider helpers.
 //
-//nolint:gocognit // B2-K-02: linear per-step env / pool / counter setup.
+//nolint:gocognit // B2-K-02: 16/15 — 7 linear if-err per-step env / pool / counter setup; split adds no readability gain.
 func (m ConfigCoreModule) Provide(
 	ctx context.Context, shared *SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {

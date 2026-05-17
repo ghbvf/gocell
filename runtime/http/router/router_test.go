@@ -80,7 +80,7 @@ func countWarnEntries(logs []byte, msg string) int {
 func mustNew(opts ...Option) *Router {
 	r, err := New(opts...)
 	if err != nil {
-		panic(err)
+		panic("mustNew: " + err.Error())
 	}
 	return r
 }

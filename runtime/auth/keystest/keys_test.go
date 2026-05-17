@@ -46,3 +46,29 @@ func TestMustNewKeyProvider_ExposesBothDomains(t *testing.T) {
 	assert.GreaterOrEqual(t, len(ring.Current()), auth.MinHMACKeyBytes,
 		"HMAC ring must satisfy minimum byte length")
 }
+
+// TestMustNewKeySet_PanicsOnNilClock verifies the panic plumbing of
+// MustNewKeySet by passing a nil clock — auth.NewKeySet's MustHaveClock
+// guard fires before any other validation, so this is the only reliable
+// way to exercise the panic-recover wrapper from a test caller.
+//
+// The unreachable `if err != nil` branch inside MustNewKeySet (after
+// auth.NewKeySet succeeds with non-nil priv/pub from MustGenerateKeyPair)
+// has no testable trigger; documented as a defensive branch in keys.go
+// godoc.
+func TestMustNewKeySet_PanicsOnNilClock(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() {
+		keystest.MustNewKeySet(nil)
+	}, "MustNewKeySet must panic when clock is nil")
+}
+
+// TestMustNewKeyProvider_PanicsOnNilClock asserts the panic plumbing
+// surfaces through MustNewKeyProvider → MustNewKeySet → auth.NewKeySet
+// (MustHaveClock guard).
+func TestMustNewKeyProvider_PanicsOnNilClock(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() {
+		keystest.MustNewKeyProvider(nil)
+	}, "MustNewKeyProvider must panic when clock is nil")
+}

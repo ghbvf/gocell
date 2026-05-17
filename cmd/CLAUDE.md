@@ -22,13 +22,22 @@ bootstrap.New(opts...).Run(ctx)
 ## Listener 配置
 
 ```go
+// B2-K-02: composition root 改 error-first；MustNew* 已删除
 // Primary：公开 API + JWT（phase4 自动发现 verifier）
+jwtAuth, err := cell.NewAuthJWTFromAssembly(asm)
+if err != nil {
+    return nil, fmt.Errorf("NewAuthJWTFromAssembly: %w", err)
+}
 bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr,
-    []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)})
+    []cell.ListenerAuth{jwtAuth})
 
 // Internal：控制平面 + ServiceToken（HMAC-SHA256 + replay guard）
+svcTokenAuth, err := cell.NewAuthServiceToken(guard.NonceStore(), guard.Ring())
+if err != nil {
+    return nil, fmt.Errorf("NewAuthServiceToken: %w", err)
+}
 bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr,
-    []cell.ListenerAuth{cell.MustNewAuthServiceToken(guard.NonceStore(), guard.Ring())})
+    []cell.ListenerAuth{svcTokenAuth})
 
 // Health：/healthz /readyz /metrics，显式无认证
 bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,

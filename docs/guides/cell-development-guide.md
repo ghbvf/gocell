@@ -331,11 +331,14 @@ func (c *MyCell) initInternal(ctx context.Context, reg cell.Registry) error {
 func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Option {
     tb.Helper()
     userStore := mem.NewStore(clk)
-    sessionProto := session.MustNewProtocol(
+    sessionProto, err := session.NewProtocol(
         session.WithFingerprint(session.FingerprintJTIRef{}),
         session.WithOrdering(session.OrderingAuthzEpoch{}),
         session.WithRevokeOnAll(),
     )
+    if err != nil {
+        tb.Fatalf("session.NewProtocol: %v", err)
+    }
     sessionStore, err := session.NewMemStore(sessionProto, clk)
     if err != nil {
         tb.Fatalf("session.NewMemStore: %v", err)
@@ -353,7 +356,7 @@ func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Opti
 }
 ```
 
-`session.MustNewProtocol` 只能在 `cmd/*`（composition root）或 `runtime/auth/session/*` 中调用，受 SESSION-PROTOCOL-COMPOSITION-ROOT-01 archtest 守护。测试辅助函数中请通过 `sessiontest.Protocol()`（`runtime/auth/session/sessiontest` 包）获取标准测试 Protocol，而不是直接调用 `session.MustNewProtocol`。
+`session.MustNewProtocol` 已删除（B2-K-02，ADR `202605171800`）。测试辅助函数中请通过 `sessiontest.Protocol()`（`runtime/auth/session/sessiontest` 包）获取标准测试 Protocol，而不是直接调用 `session.NewProtocol`，以避免重复 options 分散在各 helper 中。`session.NewProtocol` 仍受 SESSION-PROTOCOL-COMPOSITION-ROOT-01 archtest 守护（仅 `cmd/*` 或 `runtime/auth/session/*` 可调用）。
 
 ## 测试
 

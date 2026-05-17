@@ -150,7 +150,7 @@ func defaultRuntimeOptions(
 func buildInternalAuthChain(guard *internalGuard) ([]cell.ListenerAuth, error) {
 	plan, err := cell.NewAuthServiceToken(guard.NonceStore(), guard.ring)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build internal auth chain: %w", err)
 	}
 	return []cell.ListenerAuth{plan}, nil
 }
