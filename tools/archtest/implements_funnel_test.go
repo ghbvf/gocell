@@ -1,0 +1,227 @@
+// INVARIANT: TYPESUTIL-IMPLEMENTS-FUNNEL-01
+//
+// TYPESUTIL-IMPLEMENTS-FUNNEL-01: every reference to the stdlib function
+// go/types.Implements outside tools/typesutil/implements_interface.go is a
+// funnel bypass. The sanctioned wrappers typesutil.ImplementsInterface
+// (value-or-pointer) and typesutil.ImplementsInterfaceExact (value-only)
+// are the only API the rest of the repo may use; re-inlining a raw
+// types.Implements check (the "第 N 处再内联" recurrence the R2-P2 PR-a
+// consolidation removed) is structurally rejected here.
+//
+// AI-rebust: Hard (charter §"typed function call as Hard funnel for
+// unbounded operations" 范本, isomorphic to PANIC-REGISTERED-01's
+// type-resolution kernel). The callee/reference is resolved via
+// *types.Info.Uses[ident] → *types.Func → Pkg().Path()=="go/types" &&
+// Name()=="Implements", so a same-name local func, an import alias, or a
+// dot-import cannot disguise the reference. Hard property = form
+// uniqueness + archtest fail-on-deviation: there is no "looks like a
+// go/types.Implements ref but isn't" gray zone.
+//
+// Funnel 双向锁 (charter §"Funnel 双向锁评级", 两栏强制):
+//   - 下游 Hard: any file other than the funnel file referencing
+//     go/types.Implements turns CI red. The reference identity is
+//     type-resolved (no comment-anchor escape, no name convention, no
+//     whitelist map).
+//   - 上游: go/types.Implements is a stdlib symbol — Go's type system
+//     cannot seal it (any package may import "go/types" and call it), the
+//     same shape as panic(any). Honest caveat: the upstream guarantee is
+//     archtest-bound (form-uniqueness + fail-on-deviation), NOT
+//     compile-time. This is exactly the Hard 范本 the charter blesses for
+//     this rule shape; because the info.Uses sweep below covers EVERY
+//     reference form (call / dot-import / alias / func-value), there is no
+//     bypass shape left as a gray zone. Conclusion: closed Hard funnel —
+//     no backlog upgrade item is registered (R2-P2 PR-b closes the
+//     cap-02 row in the same PR).
+//
+// Blind spot inventory (each item has a reverse self-check fixture or an
+// honest scope declaration — charter §"工具选定后强制盲区自检"):
+//   - call form types.Implements(...) — selector_call_red fixture.
+//   - dot-import bare Implements(...) (import . "go/types") —
+//     dot_import_red fixture.
+//   - import-alias gt.Implements(...) (import gt "go/types") —
+//     aliased_import_red fixture.
+//   - func-value form `f := types.Implements` (reference NOT in
+//     CallExpr.Fun position) — func_value_red fixture. This is the form a
+//     CallExpr-only walk would miss; the info.Uses sweep makes it a
+//     guarded case, not a blind spot.
+//   - files behind non-default build tags — TestTypesutilImplementsFunnel01
+//     loops KnownNonDefaultTags() (default + integration + e2e + …),
+//     identical boundary to PANIC-REGISTERED-01. archtest_fixture group is
+//     skipped (fixtures intentionally violate).
+//   - generated/ codegen output — excluded by RunTypedProduction (the
+//     ProductionResolver generated/ funnel); codegen templates do not emit
+//     go/types.Implements, so there is no enforcement gap. Honest scope
+//     declaration.
+//   - string / go:generate textual mentions — not a Go type reference;
+//     out of scope by construction (info.Uses only carries resolved
+//     identifier objects). Honest scope declaration.
+//
+// ref: tools/typesutil/implements_interface.go — the single funnel
+//
+//	definition (ImplementsInterface / ImplementsInterfaceExact).
+//
+// ref: tools/archtest/panic_invariants_test.go — companion Hard pattern
+//
+//	(PANIC-REGISTERED-01, info.Uses → *types.Func identity).
+//
+// ref: docs/plans/202605162000-037r2-wave4-advance-round2.md §R2-P2 PR-b.
+package archtest
+
+import (
+	"fmt"
+	"go/ast"
+	"go/types"
+	"sort"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
+)
+
+const (
+	ruleTypesutilImplementsFunnel01 = "TYPESUTIL-IMPLEMENTS-FUNNEL-01"
+	goTypesPkgPath                  = "go/types"
+	goTypesImplementsFunc           = "Implements"
+	// implementsFunnelFileRel is the single module-relative file allowed to
+	// reference go/types.Implements directly (the consolidated funnel from
+	// R2-P2 PR-a). Every other reference is a bypass.
+	implementsFunnelFileRel = "tools/typesutil/implements_interface.go"
+)
+
+// collectImplementsFunnelViolations sweeps p.TypesInfo.Uses across every
+// file in the Pass and reports each *ast.Ident that resolves to the
+// go/types.Implements *types.Func, unless the file is the sanctioned
+// funnel file. Sweeping Uses (rather than only CallExpr.Fun) is what makes
+// the rule Hard: call form, dot-import bare form, import-alias form, and
+// func-value form (`f := types.Implements`) all produce a Uses entry whose
+// object is the same *types.Func, so no reference shape escapes.
+//
+// The funnel-file path comparison is the ONLY allowlist; it never matches
+// a fixture path, so the same detector is reused unchanged by both the
+// production test and the fixture reverse self-test.
+func collectImplementsFunnelViolations(p *Pass) []scanner.Diagnostic {
+	if p.TypesInfo == nil || p.Fset == nil {
+		return nil
+	}
+	var diags []scanner.Diagnostic
+	for _, f := range p.Files {
+		rel := p.Rel(f)
+		if rel == implementsFunnelFileRel {
+			continue // the one sanctioned site
+		}
+		EachInSubtree[ast.Ident](f, func(id *ast.Ident) {
+			fn, ok := p.TypesInfo.Uses[id].(*types.Func)
+			if !ok || fn.Pkg() == nil {
+				return
+			}
+			if fn.Pkg().Path() != goTypesPkgPath || fn.Name() != goTypesImplementsFunc {
+				return
+			}
+			diags = append(diags, scanner.Diagnostic{
+				Rel:  rel,
+				Line: p.Fset.Position(id.Pos()).Line,
+				Message: "raw go/types.Implements reference outside " +
+					implementsFunnelFileRel +
+					"; use typesutil.ImplementsInterface / ImplementsInterfaceExact",
+			})
+		})
+	}
+	return diags
+}
+
+// TestTypesutilImplementsFunnel01 enforces the rule module-wide. After
+// R2-P2 PR-a (#540) consolidated all 6 call sites into the funnel file,
+// this test must pass with zero violations. It loops KnownNonDefaultTags()
+// so integration/e2e-gated production files are also covered (same
+// boundary as PANIC-REGISTERED-01), skipping the archtest_fixture group
+// (fixtures intentionally violate).
+func TestTypesutilImplementsFunnel01(t *testing.T) {
+	t.Parallel()
+
+	seen := make(map[string]struct{})
+	var violations []scanner.Diagnostic
+
+	for _, tagGroup := range KnownNonDefaultTags() {
+		if containsTag(tagGroup, "archtest_fixture") {
+			continue
+		}
+		_ = RunTypedProduction(t, TypedOpts{Tests: false, Tags: tagGroup}, func(p *Pass) []Diagnostic {
+			for _, d := range collectImplementsFunnelViolations(p) {
+				key := fmt.Sprintf("%s:%d", d.Rel, d.Line)
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+				violations = append(violations, d)
+			}
+			return nil
+		})
+	}
+
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].Rel != violations[j].Rel {
+			return violations[i].Rel < violations[j].Rel
+		}
+		return violations[i].Line < violations[j].Line
+	})
+
+	if len(violations) > 0 {
+		t.Logf("%s: %d violation(s):", ruleTypesutilImplementsFunnel01, len(violations))
+		for _, v := range violations {
+			t.Logf("  %s:%d — %s", v.Rel, v.Line, v.Message)
+		}
+	}
+	assert.Empty(t, violations,
+		"%s: go/types.Implements must only be referenced from %s; "+
+			"use typesutil.ImplementsInterface / ImplementsInterfaceExact elsewhere.",
+		ruleTypesutilImplementsFunnel01, implementsFunnelFileRel)
+}
+
+// TestTypesutilImplementsFunnel01_Fixtures is the reverse self-check
+// mandated by charter §"工具选定后强制盲区自检": it proves the detector
+// actually fires for every reference form listed in the blind-spot
+// inventory. RED fixtures must report a violation on the exact ident line;
+// the GREEN fixture (routes through the funnel) must report zero.
+//
+// Each fixture pattern is non-recursive, so RunTyped yields exactly the
+// fixture package as a Pass (deps are loaded for type info but not yielded
+// as Passes), and the funnel-file allowlist never matches a fixture path.
+func TestTypesutilImplementsFunnel01_Fixtures(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		dir       string
+		wantLines []int // nil = GREEN (0 violations)
+	}{
+		{"selector_call_red", []int{9}},
+		{"dot_import_red", []int{9}},
+		{"aliased_import_red", []int{10}},
+		{"func_value_red", []int{13}},
+		{"approved_wrapper_green", nil},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.dir, func(t *testing.T) {
+			t.Parallel()
+
+			pattern := "./tools/archtest/testdata/typesutil_implements_fixtures/" + tc.dir
+
+			var gotLines []int
+			_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+				for _, d := range collectImplementsFunnelViolations(p) {
+					gotLines = append(gotLines, d.Line)
+				}
+				return nil
+			})
+			sort.Ints(gotLines)
+
+			wantLines := append([]int(nil), tc.wantLines...)
+			sort.Ints(wantLines)
+
+			assert.Equal(t, wantLines, gotLines,
+				"fixture %s: violation lines mismatch", tc.dir)
+		})
+	}
+}
