@@ -29,6 +29,12 @@ const (
 	// defaultS3HealthInterval is the default background health probe interval.
 	// NO magic literal: this const is the single source of truth for the 30s default.
 	defaultS3HealthInterval = 30 * time.Second
+
+	// ReadyProbeName is the ops-contract name for the S3 readiness probe registered
+	// by Checkers(). Probe name follows the observability rule: snake_case + "_ready"
+	// suffix. Single-sourced here so production code and tests reference the same
+	// identifier without drift.
+	ReadyProbeName = "s3_ready"
 )
 
 // bucketHeader is the narrow interface used by the health state machine.
@@ -280,15 +286,17 @@ func (c *Client) Health(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 // Checkers implements lifecycle.ManagedResource. It returns a single probe
-// "s3_ready" that reads the latest health state without any network call.
+// keyed by ReadyProbeName ("s3_ready") that reads the latest health state
+// without any network call.
 //
-// probe name "s3_ready" follows the observability rule:
-// snake_case + "_ready" suffix.
+// probe name follows the observability rule: snake_case + "_ready" suffix.
+// ReadyProbeName is the single source of truth; both this method and tests
+// reference it so the name cannot drift.
 //
 // ref: runtime/websocket/hub.go Checkers — state-read probe pattern.
 func (c *Client) Checkers() map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		"s3_ready": func(_ context.Context) error {
+		ReadyProbeName: func(_ context.Context) error {
 			if errPtr := c.state.Load(); errPtr != nil {
 				return *errPtr
 			}
