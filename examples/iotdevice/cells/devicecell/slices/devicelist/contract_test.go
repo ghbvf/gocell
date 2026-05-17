@@ -136,7 +136,7 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 
 func TestDeviceListContractSpecMatchesContract(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, contractSpecID)
+	c := contracttest.LoadByID(t, root, "http.device.list.v1")
 	if c.HTTP == nil {
 		t.Fatal("http.device.list.v1 must declare HTTP transport metadata")
 	}

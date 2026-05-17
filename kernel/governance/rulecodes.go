@@ -24,7 +24,7 @@ package governance
 // part of any public API. RuleCode itself is exported so external consumers
 // (cmd/gocell, tools) can create ValidationResult values with the correct type.
 //
-// Total: 85 constants across 12 series, matching goldenRuleIDs() in
+// Total: 86 constants across 12 series, matching goldenRuleIDs() in
 // rule_inventory_test.go. FMT-18 and ADV-02 are retired; the numbering gaps
 // are intentional.
 
@@ -148,4 +148,9 @@ const (
 	codeSLICECONSISTENCY02        RuleCode = "SLICE-CONSISTENCY-02"
 	codeDOCNAME01                 RuleCode = "DOC-NAME-01"
 	codeCONTRACTCONSISTENCYEMIT01 RuleCode = "CONTRACT-CONSISTENCY-EMIT-01"
+
+	// CONTRACT-ENDPOINT-TEST-MAPPING — active HTTP contract → slice.verify.contract.serve
+	// reverse coverage check. Inverse direction of the ADV-06 subscribe-role check:
+	// ADV-06 checks event contracts; this rule checks HTTP contracts.
+	codeCONTRACTENDPOINTTESTMAPPING01 RuleCode = "CONTRACT-ENDPOINT-TEST-MAPPING-01"
 )
