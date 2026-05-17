@@ -24,7 +24,7 @@
 //     (HTTP 409, no retry). Future siblings (LastWriteWins, RetryWithMerge) may
 //     be added here without breaking callers.
 //   - Protocol value — bundles the versionField name and a ConflictPolicy. Constructed
-//     via NewProtocol or MustNewProtocol (composition root only).
+//     via NewProtocol (composition root only).
 //   - CheckVersionMatch — translates UPDATE/DELETE RowsAffected into the standard
 //     ErrVersionConflict error vocabulary so cell repos share a single check point.
 //

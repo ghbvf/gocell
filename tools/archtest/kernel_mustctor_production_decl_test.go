@@ -140,6 +140,7 @@ var testFixturePkgPrefixes = []string{
 	"tests/contracttest",
 	"pkg/testutil",
 	"runtime/auth/authtest",
+	"runtime/auth/keystest",
 	"runtime/audit/ledger/storetest",
 	"cells/internal/testoutbox",
 	"kernel/cell/celltest",
@@ -196,16 +197,12 @@ func TestKernelMustCtorProductionDecl(t *testing.T) {
 
 		var out []Diagnostic
 		for _, file := range p.Files {
-			for _, decl := range file.Decls {
-				fd, ok := decl.(*ast.FuncDecl)
-				if !ok {
-					continue
-				}
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 				if !strings.HasPrefix(fd.Name.Name, "Must") {
-					continue
+					return
 				}
 				if isAllowedMustDecl(relPkg, fd.Name.Name) {
-					continue
+					return
 				}
 				pos := p.Fset.Position(fd.Pos())
 				out = append(out, Diagnostic{
@@ -220,7 +217,7 @@ func TestKernelMustCtorProductionDecl(t *testing.T) {
 						fd.Name.Name, relPkg,
 					),
 				})
-			}
+			})
 		}
 		return out
 	})
@@ -295,19 +292,15 @@ func NewFoo() (struct{}, error) { return struct{}{}, nil }
 	require.False(t, isTestFixturePkg(relPkg), "synthetic fixture pkg must not be exempt")
 
 	var hits []string
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if !strings.HasPrefix(fd.Name.Name, "Must") {
-			continue
+			return
 		}
 		if isAllowedMustDecl(relPkg, fd.Name.Name) {
-			continue
+			return
 		}
 		hits = append(hits, fd.Name.Name)
-	}
+	})
 	require.ElementsMatch(t, []string{"MustViolation", "MustOK"}, hits,
 		"reverse fixture scan must flag both Must* declarations and skip NewFoo")
 }

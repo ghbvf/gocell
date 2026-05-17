@@ -23,7 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -175,6 +175,8 @@ func WithSSOBFFListener(ref cell.ListenerRef, ln net.Listener) SSOBFFAppOption {
 //
 // ref: uber-go/fx app.go — single app factory shared by production and tests.
 // Deviates by keeping explicit typed construction instead of DI reflection.
+//
+//nolint:gocognit,cyclop // B2-K-02: linear example wiring without extra helpers.
 func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	cfg := defaultSSOBFFAppConfig()
 	for _, opt := range opts {
@@ -377,7 +379,7 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 }
 
 func newSSOBFFJWT() (*auth.JWTIssuer, *auth.JWTVerifier, error) {
-	privKey, pubKey := authtest.MustGenerateKeyPair()
+	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create key set: %w", err)

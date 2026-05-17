@@ -92,12 +92,12 @@ func routerInstallsAuthMiddleware(t *testing.T, opts []routerpkg.Option) bool {
 	rtr, err := routerpkg.NewForListener(cell.PrimaryListener, allOpts...)
 	require.NoError(t, err)
 
-	auth.MustMount(rtr, auth.Route{
+	require.NoError(t, auth.Mount(rtr, auth.Route{
 		Contract: testHTTPContract(http.MethodGet, "/auth-plan/protected"),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
-	})
+	}))
 	require.NoError(t, rtr.FinalizeAuth())
 
 	rec := httptest.NewRecorder()

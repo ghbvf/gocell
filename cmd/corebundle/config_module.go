@@ -50,6 +50,8 @@ var configStaleCipherOpts = prom.CounterOpts{
 // provisional resources that BuildApp must close if a subsequent module's
 // Provide fails. It reads configcore-specific environment variables directly
 // via the LoadPGConfig / LoadCursorKeys / LoadConfigCoreKeyProvider helpers.
+//
+//nolint:gocognit // B2-K-02: linear per-step env / pool / counter setup.
 func (m ConfigCoreModule) Provide(
 	ctx context.Context, shared *SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
@@ -138,9 +140,9 @@ func (m ConfigCoreModule) Provide(
 	// all 6 CAS write paths in configcore (config Update/Delete/Rollback +
 	// flag Update/Toggle/Delete). NewProtocol is the composition-root-only
 	// constructor (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces this).
-	casProto, err := cas.NewProtocol(cas.WithVersionField(configcore.VersionField))
+	casProto, err := newConfigCoreCASProtocol()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configcore cas protocol: %w", err)
+		return nil, nil, nil, err
 	}
 
 	baseOpts := []configcore.Option{
@@ -265,4 +267,15 @@ func registerOrReuseCounter(reg prom.Registerer, opts prom.CounterOpts) (prom.Co
 		return nil, fmt.Errorf("existing collector is not a Counter: %w", err)
 	}
 	return c, nil
+}
+
+// newConfigCoreCASProtocol builds the CAS protocol used by configcore.
+// Extracted from Provide to keep its cognitive complexity below the
+// project lint ceiling (gocognit > 15).
+func newConfigCoreCASProtocol() (*cas.Protocol, error) {
+	p, err := cas.NewProtocol(cas.WithVersionField(configcore.VersionField))
+	if err != nil {
+		return nil, fmt.Errorf("configcore cas protocol: %w", err)
+	}
+	return p, nil
 }

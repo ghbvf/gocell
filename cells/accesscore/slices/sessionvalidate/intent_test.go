@@ -14,11 +14,11 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 )
 
 func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {
-	priv, pub := authtest.MustGenerateKeyPair()
+	priv, pub := keystest.MustGenerateKeyPair()
 	ks, err := auth.NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
 	verifier, err := auth.NewJWTVerifier(ks, clock.Real(), auth.WithExpectedAudiences("gocell"))
@@ -38,7 +38,7 @@ func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {
 }
 
 func TestService_VerifyIntent_AcceptsAccessIntentToken(t *testing.T) {
-	priv, pub := authtest.MustGenerateKeyPair()
+	priv, pub := keystest.MustGenerateKeyPair()
 	ks, err := auth.NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
 	verifier, err := auth.NewJWTVerifier(ks, clock.Real(), auth.WithExpectedAudiences("gocell"))

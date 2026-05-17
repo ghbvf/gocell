@@ -37,7 +37,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -332,11 +332,12 @@ func buildPGStores(t *testing.T) *pgStores {
 	setupLock, err := accesspg.NewSetupLock(pgDeps)
 	require.NoError(t, err)
 
-	sessionProto := session.MustNewProtocol(
+	sessionProto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	require.NoError(t, err)
 	sessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
 	require.NoError(t, err)
 	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), rand.Reader)
@@ -377,7 +378,7 @@ func buildAuthLayer(t *testing.T) *authLayer {
 	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 
-	privKey, pubKey := authtest.MustGenerateKeyPair()
+	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
@@ -441,7 +442,7 @@ func buildCells(
 		accesscore.WithTxManager(persistence.WrapForCell(pg.txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(a.bootstrapMW),
-		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
+		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -450,7 +451,7 @@ func buildCells(
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
+		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
 	auditHMACKey := mustRandom32Bytes()
 	auditLedgerOpts, auditStore := buildAuditcoreLedgerOpts(t, auditHMACKey)
@@ -611,4 +612,13 @@ func postSetupAdmin(base string, body *bytes.Reader) (*http.Response, error) {
 	req.SetBasicAuth(bootstrapUsername, bootstrapPassword)
 	req.Header.Set("Content-Type", "application/json")
 	return httpClient.Do(req)
+}
+
+func mustNewCASProtocol(t *testing.T, versionField string) *cas.Protocol {
+	t.Helper()
+	p, err := cas.NewProtocol(cas.WithVersionField(versionField))
+	if err != nil {
+		t.Fatalf("cas.NewProtocol: %v", err)
+	}
+	return p
 }

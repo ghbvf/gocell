@@ -14,7 +14,7 @@
 // `MustNewKeySet`, `MustNewKeyProvider`) because the package name already
 // conveys the test context. Following K8s `httptest.NewRecorder`, not
 // `httptest.NewTestRecorder`.
-package authtest
+package keystest
 
 import (
 	"crypto/rand"

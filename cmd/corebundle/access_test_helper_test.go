@@ -19,11 +19,14 @@ import (
 func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Option {
 	tb.Helper()
 	userStore := accessmem.NewStore(clk)
-	sessionProto := session.MustNewProtocol(
+	sessionProto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
+	if err != nil {
+		tb.Fatalf("buildAccessCoreMemOptions: session.NewProtocol: %v", err)
+	}
 	sessionStore, err := session.NewMemStore(sessionProto, clk)
 	if err != nil {
 		tb.Fatalf("buildAccessCoreMemOptions: session.NewMemStore: %v", err)

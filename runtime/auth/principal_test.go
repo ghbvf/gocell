@@ -2,11 +2,8 @@ package auth
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestPrincipalKind_String(t *testing.T) {
@@ -85,31 +82,14 @@ func TestFromContext_NotInjected(t *testing.T) {
 	}
 }
 
-func TestMustFromContext_OK(t *testing.T) {
-	p := &Principal{Kind: PrincipalService, Subject: "svc"}
-	ctx := WithPrincipal(context.Background(), p)
-	got := MustFromContext(ctx)
-	if got != p {
-		t.Error("expected same pointer")
+func TestFromContext_MissingPrincipal(t *testing.T) {
+	got, ok := FromContext(context.Background())
+	if ok {
+		t.Error("expected ok=false when no principal in context")
 	}
-}
-
-func TestMustFromContext_Panics(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic")
-		}
-		ecErr, ok := r.(*errcode.Error)
-		if !ok {
-			t.Errorf("expected *errcode.Error panic value, got %T: %v", r, r)
-			return
-		}
-		if !strings.Contains(ecErr.Message, "auth: principal not in context") {
-			t.Errorf("unexpected panic message: %s", ecErr.Message)
-		}
-	}()
-	MustFromContext(context.Background())
+	if got != nil {
+		t.Error("expected nil principal when not in context")
+	}
 }
 
 func TestPrincipal_PasswordResetRequired_DefaultFalse(t *testing.T) {

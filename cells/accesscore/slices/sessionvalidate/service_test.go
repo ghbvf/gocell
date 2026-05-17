@@ -17,12 +17,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 var (
-	testKeySet, testPrivKey, _ = authtest.MustNewKeySet(clock.Real())
+	testKeySet, testPrivKey, _ = keystest.MustNewKeySet(clock.Real())
 	testVerifier               *auth.JWTVerifier
 )
 
@@ -164,7 +164,7 @@ func TestService_VerifyIntent(t *testing.T) {
 		{
 			name: "wrong signing key",
 			token: func() string {
-				wrongPriv, _ := authtest.MustGenerateKeyPair()
+				wrongPriv, _ := keystest.MustGenerateKeyPair()
 				tok, _ := IssueTestToken(wrongPriv, "usr-1", nil, time.Hour)
 				return tok
 			},

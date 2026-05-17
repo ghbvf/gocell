@@ -113,33 +113,29 @@ func TestNewProtocol_SuccessWithBothOptions(t *testing.T) {
 	}
 }
 
-// TestMustNewProtocol_PanicsOnInvalid: missing WithVersionField triggers panic.
-func TestMustNewProtocol_PanicsOnInvalid(t *testing.T) {
+// TestNewProtocol_ReturnsErrorOnMissingVersionField: missing WithVersionField returns error.
+func TestNewProtocol_ReturnsErrorOnMissingVersionField(t *testing.T) {
 	t.Parallel()
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic from MustNewProtocol when version field missing")
-		}
-		err, ok := r.(error)
-		if !ok {
-			t.Fatalf("expected panic value to be error, got %T: %v", r, r)
-		}
-		if !strings.Contains(err.Error(), "version field") {
-			t.Errorf("expected panic error to mention version field, got %q", err.Error())
-		}
-	}()
-	_ = cas.MustNewProtocol()
+	_, err := cas.NewProtocol()
+	if err == nil {
+		t.Fatal("expected error from NewProtocol when version field missing")
+	}
+	if !strings.Contains(err.Error(), "version field") {
+		t.Errorf("expected error to mention version field, got %q", err.Error())
+	}
 }
 
-// TestMustNewProtocol_SuccessReturnsProtocol: normal path returns non-nil Protocol.
-func TestMustNewProtocol_SuccessReturnsProtocol(t *testing.T) {
+// TestNewProtocol_SuccessReturnsProtocol: normal path returns non-nil Protocol.
+func TestNewProtocol_SuccessReturnsProtocol(t *testing.T) {
 	t.Parallel()
-	p := cas.MustNewProtocol(
+	p, err := cas.NewProtocol(
 		cas.WithVersionField("version"),
 	)
+	if err != nil {
+		t.Fatalf("unexpected error from NewProtocol: %v", err)
+	}
 	if p == nil {
-		t.Fatal("expected non-nil protocol from MustNewProtocol")
+		t.Fatal("expected non-nil protocol from NewProtocol")
 	}
 }
 

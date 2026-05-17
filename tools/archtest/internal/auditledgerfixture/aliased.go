@@ -5,7 +5,7 @@
 // the archtest_fixture build tag is set.
 //
 // The fixture imports `runtime/audit/ledger` under a non-default alias
-// (`auditledger`) and calls `auditledger.MustNewProtocol(nil)`. The legacy
+// (`auditledger`) and calls `auditledger.NewProtocol(...)`. The legacy
 // AST-only matcher (`pkg.Name == "ledger"`) silently passes this shape; the
 // type-aware matcher (typeseval.ResolvePackageRef → *types.PkgName →
 // Imported().Path()) catches it because resolution is by canonical import
@@ -19,22 +19,26 @@
 //	    "./tools/archtest/internal/auditledgerfixture")
 //
 // AI co-authors who modify the fixture must keep exactly one call to a
-// forbidden ledger constructor (NewProtocol / MustNewProtocol). The companion
-// test asserts hits == 1; adding a second call site or removing the call
-// breaks the contract.
+// forbidden ledger constructor (NewProtocol). The companion test asserts
+// hits == 1; adding a second call site or removing the call breaks the
+// contract.
+//
+// History: prior to B2-K-02 this fixture also called ledger.MustNewProtocol
+// to exercise the Must variant; MustNewProtocol was deleted, so only
+// NewProtocol remains.
 package auditledgerfixture
 
 import auditledger "github.com/ghbvf/gocell/runtime/audit/ledger"
 
-// AliasedMustNewProtocol intentionally invokes MustNewProtocol through a
-// non-default import alias. The return value is discarded; the function is
-// never called at runtime — the fixture exists for AST/type-info analysis.
+// AliasedNewProtocol intentionally invokes NewProtocol through a non-default
+// import alias. The return value is discarded; the function is never called
+// at runtime — the fixture exists for AST/type-info analysis.
 //
-// MustNewProtocol's signature is `func MustNewProtocol(opts ...Option) *Protocol`
+// NewProtocol's signature is `func NewProtocol(opts ...Option) (*Protocol, error)`
 // (variadic), so the zero-arg form below compiles and is a real call expression
-// that ResolvePackageRef sees as `auditledger.MustNewProtocol`. A future
-// signature change to required parameters would cause a clean build error
-// in this fixture, not silent drift.
-func AliasedMustNewProtocol() {
-	_ = auditledger.MustNewProtocol()
+// that ResolvePackageRef sees as `auditledger.NewProtocol`. A future signature
+// change to required parameters would cause a clean build error in this
+// fixture, not silent drift.
+func AliasedNewProtocol() {
+	_, _ = auditledger.NewProtocol()
 }

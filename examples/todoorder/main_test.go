@@ -15,7 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 )
 
 const testServiceKey = "test-service-secret-at-least-32-bytes!!"
@@ -95,7 +95,7 @@ func authChainContainsServiceToken(chain []cell.ListenerAuth) bool {
 
 func setJWTKeyEnv(t *testing.T) {
 	t.Helper()
-	priv, pub := authtest.MustGenerateKeyPair()
+	priv, pub := keystest.MustGenerateKeyPair()
 	pubDER, err := x509.MarshalPKIXPublicKey(pub)
 	require.NoError(t, err)
 

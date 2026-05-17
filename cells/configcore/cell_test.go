@@ -124,7 +124,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
-		WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("version"))),
+		WithCASProtocol(mustNewCASProtocol(t, "version")),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -302,7 +302,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	require.NoError(t, c.Init(ctx, recorder))
 
 	snap := recorder.Snapshot()
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r := mustNewRouter(t)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
 		if rg.Prefix != "" {
@@ -495,7 +495,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	require.NoError(t, c.Init(ctx, recorder))
 
 	snap := recorder.Snapshot()
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r := mustNewRouter(t)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
 		if rg.Prefix != "" {
@@ -555,7 +555,7 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingConfigWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})), // non-Nooper; durable-gated CheckNotNoop passes
-		WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("version"))),
+		WithCASProtocol(mustNewCASProtocol(t, "version")),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
@@ -609,7 +609,7 @@ func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})), // non-Nooper; durable-gated CheckNotNoop passes
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), outbox.WrapWriterForCell(writer)),
 		WithCursorCodec(mustNewCfgCodec(t, []byte("wiring-test-cfg-cursor-key-32b!!"))),
-		WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("version"))),
+		WithCASProtocol(mustNewCASProtocol(t, "version")),
 	)
 	// Writer is accumulated into pendingOutboxWriter pre-Init.
 	assert.NotNil(t, c.pendingOutboxWriter, "WithOutboxDeps must populate pendingOutboxWriter")
@@ -753,4 +753,22 @@ func TestConfigCore_DurableMode_MissingCASProtocol_FailsFast(t *testing.T) {
 	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 	assert.Contains(t, ec.Message, "durable mode requires a CAS protocol",
 		"diagnostic must point operators at the missing CAS wiring")
+}
+
+func mustNewRouter(t *testing.T) *router.Router {
+	t.Helper()
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+	return r
+}
+
+func mustNewCASProtocol(t *testing.T, versionField string) *cas.Protocol {
+	t.Helper()
+	p, err := cas.NewProtocol(cas.WithVersionField(versionField))
+	if err != nil {
+		t.Fatalf("cas.NewProtocol: %v", err)
+	}
+	return p
 }

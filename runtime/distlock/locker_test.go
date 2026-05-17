@@ -76,7 +76,21 @@ func mgr(l distlock.Locker) *distlock.Manager {
 
 // newTestLocker constructs a Locker backed by FakeDriver + clockmock.FakeClock.
 func newTestLocker(fc *clockmock.FakeClock, fd *locktest.FakeDriver) distlock.Locker {
-	return distlock.MustNew(fd, fc)
+	l, err := distlock.New(fd, fc)
+	if err != nil {
+		panic(err)
+	}
+	return l
+}
+
+// mustNewLocker is a test helper that calls distlock.New and panics on error.
+// It is used exclusively in tests that expect construction to succeed.
+func mustNewLocker(driver distlock.Driver, clk clock.Clock, opts ...distlock.Option) distlock.Locker {
+	l, err := distlock.New(driver, clk, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return l
 }
 
 type typedNilDriver struct{}
@@ -189,7 +203,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	// Use maxRenewAttempts=1 so a single injected error exhausts the budget.
-	l := distlock.MustNew(fd, fc,
+	l := mustNewLocker(fd, fc,
 		distlock.WithMaxRenewAttempts(1),
 	)
 
@@ -652,7 +666,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 
 	const driftFactor = 0.01
 	const renewFraction = 0.5
-	l := distlock.MustNew(fd, fc,
+	l := mustNewLocker(fd, fc,
 		distlock.WithDriftFactor(driftFactor),
 		distlock.WithRenewFraction(renewFraction),
 	)
@@ -781,16 +795,15 @@ func TestLocker_LockCtxDeadlinePropagation(t *testing.T) {
 	}
 }
 
-// TestLocker_MustNew_PanicsOnNilDriver verifies that MustNew panics immediately on nil
-// driver. New itself returns an error; MustNew wraps New and panics via
-// panicregister.Approved on any construction error.
-func TestLocker_MustNew_PanicsOnNilDriver(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Error("MustNew(nil driver) should panic")
-		}
-	}()
-	_ = distlock.MustNew(nil, clock.Real())
+// TestLocker_New_ReturnsErrorOnNilDriver verifies that New returns an error on nil driver.
+func TestLocker_New_ReturnsErrorOnNilDriver(t *testing.T) {
+	locker, err := distlock.New(nil, clock.Real())
+	if err == nil {
+		t.Error("New(nil driver) should return error")
+	}
+	if locker != nil {
+		t.Errorf("New(nil driver) locker = %T, want nil", locker)
+	}
 }
 
 func TestLocker_New_ReturnsErrorOnTypedNilDriver(t *testing.T) {
@@ -849,21 +862,8 @@ func TestLocker_New_ReturnsErrorOnNilClock(t *testing.T) {
 	})
 }
 
-// TestLocker_MustNew_PanicsOnNilClock verifies that MustNew panics when the clock is nil.
-// MustNew wraps New and panics via panicregister.Approved on any construction error,
-// so the nil-clock error from New is surfaced as a panic at the composition root.
-func TestLocker_MustNew_PanicsOnNilClock(t *testing.T) {
-	fd := locktest.NewFakeDriver()
-	defer func() {
-		if recover() == nil {
-			t.Error("MustNew(driver, nil clock) should panic")
-		}
-	}()
-	_ = distlock.MustNew(fd, nil)
-}
-
-// TestLocker_New_PanicsOnInvalidRenewFraction verifies fail-fast validation in New().
-func TestLocker_New_PanicsOnInvalidRenewFraction(t *testing.T) {
+// TestLocker_New_RejectsInvalidRenewFraction verifies fail-fast validation in New().
+func TestLocker_New_RejectsInvalidRenewFraction(t *testing.T) {
 	tests := []struct {
 		name     string
 		fraction float64
@@ -877,18 +877,16 @@ func TestLocker_New_PanicsOnInvalidRenewFraction(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fd := locktest.NewFakeDriver()
-			defer func() {
-				if r := recover(); r == nil {
-					t.Errorf("New with renewFraction=%v should panic", tc.fraction)
-				}
-			}()
-			_ = distlock.MustNew(fd, clock.Real(), distlock.WithRenewFraction(tc.fraction))
+			_, err := distlock.New(fd, clock.Real(), distlock.WithRenewFraction(tc.fraction))
+			if err == nil {
+				t.Errorf("New with renewFraction=%v should return error", tc.fraction)
+			}
 		})
 	}
 }
 
-// TestLocker_New_PanicsOnInvalidDriftFactor verifies fail-fast validation in New().
-func TestLocker_New_PanicsOnInvalidDriftFactor(t *testing.T) {
+// TestLocker_New_RejectsInvalidDriftFactor verifies fail-fast validation in New().
+func TestLocker_New_RejectsInvalidDriftFactor(t *testing.T) {
 	tests := []struct {
 		name   string
 		factor float64
@@ -900,18 +898,16 @@ func TestLocker_New_PanicsOnInvalidDriftFactor(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fd := locktest.NewFakeDriver()
-			defer func() {
-				if r := recover(); r == nil {
-					t.Errorf("New with driftFactor=%v should panic", tc.factor)
-				}
-			}()
-			_ = distlock.MustNew(fd, clock.Real(), distlock.WithDriftFactor(tc.factor))
+			_, err := distlock.New(fd, clock.Real(), distlock.WithDriftFactor(tc.factor))
+			if err == nil {
+				t.Errorf("New with driftFactor=%v should return error", tc.factor)
+			}
 		})
 	}
 }
 
-// TestLocker_New_PanicsOnNonPositiveReleaseTimeout verifies fail-fast validation in New().
-func TestLocker_New_PanicsOnNonPositiveReleaseTimeout(t *testing.T) {
+// TestLocker_New_RejectsNonPositiveReleaseTimeout verifies fail-fast validation in New().
+func TestLocker_New_RejectsNonPositiveReleaseTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
 		timeout time.Duration
@@ -922,12 +918,10 @@ func TestLocker_New_PanicsOnNonPositiveReleaseTimeout(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fd := locktest.NewFakeDriver()
-			defer func() {
-				if r := recover(); r == nil {
-					t.Errorf("New with releaseTimeout=%v should panic", tc.timeout)
-				}
-			}()
-			_ = distlock.MustNew(fd, clock.Real(), distlock.WithReleaseTimeout(tc.timeout))
+			_, err := distlock.New(fd, clock.Real(), distlock.WithReleaseTimeout(tc.timeout))
+			if err == nil {
+				t.Errorf("New with releaseTimeout=%v should return error", tc.timeout)
+			}
 		})
 	}
 }
@@ -1032,7 +1026,7 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
-	l := distlock.MustNew(fd, fc,
+	l := mustNewLocker(fd, fc,
 		distlock.WithRenewFraction(0.5),
 	)
 
@@ -1066,7 +1060,7 @@ func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
-	l := distlock.MustNew(fd, fc,
+	l := mustNewLocker(fd, fc,
 		distlock.WithRenewFraction(0.5),
 	)
 
@@ -1239,7 +1233,7 @@ func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
 	}
 }
 
-// TestLocker_WithMaxRenewAttempts_Validation verifies that New() panics on invalid values.
+// TestLocker_WithMaxRenewAttempts_Validation verifies that New() returns error on invalid values.
 func TestLocker_WithMaxRenewAttempts_Validation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1251,12 +1245,10 @@ func TestLocker_WithMaxRenewAttempts_Validation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fd := locktest.NewFakeDriver()
-			defer func() {
-				if r := recover(); r == nil {
-					t.Errorf("New with maxRenewAttempts=%d should panic", tc.n)
-				}
-			}()
-			_ = distlock.MustNew(fd, clock.Real(), distlock.WithMaxRenewAttempts(tc.n))
+			_, err := distlock.New(fd, clock.Real(), distlock.WithMaxRenewAttempts(tc.n))
+			if err == nil {
+				t.Errorf("New with maxRenewAttempts=%d should return error", tc.n)
+			}
 		})
 	}
 }

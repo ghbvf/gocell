@@ -31,7 +31,7 @@ type ConflictPolicyStrictReject struct{}
 func (ConflictPolicyStrictReject) conflictPolicyOK() {}
 
 // Protocol bundles CAS protocol decisions for a particular consumer (cell).
-// Construct via NewProtocol or MustNewProtocol (composition root only).
+// Construct via NewProtocol (composition root only).
 type Protocol struct {
 	versionField    string
 	versionFieldSet bool

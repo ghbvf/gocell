@@ -1,4 +1,4 @@
-package authtest_test
+package keystest_test
 
 import (
 	"testing"
@@ -8,12 +8,12 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 )
 
 func TestMustGenerateKeyPair_Roundtrip(t *testing.T) {
 	t.Parallel()
-	priv, pub := authtest.MustGenerateKeyPair()
+	priv, pub := keystest.MustGenerateKeyPair()
 	require.NotNil(t, priv)
 	require.NotNil(t, pub)
 	assert.GreaterOrEqual(t, pub.N.BitLen(), 2048,
@@ -22,7 +22,7 @@ func TestMustGenerateKeyPair_Roundtrip(t *testing.T) {
 
 func TestMustNewKeySet_HasSigningKeyID(t *testing.T) {
 	t.Parallel()
-	ks, priv, pub := authtest.MustNewKeySet(clock.Real())
+	ks, priv, pub := keystest.MustNewKeySet(clock.Real())
 	require.NotNil(t, ks)
 	require.NotNil(t, priv)
 	require.NotNil(t, pub)
@@ -32,7 +32,7 @@ func TestMustNewKeySet_HasSigningKeyID(t *testing.T) {
 
 func TestMustNewKeyProvider_ExposesBothDomains(t *testing.T) {
 	t.Parallel()
-	p := authtest.MustNewKeyProvider(clock.Real())
+	p := keystest.MustNewKeyProvider(clock.Real())
 	require.NotNil(t, p)
 
 	ks, err := p.RSAKeySet()

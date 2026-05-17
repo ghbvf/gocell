@@ -47,8 +47,7 @@ func TestCASProtocol_CompositionRootOnly(t *testing.T) {
 	)
 
 	forbidden := map[string]bool{
-		"NewProtocol":     true,
-		"MustNewProtocol": true,
+		"NewProtocol": true,
 	}
 
 	type hit struct {

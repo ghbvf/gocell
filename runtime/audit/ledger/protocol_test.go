@@ -390,42 +390,35 @@ func containsAny(s string, subs ...string) bool {
 	return false
 }
 
-// TestMustNewProtocol_OK: composition-root convenience wrapper succeeds with valid options.
-func TestMustNewProtocol_OK(t *testing.T) {
+// TestNewProtocol_OK: NewProtocol succeeds with valid options.
+func TestNewProtocol_OK(t *testing.T) {
 	t.Parallel()
 	hmacKey := make([]byte, 32)
 	for i := range hmacKey {
 		hmacKey[i] = byte(i + 1)
 	}
 	ns, _ := ledger.ParseNamespaceID("auditcore")
-	p := ledger.MustNewProtocol(
+	p, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(hmacKey),
 		ledger.WithNamespace(ns),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
+	if err != nil {
+		t.Fatalf("unexpected error from NewProtocol: %v", err)
+	}
 	if p == nil {
-		t.Fatal("expected non-nil protocol from MustNewProtocol")
+		t.Fatal("expected non-nil protocol from NewProtocol")
 	}
 }
 
-// TestMustNewProtocol_Panic_OnError: MustNewProtocol panics on validation failure.
-func TestMustNewProtocol_Panic_OnError(t *testing.T) {
+// TestNewProtocol_Error_OnMissingOptions: NewProtocol returns error on validation failure.
+func TestNewProtocol_Error_OnMissingOptions(t *testing.T) {
 	t.Parallel()
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic from MustNewProtocol when options missing")
-		}
-		err, ok := r.(error)
-		if !ok {
-			t.Fatalf("expected panic value to be error, got %T: %v", r, r)
-		}
-		if err == nil {
-			t.Fatal("panic error must be non-nil")
-		}
-	}()
-	_ = ledger.MustNewProtocol() // zero options → panic
+	_, err := ledger.NewProtocol() // zero options → error
+	if err == nil {
+		t.Fatal("expected error from NewProtocol when options missing")
+	}
 }
 
 // TestProtocol_HMACKeyDefensiveCopy: HMACKey() returns a defensive copy.
@@ -436,12 +429,15 @@ func TestProtocol_HMACKeyDefensiveCopy(t *testing.T) {
 		key[i] = byte(i + 1)
 	}
 	ns, _ := ledger.ParseNamespaceID("auditcore")
-	p := ledger.MustNewProtocol(
+	p, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(key),
 		ledger.WithNamespace(ns),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
+	if err != nil {
+		t.Fatalf("NewProtocol: %v", err)
+	}
 	got := p.HMACKey()
 	if len(got) != len(key) {
 		t.Fatalf("HMACKey length: got %d, want %d", len(got), len(key))
@@ -459,12 +455,15 @@ func TestProtocol_Getters(t *testing.T) {
 	t.Parallel()
 	key := make([]byte, 32)
 	ns, _ := ledger.ParseNamespaceID("auditcore")
-	p := ledger.MustNewProtocol(
+	p, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(key),
 		ledger.WithNamespace(ns),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
+	if err != nil {
+		t.Fatalf("NewProtocol: %v", err)
+	}
 	if got := p.Namespace(); got != ns {
 		t.Errorf("Namespace: got %q, want %q", got, ns)
 	}

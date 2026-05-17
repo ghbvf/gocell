@@ -116,23 +116,21 @@ func HealthRouteGroups(h *health.Handler, opts ...HealthRouteGroupOption) []cell
 		{
 			Listener: cell.HealthListener,
 			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{
+				return auth.Mount(mux, auth.Route{
 					Contract: specHealthLivez,
 					Handler:  h.LivezHandler(),
 					Public:   true,
 				})
-				return nil
 			},
 		},
 		{
 			Listener: cell.HealthListener,
 			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{
+				return auth.Mount(mux, auth.Route{
 					Contract: specHealthReadyz,
 					Handler:  h.ReadyzHandler(),
 					Public:   true,
 				})
-				return nil
 			},
 		},
 	}
@@ -141,12 +139,11 @@ func HealthRouteGroups(h *health.Handler, opts ...HealthRouteGroupOption) []cell
 		groups = append(groups, cell.RouteGroup{
 			Listener: cell.HealthListener,
 			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{
+				return auth.Mount(mux, auth.Route{
 					Contract: specHealthMetrics,
 					Handler:  mh,
 					Public:   true,
 				})
-				return nil
 			},
 		})
 	}
