@@ -102,7 +102,6 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	require.NoError(t, err)
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
-	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
@@ -117,12 +116,9 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	// buildAccessCoreMemOptions provides session + refresh mem stores and a mem
-	// user/role repo pair; the subsequent WithUserRepository / WithRoleRepository
-	// calls override only those two with the PG-backed implementations.
-	// Session/refresh stores remain in-memory for this harness (S3+S5 scope;
-	// PG session/refresh wiring is exercised separately in the S4a PG sub-tests below).
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
+	// All four repositories are PG-backed; accesscore, configcore, and auditcore
+	// all run in DurabilityDurable mode matching cells/*/cell.yaml declarations.
+	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithUserRepository(pgUserRepo),
 		accesscore.WithRoleRepository(pgRoleRepo),
@@ -133,28 +129,17 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(bootstrapMW),
-
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
-		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
-		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
-
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
 	)
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pool, txMgr, eb, configCursorCodec)...)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerPGOpts(t, pool, txMgr, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "setup-pg-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "setup-pg-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -420,8 +405,6 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	} else {
 		pgOutboxWriter = adapterpg.NewOutboxWriter(clock.Real())
 	}
-	var nw outbox.Writer = outbox.NoopWriter{}
-
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
@@ -450,24 +433,15 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
 	)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
-		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
-		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
-	)
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pool, txMgr, eb, configCursorCodec)...)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerPGOpts(t, pool, txMgr, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "session-pg-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "session-pg-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))

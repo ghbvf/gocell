@@ -16,9 +16,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
+	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -33,16 +35,50 @@ import (
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
-// noopTxRunner executes fn directly without a real transaction.
-type noopTxRunner struct{}
+var testHTTPClient = &http.Client{Timeout: testtime.D2s}
 
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
+// pgCoreDeps holds a provisioned PG pool + TxManager for integration tests.
+// Callers obtain it via newAuthTestPGCoreDeps.
+type pgCoreDeps struct {
+	pool  *adapterpg.Pool
+	txMgr *adapterpg.TxManager
 }
 
-var _ persistence.TxRunner = noopTxRunner{}
+// newAuthTestPGCoreDeps starts a testcontainer PostgreSQL instance, runs all
+// migrations, and returns a pgCoreDeps for wiring durable-mode assemblies.
+func newAuthTestPGCoreDeps(t *testing.T) *pgCoreDeps {
+	t.Helper()
+	dsn, cleanup := setupPostgresForMain(t)
+	t.Cleanup(cleanup)
 
-var testHTTPClient = &http.Client{Timeout: testtime.D2s}
+	ctx := context.Background()
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
+	require.NoError(t, err, "newAuthTestPGCoreDeps: NewPool")
+	t.Cleanup(func() { _ = pool.Close(ctx) })
+
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+	require.NoError(t, adapterpg.VerifyExpectedShape(ctx, pool))
+
+	return &pgCoreDeps{pool: pool, txMgr: adapterpg.NewTxManager(pool)}
+}
+
+// buildConfigCorePGOptions returns durable-mode configcore options backed by pool.
+func buildConfigCorePGOptions(t testing.TB, pool *adapterpg.Pool, txMgr *adapterpg.TxManager, eb outbox.Publisher, configCursorCodec *query.CursorCodec) []configcore.Option {
+	t.Helper()
+	storageOpt, err := configpg.WithPool(pool.DB(), clock.Real())
+	require.NoError(t, err, "buildConfigCorePGOptions: configpg.WithPool")
+	return []configcore.Option{
+		configcore.WithClock(clock.Real()),
+		storageOpt,
+		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
+		configcore.WithTxManager(persistence.WrapForCell(txMgr)),
+		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithMetricsProvider(metrics.NopProvider{}),
+		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
+	}
+}
 
 // TestAuthWiring_RealAssembly_ProtectedRoutes401 boots a real assembly
 // (accesscore + configcore + auditcore) with auth middleware and asserts
@@ -67,12 +103,13 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, err)
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
-	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
 	require.NoError(t, err)
+
+	pg := newAuthTestPGCoreDeps(t)
 
 	authBootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
@@ -82,36 +119,26 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
+	ac := accesscore.NewAccessCore(append(buildAccessCorePGOptions(t, pg.pool, pg.txMgr),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		accesscore.WithTxManager(persistence.WrapForCell(pg.txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(authBootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)...)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
-		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
-		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
-
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
-	)
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCorePGOptions + WithClock prepended; spread prevents direct positional arg
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerPGOpts(t, pg.pool, pg.txMgr, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -292,12 +319,13 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	guard := auth.ServiceTokenMiddleware(ring, clock.Real(), auth.WithServiceTokenNonceStore(nonceStore))
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
-	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("guard-test-audit-key-32-bytes!!!"))
 	require.NoError(t, err)
 	configCursorCodec, err := query.NewCursorCodec([]byte("guard-test-config-key-32bytes!!!"))
 	require.NoError(t, err)
+
+	pg := newAuthTestPGCoreDeps(t)
 
 	guardBootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
@@ -307,36 +335,26 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
+	ac := accesscore.NewAccessCore(append(buildAccessCorePGOptions(t, pg.pool, pg.txMgr),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		accesscore.WithTxManager(persistence.WrapForCell(pg.txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(guardBootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)...)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
-		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
-		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
-
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
-	)
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCorePGOptions + WithClock prepended; spread prevents direct positional arg
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("guard-test-hmac-key-32-bytes!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerPGOpts(t, pg.pool, pg.txMgr, []byte("guard-test-hmac-key-32-bytes!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -528,12 +546,13 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	require.NoError(t, err)
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
-	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("health-test-audit-key-32-bytes!!"))
 	require.NoError(t, err)
 	configCursorCodec, err := query.NewCursorCodec([]byte("health-test-config-key-32bytes!!"))
 	require.NoError(t, err)
+
+	pg := newAuthTestPGCoreDeps(t)
 
 	healthBootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
@@ -543,36 +562,26 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
+	ac := accesscore.NewAccessCore(append(buildAccessCorePGOptions(t, pg.pool, pg.txMgr),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		accesscore.WithTxManager(persistence.WrapForCell(pg.txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(healthBootstrapMW),
 
 		accesscore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))),
-	)...)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
-		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
-		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
-
-		configcore.WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField(configcore.VersionField))),
-	)
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCorePGOptions + WithClock prepended; spread prevents direct positional arg
+	cc := configcore.NewConfigCore(buildConfigCorePGOptions(t, pg.pool, pg.txMgr, eb, configCursorCodec)...)
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
-		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("health-test-hmac-key-32-bytes!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerPGOpts(t, pg.pool, pg.txMgr, []byte("health-test-hmac-key-32-bytes!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))

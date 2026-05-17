@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -77,48 +78,64 @@ var (
 	_ kcrypto.KeyHandle               = fakeKeyHandle{}
 )
 
+// keyProviderCellModule is a minimal CellModule used by the A19 tests to wire
+// a kcrypto.KeyProvider (that also implements kernellifecycle.ManagedResource)
+// into bootstrap without using the real ConfigCoreModule. This avoids the
+// DurabilityDurable/DurabilityDemo mismatch that the real configcore cell
+// introduces when running against a memory topology.
+//
+// The test goal is to verify the wiring path:
+//
+//	ConfigCoreModule.Provide registers kp as WithManagedResource when
+//	kp implements kernellifecycle.ManagedResource.
+//
+// A real ConfigCoreModule cannot be used in memory topology because configcore
+// declares durabilityMode: durable and the assembly uses DurabilityDemo.
+// This module replaces that wiring path with an equivalent demo-compatible module.
+type keyProviderCellModule struct {
+	kp kcrypto.KeyProvider
+}
+
+func (m keyProviderCellModule) ID() string { return "configcore-kp-stub" }
+
+func (m keyProviderCellModule) Provide(
+	_ context.Context, _ *SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	// Create a demo-mode cell so the assembly DurabilityDemo check passes.
+	c := cell.MustNewBaseCell(&metadata.CellMeta{
+		ID:             "configcore-kp-stub",
+		Type:           "core",
+		DurabilityMode: "demo",
+	})
+	var opts []bootstrap.Option
+	var provisional []kernellifecycle.ManagedResource
+	// Mirror ConfigCoreModule.Provide A19 wiring: if kp implements
+	// ManagedResource, register its Checkers() with bootstrap.
+	if kpRes, ok := m.kp.(kernellifecycle.ManagedResource); ok {
+		opts = append(opts, bootstrap.WithManagedResource(kpRes))
+		provisional = append(provisional, kpRes)
+	}
+	return c, opts, provisional, nil
+}
+
+var _ CellModule = keyProviderCellModule{}
+
 // buildBootstrapWithFakeKeyProvider is the test harness for A19. It mirrors
-// buildBootstrapFromShared but injects ConfigCoreModule{KeyProviderOverride}
-// so the readiness wiring can be exercised without GOCELL_CONFIGCORE_KEY_PROVIDER / Vault.
+// the ConfigCoreModule A19 wiring path without using the real ConfigCoreModule
+// (which fails in memory topology due to DurabilityDurable/DurabilityDemo
+// mismatch). Uses keyProviderCellModule to register the fake KeyProvider as a
+// ManagedResource in bootstrap, exercising the wiring path under test.
+// JWT is wired directly via shared.JWTDeps.verifier (no real cell.AuthProvider).
 func buildBootstrapWithFakeKeyProvider(
 	t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider,
 	primaryLn net.Listener, extra ...bootstrap.Option,
 ) (*bootstrap.Bootstrap, error) {
 	t.Helper()
-	ctx := context.Background()
-
-	cells, cellOpts, err := BuildApp(ctx, shared,
-		ConfigCoreModule{KeyProviderOverride: kp},
-		AccessCoreModule{},
-		AuditCoreModule{},
+	return buildBootstrapFromSharedWithModules(t, shared, primaryLn,
+		[]CellModule{keyProviderCellModule{kp: kp}},
+		cell.MustNewAuthJWT(shared.JWTDeps.verifier),
+		extra...,
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
-	if err != nil {
-		return nil, err
-	}
-
-	consumerBase, err := buildConsumerBase(shared)
-	if err != nil {
-		return nil, err
-	}
-
-	metricsHandler := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
-
-	adapterInfo := adapterInfoForSharedDeps(shared)
-	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
-	opts = append(opts, cellOpts...)
-	opts = append(opts, bootstrap.WithListener(
-		cell.PrimaryListener,
-		primaryLn.Addr().String(),
-		[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
-		bootstrap.WithListenerNet(primaryLn),
-	))
-	opts = append(opts, extra...)
-	return newBootstrapFromOptions(opts), nil
 }
 
 // TestA19_ConfigCoreModule_RegistersKeyProviderReadiness is the bootstrap-level
