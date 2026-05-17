@@ -54,8 +54,9 @@ ref: `golang.org/x/tools go/analysis/analysistest/analysistest.go` (`dir` positi
 | 1 | `Pass.Pkg` is `*types.Package` (go/types stdlib), NOT `*packages.Package` (golang.org/x/tools/go/packages) | **Hard** — type system | Author cannot reach `.Syntax` from `*Pass`; INV-1 form is not expressible at the call site. Reconstructing INV-1 requires explicitly importing `golang.org/x/tools/go/packages` and calling `packages.Load`. |
 | 2 | depguard rule `archtest-no-direct-packages-load` denies `golang.org/x/tools/go/packages` in `tools/archtest/*_test.go` (path-level import ban) | **Hard** — lint-blocking | Author must edit `.golangci.yml` to add their file to the negative-glob exemption (visible in diff, reviewer must approve). |
 | 3 | Meta-archtest `PASS-FUNNEL-EACHFILE-01` / `LOADPACKAGES-01` / `PACKAGES-IMPORT-01` re-detects bypass at test time via `*types.Info` resolution; symbol-level ban for `scanner.EachFile` / `typeseval.LoadPackages` / `typeseval.SharedResolver` plus packages-import path | **Hard** — type-aware | `typeseval.ResolvePackageRef` resolves call targets through go/types regardless of import alias / dot-import / vendor rewrites. Bypass requires editing `passFunnelPermanentExempt` (3-entry Medium funnel, mechanical sync with .golangci.yml). |
+| 4 | `RunTypedFixture` + `FixtureOpts` typed function choice with input-struct field exclusion (downstream) **AND** `PASS-FUNNEL-FIXTURE-TAG-01` `BasicLit` STRING `"archtest_fixture"` ban in business `*_test.go` (upstream) | **Hard** — funnel double-lock (outward compile-time + upstream archtest-bound form-uniqueness) | Downstream: `FixtureOpts` has no `Tags` field — `RunTypedFixture(t, FixtureOpts{Tags: ...}, ...)` is a compile error. Upstream: business archtest cannot smuggle the fixture build tag into `RunTyped` / `typeseval.SharedResolver` via `[]string{"archtest_fixture"}` because the BasicLit literal is rejected by `diagsFixtureTagBypass`. Go-code identity paths must reference `archtest.FixtureBuildTag` const (single-source typed reference). Same `passFunnelPermanentExempt` exempt set as defense #3 (3-entry framework files; `fixture.go` itself is excluded by the `*_test.go` suffix filter in `loadPassFunnelTargets`). |
 
-Three independent failure modes: type system, lint, archtest. Bypassing all three requires editing three independent locations in a single PR — reviewer-detectable by construction.
+Four independent failure modes: type system, lint, archtest (symbol-level), archtest (literal-level). Bypassing all four requires editing four independent locations in a single PR — reviewer-detectable by construction.
 
 **`RunTypedDir` AI-rebust grade: Hard — three defenses hold unchanged.**
 
@@ -101,6 +102,29 @@ PR #522 cleared `LegacyAllowlist` to zero via consolidated batch migration (37 r
 
 **Conclusion**: LegacyAllowlist clearing makes the funnel strictly tighter for business archtests. The +2 permanent exemptions (`pass_test.go` + `archtest_test.go`) existed in practice since Stage 1 (they were depguard-exempted from the start) but were not formally named in the ADR. PR #522 makes them explicit in `passFunnelPermanentExempt`. No previously-clean defense row becomes ⚠️/❌ post-amendment.
 
+### PR #536 review R1 amendment — façade bypass closure (2026-05-17)
+
+PR #536 first-cut shipped `RunTypedFixture` + `FixtureOpts` as the downstream Hard ("outward Hard": `FixtureOpts` has no `Tags` field, compile-time block). The review caught that the upstream side was Soft: `RunTyped` still accepts arbitrary `Tags`, so business archtest could write `RunTyped(t, TypedOpts{Tags: []string{"archtest_fixture"}}, ...)` and bypass `RunTypedFixture` entirely — the new façade was self-discipline rather than enforced. The first-cut also retained one bare `"archtest_fixture"` literal in `http_contract_visibility_type_segregation_01_test.go:352` and one in `panic_invariants_test.go:367` (the latter unrelated to fixture loading: it identified the fixture tag group inside a module-wide `RunTyped` scan), both of which would have continued to pass review without an upstream rule.
+
+R1 closes the upstream leg via two new pieces:
+
+1. **`archtest.FixtureBuildTag` package-level const** (declared in `fixture.go`) — the typed-reference single source for any Go-code path that legitimately needs the tag name (e.g., the `panic_invariants_test.go` skip predicate). `RunTypedFixture`'s body now references the const (`Tags: []string{FixtureBuildTag}`), so the literal value appears exactly once in `archtest` source (the const RHS). Fixture sub-package `//go:build archtest_fixture` directives continue to hard-code the literal because Go build-directive syntax cannot reference a constant; the godoc on `FixtureBuildTag` documents this dual-source-by-construction relationship.
+
+2. **`PASS-FUNNEL-FIXTURE-TAG-01` archtest** (`pass_funnel_test.go::diagsFixtureTagBypass`) — walks BasicLit STRING nodes in business `*_test.go` files (same `passFunnelPermanentExempt` 3-entry exempt set as defense #3; `fixture.go` itself is excluded by the `*_test.go` suffix filter in `loadPassFunnelTargets`) and rejects any literal whose unquoted value equals `"archtest_fixture"`. AI-rebust grade: **archtest-bound form-uniqueness Hard** (same Charter §1 panic(any) range — form uniqueness without compile-time blocking, archtest fail-on-deviation, no "looks like Approved but isn't" gray zone).
+
+**Threat matrix re-evaluation (per ai-collab.md §ADR amendment 落地必查):**
+
+| Defense | Before R1 (PR #536 first cut) | After R1 (this commit) | Status change |
+|---------|-------------------------------|------------------------|---------------|
+| #1 `Pass.Pkg *types.Package` (compile-time INV-1 block) | Active | Unchanged | ✅ Unchanged Hard |
+| #2 depguard `packages` import ban | Active; 3 yaml exemptions | Unchanged | ✅ Unchanged Hard |
+| #3 PASS-FUNNEL meta-archtest (symbol-level: EachFile / LoadPackages / SharedResolver / LoadProductionPackages / EachFileInPackage / ResolvePackageRef helpers / ImportBan + packages-import path) | Active; 3 framework exemptions | Unchanged | ✅ Unchanged Hard |
+| #4 RunTypedFixture downstream (FixtureOpts has no Tags) | Active outward Hard; **upstream Soft (no façade-bypass enforcement)** | Active outward Hard + **upstream archtest-bound form-uniqueness Hard (PASS-FUNNEL-FIXTURE-TAG-01)** | ✅ Upgraded from Soft to Hard upstream (funnel double-lock closed) |
+| RunTypedFixture façade-bypass surface | 2 business call sites (`http_contract_visibility:352` + `panic_invariants_test:367`) latently allowed by Soft upstream | 0 business call sites permitted by archtest; `FixtureBuildTag` const required for identity paths | ✅ Eliminated |
+| Permanent exemption escape surface | 3 files (`passFunnelPermanentExempt`) | Unchanged 3 files (PASS-FUNNEL-FIXTURE-TAG-01 reuses the same set; `fixture.go` filtered by `*_test.go` suffix, not by exempt) | ✅ Unchanged |
+
+**Conclusion**: R1 strictly tightens the funnel — defense #4 graduates from outward-Hard-only to outward-Hard + upstream-Hard double-lock. No previously-clean defense row becomes ⚠️/❌. `passFunnelPermanentExempt` size does not grow (FIXTURE-TAG-01 reuses the same Medium exempt set as EACHFILE-01 / LOADPACKAGES-01 / PACKAGES-IMPORT-01 / RESOLVE-01); §passFunnelPermanentExempt evaluation below remains valid as-is. ai-collab.md §Hard 范本 entry "typed function choice with input-struct field exclusion" gains a 配套要求 paragraph mandating that future uses of this pattern must ship the upstream meta-archtest in the same PR, naming this R1 closure as the precedent.
+
 ## Industry precedent
 
 | Project | Pass shape | INV-1 defense |
@@ -132,6 +156,18 @@ Strategic plan: `docs/plans/202605141519-040-archtest-pass-funnel-plan.md`. Summ
   - `.golangci.yml`: migration-period comment block removed from `archtest-no-direct-packages-load` section; 3 permanent self-exemptions and deny rule retained; ADR §Termination criteria cross-reference added
   - `ai-collab.md` §载体决策原则 §3 rewritten with `archtest.*` public façade routing; anti-misuse note added (existing files importing internal helpers remain valid per ADR §163); §Hard 范本 new entry "typed function choice with input-struct field exclusion" added
   - Minor comment updates: `resolve.go`, `adapter_error_classification_test.go`, `passfunnelfixture/redfixture.go`, `basesliceredfixture/base_slice_literal.go`, `basesliceredfixture/slice_meta_literal.go`
+
+  **Review R1 closure (same PR, post-first-cut commits):** PR #536 review caught that defense #4 was outward Hard only — the upstream side (façade bypass via `RunTyped(t, TypedOpts{Tags: []string{"archtest_fixture"}}, ...)`) remained Soft. Two business call sites latently allowed by Soft upstream (`http_contract_visibility_type_segregation_01_test.go:352` + `panic_invariants_test.go:367`) were not flagged by the first-cut funnel. R1 fixes:
+  - `tools/archtest/fixture.go`: add exported `FixtureBuildTag = "archtest_fixture"` const; `RunTypedFixture` body references the const (`Tags: []string{FixtureBuildTag}`); godoc rewrites the prior "no FixtureBuildTag const" justification (the //go:build side cannot reference a Go constant, but Go-code paths can — that gap is what the const fills); funnel double-lock made explicit in godoc (outward Hard + upstream Hard + inward Medium)
+  - `tools/archtest/pass_funnel_test.go`: add `diagsFixtureTagBypass` + `TestPassFunnelFixtureTagBypass01` (PASS-FUNNEL-FIXTURE-TAG-01); augment `TestPassFunnel_FixtureCoverage` with a ≥1 coverage assertion on the new detector; fix stale `LegacyAllowlist` reference at line 258 → `passFunnelPermanentExempt` (R2)
+  - `tools/archtest/internal/passfunnelfixture/redfixture.go`: add `_ = "archtest_fixture"` bare-literal RED for the new detector + godoc explanation
+  - `tools/archtest/http_contract_visibility_type_segregation_01_test.go`: helper signature changed from `(tags []string, patterns)` to `(fixture bool, patterns)`; fixture=true branch uses `RunTypedFixture`; fixture=false branch uses `RunTyped`
+  - `tools/archtest/panic_invariants_test.go`: `containsTag(tagGroup, "archtest_fixture")` → `containsTag(tagGroup, FixtureBuildTag)` (typed-reference path)
+  - 6 fixture-package godoc blocks (`rawparamfixture`, `auditledgerfixture`, `inspectorredfixture`, `wrapfixture/violation`, `sessionprotocolfixture`, `refreshinvariantsfixture`): example "loaded via `typeseval.SharedResolver` with tags=[]string{...}" rewritten to `archtest.RunTypedFixture(...)`
+  - 2 basesliceredfixture + 1 passfunnelfixture godoc blocks: literal-reference text rewritten to reference `archtest.FixtureBuildTag` const (with //go:build-cannot-reference-const justification preserved)
+  - `ai-collab.md` §Hard 范本 entry "typed function choice with input-struct field exclusion": add **配套要求** paragraph mandating the upstream meta-archtest in the same PR
+  - This ADR: defense #4 row added to §Hard-line three-defense; §PR #536 review R1 amendment subsection added (this section) with full threat matrix re-evaluation per ai-collab.md §ADR amendment 落地必查; §Termination criteria (c) extended below
+  - CI: `go test ./tools/archtest/... -count=1` all green (151.6s); `hack/verify-archtest.sh` 16-shard process-isolated all green (TOTAL=458, +1 from baseline TOTAL=457 via ARCHTEST-VERIFY-COVERAGE-01 auto-discovery)
 
 ## Stage 1.6 — RunTypedDir fixture-module driver (2026-05-15, shipped with Stage 3 PR-6)
 
@@ -168,6 +204,7 @@ The migration is complete when: (**All three achieved in PR #PENDING 2026-05-17.
    - (a) `archtestmeta.LegacyAllowlist` is empty and package deleted (criterion #1 above). `archtestmeta` package deleted entirely; `RunTypedFixture` typed helper supplies the build-tag literal via function-body inlining (single source for the `archtest_fixture` string; Go build directive syntax does not allow const reference).
    - (b) No production archtest `*_test.go` imports `golang.org/x/tools/go/packages` directly — enforced by depguard, except the three `passFunnelPermanentExempt` files.
    - (c) No production archtest `*_test.go` directly calls `scanner.EachFile` / `typeseval.LoadPackages` / `typeseval.SharedResolver` / `typeseval.LoadProductionPackages` / `typeseval.EachFileInPackage` — enforced by PASS-FUNNEL meta-archtest via `*types.Info` resolution. **Note**: direct `import` of `internal/scanner` or `internal/typeseval` for their walk/resolve helpers (`EachInSubtree`, `EachInChildren`, `ResolvePackageRef`, `EvaluateConstString`, etc.) remains **allowed** — path-level banning of these packages is NOT done (see §Why-depguard). The funnel bans specific high-risk symbols, not the package paths.
+   - (d) No production archtest `*_test.go` contains a bare BasicLit STRING `"archtest_fixture"` — enforced by PASS-FUNNEL-FIXTURE-TAG-01 (defense #4 upstream). Fixture loading uses `archtest.RunTypedFixture` (the literal is supplied inside the funnel body); Go-code tag-identity paths reference `archtest.FixtureBuildTag` const. Added in PR #536 review R1 (2026-05-17) to close the upstream Soft side of defense #4.
 
 `tools/archtest/internal/scanner` and `tools/archtest/internal/typeseval` retain their exported APIs — they are intentionally reachable from archtest test files for their non-INV-1 helpers (walk + go/types resolution). Symbol-level bans on `EachFile` / `LoadPackages` / `SharedResolver` are enforced by the PASS-FUNNEL meta-archtest (defense #3), not by lint.
 

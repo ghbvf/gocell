@@ -26,6 +26,22 @@
 - **5 处注释更新**：`resolve.go` / `adapter_error_classification_test.go` / `passfunnelfixture/redfixture.go` / `basesliceredfixture/base_slice_literal.go` / `basesliceredfixture/slice_meta_literal.go`——删 archtestmeta 引用，改指 `RunTypedFixture` / `FixtureOpts`
 - **静态反向锁 `TestArchtestmetaPackageDeleted`**：防 scaffold 回退（`os.Stat` 断言目录不存在）
 
+**阶段 4 review R1 closure（同 PR post-first-cut commits，2026-05-17）**：
+
+> **根因**：PR #536 first-cut 把 `RunTypedFixture` + `FixtureOpts` 评为 "Hard 范本"，承诺业务调用方在 type system 上无法表达"传 Tags 加载 fixture"。但实际只锁了下游 outward Hard（FixtureOpts 缺字段致编译失败），**上游 Soft**：`RunTyped` 仍接受任意 Tags，业务可写 `RunTyped(t, TypedOpts{Tags: []string{"archtest_fixture"}}, ...)` 直接绕过 `RunTypedFixture`。review 指出当前 PR 内 `http_contract_visibility_type_segregation_01_test.go:352` 就是活样本，且无 meta-archtest 阻止后续业务复制此形态。ai-collab.md §Review checklist 「新引入 Soft → reject，要求改 ≥ Medium」要求同 PR 内升 Hard，不接受局部 Hard / 全局 Soft 的 ship 形态。
+
+- **新增 `archtest.FixtureBuildTag` 包级 const**（`fixture.go`）：typed-reference 单源，给 Go-code 路径识别 fixture tag（如 `panic_invariants_test.go` 跳过 fixture tag 组）用；`RunTypedFixture` body 改用 `Tags: []string{FixtureBuildTag}`，archtest 源内 "archtest_fixture" 字面量只出现 1 次（const RHS）；godoc 把原 "no FixtureBuildTag const" 论断重写为 "Go build directive 不能引用 const → //go:build 那侧硬编 + Go-code 那侧用 const" 双源 by construction
+- **新增 `PASS-FUNNEL-FIXTURE-TAG-01`**（`pass_funnel_test.go::diagsFixtureTagBypass` + `TestPassFunnelFixtureTagBypass01` + `TestPassFunnel_FixtureCoverage` 子断言）：BasicLit STRING walk + 字面量等值断言 "archtest_fixture"；exempt = 既有 `passFunnelPermanentExempt`（3 entry，fixture.go 由 `*_test.go` 后缀过滤自动排除）；AI-rebust evidence：archtest-bound form-uniqueness Hard（同 Charter §1 panic(any) 范本，无 "looks like Approved but isn't" 灰区）；Blind spots = 字符串拼接 / cross-func var / reflect（同 PASS-FUNNEL-LOADPACKAGES-01 accept 等级）
+- **业务 callsite 迁移**：
+  - `http_contract_visibility_type_segregation_01_test.go`：helper `runHTTPContractVisibilityCheck(tags []string, patterns)` → `(fixture bool, patterns)`；fixture=true 走 `RunTypedFixture`，fixture=false 走 `RunTyped`；两 phase 仍共享 SharedResolver cache（与 façade 入口无关）
+  - `panic_invariants_test.go:367`：`containsTag(tagGroup, "archtest_fixture")` → `containsTag(tagGroup, FixtureBuildTag)`
+- **6 处 fixture 包 godoc 示例文本同步**（`rawparamfixture`/`auditledgerfixture`/`inspectorredfixture`/`wrapfixture/violation`/`sessionprotocolfixture`/`refreshinvariantsfixture`）：示例改为 `archtest.RunTypedFixture(...)` 而非 `typeseval.SharedResolver(..., []string{"archtest_fixture"}, ...)`
+- **3 处 fixture 包 godoc 文字同步**（`basesliceredfixture` × 2 + `passfunnelfixture` × 1）：原 "must agree with the 'archtest_fixture' literal (single source: RunTypedFixture helper)" 改为 "must agree with the literal value of `archtest.FixtureBuildTag`（//go:build 不能引用 const 是结构性 hard-code 理由）"
+- **F2 注释修正**（review 同时发现）：`pass_funnel_test.go:258` 旧 "single-source (LegacyAllowlist)" → "single-source (passFunnelPermanentExempt)"
+- **章程同步**：`ai-collab.md` §Hard 范本第 4 条「typed function choice with input-struct field exclusion」末尾追加 **配套要求** 段——以本 R1 闭环为先例，明示该范本必须同 PR 内补 meta-archtest 锁 façade 旁路，否则只是局部 Hard
+- **ADR amendment 落地必查**：在 ADR `202605141519` 加 §"PR #536 review R1 amendment — façade bypass closure (2026-05-17)" 子节，按 ai-collab.md §"ADR amendment 落地必查" 给出完整威胁矩阵重评（defense #4 从 outward-Hard-only → outward-Hard + 上游 archtest-bound form-uniqueness Hard 闭环双向锁；无任何 ✅ 行降级到 ⚠️/❌）；§Hard-line three-defense 表加第 4 行；§Termination criteria 加 (d) 项（业务 *_test.go 零 BasicLit STRING `"archtest_fixture"`）
+- **验证**：`go build ./...` 绿；`go test ./tools/archtest/... -count=1` 全绿（151.6s wall）；`hack/verify-archtest.sh` 16-shard process-isolated PASS（TOTAL=458，旧 457+1 新 `TestPassFunnelFixtureTagBypass01`，由 ARCHTEST-VERIFY-COVERAGE-01 自动 discovery，无需改 shard 列表）；`grep '"archtest_fixture"' tools/archtest/*.go` 除 fixture.go / pass.go（godoc）/ passFunnelPermanentExempt 三文件外 0 命中
+
 **阶段 1.8 ship 摘要（本 PR，2026-05-16）**：
 
 > **根因**：037 治理项 PR #505 引入 `scanner.FindFirstChild` 和 `SCANNER-FRAMEWORK-USAGE-02`，但 (i) `tools/archtest/walk.go` 未补 `FindFirstChild` façade 出口，Stage 4 封 internal/scanner 后业务侧无路可走；(ii) USAGE-02 检测器 typeseval target 仅 `scannerPkgPath.EachInChildren`，040 façade 端态 `archtest.EachInChildren` 上写出 done/found sentinel 会 silent miss；(iii) PR #505 fixture pipeline 走 inline-source + `empty := &types.Info{}` 启用 syntactic fallback（`scannerLocalName` + `id.Name == ...` 分支）——typeseval 主路径 + syntactic 兜底并存，是 PR #505 godoc AI-rebust 评级（form-ban Medium = Go ceiling，与 fallback 不同轴）未覆盖到的 Soft 盲点。Stage 4 封 internal/scanner 前一次性补齐 façade + 升 Hard，不留 follow-up。
