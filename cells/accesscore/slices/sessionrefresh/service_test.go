@@ -494,20 +494,22 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 	}
 }
 
-// TestService_Refresh_TwoAssertOrdering_RevokedSession_BaselineFailFirst locks
-// the two-Assert call order in refreshInTx (baseline first via
-// rejectIfUserNotActive → 403; session-revoked second via rejectIfSessionRevoked
-// → 401). When both gates would trigger simultaneously (revoked session AND
-// non-active user), the baseline-first ordering MUST surface 403
-// ErrAuthUserNotActive, not 401 ErrAuthRefreshFailed. Reversing the call order
-// would make this test red.
+// TestService_Refresh_RevokedSession_RevokeBeforeUserLookup locks the
+// post-§A11-rewrite behavior: when a session is revoked, the refresh path
+// MUST reject with uniform 401 ErrAuthRefreshFailed BEFORE any user
+// lookup or user-status check runs.
 //
-// This locks the documented "ordering matters" constraint at refreshInTx
-// (service.go ~310) and rejectIfUserNotActive's godoc.
-func TestService_Refresh_TwoAssertOrdering_RevokedSession_BaselineFailFirst(t *testing.T) {
+// The combination revoked-session + non-active-user used to surface as
+// 403 ErrAuthUserNotActive (baseline-first ordering inside the funnel,
+// pre-§A11). After §A11 rewrite the SessionNotRevoked check is moved out
+// of the user-bound funnel and into a session-only prong that runs
+// immediately after sessionStore.Get — so user state becomes irrelevant
+// once revoke is detected (ADR §A12 wire-uniformity, P1-A regression).
+func TestService_Refresh_RevokedSession_RevokeBeforeUserLookup(t *testing.T) {
 	svc, sessionStore, userRepo := newTestServiceWithUserRepo(t)
 
-	// User is suspended → baseline gate fails.
+	// User is suspended — but revoke fires first now, so user state must
+	// not influence the wire response.
 	u, err := domain.NewUser("ordering-user", "ordering@test.local", "hash", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-ordering"
@@ -515,7 +517,8 @@ func TestService_Refresh_TwoAssertOrdering_RevokedSession_BaselineFailFirst(t *t
 	u.SetStatus(domain.StatusSuspended, time.Now())
 	require.NoError(t, userRepo.Update(context.Background(), u))
 
-	// Session is also revoked → session-revoked gate would fail.
+	// Session is revoked → revoke-first prong rejects with uniform 401
+	// before reaching user lookup.
 	sess := newTestSession(u.ID, "sess-ordering")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
 	require.NoError(t, sessionStore.Revoke(context.Background(), sess.ID))
@@ -524,16 +527,92 @@ func TestService_Refresh_TwoAssertOrdering_RevokedSession_BaselineFailFirst(t *t
 	require.NoError(t, issueErr)
 
 	_, err = svc.Refresh(context.Background(), wireToken)
-	require.Error(t, err, "refresh must reject both-gates-failing case")
+	require.Error(t, err, "refresh must reject revoked session")
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	// Baseline-first ordering: 403 ErrAuthUserNotActive (rejectIfUserNotActive
-	// surfaces before rejectIfSessionRevoked).
-	assert.Equal(t, errcode.ErrAuthUserNotActive, ec.Code,
-		"baseline gate must run first; reversing call order would yield ErrAuthRefreshFailed")
-	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
-		"baseline-fail kind must be KindPermissionDenied (403), not KindUnauthenticated (401)")
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"revoked session must surface uniform 401 ErrAuthRefreshFailed — "+
+			"P1-A regression: user status (active/suspended/locked) must NOT "+
+			"escalate the wire envelope to 403 ErrAuthUserNotActive once the "+
+			"session is revoked.")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+		"revoked-session Kind must be KindUnauthenticated (401), not "+
+			"KindPermissionDenied (403); a 503/403 leak here would break "+
+			"防枚举 single-envelope semantics (ADR §A12)")
+}
+
+// TestService_Refresh_RevokedSession_UserRepoUnavailable_StillReturns401
+// is the second P1-A regression: even when userRepo would have returned
+// KindUnavailable (503) for the subject, the revoke prong fires first
+// and surfaces uniform 401, not 503. Without the prong reorder, a revoked
+// session combined with a transient userRepo outage would leak as 503 —
+// confirming both that the session exists AND that user lookup is the
+// bottleneck (a side-channel signal).
+func TestService_Refresh_RevokedSession_UserRepoUnavailable_StillReturns401(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	refreshStore := newTestRefreshStore()
+	userRepo := &refreshUnavailableUserRepo{}
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+
+	svc := MustNewService(
+		sessionStore, roleRepo, userRepo, refreshStore,
+		testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore),
+	)
+
+	// Seed a revoked session.
+	sess := newTestSession("usr-revoked-503", "sess-revoked-503")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+	require.NoError(t, sessionStore.Revoke(context.Background(), sess.ID))
+
+	wireToken, _, issueErr := refreshStore.Issue(context.Background(), sess.ID, "usr-revoked-503", int64(1))
+	require.NoError(t, issueErr)
+
+	_, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err, "refresh must reject revoked session even when userRepo would 503")
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind,
+		"revoked session must surface 401, not 503 — P1-A regression: "+
+			"a userRepo outage must NOT leak through once the session is revoked.")
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"revoked-with-userRepo-outage must collapse to ErrAuthRefreshFailed, "+
+			"not ErrAuthRefreshUnavailable (防枚举 single-envelope)")
+}
+
+// refreshUnavailableUserRepo always returns KindUnavailable from GetByID,
+// simulating a transient user-store outage so the test can assert that
+// the revoke prong fires before user lookup is even attempted.
+type refreshUnavailableUserRepo struct{}
+
+var _ ports.UserRepository = (*refreshUnavailableUserRepo)(nil)
+
+func (refreshUnavailableUserRepo) GetByID(_ context.Context, _ string) (*domain.User, error) {
+	return nil, errcode.New(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable,
+		"user store unavailable")
+}
+
+func (refreshUnavailableUserRepo) Create(_ context.Context, _ *domain.User) error { return nil }
+func (refreshUnavailableUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
+}
+func (refreshUnavailableUserRepo) Update(_ context.Context, _ *domain.User) error { return nil }
+func (refreshUnavailableUserRepo) Delete(_ context.Context, _ string) error       { return nil }
+func (refreshUnavailableUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
+	return 0, nil
+}
+func (refreshUnavailableUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
+func (refreshUnavailableUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
+}
+func (refreshUnavailableUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
 
 // TestService_Refresh_TwoAssertOrdering_BaselineOnly_Returns403 verifies the
