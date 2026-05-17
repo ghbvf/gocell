@@ -788,3 +788,44 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 		t.Fatal("full assembly bootstrap did not shut down in time")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// defaultRuntimeOptions / buildInternalAuthChain fault injection
+// ---------------------------------------------------------------------------
+
+// TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly verifies the error path
+// in defaultRuntimeOptions when a non-empty PrimaryHTTPAddr is set and asm is
+// nil. cell.NewAuthJWTFromAssembly rejects nil interfaces, so the function must
+// return an error containing "primary listener auth".
+func TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+	shared.PrimaryHTTPAddr = ":8080" // non-empty → primary listener branch executes
+
+	cb, err := buildConsumerBase(shared)
+	require.NoError(t, err)
+
+	// Pass nil assembly — NewAuthJWTFromAssembly rejects nil via IsNilInterface.
+	_, err = defaultRuntimeOptions(shared, nil, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "primary listener auth",
+		"error must identify which listener auth failed for operator diagnosis")
+}
+
+// TestBuildInternalAuthChain_NoopNonceStoreRejected verifies that
+// buildInternalAuthChain returns an error when the guard's NonceStore has
+// Kind() == NonceStoreKindNoop. cell.NewAuthServiceToken enforces replay
+// protection is not silently disabled.
+func TestBuildInternalAuthChain_NoopNonceStoreRejected(t *testing.T) {
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	guardWithNoop := &internalGuard{
+		ring:       ring,
+		nonceStore: auth.NewNoopNonceStore(),
+		mw:         func(h http.Handler) http.Handler { return h },
+	}
+
+	_, err = buildInternalAuthChain(guardWithNoop)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build internal auth chain",
+		"error must be wrapped with build-site context")
+}

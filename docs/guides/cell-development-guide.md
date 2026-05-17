@@ -331,14 +331,10 @@ func (c *MyCell) initInternal(ctx context.Context, reg cell.Registry) error {
 func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Option {
     tb.Helper()
     userStore := mem.NewStore(clk)
-    sessionProto, err := session.NewProtocol(
-        session.WithFingerprint(session.FingerprintJTIRef{}),
-        session.WithOrdering(session.OrderingAuthzEpoch{}),
-        session.WithRevokeOnAll(),
-    )
-    if err != nil {
-        tb.Fatalf("session.NewProtocol: %v", err)
-    }
+    // Use sessiontest.Protocol() instead of session.NewProtocol directly:
+    // session.NewProtocol is guarded by SESSION-PROTOCOL-COMPOSITION-ROOT-01
+    // (only cmd/* and runtime/auth/session/* may call it).
+    sessionProto := sessiontest.Protocol()
     sessionStore, err := session.NewMemStore(sessionProto, clk)
     if err != nil {
         tb.Fatalf("session.NewMemStore: %v", err)

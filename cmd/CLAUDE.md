@@ -14,7 +14,10 @@ cells, cellOpts, _ := BuildApp(ctx, shared, modules...)
 asm, _ := buildAssembly(shared.PromStack, assemblyID, mode, cells...)
 
 // 第三层：三 listener + bootstrap
-opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+opts, err := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+if err != nil {
+    return fmt.Errorf("defaultRuntimeOptions: %w", err)
+}
 opts = append(opts, cellOpts...)
 bootstrap.New(opts...).Run(ctx)
 ```

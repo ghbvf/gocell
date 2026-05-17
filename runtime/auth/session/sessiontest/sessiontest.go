@@ -23,6 +23,10 @@ import (
 //
 // Panics on misconfiguration: this helper is meant for tests where a
 // non-recoverable Protocol setup is a programmer error, not a runtime path.
+// The panic block below is a defensive branch — session.NewProtocol with the
+// hardcoded option triplet never errors in practice. Per PANIC-REGISTERED-01
+// the reason must be a const literal at the panic call site, so this branch
+// cannot be funneled through a shared helper without breaking the invariant.
 func Protocol() *session.Protocol {
 	p, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
@@ -30,8 +34,9 @@ func Protocol() *session.Protocol {
 		session.WithRevokeOnAll(),
 	)
 	if err != nil {
-		panic(panicregister.Approved("sessiontest-protocol-init",
-			errcode.Assertion("sessiontest: protocol construction failed: %v", err)))
+		e := errcode.Assertion("sessiontest: protocol construction failed")
+		e.InternalMessage = err.Error()
+		panic(panicregister.Approved("sessiontest-protocol-init", e))
 	}
 	return p
 }

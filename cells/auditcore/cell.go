@@ -207,7 +207,7 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	// Validate injected ledger deps (strong-dependency wiring options).
 	if c.ledgerProtocolNil || c.ledgerProtocol == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"auditcore: LedgerProtocol required; use WithLedgerProtocol (composition root must construct via MustNewProtocol)")
+			"auditcore: LedgerProtocol required; use WithLedgerProtocol (composition root must construct via ledger.NewProtocol)")
 	}
 	if c.ledgerStoreNil || validation.IsNilInterface(c.ledgerStore) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

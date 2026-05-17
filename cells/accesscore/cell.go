@@ -38,7 +38,7 @@ import (
 // for ChangePassword optimistic-concurrency control. Composition root uses
 // this constant when wiring cas.Protocol for the user table:
 //
-//	cas.MustNewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
+//	cas.NewProtocol(cas.WithVersionField(accesscore.PasswordVersionField))
 const PasswordVersionField = "password_version"
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
@@ -213,7 +213,7 @@ func WithSetupLock(lock ports.SetupLock) Option {
 //
 // REQUIRED: initValidate() rejects nil with ErrCellInvalidConfig so that the
 // cell will not start without a properly-configured CAS primitive.
-// Composition root constructs the Protocol via cas.MustNewProtocol and passes
+// Composition root constructs the Protocol via cas.NewProtocol and passes
 // it here; cells must not construct it directly (CAS-PROTOCOL-COMPOSITION-ROOT-01
 // archtest enforces this).
 //

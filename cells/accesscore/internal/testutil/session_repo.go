@@ -17,7 +17,7 @@ import (
 // sessiontest.Protocol lives in runtime/auth/session/sessiontest/ so that
 // SESSION-PROTOCOL-COMPOSITION-ROOT-01 archtest covers Protocol construction
 // inside the allowlisted path; this helper itself does not call
-// session.NewProtocol / session.MustNewProtocol directly.
+// session.NewProtocol directly (session.MustNewProtocol was deleted in B2-K-02).
 func RealSessionRepo(t testing.TB) *session.MemStore {
 	t.Helper()
 	store, err := session.NewMemStore(sessiontest.Protocol(), clock.Real())

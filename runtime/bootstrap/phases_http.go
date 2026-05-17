@@ -241,7 +241,7 @@ func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef,
 	return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 		"bootstrap: /internal/v1/* route(s) declared without an internal guard; "+
 			"set bootstrap.WithListener(cell.InternalListener, ..., "+
-			"[]cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)}) "+
+			"[]cell.ListenerAuth{<svcTokenAuth from cell.NewAuthServiceToken(store, ring)>}) "+
 			"and optionally layer cell.AuthMTLS{} with verified client TLS",
 		errcode.WithInternal(fmt.Sprintf("count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", "))))
 }

@@ -251,7 +251,7 @@ func (ks *KeySet) PruneExpired() {
 // GenerateRSAKeyPair generates a 2048-bit RSA key pair. Returns an error
 // when the RNG fails (effectively never on normal systems, but the API is
 // error-first so dev-mode composition roots can propagate the failure
-// instead of panicking). Test code should prefer `runtime/auth/authtest`
+// instead of panicking). Test code should prefer `runtime/auth/keystest`
 // helpers which wrap this with the test-fixture convenience semantics.
 //
 // Production callers must NOT rely on this for persistent keys —

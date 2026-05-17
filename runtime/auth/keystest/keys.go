@@ -17,6 +17,14 @@
 // `MustNewKeySet`, `MustNewKeyProvider`) because the package name already
 // conveys the test context. Following K8s `httptest.NewRecorder`, not
 // `httptest.NewTestRecorder`.
+//
+// Coverage note: the panic blocks below are defensive against errors that
+// are unreachable in practice (crypto/rand never fails, hardcoded HMAC secret
+// is always ≥32 bytes, MustGenerateKeyPair returns non-nil keys). Per
+// PANIC-REGISTERED-01 (panicregister.Approved reason must be a const string
+// literal at the panic call site), these blocks cannot be funneled through a
+// single helper without violating the literal-reason invariant — see the
+// mustNoErr funnel design rejected at PR #553 review, ADR §"Coverage limits".
 package keystest
 
 import (
