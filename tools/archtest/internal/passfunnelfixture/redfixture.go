@@ -53,6 +53,12 @@ import (
 	// VIOLATION sources for PASS-FUNNEL-RESOLVE-01 — same package, different symbols.
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	te "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+
+	// Cross-pkg exported const source for PASS-FUNNEL-FIXTURE-TAG-01 Form D
+	// (`archtest.FixtureBuildTag`). No cycle: archtest package does not import
+	// passfunnelfixture (it loads this fixture at runtime via SharedResolver),
+	// so a child→parent import is safe.
+	"github.com/ghbvf/gocell/tools/archtest"
 )
 
 // VIOLATION samples — value references suffice for typeseval.ResolvePackageRef
@@ -129,15 +135,38 @@ var (
 	_ = scanner.ImportBan{} // qualified (value reference, zero-value struct literal)
 	_ = sn.ImportBan{}      // alias-import
 	_ = ImportBan{}         // dot-import (bare Ident from `. "…/scanner"` above)
-
-	// PASS-FUNNEL-FIXTURE-TAG-01 violation: a bare STRING literal
-	// "archtest_fixture" appearing in business archtest code is the only
-	// supported bypass route around RunTypedFixture's outward-Hard
-	// FixtureOpts (which has no Tags field). The detector walks BasicLit
-	// nodes in business *_test.go files (passFunnelPermanentExempt scope)
-	// and rejects any such literal — authors must reference
-	// archtest.FixtureBuildTag (Go-code path) or use RunTypedFixture
-	// (fixture-load path); fixture.go itself stays the literal's sole
-	// declaration site.
-	_ = "archtest_fixture" //nolint:gosimple // RED fixture: bare literal is the entire detector trigger.
 )
+
+// PASS-FUNNEL-FIXTURE-TAG-01 V' RED — type-aware (callee, arg) form-uniqueness.
+// localFixtureTag exercises Form B: same-package const Ident, which
+// EvaluateConstString resolves to the literal value "archtest_fixture".
+const localFixtureTag = "archtest_fixture"
+
+// fixtureTagBypassRedForms exercises all 4 EvaluateConstString-resolvable
+// arg shapes that a business archtest could in principle use to feed the
+// archtest_fixture build tag to a loader from LOADER_SET (typeseval.
+// SharedResolver / LoadPackages / LoadProductionPackages plus archtest.
+// RunTyped / RunTypedProduction / RunTypedDir). The detector must catch
+// every form regardless of whether the literal is direct, via local const,
+// via cross-pkg exported const, or via const concatenation.
+//
+// The function is never invoked at runtime; the package is gated by
+// //go:build archtest_fixture and exists only as *ast.CallExpr +
+// *types.Info source for analysis. typeseval.SharedResolver is chosen as
+// the LOADER_SET canary because (i) it has the simplest signature for
+// fixture construction (positional tags slice at arg 3), (ii) it is
+// already a permanent RunTypedFixture-adjacent loader that business
+// archtest must not call directly (also caught by PASS-FUNNEL-LOADPACKAGES-01),
+// and (iii) the detector predicate is callee-shape-agnostic across the
+// LOADER_SET — a single callee suffices to lock all 4 arg shapes; the
+// remaining LOADER_SET members add no new arg-shape coverage axis.
+func fixtureTagBypassRedForms() {
+	// Form A — BasicLit STRING literal direct.
+	_, _ = typeseval.SharedResolver("/dummy", false, []string{"archtest_fixture"}, "x")
+	// Form B — same-pkg const Ident (localFixtureTag above).
+	_, _ = typeseval.SharedResolver("/dummy", false, []string{localFixtureTag}, "x")
+	// Form C — BinaryExpr const concatenation.
+	_, _ = typeseval.SharedResolver("/dummy", false, []string{"archtest" + "_fixture"}, "x")
+	// Form D — cross-pkg SelectorExpr to exported const (archtest.FixtureBuildTag).
+	_, _ = typeseval.SharedResolver("/dummy", false, []string{archtest.FixtureBuildTag}, "x")
+}

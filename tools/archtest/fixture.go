@@ -61,9 +61,18 @@ type FixtureOpts struct {
 //     has no Tags field; writing RunTypedFixture(t, FixtureOpts{Tags: ...},
 //     ...) is a compile error.
 //   - Upstream Hard (façade bypass closure): PASS-FUNNEL-FIXTURE-TAG-01
-//     archtest rejects any BasicLit STRING "archtest_fixture" in business
-//     *_test.go files (archtest-bound form-uniqueness — see
-//     pass_funnel_test.go diagsFixtureTagBypass godoc for evidence).
+//     archtest rejects any (callee, arg) pair where the callee resolves to
+//     a loader (archtest.RunTyped / RunTypedProduction / RunTypedDir or
+//     typeseval.SharedResolver / LoadPackages / LoadProductionPackages)
+//     AND any arg subtree contains an Expr that EvaluateConstString
+//     resolves to "archtest_fixture". This catches BasicLit literal /
+//     same-pkg const Ident / cross-pkg SelectorExpr (including
+//     archtest.FixtureBuildTag) / BinaryExpr const-concat uniformly via
+//     the helper's resolution lattice (archtest-bound form-uniqueness on a
+//     (callee, arg) pair — isomorphic to charter §Hard 范本 第 2 条
+//     panic(panicregister.Approved) form; see pass_funnel_test.go
+//     diagsFixtureTagBypass godoc for full evidence + accepted Blind
+//     spots).
 //   - Inward Medium (framework internal): the field set of FixtureOpts itself
 //     is frozen by TestRunTypedFixture_FixtureOptsLacksTagsField via reflect
 //     assertion (NumField == 1, sole field "Tests" of kind Bool) — drift here

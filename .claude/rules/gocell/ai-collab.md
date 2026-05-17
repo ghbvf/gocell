@@ -63,9 +63,13 @@
   - (b) 业务调用方无需感知该字段（不是仅默认值，是结构上不该出现）；
   - (c) 同一加载模式有多处调用复用（≥3 处是经济性阈值，并非 Hard 评级前提；1-2 处调用时优先直接传 TypedOpts.Tags + 注释说明即可，避免过早 funnel 化）。
 
-  **配套要求 — funnel 双向闭锁**：本范本的 outward Hard（FixtureOpts 字段缺失致编译失败）只挡"用 RunTypedFixture 自传 tag"这条路；语言层面 RunTyped 仍接受任意 Tags 切片，业务调用方仍可写 `RunTyped(t, TypedOpts{Tags: []string{"foo"}}, ...)` 绕过 RunTypedFixture。同 PR 内**必须**补一条 meta-archtest 锁住 façade 旁路，否则只是"funnel 内 Hard / funnel 外 Soft"，与 §Funnel 双向锁评级冲突。范例：`tools/archtest/pass_funnel_test.go` `diagsFixtureTagBypass` (PASS-FUNNEL-FIXTURE-TAG-01) 以 BasicLit STRING 形态唯一性拒绝业务 *_test.go 内出现 `"archtest_fixture"` 字面量，配合 `archtest.FixtureBuildTag` 包级 const 给 Go-code 路径（如 panic_invariants_test.go 跳过 fixture tag 组）提供 typed reference 单源——下游 outward Hard + 上游 archtest-bound form-uniqueness Hard 构成闭环双向锁（详见 ADR `docs/architecture/202605141519-adr-archtest-pass-funnel.md` §passFunnelPermanentExempt 第 4 防线）。
+  **配套要求 — funnel 双向闭锁**：本范本的 outward Hard（FixtureOpts 字段缺失致编译失败）只挡"用 RunTypedFixture 自传 tag"这条路；语言层面 RunTyped / typeseval.SharedResolver 等 loader 仍接受任意 Tags 切片，业务调用方仍可写 `RunTyped(t, TypedOpts{Tags: []string{X}}, ...)` 绕过 RunTypedFixture（其中 `X` 可以是字面量、同包 const Ident、跨包 SelectorExpr、BinaryExpr 拼接等任意 EvaluateConstString-resolvable 形态）。同 PR 内**必须**补一条 meta-archtest 锁住 façade 旁路，否则只是"funnel 内 Hard / funnel 外 Soft"，与 §Funnel 双向锁评级冲突。
 
-  ref: `tools/archtest/fixture.go` (FixtureBuildTag const + RunTypedFixture) + `tools/archtest/pass_funnel_test.go` (diagsFixtureTagBypass 上游闭锁)。
+  **形态选择 — (callee, arg) pair form-uniqueness（必选，等价于 §Hard 范本第 2 条 panic 范本同构形态）**：仅锁 BasicLit 字面量值而不锁 callee 是常见反模式——同 PR 引入的新 const 自身会成为新的绕过路径（"Soft 上 Soft"）。正确形态：(i) callee 经 `*types.Info` 解析到 loader 集合（同 §Hard 范本第 2 条 panicregister.Approved 的 callee resolve），(ii) arg 子树经 `EvaluateConstString` 解析到禁止值集合（比 panic 范本的 "arg = BasicLit STRING" 略宽——允许 const reference 等价形态——但仍是 form uniqueness）。两个条件 **AND**，缺一不可。这样合法 identity 用途（如 `containsTag(group, FixtureBuildTag)`：callee 不在 loader set，arg 同值 → 不命中）与绕过用途（loader callee + 同值 arg → 命中）自然机器可区分。
+
+  范例：`tools/archtest/pass_funnel_test.go` `diagsFixtureTagBypass` (PASS-FUNNEL-FIXTURE-TAG-01 R1.1) 以 (callee ∈ {archtest.RunTyped / RunTypedProduction / RunTypedDir + typeseval.SharedResolver / LoadPackages / LoadProductionPackages}, arg via EvaluateConstString → `"archtest_fixture"`) pair 拦截；配合 `archtest.FixtureBuildTag` 包级 const 给 Go-code 路径提供 typed reference 单源——下游 outward Hard + 上游 (callee, arg) form-uniqueness Hard 构成闭环双向锁（详见 ADR `docs/architecture/202605141519-adr-archtest-pass-funnel.md` §"PR #536 review R1 amendment" R1.1 段）。
+
+  ref: `tools/archtest/fixture.go` (FixtureBuildTag const + RunTypedFixture) + `tools/archtest/pass_funnel_test.go` (diagsFixtureTagBypass / fixtureTagLoaderSet — (callee, arg) pair form-uniqueness Hard)。
 
 ## archtest 文件命名
 
