@@ -35,6 +35,9 @@
 //     including paths intentionally excluded from the depguard ban list
 //     because they have legitimate non-write os.* calls:
 //   - tools/codegen/cellgen/scaffold.go  (no os import today; future guard)
+//   - tools/codegen/cellgen/stage_render.go (os.MkdirTemp/RemoveAll/ReadFile
+//     for temp-dir lifecycle — NOT banned; any future MkdirAll/WriteFile/
+//     Mkdir/Create/OpenFile addition here WILL trip this archtest)
 //   - tools/codegen/writer.go            (os.ReadFile for drift detection)
 //   - kernel/assembly/generator.go       (os.ReadFile/Stat for go.mod metadata)
 //   - cmd/gocell/app/scaffold.go         (os.Stat for target dir checks)
@@ -87,7 +90,10 @@ var bannedOSWriteSelectors = map[string]bool{
 // scaffoldFunnelPred limits which files inside the loaded packages are
 // scanned. cmd/gocell/app/ may only match scaffold*.go (generate_catalog.go
 // and export.go are exempt — see file-level Out-of-scope godoc).
-// tools/codegen/cellgen/ may match scaffold*.go and generate_*.go.
+// tools/codegen/cellgen/ may match scaffold*.go, generate_*.go, and
+// stage_render.go (the ephemeral-staging helper that orchestrates the
+// cross-stage merge — os.MkdirTemp/RemoveAll/ReadFile are NOT banned, only
+// write-side ops MkdirAll/WriteFile/Mkdir/Create/OpenFile).
 // Everywhere else (tools/codegen/contractgen, tools/codegen top-level,
 // kernel/assembly): all non-test .go files.
 func scaffoldFunnelPred(rel string) bool {
@@ -100,7 +106,9 @@ func scaffoldFunnelPred(rel string) bool {
 		return strings.HasPrefix(base, "scaffold")
 	}
 	if strings.HasPrefix(rel, "tools/codegen/cellgen/") {
-		return strings.HasPrefix(base, "scaffold") || strings.HasPrefix(base, "generate_")
+		return strings.HasPrefix(base, "scaffold") ||
+			strings.HasPrefix(base, "generate_") ||
+			base == "stage_render.go"
 	}
 	return true
 }
@@ -143,11 +151,16 @@ func canonicalOSWriteCall(info *types.Info, call *ast.CallExpr) string {
 // calls in scaffold paths outside pkg/pathsafe.
 //
 // Scanned paths (predicate-filtered after package load):
-//   - tools/codegen/cellgen/         (ScaffoldCell, ScaffoldCellBundle, generate_*)
+//   - tools/codegen/cellgen/         (PlanCellBundleScaffold, generate_*, stage_render.go)
 //   - tools/codegen/contractgen/     (generator + writer)
 //   - tools/codegen/writer.go        (codegen.Write — top-level only)
 //   - kernel/assembly/               (Generator.PlanAssemblyScaffold)
 //   - cmd/gocell/app/scaffold*.go    (scaffoldSlice, scaffoldContract, scaffoldJourney)
+//
+// stage_render.go blind-spot: os.MkdirTemp/RemoveAll/ReadFile are NOT in
+// bannedOSWriteSelectors (they manage temp-dir lifetime, not project-tree writes).
+// Only write-side ops (MkdirAll/WriteFile/Mkdir/Create/OpenFile) are banned.
+// The file IS scanned — any future project-tree write call added there trips this test.
 //
 // Allowlist (only these files may call banned os selectors):
 //   - pkg/pathsafe/pathsafe.go (not loaded by this test; out of scope by construction)

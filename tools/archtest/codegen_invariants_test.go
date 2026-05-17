@@ -265,12 +265,14 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 // ============================================================
 //
 // Gates protect the generator's contract on contracts that have opted into
-// codegen (codegen: true in contract.yaml).
+// codegen. Contracts opt in by default; declare `codegen: false` in
+// contract.yaml to opt out.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md K#06
 
 // TestCodegenContractGen01_OptedInHasGen verifies CODEGEN-CONTRACT-GEN-01.
-// A contract opts into codegen by setting `codegen: true` in contract.yaml.
+// Contracts are opted into codegen by default; `codegen: false` in
+// contract.yaml is the only way to opt out.
 // For every opted-in contract:
 //   - generated/<kind>/<...>/v<N>/types_gen.go must exist
 //   - generated/<kind>/<...>/v<N>/iface_gen.go must exist
@@ -308,7 +310,7 @@ func requireRealGeneratedFile(t *testing.T, root, path, contractID string) {
 	info, err := os.Lstat(path)
 	switch {
 	case err != nil && os.IsNotExist(err):
-		t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q has codegen=true but missing %s; run `gocell generate contract %s`",
+		t.Errorf("CODEGEN-CONTRACT-GEN-01: contract %q is codegen-enabled but missing %s; run `gocell generate contract %s`",
 			contractID, rel, contractID)
 	case err != nil:
 		t.Errorf("CODEGEN-CONTRACT-GEN-01: lstat %s: %v", rel, err)

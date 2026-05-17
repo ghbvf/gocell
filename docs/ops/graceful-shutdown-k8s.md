@@ -73,5 +73,6 @@ phase10 emit 的 `bootstrap_shutdown_phase_duration_seconds`（histogram）按 s
 ## 相关文档
 
 - `docs/ops/listener-topology.md` — HTTP listener / drain 顺序
+- `docs/ops/startup-timeout.md` — 启动阶段超时排查（`bootstrap.ErrBootstrapStartupTimeout`，与 shutdown 预算正交）
 - `docs/architecture/202605101730-adr-shutdown-budget-decouple.md` — phase10 双 budget 解耦决策
 - `docs/architecture/202605051800-adr-rollback-ctx-decoupling.md` — 启动失败路径的 rollback ctx 派生（与 SIGTERM-during-Start 场景相关）

@@ -67,7 +67,7 @@ Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<R
 
 ### accesscore first-admin provisioning
 
-Both variables are **required, persistent operator Basic Auth credentials** protecting the setup/admin endpoint for the lifetime of the deployment. Empty values cause fail-fast at startup. See `docs/operations/first-run-setup.md` for deployment examples and `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` for the security boundary ADR.
+Both variables are **required, persistent operator Basic Auth credentials** protecting the setup/admin endpoint for the lifetime of the deployment. Empty values cause fail-fast at startup. See `docs/ops/first-run-setup.md` for deployment examples and `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` for the security boundary ADR.
 
 | Variable | Purpose | Default | Notes |
 |---|---|---|---|

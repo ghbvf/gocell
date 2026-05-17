@@ -246,10 +246,10 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 
 	// K#06 contractgen outputs: types_gen.go / iface_gen.go (always) +
 	// handler_gen.go (kind=http only) under generated/contracts/<kind>/<...>/v<N>/
-	// for every contract that opted into codegen by setting `codegen: true`
-	// in contract.yaml. Reuse contractgen.RenderContractArtifacts so the
-	// manifest stays byte-identical to what `gocell generate contract --all`
-	// would write.
+	// for every contract that opted into codegen (the default — declare
+	// `codegen: false` in contract.yaml to opt out). Reuse
+	// contractgen.RenderContractArtifacts so the manifest stays byte-identical
+	// to what `gocell generate contract --all` would write.
 	contractgenArtifacts, err := expectedContractgenArtifacts(root, project)
 	if err != nil {
 		return nil, fmt.Errorf("expected contractgen artifacts: %w", err)

@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
@@ -53,7 +54,24 @@ var scaffoldSmokeSpec = cellgen.ScaffoldSpec{
 	ConsistencyLevel: "L1",
 }
 
-// TestScaffoldBundle_CellMarkerEmbedded asserts that ScaffoldCellBundle
+// scaffoldSmokeBundle writes the skeleton bundle for scaffoldSmokeSpec into root
+// using PlanCellBundleScaffold (SkipGenerate=true) + WritePlannedFiles.
+func scaffoldSmokeBundle(t *testing.T, root string) error {
+	t.Helper()
+	realRoot, err := pathsafe.ResolveRoot(root)
+	if err != nil {
+		return err
+	}
+	spec := scaffoldSmokeSpec
+	spec.SkipGenerate = true
+	plan, err := cellgen.PlanCellBundleScaffold(realRoot, spec)
+	if err != nil {
+		return err
+	}
+	return pathsafe.WritePlannedFiles(realRoot, plan, false)
+}
+
+// TestScaffoldBundle_CellMarkerEmbedded asserts that PlanCellBundleScaffold
 // produces a cell.go that contains the K#05 +cell:listener: marker.
 //
 // INVARIANT: SCAFFOLD-BUNDLE-MARKER-01
@@ -61,8 +79,8 @@ var scaffoldSmokeSpec = cellgen.ScaffoldSpec{
 func TestScaffoldBundle_CellMarkerEmbedded(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := cellgen.ScaffoldCellBundle(dir, scaffoldSmokeSpec); err != nil {
-		t.Fatalf("ScaffoldCellBundle: %v", err)
+	if err := scaffoldSmokeBundle(t, dir); err != nil {
+		t.Fatalf("scaffoldSmokeBundle: %v", err)
 	}
 	cellGoPath := filepath.Join(dir, "cells", "smokecell", "cell.go")
 	content, err := os.ReadFile(cellGoPath) //nolint:gosec // tempdir test fixture
@@ -175,7 +193,7 @@ func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 	}
 }
 
-// TestScaffoldBundle_ContractYAMLOmitsCodegenKey asserts that ScaffoldCellBundle
+// TestScaffoldBundle_ContractYAMLOmitsCodegenKey asserts that PlanCellBundleScaffold
 // produces a contract.yaml without a top-level `codegen:` key.
 //
 // INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01
@@ -183,7 +201,7 @@ func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 func TestScaffoldBundle_ContractYAMLOmitsCodegenKey(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	require.NoError(t, cellgen.ScaffoldCellBundle(dir, scaffoldSmokeSpec))
+	require.NoError(t, scaffoldSmokeBundle(t, dir))
 	contractPath := filepath.Join(dir, "contracts", "http", "smokecell", "example", "v1", "contract.yaml")
 	raw, err := os.ReadFile(contractPath) //nolint:gosec // tempdir test fixture
 	require.NoError(t, err)

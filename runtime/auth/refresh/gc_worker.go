@@ -65,7 +65,7 @@ func (w *GCWorker) Start(ctx context.Context) error {
 	if w.cancel != nil {
 		return nil
 	}
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	runCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
 	w.done = make(chan struct{})
 	go w.loop(runCtx, w.done)

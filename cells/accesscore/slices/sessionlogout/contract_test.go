@@ -76,6 +76,15 @@ func seedContractSession(store session.Store) string {
 	return id
 }
 
+// TestHttpAuthSessionDeleteV1_PathParamConstraints asserts that the id path
+// param (format: uuid) schema rejects non-UUID strings.
+func TestHttpAuthSessionDeleteV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.auth.session.delete.v1")
+	c.ValidatePathParam(t, "id", "550e8400-e29b-41d4-a716-446655440000")
+	c.MustRejectPathParam(t, "id", "not-a-uuid") // violates format: uuid
+}
+
 // --- HTTP contract test (S1-F1) ---
 
 func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {

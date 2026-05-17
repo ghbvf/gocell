@@ -1,6 +1,7 @@
 package yamlsafe_test
 
 import (
+	"fmt"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -300,11 +301,9 @@ func TestNeedsQuoting_PlainStyleIndicators(t *testing.T) {
 			quoted := yamlsafe.Quote(tc.raw)
 			isQuoted := quoted.String() != tc.raw
 
-			if tc.wantQuoted && !isQuoted {
-				t.Errorf("Quote(%q) = %q: expected quoted form, got plain", tc.raw, quoted.String())
-			}
-			if !tc.wantQuoted && isQuoted {
-				t.Errorf("Quote(%q) = %q: expected plain form, got quoted", tc.raw, quoted.String())
+			if isQuoted != tc.wantQuoted {
+				t.Errorf("Quote(%q) = %q: wantQuoted=%v, got quoted=%v",
+					tc.raw, quoted.String(), tc.wantQuoted, isQuoted)
 			}
 
 			if tc.roundTrip {
@@ -312,6 +311,89 @@ func TestNeedsQuoting_PlainStyleIndicators(t *testing.T) {
 				if got != tc.raw {
 					t.Errorf("Quote(%q) round-trip = %q, want original", tc.raw, got)
 				}
+			}
+		})
+	}
+}
+
+// exhaustiveCorpus enumerates the reachable input space for Quote's
+// YAML-injection classification: every ASCII byte, every 2-byte combination
+// of a YAML structural indicator with a letter / space / EOL, plus the
+// multi-byte edge tokens that the byte sweep cannot reach (document markers
+// and the YAML null-token word forms).
+//
+// Scope note 1 — byte range: the sweep is ASCII (0x00..0x7F). Every YAML
+// structural indicator and control character that can break scalar framing
+// is ASCII. Bytes 0x80..0xFF exercise Go rune decoding inside doubleQuote
+// (not touched by the needsQuoting decomposition) and a lone invalid-UTF-8
+// byte does not round-trip through yaml.v3 on the pre-refactor code either,
+// so including them would assert Go UTF-8 semantics rather than pin the
+// injection invariant.
+//
+// Scope note 2 — multi-byte tokens: the single-byte sweep covers "~" (0x7E)
+// and "" (seeded), but the >1-byte YAML null tokens ("null"/"Null"/"NULL")
+// and document markers ("---"/"...") are NOT reachable by a byte loop, so
+// they are explicit seeds below. They keep this pin sensitive to removal of
+// any individual yamlNullTokens entry — required for the Hard rating. Any
+// future multi-byte YAML token added to needsQuoting must be seeded here too.
+func exhaustiveCorpus() []string {
+	const indicators = ":{}[],&*#?|>!%@`\"'-\n\r\t\x00 "
+	companions := []byte{'a', ' ', '\n', '\r', '\t'}
+
+	corpus := []string{
+		"", "---", "...", "--", "....", "- ", "-", "?", ":", "? ", ": ",
+		"null", "Null", "NULL", // yamlNullTokens word forms (byte sweep covers "~")
+	}
+	for b := 0; b < 0x80; b++ {
+		corpus = append(corpus, string(rune(b)))
+	}
+	for i := 0; i < len(indicators); i++ {
+		m := indicators[i]
+		for _, c := range companions {
+			corpus = append(corpus, string([]byte{m, c}), string([]byte{c, m}))
+		}
+		corpus = append(corpus, string([]byte{m, m}))
+	}
+	return corpus
+}
+
+// TestQuote_ExhaustiveRoundTripInvariant is the AI-Hard equivalence pin for
+// the YAML-injection funnel core. It asserts the real security invariant
+// over the whole reachable input space (exhaustiveCorpus), independent of
+// needsQuoting's internal shape:
+//
+//  1. Round-trip fidelity: yaml.Unmarshal(Quote(x)) == x.
+//  2. No structural escape: the quoted form embedded as a mapping value
+//     parses as exactly one scalar entry — a value that escaped its scalar
+//     framing would inject an adjacent key or document boundary, making the
+//     decoded map have != 1 entry or lose the original value.
+//
+// Any change to needsQuoting that alters a single classification fails this
+// test deterministically (no string-anchor / comment-anchor escape), so it
+// is Hard by enumeration form per ai-collab.md §"Hard 范本"
+// (real-input enumeration > hand-crafted fixture). It supersedes — does not
+// duplicate — the single-purpose round-trip tests above, which remain as
+// human-readable regression documentation.
+func TestQuote_ExhaustiveRoundTripInvariant(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range exhaustiveCorpus() {
+		raw := raw
+		t.Run(fmt.Sprintf("%q", raw), func(t *testing.T) {
+			t.Parallel()
+
+			out := yamlsafe.Quote(raw).String()
+			doc := "key: " + out + "\n"
+			var decoded map[string]string
+			if err := yaml.Unmarshal([]byte(doc), &decoded); err != nil {
+				t.Fatalf("Quote(%q)=%q: yaml.Unmarshal failed: %v\ndoc=%q", raw, out, err, doc)
+			}
+			if len(decoded) != 1 {
+				t.Fatalf("Quote(%q)=%q: structural escape — decoded %d keys, want 1\ndoc=%q",
+					raw, out, len(decoded), doc)
+			}
+			if got := decoded["key"]; got != raw {
+				t.Errorf("Quote(%q)=%q: round-trip = %q, want original", raw, out, got)
 			}
 		})
 	}
