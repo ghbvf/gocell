@@ -429,36 +429,39 @@ func containsTag(group []string, tag string) bool {
 
 // TestPanicRegisteredScannerFixtures verifies the PANIC-REGISTERED-01 rule
 // logic against static fixture packages under
-// tools/archtest/testdata/panic_registered_fixtures/.
+// tools/archtest/testdata/panic_registered_fixtures/. Expected violation
+// counts are declared inline in each fixture via spec.Violation() calls
+// (one per expected diagnostic); the test calls AssertDiagnosticCount
+// to enforce got==CountViolationMarkers(pass).
 func TestPanicRegisteredScannerFixtures(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		dir       string
-		wantLines []int // empty = GREEN (0 violations); non-empty = RED with these line numbers
+		dir string
 	}{
-		// RED cases — expect violations.
-		{"bare_string_red", []int{6}},
-		{"non_funnel_err_red", []int{6}},
-		{"non_literal_reason_red", []int{13}},
-		{"old_errcode_form_red", []int{8}},
-		{"must_prefix_bare_red", []int{7}},
+		// RED cases — expected diagnostic count declared via spec.Violation()
+		// in the fixture .go file (one call per expected violation).
+		{"bare_string_red"},
+		{"non_funnel_err_red"},
+		{"non_literal_reason_red"},
+		{"old_errcode_form_red"},
+		{"must_prefix_bare_red"},
 
-		// GREEN cases — expect 0 violations.
-		{"assertion_wrapped_green", nil},
-		{"recovered_value_green", nil},
-		{"must_prefix_wrapped_green", nil},
+		// GREEN cases — expect 0 violations (no spec.Violation() in fixture).
+		{"assertion_wrapped_green"},
+		{"recovered_value_green"},
+		{"must_prefix_wrapped_green"},
 
 		// RED cases for reason argument shape.
-		{"reason_const_ident_red", []int{15}},
-		{"reason_format_invalid_red", []int{12, 16}},
+		{"reason_const_ident_red"},
+		{"reason_format_invalid_red"},
 
 		// RED/GREEN cases for payload type guard (RC-C1).
-		{"payload_type_invalid_red", []int{14, 19, 23}}, // 3 violations: fmt.Errorf, string var, string literal
-		{"payload_type_valid_green", nil},               // *errcode.Error and interface{} are allowed (no violations)
+		{"payload_type_invalid_red"}, // 3 violations: fmt.Errorf, string var, string literal
+		{"payload_type_valid_green"}, // *errcode.Error and interface{} are allowed (no violations)
 
 		// RED cases for reason placeholder denylist (RC-B1).
-		{"reason_placeholder_red", []int{12, 16, 20}}, // todo / fixme / wip all rejected
+		{"reason_placeholder_red"}, // todo / fixme / wip all rejected
 	}
 
 	for _, tc := range cases {
@@ -468,30 +471,25 @@ func TestPanicRegisteredScannerFixtures(t *testing.T) {
 
 			fixturePattern := "./tools/archtest/testdata/panic_registered_fixtures/" + tc.dir
 
-			var violations []panicRegisteredViolation
 			// Load using module root so imports of panicregister/errcode resolve.
 			_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil || p.Fset == nil {
 					return nil
 				}
+				var got []Diagnostic
 				for _, file := range p.Files {
 					rel := p.Rel(file)
-					violations = append(violations, scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel)...)
+					for _, v := range scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel) {
+						got = append(got, Diagnostic{
+							Rel:     v.File,
+							Line:    v.Line,
+							Message: v.Reason,
+						})
+					}
 				}
+				AssertDiagnosticCount(t, "PANIC-REGISTERED-01", p, got)
 				return nil
 			})
-
-			var gotLines []int
-			for _, v := range violations {
-				gotLines = append(gotLines, v.Line)
-			}
-			sort.Ints(gotLines)
-
-			wantLines := append([]int(nil), tc.wantLines...)
-			sort.Ints(wantLines)
-
-			assert.Equal(t, wantLines, gotLines,
-				"fixture %s: violation lines mismatch (got violations: %+v)", tc.dir, violations)
 		})
 	}
 }
