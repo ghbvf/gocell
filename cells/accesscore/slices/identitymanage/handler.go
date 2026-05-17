@@ -208,6 +208,9 @@ func (a ChangePasswordAdapter) ChangePassword(
 		if errors.As(err, &ce) && ce.Code == errcode.ErrVersionConflict {
 			return changepassgen.ChangePassword409ErrorResponse{Body: *ce}, nil
 		}
+		if errors.As(err, &ce) && ce.Code == errcode.ErrAuthOldPasswordIncorrect {
+			return changepassgen.ChangePassword401ErrorResponse{Body: *ce}, nil
+		}
 		return nil, err
 	}
 	return changepassgen.ChangePassword200JSONResponse{Data: toTokenPairResponseData(pair)}, nil

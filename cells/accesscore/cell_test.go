@@ -40,8 +40,11 @@ import (
 )
 
 // durableTxRunner is a test-only TxRunner that simulates a non-noop (real) tx
-// context. It injects the mem-tx sentinel so GetByUsernameForUpdate and
-// GetByIDForUpdate succeed when called through mem.Store repository paths.
+// context. It injects the mem-tx token via mem.WithTxContext (holdsLock=false)
+// so GetByUsernameForUpdate / GetByIDForUpdate take the in-tx code path on
+// mem.Store. holdsLock=false keeps per-call locking (race-safe, no
+// cross-method atomicity) since PR fix/238 — ADR
+// docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
 type durableTxRunner struct{}
 
 func (durableTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {

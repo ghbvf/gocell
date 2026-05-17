@@ -17,6 +17,7 @@ var _ ports.UserRepository = (*UserRepository)(nil)
 const (
 	msgUserNotFound   = "user not found"
 	errMsgUsernameFmt = "username=%q"
+	errMsgIDFmt       = "id=%q"
 )
 
 // UserRepository is the in-memory implementation of ports.UserRepository.
@@ -26,12 +27,13 @@ const (
 // # Lock contract
 //
 // Methods on UserRepository follow the single-lock rule (see store.go package
-// godoc). Each method checks isInMemTx(ctx):
+// godoc). Each method checks r.store.txHoldsLock(ctx):
 //
-//   - inside tx: store.mu is already held by memTxRunner.RunInTx on the
-//     calling goroutine — do NOT acquire store.mu (sync.Mutex is not reentrant;
-//     re-acquiring would deadlock).
-//   - outside tx: acquire store.mu for the duration of this method call.
+//   - txHoldsLock==true: store.mu is already held by memTxRunner.RunInTx on
+//     the calling goroutine — do NOT acquire store.mu (sync.Mutex is not
+//     reentrant; re-acquiring would deadlock).
+//   - txHoldsLock==false (no token / WithTxContext / foreign store): acquire
+//     store.mu for the duration of this method call.
 //
 // ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) follow the same
 // rule: inside memTxRunner.RunInTx they read under the held store.mu and deliver
@@ -47,7 +49,7 @@ type UserRepository struct {
 // Create persists a new User. Safe to call both inside and outside a RunInTx
 // closure; see UserRepository lock contract.
 func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -66,7 +68,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 // GetByID returns the User with the given ID. Safe to call both inside and
 // outside a RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -75,7 +77,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, id)))
 	}
 	return cloneUser(u), nil
 }
@@ -83,7 +85,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 // GetByUsername returns the User with the given username. Safe to call both
 // inside and outside a RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -118,7 +120,7 @@ func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username st
 // Update replaces the stored User. Safe to call both inside and outside a
 // RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -127,7 +129,7 @@ func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
 	if !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, user.ID)))
 	}
 
 	// S4.0 effective-admin invariant safety net (parallels migration 024
@@ -226,7 +228,7 @@ func (r *UserRepository) UpdatePassword(
 	resetRequired bool,
 	expectedPV int64,
 ) (int64, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -235,7 +237,7 @@ func (r *UserRepository) UpdatePassword(
 	if !ok {
 		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
 	}
 	if u.PasswordVersion != expectedPV {
 		return 0, cas.CheckVersionMatch(0, "user", userID)
@@ -269,7 +271,7 @@ func (r *UserRepository) UpdatePassword(
 //
 // Returns ErrAuthUserNotFound when no user matches userID.
 func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int64, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -278,7 +280,7 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int
 	if !ok {
 		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
 	}
 	newEpoch := u.AuthzEpoch() + 1
 	// Rebuild the stored user with the bumped epoch.
@@ -306,7 +308,7 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int
 // Delete removes the User with the given ID. Safe to call both inside and
 // outside a RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) Delete(ctx context.Context, id string) error {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -315,7 +317,7 @@ func (r *UserRepository) Delete(ctx context.Context, id string) error {
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, id)))
 	}
 
 	// S4.0 effective-admin invariant safety net (parallels migration 024
