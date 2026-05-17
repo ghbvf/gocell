@@ -211,6 +211,16 @@ func (s *Store) TxRunner() persistence.TxRunner {
 // cross-method atomicity — concurrent goroutines are each serialized per
 // call but a multi-statement read-modify-write is not atomic. For real
 // cross-method atomicity use Store.TxRunner().
+//
+// Token semantics: the injected token has store==nil and holdsLock==false.
+// txHoldsLock checks tok.holdsLock first, so the nil store is never
+// dereferenced (short-circuit: false && ... = false). Callers must not read
+// token.store for any purpose — it is nil by design in this path. The use
+// case is not limited to ForUpdate variants: any code that must enter the
+// in-tx branch (e.g. a fake TxRunner injecting transaction context without
+// holding the lock) can use this. Single-goroutine helpers are safe; for
+// multi-goroutine scenarios requiring cross-method atomicity, use
+// Store.TxRunner() instead.
 func WithTxContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, memTxKey{}, &memTxToken{holdsLock: false})
 }

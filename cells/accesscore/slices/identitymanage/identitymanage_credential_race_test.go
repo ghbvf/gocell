@@ -15,8 +15,11 @@ package identitymanage
 // run with go test -race to detect concurrent store mutations.
 //
 // Design: 50 goroutines concurrently call ChangePassword and Lock on the same
-// user. The in-memory stores use sync.RWMutex internally, so all operations are
+// user. The in-memory store uses sync.Mutex (per-call lock on all methods);
+// holdsLock=true token is only injectable by store-bound TxRunner (see
+// ADR 202605171846-adr-mem-tx-lock-ownership.md). All operations are
 // race-safe. Post-run assertions verify:
+// (Backlog MEM-STORE-RWMUTEX-READ-CONCURRENCY tracks the RWMutex upgrade defer.)
 //   - user.authz_epoch >= 1 (at least one credential event succeeded)
 //   - all sessions for the subject are revoked (no goroutine's revoke was dropped)
 //   - no panic occurred during concurrent execution

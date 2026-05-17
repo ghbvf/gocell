@@ -51,6 +51,15 @@ package archtest
 //     precision test — it asserts the scan finds the two real construction
 //     sites by name, so a regression that stops detecting memTxToken literals
 //     fails loudly instead of passing empty.
+//   - R2b accessor identified by FuncDecl name "txHoldsLock" + receiver type
+//     name "Store" — both are Soft string anchors (receiverTypeName is a
+//     string-comparison helper). Mitigated by (a) receiver type check added in
+//     F-A (symmetric with allowedTokenFunc), and (b) the companion-index
+//     reverse self-check TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor
+//     asserting the accessor FuncDecl is non-empty and contains at least one
+//     "holdsLock" SelectorExpr, preventing vacuous-pass when the function is
+//     renamed or its body is emptied. Rating: Medium (string-anchor, two-part
+//     match, companion-index guard).
 
 import (
 	"go/ast"
@@ -167,9 +176,15 @@ func TestMemTxLockOwnership01(t *testing.T) {
 			// access to txHoldsLock makes "build then flip / read elsewhere"
 			// uniformly catchable with a single-node walk (no []ast.Expr
 			// for-range — SCANNER-FRAMEWORK-USAGE-01 compliant).
+			//
+			// Receiver check: the accessor must have receiver *Store (value or
+			// pointer), symmetric with allowedTokenFunc's receiver check for
+			// RunInTx. This prevents a same-named function on a different type
+			// from being falsely accepted as the allowed accessor.
 			var accessor []ast.Node
 			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fd.Body != nil && fd.Name.Name == "txHoldsLock" {
+				if fd.Body != nil && fd.Name.Name == "txHoldsLock" &&
+					fd.Recv != nil && receiverTypeName(fd) == "Store" {
 					accessor = append(accessor, fd)
 				}
 			})
@@ -240,6 +255,50 @@ func TestMemTxLockOwnership01_FindsExactlyTheTwoSites(t *testing.T) {
 	require.Truef(t, sites["WithTxContext"],
 		"%s precision: expected a memTxToken literal inside WithTxContext; "+
 			"matcher may be stale", ruleMemTxLockOwnership01)
+}
+
+// TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor is the companion-index
+// reverse self-check for R2b: it asserts that the scan actually finds a
+// FuncDecl named "txHoldsLock" with receiver *Store in the mem package AND
+// that function body contains at least one "holdsLock" SelectorExpr. If the
+// accessor is renamed or its body emptied, this fails loudly instead of R2b
+// passing vacuously (no accessor found → everything outside the empty set
+// passes trivially).
+func TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor(t *testing.T) {
+	root := findModuleRoot(t)
+	scope := DirsScope(root, []string{memPkgRel})
+
+	var accessorFound bool
+	var holdsLockSelCount int
+
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Body == nil || fd.Name.Name != "txHoldsLock" {
+					return
+				}
+				if fd.Recv == nil || receiverTypeName(fd) != "Store" {
+					return
+				}
+				accessorFound = true
+				EachInSubtree[ast.SelectorExpr](fd, func(sel *ast.SelectorExpr) {
+					if sel.Sel.Name == "holdsLock" {
+						holdsLockSelCount++
+					}
+				})
+			})
+		}
+		return nil
+	})
+
+	require.Truef(t, accessorFound,
+		"%s R2b companion-index: expected a FuncDecl named txHoldsLock with "+
+			"receiver *Store in %s; matcher may be stale after rename",
+		ruleMemTxLockOwnership01, memPkgRel)
+	require.Positivef(t, holdsLockSelCount,
+		"%s R2b companion-index: expected at least one .holdsLock SelectorExpr "+
+			"inside (*Store).txHoldsLock; body may be empty or renamed",
+		ruleMemTxLockOwnership01)
 }
 
 // TestMemTxLockOwnership01_NoReflectInMemPkg closes the reflect blind spot:

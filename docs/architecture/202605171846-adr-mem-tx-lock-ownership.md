@@ -81,6 +81,14 @@ mint holdsLock=true）：R1 = `memTxToken` 复合字面量只许在
 companion-index 精度测试防 vacuous-pass。文件
 `tools/archtest/mem_tx_lock_ownership_test.go`。
 
+R2b accessor 以「FuncDecl 名 `txHoldsLock` + receiver `*Store`」识别（`receiverTypeName`
+是字符串比对 helper，Soft 字符串锚点），并由反向自检
+`TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor`（companion-index）防
+vacuous-pass。因此 R2b 评级为 **Medium**（非 Soft）：两部分字符串锚点匹配 +
+companion-index 防空集。威胁矩阵第 3 行「包内未来 edit 在 RunInTx 外 mint
+holdsLock=true ✅」维持成立——F-A（receiver 校验）与 F-B（反向自检）已在同
+PR 落地。
+
 ### D4. 被删测试改为活体回归（不删除）
 
 `TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds` 保留并接

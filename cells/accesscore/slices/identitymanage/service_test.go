@@ -854,23 +854,25 @@ func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
 // bool sentinel, made repo methods skip locking with no lock held and
 // produced `fatal error: concurrent map writes` (the PR #552 CI flake). With
 // the typed *memTxToken, holdsLock=false forces every repo method onto its
-// per-call store.mu, so two goroutines mutating the same user can never race
+// per-call store.mu, so 8 goroutines mutating the same user can never race
 // the maps.
 //
 // What this test guards (race-safe invariants — NOT timing-dependent):
 //
 //   - never `fatal error: concurrent map writes` / DATA RACE under -race
 //     (the lock-ownership fix itself);
-//   - exactly one ChangePassword succeeds;
-//   - the loser fails with a *legitimate* race outcome. Per-call locking does
-//     NOT give cross-method atomicity (GetByID → bcrypt → UpdatePassword are
-//     three independently-locked steps), so the loser is either
-//     ErrVersionConflict (its GetByID snapshotted version 0 before the winner
-//     committed → CAS rejects) OR ErrAuthOldPasswordIncorrect (its GetByID ran
-//     after the winner committed → reads the new hash, bcrypt of the old
-//     password fails). Both are correct under the mem model; asserting only
-//     ErrVersionConflict would itself be a latent flake.
+//   - exactly one ChangePassword succeeds (exactly-one-success invariant);
+//   - all (N-1) losers fail with a *legitimate* race outcome. Per-call
+//     locking does NOT give cross-method atomicity (GetByID → bcrypt →
+//     UpdatePassword are three independently-locked steps), so each loser
+//     is either ErrVersionConflict (its GetByID snapshotted version 0 before
+//     the winner committed → CAS rejects) OR ErrAuthOldPasswordIncorrect
+//     (its GetByID ran after the winner committed → reads the new hash,
+//     bcrypt of the old password fails). Both are correct under the mem
+//     model; asserting only ErrVersionConflict would itself be a latent flake.
 //   - the stored password_version advances to exactly 1 (one mutation total).
+//
+// Concurrency: 8 goroutines (up from 2 to increase race window coverage).
 //
 // The STRONG exactly-once CAS-conflict property under true concurrency (both
 // txs read version 0, exactly one gets ErrVersionConflict) is a real-MVCC
@@ -882,6 +884,8 @@ func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
 // and that is by design — see the ADR.
 func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
+
+	const concurrency = 8
 
 	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
 	require.NoError(t, err)
@@ -901,13 +905,10 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 	require.NoError(t, err)
 
 	type result struct{ err error }
-	results := make(chan result, 2)
+	results := make(chan result, concurrency)
 
-	for i := 0; i < 2; i++ {
-		newPw := "newpass1"
-		if i == 1 {
-			newPw = "newpass2"
-		}
+	for i := 0; i < concurrency; i++ {
+		newPw := fmt.Sprintf("newpass%d", i+1)
 		go func(newPw string) {
 			_, cerr := svc.ChangePassword(context.Background(), ChangePasswordInput{
 				UserID:      "usr-cas-race",
@@ -918,14 +919,12 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 		}(newPw)
 	}
 
-	r1 := <-results
-	r2 := <-results
-
 	var (
 		successes  int
 		raceLosers int
 	)
-	for _, r := range []result{r1, r2} {
+	for i := 0; i < concurrency; i++ {
+		r := <-results
 		if r.err == nil {
 			successes++
 			continue
@@ -942,7 +941,8 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 		raceLosers++
 	}
 	assert.Equal(t, 1, successes, "exactly one concurrent ChangePassword must succeed")
-	assert.Equal(t, 1, raceLosers, "exactly one concurrent ChangePassword must lose the race")
+	assert.Equal(t, concurrency-1, raceLosers,
+		"exactly %d concurrent ChangePassword goroutines must lose the race", concurrency-1)
 
 	// Exactly one mutation applied — version advances to exactly 1.
 	got, err := repo.GetByID(context.Background(), "usr-cas-race")
