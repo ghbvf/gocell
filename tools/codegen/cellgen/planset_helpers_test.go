@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
 // mustPlanSet wraps pathsafe.NewPlanSet with t.Fatal on construction error so
@@ -17,4 +18,18 @@ func mustPlanSet(t testing.TB, items []pathsafe.PlannedFile) pathsafe.PlanSet {
 		t.Fatalf("NewPlanSet: %v", err)
 	}
 	return ps
+}
+
+// mustID wraps scaffoldid.Parse with t.Fatal on validation error so fixture
+// construction sites can stay terse. Only call with known-valid literal IDs;
+// invalid strings cause t.Fatal (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). This
+// replaces the previously-exported scaffoldid.MustParse to keep the package's
+// "Parse is the sole public constructor" contract closed.
+func mustID(t testing.TB, raw string) scaffoldid.ScaffoldID {
+	t.Helper()
+	id, err := scaffoldid.Parse(raw)
+	if err != nil {
+		t.Fatalf("scaffoldid.Parse(%q): %v", raw, err)
+	}
+	return id
 }

@@ -1,19 +1,12 @@
 package scaffoldid_test
 
-// RED tests for SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01: single-source typed
-// scaffold identifier. Wave-1 RED — does not compile until kernel/scaffoldid
-// exposes type ScaffoldID + Parse(raw) (ScaffoldID, error).
-//
-// Pattern is delegated to kernel/metadata.MatchAssemblyID (^[a-z][a-z0-9]+$);
-// scaffoldid never reimplements the regex.
-
 import (
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
 func TestParse_Accept(t *testing.T) {
@@ -28,10 +21,10 @@ func TestParse_Accept(t *testing.T) {
 		{"a1", ""},
 		{"ab", "shortest all-letter valid ID (2 chars)"},
 		{"orderprocessor", ""},
-		// AssemblyIDPattern (^[a-z][a-z0-9]+$) has no upper length limit by
+		// IdentifierPattern (^[a-z][a-z0-9]+$) has no upper length limit by
 		// design; this case verifies the current accept behavior so any future
 		// upper-limit addition shows up as a test failure requiring explicit review.
-		{strings.Repeat("a", 200), "no upper-length limit in AssemblyIDPattern"},
+		{strings.Repeat("a", 200), "no upper-length limit in IdentifierPattern"},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -147,29 +140,35 @@ func TestScaffoldID_IsZero(t *testing.T) {
 	}
 }
 
-// MustParse returns a typed ScaffoldID for known-valid input — mirror of
-// regexp.MustCompile / template.Must. Used for package-level fixture vars.
-func TestMustParse_AcceptsValid(t *testing.T) {
+// Match is the predicate-style helper for callers that want pattern
+// validation without constructing a typed ScaffoldID (typically YAML schema
+// validators in kernel/metadata). Match and Parse share the same regex.
+func TestMatch_AgreesWithParse(t *testing.T) {
 	t.Parallel()
-	id := scaffoldid.MustParse("foocell")
-	if id.String() != "foocell" {
-		t.Errorf("MustParse(%q).String() = %q, want %q", "foocell", id.String(), "foocell")
+	cases := []struct {
+		in    string
+		valid bool
+	}{
+		{"foo", true},
+		{"a1", true},
+		{"", false},
+		{"a", false},
+		{"Foo", false},
+		{"foo-bar", false},
+		{"9foo", false},
 	}
-}
-
-// MustParse panics for invalid input via the panicregister.Approved funnel
-// (PANIC-REGISTERED-01). Test fixtures rely on this fail-fast so a typo'd
-// literal surfaces immediately, not as a silent zero value.
-func TestMustParse_PanicsOnInvalid(t *testing.T) {
-	t.Parallel()
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("MustParse(invalid) should panic, but did not")
-		}
-		// The panic payload is wrapped via panicregister.Approved → the value
-		// is the inner errcode.Assertion. Just assert recovery; the exact
-		// payload shape is covered by PANIC-REGISTERED-01 archtest.
-	}()
-	_ = scaffoldid.MustParse("Bad-ID")
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			if scaffoldid.Match(tc.in) != tc.valid {
+				t.Errorf("Match(%q) = %v, want %v", tc.in, !tc.valid, tc.valid)
+			}
+			_, err := scaffoldid.Parse(tc.in)
+			parseValid := err == nil
+			if parseValid != tc.valid {
+				t.Errorf("Parse(%q) valid=%v, Match valid=%v — mismatch", tc.in, parseValid, tc.valid)
+			}
+		})
+	}
 }

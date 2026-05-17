@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 )
@@ -50,7 +49,7 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("myhttpcell"),
+		CellID:           mustID(t, "myhttpcell"),
 		StructName:       "MyHTTPCell",
 		Package:          "myhttpcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -104,7 +103,7 @@ func TestScaffoldCellBundle_Events(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("myevtcell"),
+		CellID:           mustID(t, "myevtcell"),
 		StructName:       "MyEvtCell",
 		Package:          "myevtcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -144,7 +143,7 @@ func TestScaffoldCellBundle_DryRun(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("drycell"),
+		CellID:           mustID(t, "drycell"),
 		StructName:       "DryCell",
 		Package:          "drycell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -180,7 +179,7 @@ func TestScaffoldCellBundle_WithBoth(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("mybothcell"),
+		CellID:           mustID(t, "mybothcell"),
 		StructName:       "MyBothCell",
 		Package:          "mybothcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -272,7 +271,7 @@ func TestScaffoldCellBundle_SymlinkEscape_Slice(t *testing.T) {
 	}
 
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("myhttpcell"),
+		CellID:           mustID(t, "myhttpcell"),
 		StructName:       "MyHTTPCell",
 		Package:          "myhttpcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -329,7 +328,7 @@ func TestScaffoldCellBundle_SymlinkEscape_Contract(t *testing.T) {
 	}
 
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("myhttpcell"),
+		CellID:           mustID(t, "myhttpcell"),
 		StructName:       "MyHTTPCell",
 		Package:          "myhttpcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -369,7 +368,7 @@ func TestScaffoldCellBundle_AtomicRollback_OnContractConflict(t *testing.T) {
 	}
 
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("myhttpcell"),
+		CellID:           mustID(t, "myhttpcell"),
 		StructName:       "MyHTTPCell",
 		Package:          "myhttpcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -420,7 +419,7 @@ func TestScaffoldCellBundle_AtomicRollback_OnContainmentFail(t *testing.T) {
 	}
 
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("myhttpcell"),
+		CellID:           mustID(t, "myhttpcell"),
 		StructName:       "MyHTTPCell",
 		Package:          "myhttpcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -460,7 +459,7 @@ func TestScaffoldCellBundle_BundleDefaultIsHTTP(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("defcell"),
+		CellID:           mustID(t, "defcell"),
 		StructName:       "DefCell",
 		Package:          "defcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -539,7 +538,7 @@ func TestScaffoldSpec_Validate_RejectsL1WithEvents(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("badevtcell"),
+		CellID:           mustID(t, "badevtcell"),
 		StructName:       "BadEvtCell",
 		Package:          "badevtcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -566,7 +565,7 @@ func TestScaffoldSpec_Validate_AcceptsL2WithEvents(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("goodevtcell"),
+		CellID:           mustID(t, "goodevtcell"),
 		StructName:       "GoodEvtCell",
 		Package:          "goodevtcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -592,7 +591,7 @@ func TestPlanEventExampleArtifacts_HTTPAndEvents_DistinctSliceID(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("myhttpcell"),
+		CellID:           mustID(t, "myhttpcell"),
 		StructName:       "MyHTTPCell",
 		Package:          "myhttpcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -684,7 +683,7 @@ func TestPlanCellBundleScaffold_MergedPlan(t *testing.T) {
 	}
 
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("plantestcell"),
+		CellID:           mustID(t, "plantestcell"),
 		StructName:       "PlanTestCell",
 		Package:          "plantestcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -885,7 +884,7 @@ func TestPlanCellBundle_WithBothFlags_DupGuardIsBackstop(t *testing.T) {
 	}
 
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("dupguardcell"),
+		CellID:           mustID(t, "dupguardcell"),
 		StructName:       "DupGuardCell",
 		Package:          "dupguardcell",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -990,7 +989,7 @@ func TestPlanCellBundleScaffold_DirAtDerivedPath_PlanTimeReject(t *testing.T) {
 	}
 
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("rollbackstage"),
+		CellID:           mustID(t, "rollbackstage"),
 		StructName:       "RollbackStage",
 		Package:          "rollbackstage",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -1076,7 +1075,7 @@ func TestPlanCellBundleScaffold_RefusesNonGeneratedDerivedFile(t *testing.T) {
 		t.Fatalf("ResolveRoot: %v", err)
 	}
 	spec := ScaffoldSpec{
-		CellID:           scaffoldid.MustParse("guardstage"),
+		CellID:           mustID(t, "guardstage"),
 		StructName:       "GuardStage",
 		Package:          "guardstage",
 		ModulePath:       "github.com/ghbvf/gocell",
@@ -1112,7 +1111,7 @@ func TestScaffoldSpec_DefaultsToL2(t *testing.T) {
 
 	dir := t.TempDir()
 	spec := ScaffoldSpec{
-		CellID:     scaffoldid.MustParse("defaultlvlcell"),
+		CellID:     mustID(t, "defaultlvlcell"),
 		StructName: "DefaultLvlCell",
 		Package:    "defaultlvlcell",
 		ModulePath: "github.com/ghbvf/gocell",

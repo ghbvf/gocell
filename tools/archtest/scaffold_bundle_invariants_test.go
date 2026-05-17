@@ -38,24 +38,30 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
-// scaffoldSmokeSpec is the ScaffoldSpec reused by both invariant tests.
-var scaffoldSmokeSpec = cellgen.ScaffoldSpec{
-	CellID:           scaffoldid.MustParse("smokecell"),
-	StructName:       "SmokeCell",
-	Package:          "smokecell",
-	ModulePath:       "github.com/ghbvf/gocell",
-	OwnerTeam:        "platform",
-	OwnerRole:        "cell-owner",
-	Type:             "core",
-	ConsistencyLevel: "L1",
+// scaffoldSmokeSpec(t) returns the ScaffoldSpec reused by both invariant tests.
+// A function (not a package-level var) so the CellID can route through the
+// typed scaffoldid.Parse funnel via mustID(t) — keeping the package's
+// "Parse is the sole public constructor" contract closed (no MustParse
+// backdoor; SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01).
+func scaffoldSmokeSpec(t testing.TB) cellgen.ScaffoldSpec {
+	t.Helper()
+	return cellgen.ScaffoldSpec{
+		CellID:           mustID(t, "smokecell"),
+		StructName:       "SmokeCell",
+		Package:          "smokecell",
+		ModulePath:       "github.com/ghbvf/gocell",
+		OwnerTeam:        "platform",
+		OwnerRole:        "cell-owner",
+		Type:             "core",
+		ConsistencyLevel: "L1",
+	}
 }
 
-// scaffoldSmokeBundle writes the skeleton bundle for scaffoldSmokeSpec into root
+// scaffoldSmokeBundle writes the skeleton bundle for scaffoldSmokeSpec(t) into root
 // using PlanCellBundleScaffold (SkipGenerate=true) + WritePlannedFiles.
 func scaffoldSmokeBundle(t *testing.T, root string) error {
 	t.Helper()
@@ -63,7 +69,7 @@ func scaffoldSmokeBundle(t *testing.T, root string) error {
 	if err != nil {
 		return err
 	}
-	spec := scaffoldSmokeSpec
+	spec := scaffoldSmokeSpec(t)
 	spec.SkipGenerate = true
 	plan, err := cellgen.PlanCellBundleScaffold(realRoot, spec)
 	if err != nil {
@@ -104,7 +110,7 @@ func TestScaffoldBundle_CellMarkerEmbedded(t *testing.T) {
 func TestScaffoldCell_CellMarkerEmbedded(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := cellgen.ScaffoldCell(dir, "cells/smokecell", scaffoldSmokeSpec); err != nil {
+	if err := cellgen.ScaffoldCell(dir, "cells/smokecell", scaffoldSmokeSpec(t)); err != nil {
 		t.Fatalf("ScaffoldCell: %v", err)
 	}
 	cellGoPath := filepath.Join(dir, "cells", "smokecell", "cell.go")

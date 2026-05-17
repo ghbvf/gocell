@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/scaffoldid"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
 // projectWithCell builds a minimal ProjectMeta containing one cell named id,
@@ -71,7 +71,7 @@ func TestValidateAssemblyScaffoldSpec_OwnerTextRule(t *testing.T) {
 			gen := NewGenerator(project, "github.com/ghbvf/gocell", t.TempDir())
 			spec := AssemblyScaffoldSpec{
 				ID:        mustID(t, "myassembly"),
-				Cells:     []scaffoldid.ScaffoldID{scaffoldid.MustParse("examplecell")},
+				Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
 				OwnerTeam: tc.team,
 				OwnerRole: tc.role,
 			}

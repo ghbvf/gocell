@@ -8,8 +8,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
 // TestScaffoldAssembly_YAMLScalarInjection asserts that user-provided
@@ -103,7 +103,7 @@ func renderInjectionAssemblyYAML(t *testing.T, team, role string) []byte {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 	spec := AssemblyScaffoldSpec{
 		ID:        mustID(t, "myassembly"),
-		Cells:     []scaffoldid.ScaffoldID{scaffoldid.MustParse("examplecell")},
+		Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
 		OwnerTeam: team,
 		OwnerRole: role,
 		Deploy:    "k8s",
@@ -197,7 +197,7 @@ func TestScaffoldAssembly_YAMLScalarFile_ColonInOwner(t *testing.T) {
 
 	spec := AssemblyScaffoldSpec{
 		ID:        mustID(t, "myassembly"),
-		Cells:     []scaffoldid.ScaffoldID{scaffoldid.MustParse("examplecell")},
+		Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
 		OwnerTeam: injectedTeam,
 		OwnerRole: "maintainer",
 	}

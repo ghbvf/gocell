@@ -22,9 +22,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly/gentpl"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
-	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/yamlsafe"
 )
 

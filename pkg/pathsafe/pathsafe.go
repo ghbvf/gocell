@@ -5,8 +5,10 @@
 // # Design
 //
 // All scaffold/codegen filesystem writes funnel through WritePlannedFiles.
-// The caller builds a []PlannedFile (render phase), then calls WritePlannedFiles
-// once (execute phase). This gives:
+// The caller builds a []PlannedFile slice (render phase), wraps it via
+// NewPlanSet (which validates dup-AbsPath; PATHSAFE-PLANSET-TYPED-HARD-01),
+// then calls WritePlannedFiles(realRoot, ps, dryRun) once (execute phase).
+// This gives:
 //   - root containment via ResolveRoot + ContainPath before any write
 //   - all-or-nothing conflict detection (full plan checked before first write)
 //   - atomic write with best-effort rollback on failure (no half-written state)

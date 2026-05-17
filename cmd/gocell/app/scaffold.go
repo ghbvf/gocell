@@ -13,9 +13,9 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/yamlsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
@@ -85,8 +85,19 @@ func validateContractFlags(id, kind, owner string) ([]string, error) {
 	if err := validateScaffoldID(kind, "--kind"); err != nil {
 		return nil, err
 	}
-	if err := validateScaffoldID(owner, "--owner"); err != nil {
-		return nil, err
+	// --owner is a cell ID; route through the single-source typed funnel
+	// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01) for parity with scaffold cell /
+	// scaffold slice / scaffold assembly. Wrap as ErrScaffoldInvalidOpts so
+	// CLI error code stays stable (asserted by hack/verify-scaffold-reject.sh).
+	if _, err := scaffoldid.Parse(owner); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold contract: --owner does not match IdentifierPattern", err,
+			errcode.WithDetails(
+				slog.String("flag", "--owner"),
+				slog.String("pattern", scaffoldid.IdentifierPattern),
+			),
+			errcode.WithInternal(fmt.Sprintf("flag=--owner value=%q pattern=%s",
+				owner, scaffoldid.IdentifierPattern)))
 	}
 	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
 	if !validKinds[kind] {
@@ -132,9 +143,19 @@ func validateJourneyFlags(id, goal, team, cells string) ([]string, error) {
 	if len(cellList) == 0 {
 		return nil, fmt.Errorf("scaffold journey: --cells must list at least one cell")
 	}
+	// --cells[] entries are cell IDs; route through the single-source typed
+	// funnel (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). Wrap as ErrScaffoldInvalidOpts
+	// so CLI error code stays stable.
 	for _, c := range cellList {
-		if err := validateScaffoldID(c, "--cells[]"); err != nil {
-			return nil, err
+		if _, err := scaffoldid.Parse(c); err != nil {
+			return nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+				"scaffold journey: --cells[] entry does not match IdentifierPattern", err,
+				errcode.WithDetails(
+					slog.String("flag", "--cells[]"),
+					slog.String("pattern", scaffoldid.IdentifierPattern),
+				),
+				errcode.WithInternal(fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
+					c, scaffoldid.IdentifierPattern)))
 		}
 	}
 	return cellList, nil

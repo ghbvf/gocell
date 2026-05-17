@@ -3,8 +3,8 @@ package assembly
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
 // mustPlanSet wraps pathsafe.NewPlanSet with t.Fatal on construction error so

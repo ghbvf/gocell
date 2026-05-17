@@ -29,7 +29,7 @@ round-5 的"漏斗化"完成了"写入路径单源"，但"dry-run / live / rollb
 
 **删除** `Generator.Scaffold(spec) error`。**新增** `Generator.PlanAssemblyScaffold(spec) ([]pathsafe.PlannedFile, error)`：纯 render 函数，返回完整 6-file plan（3 个 skeleton + 3 个 K#10 派生）。
 
-CLI 拿到 plan 后单次调用 `pathsafe.WritePlannedFiles(realRoot, plan, *dryRun)`。dry-run 与 live 共享**同一个 Go 值** `plan`，差异仅在 `WritePlannedFiles` 的 `dryRun bool` 入参。计划一致性由 type system 天然保证——不存在第二条 plan 列表可漂移。
+CLI 拿到 plan 后用 `pathsafe.NewPlanSet(plan)` 包装为 typed PlanSet（PATHSAFE-PLANSET-TYPED-HARD-01；dup-AbsPath 在构造时拒绝），再调 `pathsafe.WritePlannedFiles(realRoot, ps, *dryRun)`。dry-run 与 live 共享**同一个 Go 值** `ps`，差异仅在 `WritePlannedFiles` 的 `dryRun bool` 入参。计划一致性由 type system 天然保证——不存在第二条 plan 列表可漂移。
 
 `AssemblyScaffoldSpec.DryRun` 字段从 kernel 完全消失（dry-run 不再是 kernel 域概念）。新字段 `SkipGenerate bool` 控制 plan 是否包含 3 个 K#10 派生文件（`--skip-generate` flag 的 typed 表达）。
 
@@ -62,7 +62,7 @@ scaffold cell 的"dry-run 不完整 + 跨阶段无 rollback"对称问题登记 b
 - **CLI 退化为薄壳**：`scaffold_assembly.go` 不再担当 codegen orchestrator 角色，`tools/codegen` import 消失，cmd 层依赖进一步收紧。
 - **re-parse 消除**：`metadata.NewParser` 在 scaffold 路径只跑一次（启动时校验 `--cells`）。
 - **kernel render-only**：`PlanAssemblyScaffold` 是纯函数（零文件系统副作用），可单元测试无需 tempdir。
-- **AI Hard 强保证**：dry-run/live plan 是同一 `[]PlannedFile` Go 值，无需 archtest 防漂移——type system 自然封闭。
+- **AI Hard 强保证**：dry-run/live plan 是同一 `pathsafe.PlanSet` Go 值（PR #555 起；items 字段未导出），无需 archtest 防漂移——type system 自然封闭。
 
 ### Negative / known carve-outs
 
@@ -86,8 +86,8 @@ scaffold cell 的"dry-run 不完整 + 跨阶段无 rollback"对称问题登记 b
 
 | Defense | Mechanism | 档 |
 |---|---|---|
-| dry-run/live plan 同源 | 返回值是同一 `[]PlannedFile` Go 值；type system 自然封闭 | **Hard** |
-| kernel render-only | `PlanAssemblyScaffold` 纯函数签名 `(spec) ([]PlannedFile, error)`；不接触文件系统 | **Hard** |
+| dry-run/live plan 同源 | 返回值是同一 `pathsafe.PlanSet` Go 值（PR #555 起）；type system 自然封闭 | **Hard** |
+| kernel render-only | `PlanAssemblyScaffold` 纯函数签名 `(spec) ([]pathsafe.PlannedFile, error)`，CLI 层 `pathsafe.NewPlanSet` 包装；不接触文件系统 | **Hard** |
 | 6-file plan all-or-nothing | `pathsafe.WritePlannedFiles` + SCAFFOLD-WRITE-FUNNEL-01 archtest 联合 | **Hard** |
 | `SkipGenerate` typed flag | `AssemblyScaffoldSpec.SkipGenerate bool` 字段；CLI 必须显式传 | **Hard** |
 | `synthesizeAssemblyMeta` 字段同步 | godoc 警告 + backlog 升级条目；未来加 reflect 字段计数 guard | **Medium** |

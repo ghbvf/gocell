@@ -138,7 +138,7 @@ func TestRunScaffoldJourney_Success(t *testing.T) {
 		[]byte("module example.com/test\n"), 0o644))
 
 	err := runScaffoldWithRoot(context.Background(), dir,
-		[]string{"journey", "--id=J-test", "--goal=test goal", "--team=squad", "--cells=a,b"})
+		[]string{"journey", "--id=J-test", "--goal=test goal", "--team=squad", "--cells=aa,bb"})
 	require.NoError(t, err)
 }
 
