@@ -1504,40 +1504,66 @@ func TestReadyz_VerboseDegraded_SlogCapturesRedactedError(t *testing.T) {
 
 	// slog channel d: the "readyz degraded" Info record must carry the
 	// dependencies Group with the redacted ErrorMsg per entry.
-	const diagMsg = "readyz degraded"
-	var diagEntry SlogDependencyEntry
-	var found bool
-	for _, r := range capture.snapshot() {
-		if r.Message != diagMsg {
-			continue
-		}
-		r.Attrs(func(a slog.Attr) bool {
-			if a.Key != "dependencies" || a.Value.Kind() != slog.KindGroup {
-				return true
-			}
-			for _, sub := range a.Value.Group() {
-				if sub.Key != "cache" {
-					continue
-				}
-				e, ok := sub.Value.Any().(SlogDependencyEntry)
-				if ok {
-					diagEntry = e
-					found = true
-				}
-			}
-			return false
-		})
-		if found {
-			break
-		}
-	}
-	require.True(t, found, "slog must emit a %q Info record with a 'cache' dependencies entry", diagMsg)
+	diagEntry, found := findDiagnosticsEntry(capture, "readyz degraded", "cache")
+	require.True(t, found, "slog must emit a \"readyz degraded\" Info record with a 'cache' dependencies entry")
 	assert.Equal(t, "degraded", diagEntry.Status(), "slog channel d entry status must be 'degraded'")
 	errMsg := diagEntry.ErrorMsg()
 	assert.Contains(t, errMsg, "<REDACTED>",
 		"slog channel d ErrorMsg must contain the redaction mask for the degraded error")
 	assert.NotContains(t, errMsg, leakSentinel,
 		"slog channel d ErrorMsg must have the raw sentinel masked")
+}
+
+// findDiagnosticsEntry walks captured slog records named msg
+// (e.g. "readyz unhealthy", "readyz degraded") and returns the
+// SlogDependencyEntry for depName from the first matching record's
+// "dependencies" Group attr. ok=false when no matching record+entry pair
+// exists. Single-purpose helper extracted so per-test bodies stay below
+// the cognitive-complexity cap (SonarCloud Critical "brain-overload").
+func findDiagnosticsEntry(capture *captureHandler, msg, depName string) (SlogDependencyEntry, bool) {
+	for _, r := range capture.snapshot() {
+		if r.Message != msg {
+			continue
+		}
+		if entry, ok := depEntryFromRecord(r, depName); ok {
+			return entry, true
+		}
+	}
+	return SlogDependencyEntry{}, false
+}
+
+// depEntryFromRecord locates the "dependencies" Group attr inside a slog
+// Record and returns the typed SlogDependencyEntry keyed by depName.
+// Returns ok=false when the record has no dependencies Group or depName is
+// absent. Companion of findDiagnosticsEntry — extracted so callers don't
+// nest five levels of for-loop+conditional+closure (cognitive complexity).
+func depEntryFromRecord(r slog.Record, depName string) (SlogDependencyEntry, bool) {
+	var (
+		entry SlogDependencyEntry
+		ok    bool
+	)
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key != "dependencies" || a.Value.Kind() != slog.KindGroup {
+			return true
+		}
+		entry, ok = depEntryFromGroup(a.Value.Group(), depName)
+		return false
+	})
+	return entry, ok
+}
+
+// depEntryFromGroup scans the sub-attrs of a "dependencies" slog.Group for
+// the one whose key matches depName and type-asserts its value to
+// SlogDependencyEntry. ok=false when missing or wrong type.
+func depEntryFromGroup(group []slog.Attr, depName string) (SlogDependencyEntry, bool) {
+	for _, sub := range group {
+		if sub.Key != depName {
+			continue
+		}
+		e, ok := sub.Value.Any().(SlogDependencyEntry)
+		return e, ok
+	}
+	return SlogDependencyEntry{}, false
 }
 
 // TestReadyz_HealthyAllAcrossBoard verifies the sanity check: all healthy → HTTP 200

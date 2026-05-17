@@ -203,7 +203,7 @@ kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy") | .dependencies'
 kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy") | .dependencies.rabbitmq_ready.error_msg'
 
 # Grafana / Loki LogQL 查询示例（结构化字段索引）：
-# {app="my-app"} | json | msg = "readyz unhealthy" | dependencies_rabbitmq_ready_status = "unhealthy"
+# {app="myapp"} | json | msg = "readyz unhealthy" | dependencies_rabbitmq_ready_status = "unhealthy"
 ```
 
 ### Text handler（`-log-format=text`，默认）
