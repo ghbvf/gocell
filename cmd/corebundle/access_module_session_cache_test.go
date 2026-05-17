@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -142,4 +143,34 @@ func TestWrapSessionStoreWithCache_NilLogger_FallsBackToDefault(t *testing.T) {
 
 	require.NoError(t, err, "nil logger must fall back to slog.Default(), not crash")
 	assert.Equal(t, inner, got)
+}
+
+// TestWrapSessionStoreWithCache_TTLExceedsMax_FailFast — T4.
+//
+// GOCELL_SESSION_CACHE_TTL=31s exceeds the documented ≤ 30s recommended
+// maximum. wrapSessionStoreWithCache fails fast with errcode.ErrValidationFailed
+// — a TTL above the documented maximum is a wiring misconfiguration, not a
+// runtime tolerance. The 30s upper-bound check fires before the Redis-nil
+// guard, so a nil RedisClient is irrelevant when the TTL is out of range.
+//
+// The type godoc (session_cache_store.go:57) declares "≤ 30s recommended",
+// and Q7 from the plan aligns this to a hard wiring upper bound.
+func TestWrapSessionStoreWithCache_TTLExceedsMax_FailFast(t *testing.T) {
+	t.Setenv(envSessionCacheTTL, "31s")
+	logger, _ := newDisableTestLogger()
+
+	inner := stubSessionStore{}
+	got, err := wrapSessionStoreWithCache(inner, &SharedDeps{}, logger)
+
+	require.Error(t, err,
+		"TTL=31s exceeds documented max (30s): wrapSessionStoreWithCache must fail-fast with an error, "+
+			"not silently return inner unchanged")
+	assert.Nil(t, got,
+		"wrapSessionStoreWithCache must return nil store on TTL-exceeds-max error")
+
+	var coded *errcode.Error
+	require.ErrorAs(t, err, &coded,
+		"error must be *errcode.Error for TTL-exceeds-max; got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrValidationFailed, coded.Code,
+		"error code must be ErrValidationFailed for TTL-exceeds-max wiring misconfiguration")
 }
