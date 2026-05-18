@@ -13,14 +13,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// Compile-time interface checks.
-var _ domain.DeviceRepository = (*DeviceRepository)(nil)
-
 // DeviceRepository is a thread-safe in-memory device store.
 type DeviceRepository struct {
 	mu      sync.RWMutex
 	devices map[string]*domain.Device
 }
+
+// Compile-time interface check.
+var _ domain.DeviceRepository = (*DeviceRepository)(nil)
 
 // NewDeviceRepository creates an empty in-memory DeviceRepository.
 func NewDeviceRepository() *DeviceRepository {
@@ -75,6 +75,10 @@ func (r *DeviceRepository) List(_ context.Context, params query.ListParams) ([]*
 	}
 	return result, nil
 }
+
+// RepoReady always returns nil for the in-memory store (no external dependency).
+// It satisfies domain.DeviceRepository and cell.RepoHealthProber.
+func (r *DeviceRepository) RepoReady(_ context.Context) error { return nil }
 
 func compareDeviceField(a, b *domain.Device, field string) int {
 	switch field {

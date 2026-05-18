@@ -218,7 +218,7 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"devicecell requires a device repository; from the composition root, "+
 				"call WithDeviceRepository(mem.NewDeviceRepository()) for demo mode or "+
-				"WithDeviceRepository(postgres.NewPGDeviceRepository(...)) for durable mode")
+				"WithDeviceRepository(postgres.NewDeviceRepository(pool.DB(), txMgr, clk)) for durable mode")
 	}
 
 	// Publisher is required (NIL-PUB-P1). For demo mode, the composition
@@ -354,6 +354,14 @@ func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registry) {
 		for k, v := range hc.Probes() {
 			reg.Health(k, v)
 		}
+	}
+	// Cell-level repo readiness probes (observability.md §"Cell 级别 Repo Readiness Probe").
+	// These probe the actual tables, not just the pool connection.
+	if prober, ok := c.deviceRepo.(cell.RepoHealthProber); ok {
+		cell.RegisterRepoReadiness(reg, "device_repo_ready", prober)
+	}
+	if prober, ok := c.commandQueue.(cell.RepoHealthProber); ok {
+		cell.RegisterRepoReadiness(reg, "command_queue_ready", prober)
 	}
 	reg.Lifecycle(c.commandSweeper.Hook())
 }

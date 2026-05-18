@@ -10,12 +10,7 @@ import (
 	internalmem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 )
 
-// DeviceRepository re-exports the cell-private interface so composition
-// roots outside the devicecell subtree can name the return type without
-// importing internal/domain.
-type DeviceRepository = domain.DeviceRepository
-
 // NewDeviceRepository constructs an empty in-memory DeviceRepository.
-func NewDeviceRepository() DeviceRepository {
+func NewDeviceRepository() domain.DeviceRepository {
 	return internalmem.NewDeviceRepository()
 }

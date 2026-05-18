@@ -39,6 +39,7 @@ import (
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
 //                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
 //                                 + commands_status_chk, commands_attempt_chk
+//                                 + idx_commands_idempotency_key UNIQUE partial (031)
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
 // caught by archtest SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01.
@@ -412,11 +413,12 @@ var expectedIndexes = []expectedIndex{
 	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true},
 	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false},
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
-	// devices / commands (029, 030) — B2.B.
+	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false},
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false},
 	{Table: "commands", Name: "idx_commands_active_lease", Unique: false},
 	{Table: "commands", Name: "idx_commands_device_active", Unique: false},
+	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true},
 }
 
 // expectedFKs is the foreign key constraint registry. ON DELETE action uses

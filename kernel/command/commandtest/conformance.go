@@ -93,6 +93,9 @@ func RunQueueConformance(t *testing.T, factory QueueFactory, features Features) 
 	t.Run("Ack/SentToFailed", func(t *testing.T) { runAckSentToFailed(t, factory, features) })
 	t.Run("Ack/SentToExpiredViaTimeout", func(t *testing.T) { runAckTimeout(t, factory, features) })
 	t.Run("Ack/SentToCanceledViaRejected", func(t *testing.T) { runAckRejected(t, factory, features) })
+	t.Run("Ack/DeliveredToSucceeded", func(t *testing.T) { runAckDeliveredToSucceeded(t, factory, features) })
+	t.Run("Ack/DeliveredToFailed", func(t *testing.T) { runAckDeliveredToFailed(t, factory, features) })
+	t.Run("Ack/DeliveredToExpired", func(t *testing.T) { runAckDeliveredToExpired(t, factory, features) })
 	t.Run("Ack/IdempotentSameTarget", func(t *testing.T) { runAckIdempotentSame(t, factory, features) })
 	t.Run("Ack/MismatchTerminalRejected", func(t *testing.T) { runAckMismatchTerminal(t, factory, features) })
 	t.Run("Ack/InvalidReason", func(t *testing.T) { runAckInvalidReason(t, factory, features) })
@@ -457,6 +460,58 @@ func runAckRejected(t *testing.T, factory QueueFactory, features Features) {
 	runAckTerminal(t, factory, features, "ack-rj", command.AckRejected, command.StatusCanceled)
 }
 
+func runAckDeliveredToSucceeded(t *testing.T, factory QueueFactory, features Features) {
+	runAckTerminalViaDelivered(t, factory, features, "ack-del-ok", command.AckSuccess, command.StatusSucceeded)
+}
+
+func runAckDeliveredToFailed(t *testing.T, factory QueueFactory, features Features) {
+	runAckTerminalViaDelivered(t, factory, features, "ack-del-fail", command.AckFailed, command.StatusFailed)
+}
+
+func runAckDeliveredToExpired(t *testing.T, factory QueueFactory, features Features) {
+	runAckTerminalViaDelivered(t, factory, features, "ack-del-exp", command.AckTimeout, command.StatusExpired)
+}
+
+// runAckTerminalViaDelivered seeds → dequeues → Reports (Sent→Delivered) →
+// Acks and verifies the terminal status. This covers the Delivered→terminal
+// path that runAckTerminal (Sent→terminal) does not exercise.
+func runAckTerminalViaDelivered(
+	t *testing.T, factory QueueFactory, features Features,
+	id string, reason command.AckReason, want command.Status,
+) {
+	t.Helper()
+	q, scanner, tx, n, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	seedEntry(t, ctx, q, tx, features, makeEntry(id, "dev-a", n()))
+	dequeueOne(t, ctx, q, tx, features, "dev-a")
+
+	// Advance to Delivered first.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Report(c, id, n())
+	}); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+
+	// Now Ack from Delivered.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Ack(c, id, reason, n())
+	}); err != nil {
+		t.Fatalf("Ack from Delivered: %v", err)
+	}
+	got, err := scanner.GetCommand(ctx, id)
+	if err != nil {
+		t.Fatalf("GetCommand: %v", err)
+	}
+	if got.Status != want {
+		t.Fatalf("expected %s after Delivered→Ack, got %s", want, got.Status)
+	}
+	if got.CompletedAt == nil {
+		t.Fatal("expected CompletedAt to be set on terminal ack from Delivered")
+	}
+}
+
 func runAckTerminal(t *testing.T, factory QueueFactory, features Features, id string, reason command.AckReason, want command.Status) {
 	t.Helper()
 	q, scanner, tx, n, cleanup := factory(t)
@@ -676,8 +731,10 @@ func runScanActiveByStatus(t *testing.T, factory QueueFactory, features Features
 	if err != nil {
 		t.Fatalf("ScanActive: %v", err)
 	}
+	// FIFO dequeue advances st-pend (oldest) to Sent; st-sent remains Pending.
+	// Filtering by StatusPending must return only the still-Pending entry st-sent.
 	if len(got) != 1 || got[0].ID != "st-sent" {
-		t.Fatalf("expected only Pending st-sent (FIFO left it Pending), got %#v", got)
+		t.Fatalf("expected only st-sent (still Pending after FIFO dequeue of st-pend), got %#v", got)
 	}
 }
 

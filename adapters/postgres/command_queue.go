@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -100,7 +101,11 @@ UPDATE commands SET status = 3, delivered_at = $2
  WHERE id = $1 AND status IN (2, 3)
  RETURNING status`
 
-const ackSelectSQL = `SELECT status FROM commands WHERE id = $1 FOR UPDATE`
+// selectStatusForUpdateSQL is used by both Ack and Cancel to lock the command
+// row and read its current status in a single round-trip before deciding the
+// next transition. Merged from the former ackSelectSQL / cancelSelectSQL which
+// were identical — one constant, one truth source.
+const selectStatusForUpdateSQL = `SELECT status FROM commands WHERE id = $1 FOR UPDATE`
 
 const ackUpdateSQL = `
 UPDATE commands SET status = $2, completed_at = $3, lease_expiry = NULL
@@ -110,8 +115,6 @@ const extendLeaseSQL = `
 UPDATE commands SET lease_expiry = $2
  WHERE id = $1 AND lease_expiry IS NOT NULL AND status IN (2, 3)
  RETURNING lease_expiry`
-
-const cancelSelectSQL = `SELECT status FROM commands WHERE id = $1 FOR UPDATE`
 
 const cancelUpdateSQL = `UPDATE commands SET status = 7, completed_at = $2, lease_expiry = NULL WHERE id = $1`
 
@@ -125,8 +128,6 @@ SELECT ` + commandSelectCols + `
  ORDER BY created_at ASC`
 
 const getCommandSQL = `SELECT ` + commandSelectCols + ` FROM commands WHERE id = $1`
-
-const enqueueIdempotencyCheckSQL = `SELECT 1 FROM commands WHERE metadata->>'_idempotency_key' = $1 LIMIT 1`
 
 const enqueueInsertSQL = `
 INSERT INTO commands (
@@ -159,13 +160,7 @@ func (q *PGCommandQueue) Enqueue(ctx context.Context, entry command.Entry, opts 
 	}
 
 	if opts.IdempotencyKey != "" {
-		dup, err := q.handleIdempotencyKey(ctx, &entry, opts.IdempotencyKey)
-		if err != nil {
-			return err
-		}
-		if dup {
-			return nil // idempotent no-op
-		}
+		q.stampIdempotencyKey(&entry, opts.IdempotencyKey)
 	}
 
 	if err := entry.ValidateNew(); err != nil {
@@ -175,24 +170,15 @@ func (q *PGCommandQueue) Enqueue(ctx context.Context, entry command.Entry, opts 
 	return q.insertEntry(ctx, entry)
 }
 
-// handleIdempotencyKey stamps the key onto entry.Metadata and reports whether a
-// prior entry already carried it (the no-op signal). Splitting out from Enqueue
-// keeps Enqueue's cognitive complexity within the 15-line ceiling.
-func (q *PGCommandQueue) handleIdempotencyKey(ctx context.Context, entry *command.Entry, key string) (bool, error) {
+// stampIdempotencyKey writes the idempotency key into entry.Metadata so it is
+// persisted in the JSONB column. The DB unique index
+// idx_commands_idempotency_key is the atomic dedup gate — no SELECT pre-check
+// is needed or performed here (migration 031).
+func (q *PGCommandQueue) stampIdempotencyKey(entry *command.Entry, key string) {
 	if entry.Metadata == nil {
 		entry.Metadata = make(map[string]string)
 	}
 	entry.Metadata["_idempotency_key"] = key
-
-	var dummy int
-	err := q.db.QueryRow(ctx, enqueueIdempotencyCheckSQL, key).Scan(&dummy)
-	if err == nil {
-		return true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("command_queue: idempotency check: %w", err)
-	}
-	return false, nil
 }
 
 // insertEntry runs the INSERT and translates PG-level errors to typed errcode.
@@ -218,6 +204,13 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 		return nil
 	}
 	if IsUniqueViolation(insertErr) {
+		// Distinguish PK collision from idempotency-key collision.
+		// idx_commands_idempotency_key violation → idempotent no-op (nil).
+		// Any other unique violation (e.g. commands_pkey) → ErrConflict.
+		var pgErr *pgconn.PgError
+		if errors.As(insertErr, &pgErr) && pgErr.ConstraintName == "idx_commands_idempotency_key" {
+			return nil // idempotent no-op
+		}
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"command already exists",
 			errcode.WithInternal(fmt.Sprintf("id=%q", entry.ID)))
@@ -227,6 +220,10 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 			"device not found",
 			errcode.WithDetails(slog.String("deviceId", entry.DeviceID)))
 	}
+	slog.Error("command_queue: pg write failed",
+		slog.String("operation", "insert"),
+		slog.String("device_id", entry.DeviceID),
+		slog.Any("error", insertErr))
 	return fmt.Errorf("command_queue: insert: %w", insertErr)
 }
 
@@ -295,7 +292,7 @@ func (q *PGCommandQueue) Ack(ctx context.Context, commandID string, reason comma
 	target := reason.TargetStatus()
 
 	var current command.Status
-	err := tx.QueryRow(ctx, ackSelectSQL, commandID).Scan(&current)
+	err := tx.QueryRow(ctx, selectStatusForUpdateSQL, commandID).Scan(&current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
 			"command not found")
@@ -356,7 +353,7 @@ func (q *PGCommandQueue) Cancel(ctx context.Context, commandID string, now time.
 	}
 
 	var current command.Status
-	err := tx.QueryRow(ctx, cancelSelectSQL, commandID).Scan(&current)
+	err := tx.QueryRow(ctx, selectStatusForUpdateSQL, commandID).Scan(&current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
 			"command not found")
@@ -377,6 +374,19 @@ func (q *PGCommandQueue) Cancel(ctx context.Context, commandID string, now time.
 
 	if _, err := tx.Exec(ctx, cancelUpdateSQL, commandID, now); err != nil {
 		return fmt.Errorf("command_queue: cancel update: %w", err)
+	}
+	return nil
+}
+
+// RepoReady verifies that the commands table is reachable by executing a
+// lightweight probe query. Registered as "command_queue_ready" via
+// cell.RegisterRepoReadiness in the devicecell Init path.
+func (q *PGCommandQueue) RepoReady(ctx context.Context) error {
+	var dummy int
+	err := q.db.QueryRow(ctx, `SELECT 1 FROM commands LIMIT 1`).Scan(&dummy)
+	// pgx.ErrNoRows means the table exists but is empty — that is healthy.
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("command_queue: readiness probe: %w", err)
 	}
 	return nil
 }
@@ -467,6 +477,9 @@ func scanCommandRow(row pgx.Row) (*command.Entry, error) {
 	if err := unmarshalMetadata(metaBytes, &e.Metadata); err != nil {
 		return nil, fmt.Errorf("command_queue: unmarshal metadata: %w", err)
 	}
+	// Strip internal keys (prefix "_") before returning to callers.
+	// They are persisted for dedup but must not be visible outside the adapter.
+	stripInternalMetadataKeys(e.Metadata)
 	e.Timeouts = command.Timeouts{
 		ScheduleToSend:  durationFromNs(scheduleNs),
 		SendToComplete:  durationFromNs(sendCompleteNs),
@@ -587,4 +600,17 @@ func buildStatusAllowlistPG(in []command.Status) []command.Status {
 		}
 	}
 	return out
+}
+
+// stripInternalMetadataKeys removes all metadata keys that begin with "_" from
+// m in-place. These keys (e.g. "_idempotency_key") are adapter-internal
+// bookkeeping fields persisted for dedup; they must not be visible to callers
+// reading command entries. The raw DB row is preserved; stripping happens only
+// in the returned Entry value.
+func stripInternalMetadataKeys(m map[string]string) {
+	for k := range m {
+		if len(k) > 0 && k[0] == '_' {
+			delete(m, k)
+		}
+	}
 }

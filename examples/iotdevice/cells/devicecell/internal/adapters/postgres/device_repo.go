@@ -1,3 +1,6 @@
+// SQLSTATE classifier helpers (isUniqueViolation etc.) and the package-level
+// doc comment explaining why this package does NOT import adapters/postgres are
+// in pgerrors.go. Read that file first when adding new error-handling logic.
 package postgres
 
 import (
@@ -80,6 +83,10 @@ func (r *PGDeviceRepository) Create(ctx context.Context, device *domain.Device) 
 				"device already exists",
 				errcode.WithInternal(fmt.Sprintf("id=%q", device.ID)))
 		}
+		slog.Error("device_repo: pg write failed",
+			slog.String("operation", "create"),
+			slog.String("device_id", device.ID),
+			slog.Any("error", err))
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: create", err)
 	}
 	return nil
@@ -210,6 +217,19 @@ func scanDeviceFromRows(rows pgx.Rows) (*domain.Device, error) {
 	d.Status = status
 	d.LastSeen = lastSeen
 	return &d, nil
+}
+
+// RepoReady verifies that the devices table is reachable by executing a
+// lightweight probe query. It is registered as the "device_repo_ready" probe
+// via cell.RegisterRepoReadiness in the cell Init path.
+func (r *PGDeviceRepository) RepoReady(ctx context.Context) error {
+	var dummy int
+	err := r.db.QueryRow(ctx, `SELECT 1 FROM devices LIMIT 1`).Scan(&dummy)
+	// pgx.ErrNoRows means the table exists but is empty — that is healthy.
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("device_repo: readiness probe: %w", err)
+	}
+	return nil
 }
 
 // validDeviceStatus reports whether s is a known device status value.

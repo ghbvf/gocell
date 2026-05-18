@@ -23,6 +23,10 @@ import (
 type DeviceRepository = domain.DeviceRepository
 
 // NewDeviceRepository constructs the PG-backed devicecell DeviceRepository.
+// Pass adapterpg.Pool.DB() as the pool argument — Pool.DB() returns the
+// underlying *pgxpool.Pool accepted by this function. Passing a Pool value
+// directly (not its .DB() result) will fail the type assertion.
+//
 // pool is accepted as `any` so callers can pass adapterpg.Pool.DB() without
 // the devicecell public surface re-exporting pgx types.
 func NewDeviceRepository(pool any, txRunner persistence.TxRunner, clk clock.Clock) (domain.DeviceRepository, error) {

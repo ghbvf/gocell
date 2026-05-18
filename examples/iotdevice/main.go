@@ -172,6 +172,7 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 		closePool()
 		return nil, nil, 0, func() {}, fmt.Errorf("migrate up: %w", err)
 	}
+	logger.Info("iotdevice: migrations applied")
 
 	txMgr := adapterpg.NewTxManager(pool)
 	deviceRepo, err := devicepg.NewDeviceRepository(pool.DB(), txMgr, clk)

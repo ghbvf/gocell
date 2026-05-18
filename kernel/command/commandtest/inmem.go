@@ -182,7 +182,7 @@ func (q *InMemQueue) Dequeue(_ context.Context, targetID string, n int, leaseDur
 			continue
 		}
 		q.leases[e.ID] = now.Add(leaseDuration)
-		result = append(result, *e)
+		result = append(result, stripInternalMetaKeys(*e))
 	}
 	return result, nil
 }
@@ -317,7 +317,7 @@ func (q *InMemQueue) ScanActive(_ context.Context, filter command.ScanFilter) ([
 		if wantStatus != nil && !slices.Contains(wantStatus, e.Status) {
 			continue
 		}
-		result = append(result, *e)
+		result = append(result, stripInternalMetaKeys(*e))
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
@@ -347,6 +347,7 @@ func buildStatusAllowlist(in []command.Status) []command.Status {
 }
 
 // GetCommand returns a single command by ID, or nil if not found.
+// Internal metadata keys (prefix "_") are stripped from the returned copy.
 func (q *InMemQueue) GetCommand(_ context.Context, id string) (*command.Entry, error) {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
@@ -355,13 +356,18 @@ func (q *InMemQueue) GetCommand(_ context.Context, id string) (*command.Entry, e
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, "commandtest: command not found: "+id)
 	}
-	cp := *e
+	cp := stripInternalMetaKeys(*e)
 	return &cp, nil
 }
 
 // ---------------------------------------------------------------------------
 // command.Writer implementation (test fixture seeding)
 // ---------------------------------------------------------------------------
+
+// RepoReady always returns nil for the in-memory queue (no external dependency).
+// Satisfies cell.RepoHealthProber so the same queue value can be registered
+// as the "command_queue_ready" readiness probe in demo/test mode.
+func (q *InMemQueue) RepoReady(_ context.Context) error { return nil }
 
 // WriteCommand stores an entry directly (bypasses Enqueue validation).
 // Used by adapter-level tests that need to seed pre-existing entries.
@@ -372,4 +378,30 @@ func (q *InMemQueue) WriteCommand(_ context.Context, entry command.Entry) error 
 	cp := entry
 	q.entries[entry.ID] = &cp
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+// stripInternalMetaKeys returns a copy of e with all metadata keys whose name
+// begins with "_" removed. These are adapter-internal bookkeeping fields (e.g.
+// "_idempotency_key") that must not be visible to callers reading entries.
+// The stored entry is not mutated.
+func stripInternalMetaKeys(e command.Entry) command.Entry {
+	if len(e.Metadata) == 0 {
+		return e
+	}
+	stripped := make(map[string]string, len(e.Metadata))
+	for k, v := range e.Metadata {
+		if len(k) == 0 || k[0] != '_' {
+			stripped[k] = v
+		}
+	}
+	if len(stripped) == 0 {
+		e.Metadata = nil
+	} else {
+		e.Metadata = stripped
+	}
+	return e
 }
