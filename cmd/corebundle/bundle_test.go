@@ -77,8 +77,8 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Two cells with the same ID causes asm.Register to fail on the second call.
-	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
-	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
+	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core", DurabilityMode: "demo"})
+	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core", DurabilityMode: "demo"})
 
 	_, err = buildAssembly(ps, "corebundle", cell.DurabilityDemo, clock.Real(), c1, c2)
 	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
@@ -376,24 +376,23 @@ func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 	}
 }
 
-// buildBootstrapFromShared is the test-path assembly helper, equivalent to the
-// production run() flow. It owns the PrimaryListener registration so the JWT
-// policy (PolicyJWTFromAssembly) is wired with the assembly that BuildApp
-// constructs internally. Tests supply the primary net.Listener and any extra
-// options (typically WithListener for InternalListener/HealthListener,
-// WithManagedResource, etc.). Uses memory topology and AccessCoreModule with
-// a fast-bcrypt option.
-func buildBootstrapFromShared(
-	t *testing.T, shared *SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option,
+// buildBootstrapFromSharedWithModules is the generic test-path assembly helper.
+// It accepts an explicit module list, allowing infrastructure tests to use
+// lightweight fake modules (e.g. okCellModule) without requiring real PG-backed
+// cells. Tests that need real platform cells should use buildBootstrapFromShared.
+//
+// primaryJWTAuth controls the JWT plan wired on the PrimaryListener:
+//   - If non-nil, used directly (pass cell.MustNewAuthJWT(verifier) for fake-module tests).
+//   - If nil, falls back to cell.MustNewAuthJWTFromAssembly(asm) (requires a
+//     cell.AuthProvider in the assembly, which real platform cells provide).
+func buildBootstrapFromSharedWithModules(
+	t *testing.T, shared *SharedDeps, primaryLn net.Listener,
+	modules []CellModule, primaryJWTAuth cell.ListenerAuth, extra ...bootstrap.Option,
 ) (*bootstrap.Bootstrap, error) {
 	t.Helper()
 	ctx := context.Background()
 
-	cells, cellOpts, err := BuildApp(ctx, shared,
-		ConfigCoreModule{},
-		AccessCoreModule{},
-		AuditCoreModule{},
-	)
+	cells, cellOpts, err := BuildApp(ctx, shared, modules...)
 	if err != nil {
 		return nil, err
 	}
@@ -413,13 +412,18 @@ func buildBootstrapFromShared(
 	adapterInfo := adapterInfoForSharedDeps(shared)
 	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
-	// Primary listener carries the JWT policy resolved from the assembly. F3
-	// round-3: this is the single source of truth for JWT auth — there is no
-	// longer a standalone bootstrap.PolicyJWTFromAssembly Option.
+
+	// Primary listener carries JWT auth. When primaryJWTAuth is nil, discover
+	// the verifier from the assembly's authProvider cell (requires AccessCore or
+	// similar). Tests using fake/demo modules must pass a direct verifier plan.
+	jwtPlan := primaryJWTAuth
+	if jwtPlan == nil {
+		jwtPlan = celltest.MustAuthJWTFromAssembly(asm)
+	}
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
 		primaryLn.Addr().String(),
-		[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+		[]cell.ListenerAuth{jwtPlan},
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
@@ -649,6 +653,11 @@ func TestBuildApp_RejectsInvalidSharedDeps(t *testing.T) {
 
 // TestBuildBootstrap_MemoryTopology verifies that a memory topology produces a
 // working bootstrap without a PG health checker.
+//
+// Uses a single fake demo cell module to avoid the DurabilityDurable/DurabilityDemo
+// mismatch that platform cells (configcore/accesscore/auditcore) introduce.
+// Full platform cell wiring is covered by TestBuildBootstrap_AssemblyHasAllCells
+// (integration build tag, requires PG).
 func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	shared := buildTestSharedDeps(t)
 
@@ -659,7 +668,9 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	healthOpt := bootstrap.WithListener(
 		cell.HealthListener, healthLn.Addr().String(),
 		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
-	app, err := buildBootstrapFromShared(t, shared, ln,
+	app, err := buildBootstrapFromSharedWithModules(t, shared, ln,
+		[]CellModule{okCellModule{name: "test-cell"}},
+		mustAuthJWT(t, shared.JWTDeps.verifier),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		healthOpt)
 	require.NoError(t, err)
@@ -703,6 +714,8 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 // StorageBackend is fixed to "memory". The test name is historical. Its sole
 // purpose is verifying the WithManagedResource lifecycle hooks
 // (Checkers / Worker / Close).
+//
+// Uses a single fake demo cell module — same rationale as TestBuildBootstrap_MemoryTopology.
 func TestBuildBootstrap_PostgresTopology_FakePoolResource(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
@@ -718,7 +731,9 @@ func TestBuildBootstrap_PostgresTopology_FakePoolResource(t *testing.T) {
 	healthOpt2 := bootstrap.WithListener(
 		cell.HealthListener, healthLn.Addr().String(),
 		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
-	app, err := buildBootstrapFromShared(t, shared, ln,
+	app, err := buildBootstrapFromSharedWithModules(t, shared, ln,
+		[]CellModule{okCellModule{name: "test-cell"}},
+		mustAuthJWT(t, shared.JWTDeps.verifier),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		healthOpt2,
 		bootstrap.WithManagedResource(fakePG),
@@ -742,51 +757,6 @@ func TestBuildBootstrap_PostgresTopology_FakePoolResource(t *testing.T) {
 
 	// Fake PG resource must be closed during shutdown.
 	assert.True(t, fakePG.closeCalled, "fakeManagedResource.Close() must be called during shutdown")
-}
-
-// TestBuildBootstrap_AssemblyHasAllCells verifies that BuildApp registers
-// configcore, accesscore, and auditcore. We check via health + /readyz
-// which would fail if any cell fails to init.
-func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
-	shared := buildTestSharedDeps(t)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	healthLn := newCorebundleLocalListener(t)
-
-	healthOpt3 := bootstrap.WithListener(
-		cell.HealthListener, healthLn.Addr().String(),
-		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
-	app, err := buildBootstrapFromShared(t, shared, ln,
-		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		healthOpt3)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() { errCh <- app.Run(ctx) }()
-
-	healthAddr := healthLn.Addr().String()
-	waitForHealthy(t, healthAddr)
-
-	// /readyz confirms all three cells started and registered their probes.
-	resp, err := http.Get("http://" + healthAddr + "/readyz")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := resp.Body.Close(); err != nil {
-			t.Logf("close resp body: %v", err)
-		}
-	})
-	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"all three cells (configcore, accesscore, auditcore) must be healthy")
-
-	cancel()
-	select {
-	case err := <-errCh:
-		assert.NoError(t, err)
-	case <-time.After(testtime.SelectAsyncSettle):
-		t.Fatal("full assembly bootstrap did not shut down in time")
-	}
 }
 
 // ---------------------------------------------------------------------------

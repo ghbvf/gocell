@@ -7,8 +7,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -29,24 +32,21 @@ func buildTestAuditProtocol(t testing.TB, hmacKey []byte) *ledger.Protocol {
 	return p
 }
 
-// buildTestAuditStore creates a ledger.Store (backed by MemStore) for integration tests.
-// F16: return type is ledger.Store (interface) so callers are decoupled from the
-// concrete MemStore type; only storetest tamper-helpers need the concrete type.
-func buildTestAuditStore(t testing.TB, p *ledger.Protocol) ledger.Store {
-	t.Helper()
-	store, err := ledger.NewMemStore(p, clock.Real())
-	require.NoError(t, err, "audit mem store construction")
-	return store
-}
-
-// auditcoreLedgerOpts returns the WithLedgerProtocol + WithLedgerStore options
-// for integration tests, replacing the former WithInMemoryDefaults + WithHMACKey pair.
-func auditcoreLedgerOpts(t testing.TB, hmacKey []byte) []auditcore.Option {
+// auditcoreLedgerPGOpts returns the WithLedgerProtocol + WithLedgerStore options
+// backed by a real PostgreSQL pool. Replaces the in-memory auditcoreLedgerOpts
+// for durable-mode test assemblies.
+//
+// The returned options do NOT include WithTxManager or WithOutboxDeps — callers
+// are responsible for wiring those (same pattern as audit_module.go durable path).
+func auditcoreLedgerPGOpts(t testing.TB, pool *adapterpg.Pool, txMgr *adapterpg.TxManager, hmacKey []byte) []auditcore.Option {
 	t.Helper()
 	p := buildTestAuditProtocol(t, hmacKey)
-	store := buildTestAuditStore(t, p)
+	pgStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, p, clock.Real())
+	require.NoError(t, err, "auditcoreLedgerPGOpts: NewLedgerStore")
 	return []auditcore.Option{
 		auditcore.WithLedgerProtocol(p),
-		auditcore.WithLedgerStore(store),
+		auditcore.WithLedgerStore(pgStore),
+		auditcore.WithTxManager(persistence.WrapForCell(txMgr)),
+		auditcore.WithOutboxDeps(nil, outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
 	}
 }

@@ -200,6 +200,9 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
+	// DurabilityDemo: this test validates caller-cell HMAC/RequireCallerCell
+	// enforcement only and uses in-memory stores. Demo mode accepts the noop
+	// writer/tx deps below — no durable store behaviour is under test.
 	asm := assembly.New(assembly.Config{
 		ID:             "caller-cell-test",
 		DurabilityMode: cell.DurabilityDemo,

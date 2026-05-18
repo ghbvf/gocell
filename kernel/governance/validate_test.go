@@ -54,10 +54,22 @@ func validProject() *metadata.ProjectMeta {
 				ID:               "sharedcrypto",
 				Type:             "support",
 				ConsistencyLevel: "L0",
+				DurabilityMode:   "demo",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.sharedcrypto.startup"}},
 				Dir:              "sharedcrypto",
 				File:             "cells/sharedcrypto/cell.yaml",
+			},
+			"configcore": {
+				ID:               "configcore",
+				Type:             "core",
+				ConsistencyLevel: "L3",
+				DurabilityMode:   "durable",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_config_core"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.configcore.startup"}},
+				Dir:              "configcore",
+				File:             "cells/configcore/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -4703,7 +4715,7 @@ func TestFMT15(t *testing.T) {
 	})
 }
 
-// --- OUTGUARD-01: L2+ durability declaration ---
+// --- OUTGUARD-01: all cells must declare durabilityMode ---
 
 func TestOUTGUARD01(t *testing.T) {
 	tests := []struct {
@@ -4720,7 +4732,7 @@ func TestOUTGUARD01(t *testing.T) {
 			wantCount: 2, // both L2 cells missing durabilityMode
 		},
 		{
-			name: "L2 cell with durabilityMode — no warning",
+			name: "L2 cell with durabilityMode — no error",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].DurabilityMode = "durable"
 				pm.Cells["auditcore"].DurabilityMode = "durable"
@@ -4728,9 +4740,8 @@ func TestOUTGUARD01(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "L0 cell without durabilityMode — no warning",
+			name: "L0 cell without durabilityMode — no error (L0/L1 optional, K8s defaulting)",
 			setup: func(pm *metadata.ProjectMeta) {
-				// sharedcrypto is L0 — no durability declaration required.
 				pm.Cells["accesscore"].DurabilityMode = "durable"
 				pm.Cells["auditcore"].DurabilityMode = "durable"
 				pm.Cells["sharedcrypto"].DurabilityMode = ""
@@ -4738,16 +4749,16 @@ func TestOUTGUARD01(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "mixed — only L2+ without durabilityMode warned",
+			name: "mixed — only L2+ cell missing durabilityMode errors",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].DurabilityMode = "durable"
-				pm.Cells["auditcore"].DurabilityMode = ""    // L2, should warn
-				pm.Cells["sharedcrypto"].DurabilityMode = "" // L0, should not warn
+				pm.Cells["auditcore"].DurabilityMode = ""    // L2 — error
+				pm.Cells["sharedcrypto"].DurabilityMode = "" // L0 — allowed (defaults to demo)
 			},
 			wantCount: 1,
 		},
 		{
-			name: "L1 cell without durabilityMode — no warning",
+			name: "L1 cell without durabilityMode — no error (L0/L1 optional)",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].DurabilityMode = "durable"
 				pm.Cells["auditcore"].DurabilityMode = "durable"
@@ -4755,6 +4766,24 @@ func TestOUTGUARD01(t *testing.T) {
 					ID:               "l1-cell",
 					Type:             "core",
 					ConsistencyLevel: "L1",
+					// No DurabilityMode — L1 allowed to omit; ParseDurabilityMode defaults to demo.
+					Owner:  metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
+					Schema: metadata.SchemaMeta{Primary: "cell_l1"},
+					Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "L1 cell with durabilityMode — no error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["accesscore"].DurabilityMode = "durable"
+				pm.Cells["auditcore"].DurabilityMode = "durable"
+				pm.Cells["l1-cell"] = &metadata.CellMeta{
+					ID:               "l1-cell",
+					Type:             "core",
+					ConsistencyLevel: "L1",
+					DurabilityMode:   "demo",
 					Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
 					Schema:           metadata.SchemaMeta{Primary: "cell_l1"},
 					Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},

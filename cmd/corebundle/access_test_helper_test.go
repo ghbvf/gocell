@@ -5,40 +5,45 @@ package main
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
+	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
-// buildAccessCoreMemOptions returns the explicit option set that replaces the
-// removed accesscore.WithInMemoryDefaults() — user/role + session.Store +
-// refresh.Store. All four repositories share the same clock to keep time
-// semantics consistent across in-memory tests.
-func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Option {
+// buildAccessCorePGOptions returns the PG-backed repository options for accesscore:
+// user/role/session/refresh stores all backed by the supplied pool + txMgr.
+// Mirrors the wiring in access_module.go (Provide durable path).
+func buildAccessCorePGOptions(tb testing.TB, pool *adapterpg.Pool, txMgr *adapterpg.TxManager) []accesscore.Option {
 	tb.Helper()
-	userStore := accessmem.NewStore(clk)
+	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
+	require.NoError(tb, err, "buildAccessCorePGOptions: accesspg.NewDeps")
+	pgUserRepo, err := accesspg.NewUserRepository(pgDeps)
+	require.NoError(tb, err, "buildAccessCorePGOptions: NewUserRepository")
+	pgRoleRepo, err := accesspg.NewRoleRepository(pgDeps)
+	require.NoError(tb, err, "buildAccessCorePGOptions: NewRoleRepository")
+	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
+	require.NoError(tb, err, "buildAccessCorePGOptions: NewSetupLock")
+
 	sessionProto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
 		session.WithRevokeOnAll(),
 	)
-	if err != nil {
-		tb.Fatalf("buildAccessCoreMemOptions: session.NewProtocol: %v", err)
-	}
-	sessionStore, err := session.NewMemStore(sessionProto, clk)
-	if err != nil {
-		tb.Fatalf("buildAccessCoreMemOptions: session.NewMemStore: %v", err)
-	}
-	refreshStore, err := refreshmem.New(accesscore.DefaultRefreshPolicy(), clk, nil)
-	if err != nil {
-		tb.Fatalf("buildAccessCoreMemOptions: refreshmem.New: %v", err)
-	}
+	require.NoError(tb, err, "buildAccessCorePGOptions: session.NewProtocol")
+	pgSessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
+	require.NoError(tb, err, "buildAccessCorePGOptions: NewSessionStore")
+	pgRefreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), nil)
+	require.NoError(tb, err, "buildAccessCorePGOptions: NewRefreshStore")
+
 	return []accesscore.Option{
-		accesscore.WithUserRepository(userStore.UserRepository()),
-		accesscore.WithRoleRepository(userStore.RoleRepository()),
-		accesscore.WithSessionStore(sessionStore),
-		accesscore.WithRefreshStore(refreshStore),
+		accesscore.WithUserRepository(pgUserRepo),
+		accesscore.WithRoleRepository(pgRoleRepo),
+		accesscore.WithSessionStore(pgSessionStore),
+		accesscore.WithRefreshStore(pgRefreshStore),
+		accesscore.WithSetupLock(pgSetupLock),
 	}
 }

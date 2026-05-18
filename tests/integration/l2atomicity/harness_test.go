@@ -262,9 +262,10 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 	pgOutboxStore := adapterpg.NewOutboxStore(pg.pool.DB(), clock.Real())
 	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
 
-	// DurabilityDemo only describes the assembly construction mode; the
-	// relay above is the durable bridge between PG outbox_entries and the
-	// in-process eventbus.
+	// PG outbox relay above is the durable bridge between PG outbox_entries
+	// and the in-process eventbus. Assembly runs DurabilityDemo (matches
+	// develop baseline before PR-CFG-L2-DIVERGENCE introduced runtime alignment);
+	// noop tx/writer in configcore/auditcore is accepted under Demo mode.
 	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))

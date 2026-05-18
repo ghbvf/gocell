@@ -189,6 +189,9 @@ func TestLoadKeySet(t *testing.T) {
 func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// run() with an immediately-canceled context exercises the full assembly
 	// path (cells, bootstrap) without needing a real HTTP listener.
+	// Since platform cells declare durabilityMode: durable, dev mode (memory
+	// backend) now fails fast with ERR_CELL_INVALID_CONFIG — this is expected
+	// behavior: corebundle requires a real PostgreSQL backend.
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes (C5).
@@ -205,12 +208,14 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	cancel() // cancel immediately — run() should exit cleanly
 
 	err := run(ctx)
-	// Only context.Canceled and listen/sandbox errors are acceptable.
-	// Any other error signals a real startup regression.
+	// Acceptable outcomes: context canceled, sandbox permission denied, port
+	// bind failure, or durability mismatch (cells require durable; memory
+	// mode is no longer valid for corebundle).
 	if err != nil {
 		acceptable := errors.Is(err, context.Canceled) ||
 			errors.Is(err, syscall.EPERM) ||
-			isBindError(err)
+			isBindError(err) ||
+			strings.Contains(err.Error(), string(errcode.ErrCellInvalidConfig))
 		if !acceptable {
 			t.Fatalf("unexpected startup error (not context-canceled or sandbox): %v", err)
 		}
@@ -460,8 +465,12 @@ func generateTestPEM(t *testing.T) (privPEM, pubPEM []byte) {
 // TestBootstrap_DemoModeUsesInMemory verifies that when GOCELL_CELL_ADAPTER_MODE
 // is unset (or empty), run() selects the in-memory storage path for configcore
 // and does not attempt to connect to PostgreSQL (no GOCELL_CONFIGCORE_DATABASE_URL required).
-// Guards against regression where the default could be accidentally flipped to
-// "postgres" and break dev/test setups.
+//
+// NOTE: After platform cells were updated to declare durabilityMode: durable,
+// the in-memory (demo) mode is no longer valid for corebundle — cells fail fast
+// with ERR_CELL_INVALID_CONFIG before attempting any PG connection. The test
+// guards that: (a) no PG connection is attempted (no DSN-missing error), and
+// (b) the error is a durability mismatch (or canceled/sandbox), not a PG error.
 func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	// Ensure GOCELL_CELL_ADAPTER_MODE is unset (selects in-memory path).
 	// GOCELL_CONFIGCORE_DATABASE_URL is not read in memory mode — no DSN required.
@@ -483,12 +492,14 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	cancel() // cancel immediately — we only need Init(), not server start
 
 	err := run(ctx)
-	// Only context.Canceled and listen/sandbox errors are acceptable.
-	// A postgres connection failure would be: "configcore PG pool: ..."
+	// Acceptable outcomes: context canceled, sandbox permission denied, port
+	// bind failure, or durability mismatch (cells require durable; memory
+	// mode fails fast before any PG connection attempt).
 	if err != nil {
 		acceptable := errors.Is(err, context.Canceled) ||
 			errors.Is(err, syscall.EPERM) ||
-			isBindError(err)
+			isBindError(err) ||
+			strings.Contains(err.Error(), string(errcode.ErrCellInvalidConfig))
 		if !acceptable {
 			t.Fatalf("unexpected error when GOCELL_CELL_ADAPTER_MODE is empty (should use in-memory): %v", err)
 		}

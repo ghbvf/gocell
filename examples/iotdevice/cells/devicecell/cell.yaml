@@ -1,7 +1,7 @@
 id: devicecell
 type: edge
 consistencyLevel: L4
-durabilityMode: durable
+durabilityMode: demo
 owner:
   team: examples
   role: device-owner

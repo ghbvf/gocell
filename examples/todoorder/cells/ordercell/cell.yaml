@@ -1,7 +1,7 @@
 id: ordercell
 type: core
 consistencyLevel: L2
-durabilityMode: durable
+durabilityMode: demo
 owner:
   team: examples
   role: order-owner

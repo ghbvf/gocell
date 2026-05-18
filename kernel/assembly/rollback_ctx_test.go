@@ -43,7 +43,7 @@ type ctxRecordingCell struct {
 
 func newCtxRecordingCell(id string, failStart bool) *ctxRecordingCell {
 	return &ctxRecordingCell{
-		BaseCell:  cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell:  cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", DurabilityMode: "demo"}),
 		failStart: failStart,
 	}
 }
@@ -83,7 +83,7 @@ type afterStartFailingCell struct {
 
 func newAfterStartFailingCell(id string) *afterStartFailingCell {
 	return &afterStartFailingCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", DurabilityMode: "demo"}),
 	}
 }
 
@@ -116,7 +116,7 @@ type beforeStartFailingCell struct {
 
 func newBeforeStartFailingCell(id string) *beforeStartFailingCell {
 	return &beforeStartFailingCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", DurabilityMode: "demo"}),
 	}
 }
 

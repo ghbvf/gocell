@@ -54,6 +54,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -204,6 +205,13 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(cellAdapterOpts...) //archtest:allow:clock-injection:via-slice options slice starts with WithClock(clock.Real()) prepended above; Go prevents mixing positional + spread
 
+	// Step 5b: Create a PG pool + TxManager for accesscore + auditcore,
+	// reusing the same pgConnStr from the migrations step above.
+	accessAuditPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
+	require.NoError(t, err, "create accesscore/auditcore PG pool")
+	t.Cleanup(func() { _ = accessAuditPool.Close(context.Background()) })
+	accessAuditTxMgr := adapterpg.NewTxManager(accessAuditPool)
+
 	// Wire accesscore with WithBootstrapAuth. The operator calls POST /setup/admin
 	// with Basic Auth to provision the first admin (interactive mode, ADR §D5).
 	e2eBootstrapMW := auth.NewBootstrapMiddleware(
@@ -214,24 +222,25 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	accessCell := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
+	accessCell := accesscore.NewAccessCore(append(buildAccessCorePGOptions(t, accessAuditPool, accessAuditTxMgr),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
+		accesscore.WithTxManager(persistence.WrapForCell(accessAuditTxMgr)),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(e2eBootstrapMW),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCorePGOptions + WithClock prepended; spread prevents direct positional arg
 	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerPGOpts(t, accessAuditPool, accessAuditTxMgr, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "e2e-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "e2e-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	require.NoError(t, asm.Register(configCell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
@@ -522,6 +531,13 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(cellAdapterOpts...) //archtest:allow:clock-injection:via-slice options slice starts with WithClock(clock.Real()) prepended above; Go prevents mixing positional + spread
 
+	// Step 5b: Create a PG pool + TxManager for accesscore + auditcore,
+	// reusing the same pgConnStr from the migrations step above.
+	accessAuditPool2, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
+	require.NoError(t, err, "create accesscore/auditcore PG pool")
+	t.Cleanup(func() { _ = accessAuditPool2.Close(context.Background()) })
+	accessAuditTxMgr2 := adapterpg.NewTxManager(accessAuditPool2)
+
 	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
 	// After receiving an entry-upserted event, configreceive will call
 	// internalSrv.URL + /internal/v1/config/{key}, and the stub records it.
@@ -533,9 +549,10 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	accessCell := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
+	accessCell := accesscore.NewAccessCore(append(buildAccessCorePGOptions(t, accessAuditPool2, accessAuditTxMgr2),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
+		accesscore.WithTxManager(persistence.WrapForCell(accessAuditTxMgr2)),
+		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
@@ -543,15 +560,15 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
+	)...) //archtest:allow:clock-injection:via-slice buildAccessCorePGOptions + WithClock prepended; spread prevents direct positional arg
 	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerPGOpts(t, accessAuditPool2, accessAuditTxMgr2, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "e2e-refetch-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "e2e-refetch-test", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
 	require.NoError(t, asm.Register(configCell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))

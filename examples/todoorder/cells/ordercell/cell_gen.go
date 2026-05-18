@@ -20,7 +20,7 @@ var cellMeta = &metadata.CellMeta{
 	ID:               "ordercell",
 	Type:             "core",
 	ConsistencyLevel: "L2",
-	DurabilityMode:   "durable",
+	DurabilityMode:   "demo",
 	Owner:            metadata.OwnerMeta{Team: "examples", Role: "order-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "orders"},
 	Verify: metadata.CellVerifyMeta{Smoke: []string{

@@ -27,7 +27,7 @@ type hookOrderCell struct {
 
 func newHookOrderCell(id string, calls *[]string, failOn string) *hookOrderCell {
 	return &hookOrderCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", DurabilityMode: "demo"}),
 		calls:    calls,
 		failOn:   failOn,
 	}
@@ -83,7 +83,7 @@ type panicHookCell struct {
 
 func newPanicHookCell(id string, calls *[]string, panicOn string) *panicHookCell {
 	return &panicHookCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", DurabilityMode: "demo"}),
 		calls:    calls,
 		panicOn:  panicOn,
 	}
@@ -152,7 +152,7 @@ type onlyBeforeStartCell struct {
 
 func newOnlyBeforeStartCell(id string, calls *[]string) *onlyBeforeStartCell {
 	return &onlyBeforeStartCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", DurabilityMode: "demo"}),
 		calls:    calls,
 	}
 }
@@ -299,7 +299,7 @@ func TestAssemblyHooks_MixedCells(t *testing.T) {
 	var calls []string
 
 	hooked1 := newHookOrderCell("H1", &calls, "")
-	plain := cell.MustNewBaseCell(&metadata.CellMeta{ID: "P", Type: "core"})
+	plain := cell.MustNewBaseCell(&metadata.CellMeta{ID: "P", Type: "core", DurabilityMode: "demo"})
 	hooked2 := newHookOrderCell("H2", &calls, "")
 
 	require.NoError(t, a.Register(hooked1))

@@ -30,8 +30,9 @@ type configSubscriberWithoutOwner struct {
 func newConfigSubscriberWithoutOwner() *configSubscriberWithoutOwner {
 	return &configSubscriberWithoutOwner{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID:   "testcellnoowner",
-			Type: "core",
+			ID:             "testcellnoowner",
+			Type:           "core",
+			DurabilityMode: "demo",
 		}),
 	}
 }

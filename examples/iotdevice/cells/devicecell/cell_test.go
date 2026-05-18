@@ -20,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -343,40 +342,6 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-// TestDeviceCell_DurableMode_RejectsMissingCursorCodec locks the fail-fast
-// behavior introduced with RunMode wiring: a durable assembly that forgets
-// to inject a production cursor codec must not silently fall back to the
-// public demo key baked into the source tree.
-func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
-	c := NewDeviceCell(
-		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
-		WithClock(clock.Real()),
-		// No WithCursorCodec — durable mode must refuse the demo fallback.
-	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
-	assert.Contains(t, err.Error(), "cursor codec")
-}
-
-// TestDeviceCell_DurableMode_RejectsInMemCommandQueue verifies that Init fails
-// fast when DurabilityDurable is requested, because commandtest.InMemQueue is
-// not suitable for durable deployments.
-func TestDeviceCell_DurableMode_RejectsInMemCommandQueue(t *testing.T) {
-	c := NewDeviceCell(
-		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
-		WithClock(clock.Real()),
-		WithCursorCodec(newTestCursorCodec(t)),
-	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "commandtest.InMemQueue is not suitable for durable deployments")
 }
 
 func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.T) {

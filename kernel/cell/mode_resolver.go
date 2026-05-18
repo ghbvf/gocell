@@ -42,8 +42,8 @@ type EmitterConfig struct {
 }
 
 // EmitterOutcome reports the resolved emitter and whether it is durable
-// (backed by a real writer+txRunner). Cells use Durable to upgrade optional
-// slices from cellvocab.L0 to cellvocab.L2 (e.g., rbacassign).
+// (backed by a real writer+txRunner). Cells use Durable to decide whether
+// optional slices (e.g., rbacassign) can activate L2 outbox publication.
 type EmitterOutcome struct {
 	Emitter outbox.Emitter
 	Durable bool
