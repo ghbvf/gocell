@@ -256,7 +256,7 @@
 
 ## cap-14: 代码生成与治理工具链
 
-> 详见 [`docs/backlog/cap-14-tooling.md`](backlog/cap-14-tooling.md)（61 条目，按主题分 6 个 h2 子节）
+> 详见 [`docs/backlog/cap-14-tooling.md`](backlog/cap-14-tooling.md)（63 条目，按主题分 6 个 h2 子节）
 
 **子节索引**：
 - [14.1 archtest / typed funnel / scanner](backlog/cap-14-tooling.md#141-archtest--typed-funnel--scanner)
@@ -268,7 +268,7 @@
 
 ## cap-x-cross: 横切
 
-> 详见 [`backlog/cap-x-cross.md`](backlog/cap-x-cross.md)（36 条目，按主题分 5 个 h2 子节）
+> 详见 [`backlog/cap-x-cross.md`](backlog/cap-x-cross.md)（39 条目，按主题分 5 个 h2 子节）
 
 **子节索引**：
 - [x.1 adapter / 外部系统](backlog/cap-x-cross.md#x.1-adapter--外部系统)

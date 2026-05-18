@@ -482,6 +482,62 @@ repoErr → 401（不漂 503）。
 
 ---
 
+### A14 S4-FU 收口标注（2026-05-18）
+
+**收口**：S4c FU-4（Journey 验收升级）落地，S4c 全部 **9/9** 完成、S4-FU
+FU-1～4 全部 merged。计划 §"完成判据"（`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`）三项收尾全部达成：
+
+1. **FU-4 Journey 声明式覆盖**：`journeys/J-ssologin.yaml` 新增 auto
+   passCriteria `error-paths-uniform`（checkRef →
+   `tests/integration/TestJSsologinErrorPathsUniform`），断言 3 个
+   client-observable 状态（missing-user 含 :484 in-tx race 变体 /
+   wrong-password / inactive 含 locked·suspended 及 :352 in-tx race 变体）—— sessionlogin
+   共 5 个构造点（service.go:262/:275/:280/:352/:484）——经 `pkg/httputil.WriteError`
+   序列化后 wire 字节完全一致（§A13 防枚举不变量的声明式 journey 验收）。FU-4
+   test 覆盖全部 5 个构造点，byte-identity 断言防止任一点未来加 WithInternal
+   致枚举旁路。`journeys/J-accountlockout.yaml` 的 `login-reject` criterion
+   补全 wire-shape 文本 + 配套 `TestJAccountlockoutLoginReject`（仅收口
+   login-reject；另 3 条 auto-lock / event-publish / admin-unlock 为
+   pre-existing experimental-exempt 缺口，不在 FU-4 范围）。两者均
+   Docker-free——J-ssologin 为 `lifecycle: active`，governance VERIFY-06
+   （`kernel/governance/rules_verify.go` 函数 `validateVERIFY06Journey`）在
+   `gocell validate --strict`（无 Docker 的 `make verify` 门）内**实际执行**
+   该 checkRef test，故不可走 testcontainers。
+
+   **T4 ↔ FU-4 分工与 §3 威胁矩阵回评**（ai-collab.md §"ADR amendment 落地必查"
+   要求）：
+
+   - (a) §3 威胁矩阵"账号枚举"/"revoked session 后置导致 wire 漂移"行 ✅ 的
+     **主防御载体仍是 T4** `tests/integration/l2atomicity/TestL2_LoginUniform401`
+     （真实 HTTP+PG roundtrip，验证 sessionlogin service 各路径实际路由到该
+     errcode，不可绕过）。
+   - (b) FU-4（本 amendment）是 **errcode → wire 序列化层的声明式规格补充**
+     （journey 验收），验证 sessionlogin 5 个构造点序列化后 wire 字节一致；它
+     **不验证 service 路由正确性**，因此不是 T4 的独立替代证据。
+   - (c) 本 amendment **无** §3 威胁矩阵格子从 ✅ 退化——FU-4 是增量声明式规格
+     覆盖，T4 持续支撑原 ✅，两者 cross-link（见
+     `tests/integration/l2atomicity/doc.go:55-57`）不重复覆盖。
+
+2. **5 项触发型 backlog 条目登记**（accept trade-off / 防御性，仅登记触发
+   条件，触发前不立 PR）：
+
+   | backlog ID | 载体文件 | 摘要 |
+   |---|---|---|
+   | `IDENTITYMANAGE-UPDATE-CO-TX-UPGRADE-01` 🟠 | `docs/backlog/cap-x-cross.md` | `identitymanage.Update` tx1（name/email + TopicUserUpdated）→ tx2（credential mutation）两段提交；§A12 已消除 `applyUserUpdate` 的 pre-tx GetByID TOCTOU，但 `Update` 的 split-tx 仍是 accepted trade-off（Hard 升级 = authzmutate 接受外部 tx 上下文，被 PR #501 以 Go 类型天花板拒绝，见 §A10） |
+   | `MIGRATION-NONEMPTY-DB-UPGRADE-GUIDE-01` 🟠 | `docs/backlog/cap-x-cross.md` | 026/027/028 链以"项目无生产 + 表证明为空"为前提；非空历史 DB 升级会被 CHECK (>0) 拦住 |
+   | `AUTHZMUTATE-MUTATION-EVENT-OPTIONAL-01` 🟠 | `docs/backlog/cap-x-cross.md` | `authzmutate.Mutation.Event()` 对 additive variant 返回占位事件，API shape 易误用 |
+   | `ARCHTEST-FUNNEL-CALLSITE-LEVEL-01` 🟠 | `docs/backlog/cap-14-tooling.md` | domain-authz funnel allowlist 已 package→file，callsite-level（`typeseval.ResolveCallSite`）是 Hard 升级路径 |
+   | `GOLANGCI-GOPACKAGES-EXEMPTION-CLEANUP-01` 🟠 | `docs/backlog/cap-14-tooling.md` | `.golangci.yml` 对 archtest 直接 import `go/packages` 例外，治理债未清完 |
+
+3. **§A12 落地必查回评**：§A12 amendment 已消除 `applyUserUpdate` 的 pre-tx
+   TOCTOU（§3 威胁矩阵相关行保持 ✅）；`identitymanage.Update` 的 tx1/tx2
+   拆分**不属于** §A12 消除范围，作为 accepted trade-off 由
+   `IDENTITYMANAGE-UPDATE-CO-TX-UPGRADE-01` 触发型条目承接，触发条件 = 第 2
+   次同模式 split-tx 引发实际部分提交事故，或 authzmutate API 重设计。无
+   §3 威胁矩阵格子从 ✅ 退化。
+
+---
+
 ## 1. Context
 
 ### 1.1 触发因素

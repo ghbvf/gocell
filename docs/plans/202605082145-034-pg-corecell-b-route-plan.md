@@ -1,8 +1,8 @@
 # 034 PG / accesscore / auditcore / configcore B 路线实施计划
 
 **生成日期**: 2026-05-08
-**最后更新**: 2026-05-17（v14 — **S4c T2 一致性等级 codegen funnel shipped**：PR #525 落地 `slice.yaml → slice_gen.go.sliceMeta` Hard funnel；删 `cell.NewBaseSlice` + 25 处 callers 全部迁移 `MustNewBaseSliceFromMeta`；governance SLICE-CONSISTENCY-02 + archtest BASESLICE-CTOR-FUNNEL-01；identitymanage 标 L2；同时关闭 `CELLS-IDENTITYMANAGE-LEVEL-MISLABEL-01` + `RBACASSIGN-L2-STATIC-HARD-UPGRADE-01`。S4c T5 第三轮 review 闭环 PR 编号补齐为 **#533**（8 IN_SCOPE finding + archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01 Hard）。S4c 进度 merged **8/9**（T1 #514 / T2 #525 / T3 #515 / T4 #523 / T5 #524+#533 / FU-1 #513 / FU-2 #512 / FU-3 #516）；剩余仅 **FU-4**。）
-**前一版**: 2026-05-17 v13（S4c T5 AUTH-CACHE-01 shipped；merged 7/9）；2026-05-16 v12（S4c T4 L2 e2e harness shipped — 新建 `tests/integration/l2atomicity/` 覆盖 7 场景 e2e 回归；接入 race-pg-integration lane；B2-C-13 闭环（accesscore scope）；doc.go 加 `//go:build integration` + FU-4 cross-link + Running locally 段。S4c 进度 merged 6/9，剩 T2 #525 / FU-4 / T5）；2026-05-16 v11（状态回灌：修正 T1/T3 PR 占位符为 #514/#515）；2026-05-16 v10（S4c T1 rbacassign 闭环 shipped）；2026-05-16 v9（S4-FU PR #501 review 闭环批）
+**最后更新**: 2026-05-18（v15 — **S4c FU-4 Journey 验收升级 shipped + S4-FU 收口完成**：`journeys/J-ssologin.yaml` 新增 auto passCriteria `error-paths-uniform`（checkRef → `tests/integration/TestJSsologinErrorPathsUniform`，Docker-free，断言 missing-user/wrong-password/inactive 三态经 `httputil.WriteError` 序列化 wire 字节完全一致）；`journeys/J-accountlockout.yaml` `login-reject` criterion 补 wire-shape 文本 + `TestJAccountlockoutLoginReject`。T4↔FU-4 显式分工（T4 `TestL2_LoginUniform401` 编程式 PG e2e / FU-4 声明式 journey 验收，cross-link 不重复）。J-ssologin 为 active journey，VERIFY-06 在 Docker-less `make verify` 内实际执行该 test，故走 errcode→wire 序列化断言而非 testcontainers。收口三项全达成：ADR §A14 S4-FU 收口标注；5 项触发型 backlog 条目登记（cap-x-cross ×3 / cap-14 ×2）；plan 回灌 9/9。**S4c 全部 merged 9/9**（T1 #514 / T2 #525 / T3 #515 / T4 #523 / T5 #524+#533 / FU-1 #513 / FU-2 #512 / FU-3 #516 / FU-4 本批）。）
+**前一版**: 2026-05-17 v14（S4c T2 一致性等级 codegen funnel shipped PR #525；merged 8/9，剩 FU-4）；2026-05-17 v13（S4c T5 AUTH-CACHE-01 shipped；merged 7/9）；2026-05-16 v12（S4c T4 L2 e2e harness shipped — 新建 `tests/integration/l2atomicity/` 覆盖 7 场景 e2e 回归；接入 race-pg-integration lane；B2-C-13 闭环（accesscore scope）；doc.go 加 `//go:build integration` + FU-4 cross-link + Running locally 段。S4c 进度 merged 6/9，剩 T2 #525 / FU-4 / T5）；2026-05-16 v11（状态回灌：修正 T1/T3 PR 占位符为 #514/#515）；2026-05-16 v10（S4c T1 rbacassign 闭环 shipped）；2026-05-16 v9（S4-FU PR #501 review 闭环批）
 **对接来源**:
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`（B 路线源）
 - `docs/plans/202605071200-033-pg-implementation-plan.md`（A 路线，已被本计划取代）
@@ -76,7 +76,7 @@ archive `202604201800-pg-pilot-layering-refactor-plan.md` 是同形态的前一�
 | **S4.0** ✅ | effective last-admin invariant (status=active∧admin 原子语义 + DB trigger 一致) | cell + adapter | S3+S5 | **shipped #476** | PR#449/#459 review last-admin 语义漏洞 |
 | **S4a** ✅ | PG session/refresh durable wiring (删 mem session/refresh + composition-root 显式 protocol + forced re-login + refresh stable-sid + sessionlogout 503/404 区分) | cell 接入 | S3F / S4.0 ✅ | **shipped #482** | S4-PG-SESSION-REFRESH-WIRING / PR338-FU / B5-FU |
 | **S4b** ✅ | authz_epoch + credential event closed loop (JWT jti+authz_epoch claims + credentialinvalidate 3-op funnel + 5 credential events 路由 + sessionvalidate epoch 比对 + refresh reuse cascade) **+ S4a FU-1/FU-2**：rbacassign 删 `syncSessionRevocation` 二态 + same-tx revoke 恢复（ADR D5 合规）；sessionvalidate `enforceSessionState` 路径 store/userRepo infra error 改 `KindUnavailable` → 503 (`ErrAuthServiceUnavailable`) | cell + JWT | S4a ✅ | **shipped #490** | JWT-AUTHZEPOCH-CLOSED-LOOP / B2-C-06 SessionLogout action 校验 / TOCTOU-10（ChangePassword in-tx + bcrypt + epoch bump 原子） |
-| **S4c** 🟡 8/9 | accesscore cleanup / race / L2 e2e (level audit / RBAC waiver / AUTH-CACHE / L2 e2e) **+ S4a FU-3b**：`session_protocol_composition_root_test.go` / `refresh_invariants_test.go` Soft → Medium (type-aware) 升级。**T1 #514 / T2 #525 / T3 #515 / T4 #523 / T5 #524+#533 / FU-1 #513 / FU-2 #512 / FU-3 #516 已 merged；剩 FU-4** | cleanup | S4b ✅ | **merged 8/9** | LEVEL-MISLABEL / B2-T-02/07 / B2-C-13 / AUTH-CACHE / PR250-F3 / PR267-FU |
+| **S4c** ✅ 9/9 | accesscore cleanup / race / L2 e2e (level audit / RBAC waiver / AUTH-CACHE / L2 e2e) **+ S4a FU-3b**：`session_protocol_composition_root_test.go` / `refresh_invariants_test.go` Soft → Medium (type-aware) 升级。**T1 #514 / T2 #525 / T3 #515 / T4 #523 / T5 #524+#533 / FU-1 #513 / FU-2 #512 / FU-3 #516 / FU-4 本批 已 merged；S4-FU 收口完成** | cleanup | S4b ✅ | **merged 9/9** | LEVEL-MISLABEL / B2-T-02/07 / B2-C-13 / AUTH-CACHE / PR250-F3 / PR267-FU |
 | **S6** ✅ | `runtime/state/cas` typed Protocol + configcore + accesscore password_version 接入 | typed primitive + 双消费 | S1 | **shipped #464** | E 表 2 项 + C 表 1 项 |
 | **S7** ✅ | `runtime/audit/ledger` typed Protocol + PG + auditcore 接入 | typed primitive + adapter + cell | S1 | **shipped #450** | D 表 9 项 + PR392-FU |
 | **W9** ✅ | outbox factory adoption | 机械迁移 | — | **shipped #434** | 033 W9 |
@@ -123,8 +123,8 @@ PR #490 review 暴露两件**未在 S4b 同 PR 修复**的 finding，因属"未�
 - **REQUIRED-DEP-NIL-GUARD-01**（cap-14）— OUTBOX-SERVICE-01 archtest scope 只守 `txRunner` 一个字段，PR #490 第五轮 review 手动补齐五处 service 的 `validation.IsNilInterface` guard；改 typeseval-based Soft → Hard archtest 触发条件为"下次新增 service"
 - **ENFORCESESSIONSTATE-HOTPATH-OPT-01**（cap-14）— `enforceSessionState` 两次串行 PG 读（`sessionStore.Get` + `userRepo.GetByID`）；S4b §HIGH-4 决策不包 read-only tx；触发条件为"生产 QPS / P99 延迟阈值"
 
-**剩余进度（v14）**：T1 ✅ / T2 ✅ / T3 ✅ / T4 ✅ / T5 ✅ / FU-1 ✅ / FU-2 ✅ / FU-3 ✅ shipped（**merged 8/9**）；剩余：仅 FU-4
-- **S4c**：仅 FU-4（journey-YAML coverage）待完成；T2 = PR #525 (codegen funnel)、T5 第三轮 = PR #533、FU-1/2/3 = PR #513/#512/#516 均已 merged
+**剩余进度（v15）**：T1 ✅ / T2 ✅ / T3 ✅ / T4 ✅ / T5 ✅ / FU-1 ✅ / FU-2 ✅ / FU-3 ✅ / FU-4 ✅ shipped（**merged 9/9**）；S4-FU 收口完成（ADR §A14 + 5 触发型 backlog + plan 回灌）
+- **S4c**：✅ 全部 9/9 完成。FU-4（journey-YAML coverage）本批 shipped；T2 = PR #525 (codegen funnel)、T5 第三轮 = PR #533、FU-1/2/3 = PR #513/#512/#516 均已 merged
 - **D4**：accesscore docs/contracts sync 并行小 PR（含 S4a FU-3a login/refresh 403 description 漂移）
 - **DX4**：PG adapter maintainability（type assertion 消除 / archtest 自动扫 PG repo）
 - **B2.B**：PG-DEVICECELL-REPO 独立 worktree（与 S4c 并行）
@@ -719,11 +719,12 @@ Wave C
 
 **完成判据**：T1-T5 + FU-1～4 共 9 个 PR 全部 merged + 5 项触发型 backlog 条目落地 `docs/backlog/*` + ADR `202605101400-adr-credential-session-protocol.md` §A12 增"S4-FU 收口"标注。预计总跨度 **2-3 个工作日**（实施 ~17h S4c + ~12h S4-FU = ~29h，并行收益压到 ~16-20h wall time）。
 
-**进度（v11，2026-05-16）**：
-- ✅ merged 5/9：**T1 #514** / **T3 #515** / **FU-1 #513** / **FU-2 #512** / **FU-3 #516**
-- ⬜ 剩 4/9：**T2**（一致性等级校正，rebase 基线就绪）/ **T4**（L2 e2e，断言基线就绪）/ **FU-4**（Journey，FU-1 已 merge 可起）/ **T5**（可延后）
-- ⬜ 收尾项未落：ADR §A12「S4-FU 收口」标注未添加；5 项触发型 backlog（IDENTITYMANAGE-UPDATE-CO-TX / MIGRATION-NONEMPTY-DB / AUTHZMUTATE-MUTATION-EVENT / ARCHTEST-FUNNEL-CALLSITE / GOLANGCI-GOPACKAGES）登记状态待核
-- ⬜ 独立侧线 **D4** / **DX4** / **B2.B** git log 未见 commit，均未 ship
+**进度（v15，2026-05-18）**：
+- ✅ merged 9/9：**T1 #514** / **T2 #525** / **T3 #515** / **T4 #523** / **T5 #524+#533** / **FU-1 #513** / **FU-2 #512** / **FU-3 #516** / **FU-4 本批**（branch `claude/continue-s4c-tasks-5TveC`）
+- ✅ 收尾项全达成：ADR §A14「S4-FU 收口标注（2026-05-18）」已添加（A12 已被 Wave 5 P1-1 占用、A13 被 wire-uniformity 占用，故新增 A14）；5 项触发型 backlog 已登记——`IDENTITYMANAGE-UPDATE-CO-TX-UPGRADE-01` / `MIGRATION-NONEMPTY-DB-UPGRADE-GUIDE-01` / `AUTHZMUTATE-MUTATION-EVENT-OPTIONAL-01` → `docs/backlog/cap-x-cross.md` §x.2；`ARCHTEST-FUNNEL-CALLSITE-LEVEL-01` / `GOLANGCI-GOPACKAGES-EXEMPTION-CLEANUP-01` → `docs/backlog/cap-14-tooling.md` §14.1（backlog.md 索引计数同步 61→63 / 36→39）
+- ⬜ 独立侧线 **D4** / **DX4** / **B2.B** git log 未见 commit，均未 ship（与 S4c/S4-FU 无依赖，状态不变）
+
+> **历史（v11，2026-05-16）**：merged 5/9（T1 #514 / T3 #515 / FU-1 #513 / FU-2 #512 / FU-3 #516）；剩 T2 / T4 / FU-4 / T5；收尾项未落。v12-v14 逐步 ship T4 / T5 / T2，v15 ship FU-4 + 收口。
 
 ---
 
