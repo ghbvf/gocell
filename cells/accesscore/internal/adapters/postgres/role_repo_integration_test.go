@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -593,7 +594,7 @@ func TestLastAdminTrigger_RawDelete(t *testing.T) {
 	var pgErr *pgconn.PgError
 	require.True(t, errors.As(rawErr, &pgErr), "error must be *pgconn.PgError")
 	assert.Equal(t, "P0001", pgErr.Code, "SQLSTATE must be P0001 (PL/pgSQL RAISE EXCEPTION)")
-	assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
+	assert.True(t, pgquery.IsLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
 }
 
 // TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG verifies that the
@@ -627,7 +628,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
 	var pgErr *pgconn.PgError
 	require.True(t, errors.As(rawErr, &pgErr), "error must be *pgconn.PgError")
 	assert.Equal(t, "P0001", pgErr.Code, "SQLSTATE must be P0001 (PL/pgSQL RAISE EXCEPTION)")
-	assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
+	assert.True(t, pgquery.IsLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
 
 	// Confirm the status was NOT actually updated (trigger fired BEFORE UPDATE).
 	got, err := userRepo.GetByID(ctx, soloAdmin.ID)
@@ -885,7 +886,7 @@ func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {
 		switch {
 		case err == nil:
 			successCount++
-		case isLastAdminProtected(err):
+		case pgquery.IsLastAdminProtected(err):
 			protectedCount++
 		default:
 			t.Fatalf("unexpected raw cascade delete error: %v", err)

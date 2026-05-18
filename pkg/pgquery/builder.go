@@ -1,4 +1,4 @@
-// Package pgquery provides PostgreSQL query-building helpers.
+// Package pgquery provides PostgreSQL query-building and wire-error classification helpers.
 package pgquery
 
 import (

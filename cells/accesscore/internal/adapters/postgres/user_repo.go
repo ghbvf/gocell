@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
@@ -169,7 +170,7 @@ func (r *PGUserRepo) Create(ctx context.Context, user *domain.User) error {
 		user.UpdatedAt,
 	)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if pgquery.IsUniqueViolation(err) {
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 				"username or email already exists",
 				errcode.WithInternal(fmt.Sprintf("username=%q email=%q", user.Username, user.Email)))
@@ -296,13 +297,13 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		user.UpdatedAt,
 	)
 	if err != nil {
-		if isLastAdminProtected(err) {
+		if pgquery.IsLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
 				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", user.ID, string(user.Status()))))
 		}
-		if isUniqueViolation(err) {
+		if pgquery.IsUniqueViolation(err) {
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 				"username or email already exists",
 				errcode.WithInternal(fmt.Sprintf("id=%s username=%q email=%q", user.ID, user.Username, user.Email)))
@@ -326,7 +327,7 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 	tag, err := r.db.Exec(ctx, deleteUserSQL, id)
 	if err != nil {
-		if isLastAdminProtected(err) {
+		if pgquery.IsLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),

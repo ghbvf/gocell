@@ -260,7 +260,7 @@ runtime/auth/session/
 - B2-X-03 PG invalid index warn continue（PG schema 启动 fail-fast 在此 PR 配套）
 - B2-A-13 PG pool tx rollback 日志泄漏（顺路，PG adapter 同主题）
 - PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE（PG integration test 加 -race）
-- **PR444-FU-SESSIONSTORE-BENCH-01** 🟡 P2（PR #444 review carry-over）：不进 S3+S5/S4 correctness 主线，移入 DX4/后续 benchmark PR；等 durable session/refresh 正确性落定后，再在 `runtime/auth/session/storetest/` 新增 1000+ session × subject scope `RevokeForSubject` 与 mixed Create/Get/Revoke 并发 benchmark suite
+- **PR444-FU-SESSIONSTORE-BENCH-01** ✅ done（bench 已随 #449 落 `runtime/auth/session/storetest/bench.go`：`RevokeForSubject_1000` + `MixedConcurrent`，mem/PG 共享 `Bench(b, factory, protocol)`；DX4 PR 核验时一并修复 #490 后 seed 缺 `AuthzEpochAtIssue` 回归）
 
 ---
 
@@ -722,7 +722,7 @@ Wave C
 **进度（v15，2026-05-18）**：
 - ✅ merged 9/9：**T1 #514** / **T2 #525** / **T3 #515** / **T4 #523** / **T5 #524+#533** / **FU-1 #513** / **FU-2 #512** / **FU-3 #516** / **FU-4 本批**（branch `claude/continue-s4c-tasks-5TveC`）
 - ✅ 收尾项全达成：ADR §A14「S4-FU 收口标注（2026-05-18）」已添加（A12 已被 Wave 5 P1-1 占用、A13 被 wire-uniformity 占用，故新增 A14）；5 项触发型 backlog 已登记——`IDENTITYMANAGE-UPDATE-CO-TX-UPGRADE-01` / `MIGRATION-NONEMPTY-DB-UPGRADE-GUIDE-01` / `AUTHZMUTATE-MUTATION-EVENT-OPTIONAL-01` → `docs/backlog/cap-x-cross.md` §x.2；`ARCHTEST-FUNNEL-CALLSITE-LEVEL-01` / `GOLANGCI-GOPACKAGES-EXEMPTION-CLEANUP-01` → `docs/backlog/cap-14-tooling.md` §14.1（backlog.md 索引计数同步 61→63 / 36→39）
-- ⬜ 独立侧线 **D4** / **DX4** / **B2.B** git log 未见 commit，均未 ship（与 S4c/S4-FU 无依赖，状态不变）
+- 独立侧线：**DX4** ✅ shipped（本 PR，实施 plan `docs-plans-202605082145-034-pg-corecell-elegant-ritchie.md`；4 子项全收口 + PR444-FU bench 核验/修复）；**D4** / **B2.B** ⬜ 仍未 ship（与 S4c/S4-FU 无依赖，状态不变）
 
 > **历史（v11，2026-05-16）**：merged 5/9（T1 #514 / T3 #515 / FU-1 #513 / FU-2 #512 / FU-3 #516）；剩 T2 / T4 / FU-4 / T5；收尾项未落。v12-v14 逐步 ship T4 / T5 / T2，v15 ship FU-4 + 收口。
 
@@ -757,22 +757,22 @@ Wave C
 
 ---
 
-### DX4 PG adapter maintainability（S4 后或低风险并行）
+### DX4 PG adapter maintainability（S4 后或低风险并行）✅ shipped（本 PR）
 
 **目的**：降低 PG accesscore wiring 的维护风险，但不阻塞 S4 correctness 主线。
 
 **建议排序**：S3F 与 S4a 之后；若人力充足可并行，但不与 S4a/S4b 共 PR。
 
-**内容**：
-- `cells/accesscore/postgres.NewDeps(pool any, ...)` 改为 typed `*pgxpool.Pool` 或小接口，消除运行时 type assertion
-- PG user/role repo 的 query/constraint 错误码与 `adapters/postgres` 统一分类，避免全部映射成泛化 `ErrInternal`
-- ambient tx archtest 从手写文件清单改为自动扫描 PG repo，或引入显式 marker / executor abstraction
-- `PR444-FU-SESSIONSTORE-BENCH-01` 从 S3+S5/S4 correctness 主线移出，等 durable session/refresh 正确性落定后单独跑 benchmark
+**内容**（实施 plan：`docs-plans-202605082145-034-pg-corecell-elegant-ritchie.md`）：
+- ✅ `cells/accesscore/postgres.NewDeps(pool any, ...)` → typed `*pgxpool.Pool`，删运行时 type assertion（编译期拦错）
+- ✅ PG user/role repo 错误码与 `adapters/postgres` **单一源统一分类**：分类器收口到 `pkg/pgquery`（删 `adapters/postgres/errors.go` + `cells/.../pgerrors.go` 两份重复，`.golangci.yml` LAYER-02 加 `pgconn`）；`role_repo.Create` 等 blanket `ErrInternal` 改按 23505/23503 分类
+- ✅ ambient tx archtest `PG-REPO-AMBIENT-TX-01` 从手写 5 文件清单升 **Hard（form-uniqueness）**：sealed `pgExecutor` 单一 holder（R1 struct-field funnel + R2 ctor-param funnel，`*types.Info` resolve），`audit_ledger_store` 收敛，companion 覆盖守卫 + RED fixture
+- ✅ `PR444-FU-SESSIONSTORE-BENCH-01`：核验确认 bench 已随 #449 实现于 `runtime/auth/session/storetest/bench.go`（`RevokeForSubject_1000` + `MixedConcurrent`，mem/PG）；核验中发现 develop 上 seed fixture 缺 `AuthzEpochAtIssue`（#490 后回归）导致 bench 不可执行——本 PR 一并修复 seed
 
 **验收**：
-- 类型签名能在编译期拦错 pool 注入
-- 新增/迁移 PG repo 时 archtest 不需要手动补文件清单
-- benchmark PR 只报告性能与索引验证，不夹带行为语义改动
+- ✅ 类型签名编译期拦错 pool 注入
+- ✅ 新增/迁移 PG repo 时 archtest 不需手动补文件清单（form-uniqueness 自动覆盖 `*_repo.go`/`*_store.go`）
+- ✅ bench 可执行（seed 修复后 mem/PG 套件通过），refactor 行为保真不夹带 write 语义改动
 
 ---
 

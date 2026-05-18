@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -174,6 +176,8 @@ WHERE ra.role_id = 'admin' AND u.status = 'active'`
 )
 
 // Create upserts a role (seed/bootstrap semantics: existing role is overwritten).
+// Returns ErrAuthRoleDuplicate (KindConflict) on unique-constraint violation
+// (SQLSTATE 23505), mirroring session_store.go sessionCreateError semantics.
 func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 	permJSON, err := json.Marshal(role.Permissions)
 	if err != nil {
@@ -186,9 +190,21 @@ func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 		r.clock.Now(),
 	)
 	if err != nil {
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: create", err)
+		return roleCreateError(err, role.ID)
 	}
 	return nil
+}
+
+// roleCreateError classifies a DB error from PGRoleRepo.Create.
+// Unique-constraint violations map to ErrAuthRoleDuplicate (KindConflict);
+// all other errors fall through to ErrInternal.
+func roleCreateError(err error, roleID string) error {
+	if pgquery.IsUniqueViolation(err) {
+		return errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate,
+			"role already exists",
+			errcode.WithDetails(slog.String("roleID", roleID)))
+	}
+	return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: create", err)
 }
 
 // GetByID fetches a role by primary key. Returns ErrAuthRoleNotFound when absent.
@@ -249,7 +265,7 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 		r.clock.Now(),
 	)
 	if err != nil {
-		if isForeignKeyViolation(err) {
+		if pgquery.IsForeignKeyViolation(err) {
 			switch fkConstraintName(err) {
 			case "role_assignments_user_id_fkey":
 				return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
@@ -285,7 +301,7 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	_, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
 	if err != nil {
-		if isLastAdminProtected(err) {
+		if pgquery.IsLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",
 				errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
@@ -340,7 +356,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 	var userHeldRole, wasDeleted bool
 	row := tx.QueryRow(ctx, removeIfNotLastSQL, userID, roleID)
 	if err := row.Scan(&userHeldRole, &wasDeleted); err != nil {
-		if isLastAdminProtected(err) {
+		if pgquery.IsLastAdminProtected(err) {
 			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
 			return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",

@@ -71,6 +71,20 @@
 
   ref: `tools/archtest/fixture.go` (FixtureBuildTag const + RunTypedFixture) + `tools/archtest/pass_funnel_test.go` (diagsFixtureTagBypass / fixtureTagLoaderSet — (callee, arg) pair form-uniqueness Hard)。
 
+- **single sanctioned holder via struct-field funnel + (R1 host-type-name, R2 callee+param) form-uniqueness** — when a concept has exactly ONE struct allowed to hold a raw infrastructure field, archtest can enforce it Hard via `*types.Info` field-type resolution without any hand-maintained allowlist. Pattern:
+
+  - **R1 (field-type funnel)**: walk every `*ast.StructType` field; resolve its type via `*types.Info.Types[expr].Type` to the target named pointer type (`*types.Pointer → *types.Named → Obj().Pkg().Path() + Obj().Name()`); assert the enclosing struct's type name equals the single sanctioned holder name (e.g., `pgExecutor`). Any other struct holding that field type fails CI immediately — no field-name string matching, no allowlist map.
+
+  - **R2 (constructor-param funnel)**: walk every `*ast.FuncDecl` parameter; resolve its type to the same target; assert (a) func name starts with `New` AND (b) func body contains a `CallExpr` whose `Fun` resolves via `*types.Info.Uses` to the sanctioned constructor function (e.g., `newPGExecutor`) and whose first argument `*ast.Ident` matches the pool param name. Both conditions AND; either missing flags a violation.
+
+  **Hard caveat (same as panic/panicregister.Approved 范本)**: intra-package compile Hard is UNREACHABLE when the sanctioned holder and the repo structs share the same Go package — package-level visibility lets sibling files reach the holder's field or declare their own. The ceiling is archtest-bound form-uniqueness: the ONLY `*pgxpool.Pool` occurrences permitted are (i) the `pgExecutor.pool` field and (ii) `New*` constructor params fed to `newPGExecutor`; both resolved via `*types.Info` (R1 host-type-name + R2 callee+param), no gray zone. Deviation fails CI immediately.
+
+  **Scan scope**: apply R1/R2 only to `*_repo.go` and `*_store.go` files. Infrastructure files (pool wrapper, tx manager, executor itself) legitimately hold the raw pool and are excluded by filename suffix, not by a hand-maintained list. A companion coverage guard asserts each scanned package yields at least one `*_repo.go`/`*_store.go` file, making coverage drift detectable.
+
+  **Ship instance**: `PG-REPO-AMBIENT-TX-01` in `tools/archtest/pg_repo_ambient_tx_test.go`. R1+R2 upgraded from Medium (hand-maintained 5-file allowlist + write-method prefix string matching) to Hard(form-uniqueness) in DX4 Item 3 PR (2026-05-18). RED fixtures in `tools/archtest/internal/pgrepoambienttxfixture/fixture.go` (3 violations: badR1Repo + badR2NonNew + NewBadR2NoWrap); GREEN cases (pgExecutor field + NewGoodRepo→newPGExecutor) assert zero diagnostics.
+
+  ref: `tools/archtest/pg_repo_ambient_tx_test.go` + `tools/archtest/internal/pgrepoambienttxfixture/fixture.go` + ADR `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4.5.1 amendment.
+
 ## archtest 文件命名
 
 - 单条独立规则 → `{rule}_test.go`

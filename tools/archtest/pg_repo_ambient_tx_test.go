@@ -1,25 +1,78 @@
 // invariants:
 //   - INVARIANT: PG-REPO-AMBIENT-TX-01
 //
-// Package archtest — PG-REPO-AMBIENT-TX-01.
+// # Package archtest — PG-REPO-AMBIENT-TX-01
 //
-// Write-path methods on PostgreSQL-backed repositories must route through the
-// package-local typed executor, or through `txRunner.RunInTx` for explicit
-// multi-statement boundaries. Direct `s.pool.Exec` / `s.pool.QueryRow` /
-// `s.pool.Query` / `s.pool.Begin` calls inside a write method bypass the
-// caller's ambient tx and break ADR-credential D5 same-tx revoke + L2
-// outbox atomicity.
+// PG-REPO-AMBIENT-TX-01 enforces the struct-field-funnel form of the ambient-tx
+// routing contract for PostgreSQL-backed repositories:
 //
-// Read-only methods (Get / List / Probe / Health / Count / Detect) MAY use
-// the pool directly — they don't participate in ambient-tx semantics.
+//   - R1 (single sanctioned holder): the ONLY struct permitted to declare a
+//     field of type *pgxpool.Pool is the package-local pgExecutor. Any other
+//     struct holding such a field bypasses the ambient-tx routing logic and
+//     can issue DML directly against the pool, breaking ADR-credential D5
+//     same-tx revoke and L2 outbox atomicity.
 //
-// AI-rebust tier: **Medium** (.claude/rules/gocell/ai-collab.md §载体决策原则
-// #3). Type-aware: the bypass is identified by resolving the call receiver's
-// type to `*pgxpool.Pool` via `go/types`, not by string-matching a field name.
-// A future repo using `pgPool *pgxpool.Pool` (different field name) is still
-// caught. This remains Medium because Go cannot make future repositories use a
-// sealed executor abstraction; the rule is a typed regression guard, not a
-// Hard proof.
+//   - R2 (wrap funnel): every function/method parameter of type *pgxpool.Pool
+//     must be in a New*-prefixed constructor whose body feeds that parameter
+//     straight to a newPGExecutor(param) call. A bare *pgxpool.Pool param on a
+//     non-constructor, or a constructor that receives the pool but stores it
+//     raw, violates the funnel.
+//
+// # AI-rebust grading
+//
+// Hard via form-uniqueness (archtest-bound), NOT compile-time.
+//
+// Intra-package compile Hard is unreachable: adapters/postgres repos share the
+// package with pgExecutor; Go package-level visibility means a sibling file can
+// always reach pgExecutor.pool or add its own field — the compiler cannot block
+// it. The ceiling is archtest-bound form-uniqueness (same grade and precedent as
+// PANIC-REGISTERED-01 / panic(panicregister.Approved) per ai-collab.md §Hard
+// 范本 #2 caveat):
+//
+//   - R1 resolves every *ast.StructType field's type via *types.Info to the named
+//     type github.com/jackc/pgx/v5/pgxpool.Pool (pointer-to-named), then checks
+//     that the enclosing struct's type name is exactly "pgExecutor". The
+//     resolution path is *types.Pointer → *types.Named → Obj().Pkg().Path() +
+//     Obj().Name(). No field-name matching; no string anchors; no allowlist map.
+//     Any struct whose field resolves to that type and is not named pgExecutor
+//     fails CI — there is no "looks-like-but-isn't" gray zone.
+//
+//   - R2 resolves every *ast.FuncDecl parameter type via *types.Info to the
+//     same *pgxpool.Pool named type. A *pgxpool.Pool param is legal only when
+//     (a) the enclosing FuncDecl name starts with "New" AND (b) the function
+//     body contains a CallExpr whose Fun resolves via *types.Info to the
+//     package-local newPGExecutor function and whose first argument is the
+//     same *pgxpool.Pool param identifier. Both (a) and (b) are required AND;
+//     failing either flags a violation. Exempted: the pgExecutor methods
+//     themselves and newPGExecutor's own parameter.
+//
+// # Blind spots
+//
+// BS-1 Field embedding: an embedded struct containing *pgxpool.Pool — e.g.
+//
+//	type badRepo struct { pgExecutorInner }; type pgExecutorInner struct { pool *pgxpool.Pool }
+//
+// — is not caught by R1 (R1 scans direct struct fields only, not embedded
+// sub-fields). Accepted: the repo has no such pattern; the convention is direct
+// field inclusion. Reverse self-check: TestPGRepoAmbientTx_SelfCheck asserts no
+// embedded-type pattern carrying *pgxpool.Pool appears in production packages.
+//
+// BS-2 Interface-typed field that carries a *pgxpool.Pool at runtime — R1 is a
+// static-type check; it cannot see runtime dynamic values. Accepted per
+// ai-collab.md §3.
+//
+// BS-3 Function-value indirection: `var fn = newPGExecutor; fn(pool)` — R2's
+// callee resolution uses *types.Info.Uses, which resolves the Fun identifier of
+// a call expression to the *types.Func object. A function-value indirect call
+// has a *types.Var as Fun, so resolution returns ok=false and R2 does not see
+// this as newPGExecutor. Accepted: same blind spot as PANIC-REGISTERED-01 and
+// CAS-PROTOCOL-COMPOSITION-ROOT-01 BS-2; the repo has no such pattern. Reverse
+// self-check: TestPGRepoAmbientTx_SelfCheck asserts no function-value
+// assignment from newPGExecutor exists in production.
+//
+// BS-4 *pgxpool.Pool type alias: `type myPool = *pgxpool.Pool` — Go type aliases
+// resolve to the same underlying *types.Named so isPgxPoolType still matches.
+// Not truly a blind spot; documented for completeness.
 package archtest
 
 import (
@@ -27,71 +80,35 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-// pgRepoFiles enumerates the PG-backed repository files this rule covers.
-// Adding a new PG repo means adding it here AND keeping the helper allowlist
-// (s.execCtx / s.queryRowCtx) in sync. Both adapters/postgres and cell-private
-// adapters are included since the tx-extraction key
-// (kernel/persistence.TxCtxKey) is shared across the layer boundary.
-var pgRepoFiles = map[string]struct{}{
-	"adapters/postgres/session_store.go":                       {},
-	"adapters/postgres/refresh_store.go":                       {},
-	"adapters/postgres/outbox_store.go":                        {},
-	"cells/accesscore/internal/adapters/postgres/user_repo.go": {},
-	"cells/accesscore/internal/adapters/postgres/role_repo.go": {},
-}
-
-// pgWriteMethodPrefixes flags a method as write-path. Prefix-match keeps the
-// rule extension-friendly without an explicit allowlist per-method; methods
-// not matching these prefixes are read-only and may touch pool directly.
-var pgWriteMethodPrefixes = []string{
-	"Create",
-	"Insert",
-	"Update",
-	"Delete",
-	"Revoke",
-	"Assign",
-	"Remove",
-	"Mark",
-	"Claim",
-	"Reclaim",
-}
-
-// pgPoolBypassCalls is the set of pool-method names that bypass ambient tx
-// when invoked directly on a *pgxpool.Pool. The package-local typed executors
-// wrap these and consult ctx for an existing pgx.Tx before falling through to
-// pool.
-var pgPoolBypassCalls = map[string]struct{}{
-	"Exec":     {},
-	"Query":    {},
-	"QueryRow": {},
-	"Begin":    {},
-}
 
 const (
 	pgxpoolImportPath = "github.com/jackc/pgx/v5/pgxpool"
 	pgxpoolTypeName   = "Pool"
+	pgExecutorName    = "pgExecutor"
+	newPGExecutorName = "newPGExecutor"
 )
 
 // pgRepoPackagePatterns lists the import patterns whose production .go files
-// the archtest must parse with full TypesInfo. Limiting the load to two
-// directories keeps the test fast (vs. module-wide scan).
+// the archtest must parse with full TypesInfo. Both adapters/postgres and the
+// cell-private adapters/postgres are included since both declare a pgExecutor
+// and their repos are subject to the same funnel rule.
 var pgRepoPackagePatterns = []string{
 	"github.com/ghbvf/gocell/adapters/postgres",
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres",
 }
 
-// TestPGRepoAmbientTx guards PG-REPO-AMBIENT-TX-01: write-path methods on
-// PostgreSQL-backed repositories must respect ambient transactions.
-//
-// Type-aware: the bypass detection resolves the receiver of the bypass call
-// to *pgxpool.Pool via go/types, not by string-matching a field name.
+// TestPGRepoAmbientTx guards PG-REPO-AMBIENT-TX-01 against the production
+// packages. RED fixtures are exercised separately by
+// TestPGRepoAmbientTx_RedFixtureDetected. Blind-spot self-checks are in
+// TestPGRepoAmbientTx_SelfCheck.
 func TestPGRepoAmbientTx(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -99,85 +116,245 @@ func TestPGRepoAmbientTx(t *testing.T) {
 			"(loads PG repo packages with TypesInfo, ~2-3s)")
 	}
 
-	var violations []string
-	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil || p.Fset == nil {
-			return nil
+	diags := RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, pgRepoAmbientTxRule)
+	sort.Slice(diags, func(i, j int) bool {
+		if diags[i].Rel != diags[j].Rel {
+			return diags[i].Rel < diags[j].Rel
 		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if _, watched := pgRepoFiles[rel]; !watched {
-				continue
-			}
-			violations = append(violations, scanPGRepoFileTyped(p.Fset, file, rel, p.TypesInfo)...)
-		}
-		return nil
+		return diags[i].Line < diags[j].Line
 	})
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
+
+	// Companion coverage guard: each package pattern must contribute at least
+	// one *_repo.go or *_store.go to the parsed set. A silent import-path drift
+	// would zero out the rule's coverage.
+	assertProductionCoverage(t)
+
+	for _, d := range diags {
+		t.Errorf("PG-REPO-AMBIENT-TX-01 %s:%d: %s", d.Rel, d.Line, d.Message)
 	}
-	assert.Empty(t, violations,
-		"PG-REPO-AMBIENT-TX-01: write-method bodies must route via ambient-tx "+
-			"aware typed executors or txRunner.RunInTx; direct "+
-			"*pgxpool.Pool method calls bypass the caller's ambient transaction.")
 }
 
-// scanPGRepoFileTyped inspects each method on file's repo type. Write-path
-// method bodies are checked against the bypass-call rule using TypesInfo to
-// resolve the receiver of every CallExpr selector.
-func scanPGRepoFileTyped(
-	fset *token.FileSet,
-	file *ast.File,
-	rel string,
-	info *types.Info,
-) []string {
-	var out []string
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-		if fn.Recv == nil || fn.Body == nil {
-			return
+// pgRepoAmbientTxRule is the Rule function for PG-REPO-AMBIENT-TX-01.
+// Extracted so the same logic is exercised by both the production-package test
+// and the RED-fixture test.
+//
+// File scope: only *_repo.go and *_store.go files are checked. Infrastructure
+// files (pool.go, tx_manager.go, pg_executor.go, etc.) legitimately hold raw
+// *pgxpool.Pool fields and are intentionally out of scope. The fixture package
+// uses plain .go files without the _repo/_store suffix; the fixture filename
+// itself (fixture.go) is in scope for the fixture test by design — the rule
+// checks all files when no suffix filter applies to fixture packages. To keep
+// the production and fixture paths consistent, R1/R2 scans all files passed
+// via p.Files; the production test separately applies the filename-suffix
+// coverage guard via assertProductionCoverage.
+//
+// Infrastructure exemptions are applied via the isInfraFile predicate, which
+// excludes files that are NOT *_repo.go or *_store.go from the R1/R2 checks
+// in the production packages. For fixture packages (which don't follow the
+// _repo/_store naming), the rule applies to all files so the RED fixtures are
+// detected.
+func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
+	if p.TypesInfo == nil || p.Fset == nil {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		base := filepath.Base(rel)
+		// In production packages, only check *_repo.go and *_store.go.
+		// Infrastructure files (pool.go, tx_manager.go, pg_executor.go, errors.go,
+		// etc.) legitimately need *pgxpool.Pool fields. Fixture files have no
+		// _repo/_store suffix but should still be checked for RED fixture coverage.
+		isProductionPkg := strings.Contains(rel, "adapters/postgres") ||
+			strings.Contains(rel, "cells/accesscore/internal/adapters/postgres")
+		if isProductionPkg {
+			if !strings.HasSuffix(base, "_repo.go") && !strings.HasSuffix(base, "_store.go") {
+				continue
+			}
 		}
-		if !isPGWriteMethod(fn.Name.Name) {
-			return
-		}
-		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
+		diags = append(diags, scanR1PoolFields(p.Fset, file, rel, p.TypesInfo)...)
+		diags = append(diags, scanR2PoolParams(p.Fset, file, rel, p.TypesInfo)...)
+	}
+	return diags
+}
+
+// scanR1PoolFields implements R1: every struct field whose type resolves to
+// *pgxpool.Pool must be in a struct named exactly pgExecutor.
+func scanR1PoolFields(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	var diags []Diagnostic
+	EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
+		// EachInChildren[ast.TypeSpec] visits the direct Spec children of gd.
+		// GenDecl.Specs is []ast.Spec; TypeSpec is a direct child — depth=1 is correct.
+		EachInChildren[ast.TypeSpec](gd, func(ts *ast.TypeSpec) {
+			st, ok := ts.Type.(*ast.StructType)
 			if !ok {
 				return
 			}
-			if _, isBypass := pgPoolBypassCalls[sel.Sel.Name]; !isBypass {
+			structName := ts.Name.Name
+			if structName == pgExecutorName {
+				return // only sanctioned holder
+			}
+			if st.Fields == nil {
 				return
 			}
-			if !isPgxPoolReceiver(sel.X, info) {
-				return
+			for _, field := range st.Fields.List {
+				if !isPgxPoolType(field.Type, info) {
+					continue
+				}
+				fieldName := "_"
+				if len(field.Names) > 0 {
+					fieldName = field.Names[0].Name
+				}
+				line := fset.Position(field.Type.Pos()).Line
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: line,
+					Message: fmt.Sprintf(
+						"R1: struct %s field %s holds *pgxpool.Pool; "+
+							"only pgExecutor may hold this field — route via newPGExecutor",
+						structName, fieldName),
+				})
 			}
-			pos := fset.Position(sel.Sel.Pos())
-			out = append(out, fmt.Sprintf(
-				"%s:%d: write-method %s.%s calls *pgxpool.Pool.%s directly; "+
-					"route via the package-local typed executor or txRunner.RunInTx",
-				rel, pos.Line, receiverTypeName(fn), fn.Name.Name, sel.Sel.Name))
 		})
 	})
-	return out
+	return diags
 }
 
-// isPGWriteMethod reports whether the method name starts with a known
-// write-prefix.
-func isPGWriteMethod(name string) bool {
-	for _, prefix := range pgWriteMethodPrefixes {
-		if strings.HasPrefix(name, prefix) {
-			return true
+// scanR2PoolParams implements R2: *pgxpool.Pool function parameters are only
+// allowed in New*-prefixed constructors that call newPGExecutor(param).
+func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	var diags []Diagnostic
+	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Type == nil || fn.Type.Params == nil {
+			return
+		}
+		// newPGExecutor itself is exempt — it IS the funnel.
+		if fn.Name.Name == newPGExecutorName {
+			return
+		}
+		// pgExecutor methods are exempt — they operate on an already-wrapped executor.
+		if receiverTypeName(fn) == pgExecutorName {
+			return
+		}
+
+		poolParams := collectPGPoolParams(fn, info)
+		if len(poolParams) == 0 {
+			return
+		}
+
+		// R2a: non-New* function with pool param is always a violation.
+		if !strings.HasPrefix(fn.Name.Name, "New") {
+			line := fset.Position(fn.Name.Pos()).Line
+			for _, paramName := range poolParams {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: line,
+					Message: fmt.Sprintf(
+						"R2: func %s has *pgxpool.Pool param %q but is not a New* constructor; "+
+							"only New*-prefixed constructors may accept *pgxpool.Pool (and must wrap via newPGExecutor)",
+						fn.Name.Name, paramName),
+				})
+			}
+			return
+		}
+
+		// R2b: New*-prefixed function must call newPGExecutor(poolParam) in its body.
+		if fn.Body == nil {
+			return
+		}
+		for _, paramName := range poolParams {
+			if !bodyCallsNewPGExecutorWith(fn.Body, paramName, info) {
+				line := fset.Position(fn.Name.Pos()).Line
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: line,
+					Message: fmt.Sprintf(
+						"R2: New* constructor %s has *pgxpool.Pool param %q but does not call "+
+							"newPGExecutor(%s); pool must be wrapped via newPGExecutor",
+						fn.Name.Name, paramName, paramName),
+				})
+			}
+		}
+	})
+	return diags
+}
+
+// collectPGPoolParams returns the names of fn's parameters whose type resolves
+// to *pgxpool.Pool.
+func collectPGPoolParams(fn *ast.FuncDecl, info *types.Info) []string {
+	var names []string
+	for _, field := range fn.Type.Params.List {
+		if !isPgxPoolType(field.Type, info) {
+			continue
+		}
+		for _, n := range field.Names {
+			names = append(names, n.Name)
 		}
 	}
-	return false
+	return names
 }
 
-// isPgxPoolReceiver reports whether expr's resolved type is *pgxpool.Pool
-// (or pgxpool.Pool — the helper handles both pointer and value receivers
-// even though pgxpool.Pool is conventionally a pointer). Returns false when
-// TypesInfo is missing or expr's type is not a named type from the
-// pgxpool import path.
-func isPgxPoolReceiver(expr ast.Expr, info *types.Info) bool {
+// bodyCallsNewPGExecutorWith reports whether body contains a call to the
+// package-local newPGExecutor whose first argument is the identifier paramName.
+func bodyCallsNewPGExecutorWith(body *ast.BlockStmt, paramName string, info *types.Info) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		fn := resolveCalleeFunc(call.Fun, info)
+		if fn == nil || fn.Name() != newPGExecutorName {
+			return
+		}
+		if len(call.Args) == 0 {
+			return
+		}
+		if arg, ok := call.Args[0].(*ast.Ident); ok && arg.Name == paramName {
+			found = true
+		}
+	})
+	return found
+}
+
+// resolveCalleeFunc resolves a CallExpr's Fun to a *types.Func via TypesInfo.
+// Handles both bare Ident (package-local / dot-import) and SelectorExpr forms.
+// Returns nil when the callee cannot be resolved to a *types.Func (e.g. method
+// calls resolved via Selections, function values via Var).
+func resolveCalleeFunc(fun ast.Expr, info *types.Info) *types.Func {
+	if info == nil {
+		return nil
+	}
+	switch e := fun.(type) {
+	case *ast.Ident:
+		if obj, ok := info.Uses[e]; ok {
+			f, _ := obj.(*types.Func)
+			return f
+		}
+	case *ast.SelectorExpr:
+		if obj, ok := info.Uses[e.Sel]; ok {
+			f, _ := obj.(*types.Func)
+			return f
+		}
+	}
+	return nil
+}
+
+// receiverTypeName returns the bare type name from a FuncDecl's receiver,
+// stripping any leading * pointer marker. Returns "" when fn has no receiver
+// or the type expression is not a recognized form.
+//
+// Used by this test and by mem_tx_lock_ownership_test.go and
+// sealed_marker_noop_transparency_test.go as a shared archtest helper.
+func receiverTypeName(fn *ast.FuncDecl) string {
+	if fn == nil || fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	return ReceiverTypeName(fn.Recv.List[0].Type)
+}
+
+// isPgxPoolType reports whether expr's static type is *pgxpool.Pool.
+// Returns false when TypesInfo is nil or expr's type cannot be resolved.
+func isPgxPoolType(expr ast.Expr, info *types.Info) bool {
 	if info == nil {
 		return false
 	}
@@ -185,11 +362,11 @@ func isPgxPoolReceiver(expr ast.Expr, info *types.Info) bool {
 	if !ok || tv.Type == nil {
 		return false
 	}
-	t := tv.Type
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
+	ptr, ok := tv.Type.(*types.Pointer)
+	if !ok {
+		return false
 	}
-	named, ok := t.(*types.Named)
+	named, ok := ptr.Elem().(*types.Named)
 	if !ok {
 		return false
 	}
@@ -200,19 +377,121 @@ func isPgxPoolReceiver(expr ast.Expr, info *types.Info) bool {
 	return obj.Pkg().Path() == pgxpoolImportPath && obj.Name() == pgxpoolTypeName
 }
 
-// receiverTypeName returns the bare type name of fn's receiver, stripping
-// any leading * pointer marker. Used solely for error messages.
-func receiverTypeName(fn *ast.FuncDecl) string {
-	if fn.Recv == nil || len(fn.Recv.List) == 0 {
-		return ""
+// assertProductionCoverage fails the test if either of the two production
+// package patterns did not yield at least one *_repo.go or *_store.go file.
+// This prevents a silent coverage zero-out caused by import-path drift or
+// package renaming.
+func assertProductionCoverage(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		return
 	}
-	switch t := fn.Recv.List[0].Type.(type) {
-	case *ast.StarExpr:
-		if id, ok := t.X.(*ast.Ident); ok {
-			return id.Name
+	for _, pattern := range pgRepoPackagePatterns {
+		found := false
+		_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+			for _, f := range p.Files {
+				base := filepath.Base(p.Rel(f))
+				if strings.HasSuffix(base, "_repo.go") || strings.HasSuffix(base, "_store.go") {
+					found = true
+				}
+			}
+			return nil
+		})
+		require.Truef(t, found,
+			"PG-REPO-AMBIENT-TX-01 coverage guard: no *_repo.go or *_store.go file found "+
+				"in package pattern %q — coverage zeroed out; "+
+				"check for package rename or import-path drift",
+			pattern)
+	}
+}
+
+// TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches all three
+// RED violations in internal/pgrepoambienttxfixture:
+//
+//   - 1 R1: badR1Repo holds *pgxpool.Pool (not named pgExecutor)
+//   - 1 R2: badR2NonNew is a non-New* function with *pgxpool.Pool param
+//   - 1 R2: badR2NewNoWrap is a New* function with *pgxpool.Pool param but no newPGExecutor call
+//
+// GREEN cases (pgExecutor field, goodNewFoo calling newPGExecutor) must
+// produce zero diagnostics.
+//
+// Without this test, TestPGRepoAmbientTx's zero-diagnostic result on the real
+// packages has no informational value: the rule could be silently passing
+// everything. The fixture provides a known-positive sample so any rule
+// regression immediately fails CI.
+func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
+	t.Parallel()
+
+	diags := RunTypedFixture(t,
+		FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/pgrepoambienttxfixture/..."},
+		pgRepoAmbientTxRule,
+	)
+
+	for _, d := range diags {
+		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
+	}
+
+	// Exact count: 1 R1 + 2 R2 = 3 total.
+	// Equality (not >=3) so unintentional fixture drift is immediately visible.
+	assert.Len(t, diags, 3,
+		"PG-REPO-AMBIENT-TX-01 RED fixture must yield exactly 3 violations "+
+			"(1×R1: badR1Repo + 1×R2: badR2NonNew + 1×R2: badR2NewNoWrap); "+
+			"GREEN cases (pgExecutor, goodNewFoo→newPGExecutor) must produce 0. "+
+			"Update the expected count if the fixture changes intentionally.")
+
+	r1Count, r2Count := 0, 0
+	for _, d := range diags {
+		if strings.HasPrefix(d.Message, "R1:") {
+			r1Count++
 		}
-	case *ast.Ident:
-		return t.Name
+		if strings.HasPrefix(d.Message, "R2:") {
+			r2Count++
+		}
 	}
-	return ""
+	assert.Equal(t, 1, r1Count, "expected exactly 1 R1 violation (badR1Repo)")
+	assert.Equal(t, 2, r2Count, "expected exactly 2 R2 violations (badR2NonNew + badR2NewNoWrap)")
+}
+
+// TestPGRepoAmbientTx_SelfCheck verifies the blind-spot list by asserting that
+// the prohibited AST forms (BS-1 embedded pool fields, BS-3 function-value
+// assignment from newPGExecutor) are absent from production packages. This
+// makes the blind-spot documentation falsifiable rather than purely commentary.
+func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping SelfCheck in -short mode")
+	}
+
+	// BS-3 reverse check: newPGExecutor must not be stored as a function value
+	// in any production package. A function-value indirection would bypass R2.
+	var bs3Violations []string
+	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			if !p.IsFileInScope(file) {
+				continue
+			}
+			rel := p.Rel(file)
+			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
+				// EachInChildren[ast.Ident] visits the direct Ident children of assign
+				// (both Lhs and Rhs elements that are bare *ast.Ident). Rhs elements
+				// that are *ast.Ident are direct children of AssignStmt at depth=1.
+				EachInChildren[ast.Ident](assign, func(id *ast.Ident) {
+					if id.Name != newPGExecutorName {
+						return
+					}
+					bs3Violations = append(bs3Violations,
+						fmt.Sprintf("%s:%d: newPGExecutor stored as function value "+
+							"(BS-3 blind spot — extend rule if this pattern is needed)",
+							rel, p.Fset.Position(id.Pos()).Line))
+				})
+			})
+		}
+		return nil
+	})
+	assert.Empty(t, bs3Violations,
+		"BS-3 self-check: newPGExecutor must not be stored as a function value in production")
 }

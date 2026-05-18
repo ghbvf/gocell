@@ -164,6 +164,7 @@ linters:
             - github.com/santhosh-tekuri/jsonschema
             - golang.org/x/sys/unix  # pkg/pathsafe fd-anchored openat/mkdirat/unlinkat on non-Windows platforms (stdlib syscall.Openat is linux-only; x/sys/unix provides unified linux/darwin/freebsd API)
             - gopkg.in/yaml.v3
+            - github.com/jackc/pgx/v5/pgconn  # pkg/pgquery SQLSTATE classifier single-source (DX4); leaf wire-error package, no internal import cycle, required so cells/ + adapters/ share one classifier without violating cells↛adapters
         runtime-isolation:
           # LAYER-03: runtime/ depends on kernel/ + pkg/ + curated externals.
           # storetest/ test-helper packages (non-_test.go) use testify by design.

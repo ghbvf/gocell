@@ -17,7 +17,7 @@ func TestNewDeps_NilPool(t *testing.T) {
 	tx := &stubTxRunnerForDeps{}
 	clk := clock.Real()
 
-	deps, err := NewDeps(nil, tx, clk)
+	deps, err := NewDeps((*pgxpool.Pool)(nil), tx, clk)
 
 	require.Error(t, err)
 	assert.Equal(t, Deps{}, deps)
@@ -26,21 +26,6 @@ func TestNewDeps_NilPool(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
 	assert.Contains(t, ecErr.Message, "pool must not be nil")
-}
-
-func TestNewDeps_WrongPoolType(t *testing.T) {
-	tx := &stubTxRunnerForDeps{}
-	clk := clock.Real()
-
-	deps, err := NewDeps(struct{}{}, tx, clk)
-
-	require.Error(t, err)
-	assert.Equal(t, Deps{}, deps)
-
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
-	assert.Contains(t, ecErr.Message, "pool must be *pgxpool.Pool")
 }
 
 func TestNewDeps_NilTxRunner(t *testing.T) {

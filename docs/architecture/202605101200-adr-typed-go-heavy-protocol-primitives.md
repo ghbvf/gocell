@@ -347,11 +347,32 @@ cell := accesscore.New(
 | 033 §6 原计划 archtest | typed Protocol 后形态 |
 |---|---|
 | `PG-REPO-CONSTRUCTOR-FAIL-FAST-01` | typed `func New(pool, txRunner, proto) (*T, error)` 签名 + body 顶层校验，**降级删除** |
-| `PG-REPO-AMBIENT-TX-01` | 调用形态约束，**保留**（typed signature 不能拦） |
+| `PG-REPO-AMBIENT-TX-01` | 调用形态约束，**保留且升级**（见 §4.5.1 amendment） |
 | `PG-REPO-INVARIANT-LIST` 索引 | 由 storetest 注册派生，**降级删除** |
 
 新增 archtest（兜底）：
 - `SESSION-PROTOCOL-COMPOSITION-ROOT-01`：`session.NewProtocol` / `MustNewProtocol` 仅在 `cmd/` 调用，禁止在 `cells/` / `runtime/` 内构造（防止 cell 自定义协议绕过 composition-root 决策）
+
+#### §4.5.1 Amendment — PG-REPO-AMBIENT-TX-01 升级到 Hard(form-uniqueness)
+
+**生效版本**：DX4 Item 3 PR（2026-05-18）
+
+**原形态（Medium）**：手工维护 5 个文件的 allowlist + 写路径方法名前缀扫描（`Create/Insert/Update/Delete/...`）+ `*pgxpool.Pool` receiver 解析。Medium 因为手工 allowlist 可被遗忘（新增 `*_store.go` 文件不自动纳入检查），且方法名前缀匹配是字符串锚点（Soft 形态）。
+
+**新形态（Hard via form-uniqueness）**：
+
+两条规则，均通过 `*types.Info` 解析，无字符串锚点、无手工 allowlist：
+
+- **R1（单一合法持有者）**：每个 `*ast.StructType` 字段，若其类型解析为 `*pgxpool.Pool`（`*types.Pointer → *types.Named → Obj().Pkg().Path() == "github.com/jackc/pgx/v5/pgxpool" && Obj().Name() == "Pool"`），则宿主结构体名称必须精确等于 `pgExecutor`。不匹配者直接失败，无 "looks-like-but-isn't" 灰色地带。
+- **R2（构造函数 wrap funnel）**：每个 `*ast.FuncDecl` 参数，若其类型解析为 `*pgxpool.Pool`，则 (a) 函数名必须以 `New` 为前缀，且 (b) 函数体内必须有 `CallExpr` 其 `Fun` 通过 `*types.Info.Uses` 解析到包内 `newPGExecutor`，且该 `CallExpr` 的第一个参数是该 pool param 的 `*ast.Ident`。两条件 AND，缺一失败。
+
+扫描范围改为 `*_repo.go` 和 `*_store.go` 后缀文件（infrastructure 文件 `pool.go`、`tx_manager.go`、`pg_executor.go` 合法持有 pool，不在范围）。覆盖保护：companion coverage guard 断言两个包模式各自至少有一个 `*_repo.go`/`*_store.go` 文件，防止包名变更导致覆盖静默归零。
+
+**诚实说明（intra-package compile Hard 不可达）**：`adapters/postgres` 包内所有文件共享相同的包可见性；Go 编译器无法阻止同包 sibling file 直接访问 `pgExecutor.pool` 或新增自己的字段。上限是 archtest-bound form-uniqueness，与 `PANIC-REGISTERED-01` / `panic(panicregister.Approved)` 同级（ai-collab.md §Hard 范本 #2 caveat）。
+
+**RED fixtures**：`tools/archtest/internal/pgrepoambienttxfixture/fixture.go` 包含 3 个必须触发违规的 cases（R1: `badR1Repo`；R2a: `badR2NonNew`；R2b: `NewBadR2NoWrap`）和 2 个 GREEN cases（`pgExecutor` 字段；`NewGoodRepo→newPGExecutor`）。`TestPGRepoAmbientTx_RedFixtureDetected` 断言恰好 3 个诊断，使规则可证伪。
+
+**C2 行为保留**：`adapters/postgres.LedgerStore` 由 `pool *pgxpool.Pool` 字段改为 `db pgExecutor` 字段，inline 三个辅助方法（`execCtx`/`queryRowCtx`/`queryCtx`）删除，所有 SQL 路径统一通过 `s.db.Exec/QueryRow/Query` 路由，行为等价（ambient tx 感知，读路径 Tail/Verify 原先直连 pool 现变为 ambient-aware，符合 DX4 "strictly more correct" 验收条件）。
 
 ---
 
