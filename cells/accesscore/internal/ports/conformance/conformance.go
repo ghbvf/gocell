@@ -114,6 +114,14 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 	t.Run("Concurrent_NoDeadlock", func(t *testing.T) {
 		conformConcurrentNoDeadlock(t, factory)
 	})
+	// F22: UpdateLockoutFields contract — persists counter / lastFailedAt /
+	// lockedUntil without touching status / epoch / password columns.
+	t.Run("UpdateLockoutFields_Succeeds", func(t *testing.T) {
+		conformUpdateLockoutFieldsSucceeds(t, factory)
+	})
+	t.Run("UpdateLockoutFields_NotFound", func(t *testing.T) {
+		conformUpdateLockoutFieldsNotFound(t, factory)
+	})
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -516,6 +524,111 @@ func conformConcurrentNoDeadlock(t *testing.T, factory UserRepoFactory) {
 			continue
 		}
 		t.Errorf("Concurrent_NoDeadlock: goroutine %d returned unexpected error: %v", r.idx, r.err)
+	}
+}
+
+// conformUpdateLockoutFieldsSucceeds (F22): writes count + lastFailedAt +
+// lockedUntil into an existing user, then reads it back via GetByID and asserts
+// the three lockout columns are persisted. Status / epoch / password columns
+// must NOT be affected.
+func conformUpdateLockoutFieldsSucceeds(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "lockfld_"+uuid.NewString())
+	initialStatus := u.Status()
+	initialEpoch := u.AuthzEpoch()
+
+	// Build updated lockout state in memory.
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	failedAt := now.Add(-2 * time.Minute)
+	lockedUntil := now.Add(15 * time.Minute)
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:               u.ID,
+		Username:         u.Username,
+		Email:            u.Email,
+		PasswordHash:     u.PasswordHash,
+		PasswordVersion:  u.PasswordVersion,
+		Status:           u.Status(),
+		Source:           u.CreationSource,
+		AuthzEpoch:       u.AuthzEpoch(),
+		CreatedAt:        u.CreatedAt,
+		UpdatedAt:        u.UpdatedAt,
+		FailedLoginCount: 5,
+		LastFailedAt:     &failedAt,
+		LockedUntil:      &lockedUntil,
+	})
+	if err != nil {
+		t.Fatalf("UpdateLockoutFields_Succeeds: ReconstituteUser: %v", err)
+	}
+
+	if err := repo.UpdateLockoutFields(context.Background(), updated); err != nil {
+		t.Fatalf("UpdateLockoutFields_Succeeds: UpdateLockoutFields: %v", err)
+	}
+
+	got, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdateLockoutFields_Succeeds: GetByID: %v", err)
+	}
+	if got.FailedLoginCount() != 5 {
+		t.Errorf("UpdateLockoutFields_Succeeds: failed_login_count: got %d, want 5", got.FailedLoginCount())
+	}
+	if got.LastFailedAt() == nil {
+		t.Fatal("UpdateLockoutFields_Succeeds: last_failed_at must not be nil after UpdateLockoutFields")
+	}
+	if !got.LastFailedAt().Truncate(time.Millisecond).Equal(failedAt) {
+		t.Errorf("UpdateLockoutFields_Succeeds: last_failed_at: got %v, want %v", got.LastFailedAt(), failedAt)
+	}
+	if got.AutoLockoutDeadline() == nil {
+		t.Fatal("UpdateLockoutFields_Succeeds: locked_until must not be nil after UpdateLockoutFields")
+	}
+	if !got.AutoLockoutDeadline().Truncate(time.Millisecond).Equal(lockedUntil) {
+		t.Errorf("UpdateLockoutFields_Succeeds: locked_until: got %v, want %v", got.AutoLockoutDeadline(), lockedUntil)
+	}
+	// Status and epoch must NOT be touched by UpdateLockoutFields.
+	if got.Status() != initialStatus {
+		t.Errorf("UpdateLockoutFields_Succeeds: status must not change: got %v, want %v", got.Status(), initialStatus)
+	}
+	if got.AuthzEpoch() != initialEpoch {
+		t.Errorf("UpdateLockoutFields_Succeeds: authz_epoch must not change: got %d, want %d", got.AuthzEpoch(), initialEpoch)
+	}
+}
+
+// conformUpdateLockoutFieldsNotFound (F22): UpdateLockoutFields on a
+// non-existent userID must return ErrAuthUserNotFound.
+func conformUpdateLockoutFieldsNotFound(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, _, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	phantom := uuid.NewString()
+	phantom2 := uuid.NewString() + "@example.com"
+	now := time.Now().UTC()
+	// fakeHash is a syntactically valid bcrypt string used only as a test
+	// placeholder; it is not a real credential.
+	const fakeHash = "$2a$12$conformancefakehash" //nolint:gosec
+	ghost, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           phantom,
+		Username:     "ghost_" + phantom,
+		Email:        phantom2,
+		PasswordHash: fakeHash,
+		Status:       domain.StatusActive,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		t.Fatalf("UpdateLockoutFields_NotFound: ReconstituteUser: %v", err)
+	}
+
+	err = repo.UpdateLockoutFields(context.Background(), ghost)
+	if err == nil {
+		t.Fatal("UpdateLockoutFields_NotFound: must return error for non-existent user, got nil")
+	}
+	if !isErrAuthUserNotFound(err) {
+		t.Errorf("UpdateLockoutFields_NotFound: must return ErrAuthUserNotFound, got %v", err)
 	}
 }
 

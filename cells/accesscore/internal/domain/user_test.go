@@ -311,6 +311,9 @@ const (
 	testCreatedAtBackdate   = -1 * time.Hour
 	testResetCaseLastGap    = -5 * time.Minute
 	testResetCaseUntilDelta = 15 * time.Minute
+	// testExactStaleEqual is exactly -StaleWindow (== boundary, not > boundary)
+	// so the stale-reset branch is NOT taken and the counter increments.
+	testExactStaleEqual = -15 * time.Minute
 )
 
 func TestUser_RegisterFailedLogin(t *testing.T) {
@@ -373,6 +376,28 @@ func TestUser_RegisterFailedLogin(t *testing.T) {
 			wantShouldLock: false,
 			wantCount:      1,
 			wantLocked:     false,
+		},
+		// F19: implementation uses strict > comparison for stale detection, so
+		// exactly ==StaleWindow is NOT stale — the counter increments normally.
+		{
+			name:           "exact stale boundary (==StaleWindow) is NOT stale → count increments",
+			seedCount:      4,
+			seedLastFailed: ptr(baseTime.Add(testExactStaleEqual)), // exactly StaleWindow ago
+			now:            baseTime,
+			wantShouldLock: true,
+			wantCount:      5,
+			wantLocked:     true,
+		},
+		// F20: count already at threshold (5) — further failures keep accumulating
+		// and re-trigger shouldLock on each call.
+		{
+			name:           "count=5 → count=6 (past threshold accumulates and re-triggers shouldLock)",
+			seedCount:      5,
+			seedLastFailed: ptr(baseTime.Add(testRecentFailureGap)),
+			now:            baseTime,
+			wantShouldLock: true,
+			wantCount:      6,
+			wantLocked:     true,
 		},
 	}
 

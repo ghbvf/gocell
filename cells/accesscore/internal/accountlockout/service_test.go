@@ -371,7 +371,7 @@ func TestService_RecordSuccess_ResetsCounter(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusActive, 3, &last, nil)
 	svc, repo, _, _ := newTestService(t, now, seed)
 
-	require.NoError(t, svc.RecordSuccess(context.Background(), context.Background(), seed))
+	require.NoError(t, svc.RecordSuccess(context.Background(), seed))
 
 	assert.Equal(t, 1, repo.updateLockoutFieldsCalls, "UpdateLockoutFields once")
 	persisted, err := repo.GetByID(context.Background(), seed.ID)
@@ -386,7 +386,7 @@ func TestService_RecordSuccess_AlreadyCleanIsNoOp(t *testing.T) {
 	seed := newSeedUser(t, domain.StatusActive, 0, nil, nil)
 	svc, repo, _, _ := newTestService(t, now, seed)
 
-	require.NoError(t, svc.RecordSuccess(context.Background(), context.Background(), seed))
+	require.NoError(t, svc.RecordSuccess(context.Background(), seed))
 
 	assert.Zero(t, repo.updateLockoutFieldsCalls, "no UPDATE when counter already clean")
 }
@@ -396,12 +396,21 @@ func TestService_TryLazyUnlock_TTLElapsed(t *testing.T) {
 	last := now.Add(testTTLElapsedLastGap)
 	until := now.Add(testTTLElapsedUntilGap) // already past
 	seed := newSeedUser(t, domain.StatusLocked, 5, &last, &until)
-	svc, repo, _, metrics := newTestService(t, now, seed)
+	svc, repo, emitter, metrics := newTestService(t, now, seed)
 
 	unlocked, err := svc.TryLazyUnlock(context.Background(), context.Background(), seed)
 	require.NoError(t, err)
 	assert.True(t, unlocked, "should lazy-unlock when TTL elapsed")
 	assert.Equal(t, 1, metrics.count("lazy_unlocked"))
+
+	// F27: TryLazyUnlock must emit event.user.unlocked.v1 on successful unlock.
+	entries := emitter.snapshot()
+	require.Len(t, entries, 1, "exactly one event emitted on lazy unlock")
+	assert.Equal(t, dto.TopicUserUnlocked, entries[0].EventType)
+	var payload dto.UserUnlockedEvent
+	require.NoError(t, json.Unmarshal(entries[0].Payload, &payload))
+	assert.Equal(t, seed.ID, payload.UserID)
+	assert.Equal(t, SystemActorID, payload.ActorID, "ActorID must be %q for auto-unlock", SystemActorID)
 
 	persisted, err := repo.GetByID(context.Background(), seed.ID)
 	require.NoError(t, err)
@@ -483,4 +492,43 @@ func TestNewService_RejectsNilDeps(t *testing.T) {
 // grows new methods.
 func TestFakeUserRepo_StaticConformance(_ *testing.T) {
 	var _ ports.UserRepository = (*fakeUserRepo)(nil)
+}
+
+// failingEmitter is an outbox.Emitter that always returns the configured error.
+// Used to test the publishLocked failure path in RecordFailure.
+type failingEmitter struct{ err error }
+
+func (f *failingEmitter) Emit(_ context.Context, _ outbox.Entry) error { return f.err }
+
+// TestService_RecordFailure_EmitFailed_PropagatesError (F21) verifies that when
+// the outbox emitter returns an error after a threshold-crossing failure, the
+// error propagates with an "emit locked event" context wrapper. The epoch bump
+// (bumpEpochCalls==1) has already happened at this point, so the caller is
+// responsible for aborting the enclosing transaction.
+func TestService_RecordFailure_EmitFailed_PropagatesError(t *testing.T) {
+	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	last := now.Add(testRecentFailureGap)
+	// Seed with count=4 and Active status: one more failure will cross threshold.
+	seed := newSeedUser(t, domain.StatusActive, 4, &last, nil)
+	repo := newFakeUserRepo(seed)
+
+	inv, err := credentialinvalidate.New(repo, &stubSessionStore{}, &stubRefreshStore{})
+	require.NoError(t, err)
+	mut, err := authzmutate.New(inv, repo)
+	require.NoError(t, err)
+
+	fe := &failingEmitter{err: errors.New("broker down")}
+	clk := clockmock.New(now)
+	svc, err := NewService(repo, mut, fe, clk)
+	require.NoError(t, err)
+
+	err = svc.RecordFailure(context.Background(), context.Background(), seed)
+	require.Error(t, err, "RecordFailure must propagate the emit error")
+	assert.Contains(t, err.Error(), "emit locked event",
+		"error message must include 'emit locked event' context")
+
+	// The epoch bump must have occurred before the emit failure:
+	// this is the side-effect that the caller must roll back via tx abort.
+	assert.Equal(t, 1, repo.bumpEpochCalls,
+		"epoch bump must happen before emit; caller must roll back on emit failure")
 }

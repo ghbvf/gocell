@@ -1103,6 +1103,49 @@ func TestLoginInTx_UnavailableError_NotCollapsedTo401(t *testing.T) {
 
 // --- P1.3a: IssueForUser active-gate tests ---
 
+// TestService_Login_ConsecutiveFailures_TriggersAutoLock (F23) is an end-to-end
+// test that exercises the real auto-lockout funnel (newTestLockout wires the
+// genuine accountlockout.Service). It verifies:
+//   - 5 consecutive wrong-password attempts each return ErrAuthLoginFailed,
+//   - the 5th attempt causes the account to be auto-locked (StatusLocked in repo),
+//   - a 6th attempt with the CORRECT password is still rejected with ErrAuthLoginFailed
+//     because the account is now locked (lazy-unlock window has not elapsed).
+func TestService_Login_ConsecutiveFailures_TriggersAutoLock(t *testing.T) {
+	svc, userRepo := newTestService(t)
+	const (
+		username       = "lockout-test-user"
+		correctPass    = "correct-pass-123"
+		wrongPass      = "wrong-pass"
+		failuresNeeded = 5 // matches accountlockout.Threshold
+	)
+	seedUser(userRepo, username, correctPass)
+
+	// 5 consecutive wrong-password logins. Each must return ErrAuthLoginFailed.
+	for i := range failuresNeeded {
+		_, err := svc.Login(context.Background(), LoginInput{Username: username, Password: wrongPass})
+		require.Error(t, err, "attempt %d: expected error", i+1)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec, "attempt %d: expected errcode.Error", i+1)
+		assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code,
+			"attempt %d: expected ErrAuthLoginFailed", i+1)
+	}
+
+	// After threshold failures, the user must be in StatusLocked.
+	u, err := userRepo.GetByUsername(context.Background(), username)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusLocked, u.Status(),
+		"user must be StatusLocked after %d consecutive failures", failuresNeeded)
+
+	// A 6th attempt with the CORRECT password must still return ErrAuthLoginFailed
+	// because the lockout TTL has not elapsed.
+	_, err = svc.Login(context.Background(), LoginInput{Username: username, Password: correctPass})
+	require.Error(t, err, "locked user must be rejected even with correct password")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code,
+		"locked user: expected ErrAuthLoginFailed (防枚举)")
+}
+
 // TestIssueForUser_NonActiveUser_Rejected (P1.3a) verifies that IssueForUser
 // fail-closes for non-active users (suspended, locked), mirroring the Login
 // pre-check. The control (active user) must still succeed.
