@@ -529,59 +529,39 @@ func TestNotFoundTestStrictFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	fixtureBase := filepath.Join(root, "tools", "archtest", "testdata", "notfound_test_strict_fixtures")
 
-	cases := []struct {
-		dir       string
-		wantLines []int // empty = GREEN (0 violations); non-empty = RED with these line numbers
-	}{
+	// Each fixture dir owns a diag.golden capturing the rule's real output
+	// (Rel:Line: Message); GREEN fixtures have an empty golden. Expected line
+	// numbers live in the regenerated golden, never in this table. See ADR
+	// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
+	dirs := []string{
 		// GREEN — funnel call with typed errcode SelectorExpr.
-		{"compliant_funcdecl_green", nil},
-		{"compliant_trun_green", nil},
-		{"compliant_wire_green", nil},
-
-		// RED — no funnel call. fn at line 12.
-		{"missing_funnel_red", []int{12}},
-		// RED — funnel-shaped name but wrong callee (assert.Equal not
-		// errcodetest). fn at line 15.
-		{"wrong_callee_red", []int{15}},
+		"compliant_funcdecl_green", "compliant_trun_green", "compliant_wire_green",
+		// RED — no funnel call.
+		"missing_funnel_red",
+		// RED — funnel-shaped name but wrong callee.
+		"wrong_callee_red",
 		// RED — right funnel, but expected resolves to non-NotFound errcode.
-		// In pure-AST mode the AST fallback only checks the selector Sel
-		// name pattern (Err*NotFound); ErrValidationFailed fails that
-		// pattern. fn at line 15.
-		{"wrong_code_pattern_red", []int{15}},
-		// RED — right funnel, expected is CallExpr (errcode.Code("ERR_X"))
-		// not SelectorExpr; form lock rejects. fn at line 15.
-		{"basic_lit_expected_red", []int{15}},
+		"wrong_code_pattern_red",
+		// RED — right funnel, expected is CallExpr not SelectorExpr; form lock rejects.
+		"basic_lit_expected_red",
 		// RED — HTTP handler test only asserts status, no funnel call.
-		// fn at line 14.
-		{"status_only_red", []int{14}},
-
-		// RED — t.Run("..._NotFound", helperFunc) with non-inline body.
-		// Fail-closed: helper function references cannot be statically
-		// verified for funnel-call presence. t.Run at line 17.
-		{"non_inline_body_red", []int{17}},
-		// RED — t.Run name contains '/' (subtest path separator). The
-		// strings.HasSuffix predicate accepts any Go-legal subtest name
-		// ending in _NotFound; the regex-only predicate would have
-		// missed this. t.Run at line 15.
-		{"trun_slash_case_red", []int{15}},
-		// RED — funnel call lives inside a nested *ast.FuncLit (dead
-		// closure) that is never invoked. EachInSubtreeStopAt boundary
-		// must NOT credit the call. fn at line 17.
-		{"nested_funclit_red", []int{17}},
-		// RED — expected arg is errcode.Code("ERR_X_NOT_FOUND") CallExpr
-		// conversion form. Same SelectorExpr form lock as
-		// basic_lit_expected_red; the named-type guard for production
-		// code is exercised by TestNotFoundTestStrict against real
-		// errcode imports (typed scan). fn at line 31.
-		{"wrong_const_type_red", []int{31}},
+		"status_only_red",
+		// RED — t.Run with non-inline body; fail-closed.
+		"non_inline_body_red",
+		// RED — t.Run name contains '/' (subtest path separator).
+		"trun_slash_case_red",
+		// RED — funnel call inside nested *ast.FuncLit (dead closure).
+		"nested_funclit_red",
+		// RED — expected arg is errcode.Code("ERR_X_NOT_FOUND") CallExpr form.
+		"wrong_const_type_red",
 	}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.dir, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
 
-			fixtureDir := filepath.Join(fixtureBase, tc.dir)
+			fixtureDir := filepath.Join(fixtureBase, dir)
 			scope := DirsScope(fixtureDir, []string{"."})
 
 			var violations []notFoundViolation
@@ -594,19 +574,13 @@ func TestNotFoundTestStrictFixtures(t *testing.T) {
 				return nil
 			})
 
-			var gotLines []int
+			var diags []Diagnostic
 			for _, v := range violations {
-				gotLines = append(gotLines, v.Line)
+				diags = append(diags, Diagnostic{Rel: v.File, Line: v.Line, Message: v.Reason})
 			}
-			sort.Ints(gotLines)
 
-			if tc.wantLines == nil {
-				assert.Empty(t, gotLines,
-					"fixture %s expected 0 violations, got at lines %v", tc.dir, gotLines)
-				return
-			}
-			assert.Equal(t, tc.wantLines, gotLines,
-				"fixture %s expected violations at lines %v, got %v", tc.dir, tc.wantLines, gotLines)
+			goldenPath := filepath.Join(fixtureBase, dir, "diag.golden")
+			AssertGolden(t, goldenPath, diags)
 		})
 	}
 }

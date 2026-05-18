@@ -1,0 +1,1 @@
+tools/archtest/testdata/typesutil_implements_fixtures/aliased_import_red/usage.go:10: raw go/types.Implements reference outside tools/typesutil/implements_interface.go; use typesutil.ImplementsInterface (value-or-pointer) or typesutil.ImplementsInterfaceExact (value-only) — see tools/typesutil/implements_interface.go

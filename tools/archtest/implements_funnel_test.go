@@ -101,6 +101,7 @@ package archtest
 import (
 	"go/ast"
 	"go/types"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -245,43 +246,39 @@ func TestTypesutilImplementsFunnel01(t *testing.T) {
 func TestTypesutilImplementsFunnel01_Fixtures(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		dir       string
-		wantLines []int // nil = GREEN (0 violations)
-	}{
-		{"selector_call_red", []int{9}},
-		{"dot_import_red", []int{9}},
-		{"aliased_import_red", []int{10}},
-		{"func_value_red", []int{13}},
-		{"approved_wrapper_green", nil},
+	// Each fixture dir owns a diag.golden capturing the rule's real output
+	// (Rel:Line: Message); GREEN fixtures have an empty golden. Expected line
+	// numbers live in the regenerated golden, never in this table. See ADR
+	// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
+	dirs := []string{
+		// RED cases — expect violations.
+		"selector_call_red", "dot_import_red", "aliased_import_red", "func_value_red",
+		// GREEN case — expect 0 violations (empty golden).
+		"approved_wrapper_green",
 	}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.dir, func(t *testing.T) {
+	root := findModuleRoot(t)
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
 
-			pattern := "./tools/archtest/testdata/typesutil_implements_fixtures/" + tc.dir
+			pattern := "./tools/archtest/testdata/typesutil_implements_fixtures/" + dir
 
-			var gotLines []int
+			var diags []Diagnostic
 			scanned := false
 			_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
 				if len(p.Files) > 0 {
 					scanned = true
 				}
-				for _, d := range collectImplementsFunnelViolations(p) {
-					gotLines = append(gotLines, d.Line)
-				}
+				diags = append(diags, collectImplementsFunnelViolations(p)...)
 				return nil
 			})
-			require.True(t, scanned, "fixture %s: no package loaded (path renamed?)", tc.dir)
-			sort.Ints(gotLines)
+			require.True(t, scanned, "fixture %s: no package loaded (path renamed?)", dir)
 
-			wantLines := append([]int(nil), tc.wantLines...)
-			sort.Ints(wantLines)
-
-			assert.Equal(t, wantLines, gotLines,
-				"fixture %s: violation lines mismatch", tc.dir)
+			goldenPath := filepath.Join(root, "tools", "archtest", "testdata",
+				"typesutil_implements_fixtures", dir, "diag.golden")
+			AssertGolden(t, goldenPath, diags)
 		})
 	}
 }
