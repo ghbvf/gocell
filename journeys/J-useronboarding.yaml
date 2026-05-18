@@ -1,6 +1,6 @@
 id: J-useronboarding
 goal: 新用户完成创建并具备登录能力
-lifecycle: experimental
+lifecycle: active
 owner:
   team: platform
   role: journey-owner
@@ -25,15 +25,24 @@ contracts:
   - http.auth.role.check.v1
   - http.auth.role.list.v1
 passCriteria:
+  # NOTE: user-create / role-assign / event-publish are mode: manual because the
+  # production code paths cross the cells/accesscore/internal/ boundary
+  # (identitymanage.Service / rbacassign.Service constructors require internal
+  # credentialinvalidate.Invalidator) and have no Docker-free load-bearing seam
+  # reachable from tests/integration/. They will be promoted back to mode: auto
+  # by JOURNEY-USERONBOARDING-AUTO-EXPANSION-01 (docs/backlog/cap-14-tooling.md)
+  # once either (a) cmd/corebundle is extracted to a library package and a
+  # tests/testutil/corebundle/ harness becomes importable, or (b)
+  # tests/integration/l2atomicity/ adds a J-useronboarding testcontainers e2e
+  # sub-suite. Do not silently revert mode: manual → mode: auto without
+  # providing one of those harnesses first; the load-bearing requirement is
+  # genuine "real-behavior" coverage, not schema-validation tautology.
   - text: 用户记录创建成功
-    mode: auto
-    checkRef: journey.J-useronboarding.user-create
+    mode: manual
   - text: 默认角色分配完成
-    mode: auto
-    checkRef: journey.J-useronboarding.role-assign
+    mode: manual
   - text: user.created 事件发布成功
-    mode: auto
-    checkRef: journey.J-useronboarding.event-publish
+    mode: manual
   - text: 新用户可成功登录
     mode: auto
     checkRef: journey.J-useronboarding.login-verify
