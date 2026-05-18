@@ -1,7 +1,6 @@
 package archtest
 
-// invariants:
-//   - INVARIANT: TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
+// INVARIANT: TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
 
 import (
 	"fmt"
@@ -60,7 +59,9 @@ import (
 //      archtest.KnownNonDefaultTags (façade re-export in resolve.go) and
 //      typeseval.KnownNonDefaultTags (direct internal import). Both point at
 //      the same *types.Func object — covered by red_panic_invariants_style.go
-//      and red_typeseval_qualified.go.
+//      and red_typeseval_qualified.go. Alias import form (kt "…/typeseval")
+//      also resolves to the same *types.Func identity — covered by
+//      red_aliased_import.go.
 //   2. Nested-closure body: RunTyped invoked inside an IIFE within the loop
 //      body must still be caught (subtree walk, not direct-child walk).
 //      Covered by red_nested_closure.go.
@@ -115,6 +116,11 @@ func TestTagGroupLoopForbidsRunTyped(t *testing.T) {
 // Test_TaggroupLoopFixturePrecisionGate verifies the rule's accuracy against
 // the curated red/green fixture set: every red_*.go must trigger at least
 // one diagnostic; no green_*.go may trigger any.
+//
+// Note: TypedOpts{} (Tests=false) here differs intentionally from the
+// live scan's TypedOpts{Tests: true}. Fixture files use anonymous
+// `func _(...)` declarations (not Test* entries), so test-variant mode
+// is unnecessary; the underlying *types.Info pipeline is the same.
 func Test_TaggroupLoopFixturePrecisionGate(t *testing.T) {
 	t.Parallel()
 
@@ -138,10 +144,11 @@ func Test_TaggroupLoopFixturePrecisionGate(t *testing.T) {
 	}
 
 	expectedRed := []string{
-		"red_panic_invariants_style",
-		"red_typeseval_qualified",
+		"red_aliased_import",
 		"red_nested_closure",
+		"red_panic_invariants_style",
 		"red_subpath_runtyped",
+		"red_typeseval_qualified",
 	}
 	for _, name := range expectedRed {
 		if hits[name] == 0 {
@@ -181,7 +188,9 @@ func scanFileForTaggroupViolations(p *Pass, file *ast.File, rel string) []Diagno
 			Message: fmt.Sprintf(
 				"for-range over %s with %s inside loop body — "+
 					"replace with single RunTyped(Tags: archtest.ProductionFlatTags()) "+
-					"or two-load nil+ProductionFlatTags pattern (see ADR 202605190000)",
+					"or two-load nil+ProductionFlatTags pattern "+
+					"(see ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md;"+
+					" ProductionFlatTags defined in tools/archtest/resolve.go)",
 				taggroupLoopKnownTagsName, taggroupLoopRunTypedName),
 		})
 	})
@@ -237,6 +246,15 @@ func bodyContainsRunTyped(p *Pass, body *ast.BlockStmt) (bool, int) {
 
 // isLiveTaggroupTarget restricts the live scan to tools/archtest/*_test.go
 // direct children (excluding fixture sub-package files).
+//
+// Scope gap intentional: tools/archtest/internal/<subpkg>/*_test.go
+// (e.g. internal/scanner/, internal/typeseval/) are NOT scanned. These
+// sub-packages test internal symbols and do not call archtest.RunTyped
+// directly, so the loop-amortization invariant is not at risk there.
+// If a future internal _test.go adds direct archtest.RunTyped usage with
+// tagGroup loops, scope extension is needed — re-evaluate at that point.
+// See ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md
+// §威胁矩阵 for the accepted scope rationale.
 func isLiveTaggroupTarget(rel string) bool {
 	if !strings.HasSuffix(rel, "_test.go") {
 		return false

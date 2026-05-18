@@ -36,17 +36,20 @@ import (
 func TestMain(m *testing.M) {
 	root, err := lookupModuleRoot()
 	if err != nil {
-		slog.Error("archtest TestMain: lookupModuleRoot", "err", err)
+		slog.Error("archtest TestMain: lookupModuleRoot", "err", err,
+			"cwd_resolution", "getwd-or-walkup-failure")
 		os.Exit(1)
 	}
 	modPath, err := moduleImportPath(root)
 	if err != nil {
-		slog.Error("archtest TestMain: moduleImportPath", "err", err)
+		slog.Error("archtest TestMain: moduleImportPath", "err", err, "modRoot", root)
 		os.Exit(1)
 	}
+	slog.Info("archtest TestMain: warming SharedResolver (may take 15-25s on cold run)")
 	if err := warmProductionPackages(root, modPath); err != nil {
-		slog.Error("archtest TestMain: warm", "err", err)
+		slog.Error("archtest TestMain: warm", "err", err, "modRoot", root, "modPath", modPath)
 		os.Exit(1)
 	}
+	slog.Info("archtest TestMain: warm-up complete")
 	os.Exit(m.Run())
 }

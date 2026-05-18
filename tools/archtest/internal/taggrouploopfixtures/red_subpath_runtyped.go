@@ -11,6 +11,11 @@ import (
 // shape because each tagGroup is a separate cacheKey under the same patterns
 // shape. The rule must catch RangeStmt+RunTyped regardless of the patterns
 // arg, since patterns is irrelevant to the loop-amortization invariant.
+//
+// Note: the "subpath" in the filename refers to the RunTyped patterns arg
+// (./cells/...), not the RunTyped position in code. The point of this
+// fixture is patterns-arg variance: the tagGroup-loop-amortization invariant
+// is independent of the patterns shape (full ./... vs subpath alike).
 func _(t *testing.T) {
 	for _, tagGroup := range archtest.KnownNonDefaultTags() {
 		_ = archtest.RunTyped(t, archtest.TypedOpts{Tags: tagGroup},

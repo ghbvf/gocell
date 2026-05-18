@@ -58,6 +58,7 @@ Accepted (2026-05-19)
 ## Alternatives 拒绝理由（含对标反向）
 
 - **包级 `sync.Once` 替代 TestMain**（对标 explorer 建议）：拒绝。slowgate budget 维度下 sync.Once 在 borderline test 内首次触发仍跨 20s budget；TestMain 是把"首次 cache miss 时机"从 budget 内移到 budget 外的唯一机制。sync.Once 适用于 perf 视角，不适用于 budget 工程化视角。
+- **TestMain 失败重试**：拒绝。`packages.Load` 失败几乎全是本地代码问题（语法错、import 循环、go.mod 缺失），不是网络抖动；module proxy 在 load 之前已由 `go build` 解析完成。fail-fast 是正确选择，retry 会掩盖真实问题。
 - **单次 union Load** (改造 2 simpler)：拒绝。`go/build/build.go::matchTag` `-tags=A,B,C` 下 `BuildTags = {A,B,C}`，`//go:build !pg` 在 union 含 `pg` 时静默排除。GoCell 当前 3 处反向 directive (`!catalog_gen` / `!unix && !windows` / `!windows`) 均不引用 KnownNonDefaultTags tag，**单次 union Load 当前不漏覆盖**；但未来若有人加 `//go:build !integration` 类文件会漏，无报错。两次 Load 是默认安全网。
 - **SharedResolverFullModule + SharedResolverPatterns 拆 typed**：拒绝。`LoadProductionPackages` 已是 `"./..."` 形态 typed wrapper，等价目标已达成。
 - **剥离 cacheKey patterns 维度**：拒绝。83.5% subpath patterns 必须保留 patterns 维度。
@@ -76,10 +77,34 @@ Accepted (2026-05-19)
 | B 轴 RSS 峰值 | N×全模块 (N=7) cumulative | 2×全模块 + GC 间隔回收 | B 轴解 |
 | 反向 build directive 监控 | 不感知 | 未来加 `//go:build !X` (X ∈ KnownNonDefaultTags) 需 review 两次 Load 设计完整性 | 新增隐含约束 |
 | 复抄范本 | 已 2 处实证 + fresh Claude 必复发 | archtest 静态拦截 | 改造 3 解 |
+| `warm.go` 直调 typeseval | 不存在 | 不受 PASS-FUNNEL-LOADPACKAGES-01 保护（该规则仅扫 `_test.go`） | 已接受：warm.go 是 archtest 包内 unexported helper，仅 TestMain 调用，无外部 _test.go 滥用风险；future-proof 升级路径见 backlog `PASS-FUNNEL-NONTESTGO-EXEMPT-UPGRADE-01` |
+| TAGGROUP-LOOP scope gap | 不存在 | `tools/archtest/internal/<subpkg>/*_test.go` (e.g. internal/scanner/, internal/typeseval/) 不被 TAGGROUP-LOOP-FORBIDS-RUNTYPED-01 扫描 | 已接受：internal 子包测试内部符号，不调 archtest.RunTyped；若未来某 internal _test.go 加直调 RunTyped 形态需扩 scope |
+| CI log path exposure | 不存在 | TestMain fail-fast 时 slog.Error 输出含完整 modRoot/cwd 路径，会出现在 GHA artifact 中 | 已接受：路径非凭据，且 testmain 是 perf/bootstrap 路径，无 PII；如未来仓库公开化需重评 |
+| Total CI wall (16 shard) | 受 borderline test 跨 budget 影响 + B 轴 OOM SIGTERM 重跑 | 预期：单 shard wall ≤ 5s (warm) + 0-3 个 borderline ≤ 10s (warm 后)；16 shard parallel wall ~30-40s + 启动开销 | warmup 在轻 shard (e.g. shard 0 = 33 tests / 4.78s) 上付 +15-25s 启动成本是 wash 或微亏；在重 shard / borderline shard 上净赚；实测需 CI 矩阵观察 2-3 次 |
+
+### 16 shard 总 wall 详细分析
+
+CI 矩阵 16 shard parallel，总 wall = max(各 shard wall) + GHA queue overhead。
+- **重 shard / borderline shard**（含 TestUserRepoConformanceEnrollment / TestCellRepoReadyzProbe 等）：原来 20-22s borderline + 其他 Test* 各自首次 cache miss 5-15s = 总 wall ~35-50s。预热后所有 Test* cache hit < 100ms，重 shard wall 降到 ~startup 15-25s + 测试 5-10s = ~25-35s。
+- **轻 shard**（e.g. shard 0 = 33 tests / 4.78s 实测）：原来 ~5s。预热后 startup +15-25s 拖到 ~20-30s，是净亏。但因 16 shard parallel 总 wall 取 max，轻 shard 拖慢不影响总 wall（仍由重 shard 决定）。
+
+净结论：CI 总 wall 预期下降（重 shard 主导），轻 shard 单独跑（如开发者本地 `go test ./tools/archtest/ -run MyTest`）会增加 wall — 由 testmain_test.go godoc 提示，开发者可接受。
+
+实测 baseline 由 PR 合并后 CI 矩阵连续 2-3 次运行采集，记录到 PR `#584` thread 或 follow-up backlog `ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01` 内。
 
 ## 回退路径
 
-单 commit revert 全部文件即可；无 schema/migration/接口变化。
+- **整体回退**：本 PR 合并若 squash 为单 commit，直接 `git revert <sha>` 即可；无 schema/migration/接口变化。
+- **selective 回退**：本 PR 包含 2 个语义 wave commit（Wave 0 RED = archtest + fixture + ProductionFlatTags helper；Wave 1 GREEN = TestMain 预热 + B 轴两次 Load + ADR）。若 Wave 1 GREEN 出 regression 而 Wave 0 archtest 无问题，按逆序 revert：先 Wave 1 GREEN，再 Wave 0 RED；revert Wave 1 后 archtest 会重新命中现有复抄变 RED，需同时 revert Wave 0 才回到 main 健康。
+- 任何 revert 后需重跑 `hack/verify-archtest.sh` 全 16 shard 矩阵确认。
+
+## slowgate allowlist follow-up
+
+本 PR 的核心收益之一是让 borderline test（TestUserRepoConformanceEnrollment、TestCellRepoReadyzProbe 等）的首次 cache miss 时机从 budget 内移到 shard startup 外，预期 wall 从 20-22s 降到 5-10s。这意味着 `tools/slowgate/allowlist.txt` 的相关条目（TestPanicRegistered / TestUserRepoConformanceEnrollment / TestCellRepoReadyzProbe / TestCellgenErrcodeFunnelNoBuildTagFiles）应可缩减。
+
+本 PR **不同步缩减 allowlist**，原因：(i) 实测 wall 取决于 GHA runner 性能（本地实测无代表性）；(ii) 需观察 CI 16-shard 矩阵 2-3 次连续运行后再判断每条 test 是否稳定 < 20s。同 PR 缩减 allowlist 若实测仍跨 budget 会触发 false positive CI 红。
+
+follow-up 由 backlog `ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01` 跟踪。
 
 ## AI-rebust 评级
 

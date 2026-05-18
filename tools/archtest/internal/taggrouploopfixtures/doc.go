@@ -26,4 +26,11 @@
 // Functions declared as func _(...) so each file can drop the body in
 // without naming pressure; multiple func _() per package are permitted by
 // the Go spec.
+//
+// Naming: this package is named taggrouploopfixtures (rule-slug-fixtures).
+// The sibling usage02fixtures package uses a numeric-suffix convention
+// (rule-id-fixtures). Both conventions are accepted under
+// tools/archtest/internal/; pick whichever reads naturally for the rule
+// (kebab/slug for descriptive rule names, numeric suffix for ordered
+// INVARIANT IDs).
 package taggrouploopfixtures
