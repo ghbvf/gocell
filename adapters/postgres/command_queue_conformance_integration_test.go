@@ -24,7 +24,10 @@ import (
 // ref: docs/plans/202605082145-034-pg-corecell-b-route-plan.md §B2.B
 func TestPGCommandQueue_Conformance(t *testing.T) {
 	commandtest.RunQueueConformance(t, pgCommandQueueFactory(t), commandtest.Features{
-		RequiresAmbientTx:    true,
+		// PGCommandQueue now self-wraps each mutating method in RunInTx,
+		// so callers need no ambient transaction. RequiresAmbientTx=false
+		// lets the suite exercise the production caller path directly.
+		RequiresAmbientTx:    false,
 		SupportsLeaseRenewal: true,
 	})
 }

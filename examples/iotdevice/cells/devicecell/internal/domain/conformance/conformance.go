@@ -49,6 +49,7 @@ func RunDeviceRepoConformance(t *testing.T, factory DeviceRepoFactory, features 
 	t.Run("List/EmptyRepository", func(t *testing.T) { runListEmpty(t, factory, features) })
 	t.Run("List/SortByNameASC", func(t *testing.T) { runListSortName(t, factory, features) })
 	t.Run("List/Pagination", func(t *testing.T) { runListPagination(t, factory, features) })
+	t.Run("List/SecondPage", func(t *testing.T) { runListSecondPage(t, factory, features) })
 }
 
 func inTx(t *testing.T, ctx context.Context, txRunner persistence.TxRunner, features Features, fn func(ctx context.Context) error) error {
@@ -236,5 +237,73 @@ func runListPagination(t *testing.T, factory DeviceRepoFactory, features Feature
 	}
 	if got[0].Name != "A" || got[1].Name != "B" {
 		t.Fatalf("expected [A, B] for first page, got [%s, %s]", got[0].Name, got[1].Name)
+	}
+}
+
+// runListSecondPage verifies that CursorValues produces correct keyset
+// pagination: second page skips the first page's rows and third page finds
+// the remaining item. Tests the end-to-end cursor flow without codec encoding
+// (CursorValues are supplied directly as decoded values).
+func runListSecondPage(t *testing.T, factory DeviceRepoFactory, features Features) {
+	t.Helper()
+	repo, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	sort := []query.SortColumn{
+		{Name: "name", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	}
+
+	// Seed 5 devices: names A,B,C,D,E with matching IDs for stable ordering.
+	seeds := []struct{ id, name string }{
+		{"kp-1", "A"}, {"kp-2", "B"}, {"kp-3", "C"}, {"kp-4", "D"}, {"kp-5", "E"},
+	}
+	for _, s := range seeds {
+		createDevice(t, ctx, repo, tx, features, &domain.Device{
+			ID: s.id, Name: s.name, Status: "online", LastSeen: now(),
+		})
+	}
+
+	// Page 1: no cursor.
+	p1, err := repo.List(ctx, query.ListParams{Limit: 2, Sort: sort})
+	if err != nil {
+		t.Fatalf("List page1: %v", err)
+	}
+	// FetchLimit=3: expect 3 rows returned (A, B, C) — HasMore detected by service.
+	if len(p1) < 2 {
+		t.Fatalf("page1: expected at least 2 rows, got %d", len(p1))
+	}
+	if p1[0].Name != "A" || p1[1].Name != "B" {
+		t.Fatalf("page1: expected [A, B], got [%s, %s]", p1[0].Name, p1[1].Name)
+	}
+	// Cursor is derived from the last visible item on page1 (B).
+	lastVisible := p1[1]
+	cursor2 := []any{lastVisible.Name, lastVisible.ID}
+
+	// Page 2: keyset after (name="B", id="kp-2").
+	p2, err := repo.List(ctx, query.ListParams{Limit: 2, Sort: sort, CursorValues: cursor2})
+	if err != nil {
+		t.Fatalf("List page2: %v", err)
+	}
+	if len(p2) < 2 {
+		t.Fatalf("page2: expected at least 2 rows, got %d", len(p2))
+	}
+	if p2[0].Name != "C" || p2[1].Name != "D" {
+		t.Fatalf("page2: expected [C, D], got [%s, %s]", p2[0].Name, p2[1].Name)
+	}
+	lastVisible2 := p2[1]
+	cursor3 := []any{lastVisible2.Name, lastVisible2.ID}
+
+	// Page 3: keyset after (name="D", id="kp-4") — only E remains.
+	p3, err := repo.List(ctx, query.ListParams{Limit: 2, Sort: sort, CursorValues: cursor3})
+	if err != nil {
+		t.Fatalf("List page3: %v", err)
+	}
+	if len(p3) != 1 {
+		t.Fatalf("page3: expected 1 row, got %d", len(p3))
+	}
+	if p3[0].Name != "E" {
+		t.Fatalf("page3: expected [E], got [%s]", p3[0].Name)
 	}
 }

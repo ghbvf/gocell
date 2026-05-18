@@ -114,14 +114,21 @@ func (r *PGDeviceRepository) GetByID(ctx context.Context, id string) (*domain.De
 // List returns up to params.FetchLimit() (= Limit+1) devices sorted per params.
 // Callers use the extra row to detect HasMore without a separate COUNT query.
 //
+// When params.CursorValues is non-nil it must have the same length as
+// params.Sort; otherwise ErrCursorInvalid is returned. Only uniform-direction
+// sorts (all ASC or all DESC) are supported; mixed-direction sorts return
+// ErrCursorInvalid.
+//
 // Sort columns must be a trusted subset of {name, id, status} — column names
 // come from query.SortColumn.Name which is produced by trusted code paths, not
 // raw user input, so they are safe to interpolate into the ORDER BY clause.
 func (r *PGDeviceRepository) List(ctx context.Context, params query.ListParams) ([]*domain.Device, error) {
-	orderBy := buildOrderBy(params.Sort)
-	sql := "SELECT id, name, status, last_seen FROM devices ORDER BY " + orderBy + " LIMIT $1"
+	sqlStr, args, err := buildListQuery(params)
+	if err != nil {
+		return nil, err
+	}
 
-	rows, err := r.db.Query(ctx, sql, params.FetchLimit())
+	rows, err := r.db.Query(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: list", err)
 	}
@@ -143,6 +150,67 @@ func (r *PGDeviceRepository) List(ctx context.Context, params query.ListParams) 
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: list rows", err)
 	}
 	return devices, nil
+}
+
+// buildListQuery constructs the SELECT SQL and placeholder args for a List call.
+// When CursorValues is nil the query is a plain ORDER BY ... LIMIT.
+// When CursorValues is non-nil a keyset WHERE predicate is prepended.
+// Only uniform sort directions (all ASC or all DESC) are supported.
+func buildListQuery(params query.ListParams) (string, []any, error) {
+	orderBy := buildOrderBy(params.Sort)
+
+	if len(params.CursorValues) == 0 {
+		// First page: no keyset predicate.
+		sqlStr := "SELECT id, name, status, last_seen FROM devices ORDER BY " + orderBy + " LIMIT $1"
+		return sqlStr, []any{params.FetchLimit()}, nil
+	}
+
+	// Validate cursor length matches sort columns.
+	if len(params.CursorValues) != len(params.Sort) {
+		return "", nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
+			"cursor values length must match sort columns")
+	}
+	if len(params.Sort) == 0 {
+		return "", nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
+			"sort columns required when cursor values are present")
+	}
+
+	// Determine uniform sort direction — only all-ASC or all-DESC are supported.
+	dir := params.Sort[0].Direction
+	for _, col := range params.Sort[1:] {
+		if col.Direction != dir {
+			return "", nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
+				"mixed sort directions not supported for keyset pagination")
+		}
+	}
+
+	// Build row-value comparison: (col1, col2) > ($1, $2) for ASC,
+	//                              (col1, col2) < ($1, $2) for DESC.
+	op := ">"
+	if dir == query.SortDESC {
+		op = "<"
+	}
+
+	colNames := make([]string, len(params.Sort))
+	placeholders := make([]string, len(params.Sort))
+	args := make([]any, 0, len(params.CursorValues)+1)
+	for i, col := range params.Sort {
+		colNames[i] = trustedDeviceColumn(col.Name)
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args = append(args, params.CursorValues[i])
+	}
+	args = append(args, params.FetchLimit())
+	limitPlaceholder := fmt.Sprintf("$%d", len(params.Sort)+1)
+
+	sqlStr := fmt.Sprintf(
+		"SELECT id, name, status, last_seen FROM devices WHERE (%s) %s (%s) ORDER BY %s LIMIT %s",
+		strings.Join(colNames, ", "),
+		op,
+		strings.Join(placeholders, ", "),
+		orderBy,
+		limitPlaceholder,
+	)
+	return sqlStr, args, nil
 }
 
 // buildOrderBy converts sort columns to a SQL ORDER BY clause fragment.

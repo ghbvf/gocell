@@ -412,19 +412,46 @@ func runReportSentToDelivered(t *testing.T, factory QueueFactory, features Featu
 
 func runReportIdempotent(t *testing.T, factory QueueFactory, features Features) {
 	t.Helper()
-	q, _, tx, n, cleanup := factory(t)
+	q, scanner, tx, n, cleanup := factory(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	seedEntry(t, ctx, q, tx, features, makeEntry("rep-idem-1", "dev-a", n()))
 	dequeueOne(t, ctx, q, tx, features, "dev-a")
 
-	for i := 0; i < 2; i++ {
-		if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-			return q.Report(c, "rep-idem-1", n())
-		}); err != nil {
-			t.Fatalf("Report iter=%d: %v", i, err)
-		}
+	// First Report — advances Sent→Delivered and sets delivered_at.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Report(c, "rep-idem-1", n())
+	}); err != nil {
+		t.Fatalf("Report first call: %v", err)
+	}
+
+	first, err := scanner.GetCommand(ctx, "rep-idem-1")
+	if err != nil {
+		t.Fatalf("GetCommand after first Report: %v", err)
+	}
+	if first.DeliveredAt == nil {
+		t.Fatal("expected DeliveredAt set after first Report")
+	}
+	firstDeliveredAt := *first.DeliveredAt
+
+	// Second Report — must be idempotent: no error and delivered_at unchanged.
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Report(c, "rep-idem-1", n())
+	}); err != nil {
+		t.Fatalf("Report second call: %v", err)
+	}
+
+	second, err := scanner.GetCommand(ctx, "rep-idem-1")
+	if err != nil {
+		t.Fatalf("GetCommand after second Report: %v", err)
+	}
+	if second.DeliveredAt == nil {
+		t.Fatal("expected DeliveredAt still set after second Report")
+	}
+	if !second.DeliveredAt.Equal(firstDeliveredAt) {
+		t.Fatalf("delivered_at must not change on idempotent Report: first=%v second=%v",
+			firstDeliveredAt, *second.DeliveredAt)
 	}
 }
 

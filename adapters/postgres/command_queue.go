@@ -29,9 +29,11 @@ var (
 )
 
 // PGCommandQueue implements kernel/command.Queue + command.ActiveScanner backed
-// by PostgreSQL. All mutating methods require an ambient transaction in ctx
-// (injected by PGTxManager.RunInTx). Read-only methods (ScanActive, GetCommand)
-// run directly against the pool.
+// by PostgreSQL. All mutating methods (Enqueue/Dequeue/Report/Ack/ExtendLease/
+// Cancel) self-wrap in a short RunInTx so callers require no ambient transaction.
+// When the caller already holds an ambient tx, the inner RunInTx walks savepoint
+// semantics via PGTxManager.RunInTx (adapters/postgres/tx_manager.go).
+// Read-only methods (ScanActive, GetCommand) run directly against the pool.
 //
 // Consistency: L4 DeviceLatent — commands traverse the state machine
 // Pending→Sent→Delivered→{Succeeded,Failed,Expired,Canceled} through distinct
@@ -39,7 +41,7 @@ var (
 // responsibility; Dequeue does NOT reclaim expired leases inline.
 //
 // ref: adapters/postgres/outbox_store.go (FOR UPDATE SKIP LOCKED pattern)
-// ref: adapters/postgres/session_store.go (ambient-tx pattern via pgExecutor)
+// ref: adapters/postgres/tx_manager.go (savepoint / nested RunInTx)
 type PGCommandQueue struct {
 	db       pgExecutor // routes SQL through ambient tx when present
 	pool     *pgxpool.Pool
@@ -96,10 +98,17 @@ UPDATE commands
  )
  RETURNING ` + commandSelectCols
 
+// reportSQL advances a command from Sent (status=2) to Delivered (status=3).
+// Only Sent→Delivered is allowed; already-Delivered rows produce rows=0 so the
+// caller can distinguish idempotent no-op from invalid-state.
 const reportSQL = `
 UPDATE commands SET status = 3, delivered_at = $2
- WHERE id = $1 AND status IN (2, 3)
+ WHERE id = $1 AND status = 2
  RETURNING status`
+
+// reportStatusCheckSQL reads the current status for the already-Delivered /
+// not-found disambiguation path in Report.
+const reportStatusCheckSQL = `SELECT status FROM commands WHERE id = $1`
 
 // selectStatusForUpdateSQL is used by both Ack and Cancel to lock the command
 // row and read its current status in a single round-trip before deciding the
@@ -141,9 +150,10 @@ INSERT INTO commands (
 // ---------------------------------------------------------------------------
 
 // Enqueue stores entry in the commands table with status=Pending.
-// If opts.Authz is non-nil, it is invoked before any write.
+// If opts.Authz is non-nil, it is invoked before the transaction opens.
 // If opts.IdempotencyKey is set, an existing entry with the same key is a no-op.
 // Duplicate PK returns ErrConflict; unknown device_id returns ErrDeviceNotFound.
+// The method self-manages a short transaction; nested calls walk savepoint semantics.
 func (q *PGCommandQueue) Enqueue(ctx context.Context, entry command.Entry, opts command.EnqueueOptions) error {
 	if opts.Authz != nil {
 		if err := opts.Authz(ctx); err != nil {
@@ -163,11 +173,12 @@ func (q *PGCommandQueue) Enqueue(ctx context.Context, entry command.Entry, opts 
 		q.stampIdempotencyKey(&entry, opts.IdempotencyKey)
 	}
 
-	if err := entry.ValidateNew(); err != nil {
-		return err
-	}
-
-	return q.insertEntry(ctx, entry)
+	return q.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := entry.ValidateNew(); err != nil {
+			return err
+		}
+		return q.insertEntry(txCtx, entry)
+	})
 }
 
 // stampIdempotencyKey writes the idempotency key into entry.Metadata so it is
@@ -228,71 +239,82 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 }
 
 // Dequeue atomically claims up to n Pending entries for deviceID (oldest FIFO),
-// advancing them to StatusSent and setting a lease. Requires ambient tx.
+// advancing them to StatusSent and setting a lease.
+// The method self-manages a short transaction; nested calls walk savepoint semantics.
 func (q *PGCommandQueue) Dequeue(ctx context.Context, deviceID string, n int, leaseDuration time.Duration) ([]command.Entry, error) {
 	if leaseDuration <= 0 {
 		leaseDuration = command.DefaultLeaseDuration
 	}
 
-	tx, ok := TxFromContext(ctx)
-	if !ok {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGNoTx,
-			"command_queue: Dequeue requires an ambient transaction")
-	}
-
 	now := q.clock.Now()
 	leaseExpiry := now.Add(leaseDuration)
 
-	rows, err := tx.Query(ctx, dequeueSQL, deviceID, n, now, leaseExpiry)
-	if err != nil {
-		return nil, fmt.Errorf("command_queue: dequeue query: %w", err)
-	}
-	defer rows.Close()
+	var result []command.Entry
+	err := q.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		rows, err := q.db.Query(txCtx, dequeueSQL, deviceID, n, now, leaseExpiry)
+		if err != nil {
+			return fmt.Errorf("command_queue: dequeue query: %w", err)
+		}
+		defer rows.Close()
 
-	return scanCommandRows(rows)
+		var scanErr error
+		result, scanErr = scanCommandRows(rows)
+		return scanErr
+	})
+	return result, err
 }
 
-// Report advances a command from Sent to Delivered. Idempotent if already Delivered.
-// Returns ErrCommandNotFound when commandID is not found.
-// Requires ambient tx.
+// Report advances a command from Sent to Delivered. Idempotent when the command
+// is already Delivered (preserves the original delivered_at timestamp).
+// Returns ErrCommandNotFound when commandID does not exist.
+// The method self-manages a short transaction; nested calls walk savepoint semantics.
 func (q *PGCommandQueue) Report(ctx context.Context, commandID string, now time.Time) error {
-	if _, ok := TxFromContext(ctx); !ok {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx,
-			"command_queue: Report requires an ambient transaction")
-	}
+	return q.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		var gotStatus command.Status
+		err := q.db.QueryRow(txCtx, reportSQL, commandID, now).Scan(&gotStatus)
+		if err == nil {
+			return nil // Sent→Delivered advanced
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("command_queue: report update: %w", err)
+		}
 
-	var gotStatus command.Status
-	err := q.db.QueryRow(ctx, reportSQL, commandID, now).Scan(&gotStatus)
-	if err == nil {
-		return nil // updated (Sent→Delivered or already Delivered no-op)
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("command_queue: report update: %w", err)
-	}
-
-	// rows=0: determine whether command doesn't exist or has invalid status.
-	return q.notFoundOrInvalidTransition(ctx, commandID, "report")
+		// rows=0: either already Delivered (idempotent), not found, or invalid transition.
+		var cur command.Status
+		err2 := q.db.QueryRow(txCtx, reportStatusCheckSQL, commandID).Scan(&cur)
+		if errors.Is(err2, pgx.ErrNoRows) {
+			return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
+				"command not found")
+		}
+		if err2 != nil {
+			return fmt.Errorf("command_queue: report status check: %w", err2)
+		}
+		if cur == command.StatusDelivered {
+			return nil // idempotent — delivered_at preserved
+		}
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command status does not allow this operation")
+	})
 }
 
 // Ack finalizes a command in a single transition to a terminal status.
 // Same-target idempotent; different-target on terminal returns ErrValidationFailed.
-// Requires ambient tx.
+// The method self-manages a short transaction; nested calls walk savepoint semantics.
 func (q *PGCommandQueue) Ack(ctx context.Context, commandID string, reason command.AckReason, now time.Time) error {
 	if !reason.Valid() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command_queue: invalid AckReason")
 	}
+	return q.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		return q.ackInTx(txCtx, commandID, reason.TargetStatus(), now)
+	})
+}
 
-	tx, ok := TxFromContext(ctx)
-	if !ok {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx,
-			"command_queue: Ack requires an ambient transaction")
-	}
-
-	target := reason.TargetStatus()
-
+// ackInTx executes the Ack state-machine check and UPDATE inside an active tx.
+// Extracted to keep Ack's cognitive complexity within the project limit (≤15).
+func (q *PGCommandQueue) ackInTx(txCtx context.Context, commandID string, target command.Status, now time.Time) error {
 	var current command.Status
-	err := tx.QueryRow(ctx, selectStatusForUpdateSQL, commandID).Scan(&current)
+	err := q.db.QueryRow(txCtx, selectStatusForUpdateSQL, commandID).Scan(&current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
 			"command not found")
@@ -313,8 +335,7 @@ func (q *PGCommandQueue) Ack(ctx context.Context, commandID string, reason comma
 	if err := command.Transition(current, target); err != nil {
 		return fmt.Errorf("command_queue: ack: %w", err)
 	}
-
-	if _, err := tx.Exec(ctx, ackUpdateSQL, commandID, target, now); err != nil {
+	if _, err := q.db.Exec(txCtx, ackUpdateSQL, commandID, target, now); err != nil {
 		return fmt.Errorf("command_queue: ack update: %w", err)
 	}
 	return nil
@@ -322,60 +343,54 @@ func (q *PGCommandQueue) Ack(ctx context.Context, commandID string, reason comma
 
 // ExtendLease renews the lease for a Sent or Delivered command.
 // Returns ErrCommandNotFound when not found; ErrValidationFailed when no lease.
-// Requires ambient tx.
+// The method self-manages a short transaction; nested calls walk savepoint semantics.
 func (q *PGCommandQueue) ExtendLease(ctx context.Context, commandID string, extension time.Duration, now time.Time) error {
-	if _, ok := TxFromContext(ctx); !ok {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx,
-			"command_queue: ExtendLease requires an ambient transaction")
-	}
-
 	newExpiry := now.Add(extension)
-	var got time.Time
-	err := q.db.QueryRow(ctx, extendLeaseSQL, commandID, newExpiry).Scan(&got)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("command_queue: extend lease: %w", err)
-	}
 
-	return q.notFoundOrInvalidLease(ctx, commandID)
+	return q.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		var got time.Time
+		err := q.db.QueryRow(txCtx, extendLeaseSQL, commandID, newExpiry).Scan(&got)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("command_queue: extend lease: %w", err)
+		}
+
+		return q.notFoundOrInvalidLease(txCtx, commandID)
+	})
 }
 
 // Cancel transitions a non-terminal command to StatusCanceled.
 // Returns ErrValidationFailed when the command is already terminal.
-// Requires ambient tx.
+// The method self-manages a short transaction; nested calls walk savepoint semantics.
 func (q *PGCommandQueue) Cancel(ctx context.Context, commandID string, now time.Time) error {
-	tx, ok := TxFromContext(ctx)
-	if !ok {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx,
-			"command_queue: Cancel requires an ambient transaction")
-	}
+	return q.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		var current command.Status
+		err := q.db.QueryRow(txCtx, selectStatusForUpdateSQL, commandID).Scan(&current)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
+				"command not found")
+		}
+		if err != nil {
+			return fmt.Errorf("command_queue: cancel select: %w", err)
+		}
 
-	var current command.Status
-	err := tx.QueryRow(ctx, selectStatusForUpdateSQL, commandID).Scan(&current)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
-			"command not found")
-	}
-	if err != nil {
-		return fmt.Errorf("command_queue: cancel select: %w", err)
-	}
+		if current.IsTerminal() {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"command already in terminal state",
+				errcode.WithInternal(fmt.Sprintf("current=%s", current)))
+		}
 
-	if current.IsTerminal() {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"command already in terminal state",
-			errcode.WithInternal(fmt.Sprintf("current=%s", current)))
-	}
+		if err := command.Transition(current, command.StatusCanceled); err != nil {
+			return fmt.Errorf("command_queue: cancel: %w", err)
+		}
 
-	if err := command.Transition(current, command.StatusCanceled); err != nil {
-		return fmt.Errorf("command_queue: cancel: %w", err)
-	}
-
-	if _, err := tx.Exec(ctx, cancelUpdateSQL, commandID, now); err != nil {
-		return fmt.Errorf("command_queue: cancel update: %w", err)
-	}
-	return nil
+		if _, err := q.db.Exec(txCtx, cancelUpdateSQL, commandID, now); err != nil {
+			return fmt.Errorf("command_queue: cancel update: %w", err)
+		}
+		return nil
+	})
 }
 
 // RepoReady verifies that the commands table is reachable by executing a
@@ -542,22 +557,6 @@ func durationFromNs(ns *int64) time.Duration {
 		return 0
 	}
 	return time.Duration(*ns)
-}
-
-// notFoundOrInvalidTransition distinguishes "command not found" from "invalid
-// status for this operation" when an UPDATE affected 0 rows.
-func (q *PGCommandQueue) notFoundOrInvalidTransition(ctx context.Context, commandID, op string) error {
-	var dummy int
-	err := q.db.QueryRow(ctx, existsSQL, commandID).Scan(&dummy)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
-			"command not found")
-	}
-	if err != nil {
-		return fmt.Errorf("command_queue: %s existence check: %w", op, err)
-	}
-	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"command status does not allow this operation")
 }
 
 // notFoundOrInvalidLease distinguishes "command not found" from "no active

@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,13 +54,6 @@ func main() {
 	// In-memory event bus for demo mode.
 	eb := eventbus.New(eventbus.WithClock(clk))
 
-	// Cursor codec for pagination (demo mode).
-	cursorCodec, err := query.NewCursorCodec([]byte("iotdevice-cursor-key-32-bytes!!!"))
-	if err != nil {
-		logger.Error("failed to create cursor codec", slog.Any("error", err))
-		os.Exit(1)
-	}
-
 	// Resolve persistence: durable PG wiring when GOCELL_IOTDEVICE_DSN is set,
 	// otherwise explicit in-memory wiring. The cell never falls back silently
 	// (B2.B: no soft fallback), so demo runs MUST inject mem implementations.
@@ -69,6 +63,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeBackends()
+
+	// Cursor codec for pagination. Durable mode requires a real key from the
+	// environment; demo mode uses a hard-coded public key (not production-safe).
+	cursorCodec, err := buildCursorCodec(durabilityMode)
+	if err != nil {
+		logger.Error("failed to build cursor codec", slog.Any("error", err))
+		os.Exit(1)
+	}
 
 	// Create the device cell with explicitly wired persistence.
 	dc := devicecell.NewDeviceCell(
@@ -174,6 +176,20 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 	}
 	logger.Info("iotdevice: migrations applied")
 
+	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS, "schema_migrations"); err != nil {
+		closePool()
+		return nil, nil, 0, func() {}, fmt.Errorf("schema version verify: %w", err)
+	}
+	if err := adapterpg.VerifyExpectedShape(ctx, pool); err != nil {
+		closePool()
+		return nil, nil, 0, func() {}, fmt.Errorf("schema shape verify: %w", err)
+	}
+	if err := adapterpg.VerifyNoInvalidIndexes(ctx, pool); err != nil {
+		closePool()
+		return nil, nil, 0, func() {}, fmt.Errorf("schema indexes verify: %w", err)
+	}
+	logger.Info("iotdevice: schema verified")
+
 	txMgr := adapterpg.NewTxManager(pool)
 	deviceRepo, err := devicepg.NewDeviceRepository(pool.DB(), txMgr, clk)
 	if err != nil {
@@ -188,4 +204,19 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 
 	logger.Info("iotdevice: using PG persistence (durable mode)", slog.String("dsn", "set"))
 	return deviceRepo, commandQueue, cell.DurabilityDurable, closePool, nil
+}
+
+// buildCursorCodec builds a CursorCodec appropriate for the durability mode.
+// Durable mode requires GOCELL_IOTDEVICE_CURSOR_KEY env var (≥32 bytes) so
+// that the hard-coded demo key is never used in production.
+// Demo mode uses a well-known public key that is intentionally NOT secret.
+func buildCursorCodec(mode cell.DurabilityMode) (*query.CursorCodec, error) {
+	if mode == cell.DurabilityDurable {
+		raw := os.Getenv("GOCELL_IOTDEVICE_CURSOR_KEY")
+		if len(raw) < 32 {
+			return nil, errors.New("GOCELL_IOTDEVICE_CURSOR_KEY env var required (>=32 bytes) in durable mode")
+		}
+		return query.NewCursorCodec([]byte(raw))
+	}
+	return query.NewCursorCodec([]byte("iotdevice-cursor-key-32-bytes!!!"))
 }
