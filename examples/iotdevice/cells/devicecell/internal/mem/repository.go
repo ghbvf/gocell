@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
@@ -12,14 +13,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// Compile-time interface checks.
-var _ domain.DeviceRepository = (*DeviceRepository)(nil)
-
 // DeviceRepository is a thread-safe in-memory device store.
 type DeviceRepository struct {
 	mu      sync.RWMutex
 	devices map[string]*domain.Device
 }
+
+// Compile-time interface check.
+var _ domain.DeviceRepository = (*DeviceRepository)(nil)
 
 // NewDeviceRepository creates an empty in-memory DeviceRepository.
 func NewDeviceRepository() *DeviceRepository {
@@ -32,8 +33,9 @@ func (r *DeviceRepository) Create(_ context.Context, device *domain.Device) erro
 	defer r.mu.Unlock()
 
 	if _, exists := r.devices[device.ID]; exists {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("device %q already exists", device.ID))
+		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+			"device already exists",
+			errcode.WithInternal(fmt.Sprintf("id=%q", device.ID)))
 	}
 	stored := *device
 	r.devices[device.ID] = &stored
@@ -48,7 +50,8 @@ func (r *DeviceRepository) GetByID(_ context.Context, id string) (*domain.Device
 	d, ok := r.devices[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
-			fmt.Sprintf("device %q not found", id))
+			"device not found",
+			errcode.WithDetails(slog.String("deviceId", id)))
 	}
 	out := *d
 	return &out, nil
@@ -72,6 +75,10 @@ func (r *DeviceRepository) List(_ context.Context, params query.ListParams) ([]*
 	}
 	return result, nil
 }
+
+// RepoReady always returns nil for the in-memory store (no external dependency).
+// It satisfies domain.DeviceRepository and cell.RepoHealthProber.
+func (r *DeviceRepository) RepoReady(_ context.Context) error { return nil }
 
 func compareDeviceField(a, b *domain.Device, field string) int {
 	switch field {

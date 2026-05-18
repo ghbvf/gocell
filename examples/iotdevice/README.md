@@ -61,8 +61,15 @@ export GOCELL_EXAMPLE_POSTGRES_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
 cd ../..
 # Export the JWT and GOCELL_IOTDEVICE_SERVICE_SECRET variables from Quick Start first.
+# Set the DSN to enable durable PG mode with automatic migration.
+export GOCELL_IOTDEVICE_DSN="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/iot_device?sslmode=disable"
 go run ./examples/iotdevice
 ```
+
+When `GOCELL_IOTDEVICE_DSN` is set, the application switches to durable mode:
+migrations are applied automatically on startup and device + command data is
+persisted to PostgreSQL. Without this variable the application uses in-memory
+storage (demo mode).
 
 ## API
 

@@ -1,0 +1,16 @@
+# Fixture metadata. Mirrors the cell.yaml shape but lives under testdata/
+# so the production Phase A scan (ProductionScope) does not see it. The
+# fixture tests synthesize their target via fixtureTargetFor() instead.
+id: fixture-red_l2_missing
+type: core
+consistencyLevel: L2
+durabilityMode: durable
+owner:
+  team: archtest-fixture
+  role: cell-owner
+schema:
+  primary: fixture_red_l2_missing
+verify:
+  smoke:
+    - smoke.fixture.startup
+goStructName: RedL2Cell

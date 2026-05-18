@@ -80,9 +80,8 @@ func ContractIDFrom(ctx context.Context) (string, bool) {
 // contract-bound routes without the inner wrapper creating a duplicate span.
 //
 // The slice is passed as any so kernel/ctxkeys stays free of any wrapper
-// type dependency. Consumers type-assert to their known type (the runtime
-// side uses []runtime/observability/tracing.Attr, which is an alias of
-// []kernel/wrapper.Attr).
+// type dependency. Consumers type-assert to their known type
+// ([]kernel/wrapper.Attr).
 func WithContractAttrs(ctx context.Context, attrs any) context.Context {
 	if attrs == nil {
 		return ctx
@@ -91,7 +90,7 @@ func WithContractAttrs(ctx context.Context, attrs any) context.Context {
 }
 
 // ContractAttrsFrom extracts the contract attribute slice from ctx as an any.
-// Callers type-assert to []wrapper.Attr / []tracing.Attr. Reports false when
+// Callers type-assert to []wrapper.Attr. Reports false when
 // the key is absent.
 func ContractAttrsFrom(ctx context.Context) (any, bool) {
 	v := ctx.Value(contractAttrs)

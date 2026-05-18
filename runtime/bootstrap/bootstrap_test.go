@@ -42,7 +42,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	"github.com/ghbvf/gocell/runtime/observability/tracingtest"
 )
 
 // mustMount is a test helper that calls auth.Mount and panics on error.
@@ -260,7 +260,7 @@ func optionOriginName(opt router.Option) string {
 }
 
 func TestNew_WithTracer(t *testing.T) {
-	tracer := tracing.NewTracer("bootstrap-test")
+	tracer := tracingtest.NewSimpleTracer("bootstrap-test")
 	b := New(WithClock(clock.Real()), WithTracer(tracer))
 	// WithTracer forwards two router options: router.WithTracer (the tracer
 	// itself) and router.WithTracingOptions(WithProbeFilter(DefaultProbeFilter))
@@ -2798,7 +2798,7 @@ func (c *tracingTestCell) Init(ctx context.Context, reg cell.Registry) error {
 
 func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 	ln := newLocalListener(t)
-	tracer := tracing.NewTracer("bootstrap-tracing-e2e")
+	tracer := tracingtest.NewSimpleTracer("bootstrap-tracing-e2e")
 
 	var gotTraceID string
 	// PR-A14a: register via raw mux.Handle + coverage whitelist so the route
@@ -2843,7 +2843,7 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 
 func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 	ln := newLocalListener(t)
-	tracer := tracing.NewTracer("bootstrap-upstream-e2e")
+	tracer := tracingtest.NewSimpleTracer("bootstrap-upstream-e2e")
 
 	var gotTraceID string
 	// PR-A14a: see TestBootstrap_TracingE2E_BusinessRoute rationale for the
@@ -2893,7 +2893,7 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 
 func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	ln := newLocalListener(t)
-	tracer := tracing.NewTracer("bootstrap-panic-e2e")
+	tracer := tracingtest.NewSimpleTracer("bootstrap-panic-e2e")
 
 	tc := newTracingTestCell("trace-panic", func(mux cell.RouteMux) error {
 		mux.Handle("GET /api/v1/boom", http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
@@ -2944,7 +2944,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 	defer slog.SetDefault(oldDefault)
 
 	ln := newLocalListener(t)
-	tracer := tracing.NewTracer("bootstrap-infra-e2e")
+	tracer := tracingtest.NewSimpleTracer("bootstrap-infra-e2e")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
@@ -3621,7 +3621,7 @@ func (c *traceCapturingCell) Init(ctx context.Context, reg cell.Registry) error 
 //   - Protected endpoints with a valid auth token MUST propagate the upstream traceparent.
 func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T) {
 	ln := newLocalListener(t)
-	tracer := tracing.NewTracer("trust-test")
+	tracer := tracingtest.NewSimpleTracer("trust-test")
 
 	verifier := &bootstrapTestVerifier{
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},

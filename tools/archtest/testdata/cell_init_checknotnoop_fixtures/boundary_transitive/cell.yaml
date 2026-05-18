@@ -1,0 +1,13 @@
+id: fixture-boundary_transitive
+type: core
+consistencyLevel: L2
+durabilityMode: durable
+owner:
+  team: archtest-fixture
+  role: cell-owner
+schema:
+  primary: fixture_boundary_transitive
+verify:
+  smoke:
+    - smoke.fixture.startup
+goStructName: BoundaryTransitiveCell

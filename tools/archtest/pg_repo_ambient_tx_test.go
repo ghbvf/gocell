@@ -211,6 +211,7 @@ var r3ExecDirectAllowlist = map[string]struct{}{
 var pgRepoPackagePatterns = []string{
 	"github.com/ghbvf/gocell/adapters/postgres",
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres",
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/adapters/postgres",
 }
 
 // TestPGRepoAmbientTx guards PG-REPO-AMBIENT-TX-01 against the production

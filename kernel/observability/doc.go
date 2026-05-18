@@ -5,8 +5,10 @@
 //
 // Tracing abstractions (Tracer / Span / Attr) live in kernel/wrapper,
 // not under this tree, because tracing is consumed by wrapper-level
-// middleware that pre-dates this namespace. runtime/observability/tracing
-// re-exports them as type aliases for HTTP-side callers.
+// middleware. Production wires the OTel adapter (adapters/otel) via
+// bootstrap.WithTracer, falling back to wrapper.NoopTracer{}. An
+// in-process stdlib Tracer fixture for tests lives in the test-only
+// package runtime/observability/tracingtest (B2-A-20).
 //
 // Layer split — what lives where:
 //
@@ -18,10 +20,10 @@
 //
 //   - runtime/observability/...   — wiring + in-memory implementations.
 //     HTTP middleware for logging context enrichment and the in-memory
-//     request collector; a stdlib-only Tracer stub re-exporting the
-//     kernel/wrapper interfaces; ProviderCollector adapters that bridge
-//     kernel metrics interfaces to a chosen Provider at composition
-//     time. No external propagation logic — that lives in adapters.
+//     request collector; ProviderCollector adapters that bridge kernel
+//     metrics interfaces to a chosen Provider at composition time; a
+//     test-only stdlib Tracer fixture (tracingtest). No external
+//     propagation logic — that lives in adapters.
 //
 //   - adapters/{prometheus,otel,…} — concrete exporters. prometheus
 //     implements kernel/observability/metrics.Provider; otel implements

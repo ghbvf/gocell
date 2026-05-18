@@ -1,0 +1,1 @@
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/errors_dot_import_new_red/usage.go:10: cellgen: reference to blacklisted error constructor: errors.New

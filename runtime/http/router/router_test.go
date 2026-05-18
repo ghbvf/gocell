@@ -29,7 +29,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	"github.com/ghbvf/gocell/runtime/observability/tracingtest"
 )
 
 type stubCell struct{ *cell.BaseCell }
@@ -789,7 +789,7 @@ func TestNew_NilTrustedProxies(t *testing.T) {
 // --- Tracing wiring ---
 
 func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
-	tracer := tracing.NewTracer("test-router-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-router-tracer")
 	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
 
 	var gotTraceID string
@@ -836,7 +836,7 @@ func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
 }
 
 func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
-	tracer := tracing.NewTracer("test-router-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-router-tracer")
 	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
 
 	var gotTraceID string
@@ -858,7 +858,7 @@ func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
 }
 
 func TestWithTracingOptions_PublicEndpointNewRoot(t *testing.T) {
-	tracer := tracing.NewTracer("test-public")
+	tracer := tracingtest.NewSimpleTracer("test-public")
 	r := mustNew(WithRouterClock(clock.Real()),
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
@@ -921,7 +921,7 @@ func TestWithTracer_TraceIDInAccessLog(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(original)
 
-	tracer := tracing.NewTracer("log-test")
+	tracer := tracingtest.NewSimpleTracer("log-test")
 	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
 	r.Handle("/log-trace", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -965,7 +965,7 @@ func TestAccessLog_IncludesRealIP(t *testing.T) {
 }
 
 func TestWithTracer_PanicRequestTraced(t *testing.T) {
-	tracer := tracing.NewTracer("panic-trace-test")
+	tracer := tracingtest.NewSimpleTracer("panic-trace-test")
 	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
 	r.Handle("/boom-traced", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("tracing panic test")
@@ -981,7 +981,7 @@ func TestWithTracer_PanicRequestTraced(t *testing.T) {
 
 func TestWithTracer_PanicRequestRecordedInMetrics(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	tracer := tracing.NewTracer("metrics-panic-test")
+	tracer := tracingtest.NewSimpleTracer("metrics-panic-test")
 	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer), WithMetricsCollector(mc))
 	r.Handle("/boom-full", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("full chain panic test")
@@ -1540,7 +1540,7 @@ func TestDeclareAuth_TracingNewRoot(t *testing.T) {
 	// F3: public routes declared via auth.Mount create new trace roots.
 	// PR-A14a: /internal is whitelisted from policy coverage (raw r.Handle)
 	// so the non-public route runs without an auth gate.
-	tracer := tracing.NewTracer("test-combined")
+	tracer := tracingtest.NewSimpleTracer("test-combined")
 	r := mustNew(WithRouterClock(clock.Real()),
 		WithTracer(tracer),
 		WithPolicyCoverageWhitelist([]string{"/internal/*"}),
@@ -1646,7 +1646,7 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 	// wins for tracing (last-write-wins in tracingConfig). The lazy closure from
 	// auth.Mount / FinalizeAuth is consulted for auth + RequestID; the explicit
 	// WithTracingOptions fn controls trace root creation.
-	tracer := tracing.NewTracer("test-combined-fine")
+	tracer := tracingtest.NewSimpleTracer("test-combined-fine")
 	r := mustNew(WithRouterClock(clock.Real()),
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
@@ -1763,7 +1763,7 @@ func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 	// PR-A14a: /test is whitelisted from policy coverage (raw r.Handle without
 	// auth.Mount) so the route runs without any auth gate and the tracing
 	// context is captured unconditionally.
-	tracer := tracing.NewTracer("test-empty")
+	tracer := tracingtest.NewSimpleTracer("test-empty")
 	r := mustNew(WithRouterClock(clock.Real()),
 		WithTracer(tracer),
 		WithPolicyCoverageWhitelist([]string{"/test/*"}),

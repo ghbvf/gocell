@@ -80,7 +80,7 @@ archive `202604201800-pg-pilot-layering-refactor-plan.md` 是同形态的前一�
 | **S6** ✅ | `runtime/state/cas` typed Protocol + configcore + accesscore password_version 接入 | typed primitive + 双消费 | S1 | **shipped #464** | E 表 2 项 + C 表 1 项 |
 | **S7** ✅ | `runtime/audit/ledger` typed Protocol + PG + auditcore 接入 | typed primitive + adapter + cell | S1 | **shipped #450** | D 表 9 项 + PR392-FU |
 | **W9** ✅ | outbox factory adoption | 机械迁移 | — | **shipped #434** | 033 W9 |
-| **B2.B** | PG-DEVICECELL-REPO | adapter + migration | — | ✅ 与 examples 业务无关 | 033 B2.B |
+| **B2.B** ✅ | PG-DEVICECELL-REPO（device_repo + command_queue PG impl + 2 migrations + shared conformance suite mem/PG + cell.go strict fail-fast + composition root explicit wiring + readiness probe + idempotency unique index + slog redaction） | adapter + migration | — | **shipped #575** | 033 B2.B + L4 review F-A-001 / F-S-001 / F-S-002 / F-T-001 / F-T-002 / F-O-001 / F-O-002 / F-D-001 / F-P-001 + 顺路收 10 项 P2 Cx1 |
 
 **~~ADR-B 接口归属决议~~**：v3 删除。6 条边界规则由 typed Go 类型系统天然画出（sealed interface 决定接口归属，import 方向决定路径归属，`runtime-api.md` Option 范式决定事务关系），无需文字 ADR。
 
