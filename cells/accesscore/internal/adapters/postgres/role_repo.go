@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -176,8 +175,9 @@ WHERE ra.role_id = 'admin' AND u.status = 'active'`
 )
 
 // Create upserts a role (seed/bootstrap semantics: existing role is overwritten).
-// Returns ErrAuthRoleDuplicate (KindConflict) on unique-constraint violation
-// (SQLSTATE 23505), mirroring session_store.go sessionCreateError semantics.
+// The SQL uses ON CONFLICT (id) DO UPDATE — the only unique index on `roles` is
+// the PK. A unique-violation (SQLSTATE 23505) is therefore structurally impossible
+// here; any error is a genuine infra failure, classified as ErrInternal.
 func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 	permJSON, err := json.Marshal(role.Permissions)
 	if err != nil {
@@ -190,21 +190,9 @@ func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 		r.clock.Now(),
 	)
 	if err != nil {
-		return roleCreateError(err, role.ID)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: create", err)
 	}
 	return nil
-}
-
-// roleCreateError classifies a DB error from PGRoleRepo.Create.
-// Unique-constraint violations map to ErrAuthRoleDuplicate (KindConflict);
-// all other errors fall through to ErrInternal.
-func roleCreateError(err error, roleID string) error {
-	if pgquery.IsUniqueViolation(err) {
-		return errcode.New(errcode.KindConflict, errcode.ErrAuthRoleDuplicate,
-			"role already exists",
-			errcode.WithDetails(slog.String("roleID", roleID)))
-	}
-	return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: create", err)
 }
 
 // GetByID fetches a role by primary key. Returns ErrAuthRoleNotFound when absent.

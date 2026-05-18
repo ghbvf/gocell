@@ -1,4 +1,6 @@
-// Package pgquery provides PostgreSQL query-building and wire-error classification helpers.
+// Package pgquery provides PostgreSQL helpers: SQL query building (Builder) and
+// PG SQLSTATE wire-error classification (IsUniqueViolation / IsForeignKeyViolation /
+// IsLastAdminProtected).
 package pgquery
 
 import (

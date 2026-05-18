@@ -4,39 +4,44 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 )
 
-// TestRoleCreateError_UniqueViolation asserts that a 23505 PG error is
-// classified as KindConflict / ErrAuthRoleDuplicate, not ErrInternal.
-// Mirrors session_store.go TestSessionCreateError pattern.
-func TestRoleCreateError_UniqueViolation(t *testing.T) {
-	uniqueErr := &pgconn.PgError{Code: pgquery.SQLStateUniqueViolation}
+// TestPGRoleRepo_Constructor_FailFast verifies that NewPGRoleRepo rejects nil
+// dependencies at construction time, without requiring a real PG connection.
+// Uses new(pgxpool.Pool) / new(adapterpg.TxManager) (non-nil zero values) to
+// reach the later guards — mirroring the session_store_uuid_test.go pattern.
+func TestPGRoleRepo_Constructor_FailFast(t *testing.T) {
+	fakePool := new(pgxpool.Pool)       // non-nil zero value, no real PG needed
+	fakeTxm := new(adapterpg.TxManager) // non-nil zero value, reaches clock guard
 
-	err := roleCreateError(uniqueErr, "admin")
-	require.Error(t, err)
+	assertValidationFailed := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	}
 
-	var ec *errcode.Error
-	require.True(t, errors.As(err, &ec), "must be *errcode.Error, got %T: %v", err, err)
-	assert.Equal(t, errcode.KindConflict, ec.Kind, "unique violation must map to KindConflict")
-	assert.Equal(t, errcode.ErrAuthRoleDuplicate, ec.Code, "unique violation must use ErrAuthRoleDuplicate")
-}
+	t.Run("nil_pool", func(t *testing.T) {
+		_, err := NewPGRoleRepo(nil, fakeTxm, clock.Real())
+		assertValidationFailed(t, err)
+	})
 
-// TestRoleCreateError_InfraError asserts that a non-constraint error remains
-// classified as KindInternal (infra errors must not be mis-classified).
-func TestRoleCreateError_InfraError(t *testing.T) {
-	infraErr := errors.New("connection reset by peer")
+	t.Run("nil_txRunner_typed_nil", func(t *testing.T) {
+		var nilTxm *adapterpg.TxManager // typed-nil caught by validation.IsNilInterface
+		_, err := NewPGRoleRepo(fakePool, nilTxm, clock.Real())
+		assertValidationFailed(t, err)
+	})
 
-	err := roleCreateError(infraErr, "admin")
-	require.Error(t, err)
-
-	var ec *errcode.Error
-	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, errcode.KindInternal, ec.Kind, "infra error must remain KindInternal")
-	assert.Equal(t, errcode.ErrInternal, ec.Code)
+	t.Run("nil_clock_typed_nil", func(t *testing.T) {
+		_, err := NewPGRoleRepo(fakePool, fakeTxm, nil)
+		assertValidationFailed(t, err)
+	})
 }

@@ -9,6 +9,8 @@
 //   - RowScanner helper for reducing boilerplate in repository implementations.
 //
 // For parameterized PostgreSQL query construction, see pkg/pgquery.Builder.
+// For PG SQLSTATE wire-error classification, see pkg/pgquery.IsUniqueViolation,
+// IsForeignKeyViolation, and IsLastAdminProtected.
 //
 // Error codes use the ERR_ADAPTER_PG_* prefix (see errcode.go in this package).
 //

@@ -17,7 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/pgquery"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -288,6 +288,11 @@ LIMIT 1`
 // aware; falls back to pool when no tx in ctx).
 //
 // F13: uses a single SQL query to retrieve seq_no, hash, and total count.
+//
+// Caveat: when called within a caller's ambient transaction, the result
+// reflects that transaction's uncommitted chain state. Callers requiring
+// post-commit integrity verification must call Tail after the transaction
+// commits.
 func (s *LedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 	ns := s.namespace()
 
@@ -321,6 +326,10 @@ const ledgerRepoReadySQL = `SELECT 1 FROM audit_entries WHERE false`
 // that schema/migration drift and table-level permission loss are surfaced as a
 // differentiated failure domain distinct from the pool-level postgres_ready
 // probe registered by *Pool.
+//
+// The ambient-tx fallback in pgExecutor is a no-op for this probe: health
+// handler contexts never carry a pgx.Tx, so pgExecutor routes directly to the
+// pool, keeping the health check independent of any caller transaction state.
 func (s *LedgerStore) RepoReady(ctx context.Context) error {
 	_, err := s.db.Exec(ctx, ledgerRepoReadySQL)
 	if err != nil {
@@ -423,6 +432,11 @@ func (s *LedgerStore) scanEntries(rows pgx.Rows, ns string) ([]*ledger.Entry, er
 // predecessor's hash as the baseline so the first PrevHash linkage check is
 // evaluated against the correct expected value rather than the empty string used
 // for the chain's genesis entry.
+//
+// Caveat: when called within a caller's ambient transaction, the result
+// reflects that transaction's uncommitted chain state. Callers requiring
+// post-commit integrity verification must call Verify after the transaction
+// commits.
 func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
 	ns := s.namespace()
 

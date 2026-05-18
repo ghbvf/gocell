@@ -1,7 +1,7 @@
 # ADR: typed-Go-heavy 协议 primitive 范式
 
 **Date**: 2026-05-10
-**Status**: Proposed
+**Status**: Accepted
 **Related plans**: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md`
 **Supersedes (architectural intent)**: 034 §4 ADR-B 6 条边界规则（被 typed Go 类型系统天然画出）
 
@@ -368,7 +368,12 @@ cell := accesscore.New(
 
 扫描范围改为 `*_repo.go` 和 `*_store.go` 后缀文件（infrastructure 文件 `pool.go`、`tx_manager.go`、`pg_executor.go` 合法持有 pool，不在范围）。覆盖保护：companion coverage guard 断言两个包模式各自至少有一个 `*_repo.go`/`*_store.go` 文件，防止包名变更导致覆盖静默归零。
 
-**诚实说明（intra-package compile Hard 不可达）**：`adapters/postgres` 包内所有文件共享相同的包可见性；Go 编译器无法阻止同包 sibling file 直接访问 `pgExecutor.pool` 或新增自己的字段。上限是 archtest-bound form-uniqueness，与 `PANIC-REGISTERED-01` / `panic(panicregister.Approved)` 同级（ai-collab.md §Hard 范本 #2 caveat）。
+**Funnel 双向锁评级（ai-collab.md §Funnel 双向锁评级）**：
+
+- **下游 Hard**：R1/R2 通过 `*types.Info` form-uniqueness 拦截；违反形态无灰色地带，不经 archtest 即无法绕过 R1/R2 约束。
+- **上游 Medium**：intra-package compile Hard 不可达 — `adapters/postgres` 包内所有文件共享相同的包可见性；Go 编译器无法阻止同包 sibling file 直接访问 `pgExecutor.pool` 或新增自己的字段。上限是 archtest-bound form-uniqueness，与 `PANIC-REGISTERED-01` / `panic(panicregister.Approved)` 同级（ai-collab.md §Hard 范本 #2 caveat）。升级路径：seal `pgExecutor` 为 exported interface + 私有化构造函数，让包外绕过不可表达。详见 backlog `PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01`（`docs/backlog/cap-14-tooling.md`）。
+
+**R2 callee 校验增强**：`bodyCallsNewPGExecutorWith` 在 name 匹配后还通过 `fn.Pkg().Path()` 验证 callee 属于被扫描包（package-local），防止跨包同名函数导致误放行（DX4 PR #578 review A1 修复）。
 
 **RED fixtures**：`tools/archtest/internal/pgrepoambienttxfixture/fixture.go` 包含 3 个必须触发违规的 cases（R1: `badR1Repo`；R2a: `badR2NonNew`；R2b: `NewBadR2NoWrap`）和 2 个 GREEN cases（`pgExecutor` 字段；`NewGoodRepo→newPGExecutor`）。`TestPGRepoAmbientTx_RedFixtureDetected` 断言恰好 3 个诊断，使规则可证伪。
 

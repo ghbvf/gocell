@@ -765,7 +765,7 @@ Wave C
 
 **内容**（实施 plan：`docs-plans-202605082145-034-pg-corecell-elegant-ritchie.md`）：
 - ✅ `cells/accesscore/postgres.NewDeps(pool any, ...)` → typed `*pgxpool.Pool`，删运行时 type assertion（编译期拦错）
-- ✅ PG user/role repo 错误码与 `adapters/postgres` **单一源统一分类**：分类器收口到 `pkg/pgquery`（删 `adapters/postgres/errors.go` + `cells/.../pgerrors.go` 两份重复，`.golangci.yml` LAYER-02 加 `pgconn`）；`role_repo.Create` 等 blanket `ErrInternal` 改按 23505/23503 分类
+- ✅ PG user/role repo 错误码与 `adapters/postgres` **单一源统一分类**：分类器收口到 `pkg/pgquery`（删 `adapters/postgres/errors.go` + `cells/.../pgerrors.go` 两份重复，`.golangci.yml` LAYER-02 加 `pgconn`）；under-classification 审计确认 `user.Create`/`Update` unique、`role.AssignToUser` FK、last-admin 等路径**已正确分类**；`role.Create` 为 PK-only upsert（`ON CONFLICT (id) DO UPDATE`），`roles` 表仅有 PK unique index，23505 结构上不可能触发，`ErrInternal` blanket 分类正确（非欠分类，PR review 确认并删除死代码 `roleCreateError` 分支）
 - ✅ ambient tx archtest `PG-REPO-AMBIENT-TX-01` 从手写 5 文件清单升 **Hard（form-uniqueness）**：sealed `pgExecutor` 单一 holder（R1 struct-field funnel + R2 ctor-param funnel，`*types.Info` resolve），`audit_ledger_store` 收敛，companion 覆盖守卫 + RED fixture
 - ✅ `PR444-FU-SESSIONSTORE-BENCH-01`：核验确认 bench 已随 #449 实现于 `runtime/auth/session/storetest/bench.go`（`RevokeForSubject_1000` + `MixedConcurrent`，mem/PG）；核验中发现 develop 上 seed fixture 缺 `AuthzEpochAtIssue`（#490 后回归）导致 bench 不可执行——本 PR 一并修复 seed
 

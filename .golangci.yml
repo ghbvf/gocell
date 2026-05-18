@@ -148,6 +148,14 @@ linters:
             - github.com/ghbvf/gocell/kernel
             - github.com/ghbvf/gocell/pkg
             - gopkg.in/yaml.v3
+          deny:
+            - pkg: github.com/ghbvf/gocell/pkg/pgquery
+              desc: |
+                pkg/pgquery is a PG-specific SQLSTATE classifier helper; kernel/ must not
+                depend on any PG driver package (CLAUDE.md layering: kernel depends only
+                on stdlib + pkg + gopkg.in/yaml.v3). Already implicitly denied by strict
+                mode; explicit deny makes the constraint self-documenting and prevents
+                accidental re-allowance. Ref: DX4 PR #578 A4 reciprocal guard.
         pkg-isolation:
           # pkg/ is foundational: stdlib + a minimal external surface. Must not
           # depend on kernel/runtime/cells/adapters/cmd/examples/tests/tools to
@@ -189,6 +197,15 @@ linters:
             - go.opentelemetry.io/otel
             - golang.org/x/sync
             - gopkg.in/yaml.v3
+          deny:
+            - pkg: github.com/ghbvf/gocell/pkg/pgquery
+              desc: |
+                pkg/pgquery is a PG-specific SQLSTATE classifier helper; runtime/ must not
+                depend on any PG driver package (CLAUDE.md layering: runtime depends on
+                kernel + pkg + curated externals, not on PG-specific helpers). Already
+                implicitly denied by strict mode; explicit deny makes the constraint
+                self-documenting and prevents accidental re-allowance. Ref: DX4 PR #578
+                A4 reciprocal guard.
         adapters-isolation:
           # LAYER-04: adapters/ depend on kernel/ + runtime/ + pkg/ + SDKs.
           # Cell-internal `cells/*/internal/adapters/**` is owned by the cell
