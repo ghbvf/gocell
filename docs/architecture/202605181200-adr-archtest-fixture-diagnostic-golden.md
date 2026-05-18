@@ -1,8 +1,8 @@
 # ADR: archtest fixture 诊断断言载体选型 — golden-file 单源
 
-> Status: Proposed
+> Status: Accepted
 > Date: 2026-05-18
-> Implementation: PR-A（本分支 `claude/review-pr-557-agents-DzzXk`，基于 develop）
+> Implementation: 已落地 — scope A `#562`；scope B `#563`（RunTypedDir 批次 B1）/ `#564`（implements_funnel + notfound 批次 B2）；scope C `#565`（errcode_invariants 多段 批次 C2）/ `#566`（wantViolCount 计数盲区三件 批次 C1）。全部合并至 develop @ acbe58a。`#557`（count-only marker）已 superseded 关闭。
 > ref: PR #557（`refactor/604-archtest-fixturespec-marker`，count-only 现状，本 ADR 取代其断言形态）;
 >      docs/backlog/cap-14-tooling.md L30 `FIXTURESPEC-DIAGNOSTIC-POSITION-BINDING-01`（本 ADR 即该 backlog 条目的提前落地决策）;
 >      docs/backlog/cap-14-tooling.md L29 `FIXTURESPEC-COUNT-MATCH-UPSTREAM-HARD-01`;
@@ -81,11 +81,12 @@ golden regenerate-only 纪律当前为 Soft review 约定（Medium→Hard 路径
 - **实现约束**：该 meta-archtest 本身不能是 Soft（不能靠注释豁免或文件名 convention 做检测）；必须在 CI 环境有真实 git history，或通过 fixture diff snapshot 代替；scope B/C 落地时在 `tools/archtest/` 补对应 `*_invariants_test.go` 并在本 ADR 更新 §AI-rebust 评级表状态。
 - **触发条件**：本 stub 在 scope B/C 批量迁移后才有守护对象（golden 文件足够多时才值得机器检测）。PR-A 不落地实现，仅冻结形态设计。
 
-## Scope（待用户拍板，ADR review 门）
+## Scope（已决议并落地）
 
-本 ADR 决策"载体 = golden"。**实施范围**两档，需用户确认后才动 39-package：
+本 ADR 决策"载体 = golden"。实施采用**范围 A**（先用 `#562` 冻结机制契约 + 2 范例 golden proof，再分批机械迁移），已全部完成：
 
-- **范围 A（mechanism + exemplar）**：PR-A 仅落地 golden 序列化器 + `-update` flag + CI 接线 + 1~2 个范例 fixture 迁移作 golden proof + 本 ADR + 诚实性修正（对齐 backlog 措辞）。其余迁移分批走 PR-B/C。**符合原 PR-A 定义（先冻结机制契约，再批量迁移）。**
-- **范围 B（full landing）**：PR-A 直接迁移全部 ~39 fixture pkg + ~15 caller。改动量大，单 PR review 负荷高。
+- **scope A** `#562`：golden 序列化器 + `-update` flag + `scanner.Canonical` 单源 + `golden.go`/`golden_test.go` + 2 范例（panic RunTyped / eval RunTypedDir）+ 本 ADR。
+- **scope B** `#563`（B1：prod_clock_injection / prod_duration / test_time_literal / exported_error_new，RunTypedDir）、`#564`（B2：implements_funnel RunTyped + notfound AST-only，notfound 同时恢复被弱断言退化的精确断言）。
+- **scope C** `#565`（C2：errcode_invariants 多段，含 `assert.NotEmpty/Empty` 弱断言移除）、`#566`（C1：clock_invariants / errcode_message_const / span_record_error 的 `wantViolCount int` 计数盲区消解；review 闭环额外删除迁移遗留死代码 + 去硬编码 count 注释）。
 
-推荐**范围 A**：契约（golden 载体）由本 ADR 冻结后，批量迁移是机械低风险操作，分批 PR 各自可审；notfound/errcode 特例（#557 review Agent 2 标真实等价性回归）单列 PR 因其非机械。
+历史决策记录：当初备选"范围 B（单 PR 全量 ~39 pkg）"因 review 负荷过高未采用；notfound/errcode 特例按非机械单列（C1/C2）已如期处理。三-reviewer 复审在 `#566` 抓出迁移遗留死代码（`runSpanRecordErrorFixtureScan`/`scanSpanRecordErrorFile`），已修。本次迁移高强度审查另暴露 4 条**既存非本次引入**的 Soft 治理债，登记于 backlog（见 `cap-14-tooling.md` §14.1：`SPAN-ARCHTEST-ANCHOR-ORPHAN-01` / `INVARIANT-HEADER-CASING-DRIFT-01` / `WALK-DEPTH-API-EACHCHILDREN-01` / `FIXTURE-SCANNER-REL-STRATEGY-UNIFY-01`）。
