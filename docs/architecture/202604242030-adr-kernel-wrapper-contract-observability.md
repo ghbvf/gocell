@@ -17,6 +17,18 @@
 > instead of surfacing a real wiring bug. §4 is also updated: consumer
 > WrapConsumer wiring is now in-scope for PR-A11 (symmetric with HTTP
 > side) rather than deferred. §1/§2 remain unchanged.
+>
+> **Amendment (B2-A-20, PR #577, 2026-05-18)**: the §1 back-compat shim
+> — package `runtime/observability/tracing` re-exporting
+> `kernel/wrapper.{Tracer,Span,Attr}` as type aliases plus `SpanSet*`
+> helper shims plus an in-process `NewTracer` — has been **deleted
+> outright** (no external callers exist per CLAUDE.md). All call sites now
+> use `kernel/wrapper` directly; the in-process fixture moved to the
+> test-only package `runtime/observability/tracingtest` (archtest
+> `TRACING-SIMPLETRACER-TEST-ONLY-01`). §1, §10, and the §Neutral
+> "source-compatible via type aliases" line are rewritten in-place below
+> to remove the now-false alias claim (ai-collab.md §"ADR amendment 落地
+> 必查" — no dual truth source).
 
 ## Context
 
@@ -38,13 +50,17 @@ contracts to runtime observability primitives. The design has four parts:
 
 ### 1. Kernel owns Tracer/Span interfaces
 
-`kernel/wrapper.Tracer` and `kernel/wrapper.Span` replace the definitions
-previously living in `runtime/observability/tracing`. `runtime/observability/
-tracing.Tracer` / `.Span` / `.Attr` are now **type aliases** of the kernel
-interfaces so downstream callers keep compiling. CLAUDE.md's LAYER-01
-rule (kernel ⇏ runtime/adapters/cells, third-party import allowlist: stdlib
+`kernel/wrapper.Tracer` and `kernel/wrapper.Span` are the **single
+definition source** for the Tracer/Span/Attr interfaces. (Originally
+`runtime/observability/tracing` re-exported them as type aliases so
+pre-existing callers kept compiling; that back-compat package was deleted
+outright by B2-A-20 / PR #577 — see the Amendment note above — and all
+call sites now reference `kernel/wrapper` directly. The in-process
+stdlib fixture moved to the test-only package
+`runtime/observability/tracingtest`.) CLAUDE.md's LAYER-01 rule
+(kernel ⇏ runtime/adapters/cells, third-party import allowlist: stdlib
 + `pkg/*` + `gopkg.in/yaml.v3`) stays clean — OTel adapter lives in
-`adapters/otel` as the concrete kernel.Tracer implementation.
+`adapters/otel` as the concrete `kernel/wrapper.Tracer` implementation.
 
 Rationale: `kernel/wrapper.HTTPHandler` and `kernel/wrapper.WrapConsumer`
 both need to start spans. Duplicating a second Tracer interface in
@@ -391,8 +407,9 @@ The same review round tightened adapter safety:
 
 - `adapters/otel` no longer exports raw `[]byte` attributes as strings;
   it emits a redacted length + sha256 summary.
-- `runtime/observability/tracing.simpleSpan` now locks all mutable span
-  fields, satisfying the `wrapper.Span` concurrency contract.
+- `runtime/observability/tracingtest.simpleSpan` (moved from the deleted
+  `runtime/observability/tracing` by B2-A-20 / PR #577) locks all mutable
+  span fields, satisfying the `wrapper.Span` concurrency contract.
 
 ## Consequences
 
@@ -417,8 +434,11 @@ The same review round tightened adapter safety:
   becomes a backend cost issue.
 
 ### Neutral
-- `runtime/observability/tracing` Tracer/Span interface move is source-
-  compatible via type aliases; callers see no breakage.
+- The Tracer/Span/Attr interfaces are owned solely by `kernel/wrapper`.
+  The original `runtime/observability/tracing` alias package (added for
+  source-compatibility during the PR-A11 move) was deleted by B2-A-20 /
+  PR #577; all call sites were migrated to `kernel/wrapper` in the same
+  PR (one-shot, no deprecation window — no external callers per CLAUDE.md).
 - Performance: the HTTP wrapper adds one `ctxkeys.WithContractID` call
   and appends five attributes to the request-owned `AttrCarrier`.
   Span creation remains owned by the existing outer HTTP tracing

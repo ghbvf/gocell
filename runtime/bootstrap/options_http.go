@@ -18,10 +18,10 @@ import (
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
 // WithRouterOptions passes options to the router builder.
@@ -39,7 +39,7 @@ func WithRouterOptions(opts ...router.Option) Option {
 // is emitted at bootstrap time so ops notice the silent degrade.
 //
 // ref: go-zero — observability configuration at app level
-func WithTracer(t tracing.Tracer) Option {
+func WithTracer(t wrapper.Tracer) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts,
 			router.WithTracer(t),

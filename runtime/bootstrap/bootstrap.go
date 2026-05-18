@@ -28,11 +28,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -83,7 +83,7 @@ type Bootstrap struct {
 	duplicateListenerRefs []cell.ListenerRef
 	routerOpts            []router.Option
 	healthRouteGroupOpts  []HealthRouteGroupOption
-	wrapperTracer         tracing.Tracer
+	wrapperTracer         wrapper.Tracer
 	circuitBreakerNil     bool
 	healthCheckers        []namedChecker
 	adapterInfo           map[string]string

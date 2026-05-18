@@ -15,11 +15,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	"github.com/ghbvf/gocell/runtime/observability/tracingtest"
 )
 
 func TestTracing_CreatesSpan(t *testing.T) {
-	tracer := tracing.NewTracer("test-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-tracer")
 
 	var traceID, spanID string
 	handler := Tracing(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +44,7 @@ func TestTracing_CreatesSpan(t *testing.T) {
 }
 
 func TestTracing_UsesUpstreamTraceparent(t *testing.T) {
-	tracer := tracing.NewTracer("test-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-tracer")
 
 	var gotTraceID string
 	var gotSpanID string
@@ -73,7 +73,7 @@ func TestTracing_UsesUpstreamTraceparent(t *testing.T) {
 }
 
 func TestTracing_InvalidTraceHeadersStartNewRoot(t *testing.T) {
-	tracer := tracing.NewTracer("test-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-tracer")
 
 	var gotTraceID string
 	var gotSpanID string
@@ -101,7 +101,7 @@ func TestTracing_InvalidTraceHeadersStartNewRoot(t *testing.T) {
 }
 
 func TestTracing_CapturesStatus(t *testing.T) {
-	tracer := tracing.NewTracer("test-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-tracer")
 
 	handler := Tracing(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -115,7 +115,7 @@ func TestTracing_CapturesStatus(t *testing.T) {
 }
 
 func TestTracing_UniqueSpanIDs(t *testing.T) {
-	tracer := tracing.NewTracer("test-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-tracer")
 	spanIDs := make(map[string]bool)
 
 	handler := Tracing(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +186,7 @@ type spyTracer struct {
 	spans []*spySpan
 }
 
-func (st *spyTracer) Start(ctx context.Context, name string, attrs ...wrapper.Attr) (context.Context, tracing.Span) {
+func (st *spyTracer) Start(ctx context.Context, name string, attrs ...wrapper.Attr) (context.Context, wrapper.Span) {
 	span := &spySpan{name: name, attrs: make(map[string]any)}
 	if len(attrs) > 0 {
 		span.SetAttributes(attrs...)
@@ -544,7 +544,7 @@ func TestTracing_2xxDoesNotSetErrorSpanStatus(t *testing.T) {
 // --- Public endpoint trust boundary tests (#24 TRUST-POLICY-01) ---
 
 func TestTracing_PublicEndpoint_NewRootTrace(t *testing.T) {
-	tracer := tracing.NewTracer("public-test")
+	tracer := tracingtest.NewSimpleTracer("public-test")
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
 
 	var gotTraceID string
@@ -593,7 +593,7 @@ func TestTracing_PublicEndpoint_LinkedAttributes(t *testing.T) {
 }
 
 func TestTracing_NonPublicEndpoint_InheritsTrace(t *testing.T) {
-	tracer := tracing.NewTracer("test-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-tracer")
 
 	var gotTraceID string
 	handler := Tracing(tracer, WithPublicEndpointFn(func(r *http.Request) bool {
@@ -613,7 +613,7 @@ func TestTracing_NonPublicEndpoint_InheritsTrace(t *testing.T) {
 }
 
 func TestTracing_PublicEndpoint_NoInboundHeaders(t *testing.T) {
-	tracer := tracing.NewTracer("test-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-tracer")
 
 	var gotTraceID string
 	handler := Tracing(tracer, WithPublicEndpointFn(func(r *http.Request) bool {
@@ -632,7 +632,7 @@ func TestTracing_PublicEndpoint_NoInboundHeaders(t *testing.T) {
 }
 
 func TestTracing_NilPublicEndpointFn_AllTrusted(t *testing.T) {
-	tracer := tracing.NewTracer("test-tracer")
+	tracer := tracingtest.NewSimpleTracer("test-tracer")
 
 	var gotTraceID string
 	// No WithPublicEndpointFn option → all endpoints trusted (backward compat)

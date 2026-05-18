@@ -416,7 +416,7 @@ three D6 clock-injection tests in one shot.
 | `adapters/s3` | Thin aws-sdk-go-v2 wrapper (Config, Upload, Health, SDK escape hatch) | — |
 | `adapters/rabbitmq` | Publisher, Subscriber, ConsumerBase (DLQ + retry) | `outbox.Publisher`, `outbox.Subscriber` |
 | `adapters/websocket` | WebSocket Hub, signal-first push | — |
-| `adapters/otel` | OTel SDK tracer + MetricProvider + pool collector (OTLP gRPC exporter, semconv `db.client.connection.*`) | `tracing.Tracer`, `kernel/observability/metrics.Provider` |
+| `adapters/otel` | OTel SDK tracer + MetricProvider + pool collector (OTLP gRPC exporter, semconv `db.client.connection.*`) | `kernel/wrapper.Tracer`, `kernel/observability/metrics.Provider` |
 | `adapters/prometheus` | MetricProvider (backs runtime/outbox collectors) + LifecycleHookObserver | `kernel/observability/metrics.Provider`, `cell.LifecycleHookObserver` |
 
 ### Outbox Wiring
@@ -516,18 +516,27 @@ safely degrade to a new root trace.
 `router.WithTracer`:
 
 ```go
-// bootstrap (recommended)
-tracer := tracing.NewTracer("my-service")  // or adapters/otel.NewTracer(...)
+// bootstrap (recommended) — production wires the OTel adapter.
+// otel.NewTracer returns (*otel.Tracer, shutdown func(context.Context) error, error).
+tracer, shutdown, err := otel.NewTracer(ctx, otel.TracerConfig{ServiceName: "my-service"})
+if err != nil { /* handle */ }
+defer shutdown(context.Background())
+
 app := bootstrap.New(
     bootstrap.WithAssembly(asm),
     bootstrap.WithListener(cell.PrimaryListener, ":8080",
         []cell.ListenerAuth{cell.AuthNone{}}),
-    bootstrap.WithTracer(tracer),
+    bootstrap.WithTracer(tracer), // tracer is a kernel/wrapper.Tracer
 )
 
 // router (standalone)
 r := router.New(router.WithTracer(tracer))
 ```
+
+> Without `WithTracer`, span creation falls back to `wrapper.NoopTracer{}`.
+> Tests that need inspectable trace/span IDs use the in-process fixture
+> `runtime/observability/tracingtest.NewSimpleTracer("svc")` (test-only —
+> archtest `TRACING-SIMPLETRACER-TEST-ONLY-01` bans it from production).
 
 **Trust assumption**: trace header propagation assumes a trusted-upstream
 deployment (service-to-service behind a gateway or mesh). Public-facing edges

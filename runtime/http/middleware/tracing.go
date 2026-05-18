@@ -11,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/redaction"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
 // TracingOption configures the Tracing middleware.
@@ -121,7 +120,7 @@ func DefaultProbeFilter(r *http.Request) bool {
 // skips span creation entirely. This replaces the earlier wrapper-level
 // DefaultProbeFilter that never fired in practice because probe routes are
 // registered on the outer mux and bypass wrapper.HTTPHandler entirely.
-func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) http.Handler {
+func Tracing(tracer wrapper.Tracer, opts ...TracingOption) func(http.Handler) http.Handler {
 	var cfg tracingConfig
 	for _, o := range opts {
 		o(&cfg)
@@ -140,7 +139,7 @@ func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) ht
 
 // serveSpanned starts the outer request span, delegates to next, then
 // finalizes the span. Extracted to keep Tracing's cognitive complexity ≤ 15.
-func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w http.ResponseWriter, r *http.Request) {
+func serveSpanned(tracer wrapper.Tracer, cfg tracingConfig, next http.Handler, w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	isPublic := cfg.publicEndpointFn != nil && cfg.publicEndpointFn(r)
 
@@ -175,8 +174,8 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	// Record linked remote context for public endpoints.
 	if isPublic && remoteSpanCtx.IsValid() && remoteSpanCtx.IsRemote() {
 		span.SetAttributes(
-			tracing.Attr{Key: "linked.trace_id", Value: remoteSpanCtx.TraceID().String()},
-			tracing.Attr{Key: "linked.span_id", Value: remoteSpanCtx.SpanID().String()},
+			wrapper.Attr{Key: "linked.trace_id", Value: remoteSpanCtx.TraceID().String()},
+			wrapper.Attr{Key: "linked.span_id", Value: remoteSpanCtx.SpanID().String()},
 		)
 	}
 
@@ -192,13 +191,13 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 
 	status := state.Status()
 	route, contractAttrs := finalRouteAndContractAttrs(r, carrier, cfg)
-	tracing.SpanSetName(span, r.Method+" "+route)
+	wrapper.SetSpanName(span, r.Method+" "+route)
 
 	// Emit http.status_code as int64 for cross-span type consistency with
 	// OTel collector pipelines that switch on attribute type.
 	span.SetAttributes(
-		tracing.Attr{Key: "http.route", Value: route},
-		tracing.Attr{Key: "http.status_code", Value: int64(status)},
+		wrapper.Attr{Key: "http.route", Value: route},
+		wrapper.Attr{Key: "http.status_code", Value: int64(status)},
 	)
 
 	// Late-bind contract attributes collected by wrapper.HTTPHandler on
@@ -241,13 +240,13 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 			reason = "context_canceled"
 		}
 		span.SetAttributes(
-			tracing.Attr{Key: "client.cancel.reason", Value: reason},
+			wrapper.Attr{Key: "client.cancel.reason", Value: reason},
 		)
 	}
 
 	// 5xx → error span; 4xx and below → unset (otelhttp convention).
 	if status >= 500 {
-		tracing.SpanSetStatus(span, true, http.StatusText(status))
+		span.SetStatus(wrapper.StatusError, http.StatusText(status))
 	}
 }
 
@@ -285,12 +284,12 @@ func attrString(attrs []wrapper.Attr, key string) string {
 }
 
 type spanErrorRecorder struct {
-	span tracing.Span
+	span wrapper.Span
 }
 
 type spanErrorRecorderKey struct{}
 
-func withSpanErrorRecorder(ctx context.Context, span tracing.Span) context.Context {
+func withSpanErrorRecorder(ctx context.Context, span wrapper.Span) context.Context {
 	return context.WithValue(ctx, spanErrorRecorderKey{}, spanErrorRecorder{span: span})
 }
 
@@ -308,7 +307,7 @@ func recordPanicOnActiveSpan(ctx context.Context, rec any) {
 	if err := panicAsError(rec); err != nil {
 		r.span.RecordError(redaction.RedactError(err))
 	}
-	tracing.SpanSetStatus(r.span, true, "panic")
+	r.span.SetStatus(wrapper.StatusError, "panic")
 }
 
 func panicAsError(rec any) error {
