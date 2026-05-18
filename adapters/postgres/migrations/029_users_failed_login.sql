@@ -27,6 +27,9 @@
 --
 -- ref: keycloak BruteForceProtector LoginFailureEntity
 -- ref: dotnet/aspnetcore Identity LockoutOptions
+--
+-- Deploy runbook: ADD COLUMN only; PG 12+ does not rewrite the table (metadata
+-- default). Standard rolling deploy — no traffic drain required.
 
 -- +goose Up
 SET LOCAL lock_timeout = '5s';

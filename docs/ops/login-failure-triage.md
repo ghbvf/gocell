@@ -129,3 +129,60 @@ distribution = regression of the timing-normalization invariant
 rather than the uniform 401. The path is admin-authenticated, so there is no
 enumeration concern; surfacing the specific cause helps admin tooling.
 See `IssueForUser` godoc for the rationale.
+
+## Auto-lockout 相关 slog 事件 (ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01)
+
+| Event | Level | slog message | 字段 | 含义 |
+|-------|-------|--------------|------|------|
+| auto-lock 触发 | Warn | `account auto-locked` | `user_id` / `failed_count` / `reason=threshold_locked` | 用户连续失败达阈值，已自动锁定 |
+| lazy-unlock 触发 | Info | `account lazy-unlocked` | `user_id` / `locked_until` / `reason=lazy_unlocked` | TTL 到期，sessionlogin 自动解锁 |
+| lockout 计数器更新失败 | Error | `session-login: lockout record failure failed` | `error` / `user_id` / `reason` | DB/outbox 故障导致计数器无法持久化 |
+
+### 查询示例
+
+近 1 小时被自动锁定的用户：
+
+```
+jq 'select(.msg == "account auto-locked") | {time, user_id, failed_count}'
+```
+
+lockout 计数器异常：
+
+```
+jq 'select(.msg | startswith("session-login: lockout record failure"))'
+```
+
+## Break-glass：唯一 admin 被 auto-lock 后恢复
+
+### 触发场景
+
+所有 admin 用户被 `accountlockout` 阈值锁定后，登录端点 (`POST /api/v1/access/sessions`) 拒绝任何 admin login，导致无法走 admin unlock endpoint 解锁。
+
+### 恢复路径
+
+**首选：BootstrapAuth setup endpoint（FMT-28）**
+
+`/api/v1/*/setup/admin` endpoint 走独立认证面（HTTP Basic via env `GOCELL_SETUP_ADMIN_USERNAME` + `GOCELL_SETUP_ADMIN_PASSWORD`），不参与 password-login lockout：
+1. 确认 env 凭证仍可用（生产部署应保留）
+2. 用 setup endpoint 重置 admin 密码 / 状态（具体 endpoint 参考 contracts/http/auth/setup/admin/*）
+
+**次选：DB-level recovery（ops 操作）**
+
+直连 PG 解除锁定：
+
+```sql
+UPDATE users
+SET status='active', failed_login_count=0, locked_until=NULL, updated_at=NOW()
+WHERE id='<admin-user-id>';
+```
+
+注意：此操作不通过 authzmutate funnel，不会 bump authz_epoch。如果担心 stale session，配合：
+
+```sql
+UPDATE sessions SET revoked_at=NOW() WHERE user_id='<admin-user-id>' AND revoked_at IS NULL;
+UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id='<admin-user-id>' AND revoked_at IS NULL;
+```
+
+### 防御
+
+监控 `auth_account_lockout_total{reason="threshold_locked"}` rate。设置告警阈值（如 > 1/min 持续 5min）。

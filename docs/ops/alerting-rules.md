@@ -450,6 +450,46 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 
 ---
 
+## Auth 账户自动锁定
+
+`auth_account_lockout_total{reason}` 由 `runtime/auth.AccountLockoutMetrics` 在 accesscore sessionlogin 路径发射，`reason` 取值：
+- `threshold_locked`：连续失败达阈值，账户被自动锁定
+- `lazy_unlocked`：TTL 到期，sessionlogin 透明解锁
+
+### GoCellAuthAccountAutoLockSpike
+
+短时内多个账户被自动锁定，可能意味着暴力破解攻击或系统性认证问题。
+
+```yaml
+- alert: GoCellAuthAccountAutoLockSpike
+  expr: sum(rate(gocell_auth_account_lockout_total{reason="threshold_locked"}[5m])) > 1
+  for: 5m
+  labels:
+    severity: warning
+    cell: accesscore
+  annotations:
+    summary: "Account auto-lockout spike detected"
+    description: "Accounts are being auto-locked at >1/min. Possible brute-force attack or systemic auth issue. Runbook: docs/ops/login-failure-triage.md#auto-lockout-相关-slog-事件"
+```
+
+### GoCellAuthAccountLazyUnlockUnusualFrequency
+
+lazy-unlock 频率持续偏高，可能意味着攻击者在利用 TTL 边界周期性尝试。
+
+```yaml
+- alert: GoCellAuthAccountLazyUnlockUnusualFrequency
+  expr: sum(rate(gocell_auth_account_lockout_total{reason="lazy_unlocked"}[15m])) > 0.5
+  for: 15m
+  labels:
+    severity: info
+    cell: accesscore
+  annotations:
+    summary: "High lazy-unlock frequency"
+    description: "lazy-unlock rate exceeds 0.5/min sustained over 15min. Indicates attackers may be exploiting TTL boundary."
+```
+
+---
+
 ## 注意事项
 
 1. **fqName 单前缀**：所有规则中的指标名已包含 `gocell_` 前缀。若部署时 Prometheus
