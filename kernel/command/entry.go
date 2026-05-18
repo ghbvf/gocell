@@ -1,6 +1,8 @@
 package command
 
 import (
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -179,6 +181,21 @@ func (e *Entry) validateTimeouts() error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: OverallDeadline timeout must be non-negative")
 	}
 	return nil
+}
+
+// LogValue implements slog.LogValuer so that Entry can be logged without
+// leaking arbitrary Payload bytes. Payload is replaced by a byte-count summary
+// "<REDACTED bytes=N>" to prevent accidental sensitive data exposure in logs
+// while still giving operators the payload size for debugging.
+func (e *Entry) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("id", e.ID),
+		slog.String("deviceId", e.DeviceID),
+		slog.String("commandType", e.CommandType),
+		slog.String("payload", fmt.Sprintf("<REDACTED bytes=%d>", len(e.Payload))),
+		slog.String("status", e.Status.String()),
+		slog.Int("attempt", e.Attempt),
+	)
 }
 
 // NewEntry creates an Entry in Pending status with the given parameters.

@@ -275,6 +275,10 @@ linters:
             - github.com/ghbvf/gocell/examples/iotdevice
             - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
+            # B2.B: devicecell has a cell-private PG adapter under
+            # internal/adapters/postgres mirroring cells-isolation. pgx is the
+            # underlying SDK — same allowance as platform cells-isolation.
+            - github.com/jackc/pgx
         example-cells-isolation-todoorder:
           list-mode: strict
           files:

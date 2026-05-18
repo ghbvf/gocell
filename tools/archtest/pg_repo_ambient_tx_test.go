@@ -40,11 +40,13 @@ import (
 // adapters are included since the tx-extraction key
 // (kernel/persistence.TxCtxKey) is shared across the layer boundary.
 var pgRepoFiles = map[string]struct{}{
-	"adapters/postgres/session_store.go":                       {},
-	"adapters/postgres/refresh_store.go":                       {},
-	"adapters/postgres/outbox_store.go":                        {},
-	"cells/accesscore/internal/adapters/postgres/user_repo.go": {},
-	"cells/accesscore/internal/adapters/postgres/role_repo.go": {},
+	"adapters/postgres/session_store.go":                                            {},
+	"adapters/postgres/refresh_store.go":                                            {},
+	"adapters/postgres/outbox_store.go":                                             {},
+	"adapters/postgres/command_queue.go":                                            {},
+	"cells/accesscore/internal/adapters/postgres/user_repo.go":                      {},
+	"cells/accesscore/internal/adapters/postgres/role_repo.go":                      {},
+	"examples/iotdevice/cells/devicecell/internal/adapters/postgres/device_repo.go": {},
 }
 
 // pgWriteMethodPrefixes flags a method as write-path. Prefix-match keeps the
@@ -80,11 +82,16 @@ const (
 )
 
 // pgRepoPackagePatterns lists the import patterns whose production .go files
-// the archtest must parse with full TypesInfo. Limiting the load to two
-// directories keeps the test fast (vs. module-wide scan).
+// the archtest must parse with full TypesInfo. Limiting the load to a small
+// set of directories keeps the test fast (vs. module-wide scan).
+//
+// When adding a new PG-backed repository file to pgRepoFiles, the owning
+// package must also be appended here so that the typed load actually covers
+// the new file; otherwise pgRepoFiles entry exists but is never scanned.
 var pgRepoPackagePatterns = []string{
 	"github.com/ghbvf/gocell/adapters/postgres",
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres",
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/adapters/postgres",
 }
 
 // TestPGRepoAmbientTx guards PG-REPO-AMBIENT-TX-01: write-path methods on

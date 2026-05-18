@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -28,11 +29,13 @@ import (
 )
 
 func newTestCell() *DeviceCell {
-	return NewDeviceCell(
+	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
 		WithClock(clock.Real()),
 	)
+	c.RegisterCommandQueue(commandtest.NewInMemQueue())
+	return c
 }
 
 type failingPublisher struct{}
@@ -91,16 +94,36 @@ func TestDeviceCell_Startup(t *testing.T) {
 	require.NoError(t, c.Stop(ctx))
 }
 
-func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
-	// No repos injected; Init should use in-memory defaults.
+func TestDeviceCell_InitNoDeviceRepository_FailsFast(t *testing.T) {
+	// "No soft fallback": devicecell never silently constructs a mem repo. Demo
+	// callers must wire mem.NewDeviceRepository() explicitly via the option.
 	c := NewDeviceCell(
 		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
 		WithClock(clock.Real()),
 	)
-	ctx := context.Background()
-	rec := newTestRec()
-	require.NoError(t, c.Init(ctx, rec))
-	assert.Len(t, c.OwnedSlices(), 5)
+	c.RegisterCommandQueue(commandtest.NewInMemQueue())
+	err := c.Init(context.Background(), newTestRec())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, err.Error(), "device repository")
+}
+
+func TestDeviceCell_InitNoCommandQueue_FailsFast(t *testing.T) {
+	// Companion of the device-repo case: nil commandQueue is also rejected in
+	// every mode. RegisterCommandQueue is the only sanctioned wiring point.
+	c := NewDeviceCell(
+		WithDeviceRepository(mem.NewDeviceRepository()),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
+		WithClock(clock.Real()),
+	)
+	err := c.Init(context.Background(), newTestRec())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, err.Error(), "command queue")
 }
 
 func TestDeviceCell_InitNoPublisher(t *testing.T) {
@@ -364,31 +387,17 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	assert.Contains(t, err.Error(), "cursor codec")
 }
 
-// TestDeviceCell_DurableMode_RejectsInMemCommandQueue verifies that Init fails
-// fast when DurabilityDurable is requested, because commandtest.InMemQueue is
-// not suitable for durable deployments.
-func TestDeviceCell_DurableMode_RejectsInMemCommandQueue(t *testing.T) {
-	c := NewDeviceCell(
-		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
-		WithClock(clock.Real()),
-		WithCursorCodec(newTestCursorCodec(t)),
-	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "commandtest.InMemQueue is not suitable for durable deployments")
-}
-
 func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
-	// Uses DurabilityDemo (not DurabilityDurable) because InMemQueue is not
-	// suitable for durable deployments and Init will reject durable mode.
-	// The publish-fail-open behavior under test applies in both modes.
+	// The publish-fail-open behavior under test applies in both modes; we use
+	// demo mode here purely to dodge the cursor-codec durability check, since
+	// the focus is on persistence vs publish separation.
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
 		WithClock(clock.Real()),
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
+	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
 
 	rec := httptest.NewRecorder()
@@ -406,6 +415,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
 		WithClock(clock.Real()),
 	)
+	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
 
 	rec := httptest.NewRecorder()
