@@ -361,21 +361,20 @@ cell := accesscore.New(
 
 **新形态（Hard via form-uniqueness）**：
 
-两条规则，均通过 `*types.Info` 解析，无字符串锚点、无手工 allowlist：
+三条规则，均通过 `*types.Info` 解析，无字符串锚点、无手工 allowlist（完整规则描述见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc）：
 
-- **R1（单一合法持有者）**：每个 `*ast.StructType` 字段，若其类型解析为 `*pgxpool.Pool`（`*types.Pointer → *types.Named → Obj().Pkg().Path() == "github.com/jackc/pgx/v5/pgxpool" && Obj().Name() == "Pool"`），则宿主结构体名称必须精确等于 `pgExecutor`。不匹配者直接失败，无 "looks-like-but-isn't" 灰色地带。
-- **R2（构造函数 wrap funnel）**：每个 `*ast.FuncDecl` 参数，若其类型解析为 `*pgxpool.Pool`，则 (a) 函数名必须以 `New` 为前缀，且 (b) 函数体内必须有 `CallExpr` 其 `Fun` 通过 `*types.Info.Uses` 解析到包内 `newPGExecutor`，且该 `CallExpr` 的第一个参数是该 pool param 的 `*ast.Ident`。两条件 AND，缺一失败。
+- **R1（单一合法持有者）**：每个 `*ast.StructType` 字段，若其类型解析为 `*pgxpool.Pool`，则宿主结构体名称必须精确等于 `pgExecutor`。
+- **R2（构造函数 wrap funnel）**：每个 `*ast.FuncDecl` 参数，若其类型解析为 `*pgxpool.Pool`，则 (a) 函数名必须以 `New` 为前缀，且 (b) 函数体内必须有 `CallExpr` 其 `Fun` 通过 `*types.Info.Uses` 解析到包内 `newPGExecutor`，且第一个参数是该 pool param 的 `*ast.Ident`。两条件 AND，缺一失败。
+- **R3（使用点 funnel）**：repo/store 方法不得直接访问 `pgExecutor.pool` 字段，也不得在 callsite allowlist 之外调用 `pgExecutor.ExecDirect`。通过 `*types.Info.Types` 解析 receiver 类型。
 
-扫描范围改为 `*_repo.go` 和 `*_store.go` 后缀文件（infrastructure 文件 `pool.go`、`tx_manager.go`、`pg_executor.go` 合法持有 pool，不在范围）。覆盖保护：companion coverage guard 断言两个包模式各自至少有一个 `*_repo.go`/`*_store.go` 文件，防止包名变更导致覆盖静默归零。
+扫描范围为 `*_repo.go` 和 `*_store.go` 后缀文件（infrastructure 文件合法持有 pool，不在范围）。覆盖保护：companion coverage guard 断言两个包模式各自至少有一个此类文件，防止包名变更导致覆盖静默归零。
 
 **Funnel 双向锁评级（ai-collab.md §Funnel 双向锁评级）**：
 
 - **下游 Hard**：R1/R2 通过 `*types.Info` form-uniqueness 拦截；违反形态无灰色地带，不经 archtest 即无法绕过 R1/R2 约束。
 - **上游 Medium**：intra-package compile Hard 不可达 — `adapters/postgres` 包内所有文件共享相同的包可见性；Go 编译器无法阻止同包 sibling file 直接访问 `pgExecutor.pool` 或新增自己的字段。上限是 archtest-bound form-uniqueness，与 `PANIC-REGISTERED-01` / `panic(panicregister.Approved)` 同级（ai-collab.md §Hard 范本 #2 caveat）。升级路径：seal `pgExecutor` 为 exported interface + 私有化构造函数，让包外绕过不可表达。详见 backlog `PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01`（`docs/backlog/cap-14-tooling.md`）。
 
-**R2 callee 校验增强**：`bodyCallsNewPGExecutorWith` 在 name 匹配后还通过 `fn.Pkg().Path()` 验证 callee 属于被扫描包（package-local），防止跨包同名函数导致误放行（DX4 PR #578 review A1 修复）。
-
-**RED fixtures**：`tools/archtest/internal/pgrepoambienttxfixture/fixture.go` 包含 3 个必须触发违规的 cases（R1: `badR1Repo`；R2a: `badR2NonNew`；R2b: `NewBadR2NoWrap`）和 2 个 GREEN cases（`pgExecutor` 字段；`NewGoodRepo→newPGExecutor`）。`TestPGRepoAmbientTx_RedFixtureDetected` 断言恰好 3 个诊断，使规则可证伪。
+**RED/GREEN fixture 权威集**：`tools/archtest/internal/pgrepoambienttxfixture/fixture.go` 是 RED/GREEN fixture 的权威单一来源；`TestPGRepoAmbientTx_RedFixtureDetected` 对其进行精确集合断言（exact-set assertion on (ruleID_prefix, fixture source line) pairs），使规则可证伪。当前 RED fixture 集与期望违规计数见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc + `expectedFixtureViolations` — 不在本 ADR 中硬编码，避免每次 fixture 演化时 ADR 与代码双源漂移。
 
 **C2 行为保留**：`adapters/postgres.LedgerStore` 由 `pool *pgxpool.Pool` 字段改为 `db pgExecutor` 字段，inline 三个辅助方法（`execCtx`/`queryRowCtx`/`queryCtx`）删除，所有 SQL 路径统一通过 `s.db.Exec/QueryRow/Query` 路由，行为等价（ambient tx 感知，读路径 Tail/Verify 原先直连 pool 现变为 ambient-aware，符合 DX4 "strictly more correct" 验收条件）。
 

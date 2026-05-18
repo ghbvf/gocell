@@ -45,13 +45,13 @@ type BenchFactory func(b *testing.B) (store session.Store, fakeClock *clockmock.
 //
 //	BenchmarkRevokeForSubject_1000  — credential-event revoke fan-out
 //	BenchmarkMixedConcurrent        — login/validate/logout interleave
-func Bench(b *testing.B, factory BenchFactory, protocol *session.Protocol) {
+//
+// The Protocol is constructed inside factory (e.g. via NewBenchProtocol), so
+// Bench itself does not need a protocol parameter.
+func Bench(b *testing.B, factory BenchFactory) {
 	b.Helper()
 	if factory == nil {
 		b.Fatal("storetest.Bench: factory must not be nil")
-	}
-	if protocol == nil {
-		b.Fatal("storetest.Bench: protocol must not be nil")
 	}
 
 	b.Run("RevokeForSubject_1000", func(b *testing.B) {

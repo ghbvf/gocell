@@ -83,9 +83,9 @@
 
   **Scan scope**: apply R1/R2 only to `*_repo.go` and `*_store.go` files. Infrastructure files (pool wrapper, tx manager, executor itself) legitimately hold the raw pool and are excluded by filename suffix, not by a hand-maintained list. A companion coverage guard asserts each scanned package yields at least one `*_repo.go`/`*_store.go` file, making coverage drift detectable.
 
-  **Ship instance**: `PG-REPO-AMBIENT-TX-01` in `tools/archtest/pg_repo_ambient_tx_test.go`. R1+R2 upgraded from Medium (hand-maintained 5-file allowlist + write-method prefix string matching) to Hard(form-uniqueness) in DX4 Item 3 PR (2026-05-18). RED fixtures in `tools/archtest/internal/pgrepoambienttxfixture/fixture.go` (3 violations: badR1Repo + badR2NonNew + NewBadR2NoWrap); GREEN cases (pgExecutor field + NewGoodRepo→newPGExecutor) assert zero diagnostics. DX4 PR #578 review fixes: A1 pkg-path callee check; A2+T1 BS-1+BS-5 reverse self-checks; T3 fixture name typo (badR2NewNoWrap→NewBadR2NoWrap); D5 pgRepoPackagePatterns maintenance obligation godoc; A3 dual-column funnel grading + PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01 backlog.
+  **Ship instance**: `PG-REPO-AMBIENT-TX-01` — authoritative current state (R1/R2/R3 rule set, RED fixture function names and expected violation set, full blind-spot list BS-1…BS-7) lives in `tools/archtest/pg_repo_ambient_tx_test.go` package godoc + `tools/archtest/internal/pgrepoambienttxfixture/fixture.go`. Design rationale and Funnel 双向锁 grading in ADR `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4.5.1.
 
-  ref: `tools/archtest/pg_repo_ambient_tx_test.go` + `tools/archtest/internal/pgrepoambienttxfixture/fixture.go` + ADR `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4.5.1 amendment.
+  ref: `tools/archtest/pg_repo_ambient_tx_test.go` + `tools/archtest/internal/pgrepoambienttxfixture/fixture.go` + ADR `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4.5.1.
 
 ## archtest 文件命名
 

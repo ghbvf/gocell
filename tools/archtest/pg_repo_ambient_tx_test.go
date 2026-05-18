@@ -77,6 +77,16 @@
 //     Exempted: pgExecutor's own methods (they legitimately use e.pool /
 //     call ExecDirect on self); newPGExecutor constructor.
 //
+// # RED fixtures
+//
+// The authoritative expected-violation set is defined as expectedFixtureViolations
+// (a []fixtureViolation slice in this file) and asserted by
+// TestPGRepoAmbientTx_RedFixtureDetected. Each entry is a (ruleID_prefix, source
+// line) pair pinned to tools/archtest/internal/pgrepoambienttxfixture/fixture.go.
+// The fixture file's package godoc enumerates each RED case and its GREEN controls.
+// Do not duplicate the list here or in ADR §4.5.1 — update expectedFixtureViolations
+// and fixture.go together when the fixture changes intentionally.
+//
 // # Blind spots
 //
 // BS-1 Field embedding: an embedded struct containing *pgxpool.Pool — e.g.
@@ -99,8 +109,10 @@
 // has a *types.Var as Fun, so resolution returns ok=false and R2 does not see
 // this as newPGExecutor. Accepted: same blind spot as PANIC-REGISTERED-01 and
 // CAS-PROTOCOL-COMPOSITION-ROOT-01 BS-2; the repo has no such pattern. Reverse
-// self-check: TestPGRepoAmbientTx_SelfCheck asserts no function-value
-// assignment from newPGExecutor exists in production.
+// self-check: TestPGRepoAmbientTx_SelfCheck BS-3 uses identity-based detection
+// (EachInSubtree[ast.Ident] + *types.Info.Uses, excluding direct-call callee
+// positions) to assert no function-value use of newPGExecutor exists in any
+// form (ValueSpec, call argument, return, composite-literal) in production.
 //
 // BS-4 *pgxpool.Pool type alias: `type myPool = *pgxpool.Pool` — Go type aliases
 // resolve to the same underlying *types.Named so isPgxPoolType still matches.
@@ -113,17 +125,21 @@
 // it is the DI wiring layer that bridges cmd/* to the cell's internal adapters.
 // It is intentionally excluded from pgRepoPackagePatterns (which only includes
 // internal/adapters/postgres, not the parent postgres package). Reverse
-// self-check: TestPGRepoAmbientTx_SelfCheck BS-5 check asserts that
-// cells/accesscore/postgres contains exactly one non-pgExecutor struct holding
-// *pgxpool.Pool named "Deps", preventing a second such struct from silently
-// appearing there.
+// self-check: TestPGRepoAmbientTx_SelfCheck BS-5 asserts three properties: (1)
+// exactly one struct named "Deps" holds *pgxpool.Pool (positive anchor — deleting
+// or renaming Deps fails), (2) no other non-pgExecutor struct holds *pgxpool.Pool
+// (second-struct guard). The former check asserted only (2); adding (1) means
+// renaming/removing Deps is also caught immediately.
 //
 // BS-6 R3 method-value indirection: `var fn = s.db.ExecDirect; fn(ctx, sql)` —
-// R3's ExecDirect detection looks for SelectorExpr CallExpr with Sel.Name ==
-// "ExecDirect". A method-value stored in a variable has a different AST shape
-// and would not be caught. Accepted: the repo has no such pattern; method-value
-// assignment from ExecDirect is covered by reverse self-check
-// TestPGRepoAmbientTx_SelfCheck BS-6.
+// R3's ExecDirect detection looks for a CallExpr whose Fun is a SelectorExpr with
+// Sel.Name == "ExecDirect". A method-value stored in a variable has a different
+// AST shape (SelectorExpr not directly enclosed by CallExpr.Fun) and would not be
+// caught by R3. Accepted: the repo has no such pattern. Reverse self-check:
+// TestPGRepoAmbientTx_SelfCheck BS-6 uses identity-based detection
+// (EachInSubtree[ast.Ident] + *types.Info.Uses on Sel idents, excluding
+// direct-call callee positions) to assert no method-value use of ExecDirect on
+// pgExecutor exists in any form in production.
 //
 // BS-7 R3 pool access via local variable: `p := s.db.pool; p.Exec(ctx, sql)` —
 // R3's pool detection looks for a SelectorExpr `<x>.pool` where <x> resolves to
@@ -662,6 +678,42 @@ func assertProductionCoverage(t *testing.T) {
 	}
 }
 
+// fixtureViolation is a (ruleID_prefix, line) pair identifying one expected
+// RED fixture diagnostic. The ruleID_prefix matches the start of Diagnostic.Message
+// ("R1:", "R2:", "R3:"). Line is the 1-based source line from the fixture file
+// as returned by fset.Position. Both fields must match exactly.
+type fixtureViolation struct {
+	rulePrefix string
+	line       int
+}
+
+// expectedFixtureViolations is the authoritative expected set for
+// TestPGRepoAmbientTx_RedFixtureDetected. Each entry must correspond 1:1 with
+// exactly one diagnostic produced by pgRepoAmbientTxRule on the fixture package.
+//
+// Lines are pinned to the fixture source at
+// tools/archtest/internal/pgrepoambienttxfixture/fixture.go. When the fixture
+// changes intentionally, update both the fixture and this set together —
+// a mismatch is always a bug.
+//
+// Mask check: losing badR1Repo while gaining a different spurious R1 at a
+// different line changes the line, so the set still fails (two different lines
+// for the same rulePrefix). A substitution at the SAME line is caught by the
+// test because the set sizes must match AND every actual entry must be in the
+// expected set.
+var expectedFixtureViolations = []fixtureViolation{
+	// R1: badR1Repo — struct field pool *pgxpool.Pool at line 88 of fixture.go
+	{"R1:", 88},
+	// R2: badR2NonNew — non-New* func with *pgxpool.Pool param, func name at line 93
+	{"R2:", 93},
+	// R2: NewBadR2NoWrap — New* func without newPGExecutor call, func name at line 99
+	{"R2:", 99},
+	// R3: badR3PoolDirect — r.db.pool direct access at line 117
+	{"R3:", 117},
+	// R3: badR3ExecDirect — r.db.ExecDirect outside allowlist at line 123
+	{"R3:", 123},
+}
+
 // TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches all five
 // RED violations in internal/pgrepoambienttxfixture:
 //
@@ -673,6 +725,11 @@ func assertProductionCoverage(t *testing.T) {
 //
 // GREEN cases (pgExecutor field, goodNewFoo→newPGExecutor, goodExecMethod using
 // r.db.Exec) must produce zero diagnostics.
+//
+// The assertion is an exact-set match on (ruleID_prefix, line) pairs from
+// expectedFixtureViolations. This prevents a masked substitution where losing
+// badR1Repo but gaining a different spurious R1 at a different line would still
+// yield r1Count==1 under the old category-count form.
 //
 // Without this test, TestPGRepoAmbientTx's zero-diagnostic result on the real
 // packages has no informational value: the rule could be silently passing
@@ -691,38 +748,80 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
 
-	// Exact count: 1 R1 + 2 R2 + 2 R3 = 5 total.
-	// Equality (not >=5) so unintentional fixture drift is immediately visible.
-	assert.Len(t, diags, 5,
-		"PG-REPO-AMBIENT-TX-01 RED fixture must yield exactly 5 violations "+
-			"(1×R1: badR1Repo + 1×R2: badR2NonNew + 1×R2: NewBadR2NoWrap + "+
-			"1×R3: badR3PoolDirect + 1×R3: badR3ExecDirect); "+
-			"GREEN cases (pgExecutor, goodNewFoo→newPGExecutor, goodExecMethod) must produce 0. "+
-			"Update the expected count if the fixture changes intentionally.")
-
-	r1Count, r2Count, r3Count := 0, 0, 0
+	// Build actual (rulePrefix, line) set from produced diagnostics.
+	type diagKey struct {
+		rulePrefix string
+		line       int
+	}
+	actualSet := make(map[diagKey]struct{}, len(diags))
 	for _, d := range diags {
-		if strings.HasPrefix(d.Message, "R1:") {
-			r1Count++
+		var prefix string
+		switch {
+		case strings.HasPrefix(d.Message, "R1:"):
+			prefix = "R1:"
+		case strings.HasPrefix(d.Message, "R2:"):
+			prefix = "R2:"
+		case strings.HasPrefix(d.Message, "R3:"):
+			prefix = "R3:"
+		default:
+			t.Errorf("unexpected diagnostic with unrecognized rulePrefix at %s:%d: %s",
+				d.Rel, d.Line, d.Message)
+			continue
 		}
-		if strings.HasPrefix(d.Message, "R2:") {
-			r2Count++
-		}
-		if strings.HasPrefix(d.Message, "R3:") {
-			r3Count++
+		actualSet[diagKey{prefix, d.Line}] = struct{}{}
+	}
+
+	// Build expected set.
+	expectedSet := make(map[diagKey]struct{}, len(expectedFixtureViolations))
+	for _, v := range expectedFixtureViolations {
+		expectedSet[diagKey(v)] = struct{}{}
+	}
+
+	// Assert exact match: every expected entry must be in actual, and vice versa.
+	// Using two-sided diff so the error message names the missing/extra entries.
+	for k := range expectedSet {
+		if _, ok := actualSet[k]; !ok {
+			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: expected %s violation at line %d "+
+				"but it was NOT produced — rule may have regressed or fixture line shifted; "+
+				"update expectedFixtureViolations if fixture changed intentionally",
+				k.rulePrefix, k.line)
 		}
 	}
-	assert.Equal(t, 1, r1Count, "expected exactly 1 R1 violation (badR1Repo)")
-	assert.Equal(t, 2, r2Count, "expected exactly 2 R2 violations (badR2NonNew + NewBadR2NoWrap)")
-	assert.Equal(t, 2, r3Count, "expected exactly 2 R3 violations (badR3PoolDirect + badR3ExecDirect)")
+	for k := range actualSet {
+		if _, ok := expectedSet[k]; !ok {
+			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: unexpected %s violation at line %d "+
+				"— rule produced an extra diagnostic not in expectedFixtureViolations; "+
+				"update expectedFixtureViolations if fixture changed intentionally",
+				k.rulePrefix, k.line)
+		}
+	}
+	if len(actualSet) != len(expectedSet) {
+		t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: got %d unique (rulePrefix, line) entries, "+
+			"want %d; GREEN cases (pgExecutor, goodNewFoo→newPGExecutor, goodExecMethod) must produce 0; "+
+			"see expectedFixtureViolations for the authoritative list",
+			len(actualSet), len(expectedSet))
+	}
 }
 
 // TestPGRepoAmbientTx_SelfCheck verifies the blind-spot list by asserting that
-// the prohibited AST forms (BS-1 embedded pool fields, BS-3 function-value
-// assignment from newPGExecutor) are absent from production packages, and that
-// the BS-5 intentional exclusion (cells/accesscore/postgres.Deps) remains
-// exactly bounded. This makes the blind-spot documentation falsifiable rather
-// than purely commentary.
+// prohibited AST forms are absent from production packages and that the BS-5
+// intentional exclusion (cells/accesscore/postgres.Deps) remains exactly bounded.
+// This makes the blind-spot documentation falsifiable rather than purely commentary.
+//
+// BS-3: identity-based detection via EachInSubtree[ast.Ident]+*types.Info.Uses
+// covers all function-value forms of newPGExecutor (ValueSpec, call argument,
+// return, composite-literal), not just AssignStmt. Any Ident resolving to
+// newPGExecutor that is NOT in the callee position of a direct call is flagged.
+//
+// BS-5: positive anchor asserts Deps exists exactly once with *pgxpool.Pool, AND
+// no other non-pgExecutor struct holds *pgxpool.Pool. Deleting/renaming Deps now
+// also fails the check.
+//
+// BS-6: identity-based detection via EachInSubtree[ast.Ident]+*types.Info.Uses
+// covers all method-value forms of ExecDirect on pgExecutor (ValueSpec, call
+// argument, return, composite-literal), not just AssignStmt. Receiver type is
+// verified via *types.Func.Type().(*types.Signature).Recv() rather than by
+// AST receiver expression type, making it independent of AST statement shape.
 func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -774,45 +873,59 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		"BS-1 self-check: no production struct outside pgExecutor may use an "+
 			"embedded field that carries *pgxpool.Pool (R1 blind spot)")
 
-	// BS-3 reverse check: newPGExecutor must not be stored as a function value
-	// in any production package. A function-value indirection would bypass R2.
+	// BS-3 reverse check: newPGExecutor must not appear as a function value (i.e.,
+	// used as a value rather than directly called) in any production package.
+	// A function-value indirection bypasses R2 because R2's callee resolution uses
+	// *types.Info.Uses on the Fun ident of a direct CallExpr; an indirect call via
+	// a stored function value has a *types.Var as Fun, so resolution returns ok=false.
+	//
+	// Detection (identity-based, covers all AST forms uniformly):
+	//   1. Walk EachInSubtree[ast.Ident] over all production files.
+	//   2. Resolve each Ident via *types.Info.Uses to a *types.Func.
+	//   3. If the resolved func is the package-local newPGExecutor (name + pkg path),
+	//      check whether the Ident is in the callee position of a direct call:
+	//      collect all such callee Ident positions from EachInSubtree[ast.CallExpr]
+	//      in a pre-pass, then exclude them.
+	//   4. Any remaining Ident that resolves to newPGExecutor is a function-value use
+	//      (ValueSpec, call argument, return value, composite-literal element, etc.).
+	//
+	// This is strictly broader than the former AssignStmt-only scan and matches the
+	// godoc claim "asserts no function-value assignment from newPGExecutor".
 	var bs3Violations []string
 	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
+		}
+		pkgPath := ""
+		if p.Pkg != nil {
+			pkgPath = p.Pkg.Path()
 		}
 		for _, file := range p.Files {
 			if !p.IsFileInScope(file) {
 				continue
 			}
 			rel := p.Rel(file)
-			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-				// EachInChildren[ast.Ident] visits the direct Ident children of assign
-				// (both Lhs and Rhs elements that are bare *ast.Ident). Rhs elements
-				// that are *ast.Ident are direct children of AssignStmt at depth=1.
-				EachInChildren[ast.Ident](assign, func(id *ast.Ident) {
-					if id.Name != newPGExecutorName {
-						return
-					}
-					bs3Violations = append(bs3Violations,
-						fmt.Sprintf("%s:%d: newPGExecutor stored as function value "+
-							"(BS-3 blind spot — extend rule if this pattern is needed)",
-							rel, p.Fset.Position(id.Pos()).Line))
-				})
-			})
+			bs3Violations = append(bs3Violations,
+				findNewPGExecutorValueUses(p.Fset, file, rel, p.TypesInfo, pkgPath)...)
 		}
 		return nil
 	})
 	assert.Empty(t, bs3Violations,
-		"BS-3 self-check: newPGExecutor must not be stored as a function value in production")
+		"BS-3 self-check: newPGExecutor must not be used as a function value in production; "+
+			"all non-callee Ident references to newPGExecutor are covered by identity resolution")
 
 	// BS-5 reverse check: cells/accesscore/postgres (DI wiring helper, intentionally
 	// NOT in pgRepoPackagePatterns) legitimately holds *pgxpool.Pool in its Deps
-	// struct. Assert exactly ONE non-pgExecutor struct in that package holds
-	// *pgxpool.Pool and its name is "Deps". A second such struct would mean the
-	// DI package grew beyond its intended scope.
+	// struct. This check enforces three properties simultaneously:
+	//   1. There is EXACTLY ONE non-pgExecutor struct in the package holding *pgxpool.Pool.
+	//   2. That struct is named "Deps" (positive anchor: deleting/renaming Deps fails check).
+	//   3. No OTHER non-pgExecutor struct holds *pgxpool.Pool (second-struct guard).
+	//
+	// The former check only asserted (3). Without (1)+(2), renaming Deps or deleting
+	// it would let bs5NonDepsCount stay 0 and the check would trivially pass even
+	// though the invariant was broken.
 	bs5Patterns := []string{"github.com/ghbvf/gocell/cells/accesscore/postgres"}
-	var bs5NonDepsCount int
+	var bs5DepsCount, bs5NonDepsCount int
 	_ = RunTyped(t, TypedOpts{}, bs5Patterns, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
@@ -831,7 +944,12 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 						return
 					}
 					for _, field := range st.Fields.List {
-						if isPgxPoolType(field.Type, p.TypesInfo) && ts.Name.Name != "Deps" {
+						if !isPgxPoolType(field.Type, p.TypesInfo) {
+							continue
+						}
+						if ts.Name.Name == "Deps" {
+							bs5DepsCount++
+						} else {
 							bs5NonDepsCount++
 						}
 					}
@@ -840,50 +958,56 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		}
 		return nil
 	})
+	// Positive anchor: the Deps struct must exist exactly once with a *pgxpool.Pool field.
+	assert.Equal(t, 1, bs5DepsCount,
+		"BS-5 self-check: cells/accesscore/postgres must contain exactly one 'Deps' struct "+
+			"with a *pgxpool.Pool field — the DI wiring pool holder; "+
+			"if Deps was renamed or its pool field removed, update this check and pgRepoPackagePatterns")
+	// Second-struct guard: no other non-pgExecutor struct may hold *pgxpool.Pool.
 	assert.Equal(t, 0, bs5NonDepsCount,
 		"BS-5 self-check: cells/accesscore/postgres must not introduce a second "+
-			"non-pgExecutor struct holding *pgxpool.Pool beyond the intentional Deps struct; "+
+			"non-pgExecutor, non-Deps struct holding *pgxpool.Pool; "+
 			"if a second such struct appears, add it to pgRepoPackagePatterns instead")
 
-	// BS-6 reverse check: ExecDirect must not be stored as a method value in any
-	// production repo/store file. A method-value indirection would bypass R3's
-	// ExecDirect detection. Check all files (not just _repo/_store) in the
-	// production packages to be conservative about the blind spot boundary.
+	// BS-6 reverse check: ExecDirect must not appear as a method value (i.e., used
+	// as a value rather than directly called) in any production file. A method-value
+	// indirection bypasses R3's ExecDirect detection because R3 looks for a CallExpr
+	// whose Fun is a SelectorExpr; a method value stored in a variable has a
+	// different AST shape (SelectorExpr without enclosing CallExpr.Fun).
+	//
+	// Detection (identity-based, covers all AST forms uniformly):
+	//   1. Pre-pass: collect Ident positions that are the Sel of a SelectorExpr that
+	//      is directly used as CallExpr.Fun (direct call to ExecDirect on pgExecutor).
+	//   2. Walk EachInSubtree[ast.Ident] over all production files.
+	//   3. Resolve each Ident via *types.Info.Uses to its object; filter to those
+	//      whose Sel.Name == "ExecDirect" AND whose receiver resolves to pgExecutor.
+	//   4. Exclude Idents in direct-call callee position (step 1). Remaining Idents
+	//      are method-value uses (ValueSpec, call argument, return, composite-lit).
+	//
+	// Check all files (not just _repo/_store) in the production packages to be
+	// conservative about the blind spot boundary.
 	var bs6Violations []string
 	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
+		}
+		pkgPath := ""
+		if p.Pkg != nil {
+			pkgPath = p.Pkg.Path()
 		}
 		for _, file := range p.Files {
 			if !p.IsFileInScope(file) {
 				continue
 			}
 			rel := p.Rel(file)
-			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-				// Look for Rhs elements that are SelectorExpr with Sel == "ExecDirect".
-				EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
-					if sel.Sel.Name != execDirectName {
-						return
-					}
-					// Only flag if the receiver resolves to pgExecutor.
-					var pkgPath string
-					if p.Pkg != nil {
-						pkgPath = p.Pkg.Path()
-					}
-					if !isPgExecutorType(sel.X, p.TypesInfo, pkgPath) {
-						return
-					}
-					bs6Violations = append(bs6Violations,
-						fmt.Sprintf("%s:%d: ExecDirect stored as method value "+
-							"(BS-6 blind spot — R3 would not detect this; extend rule if needed)",
-							rel, p.Fset.Position(sel.Pos()).Line))
-				})
-			})
+			bs6Violations = append(bs6Violations,
+				findExecDirectValueUses(p.Fset, file, rel, p.TypesInfo, pkgPath)...)
 		}
 		return nil
 	})
 	assert.Empty(t, bs6Violations,
-		"BS-6 self-check: pgExecutor.ExecDirect must not be stored as a method value in production")
+		"BS-6 self-check: pgExecutor.ExecDirect must not be used as a method value in production; "+
+			"all non-callee Sel references to ExecDirect on pgExecutor are covered by identity resolution")
 
 	// BS-7 reverse check: pool must not be assigned to a local variable in any
 	// production repo/store file. An assignment like `p := s.db.pool` would let
@@ -922,6 +1046,135 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	})
 	assert.Empty(t, bs7Violations,
 		"BS-7 self-check: pgExecutor.pool must not be assigned to a local variable in production")
+}
+
+// findNewPGExecutorValueUses returns violations for BS-3: any Ident in the file
+// that resolves (via *types.Info.Uses) to the package-local newPGExecutor function
+// AND is NOT in the callee position of a direct call. This covers all value-use
+// forms — ValueSpec, call argument, return value, composite-literal element, etc.
+// — that the former AssignStmt-only scan missed.
+//
+// Two-pass approach:
+//  1. Collect all Ident positions that serve as the direct-call callee of newPGExecutor
+//     (these are legitimate call sites, not function-value uses).
+//  2. Walk all Idents via EachInSubtree; flag those resolving to newPGExecutor that
+//     are NOT in the callee set.
+func findNewPGExecutorValueUses(fset *token.FileSet, file *ast.File, rel string, info *types.Info, pkgPath string) []string {
+	// Pass 1: collect callee-ident positions for direct newPGExecutor calls.
+	calleePos := make(map[token.Pos]struct{})
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		fn := resolveCalleeFunc(call.Fun, info)
+		if fn == nil || fn.Name() != newPGExecutorName {
+			return
+		}
+		if pkgPath != "" && (fn.Pkg() == nil || fn.Pkg().Path() != pkgPath) {
+			return
+		}
+		// Record the Fun identifier position as a known-callee.
+		switch e := call.Fun.(type) {
+		case *ast.Ident:
+			calleePos[e.Pos()] = struct{}{}
+		case *ast.SelectorExpr:
+			calleePos[e.Sel.Pos()] = struct{}{}
+		}
+	})
+
+	// Pass 2: flag any Ident resolving to newPGExecutor that is NOT a direct-call callee.
+	var violations []string
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+		obj, ok := info.Uses[id]
+		if !ok {
+			return
+		}
+		fn, ok := obj.(*types.Func)
+		if !ok {
+			return
+		}
+		if fn.Name() != newPGExecutorName {
+			return
+		}
+		if pkgPath != "" && (fn.Pkg() == nil || fn.Pkg().Path() != pkgPath) {
+			return
+		}
+		if _, isCallee := calleePos[id.Pos()]; isCallee {
+			return // legitimate direct call — not a function-value use
+		}
+		violations = append(violations,
+			fmt.Sprintf("%s:%d: newPGExecutor used as function value (not a direct call) "+
+				"(BS-3 blind spot — R2 would not detect indirect calls; extend rule if needed)",
+				rel, fset.Position(id.Pos()).Line))
+	})
+	return violations
+}
+
+// findExecDirectValueUses returns violations for BS-6: any Ident in the file that
+// resolves (via *types.Info.Uses) to the ExecDirect method on a pgExecutor receiver
+// AND is NOT in the callee position of a direct call. This covers all method-value
+// forms — ValueSpec, call argument, return value, composite-literal element, etc.
+// — that the former AssignStmt+EachInChildren[SelectorExpr] scan missed.
+//
+// Note: for methods, *types.Info.Uses maps the Sel ident of a SelectorExpr to the
+// method's *types.Func object. We check that the Sel's object is a *types.Func whose
+// receiver is pgExecutor (via *types.Func.Type().(*types.Signature).Recv()).
+//
+// Two-pass approach:
+//  1. Collect Sel-ident positions for direct ExecDirect calls on pgExecutor receivers.
+//  2. Walk all Idents; flag those resolving to ExecDirect on pgExecutor that are NOT
+//     in the callee set.
+func findExecDirectValueUses(fset *token.FileSet, file *ast.File, rel string, info *types.Info, pkgPath string) []string {
+	// Pass 1: collect callee-ident positions for direct ExecDirect calls.
+	calleePos := make(map[token.Pos]struct{})
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != execDirectName {
+			return
+		}
+		if !isPgExecutorType(sel.X, info, pkgPath) {
+			return
+		}
+		calleePos[sel.Sel.Pos()] = struct{}{}
+	})
+
+	// Pass 2: flag any Ident named "ExecDirect" resolving to a method on pgExecutor
+	// that is NOT a direct-call callee.
+	var violations []string
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+		if id.Name != execDirectName {
+			return
+		}
+		obj, ok := info.Uses[id]
+		if !ok {
+			return
+		}
+		fn, ok := obj.(*types.Func)
+		if !ok {
+			return
+		}
+		// Check that the method receiver type is pgExecutor.
+		sig, ok := fn.Type().(*types.Signature)
+		if !ok || sig.Recv() == nil {
+			return
+		}
+		recv := sig.Recv().Type()
+		if ptr, ok := recv.(*types.Pointer); ok {
+			recv = ptr.Elem()
+		}
+		named, ok := recv.(*types.Named)
+		if !ok || named.Obj() == nil || named.Obj().Name() != pgExecutorName {
+			return
+		}
+		if pkgPath != "" && (named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != pkgPath) {
+			return
+		}
+		if _, isCallee := calleePos[id.Pos()]; isCallee {
+			return // legitimate direct call — not a method-value use
+		}
+		violations = append(violations,
+			fmt.Sprintf("%s:%d: pgExecutor.ExecDirect used as method value (not a direct call) "+
+				"(BS-6 blind spot — R3 would not detect this; extend rule if needed)",
+				rel, fset.Position(id.Pos()).Line))
+	})
+	return violations
 }
 
 // embeddedStructHasPoolField reports whether the type denoted by expr (an
