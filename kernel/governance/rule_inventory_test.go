@@ -80,7 +80,7 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 // kernel/governance/*.go. Update this list whenever a rule is added /
 // renamed / removed.
 //
-// Total: 86 IDs across 12 series.
+// Total: 87 IDs across 12 series.
 func goldenRuleIDs() []string {
 	return []string{
 		// ADV — advisory warnings (rules_misc_advisory.go).
@@ -119,7 +119,7 @@ func goldenRuleIDs() []string {
 		"FMT-16", "FMT-17", "FMT-19",
 		"FMT-20", "FMT-21", "FMT-22", "FMT-23", "FMT-24", "FMT-25",
 		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30", "FMT-31",
-		"FMT-32", "FMT-33",
+		"FMT-32", "FMT-33", "FMT-34",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency
