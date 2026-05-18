@@ -1318,19 +1318,24 @@ func TestFMT33_VisibilitySegregation(t *testing.T) {
 // validateBypassCompatibility, which catches the same shape at runtime.
 // FMT-26 catches the two-bypass mutex orthogonally (auth.public vs
 // auth.passwordResetExempt mutual exclusion) regardless of path.
+// fmt34TestCase carries inputs and expectations for a single FMT-34
+// scenario. Defined at file scope so the runFMT34Case / assertFMT34Findings
+// helpers can accept it as a typed argument — keeping the table-driven test
+// body small enough to satisfy the kernel/ cognitive complexity budget.
+type fmt34TestCase struct {
+	name       string
+	path       string
+	auth       metadata.HTTPAuthMeta
+	clients    []string
+	nilHTTP    bool
+	wantCount  int
+	wantFields []string
+}
+
 func TestFMT34_PublicBypassOnInternalPath(t *testing.T) {
 	t.Parallel()
-	type tc struct {
-		name       string
-		path       string
-		auth       metadata.HTTPAuthMeta
-		clients    []string
-		nilHTTP    bool
-		wantCount  int
-		wantFields []string
-	}
 
-	tests := []tc{
+	tests := []fmt34TestCase{
 		{
 			name:       "public_on_internal_path",
 			path:       "/internal/v1/foo",
@@ -1419,62 +1424,92 @@ func TestFMT34_PublicBypassOnInternalPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			contract := &metadata.ContractMeta{
-				ID:               "http.fmt34." + tt.name + ".v1",
-				Kind:             "http",
-				ConsistencyLevel: "L1",
-				Lifecycle:        "active",
-				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: tt.clients,
-				},
-				Dir:  "contracts/http/fmt34/" + tt.name + "/v1",
-				File: "contracts/http/fmt34/" + tt.name + "/v1/contract.yaml",
-			}
-			if !tt.nilHTTP {
-				contract.Endpoints.HTTP = &metadata.HTTPTransportMeta{
-					Method:        "GET",
-					Path:          tt.path,
-					SuccessStatus: 200,
-					Auth:          tt.auth,
-				}
-			}
-
-			project := &metadata.ProjectMeta{
-				Cells:      map[string]*metadata.CellMeta{},
-				Slices:     map[string]*metadata.SliceMeta{},
-				Contracts:  map[string]*metadata.ContractMeta{contract.ID: contract},
-				Journeys:   map[string]*metadata.JourneyMeta{},
-				Assemblies: map[string]*metadata.AssemblyMeta{},
-			}
-
-			v := NewValidator(project, "", clock.Real())
-			matches := findByCode(v.validateFMT34(), codeFMT34)
-			if len(matches) != tt.wantCount {
-				t.Fatalf("FMT-34 %s: expected %d findings, got %d: %v",
-					tt.name, tt.wantCount, len(matches), matches)
-			}
-
-			for _, m := range matches {
-				if m.Severity != SeverityError {
-					t.Errorf("FMT-34 %s: expected SeverityError, got %v", tt.name, m.Severity)
-				}
-				if !strings.Contains(m.Message, "; fix:") {
-					t.Errorf("FMT-34 %s: message must contain '; fix:' suffix, got: %q",
-						tt.name, m.Message)
-				}
-			}
-
-			gotFields := make(map[string]bool, len(matches))
-			for _, m := range matches {
-				gotFields[m.Field] = true
-			}
-			for _, want := range tt.wantFields {
-				if !gotFields[want] {
-					t.Errorf("FMT-34 %s: expected finding on field %q, got fields %v",
-						tt.name, want, gotFields)
-				}
-			}
+			runFMT34Case(t, tt)
 		})
 	}
+}
+
+// runFMT34Case builds the project fixture for one FMT-34 scenario, runs
+// validateFMT34, and delegates result validation to assertFMT34Findings.
+// Extracted from TestFMT34_PublicBypassOnInternalPath to keep cognitive
+// complexity under the kernel/ budget of 15.
+func runFMT34Case(t *testing.T, tt fmt34TestCase) {
+	t.Helper()
+	contract := &metadata.ContractMeta{
+		ID:               "http.fmt34." + tt.name + ".v1",
+		Kind:             "http",
+		ConsistencyLevel: "L1",
+		Lifecycle:        "active",
+		Endpoints: metadata.EndpointsMeta{
+			Server:  "accesscore",
+			Clients: tt.clients,
+		},
+		Dir:  "contracts/http/fmt34/" + tt.name + "/v1",
+		File: "contracts/http/fmt34/" + tt.name + "/v1/contract.yaml",
+	}
+	if !tt.nilHTTP {
+		contract.Endpoints.HTTP = &metadata.HTTPTransportMeta{
+			Method:        "GET",
+			Path:          tt.path,
+			SuccessStatus: 200,
+			Auth:          tt.auth,
+		}
+	}
+
+	project := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{contract.ID: contract},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT34(), codeFMT34)
+	assertFMT34Findings(t, tt, matches)
+}
+
+// assertFMT34Findings checks that matches has the expected count, that every
+// finding carries SeverityError + "; fix:" suffix (INV-3 contract), and that
+// every expected field path appears in the result set.
+func assertFMT34Findings(t *testing.T, tt fmt34TestCase, matches []ValidationResult) {
+	t.Helper()
+	if len(matches) != tt.wantCount {
+		t.Fatalf("FMT-34 %s: expected %d findings, got %d: %v",
+			tt.name, tt.wantCount, len(matches), matches)
+	}
+	for _, m := range matches {
+		assertFMT34Severity(t, tt.name, m)
+		assertFMT34FixSuffix(t, tt.name, m)
+	}
+	gotFields := collectFMT34Fields(matches)
+	for _, want := range tt.wantFields {
+		if !gotFields[want] {
+			t.Errorf("FMT-34 %s: expected finding on field %q, got fields %v",
+				tt.name, want, gotFields)
+		}
+	}
+}
+
+func assertFMT34Severity(t *testing.T, name string, m ValidationResult) {
+	t.Helper()
+	if m.Severity != SeverityError {
+		t.Errorf("FMT-34 %s: expected SeverityError, got %v", name, m.Severity)
+	}
+}
+
+func assertFMT34FixSuffix(t *testing.T, name string, m ValidationResult) {
+	t.Helper()
+	if !strings.Contains(m.Message, "; fix:") {
+		t.Errorf("FMT-34 %s: message must contain '; fix:' suffix, got: %q",
+			name, m.Message)
+	}
+}
+
+func collectFMT34Fields(matches []ValidationResult) map[string]bool {
+	out := make(map[string]bool, len(matches))
+	for _, m := range matches {
+		out[m.Field] = true
+	}
+	return out
 }
