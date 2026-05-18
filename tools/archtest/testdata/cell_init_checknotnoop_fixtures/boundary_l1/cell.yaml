@@ -1,0 +1,12 @@
+id: fixture-boundary_l1
+type: core
+consistencyLevel: L1
+owner:
+  team: archtest-fixture
+  role: cell-owner
+schema:
+  primary: fixture_boundary_l1
+verify:
+  smoke:
+    - smoke.fixture.startup
+goStructName: BoundaryL1Cell
