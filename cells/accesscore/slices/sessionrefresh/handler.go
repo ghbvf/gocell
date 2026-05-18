@@ -2,10 +2,12 @@ package sessionrefresh
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	refreshgen "github.com/ghbvf/gocell/generated/contracts/http/auth/refresh/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // RefreshAdapter implements refreshgen.Service for http.auth.refresh.v1.
@@ -18,6 +20,17 @@ type RefreshAdapter struct{ S *Service }
 func (a RefreshAdapter) Refresh(ctx context.Context, req *refreshgen.Request) (refreshgen.RefreshResponseObject, error) {
 	pair, err := a.S.Refresh(ctx, req.RefreshToken)
 	if err != nil {
+		// Declared business 403: account suspended/locked — service.go
+		// rejectIfUserNotActive returns KindPermissionDenied +
+		// ErrAuthUserNotActive. error-handling.md rule 4 + typed-envelope ADR
+		// 202605061500 require a declared business 4xx to return its typed
+		// struct, not framework fallback. The other declared statuses
+		// (400/401/503) stay framework-fallback — pre-existing B-FLOOR
+		// backlog territory, out of this contract-sync change's scope.
+		var ecErr *errcode.Error
+		if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrAuthUserNotActive {
+			return refreshgen.Refresh403ErrorResponse{Body: *ecErr}, nil
+		}
 		return nil, err
 	}
 	return refreshgen.Refresh200JSONResponse{

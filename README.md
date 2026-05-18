@@ -322,7 +322,7 @@ gocell scaffold assembly --id=bar --cells=foo --team=platform --role=admin --dep
 | [iotdevice](examples/iotdevice/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
 
 The `ssobff` example demonstrates the initial admin bootstrap path: an operator
-hits `POST /api/v1/access/setup/admin` on the internal listener, protected by
+hits `POST /api/v1/access/setup/admin` on the primary listener, protected by
 HTTP Basic Auth using `GOCELL_BOOTSTRAP_ADMIN_USERNAME` /
 `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` (persistent operator credentials, required at
 startup). The endpoint body carries the actual admin identity (`username` /

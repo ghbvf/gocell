@@ -31,7 +31,7 @@ PR#417 §12 倾向"至少一个"，但未拍板。本 ADR 锁定决议。
 
 ### 1.2 关联 backlog
 
-- **B2-C-02 SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT** 🔴 P0：setup endpoint 当前常驻 Public Route，应在 admin 存在后转 409；本 ADR 决议直接为 B2-C-02 提供 setup lifecycle 形态依据
+- **B2-C-02 SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT** 🔴 P0：setup endpoint 当前常驻 Public Route，应在 admin 存在后转 410（Gone，endpoint retired）；本 ADR 决议直接为 B2-C-02 提供 setup lifecycle 形态依据
 - **B2-PROVISIONER-MUTEX-REVIEW** 🟠 P2：PG 落地后审视 mutex 是否仍需；本 ADR 决议 + S3+S5 PG schema 落地后自然消化
 
 ---
@@ -43,7 +43,7 @@ PR#417 §12 倾向"至少一个"，但未拍板。本 ADR 锁定决议。
 1. **可有任意数量的 admin**（≥ 0）；上限不强制
 2. **删除最后一个 admin 必须被拒**（业务校验）
 3. **handoff 流程**：先 grant 新 admin → 再 revoke 旧 admin。**禁**同 tx 完整 swap；强制存在"两个 admin 并存的中间状态"
-4. **setup endpoint lifecycle**：仅在 `count(admin) == 0` 时可用；`count(admin) >= 1` 时 endpoint 返回 `409 ERR_AUTH_ADMIN_ALREADY_EXISTS`；endpoint 始终挂 PrimaryListener（`auth.Route{Bootstrap: true}` HTTP Basic Auth 保护，见 §3.3）
+4. **setup endpoint lifecycle**：仅在 `count(admin) == 0` 时可用；`count(admin) >= 1` 时 endpoint 返回 `410 ERR_SETUP_ALREADY_INITIALIZED`（KindGone，endpoint retired）；endpoint 始终挂 PrimaryListener（`auth.Route{Bootstrap: true}` HTTP Basic Auth 保护，见 §3.3）
 5. **0 admin → 1 admin 的过渡**：仅由 setup endpoint（受 Bootstrap HTTP Basic Auth 保护）触发；后续 admin 由现有 admin 通过 RBACAssign 创建
 
 ### 2.1 Alternatives Considered
@@ -104,15 +104,16 @@ func (g *LastAdminGuard) CheckRemove(ctx context.Context, userID string, hasAdmi
 setup endpoint 形态在 S3+S5 PR 落地，但语义本 ADR 锁定：
 
 ```
-GET  /api/v1/access/setup/admin  → 200 if count(admin)==0 else 409 (with retry-hint)
 POST /api/v1/access/setup/admin  → 201 if count(admin)==0
-                                  → 409 ERR_AUTH_ADMIN_ALREADY_EXISTS otherwise
+                                  → 410 ERR_SETUP_ALREADY_INITIALIZED otherwise (KindGone, endpoint retired)
 ```
 
-本 ADR 决议 setup endpoint 始终挂 PrimaryListener，由 `auth.Route{Bootstrap: true}` 提供 HTTP Basic Auth (env credentials) 保护；count(admin) >= 1 时返回 409 ERR_AUTH_ADMIN_ALREADY_EXISTS。**本决议替代 backlog B2-C-02 提议的 'setup endpoint 移到 /internal/v1/setup/'**——理由：(1) InternalListener 用 service token 鉴权（cell-to-cell RPC 体系），不适合运维首次入口；(2) PrimaryListener Bootstrap auth 已为此场景设计；(3) Vault / K8s / Keycloak 均采用 '默认收敛暴露面 + 明确生命周期' 范式（参见 reviewer 主题 C 对照），409 + bootstrap-only lifecycle 满足该范式，无需 listener 切换。
+（仅 POST；无 GET setup/admin 路由——首管是否已存在由 `GET /api/v1/access/setup/status` 公共端点查询。requested first-admin username 已被另一非 admin 用户占用是独立路径，返回 `409 ERR_AUTH_USER_DUPLICATE`，与本 lifecycle 的 410 语义不同。）
+
+本 ADR 决议 setup endpoint 始终挂 PrimaryListener，由 `auth.Route{Bootstrap: true}` 提供 HTTP Basic Auth (env credentials) 保护；count(admin) >= 1 时返回 410 ERR_SETUP_ALREADY_INITIALIZED。**本决议替代 backlog B2-C-02 提议的 'setup endpoint 移到 /internal/v1/setup/'**——理由：(1) InternalListener 用 service token 鉴权（cell-to-cell RPC 体系），不适合运维首次入口；(2) PrimaryListener Bootstrap auth 已为此场景设计；(3) Vault / K8s / Keycloak 均采用 '默认收敛暴露面 + 明确生命周期' 范式（参见 reviewer 主题 C 对照），410 retired + bootstrap-only lifecycle 满足该范式，无需 listener 切换。
 
 实现位置（S3+S5 PR）：
-- `cells/accesscore/slices/setup/handler.go` — GET/POST handler，count(admin) 逻辑
+- `cells/accesscore/slices/setup/handler.go` — POST handler，count(admin) 逻辑
 - `auth.Route{Bootstrap: true}` 保护（HTTP Basic Auth + per-IP token-bucket + `subtle.ConstantTimeCompare`）
 - endpoint 路径保持 `/api/v1/access/setup/admin`，始终挂 PrimaryListener
 

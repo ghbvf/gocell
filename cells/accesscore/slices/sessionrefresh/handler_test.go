@@ -264,3 +264,46 @@ func TestHandler_Refresh_BlankToken(t *testing.T) {
 	}
 	assert.True(t, foundDetail, "expected 'detail' key in error details")
 }
+
+// TestHandleRefresh_UserNotActive_Returns403 exercises the RefreshAdapter
+// typed-response branch: when the session owner is suspended/locked,
+// service.rejectIfUserNotActive returns KindPermissionDenied +
+// ErrAuthUserNotActive, and the adapter must surface it as the declared
+// typed Refresh403ErrorResponse (contracts/http/auth/refresh/v1 responses.403),
+// not the generic framework fallback. Asserts the canonical 403 wire envelope.
+func TestHandleRefresh_UserNotActive_Returns403(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	refreshStore := newTestRefreshStore()
+
+	// Seed an active user, then demote to suspended so the live session
+	// predates the demotion (admin suspends a user with an active session).
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	u, err := domain.NewUser("suspended-usr", "suspended@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = "usr-suspended"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+	u.SetStatus(domain.StatusSuspended, time.Now())
+	require.NoError(t, userRepo.Update(context.Background(), u))
+
+	sess := newTestSession(u.ID, "sess-suspended")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+	wireToken, _, issueErr := refreshStore.Issue(context.Background(), sess.ID, u.ID, int64(1))
+	require.NoError(t, issueErr)
+
+	svc := mustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore))
+	mux := celltest.NewTestMux()
+	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
+		panic("RegisterRoutes: " + err.Error())
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(`{"refreshToken":"`+wireToken+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"suspended session owner must get 403 via typed Refresh403ErrorResponse")
+	assertErrorBody(t, w.Body.Bytes(), "ERR_AUTH_USER_NOT_ACTIVE", "account is not active")
+}
