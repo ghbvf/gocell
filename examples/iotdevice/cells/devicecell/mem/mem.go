@@ -1,0 +1,21 @@
+// Package mem exposes devicecell's in-memory repository factory to
+// composition roots while keeping the concrete implementation inside the
+// cell's internal/mem package.
+//
+// Mirror of examples/iotdevice/cells/devicecell/postgres for the demo path.
+package mem
+
+import (
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	internalmem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+)
+
+// DeviceRepository re-exports the cell-private interface so composition
+// roots outside the devicecell subtree can name the return type without
+// importing internal/domain.
+type DeviceRepository = domain.DeviceRepository
+
+// NewDeviceRepository constructs an empty in-memory DeviceRepository.
+func NewDeviceRepository() DeviceRepository {
+	return internalmem.NewDeviceRepository()
+}

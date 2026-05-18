@@ -21,6 +21,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// duplicate ID sentinel — the same message string is reused in storeIfNotDup
+// so it is extracted here to satisfy the ≥3-use constant rule. The MESSAGE
+// constant carries no runtime data (MESSAGE-CONST-LITERAL-01 compliant).
+const msgCommandAlreadyExists = "commandtest: command already exists"
+
 // InMemQueue is a process-local, thread-safe implementation of command.Queue,
 // command.ActiveScanner, and command.Writer backed by a map.
 // It is NOT suitable for multi-replica coordination — use for tests and examples.
@@ -125,9 +130,18 @@ func (q *InMemQueue) storeIfNotDup(entry command.Entry, idempotencyKey string) e
 		if _, exists := q.idempotencyKeys[idempotencyKey]; exists {
 			return nil // idempotent no-op
 		}
-		q.idempotencyKeys[idempotencyKey] = struct{}{}
 	}
 
+	// Reject duplicate IDs (consistent with PG PK constraint).
+	if _, exists := q.entries[entry.ID]; exists {
+		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+			msgCommandAlreadyExists,
+			errcode.WithInternal(fmt.Sprintf("id=%q", entry.ID)))
+	}
+
+	if idempotencyKey != "" {
+		q.idempotencyKeys[idempotencyKey] = struct{}{}
+	}
 	cp := entry
 	q.entries[entry.ID] = &cp
 	return nil

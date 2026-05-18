@@ -11,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicecommandinternal "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommandinternal"
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
@@ -23,7 +22,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
-	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -211,10 +209,16 @@ func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registry) error 
 
 // initDeps validates and resolves publisher, emitter, and cursor codec.
 func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
-	// Default to in-memory device repository if none injected.
+	// DeviceRepository is required in every mode. Demo callers MUST wire
+	// mem.NewDeviceRepository() explicitly via WithDeviceRepository — the
+	// cell never falls back silently. This matches "no soft fallback":
+	// CLAUDE.md §"不做的事" (in-memory↔PG dual-run fallback forbidden) +
+	// .claude/rules/gocell/cell-patterns.md §"Init() fail-fast".
 	if c.deviceRepo == nil {
-		c.deviceRepo = mem.NewDeviceRepository()
-		c.logger.Info("devicecell: using in-memory device repository (demo mode)")
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"devicecell requires a device repository; from the composition root, "+
+				"call WithDeviceRepository(mem.NewDeviceRepository()) for demo mode or "+
+				"WithDeviceRepository(postgres.NewPGDeviceRepository(...)) for durable mode")
 	}
 
 	// Publisher is required (NIL-PUB-P1). For demo mode, the composition
@@ -274,15 +278,15 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	c.registerHandler = registercontract.NewHandler(registerSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(deviceregister.SliceMetadata()))
 
-	// device-command slice: uses commandtest.InMemQueue as the command store in
-	// demo/example mode. For a production deployment, inject a durable adapter
-	// implementing command.Queue + command.ActiveScanner via RegisterCommandQueue.
-	if c.commandQueue == nil && durabilityMode == cell.DurabilityDurable {
-		return fmt.Errorf("devicecell: commandtest.InMemQueue is not suitable for durable " +
-			"deployments; wire a durable command.Queue adapter instead")
-	}
+	// device-command slice: a Queue + ActiveScanner is required in every mode.
+	// Demo callers MUST wire commandtest.NewInMemQueue() explicitly via
+	// RegisterCommandQueue — the cell never falls back silently. Same
+	// "no soft fallback" rationale as the deviceRepo path above.
 	if c.commandQueue == nil {
-		c.commandQueue = commandtest.NewInMemQueue()
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"devicecell requires a command queue; from the composition root, "+
+				"call RegisterCommandQueue(commandtest.NewInMemQueue()) for demo mode or "+
+				"RegisterCommandQueue(postgres.NewCommandQueue(...)) for durable mode")
 	}
 	cmdQueue := c.commandQueue
 	runMode := query.RunModeForDemo(durabilityMode == cell.DurabilityDemo)

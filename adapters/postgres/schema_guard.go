@@ -34,6 +34,11 @@ import (
 //   - role_assignments   (019)  accesscore user-role grants
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
 //   - audit_entries      (020)  tamper-evident audit ledger (per-namespace hash chain)
+//   - devices            (029)  examples/iotdevice devicecell PG repo (B2.B)
+//                                 + devices_status_chk CHECK (status IN online/offline)
+//   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
+//                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
+//                                 + commands_status_chk, commands_attempt_chk
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
 // caught by archtest SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01.
@@ -345,6 +350,27 @@ var expectedColumns = []expectedColumn{
 	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
 	{Table: "audit_entries", Column: "prev_hash", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "hash", Type: "text", NotNull: true},
+	// devices (029_devices.sql) — examples/iotdevice devicecell PG repo (B2.B).
+	{Table: "devices", Column: "id", Type: "text", NotNull: true},
+	{Table: "devices", Column: "name", Type: "text", NotNull: true},
+	{Table: "devices", Column: "status", Type: "text", NotNull: true},
+	{Table: "devices", Column: "last_seen", Type: "timestamp with time zone", NotNull: true},
+	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
+	{Table: "commands", Column: "id", Type: "uuid", NotNull: true},
+	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
+	{Table: "commands", Column: "command_type", Type: "text", NotNull: true},
+	{Table: "commands", Column: "payload", Type: "bytea", NotNull: true},
+	{Table: "commands", Column: "metadata", Type: "jsonb", NotNull: true},
+	{Table: "commands", Column: "status", Type: "smallint", NotNull: true},
+	{Table: "commands", Column: "attempt", Type: "integer", NotNull: true},
+	{Table: "commands", Column: "created_at", Type: "timestamp with time zone", NotNull: true},
+	{Table: "commands", Column: "sent_at", Type: "timestamp with time zone", NotNull: false},
+	{Table: "commands", Column: "delivered_at", Type: "timestamp with time zone", NotNull: false},
+	{Table: "commands", Column: "completed_at", Type: "timestamp with time zone", NotNull: false},
+	{Table: "commands", Column: "lease_expiry", Type: "timestamp with time zone", NotNull: false},
+	{Table: "commands", Column: "timeouts_schedule_to_send_ns", Type: "bigint", NotNull: false},
+	{Table: "commands", Column: "timeouts_send_to_complete_ns", Type: "bigint", NotNull: false},
+	{Table: "commands", Column: "timeouts_overall_ns", Type: "bigint", NotNull: false},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
@@ -364,6 +390,9 @@ var expectedPKs = []expectedPK{
 	{Table: "role_assignments", Columns: []string{"user_id", "role_id"}},
 	// audit_entries (020_audit_ledger.sql)
 	{Table: "audit_entries", Columns: []string{"id"}},
+	// devices / commands (029, 030) — B2.B.
+	{Table: "devices", Columns: []string{"id"}},
+	{Table: "commands", Columns: []string{"id"}},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
@@ -383,6 +412,11 @@ var expectedIndexes = []expectedIndex{
 	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true},
 	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false},
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
+	// devices / commands (029, 030) — B2.B.
+	{Table: "devices", Name: "idx_devices_status", Unique: false},
+	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false},
+	{Table: "commands", Name: "idx_commands_active_lease", Unique: false},
+	{Table: "commands", Name: "idx_commands_device_active", Unique: false},
 }
 
 // expectedFKs is the foreign key constraint registry. ON DELETE action uses
@@ -416,6 +450,13 @@ var expectedFKs = []expectedFK{
 		RefTable:   "roles",
 		RefColumns: []string{"id"},
 		OnDelete:   "r", // RESTRICT — migrations/019_roles.sql
+	},
+	{
+		Table:      "commands",
+		Constraint: "commands_device_id_fkey",
+		RefTable:   "devices",
+		RefColumns: []string{"id"},
+		OnDelete:   "r", // RESTRICT — migrations/030_commands.sql (B2.B)
 	},
 }
 
@@ -458,6 +499,10 @@ var expectedChecks = []expectedCheck{
 	{Table: "users", Name: "users_authz_epoch_positive"},
 	{Table: "sessions", Name: "sessions_authz_epoch_at_issue_positive"},
 	{Table: "refresh_tokens", Name: "refresh_tokens_authz_epoch_at_issue_positive"},
+	// devices / commands (029, 030) — B2.B.
+	{Table: "devices", Name: "devices_status_chk"},
+	{Table: "commands", Name: "commands_status_chk"},
+	{Table: "commands", Name: "commands_attempt_chk"},
 }
 
 // ---------------------------------------------------------------------------

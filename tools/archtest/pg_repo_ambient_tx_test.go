@@ -40,11 +40,13 @@ import (
 // adapters are included since the tx-extraction key
 // (kernel/persistence.TxCtxKey) is shared across the layer boundary.
 var pgRepoFiles = map[string]struct{}{
-	"adapters/postgres/session_store.go":                       {},
-	"adapters/postgres/refresh_store.go":                       {},
-	"adapters/postgres/outbox_store.go":                        {},
-	"cells/accesscore/internal/adapters/postgres/user_repo.go": {},
-	"cells/accesscore/internal/adapters/postgres/role_repo.go": {},
+	"adapters/postgres/session_store.go":                                            {},
+	"adapters/postgres/refresh_store.go":                                            {},
+	"adapters/postgres/outbox_store.go":                                             {},
+	"adapters/postgres/command_queue.go":                                            {},
+	"cells/accesscore/internal/adapters/postgres/user_repo.go":                      {},
+	"cells/accesscore/internal/adapters/postgres/role_repo.go":                      {},
+	"examples/iotdevice/cells/devicecell/internal/adapters/postgres/device_repo.go": {},
 }
 
 // pgWriteMethodPrefixes flags a method as write-path. Prefix-match keeps the

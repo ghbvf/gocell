@@ -9,13 +9,19 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
+	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
+	devicepg "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kcommand "github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -54,16 +60,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create the device cell with in-memory defaults.
+	// Resolve persistence: durable PG wiring when GOCELL_IOTDEVICE_DSN is set,
+	// otherwise explicit in-memory wiring. The cell never falls back silently
+	// (B2.B: no soft fallback), so demo runs MUST inject mem implementations.
+	deviceRepo, commandQueue, durabilityMode, closeBackends, err := buildDevicePersistence(context.Background(), clk, logger)
+	if err != nil {
+		logger.Error("failed to build device persistence", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer closeBackends()
+
+	// Create the device cell with explicitly wired persistence.
 	dc := devicecell.NewDeviceCell(
 		devicecell.WithClock(clk),
+		devicecell.WithDeviceRepository(deviceRepo),
 		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(eb)),
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithLogger(logger),
 	)
+	dc.RegisterCommandQueue(commandQueue)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: "iotdevice", DurabilityMode: cell.DurabilityDemo, Clock: clk})
+	asm := assembly.New(assembly.Config{ID: "iotdevice", DurabilityMode: durabilityMode, Clock: clk})
 	if err := asm.Register(dc); err != nil {
 		logger.Error("failed to register devicecell", slog.Any("error", err))
 		os.Exit(1)
@@ -106,4 +124,67 @@ func main() {
 		logger.Error("iotdevice: application exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
+}
+
+// deviceCommandQueue is the runtime contract devicecell expects — a single
+// store implements both kernel/command.Queue (consumer path) and
+// command.ActiveScanner (sweeper / ops view).
+type deviceCommandQueue interface {
+	kcommand.Queue
+	kcommand.ActiveScanner
+}
+
+// buildDevicePersistence resolves the device repository + command queue based
+// on GOCELL_IOTDEVICE_DSN. When the DSN env var is set, durable mode wires PG
+// implementations + applies migrations; otherwise demo mode wires the
+// in-memory implementations. The returned close func is always non-nil and
+// safe to defer.
+func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.Logger) (
+	devicepg.DeviceRepository, deviceCommandQueue, cell.DurabilityMode, func(), error,
+) {
+	dsn := os.Getenv("GOCELL_IOTDEVICE_DSN")
+	if dsn == "" {
+		logger.Info("iotdevice: using in-memory persistence (set GOCELL_IOTDEVICE_DSN for PG)")
+		return devicemem.NewDeviceRepository(), commandtest.NewInMemQueue(), cell.DurabilityDemo, func() {}, nil
+	}
+
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
+	if err != nil {
+		return nil, nil, 0, func() {}, fmt.Errorf("pg pool: %w", err)
+	}
+	closePool := func() {
+		if err := pool.Close(ctx); err != nil {
+			logger.Warn("iotdevice: pg pool close failed", slog.Any("error", err))
+		}
+	}
+
+	migrationsFS, err := adapterpg.MigrationsFS()
+	if err != nil {
+		closePool()
+		return nil, nil, 0, func() {}, fmt.Errorf("migrations fs: %w", err)
+	}
+	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
+	if err != nil {
+		closePool()
+		return nil, nil, 0, func() {}, fmt.Errorf("migrator: %w", err)
+	}
+	if err := migrator.Up(ctx); err != nil {
+		closePool()
+		return nil, nil, 0, func() {}, fmt.Errorf("migrate up: %w", err)
+	}
+
+	txMgr := adapterpg.NewTxManager(pool)
+	deviceRepo, err := devicepg.NewDeviceRepository(pool.DB(), txMgr, clk)
+	if err != nil {
+		closePool()
+		return nil, nil, 0, func() {}, fmt.Errorf("device repo: %w", err)
+	}
+	commandQueue, err := adapterpg.NewCommandQueue(pool.DB(), txMgr, clk)
+	if err != nil {
+		closePool()
+		return nil, nil, 0, func() {}, fmt.Errorf("command queue: %w", err)
+	}
+
+	logger.Info("iotdevice: using PG persistence (durable mode)", slog.String("dsn", "set"))
+	return deviceRepo, commandQueue, cell.DurabilityDurable, closePool, nil
 }
