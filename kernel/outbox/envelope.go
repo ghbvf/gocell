@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
 // EnvelopeSchemaV1 is the canonical schema version for outbox wire envelopes.
@@ -17,13 +18,18 @@ var ErrUnknownEnvelopeVersion = errcode.New(errcode.KindInvalid, errcode.ErrEnve
 
 // WireMessage is the canonical wire envelope used by outbox relay and direct
 // publisher paths across transports.
+//
+// ID-shaped fields use idutil.SafeID, whose UnmarshalJSON fail-closes on
+// unsafe characters (CWE-117 log injection) and length-cap violation. See
+// SAFEID-WIREMESSAGE-USAGE-01 archtest and ai-collab.md §"Hard 范本" 第 3 条
+// string-typed concept funnel.
 type WireMessage struct {
 	SchemaVersion string                `json:"schemaVersion"`
-	ID            string                `json:"id"`
-	AggregateID   string                `json:"aggregateId,omitempty"`
-	AggregateType string                `json:"aggregateType,omitempty"`
-	EventType     string                `json:"eventType"`
-	Topic         string                `json:"topic,omitempty"`
+	ID            idutil.SafeID         `json:"id"`
+	AggregateID   idutil.SafeID         `json:"aggregateId,omitempty"`
+	AggregateType idutil.SafeID         `json:"aggregateType,omitempty"`
+	EventType     idutil.SafeID         `json:"eventType"`
+	Topic         idutil.SafeID         `json:"topic,omitempty"`
 	Payload       json.RawMessage       `json:"payload"`
 	Metadata      map[string]string     `json:"metadata,omitempty"`
 	Observability ObservabilityMetadata `json:"observability,omitempty"`
@@ -37,14 +43,40 @@ type WireMessage struct {
 // outbox writer pre-fills CreatedAt from now() at INSERT time, the relay
 // reads it back from the row, and DirectEmitter sets it from its injected
 // clock.Clock — all paths populate CreatedAt before reaching this function.
+//
+// Producer-side fail-fast: every ID-shaped field is parsed through
+// idutil.ParseSafeID so an unsafe in-memory Entry surfaces an error at
+// write time rather than poisoning downstream consumers (defense in depth
+// against accidental Entry{ID: rawUnsafe} construction outside the
+// trusted MustNewEntryID path).
 func MarshalEnvelope(entry Entry) ([]byte, error) {
+	id, err := idutil.ParseSafeID(entry.ID)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.ID", err)
+	}
+	aggID, err := idutil.ParseSafeID(entry.AggregateID)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.AggregateID", err)
+	}
+	aggType, err := idutil.ParseSafeID(entry.AggregateType)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.AggregateType", err)
+	}
+	eventType, err := idutil.ParseSafeID(entry.EventType)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.EventType", err)
+	}
+	topic, err := idutil.ParseSafeID(entry.RoutingTopic())
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.Topic", err)
+	}
 	msg := WireMessage{
 		SchemaVersion: EnvelopeSchemaV1,
-		ID:            entry.ID,
-		AggregateID:   entry.AggregateID,
-		AggregateType: entry.AggregateType,
-		EventType:     entry.EventType,
-		Topic:         entry.RoutingTopic(),
+		ID:            id,
+		AggregateID:   aggID,
+		AggregateType: aggType,
+		EventType:     eventType,
+		Topic:         topic,
 		Payload:       json.RawMessage(entry.Payload),
 		Metadata:      entry.Metadata,
 		Observability: entry.Observability,
@@ -57,7 +89,11 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 	return b, nil
 }
 
-// UnmarshalEnvelope decodes a v1 wire envelope into an Entry.
+// UnmarshalEnvelope decodes a v1 wire envelope into an Entry. Unsafe
+// ID-shaped fields (newline, length overrun, etc.) are rejected during
+// json.Unmarshal via idutil.SafeID.UnmarshalJSON — wrapped here as
+// ErrEnvelopeSchema for consistent error classification across the
+// schema-version / missing-field / unsafe-id rejection paths.
 func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 	var msg WireMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
@@ -75,15 +111,15 @@ func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 		return Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: envelope missing required field: eventType")
 	}
-	entryTopic := msg.Topic
+	entryTopic := string(msg.Topic)
 	if entryTopic == "" {
 		entryTopic = topic
 	}
 	return Entry{
-		ID:            msg.ID,
-		AggregateID:   msg.AggregateID,
-		AggregateType: msg.AggregateType,
-		EventType:     msg.EventType,
+		ID:            string(msg.ID),
+		AggregateID:   string(msg.AggregateID),
+		AggregateType: string(msg.AggregateType),
+		EventType:     string(msg.EventType),
 		Topic:         entryTopic,
 		Payload:       []byte(msg.Payload),
 		Metadata:      msg.Metadata,

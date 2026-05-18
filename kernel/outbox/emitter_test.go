@@ -542,9 +542,9 @@ func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
 	// Decode the published envelope and inspect the entry it carries.
 	got, err := UnmarshalEnvelope(entry.Topic, publisher.calls[0].payload)
 	require.NoError(t, err)
-	assert.Equal(t, wantRequestID, got.Observability.RequestID,
+	assert.Equal(t, wantRequestID, string(got.Observability.RequestID),
 		"DirectEmitter must inject request_id from ctx into entry.Observability")
-	assert.Equal(t, wantTraceID, got.Observability.TraceID,
+	assert.Equal(t, wantTraceID, string(got.Observability.TraceID),
 		"DirectEmitter must inject trace_id from ctx into entry.Observability")
 }
 

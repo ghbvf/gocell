@@ -2,7 +2,6 @@ package outbox
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
@@ -75,7 +73,7 @@ func TestObservabilityMetadata_IsZero_FieldCoverageInvariant(t *testing.T) {
 
 func TestObservabilityMetadata_Validate(t *testing.T) {
 	validTP := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-	tooLong := strings.Repeat("a", idutil.MaxMetadataIDLen+1)
+	tooLong := idutil.SafeID(strings.Repeat("a", idutil.MaxMetadataIDLen+1))
 
 	cases := []struct {
 		name      string
@@ -87,9 +85,9 @@ func TestObservabilityMetadata_Validate(t *testing.T) {
 			TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", TraceParent: validTP,
 			RequestID: "req-1", CorrelationID: "corr-1",
 		}},
-		{name: "TraceID too long", o: ObservabilityMetadata{TraceID: tooLong}, wantError: "field length exceeds max"},
-		{name: "RequestID too long", o: ObservabilityMetadata{RequestID: tooLong}, wantError: "field length exceeds max"},
-		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "field length exceeds max"},
+		{name: "TraceID too long", o: ObservabilityMetadata{TraceID: tooLong}, wantError: "exceeds max"},
+		{name: "RequestID too long", o: ObservabilityMetadata{RequestID: tooLong}, wantError: "exceeds max"},
+		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "exceeds max"},
 		{name: "TraceID unsafe chars", o: ObservabilityMetadata{TraceID: "trace; DROP TABLE"}, wantError: "unsafe characters"},
 		{name: "TraceParent malformed", o: ObservabilityMetadata{TraceParent: "not-a-valid-traceparent"}, wantError: "valid W3C traceparent"},
 	}
@@ -100,12 +98,8 @@ func TestObservabilityMetadata_Validate(t *testing.T) {
 				assert.NoError(t, err)
 			} else {
 				require.Error(t, err)
-				var ecErr *errcode.Error
-				if errors.As(err, &ecErr) {
-					assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, tc.wantError)
-				} else {
-					assert.Contains(t, err.Error(), tc.wantError)
-				}
+				assert.Contains(t, err.Error(), tc.wantError,
+					"err.Error() must surface SafeID validation cause")
 			}
 		})
 	}
@@ -124,9 +118,9 @@ func TestContextObservability_ReadsAllReservedKeys(t *testing.T) {
 
 	got := ContextObservability(ctx)
 
-	assert.Equal(t, "req-123", got.RequestID)
-	assert.Equal(t, "corr-123", got.CorrelationID)
-	assert.Equal(t, "trace-123", got.TraceID)
+	assert.Equal(t, "req-123", string(got.RequestID))
+	assert.Equal(t, "corr-123", string(got.CorrelationID))
+	assert.Equal(t, "trace-123", string(got.TraceID))
 	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", got.TraceParent)
 	assert.False(t, got.IsZero())
 }
@@ -138,7 +132,7 @@ func TestContextObservability_SynthesizesTraceParentFromTraceAndSpan(t *testing.
 
 	got := ContextObservability(ctx)
 
-	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", got.TraceID)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", string(got.TraceID))
 	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", got.TraceParent)
 }
 
@@ -263,7 +257,7 @@ func TestObservabilityMetadata_RestoreToContext_RejectsOverlongValues(t *testing
 		longID[i] = 'a'
 	}
 	o := ObservabilityMetadata{
-		RequestID: string(longID),
+		RequestID: idutil.SafeID(longID),
 	}
 
 	ctx := o.RestoreToContext(context.Background())
@@ -368,9 +362,9 @@ func TestEntry_InjectObservabilityFromContext_RoundTrip(t *testing.T) {
 	e := Entry{ID: "e1", EventType: "test.v1", Payload: []byte(`{}`)}
 	e.InjectObservabilityFromContext(ctx)
 
-	assert.Equal(t, "req-round-trip", e.Observability.RequestID)
-	assert.Equal(t, "corr-round-trip", e.Observability.CorrelationID)
-	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", e.Observability.TraceID)
+	assert.Equal(t, "req-round-trip", string(e.Observability.RequestID))
+	assert.Equal(t, "corr-round-trip", string(e.Observability.CorrelationID))
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", string(e.Observability.TraceID))
 	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", e.Observability.TraceParent)
 
 	// Restore back to a clean context and verify round-trip.
@@ -402,7 +396,7 @@ func TestEntry_InjectObservabilityFromContext_OverwritesPriorValue(t *testing.T)
 
 	e.InjectObservabilityFromContext(ctx)
 
-	assert.Equal(t, "new-req", e.Observability.RequestID, "InjectObservabilityFromContext must overwrite prior value")
+	assert.Equal(t, "new-req", string(e.Observability.RequestID), "InjectObservabilityFromContext must overwrite prior value")
 }
 
 func TestEntry_InjectObservabilityFromContext_EmptyContextYieldsZero(t *testing.T) {

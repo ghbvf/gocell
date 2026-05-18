@@ -166,42 +166,37 @@ func TestUnmarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 	// CWE-117 log-injection trust boundary: every ID-shaped wire field
 	// must pass idutil.IsSafeID + length cap at decode time. Required-empty
 	// checks remain separate (covered by TestUnmarshalEnvelope_MissingRequiredFieldRejected).
+	envelope := func(overrides map[string]string) []byte {
+		fields := map[string]string{
+			"schemaVersion": "v1",
+			"id":            "ok",
+			"eventType":     "foo.v1",
+		}
+		for k, v := range overrides {
+			fields[k] = v
+		}
+		var parts []string
+		for k, v := range fields {
+			parts = append(parts, `"`+k+`":"`+v+`"`)
+		}
+		body := strings.Join(parts, ",")
+		return []byte(`{` + body + `,"payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`)
+	}
 	tests := []struct {
-		name string
-		raw  []byte
+		name      string
+		overrides map[string]string
 	}{
-		{
-			name: "ID with newline injection",
-			raw:  []byte(`{"schemaVersion":"v1","id":"evt-1\nlevel=error msg=injected","eventType":"foo.v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
-		},
-		{
-			name: "ID with CR injection",
-			raw:  []byte(`{"schemaVersion":"v1","id":"evt-1\rINJECT","eventType":"foo.v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
-		},
-		{
-			name: "ID overlong",
-			raw:  []byte(`{"schemaVersion":"v1","id":"` + strings.Repeat("a", 257) + `","eventType":"foo.v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
-		},
-		{
-			name: "EventType with space",
-			raw:  []byte(`{"schemaVersion":"v1","id":"ok","eventType":"foo v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
-		},
-		{
-			name: "Topic with newline",
-			raw:  []byte(`{"schemaVersion":"v1","id":"ok","eventType":"foo.v1","topic":"foo.v1\nx","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
-		},
-		{
-			name: "AggregateID with angle brackets (XSS-like injection)",
-			raw:  []byte(`{"schemaVersion":"v1","id":"ok","eventType":"foo.v1","aggregateId":"<script>","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
-		},
-		{
-			name: "AggregateType with space",
-			raw:  []byte(`{"schemaVersion":"v1","id":"ok","eventType":"foo.v1","aggregateType":"some type","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
-		},
+		{name: "ID with newline injection", overrides: map[string]string{"id": `evt-1\nlevel=error msg=injected`}},
+		{name: "ID with CR injection", overrides: map[string]string{"id": `evt-1\rINJECT`}},
+		{name: "ID overlong", overrides: map[string]string{"id": strings.Repeat("a", 257)}},
+		{name: "EventType with space", overrides: map[string]string{"eventType": "foo v1"}},
+		{name: "Topic with newline", overrides: map[string]string{"topic": `foo.v1\nx`}},
+		{name: "AggregateID with angle brackets", overrides: map[string]string{"aggregateId": "<script>"}},
+		{name: "AggregateType with space", overrides: map[string]string{"aggregateType": "some type"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := UnmarshalEnvelope("foo.v1", tt.raw)
+			_, err := UnmarshalEnvelope("foo.v1", envelope(tt.overrides))
 			require.Error(t, err, "unsafe ID-shaped field must fail-closed at wire boundary")
 			var ce *errcode.Error
 			require.True(t, errors.As(err, &ce))

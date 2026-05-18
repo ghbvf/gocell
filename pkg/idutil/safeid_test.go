@@ -58,7 +58,12 @@ func TestSafeID_UnmarshalJSON(t *testing.T) {
 		{name: "rejects space", json: `"evt 1"`, wantErr: true},
 		{name: "rejects angle brackets", json: `"<script>"`, wantErr: true},
 		{name: "rejects over-length", json: `"` + strings.Repeat("a", MaxMetadataIDLen+1) + `"`, wantErr: true},
-		{name: "accepts max-length", json: `"` + strings.Repeat("a", MaxMetadataIDLen) + `"`, want: SafeID(strings.Repeat("a", MaxMetadataIDLen)), wantErr: false},
+		{
+			name:    "accepts max-length",
+			json:    `"` + strings.Repeat("a", MaxMetadataIDLen) + `"`,
+			want:    SafeID(strings.Repeat("a", MaxMetadataIDLen)),
+			wantErr: false,
+		},
 		{name: "rejects non-string (number)", json: `123`, wantErr: true},
 		{name: "rejects malformed JSON", json: `"unterminated`, wantErr: true},
 	}
@@ -107,4 +112,3 @@ func TestParseSafeID(t *testing.T) {
 		require.Error(t, err)
 	})
 }
-

@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -428,11 +429,11 @@ func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 	}
 	wire := outbox.WireMessage{
 		SchemaVersion: outbox.EnvelopeSchemaV1, // required since P1-14 A1 (fail-closed envelope schema)
-		ID:            entry.ID,
-		AggregateID:   entry.AggregateID,
-		AggregateType: entry.AggregateType,
-		EventType:     entry.EventType,
-		Topic:         entry.Topic,
+		ID:            idutil.SafeID(entry.ID),
+		AggregateID:   idutil.SafeID(entry.AggregateID),
+		AggregateType: idutil.SafeID(entry.AggregateType),
+		EventType:     idutil.SafeID(entry.EventType),
+		Topic:         idutil.SafeID(entry.Topic),
 		Payload:       json.RawMessage(payload),
 		Metadata:      entry.Metadata,
 		Observability: entry.Observability,

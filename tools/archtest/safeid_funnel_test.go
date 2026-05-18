@@ -156,14 +156,18 @@ func checkSafeIDFields(pkg *types.Package) []Diagnostic {
 			ft, present := got[fieldName]
 			if !present {
 				diags = append(diags, Diagnostic{
-					Message: fmt.Sprintf("SAFEID-WIREMESSAGE-USAGE-01: %s.%s missing required field %q; rename or removal must keep the field typed idutil.SafeID",
+					Message: fmt.Sprintf(
+						"SAFEID-WIREMESSAGE-USAGE-01: %s.%s missing required field %q; "+
+							"rename or removal must keep the field typed idutil.SafeID",
 						pkg.Path(), typeName, fieldName),
 				})
 				continue
 			}
 			if !isSafeIDType(ft) {
 				diags = append(diags, Diagnostic{
-					Message: fmt.Sprintf("SAFEID-WIREMESSAGE-USAGE-01: %s.%s.%s has type %s; must be idutil.SafeID so SafeID.UnmarshalJSON validates wire input (CWE-117)",
+					Message: fmt.Sprintf(
+						"SAFEID-WIREMESSAGE-USAGE-01: %s.%s.%s has type %s; "+
+							"must be idutil.SafeID so SafeID.UnmarshalJSON validates wire input (CWE-117)",
 						pkg.Path(), typeName, fieldName, ft.String()),
 				})
 			}
@@ -248,7 +252,9 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 				}
 				if suspectCount >= 2 {
 					diags = append(diags, Diagnostic{
-						Message: fmt.Sprintf("SAFEID-WIREMESSAGE-USAGE-01/BlindSpot: %s.%s looks like a parallel wire envelope (string-typed fields %s) — extend safeIDRequiredFields or change the fields to idutil.SafeID",
+						Message: fmt.Sprintf(
+							"SAFEID-WIREMESSAGE-USAGE-01/BlindSpot: %s.%s looks like a parallel wire envelope "+
+								"(string-typed fields %s) — extend safeIDRequiredFields or change the fields to idutil.SafeID",
 							p.Pkg.Path(), name, strings.Join(suspectFields, ", ")),
 					})
 				}
