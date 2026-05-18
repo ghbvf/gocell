@@ -81,6 +81,11 @@ func TestSafeID_UnmarshalJSON(t *testing.T) {
 	}
 }
 
+func TestSafeID_String(t *testing.T) {
+	assert.Equal(t, "evt-1", SafeID("evt-1").String())
+	assert.Equal(t, "", SafeID("").String())
+}
+
 func TestSafeID_MarshalJSONRoundtrip(t *testing.T) {
 	cases := []SafeID{"", "evt-1", "order.created.v1", "ns/topic:v1"}
 	for _, in := range cases {

@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 
@@ -111,30 +112,27 @@ func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 	if msg.SchemaVersion != EnvelopeSchemaV1 {
 		return Entry{}, ErrUnknownEnvelopeVersion
 	}
-	if msg.ID == "" {
-		return Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
-			"outbox: envelope missing required field: id")
-	}
+	// Wire-only required-field checks that Entry.Validate cannot express:
+	//   - EventType must be set on wire (Entry.Validate uses RoutingTopic
+	//     fallback so Entry{Topic:"x", EventType:""} passes — wire requires
+	//     EventType explicit so a stale producer cannot omit type tagging).
+	//   - Payload null vs absent: wire bytes `"payload":null` produce a
+	//     4-byte RawMessage `[]byte("null")` that Entry.Validate sees as
+	//     non-empty. User-flagged finding: such envelopes used to flow
+	//     through and reach handlers with semantically empty Entry.Payload.
 	if msg.EventType == "" {
 		return Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: envelope missing required field: eventType")
 	}
-	// Wire-side observability fail-closed (PR #582 round-3 review F3):
-	// SafeID.UnmarshalJSON covers ID-shaped fields automatically, but
-	// TraceParent is `string` with W3C format validator (validTraceParent)
-	// that only runs inside ObservabilityMetadata.Validate(). Without this
-	// explicit call, an envelope with malformed traceparent flows through
-	// to slog/trace consumers. Mirrors OpenTelemetry propagation.
-	// TraceContext.Extract pattern (validate every field at decode time).
-	if err := msg.Observability.Validate(); err != nil {
-		return Entry{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
-			"outbox: envelope observability invalid", err)
+	if len(msg.Payload) == 0 || bytes.Equal(msg.Payload, []byte("null")) {
+		return Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
+			"outbox: envelope missing required field: payload")
 	}
 	entryTopic := string(msg.Topic)
 	if entryTopic == "" {
 		entryTopic = topic
 	}
-	return Entry{
+	entry := Entry{
 		ID:            string(msg.ID),
 		AggregateID:   string(msg.AggregateID),
 		AggregateType: string(msg.AggregateType),
@@ -144,5 +142,16 @@ func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 		Metadata:      msg.Metadata,
 		Observability: msg.Observability,
 		CreatedAt:     msg.CreatedAt,
-	}, nil
+	}
+	// Wire-boundary single-source fail-closed (PR #582 round-3 review F3 +
+	// user-flagged "missing payload" finding): defer all required-field /
+	// charset / size / observability checks to Entry.Validate so a new
+	// invariant on Entry automatically applies at the wire boundary too.
+	// Mirrors AWS Smithy DeserializeMiddleware → ValidateInputAndOutput and
+	// K8s runtime.Decode → obj.Validate() patterns.
+	if err := entry.Validate(); err != nil {
+		return Entry{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
+			"outbox: envelope failed validation", err)
+	}
+	return entry, nil
 }

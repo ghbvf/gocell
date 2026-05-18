@@ -95,7 +95,7 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 		"eventType": "test.envelope.topic",
 		"topic": "test.envelope.topic",
 		"payload": {"action":"created","key":"k1","value":"v1"},
-		"metadata": {"request_id":"req-42"},
+		"metadata": {"source":"test"},
 		"createdAt": "2026-04-18T00:00:00Z"
 	}`)
 	require.NoError(t, bus.Publish(context.Background(), "test.envelope.topic", envelope))
@@ -119,7 +119,7 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 	assert.Equal(t, "agg-1", got.AggregateID)
 	assert.Equal(t, "config", got.AggregateType)
 	assert.Equal(t, "test.envelope.topic", got.EventType)
-	assert.Equal(t, map[string]string{"request_id": "req-42"}, got.Metadata)
+	assert.Equal(t, map[string]string{"source": "test"}, got.Metadata)
 }
 
 // TestPublish_InvalidEnvelope_Rejected verifies the P1-14 follow-up

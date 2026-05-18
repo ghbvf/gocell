@@ -42,7 +42,8 @@ func TestUnmarshalEnvelope_V1Success(t *testing.T) {
 		EventType:     "order.created.v1",
 		Topic:         "order.created.v1",
 		Payload:       []byte(`{"orderId":"o-1","amount":99}`),
-		Metadata:      map[string]string{"trace_id": "t-123"},
+		// PR246-FU1 reserved keys (trace_id/request_id/...) belong in Observability, not Metadata.
+		Metadata:      map[string]string{"source": "test"},
 		Observability: ObservabilityMetadata{TraceID: "abc123"},
 		CreatedAt:     now,
 	}
@@ -97,12 +98,31 @@ func TestUnmarshalEnvelope_MissingRequiredFieldRejected(t *testing.T) {
 			name: "empty eventType",
 			raw:  []byte(`{"schemaVersion":"v1","id":"some-id","eventType":"","payload":{"d":"y"},"createdAt":"2026-04-23T00:00:00Z"}`),
 		},
+		{
+			// User-flagged finding: wire envelope without payload field used to
+			// flow through UnmarshalEnvelope and be dispatched to handlers with
+			// an empty Entry.Payload. wire boundary must reject.
+			name: "missing payload field",
+			raw:  []byte(`{"schemaVersion":"v1","id":"some-id","eventType":"foo.v1","createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+		{
+			name: "null payload",
+			raw:  []byte(`{"schemaVersion":"v1","id":"some-id","eventType":"foo.v1","payload":null,"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+		{
+			name: "empty payload object",
+			raw:  []byte(`{"schemaVersion":"v1","id":"some-id","eventType":"foo.v1","payload":,"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := UnmarshalEnvelope("foo.v1", tt.raw)
-			assert.Error(t, err)
+			require.Error(t, err)
+			var ce *errcode.Error
+			require.True(t, errors.As(err, &ce))
+			assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code,
+				"all required-field rejections must surface as ErrEnvelopeSchema")
 		})
 	}
 }
@@ -214,8 +234,7 @@ func TestUnmarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 
 // TestUnmarshalEnvelope_RejectsNullID covers the JSON null path for an
 // ID-shaped field embedded in a struct. SafeID.UnmarshalJSON treats null
-// as zero-value (no error); the required-field check at envelope level
-// then rejects the empty ID.
+// as zero-value (no error); Entry.Validate then rejects the empty ID.
 func TestUnmarshalEnvelope_RejectsNullID(t *testing.T) {
 	raw := []byte(`{"schemaVersion":"v1","id":null,"eventType":"foo.v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`)
 	_, err := UnmarshalEnvelope("foo.v1", raw)
@@ -223,7 +242,7 @@ func TestUnmarshalEnvelope_RejectsNullID(t *testing.T) {
 	var ce *errcode.Error
 	require.True(t, errors.As(err, &ce))
 	assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code)
-	assert.Contains(t, ce.Message, "missing required field: id")
+	assert.Contains(t, err.Error(), "missing ID")
 }
 
 func TestMarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
@@ -265,6 +284,14 @@ func TestMarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 			name:  "Topic with CR injection",
 			entry: func() Entry { e := validEntry; e.Topic = "foo.v1\rINJECT"; return e }(),
 		},
+		{
+			name: "invalid TraceParent in Observability",
+			entry: func() Entry {
+				e := validEntry
+				e.Observability = ObservabilityMetadata{TraceParent: "malformed"}
+				return e
+			}(),
+		},
 	}
 
 	for _, tt := range tests {
@@ -275,6 +302,38 @@ func TestMarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 			require.True(t, errors.As(err, &ce))
 			assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code,
 				"producer-side validation failures must surface as ErrEnvelopeSchema")
+		})
+	}
+}
+
+// TestEntryValidate_RejectsUnsafeIDFields covers validateEntryIDField defense
+// in depth: every ID-shaped Entry field (5 total) must reject unsafe chars
+// even in pure in-memory construction (no wire involvement).
+func TestEntryValidate_RejectsUnsafeIDFields(t *testing.T) {
+	base := Entry{
+		ID: "valid", EventType: "t.v1", Topic: "t.v1", Payload: []byte(`{}`),
+	}
+	tests := []struct {
+		name  string
+		mut   func(*Entry)
+		field string
+	}{
+		{name: "unsafe ID", mut: func(e *Entry) { e.ID = "id\nbad" }, field: "id"},
+		{name: "unsafe EventType", mut: func(e *Entry) { e.EventType = "t\nv1"; e.Topic = "t.v1" }, field: "eventType"},
+		{name: "unsafe Topic", mut: func(e *Entry) { e.Topic = "t\nv1"; e.EventType = "t.v1" }, field: "topic"},
+		{name: "unsafe AggregateID", mut: func(e *Entry) { e.AggregateID = "<script>" }, field: "aggregateId"},
+		{name: "unsafe AggregateType", mut: func(e *Entry) { e.AggregateType = "a b" }, field: "aggregateType"},
+		{name: "overlong ID", mut: func(e *Entry) { e.ID = strings.Repeat("a", 257) }, field: "id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := base
+			tt.mut(&e)
+			err := e.Validate()
+			require.Error(t, err, "Entry.Validate must reject unsafe %s", tt.field)
+			var ce *errcode.Error
+			require.True(t, errors.As(err, &ce))
+			assert.Equal(t, errcode.ErrValidationFailed, ce.Code)
 		})
 	}
 }
