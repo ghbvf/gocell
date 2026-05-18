@@ -8,12 +8,10 @@
 package archtest
 
 import (
-	"fmt"
 	"path/filepath"
-	"sort"
+	"strconv"
+	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 // runFixtureScan loads the fixture package at fixtureDir and returns the sorted
@@ -38,13 +36,42 @@ func runFixtureScan(t *testing.T, fixtureDir string) []string {
 			}
 			return nil
 		})
-	sort.Strings(violations)
 	return violations
 }
 
+// parseDurationDiags converts the "rel:line: message" strings produced by
+// scanProdDurationAST into []Diagnostic for golden-file comparison.
+// Lines that do not match the expected prefix format are silently skipped
+// (they should never appear in well-formed fixture output).
+func parseDurationDiags(raw []string) []Diagnostic {
+	var out []Diagnostic
+	for _, s := range raw {
+		// Format: "rel:line: message"
+		// rel itself may contain path separators but not colons on the target OS.
+		firstColon := strings.Index(s, ":")
+		if firstColon < 0 {
+			continue
+		}
+		rel := s[:firstColon]
+		rest := s[firstColon+1:]
+		secondColon := strings.Index(rest, ":")
+		if secondColon < 0 {
+			continue
+		}
+		lineStr := rest[:secondColon]
+		line, err := strconv.Atoi(lineStr)
+		if err != nil {
+			continue
+		}
+		msg := strings.TrimPrefix(rest[secondColon+1:], " ")
+		out = append(out, Diagnostic{Rel: rel, Line: line, Message: msg})
+	}
+	return out
+}
+
 // TestProdDurationConstFixtures runs the PROD-DURATION-CONST-01 scanner over
-// all 22 fixture subpackages (5 positive + 17 negative; package_load_error is
-// covered by TestProdDurationConstFailsClosedOnLoadError separately).
+// all fixture subpackages and compares against diag.golden.
+// GREEN fixtures have an empty golden; RED fixtures capture the real output.
 func TestProdDurationConstFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -54,63 +81,44 @@ func TestProdDurationConstFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	fixturesBase := filepath.Join(root, "tools", "archtest", "testdata", "prod_duration_fixtures")
 
-	cases := []struct {
-		pkg          string
-		wantViolLine []int // expected violation lines; nil = expect 0 violations
-	}{
-		// Positive — must produce 0 violations
-		{"package_const_passes", nil},
-		{"package_const_block_passes", nil},
-		{"zero_literal_passes", nil},
-		{"non_duration_literal_passes", nil},
-		{"time_now_add_named_passes", nil},
+	dirs := []string{
+		// GREEN — must produce 0 violations.
+		"package_const_passes",
+		"package_const_block_passes",
+		"zero_literal_passes",
+		"non_duration_literal_passes",
+		"time_now_add_named_passes",
 
-		// Negative — must produce exact violations
-		{"func_local_const_violates", []int{8}},
-		{"alias_import_violates", []int{8}},
-		{"dot_import_violates", []int{8}},
-		{"non_whitelist_sink_violates", []int{11}},
-		{"composite_field_violates", []int{12}},
-		{"return_violates", []int{8}},
-		{"var_init_violates", []int{7}},
-		{"var_basicLit_violates", []int{7}},
-		{"time_now_add_literal_violates", []int{8}},
-		{"switch_case_violates", []int{9}},
-		{"for_init_violates", []int{10}},
-		{"closure_violates", []int{8}},
-		{"type_conversion_violates", []int{9}},
-		{"chained_unit_violates", []int{7}},
-		{"time_duration_cast_violates", []int{8}},
-		{"negative_literal_violates", []int{7}},
-		{"addition_violates", []int{8, 8}}, // two violations on same line
-		{"build_tag_e2e_violates", []int{10}},
-		{"build_tag_integration_violates", []int{10}},
+		// RED — must produce violations.
+		"func_local_const_violates",
+		"alias_import_violates",
+		"dot_import_violates",
+		"non_whitelist_sink_violates",
+		"composite_field_violates",
+		"return_violates",
+		"var_init_violates",
+		"var_basicLit_violates",
+		"time_now_add_literal_violates",
+		"switch_case_violates",
+		"for_init_violates",
+		"closure_violates",
+		"type_conversion_violates",
+		"chained_unit_violates",
+		"time_duration_cast_violates",
+		"negative_literal_violates",
+		"addition_violates",
+		"build_tag_e2e_violates",
+		"build_tag_integration_violates",
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.pkg, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			fixtureDir := filepath.Join(fixturesBase, tc.pkg)
-			got := runFixtureScan(t, fixtureDir)
-
-			if len(tc.wantViolLine) == 0 {
-				assert.Empty(t, got,
-					"fixture %s: expected 0 violations, got %v", tc.pkg, got)
-				return
-			}
-
-			assert.Equal(t, len(tc.wantViolLine), len(got),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.pkg, len(tc.wantViolLine), len(got), got)
-
-			for i, line := range tc.wantViolLine {
-				if i >= len(got) {
-					break
-				}
-				prefix := fmt.Sprintf("usage.go:%d:", line)
-				assert.Contains(t, got[i], prefix,
-					"fixture %s violation[%d]: expected prefix %q, got %q", tc.pkg, i, prefix, got[i])
-			}
+			fixtureDir := filepath.Join(fixturesBase, dir)
+			raw := runFixtureScan(t, fixtureDir)
+			diags := parseDurationDiags(raw)
+			AssertGolden(t, filepath.Join(fixtureDir, "diag.golden"), diags)
 		})
 	}
 }

@@ -24,8 +24,6 @@ package archtest
 import (
 	"path/filepath"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 // runProdClockInjectionFixtureScan loads the fixture package at fixtureDir
@@ -46,7 +44,8 @@ func runProdClockInjectionFixtureScan(t *testing.T, fixtureDir string) []Diagnos
 }
 
 // TestProdClockInjectionFixtures runs the PROD-CLOCK-INJECTION-01 scanner
-// over each fixture subpackage and asserts the expected violation lines.
+// over each fixture subpackage and compares against diag.golden.
+// GREEN fixtures have an empty golden; RED fixtures capture the real output.
 func TestProdClockInjectionFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -56,87 +55,44 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	fixturesBase := filepath.Join(root, "tools", "archtest", "testdata", "prod_clock_injection_fixtures")
 
-	cases := []struct {
-		pkg          string
-		wantViolLine []int  // expected violation lines; nil = expect 0 violations
-		wantRel      string // expected Diagnostic.Rel; "" defaults to "usage.go"
-	}{
-		// Positive — must produce 0 violations
-		{pkg: "injected_clock_passes"},
+	dirs := []string{
+		// GREEN — must produce 0 violations.
+		"injected_clock_passes",
 
-		// Negative — must produce exactly the listed violations
-		{pkg: "after_violates", wantViolLine: []int{7}},
-		{pkg: "newticker_violates", wantViolLine: []int{7}},
-		{pkg: "afterfunc_violates", wantViolLine: []int{7}},
-		{pkg: "tick_violates", wantViolLine: []int{8}},
-		{pkg: "sleep_violates", wantViolLine: []int{7}},
-		{pkg: "alias_violates", wantViolLine: []int{9}},
-		{pkg: "dot_import_violates", wantViolLine: []int{9}},
-		{pkg: "func_value_ref_violates", wantViolLine: []int{9}},
-		{pkg: "struct_field_assign_violates", wantViolLine: []int{14}},
+		// RED — must produce violations.
+		"after_violates",
+		"newticker_violates",
+		"afterfunc_violates",
+		"tick_violates",
+		"sleep_violates",
+		"alias_violates",
+		"dot_import_violates",
+		"func_value_ref_violates",
+		"struct_field_assign_violates",
 
 		// Core time symbols — must also be flagged individually.
-		{pkg: "now_violates", wantViolLine: []int{8}},
-		{pkg: "since_violates", wantViolLine: []int{8}},
-		{pkg: "until_violates", wantViolLine: []int{8}},
-		{pkg: "newtimer_violates", wantViolLine: []int{8}},
+		"now_violates",
+		"since_violates",
+		"until_violates",
+		"newtimer_violates",
 
 		// Function-level control-plane marker carve-out self-checks
 		// (per ai-collab.md §"盲区自检" / PROD-CLOCK-INJECTION-01 godoc).
-		//
-		// GREEN: marker doc comment AND (rel, name) ∈ controlPlaneClockCarveOut.
-		// The fixture file lives at runtime/command/lifecycle.go (mirroring the
-		// real allowlisted path) with the two allowlisted func names → 0 viol.
-		{pkg: "control_plane_marker_passes"},
-		// RED (P1-3): right name + valid marker but WRONG path (usage.go ∉
-		// allowlist) — must still be flagged. Proves the marker alone never
-		// exempts.
-		{pkg: "control_plane_marker_wrong_path_violates", wantViolLine: []int{15}, wantRel: "usage.go"},
-		// RED (P1-3): a THIRD marked function on the allowlisted path
-		// runtime/command/lifecycle.go — name not in allowlist, must still be
-		// flagged. Proves the allowlist is name-exhaustive, not path-blanket.
-		{pkg: "control_plane_marker_wrong_func_violates", wantViolLine: []int{15}, wantRel: "runtime/command/lifecycle.go"},
-		// RED: inline body comment (not doc comment group) is NOT recognized;
-		// time.NewTicker is still flagged.
-		{pkg: "control_plane_no_marker_violates", wantViolLine: []int{16}},
-		// RED: non-exempt function with closure calling time.NewTicker is flagged.
-		{pkg: "control_plane_closure_violates", wantViolLine: []int{22}},
-		// RED: blind-spot-A self-check — time.* inside a FuncLit (closure) within
-		// an exempt (marked) FuncDecl is NOT exempt; must still be flagged.
-		{pkg: "control_plane_exempt_func_closure_violates", wantViolLine: []int{21}},
+		"control_plane_marker_passes",
+		"control_plane_marker_wrong_path_violates",
+		"control_plane_marker_wrong_func_violates",
+		"control_plane_no_marker_violates",
+		"control_plane_closure_violates",
+		"control_plane_exempt_func_closure_violates",
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.pkg, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			fixtureDir := filepath.Join(fixturesBase, tc.pkg)
-			got := runProdClockInjectionFixtureScan(t, fixtureDir)
-
-			if len(tc.wantViolLine) == 0 {
-				assert.Empty(t, got,
-					"fixture %s: expected 0 violations, got %v", tc.pkg, got)
-				return
-			}
-
-			assert.Equal(t, len(tc.wantViolLine), len(got),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.pkg, len(tc.wantViolLine), len(got), got)
-
-			wantRel := tc.wantRel
-			if wantRel == "" {
-				wantRel = "usage.go"
-			}
-			for i, line := range tc.wantViolLine {
-				if i >= len(got) {
-					break
-				}
-				assert.Equal(t, wantRel, got[i].Rel,
-					"fixture %s violation[%d]: expected Rel=%s, got %q",
-					tc.pkg, i, wantRel, got[i].Rel)
-				assert.Equal(t, line, got[i].Line,
-					"fixture %s violation[%d]: expected Line=%d, got %d",
-					tc.pkg, i, line, got[i].Line)
-			}
+			fixtureDir := filepath.Join(fixturesBase, dir)
+			diags := runProdClockInjectionFixtureScan(t, fixtureDir)
+			AssertGolden(t, filepath.Join(fixtureDir, "diag.golden"), diags)
 		})
 	}
 }

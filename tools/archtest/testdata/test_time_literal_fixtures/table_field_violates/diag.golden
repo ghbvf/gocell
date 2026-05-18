@@ -1,0 +1,2 @@
+usage_test.go:18: 50*time.Millisecond
+usage_test.go:19: 5*time.Second

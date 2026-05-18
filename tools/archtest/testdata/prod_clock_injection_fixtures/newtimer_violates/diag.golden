@@ -1,0 +1,1 @@
+usage.go:8: time.NewTimer — must use injected clock.Clock.NewTimerAt instead

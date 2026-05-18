@@ -1,0 +1,1 @@
+usage.go:7: time.Sleep — must use injected clock.Clock.Sleep instead
