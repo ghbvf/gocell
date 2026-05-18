@@ -362,6 +362,14 @@ func TestRunInTx_BumpAuthzEpoch_InsideTx(t *testing.T) {
 // A concurrent BumpAuthzEpoch (outside tx) must block during the sleep and
 // observe epoch=2 when it eventually acquires the lock (not epoch=1 which it
 // would see if the lock were not held for the duration).
+//
+// Invariant: assert.Equal(epoch2, 3) is a serialization invariant, not a
+// timing assertion. Serialization holds because store.mu provides a strict
+// happens-before guarantee: the <-locked receive happens-after tx-1 has
+// acquired the mutex and bumped the epoch; tx-2's store.mu.Lock() call then
+// blocks until RunInTx returns (releasing the mutex). Therefore tx-2 always
+// observes epoch=2 and produces 3. time.Sleep merely widens the detection
+// window for races — it is not the mechanism being asserted.
 func TestRunInTx_Serialization_ConcurrentBumpEpochBlocked(t *testing.T) {
 	store := NewStore(clock.Real())
 	repo := store.UserRepository()

@@ -40,7 +40,7 @@ func (r *RoleRepository) SeedRole(role *domain.Role) {
 // Safe to call both inside and outside a RunInTx closure; see the lock
 // contract on UserRepository (same rules apply here).
 func (r *RoleRepository) Create(ctx context.Context, role *domain.Role) error {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -54,7 +54,7 @@ func (r *RoleRepository) Create(ctx context.Context, role *domain.Role) error {
 // GetByID returns the Role with the given ID. Safe to call both inside and
 // outside a RunInTx closure; see the lock contract on UserRepository.
 func (r *RoleRepository) GetByID(ctx context.Context, id string) (*domain.Role, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -72,7 +72,7 @@ func (r *RoleRepository) GetByID(ctx context.Context, id string) (*domain.Role, 
 // GetByUserID returns all roles assigned to userID. Safe to call both inside
 // and outside a RunInTx closure; see the lock contract on UserRepository.
 func (r *RoleRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -95,7 +95,7 @@ func (r *RoleRepository) GetByUserID(ctx context.Context, userID string) ([]*dom
 // AssignToUser assigns roleID to userID. Safe to call both inside and outside
 // a RunInTx closure; see the lock contract on UserRepository.
 func (r *RoleRepository) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -120,7 +120,7 @@ func (r *RoleRepository) AssignToUser(ctx context.Context, userID, roleID string
 // both inside and outside a RunInTx closure; see the lock contract on
 // UserRepository.
 func (r *RoleRepository) RemoveFromUser(ctx context.Context, userID, roleID string) error {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -155,7 +155,7 @@ func (r *RoleRepository) RemoveFromUser(ctx context.Context, userID, roleID stri
 // serialization. Safe to call both inside and outside a RunInTx closure; see
 // the lock contract on UserRepository.
 func (r *RoleRepository) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -212,7 +212,7 @@ func (r *RoleRepository) ListByUserID(ctx context.Context, userID string, params
 }
 
 func (r *RoleRepository) rolesByUserSnapshot(ctx context.Context, userID string) []*domain.Role {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -261,7 +261,7 @@ func roleFieldValue(r *domain.Role, field string) any {
 // see CountEffectiveAdmins. Safe to call both inside and outside a RunInTx
 // closure; see the lock contract on UserRepository.
 func (r *RoleRepository) CountByRole(ctx context.Context, roleID string) (int, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -280,7 +280,7 @@ func (r *RoleRepository) CountByRole(ctx context.Context, roleID string) (int, e
 // call both inside and outside a RunInTx closure; see the lock contract on
 // UserRepository.
 func (r *RoleRepository) CountEffectiveAdmins(ctx context.Context) (int, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -308,7 +308,7 @@ func (r *RoleRepository) CountEffectiveAdmins(ctx context.Context) (int, error) 
 // for typical small user sets). Safe to call both inside and outside a
 // RunInTx closure; see the lock contract on UserRepository.
 func (r *RoleRepository) EffectiveAdminExists(ctx context.Context) (bool, error) {
-	if !isInMemTx(ctx) {
+	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}

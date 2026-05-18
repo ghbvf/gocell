@@ -5,11 +5,20 @@
 // Build tag: integration. Run with: go test -tags=integration ./...
 // Not included in the default go test ./... run.
 //
-// Rationale: The mem-store concurrent test (TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds)
-// proves CAS logic correctness against in-memory repo. This test proves the same
-// invariant against a real PostgreSQL instance using testcontainers, verifying that
-// the SQL CAS guard (WHERE password_version=$expected) delivers exactly-once semantics
-// under concurrent goroutine load.
+// Rationale: mem-store CAS-conflict correctness is covered deterministically
+// by TestUserRepo_UpdatePassword_VersionMismatch (internal/mem) and
+// TestChangePassword_StalePasswordVersion_ReturnsConflict. The STRONG
+// exactly-once property under TRUE concurrency (two txs both read version 0,
+// exactly one gets ErrVersionConflict) is a real-MVCC property the mem store
+// cannot model — its only concurrency primitive is the all-or-nothing
+// store.mu (see ADR 202605171846-adr-mem-tx-lock-ownership.md). This test is
+// that property's only faithful home: it proves the SQL CAS guard
+// (WHERE password_version=$expected) delivers exactly-once semantics under
+// concurrent goroutine load against a real PostgreSQL instance via
+// testcontainers. Its mem-store sibling
+// TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds asserts only the
+// race-safe invariants (no corruption; exactly one winner; loser is a
+// legitimate per-call-locked race outcome).
 package identitymanage
 
 import (

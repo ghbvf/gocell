@@ -851,6 +851,13 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// the ~100ms bcrypt cost is acceptable inside a short-lived tx, and keeping
 	// the hash computation next to the CAS write avoids a TOCTOU window where a
 	// concurrent change could replace the hash between hash computation and write.
+	//
+	// mem holdsLock=false path (WithTxContext / foreign TxRunner): GetByID and
+	// UpdatePassword each acquire store.mu independently (per-call), so bcrypt
+	// runs between the two locks rather than under a held lock. Cross-method
+	// atomicity is only guaranteed by the mem Store's own TxRunner (holdsLock=true)
+	// and by PG; the CAS version check still guards correctness on the mem path
+	// (ADR 202605171846).
 	var userID string
 	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		id, txErr := s.changePasswordInTx(txCtx, input)

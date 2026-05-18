@@ -68,6 +68,13 @@ type Features struct {
 	// SupportsCASConflict: concurrent UpdatePassword / BumpAuthzEpoch returns
 	// errcode.ErrConflict-family on the loser. PG=true (version column CAS),
 	// mem=false (store.mu serializes all writes; no lost update; no conflict).
+	//
+	// For mem: the conformance suite exercises the deterministic stale-version
+	// path only (no concurrent goroutines). The concurrent-race regression — where
+	// exactly one of two concurrent ChangePassword calls succeeds — is covered by
+	// cells/accesscore/slices/identitymanage.TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds
+	// (live goroutine test, ADR 202605171846 §D4); that test runs against the
+	// mem Store's own TxRunner and validates the serialization guarantee end-to-end.
 	SupportsCASConflict bool
 }
 
