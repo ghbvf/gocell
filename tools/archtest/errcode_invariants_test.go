@@ -1213,8 +1213,11 @@ func TestErrorFirstTypedNil01(t *testing.T) {
 // via real fixture modules (Hard upgrade from inline-source table).
 //
 // Each subdirectory under testdata/errorfirsttypednilfixture/ is a standalone
-// Go module. *_violates cases expect non-empty diagnostics; *_passes cases
-// expect zero diagnostics. This mirrors TestKernelClockResetRelativeFixtures.
+// Go module. Each fixture dir owns a diag.golden capturing the rule's real
+// output (Rel:Line: Message). *_passes cases have an empty golden; *_violates
+// cases have one or more diagnostic lines. Line numbers live in the golden,
+// never in this table. See ADR
+// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
 func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1224,38 +1227,37 @@ func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := root + "/tools/archtest/testdata/errorfirsttypednilfixture"
 
-	cases := []struct {
-		dir      string
-		wantViol bool // true = expect ≥1 violation; false = expect 0
-	}{
-		{"constructor_interface_without_isnil_violates", true},
-		{"constructor_interface_with_isnil_passes", false},
-		{"optional_interface_with_isnil_passes", false},
-		{"non_error_constructor_passes", false},
-		{"non_constructor_function_passes", false},
-		{"isnil_result_discarded_violates", true},
-		{"isnil_inside_non_if_call_violates", true},
-		{"if_cond_no_return_violates", true},
-		{"then_in_goroutine_violates", true},
-		{"and_compound_violates", true},
-		{"pointer_param_nil_guard_passes", false},
-		{"or_compound_isnil_passes", false},
-		{"map_param_nil_guard_passes", false},
-		{"chan_param_nil_guard_passes", false},
-		{"func_param_nil_guard_passes", false},
-		{"slice_param_passes", false},
-		{"then_in_defer_violates", true},
-		{"aliased_validation_violates", true},
-		{"unnamed_param_passes", false},
-		{"blank_param_passes", false},
+	// RED (*_violates) and GREEN (*_passes) cases share the same loop body;
+	// distinction is captured entirely in the golden file.
+	dirs := []string{
+		"constructor_interface_without_isnil_violates",
+		"constructor_interface_with_isnil_passes",
+		"optional_interface_with_isnil_passes",
+		"non_error_constructor_passes",
+		"non_constructor_function_passes",
+		"isnil_result_discarded_violates",
+		"isnil_inside_non_if_call_violates",
+		"if_cond_no_return_violates",
+		"then_in_goroutine_violates",
+		"and_compound_violates",
+		"pointer_param_nil_guard_passes",
+		"or_compound_isnil_passes",
+		"map_param_nil_guard_passes",
+		"chan_param_nil_guard_passes",
+		"func_param_nil_guard_passes",
+		"slice_param_passes",
+		"then_in_defer_violates",
+		"aliased_validation_violates",
+		"unnamed_param_passes",
+		"blank_param_passes",
 	}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.dir, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			fixtureDir := base + "/" + tc.dir
-			got := RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
+			fixtureDir := base + "/" + dir
+			diags := RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
 				func(p *Pass) []Diagnostic {
 					var out []Diagnostic
 					for _, file := range p.Files {
@@ -1265,13 +1267,8 @@ func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
 					return out
 				})
 
-			if tc.wantViol {
-				assert.NotEmpty(t, got,
-					"fixture %s: expected ≥1 violation, got 0", tc.dir)
-			} else {
-				assert.Empty(t, got,
-					"fixture %s: expected 0 violations, got %d: %v", tc.dir, len(got), got)
-			}
+			goldenPath := filepath.Join(base, dir, "diag.golden")
+			AssertGolden(t, goldenPath, diags)
 		})
 	}
 }
@@ -1644,24 +1641,29 @@ func isInDetailsSlogAttrAllowlist(rel string) bool {
 
 // TestDetailsSlogAttrFixtures verifies the AST scanner via static
 // regression cases.
+//
+// Each fixture dir owns a diag.golden capturing the rule's real output
+// (Rel:Line: Message). GREEN fixtures have an empty golden. Line numbers
+// live in the regenerated golden, never in this table — adding an import
+// to a fixture and re-running with -update produces a clean positional
+// delta. See ADR
+// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
 func TestDetailsSlogAttrFixtures(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "details_slog_attr")
 
-	cases := []struct {
-		pkg           string
-		wantViolCount int
-	}{
-		{"compliant", 0},
-		{"violates", 3}, // map literal + slog.Any + slog.Group
+	// RED cases expect violations; GREEN cases expect empty golden.
+	dirs := []string{
+		"compliant", // GREEN
+		"violates",  // RED: map literal + slog.Any + slog.Group
 	}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.pkg, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			fixtureDir := filepath.Join(base, tc.pkg)
+			fixtureDir := filepath.Join(base, dir)
 			diags := Run(t, DirsScope(fixtureDir, []string{"."}), func(p *Pass) []Diagnostic {
 				var out []Diagnostic
 				for _, file := range p.Files {
@@ -1670,9 +1672,8 @@ func TestDetailsSlogAttrFixtures(t *testing.T) {
 				}
 				return out
 			})
-			assert.Equal(t, tc.wantViolCount, len(diags),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.pkg, tc.wantViolCount, len(diags), diags)
+			goldenPath := filepath.Join(base, dir, "diag.golden")
+			AssertGolden(t, goldenPath, diags)
 		})
 	}
 }

@@ -1,0 +1,1 @@
+usage.go:15: constructor New: nil-able dependency dep is not guarded at construction time

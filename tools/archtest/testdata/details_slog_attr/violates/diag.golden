@@ -1,0 +1,3 @@
+violates.go:18: errcode.WithDetails(map[string]any{...}) — pass typed slog.Attr values instead. ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md
+violates.go:25: errcode.WithDetails(slog.Any(...)) — wire-unsafe kind; use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time. ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md
+violates.go:32: errcode.WithDetails(slog.Group(...)) — wire-unsafe kind; use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time. ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md
