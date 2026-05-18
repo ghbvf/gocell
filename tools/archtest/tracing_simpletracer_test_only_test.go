@@ -25,6 +25,8 @@ import (
 //     so the Go compiler is the real seal — R-A is the belt-and-suspenders
 //     guard that prevents anyone recreating a `runtime/observability/tracing`
 //     package with a `NewTracer` constructor. Mirrors AUTH-AUTHTEST-A.
+//     This check is alias-blind (matches only default local name `tracing`/
+//     `tracingtest`); R-B is the load-bearing gate for aliased/dot imports.
 //
 //   - R-B (load-bearing boundary, the Medium guard): non-_test.go files must
 //     not import `runtime/observability/tracingtest`. Construction of the
@@ -36,6 +38,35 @@ import (
 //     package directory stays gone, and that the legitimate consumers
 //     (tracingtest's own impl files + _test.go files) are NOT false-flagged.
 //
+//   - R-D (dot-import reverse self-check): asserts no production (non-_test.go)
+//     file uses a dot-import of the tracingtest package. Overlaps R-B by
+//     design — proves the R-A dot-import blind spot is closed by R-B.
+//
+// Blind-spot inventory (AST forms outside findCallExpr detection range):
+//
+//   - R-A is alias-blind: `import tt "…/tracing"` + `tt.NewTracer()` (or an
+//     aliased tracingtest) is NOT matched by R-A's prefix-based scan. R-B is
+//     the load-bearing gate — it resolves the full import PATH so aliased AND
+//     dot-imports of tracingtest are caught regardless of local name. R-A is
+//     belt-and-suspenders for the (now compiler-sealed) deleted `tracing` symbol.
+//   - dot-import `import . "…/tracingtest"` then bare `NewSimpleTracer()`: R-A
+//     (prefix-based) cannot see it; R-B's import-path scan DOES catch the
+//     dot-import path → acceptable, documented. R-D proves this closure.
+//   - tools/archtest/ is excluded from collectGoFiles (self-exemption) —
+//     archtest's own probe strings do not self-trip.
+//
+// AI-rebust funnel rating (ai-collab.md §Funnel 双向锁评级):
+//
+//	R-A (anti-reintroduction seal): 下游 Hard (Go compiler — runtime/observability/
+//	   tracing no longer exists; any tracing.NewTracer ref is a compile error),
+//	   上游 N/A (not an active call funnel — seals a deleted symbol).
+//	R-B (import boundary): 下游 Hard (.golangci.yml depguard tracingtest-test-only,
+//	   lint-time path ban) + Medium (this archtest, AST scan), 上游 N/A (production
+//	   must never import; no wiring funnel).
+//	Combined ceiling: Medium — which wrapper.Tracer impl bootstrap.WithTracer
+//	   injects is a runtime wiring choice the Go type system cannot forbid
+//	   (honest caveat, mirrors charter PANIC-REGISTERED honest-caveat).
+//
 // AI-rebust grade: Medium — and this is the *ceiling* for this rule shape.
 // Which `wrapper.Tracer` implementation the composition root injects via
 // `bootstrap.WithTracer(t)` is a runtime wiring choice; Go's type system
@@ -44,8 +75,10 @@ import (
 // adapter, not a noop publisher"). Pure Hard ("violation not expressible")
 // is structurally unreachable here. R-A (syntactic anti-reintroduction,
 // mirroring shipped AUTH-AUTHTEST-A) + R-B (resolved-import-path boundary,
-// mirroring shipped AUTH-AUTHTEST-C) + R-C (reverse self-check) is the
-// strongest Medium attainable, stated honestly without "near-Hard" hedging.
+// mirroring shipped AUTH-AUTHTEST-C, now double-layered with depguard Hard)
+// + R-C (reverse self-check) + R-D (dot-import reverse self-check proving
+// the R-A blind spot is closed by R-B) is the strongest Medium attainable,
+// stated honestly without "near-Hard" hedging.
 // See ai-collab.md §"AI-rebust 三档分级" + §Hard PANIC-REGISTERED honest-caveat.
 func TestTracingSimpleTracerTestOnly(t *testing.T) {
 	root := findModuleRoot(t)
@@ -63,6 +96,8 @@ func TestTracingSimpleTracerTestOnly(t *testing.T) {
 	// (findCallExpr → ast.CallExpr) so comments / doc strings / unrelated
 	// identical strings are not misclassified. tracingtest's own *.go impl
 	// files are exempt for the NewSimpleTracer arm (they define it).
+	// This check is alias-blind (matches only default local name `tracing`/
+	// `tracingtest`); R-B is the load-bearing gate for aliased/dot imports.
 	t.Run("R-A_no_simpletracer_construction_in_production", func(t *testing.T) {
 		var hits []string
 		for _, f := range allGoFiles {
@@ -172,5 +207,40 @@ func TestTracingSimpleTracerTestOnly(t *testing.T) {
 		assert.Positive(t, testImporters,
 			"expected at least one _test.go to import tracingtest (proving R-A/R-B "+
 				"do not over-reach and the fixture is genuinely test-wired)")
+	})
+
+	// R-D: dot-import reverse self-check / blind-spot closure.
+	// R-A's findCallExpr is alias-blind: `import . "…/tracingtest"` followed
+	// by a bare `NewSimpleTracer()` call would NOT be detected by R-A. R-B's
+	// import-path scan DOES catch the dot-import (parseImports returns the
+	// resolved path for dot-imports). This subtest asserts no production
+	// (non-_test.go) file outside tracingtest/ uses a dot-import of the
+	// tracingtest package, proving the blind spot is closed by R-B.
+	t.Run("R-D_blindspot_reverse_check_no_dot_import_in_production", func(t *testing.T) {
+		var violations []string
+		for _, f := range allGoFiles {
+			if strings.HasSuffix(f, "_test.go") {
+				continue
+			}
+			if filepath.Dir(f) == tracingtestPkgDir {
+				continue
+			}
+			imports, err := parseImports(f)
+			require.NoErrorf(t, err, "failed to parse %s", f)
+			for _, imp := range imports {
+				if imp == tracingtestImport {
+					rel, _ := filepath.Rel(root, f)
+					rel = filepath.ToSlash(rel)
+					violations = append(violations,
+						fmt.Sprintf("R-D: %s (non-test file) imports %s (including via dot-import)", rel, imp))
+				}
+			}
+		}
+		for _, v := range violations {
+			t.Logf("%s", v)
+		}
+		assert.Empty(t, violations,
+			"no production file may import tracingtest (including dot-import form); "+
+				"R-B's path-based scan catches dot-imports, closing the R-A alias blind spot")
 	})
 }

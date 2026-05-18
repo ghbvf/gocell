@@ -7,10 +7,13 @@
 //
 // simpleTracer is in-process-only by design:
 //
-//   - INBOUND (symmetric, intentional): Start reuses an upstream trace ID that
-//     runtime/http/middleware.trace_propagation already extracted from W3C/B3
-//     headers into kernel/pkg/ctxkeys. The OTel adapter honors inbound context
-//     the same way, so this side is symmetric and correct.
+//   - INBOUND (trace-ID reuse only, NOT parent-span linking): Start reuses an
+//     upstream trace ID that runtime/http/middleware.trace_propagation already
+//     extracted from W3C/B3 headers into kernel/pkg/ctxkeys. simpleSpan has no
+//     parentSpanID field — full parent-child span hierarchy requires the OTel
+//     adapter (adapters/otel). The OTel adapter honors inbound context the same
+//     way for the trace-ID dimension, but additionally links spans in a proper
+//     parent-child hierarchy that simpleTracer cannot express.
 //   - OUTBOUND (asymmetric, intentional): simpleTracer NEVER injects a W3C
 //     `traceparent` header onto outbound calls. Cross-process trace propagation
 //     is exclusively the responsibility of the OTel adapter (adapters/otel,

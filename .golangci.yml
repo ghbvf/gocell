@@ -348,6 +348,21 @@ linters:
           deny:
             - pkg: github.com/ghbvf/gocell/kernel/clock/clockmock
               desc: "clockmock is test-only; production code must inject clock.Clock"
+        tracingtest-test-only:
+          # TRACING-SIMPLETRACER-TEST-ONLY-01: runtime/observability/tracingtest
+          # is a test-only in-process Tracer fixture with deliberately asymmetric
+          # propagation (no outbound W3C traceparent). Production must use
+          # kernel/wrapper directly and wire adapters/otel via bootstrap.WithTracer
+          # (falling back to wrapper.NoopTracer{}). Non-_test.go must not import it.
+          # Exemptions: tracingtest/ self; tools/archtest/ (scans the symbol).
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/tools/archtest/**"
+            - "!**/runtime/observability/tracingtest/**"
+          deny:
+            - pkg: github.com/ghbvf/gocell/runtime/observability/tracingtest
+              desc: "tracingtest is test-only; production code must use kernel/wrapper + bootstrap.WithTracer (adapters/otel)"
         scaffold-os-ban:
           # SCAFFOLD-WRITE-FUNNEL-DEPGUARD-01: Hard-level enforcement of
           # SCAFFOLD-WRITE-FUNNEL-01. scaffold/codegen writes must funnel through

@@ -421,6 +421,22 @@ func TestSpan_SetStatus_Ok(t *testing.T) {
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 	assert.Equal(t, otelcodes.Ok, spans[0].Status.Code)
+
+	// OTel spec: description is only meaningful for StatusError; for StatusOK
+	// (and StatusUnset) the SDK drops any description. Pin this adjacent
+	// behavior so the SpanSetStatus shim removal does not silently regress it.
+	t.Run("ok_status_drops_description", func(t *testing.T) {
+		tracer2, exporter2 := newTestTracer(t)
+		_, span2 := tracer2.Start(ctx, "ok-status-with-desc")
+		span2.SetStatus(wrapper.StatusOK, "ignored-desc")
+		span2.End()
+
+		spans2 := exporter2.GetSpans()
+		require.Len(t, spans2, 1)
+		assert.Equal(t, otelcodes.Ok, spans2[0].Status.Code)
+		assert.Equal(t, "", spans2[0].Status.Description,
+			"OTel drops description for non-Error status per spec")
+	})
 }
 
 func TestSpanHelper_SimpleSpanAcceptsAll(t *testing.T) {
