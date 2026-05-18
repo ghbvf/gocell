@@ -274,14 +274,17 @@ func (v *Validator) adv06SliceToContract() []ValidationResult {
 // OUTGUARD-01 (formerly rules_outbox.go)
 // =============================================================================
 
-// validateOUTGUARD01 checks that cells with L2+ consistency level declare
-// a durabilityMode in their cell.yaml. L2+ cells use the transactional outbox
-// pattern and should explicitly declare "demo" or "durable" mode so that
-// runtime CheckNotNoop can enforce the correct behavior.
+// validateOUTGUARD01 checks that L2+ cells declare a durabilityMode in their
+// cell.yaml. L2+ cells use the transactional outbox pattern and must
+// explicitly declare "demo" or "durable"; runtime CheckNotNoop then rejects
+// noop outbox implementations when an assembly resolves to DurabilityDurable.
+// L0/L1 cells may omit the field (advisory only); when present its value is
+// still validated so a typo cannot slip through.
 //
-// Missing durabilityMode on L2+ cells is SeverityError because the runtime
-// CheckNotNoop is a hard gate — if the author didn't declare intent, CI should
-// catch it before runtime does. Invalid values are also SeverityError.
+// durabilityMode is advisory cell.yaml metadata consumed by governance and
+// the devtools catalog; it is not threaded into the runtime BaseCell path.
+// The cell.yaml ↔ runtime DurabilityMode Init-time reconciliation was
+// deferred — see backlog BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED.
 //
 // ref: K8s apimachinery validation — required field checks
 // ref: kernel/cell/durability.go — DurabilityMode, CheckNotNoop
@@ -289,6 +292,20 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
 		if !isL2OrHigher(c.ConsistencyLevel) {
+			// L0/L1 may omit durabilityMode (advisory only);
+			// only validate value when explicitly set.
+			if c.DurabilityMode != "" && !isValidDurabilityMode(c.DurabilityMode) {
+				results = append(results, v.newResult(
+					codeOUTGUARD01, SeverityError, IssueInvalid,
+					cellFile(c),
+					"durabilityMode",
+					fmt.Sprintf(
+						"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
+							"fix: set durabilityMode to demo or durable in the cell.yaml "+
+							"(use demo for examples/tests, durable for production assemblies)",
+						c.ID, c.DurabilityMode),
+				))
+			}
 			continue
 		}
 		if c.DurabilityMode == "" {
@@ -298,9 +315,9 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 				"durabilityMode",
 				fmt.Sprintf(
 					"cell %q declares %s consistency but has no durabilityMode; "+
-						"set durabilityMode to \"demo\" or \"durable\" so CheckNotNoop "+
-						"can enforce outbox durability at runtime; "+
-						"fix: add durabilityMode: demo or durabilityMode: durable to the cell.yaml",
+						"L2+ cells must declare durabilityMode: demo or durable; "+
+						"fix: add durabilityMode: demo or durabilityMode: durable to the cell.yaml "+
+						"(use demo for examples/tests, durable for production assemblies)",
 					c.ID, c.ConsistencyLevel),
 			))
 			continue
@@ -312,7 +329,8 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 				"durabilityMode",
 				fmt.Sprintf(
 					"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
-						"fix: set durabilityMode to demo or durable in the cell.yaml",
+						"fix: set durabilityMode to demo or durable in the cell.yaml "+
+						"(use demo for examples/tests, durable for production assemblies)",
 					c.ID, c.DurabilityMode),
 			))
 		}
