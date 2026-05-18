@@ -14,8 +14,6 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 // runErrcodeMessageConstFixtureScan parses every non-test .go file under
@@ -56,27 +54,27 @@ func scanErrcodeMessageASTNoTypesDiags(fset *token.FileSet, file *ast.File, rel 
 
 // TestErrcodeMessageConstLiteralFixtures validates the MESSAGE-CONST-
 // LITERAL-01 scanner via curated regression cases.
+//
+// Each fixture directory owns a diag.golden capturing the rule's real output
+// (Rel:Line: Message); GREEN fixtures have an empty golden. Expected line
+// numbers live in the regenerated golden, never in this table. See ADR
+// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
 func TestErrcodeMessageConstLiteralFixtures(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "errcode_message_const")
 
-	cases := []struct {
-		pkg           string
-		wantViolCount int
-	}{
-		{"compliant", 0},
-		{"violates", 5}, // 3 errcode.New/Wrap + httputil.WritePublic + ctxcancel.WrapOrInfra
-	}
+	// GREEN fixture: 0 violations.
+	// RED fixture: 5 violations (3 errcode.New/Wrap + httputil.WritePublic + ctxcancel.WrapOrInfra).
+	dirs := []string{"compliant", "violates"}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.pkg, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			got := runErrcodeMessageConstFixtureScan(t, filepath.Join(base, tc.pkg))
-			assert.Equal(t, tc.wantViolCount, len(got),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.pkg, tc.wantViolCount, len(got), got)
+			fixtureDir := filepath.Join(base, dir)
+			got := runErrcodeMessageConstFixtureScan(t, fixtureDir)
+			AssertGolden(t, filepath.Join(fixtureDir, "diag.golden"), got)
 		})
 	}
 }

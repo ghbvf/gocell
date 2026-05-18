@@ -39,6 +39,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// runSpanRecordErrorFixtureDiags is the golden-compatible variant of
+// runSpanRecordErrorFixtureScan: it returns []Diagnostic instead of []string,
+// preserving the same Rel (basename of the file) and Line as the string form.
+// Used by TestSpanRecordErrorRedactedFixtures to drive AssertGolden.
+func runSpanRecordErrorFixtureDiags(t *testing.T, root, fixtureDirRel string) []Diagnostic {
+	t.Helper()
+	scope := DirsScope(root, []string{fixtureDirRel}, IncludeTestdata(), IncludeGenerated())
+	var out []Diagnostic
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			rel := filepath.Base(p.Abs(file))
+			redactionLocal := redactionLocalName(file)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
+					return
+				}
+				if len(call.Args) == 0 {
+					return
+				}
+				if isRedactErrorCall(call.Args[0], redactionLocal) {
+					return
+				}
+				line := p.Fset.Position(call.Pos()).Line
+				out = append(out, Diagnostic{Rel: rel, Line: line, Message: spanRedactViolMsg})
+			})
+		}
+		return nil
+	})
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rel != out[j].Rel {
+			return out[i].Rel < out[j].Rel
+		}
+		return out[i].Line < out[j].Line
+	})
+	return out
+}
+
 const redactionImportPath = `"github.com/ghbvf/gocell/pkg/redaction"`
 
 // spanRedactViolMsg is the diagnostic message emitted when a RecordError call
@@ -330,33 +368,27 @@ func runSpanRecordErrorFixtureScan(t *testing.T, root, fixtureDirRel string) []s
 }
 
 // TestSpanRecordErrorRedactedFixtures verifies the AST scanner via static
-// regression cases (compliant: 0 violations, violates: 1 violation).
+// regression cases. Each fixture dir owns a diag.golden capturing the rule's
+// real output (Rel:Line: Message); GREEN fixtures have an empty golden. Line
+// numbers live in the regenerated golden, never in this table. See ADR
+// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
 func TestSpanRecordErrorRedactedFixtures(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	baseRel := "tools/archtest/testdata/span_record_error_fixtures"
+	base := filepath.Join(root, "tools", "archtest", "testdata", "span_record_error_fixtures")
 
-	cases := []struct {
-		pkg           string
-		wantViolCount int
-	}{
-		{"compliant", 0},
-		{"violates", 1},
-		// violates_in_generated buries the offending file under a "generated"
-		// subdirectory; reaching it requires runSpanRecordErrorFixtureScan to
-		// pass IncludeGenerated() to the scope. Removing that option from the
-		// fixture scan flips wantViolCount=1 to observed=0 and turns red.
-		{"violates_in_generated", 1},
-	}
+	// GREEN fixture: 0 violations.
+	// RED fixtures: 1 violation each (violates: direct; violates_in_generated:
+	// buried under "generated/" — requires IncludeGenerated() to be reached).
+	dirs := []string{"compliant", "violates", "violates_in_generated"}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.pkg, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			got := runSpanRecordErrorFixtureScan(t, root, baseRel+"/"+tc.pkg)
-			assert.Equal(t, tc.wantViolCount, len(got),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.pkg, tc.wantViolCount, len(got), got)
+			got := runSpanRecordErrorFixtureDiags(t, root, baseRel+"/"+dir)
+			AssertGolden(t, filepath.Join(base, dir, "diag.golden"), got)
 		})
 	}
 }

@@ -1,0 +1,1 @@
+usage.go:17: Timer.Reset(d time.Duration) — use ResetAt(deadline time.Time) instead to avoid read-then-act race; ref: docs/architecture/202605021500-adr-kernel-clock-injection.md

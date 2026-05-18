@@ -1,0 +1,3 @@
+usage.go:14: kernel/clock.Real() — accept clock.Clock as a constructor parameter and validate via clock.MustHaveClock
+usage.go:20: kernel/clock.Real() — accept clock.Clock as a constructor parameter and validate via clock.MustHaveClock
+usage.go:33: kernel/clock.Real() — accept clock.Clock as a constructor parameter and validate via clock.MustHaveClock
