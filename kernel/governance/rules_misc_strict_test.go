@@ -322,6 +322,7 @@ func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
 				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L1",
+				DurabilityMode:   "demo",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
