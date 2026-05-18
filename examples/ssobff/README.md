@@ -7,11 +7,16 @@ built-in GoCell Cells into one assembly:
 - **auditcore** (L3 WorkflowEventual): tamper-evident audit log with hash chain
 - **configcore** (L2 OutboxFact): configuration CRUD, publish/rollback, feature flags
 
-All dependencies are in-memory (no external services required).
+All three cells use PostgreSQL for persistence. A running PostgreSQL instance and
+`DATABASE_URL` are required before starting the server.
 
 ## Quick Start
 
+PostgreSQL is required. Start the bundled Docker Compose stack first (see
+[Docker Infrastructure](#docker-infrastructure)), then:
+
 ```bash
+export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"  # database name matches docker-compose.yml POSTGRES_DB=sso_bff; sslmode=disable is local-demo only — use sslmode=require for any non-localhost PostgreSQL
 export GOCELL_SSOBFF_SERVICE_SECRET="$(openssl rand -base64 32)"
 go run ./examples/ssobff
 ```
@@ -26,15 +31,16 @@ Each address is overridable via environment variable (see [Environment Variables
 
 ## Docker Infrastructure
 
-Infrastructure services are available for future adapter-based mode. The
-current `ssobff` example still uses in-memory dependencies, so starting these
-containers is optional and does not change runtime storage or event delivery.
+**Required before starting ssobff.** The stack provides the PostgreSQL instance
+that all three cells depend on.
 
 ```bash
 cd examples/ssobff
 export GOCELL_EXAMPLE_POSTGRES_PASSWORD="$(openssl rand -base64 24)"
 export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
+# wait for postgres to become healthy, then set DATABASE_URL
+export DATABASE_URL="postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable"
 ```
 
 ## First Admin Provisioning
@@ -219,11 +225,15 @@ curl -s -X POST http://localhost:8081/api/v1/config/ \
 
 ### 9. Update a config entry
 
+`expectedVersion` must match the current stored version (CAS); use the
+`version` field from the prior GET response. The server rejects the PUT
+with 409 Conflict if the version does not match.
+
 ```bash
 curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{"value":"SSO Portal v2"}' | jq
+  -d '{"value":"SSO Portal v2","expectedVersion":1}' | jq
 ```
 
 ### 10. Read a config entry (admin-only)
@@ -308,7 +318,7 @@ tracked in the backlog. The current PR provides the middleware primitives.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `GOCELL_STATE_DIR` | (per-OS) | Override the directory holding the bootstrap admin credential file. |
+| `DATABASE_URL` | (required) | PostgreSQL DSN. With the bundled docker-compose: `postgres://gocell:${GOCELL_EXAMPLE_POSTGRES_PASSWORD}@localhost:5432/sso_bff?sslmode=disable`. The process fails fast when absent. |
 | `GOCELL_SSOBFF_SERVICE_SECRET` | (required) | Internal listener service-token shared secret. ≥ 32 bytes; missing or short value fails the process at startup. |
 | `GOCELL_SSOBFF_PRIMARY_ADDR` | `:8081` | Primary listener bind address (public business API). |
 | `GOCELL_SSOBFF_INTERNAL_ADDR` | `127.0.0.1:9081` | Internal listener bind (control-plane / service-token). Loopback default keeps it off the public network until the operator opts in. |

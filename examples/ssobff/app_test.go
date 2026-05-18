@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"testing"
 
@@ -21,7 +22,26 @@ func TestNewSSOBFFAppFailsFastWithoutServiceSecret(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), ssobffServiceKeyEnv), "error must name missing env var: %v", err)
 }
 
+func TestNewSSOBFFAppFailsFastWithoutDatabaseURL(t *testing.T) {
+	t.Setenv(ssobffDatabaseURLEnv, "")
+
+	app, err := NewSSOBFFApp(
+		WithSSOBFFLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		WithSSOBFFInternalServiceSecret("ssobff-test-service-secret-32b!!!"),
+	)
+	require.Error(t, err)
+	require.Nil(t, app)
+	require.True(t, strings.Contains(err.Error(), ssobffDatabaseURLEnv), "error must name missing env var: %v", err)
+}
+
 func TestNewSSOBFFApp_AcceptsInjectedListeners(t *testing.T) {
+	if os.Getenv(ssobffDatabaseURLEnv) == "" {
+		const skipMsg = "walkthrough test requires %s (PG DSN). " +
+			"Start PG via `docker compose -f examples/ssobff/docker-compose.yml up -d` " +
+			"and export %s=postgres://gocell:$GOCELL_EXAMPLE_POSTGRES_PASSWORD" +
+			"@localhost:5432/sso_bff?sslmode=disable."
+		t.Skipf(skipMsg, ssobffDatabaseURLEnv, ssobffDatabaseURLEnv)
+	}
 	primary := newTestListener(t)
 	internal := newTestListener(t)
 	health := newTestListener(t)
