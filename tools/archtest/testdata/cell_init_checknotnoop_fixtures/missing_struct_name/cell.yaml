@@ -1,0 +1,17 @@
+# Fixture pinning F2's "L2+ but missing goStructName" branch. Used by
+# TestParseAndIncludeTarget — no cell.go sibling because the test exercises
+# parseAndIncludeTarget directly on the YAML bytes; the missing-goStructName
+# branch returns before Phase B is reached, so no Go package is needed.
+id: fixture-missing_struct_name
+type: core
+consistencyLevel: L2
+durabilityMode: durable
+owner:
+  team: archtest-fixture
+  role: cell-owner
+schema:
+  primary: fixture_missing_struct_name
+verify:
+  smoke:
+    - smoke.fixture.startup
+# (goStructName intentionally omitted)

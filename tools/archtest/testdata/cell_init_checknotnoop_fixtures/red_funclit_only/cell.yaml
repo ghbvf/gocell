@@ -1,0 +1,13 @@
+id: fixture-red_funclit_only
+type: core
+consistencyLevel: L2
+durabilityMode: durable
+owner:
+  team: archtest-fixture
+  role: cell-owner
+schema:
+  primary: fixture_red_funclit_only
+verify:
+  smoke:
+    - smoke.fixture.startup
+goStructName: RedFuncLitCell
