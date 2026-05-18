@@ -4860,6 +4860,50 @@ func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 	assert.Contains(t, got[0].Message, "banana")
 }
 
+// TestOUTGUARD01_InvalidDurabilityMode_L0L1 covers the L0/L1 branch: the field
+// is optional, but when explicitly set its value is still validated (a typo
+// must not slip through just because the cell is below L2).
+func TestOUTGUARD01_InvalidDurabilityMode_L0L1(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(pm *metadata.ProjectMeta)
+	}{
+		{
+			name: "L0 cell with invalid durabilityMode",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["sharedcrypto"].DurabilityMode = "banana" // L0, invalid
+			},
+		},
+		{
+			name: "L1 cell with invalid durabilityMode",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["l1-cell"] = &metadata.CellMeta{
+					ID:               "l1-cell",
+					Type:             "core",
+					ConsistencyLevel: "L1",
+					DurabilityMode:   "banana", // L1, invalid
+					Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
+					Schema:           metadata.SchemaMeta{Primary: "cell_l1"},
+					Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+
+			val := NewValidator(pm, ".", clock.Real())
+			got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
+			assert.Len(t, got, 1, "invalid durabilityMode on L0/L1 cell should still error")
+			assert.Equal(t, SeverityError, got[0].Severity)
+			assert.Equal(t, IssueInvalid, got[0].IssueType)
+			assert.Contains(t, got[0].Message, "banana")
+		})
+	}
+}
+
 // --- Parser examples/ walk coverage (V-A11) ---
 // Confirms that Parser.ParseFS includes cells under examples/*/cells/**/cell.yaml
 // in ProjectMeta.Cells. Backlog item V-A11.
