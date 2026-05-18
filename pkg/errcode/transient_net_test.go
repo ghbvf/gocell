@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"syscall"
 	"testing"
 )
@@ -78,6 +79,41 @@ func TestIsTransientNet(t *testing.T) {
 			name: "*net.DNSError NXDOMAIN (IsNotFound=true) → transient (accepted trade-off per ADR 202605161800)",
 			err:  &net.DNSError{Err: "no such host", Name: "example.invalid", IsNotFound: true},
 			want: true,
+		},
+		{
+			// *url.Error Op="parse" — operator-side URL misconfiguration.
+			// Permanent: retry will never fix a malformed endpoint string.
+			// ref: aws-sdk-go-v2 retry/retryable_error.go url.Error handling.
+			name: "*url.Error Op=parse (URL misconfig) → permanent",
+			err: &url.Error{
+				Op:  "parse",
+				URL: "://invalid",
+				Err: errors.New("missing scheme"),
+			},
+			want: false,
+		},
+		{
+			// *url.Error Op="Get" wrapping a real *net.OpError dial-refused —
+			// HTTP client wraps transport-layer errors in *url.Error. The inner
+			// cause is transient; helper must recurse on urlErr.Err.
+			name: "*url.Error Op=Get wrapping *net.OpError (dial refused) → transient",
+			err: &url.Error{
+				Op:  "Get",
+				URL: "http://example.invalid/path",
+				Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
+			},
+			want: true,
+		},
+		{
+			// *url.Error Op="Get" wrapping a non-net.Error cause (e.g. content
+			// decode failure). Recursion finds no net.Error → permanent.
+			name: "*url.Error Op=Get wrapping plain error → permanent",
+			err: &url.Error{
+				Op:  "Get",
+				URL: "http://example.com/path",
+				Err: errors.New("content decode failed"),
+			},
+			want: false,
 		},
 	}
 

@@ -4,25 +4,38 @@
 // Hard double-lock for the adapter "net.Error → transient" rule
 // (ai-collab.md §AI-rebust + §Funnel 双向锁 + ADR 202605161800):
 //
-//   - Downstream Hard (ADAPTER-NET-TRANSIENT-FUNNEL-01): every `var x net.Error`
-//     declaration in production code must reside in an allowlisted
-//     (pkgPath, funcName) pair. The allowlist is the single typed source of
-//     truth for "where the net.Error interface assertion is legitimately
-//     decoded outside the funnel"; everywhere else MUST delegate to
-//     errcode.IsTransientNet. Adding a new adapter classifier that re-inlines
-//     `var x net.Error` is RED in CI; expanding the allowlist requires
-//     same-PR edit to this file + ADR §"Adapter transient inventory".
+//   - Downstream Hard (ADAPTER-NET-TRANSIENT-FUNNEL-01): every site in
+//     production code that performs a net.Error fan-in decision must reside
+//     in an allowlisted (pkgPath, funcName) pair. Two equivalent shapes are
+//     locked:
+//     (a) `var x net.Error` declaration (allowlist detector,
+//     scanNetErrorDeclarations; alias-aware via types.Unalias).
+//     (b) `errors.As(err, &op)` where op has type `*net.X` for some
+//     concrete X != "Error" (narrow-form detector,
+//     scanErrorsAsNetSubtypeNarrow). Adapters cannot bypass the
+//     interface-level check by anchoring on a concrete subtype.
+//     Everywhere outside the allowlist must delegate to
+//     errcode.IsTransientNet. Allowlist drift requires same-PR edit to
+//     this file + ADR §"Adapter transient inventory".
 //
 //   - Upstream Hard (TRANSIENT-NET-HELPER-FORM-01): the body of
-//     pkg/errcode.IsTransientNet is locked to the broadest form — declares
-//     `var n net.Error`, calls `errors.As(err, &n)`, and contains no
-//     `.Timeout()` SelectorExpr nor narrowing type assertion (*net.OpError,
-//     *net.DNSError, etc.). A regression that re-introduces Timeout()
-//     filtering or narrowing inside the helper is RED in CI.
+//     pkg/errcode.IsTransientNet is locked to a positive + negative
+//     compound form:
+//     Positive (scanHelperPositiveErrorsAs): body MUST contain at least
+//     one stdlib `errors.As(<expr>, &<ident>)` CallExpr where the ident
+//     has the static type net.Error interface. Empty / stub bodies
+//     (`return false` / `return true`) are RED.
+//     Negative (scanHelperFormViolations): `.Timeout()` SelectorExpr on
+//     a net.Error receiver is RED (would narrow transient set);
+//     `*net.X` StarExpr where X != "Error" is RED (would key on a
+//     concrete subtype instead of the interface). `*url.Error` is in
+//     a different package and not net.*, so url.Error unwrap
+//     preamble is permitted (matches the helper's documented shape).
 //
 // Tool: archtest.RunTypedProduction (040 Pass-Driver) + *types.Info Uses /
 // TypeOf for callee + type resolution; AST walk via EachInSubtree[ast.GenDecl] /
-// EachInSubtree[ast.SelectorExpr].
+// EachInSubtree[ast.SelectorExpr] / EachInSubtree[ast.CallExpr]; alias
+// transparency via types.Unalias.
 //
 // Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"):
 //
@@ -30,23 +43,31 @@
 //     for in-package var declarations — Go type system requires `var x net.Error`
 //     to import `net`, which `*types.Info.ObjectOf(spec.Type.Sel).Pkg().Path()`
 //     resolves authoritatively. Compensation: Go type system.
-//  2. Type alias for net.Error (`type myNetErr = net.Error; var x myNetErr`):
-//     Go alias semantics guarantee `TypeOf` on aliased `net.Error` still returns
-//     `*types.Named`; the `!ok` branch is unreachable for alias declarations.
-//     Compensation: Go type system (alias transparency).
-//  3. `errors.As(err, &x)` where x has interface type assignable to net.Error
-//     but is declared via short var `x := someFunc()` instead of `var x net.Error`:
-//     Go's errors.As signature requires `&x` where *x implements net.Error or
-//     error; the canonical Go pattern is `var x net.Error` zero-value-then-As.
-//     Short-decl forms are anti-idiomatic and would be caught by the
-//     `errors.As` second-arg type check (also implemented below). Compensation:
-//     same-archtest secondary form check on errors.As call sites.
+//  2. Type alias `type myNetErr = net.Error; var x myNetErr`: detected via
+//     `types.Unalias` in `isNetErrorTypeExpr` and
+//     `isExprStaticallyNetError`. Reverse fixture `forbiddenAliasNetError`
+//     verifies the path catches the alias declaration. Compensation:
+//     types.Unalias + reverse fixture.
+//  3. Short-decl `x := someFunc()` whose type is net.Error: very rare in
+//     practice; the canonical Go pattern is `var x net.Error` zero-value-
+//     then-As. The narrow-form detector (`scanErrorsAsNetSubtypeNarrow`)
+//     scans every `errors.As(_, &x)` call regardless of declaration form,
+//     so short-decl narrow forms (`x := (*net.OpError)(nil); errors.As(...)`)
+//     would still be caught. Pure interface short-decl is functionally
+//     dead code (zero value of interface = nil) and not a real bypass.
+//     Compensation: errors.As-callsite type check.
 //  4. Body-scope detector that bypasses enclosing function (e.g., closure
 //     captured `net.Error` from outer scope): the declaration site is what we
 //     scan; the enclosing function name is captured via positional containment.
 //     A closure assigning into an outer `var netErr net.Error` would still be
 //     anchored to the outer function's declaration. Compensation: positional
 //     enclosing-func scan locks the declaration site, not the assignment site.
+//  5. `errors.As` callee bypass (alternative function with the same shape
+//     that traverses the chain similarly): the positive scan resolves the
+//     callee via `*types.Info` to stdlib "errors".As exactly; a fork or
+//     wrapper would not satisfy the positive check, forcing the regression
+//     RED. The negative scans on the helper body still trigger on
+//     `.Timeout()` / `*net.X` regardless of where the call originates.
 //
 // Reverse self-check: TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern
 // loads tools/archtest/internal/nettransientfunnelfixture/ via
@@ -135,7 +156,10 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01(t *testing.T) {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
-		return scanNetErrorDeclarations(p, allowed)
+		var ds []Diagnostic
+		ds = append(ds, scanNetErrorDeclarations(p, allowed)...)
+		ds = append(ds, scanErrorsAsNetSubtypeNarrow(p, allowed)...)
+		return ds
 	})
 	Report(t, "ADAPTER-NET-TRANSIENT-FUNNEL-01", diags)
 }
@@ -178,9 +202,10 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 		fixturePkgPath: {"allowedSite": {}},
 	}
 
-	// Allowlist detector: 3 RED expected (forbiddenSite + regressedHelperTimeout
-	// + regressedHelperNarrow all declare `var n net.Error` outside the
-	// fixture-local allowlist).
+	// Allowlist detector: 4 RED expected — forbiddenSite +
+	// regressedHelperTimeout + regressedHelperNarrow + forbiddenAliasNetError
+	// (the last one uses `type myNetErr = net.Error`, verifying the
+	// types.Unalias resolution path; without Unalias it slips past).
 	allowlistDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{fixturePattern},
 		func(p *Pass) []Diagnostic {
@@ -196,10 +221,10 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	for _, d := range allowlistDiags {
 		t.Logf("allowlist: %s", d.Message)
 	}
-	require.Len(t, allowlistDiags, 3,
-		"fixture allowlist detector must yield exactly 3 RED sites "+
-			"(forbiddenSite + regressedHelperTimeout + regressedHelperNarrow); "+
-			"allowedSite must NOT be flagged")
+	require.Len(t, allowlistDiags, 4,
+		"fixture allowlist detector must yield exactly 4 RED sites "+
+			"(forbiddenSite + regressedHelperTimeout + regressedHelperNarrow + "+
+			"forbiddenAliasNetError); allowedSite must NOT be flagged")
 	joined := ""
 	for _, d := range allowlistDiags {
 		joined += d.Message + "\n"
@@ -207,7 +232,62 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 	assert.Contains(t, joined, "forbiddenSite")
 	assert.Contains(t, joined, "regressedHelperTimeout")
 	assert.Contains(t, joined, "regressedHelperNarrow")
+	assert.Contains(t, joined, "forbiddenAliasNetError")
 	assert.NotContains(t, joined, "allowedSite")
+
+	// Narrow-form detector (scanErrorsAsNetSubtypeNarrow): 2 RED expected —
+	// regressedHelperNarrow (contains `var op *net.OpError; errors.As(err, &op)`)
+	// + forbiddenOpErrorNarrow (same shape). The function-name match excludes
+	// allowedSite (no narrow form) and forbiddenSite (no narrow form).
+	narrowFormDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{fixturePattern},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			if p.Pkg.Path() != fixturePkgPath {
+				return nil
+			}
+			return scanErrorsAsNetSubtypeNarrow(p, fixtureAllowed)
+		})
+	for _, d := range narrowFormDiags {
+		t.Logf("narrow-form: %s", d.Message)
+	}
+	require.Len(t, narrowFormDiags, 2,
+		"narrow-form detector must yield exactly 2 RED sites "+
+			"(regressedHelperNarrow + forbiddenOpErrorNarrow); both contain "+
+			"`var op *net.OpError; errors.As(err, &op)` outside the allowlist")
+	joinedNarrow := ""
+	for _, d := range narrowFormDiags {
+		joinedNarrow += d.Message + "\n"
+	}
+	assert.Contains(t, joinedNarrow, "regressedHelperNarrow")
+	assert.Contains(t, joinedNarrow, "forbiddenOpErrorNarrow")
+
+	// Positive helper-form check: empty-body regressions must be reported.
+	// scanHelperPositiveErrorsAs requires the named function body to contain
+	// at least one `errors.As(err, &netErrVar)` call with the var typed
+	// net.Error; absence is RED.
+	for _, regressed := range []string{"regressedHelperEmptyFalse", "regressedHelperEmptyTrue"} {
+		regressed := regressed
+		emptyDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
+			[]string{fixturePattern},
+			func(p *Pass) []Diagnostic {
+				if p.Pkg == nil || p.TypesInfo == nil {
+					return nil
+				}
+				if p.Pkg.Path() != fixturePkgPath {
+					return nil
+				}
+				return scanHelperFormViolations(p, regressed)
+			})
+		for _, d := range emptyDiags {
+			t.Logf("helper-form positive %s: %s", regressed, d.Message)
+		}
+		require.NotEmpty(t, emptyDiags,
+			"positive shape check must flag empty/stub body for "+regressed+
+				" — body must contain canonical `errors.As(err, &netErrVar)`")
+	}
 
 	// Helper-form detector: targeting the synthetic "regressedHelperTimeout"
 	// function name; expect 1 RED diag (Timeout SelectorExpr present).
@@ -353,16 +433,27 @@ func scanNetErrorDeclarations(p *Pass, allowlist map[string]map[string]struct{})
 	return ds
 }
 
-// scanHelperFormViolations reports every Timeout() SelectorExpr and every
-// narrowing type-assertion (*net.OpError / *net.DNSError) inside the body
-// of the funcName function declared in p. The canonical form is:
+// scanHelperFormViolations enforces TRANSIENT-NET-HELPER-FORM-01 on the body
+// of the funcName function. The canonical form is:
 //
 //	var n net.Error
 //	return errors.As(err, &n)
 //
-// Any presence of `.Timeout()`, `*net.OpError`, or `*net.DNSError` inside
-// the body is RED — the helper must classify by net.Error interface
-// membership alone.
+// (with a leading `*url.Error` unwrap permitted, per the helper's documented
+// shape — see pkg/errcode.IsTransientNet godoc).
+//
+// Three checks:
+//
+//  1. Positive shape — body MUST contain at least one CallExpr resolving to
+//     stdlib errors.As whose second argument is `&<ident>` where the ident's
+//     static type is the net.Error interface. Absence → RED (catches empty
+//     stubs like `return false` / `return true` that would silently disable
+//     the helper).
+//  2. Timeout()-filter denylist — `.Timeout()` SelectorExpr resolving to the
+//     net.Error method is RED (would narrow transient classification).
+//  3. net.* concrete-subtype narrowing denylist — `*net.X` StarExpr where X
+//     is not the Error interface is RED (e.g. *net.OpError / *net.DNSError;
+//     classification must key on the interface, not a specific subtype).
 func scanHelperFormViolations(p *Pass, funcName string) []Diagnostic {
 	var ds []Diagnostic
 	for _, file := range p.Files {
@@ -370,6 +461,7 @@ func scanHelperFormViolations(p *Pass, funcName string) []Diagnostic {
 			if fd.Name == nil || fd.Name.Name != funcName || fd.Body == nil {
 				return
 			}
+			ds = append(ds, scanHelperPositiveErrorsAs(p, file, fd, funcName)...)
 			EachInSubtree[ast.SelectorExpr](fd.Body, func(sel *ast.SelectorExpr) {
 				if sel.Sel == nil {
 					return
@@ -408,18 +500,193 @@ func scanHelperFormViolations(p *Pass, funcName string) []Diagnostic {
 	return ds
 }
 
-// isNetErrorTypeExpr reports whether typeExpr resolves to the stdlib
-// net.Error interface type. Handles both direct `net.Error` SelectorExpr and
-// any alias whose underlying type is net.Error.
+// scanHelperPositiveErrorsAs implements TRANSIENT-NET-HELPER-FORM-01 positive
+// shape check (#1 in scanHelperFormViolations docs): the body must contain
+// at least one stdlib errors.As CallExpr whose second argument is `&<ident>`
+// with the ident's static type resolving to the net.Error interface.
 //
-// Go alias semantics guarantee that TypeOf on an aliased net.Error still
-// returns *types.Named (alias transparency); the !ok branch is unreachable
-// for alias declarations (blind spot #2 — compensated by Go type system).
+// Returns a diagnostic if absent. An empty body, `return false`, or any body
+// missing this canonical call site fails the check — closing the gap where
+// negative-only scans would silently accept a stub that disables transient
+// classification.
+func scanHelperPositiveErrorsAs(p *Pass, file *ast.File, fd *ast.FuncDecl, funcName string) []Diagnostic {
+	found := false
+	EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		if !isErrorsAsCall(p.TypesInfo, call) {
+			return
+		}
+		if len(call.Args) < 2 {
+			return
+		}
+		if isAddressOfNetErrorIdent(p.TypesInfo, call.Args[1]) {
+			found = true
+		}
+	})
+	if found {
+		return nil
+	}
+	return []Diagnostic{{
+		Rel:  p.Rel(file),
+		Line: p.Fset.Position(fd.Pos()).Line,
+		Message: fmt.Sprintf(
+			"TRANSIENT-NET-HELPER-FORM-01: %s body must contain a canonical "+
+				"`errors.As(err, &netErrVar)` call where netErrVar is typed "+
+				"net.Error — empty / stub bodies (return false / return true) "+
+				"are RED (positive shape lock; closes the negative-only-scan gap)",
+			funcName,
+		),
+	}}
+}
+
+// scanErrorsAsNetSubtypeNarrow reports every `errors.As(err, &op)` CallExpr
+// in production code whose enclosing function is OUTSIDE the allowlist AND
+// whose second argument has a static type of `**net.X` (i.e. `&op` where
+// `op : *net.X` and X is a concrete net.* subtype like OpError / DNSError /
+// AddrError). This catches the narrowing-bypass form:
+//
+//	var op *net.OpError
+//	if errors.As(err, &op) { ... transient-decision ... }
+//
+// — equivalent to declaring `var n net.Error` (which the existing detector
+// flags) but using a concrete subtype to slip past the
+// `var x net.Error`-only check. Locking this form makes
+// ADAPTER-NET-TRANSIENT-FUNNEL-01 complete in the downstream direction.
+func scanErrorsAsNetSubtypeNarrow(p *Pass, allowlist map[string]map[string]struct{}) []Diagnostic {
+	allowed, tracked := allowlist[p.Pkg.Path()]
+	if !tracked {
+		if !inEnforcementScope(p.Pkg.Path()) {
+			return nil
+		}
+		allowed = map[string]struct{}{}
+	}
+	var ds []Diagnostic
+	for _, file := range p.Files {
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			if !isErrorsAsCall(p.TypesInfo, call) {
+				return
+			}
+			if len(call.Args) < 2 {
+				return
+			}
+			subtype, isNarrow := addressOfNetSubtypeName(p.TypesInfo, call.Args[1])
+			if !isNarrow {
+				return
+			}
+			fn := enclosingFuncName(file, call.Pos())
+			if fn == "" {
+				fn = "<package scope>"
+			}
+			if _, ok := allowed[fn]; ok {
+				return
+			}
+			ds = append(ds, Diagnostic{
+				Rel:  p.Rel(file),
+				Line: p.Fset.Position(call.Pos()).Line,
+				Message: fmt.Sprintf(
+					"`errors.As(err, &<*net.%s>)` narrowing form in %s.%s is "+
+						"outside the ADAPTER-NET-TRANSIENT-FUNNEL-01 allowlist; "+
+						"declaring `var x *net.%s; errors.As(err, &x)` for a "+
+						"transient/permanent decision is equivalent to "+
+						"`var n net.Error; errors.As(err, &n)` with a concrete "+
+						"subtype — route the decision through "+
+						"errcode.IsTransientNet, or extend the allowlist + ADR "+
+						"202605161800 in the same PR",
+					subtype, p.Pkg.Name(), fn, subtype,
+				),
+			})
+		})
+	}
+	return ds
+}
+
+// isErrorsAsCall reports whether call's callee resolves (via *types.Info) to
+// stdlib errors.As. Robust to import aliases (`stderrors "errors"`) and dot
+// imports.
+func isErrorsAsCall(info *types.Info, call *ast.CallExpr) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+	if !ok {
+		return false
+	}
+	return pkgPath == "errors" && name == "As"
+}
+
+// isAddressOfNetErrorIdent reports whether expr is `&<ident>` and ident's
+// static type is the net.Error interface (after types.Unalias).
+func isAddressOfNetErrorIdent(info *types.Info, expr ast.Expr) bool {
+	unary, ok := expr.(*ast.UnaryExpr)
+	if !ok || unary.Op != token.AND {
+		return false
+	}
+	return isExprStaticallyNetError(info, unary.X)
+}
+
+// isExprStaticallyNetError reports whether expr's static type resolves to
+// the net.Error interface. Walks through types.Unalias to handle
+// `type myNetErr = net.Error` alias declarations.
+func isExprStaticallyNetError(info *types.Info, expr ast.Expr) bool {
+	t := info.TypeOf(expr)
+	if t == nil {
+		return false
+	}
+	t = types.Unalias(t)
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	if named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Pkg().Path() == "net" && named.Obj().Name() == "Error"
+}
+
+// addressOfNetSubtypeName reports whether expr is `&<ident>` where ident's
+// static type is `*net.X` for some concrete X != "Error". On match, returns
+// the subtype name (e.g. "OpError" / "DNSError" / "AddrError"). Alias-aware
+// via types.Unalias.
+func addressOfNetSubtypeName(info *types.Info, expr ast.Expr) (string, bool) {
+	unary, ok := expr.(*ast.UnaryExpr)
+	if !ok || unary.Op != token.AND {
+		return "", false
+	}
+	t := info.TypeOf(unary.X)
+	if t == nil {
+		return "", false
+	}
+	t = types.Unalias(t)
+	ptr, ok := t.(*types.Pointer)
+	if !ok {
+		return "", false
+	}
+	elem := types.Unalias(ptr.Elem())
+	named, ok := elem.(*types.Named)
+	if !ok {
+		return "", false
+	}
+	if named.Obj() == nil || named.Obj().Pkg() == nil {
+		return "", false
+	}
+	if named.Obj().Pkg().Path() != "net" {
+		return "", false
+	}
+	if named.Obj().Name() == "Error" {
+		return "", false
+	}
+	return named.Obj().Name(), true
+}
+
+// isNetErrorTypeExpr reports whether typeExpr resolves to the stdlib
+// net.Error interface type. Uses types.Unalias to handle the
+// `type myNetErr = net.Error` alias declaration form (Go 1.22+ default;
+// without Unalias, `t.(*types.Named)` may fail for *types.Alias values).
 func isNetErrorTypeExpr(info *types.Info, typeExpr ast.Expr) bool {
 	t := info.TypeOf(typeExpr)
 	if t == nil {
 		return false
 	}
+	t = types.Unalias(t)
 	named, ok := t.(*types.Named)
 	if !ok {
 		return false
