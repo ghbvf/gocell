@@ -1,0 +1,1 @@
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/errors_join_red/usage.go:12: cellgen: error constructor outside errcode funnel: callee=Join from errors

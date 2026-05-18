@@ -1,5 +1,6 @@
 // Package fmt_errorf_red verifies F1: fmt.Errorf (normal SelectorExpr,
-// canonical import) is caught by STEP 3 (callee.Pkg = "fmt" ≠ errcode).
+// canonical import) is caught by STEP 2 — (fmt, Errorf) is in the
+// cellgenErrConstructorBlacklist.
 // 1 violation expected.
 package fmt_errorf_red
 

@@ -248,6 +248,115 @@ func TestCellgenErrcodeFunnel(t *testing.T) {
 	}
 }
 
+// TestCellgenErrcodeFunnelBlindSpotsAbsent enforces the runtime side of
+// charter §"工具选定后强制盲区自检" (`.claude/rules/gocell/ai-collab.md`)
+// — Hard/Medium rule shapes require that each declared blind spot has a
+// **runtime self-check** asserting the spot is empty in production AST,
+// not just a documentation claim. Without this test, a future cellgen
+// change introducing one of these patterns would slip through CI.
+//
+// Blind spots asserted absent in production cellgen (mirrors ADR
+// docs/architecture/202605171200-adr-cellgen-errcode-funnel-mechanism.md §D5):
+//
+//  1. CompositeLit of a non-errcode type whose method set implements
+//     the error interface — e.g., `return &myErr{}` where myErr has
+//     `func (m *myErr) Error() string`. This is the only documented
+//     escape under current Path A (closed only by Path C-full
+//     errcode.Error field privatization). Asserting 0 occurrences
+//     here freezes the "currently 0" claim in CI.
+//  2. reflect.MakeFunc / reflect.Value.Call(...).Interface().(error)
+//     dynamic error construction — escapes static AST resolution.
+//     Asserting these imports/calls are 0 in cellgen.
+//
+// If a future cellgen change legitimately introduces one of these
+// patterns, the trigger is a same-PR ADR §D5/§D7 update + this test
+// adjustment, NOT a silent expansion.
+func TestCellgenErrcodeFunnelBlindSpotsAbsent(t *testing.T) {
+	t.Parallel()
+
+	var compositeLitErrs []string
+	var reflectCalls []string
+
+	_ = RunTyped(t, TypedOpts{},
+		[]string{"./tools/codegen/cellgen/..."},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+
+				// Blind spot 1: CompositeLit whose type implements error.
+				EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
+					if lit.Type == nil {
+						return
+					}
+					t := p.TypesInfo.TypeOf(lit.Type)
+					if t == nil {
+						return
+					}
+					// Check both the type and a pointer-to-type implement error
+					// (composite literals are typically followed by &-take to
+					// produce *T, and pointer receiver Error() methods are
+					// only visible on *T).
+					if typesutil.ImplementsInterface(t, errorInterface) {
+						compositeLitErrs = append(compositeLitErrs,
+							fmt.Sprintf("%s:%d: %s", rel,
+								p.Fset.Position(lit.Pos()).Line, t.String()))
+					}
+				})
+
+				// Blind spot 2: reflect.MakeFunc / reflect.Value.Call.
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return
+					}
+					obj := p.TypesInfo.Uses[sel.Sel]
+					fn, isFunc := obj.(*types.Func)
+					if !isFunc || fn.Pkg() == nil || fn.Pkg().Path() != "reflect" {
+						return
+					}
+					if fn.Name() != "MakeFunc" {
+						return
+					}
+					reflectCalls = append(reflectCalls,
+						fmt.Sprintf("%s:%d: reflect.%s",
+							rel, p.Fset.Position(call.Pos()).Line, fn.Name()))
+				})
+			}
+			return nil
+		})
+
+	if len(compositeLitErrs) > 0 {
+		t.Logf("%s blind-spot: %d composite literal(s) implementing error in cellgen:",
+			ruleCellgenErrcodeFunnel01, len(compositeLitErrs))
+		for _, v := range compositeLitErrs {
+			t.Logf("  %s", v)
+		}
+		t.Fatalf("%s: composite-literal error construction detected in cellgen. "+
+			"Per ADR §D5/§D7, this is the documented blind spot of Path A "+
+			"(closed only by Path C-full errcode.Error field privatization). "+
+			"Either remove the construction or trigger the Path C-full upgrade.",
+			ruleCellgenErrcodeFunnel01)
+	}
+	if len(reflectCalls) > 0 {
+		t.Logf("%s blind-spot: %d reflect.MakeFunc call(s) in cellgen:",
+			ruleCellgenErrcodeFunnel01, len(reflectCalls))
+		for _, v := range reflectCalls {
+			t.Logf("  %s", v)
+		}
+		t.Fatalf("%s: reflect.MakeFunc detected in cellgen. Reflect-based "+
+			"dynamic error construction escapes static AST resolution. "+
+			"Per ADR §D5, this is a declared blind spot — extend the rule "+
+			"or add a reflect import ban before merging.",
+			ruleCellgenErrcodeFunnel01)
+	}
+}
+
 // TestCellgenErrcodeFunnelScannerFixtures verifies the
 // CELLGEN-ERRCODE-FUNNEL-01 rule logic against static fixture packages
 // under tools/archtest/testdata/cellgen_errcode_funnel_fixtures/. Each
@@ -275,6 +384,7 @@ func TestCellgenErrcodeFunnelScannerFixtures(t *testing.T) {
 		"fmt_dot_import_errorf_red",
 		"errors_new_red",
 		"errors_dot_import_new_red",
+		"errors_join_red",
 		"local_wrapper_red",
 		"function_valued_var_red",
 		"errcode_assertion_green",
@@ -295,6 +405,9 @@ func TestCellgenErrcodeFunnelScannerFixtures(t *testing.T) {
 				}
 				for _, file := range p.Files {
 					rel := p.Rel(file)
+					if strings.HasSuffix(rel, "_test.go") {
+						continue // mirror production scan; fixtures shouldn't include _test.go but be defensive
+					}
 					for _, v := range scanFileForCellgenErrcodeViolations(p, file, rel) {
 						diags = append(diags, Diagnostic{
 							Rel:     v.File,

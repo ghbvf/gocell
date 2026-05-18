@@ -1,1 +1,1 @@
-tools/archtest/testdata/cellgen_errcode_funnel_fixtures/fmt_errorf_red/usage.go:9: cellgen: error constructor outside errcode funnel: callee=Errorf from fmt
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/fmt_errorf_red/usage.go:10: cellgen: error constructor outside errcode funnel: callee=Errorf from fmt

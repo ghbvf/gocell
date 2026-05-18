@@ -16,11 +16,13 @@
 
 `tools/codegen/cellgen/` 包负责生成 cell/slice scaffold 与运行时元数据 literal。PR #453（`refactor(cellgen): PR442 follow-up — housekeeping (cellgen errcode + CI + docs)`，merged 2026-05-11）完成 cellgen 全包 errcode 迁移：50+ 处 error 构造均走 `errcode.New / errcode.Wrap / errcode.Assertion`，0 处 `fmt.Errorf / errors.New / pkg/errors`。（备注：backlog `cap-14-tooling.md:44` 原文写「PR#557」是事实错误，本 ADR 以 GitHub merged PR 号为准）
 
-当前 enforcement archtest `CELLGEN-SCAFFOLD-ERRCODE-FUNNEL-01`（`tools/archtest/cellgen_errcode_funnel_test.go` L57-71）用纯 AST identifier 匹配（`SelectorExpr.X.Name == "fmt" && Sel.Name == "Errorf"`）单点禁 `fmt.Errorf`：
+（**历史叙述**——下述描述是 spike 编写时的现状；P5.1 落地后该 archtest 已重命名为 `CELLGEN-ERRCODE-FUNNEL-01` 并完全重写为 types.Info-driven 黑名单 form uniqueness。本段保留为决策上下文，新规则形态见 §D5。）
+
+当时 enforcement archtest `CELLGEN-SCAFFOLD-ERRCODE-FUNNEL-01`（旧版 `tools/archtest/cellgen_errcode_funnel_test.go`）用纯 AST identifier 匹配（`SelectorExpr.X.Name == "fmt" && Sel.Name == "Errorf"`）单点禁 `fmt.Errorf`：
 
 - 未使用 `types.Info`；alias import (`fmtx "fmt"`)、dot import (`. "fmt"`)、re-export 均可绕过
 - 不覆盖 `errors.New` / 第三方 errors lib / cellgen 包内自建 error wrapper（如 `func newErr(msg) error { return errors.New(msg) }`）等其他 escape route
-- 自我评级 Medium（文件头 godoc L11-14 明示「Medium scanner AST + concrete-package allowlist」）
+- 自我评级 Medium（旧版文件头 godoc 明示「Medium scanner AST + concrete-package allowlist」）
 
 backlog `cap-14-tooling.md` L44 提出两个 Hard 升级候选：
 
@@ -153,8 +155,13 @@ STEP 3 — function-valued *types.Var 拒绝：
 - **复合字面量构造 `&myErr{}`**：`type myErr struct{ msg string }; func (e *myErr) Error() string { return e.msg }; return &myErr{}` 形态。CompositeLit 节点非 CallExpr，本 archtest 不扫。cellgen 当前无此模式（grep `func.*Error\(\) string` 在 cellgen 非 _test.go 文件中 0 命中）。终极 Hard 化需 Path C-full 字段私有化重构 errcode.Error → backlog `CELLGEN-ERRCODE-FUNNEL-HARDEN-PATH-C-FULL`（详 §D7）。
 - **反射动态构造**：`reflect.MakeFunc` / `reflect.Value.Call(...).Interface().(error)` 在静态 AST 不可解析。cellgen 当前 0 处（grep 验证）；未来引入反射 codegen，加 `reflect` 包 import ban 关闭。
 - **build-tag 隔离 file**：cellgen 现无 `//go:build` 文件（grep 验证），由 `ARCHTEST-VERIFY-COVERAGE-01` 守护 archtest 注册一致性。
-- **interface method call 返回单 error**：如 `var x SomeIface; x.Method() error`。cellgen 当前 0 处；若未来出现，STEP 1.a 解析到 `*types.Func`（interface method），(Pkg.Path, Name) 不在黑名单则不报——与合法 stdlib `os.RemoveAll` 等 operation 同处理，Hard 性质不受影响。
-- **新构造 lib 未登记**：AI 通过 `import "alt/errlib"` 引入并 `alt.NewErr(...)` 构造。`alt/errlib` 不在 depguard deny 项即编译通过，且不在 archtest 黑名单。**这是 Path A 的本质盲区**（OSS 业界普遍接受）。Trigger-based mitigation：发现新 escape 同 PR 加 depguard + 黑名单 entry。
+- **新构造 lib 未登记**：AI 通过 `import "alt/errlib"` 引入并 `alt.NewErr(...)` 构造。`alt/errlib` 不在 depguard deny 项即编译通过，且不在 archtest 黑名单。**这是 Path A 的本质盲区**（OSS 业界普遍接受）。Trigger-based mitigation：发现新 escape 同 PR 加 depguard + 黑名单 entry + RED fixture。
+- **function-valued var 误抦（false positive）潜在面**：STEP 3 拒绝任何 `*types.Var` callee 且签名返回单一 error。当前 cellgen 0 处此模式（grep `var \w+ = .*` 中 RHS 是返回 error 的 func 均无命中），所以无误抦。但若未来引入合法 passthrough var（如 `var transform = pathsafe.Validate; transform(...)`，`pathsafe.Validate` 返回 error 但非"构造"），STEP 3 会误抦。Mitigation：保留作"设计已知误抦面"，未来出现合法 var 时考虑：(a) 加 var-allowlist 显式登记，或 (b) 改 inline call。
+
+**设计意图确认**（非盲区）：
+
+- **interface method call 返回单 error**：如 `var x SomeIface; x.Method() error`。STEP 1.a 解析到 `*types.Func`（interface method），(Pkg.Path, Name) 不在黑名单则不报——与合法 stdlib `os.RemoveAll` 等 operation 同处理。**这是设计意图**：cellgen 调用接口方法返回 error 是合法 operation 转发，不是构造点。Hard 性质不受影响。
+- **`golang.org/x/sync/errgroup` 不在 depguard deny 列表**：`errgroup.Group.Wait() error` 与 `errgroup.Group.Go(func() error)` 返回的是已存在 goroutine 错误的传播，不是新构造。`errgroup` 不在 cellgen `cellgen-error-libs` ban 列表是正确选择（与 stdlib `os/template` operation 同理）。同样 `cellgen` 现也未 import errgroup（grep 验证）。
 
 ### D6. AI-rebust 评级 = Hard（OSS 业界上限，存在显式登记盲区）
 
@@ -198,7 +205,7 @@ STEP 3 — function-valued *types.Var 拒绝：
 - (a') depguard package-level 禁 fmt import — D2（破坏 literal_printer.go）
 - (b) typed Error return wrapper — D3（无运行时价值，违反优雅简洁）
 - (c) 黑名单单点禁 + type-aware 升级 — D4（仅防 fmt.Errorf 单形）
-- ~~(c'') 原稿白名单 form uniqueness（"callee 返回含 error" 触发判定）~~ — 实施期被发现 STEP 2 过宽（误抦 `os.RemoveAll` / `template.Execute` 等 operation），改为 D5 Path A 黑名单。OSS 业界（K8s/Kratos/go-zero）调研证明 type-system Hard 全包性 enforcement 不可达；Path A 是实测上限
+- ~~(c'') 原稿 STEP 2 设计（"callee 返回含 error" 触发判定）~~ — **修正非否决**：实施期发现 STEP 2 过宽（误抦 `os.RemoveAll` / `template.Execute` 等 operation），**已修正为 D5 Path A 黑名单形式**（保留 (c'') 形态唯一性 + 对偶 PANIC-REGISTERED-01 的设计目标，仅改 STEP 2 触发判定从"返回 error"到"已知构造函数黑名单匹配"）。OSS 业界（K8s/Kratos/go-zero）调研证明 type-system Hard 全包性 enforcement 不可达；Path A 是实测上限。注意：D4 否决的 (c) 是另一方案——"仅扩 fmt.Errorf 单点到 type-aware 升级"，与 (c'') 完全不同
 - Path C-lite（cellgen funcs return *errcode.Error 但不私有化字段）— 被 errcode.Error exported 字段卡住，与 Path A 同 Hard 等级但额外 5-8h 成本，无收益
 - Path C-full — 见 §D7，超出 P5.1 范围，backlog 登记
 

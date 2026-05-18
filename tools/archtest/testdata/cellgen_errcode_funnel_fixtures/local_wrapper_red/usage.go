@@ -3,10 +3,10 @@
 // escape from a simple "ban fmt.Errorf" rule. The Hard guarantee is
 // unavoidable inspection of the inner construction:
 //
-//   - Inner errors.New: callee.Pkg = "errors" ≠ same ≠ errcode → STEP 3
-//     fails at the wrapper definition body.
-//   - Outer newErr caller: callee.Pkg = this package = self → same-package
-//     forwarding, not flagged at the call site. The wrapper's body is
+//   - Inner errors.New: STEP 2 fails at the wrapper definition body —
+//     (errors, New) is in the cellgenErrConstructorBlacklist.
+//   - Outer newErr caller: callee resolves to a same-package func; not in
+//     blacklist → not flagged at the call site. The wrapper's body is
 //     itself scanned, so the construction grounds out at the inner call.
 //
 // 1 violation expected (wrapper body errors.New). A chain of N
