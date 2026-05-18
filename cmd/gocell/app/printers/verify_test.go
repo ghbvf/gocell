@@ -68,6 +68,21 @@ var verifyGoldenCases = []struct {
 		},
 	},
 	{
+		name: "skipped_only",
+		result: &verify.VerifyResult{
+			TargetID: "accesscore/sessions",
+			Passed:   false,
+			Results: []verify.TestResult{
+				{Name: "TestStubbed", Passed: false, SkippedOnly: true},
+			},
+			Errors: []error{errcode.New(
+				errcode.KindNotFound,
+				errcode.ErrZeroTestMatch,
+				"pattern matched only skipped tests — replace stubs with executable checks",
+			)},
+		},
+	},
+	{
 		name: "multi_test_mixed",
 		result: &verify.VerifyResult{
 			TargetID: "accesscore/all",
@@ -187,6 +202,8 @@ func TestVerifyJSONPrinter_EmitsSkippedOnlyAndStructuredErrors(t *testing.T) {
 	require.Len(t, doc.Results, 1)
 	require.True(t, doc.Results[0].SkippedOnly)
 	require.False(t, doc.Results[0].ZeroMatch)
+	require.False(t, doc.Results[0].Passed,
+		"SkippedOnly must force Passed=false (recordResult contract)")
 	require.Len(t, doc.Errors, 1)
 	require.Equal(t, errcode.ErrZeroTestMatch, doc.Errors[0].Code)
 	require.Equal(t, "pattern matched only skipped tests — replace stubs with executable checks", doc.Errors[0].Message)

@@ -102,7 +102,7 @@
 | NOLINT-AUDIT-01 | **Nolint audit** — 现状: 全仓 101 处 nolint 含 errcheck 类豁免；修复: 审查 | arch-opt | Cx2 | 🟡 | — | 全仓 *.go | NOLINT-AUDIT-01 |
 | ADR-INDEX-01 | **ADR index** — 现状: 缺 ADR 索引；修复: 生成 docs/architecture/INDEX.md | doc | Cx1 | 🟡 | — | `docs/architecture/` | ADR-INDEX-01 |
 | ADR-DATE-CONSISTENCY-CHECK | **ADR 文件名日期 vs 内容 Date 一致性** — 现状: PR#404 ADR `202605061800-...md` 文件内 Date: 2026-05-07（1 天误差）；修复: archtest 校验 `docs/architecture/yyyymmddHHmm-*.md` 文件名前缀日期 = 内容 `Date:` 字段日期 | test | P3/Cx1 | 🟡 | — | `tools/archtest/` + ADR 命名约定 | PR#404 F6 |
-| G-14 | **VERIFY-PRINTER-ZEROMATCH-WARN** — text printer 对 `TestResult.ZeroMatch=true` 无警告，与 `[PASS]` + 实际跑 N 个测试输出完全相同；修复: `printTestResults` 检测 `tr.ZeroMatch` 输出 `[WARN] %s — no tests matched -run pattern` | bug | P1/Cx1 | 🟡 | — | `cmd/gocell/app/printers/verify.go` | 030 §3 G-14 |
+| G-14 | **VERIFY-PRINTER-ZEROMATCH-WARN** — text printer 对 `TestResult.ZeroMatch=true` 无警告，与 `[PASS]` + 实际跑 N 个测试输出完全相同；修复: `printTestResults` 检测 `tr.ZeroMatch` 输出 `[WARN] %s — no tests matched -run pattern`，同步对称修 `SkippedOnly` | bug | P1/Cx1 | ✅ | closed by PR #580 | `cmd/gocell/app/printers/verify.go` | 030 §3 G-14 |
 | F-07 | **SYSML-VIEW-CODEGEN** — 5 张 SysML 图（BDD/IBD/用例/活动/状态机）有元数据天然映射但无生成器；修复: 新建 `tools/sysmlgen/` → `generated/sysml/<view>.{puml,mermaid}` + CI step `make sysml-verify` | feat | P3/Cx3 | 🟡 | F-06 落地后 | `tools/sysmlgen/` (新) + `generated/sysml/` (新) | 030 §3 F-07 |
 
 ## 14.6 杂项 / PR FU / T-*
