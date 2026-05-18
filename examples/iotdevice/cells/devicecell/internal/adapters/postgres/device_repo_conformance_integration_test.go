@@ -51,6 +51,10 @@ func TestPGDeviceRepository_Conformance(t *testing.T) {
 // container in t.Cleanup.
 func setupSharedDeviceRepoPG(t *testing.T) (*adapterpg.Pool, *adapterpg.TxManager, func()) {
 	t.Helper()
+	// Required by archtest TestTestcontainerHelpersRequireDockerBeforeRun:
+	// the same function that calls tcpostgres.Run must also call RequireDocker
+	// (RequireDocker is idempotent — caller already invoking is harmless).
+	testutil.RequireDocker(t)
 	ctx := context.Background()
 
 	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
