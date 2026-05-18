@@ -31,6 +31,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -140,6 +141,9 @@ func (s *walkthroughServer) Cleanup(t *testing.T) {
 
 func buildWalkthroughServer(t *testing.T, capHandler *capturingHandler) *walkthroughServer {
 	t.Helper()
+	if os.Getenv(ssobffDatabaseURLEnv) == "" {
+		t.Skipf("walkthrough test requires %s (PG DSN). Start PG via `docker compose -f examples/ssobff/docker-compose.yml up -d` and export %s=postgres://gocell:$GOCELL_EXAMPLE_POSTGRES_PASSWORD@localhost:5432/sso_bff?sslmode=disable.", ssobffDatabaseURLEnv, ssobffDatabaseURLEnv)
+	}
 
 	logger := slog.New(capHandler)
 	previousDefaultLogger := slog.Default()

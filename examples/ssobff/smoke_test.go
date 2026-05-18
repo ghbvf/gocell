@@ -71,6 +71,11 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 		t.Skip("smoke test relies on POSIX signals; ssobff has no Windows production target")
 	}
 
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("smoke test requires DATABASE_URL; set when running examples-smoke against a PG fixture (CI sets this automatically)")
+	}
+
 	tmp := t.TempDir()
 	binPath := filepath.Join(tmp, "ssobff-smoke")
 	stateDir := filepath.Join(tmp, "state")
@@ -100,6 +105,7 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 	logs := newSyncBuffer()
 	cmd := exec.Command(binPath)
 	cmd.Env = append(filteredEnv(),
+		"DATABASE_URL="+dbURL,
 		"GOCELL_STATE_DIR="+stateDir,
 		"GOCELL_SSOBFF_PRIMARY_ADDR="+smokePrimaryAddr,
 		"GOCELL_SSOBFF_INTERNAL_ADDR="+smokeInternalAddr,

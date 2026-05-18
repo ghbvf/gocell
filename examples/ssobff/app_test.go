@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"testing"
 
@@ -21,7 +22,22 @@ func TestNewSSOBFFAppFailsFastWithoutServiceSecret(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), ssobffServiceKeyEnv), "error must name missing env var: %v", err)
 }
 
+func TestNewSSOBFFAppFailsFastWithoutDatabaseURL(t *testing.T) {
+	t.Setenv(ssobffDatabaseURLEnv, "")
+
+	app, err := NewSSOBFFApp(
+		WithSSOBFFLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+		WithSSOBFFInternalServiceSecret("ssobff-test-service-secret-32b!!!"),
+	)
+	require.Error(t, err)
+	require.Nil(t, app)
+	require.True(t, strings.Contains(err.Error(), ssobffDatabaseURLEnv), "error must name missing env var: %v", err)
+}
+
 func TestNewSSOBFFApp_AcceptsInjectedListeners(t *testing.T) {
+	if os.Getenv(ssobffDatabaseURLEnv) == "" {
+		t.Skipf("%s not set; skipping (requires a real PostgreSQL database)", ssobffDatabaseURLEnv)
+	}
 	primary := newTestListener(t)
 	internal := newTestListener(t)
 	health := newTestListener(t)
