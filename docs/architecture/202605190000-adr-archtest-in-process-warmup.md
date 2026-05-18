@@ -106,6 +106,16 @@ CI 矩阵 16 shard parallel，总 wall = max(各 shard wall) + GHA queue overhea
 
 follow-up 由 backlog `ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01` 跟踪。
 
+### PR #584 落地实测调整（2026-05-19）
+
+PR #584 CI 首次运行 shard 12 触发 slowgate fail：`TestArchtestVerifyCoverage01` 跑 27.14s 跨 20s budget。根因诊断：该 test 跑 1 次 `verify-archtest.sh DRY_RUN` + K=4 次 `LIST_SHARD_TESTS` 子进程，每次子进程独立 `go test -list ./tools/archtest` ≈ 5-6s on GHA → 累积 ~27s。
+
+**与本 PR 的关系**：该 test 的子进程开销与本 PR 的 in-process TestMain 预热**正交**——子进程 cache 独立，TestMain 预热无法摊销子进程 `go test -list`。modulo 重排把 TestArchtestVerifyCoverage01 推进 shard 12 暴露了这条 pre-existing 子进程开销。
+
+**应急处理**：同 PR 把 `TestArchtestVerifyCoverage01` 加进 `tools/slowgate/allowlist.txt`，并加注释明确"subprocess-overhead，不在 TestMain 预热范围"。这条 allowlist 是**结构性必要**而非 cache-miss workaround，不被 `ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01` cleanup wave 覆盖。
+
+**根本修复路径** 由新 backlog `ARCHTEST-VERIFY-COVERAGE-DISPATCH-OPTIMIZE-01` 跟踪：K=4 → K=2 / bash 脚本侧合并 DRY_RUN + LIST_SHARD_TESTS / 用 `go list -test` 一次性拿全集。
+
 ## AI-rebust 评级
 
 - 改造 3 `TAGGROUP-LOOP-FORBIDS-RUNTYPED-01` = typed-function-call funnel **Hard**（对齐 ai-collab.md §"Hard 范本" 第 2 条 panic 范本同构 + staticcheck SA4000 同构）

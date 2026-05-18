@@ -1,3 +1,5 @@
+// INVARIANT: ARCHTEST-TESTMAIN-01
+
 package archtest
 
 import (
