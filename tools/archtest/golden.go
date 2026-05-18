@@ -13,17 +13,25 @@ import (
 
 // updateGolden, when set via `go test ./tools/archtest/... -update`, makes
 // [AssertGolden] (re)write golden files instead of asserting against them.
-// Default false: CI (hack/verify-archtest.sh) always asserts, never updates.
+// Default false: CI (hack/verify-archtest.sh) always asserts, never updates;
+// golden mismatch surfaces as a t.Errorf test failure, not as git diff --exit-code.
 //
 // archtest is a test-only helper library (every entry point takes
 // *testing.T / testing.TB), so this package-scope flag is only ever
 // registered into archtest test binaries — there is no production binary
-// that imports archtest.
+// that imports archtest. Note: if an external test binary independently imports
+// archtest and also registers its own -update flag, the flag package will panic
+// on duplicate registration; archtest's own test binary registers this flag
+// exactly once, which is safe.
 var updateGolden = flag.Bool("update", false,
 	"regenerate archtest golden files instead of asserting against them")
 
 // AssertGolden canonicalizes diags and compares the rule's observed diagnostic
 // set against the golden file at goldenPath.
+//
+// goldenPath must be an absolute path derived from the module root or
+// t.TempDir() (e.g. testdata/<fixture>/diag.golden under the repo root).
+// Relative paths and paths outside the repository are not supported.
 //
 // Canonicalization reuses [scanner.Canonical] — the single source of
 // diagnostic ordering shared with [Report] — so the golden file and a Report
@@ -51,6 +59,15 @@ var updateGolden = flag.Bool("update", false,
 // migration of the remaining wantLines-style fixture tests.
 func AssertGolden(t testing.TB, goldenPath string, diags []Diagnostic) {
 	t.Helper()
+	writeOrAssertGolden(t, goldenPath, diags, *updateGolden)
+}
+
+// writeOrAssertGolden is the testable core of [AssertGolden]. Callers pass
+// update explicitly so tests can exercise the update path without touching the
+// package-global updateGolden flag (which would cause data races with
+// t.Parallel tests that concurrently read *updateGolden).
+func writeOrAssertGolden(t testing.TB, goldenPath string, diags []Diagnostic, update bool) {
+	t.Helper()
 
 	var b strings.Builder
 	for _, d := range scanner.Canonical(diags) {
@@ -58,7 +75,7 @@ func AssertGolden(t testing.TB, goldenPath string, diags []Diagnostic) {
 	}
 	got := b.String()
 
-	if *updateGolden {
+	if update {
 		if err := os.MkdirAll(filepath.Dir(goldenPath), 0o750); err != nil {
 			t.Fatalf("archtest.AssertGolden: mkdir %s: %v", filepath.Dir(goldenPath), err)
 		}

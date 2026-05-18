@@ -32,7 +32,7 @@ PR #557 的解法：引入 `fixturespec.Violation()` typed marker（Hard funnel�
 
 1. 规则 R 在 fixture F 上的实际诊断输出（`Rel:Line:Col Severity RuleID Message` 规范化文本）序列化为签入的 golden artifact（`tools/archtest/testdata/<fixture>/diag.golden`）。
 2. `go test ./tools/archtest/... -update`（典型 golden flag）重生成全部 golden。
-3. CI 走 `bash hack/verify-archtest.sh`，golden 不一致 → `git diff --exit-code` 红。
+3. CI 走 `bash hack/verify-archtest.sh`（默认 `-update=false`，只断言不重写），golden 与规则输出不一致 → `AssertGolden` `t.Errorf` → 对应 shard `go test` 失败 → CI 红。`git diff --exit-code` 形态是 K8s 对标的可选 Medium→Hard 升级路径，**本 PR 未实施**（见 §AI-rebust 评级表 Medium→Hard 路径与 backlog）。
 4. fixture 退化为**纯触发代码**，不再含任何 `fixturespec.Violation()` 手放 marker——期望完全由规则输出派生。
 
 **#557 关系**：PR-A 基于 develop，**取代** #557 的断言形态。`fixturespec.Violation` marker + `FIXTURESPEC-VIOLATION-CALLER-ALLOWLIST-01` / `FIXTURESPEC-COUNT-MATCH-ENFORCED-01` 两个 funnel meta-archtest 在 golden 形态下**无守护对象**（无 marker 可声明），随 #557 一并不落地。#557 应在 PR-A ship 后关闭为 superseded。
@@ -51,7 +51,7 @@ PR #557 的解法：引入 `fixturespec.Violation()` typed marker（Hard funnel�
 
 ### 双源问题辨析（关键，回应 review 质询）
 
-被表征的真值只有一个生成源：**规则逻辑 ⊗ fixture 源码**。其余皆为：(a) 人手写断言（#557 `Violation()` 计数 / `wantLines` / analysistest `// want`）——独立的人类第二真值，能因与回归无关的原因（数错、忘改）与规则分歧；(b) 机器重生快照（golden + CI `git diff --exit-code`）。
+被表征的真值只有一个生成源：**规则逻辑 ⊗ fixture 源码**。其余皆为：(a) 人手写断言（#557 `Violation()` 计数 / `wantLines` / analysistest `// want`）——独立的人类第二真值，能因与回归无关的原因（数错、忘改）与规则分歧；(b) 机器重生快照（golden + CI `AssertGolden` 断言；`git diff --exit-code` 是未实施的 Hard 升级路径，见 §AI-rebust 评级表）。
 
 **(b) 严格比 (a) 更单源**：重生的 golden 不可能独立分歧——它就是规则输出的冻结，唯一"分歧"即 `git diff`，那恰是回归信号本身。golden 是所有选项里最接近单源者。章程 §载体决策第 1 条把 golden 列为 Hard 首选，正因"重生+diff"使生成器成为唯一源、golden 退化为派生 cache。
 
@@ -69,8 +69,17 @@ golden 记 `file:line` 看似 `wantLines` 病换地方——**否，差别在"�
 
 | 子件 | 评级 | 理由 |
 |------|------|------|
-| golden + `-update` + CI `git diff --exit-code` | **Hard** | 章程 §载体决策第 1 条 codegen funnel + golden；违反（漏 update / 手改 golden）= `git diff` 红，不可表达为"绿" |
-| golden regenerate-only 纪律 | Medium → Hard 路径 | review 一等公民（Soft-ish）；可选 meta-archtest 锁"golden 变更必伴随规则/fixture 变更"升 Hard，列 PR-A 内或紧随 backlog |
+| golden + `-update` + CI `AssertGolden` t.Errorf | **Hard** | 章程 §载体决策第 1 条 codegen funnel + golden；golden 不一致 → `AssertGolden` `t.Errorf` → shard `go test` 失败，不可绕过。`git diff --exit-code` 是 K8s 对标的可选升级路径（见下行），本 PR 未实施 |
+| golden regenerate-only 纪律（`git diff --exit-code` 升级路径） | Medium → Hard 路径 | 当前实现：review 一等公民（regenerate-only 为 review 纪律，Soft）；Medium→Hard 升级：补 meta-archtest 锁"golden 变更必伴随规则/fixture 同 commit 变更"（`git diff` 派生，非 AST anchor）；列 backlog `FIXTURE-DIAGNOSTIC-GOLDEN-MIGRATION` §Medium→Hard 路径 |
+
+### meta-archtest 形态 stub（Medium→Hard 升级路径，scope B/C 落地）
+
+golden regenerate-only 纪律当前为 Soft review 约定（Medium→Hard 路径在 §AI-rebust 评级表中已标注）。拟定 Hard 升级形态如下，供 scope B/C 承接者按此规格实现，避免重设计：
+
+- **载体形态**：检测 `*.golden` 文件在 commit 中变更时，同一 commit 必须包含对应 `*_test.go` 或 fixture 源文件（`testdata/` 下）的变更。派生方式：`git diff --name-only HEAD~1 HEAD`（或 CI diff 接口），不依赖 AST 字符串 anchor（字符串 anchor = Soft，见 ai-collab.md §三档分级）。
+- **预期 AI-rebust 评级**：**Medium**（git diff 派生，机器可执行，但不是 Go 类型系统约束，无法阻止 force-push 绕过）。进一步升 Hard 需要 commit signing + branch protection 联动，超出 archtest 范围，不在本仓库规划。
+- **实现约束**：该 meta-archtest 本身不能是 Soft（不能靠注释豁免或文件名 convention 做检测）；必须在 CI 环境有真实 git history，或通过 fixture diff snapshot 代替；scope B/C 落地时在 `tools/archtest/` 补对应 `*_invariants_test.go` 并在本 ADR 更新 §AI-rebust 评级表状态。
+- **触发条件**：本 stub 在 scope B/C 批量迁移后才有守护对象（golden 文件足够多时才值得机器检测）。PR-A 不落地实现，仅冻结形态设计。
 
 ## Scope（待用户拍板，ADR review 门）
 

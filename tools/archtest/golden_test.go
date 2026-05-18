@@ -6,10 +6,11 @@ package archtest
 // golden_test.go — unit coverage for the AssertGolden harness and the
 // scanner.Canonical single-source ordering it shares with Report. The blind
 // spot of these tests (declared per .claude/rules/gocell/ai-collab.md
-// §"工具选定后强制盲区自检"): they exercise AssertGolden via a recorder TB,
-// NOT a real *testing.T, so they do not prove `-update` interacts correctly
-// with `go test` flag parsing — that path is covered by the two migrated
-// exemplar fixture tests run under `-update` in CI.
+// §"工具选定后强制盲区自检"): they exercise writeOrAssertGolden directly with
+// an explicit update bool, NOT via a real *testing.T with flag parsing, so they
+// do not prove `-update` interacts correctly with `go test` flag parsing — that
+// path is a declared blind spot; local manual verification:
+// `go test ./tools/archtest/... -run TestPanicRegisteredScannerFixtures -update`.
 
 import (
 	"fmt"
@@ -124,16 +125,15 @@ func TestAssertGolden_MissingGolden(t *testing.T) {
 }
 
 func TestAssertGolden_UpdateWritesFile(t *testing.T) {
-	// Not parallel: toggles the package-global updateGolden flag.
+	t.Parallel()
+
 	dir := t.TempDir()
 	gp := filepath.Join(dir, "sub", "diag.golden")
 
-	orig := *updateGolden
-	*updateGolden = true
-	defer func() { *updateGolden = orig }()
-
 	rec := &recorderTB{}
-	AssertGolden(rec, gp, []Diagnostic{{Rel: "z.go", Line: 7, Message: "w"}})
+	// Call writeOrAssertGolden directly with update=true to avoid touching the
+	// package-global *updateGolden flag, which would race with parallel tests.
+	writeOrAssertGolden(rec, gp, []Diagnostic{{Rel: "z.go", Line: 7, Message: "w"}}, true)
 
 	require.Empty(t, rec.fatals)
 	require.Empty(t, rec.errors)
