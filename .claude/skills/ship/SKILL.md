@@ -1,13 +1,13 @@
 ---
 name: ship
-description: "全流程实施：探索→计划→worktree→TDD→实施→PR→review→/fix Cx1/Cx2→人工确认。L1(跳过探索,1 reviewer)/L2(单agent探索,1 reviewer)/L3(默认,三agent探索,1-3 reviewer按diff行数)/L4(三agent探索+6角色review)"
-argument-hint: "[--level=L1|L2|L3|L4] <backlog-id 或任务描述>"
+description: "全流程实施：探索→计划→worktree→TDD→实施→PR→review→/fix Cx1/Cx2→人工确认。L1(跳过探索,1 reviewer)/L2(单agent探索,1 reviewer)/L3(默认,三agent探索,按diff行数1/2/3/6 reviewer自动)"
+argument-hint: "[--level=L1|L2|L3] <backlog-id 或任务描述>"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
 # GoCell Ship — 全流程实施
 
-默认 L3（三 agent 探索 + 详细计划 + 与用户确认 + 1–3 reviewer，按 diff 行数，见阶段 7）。L4 在 L3 基础上升级为 6 角色 review。
+默认 L3（三 agent 探索 + 详细计划 + 与用户确认 + 按 diff 行数自动 1/2/3/6 reviewer，见阶段 7）。
 
 ## 等级
 
@@ -15,8 +15,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 |------|------|---------|-----------|--------|
 | L1 | 不探索 | 不需要 | 1-2 并行 | 1 reviewer |
 | L2 | 1 explorer | 展示给用户 | 1-2 并行 | 1 reviewer |
-| L3（默认） | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 1–3 reviewer（按 diff 行数，见阶段 7） |
-| L4 | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 6角色6个并行 |
+| L3（默认） | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 1/2/3/6 reviewer（按 diff 行数自动，见阶段 7） |
 
 ---
 
@@ -146,11 +145,9 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 | `diff < 200` | 1 | 单 agent 跑全六维度 |
 | `200 ≤ diff < 600` | 2 | A：架构合规 + 测试 + 产品；B：安全 + 运维可观测 + DX |
 | `600 ≤ diff < 1500` | 3 | A：架构合规 + 测试；B：安全 + 产品；C：运维可观测 + DX |
-| `diff ≥ 1500` | — | 不在 L3 内强跑：用 AskUserQuestion 阻塞等待用户二选一——选「升 L4」立即切 L4 流程（6 角色并行）；选「拆 PR」暂停 review 并输出拆分建议 |
+| `diff ≥ 1500` | 6 | 六角色一一对应：架构合规 / 安全 / 测试 / 运维可观测 / DX / 产品 各 1 agent 并行 |
 
 多 agent 时并行启动，每个 agent prompt 自包含其负责维度；全部完成后由主 agent 汇总去重 findings 表（含 Cx 分级）。
-
-**L4**：并行 6 个 `reviewer` agent（架构合规 / 安全 / 测试 / 运维可观测 / DX / 产品，与上述六维度一一对应）。全部完成后汇总 findings 表（含 Cx 分级）。
 
 Review结束后查看（`gh pr checks <编号>`），禁止自动循环等待CI结束
 ---
@@ -165,7 +162,7 @@ Review结束后查看（`gh pr checks <编号>`），禁止自动循环等待CI�
 
 ```
 PR: #<编号> <URL>
-已完成：TDD / 实施 / PR / review（实跑 reviewer 数：L3 按 diff 1–3 / L4 6 角色） / Cx1-Cx2 fix / CI
+已完成：TDD / 实施 / PR / review（实跑 reviewer 数：按 diff 1/2/3/6 自动） / Cx1-Cx2 fix / CI
 
 未处理问题（需人工确认）：
 | # | Finding | Cx | 建议方案 | 原因 |
