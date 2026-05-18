@@ -183,14 +183,54 @@ func collectL2PlusTargets(t *testing.T, scope Scope) []l2TargetCell {
 // l2TargetCell whose pkgSuffix matches Pass.Pkg.Path() (at most one match),
 // locates the Init FuncDecl on the receiver `*GoStructName`, and runs a same-
 // package BFS to find a CheckNotNoop callee. A diagnostic is emitted iff the
-// BFS does not find one.
+// BFS does not find one (or the Init method is missing).
 //
-// NOTE (Phase 4 RED stub): this implementation currently returns nil
-// unconditionally so that the RED fixture tests fail. The GREEN commit
-// replaces the stub body with the Phase B algorithm proper.
+// Diagnostics reference the target's yamlPath at line 1 — the rule is about
+// a missing wiring on the cell as a whole; Init's Go file position is less
+// informative than "this cell declared L2+ in cell.yaml but its Init does
+// not call CheckNotNoop".
 func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic {
-	_ = p
-	_ = targets
+	if p == nil || p.Pkg == nil {
+		return nil
+	}
+	pkgPath := p.Pkg.Path()
+	target := matchTarget(pkgPath, targets)
+	if target == nil {
+		return nil
+	}
+	initFn := initFuncDecl(p, target.goStructName)
+	if initFn == nil {
+		return []Diagnostic{{
+			Rel:  target.yamlPath,
+			Line: 1,
+			Message: "L2+ cell " + target.cellID +
+				": missing Init method on *" + target.goStructName +
+				" — every L2+ cell needs an Init that calls kernel/cell.CheckNotNoop",
+		}}
+	}
+	if !initReachesCheckNotNoop(p, initFn) {
+		return []Diagnostic{{
+			Rel:  target.yamlPath,
+			Line: 1,
+			Message: "L2+ cell " + target.cellID +
+				": Init (same-package callees of *" + target.goStructName +
+				".Init) does not call kernel/cell.CheckNotNoop;" +
+				" add the call in Init or in a hand-written same-package hook" +
+				" (e.g. initInternal) to guard durable-mode wiring",
+		}}
+	}
+	return nil
+}
+
+// matchTarget returns the l2TargetCell whose pkgSuffix matches the given
+// package import path, or nil if no target matches. Each cell occupies a
+// unique cells/<id>/ directory, so at most one target matches per Pass.
+func matchTarget(pkgPath string, targets []l2TargetCell) *l2TargetCell {
+	for i := range targets {
+		if strings.HasSuffix(pkgPath, targets[i].pkgSuffix) {
+			return &targets[i]
+		}
+	}
 	return nil
 }
 
