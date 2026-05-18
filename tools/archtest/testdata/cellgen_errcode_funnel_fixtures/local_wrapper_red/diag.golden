@@ -1,1 +1,1 @@
-tools/archtest/testdata/cellgen_errcode_funnel_fixtures/local_wrapper_red/usage.go:21: cellgen: error constructor outside errcode funnel: callee=New from errors
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/local_wrapper_red/usage.go:21: cellgen: reference to blacklisted error constructor: errors.New

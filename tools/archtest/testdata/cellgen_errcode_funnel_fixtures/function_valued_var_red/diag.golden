@@ -1,1 +1,1 @@
-tools/archtest/testdata/cellgen_errcode_funnel_fixtures/function_valued_var_red/usage.go:14: cellgen: error constructor via function-valued variable forbidden: var=ErrNew
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/function_valued_var_red/usage.go:11: cellgen: reference to blacklisted error constructor: errors.New

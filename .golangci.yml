@@ -473,8 +473,13 @@ linters:
           #
           # See ADR docs/architecture/202605171200-adr-cellgen-errcode-funnel-mechanism.md §D5.
           list-mode: lax
+          # Recursive match: covers tools/codegen/cellgen/ itself and any
+          # future subpackages (e.g., tools/codegen/cellgen/subpkg/*.go).
+          # The companion archtest uses ./tools/codegen/cellgen/... which
+          # is also recursive; depguard must match the same surface.
           files:
-            - "**/tools/codegen/cellgen/*.go"
+            - "**/tools/codegen/cellgen/**"
+            - "!**/tools/codegen/cellgen/**/*_test.go"
             - "!**/tools/codegen/cellgen/*_test.go"
           deny:
             - pkg: github.com/pkg/errors
