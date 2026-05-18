@@ -12,13 +12,13 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
-// Compile-time check: Tracer implements tracing.Tracer.
-var _ tracing.Tracer = (*Tracer)(nil)
+// Compile-time check: Tracer implements wrapper.Tracer.
+var _ wrapper.Tracer = (*Tracer)(nil)
 
 // defaultShutdownTimeout caps tp.Shutdown to prevent caller ctx from being
 // unbounded. BatchSpanProcessor.Shutdown blocks until in-flight spans flush
@@ -33,7 +33,7 @@ var _ tracing.Tracer = (*Tracer)(nil)
 // not need to be a var for test override.
 const defaultShutdownTimeout = 10 * time.Second
 
-// Tracer implements tracing.Tracer using the OpenTelemetry SDK.
+// Tracer implements wrapper.Tracer using the OpenTelemetry SDK.
 type Tracer struct {
 	inner oteltrace.Tracer
 }
@@ -161,7 +161,7 @@ func NewTracerFromTracerProvider(tp oteltrace.TracerProvider, serviceName string
 // the span and its trace/span IDs propagated via ctxkeys. Accepts variadic
 // wrapper.Attr so kernel/wrapper callers can hand attributes in at Start;
 // attrs are applied on the returned Span immediately via SetAttributes.
-func (t *Tracer) Start(ctx context.Context, name string, attrs ...tracing.Attr) (context.Context, tracing.Span) {
+func (t *Tracer) Start(ctx context.Context, name string, attrs ...wrapper.Attr) (context.Context, wrapper.Span) {
 	if traceparent, ok := ctxkeys.TraceParentFrom(ctx); ok && traceparent != "" {
 		ctx = propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": traceparent})
 	}

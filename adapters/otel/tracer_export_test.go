@@ -9,7 +9,6 @@ import (
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
 // newInMemoryTracer returns a Tracer wired to a TracerProvider that batches
@@ -44,7 +43,7 @@ func TestTracer_SpanNameAndAttributes(t *testing.T) {
 		wrapper.Attr{Key: "cell.id", Value: "accesscore"},
 		wrapper.Attr{Key: "retry.count", Value: 3},
 	)
-	tracing.SpanSetStatus(span, false, "")
+	span.SetStatus(wrapper.StatusOK, "")
 	span.End()
 
 	_ = ctx
@@ -106,7 +105,7 @@ func TestTracer_ErrorStatusRecordsSpan(t *testing.T) {
 
 	_, span := tr.Start(context.Background(), "err-op")
 	span.RecordError(errTracerBoom)
-	tracing.SpanSetStatus(span, true, "boom")
+	span.SetStatus(wrapper.StatusError, "boom")
 	span.End()
 
 	spans := exp.GetSpans()

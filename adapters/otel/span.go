@@ -10,18 +10,17 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
-// Compile-time checks: otelSpan implements tracing.Span (aliased to
-// wrapper.Span) and wrapper.SpanRenamer.
+// Compile-time checks: otelSpan implements wrapper.Span and
+// wrapper.SpanRenamer.
 var (
-	_ tracing.Span        = (*otelSpan)(nil)
+	_ wrapper.Span        = (*otelSpan)(nil)
 	_ wrapper.SpanRenamer = (*otelSpan)(nil)
 )
 
 // otelSpan wraps an OTel trace.Span to implement the kernel/wrapper.Span
-// interface (re-exported as tracing.Span for backwards-compatible callers).
+// interface.
 type otelSpan struct {
 	inner oteltrace.Span
 }

@@ -33,7 +33,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
 // Middleware is the standard net/http middleware shape used throughout the
@@ -151,7 +150,7 @@ func WithClientErrorLogSampling(every int) Option {
 //
 // ref: go-zero — observability wired by default when configured
 // ref: otelchi — chi middleware for OpenTelemetry trace propagation
-func WithTracer(t tracing.Tracer) Option {
+func WithTracer(t wrapper.Tracer) Option {
 	return func(r *Router) {
 		r.tracer = t
 	}
@@ -384,7 +383,7 @@ type Router struct {
 
 	// configuration fields (read during build)
 	metricsCollector            metrics.Collector
-	tracer                      tracing.Tracer
+	tracer                      wrapper.Tracer
 	tracingOpts                 []middleware.TracingOption
 	requestIDOpts               []middleware.RequestIDOption
 	rateLimiter                 middleware.RateLimiter

@@ -16,7 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	"github.com/ghbvf/gocell/runtime/observability/tracingtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,7 +24,7 @@ import (
 
 // spanIDs extracts trace/span ids from an otelSpan — replaces the removed
 // TraceID()/SpanID() methods on the generic Span interface.
-func spanIDs(t *testing.T, s tracing.Span) (string, string) {
+func spanIDs(t *testing.T, s wrapper.Span) (string, string) {
 	t.Helper()
 	os, ok := s.(*otelSpan)
 	require.True(t, ok, "expected *otelSpan, got %T", s)
@@ -49,7 +49,7 @@ func newTestTracer(t *testing.T) (*Tracer, *tracetest.InMemoryExporter) {
 
 func TestTracer_ImplementsInterface(t *testing.T) {
 	tracer, _ := newTestTracer(t)
-	var _ tracing.Tracer = tracer
+	var _ wrapper.Tracer = tracer
 }
 
 func TestTracer_StartCreatesSpan(t *testing.T) {
@@ -376,7 +376,7 @@ func TestTracerConfig_Validate(t *testing.T) {
 }
 
 func TestSpan_ImplementsInterface(t *testing.T) {
-	var _ tracing.Span = (*otelSpan)(nil)
+	var _ wrapper.Span = (*otelSpan)(nil)
 	var _ wrapper.SpanRenamer = (*otelSpan)(nil)
 }
 
@@ -401,7 +401,7 @@ func TestSpan_SetStatus_Error(t *testing.T) {
 	ctx := context.Background()
 
 	_, span := tracer.Start(ctx, "err-status")
-	tracing.SpanSetStatus(span, true, "db connection failed")
+	span.SetStatus(wrapper.StatusError, "db connection failed")
 	span.End()
 
 	spans := exporter.GetSpans()
@@ -415,7 +415,7 @@ func TestSpan_SetStatus_Ok(t *testing.T) {
 	ctx := context.Background()
 
 	_, span := tracer.Start(ctx, "ok-status")
-	tracing.SpanSetStatus(span, false, "")
+	span.SetStatus(wrapper.StatusOK, "")
 	span.End()
 
 	spans := exporter.GetSpans()
@@ -426,7 +426,7 @@ func TestSpan_SetStatus_Ok(t *testing.T) {
 func TestSpanHelper_SimpleSpanAcceptsAll(t *testing.T) {
 	// simpleSpan now implements the full wrapper.Span interface — helpers
 	// just delegate; assert they pass through without panic.
-	simple := tracing.NewTracer("test")
+	simple := tracingtest.NewSimpleTracer("test")
 	_, span := simple.Start(context.Background(), "op")
 	defer span.End()
 
@@ -434,7 +434,7 @@ func TestSpanHelper_SimpleSpanAcceptsAll(t *testing.T) {
 		span.RecordError(errors.New("some error"))
 	})
 	assert.NotPanics(t, func() {
-		tracing.SpanSetStatus(span, true, "fail")
+		span.SetStatus(wrapper.StatusError, "fail")
 	})
 }
 
