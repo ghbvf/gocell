@@ -1,0 +1,1 @@
+tools/archtest/testdata/panic_registered_fixtures/bare_string_red/usage.go:6: panic argument must be a call to panicregister.Approved(literal, value)

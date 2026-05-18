@@ -23,8 +23,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -358,49 +356,40 @@ func TestEvalPredicateCentralizationFixtures(t *testing.T) {
 	fixtureBase := filepath.Join(root, "tools", "archtest", "testdata",
 		"eval_predicate_centralization_fixtures")
 
-	cases := []struct {
-		dir       string
-		wantLines []int // empty / nil = GREEN; non-empty = RED with these line numbers
-	}{
+	// Each fixture dir owns a diag.golden capturing the rule's real output
+	// (Rel:Line: Message); GREEN fixtures have an empty golden. Expected line
+	// numbers live in the regenerated golden, never in this table. See ADR
+	// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
+	dirs := []string{
 		// GREEN — Form A and Form B canonical shapes accepted.
-		{"form_a_good", nil},
-		{"form_b_good", nil},
+		"form_a_good", "form_b_good",
 		// RED — hand-rolled predicate (most common drift form).
-		{"inline_predicate_red", []int{10}},
+		"inline_predicate_red",
 		// RED — var binding indirection (arg is Ident, not CallExpr / FuncLit).
-		{"var_binding_red", []int{10}},
+		"var_binding_red",
 		// RED — FuncLit body has multi-statement, fails sentinel single-stmt check.
-		{"funclit_multi_stmt_red", []int{9}},
+		"funclit_multi_stmt_red",
 	}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.dir, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
 
-			fixtureDir := filepath.Join(fixtureBase, tc.dir)
-			var violations []evalPredicateViolation
+			fixtureDir := filepath.Join(fixtureBase, dir)
+			var diags []Diagnostic
 			RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
 				func(p *Pass) []Diagnostic {
 					for _, f := range p.Files {
 						rel := p.Rel(f)
-						violations = append(violations,
-							scanFileForEvalPredicateViolations(p.Fset, f, p.TypesInfo, rel)...)
+						for _, v := range scanFileForEvalPredicateViolations(p.Fset, f, p.TypesInfo, rel) {
+							diags = append(diags, Diagnostic{Rel: v.Rel, Line: v.Line, Message: v.Form})
+						}
 					}
 					return nil
 				})
 
-			var gotLines []int
-			for _, v := range violations {
-				gotLines = append(gotLines, v.Line)
-			}
-			sort.Ints(gotLines)
-
-			wantLines := append([]int(nil), tc.wantLines...)
-			sort.Ints(wantLines)
-
-			require.Equal(t, wantLines, gotLines,
-				"fixture %s: violation lines mismatch (got: %+v)", tc.dir, violations)
+			AssertGolden(t, filepath.Join(fixtureDir, "diag.golden"), diags)
 		})
 	}
 }

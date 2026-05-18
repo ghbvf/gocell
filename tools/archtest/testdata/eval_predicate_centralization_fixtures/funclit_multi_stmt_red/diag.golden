@@ -1,0 +1,1 @@
+usage.go:9: FuncLit with non-canonical body (not `return false` single-stmt)

@@ -1,0 +1,1 @@
+tools/archtest/testdata/panic_registered_fixtures/old_errcode_form_red/usage.go:8: panic argument must call panicregister.Approved (got: errcode.Assertion)

@@ -1,0 +1,1 @@
+tools/archtest/testdata/panic_registered_fixtures/non_funnel_err_red/usage.go:6: panic argument must be a call to panicregister.Approved(literal, value)

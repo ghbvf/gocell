@@ -1,0 +1,3 @@
+tools/archtest/testdata/panic_registered_fixtures/reason_placeholder_red/usage.go:12: reason "todo-fix-later" is a placeholder identifier (todo/fixme/tbd/xxx/placeholder/wip); replace with descriptive kebab-case
+tools/archtest/testdata/panic_registered_fixtures/reason_placeholder_red/usage.go:16: reason "fixme" is a placeholder identifier (todo/fixme/tbd/xxx/placeholder/wip); replace with descriptive kebab-case
+tools/archtest/testdata/panic_registered_fixtures/reason_placeholder_red/usage.go:20: reason "wip-prototype" is a placeholder identifier (todo/fixme/tbd/xxx/placeholder/wip); replace with descriptive kebab-case

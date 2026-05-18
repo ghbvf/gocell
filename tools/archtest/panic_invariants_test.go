@@ -19,6 +19,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -433,42 +434,35 @@ func containsTag(group []string, tag string) bool {
 func TestPanicRegisteredScannerFixtures(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		dir       string
-		wantLines []int // empty = GREEN (0 violations); non-empty = RED with these line numbers
-	}{
+	// Each fixture dir owns a diag.golden capturing the rule's real output
+	// (Rel:Line: Message). GREEN fixtures have an empty golden. Line numbers
+	// live in the regenerated golden, never in this table — adding an import
+	// to a fixture and re-running with -update produces a clean positional
+	// delta, not a false failure. See ADR
+	// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
+	dirs := []string{
 		// RED cases — expect violations.
-		{"bare_string_red", []int{6}},
-		{"non_funnel_err_red", []int{6}},
-		{"non_literal_reason_red", []int{13}},
-		{"old_errcode_form_red", []int{8}},
-		{"must_prefix_bare_red", []int{7}},
-
-		// GREEN cases — expect 0 violations.
-		{"assertion_wrapped_green", nil},
-		{"recovered_value_green", nil},
-		{"must_prefix_wrapped_green", nil},
-
+		"bare_string_red", "non_funnel_err_red", "non_literal_reason_red",
+		"old_errcode_form_red", "must_prefix_bare_red",
+		// GREEN cases — expect 0 violations (empty golden).
+		"assertion_wrapped_green", "recovered_value_green", "must_prefix_wrapped_green",
 		// RED cases for reason argument shape.
-		{"reason_const_ident_red", []int{15}},
-		{"reason_format_invalid_red", []int{12, 16}},
-
+		"reason_const_ident_red", "reason_format_invalid_red",
 		// RED/GREEN cases for payload type guard (RC-C1).
-		{"payload_type_invalid_red", []int{14, 19, 23}}, // 3 violations: fmt.Errorf, string var, string literal
-		{"payload_type_valid_green", nil},               // *errcode.Error and interface{} are allowed (no violations)
-
+		"payload_type_invalid_red", "payload_type_valid_green",
 		// RED cases for reason placeholder denylist (RC-B1).
-		{"reason_placeholder_red", []int{12, 16, 20}}, // todo / fixme / wip all rejected
+		"reason_placeholder_red",
 	}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.dir, func(t *testing.T) {
+	root := findModuleRoot(t)
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
 
-			fixturePattern := "./tools/archtest/testdata/panic_registered_fixtures/" + tc.dir
+			fixturePattern := "./tools/archtest/testdata/panic_registered_fixtures/" + dir
 
-			var violations []panicRegisteredViolation
+			var diags []Diagnostic
 			// Load using module root so imports of panicregister/errcode resolve.
 			_ = RunTyped(t, TypedOpts{}, []string{fixturePattern}, func(p *Pass) []Diagnostic {
 				if p.TypesInfo == nil || p.Fset == nil {
@@ -476,22 +470,16 @@ func TestPanicRegisteredScannerFixtures(t *testing.T) {
 				}
 				for _, file := range p.Files {
 					rel := p.Rel(file)
-					violations = append(violations, scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel)...)
+					for _, v := range scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel) {
+						diags = append(diags, Diagnostic{Rel: v.File, Line: v.Line, Message: v.Reason})
+					}
 				}
 				return nil
 			})
 
-			var gotLines []int
-			for _, v := range violations {
-				gotLines = append(gotLines, v.Line)
-			}
-			sort.Ints(gotLines)
-
-			wantLines := append([]int(nil), tc.wantLines...)
-			sort.Ints(wantLines)
-
-			assert.Equal(t, wantLines, gotLines,
-				"fixture %s: violation lines mismatch (got violations: %+v)", tc.dir, violations)
+			goldenPath := filepath.Join(root, "tools", "archtest", "testdata",
+				"panic_registered_fixtures", dir, "diag.golden")
+			AssertGolden(t, goldenPath, diags)
 		})
 	}
 }
