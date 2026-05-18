@@ -236,18 +236,27 @@ func matchTarget(pkgPath string, targets []l2TargetCell) *l2TargetCell {
 
 // initFuncDecl returns the FuncDecl named "Init" whose receiver type matches
 // the goStructName (with or without leading "*"). The lookup walks every file
-// in the pass; receiverTypeName is the shared archtest helper defined in
-// pg_repo_ambient_tx_test.go (handles both `(c *Foo)` and `(c Foo)` forms).
+// via archtest.EachInChildren[ast.FuncDecl] which iterates only direct
+// FuncDecl children of *ast.File (depth=1, structurally exact for top-level
+// function declarations). receiverTypeName is the shared archtest helper
+// defined in pg_repo_ambient_tx_test.go (handles both `(c *Foo)` and `(c Foo)`
+// forms).
 func initFuncDecl(p *Pass, goStructName string) *ast.FuncDecl {
+	var found *ast.FuncDecl
 	for _, f := range p.Files {
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Recv == nil || fd.Name == nil || fd.Name.Name != "Init" {
-				continue
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if found != nil {
+				return
+			}
+			if fd.Recv == nil || fd.Name == nil || fd.Name.Name != "Init" {
+				return
 			}
 			if receiverTypeName(fd) == goStructName {
-				return fd
+				found = fd
 			}
+		})
+		if found != nil {
+			return found
 		}
 	}
 	return nil
@@ -270,18 +279,17 @@ func initReachesCheckNotNoop(p *Pass, init *ast.FuncDecl) bool {
 	// directly into the BFS frontier.
 	sameSrcByFunc := map[*types.Func]*ast.FuncDecl{}
 	for _, f := range p.Files {
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Name == nil {
-				continue
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if fd.Name == nil {
+				return
 			}
 			obj := p.TypesInfo.Defs[fd.Name]
 			fn, ok := obj.(*types.Func)
 			if !ok {
-				continue
+				return
 			}
 			sameSrcByFunc[fn] = fd
-		}
+		})
 	}
 
 	visited := map[*ast.FuncDecl]struct{}{}
@@ -297,26 +305,21 @@ func initReachesCheckNotNoop(p *Pass, init *ast.FuncDecl) bool {
 			continue
 		}
 		found := false
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
+		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 			if found {
-				return false
-			}
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+				return
 			}
 			callee := resolveCallee(p, call.Fun)
 			if callee == nil {
-				return true
+				return
 			}
 			if callee.FullName() == kernelCellCheckNotNoopFullName {
 				found = true
-				return false
+				return
 			}
 			if next, ok := sameSrcByFunc[callee]; ok {
 				queue = append(queue, next)
 			}
-			return true
 		})
 		if found {
 			return true
@@ -459,16 +462,12 @@ func TestNoReflectCheckNotNoopInProduction(t *testing.T) {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			ast.Inspect(f, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
+			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 				if !isReflectValueOfCall(p, call) {
-					return true
+					return
 				}
 				if !argSubtreeReferencesCheckNotNoop(p, call.Args) {
-					return true
+					return
 				}
 				pos := p.Fset.Position(call.Pos())
 				out = append(out, Diagnostic{
@@ -478,7 +477,6 @@ func TestNoReflectCheckNotNoopInProduction(t *testing.T) {
 						" — this shape evades CELL-L2-INIT-CHECKNOTNOOP-CALLED-01's *types.Info" +
 						" BFS; call CheckNotNoop directly from the cell's Init or same-package hook",
 				})
-				return true
 			})
 		}
 		return out
@@ -508,20 +506,14 @@ func isReflectValueOfCall(p *Pass, call *ast.CallExpr) bool {
 func argSubtreeReferencesCheckNotNoop(p *Pass, args []ast.Expr) bool {
 	for _, arg := range args {
 		hit := false
-		ast.Inspect(arg, func(n ast.Node) bool {
+		EachInSubtree[ast.Ident](arg, func(id *ast.Ident) {
 			if hit {
-				return false
-			}
-			id, ok := n.(*ast.Ident)
-			if !ok {
-				return true
+				return
 			}
 			fn, _ := p.TypesInfo.Uses[id].(*types.Func)
 			if fn != nil && fn.FullName() == kernelCellCheckNotNoopFullName {
 				hit = true
-				return false
 			}
-			return true
 		})
 		if hit {
 			return true
@@ -594,13 +586,9 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
-			ast.Inspect(f, func(n ast.Node) bool {
-				gostmt, ok := n.(*ast.GoStmt)
-				if !ok {
-					return true
-				}
+			EachInSubtree[ast.GoStmt](f, func(gostmt *ast.GoStmt) {
 				if !goStmtCallsCheckNotNoop(p, gostmt) {
-					return true
+					return
 				}
 				pos := p.Fset.Position(gostmt.Pos())
 				out = append(out, Diagnostic{
@@ -609,7 +597,6 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 					Message: "async `go func() { ... CheckNotNoop ... }()` in L2+ cell " + target.cellID +
 						" — Init must call CheckNotNoop synchronously to guard durable-mode wiring",
 				})
-				return true
 			})
 		}
 		return out
@@ -622,20 +609,14 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 // kernel/cell.CheckNotNoop.
 func goStmtCallsCheckNotNoop(p *Pass, gostmt *ast.GoStmt) bool {
 	hit := false
-	ast.Inspect(gostmt, func(n ast.Node) bool {
+	EachInSubtree[ast.CallExpr](gostmt, func(call *ast.CallExpr) {
 		if hit {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+			return
 		}
 		fn := resolveCallee(p, call.Fun)
 		if fn != nil && fn.FullName() == kernelCellCheckNotNoopFullName {
 			hit = true
-			return false
 		}
-		return true
 	})
 	return hit
 }
