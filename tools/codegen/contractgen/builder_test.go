@@ -1355,11 +1355,20 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 			wantErrFrags: []string{"FMT-34", "auth.public", "/internal/v1"},
 		},
 
-		// pass cases — legitimate internal-path auth shapes must build.
+		// pass cases — FMT-34 must not over-fire on shapes outside its scope.
+		// FMT-34 only inspects auth.Public + auth.PasswordResetExempt on
+		// /internal/v1/* paths; bootstrap / serviceOwned / clientsOnly are
+		// not its concern (separate rules — FMT-28 narrows bootstrap to
+		// /api/v{N}/{cell}/setup/admin, etc.). These cases lock that scope.
 		{
-			name:    "bootstrap_on_internal_path_ok",
+			// bootstrap on /internal/v1/* is NOT a legitimate shape (FMT-28
+			// rejects bootstrap on non-setup-admin paths), but FMT-34 itself
+			// does not inspect the Bootstrap flag → no FMT-34 finding here.
+			// Separation-of-concerns: codegen-side FMT-28 enforcement runs in
+			// validateAuthServiceOwned / governance FMT-28 rule.
+			name:    "bootstrap_flag_not_fmt34_concern",
 			auth:    metadata.HTTPAuthMeta{Bootstrap: true},
-			path:    "/internal/v1/access/setup/admin",
+			path:    "/internal/v1/foo",
 			wantErr: false,
 		},
 		{

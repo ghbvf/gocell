@@ -1452,9 +1452,11 @@ func (v *Validator) validateFMT33() []ValidationResult {
 // validateFMT34 forbids auth.public / auth.passwordResetExempt on
 // /internal/v1/* paths. Internal endpoints must not bypass JWT entirely
 // (auth.public) or accept JWTs carrying password_reset_required=true
-// (auth.passwordResetExempt); use auth.bootstrap (HTTP Basic Auth for
-// setup), auth.serviceOwned (service delegates ownership), or
-// auth.clientsOnly (caller-cell allowlist) instead.
+// (auth.passwordResetExempt); use auth.serviceOwned (service delegates
+// ownership) or auth.clientsOnly (caller-cell allowlist) instead.
+// auth.bootstrap is intentionally NOT suggested — FMT-28 narrows
+// bootstrap to /api/v{N}/{cell}/setup/admin, so it is not a valid
+// alternative on /internal/v1/* paths.
 //
 // Funnel pair (ai-collab.md §Funnel 双向锁评级):
 //

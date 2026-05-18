@@ -1372,10 +1372,13 @@ func TestFMT34_PublicBypassOnInternalPath(t *testing.T) {
 			wantFields: []string{"endpoints.http.auth.public"},
 		},
 		{
-			// bootstrap is the legitimate setup-admin auth shape on
-			// internal paths (FMT-28 enforces path narrowing) — FMT-34
-			// must not over-fire.
-			name:      "bootstrap_on_internal_path_ok",
+			// bootstrap on /internal/v1/* is NOT a legitimate shape — FMT-28
+			// narrows bootstrap to /api/v{N}/{cell}/setup/admin only. FMT-34
+			// itself does not inspect the Bootstrap flag, so wantCount=0 here
+			// locks scope separation (FMT-34 only checks Public /
+			// PasswordResetExempt). FMT-28 catches the path violation in a
+			// separate rule.
+			name:      "bootstrap_flag_not_fmt34_concern",
 			path:      "/internal/v1/foo",
 			auth:      metadata.HTTPAuthMeta{Bootstrap: true},
 			wantCount: 0,
