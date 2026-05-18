@@ -1,6 +1,6 @@
 # archtest 入口合并方案：Pass-Driver 范式 + 零二次返工迁移
 
-**最后更新**：2026-05-16（Stage 1.8 façade 完备性 + USAGE-02 升 Hard，吸收 037 PR #505；PR #522 consolidated-batch 清零 LegacyAllowlist，F1-F3 ADR/plan 真理源同步）
+**最后更新**：2026-05-17（baseline `develop @ 70d9137ff` —— Stage 1-3 实质工作已 ship；**Stage 4 PR #536 OPEN**（branch `refactor/598-040-stage4-archtest-passfunnel-closeout`）：delete `archtestmeta` + 新增 `RunTypedFixture` typed funnel + `PASS-FUNNEL-FIXTURE-TAG-01` meta-archtest + review R1 façade bypass closure 已完成 commit chain（`cf7a9ef98 / 3f79c3ecb / 4c474ca7e / 67525e1fa`），merge 后 Stage 4 闭环。前一版：2026-05-16 Stage 1.8 façade 完备性 + USAGE-02 升 Hard，吸收 037 PR #505；PR #522 consolidated-batch 清零 LegacyAllowlist。）
 
 ## 进度状态
 
@@ -13,9 +13,9 @@
 | **1.8 — FindFirstChild façade + USAGE-02 升 Hard** | 1 | ✅ PR #511 (2026-05-16) | 吸收 037 PR #505 治理产物（含 F6 同包裸调用 post-merge review 闭环）；不计入 Stage 3 实质迁移进度 |
 | 2 — A 类 EachFile 主题分批迁移 | 4 | ✅ 全部 ship | PR-2 ✅ #496 (metadata)；PR-3 ✅ #493 (contract/codegen)；PR-4 ✅ #498 (observability)；PR-5 ✅ #497 (lifecycle/errcode) |
 | 3 — E 类 for-range 主题分批迁移 | 5→3 | ✅ PR-8~10 合并入 PR #522 consolidated-batch 交付（2026-05-16）| PR-6 ✅ #500；PR-7 ✅ #507；余 37 文件合并为单一 PR #522（实测文件数 37 > 原估 27；shared-helper 图谱强耦合导致 batch 非独立，consolidated 更可行）；LegacyAllowlist 已清零 |
-| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ✅ PR #PENDING (2026-05-17) | — |
+| 4 — 收尾（删 allowlist + scanner/typeseval 深 internal 化） | 1 | ✅ PR #536 (2026-05-17, a835292c0) | — |
 
-**阶段 4 ship 摘要（PR #PENDING，2026-05-17）**：
+**阶段 4 ship 摘要（PR #536，2026-05-17，a835292c0）**：
 
 - **删除 `tools/archtest/internal/archtestmeta/` 整个包**（迁移期 scaffold 终结；LegacyAllowlist 已在 PR #522 清零）
 - **新增 `RunTypedFixture` + `FixtureOpts` typed funnel**（Hard 范本：业务调用方在 type system 上无法表达"传 Tags 加载 fixture"——编译失败；`FixtureOpts` 不含 Tags 字段）
@@ -44,7 +44,6 @@
 - **章程同步（R1.1 终态形态）**：`ai-collab.md` §Hard 范本第 4 条「typed function choice with input-struct field exclusion」末尾追加 **配套要求 — funnel 双向闭锁** 段——以本 R1.1 闭环为先例，明示该范本必须同 PR 内补 meta-archtest 锁 façade 旁路；**形态选择段强制 (callee, arg) pair form-uniqueness**，警告"只锁 BasicLit 字面量值"是常见反模式（同 PR 引入的新 const 自身会成新绕过路径）
 - **ADR amendment 落地必查**：ADR `202605141519` §"PR #536 review R1 amendment — façade bypass closure" 段原地重写为 R1 + R1.1 合并叙事 + 完整三轨威胁矩阵（before R1 / R1 first attempt / R1.1 final）；§Hard-line three-defense 表第 4 行措辞改 type-aware (callee, arg) pair ban；§Termination criteria (d) 同步 — 按 ai-collab.md §"ADR amendment 落地必查" 同 PR 内重写，不留 R1 旧措辞作"历史脉络"
 - **验证**：`go build ./...` 绿；`go test ./tools/archtest/... -count=1` 全绿；`hack/verify-archtest.sh` 16-shard process-isolated PASS（TOTAL=458，旧 457+1 新 `TestPassFunnelFixtureTagBypass01`，由 ARCHTEST-VERIFY-COVERAGE-01 自动 discovery）；业务 archtest *_test.go 内零字面量 `"archtest_fixture"` 残留（仅 fixture.go const RHS / pass.go godoc / passFunnelPermanentExempt 3 文件 + passfunnelfixture redfixture.go 内 V' RED）
-
 **阶段 1.8 ship 摘要（本 PR，2026-05-16）**：
 
 > **根因**：037 治理项 PR #505 引入 `scanner.FindFirstChild` 和 `SCANNER-FRAMEWORK-USAGE-02`，但 (i) `tools/archtest/walk.go` 未补 `FindFirstChild` façade 出口，Stage 4 封 internal/scanner 后业务侧无路可走；(ii) USAGE-02 检测器 typeseval target 仅 `scannerPkgPath.EachInChildren`，040 façade 端态 `archtest.EachInChildren` 上写出 done/found sentinel 会 silent miss；(iii) PR #505 fixture pipeline 走 inline-source + `empty := &types.Info{}` 启用 syntactic fallback（`scannerLocalName` + `id.Name == ...` 分支）——typeseval 主路径 + syntactic 兜底并存，是 PR #505 godoc AI-rebust 评级（form-ban Medium = Go ceiling，与 fallback 不同轴）未覆盖到的 Soft 盲点。Stage 4 封 internal/scanner 前一次性补齐 façade + 升 Hard，不留 follow-up。

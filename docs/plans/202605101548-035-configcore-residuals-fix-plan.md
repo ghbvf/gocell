@@ -27,9 +27,9 @@
 | 8 | PR-CFG-G1-FU6 | ✅ subsumed by FMT-21 (PR-CFG-G1-FU6-RECYCLE) | `kernel/governance/rules_misc_strict.go:551-602` (`validateFMTContractDirIDMatch01`) is the bijective inverse and already fires on the canonical regression. Regression test pinned at `rules_misc_strict_test.go::TestFMTContractDirIDMatch01_Mismatch` "dash-instead-of-slash regression"; docstring aliased. |
 | 9 | PR238-FU4 legacy NotFound 测试去重 | ✅ 已完成（代码端态核对 develop@67f5ce917）| legacy 命名函数已删；`config_repo_test.go` NotFound 与 OtherScanError 已分离（`TestGetByKey_NotFound_*`/`TestGetByKey_OtherScanError_*`、`TestGetVersion_*` 各一对），无旧重复对 |
 | 10 | PR238-FU8 UpdateForRollback op label 断言 | ✅ 已完成（代码端态核对 develop@67f5ce917）| `config_repo_test.go:408 assert.Contains(ec.InternalMessage, opUpdateForRollback)` + `:366 assert.NotContains`（Update 路径反向断言），与 fix spec 完全一致 |
-| 11 | CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | 🟡 部分完成（代码端态核对 develop@67f5ce917）| **auditappend ✅ 已 4 拆**（`auditappend{config,role,session,user}`，旧 `auditappend` slice 已删）——但**偏离设计**：各子 slice 独立 `service.go`，**未走 plan 要求的 `internal/dispatch.go` 共享 helper**（全仓无 dispatch.go）。**configread ❌ 未拆**：`configread/slice.yaml:8` 仍 `http.config.internal.get.v1` 与 public serve 同 slice，无 `configread-internal` slice → SLICE-DECOMP 第(2)项未达成 |
+| 11 | CELLS-SLICE-MULTI-VERB-DECOMPOSE-01 | ✅ closed (reframed) by **PR #529 (FMT-33)** + auditappend 早 4 拆 | **auditappend ✅ 已 4 拆**（`auditappend{config,role,session,user}`，旧 `auditappend` slice 已删）——**偏离设计 accepted**：各子 slice 独立 `service.go`，无 `internal/dispatch.go` 共享 helper；**configread ✅ closed by PR #529**：L3 重构语义从「多 verb」改为「HTTP 信任边界隔离」(`configread` 公有 get+list + 新 `configreadinternal`；共享读逻辑迁 `cells/configcore/internal/configreader`，镜像 `auditcore/internal/appender`)；同 PR 加 governance rule `SLICE-HTTP-VISIBILITY-SEGREGATION-01 (FMT-33)`：slice 不得同时承载 `/api/v1` + `/internal/v1`（基于 `metadata.IsInternalHTTPPath` 而非命名启发），repo-wide 锁防回归；examples/iotdevice devicecommand 同步拆分 |
 
-**汇总**（2026-05-16 代码端态回灌 develop@67f5ce917）：已解决 8（#1/#2/#3 PR 207-cfg-cache-lifecycle；#6；#7/#9/#10 测试硬化已落；#8 subsumed by FMT-21）/ 撤回主方案 1（#4，改业务触发）/ 部分完成 1（#11 auditappend 4 拆毕但偏离 dispatch 设计、configread 未拆）/ 实际未实施 1（#5 PR-CFG-L2-DIVERGENCE）
+**汇总**（2026-05-17 代码端态回灌 develop@70d9137ff）：已解决 9（#1/#2/#3 PR 207-cfg-cache-lifecycle；#6；#7/#9/#10 测试硬化已落；#8 subsumed by FMT-21；**#11 closed by PR #529 FMT-33 reframe + auditappend 早拆**）/ 撤回主方案 1（#4，改业务触发）/ 实际未实施 1（#5 PR-CFG-L2-DIVERGENCE）
 
 ---
 
@@ -42,7 +42,7 @@
 | ~~**PR-CFG-PLACEHOLDER-CLEAN**~~ → **PR-CFG-CELL-ROUTES-CLEAN** | configcore + accesscore cell_routes.go 占位清理 | ~~#4,~~ #6 | Cx1 | 0.1d | 无（已合）|
 | **PR-CFG-L2-DIVERGENCE** | ConfigCore L2 与 memory 行为分歧治理 | #5 | Cx1（决策）+ Cx2（实施） | 1d 设计 + 4h 实施 | architect 评估 |
 | **PR-CFG-G1-FU6-RECYCLE** | ~~CONTRACT-PATH-ID-MAPPING-ARCHTEST~~ → **subsumed by FMT-21**; pin regression test + alias docstring | #8 | Cx1 | 0.5h | subsumed-by: FMT-21 (`validateFMTContractDirIDMatch01`) |
-| **PR-CFG-SLICE-DECOMPOSE** | auditappend / configread 多 verb 拆分 | #11 | Cx3 | 1.5-2d | 🟡 部分：auditappend 4 拆 ✅（偏离——无 internal/dispatch.go，各 slice 独立 service.go）；configread→configread-internal ❌ 未拆，仍需推进 |
+| **PR-CFG-SLICE-DECOMPOSE** | auditappend / configread 多 verb 拆分 | #11 | Cx3 | 1.5-2d | ✅ **CLOSED**（reframed）— auditappend 4 拆 ✅（设计偏离 accepted：无 internal/dispatch.go）；configread 半部分 ✅ by **PR #529 (FMT-33)**——L3 重构为「HTTP 信任边界隔离」(`configread` 公有 + 新 `configreadinternal`；共享逻辑迁 `internal/configreader`)；同 PR 加 governance rule `SLICE-HTTP-VISIBILITY-SEGREGATION-01` repo-wide 锁防回归 |
 
 ---
 

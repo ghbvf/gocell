@@ -4,23 +4,23 @@
 
 - **PR #442**（K#09 SCAFFOLD-ONE-CMD，已 merged @ 2026-05-10）round-4/5/6 主线 P1 已闭环。
 - **PR #461**（OPEN，docs/backlog-only）对 PR #442 做了 root-cause triage（`docs/reviews/202605111231-804-pr442-root-cause-triage.md`），登记 6 个新 gap + 收窄 3 处 over-claim done。
-- 本计划基线 `develop == 41fc70074`（已超过 triage 基线 `47cd9e018`）。**逐项对照源码确认：10 个遗留任务在当前 develop 全部仍然存在**（验证记录见下表）。
+- 本计划基线 `develop == 41fc70074`（已超过 triage 基线 `47cd9e018`）。**进度回灌（2026-05-17，develop `70d9137ff` 逐项源码核对）：9/10 已闭环** —— Lane A（#4/#9/A-API）by **PR #526**、Lane B（#2/#3/#8）by **PR #527**、Lane C（#1/#6）by **PR #539**、Lane D（#5/#7）by **PR #544**；剩余真 TODO 仅 1 项（Lane E #10），逐项「实况」见下表状态列。
 - 用户指令：**不登记 backlog**，按文件冲突域**最大并行**处理。PR #461 的 backlog 登记是独立动作，不在本计划内（本计划直接修代码，不依赖 #461 merge）。
 
-### 遗留任务清单（已在 develop 41fc70074 验证仍存在）
+### 遗留任务清单（status = develop `70d9137ff` 2026-05-17 实地核对）
 
-| # | ID | 证据 | P/Cx |
-|---|---|---|---|
-| 1 | GENERATE-HELP-CODEGEN-DEFAULT-DRIFT-01 | `cmd/gocell/app/generate.go:73` 仍 `"Prerequisite: set codegen: true"`；`README.md:114` 旧示例 | docs/Cx1 |
-| 2 | SCAFFOLD-ASSEMBLY-YAML-SCALAR-SAFETY-01 | `kernel/assembly/gentpl/scaffold-assembly-yaml.tpl` raw scalar；`scaffoldAssemblyContext`(generator.go:138-143) 裸 string | P1/Cx2 |
-| 3 | SCAFFOLD-ASSEMBLY-ID-METADATA-RULE-01 | `validateAssemblyScaffoldSpec` 用 path/control-char 校验，未走 `metadata.MatchAssemblyID` | P2/Cx1 |
-| 4 | PATHSAFE-PARENT-SYMLINK-TOCTOU-01 | `pathsafe.go:78,339` 父目录 `os.MkdirAll`+路径式 `ContainPath` 预检，非 handle-based | P1/Cx3 |
-| 5 | SCAFFOLD-BUNDLE-VARIANT-DUPLICATE-PATH-01 | `resolveBundleVariants:188-190` 允许 `WithHTTP&&WithEvents`；`planEventExampleArtifacts:219-221` 仅 `WithBoth` 换 sliceID | P2/Cx1 |
-| 6 | PATHSAFE-OS-SMOKE-COVERAGE-01 | `_build-lint.yml:682,690` os-smoke 不含 `pkg/pathsafe/...` | test/Cx1 |
-| 7 | SCAFFOLD-CELL-BUNDLE-CROSS-STAGE-PLAN-MERGE-01 | `scaffold.go:442` dry-run 在 `:462 autoGenerateCellBundleArtifacts` 前 return；派生文件跨阶段无 rollback | P2/Cx3 |
-| 8 | ASSEMBLY-META-SYNTHESIS-FIELD-GUARD | `generator.go:359` 仍 `// Build.Binary intentionally omitted`，浅复制无字段 guard | P2/Cx2 |
-| 9 | PATHSAFE-COLLECT-MISSING-DIRS-EACCES-01 | `pathsafe.go:359` `os.Stat;os.IsNotExist`，EACCES 不区分 → rollback 漏删 | P3/Cx2 |
-| 10 | SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01 | `pkg/scaffoldid` 不存在；输入校验散在 cmd/cellgen/assembly 三处副本 | P2/Cx3 |
+| # | ID | 证据 | P/Cx | 状态（实况） |
+|---|---|---|---|---|
+| 1 | GENERATE-HELP-CODEGEN-DEFAULT-DRIFT-01 | `cmd/gocell/app/generate.go:73` 旧 `"Prerequisite: set codegen: true"`；`README.md:114` 旧示例 | docs/Cx1 | ✅ **DONE PR #539** (Lane C) — 5 处文档/help/godoc 同步翻转（`generate.go:73`、`README.md:114`、`docs/guides/codegen-new-endpoint.md:37/203`、`tools/generatedverify/generatedverify.go:247-252`、`tools/archtest/codegen_invariants_test.go:267-273`），无 Go 逻辑变更 |
+| 2 | SCAFFOLD-ASSEMBLY-YAML-SCALAR-SAFETY-01 | `kernel/assembly/gentpl/scaffold-assembly-yaml.tpl` raw scalar；`scaffoldAssemblyContext`(generator.go:138-143) 裸 string | P1/Cx2 | ✅ **DONE PR #527** — `scaffoldAssemblyContext` 字段已 `yamlsafe.Scalar` |
+| 3 | SCAFFOLD-ASSEMBLY-ID-METADATA-RULE-01 | `validateAssemblyScaffoldSpec` 用 path/control-char 校验，未走 `metadata.MatchAssemblyID` | P2/Cx1 | ✅ **DONE PR #527** — 走 `metadata.MatchAssemblyID`，旧 path 校验已删 |
+| 4 | PATHSAFE-PARENT-SYMLINK-TOCTOU-01 | `pathsafe.go:78,339` 父目录 `os.MkdirAll`+路径式 `ContainPath` 预检，非 handle-based | P1/Cx3 | ✅ **DONE PR #526** (Lane A) |
+| 5 | SCAFFOLD-BUNDLE-VARIANT-DUPLICATE-PATH-01 | `resolveBundleVariants:188-190` 允许 `WithHTTP&&WithEvents`；`planEventExampleArtifacts:219-221` 仅 `WithBoth` 换 sliceID | P2/Cx1 | ✅ **DONE PR #544** (Lane D) — `planEventExampleArtifacts` 改 gate `withHTTP`（不再仅 `spec.WithBoth`），双 variant 路径合一，单 plan 内无重复 AbsPath |
+| 6 | PATHSAFE-OS-SMOKE-COVERAGE-01 | `_build-lint.yml:682,690` os-smoke 不含 `pkg/pathsafe/...` | test/Cx1 | ✅ **DONE PR #539** (Lane C) — vet 步 + macOS/Windows 双 test 分支均加 `./pkg/pathsafe/...`，保留 `continue-on-error: true` advisory 语义 |
+| 7 | SCAFFOLD-CELL-BUNDLE-CROSS-STAGE-PLAN-MERGE-01 | `scaffold.go:442` dry-run 在 `:462 autoGenerateCellBundleArtifacts` 前 return；派生文件跨阶段无 rollback | P2/Cx3 | ✅ **DONE PR #544** (Lane D) — 新 `tools/codegen/cellgen/stage_render.go` 把骨架物化到 `os.MkdirTemp` 经 `pathsafe.WritePlannedFiles` 自身（funnel 不绕过），渲染派生后 re-base 到 real root + `ForceOverwrite:true` 并入单 plan；`--dry-run` 含派生路径；删除 `ScaffoldCellBundle/PlanCellBundleForDryRun/autoGenerateCellBundleArtifacts/printScaffoldCellDryRunPlan/ScaffoldSpec.DryRun`，新增 `PlanCellBundleScaffold` + `ScaffoldSpec.SkipGenerate` + `contractgen.ContractIDsForCell`。**SCAFFOLD-WRITE-FUNNEL-01 零 carve-out**。Follow-up Hard 升级登记于 cap-14 `PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01`（与 `PATHSAFE-PLANSET-TYPED-HARD-01` 同批 Lane E 收编） |
+| 8 | ASSEMBLY-META-SYNTHESIS-FIELD-GUARD | `generator.go:359` 仍 `// Build.Binary intentionally omitted`，浅复制无字段 guard | P2/Cx2 | ✅ **DONE PR #527** — Build.Binary 已派生；reflect 字段 Hard guard 落 `kernel/assembly/synthesize_field_guard_test.go`（非计划预测的 `tools/archtest/assembly_meta_*` 路径） |
+| 9 | PATHSAFE-COLLECT-MISSING-DIRS-EACCES-01 | `pathsafe.go:359` `os.Stat;os.IsNotExist`，EACCES 不区分 → rollback 漏删 | P3/Cx2 | ✅ **DONE PR #526** (Lane A) |
+| 10 | SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01 | `pkg/scaffoldid` 不存在；输入校验散在 cmd/cellgen/assembly 三处副本 | P2/Cx3 | ❌ TODO (Lane E) — 核对：`pkg/scaffoldid` 仍不存在 |
 
 ### 显式不在范围（已闭环，不重做）
 
@@ -36,29 +36,27 @@
 
 | Lane | 独占文件域 | 任务 | Base 分支 |
 |---|---|---|---|
-| **A** pathsafe core | `pkg/pathsafe/**` | #4, #9, +API 扩展(ForceOverwrite/dup-guard) | `develop` |
-| **B** assembly generator | `kernel/assembly/**`、`tools/archtest/assembly_meta_*` | #2, #3, #8 | `develop` |
-| **C** docs/CI 孤立 | `cmd/gocell/app/generate.go`、`README.md`、`.github/workflows/_build-lint.yml` | #1, #6 | `develop` |
-| **D** scaffold cell/bundle | `tools/codegen/cellgen/scaffold_bundle.go`、`tools/codegen/contractgen/*`、`cmd/gocell/app/scaffold.go` | #5, #7 | **Lane A 分支**（栈式） |
-| **E** typed scaffold ID（收尾） | `pkg/scaffoldid/**`（新）+ 三处 spec 字段类型升级 | #10 | **B+D merge 后的 develop** |
+| ~~**A** pathsafe core~~ ✅ #526 | `pkg/pathsafe/**` | #4, #9, +API 扩展(ForceOverwrite/dup-guard) | — merged |
+| ~~**B** assembly generator~~ ✅ #527 | `kernel/assembly/**`（实装 guard 落 `kernel/assembly/synthesize_field_guard_test.go`） | #2, #3, #8 | — merged |
+| ~~**C** docs/CI 孤立~~ ✅ #539 | `cmd/gocell/app/generate.go`、`README.md`、`docs/guides/codegen-new-endpoint.md`、`tools/generatedverify/`、`tools/archtest/codegen_invariants_test.go`、`.github/workflows/_build-lint.yml` | #1, #6 | — merged |
+| ~~**D** scaffold cell/bundle~~ ✅ #544 | `tools/codegen/cellgen/{scaffold_bundle.go,scaffold.go,stage_render.go(新)}`、`tools/codegen/contractgen/generator.go`、`cmd/gocell/app/scaffold.go` | #5, #7 | — merged |
+| **E** typed scaffold ID（收尾） | `pkg/scaffoldid/**`（新）+ 三处 spec 字段类型升级 | #10 | `develop`（A/B/C/D 前置全部满足） |
 
 ### 依赖 DAG 与调度
 
 ```
-t0 ┌── Lane A (worktree #1)  pkg/pathsafe          [A-API → A4 → A9]
-   ├── Lane B (worktree #2)  kernel/assembly       [B2 → B1 → B8]
-   └── Lane C (worktree #3)  docs/CI               [C1 ∥ C6]   ← 最快，先 ship
-        │
-        └─(A-API commit 落地后)→ Lane D (worktree #4, base=Lane A 分支) [D5 → D7]
-                                          │
-                          (B + D merge 后)└→ Lane E (worktree #5)  [E10]
+✅ Lane A  pkg/pathsafe       [A-API → A4 → A9]  — merged PR #526
+✅ Lane B  kernel/assembly    [B2 → B1 → B8]     — merged PR #527
+✅ Lane C  docs/CI            [C1 ∥ C6]          — merged PR #539
+✅ Lane D  scaffold cell/bundle [D5 → D7]        — merged PR #544
+─────────────────────────── 余下 ───────────────────────────
+t0 └── Lane E (worktree)  pkg/scaffoldid 单源收编  [E10]   (base=develop)
 ```
 
-- **t0 同时启动 3 个 worktree**：A、B、C 完全独立，零文件重叠。
-- **Lane D 栈式基于 Lane A 分支**：D 需要 `pathsafe.PlannedFile.ForceOverwrite`（#7）+ duplicate-AbsPath preflight（#5）这两个 API。Lane A **第一个 commit 必须是纯加性 API 扩展**（A-API，Cx1），随后 A 继续做 #4/#9 的同时，Lane D worktree 以 Lane A 分支为 base 启动 D5/D7。A 的 PR 先 merge，D 的 PR rebase 到 develop 后 merge（PR 栈：A → D）。
-- **Lane E 收尾串行**：#10 把 B 的 assembly-ID validator（#3）+ D 的 cellgen reject + cmd flag 绑定**收编进单源 `pkg/scaffoldid`**，必须等 B、D merge 后基于最新 develop 起，避免三方 rebase 冲突。
+- **A/B/C/D 已全部 merge**：A-API（`pathsafe.PlannedFile.ForceOverwrite` + duplicate-AbsPath preflight）+ B 的 `metadata.MatchAssemblyID` 入口 + D 的 cellgen single-plan funnel 全部在 develop。Lane E 前置完全就绪。
+- **Lane E 收尾**：#10 收编范围 = B 的 assembly-ID validator（#3）+ D 的 cellgen reject + cmd 三处 `validateAssemblyPathComponent`/同义副本 → 单源 `pkg/scaffoldid` typed funnel；同批可吸纳 cap-14 已登记的 [[PATHSAFE-PLANSET-TYPED-HARD-01]] + [[PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01]]（同属「scaffold input contract」概念域，Lane E 是其唯一窗口）。
 
-**关键路径** ≈ `A-API → D7(Cx3) → E10(Cx3)`。Lane C（Cx1×2）最短，优先 ship 清掉噪音。
+**关键路径**（余下）≈ `E10(Cx3) 单 PR`。计划进入尾声，仅 1 PR 即可全部清账。
 
 ---
 
@@ -139,7 +137,7 @@ t0 ┌── Lane A (worktree #1)  pkg/pathsafe          [A-API → A4 → A9]
 
 ## 全局执行约束
 
-1. **PR 栈关系**：A、B、C 独立基于 develop，可乱序 merge。D 基于 A 分支，A merge 后 D rebase develop。E 必须 B+D merge 后起。C 优先 ship（清噪音）。
+1. **PR 栈关系**（回灌后）：~~A（#526）、B（#527）、C（#539）、D（#544）已 merge~~。余下 **E 单 PR**，基于最新 develop 起，无栈无并行。
 2. **每 PR 独立 review/merge**，互不阻塞（用户指令：最大并行）。每 PR 描述含 contract-fanout implementation matrix（涉及 schema/interface/CI 变更的 Lane 适用）。
 3. **不登记 backlog**（用户指令）。PR #461 的 backlog 登记是独立轨，不阻塞本计划；本计划完成后这 10 条 gap 实质消失，#461 的对应行应在其自身轨道改判 done（不在本计划动作内）。
 4. **新约束同 PR 闭环**：仅 B8（reflect 字段 guard）、E10（typed funnel）引入新 enforcement，均要求同 PR 三件套（静态守卫+文档契约+回归测试）+ AI-rebust ≥ Medium（实际均 Hard），无 Soft 立项，无升级 backlog 甩单。

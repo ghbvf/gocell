@@ -1,7 +1,7 @@
 # archtest / governance 治理 Rollout 计划
 
 **生成日期**：2026-05-11
-**最近同步**：2026-05-16（origin/develop @ `41fc70074`，Wave 2 panic 单源 + Phase 2.1/2.2/3.1/3.2/3.3/3.4/3.5/3.7/3.8/3.9/**3.10** 已 ship；Phase 0.1 ✅ done，Phase 3.6 ❌ cancelled by PR #435；**Wave 2/3 实质工作 100% 收官**，剩余仅 §0 backlog 手动归档 + §4 触发型休眠待命。状态回灌：Phase 3.10 ✅ PR #480；§4 触发表 SERVICEOWNED ✅ PR #508 / CARVEOUT ✅ PR #503 / FINDFIRSTCHILD ✅ 037 PR-A1 #505）
+**最近同步**：2026-05-17（origin/develop @ `70d9137ff`，Wave 2 panic 单源 + Phase 2.1/2.2/3.1/3.2/3.3/3.4/3.5/3.7/3.8/3.9/**3.10** 已 ship；Phase 0.1 ✅ done，Phase 3.6 ❌ cancelled by PR #435；**Wave 2/3 实质工作 100% 收官**，剩余仅 §0 backlog 手动归档 + §4 触发型休眠待命。Wave 4 trigger 推进由分流 037-R2（见 [`202605162000-037r2-wave4-advance-round2.md`](202605162000-037r2-wave4-advance-round2.md)）独立排期：R2-P1 #521 / R2-P2 #540+#547 / R2-P3 #528+#530 ✅；R2-P5 spike ✅ #548；P5.1 待启动；本 036 主轴不变。状态回灌：Phase 3.10 ✅ PR #480；§4 触发表 SERVICEOWNED ✅ PR #508 / CARVEOUT ✅ PR #503 / FINDFIRSTCHILD ✅ 037 PR-A1 #505）
 **关系**：本文件是 `docs/plans/202605101300-ai-first-governance-charter.md`（AI-first 章程）的 **PR 级 rollout 视角**。章程是第一性原理 + 决策原则视角不动；本文件按 PR #445 复盘教训（scope 失控、多维捆绑）把章程 Wave 1-4 翻译成"单 PR = 单维度"的可独立 ship 的 PR 序列，含 Phase 顺序、依赖图、优先级。冲突时以本文件的拆分为准，章程的判断/原则不变。
 
 **核心拆分规则**：新增/修改工程机制的 PR 不得跨维度捆绑。维度清单：

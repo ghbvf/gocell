@@ -1,7 +1,7 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
-**最后更新**：2026-05-16（状态回灌：Wave 1 8/8 ship — PR-3 CLI-HARDEN ✅ #502 + PR-9 REPO-READYZ ✅ #506 + PR-4 JOURNEY-LIFECYCLE-GOV ✅ #520（+JOURNEY-CONTRACT-EXISTENCE-01 + JOURNEY-STATUS-LIFECYCLE-01 + 2 Hard upgrade backlog 登记）；**Wave 2 1/2 ship — PR-11 OIDC-JWKS-ROTATION-WORKER ✅ #504**，剩 PR-5 GOV-NEW-RULES ⏳；**Wave 4 3/5 ship — ADAPTER-ERR-CLASS ✅ #517 / C-02 ✅ #518 / STARTUP-ROLLBACK ✅ #499**，剩 R-01+G-08 batch / ADAPTER-CONN-BUDGET ⏳；040 阶段 1 ✅ PR #492 → PR-5 阻塞解除。修正 PR-4/PR-9 branch 占位符为实际编号 #520/#506，回灌 PR-11/Wave-4 漏标）
+**最后更新**：2026-05-17 v2（状态回灌：**Wave 6 +1 — PR-W6-1 CONTRACT-TEST-GATE ✅ PR #543**（038 Wave 6 PR-W6-1 一并 ship 3 子项：A SCHEMAREF-FAILFAST-01 zero-code close + B ENDPOINT-TEST-MAPPING-01 governance rule + C PATH-QUERY-EXECUTABLE-01 contracttest 4 API + 全覆盖 23 contract + archtest GATE；衍生 Hard 升级 backlog cap-14 `CONTRACT-ENDPOINT-TEST-MAPPING-HARD-CODEGEN-01`）。**Wave 4 4/5 ship**（新增 ADAPTER-CONNECT-BUDGET-01 ✅ **PR #541**），剩 R-01+G-08 batch ⏳；**Wave 5 1/3 ship — BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE ✅ PR #531**，剩 G-10 / SEALED-MARKER-DEFENSE 束；**Wave 6 2/? — S3-FAILURE-INJECTION-01 ✅ PR #538 + PR-W6-1 ✅ PR #543**。Wave 1 8/8 / Wave 2 PR-11 ✅ 不变。**前一版**：2026-05-17 v1 仅 Wave 6 1/?（S3 #538）；2026-05-16 Wave 4 3/5；Wave 5 0/3；无 Wave 6。）
 **关系**：
 - [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S3+S5/S3F/S4.0/S4a/S4b 已 ship；S4c 串行推进）。本计划不重复 accesscore 路线
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
@@ -189,17 +189,25 @@ Wave 2（依赖 Wave 1，2 PR） — 1/2 ship：
 Wave 3（依赖 Wave 1）：
   TEST-JOURNEY-ROOT-HARNESS-01      ← 依赖 PR-4 ✅ #520 → 前置已达成，可起（harness 本体未启动）
 
-Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突） — 3/5 ship：
+Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突） — 4/5 ship：
   R-01 + G-08 同 batch（分 PR review）              ⏳ 未起
   C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE              ✅ PR #518 (035 PR-CFG-CACHE-LIFECYCLE)
   STARTUP-ROLLBACK-ERR-JOIN-01                      ✅ PR #499
   ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01         ✅ PR #517
-  ADAPTER-CONNECT-BUDGET-01                         ⏳ 未起（🟡 P1，cap-x-cross）
+  ADAPTER-CONNECT-BUDGET-01                         ✅ PR #541 (Wave-4-B, 2026-05-17) — PG/RMQ ConnectTimeout 码 + RMQ classifyConnectError funnel + Health/AcquireChannel explicit-close 不对称同 PR 闭环（ErrAdapterAMQPClosed + c.closed 前置）
 
-Wave 5（架构性重构，独立排期，不阻塞发布）：
+Wave 5（架构性重构，独立排期，不阻塞发布） — 1/3 ship：
   G-10 KERNEL-CELL-PACKAGE-DECOMPOSE
   SEALED-MARKER-DEFENSE-EXPANSION-BUNDLE (7 子条)
-  BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE (3 子条)
+  BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE (3 子条) ✅ PR #531 (2026-05-17) — C.1 时钟二分 / C.2 OwnerCtx / C.3 sweep 可观测；ADR 202605170000 supersede 202605102000 §D1/§D3
+
+Wave 6（cap-x-cross 触发型小 PR 簇 / 发布前 contract 测试门禁簇）：
+  PR-W6-1 CONTRACT-TEST-GATE                        ✅ PR #543 (2026-05-17) — 3 子项一并 ship (激进自审 v2 收口)：
+                                                       (A) SCHEMAREF-FAILFAST-01 zero-code close（行为已 RED 锁于 mockTB 反向测）；
+                                                       (B) ENDPOINT-TEST-MAPPING-01 governance rule (kernel/governance/rules_contract_test_mapping.go, SeverityError + ; fix: 后缀, ADV-06 同形态) — 反向校验 33 个 active HTTP contract 全部已合规，0 slice.yaml 修补；
+                                                       (C) PATH-QUERY-EXECUTABLE-01 contracttest 新 4 API (ValidatePathParam/MustRejectPathParam/ValidateQueryParam/MustRejectQueryParam) + 全覆盖 23 个声明 path/queryParams 的 active HTTP contract (10 contract_test.go 补 rejected 用例) + archtest `CONTRACT-PATH-QUERY-COVERAGE-01` Medium GATE (RunTypedProduction + scanner.EachContentFile + 反向自检 fixture)。
+                                                       衍生 Hard 升级 backlog cap-14 `CONTRACT-ENDPOINT-TEST-MAPPING-HARD-CODEGEN-01`（rule godoc 已点名，非 silent carryover）。
+  S3-FAILURE-INJECTION-01                           ✅ PR #538 (2026-05-17) — MinIO testcontainer + transport mock 故障注入；Upload/Health/Worker × {403/5xx/timeout/recovery} 11 单元 + 3 集成；ReadyProbeName const 单源；衍生 backlog S3-CLASSIFYERROR-CONN-REFUSED-01 + OPS-CONTRACT-STRING-FUNNEL-01
 
 外部进行中（不在本计划内但相关）：
   034 S4a ✅ PR #482 → S4b ✅ PR #490 → S4c (accesscore PG 链，串行；S4a/S4b 已 ship)
@@ -241,13 +249,14 @@ Wave 5（架构性重构，独立排期，不阻塞发布）：
 | PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8 ✅） | 4h | 2h | ✅ PR #504 | periodic re-discovery worker + refresh metric (A-02)；PR-8 unblock |
 | PR-5 GOV-NEW-RULES | 4h | 2h | ⏳ 可起（040 阶段 1 ✅ PR #492 解锁）| PR-6 ✅；保持合并；V-A11 archtest 走 `archtest.Run`/`RunTyped`（Wave 2 唯一遗留）|
 | Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 8h | 4h | ⏳ 可起（PR-4 ✅ #520 解锁）| integration harness |
-| Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | 🟡 3/5 | ✅ **ADAPTER-ERR-CLASS PR #517** / **C-02 PR #518**（035 PR-CFG-CACHE-LIFECYCLE）/ **STARTUP-ROLLBACK PR #499**；剩 2 项 ⏳：R-01+G-08 batch 10h+5h / ADAPTER-CONN-BUDGET 4h+2h |
-| Wave 5 架构重构 | 独立排期 | — | — | G-10 / SEALED / BOOTSTRAP 束 |
+| Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | 🟡 4/5 | ✅ **ADAPTER-ERR-CLASS PR #517** / **C-02 PR #518**（035 PR-CFG-CACHE-LIFECYCLE）/ **STARTUP-ROLLBACK PR #499** / **ADAPTER-CONN-BUDGET PR #541**；剩 1 项 ⏳：R-01+G-08 batch 10h+5h |
+| Wave 5 架构重构 | 独立排期 | — | 🟡 1/3 | ✅ BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE PR #531；剩 G-10 / SEALED 束 |
+| Wave 6 cap-x-cross 触发型 + 发布前 contract 测试门禁簇 | 独立排期 | — | 🟡 2/? | ✅ S3-FAILURE-INJECTION-01 PR #538；✅ PR-W6-1 CONTRACT-TEST-GATE PR #543（A/B/C 三子项一并 ship + Hard 升级 backlog 同 PR 登记）|
 
 **累计**：
-- ✅ shipped (9 PR + Wave 4 3 项): ~78h dev / ~37h review（PR-1/2/3/4/6/7/8/9/11 + Wave 4: ADAPTER-ERR-CLASS #517 / C-02 #518 / STARTUP-ROLLBACK #499）
-- ⏳ 待启动 (Wave 2 剩余 + Wave 3 + Wave 4 剩余): ~26h dev / ~13h review（PR-5 + Wave 3 TEST-JOURNEY-ROOT-HARNESS + Wave 4: R-01+G-08 / ADAPTER-CONN-BUDGET）
-- 进度：Wave 1 8/8 ship（100%）；Wave 2 1/2 ship；Wave 4 3/5 ship；038 整体 dev 进度 ~76%（按原计划 102h 总分母）
+- ✅ shipped (9 Wave1 PR + Wave 2 PR-11 + Wave 4 4 项 + Wave 5 1 项 + Wave 6 1 项): ~87h dev / ~42h review（PR-1/2/3/4/6/7/8/9/11 + Wave 4: ADAPTER-ERR-CLASS #517 / C-02 #518 / STARTUP-ROLLBACK #499 / ADAPTER-CONN-BUDGET #541 + Wave 5: #531 + Wave 6: #538）
+- ⏳ 待启动 (Wave 2 剩余 + Wave 3 + Wave 4 剩余): ~22h dev / ~11h review（PR-5 + Wave 3 TEST-JOURNEY-ROOT-HARNESS + Wave 4: R-01+G-08）
+- 进度：Wave 1 8/8 ship（100%）；Wave 2 1/2 ship；Wave 4 4/5 ship；Wave 5 1/3 ship；038 整体 dev 进度 ~82%（按原计划 102h 总分母）
 
 ---
 
