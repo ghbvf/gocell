@@ -70,6 +70,14 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.Topic", err)
 	}
+	// Producer-side observability fail-fast (PR #582 round-3 review F2/F3):
+	// TraceParent is a `string` (W3C format, not SafeID) — without this
+	// explicit revalidate, an unsafe TraceParent in entry.Observability
+	// would slip past SafeID's UnmarshalJSON-driven funnel and reach wire.
+	if err := entry.Observability.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
+			"outbox: marshal envelope: invalid observability", err)
+	}
 	msg := WireMessage{
 		SchemaVersion: EnvelopeSchemaV1,
 		ID:            id,
@@ -110,6 +118,17 @@ func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 	if msg.EventType == "" {
 		return Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: envelope missing required field: eventType")
+	}
+	// Wire-side observability fail-closed (PR #582 round-3 review F3):
+	// SafeID.UnmarshalJSON covers ID-shaped fields automatically, but
+	// TraceParent is `string` with W3C format validator (validTraceParent)
+	// that only runs inside ObservabilityMetadata.Validate(). Without this
+	// explicit call, an envelope with malformed traceparent flows through
+	// to slog/trace consumers. Mirrors OpenTelemetry propagation.
+	// TraceContext.Extract pattern (validate every field at decode time).
+	if err := msg.Observability.Validate(); err != nil {
+		return Entry{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
+			"outbox: envelope observability invalid", err)
 	}
 	entryTopic := string(msg.Topic)
 	if entryTopic == "" {

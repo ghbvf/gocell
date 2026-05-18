@@ -86,26 +86,45 @@ const (
 	observabilityType = "ObservabilityMetadata"
 )
 
-// safeIDRequiredFields maps named types in kernel/outbox to the subset of
-// exported fields that MUST be typed idutil.SafeID. Adding a new ID-shaped
-// wire field requires extending this map; renaming a covered field without
-// updating this map will fail the "field not found" branch below.
-var safeIDRequiredFields = map[string][]string{
-	wireMessageType:   {"ID", "AggregateID", "AggregateType", "EventType", "Topic"},
-	observabilityType: {"TraceID", "RequestID", "CorrelationID"},
+// safeIDExemptFields lists, per guarded type, the exported fields that are
+// legitimately NOT typed idutil.SafeID. The reverse direction is the funnel
+// invariant: **every other exported field on WireMessage / ObservabilityMetadata
+// MUST be SafeID**. Adding a new field to either type defaults to
+// "SafeID required" — exempting it requires explicit reviewer judgment by
+// adding an entry here with a one-line rationale.
+//
+// Deny-by-default mirrors Kubernetes API server's runtime.Decode pattern:
+// new fields cannot silently slip past validation by being absent from a
+// required-list; they are caught by reflective field walking that requires
+// either a typed wrapper or an explicit carve-out.
+var safeIDExemptFields = map[string]map[string]string{
+	wireMessageType: {
+		"SchemaVersion": "envelope version literal, not ID-shaped (e.g. \"v1\")",
+		"Payload":       "json.RawMessage business payload bytes",
+		"Metadata":      "map[string]string business metadata (validated separately by validateMetadata)",
+		"Observability": "nested ObservabilityMetadata struct, walked recursively",
+		"CreatedAt":     "time.Time, not ID-shaped",
+	},
+	observabilityType: {
+		"TraceParent": "W3C 55-byte fixed-format string with its own validator (validTraceParent)",
+	},
 }
 
-// safeIDBlindSpotAllowlist lists structs that legitimately keep string-typed
-// ID-shaped fields. Entry is the in-memory representation populated AFTER
-// UnmarshalEnvelope has validated SafeID at the wire boundary; downstream
-// code (slog.String, PG columns) consumes plain string. Adding a struct
-// here requires reviewer judgment that it is NOT a wire-decode entry point.
+// safeIDBlindSpotAllowlist lists OTHER named structs in kernel/outbox that
+// legitimately hold string-typed ID-shaped fields. Entry is the in-memory
+// representation populated AFTER UnmarshalEnvelope validates wire input;
+// downstream code (slog.String, PG columns) consumes plain string. Adding
+// a struct here requires reviewer judgment that it is NOT a wire-decode
+// entry point.
 var safeIDBlindSpotAllowlist = map[string]struct{}{
 	"Entry": {},
 }
 
-// TestSAFEIDWireMessageUsage01 asserts that every field listed in
-// safeIDRequiredFields is declared with type idutil.SafeID.
+// TestSAFEIDWireMessageUsage01 reflectively asserts that every exported
+// field on WireMessage and ObservabilityMetadata is either typed
+// idutil.SafeID or explicitly carved out in safeIDExemptFields. A new field
+// default-fails until a reviewer either types it SafeID or registers a
+// carve-out with rationale (deny-by-default).
 func TestSAFEIDWireMessageUsage01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -126,18 +145,20 @@ func TestSAFEIDWireMessageUsage01(t *testing.T) {
 	Report(t, "SAFEID-WIREMESSAGE-USAGE-01", diags)
 }
 
+// checkSafeIDFields walks the guarded types and emits a diagnostic for every
+// exported field that is neither SafeID-typed nor explicitly exempted.
 func checkSafeIDFields(pkg *types.Package) []Diagnostic {
 	var diags []Diagnostic
 
 	// Deterministic iteration: sort type names so failure messages are stable.
-	typeNames := make([]string, 0, len(safeIDRequiredFields))
-	for tn := range safeIDRequiredFields {
+	typeNames := make([]string, 0, len(safeIDExemptFields))
+	for tn := range safeIDExemptFields {
 		typeNames = append(typeNames, tn)
 	}
 	sort.Strings(typeNames)
 
 	for _, typeName := range typeNames {
-		want := safeIDRequiredFields[typeName]
+		exempt := safeIDExemptFields[typeName]
 		obj := pkg.Scope().Lookup(typeName)
 		if obj == nil {
 			diags = append(diags, Diagnostic{
@@ -160,30 +181,24 @@ func checkSafeIDFields(pkg *types.Package) []Diagnostic {
 			continue
 		}
 
-		got := make(map[string]types.Type, strct.NumFields())
 		for i := 0; i < strct.NumFields(); i++ {
 			f := strct.Field(i)
-			got[f.Name()] = f.Type()
-		}
-		for _, fieldName := range want {
-			ft, present := got[fieldName]
-			if !present {
-				diags = append(diags, Diagnostic{
-					Message: fmt.Sprintf(
-						"SAFEID-WIREMESSAGE-USAGE-01: %s.%s missing required field %q; "+
-							"rename or removal must keep the field typed idutil.SafeID",
-						pkg.Path(), typeName, fieldName),
-				})
+			if !f.Exported() {
 				continue
 			}
-			if !isSafeIDType(ft) {
-				diags = append(diags, Diagnostic{
-					Message: fmt.Sprintf(
-						"SAFEID-WIREMESSAGE-USAGE-01: %s.%s.%s has type %s; "+
-							"must be idutil.SafeID so SafeID.UnmarshalJSON validates wire input (CWE-117)",
-						pkg.Path(), typeName, fieldName, ft.String()),
-				})
+			if _, exempted := exempt[f.Name()]; exempted {
+				continue
 			}
+			if isSafeIDType(f.Type()) {
+				continue
+			}
+			diags = append(diags, Diagnostic{
+				Message: fmt.Sprintf(
+					"SAFEID-WIREMESSAGE-USAGE-01: %s.%s.%s has type %s; "+
+						"must be idutil.SafeID or registered in safeIDExemptFields with rationale "+
+						"(deny-by-default — new fields default to SafeID required to keep CWE-117 funnel intact)",
+					pkg.Path(), typeName, f.Name(), f.Type().String()),
+			})
 		}
 	}
 	return diags
@@ -204,19 +219,33 @@ func isSafeIDType(t types.Type) bool {
 	return tn.Pkg().Path() == safeIDPkgPath && tn.Name() == safeIDTypeName
 }
 
+// safeIDWireFieldNames is the closed set of canonical ID-shaped field names
+// the BlindSpot detector looks for in other structs. Extending this set
+// requires reviewer judgment; it is intentionally narrow (canonical names
+// only) to keep the heuristic conservative — false-positives are cheap
+// (just add the struct to safeIDBlindSpotAllowlist with rationale).
+var safeIDWireFieldNames = map[string]struct{}{
+	"ID":            {},
+	"AggregateID":   {},
+	"AggregateType": {},
+	"EventType":     {},
+	"Topic":         {},
+	"TraceID":       {},
+	"RequestID":     {},
+	"CorrelationID": {},
+}
+
 // TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct asserts that no
 // other struct in kernel/outbox has the same shape as WireMessage (i.e.
 // id/eventType/aggregateId fields typed string) — covers the blind spot
 // noted in the package godoc: a parallel wire struct that reintroduces
 // untyped fields.
 //
-// Known limitation: this detector only checks field names present in the
-// safeIDRequiredFields map (ID / AggregateID / AggregateType / EventType /
-// Topic / TraceID / RequestID / CorrelationID). A new wire-shape struct that
-// uses alternative ID-shaped field names such as SourceID, CorrelationKey,
-// or SenderID will not be detected. When adding new ID-shaped fields to any
-// wire struct, reviewers must explicitly extend safeIDRequiredFields to cover
-// the new names.
+// Known limitation: this detector only checks canonical field names listed
+// in safeIDWireFieldNames. A new wire-shape struct using alternative
+// ID-shaped names (SourceID, CorrelationKey, SenderID) will not be detected.
+// When adding such names to any wire struct, reviewers must extend
+// safeIDWireFieldNames or directly carve out in safeIDExemptFields.
 func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -250,9 +279,9 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 				// Heuristic: if a non-allowlisted exported struct has both
 				// an exported ID-like field AND an exported EventType/Topic
 				// field, treat it as a candidate envelope. ID-like = field
-				// whose name matches our safeIDRequiredFields entries on
-				// WireMessage. This is intentionally conservative — we want
-				// failure on any new wire-like struct.
+				// whose name matches safeIDWireFieldNames. This is
+				// intentionally conservative — we want failure on any new
+				// wire-like struct.
 				suspectCount := 0
 				suspectFields := []string{}
 				for i := 0; i < strct.NumFields(); i++ {
@@ -260,7 +289,7 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 					if !f.Exported() {
 						continue
 					}
-					if !isWireFieldName(f.Name()) {
+					if _, ok := safeIDWireFieldNames[f.Name()]; !ok {
 						continue
 					}
 					if isSafeIDType(f.Type()) {
@@ -275,7 +304,7 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 					diags = append(diags, Diagnostic{
 						Message: fmt.Sprintf(
 							"SAFEID-WIREMESSAGE-USAGE-01/BlindSpot: %s.%s looks like a parallel wire envelope "+
-								"(string-typed fields %s) — extend safeIDRequiredFields or change the fields to idutil.SafeID",
+								"(string-typed fields %s) — change the fields to idutil.SafeID or register the struct in safeIDBlindSpotAllowlist",
 							p.Pkg.Path(), name, strings.Join(suspectFields, ", ")),
 					})
 				}
@@ -284,17 +313,4 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 		})
 
 	Report(t, "SAFEID-WIREMESSAGE-USAGE-01/BlindSpot/NewWireStruct", diags)
-}
-
-// isWireFieldName reports whether name matches an ID-shaped wire field
-// (any field listed in safeIDRequiredFields, across all guarded types).
-func isWireFieldName(name string) bool {
-	for _, names := range safeIDRequiredFields {
-		for _, n := range names {
-			if n == name {
-				return true
-			}
-		}
-	}
-	return false
 }
