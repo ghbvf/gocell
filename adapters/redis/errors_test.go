@@ -124,6 +124,18 @@ func TestClassifyRedisError(t *testing.T) {
 			err:       fmt.Errorf("cache get: %w", goredis.ErrPoolTimeout),
 			transient: true,
 		},
+		{
+			// Semantic lock: when an error chain contains BOTH context.Canceled
+			// and a net.Error (*net.OpError), errcode.IsTransientNet hits the
+			// net.Error in the chain → transient. This documents the expected
+			// branch-order behavior: net.Error check (IsTransientNet) fires
+			// before the context.Canceled permanent check. Preventing future
+			// accidental reordering that would route this to permanent.
+			name: "context.Canceled wrapping *net.OpError — IsTransientNet hits, transient",
+			err: fmt.Errorf("cancel: %w (net: %w)", context.Canceled,
+				&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}),
+			transient: true,
+		},
 	}
 
 	for _, tc := range tests {

@@ -31,6 +31,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -838,6 +839,19 @@ func TestIsTransientVaultError_ContextError(t *testing.T) {
 		{
 			name:      "errcode.ErrKeyProviderTransient → transient",
 			err:       errcode.WrapInfra(errcode.ErrKeyProviderTransient, "rate limited", nil),
+			wantTrans: true,
+		},
+		{
+			// Regression: dial-refused on a Vault container that is restarting
+			// surfaces as *net.OpError + syscall.ECONNREFUSED. Post-fix this is
+			// transient (ADAPTER-NET-TRANSIENT-FUNNEL-01 funnel via
+			// errcode.IsTransientNet — any net.Error in chain → transient).
+			name: "*net.OpError + ECONNREFUSED (dial refused) → transient",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: syscall.ECONNREFUSED,
+			},
 			wantTrans: true,
 		},
 	}

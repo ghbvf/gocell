@@ -47,6 +47,10 @@ func regressedHelperTimeout(err error) bool {
 // regressedHelperNarrow narrows to *net.OpError specifically — also a
 // regression of the helper form. The helper-form detector must report it
 // (RED).
+//
+// Narrowing to *net.OpError alone misses *net.DNSError, *net.AddrError, and
+// other net.Error implementations — the helper must key on the net.Error
+// interface, not on any specific subtype.
 func regressedHelperNarrow(err error) bool {
 	var n net.Error
 	if !errors.As(err, &n) {

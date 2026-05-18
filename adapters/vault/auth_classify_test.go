@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"testing"
 
 	vaultapi "github.com/hashicorp/vault/api"
@@ -107,6 +108,16 @@ func TestClassifyAuthLoginError_Table(t *testing.T) {
 			err: errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "login",
 				&vaultapi.ResponseError{StatusCode: 400, Errors: []string{"invalid role_id"}}),
 			want: reasonAuthInvalid,
+		},
+		{
+			// Dial-refused on a Vault container that is restarting surfaces as
+			// *net.OpError + syscall.ECONNREFUSED. classifyAuthLoginError checks
+			// var n net.Error (allowlisted); ECONNREFUSED implements net.Error
+			// and does NOT have Timeout()==true → falls to the Timeout==false
+			// (non-timeout) net.Error branch → reasonNetwork metric label.
+			name: "*net.OpError + ECONNREFUSED (dial refused) → network",
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
+			want: reasonNetwork,
 		},
 	}
 

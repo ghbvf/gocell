@@ -46,6 +46,11 @@ import (
 // Returns true for any net.Error (timeout class, *net.OpError dial refused /
 // connection reset, *net.DNSError). Returns false for nil and for errors
 // that do not implement net.Error.
+//
+// For classified *errcode.Error values, use errcode.IsTransient — that
+// predicate keys on the WrapInfra transient marker and handles both
+// classified and unclassified errors. IsTransientNet is the adapter-side
+// helper for the net.Error fan-in branch only.
 func IsTransientNet(err error) bool {
 	var n net.Error
 	return errors.As(err, &n)

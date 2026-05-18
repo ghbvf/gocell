@@ -60,6 +60,25 @@ func TestIsTransientNet(t *testing.T) {
 			err:  &net.DNSError{Err: "no such host", Name: "example.invalid"},
 			want: true,
 		},
+		{
+			// errors.Join multi-chain: net.Error anywhere in the joined chain
+			// must be detected (errors.As traverses joined errors).
+			name: "errors.Join with *net.OpError in second branch → transient",
+			err: errors.Join(
+				errors.New("other error"),
+				&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
+			),
+			want: true,
+		},
+		{
+			// NXDOMAIN: *net.DNSError with IsNotFound=true is still a net.Error;
+			// accepted trade-off per ADR 202605161800 — any net.Error → transient
+			// (DNS misconfiguration is transient in the sense that a retry may
+			// reach a repaired resolver or re-resolve successfully).
+			name: "*net.DNSError NXDOMAIN (IsNotFound=true) → transient (accepted trade-off per ADR 202605161800)",
+			err:  &net.DNSError{Err: "no such host", Name: "example.invalid", IsNotFound: true},
+			want: true,
+		},
 	}
 
 	for _, tc := range tests {

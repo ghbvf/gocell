@@ -179,6 +179,11 @@ func IsTransient(err error) bool {
 
 	// Tier 2: raw, un-classified low-level error only.
 	// context.Canceled is intentionally excluded (caller gave up).
+	//
+	// Adapter classifiers performing raw net.Error classification should use
+	// errcode.IsTransientNet for the net.Error branch (any net.Error →
+	// transient, symmetric across adapters; routed through ADAPTER-NET-
+	// TRANSIENT-FUNNEL-01).
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

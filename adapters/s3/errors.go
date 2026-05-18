@@ -48,9 +48,11 @@ const (
 // wraps it via the appropriate errcode funnel:
 //
 //   - Transient (safe to retry): AWS SDK response with HTTP status in
-//     {408, 429, 500, 502, 503, 504}; context.DeadlineExceeded;
-//     net.Error.Timeout() == true. Routed through errcode.WrapInfra so that
-//     errcode.IsTransient returns true.
+//     {408, 429, 500, 502, 503, 504}; AWS API retryable error codes
+//     (RequestTimeout / SlowDown / Throttling / …); context.DeadlineExceeded;
+//     any `net.Error` in chain (timeout, `*net.OpError` dial refused /
+//     connection reset, `*net.DNSError`) via `errcode.IsTransientNet`.
+//     Routed through errcode.WrapInfra so that errcode.IsTransient returns true.
 //   - Permanent: all other errors (403, 404, 400, context.Canceled, plain
 //     errors). Routed through errcode.Wrap with KindInternal.
 //

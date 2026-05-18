@@ -31,9 +31,9 @@
 //     to import `net`, which `*types.Info.ObjectOf(spec.Type.Sel).Pkg().Path()`
 //     resolves authoritatively. Compensation: Go type system.
 //  2. Type alias for net.Error (`type myNetErr = net.Error; var x myNetErr`):
-//     `*types.Info.TypeOf(spec.Type)` resolves through the alias to the
-//     underlying interface type. The check uses `.Underlying() == netErrorIface`
-//     match, robust to aliases. Compensation: typed resolution.
+//     Go alias semantics guarantee `TypeOf` on aliased `net.Error` still returns
+//     `*types.Named`; the `!ok` branch is unreachable for alias declarations.
+//     Compensation: Go type system (alias transparency).
 //  3. `errors.As(err, &x)` where x has interface type assignable to net.Error
 //     but is declared via short var `x := someFunc()` instead of `var x net.Error`:
 //     Go's errors.As signature requires `&x` where *x implements net.Error or
@@ -53,6 +53,12 @@
 // RunTypedFixture and asserts the synthetic regressed forms are reported,
 // while the clean form is not. Bypassing the reverse self-check requires
 // editing the real fixture source.
+//
+// File-naming note: this file declares 2 related rules sharing the
+// net.Error transient funnel theme (ADAPTER-NET-TRANSIENT-FUNNEL-01 +
+// TRANSIENT-NET-HELPER-FORM-01). Per ai-collab.md §archtest 文件命名,
+// the `_invariants_test.go` rename is triggered once a third related
+// rule lands. Until then this single-file form is intentional.
 package archtest
 
 import (
@@ -224,6 +230,28 @@ func TestADAPTER_NET_TRANSIENT_FUNNEL_01_FixturePattern(t *testing.T) {
 		"helper-form detector must flag the Timeout() filter regression "+
 			"in regressedHelperTimeout body")
 
+	// Helper-form detector: targeting the synthetic "regressedHelperNarrow"
+	// function name; expect 1 RED diag (*net.OpError narrowing present).
+	// Verifies each regressed form independently, each verified independently
+	// (asserts the detector catches both regressed forms, each verified independently).
+	narrowDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{fixturePattern},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			if p.Pkg.Path() != fixturePkgPath {
+				return nil
+			}
+			return scanHelperFormViolations(p, "regressedHelperNarrow")
+		})
+	for _, d := range narrowDiags {
+		t.Logf("helper-form regressedHelperNarrow: %s", d.Message)
+	}
+	require.NotEmpty(t, narrowDiags,
+		"helper-form detector must flag the *net.OpError narrowing regression "+
+			"in regressedHelperNarrow body")
+
 	// Also confirm the clean shape (allowedSite) is NOT flagged when targeted.
 	cleanDiags := RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{fixturePattern},
@@ -383,6 +411,10 @@ func scanHelperFormViolations(p *Pass, funcName string) []Diagnostic {
 // isNetErrorTypeExpr reports whether typeExpr resolves to the stdlib
 // net.Error interface type. Handles both direct `net.Error` SelectorExpr and
 // any alias whose underlying type is net.Error.
+//
+// Go alias semantics guarantee that TypeOf on an aliased net.Error still
+// returns *types.Named (alias transparency); the !ok branch is unreachable
+// for alias declarations (blind spot #2 — compensated by Go type system).
 func isNetErrorTypeExpr(info *types.Info, typeExpr ast.Expr) bool {
 	t := info.TypeOf(typeExpr)
 	if t == nil {
@@ -390,16 +422,6 @@ func isNetErrorTypeExpr(info *types.Info, typeExpr ast.Expr) bool {
 	}
 	named, ok := t.(*types.Named)
 	if !ok {
-		// Aliases / instantiated interfaces still report as *types.Named via
-		// the resolution chain. Walk the chain via Underlying() and re-check.
-		und := t.Underlying()
-		iface, ok := und.(*types.Interface)
-		if !ok {
-			return false
-		}
-		// Cross-check against the canonical net.Error by looking for a Sel
-		// that resolves to "Error" in package "net".
-		_ = iface
 		return false
 	}
 	if named.Obj() == nil || named.Obj().Pkg() == nil {
@@ -460,6 +482,11 @@ func isNetSubtype(info *types.Info, typeExpr ast.Expr) bool {
 // inEnforcementScope reports whether pkgPath is in the enforcement domain
 // (any adapter package + pkg/errcode). Untracked packages outside this scope
 // (e.g., kernel, runtime) are silently exempt.
+//
+// kernel/, runtime/, cells/ packages are exempt: they do not perform
+// adapter-level transient classification; introducing net.Error transient
+// gating there is explicitly out of scope of this rule. pkg/errcode is
+// enforced via the allowlist (helper site).
 func inEnforcementScope(pkgPath string) bool {
 	for prefix := range netErrorAllowlist {
 		// "/adapters/..." and "/pkg/errcode" — match by suffix-rooted prefix.
