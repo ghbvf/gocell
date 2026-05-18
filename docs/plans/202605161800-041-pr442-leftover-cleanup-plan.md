@@ -4,7 +4,7 @@
 
 - **PR #442**（K#09 SCAFFOLD-ONE-CMD，已 merged @ 2026-05-10）round-4/5/6 主线 P1 已闭环。
 - **PR #461**（OPEN，docs/backlog-only）对 PR #442 做了 root-cause triage（`docs/reviews/202605111231-804-pr442-root-cause-triage.md`），登记 6 个新 gap + 收窄 3 处 over-claim done。
-- 本计划基线 `develop == 41fc70074`（已超过 triage 基线 `47cd9e018`）。**进度回灌（2026-05-17，develop `70d9137ff` 逐项源码核对）：9/10 已闭环** —— Lane A（#4/#9/A-API）by **PR #526**、Lane B（#2/#3/#8）by **PR #527**、Lane C（#1/#6）by **PR #539**、Lane D（#5/#7）by **PR #544**；剩余真 TODO 仅 1 项（Lane E #10），逐项「实况」见下表状态列。
+- 本计划基线 `develop == 41fc70074`（已超过 triage 基线 `47cd9e018`）。**进度回灌（2026-05-18，develop `acbe58a` 逐项源码核对）：10/10 全部闭环 ✅** —— Lane A（#4/#9/A-API）by **PR #526**、Lane B（#2/#3/#8）by **PR #527**、Lane C（#1/#6）by **PR #539**、Lane D（#5/#7）by **PR #544**、Lane E（#10）by **PR #555**（`6bc9445` "refactor(scaffold): Lane E — typed ScaffoldID + PlanSet + DerivedOverwrite Hard funnels"）。**本计划全部清账，可归档。**
 - 用户指令：**不登记 backlog**，按文件冲突域**最大并行**处理。PR #461 的 backlog 登记是独立动作，不在本计划内（本计划直接修代码，不依赖 #461 merge）。
 
 ### 遗留任务清单（status = develop `70d9137ff` 2026-05-17 实地核对）
@@ -20,7 +20,7 @@
 | 7 | SCAFFOLD-CELL-BUNDLE-CROSS-STAGE-PLAN-MERGE-01 | `scaffold.go:442` dry-run 在 `:462 autoGenerateCellBundleArtifacts` 前 return；派生文件跨阶段无 rollback | P2/Cx3 | ✅ **DONE PR #544** (Lane D) — 新 `tools/codegen/cellgen/stage_render.go` 把骨架物化到 `os.MkdirTemp` 经 `pathsafe.WritePlannedFiles` 自身（funnel 不绕过），渲染派生后 re-base 到 real root + `ForceOverwrite:true` 并入单 plan；`--dry-run` 含派生路径；删除 `ScaffoldCellBundle/PlanCellBundleForDryRun/autoGenerateCellBundleArtifacts/printScaffoldCellDryRunPlan/ScaffoldSpec.DryRun`，新增 `PlanCellBundleScaffold` + `ScaffoldSpec.SkipGenerate` + `contractgen.ContractIDsForCell`。**SCAFFOLD-WRITE-FUNNEL-01 零 carve-out**。Follow-up Hard 升级登记于 cap-14 `PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01`（与 `PATHSAFE-PLANSET-TYPED-HARD-01` 同批 Lane E 收编） |
 | 8 | ASSEMBLY-META-SYNTHESIS-FIELD-GUARD | `generator.go:359` 仍 `// Build.Binary intentionally omitted`，浅复制无字段 guard | P2/Cx2 | ✅ **DONE PR #527** — Build.Binary 已派生；reflect 字段 Hard guard 落 `kernel/assembly/synthesize_field_guard_test.go`（非计划预测的 `tools/archtest/assembly_meta_*` 路径） |
 | 9 | PATHSAFE-COLLECT-MISSING-DIRS-EACCES-01 | `pathsafe.go:359` `os.Stat;os.IsNotExist`，EACCES 不区分 → rollback 漏删 | P3/Cx2 | ✅ **DONE PR #526** (Lane A) |
-| 10 | SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01 | `pkg/scaffoldid` 不存在；输入校验散在 cmd/cellgen/assembly 三处副本 | P2/Cx3 | ❌ TODO (Lane E) — 核对：`pkg/scaffoldid` 仍不存在 |
+| 10 | SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01 | `pkg/scaffoldid` 不存在；输入校验散在 cmd/cellgen/assembly 三处副本 | P2/Cx3 | ✅ **DONE PR #555** (Lane E) — 核对 develop `acbe58a`：`pkg/scaffoldid/scaffoldid.go` 已存在（`type ScaffoldID struct` + `func Parse(raw) (ScaffoldID, error)` 单源 funnel + `String()/IsZero()` accessor）；spec 字段类型升级为 `scaffoldid.ScaffoldID`，`generator.go` 内 `metadata.MatchAssemblyID`/循环 `MatchCellID` 重复检查删除（typed 已保证），类型转换仅 `pkg/scaffoldid` 包内；同批吸纳 `PATHSAFE-PLANSET-TYPED-HARD-01` + `PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01`（PlanSet + DerivedOverwrite Hard funnel）；38 文件 +1504/-779 |
 
 ### 显式不在范围（已闭环，不重做）
 
@@ -40,7 +40,7 @@
 | ~~**B** assembly generator~~ ✅ #527 | `kernel/assembly/**`（实装 guard 落 `kernel/assembly/synthesize_field_guard_test.go`） | #2, #3, #8 | — merged |
 | ~~**C** docs/CI 孤立~~ ✅ #539 | `cmd/gocell/app/generate.go`、`README.md`、`docs/guides/codegen-new-endpoint.md`、`tools/generatedverify/`、`tools/archtest/codegen_invariants_test.go`、`.github/workflows/_build-lint.yml` | #1, #6 | — merged |
 | ~~**D** scaffold cell/bundle~~ ✅ #544 | `tools/codegen/cellgen/{scaffold_bundle.go,scaffold.go,stage_render.go(新)}`、`tools/codegen/contractgen/generator.go`、`cmd/gocell/app/scaffold.go` | #5, #7 | — merged |
-| **E** typed scaffold ID（收尾） | `pkg/scaffoldid/**`（新）+ 三处 spec 字段类型升级 | #10 | `develop`（A/B/C/D 前置全部满足） |
+| ~~**E** typed scaffold ID（收尾）~~ ✅ #555 | `pkg/scaffoldid/**`（新）+ 三处 spec 字段类型升级 | #10 | — merged |
 
 ### 依赖 DAG 与调度
 
@@ -50,13 +50,13 @@
 ✅ Lane C  docs/CI            [C1 ∥ C6]          — merged PR #539
 ✅ Lane D  scaffold cell/bundle [D5 → D7]        — merged PR #544
 ─────────────────────────── 余下 ───────────────────────────
-t0 └── Lane E (worktree)  pkg/scaffoldid 单源收编  [E10]   (base=develop)
+✅ Lane E  pkg/scaffoldid     [E10]              — merged PR #555
 ```
 
-- **A/B/C/D 已全部 merge**：A-API（`pathsafe.PlannedFile.ForceOverwrite` + duplicate-AbsPath preflight）+ B 的 `metadata.MatchAssemblyID` 入口 + D 的 cellgen single-plan funnel 全部在 develop。Lane E 前置完全就绪。
-- **Lane E 收尾**：#10 收编范围 = B 的 assembly-ID validator（#3）+ D 的 cellgen reject + cmd 三处 `validateAssemblyPathComponent`/同义副本 → 单源 `pkg/scaffoldid` typed funnel；同批可吸纳 cap-14 已登记的 [[PATHSAFE-PLANSET-TYPED-HARD-01]] + [[PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01]]（同属「scaffold input contract」概念域，Lane E 是其唯一窗口）。
+- **A/B/C/D/E 全部 merge**：A-API（`pathsafe.PlannedFile.ForceOverwrite` + duplicate-AbsPath preflight）+ B 的 `metadata.MatchAssemblyID` 入口 + D 的 cellgen single-plan funnel + E 的 `pkg/scaffoldid` typed funnel 全部在 develop。
+- **Lane E 已收尾**（PR #555）：#10 收编范围 = B 的 assembly-ID validator（#3）+ D 的 cellgen reject + cmd 三处 `validateAssemblyPathComponent`/同义副本 → 单源 `pkg/scaffoldid` typed funnel；同批已吸纳 cap-14 登记的 `PATHSAFE-PLANSET-TYPED-HARD-01` + `PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01`。
 
-**关键路径**（余下）≈ `E10(Cx3) 单 PR`。计划进入尾声，仅 1 PR 即可全部清账。
+**计划完结**：10/10 全部 ship（A #526 / B #527 / C #539 / D #544 / E #555），无残余 TODO，可归档。
 
 ---
 
