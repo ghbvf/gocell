@@ -22,32 +22,35 @@ import (
 // TestPGDeviceRepository_Conformance enrolls the PG implementation in the
 // shared device-repo conformance suite (same suite drives mem behaviour).
 //
+// One PG testcontainer is shared across all sub-tests; each sub-test factory
+// call TRUNCATEs `devices` for a pristine view without paying the
+// container-start cost per sub-test. This matches the shared-container
+// pattern used by adapters/postgres command_queue conformance.
+//
 // ref: cells/accesscore/internal/adapters/postgres/user_repo_conformance_integration_test.go
 func TestPGDeviceRepository_Conformance(t *testing.T) {
-	conformance.RunDeviceRepoConformance(t, pgDeviceRepoFactory(t), conformance.Features{
+	testutil.RequireDocker(t)
+	pool, txMgr, terminate := setupSharedDeviceRepoPG(t)
+	t.Cleanup(terminate)
+
+	factory := func(t *testing.T) (domain.DeviceRepository, persistence.TxRunner, func() time.Time, func()) {
+		t.Helper()
+		resetDeviceRepoSchema(t, pool)
+		repo, err := NewPGDeviceRepository(pool.DB(), txMgr, clock.Real())
+		require.NoError(t, err)
+		return repo, txMgr, time.Now, func() {}
+	}
+
+	conformance.RunDeviceRepoConformance(t, factory, conformance.Features{
 		RequiresAmbientTx: true,
 	})
 }
 
-func pgDeviceRepoFactory(t *testing.T) conformance.DeviceRepoFactory {
+// setupSharedDeviceRepoPG spins ONE testcontainer + migrates schema once for
+// the whole conformance suite. terminate closes the pool and stops the
+// container in t.Cleanup.
+func setupSharedDeviceRepoPG(t *testing.T) (*adapterpg.Pool, *adapterpg.TxManager, func()) {
 	t.Helper()
-	return func(t *testing.T) (domain.DeviceRepository, persistence.TxRunner, func() time.Time, func()) {
-		t.Helper()
-		repo, txRunner, cleanup := setupPGDeviceRepo(t)
-		return repo, txRunner, time.Now, cleanup
-	}
-}
-
-// setupPGDeviceRepo spins a fresh PG testcontainer, runs all migrations, and
-// returns a PGDeviceRepository wired to a NewTxManager + clock.Real().
-//
-// Each call creates an isolated container so conformance sub-tests cannot
-// observe each other's writes. testutil.RequireDocker skips the test cleanly
-// when Docker is unavailable.
-func setupPGDeviceRepo(t *testing.T) (*PGDeviceRepository, persistence.TxRunner, func()) {
-	t.Helper()
-	testutil.RequireDocker(t)
-
 	ctx := context.Background()
 
 	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
@@ -68,11 +71,7 @@ func setupPGDeviceRepo(t *testing.T) (*PGDeviceRepository, persistence.TxRunner,
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
-	txMgr := adapterpg.NewTxManager(pool)
-	repo, err := NewPGDeviceRepository(pool.DB(), txMgr, clock.Real())
-	require.NoError(t, err)
-
-	cleanup := func() {
+	terminate := func() {
 		if err := pool.Close(ctx); err != nil {
 			t.Logf("WARN: pool close: %v", err)
 		}
@@ -80,8 +79,17 @@ func setupPGDeviceRepo(t *testing.T) (*PGDeviceRepository, persistence.TxRunner,
 			t.Logf("WARN: failed to terminate postgres container: %v", err)
 		}
 	}
+	return pool, adapterpg.NewTxManager(pool), terminate
+}
 
-	return repo, txMgr, cleanup
+// resetDeviceRepoSchema TRUNCATEs the devices table between sub-tests so each
+// case starts from an empty state. RESTART IDENTITY CASCADE clears any
+// dependent rows that might have been seeded (commands.device_id FK would
+// cascade-reject otherwise — but devicecell's domain repo only owns devices).
+func resetDeviceRepoSchema(t *testing.T, pool *adapterpg.Pool) {
+	t.Helper()
+	_, err := pool.DB().Exec(context.Background(), "TRUNCATE TABLE devices RESTART IDENTITY CASCADE")
+	require.NoError(t, err, "truncate devices")
 }
 
 // testAdapterMigrationsFS returns the shared adapters/postgres migration FS.

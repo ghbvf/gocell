@@ -21,23 +21,65 @@ import (
 // suite drives the InMemQueue implementation in kernel/command/commandtest;
 // both must pass identically.
 //
+// One PG testcontainer is shared across all sub-tests; each sub-test factory
+// call TRUNCATEs `commands` and re-seeds the device FK targets to give a
+// pristine schema view without paying the ~1.5s container-start cost per
+// sub-test (33 sub-tests × ~1.5s = 50s + Docker daemon contention → flaky on
+// constrained CI runners).
+//
 // ref: docs/plans/202605082145-034-pg-corecell-b-route-plan.md §B2.B
 func TestPGCommandQueue_Conformance(t *testing.T) {
-	commandtest.RunQueueConformance(t, pgCommandQueueFactory(t), commandtest.Features{
-		// PGCommandQueue now self-wraps each mutating method in RunInTx,
-		// so callers need no ambient transaction. RequiresAmbientTx=false
-		// lets the suite exercise the production caller path directly.
+	testutil.RequireDocker(t)
+	pool, txMgr, terminate := setupSharedCommandQueuePG(t)
+	t.Cleanup(terminate)
+
+	factory := func(t *testing.T) (command.Queue, command.ActiveScanner, commandtest.TxRunner, func() time.Time, func()) {
+		t.Helper()
+		resetCommandQueueSchema(t, pool)
+		q, err := NewCommandQueue(pool.DB(), txMgr, clock.Real())
+		require.NoError(t, err)
+		return q, q, txMgr, time.Now, func() {} // shared container — no per-sub-test teardown
+	}
+
+	commandtest.RunQueueConformance(t, factory, commandtest.Features{
+		// PGCommandQueue self-wraps each mutating method in RunInTx, so the
+		// suite exercises the production caller path with RequiresAmbientTx=false.
 		RequiresAmbientTx:    false,
 		SupportsLeaseRenewal: true,
 	})
 }
 
-func pgCommandQueueFactory(t *testing.T) commandtest.QueueFactory {
+// setupSharedCommandQueuePG spins ONE testcontainer + migrates schema +
+// creates a TxManager that the whole conformance suite reuses. terminate
+// closes the pool and stops the container in t.Cleanup.
+func setupSharedCommandQueuePG(t *testing.T) (*Pool, *TxManager, func()) {
 	t.Helper()
-	return func(t *testing.T) (command.Queue, command.ActiveScanner, commandtest.TxRunner, func() time.Time, func()) {
-		t.Helper()
-		q, txRunner, cleanup := setupPGCommandQueue(t)
-		return q, q, txRunner, time.Now, cleanup
+	pool, basicCleanup := setupPostgres(t)
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	return pool, NewTxManager(pool), basicCleanup
+}
+
+// resetCommandQueueSchema truncates the commands table and re-seeds the
+// devices rows that the conformance suite Enqueue path FK-targets. CASCADE
+// on devices clears any leftover commands, then we re-insert the canonical
+// seed set. Kept in lock-step with the literals in
+// kernel/command/commandtest/conformance.go.
+func resetCommandQueueSchema(t *testing.T, pool *Pool) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := pool.DB().Exec(ctx, "TRUNCATE TABLE commands, devices RESTART IDENTITY CASCADE")
+	require.NoError(t, err, "truncate commands/devices")
+
+	for _, id := range []string{"dev-a", "dev-b", "dev-x", "dev-y", "dev-z"} {
+		_, err := pool.DB().Exec(ctx,
+			`INSERT INTO devices (id, name, status, last_seen) VALUES ($1, $2, 'online', now())`,
+			id, id)
+		require.NoError(t, err, "seed device %q", id)
 	}
 }
 
@@ -79,41 +121,4 @@ func TestPGCommandQueue_RepoReadinessConformance(t *testing.T) {
 	require.NoError(t, err)
 
 	celltest.RunRepoReadinessConformance(t, "command-queue-pg", healthy, broken)
-}
-
-// setupPGCommandQueue spins a fresh testcontainer, applies all migrations,
-// seeds a device row (commands.device_id FK targets it) and returns the
-// queue + TxManager. The FK seed is required because the conformance suite
-// uses synthetic device IDs like "dev-a" / "dev-x" / "dev-y" / "dev-z";
-// without seeding, every Enqueue would hit a foreign-key violation.
-func setupPGCommandQueue(t *testing.T) (*PGCommandQueue, *TxManager, func()) {
-	t.Helper()
-	testutil.RequireDocker(t)
-	pool, basicCleanup := setupPostgres(t)
-
-	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
-	// Seed the device IDs the conformance suite uses, so commands FK target
-	// resolves. Kept in sync with the literals in
-	// kernel/command/commandtest/conformance.go.
-	seedDeviceIDs := []string{"dev-a", "dev-b", "dev-x", "dev-y", "dev-z"}
-	for _, id := range seedDeviceIDs {
-		_, err := pool.DB().Exec(ctx,
-			`INSERT INTO devices (id, name, status, last_seen) VALUES ($1, $2, 'online', now())`,
-			id, id)
-		require.NoError(t, err, "seed device %q", id)
-	}
-
-	txMgr := NewTxManager(pool)
-	q, err := NewCommandQueue(pool.DB(), txMgr, clock.Real())
-	require.NoError(t, err)
-
-	cleanup := func() {
-		basicCleanup()
-	}
-
-	return q, txMgr, cleanup
 }

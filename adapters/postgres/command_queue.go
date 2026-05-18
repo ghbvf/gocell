@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -138,12 +137,25 @@ SELECT ` + commandSelectCols + `
 
 const getCommandSQL = `SELECT ` + commandSelectCols + ` FROM commands WHERE id = $1`
 
+// enqueueInsertSQL writes a new command row. The `ON CONFLICT … DO NOTHING`
+// clause matches migration 031's partial unique index
+// `idx_commands_idempotency_key` on `metadata->>'_idempotency_key'` (predicate
+// `metadata->>'_idempotency_key' IS NOT NULL`). When a row with the same key
+// already exists, PG silently skips the insert — RowsAffected returns 0 and
+// the surrounding transaction stays clean. This is the L4 idempotent-no-op
+// path; PK collisions (different idempotency context, same id) still raise
+// unique_violation and route to ErrConflict in insertEntry.
+//
+// ref: River queue / Hatchet INSERT … ON CONFLICT DO NOTHING dedup pattern.
 const enqueueInsertSQL = `
 INSERT INTO commands (
 	id, device_id, command_type, payload, metadata, status, attempt,
 	created_at,
 	timeouts_schedule_to_send_ns, timeouts_send_to_complete_ns, timeouts_overall_ns
-) VALUES ($1, $2, $3, $4, $5, 1, 0, $6, $7, $8, $9)`
+) VALUES ($1, $2, $3, $4, $5, 1, 0, $6, $7, $8, $9)
+ON CONFLICT ((metadata->>'_idempotency_key'))
+   WHERE metadata->>'_idempotency_key' IS NOT NULL
+   DO NOTHING`
 
 // ---------------------------------------------------------------------------
 // command.Queue implementation
@@ -193,14 +205,21 @@ func (q *PGCommandQueue) stampIdempotencyKey(entry *command.Entry, key string) {
 }
 
 // insertEntry runs the INSERT and translates PG-level errors to typed errcode.
-// Same split rationale as handleIdempotencyKey.
+//
+// Idempotency dedup is now handled in-SQL via `ON CONFLICT DO NOTHING` against
+// the partial unique index `idx_commands_idempotency_key`. When the existing
+// row already carries the same idempotency key, PG returns RowsAffected=0
+// without raising an error — the surrounding transaction stays clean, no
+// savepoint rollback gymnastics. PK collisions still raise unique_violation
+// (the ON CONFLICT clause is keyed on the idempotency-key index only) and are
+// reported as ErrConflict.
 func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) error {
 	metaBytes, err := marshalMetadata(entry.Metadata)
 	if err != nil {
 		return err
 	}
 
-	_, insertErr := q.db.Exec(ctx, enqueueInsertSQL,
+	tag, insertErr := q.db.Exec(ctx, enqueueInsertSQL,
 		entry.ID,
 		entry.DeviceID,
 		entry.CommandType,
@@ -212,16 +231,14 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 		nullableNs(entry.Timeouts.OverallDeadline),
 	)
 	if insertErr == nil {
+		// rows=0 → ON CONFLICT (idempotency_key) DO NOTHING fired, idempotent no-op.
+		if tag.RowsAffected() == 0 {
+			return nil
+		}
 		return nil
 	}
 	if IsUniqueViolation(insertErr) {
-		// Distinguish PK collision from idempotency-key collision.
-		// idx_commands_idempotency_key violation → idempotent no-op (nil).
-		// Any other unique violation (e.g. commands_pkey) → ErrConflict.
-		var pgErr *pgconn.PgError
-		if errors.As(insertErr, &pgErr) && pgErr.ConstraintName == "idx_commands_idempotency_key" {
-			return nil // idempotent no-op
-		}
+		// PK collision (same id, no matching idempotency key) → ErrConflict.
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"command already exists",
 			errcode.WithInternal(fmt.Sprintf("id=%q", entry.ID)))

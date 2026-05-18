@@ -57,12 +57,14 @@ func main() {
 	// Resolve persistence: durable PG wiring when GOCELL_IOTDEVICE_DSN is set,
 	// otherwise explicit in-memory wiring. The cell never falls back silently
 	// (B2.B: no soft fallback), so demo runs MUST inject mem implementations.
-	deviceRepo, commandQueue, durabilityMode, closeBackends, err := buildDevicePersistence(context.Background(), clk, logger)
+	// In durable mode, pgPool is non-nil and is registered as a
+	// bootstrap.WithManagedCloser below so framework LIFO teardown closes it
+	// during shutdown — defer-based cleanup would be skipped on os.Exit(1).
+	deviceRepo, commandQueue, durabilityMode, pgPool, err := buildDevicePersistence(context.Background(), clk, logger)
 	if err != nil {
 		logger.Error("failed to build device persistence", slog.Any("error", err))
 		os.Exit(1)
 	}
-	defer closeBackends()
 
 	// Cursor codec for pagination. Durable mode requires a real key from the
 	// environment; demo mode uses a hard-coded public key (not production-safe).
@@ -112,14 +114,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	app := bootstrap.New(
+	opts := []bootstrap.Option{
 		bootstrap.WithClock(clk),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{jwtPlan}),
 		bootstrap.WithListener(cell.InternalListener, ":9083", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
-	)
+	}
+	// Durable mode: register the PG pool as a managed closer so framework
+	// LIFO teardown closes it even when app.Run returns an error followed by
+	// os.Exit(1). Defer-based cleanup would be skipped on that path.
+	if pgPool != nil {
+		opts = append(opts, bootstrap.WithManagedCloser(pgPool))
+	}
+	app := bootstrap.New(opts...)
 
 	logger.Info("iotdevice: starting on :8083; protected routes require an RS256 bearer token")
 	if err := app.Run(ctx); err != nil {
@@ -139,20 +148,30 @@ type deviceCommandQueue interface {
 // buildDevicePersistence resolves the device repository + command queue based
 // on GOCELL_IOTDEVICE_DSN. When the DSN env var is set, durable mode wires PG
 // implementations + applies migrations; otherwise demo mode wires the
-// in-memory implementations. The returned close func is always non-nil and
-// safe to defer.
+// in-memory implementations.
+//
+// The returned `*adapterpg.Pool` is nil in demo mode; in durable mode the
+// caller MUST register the pool via `bootstrap.WithManagedCloser(pool)` so
+// the framework's LIFO teardown closes it during shutdown — relying on a
+// deferred `pool.Close()` would be skipped when `os.Exit(1)` runs after
+// `app.Run` returns an error.
 func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.Logger) (
-	devicepg.DeviceRepository, deviceCommandQueue, cell.DurabilityMode, func(), error,
+	devicepg.DeviceRepository, deviceCommandQueue, cell.DurabilityMode, *adapterpg.Pool, error,
 ) {
 	dsn := os.Getenv("GOCELL_IOTDEVICE_DSN")
 	if dsn == "" {
 		logger.Info("iotdevice: using in-memory persistence (set GOCELL_IOTDEVICE_DSN for PG)")
-		return devicemem.NewDeviceRepository(), commandtest.NewInMemQueue(), cell.DurabilityDemo, func() {}, nil
+		// nil pool is the documented "demo mode" signal — main.go branches on
+		// pool != nil to decide WithManagedCloser. err is also nil because
+		// demo wiring cannot fail. Linter conventionally treats (nil, nil) as
+		// ambiguous, but here the pool channel is a multi-return discriminant.
+		//nolint:nilnil // demo mode returns nil pool intentionally; see godoc
+		return devicemem.NewDeviceRepository(), commandtest.NewInMemQueue(), cell.DurabilityDemo, nil, nil
 	}
 
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	if err != nil {
-		return nil, nil, 0, func() {}, fmt.Errorf("pg pool: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("pg pool: %w", err)
 	}
 	closePool := func() {
 		if err := pool.Close(ctx); err != nil {
@@ -163,30 +182,30 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 	migrationsFS, err := adapterpg.MigrationsFS()
 	if err != nil {
 		closePool()
-		return nil, nil, 0, func() {}, fmt.Errorf("migrations fs: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("migrations fs: %w", err)
 	}
 	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
 	if err != nil {
 		closePool()
-		return nil, nil, 0, func() {}, fmt.Errorf("migrator: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("migrator: %w", err)
 	}
 	if err := migrator.Up(ctx); err != nil {
 		closePool()
-		return nil, nil, 0, func() {}, fmt.Errorf("migrate up: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("migrate up: %w", err)
 	}
 	logger.Info("iotdevice: migrations applied")
 
 	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS, "schema_migrations"); err != nil {
 		closePool()
-		return nil, nil, 0, func() {}, fmt.Errorf("schema version verify: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("schema version verify: %w", err)
 	}
 	if err := adapterpg.VerifyExpectedShape(ctx, pool); err != nil {
 		closePool()
-		return nil, nil, 0, func() {}, fmt.Errorf("schema shape verify: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("schema shape verify: %w", err)
 	}
 	if err := adapterpg.VerifyNoInvalidIndexes(ctx, pool); err != nil {
 		closePool()
-		return nil, nil, 0, func() {}, fmt.Errorf("schema indexes verify: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("schema indexes verify: %w", err)
 	}
 	logger.Info("iotdevice: schema verified")
 
@@ -194,16 +213,16 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 	deviceRepo, err := devicepg.NewDeviceRepository(pool.DB(), txMgr, clk)
 	if err != nil {
 		closePool()
-		return nil, nil, 0, func() {}, fmt.Errorf("device repo: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("device repo: %w", err)
 	}
 	commandQueue, err := adapterpg.NewCommandQueue(pool.DB(), txMgr, clk)
 	if err != nil {
 		closePool()
-		return nil, nil, 0, func() {}, fmt.Errorf("command queue: %w", err)
+		return nil, nil, 0, nil, fmt.Errorf("command queue: %w", err)
 	}
 
 	logger.Info("iotdevice: using PG persistence (durable mode)", slog.String("dsn", "set"))
-	return deviceRepo, commandQueue, cell.DurabilityDurable, closePool, nil
+	return deviceRepo, commandQueue, cell.DurabilityDurable, pool, nil
 }
 
 // buildCursorCodec builds a CursorCodec appropriate for the durability mode.
