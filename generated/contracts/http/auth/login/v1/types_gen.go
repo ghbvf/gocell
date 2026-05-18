@@ -94,19 +94,6 @@ func (r Login401ErrorResponse) visitLoginResponse(ctx context.Context, w http.Re
 	return nil
 }
 
-// Login403ErrorResponse renders an HTTP 403 error response.
-// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
-// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
-// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
-type Login403ErrorResponse struct {
-	Body errcode.Error
-}
-
-func (r Login403ErrorResponse) visitLoginResponse(ctx context.Context, w http.ResponseWriter) error {
-	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
-	return nil
-}
-
 // Login413ErrorResponse renders an HTTP 413 error response.
 // Body carries an errcode.Error whose Kind/Code/Message/Details follow the
 // canonical wire schema in contracts/shared/errors/error-response-v1.schema.json

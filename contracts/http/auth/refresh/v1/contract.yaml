@@ -21,6 +21,9 @@ endpoints:
       401:
         description: Refresh token rejected.
         schemaRef: ../../../../shared/errors/error-response-v1.schema.json
+      403:
+        description: "ERR_AUTH_USER_NOT_ACTIVE — the refresh token's subject account is suspended or locked. The session is cascade-revoked; subsequent refresh attempts keep failing until the account is reactivated. Distinct from the uniform 401 because the caller already proved possession of a valid refresh token (subject identity is already known, so this is not an account-enumeration surface)."
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
       413:
         description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: ../../../../shared/errors/error-response-v1.schema.json
