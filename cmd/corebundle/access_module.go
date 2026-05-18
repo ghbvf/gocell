@@ -117,6 +117,15 @@ func (m AccessCoreModule) Provide(
 		return nil, nil, nil, fmt.Errorf("accesscore session protocol: %w", err)
 	}
 
+	// Auto-lockout observability: register auth_account_lockout_total once on
+	// the shared metrics provider and inject the recorder into the cell.
+	// Failure here is fatal — the cell composition cannot proceed without
+	// observability for a security-critical transition.
+	lockoutMetrics, err := auth.NewAccountLockoutMetrics(shared.PromStack.metricProvider)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("accesscore: register account-lockout metrics: %w", err)
+	}
+
 	accessOpts := []accesscore.Option{
 		accesscore.WithClock(shared.Clock),
 		// Publisher set unconditionally; outboxWriter set conditionally below.
@@ -128,6 +137,7 @@ func (m AccessCoreModule) Provide(
 		accesscore.WithCursorCodec(cursorCodec),
 		accesscore.WithMetricsProvider(shared.PromStack.metricProvider),
 		accesscore.WithConfigEventCollector(shared.ConfigEventCollector),
+		accesscore.WithLockoutMetrics(lockoutMetrics),
 		accesscore.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
 		accesscore.WithCASProtocol(casProto),
 	}

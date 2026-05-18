@@ -2,11 +2,14 @@ package accesscore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
@@ -169,8 +172,44 @@ func (c *AccessCore) initRefreshGC() error {
 // helpers and obscure the cross-slice ordering constraints (e.g. login must
 // be constructed before identity-manage to inject TokenIssuer).
 //
-//nolint:funlen // sequential cell composition root; readability over funlen budget
+// constraints (login before identity, accountlockout before login, etc.) outweigh
+// the funlen / cognitive-complexity budgets.
+//
+//nolint:funlen,gocognit,cyclop // sequential cell composition root; readability and ordering
 func (c *AccessCore) initSlices() error {
+	// credentialinvalidate: shared invalidator for identity-manage, rbac-assign,
+	// session-refresh, and accountlockout. Atomically bumps authz_epoch, revokes
+	// all sessions, and revokes all refresh tokens for a subject when a
+	// credential-invalidating event (password change, role assignment, token
+	// reuse, account auto-lock) is detected. Built first so accountlockout can
+	// route through it via authzmutate.
+	inv, err := credentialinvalidate.New(c.userRepo, c.sessionStore, c.refreshStore)
+	if err != nil {
+		return err
+	}
+	c.invalidator = inv
+
+	// accountlockout: typed mediator for sessionlogin auto-lockout decisions.
+	// Owns the failure-window policy + persists counter via UserRepository +
+	// routes lock/unlock through authzmutate. sessionlogin imports this package
+	// instead of authzmutate directly (depguard upstream Hard funnel
+	// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01).
+	lockoutMutator, err := authzmutate.New(c.invalidator, c.userRepo)
+	if err != nil {
+		return fmt.Errorf("accesscore: build lockout authzmutator: %w", err)
+	}
+	lockoutOpts := []accountlockout.Option{}
+	if c.lockoutMetrics != nil {
+		lockoutOpts = append(lockoutOpts, accountlockout.WithMetrics(c.lockoutMetrics))
+	}
+	if c.logger != nil {
+		lockoutOpts = append(lockoutOpts, accountlockout.WithLogger(c.logger))
+	}
+	lockoutSvc, err := accountlockout.NewService(c.userRepo, lockoutMutator, c.emitter, c.clk, lockoutOpts...)
+	if err != nil {
+		return fmt.Errorf("accesscore: build accountlockout service: %w", err)
+	}
+
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.
 	loginOpts := []sessionlogin.Option{
@@ -178,6 +217,7 @@ func (c *AccessCore) initSlices() error {
 		sessionlogin.WithTxManager(c.txRunner),
 		sessionlogin.WithClock(c.clk),
 		sessionlogin.WithSessionTTL(DefaultRefreshMaxAge),
+		sessionlogin.WithAccountLockout(lockoutSvc),
 	}
 	loginSvc, err := sessionlogin.NewService(c.userRepo, c.sessionStore, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
 	if err != nil {
@@ -185,16 +225,6 @@ func (c *AccessCore) initSlices() error {
 	}
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionlogin.SliceMetadata()))
-
-	// credentialinvalidate: shared invalidator for identity-manage, rbac-assign,
-	// and session-refresh. Atomically bumps authz_epoch, revokes all sessions, and
-	// revokes all refresh tokens for a subject when a credential-invalidating event
-	// (password change, role assignment, token reuse) is detected.
-	inv, err := credentialinvalidate.New(c.userRepo, c.sessionStore, c.refreshStore)
-	if err != nil {
-		return err
-	}
-	c.invalidator = inv
 
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
 	identityOpts := []identitymanage.Option{
@@ -276,7 +306,8 @@ func (c *AccessCore) initSlices() error {
 
 	// config-receive: subscribes to config state-sync events from configcore.
 	// WithConfigGetter is optional — nil disables the cross-cell GetEntry fetch.
-	c.configReceiveSvc = configreceive.NewService(c.logger,
+	c.configReceiveSvc = configreceive.NewService(
+		c.logger,
 		configreceive.WithConfigGetter(c.configGetter),
 		configreceive.WithConfigEventCollector(c.configEventCollector),
 	)
@@ -301,7 +332,8 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	setupSvc, err := setup.NewService(setupProv, c.logger,
+	setupSvc, err := setup.NewService(
+		setupProv, c.logger,
 		setup.WithEmitter(c.emitter),
 		setup.WithTxManager(c.txRunner),
 		setup.WithSetupLock(c.setupLock),
@@ -330,7 +362,8 @@ func (c *AccessCore) initSlices() error {
 //     (RunInTx → emit) but there is no row to replay on failure — this is
 //     test/demo fidelity only, not L2 atomicity.
 func (c *AccessCore) initRbacAssign() error {
-	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.invalidator, c.logger,
+	rbacAssignSvc, err := rbacassign.NewService(
+		c.roleRepo, c.invalidator, c.logger,
 		rbacassign.WithEmitter(c.emitter),
 		rbacassign.WithTxManager(c.txRunner),
 	)

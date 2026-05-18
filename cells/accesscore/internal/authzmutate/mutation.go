@@ -120,12 +120,22 @@ func (SuspendUser) mutationOK() {}
 // ActivateUser re-activates a user. Additive — Invalidates() == false.
 // Existing sessions remain valid; no epoch-bump needed.
 // ref: ADR §A6 / OAuth Security BCP §4.13.2 (scope-expanding ops don't revoke).
+//
+// Auto-lockout interaction: apply also calls u.ResetFailedLogins() to clear
+// the failed_login_count / last_failed_at / locked_until columns. Without
+// this, a manual admin unlock would not reset the counter, and the very
+// next failed login could re-trigger the auto-lock immediately (since the
+// stored counter is still at or above the threshold). Lazy-unlock by
+// accountlockout.TryLazyUnlock also routes through this mutation, so the
+// reset behavior is shared by both unlock paths
+// (ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01).
 type ActivateUser struct{}
 
 func (ActivateUser) Event() session.CredentialEvent { return session.CredentialEventLock }
 func (ActivateUser) Invalidates() bool              { return false }
 func (ActivateUser) apply(u *domain.User, now time.Time) {
 	u.SetStatus(domain.StatusActive, now)
+	u.ResetFailedLogins()
 }
 func (ActivateUser) mutationOK() {}
 

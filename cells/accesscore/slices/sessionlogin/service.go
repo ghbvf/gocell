@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -143,6 +144,23 @@ type Service struct {
 	clock           clock.Clock
 	sessionTTL      time.Duration
 	comparePassword passwordComparer // defaults to bcrypt.CompareHashAndPassword
+	// lockout drives ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01: it owns the
+	// failure-window policy, persists the counter, and routes lock/unlock
+	// through authzmutate. Required (fail-fast in NewService) — sessionlogin
+	// MUST NOT import authzmutate directly (depguard upstream Hard funnel
+	// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01).
+	lockout *accountlockout.Service
+}
+
+// WithAccountLockout injects the auto-lockout mediator. Required for sessionlogin;
+// the upstream depguard rule SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01 forces
+// every lock decision through this funnel.
+func WithAccountLockout(svc *accountlockout.Service) Option {
+	return func(s *Service) {
+		if svc != nil {
+			s.lockout = svc
+		}
+	}
 }
 
 // NewService creates a session-login Service. refreshStore issues the opaque
@@ -195,6 +213,11 @@ func NewService(
 	if s.sessionTTL <= 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"sessionlogin: SessionTTL required; use WithSessionTTL (typically accesscore.DefaultRefreshMaxAge)")
+	}
+	if s.lockout == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sessionlogin: AccountLockout required; use WithAccountLockout "+
+				"(sessionlogin must route lock decisions through accountlockout, not authzmutate)")
 	}
 	return s, nil
 }
@@ -255,50 +278,31 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	// sidechannels regardless of user-lookup outcome or account status.
 	bcryptErr := s.comparePassword(hashToCompare, []byte(input.Password))
 
-	// Evaluate the unified failure condition. Internal reasons are logged via
-	// WithInternal only; they never appear in the 4xx response body.
-	switch {
-	case userLookupErr != nil:
+	// Missing user → unified 401 without entering a tx. There is no user row to
+	// lock or to increment failure counters against; the dummyBcryptHash above
+	// already paid the timing cost so the latency profile matches the
+	// wrong-password / inactive-account paths within their own bcrypt budget.
+	if userLookupErr != nil {
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
 			errcode.WithInternal(fmt.Sprintf("user lookup failed: %v", userLookupErr)))
-	case credentialauthority.Assert(preUser) != nil:
-		// C1: inactive account → same 401 as bad password. Real reason in WithInternal.
-		// R4: log only preUser.ID and preUser.Status() — NOT the full struct which
-		// contains PasswordHash. Using %v on *domain.User would leak the hash into
-		// slog/trace via errcode Internal (PR #501 RC-E, R4 fix).
-		//
-		// P2-C fix: bcrypt_ok was previously logged here, which leaked
-		// "password matched" truth for inactive/locked accounts and let
-		// attackers verify credentials against a disabled account. The
-		// bcryptErr value is intentionally NOT logged.
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
-			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("credentialauthority: pre-bcrypt baseline fail (user_id=%s status=%v)",
-				preUser.ID, preUser.Status())))
-	case bcryptErr != nil:
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
-			errMsgInvalidCredentials)
 	}
 
-	// Pin the PasswordVersion from the pre-bcrypt snapshot. loginInTx will
-	// re-check this against the FOR UPDATE locked row to detect a concurrent
-	// ChangePassword committed in the race window (P1.1). The snapshot is
-	// captured through credentialauthority.SnapshotPasswordVersion so this
-	// slice file never reads domain.User.PasswordVersion directly (Hard
-	// funnel CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream prong).
+	// User exists. Open a tx that holds the row lock across:
+	//   1. TryLazyUnlock (locked + TTL elapsed → flip back to Active + reset counter)
+	//   2. credentialauthority.Assert baseline (inactive / suspended → 401 + RecordFailure)
+	//   3. bcrypt result check (wrong password → 401 + RecordFailure)
+	//   4. session/refresh issue + outbox emit + RecordSuccess on the happy path
+	//
+	// pwVersionPin is the opaque WithPasswordVersionPin Check captured from the
+	// pre-bcrypt snapshot via credentialauthority.SnapshotPasswordVersion so this
+	// slice file never reads domain.User.PasswordVersion directly (Hard funnel
+	// CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream prong).
 	pwVersionPin := credentialauthority.SnapshotPasswordVersion(preUser)
-
-	// Re-fetch inside tx with FOR UPDATE to pin authz_epoch atomically.
-	// If the user was deactivated between the pre-check and the tx, the
-	// credentialauthority.Assert baseline inside loginInTx rejects it — no
-	// silent credential issuance. The transactional body is extracted to keep
-	// Login's cognitive complexity within the CLAUDE.md ≤15 budget after
-	// S4d added the FOR UPDATE re-fetch + post-check.
 	sessionID := uuid.NewString()
 	var pair dto.TokenPair
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		p, err := s.loginInTx(txCtx, input.Username, sessionID, pwVersionPin)
+		p, err := s.loginInTx(ctx, txCtx, input.Username, sessionID, pwVersionPin, bcryptErr)
 		if err != nil {
 			return err
 		}
@@ -314,12 +318,13 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 }
 
 // loginInTx is the FOR-UPDATE-locked body of Login. It re-fetches the user
-// inside the ambient transaction (acquiring the user-row write lock), checks
-// CanAuthenticate, mints the access token, creates the session row, issues
-// the refresh chain root, and emits the session.created outbox entry — all
-// while holding the row lock so concurrent Invalidator.Apply cannot advance
-// users.authz_epoch between the snapshot read and the session/refresh
-// INSERTs (S4d §D2; PR #490 review P1-#3 fix).
+// inside the ambient transaction (acquiring the user-row write lock),
+// invokes lazy-unlock if applicable, checks CanAuthenticate + password-version
+// pin + bcrypt result, then on success mints the access token, creates the
+// session row, issues the refresh chain root, and emits the session.created
+// outbox entry — all while holding the row lock so concurrent Invalidator.Apply
+// cannot advance users.authz_epoch between the snapshot read and the
+// session/refresh INSERTs (S4d §D2; PR #490 review P1-#3 fix).
 //
 // pwVersionPin is the opaque WithPasswordVersionPin Check captured from the
 // pre-bcrypt snapshot via credentialauthority.SnapshotPasswordVersion. If
@@ -327,20 +332,51 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // concurrent ChangePassword committed in the race window — the old password
 // must be rejected (P1.1).
 //
+// bcryptErr is the result of the pre-bcrypt password comparison performed
+// outside the tx (timing-anchor). A non-nil value means the password did not
+// match the user's stored hash; combined with a passing baseline assert this
+// is the wrong-password failure path and increments the auto-lockout counter.
+//
 // R3 error classification: only credential-domain errors (user not found:
 // KindNotFound) are collapsed into the opaque 401 ErrAuthLoginFailed.
 // Infrastructure errors (KindInternal, KindUnavailable, etc.) are passed
 // through as-is to preserve their HTTP status (5xx / 503), preventing
 // infra faults from being silently disguised as authentication failures.
+//
+// multi-stage auto-lockout decision (lazy-unlock → baseline assert → bcrypt
+// → mint+emit). Further extraction would scatter the row-lock invariant
+// across helpers, breaking the "single tx, single locked row" contract that
+// makes auto-lockout race-safe.
+//
+//nolint:gocognit,funlen // cognitive complexity + length are driven by the
 func (s *Service) loginInTx(
+	ctx context.Context,
 	txCtx context.Context,
 	username, sessionID string,
 	pwVersionPin credentialauthority.Check,
+	bcryptErr error,
 ) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
 	if err != nil {
 		return dto.TokenPair{}, classifyForUpdateErr(err)
 	}
+
+	// Lazy-unlock: if the user is auto-locked and the TTL has elapsed,
+	// transparently flip status back to Active and clear the counter. On
+	// unlock we re-fetch the row inside the same tx so the rest of this
+	// function operates on the post-mutation view (status=Active,
+	// failed_login_count=0, locked_until=nil).
+	unlocked, err := s.lockout.TryLazyUnlock(ctx, txCtx, user)
+	if err != nil {
+		return dto.TokenPair{}, fmt.Errorf("session-login: lazy unlock: %w", err)
+	}
+	if unlocked {
+		user, err = s.userRepo.GetByUsernameForUpdate(txCtx, username)
+		if err != nil {
+			return dto.TokenPair{}, classifyForUpdateErr(err)
+		}
+	}
+
 	// Credentialauthority funnel: baseline (CanAuthenticate) re-check after the
 	// FOR UPDATE lock closes the concurrent-deactivation race (C1), and
 	// the password-version pin re-checks the version captured pre-bcrypt to
@@ -348,10 +384,41 @@ func (s *Service) loginInTx(
 	// (P1.1). Both failure classes collapse to the uniform 401 with internal
 	// reason; the caller may not branch on err to discover which check failed
 	// (防枚举).
+	//
+	// Baseline + pwVersionPin failure also increments the auto-lockout counter:
+	// concurrent-ChangePassword races are rare but indistinguishable from a
+	// genuinely wrong password from the caller's perspective; not counting
+	// them would create a small but real timing oracle ("racing my own change
+	// doesn't lock me out"). Counter increment is best-effort — we still
+	// return 401 even if the counter UPDATE fails.
 	if err := credentialauthority.Assert(user, pwVersionPin); err != nil {
+		s.recordFailureBestEffort(ctx, txCtx, user, "baseline_assert")
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
 			errcode.WithInternal(fmt.Sprintf("credentialauthority: in-tx assert failed (user=%s): %v", username, err)))
+	}
+
+	// Wrong-password (post-baseline): increment auto-lockout counter. If the
+	// new count >= threshold, accountlockout.RecordFailure runs the LockUser
+	// mutation + emits event.user.locked.v1 inside this tx; subsequent reads
+	// of the user row in the same tx see status=Locked. Return the unified
+	// 401 either way.
+	if bcryptErr != nil {
+		s.recordFailureBestEffort(ctx, txCtx, user, "wrong_password")
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+			errMsgInvalidCredentials)
+	}
+
+	// Successful credentials. Reset the auto-lockout counter (no-op if it was
+	// already clean) before minting tokens so the success path co-commits
+	// counter clear + session/refresh INSERT + outbox emit.
+	if err := s.lockout.RecordSuccess(ctx, txCtx, user); err != nil {
+		s.logger.Error("session-login: lockout reset failed",
+			slog.Any("error", err), slog.String("user_id", user.ID))
+		// Counter reset failure is non-fatal: the user has proven their
+		// password, so we proceed with token issuance. The stale counter
+		// remains and may auto-lock prematurely on the next failure, but
+		// the alternative (rejecting a valid login) is worse.
 	}
 
 	minted, err := sessionmint.MintAccess(txCtx, sessionmint.Deps{
@@ -415,6 +482,26 @@ func (s *Service) loginInTx(
 		UserID:                user.ID,
 		PasswordResetRequired: user.PasswordResetRequired(),
 	}, nil
+}
+
+// recordFailureBestEffort calls accountlockout.RecordFailure inside the
+// existing tx, logging (but not returning) any error so the caller can always
+// return the unified 401. The failure modes (counter UPDATE failure, lock
+// mutation failure, outbox emit failure) all degrade gracefully: the user is
+// still rejected by the 401, only the auto-lockout bookkeeping is incomplete.
+//
+// reason is a free-form label used in slog Error context to disambiguate
+// "wrong_password" vs "baseline_assert" failures; it is NOT exposed on the
+// wire (account-status enumeration prevention) and is NOT the metric
+// `reason` label (which is fixed by accountlockout to {threshold_locked,
+// lazy_unlocked}).
+func (s *Service) recordFailureBestEffort(ctx, txCtx context.Context, user *domain.User, reason string) {
+	if err := s.lockout.RecordFailure(ctx, txCtx, user); err != nil {
+		s.logger.Error("session-login: lockout record failure failed",
+			slog.Any("error", err),
+			slog.String("user_id", user.ID),
+			slog.String("reason", reason))
+	}
 }
 
 // persistSessionWithRefresh writes the session, issues the refresh root, and

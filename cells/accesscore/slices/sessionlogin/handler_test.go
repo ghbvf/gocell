@@ -58,9 +58,14 @@ func setup(t *testing.T) http.Handler {
 	user.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), user)
 
-	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
-		newHandlerRefreshStore(), testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithSessionTTL(time.Hour))
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newHandlerRefreshStore()
+	svc, err := NewService(userRepo, sessionStore, mem.NewStore(clock.Real()).RoleRepository(),
+		refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithSessionTTL(time.Hour),
+		WithAccountLockout(newTestLockout(userRepo, sessionStore, refreshStore)))
 	require.NoError(t, err)
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {

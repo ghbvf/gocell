@@ -13,6 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -126,12 +129,38 @@ func mustNewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
+	lockoutSvc := newTestLockout(userRepo, sessionStore, refreshStore)
+	// CLOCK-INJECTION-TEST-CALLSITE-01 scans the NewService argument tree for
+	// a WithClock literal; the slice-literal form here keeps the call site
+	// statically detectable (caller opts are spread on top as in the original
+	// mustNewService).
 	s, err := NewService(userRepo, sessionStore, roleRepo, refreshStore, issuer, logger,
-		append([]Option{WithClock(clock.Real())}, opts...)...)
+		append([]Option{WithClock(clock.Real()), WithAccountLockout(lockoutSvc)}, opts...)...)
 	if err != nil {
 		panic("mustNewService: " + err.Error())
 	}
 	return s
+}
+
+// newTestLockout wires a real accountlockout.Service from the same repo / stores
+// used by the test so the auto-lock decision exercises the real funnel
+// (authzmutate.LockUser → credentialinvalidate.Apply → counter UPDATE).
+// Tests inject this directly via WithAccountLockout (the depguard rule
+// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01 excludes _test.go).
+func newTestLockout(userRepo ports.UserRepository, sessionStore session.Store, refreshStore refresh.Store) *accountlockout.Service {
+	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
+	if err != nil {
+		panic("newTestLockout invalidator: " + err.Error())
+	}
+	mut, err := authzmutate.New(inv, userRepo)
+	if err != nil {
+		panic("newTestLockout mutator: " + err.Error())
+	}
+	svc, err := accountlockout.NewService(userRepo, mut, outbox.NewNoopEmitter(), clock.Real())
+	if err != nil {
+		panic("newTestLockout service: " + err.Error())
+	}
+	return svc
 }
 
 func newTestService(t testing.TB) (*Service, *mem.UserRepository) {

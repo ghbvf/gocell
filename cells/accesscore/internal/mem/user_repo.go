@@ -3,6 +3,7 @@ package mem
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -205,6 +206,9 @@ func cloneUser(u *domain.User) *domain.User {
 		AuthzEpoch:            u.AuthzEpoch(),
 		CreatedAt:             u.CreatedAt,
 		UpdatedAt:             u.UpdatedAt,
+		FailedLoginCount:      u.FailedLoginCount(),
+		LastFailedAt:          copyTime(u.LastFailedAt()),
+		LockedUntil:           copyTime(u.AutoLockoutDeadline()),
 	})
 	if err != nil {
 		// ReconstituteUser only fails on invalid values; a well-formed stored
@@ -213,6 +217,17 @@ func cloneUser(u *domain.User) *domain.User {
 			errcode.Assertion("mem: cloneUser: unexpected invalid stored User: %v", err)))
 	}
 	return clone
+}
+
+// copyTime returns a fresh pointer to the same time value (or nil for nil
+// input). Without this, two stored users could share the same *time.Time
+// pointer; mutating one would surface in the other.
+func copyTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	v := *t
+	return &v
 }
 
 // UpdatePassword applies a CAS-guarded password update. Safe to call both
@@ -256,6 +271,9 @@ func (r *UserRepository) UpdatePassword(
 		AuthzEpoch:            u.AuthzEpoch(),
 		CreatedAt:             u.CreatedAt,
 		UpdatedAt:             now,
+		FailedLoginCount:      u.FailedLoginCount(),
+		LastFailedAt:          copyTime(u.LastFailedAt()),
+		LockedUntil:           copyTime(u.AutoLockoutDeadline()),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("mem: update-password reconstitute: %w", err)
@@ -296,6 +314,9 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int
 		AuthzEpoch:            newEpoch,
 		CreatedAt:             u.CreatedAt,
 		UpdatedAt:             u.UpdatedAt,
+		FailedLoginCount:      u.FailedLoginCount(),
+		LastFailedAt:          copyTime(u.LastFailedAt()),
+		LockedUntil:           copyTime(u.AutoLockoutDeadline()),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("mem: bump-authz-epoch reconstitute: %w", err)
@@ -303,6 +324,37 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int
 	r.store.usersByID[userID] = updated
 	r.store.byName[updated.Username] = updated
 	return newEpoch, nil
+}
+
+// UpdateLockoutFields persists the auto-lockout state (failed_login_count,
+// last_failed_at, locked_until) for an existing user. Safe to call both
+// inside and outside a RunInTx closure; see UserRepository lock contract.
+//
+// Implementation note: the mem store re-clones the entire user via
+// ReconstituteUser, carrying over every field — including status and
+// authz_epoch. The accountlockout service contract is that it does NOT
+// mutate status/epoch through this method (those routes are reserved for
+// authzmutate.Mutator.ApplyInTx); the user's in-memory state at the time of
+// the call must reflect any pending status/epoch changes (which, in the
+// expected call order, are absent — sessionlogin reads user, calls
+// UpdateLockoutFields, then may call ApplyInTx(LockUser) which goes through
+// a separate Update path).
+func (r *UserRepository) UpdateLockoutFields(ctx context.Context, user *domain.User) error {
+	if !r.store.txHoldsLock(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
+
+	if _, exists := r.store.usersByID[user.ID]; !exists {
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, user.ID)))
+	}
+
+	c := cloneUser(user)
+	r.store.usersByID[user.ID] = c
+	r.store.byName[user.Username] = c
+	return nil
 }
 
 // Delete removes the User with the given ID. Safe to call both inside and

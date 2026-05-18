@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
@@ -174,6 +175,18 @@ func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
 	return func(c *AccessCore) { c.configEventCollector = collector }
 }
 
+// WithLockoutMetrics injects the auto-lockout observability recorder. The
+// composition root constructs auth.NewAccountLockoutMetrics(p) and passes
+// the result here. Nil is silently ignored (mem/demo mode falls back to a
+// no-op recorder inside accountlockout.NewService).
+func WithLockoutMetrics(rec accountlockout.MetricsRecorder) Option {
+	return func(c *AccessCore) {
+		if rec != nil {
+			c.lockoutMetrics = rec
+		}
+	}
+}
+
 // WithClock sets the time source for this Cell. Required — Init() panics via
 // clock.MustHaveClock if not set. Composition root passes clock.Real(); tests
 // inject a deterministic clock to control time-sensitive logic.
@@ -284,11 +297,17 @@ type AccessCore struct {
 
 	metricsProvider      metrics.Provider
 	configEventCollector obmetrics.ConfigEventCollector
-	refreshGCEnabled     bool
-	refreshGCInterval    time.Duration
-	refreshGCRetention   time.Duration
-	refreshGCCollector   refresh.GCCollector
-	refreshGC            *refresh.GCWorker
+
+	// lockoutMetrics is the observability recorder injected by the composition
+	// root for ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01. accountlockout.Service
+	// calls IncAccountLockout("threshold_locked"|"lazy_unlocked") on transitions.
+	// Nil → accountlockout uses its internal no-op recorder (mem/demo mode).
+	lockoutMetrics     accountlockout.MetricsRecorder
+	refreshGCEnabled   bool
+	refreshGCInterval  time.Duration
+	refreshGCRetention time.Duration
+	refreshGCCollector refresh.GCCollector
+	refreshGC          *refresh.GCWorker
 
 	// configGetter is used by the configreceive slice to fetch config entry
 	// values from configcore after an upsert event. nil = log-only mode.

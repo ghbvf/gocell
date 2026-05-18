@@ -1,6 +1,6 @@
 id: J-accountlockout
 goal: 多次登录失败后账户自动锁定，管理员可手动解锁
-lifecycle: experimental
+lifecycle: active
 owner:
   team: platform
   role: journey-owner
@@ -12,15 +12,27 @@ contracts:
   - http.auth.user.lock.v1
   - http.auth.user.unlock.v1
 passCriteria:
+  # NOTE: auto-lock / event-publish / admin-unlock are mode: manual because the
+  # production code paths cross the cells/accesscore/internal/ boundary
+  # (accountlockout.Service / authzmutate.Mutator / identitymanage.Service all
+  # require the internal credentialinvalidate.Invalidator + authzmutate funnel)
+  # and have no Docker-free load-bearing seam reachable from tests/integration/.
+  # They will be promoted back to mode: auto by
+  # JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION-01 (docs/backlog/cap-14-tooling.md)
+  # once either (a) cmd/corebundle is extracted to a library package and a
+  # tests/testutil/corebundle/ harness becomes importable, or (b)
+  # tests/integration/l2atomicity/ adds a J-accountlockout testcontainers e2e
+  # sub-suite (extends the existing TestL2_LoginUniform401 inactive_account_locked
+  # path with N consecutive failed attempts → wire-level lock event observation).
+  # Do not silently revert mode: manual → mode: auto without providing one of
+  # those harnesses first; the load-bearing requirement is genuine "real-behavior"
+  # coverage, not schema-validation tautology.
   - text: 连续失败达阈值后账户锁定
-    mode: auto
-    checkRef: journey.J-accountlockout.auto-lock
+    mode: manual
   - text: user.locked 事件发布成功
-    mode: auto
-    checkRef: journey.J-accountlockout.event-publish
+    mode: manual
   - text: 锁定期间登录被拒绝 — 锁定账户登录返回 HTTP 401 + code=ERR_AUTH_LOGIN_FAILED + message="invalid credentials"（与 missing-user / wrong-password 归一，防账号枚举）
     mode: auto
     checkRef: journey.J-accountlockout.login-reject
   - text: 管理员解锁后可正常登录
-    mode: auto
-    checkRef: journey.J-accountlockout.admin-unlock
+    mode: manual

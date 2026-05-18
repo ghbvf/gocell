@@ -73,4 +73,16 @@ type UserRepository interface {
 	// guarantee; mem full serialization on Store-TxRunner, per-call lock under
 	// a foreign CellTxManager, never hard-fails on pairing).
 	GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error)
+
+	// UpdateLockoutFields persists the auto-lockout state (failed_login_count,
+	// last_failed_at, locked_until) for an existing user. Called exclusively
+	// from cells/accesscore/internal/accountlockout. The status / authz_epoch
+	// / password_hash columns are NOT touched by this path — status
+	// transitions remain the responsibility of authzmutate.Mutator.ApplyInTx
+	// (which calls Update for status changes).
+	//
+	// Must be invoked within an ambient transaction (txCtx) so the counter
+	// update co-commits with the surrounding sessionlogin tx (L2 OutboxFact).
+	// Returns ErrAuthUserNotFound (KindNotFound) when no row matches user.ID.
+	UpdateLockoutFields(ctx context.Context, user *domain.User) error
 }

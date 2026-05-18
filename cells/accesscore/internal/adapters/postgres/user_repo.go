@@ -88,13 +88,15 @@ INSERT INTO users (
 
 	selectUserByIDSQL = `
 SELECT id, username, email, password_hash, password_version, password_reset_required,
-       status, creation_source, authz_epoch, created_at, updated_at
+       status, creation_source, authz_epoch, created_at, updated_at,
+       failed_login_count, last_failed_at, locked_until
 FROM users
 WHERE id = $1`
 
 	selectUserByUsernameSQL = `
 SELECT id, username, email, password_hash, password_version, password_reset_required,
-       status, creation_source, authz_epoch, created_at, updated_at
+       status, creation_source, authz_epoch, created_at, updated_at,
+       failed_login_count, last_failed_at, locked_until
 FROM users
 WHERE username = $1`
 
@@ -108,14 +110,16 @@ WHERE username = $1`
 	// the locked row until COMMIT.
 	selectUserByIDForUpdateSQL = `
 SELECT id, username, email, password_hash, password_version, password_reset_required,
-       status, creation_source, authz_epoch, created_at, updated_at
+       status, creation_source, authz_epoch, created_at, updated_at,
+       failed_login_count, last_failed_at, locked_until
 FROM users
 WHERE id = $1
 FOR UPDATE`
 
 	selectUserByUsernameForUpdateSQL = `
 SELECT id, username, email, password_hash, password_version, password_reset_required,
-       status, creation_source, authz_epoch, created_at, updated_at
+       status, creation_source, authz_epoch, created_at, updated_at,
+       failed_login_count, last_failed_at, locked_until
 FROM users
 WHERE username = $1
 FOR UPDATE`
@@ -133,9 +137,32 @@ WHERE id = $1`
 
 	deleteUserSQL = `DELETE FROM users WHERE id = $1`
 
+	// maxFailedLoginCount caps the in-domain failed_login_count value before
+	// it crosses the PG int32 wire boundary (column type is INTEGER in
+	// migration 029). Real-world threshold = 5 and the counter resets on
+	// stale-window / lazy-unlock / success, so this guard is a defensive
+	// upper bound rather than an operational limit.
+	maxFailedLoginCount = 1 << 30
+
 	// bumpAuthzEpochSQL atomically increments authz_epoch and returns the new value.
 	// Must be called inside an ambient transaction provided by the credential-invalidation funnel.
 	bumpAuthzEpochSQL = `UPDATE users SET authz_epoch = authz_epoch + 1 WHERE id = $1 RETURNING authz_epoch`
+
+	// updateLockoutFieldsSQL persists the auto-lockout state for an existing
+	// user. Called from cells/accesscore/internal/accountlockout inside the
+	// sessionlogin tx; does NOT touch status / authz_epoch / password_hash
+	// columns (those are owned by authzmutate.Mutator.ApplyInTx via the regular
+	// Update path or by the password / epoch mutators respectively).
+	//
+	// Migration 029 schema: failed_login_count (NOT NULL, CHECK >= 0),
+	// last_failed_at (NULL OK), locked_until (NULL OK).
+	updateLockoutFieldsSQL = `
+UPDATE users
+SET failed_login_count = $2,
+    last_failed_at = $3,
+    locked_until = $4,
+    updated_at = $5
+WHERE id = $1`
 
 	// updatePasswordSQL is the CAS-guarded password write. WHERE id=$4 AND
 	// password_version=$5 ensures that a stale view (from a concurrent change)
@@ -382,6 +409,8 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 		status, source                    string
 		authzEpoch                        int64
 		createdAt, updatedAt              time.Time
+		failedLoginCount                  int32
+		lastFailedAt, lockedUntil         *time.Time
 	)
 	err := row.Scan(
 		&id,
@@ -395,6 +424,9 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 		&authzEpoch,
 		&createdAt,
 		&updatedAt,
+		&failedLoginCount,
+		&lastFailedAt,
+		&lockedUntil,
 	)
 	if err != nil {
 		return nil, err
@@ -411,6 +443,12 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "creation_source")),
 			errcode.WithInternal(fmt.Sprintf("scanned source=%q", source)))
 	}
+	if failedLoginCount < 0 {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
+			"scanUser: failed_login_count must be >= 0",
+			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "failed_login_count")),
+			errcode.WithInternal(fmt.Sprintf("scanned value=%d", failedLoginCount)))
+	}
 	u, reconErr := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:                    id,
 		Username:              username,
@@ -423,12 +461,51 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 		AuthzEpoch:            authzEpoch,
 		CreatedAt:             createdAt,
 		UpdatedAt:             updatedAt,
+		FailedLoginCount:      int(failedLoginCount),
+		LastFailedAt:          lastFailedAt,
+		LockedUntil:           lockedUntil,
 	})
 	if reconErr != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: ReconstituteUser failed", reconErr)
 	}
 	return u, nil
+}
+
+// UpdateLockoutFields persists the auto-lockout state (failed_login_count,
+// last_failed_at, locked_until, updated_at) for an existing user. Called
+// exclusively from cells/accesscore/internal/accountlockout inside the
+// sessionlogin tx. Returns ErrAuthUserNotFound when no row matched.
+//
+// Schema note: this method touches only the four lockout-bookkeeping
+// columns plus updated_at. The status / authz_epoch / password_hash columns
+// remain owned by authzmutate.Mutator.ApplyInTx (Update / BumpAuthzEpoch) and
+// the password-change path (UpdatePassword); they are NOT mutated here.
+func (r *PGUserRepo) UpdateLockoutFields(ctx context.Context, user *domain.User) error {
+	count := user.FailedLoginCount()
+	if count < 0 || int64(count) > int64(maxFailedLoginCount) {
+		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"user_repo: failed_login_count out of range",
+			errcode.WithInternal(fmt.Sprintf("id=%s count=%d", user.ID, count)))
+	}
+	// G115 bounds-check is performed above against maxFailedLoginCount; the
+	// int32 conversion below cannot overflow.
+	tag, err := r.db.Exec(ctx, updateLockoutFieldsSQL,
+		user.ID,
+		int32(count),
+		user.LastFailedAt(),
+		user.AutoLockoutDeadline(),
+		user.UpdatedAt,
+	)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update lockout fields", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
+	}
+	return nil
 }
 
 // UpdatePassword applies a CAS-guarded password write.
