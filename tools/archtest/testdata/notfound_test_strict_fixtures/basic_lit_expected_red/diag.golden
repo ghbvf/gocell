@@ -1,0 +1,1 @@
+usage.go:15: [POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01] TestFoo_NotFound missing typed funnel: every test whose name ends in _NotFound must contain at least one call to errcodetest.AssertCode or errcodetest.AssertWireCode with a typed errcode.Err*NotFound expected argument (selector form, not BasicLit). See cap-14:18.
