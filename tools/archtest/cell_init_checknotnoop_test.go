@@ -22,9 +22,14 @@
 //
 // AI-rebust grade: Medium (type-aware AST funnel via RunTypedProduction +
 // *types.Info callee resolution; scoped to production packages). Hard
-// upgrade candidates are tracked in plan
-// `docs/plans/202605101548-035-configcore-residuals-fix-plan.md` §Tradeoff
-// (codegen funnel / CheckNotNoop nil-reject / drop memory mode).
+// upgrade candidates are tracked in PR #576 body §Tradeoff Accepted plus
+// independent backlog entries:
+//   - CELL-L2-CHECKNOTNOOP-CODEGEN-HARD-UPGRADE-01 (codegen funnel)
+//   - ARCHTEST-WALKER-BOUNDARY-CONTROL-01 (framework boundary API)
+//
+// Coupled body — BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED
+// (CheckNotNoop nil-reject / drop memory mode require resolving that
+// deferred breakage surface first).
 //
 // # Algorithm
 //
@@ -88,6 +93,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,6 +155,117 @@ type cellYAMLSubset struct {
 // behavior with explicit cases for "L1"/"L2"/"L4"/"l2"/"L10"/"".
 func consistencyLevelAtLeastL2(level string) bool {
 	return level >= "L2" && level <= "L4"
+}
+
+// TestParseAndIncludeTarget exercises the Phase A pure helper on every
+// fixture cell.yaml under testdata/cell_init_checknotnoop_fixtures/. Each
+// case loads the YAML file via os.ReadFile (bypassing scope-based walking
+// so testdata-scoped YAML can drive the test), invokes parseAndIncludeTarget,
+// and asserts the (target, diagnostic, include) tuple matches expectations.
+//
+// This closes F6 from the round-2 review: prior to this test the Phase A
+// branches (L0/L1 drop, L2+ accept, L2+ missing-goStructName diagnostic)
+// were only exercised end-to-end through ProductionScope, which excludes
+// testdata/. fixture cell.yaml files could drift relative to their cell.go
+// siblings without any test failing. With this YAML-driven unit test, any
+// change to a fixture cell.yaml's id / consistencyLevel / goStructName is
+// immediately observed.
+func TestParseAndIncludeTarget(t *testing.T) {
+	t.Parallel()
+	modPath := fixtureModPath(t)
+	root := findModuleRoot(t)
+
+	cases := []struct {
+		name           string
+		rel            string // module-relative path to fixture cell.yaml
+		wantInclude    bool
+		wantDiag       bool
+		wantCellID     string
+		wantGoStruct   string
+		wantDiagSubstr string
+	}{
+		{
+			name:         "L2 with goStructName — red_l2_missing",
+			rel:          fixturePkgRoot[2:] + "red_l2_missing/cell.yaml", // strip leading "./"
+			wantInclude:  true,
+			wantCellID:   "fixture-red_l2_missing",
+			wantGoStruct: "RedL2Cell",
+		},
+		{
+			name:         "L2 with goStructName — red_cross_pkg",
+			rel:          fixturePkgRoot[2:] + "red_cross_pkg/cell.yaml",
+			wantInclude:  true,
+			wantCellID:   "fixture-red_cross_pkg",
+			wantGoStruct: "RedCrossPkgCell",
+		},
+		{
+			name:         "L2 with goStructName — red_funclit_only",
+			rel:          fixturePkgRoot[2:] + "red_funclit_only/cell.yaml",
+			wantInclude:  true,
+			wantCellID:   "fixture-red_funclit_only",
+			wantGoStruct: "RedFuncLitCell",
+		},
+		{
+			name:         "L2 with goStructName — red_missing_init",
+			rel:          fixturePkgRoot[2:] + "red_missing_init/cell.yaml",
+			wantInclude:  true,
+			wantCellID:   "fixture-red_missing_init",
+			wantGoStruct: "RedMissingInitCell",
+		},
+		{
+			name:         "L2 with goStructName — boundary_transitive",
+			rel:          fixturePkgRoot[2:] + "boundary_transitive/cell.yaml",
+			wantInclude:  true,
+			wantCellID:   "fixture-boundary_transitive",
+			wantGoStruct: "BoundaryTransitiveCell",
+		},
+		{
+			name:        "L1 dropped — boundary_l1",
+			rel:         fixturePkgRoot[2:] + "boundary_l1/cell.yaml",
+			wantInclude: false,
+			wantDiag:    false,
+		},
+		{
+			name:           "L2 missing goStructName — diagnostic emitted",
+			rel:            fixturePkgRoot[2:] + "missing_struct_name/cell.yaml",
+			wantInclude:    false,
+			wantDiag:       true,
+			wantDiagSubstr: "missing goStructName",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// #nosec G304 -- tc.rel is a hard-coded module-relative path
+			// from the test's own case list (not user input); this is
+			// test-only fixture-yaml reading, mirrors the pattern in
+			// tools/archtest/internal/scanner/content.go:51.
+			content, err := os.ReadFile(filepath.Join(root, tc.rel))
+			require.NoError(t, err, "read fixture cell.yaml %s", tc.rel)
+
+			target, diag, ok := parseAndIncludeTarget(t, tc.rel, content, modPath)
+
+			require.Equal(t, tc.wantInclude, ok, "include flag mismatch for %s", tc.rel)
+
+			if tc.wantDiag {
+				require.NotNil(t, diag, "expected diagnostic for %s", tc.rel)
+				require.Contains(t, diag.Message, tc.wantDiagSubstr,
+					"diagnostic message substring mismatch: got %q", diag.Message)
+				require.Equal(t, tc.rel, diag.Rel, "diagnostic Rel must point at fixture yaml")
+			} else {
+				require.Nil(t, diag, "unexpected diagnostic for %s: %+v", tc.rel, diag)
+			}
+
+			if tc.wantInclude {
+				require.Equal(t, tc.wantCellID, target.cellID)
+				require.Equal(t, tc.wantGoStruct, target.goStructName)
+				require.Equal(t, tc.rel, target.yamlPath)
+				wantPkgPath := modPath + "/" + filepath.ToSlash(filepath.Dir(tc.rel))
+				require.Equal(t, wantPkgPath, target.pkgPath,
+					"target.pkgPath must equal modPath + cellDir for F4 == matching")
+			}
+		})
+	}
 }
 
 // TestConsistencyLevelAtLeastL2 pins the closed-set boundary behavior of
