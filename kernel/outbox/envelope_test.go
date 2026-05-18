@@ -206,6 +206,59 @@ func TestUnmarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 	}
 }
 
+func TestMarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
+	// Producer-side fail-fast: MarshalEnvelope calls idutil.ParseSafeID on
+	// all 5 ID-shaped fields. An unsafe in-memory Entry (e.g. accidental
+	// SafeID(rawUnsafe) cast) must be caught at write time rather than
+	// poisoning downstream consumers (defense in depth).
+	validEntry := Entry{
+		ID:            "valid-id",
+		AggregateID:   "agg-1",
+		AggregateType: "Order",
+		EventType:     "order.created.v1",
+		Topic:         "order.created.v1",
+		Payload:       []byte(`{"x":1}`),
+		CreatedAt:     time.Now(),
+	}
+
+	tests := []struct {
+		name  string
+		entry Entry
+	}{
+		{
+			name:  "ID with newline injection",
+			entry: func() Entry { e := validEntry; e.ID = "evt-1\nlevel=error"; return e }(),
+		},
+		{
+			name:  "AggregateID with angle brackets",
+			entry: func() Entry { e := validEntry; e.AggregateID = "<script>"; return e }(),
+		},
+		{
+			name:  "AggregateType with space",
+			entry: func() Entry { e := validEntry; e.AggregateType = "some type"; return e }(),
+		},
+		{
+			name:  "EventType with newline",
+			entry: func() Entry { e := validEntry; e.EventType = "foo.v1\nx"; return e }(),
+		},
+		{
+			name:  "Topic with CR injection",
+			entry: func() Entry { e := validEntry; e.Topic = "foo.v1\rINJECT"; return e }(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := MarshalEnvelope(tt.entry)
+			require.Error(t, err, "unsafe ID-shaped field must be rejected at marshal time")
+			var ce *errcode.Error
+			require.True(t, errors.As(err, &ce))
+			assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code,
+				"producer-side validation failures must surface as ErrEnvelopeSchema")
+		})
+	}
+}
+
 func TestEntryValidate_RejectsEmptyRequiredFields(t *testing.T) {
 	tests := []struct {
 		name string

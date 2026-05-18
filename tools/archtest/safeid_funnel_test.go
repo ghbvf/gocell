@@ -20,15 +20,28 @@
 // is no parser-level shape that bypasses SafeID.UnmarshalJSON when the
 // field is typed SafeID.
 //
-// Upstream Hard:
+// Upstream Medium-by-necessity (see backlog SAFEID-UPSTREAM-FUNNEL-HARD-01):
 //
-//	json.Unmarshal is the single decode entry point for wire envelopes —
-//	UnmarshalEnvelope calls it directly (kernel/outbox/envelope.go) and is
-//	itself the only caller used by every transport (RabbitMQ subscriber,
-//	in-memory eventbus, examples). The Go runtime guarantees the
-//	UnmarshalJSON dispatch; no business code participates in the decode
-//	pipeline. Form uniqueness on the field type therefore implies
-//	boundary-time validation by construction.
+//	(a) Current downstream Hard already covers the "field type" path:
+//	    json.Unmarshal cannot decode an unsafe value into a SafeID-typed
+//	    field — SafeID.UnmarshalJSON is dispatched by the Go runtime
+//	    regardless of which caller invokes json.Unmarshal. A business-code
+//	    WireMessage{ID: idutil.SafeID(rawUnsafe)} literal cast still triggers
+//	    MarshalEnvelope's ParseSafeID producer-side fail-fast and does NOT
+//	    bypass the type system (the field is still SafeID, not string).
+//
+//	(b) Unguarded bypass paths that remain:
+//	    - Direct json.Unmarshal(bytes, &outbox.WireMessage{}) outside
+//	      UnmarshalEnvelope skips the schemaVersion/required-field checks
+//	      (though SafeID.UnmarshalJSON still fires for all ID-shaped fields,
+//	      so the CWE-117 vector is closed even here).
+//	    - There is no archtest locking "UnmarshalEnvelope is the only caller
+//	      of json.Unmarshal for WireMessage" across transports. This gap is
+//	      the gap that prevents a full upstream Hard claim.
+//
+//	Upstream Medium is the appropriate rating under ai-collab.md
+//	§"Funnel 双向锁评级" — archtest caller-allowlist would be needed for
+//	upstream Hard. See backlog SAFEID-UPSTREAM-FUNNEL-HARD-01.
 //
 // Scanning tool: typeseval.SharedResolver via RunTyped + go/types struct
 // field inspection (kernel/outbox package scope, no fixture). Selected per
@@ -196,6 +209,14 @@ func isSafeIDType(t types.Type) bool {
 // id/eventType/aggregateId fields typed string) — covers the blind spot
 // noted in the package godoc: a parallel wire struct that reintroduces
 // untyped fields.
+//
+// Known limitation: this detector only checks field names present in the
+// safeIDRequiredFields map (ID / AggregateID / AggregateType / EventType /
+// Topic / TraceID / RequestID / CorrelationID). A new wire-shape struct that
+// uses alternative ID-shaped field names such as SourceID, CorrelationKey,
+// or SenderID will not be detected. When adding new ID-shaped fields to any
+// wire struct, reviewers must explicitly extend safeIDRequiredFields to cover
+// the new names.
 func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {

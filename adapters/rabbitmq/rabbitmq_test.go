@@ -421,6 +421,12 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 // makeDeliveryBody serializes an outbox.Entry into a WireMessage envelope
 // suitable for delivery to unmarshalDelivery. RabbitMQ now only accepts relay
 // envelope format (legacy PascalCase Entry JSON is no longer supported).
+//
+// The SafeID direct casts below (e.g. idutil.SafeID(entry.ID)) are safe here
+// because all callers pass known-safe literal or fixture IDs. Tests that
+// construct attack vectors (e.g. IDs containing "\n") must assert that the
+// downstream decoder (UnmarshalEnvelope / unmarshalDelivery) rejects the
+// resulting bytes rather than relying on this helper to sanitize inputs.
 func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 	t.Helper()
 	payload := entry.Payload

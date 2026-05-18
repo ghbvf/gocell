@@ -24,6 +24,12 @@ import (
 //
 // ref: pkg/idutil.IsSafeID — character set source (ASCII letters, digits,
 // `._:/-`); pkg/idutil.MaxMetadataIDLen — length cap.
+//
+// Bypass boundary: SafeID(untrustedInput) in tests that construct wire bytes
+// bypasses UnmarshalJSON validation. Such usage is only safe when the test
+// also asserts that the downstream decoder (e.g. UnmarshalEnvelope) rejects
+// the resulting bytes. Do not treat SafeID(untrustedInput) as a general
+// pattern for trusting external data.
 type SafeID string
 
 // String returns the underlying string.
@@ -72,7 +78,7 @@ func validateSafeIDString(s string) error {
 		return nil
 	}
 	if len(s) > MaxMetadataIDLen {
-		return fmt.Errorf("idutil: SafeID length %d exceeds max %d", len(s), MaxMetadataIDLen)
+		return fmt.Errorf("idutil: SafeID too long")
 	}
 	if !IsSafeID(s) {
 		return fmt.Errorf("idutil: SafeID contains unsafe characters")
