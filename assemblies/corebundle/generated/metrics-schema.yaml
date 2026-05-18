@@ -3,6 +3,14 @@ assemblyId: corebundle
 scope: assembly-reachable
 entrypoint: cmd/corebundle/main.go
 metrics:
+    - name: auth_account_lockout_total
+      fqName: gocell_auth_account_lockout_total
+      namespace: gocell
+      type: counter
+      help: Total number of account auto-lockout transitions, by reason (threshold_locked / lazy_unlocked).
+      labels:
+        - reason
+      file: runtime/auth/metrics.go
     - name: auth_login_total
       fqName: gocell_vault_auth_login_total
       namespace: gocell
