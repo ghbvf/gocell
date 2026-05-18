@@ -287,20 +287,22 @@ func scanNetErrorDeclarations(p *Pass, allowlist map[string]map[string]struct{})
 			if gd.Tok != token.VAR {
 				return
 			}
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok || vs.Type == nil {
-					continue
+			// EachInChildren[ast.ValueSpec] is the typed depth-1 walk over
+			// GenDecl.Specs (SCANNER-FRAMEWORK-USAGE-01 funnel; the
+			// `for _, spec := range gd.Specs` + type-assertion shape is RED).
+			EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+				if vs.Type == nil {
+					return
 				}
 				if !isNetErrorTypeExpr(p.TypesInfo, vs.Type) {
-					continue
+					return
 				}
 				fn := enclosingFuncName(file, vs.Pos())
 				if fn == "" {
 					fn = "<package scope>"
 				}
 				if _, ok := allowed[fn]; ok {
-					continue
+					return
 				}
 				ds = append(ds, Diagnostic{
 					Rel:  p.Rel(file),
@@ -317,7 +319,7 @@ func scanNetErrorDeclarations(p *Pass, allowlist map[string]map[string]struct{})
 						valueSpecFirstName(vs), p.Pkg.Name(), fn,
 					),
 				})
-			}
+			})
 		})
 	}
 	return ds
