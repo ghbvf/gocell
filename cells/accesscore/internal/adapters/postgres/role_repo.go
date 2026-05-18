@@ -289,7 +289,7 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	_, err := r.db.Exec(ctx, deleteAssignmentSQL, userID, roleID)
 	if err != nil {
-		if pgquery.IsLastAdminProtected(err) {
+		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",
 				errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
@@ -344,7 +344,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 	var userHeldRole, wasDeleted bool
 	row := tx.QueryRow(ctx, removeIfNotLastSQL, userID, roleID)
 	if err := row.Scan(&userHeldRole, &wasDeleted); err != nil {
-		if pgquery.IsLastAdminProtected(err) {
+		if isLastAdminProtected(err) {
 			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
 			return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",

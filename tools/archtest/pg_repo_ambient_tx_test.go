@@ -18,9 +18,32 @@
 //     non-constructor, or a constructor that receives the pool but stores it
 //     raw, violates the funnel.
 //
+//   - R3 (usage-point funnel): methods on repo/store structs that hold a
+//     pgExecutor field must NOT (a) access <x>.pool directly (where <x>
+//     resolves to pgExecutor type via *types.Info) nor (b) call
+//     <x>.ExecDirect(...) unless the callsite is on the static allowlist.
+//     The allowlist is keyed by (file, enclosing function name) and currently
+//     contains exactly one entry:
+//     "adapters/postgres/refresh_store.go::revokeSessionDetachedAt" — the
+//     intentional independent-commit cascade-revoke compensation path.
+//
 // # AI-rebust grading (Funnel 双向锁评级)
 //
 // 下游 Hard / 上游 Medium (backlog: PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01).
+//
+// 上游 Medium: intra-package compile Hard is unreachable — adapters/postgres
+// repos share the package with pgExecutor; Go package-level visibility means a
+// sibling file can always reach pgExecutor.pool or add its own field — the
+// compiler cannot block it. The ceiling is archtest-bound form-uniqueness (same
+// grade and precedent as PANIC-REGISTERED-01 / panic(panicregister.Approved)
+// per ai-collab.md §Hard 范本 #2 caveat). R1+R2 guard holding+construction;
+// R3 adds callsite caller-allowlist enforcement so that the only existing
+// legitimate bypass (revokeSessionDetachedAt) is statically pinned and any NEW
+// bypass immediately fails CI. This elevates upstream enforcement from doc-only
+// to archtest-enforced Medium (caller-allowlist form). Hard terminal state
+// remains: seal pgExecutor behind an exported interface + private construction
+// funnel making bypass unexpressible package-externally.
+// See backlog PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01.
 //
 // 下游 Hard via form-uniqueness (archtest-bound), NOT compile-time:
 //
@@ -43,14 +66,16 @@
 //     violation. Exempted: the pgExecutor methods themselves and newPGExecutor's
 //     own parameter.
 //
-// 上游 Medium: intra-package compile Hard is unreachable — adapters/postgres
-// repos share the package with pgExecutor; Go package-level visibility means a
-// sibling file can always reach pgExecutor.pool or add its own field — the
-// compiler cannot block it. The ceiling is archtest-bound form-uniqueness (same
-// grade and precedent as PANIC-REGISTERED-01 / panic(panicregister.Approved)
-// per ai-collab.md §Hard 范本 #2 caveat). Upgrade path: seal pgExecutor behind
-// an exported interface + private construction funnel making bypass unexpressible
-// package-externally. See backlog PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01.
+//   - R3 resolves selector expressions via *types.Info.Types to check whether
+//     the receiver expression resolves to the package-local pgExecutor named
+//     type (Obj().Name() == "pgExecutor" AND Obj().Pkg().Path() == pkgPath).
+//     (a) For pool access: any SelectorExpr `<x>.pool` where <x> resolves to
+//     pgExecutor and `.pool` is accessed from outside pgExecutor's own methods.
+//     (b) For ExecDirect calls: any CallExpr `<x>.ExecDirect(...)` where <x>
+//     resolves to pgExecutor, unless the enclosing function is on the static
+//     allowlist map[string]struct{} keyed by "file::funcname".
+//     Exempted: pgExecutor's own methods (they legitimately use e.pool /
+//     call ExecDirect on self); newPGExecutor constructor.
 //
 // # Blind spots
 //
@@ -92,6 +117,21 @@
 // cells/accesscore/postgres contains exactly one non-pgExecutor struct holding
 // *pgxpool.Pool named "Deps", preventing a second such struct from silently
 // appearing there.
+//
+// BS-6 R3 method-value indirection: `var fn = s.db.ExecDirect; fn(ctx, sql)` —
+// R3's ExecDirect detection looks for SelectorExpr CallExpr with Sel.Name ==
+// "ExecDirect". A method-value stored in a variable has a different AST shape
+// and would not be caught. Accepted: the repo has no such pattern; method-value
+// assignment from ExecDirect is covered by reverse self-check
+// TestPGRepoAmbientTx_SelfCheck BS-6.
+//
+// BS-7 R3 pool access via local variable: `p := s.db.pool; p.Exec(ctx, sql)` —
+// R3's pool detection looks for a SelectorExpr `<x>.pool` where <x> resolves to
+// pgExecutor. If pool is first assigned to a local variable and then used, the
+// Exec call is on the variable, not on pgExecutor, and would not be caught.
+// Accepted: pool is an unexported field — the only way to capture it locally is
+// inside the same package; the repo has no such pattern. Covered by
+// TestPGRepoAmbientTx_SelfCheck BS-7 reverse self-check.
 package archtest
 
 import (
@@ -113,7 +153,29 @@ const (
 	pgxpoolTypeName   = "Pool"
 	pgExecutorName    = "pgExecutor"
 	newPGExecutorName = "newPGExecutor"
+	execDirectName    = "ExecDirect"
+	poolFieldName     = "pool"
 )
+
+// r3ExecDirectAllowlist is the static callsite allowlist for R3(b): the ONLY
+// production callsites permitted to call pgExecutor.ExecDirect from a
+// repo/store method. Keys are "relative-file::enclosing-func-name".
+//
+// Current single allowlist entry:
+//
+//	adapters/postgres/refresh_store.go::revokeSessionDetachedAt
+//
+// This is the intentional independent-commit cascade-revoke compensation path
+// (security response that must commit independently of the ambient transaction).
+// See PGRefreshStore.revokeSessionDetachedAt godoc and ADR
+// docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md.
+//
+// Maintenance obligation: add a new entry ONLY when there is an ADR-explicit
+// rationale for bypassing the ambient transaction. Any new *_repo.go/*_store.go
+// method calling ExecDirect that is NOT here will fail CI immediately.
+var r3ExecDirectAllowlist = map[string]struct{}{
+	"adapters/postgres/refresh_store.go::revokeSessionDetachedAt": {},
+}
 
 // pgRepoPackagePatterns lists the import patterns whose production .go files
 // the archtest must parse with full TypesInfo. Both adapters/postgres and the
@@ -212,6 +274,7 @@ func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 		}
 		diags = append(diags, scanR1PoolFields(p.Fset, file, rel, p.TypesInfo)...)
 		diags = append(diags, scanR2PoolParams(p.Fset, file, rel, p.TypesInfo, pkgPath)...)
+		diags = append(diags, scanR3UsagePoints(p.Fset, file, rel, p.TypesInfo, pkgPath)...)
 	}
 	return diags
 }
@@ -318,6 +381,144 @@ func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *typ
 		}
 	})
 	return diags
+}
+
+// scanR3UsagePoints implements R3: repo/store methods must not access
+// pgExecutor.pool directly nor call pgExecutor.ExecDirect outside the allowlist.
+//
+// pkgPath is the import path of the package being scanned and is used to verify
+// that the resolved pgExecutor type belongs to this same package (package-local
+// identity check), preventing false positives from similarly-named types in
+// other packages.
+//
+// Two sub-checks:
+//
+// (a) pool direct access: any SelectorExpr `<x>.pool` where <x>'s static type
+// (via *types.Info.Types) resolves to pgExecutor. Exempt: pgExecutor's own
+// methods (receiver type == pgExecutor); newPGExecutor.
+//
+// (b) ExecDirect call outside allowlist: any CallExpr `<x>.ExecDirect(...)` where
+// <x> resolves to pgExecutor, unless the enclosing FuncDecl's canonical key
+// "relative-file::func-name" is in r3ExecDirectAllowlist. Exempt: pgExecutor's
+// own methods.
+//
+// Cognitive complexity: split into two sub-helpers to stay ≤15.
+func scanR3UsagePoints(fset *token.FileSet, file *ast.File, rel string, info *types.Info, pkgPath string) []Diagnostic {
+	var diags []Diagnostic
+	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		// pgExecutor's own methods legitimately use e.pool and ExecDirect.
+		if receiverTypeName(fn) == pgExecutorName {
+			return
+		}
+		// newPGExecutor itself is also exempt.
+		if fn.Name.Name == newPGExecutorName {
+			return
+		}
+		if fn.Body == nil {
+			return
+		}
+		enclosingKey := rel + "::" + fn.Name.Name
+		diags = append(diags, scanR3PoolAccess(fset, fn.Body, rel, info, pkgPath)...)
+		diags = append(diags, scanR3ExecDirect(fset, fn.Body, rel, info, pkgPath, enclosingKey)...)
+	})
+	return diags
+}
+
+// scanR3PoolAccess flags SelectorExpr `<x>.pool` where <x> resolves to the
+// package-local pgExecutor type.
+func scanR3PoolAccess(fset *token.FileSet, body *ast.BlockStmt, rel string, info *types.Info, pkgPath string) []Diagnostic {
+	var diags []Diagnostic
+	EachInSubtree[ast.SelectorExpr](body, func(sel *ast.SelectorExpr) {
+		if sel.Sel.Name != poolFieldName {
+			return
+		}
+		if !isPgExecutorType(sel.X, info, pkgPath) {
+			return
+		}
+		line := fset.Position(sel.Pos()).Line
+		diags = append(diags, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: "R3: direct access to pgExecutor.pool field bypasses ambient-tx routing; " +
+				"use e.Exec/e.Query/e.QueryRow (or ExecDirect for allowlisted compensation paths)",
+		})
+	})
+	return diags
+}
+
+// scanR3ExecDirect flags CallExpr `<x>.ExecDirect(...)` where <x> resolves to
+// pgExecutor, unless enclosingKey is in r3ExecDirectAllowlist.
+func scanR3ExecDirect(
+	fset *token.FileSet,
+	body *ast.BlockStmt,
+	rel string,
+	info *types.Info,
+	pkgPath string,
+	enclosingKey string,
+) []Diagnostic {
+	var diags []Diagnostic
+	if _, allowed := r3ExecDirectAllowlist[enclosingKey]; allowed {
+		return nil
+	}
+	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		if sel.Sel.Name != execDirectName {
+			return
+		}
+		if !isPgExecutorType(sel.X, info, pkgPath) {
+			return
+		}
+		line := fset.Position(call.Pos()).Line
+		diags = append(diags, Diagnostic{
+			Rel:  rel,
+			Line: line,
+			Message: "R3: pgExecutor.ExecDirect call outside the allowlist bypasses ambient-tx " +
+				"routing; only allowlisted compensation callsites may call ExecDirect " +
+				"(see r3ExecDirectAllowlist in pg_repo_ambient_tx_test.go)",
+		})
+	})
+	return diags
+}
+
+// isPgExecutorType reports whether expr's static type resolves to the
+// package-local pgExecutor named struct type. The check requires both the type
+// name ("pgExecutor") AND the package path to match, preventing false positives
+// from similarly-named types in other packages.
+//
+// Handles both value and pointer receiver forms (pgExecutor and *pgExecutor).
+// pkgPath may be empty (fixture loads where Pkg is nil); when empty only the
+// type name is checked.
+func isPgExecutorType(expr ast.Expr, info *types.Info, pkgPath string) bool {
+	if info == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok || tv.Type == nil {
+		return false
+	}
+	t := tv.Type
+	// Dereference pointer if receiver is *pgExecutor.
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil {
+		return false
+	}
+	if obj.Name() != pgExecutorName {
+		return false
+	}
+	if pkgPath != "" && (obj.Pkg() == nil || obj.Pkg().Path() != pkgPath) {
+		return false
+	}
+	return true
 }
 
 // collectPGPoolParams returns the names of fn's parameters whose type resolves
@@ -461,15 +662,17 @@ func assertProductionCoverage(t *testing.T) {
 	}
 }
 
-// TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches all three
+// TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches all five
 // RED violations in internal/pgrepoambienttxfixture:
 //
 //   - 1 R1: badR1Repo holds *pgxpool.Pool (not named pgExecutor)
 //   - 1 R2: badR2NonNew is a non-New* function with *pgxpool.Pool param
-//   - 1 R2: badR2NewNoWrap is a New* function with *pgxpool.Pool param but no newPGExecutor call
+//   - 1 R2: NewBadR2NoWrap is a New* function with *pgxpool.Pool param but no newPGExecutor call
+//   - 1 R3: badR3PoolDirect accesses r.db.pool directly
+//   - 1 R3: badR3ExecDirect calls r.db.ExecDirect outside the allowlist
 //
-// GREEN cases (pgExecutor field, goodNewFoo calling newPGExecutor) must
-// produce zero diagnostics.
+// GREEN cases (pgExecutor field, goodNewFoo→newPGExecutor, goodExecMethod using
+// r.db.Exec) must produce zero diagnostics.
 //
 // Without this test, TestPGRepoAmbientTx's zero-diagnostic result on the real
 // packages has no informational value: the rule could be silently passing
@@ -488,15 +691,16 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
 
-	// Exact count: 1 R1 + 2 R2 = 3 total.
-	// Equality (not >=3) so unintentional fixture drift is immediately visible.
-	assert.Len(t, diags, 3,
-		"PG-REPO-AMBIENT-TX-01 RED fixture must yield exactly 3 violations "+
-			"(1×R1: badR1Repo + 1×R2: badR2NonNew + 1×R2: NewBadR2NoWrap); "+
-			"GREEN cases (pgExecutor, goodNewFoo→newPGExecutor) must produce 0. "+
+	// Exact count: 1 R1 + 2 R2 + 2 R3 = 5 total.
+	// Equality (not >=5) so unintentional fixture drift is immediately visible.
+	assert.Len(t, diags, 5,
+		"PG-REPO-AMBIENT-TX-01 RED fixture must yield exactly 5 violations "+
+			"(1×R1: badR1Repo + 1×R2: badR2NonNew + 1×R2: NewBadR2NoWrap + "+
+			"1×R3: badR3PoolDirect + 1×R3: badR3ExecDirect); "+
+			"GREEN cases (pgExecutor, goodNewFoo→newPGExecutor, goodExecMethod) must produce 0. "+
 			"Update the expected count if the fixture changes intentionally.")
 
-	r1Count, r2Count := 0, 0
+	r1Count, r2Count, r3Count := 0, 0, 0
 	for _, d := range diags {
 		if strings.HasPrefix(d.Message, "R1:") {
 			r1Count++
@@ -504,9 +708,13 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 		if strings.HasPrefix(d.Message, "R2:") {
 			r2Count++
 		}
+		if strings.HasPrefix(d.Message, "R3:") {
+			r3Count++
+		}
 	}
 	assert.Equal(t, 1, r1Count, "expected exactly 1 R1 violation (badR1Repo)")
 	assert.Equal(t, 2, r2Count, "expected exactly 2 R2 violations (badR2NonNew + NewBadR2NoWrap)")
+	assert.Equal(t, 2, r3Count, "expected exactly 2 R3 violations (badR3PoolDirect + badR3ExecDirect)")
 }
 
 // TestPGRepoAmbientTx_SelfCheck verifies the blind-spot list by asserting that
@@ -636,6 +844,84 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		"BS-5 self-check: cells/accesscore/postgres must not introduce a second "+
 			"non-pgExecutor struct holding *pgxpool.Pool beyond the intentional Deps struct; "+
 			"if a second such struct appears, add it to pgRepoPackagePatterns instead")
+
+	// BS-6 reverse check: ExecDirect must not be stored as a method value in any
+	// production repo/store file. A method-value indirection would bypass R3's
+	// ExecDirect detection. Check all files (not just _repo/_store) in the
+	// production packages to be conservative about the blind spot boundary.
+	var bs6Violations []string
+	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			if !p.IsFileInScope(file) {
+				continue
+			}
+			rel := p.Rel(file)
+			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
+				// Look for Rhs elements that are SelectorExpr with Sel == "ExecDirect".
+				EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
+					if sel.Sel.Name != execDirectName {
+						return
+					}
+					// Only flag if the receiver resolves to pgExecutor.
+					var pkgPath string
+					if p.Pkg != nil {
+						pkgPath = p.Pkg.Path()
+					}
+					if !isPgExecutorType(sel.X, p.TypesInfo, pkgPath) {
+						return
+					}
+					bs6Violations = append(bs6Violations,
+						fmt.Sprintf("%s:%d: ExecDirect stored as method value "+
+							"(BS-6 blind spot — R3 would not detect this; extend rule if needed)",
+							rel, p.Fset.Position(sel.Pos()).Line))
+				})
+			})
+		}
+		return nil
+	})
+	assert.Empty(t, bs6Violations,
+		"BS-6 self-check: pgExecutor.ExecDirect must not be stored as a method value in production")
+
+	// BS-7 reverse check: pool must not be assigned to a local variable in any
+	// production repo/store file. An assignment like `p := s.db.pool` would let
+	// the caller bypass R3's pool-access detection on the subsequent p.Exec call.
+	var bs7Violations []string
+	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			if !p.IsFileInScope(file) {
+				continue
+			}
+			rel := p.Rel(file)
+			var pkgPath string
+			if p.Pkg != nil {
+				pkgPath = p.Pkg.Path()
+			}
+			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
+				EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
+					if sel.Sel.Name != poolFieldName {
+						return
+					}
+					if !isPgExecutorType(sel.X, p.TypesInfo, pkgPath) {
+						return
+					}
+					bs7Violations = append(bs7Violations,
+						fmt.Sprintf("%s:%d: pgExecutor.pool assigned to local variable "+
+							"(BS-7 blind spot — R3 pool-access detection would miss subsequent use; "+
+							"extend rule if this pattern is needed)",
+							rel, p.Fset.Position(sel.Pos()).Line))
+				})
+			})
+		}
+		return nil
+	})
+	assert.Empty(t, bs7Violations,
+		"BS-7 self-check: pgExecutor.pool must not be assigned to a local variable in production")
 }
 
 // embeddedStructHasPoolField reports whether the type denoted by expr (an

@@ -297,7 +297,7 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		user.UpdatedAt,
 	)
 	if err != nil {
-		if pgquery.IsLastAdminProtected(err) {
+		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
@@ -327,7 +327,7 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 	tag, err := r.db.Exec(ctx, deleteUserSQL, id)
 	if err != nil {
-		if pgquery.IsLastAdminProtected(err) {
+		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),

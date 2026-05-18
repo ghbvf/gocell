@@ -722,7 +722,7 @@ Wave C
 **进度（v15，2026-05-18）**：
 - ✅ merged 9/9：**T1 #514** / **T2 #525** / **T3 #515** / **T4 #523** / **T5 #524+#533** / **FU-1 #513** / **FU-2 #512** / **FU-3 #516** / **FU-4 本批**（branch `claude/continue-s4c-tasks-5TveC`）
 - ✅ 收尾项全达成：ADR §A14「S4-FU 收口标注（2026-05-18）」已添加（A12 已被 Wave 5 P1-1 占用、A13 被 wire-uniformity 占用，故新增 A14）；5 项触发型 backlog 已登记——`IDENTITYMANAGE-UPDATE-CO-TX-UPGRADE-01` / `MIGRATION-NONEMPTY-DB-UPGRADE-GUIDE-01` / `AUTHZMUTATE-MUTATION-EVENT-OPTIONAL-01` → `docs/backlog/cap-x-cross.md` §x.2；`ARCHTEST-FUNNEL-CALLSITE-LEVEL-01` / `GOLANGCI-GOPACKAGES-EXEMPTION-CLEANUP-01` → `docs/backlog/cap-14-tooling.md` §14.1（backlog.md 索引计数同步 61→63 / 36→39）
-- 独立侧线：**DX4** ✅ shipped（本 PR，实施 plan `docs-plans-202605082145-034-pg-corecell-elegant-ritchie.md`；4 子项全收口 + PR444-FU bench 核验/修复）；**D4** / **B2.B** ⬜ 仍未 ship（与 S4c/S4-FU 无依赖，状态不变）
+- 独立侧线：**DX4** ✅ shipped（本 PR #578；实施细节见本节 §DX4 内容；4 子项全收口 + PR444-FU bench 核验/修复）；**D4** / **B2.B** ⬜ 仍未 ship（与 S4c/S4-FU 无依赖，状态不变）
 
 > **历史（v11，2026-05-16）**：merged 5/9（T1 #514 / T3 #515 / FU-1 #513 / FU-2 #512 / FU-3 #516）；剩 T2 / T4 / FU-4 / T5；收尾项未落。v12-v14 逐步 ship T4 / T5 / T2，v15 ship FU-4 + 收口。
 
@@ -763,7 +763,7 @@ Wave C
 
 **建议排序**：S3F 与 S4a 之后；若人力充足可并行，但不与 S4a/S4b 共 PR。
 
-**内容**（实施 plan：`docs-plans-202605082145-034-pg-corecell-elegant-ritchie.md`）：
+**内容**（实施见 §DX4 + PR #578）：
 - ✅ `cells/accesscore/postgres.NewDeps(pool any, ...)` → typed `*pgxpool.Pool`，删运行时 type assertion（编译期拦错）
 - ✅ PG user/role repo 错误码与 `adapters/postgres` **单一源统一分类**：分类器收口到 `pkg/pgquery`（删 `adapters/postgres/errors.go` + `cells/.../pgerrors.go` 两份重复，`.golangci.yml` LAYER-02 加 `pgconn`）；under-classification 审计确认 `user.Create`/`Update` unique、`role.AssignToUser` FK、last-admin 等路径**已正确分类**；`role.Create` 为 PK-only upsert（`ON CONFLICT (id) DO UPDATE`），`roles` 表仅有 PK unique index，23505 结构上不可能触发，`ErrInternal` blanket 分类正确（非欠分类，PR review 确认并删除死代码 `roleCreateError` 分支）
 - ✅ ambient tx archtest `PG-REPO-AMBIENT-TX-01` 从手写 5 文件清单升 **Hard（form-uniqueness）**：sealed `pgExecutor` 单一 holder（R1 struct-field funnel + R2 ctor-param funnel，`*types.Info` resolve），`audit_ledger_store` 收敛，companion 覆盖守卫 + RED fixture

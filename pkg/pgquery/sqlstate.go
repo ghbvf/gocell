@@ -2,7 +2,6 @@ package pgquery
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -19,7 +18,7 @@ const (
 	// SQLStateForeignKeyViolation is class 23 / 23503.
 	SQLStateForeignKeyViolation = "23503"
 	// SQLStateRaiseException is the catch-all class P0001 used by
-	// PL/pgSQL `RAISE EXCEPTION` (e.g. last_admin_protected trigger).
+	// PL/pgSQL `RAISE EXCEPTION`.
 	SQLStateRaiseException = "P0001"
 )
 
@@ -44,39 +43,4 @@ func IsForeignKeyViolation(err error) bool {
 		return false
 	}
 	return pgErr.Code == SQLStateForeignKeyViolation
-}
-
-// LastAdminTriggerSentinel is the message prefix emitted by the
-// effective_admin_invariant_fn trigger function when it blocks a mutation that
-// would leave the system with no effective admin. The full trigger message is:
-//
-//	"effective_admin_invariant: would leave the system with no effective admin"
-//
-// ref: adapters/postgres/migrations/024_effective_admin_invariant.sql
-const LastAdminTriggerSentinel = "effective_admin_invariant"
-
-// IsLastAdminProtected reports whether err (or any error in its Unwrap chain)
-// is the PL/pgSQL exception raised by the effective_admin_invariant_fn trigger
-// function (migrations/024_effective_admin_invariant.sql). Distinct from the
-// bare SQLSTATE check because P0001 is a generic class — we also need the
-// trigger sentinel in the MESSAGE field to avoid catching unrelated RAISE
-// EXCEPTION sites.
-//
-// The check uses a prefix match (strings.HasPrefix) because the trigger always
-// emits LastAdminTriggerSentinel as the first token of its message. A substring
-// scan would produce false positives for unrelated P0001 messages that merely
-// contain the sentinel text.
-//
-// S4.0 (migration 024) renamed the trigger function from
-// `last_admin_protected_fn` → `effective_admin_invariant_fn` and changed the
-// message prefix accordingly. The 019 trigger / function are fully retired.
-func IsLastAdminProtected(err error) bool {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return false
-	}
-	if pgErr.Code != SQLStateRaiseException {
-		return false
-	}
-	return strings.HasPrefix(pgErr.Message, LastAdminTriggerSentinel)
 }

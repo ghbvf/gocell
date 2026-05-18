@@ -25,13 +25,28 @@
 //   - NewBadR2NoWrap: a New*-prefixed function that takes *pgxpool.Pool but
 //     does NOT call newPGExecutor. Must produce exactly one R2 diagnostic.
 //
-// GREEN control: NewGoodRepo takes *pgxpool.Pool and calls newPGExecutor,
-// and pgExecutor is the single struct holding the pool field. Zero diagnostics.
+// R3 — usage-point funnel: same-package repo/store methods must not access
+// pgExecutor's unexported pool field directly nor call pgExecutor.ExecDirect
+// outside the explicit callsite allowlist.
 //
-// Total expected diagnostics: 3 (one R1 + two R2).
+//   - badR3PoolDirect: a repo method that accesses r.db.pool directly.
+//     Must produce exactly one R3 diagnostic.
+//
+//   - badR3ExecDirect: a repo method that calls r.db.ExecDirect outside the
+//     allowlist. Must produce exactly one R3 diagnostic.
+//
+// GREEN control: NewGoodRepo takes *pgxpool.Pool and calls newPGExecutor,
+// goodExecMethod uses r.db.Exec (sanctioned), pgExecutor holds pool field.
+// Zero R1/R2/R3 diagnostics from GREEN cases.
+//
+// Total expected diagnostics: 5 (one R1 + two R2 + two R3).
 package pgrepoambienttxfixture
 
-import "github.com/jackc/pgx/v5/pgxpool"
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
 
 // pgExecutor is the ONE sanctioned struct allowed to hold *pgxpool.Pool.
 // Its presence here is the GREEN control — R1 must NOT flag it.
@@ -42,6 +57,29 @@ type pgExecutor struct {
 // newPGExecutor is the sanctioned constructor. Referenced by goodNewFoo below.
 func newPGExecutor(pool *pgxpool.Pool) pgExecutor {
 	return pgExecutor{pool: pool}
+}
+
+// Exec is the sanctioned ambient-tx routing path.
+func (e pgExecutor) Exec(ctx context.Context, sql string, args ...any) {
+	_, _ = e.pool.Exec(ctx, sql, args...)
+}
+
+// ExecDirect is the explicit bypass path reserved for compensation/security
+// contexts. Only allowlisted callsites may call this.
+func (e pgExecutor) ExecDirect(ctx context.Context, sql string, args ...any) {
+	_, _ = e.pool.Exec(ctx, sql, args...)
+}
+
+// goodRepo demonstrates the GREEN path: holds a pgExecutor (not pool directly)
+// and uses e.db.Exec which routes through the ambient-tx logic.
+type goodRepo struct {
+	db pgExecutor
+}
+
+// goodExecMethod is a GREEN control: uses r.db.Exec (sanctioned routing).
+// R3 must NOT flag this.
+func (r goodRepo) goodExecMethod(ctx context.Context) {
+	r.db.Exec(ctx, "SELECT 1")
 }
 
 // badR1Repo is a struct that holds *pgxpool.Pool but is NOT named pgExecutor.
@@ -66,4 +104,21 @@ func NewBadR2NoWrap(pool *pgxpool.Pool) *badR1Repo {
 // newPGExecutor — the correct constructor pattern. R2 must NOT flag this.
 func NewGoodRepo(pool *pgxpool.Pool) pgExecutor {
 	return newPGExecutor(pool)
+}
+
+// badR3Repo has a pgExecutor field (like a real store) but misuses it.
+type badR3Repo struct {
+	db pgExecutor
+}
+
+// badR3PoolDirect is a RED R3 fixture: directly accesses r.db.pool.Exec,
+// bypassing the ambient-tx routing. R3 must flag this.
+func (r badR3Repo) badR3PoolDirect(ctx context.Context) {
+	r.db.pool.Exec(ctx, "SELECT 1") // R3 violation: direct pool access
+}
+
+// badR3ExecDirect is a RED R3 fixture: calls r.db.ExecDirect outside the
+// allowlist. R3 must flag this.
+func (r badR3Repo) badR3ExecDirect(ctx context.Context) {
+	r.db.ExecDirect(ctx, "SELECT 1") // R3 violation: ExecDirect outside allowlist
 }

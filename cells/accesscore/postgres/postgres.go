@@ -18,8 +18,12 @@ import (
 // PG-backed repositories. Callers in cmd/* construct this once via NewDeps and
 // pass it to NewUserRepository / NewRoleRepository / NewSetupLock.
 //
-// The unexported pool field hides *pgxpool.Pool from the root accesscore API
-// surface; callers interact only through the typed NewDeps constructor.
+// The fields (pool, txRunner, clock) are unexported to encapsulate
+// cell-internal wiring: callers must go through NewDeps rather than
+// constructing Deps directly. NewDeps intentionally accepts a typed
+// *pgxpool.Pool parameter so that injecting the wrong pool is a compile error
+// (DX4-1 compile-time pool-injection guard) — the pgx type is not hidden from
+// the caller; it is the constructor's parameter type.
 type Deps struct {
 	pool     *pgxpool.Pool
 	txRunner persistence.TxRunner
