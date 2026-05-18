@@ -12,7 +12,6 @@ package redis
 import (
 	"context"
 	"errors"
-	"net"
 	"strings"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -24,8 +23,10 @@ import (
 //
 // Transient when any of:
 //   - errors.Is(err, context.DeadlineExceeded) — deadline may succeed on retry
-//   - errors.As net.Error && Timeout() == true — socket read/write timeout
-//   - err.Error() contains "i/o timeout" — raw network timeout string
+//   - errcode.IsTransientNet(err) — any net.Error in chain (timeout, *net.OpError
+//     dial refused / connection reset, *net.DNSError) per ADAPTER-NET-TRANSIENT-
+//     FUNNEL-01
+//   - err.Error() contains "i/o timeout" — raw network timeout string fallback
 //   - CLUSTERDOWN / LOADING / TRYAGAIN / MASTERDOWN Redis reply codes
 //     (server-recovering states that should requeue, not DLX)
 //
@@ -53,20 +54,19 @@ func classifyRedisError(err error, opCode errcode.Code, opMsg string) error {
 // Classification:
 //  1. context.DeadlineExceeded → transient (deadline exceeded may succeed on retry).
 //     context.Canceled is excluded (caller gave up; retrying is pointless).
-//  2. net.Error.Timeout() == true → transient (socket I/O timeout).
-//  3. Error string contains "i/o timeout" → transient. SOFT best-effort
-//     fallback, intentionally AFTER the typed net.Error.Timeout() check (2)
-//     which is the primary path: go-redis dial/socket timeouts implement
-//     net.Error and are caught by (2). (3) only catches plain errors that
-//     carry the message text without implementing net.Error. It is not the
-//     authoritative classifier; over/under-match here degrades to the
-//     fail-closed-permanent default (Requeue-then-budget-DLX), never to
-//     event loss. Not an AI-rebust enforcement mechanism (business
-//     classification, not archtest/governance) — no Soft-upgrade backlog
-//     entry required; the typed check (2) is the durable signal.
-//     3b. goredis.ErrPoolTimeout → transient (connection-pool exhaustion; the
+//  2. goredis.ErrPoolTimeout → transient (connection-pool exhaustion; the
 //     pool frees up — go-redis itself classifies this retryable).
-//  4. Redis reply-code prefixes CLUSTERDOWN / LOADING / TRYAGAIN / MASTERDOWN →
+//  3. errcode.IsTransientNet(err) → transient. Covers timeout class (socket
+//     I/O timeout) AND non-timeout class (*net.OpError dial refused /
+//     connection reset, *net.DNSError). Symmetric with adapters/s3 and
+//     adapters/vault per ADR 202605161800 §"Adapter transient inventory"
+//     (ADAPTER-NET-TRANSIENT-FUNNEL-01).
+//  4. Error string contains "i/o timeout" → transient. SOFT best-effort
+//     fallback for plain errors.New strings that do NOT implement net.Error
+//     (the typed net.Error path at step 3 catches all go-redis socket
+//     errors). Over/under-match here degrades to fail-closed-permanent
+//     (Requeue-then-budget-DLX), never to event loss.
+//  5. Redis reply-code prefixes CLUSTERDOWN / LOADING / TRYAGAIN / MASTERDOWN →
 //     transient (server-recovering states; go-redis typed helpers via HasErrorPrefix
 //     are preferred; plain errors.New strings match the HasPrefix fallback path).
 func isTransientRedisError(err error) bool {
@@ -81,8 +81,9 @@ func isTransientRedisError(err error) bool {
 		return true
 	}
 
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	// Any net.Error in chain (timeout / *net.OpError dial refused / reset /
+	// DNS) → transient. Single-source funnel: ADAPTER-NET-TRANSIENT-FUNNEL-01.
+	if errcode.IsTransientNet(err) {
 		return true
 	}
 

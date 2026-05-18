@@ -3,7 +3,6 @@ package s3
 import (
 	"context"
 	"errors"
-	"net"
 
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
@@ -82,7 +81,11 @@ func classifyS3Error(err error, opCode errcode.Code, opMsg string) error {
 //     (RequestTimeout / SlowDown / Throttling… — retry-safe regardless of
 //     HTTP status; RequestTimeout is HTTP 400).
 //  4. context.DeadlineExceeded → transient; context.Canceled → permanent.
-//  5. net.Error.Timeout() == true → transient.
+//  5. net.Error in chain → transient. Covers timeout class (deadline / I/O
+//     timeout) AND non-timeout class (*net.OpError dial refused / connection
+//     reset, *net.DNSError). Routed through errcode.IsTransientNet so the
+//     transient set stays symmetric across adapters (ADAPTER-NET-TRANSIENT-
+//     FUNNEL-01, ADR 202605161800).
 //  6. Everything else → permanent (fail-closed).
 func isTransientS3Error(err error) bool {
 	// 1. Already has WrapInfra transient marker.
@@ -123,9 +126,10 @@ func isTransientS3Error(err error) bool {
 		return false
 	}
 
-	// 5. Network timeout.
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	// 5. Network error in chain (timeout / *net.OpError dial refused / reset /
+	//    DNS) → transient. errcode.IsTransientNet is the single-source funnel
+	//    (ADAPTER-NET-TRANSIENT-FUNNEL-01).
+	if errcode.IsTransientNet(err) {
 		return true
 	}
 
