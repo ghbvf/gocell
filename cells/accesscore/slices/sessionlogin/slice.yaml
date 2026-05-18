@@ -6,6 +6,10 @@ contractUsages:
     role: serve
   - contract: event.session.created.v1
     role: publish
+  - contract: event.user.locked.v1
+    role: publish
+  - contract: event.user.unlocked.v1
+    role: publish
   - contract: http.config.get.v1
     role: call
 verify:
@@ -14,6 +18,8 @@ verify:
   contract:
     - contract.http.auth.login.v1.serve
     - contract.event.session.created.v1.publish
+    - contract.event.user.locked.v1.publish
+    - contract.event.user.unlocked.v1.publish
   waivers:
     - contract: http.config.get.v1
       owner: platform-team

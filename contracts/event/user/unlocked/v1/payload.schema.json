@@ -7,7 +7,8 @@
       "type": "string"
     },
     "actorId": {
-      "type": "string"
+      "type": "string",
+      "description": "Identity of the principal that triggered the unlock. UUID for admin-initiated unlocks; the sentinel 'system' for auto-unlocks triggered by accountlockout TTL expiry (cells/accesscore/internal/accountlockout)."
     }
   },
   "required": [

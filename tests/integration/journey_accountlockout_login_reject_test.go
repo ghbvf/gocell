@@ -24,13 +24,10 @@ import (
 // executes it under -tags=integration via `gocell verify journey
 // --id=J-accountlockout`.
 //
-// J-accountlockout is lifecycle: experimental, so governance VERIFY-06 does
-// NOT force-execute this test in `gocell validate --strict`
-// (kernel/governance/rules_verify.go function validateVERIFY06Journey returns
-// nil for non-active journeys). It is kept Docker-free regardless so
-// `gocell verify journey` runs it without a container runtime, consistent
-// with TestJSsologinSessionDb / TestJSsologinErrorPathsUniform in this
-// package.
+// J-accountlockout is lifecycle: active, so governance VERIFY-06 runs this
+// test inside `gocell validate --strict`. 3 of 4 passCriteria are mode:
+// manual (see journeys/J-accountlockout.yaml inline comment + cap-14
+// JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION-01); only login-reject is mode: auto.
 //
 // The criterion asserts a locked account that attempts login receives the
 // SAME opaque 401 envelope as missing-user / wrong-password (FU-1 #513
@@ -56,15 +53,6 @@ import (
 // errMsgInvalidCredentials ("invalid credentials") is unexported in the
 // sessionlogin package; the literal here is the wire contract value pinned
 // in contracts/http/auth/login/v1/contract.yaml:24.
-//
-// J-accountlockout has 4 auto checkRef criteria. Only login-reject is
-// implemented here; the other 3 (auto-lock / event-publish / admin-unlock)
-// are pre-existing gaps with no test implementation. Because J-accountlockout
-// is lifecycle: experimental, VERIFY-06 exempts all 4 criteria from the
-// active gate / `make verify` green path. Running `gocell verify journey
-// --id=J-accountlockout` standalone will show those 3 criteria as FAIL —
-// that is a pre-existing known gap and is explicitly out of scope for plan
-// 034 §FU-4.
 func TestJAccountlockoutLoginReject(t *testing.T) {
 	t.Parallel()
 

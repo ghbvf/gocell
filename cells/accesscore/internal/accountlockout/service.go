@@ -156,7 +156,7 @@ func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user
 		return fmt.Errorf("accountlockout.RecordFailure: emit locked event: %w", err)
 	}
 	s.metrics.IncAccountLockout("threshold_locked")
-	s.logger.Info("account auto-locked",
+	s.logger.Warn("account auto-locked",
 		slog.String("user_id", user.ID),
 		slog.Int("failed_count", user.FailedLoginCount()),
 		slog.String("reason", "threshold_locked"))
@@ -170,12 +170,11 @@ func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user
 //
 // No-op when the user already has FailedLoginCount==0 and LastFailedAt==nil
 // (avoids a redundant UPDATE on every successful login).
-func (s *Service) RecordSuccess(ctx context.Context, txCtx context.Context, user *domain.User) error {
+func (s *Service) RecordSuccess(txCtx context.Context, user *domain.User) error {
 	if user == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"accountlockout.RecordSuccess: user must not be nil")
 	}
-	_ = ctx
 	if user.FailedLoginCount() == 0 && user.LastFailedAt() == nil && user.AutoLockoutDeadline() == nil {
 		return nil
 	}
@@ -225,6 +224,9 @@ func (s *Service) TryLazyUnlock(ctx context.Context, txCtx context.Context, user
 	if err := s.authzmutator.ApplyInTx(ctx, txCtx, user.ID, authzmutate.ActivateUser{}, now); err != nil {
 		return false, fmt.Errorf("accountlockout.TryLazyUnlock: apply activate: %w", err)
 	}
+	if err := s.publishUnlocked(txCtx, user.ID); err != nil {
+		return false, fmt.Errorf("accountlockout.TryLazyUnlock: emit unlocked event: %w", err)
+	}
 	s.metrics.IncAccountLockout("lazy_unlocked")
 	s.logger.Info("account lazy-unlocked",
 		slog.String("user_id", user.ID),
@@ -250,6 +252,26 @@ func (s *Service) publishLocked(txCtx context.Context, userID string) error {
 	}
 	if err := s.emitter.Emit(txCtx, entry); err != nil {
 		return fmt.Errorf("accountlockout: emit locked event: %w", err)
+	}
+	return nil
+}
+
+// publishUnlocked emits event.user.unlocked.v1 with ActorID=SystemActorID into
+// the outbox inside the caller's tx (txCtx). Mirrors publishLocked: same DTO
+// shape, same SystemActorID sentinel — consumers can distinguish auto-unlock
+// from admin-initiated unlock only by ActorID value.
+func (s *Service) publishUnlocked(txCtx context.Context, userID string) error {
+	payload, err := json.Marshal(dto.UserUnlockedEvent{UserID: userID, ActorID: SystemActorID})
+	if err != nil {
+		return fmt.Errorf("accountlockout: marshal unlocked event: %w", err)
+	}
+	entry := outbox.Entry{
+		ID:        outbox.MustNewEntryID(),
+		EventType: dto.TopicUserUnlocked,
+		Payload:   payload,
+	}
+	if err := s.emitter.Emit(txCtx, entry); err != nil {
+		return fmt.Errorf("accountlockout: emit unlocked event: %w", err)
 	}
 	return nil
 }

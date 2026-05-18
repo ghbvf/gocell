@@ -607,7 +607,7 @@ func conformUpdateLockoutFieldsNotFound(t *testing.T, factory UserRepoFactory) {
 	now := time.Now().UTC()
 	// fakeHash is a syntactically valid bcrypt string used only as a test
 	// placeholder; it is not a real credential.
-	const fakeHash = "$2a$12$conformancefakehash" //nolint:gosec
+	const fakeHash = "$2a$12$conformancefakehash"
 	ghost, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:           phantom,
 		Username:     "ghost_" + phantom,

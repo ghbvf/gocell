@@ -395,7 +395,7 @@ func (s *Service) loginInTx(
 		s.recordFailureBestEffort(ctx, txCtx, user, "baseline_assert")
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("credentialauthority: in-tx assert failed (user=%s): %v", username, err)))
+			errcode.WithInternal(fmt.Sprintf("credentialauthority: in-tx assert failed (user_id=%s): %v", user.ID, err)))
 	}
 
 	// Wrong-password (post-baseline): increment auto-lockout counter. If the
@@ -412,7 +412,7 @@ func (s *Service) loginInTx(
 	// Successful credentials. Reset the auto-lockout counter (no-op if it was
 	// already clean) before minting tokens so the success path co-commits
 	// counter clear + session/refresh INSERT + outbox emit.
-	if err := s.lockout.RecordSuccess(ctx, txCtx, user); err != nil {
+	if err := s.lockout.RecordSuccess(txCtx, user); err != nil {
 		s.logger.Error("session-login: lockout reset failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
 		// Counter reset failure is non-fatal: the user has proven their
@@ -495,6 +495,13 @@ func (s *Service) loginInTx(
 // wire (account-status enumeration prevention) and is NOT the metric
 // `reason` label (which is fixed by accountlockout to {threshold_locked,
 // lazy_unlocked}).
+//
+// Decision: returning 401 to the caller takes priority over lockout counter
+// accuracy. If RecordFailure returns err, the loginInTx returns err which
+// causes RunInTx to rollback the whole tx — counter and lock status are NOT
+// half-committed (the tx is atomic). The "best effort" framing here only
+// means we don't propagate the lockout-bookkeeping error to the wire; the
+// 401 response is unchanged. See loginInTx comment block for the full flow.
 func (s *Service) recordFailureBestEffort(ctx, txCtx context.Context, user *domain.User, reason string) {
 	if err := s.lockout.RecordFailure(ctx, txCtx, user); err != nil {
 		s.logger.Error("session-login: lockout record failure failed",
