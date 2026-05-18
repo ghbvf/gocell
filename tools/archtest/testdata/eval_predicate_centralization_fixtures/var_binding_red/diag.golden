@@ -1,0 +1,1 @@
+usage.go:10: non-CallExpr/non-FuncLit predicate argument (var binding / Ident / SelectorExpr not allowed)

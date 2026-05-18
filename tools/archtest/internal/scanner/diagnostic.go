@@ -23,9 +23,12 @@ type diagKey struct {
 	Message string
 }
 
-// formatReport deduplicates and sorts diags, then returns one formatted message
-// string per unique diagnostic in the form "<ruleID>: <rel>:<line>: <message>".
-func formatReport(ruleID string, diags []Diagnostic) []string {
+// Canonical deduplicates diags and returns them sorted by (Rel, Line, Message).
+// It is the single source of diagnostic ordering shared by [Report] and the
+// archtest golden harness (archtest.AssertGolden) — so a golden file and a
+// Report failure always present the same diagnostic set in the same order.
+// An empty or nil input returns nil.
+func Canonical(diags []Diagnostic) []Diagnostic {
 	if len(diags) == 0 {
 		return nil
 	}
@@ -49,6 +52,17 @@ func formatReport(ruleID string, diags []Diagnostic) []string {
 		}
 		return unique[i].Message < unique[j].Message
 	})
+	return unique
+}
+
+// formatReport deduplicates and sorts diags via [Canonical], then returns one
+// formatted message string per unique diagnostic in the form
+// "<ruleID>: <rel>:<line>: <message>".
+func formatReport(ruleID string, diags []Diagnostic) []string {
+	unique := Canonical(diags)
+	if len(unique) == 0 {
+		return nil
+	}
 	msgs := make([]string, len(unique))
 	for i, d := range unique {
 		msgs[i] = fmt.Sprintf("%s: %s:%d: %s", ruleID, d.Rel, d.Line, d.Message)

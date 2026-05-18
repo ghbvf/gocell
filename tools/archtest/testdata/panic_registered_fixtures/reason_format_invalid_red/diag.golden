@@ -1,0 +1,2 @@
+tools/archtest/testdata/panic_registered_fixtures/reason_format_invalid_red/usage.go:12: panicregister.Approved reason must be kebab-case identifier (got: "reason_with_underscore")
+tools/archtest/testdata/panic_registered_fixtures/reason_format_invalid_red/usage.go:16: panicregister.Approved reason must be kebab-case identifier (got: "Reason-With-Caps")

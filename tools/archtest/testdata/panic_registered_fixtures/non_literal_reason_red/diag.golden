@@ -1,0 +1,1 @@
+tools/archtest/testdata/panic_registered_fixtures/non_literal_reason_red/usage.go:13: panicregister.Approved reason must be a const string literal (no fmt.Sprintf / concat / variable)

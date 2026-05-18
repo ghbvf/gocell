@@ -1,0 +1,3 @@
+tools/archtest/testdata/panic_registered_fixtures/payload_type_invalid_red/usage.go:14: panicregister.Approved payload must be *errcode.Error or interface{} (got: error)
+tools/archtest/testdata/panic_registered_fixtures/payload_type_invalid_red/usage.go:19: panicregister.Approved payload must be *errcode.Error or interface{} (got: string)
+tools/archtest/testdata/panic_registered_fixtures/payload_type_invalid_red/usage.go:23: panicregister.Approved payload must be *errcode.Error or interface{} (got: string)
