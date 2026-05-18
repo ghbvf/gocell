@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/securecookie"
 )
 
@@ -129,16 +127,6 @@ func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler,
 		})
 	}
 	return mw, nil
-}
-
-// MustCookieSession is like NewCookieSession but panics on error.
-// Use at init time when configuration errors are programming mistakes.
-func MustCookieSession(cfg CookieSessionConfig) func(http.Handler) http.Handler {
-	mw, err := NewCookieSession(cfg)
-	if err != nil {
-		panic(panicregister.Approved("cookie-session-init", errcode.Assertion("cookie_session: %v", err)))
-	}
-	return mw
 }
 
 // NewSessionCookieWriter creates a reusable writer for setting session cookies.

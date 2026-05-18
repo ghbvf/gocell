@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -121,15 +120,6 @@ func New(driver Driver, clk clock.Clock, opts ...Option) (Locker, error) {
 		mgr: newManager(driver, cfg),
 		cfg: cfg,
 	}, nil
-}
-
-// MustNew is the static-wiring variant of New.
-func MustNew(driver Driver, clk clock.Clock, opts ...Option) Locker {
-	l, err := New(driver, clk, opts...)
-	if err != nil {
-		panic(panicregister.Approved("distlock-init", errcode.Assertion("distlock: %v", err)))
-	}
-	return l
 }
 
 // validateConfig returns an error if any configuration parameter is outside its

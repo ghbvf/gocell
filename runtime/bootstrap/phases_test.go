@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -271,7 +272,7 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAssembly(asmA),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmB)}),
+			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asmB)}),
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
@@ -286,7 +287,7 @@ func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
+			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
@@ -382,7 +383,7 @@ func TestChainProtectsRoutes(t *testing.T) {
 		},
 		{
 			name:  "auth_jwt_protected",
-			chain: []cell.ListenerAuth{cell.MustNewAuthJWT(stubVerifier)},
+			chain: []cell.ListenerAuth{celltest.MustAuthJWT(stubVerifier)},
 			want:  true,
 		},
 		{
@@ -392,7 +393,7 @@ func TestChainProtectsRoutes(t *testing.T) {
 		},
 		{
 			name:  "auth_service_token_protected",
-			chain: []cell.ListenerAuth{cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			chain: []cell.ListenerAuth{celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
 			want:  true,
 		},
 		{
@@ -405,7 +406,7 @@ func TestChainProtectsRoutes(t *testing.T) {
 			// Multi-protective chain (mTLS outer + HMAC inner) is the
 			// canonical InternalListener configuration.
 			name:  "mixed_mtls_plus_service_token_protected",
-			chain: []cell.ListenerAuth{cell.AuthMTLS{}, cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			chain: []cell.ListenerAuth{cell.AuthMTLS{}, celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
 			want:  true,
 		},
 	}
@@ -1380,7 +1381,7 @@ func TestBootstrap_Phase5_InternalRoutesRequireGuard(t *testing.T) {
 
 func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
 	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0",
-		[]cell.ListenerAuth{cell.MustNewAuthJWT(&stubIntentTokenVerifier{})}))
+		[]cell.ListenerAuth{celltest.MustAuthJWT(&stubIntentTokenVerifier{})}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1414,7 +1415,7 @@ func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
 }
 
 func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {
-	plan := cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
+	plan := celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
 	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{plan}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
@@ -1430,7 +1431,7 @@ func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {
 }
 
 func TestBootstrap_Phase5_InternalRoutesAcceptLayeredInternalGuards(t *testing.T) {
-	plan := cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
+	plan := celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
 	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthMTLS{}, plan}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{

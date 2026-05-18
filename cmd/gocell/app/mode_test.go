@@ -605,7 +605,7 @@ func TestRunScaffoldContract_DryRun_NoFileWritten(t *testing.T) {
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(context.Background(), dir, []string{
 			"contract",
-			"--id=http.dry.test.v1", "--kind=http", "--owner=some-cell", "--dry-run",
+			"--id=http.dry.test.v1", "--kind=http", "--owner=somecell", "--dry-run",
 		})
 		require.NoError(t, err)
 	})
@@ -622,7 +622,7 @@ func TestRunScaffoldJourney_DryRun_NoFileWritten(t *testing.T) {
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(context.Background(), dir, []string{
 			"journey",
-			"--id=J-dry", "--goal=test goal", "--team=squad", "--cells=a,b", "--dry-run",
+			"--id=J-dry", "--goal=test goal", "--team=squad", "--cells=aa,bb", "--dry-run",
 		})
 		require.NoError(t, err)
 	})

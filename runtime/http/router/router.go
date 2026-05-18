@@ -29,7 +29,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -497,15 +496,6 @@ const internalPathPrefix = cellvocab.InternalPathPrefix
 // ref: uber-go/fx — startup failures return error, trigger rollback
 func New(opts ...Option) (*Router, error) {
 	return NewForListener(kcell.ListenerRef{}, opts...)
-}
-
-// MustNew is the composition-root fail-fast variant of New.
-func MustNew(opts ...Option) *Router {
-	r, err := New(opts...)
-	if err != nil {
-		panic(panicregister.Approved("router-init", errcode.Assertion("router: %v", err)))
-	}
-	return r
 }
 
 // NewForListener builds a Router for a specific listener. Listener-level

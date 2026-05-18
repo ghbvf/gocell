@@ -47,6 +47,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -145,7 +146,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	}, intClock, nil)
 	require.NoError(t, err)
 
-	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
 
 	require.NotEmpty(t, cfg.verifierAuds, "loginAndGetPair: verifierAuds must not be empty; use withVerifierAuds(\"gocell\") or similar")
 
@@ -184,7 +185,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	require.NoError(t, c.Init(context.Background(), intReg))
 
 	intSnap := intReg.Snapshot()
-	r := router.MustNew(router.WithRouterClock(clock.Real()))
+	r := mustNewRouter(t)
 	for _, rg := range intSnap.RouteGroups {
 		rg := rg
 		if rg.Listener == cell.PrimaryListener {
@@ -260,14 +261,17 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	// Build a refresh-service that mirrors production wiring.
 	// After the opaque-store rewrite, ParseOpaque rejects the JWT (wrong
 	// selector/verifier format) → refresh.ErrRejected → ErrAuthRefreshFailed.
-	refreshSvc := sessionrefresh.MustNewService(
+	inv1, err := credentialinvalidate.New(fx.Cell.userRepo, fx.Cell.sessionStore, fx.Cell.refreshStore)
+	require.NoError(t, err)
+	refreshSvc, err := sessionrefresh.NewService(
 		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
-		sessionrefresh.WithInvalidator(credentialinvalidate.MustNew(fx.Cell.userRepo, fx.Cell.sessionStore, fx.Cell.refreshStore)),
+		sessionrefresh.WithInvalidator(inv1),
 	)
+	require.NoError(t, err)
 
-	_, err := refreshSvc.Refresh(context.Background(), fx.AccessToken)
+	_, err = refreshSvc.Refresh(context.Background(), fx.AccessToken)
 	require.Error(t, err,
 		"access token must NOT be accepted by session-refresh (token confusion defense)")
 	var ec *errcode.Error
@@ -283,12 +287,15 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	// real login flow, so fx.Cell.sessionStore already has one).
 	require.NotNil(t, fx.Cell.sessionStore, "session repo must be wired")
 
-	refreshSvc := sessionrefresh.MustNewService(
+	inv2, err := credentialinvalidate.New(fx.Cell.userRepo, fx.Cell.sessionStore, fx.Cell.refreshStore)
+	require.NoError(t, err)
+	refreshSvc, err := sessionrefresh.NewService(
 		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
-		sessionrefresh.WithInvalidator(credentialinvalidate.MustNew(fx.Cell.userRepo, fx.Cell.sessionStore, fx.Cell.refreshStore)),
+		sessionrefresh.WithInvalidator(inv2),
 	)
+	require.NoError(t, err)
 
 	newPair, err := refreshSvc.Refresh(context.Background(), fx.RefreshToken)
 	require.NoError(t, err, "legitimate refresh token must rotate successfully")
@@ -366,7 +373,8 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	// S4b: rbacassign.Revoke now drives credential invalidation through the
 	// credentialinvalidate funnel (3-op same-tx: bump epoch + revoke sessions
 	// + revoke refresh chain). The sessionlogout consumer is audit/ack-only.
-	invalidator := credentialinvalidate.MustNew(userRepo, sessionRepo, refreshStore)
+	invalidator, err := credentialinvalidate.New(userRepo, sessionRepo, refreshStore)
+	require.NoError(t, err)
 
 	// Wire rbacassign with outbox stubs (durable mode).
 	stubWriter := &rbacStubOutboxWriter{}
@@ -457,3 +465,12 @@ var (
 	_ = (*sessionrefresh.Service)(nil)
 	_ = (*sessionvalidate.Service)(nil)
 )
+
+func mustNewRouter(t *testing.T) *router.Router {
+	t.Helper()
+	r, err := router.New(router.WithRouterClock(clock.Real()))
+	if err != nil {
+		t.Fatalf("router.New: %v", err)
+	}
+	return r
+}

@@ -80,7 +80,7 @@ func newTestServiceWithComparer(t *testing.T, cmp *countingComparer) (*Service, 
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	svc := MustNewService(
+	svc := mustNewService(
 		userRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(),
 		WithClock(clock.Real()),
@@ -272,7 +272,7 @@ func TestLogin_InactiveInTx_NoPublic403(t *testing.T) {
 
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	svc := MustNewService(
+	svc := mustNewService(
 		racingRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(),
 		WithClock(clock.Real()),

@@ -15,11 +15,10 @@ const (
 )
 
 // sessionProtocolForbidden is the closed set of session-package constructors
-// banned outside the composition root. Both forms (error-returning + panic-
-// wrapping) belong to wiring authority, not consumer Cell code.
+// banned outside the composition root. (MustNewProtocol was deleted by
+// B2-K-02; only NewProtocol remains.)
 var sessionProtocolForbidden = map[string]struct{}{
-	"NewProtocol":     {},
-	"MustNewProtocol": {},
+	"NewProtocol": {},
 }
 
 // TestSessionProtocol_CompositionRootOnly enforces

@@ -287,7 +287,7 @@ func (c *AccessCore) initSlices() error {
 	if c.casProtocol == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore: WithCASProtocol is required for ChangePassword concurrent-write guard (S6); "+
-				"composition root must wire cas.MustNewProtocol(cas.WithVersionField(\"password_version\")) "+
+				"composition root must wire cas.NewProtocol(cas.WithVersionField(\"password_version\")) "+
 				"via WithCASProtocol")
 	}
 	if c.bootstrapAuth == nil {

@@ -60,6 +60,11 @@ func (AuditCoreModule) Provide(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
 	}
+	// Belt-and-suspenders: zero the HMAC key on both success and error paths.
+	// WithChainHMAC makes a defensive copy and zeroes the caller's slice
+	// internally on success, but if NewProtocol returns an error before that
+	// option is applied the key bytes would otherwise remain live on the stack.
+	defer clear(hmacKey)
 
 	// Build ledger.Protocol (composition root responsibility per
 	// AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01 archtest).
@@ -67,16 +72,15 @@ func (AuditCoreModule) Provide(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("auditcore namespace: %w", err)
 	}
-	protocol := ledger.MustNewProtocol(
+	protocol, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(hmacKey),
 		ledger.WithNamespace(auditNamespace),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
-	// F7: Zero the HMAC key local variable after Protocol construction.
-	// WithChainHMAC already zeroes the caller's slice internally; this is a
-	// belt-and-suspenders clear for any residual local reference.
-	clear(hmacKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("auditcore ledger protocol: %w", err)
+	}
 
 	// Build ledger.Store: postgres or mem.
 	var ledgerStore ledger.Store

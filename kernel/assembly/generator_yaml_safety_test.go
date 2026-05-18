@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
 // TestScaffoldAssembly_YAMLScalarInjection asserts that user-provided
@@ -101,8 +102,8 @@ func renderInjectionAssemblyYAML(t *testing.T, team, role string) []byte {
 	root, pm := scaffoldTestProject(t)
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 	spec := AssemblyScaffoldSpec{
-		ID:        "myassembly",
-		Cells:     []string{"examplecell"},
+		ID:        mustID(t, "myassembly"),
+		Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
 		OwnerTeam: team,
 		OwnerRole: role,
 		Deploy:    "k8s",
@@ -112,7 +113,7 @@ func renderInjectionAssemblyYAML(t *testing.T, team, role string) []byte {
 		t.Fatalf("PlanAssemblyScaffold: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, false); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("WritePlannedFiles: %v", err)
 	}
 	asmYAML, err := os.ReadFile(filepath.Join(root, "assemblies", "myassembly", scaffoldAsmYAML)) //nolint:gosec // tempdir test fixture
@@ -195,8 +196,8 @@ func TestScaffoldAssembly_YAMLScalarFile_ColonInOwner(t *testing.T) {
 	const injectedTeam = "ops:malicious-key: pwned"
 
 	spec := AssemblyScaffoldSpec{
-		ID:        "myassembly",
-		Cells:     []string{"examplecell"},
+		ID:        mustID(t, "myassembly"),
+		Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
 		OwnerTeam: injectedTeam,
 		OwnerRole: "maintainer",
 	}
@@ -205,7 +206,7 @@ func TestScaffoldAssembly_YAMLScalarFile_ColonInOwner(t *testing.T) {
 		t.Fatalf("PlanAssemblyScaffold: %v", err)
 	}
 	realRoot, _ := pathsafe.ResolveRoot(root)
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, false); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false); err != nil {
 		t.Fatalf("WritePlannedFiles: %v", err)
 	}
 	asmYAML, _ := os.ReadFile(filepath.Join(root, "assemblies", "myassembly", scaffoldAsmYAML)) //nolint:gosec // tempdir fixture

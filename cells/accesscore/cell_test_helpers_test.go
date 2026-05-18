@@ -24,5 +24,9 @@ func withTestBootstrapAuth() Option { return WithBootstrapAuth(testPassthroughBo
 // CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest (which skips _test.go) remains
 // strict for production paths.
 func withTestCASProtocol() Option {
-	return WithCASProtocol(cas.MustNewProtocol(cas.WithVersionField("password_version")))
+	p, err := cas.NewProtocol(cas.WithVersionField("password_version"))
+	if err != nil {
+		panic("withTestCASProtocol: " + err.Error())
+	}
+	return WithCASProtocol(p)
 }

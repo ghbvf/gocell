@@ -97,11 +97,7 @@ func planDerivedArtifact(realRoot, relSlashPath string, content []byte) (pathsaf
 			"scaffold stage: stat derived artifact target", readErr,
 			errcode.WithDetails(slog.String("artifactPath", relSlashPath)))
 	}
-	return pathsafe.PlannedFile{
-		AbsPath:        absReal,
-		Content:        content,
-		ForceOverwrite: true,
-	}, nil
+	return pathsafe.DerivedOverwrite(absReal, content), nil
 }
 
 // sharedErrorSchemaRelPath is the repo-relative path of the shared error
@@ -163,10 +159,12 @@ func materializeSkeletonStage(realRoot string, skeletonPlan []pathsafe.PlannedFi
 				errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
 			return "", err
 		}
+		// Skeleton entries never carry forceOverwrite (only DerivedOverwrite
+		// constructs that flag, and skeletonPlan precedes derived rendering),
+		// so the rebase is a fresh PlannedFile.
 		stagePlan = append(stagePlan, pathsafe.PlannedFile{
-			AbsPath:        filepath.Join(stageRoot, rel),
-			Content:        f.Content,
-			ForceOverwrite: f.ForceOverwrite,
+			AbsPath: filepath.Join(stageRoot, rel),
+			Content: f.Content,
 		})
 	}
 
@@ -187,7 +185,14 @@ func materializeSkeletonStage(realRoot string, skeletonPlan []pathsafe.PlannedFi
 	}
 
 	// Write skeleton + schema into the staging root via the funnel.
-	if writeErr := pathsafe.WritePlannedFiles(stageRoot, stagePlan, false); writeErr != nil {
+	stageSet, planErr := pathsafe.NewPlanSet(stagePlan)
+	if planErr != nil {
+		err = errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"scaffold stage: build staging PlanSet", planErr,
+			errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))
+		return "", err
+	}
+	if writeErr := pathsafe.WritePlannedFiles(stageRoot, stageSet, false); writeErr != nil {
 		err = errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: materialize skeleton", writeErr,
 			errcode.WithInternal(fmt.Sprintf("stageRoot=%s", stageRoot)))

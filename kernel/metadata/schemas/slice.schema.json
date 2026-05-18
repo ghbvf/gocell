@@ -9,8 +9,8 @@
   "properties": {
     "id": {
       "type": "string",
-      "description": "Unique slice identifier. Must equal the directory name under cells/{cell-id}/slices/.",
-      "pattern": "^[a-z][a-z0-9-]*$"
+      "description": "Unique slice identifier. Must equal the directory name under cells/{cell-id}/slices/. Must match the shared IdentifierPattern (^[a-z][a-z0-9]+$): lowercase letters and digits only, at least 2 chars, no dashes / underscores / dots. Aligned with AssemblyID / CellID for single-source typed scaffold identifier funnel (pkg/scaffoldid).",
+      "pattern": "^[a-z][a-z0-9]+$"
     },
     "belongsToCell": {
       "type": "string",

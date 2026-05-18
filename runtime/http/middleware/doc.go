@@ -35,7 +35,7 @@
 // Example:
 //
 //	csrfMW := middleware.CSRF(csrfCfg)
-//	sessMW := middleware.MustCookieSession(sessCfg)
+//	sessMW, err := middleware.NewCookieSession(sessCfg)
 //	authMW := auth.AuthMiddleware(verifier, publicEndpoints)
 //
 //	rtr.Route("/api/v1", func(r cell.RouteMux) {

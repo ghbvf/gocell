@@ -36,7 +36,7 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 func TestService_WithEmitter(t *testing.T) {
 	store := testutil.RealSessionRepo(t)
 	ow := &stubOutboxWriter{}
-	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(),
+	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
@@ -51,7 +51,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	store := testutil.RealSessionRepo(t)
 	tx := &stubTxRunner{}
-	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
+	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 
 	seedSession(store, "sess-1", "usr-1")
 
@@ -63,7 +63,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	store := testutil.RealSessionRepo(t)
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := MustNewService(store, newLogoutRefreshStore(), slog.Default(),
+	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(tx)))
 
 	seedSession(store, "sess-1", "usr-1")

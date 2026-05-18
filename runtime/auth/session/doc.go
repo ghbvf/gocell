@@ -52,9 +52,9 @@
 //
 // Composition root only (cmd/corebundle/access_module.go):
 //
-//	proto := session.MustNewProtocol(...)
+//	proto, err := session.NewProtocol(...)
 //
-// session.NewProtocol / MustNewProtocol must only be called from cmd/* (or
+// session.NewProtocol must only be called from cmd/* (or
 // from this package's own storetest sub-package, which constructs the
 // canonical test Protocol) — cells must consume an injected *Protocol, never
 // construct their own. This boundary is enforced by archtest

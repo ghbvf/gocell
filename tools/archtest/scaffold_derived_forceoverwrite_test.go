@@ -1,49 +1,55 @@
 // INVARIANT: SCAFFOLD-DERIVED-FORCEOVERWRITE-01
 //
-// Every derived-codegen pathsafe.PlannedFile carrying ForceOverwrite=true in
-// tools/codegen/cellgen MUST be constructed by planDerivedArtifact
-// (stage_render.go). planDerivedArtifact is the sole site that restores the
-// governance.IsGoCellGenerated overwrite gate which the legacy codegen.Write
-// enforced before PR #544 routed derived writes through the pathsafe
-// single-plan funnel. A direct pathsafe.PlannedFile{...ForceOverwrite:true}
-// composite literal anywhere else in cellgen would silently overwrite a
-// hand-written (non-generated) file on the project tree — exactly the F1
-// regression this rule locks shut.
+// Every production reference to pathsafe.DerivedOverwrite must occur inside
+// tools/codegen/cellgen/stage_render.go::planDerivedArtifact — the sole site
+// that restores the governance.IsGoCellGenerated overwrite gate.
+// planDerivedArtifact is the SOLE production caller of the typed
+// pathsafe.DerivedOverwrite constructor in the entire repository.
 //
-// AI-rebust: Medium (downstream caller-allowlist, type-aware via go/types —
-// the literal's type is resolved to pkg/pathsafe.PlannedFile, not matched by
-// name). Upstream is Soft: pathsafe.PlannedFile.ForceOverwrite is an exported
-// field that pathsafe's cross-package callers set directly, so "skip the
-// constructor" cannot be made unrepresentable at the type level here.
-// Upstream Hard-ization is tracked by backlog
-// PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01 (cap-14), same Lane E typed-scaffold
-// single-source收编 as PATHSAFE-PLANSET-TYPED-HARD-01.
+// AI-rebust: Hard (compile-time + archtest funnel).
 //
-// # Recognition: type-aware
+//   - **Upstream Hard (compile-time)**:
+//     pkg/pathsafe.PlannedFile.forceOverwrite is package-private and the only
+//     public path that produces a force-overwrite PlannedFile is
+//     pathsafe.DerivedOverwrite. A composite literal anywhere outside the
+//     pathsafe package cannot set forceOverwrite — the Go compiler rejects
+//     the field-name reference. This is the upstream half of the funnel
+//     (PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01) and needs no archtest because
+//     the type system itself enforces it.
 //
-// A CompositeLit matches only when info.Types[lit.Type] resolves to the
-// *types.Named (github.com/ghbvf/gocell/pkg/pathsafe).PlannedFile. Alias
-// imports / dot-imports of pathsafe therefore cannot evade the rule.
+//   - **Downstream Hard (archtest)**: every CallExpr that resolves via
+//     *types.Info to pkg/pathsafe.DerivedOverwrite in **any production
+//     package** must occur inside planDerivedArtifact. Any other call site
+//     fails the archtest — a hand-rolled caller in any package that
+//     bypassed the governance.IsGoCellGenerated gate would be detected
+//     even though the compiler accepts the typed constructor in isolation.
+//     Tests are excluded so fixture code can still exercise DerivedOverwrite
+//     directly.
+//
+// # Recognition: type-aware (Ident + SelectorExpr unified)
+//
+// `pathsafe.DerivedOverwrite(...)` parses as `*ast.SelectorExpr` whose
+// `.Sel` is the function name. Alias imports (`p "pkg/pathsafe"; p.DerivedOverwrite()`)
+// keep the same SelectorExpr shape. **Dot-import** (`import . "pkg/pathsafe";
+// DerivedOverwrite()`) collapses to a bare `*ast.Ident`, NOT a SelectorExpr —
+// so the archtest must resolve **both** Ident and SelectorExpr through
+// *types.Info.Uses to the underlying *types.Func. callsDerivedOverwrite
+// implements this unified resolution.
 //
 // # Blind spots (declared per ai-collab §载体决策原则)
 //
-// EachInSubtree[ast.CompositeLit] + KeyValueExpr value inspection does NOT
-// reason about:
+//  1. Indirect call through a function-typed variable
+//     (`f := pathsafe.DerivedOverwrite; f(...)`). TestScaffoldDerivedForceOverwrite_NoIndirectReference
+//     covers this by rejecting any non-CallExpr reference to DerivedOverwrite
+//     (either via SelectorExpr or dot-imported Ident).
 //
-//  1. ForceOverwrite set to a non-literal expression that evaluates true at
-//     runtime (e.g. `ForceOverwrite: someBoolVar`). The main rule keys on the
-//     `true` *ast.Ident literal only.
-//  2. The benign propagation form `ForceOverwrite: f.ForceOverwrite` in
-//     materializeSkeletonStage (skeleton plan entries never set force=true
-//     themselves — they originate in scaffold.go / scaffold_bundle.go which
-//     never set the field — so copying the field is a no-op-true).
-//
-// TestScaffoldDerivedForceOverwrite_NoNonLiteralForms is the reverse
-// self-check: it asserts the production cellgen AST contains ONLY the two
-// expected ForceOverwrite value forms (literal `true` inside
-// planDerivedArtifact; selector `f.ForceOverwrite` inside
-// materializeSkeletonStage). Any third form — including a bool variable used
-// to sneak true past blind spot #1 — fails the self-check.
+//  2. A future caller written as `pathsafe.DerivedOverwrite(x, y)` could
+//     pass the type check but produce content that bypasses the upstream
+//     governance gate the cellgen-level planDerivedArtifact runs. The
+//     archtest accepts that planDerivedArtifact is the trusted gatekeeper —
+//     a Lane-E successor that splits the gate from the constructor must
+//     re-validate this assumption.
+//     Tracked: backlog SCAFFOLD-DERIVED-FORCEOVERWRITE-GATE-SPLIT-BACKLOG (cap-14).
 package archtest
 
 import (
@@ -54,97 +60,99 @@ import (
 )
 
 const (
-	pathsafePkgPath       = "github.com/ghbvf/gocell/pkg/pathsafe"
-	plannedFileTypeName   = "PlannedFile"
-	forceOverwriteField   = "ForceOverwrite"
-	derivedCtorFuncName   = "planDerivedArtifact"
-	skeletonStageFuncName = "materializeSkeletonStage"
-	cellgenRelPrefix      = "tools/codegen/cellgen/"
+	pathsafePkgPath     = "github.com/ghbvf/gocell/pkg/pathsafe"
+	derivedOverwriteFn  = "DerivedOverwrite"
+	derivedCtorFuncName = "planDerivedArtifact"
+	// derivedCtorRel pins the single permitted call-site file. cellgen/ is
+	// also matched as a defense-in-depth check that planDerivedArtifact
+	// stays in stage_render.go (its godoc-declared home).
+	derivedCtorRel = "tools/codegen/cellgen/stage_render.go"
 )
 
-// isPlannedFileType reports whether expr resolves to pathsafe.PlannedFile.
-func isPlannedFileType(info *types.Info, expr ast.Expr) bool {
-	if info == nil || expr == nil {
-		return false
+// resolveDerivedOverwriteIdent returns the *types.Func bound to ident if it
+// resolves through types.Info.Uses to pathsafe.DerivedOverwrite, otherwise
+// nil. Handles both selector-form (pkg.DerivedOverwrite) and dot-import-form
+// (DerivedOverwrite) — the caller passes whichever Ident represents the
+// function name.
+func resolveDerivedOverwriteIdent(info *types.Info, ident *ast.Ident) *types.Func {
+	if info == nil || ident == nil || ident.Name != derivedOverwriteFn {
+		return nil
 	}
-	tv, ok := info.Types[expr]
-	if !ok || tv.Type == nil {
-		return false
+	obj, ok := info.Uses[ident]
+	if !ok || obj == nil {
+		return nil
 	}
-	named, ok := tv.Type.(*types.Named)
+	fn, ok := obj.(*types.Func)
 	if !ok {
-		return false
+		return nil
 	}
-	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil {
-		return false
+	if fn.Pkg() == nil || fn.Pkg().Path() != pathsafePkgPath {
+		return nil
 	}
-	return obj.Pkg().Path() == pathsafePkgPath && obj.Name() == plannedFileTypeName
+	return fn
 }
 
-// forceOverwriteValue returns the value expression of a ForceOverwrite
-// KeyValueExpr in lit, or nil if the field is not explicitly set.
-func forceOverwriteValue(lit *ast.CompositeLit) ast.Expr {
-	var val ast.Expr
-	EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
-		if val != nil {
-			return
-		}
-		key, ok := kv.Key.(*ast.Ident)
-		if !ok || key.Name != forceOverwriteField {
-			return
-		}
-		val = kv.Value
-	})
-	return val
-}
-
-func isLiteralTrue(e ast.Expr) bool {
-	id, ok := e.(*ast.Ident)
-	return ok && id.Name == "true"
+// callsDerivedOverwrite reports whether call.Fun resolves through types.Info
+// to pathsafe.DerivedOverwrite. Handles BOTH:
+//
+//   - SelectorExpr (`pathsafe.DerivedOverwrite()` or aliased)
+//   - Ident (dot-import form: `import . "pkg/pathsafe"; DerivedOverwrite()`)
+//
+// Either case routes through resolveDerivedOverwriteIdent → types.Info.Uses
+// → *types.Func with Pkg().Path() == pathsafePkgPath, so the function name
+// alone is never the discriminator (which would miss dot-import or be
+// fooled by a same-name function in another package).
+func callsDerivedOverwrite(info *types.Info, call *ast.CallExpr) bool {
+	if info == nil || call == nil {
+		return false
+	}
+	switch fun := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return resolveDerivedOverwriteIdent(info, fun.Sel) != nil
+	case *ast.Ident:
+		return resolveDerivedOverwriteIdent(info, fun) != nil
+	default:
+		return false
+	}
 }
 
 // TestScaffoldDerivedForceOverwrite_OnlyInConstructor enforces
-// SCAFFOLD-DERIVED-FORCEOVERWRITE-01: a pathsafe.PlannedFile composite literal
-// with `ForceOverwrite: true` in tools/codegen/cellgen is allowed only inside
-// func planDerivedArtifact.
+// SCAFFOLD-DERIVED-FORCEOVERWRITE-01 downstream: pathsafe.DerivedOverwrite
+// in any production package may be called only from planDerivedArtifact
+// (which lives in tools/codegen/cellgen/stage_render.go).
 func TestScaffoldDerivedForceOverwrite_OnlyInConstructor(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTyped(t, TypedOpts{}, []string{
-		"./tools/codegen/cellgen/...",
-	}, func(p *Pass) []Diagnostic {
+	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		var out []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			if !strings.HasPrefix(rel, cellgenRelPrefix) ||
-				strings.HasSuffix(rel, "_test.go") {
+			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Body == nil {
 					return
 				}
-				EachInSubtree[ast.CompositeLit](fn.Body, func(lit *ast.CompositeLit) {
-					if !isPlannedFileType(p.TypesInfo, lit.Type) {
+				EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+					if !callsDerivedOverwrite(p.TypesInfo, call) {
 						return
 					}
-					v := forceOverwriteValue(lit)
-					if v == nil || !isLiteralTrue(v) {
-						return
-					}
-					if fn.Name != nil && fn.Name.Name == derivedCtorFuncName {
+					// Allow the sole gatekeeper: planDerivedArtifact in
+					// stage_render.go.
+					if fn.Name != nil && fn.Name.Name == derivedCtorFuncName &&
+						rel == derivedCtorRel {
 						return
 					}
 					out = append(out, Diagnostic{
 						Rel:  rel,
-						Line: p.Fset.Position(lit.Pos()).Line,
-						Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: pathsafe.PlannedFile{ForceOverwrite:true} " +
-							"outside planDerivedArtifact — derived writes must go through the " +
-							"governance.IsGoCellGenerated overwrite gate (stage_render.go)",
+						Line: p.Fset.Position(call.Pos()).Line,
+						Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: pathsafe.DerivedOverwrite called outside " +
+							"tools/codegen/cellgen/stage_render.go::planDerivedArtifact — " +
+							"derived writes must go through the governance.IsGoCellGenerated overwrite gate",
 					})
 				})
 			})
@@ -154,69 +162,106 @@ func TestScaffoldDerivedForceOverwrite_OnlyInConstructor(t *testing.T) {
 	Report(t, "SCAFFOLD-DERIVED-FORCEOVERWRITE-01", diags)
 }
 
-// TestScaffoldDerivedForceOverwrite_NoNonLiteralForms is the declared
-// blind-spot reverse self-check (see file godoc): the ONLY ForceOverwrite
-// value forms permitted in production cellgen AST are
-//
-//   - literal `true` inside planDerivedArtifact
-//   - selector `f.ForceOverwrite` inside materializeSkeletonStage
-//
-// Anything else (a bool variable, a function call, a literal true outside the
-// constructor) fails — closing the "sneak true via non-literal" blind spot.
-func TestScaffoldDerivedForceOverwrite_NoNonLiteralForms(t *testing.T) {
+// TestScaffoldDerivedForceOverwrite_NoIndirectReference is the declared
+// blind-spot reverse self-check (see file godoc blind spot #1): production
+// AST in any package must NOT reference pathsafe.DerivedOverwrite outside a
+// CallExpr position. A bare identifier reference (e.g. taking a function
+// value via `f := pathsafe.DerivedOverwrite`) would bypass the
+// _OnlyInConstructor archtest because it scans CallExpr only.
+func TestScaffoldDerivedForceOverwrite_NoIndirectReference(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTyped(t, TypedOpts{}, []string{
-		"./tools/codegen/cellgen/...",
-	}, func(p *Pass) []Diagnostic {
+	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		var out []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			if !strings.HasPrefix(rel, cellgenRelPrefix) ||
-				strings.HasSuffix(rel, "_test.go") {
+			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-				if fn.Body == nil {
+			// SelectorExpr form: pathsafe.DerivedOverwrite as a non-call
+			// reference.
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+				if resolveDerivedOverwriteIdent(p.TypesInfo, sel.Sel) == nil {
 					return
 				}
-				fnName := ""
-				if fn.Name != nil {
-					fnName = fn.Name.Name
+				if isCallExprFun(file, sel) {
+					return
 				}
-				EachInSubtree[ast.CompositeLit](fn.Body, func(lit *ast.CompositeLit) {
-					if !isPlannedFileType(p.TypesInfo, lit.Type) {
-						return
-					}
-					v := forceOverwriteValue(lit)
-					if v == nil {
-						return // field omitted → zero value false, fine
-					}
-					if isLiteralTrue(v) && fnName == derivedCtorFuncName {
-						return
-					}
-					if sel, ok := v.(*ast.SelectorExpr); ok &&
-						sel.Sel != nil && sel.Sel.Name == forceOverwriteField &&
-						fnName == skeletonStageFuncName {
-						return // benign skeleton propagation
-					}
-					if id, ok := v.(*ast.Ident); ok && id.Name == "false" {
-						return // explicit false → harmless
-					}
-					out = append(out, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(v.Pos()).Line,
-						Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: unexpected ForceOverwrite value form in " +
-							fnName + " — only literal true (planDerivedArtifact) or f.ForceOverwrite " +
-							"propagation (materializeSkeletonStage) are permitted",
-					})
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(sel.Pos()).Line,
+					Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: indirect SelectorExpr reference to " +
+						"pathsafe.DerivedOverwrite (function value / pointer) defeats the " +
+						"caller-allowlist archtest — must always appear inside a direct CallExpr",
+				})
+			})
+			// Dot-import Ident form: DerivedOverwrite as a non-call reference.
+			EachInSubtree[ast.Ident](file, func(ident *ast.Ident) {
+				if resolveDerivedOverwriteIdent(p.TypesInfo, ident) == nil {
+					return
+				}
+				if isIdentCallExprFun(file, ident) || isInsideSelectorExpr(file, ident) {
+					return
+				}
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(ident.Pos()).Line,
+					Message: "SCAFFOLD-DERIVED-FORCEOVERWRITE-01: indirect dot-imported Ident reference to " +
+						"pathsafe.DerivedOverwrite defeats the caller-allowlist archtest — " +
+						"must always appear inside a direct CallExpr",
 				})
 			})
 		}
 		return out
 	})
 	Report(t, "SCAFFOLD-DERIVED-FORCEOVERWRITE-01", diags)
+}
+
+// isCallExprFun walks file looking for any CallExpr whose Fun field is sel.
+// Returns true iff sel appears as the Fun of some CallExpr in the file.
+func isCallExprFun(file *ast.File, sel *ast.SelectorExpr) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		if call.Fun == sel {
+			found = true
+		}
+	})
+	return found
+}
+
+// isIdentCallExprFun is the Ident analog of isCallExprFun: returns true iff
+// ident appears as the Fun of some CallExpr in the file (dot-import form).
+func isIdentCallExprFun(file *ast.File, ident *ast.Ident) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		if call.Fun == ident {
+			found = true
+		}
+	})
+	return found
+}
+
+// isInsideSelectorExpr returns true iff ident appears as the Sel of any
+// SelectorExpr in the file. SelectorExpr.Sel positions are already handled
+// by the SelectorExpr walker; skip them here to avoid double-reporting.
+func isInsideSelectorExpr(file *ast.File, ident *ast.Ident) bool {
+	found := false
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if found {
+			return
+		}
+		if sel.Sel == ident {
+			found = true
+		}
+	})
+	return found
 }

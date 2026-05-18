@@ -68,7 +68,7 @@ func setup(t testing.TB) http.Handler {
 		ExpiresAt:         time.Now().Add(time.Hour),
 	})
 
-	svc := MustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+	svc := mustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())

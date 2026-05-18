@@ -78,9 +78,14 @@ import (
 )
 
 const (
-	cellIDPatternRuleID         = "CELL-ID-PATTERN-SINGLE-SOURCE-01"
-	regexpPkgPath               = "regexp"
-	cellIDPatternAllowFile      = "kernel/metadata/contract_constraints.go"
+	cellIDPatternRuleID = "CELL-ID-PATTERN-SINGLE-SOURCE-01"
+	regexpPkgPath       = "regexp"
+	// cellIDPatternAllowFile is the canonical single source for cell-id
+	// family regex compilation. PR #555 moved the compile site from
+	// kernel/metadata/contract_constraints.go to pkg/scaffoldid/scaffoldid.go
+	// (the typed identifier package); kernel/metadata.CellIDPattern /
+	// AssemblyIDPattern are now reverse-aliased to scaffoldid.IdentifierPattern.
+	cellIDPatternAllowFile      = "pkg/scaffoldid/scaffoldid.go"
 	cellIDPatternAllowSelfFile  = "tools/archtest/cell_id_pattern_single_source_test.go"
 	legacyCallerCellRegexString = `^[a-z][a-z0-9-]*$`
 )

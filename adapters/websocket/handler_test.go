@@ -452,28 +452,6 @@ func TestUpgradeHandler_RejectsNilHub(t *testing.T) {
 	assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code)
 }
 
-// TestMustUpgradeHandler_PanicsOnNilHub locks the static-wiring twin: a nil
-// hub must surface as a panic at composition root, not at request time, and
-// the panic value must be a typed *errcode.Error (A/B class: ErrInternal via
-// errcode.Assertion) whose message describes the construction failure.
-func TestMustUpgradeHandler_PanicsOnNilHub(t *testing.T) {
-	defer func() {
-		r := recover()
-		require.NotNil(t, r, "MustUpgradeHandler must panic on nil hub")
-		err, ok := r.(error)
-		require.True(t, ok, "panic value must be an error, got %T", r)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrInternal, ec.Code)
-		assert.Contains(t, ec.Message, "websocket: upgrade handler construction failed")
-	}()
-	_ = adapterws.MustUpgradeHandler(nil, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"http://*"},
-		Authenticator:  testAuth(),
-	})
-	t.Fatal("expected MustUpgradeHandler to panic, got none")
-}
-
 // TestUpgradeHandler_NilHubTakesPriorityOverOrigins locks the diagnostic order:
 // when both hub and cfg are invalid, the caller sees ErrWebsocketHubMissing
 // first. Reordering the checks in UpgradeHandler would silently change which
@@ -503,17 +481,6 @@ func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrWebsocketOriginsInvalid, ec.Code)
-}
-
-func TestMustUpgradeHandler_PanicsOnInvalidConfig(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
-
-	require.Panics(t, func() {
-		_ = adapterws.MustUpgradeHandler(hub, adapterws.UpgradeConfig{
-			AllowedOrigins: []string{"*"},
-			Authenticator:  testAuth(),
-		})
-	})
 }
 
 // TestUpgradeHandler_RejectsBareHostOrigin locks the construction-time
@@ -635,15 +602,6 @@ func TestUpgradeHandler_RejectsNilAuthenticator(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrWebsocketAuthenticatorMissing, ec.Code)
-}
-
-func TestMustUpgradeHandler_PanicsOnNilAuthenticator(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
-	require.Panics(t, func() {
-		_ = adapterws.MustUpgradeHandler(hub, adapterws.UpgradeConfig{
-			AllowedOrigins: []string{"http://*"},
-		})
-	})
 }
 
 // stubDenyingAuth returns absent (no credential). The (nil, false, nil) shape

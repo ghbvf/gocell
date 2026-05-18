@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -92,16 +93,17 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 	opts = append(opts,
 		bootstrap.WithListener(
 			cell.PrimaryListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.MustNewAuthJWT(shared.JWTDeps.verifier)},
+			[]cell.ListenerAuth{celltest.MustAuthJWT(shared.JWTDeps.verifier)},
 		),
 		bootstrap.WithListener(
 			cell.HealthListener, "127.0.0.1:0",
 			[]cell.ListenerAuth{cell.AuthNone{}},
 		),
-		bootstrap.WithListener(
-			cell.InternalListener, shared.InternalHTTPAddr,
-			buildInternalAuthChain(shared.InternalGuard),
-		),
+		func() bootstrap.Option {
+			chain, err := buildInternalAuthChain(shared.InternalGuard)
+			require.NoError(t, err)
+			return bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, chain)
+		}(),
 	)
 	b := newBootstrapFromOptions(opts)
 

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -114,7 +115,7 @@ func buildBootstrapWithFakeKeyProvider(
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
 		primaryLn.Addr().String(),
-		[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+		[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)

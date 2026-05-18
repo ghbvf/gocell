@@ -171,8 +171,8 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 			if cellID == "" {
 				cellID = "<framework>"
 			}
-			return fmt.Errorf("cell %s RouteGroup %d (listener=%s, prefix=%q): %w",
-				cellID, i, rg.Listener.String(), rg.Prefix, err)
+			return fmt.Errorf("cell %s RouteGroup %d/%d (listener=%s, prefix=%q): %w",
+				cellID, i, len(groups), rg.Listener.String(), rg.Prefix, err)
 		}
 	}
 	return nil
@@ -241,7 +241,7 @@ func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef,
 	return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 		"bootstrap: /internal/v1/* route(s) declared without an internal guard; "+
 			"set bootstrap.WithListener(cell.InternalListener, ..., "+
-			"[]cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)}) "+
+			"[]cell.ListenerAuth{<svcTokenAuth from cell.NewAuthServiceToken(store, ring)>}) "+
 			"and optionally layer cell.AuthMTLS{} with verified client TLS",
 		errcode.WithInternal(fmt.Sprintf("count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", "))))
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -32,7 +31,7 @@ type ConflictPolicyStrictReject struct{}
 func (ConflictPolicyStrictReject) conflictPolicyOK() {}
 
 // Protocol bundles CAS protocol decisions for a particular consumer (cell).
-// Construct via NewProtocol or MustNewProtocol (composition root only).
+// Construct via NewProtocol (composition root only).
 type Protocol struct {
 	versionField    string
 	versionFieldSet bool
@@ -106,21 +105,6 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 		p.conflict = ConflictPolicyStrictReject{}
 	}
 	return p, nil
-}
-
-// MustNewProtocol panics on misconfiguration. Use only in composition root
-// (cmd/*); CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces this. B-class
-// panic: programming error visible at process startup.
-//
-// B 类 panic（参数约定违反，编程错误）：composition-root 静态字面量配错；
-// Must* 是 fail-fast 包装，在进程启动时立刻暴露配置错误。
-func MustNewProtocol(opts ...Option) *Protocol {
-	p, err := NewProtocol(opts...)
-	if err != nil {
-		panic(panicregister.Approved("cas-protocol-init",
-			errcode.Assertion("cas: protocol construction failed: %v", err)))
-	}
-	return p
 }
 
 // CheckVersionMatch translates UPDATE/DELETE ... WHERE version=$expected

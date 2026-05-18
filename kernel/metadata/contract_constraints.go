@@ -22,21 +22,23 @@ package metadata
 import (
 	"regexp"
 	"strings"
+
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
 const (
 	// AssemblyIDPattern restricts assembly ids to lowercase ASCII letters
 	// + digits, ≥2 chars, must start with a letter. Mirrors
-	// schemas/assembly.schema.json properties.id.pattern.
-	AssemblyIDPattern = `^[a-z][a-z0-9]+$`
-	// CellIDPattern restricts cell ids to lowercase ASCII letters + digits,
-	// ≥2 chars, must start with a letter. Mirrors
-	// schemas/cell.schema.json properties.id.pattern. Identical to
-	// AssemblyIDPattern by design — both share the no-dash concatenation
-	// convention enforced by FMT-16 / FMT-C1; single-sourced here so adapter
-	// (e.g. adapters/prometheus.promCellLabel), governance, and codegen
-	// layers consume the same regex.
-	CellIDPattern = `^[a-z][a-z0-9]+$`
+	// schemas/assembly.schema.json properties.id.pattern. Reverse-aliased
+	// from pkg/scaffoldid.IdentifierPattern — pkg/scaffoldid owns the
+	// single-source pattern so typed-identifier funnel (ScaffoldID) and
+	// YAML schema validator stay in lock-step. kernel/ may depend on pkg/
+	// (architecture rule).
+	AssemblyIDPattern = scaffoldid.IdentifierPattern
+	// CellIDPattern is identical to AssemblyIDPattern by design — both share
+	// the no-dash concatenation convention enforced by FMT-16 / FMT-C1.
+	// Same single-source reverse-alias as AssemblyIDPattern.
+	CellIDPattern = scaffoldid.IdentifierPattern
 	// GoStructNamePattern restricts cell.GoStructName to a Go-exported
 	// identifier shape (uppercase first letter, ASCII letters + digits).
 	// Mirrors schemas/cell.schema.json properties.goStructName.pattern.
@@ -48,17 +50,16 @@ const (
 // reorder without updating schemas/assembly.schema.json in lockstep.
 var DeployTemplateEnum = []string{"k8s", "compose", "binary"}
 
-var (
-	assemblyIDRe   = regexp.MustCompile(AssemblyIDPattern)
-	cellIDRe       = regexp.MustCompile(CellIDPattern)
-	goStructNameRe = regexp.MustCompile(GoStructNamePattern)
-)
+var goStructNameRe = regexp.MustCompile(GoStructNamePattern)
 
-// MatchAssemblyID reports whether s satisfies AssemblyIDPattern.
-func MatchAssemblyID(s string) bool { return assemblyIDRe.MatchString(s) }
+// MatchAssemblyID reports whether s satisfies AssemblyIDPattern. Forwards
+// to pkg/scaffoldid.Match so the regex is compiled exactly once across the
+// codebase (CELL-ID-PATTERN-SINGLE-SOURCE-01).
+func MatchAssemblyID(s string) bool { return scaffoldid.Match(s) }
 
-// MatchCellID reports whether s satisfies CellIDPattern.
-func MatchCellID(s string) bool { return cellIDRe.MatchString(s) }
+// MatchCellID reports whether s satisfies CellIDPattern. Same single-source
+// forwarding as MatchAssemblyID.
+func MatchCellID(s string) bool { return scaffoldid.Match(s) }
 
 // MatchGoStructName reports whether s satisfies GoStructNamePattern.
 func MatchGoStructName(s string) bool { return goStructNameRe.MatchString(s) }

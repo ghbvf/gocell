@@ -5,14 +5,17 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 	"unicode"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/pkg/scaffoldid"
 	"github.com/ghbvf/gocell/pkg/yamlsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
@@ -82,8 +85,19 @@ func validateContractFlags(id, kind, owner string) ([]string, error) {
 	if err := validateScaffoldID(kind, "--kind"); err != nil {
 		return nil, err
 	}
-	if err := validateScaffoldID(owner, "--owner"); err != nil {
-		return nil, err
+	// --owner is a cell ID; route through the single-source typed funnel
+	// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01) for parity with scaffold cell /
+	// scaffold slice / scaffold assembly. Wrap as ErrScaffoldInvalidOpts so
+	// CLI error code stays stable (asserted by hack/verify-scaffold-reject.sh).
+	if _, err := scaffoldid.Parse(owner); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold contract: --owner does not match IdentifierPattern", err,
+			errcode.WithDetails(
+				slog.String("flag", "--owner"),
+				slog.String("pattern", scaffoldid.IdentifierPattern),
+			),
+			errcode.WithInternal(fmt.Sprintf("flag=--owner value=%q pattern=%s",
+				owner, scaffoldid.IdentifierPattern)))
 	}
 	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
 	if !validKinds[kind] {
@@ -129,9 +143,19 @@ func validateJourneyFlags(id, goal, team, cells string) ([]string, error) {
 	if len(cellList) == 0 {
 		return nil, fmt.Errorf("scaffold journey: --cells must list at least one cell")
 	}
+	// --cells[] entries are cell IDs; route through the single-source typed
+	// funnel (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). Wrap as ErrScaffoldInvalidOpts
+	// so CLI error code stays stable.
 	for _, c := range cellList {
-		if err := validateScaffoldID(c, "--cells[]"); err != nil {
-			return nil, err
+		if _, err := scaffoldid.Parse(c); err != nil {
+			return nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+				"scaffold journey: --cells[] entry does not match IdentifierPattern", err,
+				errcode.WithDetails(
+					slog.String("flag", "--cells[]"),
+					slog.String("pattern", scaffoldid.IdentifierPattern),
+				),
+				errcode.WithInternal(fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
+					c, scaffoldid.IdentifierPattern)))
 		}
 	}
 	return cellList, nil
@@ -219,7 +243,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"[--type=core|edge|support] [--level=L0..L4]",
 			"[--with-http] [--with-events] [--with-both]",
 			"[--skip-generate] [--dry-run]",
-			"Note: --id must not contain '-' (use nodash identifiers).",
+			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldCell(root, a) },
 	},
@@ -228,7 +252,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 		help: []string{
 			"Create cells/<cellID>/slices/<id>/slice.yaml.",
 			"--id=<id> --cell=<cellID> [--dry-run]",
-			"Note: --id must not contain '-' (use nodash identifiers).",
+			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldSlice(root, a) },
 	},
@@ -255,7 +279,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
 			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
 			"[--deploy=k8s|compose|binary] (default: k8s) [--skip-generate] [--dry-run]",
-			"Note: --id must not contain '-' (use nodash identifiers; min 2 chars).",
+			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldAssembly(root, a) },
 	},
@@ -302,10 +326,13 @@ func reportScaffold(r scaffoldReport) {
 
 // scaffoldCellInputs groups the parsed flag values for buildScaffoldCellSpec.
 // Introduced to replace the 11-parameter signature that exceeded the Sonar
-// cognitive-complexity cap (max 7 params per function).
+// cognitive-complexity cap (max 7 params per function). ID is typed
+// (scaffoldid.ScaffoldID) so it is validated at flag-parsing time via
+// scaffoldid.Parse before reaching the spec.
 type scaffoldCellInputs struct {
-	ID, ResolvedStruct, Package, ModulePath, OwnerTeam, OwnerRole, CellType, Level string
-	WithHTTP, WithEvents, WithBoth                                                 bool
+	ID                                                                         scaffoldid.ScaffoldID
+	ResolvedStruct, Package, ModulePath, OwnerTeam, OwnerRole, CellType, Level string
+	WithHTTP, WithEvents, WithBoth                                             bool
 }
 
 // buildScaffoldCellSpec constructs a cellgen.ScaffoldSpec from the parsed
@@ -341,22 +368,17 @@ func validateScaffoldCellFlags(id, team, role string) error {
 	if role == "" {
 		return fmt.Errorf("--role is required")
 	}
-	// Round-7: control-char + path-traversal guard.
-	if err := validateScaffoldID(id, "--id"); err != nil {
-		return err
-	}
 	if err := validateScaffoldText(team, "--team"); err != nil {
 		return err
 	}
 	if err := validateScaffoldText(role, "--role"); err != nil {
 		return err
 	}
-	// F11: reject kebab-case cell IDs (aligned with scaffoldSlice behavior).
-	if strings.Contains(id, "-") {
-		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"scaffold cell: --id must not contain '-'; use no-dash identifier",
-			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", id, strings.ReplaceAll(id, "-", ""))))
-	}
+	// --id is validated downstream by scaffoldCell via scaffoldid.Parse —
+	// the typed funnel (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01) is a strict
+	// superset of the legacy validateScaffoldID path-traversal /
+	// control-char / no-dash checks (AssemblyIDPattern ^[a-z][a-z0-9]+$
+	// physically excludes all of them). Pre-Parse is unnecessary.
 	return nil
 }
 
@@ -400,8 +422,19 @@ func scaffoldCell(root string, args []string) error {
 		return fmt.Errorf("scaffold cell: read module path: %w", err)
 	}
 
+	cellID, err := scaffoldid.Parse(*id)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"--id does not match metadata AssemblyIDPattern", err,
+			errcode.WithDetails(
+				slog.String("flag", "--id"),
+				slog.String("pattern", metadata.AssemblyIDPattern),
+			),
+			errcode.WithInternal(fmt.Sprintf("flag=--id value=%q pattern=%s",
+				*id, metadata.AssemblyIDPattern)))
+	}
 	spec := buildScaffoldCellSpec(scaffoldCellInputs{
-		ID:             *id,
+		ID:             cellID,
 		ResolvedStruct: resolvedStruct,
 		Package:        *id,
 		ModulePath:     mod,
@@ -425,12 +458,16 @@ func scaffoldCell(root string, args []string) error {
 		return err
 	}
 
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return err
+	}
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return err
 	}
 
 	if *dryRun {
-		for _, p := range pathsafe.PlannedPaths(plan) {
+		for _, p := range ps.Paths() {
 			rel, _ := filepath.Rel(realRoot, p)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
@@ -486,16 +523,30 @@ func validateSliceScaffoldFlags(id, cellID, level string) error {
 	if cellID == "" {
 		return fmt.Errorf("--cell is required")
 	}
-	if err := validateScaffoldID(id, "--id"); err != nil {
-		return err
+	// --id and --cell share the AssemblyIDPattern (^[a-z][a-z0-9]+$) — route
+	// through the single-source scaffoldid.Parse funnel
+	// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). The legacy validateScaffoldID
+	// path-traversal / control-char check is subsumed (Parse pattern is a
+	// strict superset of path-traversal rejection).
+	if _, err := scaffoldid.Parse(id); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold slice: --id does not match AssemblyIDPattern", err,
+			errcode.WithDetails(
+				slog.String("flag", "--id"),
+				slog.String("pattern", metadata.AssemblyIDPattern),
+			),
+			errcode.WithInternal(fmt.Sprintf("flag=--id value=%q pattern=%s",
+				id, metadata.AssemblyIDPattern)))
 	}
-	if err := validateScaffoldID(cellID, "--cell"); err != nil {
-		return err
-	}
-	if strings.Contains(id, "-") {
-		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"scaffold slice: --id must not contain '-'; use no-dash identifier",
-			errcode.WithInternal(fmt.Sprintf("id=%q suggestion=%q", id, strings.ReplaceAll(id, "-", ""))))
+	if _, err := scaffoldid.Parse(cellID); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"scaffold slice: --cell does not match AssemblyIDPattern", err,
+			errcode.WithDetails(
+				slog.String("flag", "--cell"),
+				slog.String("pattern", metadata.AssemblyIDPattern),
+			),
+			errcode.WithInternal(fmt.Sprintf("flag=--cell value=%q pattern=%s",
+				cellID, metadata.AssemblyIDPattern)))
 	}
 	if !validSliceLevels[level] {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
@@ -552,15 +603,19 @@ func scaffoldSlice(root string, args []string) error {
 		return fmt.Errorf(errFmtScaffoldSlice, err)
 	}
 	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return fmt.Errorf(errFmtScaffoldSlice, err)
+	}
 
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths.
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return fmt.Errorf(errFmtScaffoldSlice, err)
 	}
 
 	if *dryRun {
-		for _, absPath := range pathsafe.PlannedPaths(plan) {
+		for _, absPath := range ps.Paths() {
 			rel, _ := filepath.Rel(root, absPath)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
@@ -612,15 +667,19 @@ func scaffoldContract(root string, args []string) error {
 	}
 
 	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return fmt.Errorf(errFmtScaffoldContract, err)
+	}
 
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths. On dry-run it returns nil or a conflict/containment error.
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return fmt.Errorf(errFmtScaffoldContract, err)
 	}
 
 	if *dryRun {
-		for _, absPath := range pathsafe.PlannedPaths(plan) {
+		for _, absPath := range ps.Paths() {
 			rel, _ := filepath.Rel(root, absPath)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
@@ -679,15 +738,19 @@ func scaffoldJourney(root string, args []string) error {
 	}
 
 	plan := []pathsafe.PlannedFile{{AbsPath: absYAML, Content: content}}
+	ps, err := pathsafe.NewPlanSet(plan)
+	if err != nil {
+		return fmt.Errorf(errFmtScaffoldJourney, err)
+	}
 
 	// WritePlannedFiles handles both dry-run (validation + conflict detection only)
 	// and live write paths.
-	if err := pathsafe.WritePlannedFiles(realRoot, plan, *dryRun); err != nil {
+	if err := pathsafe.WritePlannedFiles(realRoot, ps, *dryRun); err != nil {
 		return fmt.Errorf(errFmtScaffoldJourney, err)
 	}
 
 	if *dryRun {
-		for _, absPath := range pathsafe.PlannedPaths(plan) {
+		for _, absPath := range ps.Paths() {
 			rel, _ := filepath.Rel(root, absPath)
 			fmt.Printf(dryRunCreatePathFmt, filepath.ToSlash(rel))
 		}
@@ -743,6 +806,24 @@ func renderInlineSliceYAML(id, cellID, level string) ([]byte, error) {
 // filled in. Mirrors the 5 deferred kind=command contracts.
 // ID, Kind, and OwnerCell are wrapped with yamlsafe.Quote so YAML-meta
 // characters in user input cannot inject extra fields or break scalar parsing.
+//
+// NOTE: standalone `gocell scaffold contract` and the bundled
+// `gocell scaffold cell --with-http/--with-events` emit different
+// contract.yaml shapes:
+//
+//   - standalone (this template): writes `codegen: false` explicitly because
+//     the empty draft has no schemaRefs yet. Edit-then-`codegen: true` is the
+//     intended flow.
+//   - bundled (cellgen.planExampleContract): omits the codegen: field entirely
+//     so the parser default (codegen: true) drives derived generation. The
+//     bundled flow ships with concrete request/response schemas already, so
+//     `codegen: false` would be wrong. archtest
+//     SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 locks the bundled shape.
+//
+// The two paths are NOT a regression — they encode different user intents
+// (empty draft vs. compilable example). Do not merge them without first
+// proving the bundled flow can also emit `codegen: false` without breaking
+// the immediate-compile guarantee.
 var inlineContractYAMLTpl = template.Must(template.New("contract-yaml").Parse(`id: {{.ID}}
 kind: {{.Kind}}
 ownerCell: {{.OwnerCell}}

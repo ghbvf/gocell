@@ -41,7 +41,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/logutil"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/http/health/probequery"
 )
@@ -206,13 +205,6 @@ func (h *Handler) RegisterChecker(name string, fn Checker) error {
 	}
 	h.checkers[name] = wrapCtxSafe(fn, h.clock)
 	return nil
-}
-
-// MustRegisterChecker is the static-wiring variant of RegisterChecker.
-func (h *Handler) MustRegisterChecker(name string, fn Checker) {
-	if err := h.RegisterChecker(name, fn); err != nil {
-		panic(panicregister.Approved("health-checker-register", errcode.Assertion("health: %v", err)))
-	}
 }
 
 // SetVerboseToken sets a bearer token that must be provided via the

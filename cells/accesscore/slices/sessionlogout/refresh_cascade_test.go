@@ -57,7 +57,7 @@ func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 	wire, _, err := refreshStore.Issue(ctx, sessionID, userID, int64(1))
 	require.NoError(t, err)
 
-	svc := MustNewService(sessionStore, refreshStore, slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+	svc := mustNewService(sessionStore, refreshStore, slog.Default(), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	require.NoError(t, svc.Logout(ctx, sessionID, userID))
 
 	_, _, err = refreshStore.Rotate(ctx, wire)

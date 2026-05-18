@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -21,12 +23,22 @@ func eventSpec() contractspec.ContractSpec {
 	}
 }
 
+// wrapOrFatal is a test helper that wraps wrapper.WrapConsumer with
+// require.NoError. It replaces the deleted wrapper.MustWrapConsumer
+// composition-root convenience in test scope only.
+func wrapOrFatal(t *testing.T, tr wrapper.Tracer, spec contractspec.ContractSpec, fn wrapper.ConsumerFunc) wrapper.ConsumerFunc {
+	t.Helper()
+	w, err := wrapper.WrapConsumer(tr, spec, fn)
+	require.NoError(t, err)
+	return w
+}
+
 func TestWrapConsumer_PassesAckResultThrough(t *testing.T) {
 	tr := &spyTracer{}
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.Ack()
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{EventType: "session.revoked.v1"})
 	if res.Disposition != outbox.DispositionAck {
 		t.Errorf("want Ack, got %v", res.Disposition)
@@ -58,7 +70,7 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.Requeue(transient)
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	if res.Disposition != outbox.DispositionRequeue {
@@ -81,7 +93,7 @@ func TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.Requeue(errors.New(`upstream rejected: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`))
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
 
 	span := tr.only(t)
@@ -106,7 +118,7 @@ func TestWrapConsumer_RecordsFallbackOnNilDispositionError(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.Reject(nil)
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
 
 	span := tr.only(t)
@@ -121,7 +133,7 @@ func TestWrapConsumer_MarksErrorOnReject(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.Reject(permanent)
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	if res.Disposition != outbox.DispositionReject {
@@ -151,16 +163,6 @@ func TestWrapConsumer_ReturnsErrorOnNilFn(t *testing.T) {
 	}
 }
 
-func TestMustWrapConsumer_PanicsOnNilFn(t *testing.T) {
-	t.Parallel()
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic on nil fn")
-		}
-	}()
-	_ = wrapper.MustWrapConsumer(wrapper.NoopTracer{}, eventSpec(), nil)
-}
-
 func TestWrapConsumer_PutsContractIDInContext(t *testing.T) {
 	t.Parallel()
 	var seen string
@@ -168,7 +170,7 @@ func TestWrapConsumer_PutsContractIDInContext(t *testing.T) {
 		seen = wrapper.ContractIDFromContext(ctx)
 		return outbox.Ack()
 	}
-	w := wrapper.MustWrapConsumer(wrapper.NoopTracer{}, eventSpec(), inner)
+	w := wrapOrFatal(t, wrapper.NoopTracer{}, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
 	if seen != "event.session.revoked.v1" {
 		t.Errorf("ContractID missing from ctx; got %q", seen)
@@ -183,7 +185,7 @@ func TestWrapConsumer_NilTracer_FallsBackToNoop(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.Ack()
 	}
-	w := wrapper.MustWrapConsumer(nil, eventSpec(), inner)
+	w := wrapOrFatal(t, nil, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 	if res.Disposition != outbox.DispositionAck {
 		t.Errorf("want Ack with nil tracer, got %v", res.Disposition)
@@ -198,7 +200,7 @@ func TestWrapConsumer_PanicInHandler(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		panic(boom)
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 
 	defer func() {
 		r := recover()
@@ -229,7 +231,7 @@ func TestWrapConsumer_PanicNonError(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		panic("string panic value")
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 
 	defer func() {
 		_ = recover()
@@ -255,7 +257,7 @@ func TestWrapConsumer_InvalidDispositionRecordsError(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{} // zero value: Disposition is invalid
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	// Result is passed through untouched — downstream decides downgrade.
@@ -283,7 +285,7 @@ func TestWrapConsumer_InvalidDispositionWithExplicitError(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.Disposition(99), Err: explicit}
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	w := wrapOrFatal(t, tr, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
 	span := tr.only(t)
 	if len(span.errs) != 1 || !errors.Is(span.errs[0], explicit) {

@@ -160,23 +160,6 @@ func NewService(
 	return s, nil
 }
 
-// MustNewService is the static-wiring variant of NewService.
-func MustNewService(
-	sessionStore session.Store,
-	roleRepo ports.RoleRepository,
-	userRepo ports.UserRepository,
-	refreshStore refresh.Store,
-	issuer *auth.JWTIssuer,
-	logger *slog.Logger,
-	opts ...Option,
-) *Service {
-	s, err := NewService(sessionStore, roleRepo, userRepo, refreshStore, issuer, logger, opts...)
-	if err != nil {
-		panic(panicregister.Approved("sessionrefresh-invariant", errcode.Assertion("sessionrefresh: invariant violated: %v", err)))
-	}
-	return s
-}
-
 // Refresh validates the presented opaque refresh token, checks the backing
 // session and subject, mints a new access JWT, and rotates the refresh token.
 // Token rejection surfaces ErrAuthRefreshFailed; dependency failures surface

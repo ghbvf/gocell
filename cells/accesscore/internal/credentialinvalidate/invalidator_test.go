@@ -3,7 +3,6 @@ package credentialinvalidate
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -236,59 +235,4 @@ func TestNew_NilRefresh_ReturnsKindInvalid(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.KindInvalid, ec.Kind)
-}
-
-// ---------------------------------------------------------------------------
-// MustNew panic tests (Finding #6: extended to cover all 3 nil deps)
-// ---------------------------------------------------------------------------
-
-// TestMustNew_NilPanics verifies that MustNew panics for each nil dependency.
-// The panic value is a panicregister.Approved-wrapped errcode.Assertion, so
-// we assert via require.Panics + recover rather than require.PanicsWithValue
-// (which does a deep-equal comparison that would not match the wrapped type).
-func TestMustNew_NilPanics(t *testing.T) {
-	cases := []struct {
-		name    string
-		call    func()
-		wantMsg string
-	}{
-		{
-			name: "nil users panics",
-			call: func() {
-				MustNew(nil, &stubSessionStore{}, &stubRefreshStore{})
-			},
-			wantMsg: "UserRepository",
-		},
-		{
-			name: "nil sessions panics",
-			call: func() {
-				MustNew(&stubUserRepo{}, nil, &stubRefreshStore{})
-			},
-			wantMsg: "session.Store",
-		},
-		{
-			name: "nil refreshStore panics",
-			call: func() {
-				MustNew(&stubUserRepo{}, &stubSessionStore{}, nil)
-			},
-			wantMsg: "refresh.Store",
-		},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			var recovered any
-			func() {
-				defer func() { recovered = recover() }()
-				tc.call()
-			}()
-			require.NotNil(t, recovered, "MustNew must panic for %s", tc.name)
-			// The panic value is panicregister.Approved("credentialinvalidate-mustnew", ...)
-			// containing an errcode.Assertion message. Convert to string and check.
-			msg := fmt.Sprintf("%v", recovered)
-			assert.Contains(t, msg, tc.wantMsg,
-				"panic message must mention the missing dependency: %s", tc.name)
-		})
-	}
 }
