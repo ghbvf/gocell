@@ -436,3 +436,206 @@ func TestCellInitCheckNotNoop_BoundaryTransitive(t *testing.T) {
 	require.Empty(t, diags,
 		"boundary_transitive fixture: expected zero diagnostics, got %+v", diags)
 }
+
+// -------------------------------------------------------------------------
+// Reverse self-checks for the Medium grade blind-spot inventory. Each test
+// asserts that the corresponding evasion shape does not appear in the
+// current production AST. New production code that introduces any of these
+// shapes will fail one of these tests and force a deliberate evaluation —
+// the AST shape itself becomes a review signal even though Phase B does
+// not detect it directly.
+// -------------------------------------------------------------------------
+
+// TestNoReflectCheckNotNoopInProduction asserts that no production *.go file
+// invokes kernel/cell.CheckNotNoop via reflect.ValueOf(...).Call(...) — a
+// shape that hides the callee from the Phase B BFS's *types.Info resolver.
+// Blind-spot #1 from the file-level inventory.
+func TestNoReflectCheckNotNoopInProduction(t *testing.T) {
+	t.Parallel()
+	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var out []Diagnostic
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if !isReflectValueOfCall(p, call) {
+					return true
+				}
+				if !argSubtreeReferencesCheckNotNoop(p, call.Args) {
+					return true
+				}
+				pos := p.Fset.Position(call.Pos())
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: "reflect.ValueOf invocation references kernel/cell.CheckNotNoop" +
+						" — this shape evades CELL-L2-INIT-CHECKNOTNOOP-CALLED-01's *types.Info" +
+						" BFS; call CheckNotNoop directly from the cell's Init or same-package hook",
+				})
+				return true
+			})
+		}
+		return out
+	})
+	Report(t, cellInitCheckNotNoopRuleID+"/no-reflect", diags)
+}
+
+// isReflectValueOfCall reports whether call.Fun resolves to reflect.ValueOf.
+func isReflectValueOfCall(p *Pass, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "ValueOf" {
+		return false
+	}
+	pkgIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	obj := p.TypesInfo.Uses[pkgIdent]
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	return obj.Pkg().Path() == "reflect"
+}
+
+// argSubtreeReferencesCheckNotNoop reports whether any Ident within args
+// resolves to kernel/cell.CheckNotNoop via *types.Info.Uses.
+func argSubtreeReferencesCheckNotNoop(p *Pass, args []ast.Expr) bool {
+	for _, arg := range args {
+		hit := false
+		ast.Inspect(arg, func(n ast.Node) bool {
+			if hit {
+				return false
+			}
+			id, ok := n.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			fn, _ := p.TypesInfo.Uses[id].(*types.Func)
+			if fn != nil && fn.FullName() == kernelCellCheckNotNoopFullName {
+				hit = true
+				return false
+			}
+			return true
+		})
+		if hit {
+			return true
+		}
+	}
+	return false
+}
+
+// TestNoLinknameAliasInProduction asserts that no production *.go file
+// declares a `//go:linkname` directive aliasing kernel/cell.CheckNotNoop.
+// Blind-spot #2 from the file-level inventory. Content scan over the
+// production scope (excluding tests and generated/).
+func TestNoLinknameAliasInProduction(t *testing.T) {
+	t.Parallel()
+	scope := ModuleScope(findModuleRoot(t))
+	var diags []Diagnostic
+	EachContentFile(t, scope, []string{".go"}, func(_ *testing.T, fc ContentContext) {
+		// `//go:linkname <localname> <target>` — flag any line whose target
+		// segment ends in `.CheckNotNoop` or whose localname is `CheckNotNoop`.
+		text := string(fc.Bytes)
+		lines := strings.Split(text, "\n")
+		for i, ln := range lines {
+			trim := strings.TrimSpace(ln)
+			if !strings.HasPrefix(trim, "//go:linkname") {
+				continue
+			}
+			if !strings.Contains(trim, "CheckNotNoop") {
+				continue
+			}
+			diags = append(diags, Diagnostic{
+				Rel:  fc.Rel,
+				Line: i + 1,
+				Message: "//go:linkname directive references CheckNotNoop —" +
+					" linkname aliasing evades CELL-L2-INIT-CHECKNOTNOOP-CALLED-01's BFS;" +
+					" call kernel/cell.CheckNotNoop by its canonical name from the cell package",
+			})
+		}
+	})
+	Report(t, cellInitCheckNotNoopRuleID+"/no-linkname", diags)
+}
+
+// TestNoAsyncCheckNotNoopInProduction asserts that no production *.go file
+// invokes kernel/cell.CheckNotNoop inside a `go func(){...}()` block from
+// inside the function reachable set of any L2+ cell Init. The synchronous
+// Init contract demands the call happen before Init returns; an async call
+// is statically reachable but may not have executed at Init's epilogue.
+// Blind-spot #3 from the file-level inventory.
+func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
+	t.Parallel()
+	scope := ModuleScope(findModuleRoot(t))
+	targets := collectL2PlusTargets(t, scope)
+	require.NotEmpty(t, targets)
+
+	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Pkg == nil {
+			return nil
+		}
+		target := matchTarget(p.Pkg.Path(), targets)
+		if target == nil {
+			return nil
+		}
+		initFn := initFuncDecl(p, target.goStructName)
+		if initFn == nil {
+			return nil
+		}
+		// Visit every FuncDecl in the same package (Init's reachable set is
+		// bounded by same-package callees; for the negative probe we
+		// over-approximate by scanning all same-package funcs — false
+		// positives here would still be worth flagging).
+		var out []Diagnostic
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+			ast.Inspect(f, func(n ast.Node) bool {
+				gostmt, ok := n.(*ast.GoStmt)
+				if !ok {
+					return true
+				}
+				if !goStmtCallsCheckNotNoop(p, gostmt) {
+					return true
+				}
+				pos := p.Fset.Position(gostmt.Pos())
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: "async `go func() { ... CheckNotNoop ... }()` in L2+ cell " + target.cellID +
+						" — Init must call CheckNotNoop synchronously to guard durable-mode wiring",
+				})
+				return true
+			})
+		}
+		return out
+	})
+	Report(t, cellInitCheckNotNoopRuleID+"/no-async", diags)
+}
+
+// goStmtCallsCheckNotNoop reports whether the goroutine body (or any
+// expression in the go-stmt call chain) contains a CallExpr resolving to
+// kernel/cell.CheckNotNoop.
+func goStmtCallsCheckNotNoop(p *Pass, gostmt *ast.GoStmt) bool {
+	hit := false
+	ast.Inspect(gostmt, func(n ast.Node) bool {
+		if hit {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		fn := resolveCallee(p, call.Fun)
+		if fn != nil && fn.FullName() == kernelCellCheckNotNoopFullName {
+			hit = true
+			return false
+		}
+		return true
+	})
+	return hit
+}
