@@ -4715,7 +4715,7 @@ func TestFMT15(t *testing.T) {
 	})
 }
 
-// --- OUTGUARD-01: all cells must declare durabilityMode ---
+// --- OUTGUARD-01: L2+ must declare durabilityMode; L0/L1 optional ---
 
 func TestOUTGUARD01(t *testing.T) {
 	tests := []struct {
