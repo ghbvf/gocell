@@ -65,17 +65,18 @@ func (p *verifyTextPrinter) Print(r *verify.VerifyResult) error {
 
 func (p *verifyTextPrinter) printTestResults(results []verify.TestResult) error {
 	for _, tr := range results {
-		// ZeroMatch / SkippedOnly carry Passed=false from recordResult but
-		// represent "no executable check ran" rather than a true assertion
-		// failure. Surface them as [WARN] with a trailing reason so the
-		// first line carries the full diagnosis; the generic Passed/!Passed
-		// split is reserved for tests that actually executed.
+		// ZeroMatch / SkippedOnly represent "no executable check ran" rather
+		// than a true assertion failure. Surface them as [WARN] with a
+		// trailing reason so the first line carries the full diagnosis. We
+		// branch on these fields before the generic Passed split so the WARN
+		// classification stays robust even if a future upstream change drops
+		// the recordResult convention of forcing Passed=false alongside them.
 		var marker, suffix string
 		switch {
 		case tr.ZeroMatch:
 			marker, suffix = "WARN", " — no tests matched -run pattern"
 		case tr.SkippedOnly:
-			marker, suffix = "WARN", " — only skipped tests"
+			marker, suffix = "WARN", " — all matched tests skipped (replace stubs with executable checks)"
 		case tr.Passed:
 			marker = "PASS"
 		default:

@@ -1,3 +1,3 @@
 Verify accesscore/sessions: FAILED
-  [WARN] TestStubbed — only skipped tests
+  [WARN] TestStubbed — all matched tests skipped (replace stubs with executable checks)
   error: [ERR_ZERO_TEST_MATCH] pattern matched only skipped tests — replace stubs with executable checks
