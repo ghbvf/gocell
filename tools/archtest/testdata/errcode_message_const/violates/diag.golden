@@ -1,0 +1,5 @@
+usage.go:19: errcode.New(...) message must be a const literal (got *ast.CallExpr) — move runtime data to WithDetails(slog.Attr) or WithInternal
+usage.go:26: errcode.Wrap(...) message must be a const literal (got *ast.CallExpr) — move runtime data to WithDetails(slog.Attr) or WithInternal
+usage.go:33: errcode.New(...) message must be a const literal (got *ast.BinaryExpr) — move runtime data to WithDetails(slog.Attr) or WithInternal
+usage.go:41: httputil.WritePublic(...) message must be a const literal (got *ast.CallExpr) — move runtime data to WithDetails(slog.Attr) or WithInternal
+usage.go:50: ctxcancel.WrapOrInfra(...) message must be a const literal (got *ast.CallExpr) — move runtime data to WithDetails(slog.Attr) or WithInternal

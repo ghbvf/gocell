@@ -489,6 +489,10 @@ func runClockCallsiteFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 }
 
 // TestClockInjectionCallsiteFixtures validates fixture-based regression cases.
+// Each fixture dir owns a diag.golden capturing the rule's real output
+// (Rel:Line: Message); GREEN fixtures have an empty golden. Line numbers live
+// in the regenerated golden, never in this table. See ADR
+// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
 func TestClockInjectionCallsiteFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -496,23 +500,17 @@ func TestClockInjectionCallsiteFixtures(t *testing.T) {
 	}
 
 	root := findModuleRoot(t)
-	base := root + "/tools/archtest/testdata/clock_injection_callsite_fixtures"
+	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_injection_callsite_fixtures")
 
-	cases := []struct {
-		pkg           string
-		wantViolCount int
-	}{
-		{"compliant", 0},
-		{"violates", 1},
-	}
+	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
+	dirs := []string{"compliant", "violates"}
 
-	for _, tc := range cases {
-		t.Run(tc.pkg, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			got := runClockCallsiteFixtureScan(t, base+"/"+tc.pkg)
-			assert.Equal(t, tc.wantViolCount, len(got),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.pkg, tc.wantViolCount, len(got), got)
+			got := runClockCallsiteFixtureScan(t, base+"/"+dir)
+			AssertGolden(t, filepath.Join(base, dir, "diag.golden"), got)
 		})
 	}
 }
@@ -807,8 +805,12 @@ func runLeafFallbackFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 }
 
 // TestKernelClockLeafFallbackFixtures runs the KERNEL-CLOCK-LEAF-FALLBACK-01
-// scanner over each fixture subpackage and asserts the expected violation
-// count. Mirrors TestProdClockInjectionFixtures (sibling gate).
+// scanner over each fixture subpackage and asserts against the golden.
+// Mirrors TestProdClockInjectionFixtures (sibling gate).
+// Each fixture dir owns a diag.golden capturing the rule's real output
+// (Rel:Line: Message); GREEN fixtures have an empty golden. Line numbers live
+// in the regenerated golden, never in this table. See ADR
+// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
 func TestKernelClockLeafFallbackFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -816,27 +818,17 @@ func TestKernelClockLeafFallbackFixtures(t *testing.T) {
 	}
 
 	root := findModuleRoot(t)
-	base := root + "/tools/archtest/testdata/clock_leaf_fallback_fixtures"
+	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_leaf_fallback_fixtures")
 
-	cases := []struct {
-		pkg          string
-		wantViolReps int // expected number of (file:line) violation reports
-	}{
-		// Positive — must produce 0 violations.
-		{"compliant", 0},
-		// Negative — exercises three call shapes (direct, alias, nil-fallback).
-		// Each produces one (file:line) report (selector + alias + body all on
-		// distinct lines), so 3 reports total.
-		{"violates", 3},
-	}
+	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
+	dirs := []string{"compliant", "violates"}
 
-	for _, tc := range cases {
-		t.Run(tc.pkg, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			got := runLeafFallbackFixtureScan(t, base+"/"+tc.pkg)
-			assert.Equal(t, tc.wantViolReps, len(got),
-				"fixture %s: expected %d violation report(s), got %d: %v",
-				tc.pkg, tc.wantViolReps, len(got), got)
+			got := runLeafFallbackFixtureScan(t, base+"/"+dir)
+			AssertGolden(t, filepath.Join(base, dir, "diag.golden"), got)
 		})
 	}
 }
@@ -1033,6 +1025,10 @@ func isTimeTimeType(t types.Type) bool {
 
 // TestKernelClockResetRelativeFixtures verifies the scanner against the two
 // fixture packages: one that violates the rule, one that is compliant.
+// Each fixture dir owns a diag.golden capturing the rule's real output
+// (Rel:Line: Message); GREEN fixtures have an empty golden. Line numbers live
+// in the regenerated golden, never in this table. See ADR
+// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
 func TestKernelClockResetRelativeFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1040,42 +1036,17 @@ func TestKernelClockResetRelativeFixtures(t *testing.T) {
 	}
 
 	root := findModuleRoot(t)
-	fixturesBase := root + "/tools/archtest/testdata/clock_reset_relative_fixtures"
+	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_reset_relative_fixtures")
 
-	cases := []struct {
-		dir           string
-		wantViolLines []int // nil = expect 0 violations
-	}{
-		{"compliant", nil},
-		{"violates", []int{17}},
-	}
+	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
+	dirs := []string{"compliant", "violates"}
 
-	for _, tc := range cases {
-		t.Run(tc.dir, func(t *testing.T) {
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
 			t.Parallel()
-			fixtureDir := fixturesBase + "/" + tc.dir
-			got := runClockResetRelativeFixtureScan(t, fixtureDir)
-
-			if len(tc.wantViolLines) == 0 {
-				assert.Empty(t, got, "fixture %s: expected 0 violations, got %v", tc.dir, got)
-				return
-			}
-
-			assert.Equal(t, len(tc.wantViolLines), len(got),
-				"fixture %s: expected %d violation(s), got %d: %v",
-				tc.dir, len(tc.wantViolLines), len(got), got)
-
-			for i, wantLine := range tc.wantViolLines {
-				if i >= len(got) {
-					break
-				}
-				assert.Equal(t, "usage.go", got[i].Rel,
-					"fixture %s violation[%d]: expected Rel=usage.go, got %q",
-					tc.dir, i, got[i].Rel)
-				assert.Equal(t, wantLine, got[i].Line,
-					"fixture %s violation[%d]: expected Line=%d, got %d",
-					tc.dir, i, wantLine, got[i].Line)
-			}
+			got := runClockResetRelativeFixtureScan(t, base+"/"+dir)
+			AssertGolden(t, filepath.Join(base, dir, "diag.golden"), got)
 		})
 	}
 }

@@ -1,0 +1,1 @@
+leaky.go:20: span.RecordError(...) first arg must be redaction.RedactError(...) — hardcoded fail-closed redaction has no caller-side opt-out (ADR §8)
