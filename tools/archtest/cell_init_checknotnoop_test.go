@@ -35,18 +35,27 @@
 //
 // Phase A — enumerate targets:
 //
-//	EachContentFile over cells/**/cell.yaml; yaml.Unmarshal into a minimal
-//	struct {ID, ConsistencyLevel, GoStructName}; keep those with
-//	ConsistencyLevel >= "L2" and a non-empty GoStructName.
+//	EachContentFile over cells/**/cell.yaml; parseAndIncludeTarget runs
+//	yaml.Unmarshal into a minimal struct {ID, ConsistencyLevel, GoStructName}.
+//	Cells with ConsistencyLevel >= "L2" and a non-empty GoStructName become
+//	l2TargetCell entries whose `pkgPath` is the FULL import path
+//	`modPath + "/" + cellDir`. L2+ cells WITHOUT goStructName emit a
+//	diagnostic ("missing goStructName" — K#04 codegen convention violation)
+//	instead of silently skipping. collectL2PlusTargets returns both lists.
 //
 // Phase B — scan production code per target:
 //
-//	RunTypedProduction loads the production package set. For each target
-//	cell, find its package by import path suffix (`/cells/<cellID>`),
-//	locate the Init FuncDecl on `*GoStructName`, then BFS over same-package
-//	callees of Init. A target satisfies the rule if any visited CallExpr
-//	resolves via *types.Info to `kernel/cell.CheckNotNoop`. Diagnostics
-//	reference the cell.yaml path and the Init receiver position.
+//	RunTypedProduction loads the production package set. matchTarget
+//	compares Pass.Pkg.Path() to target.pkgPath via `==` (exact equality,
+//	not HasSuffix — F4 fix prevents examples/foo/cells/<id> from being
+//	mis-attributed). For the matched target, locate the Init FuncDecl on
+//	`*GoStructName`, then BFS over same-package callees of Init.
+//	collectFuncLitRanges + posInsideAnyRange filter out CallExprs nested
+//	inside unexecuted FuncLit closures (F1 fix; equivalent to
+//	inspector.Nodes returning proceed=false at FuncLit). A target
+//	satisfies the rule if any visited CallExpr resolves via *types.Info
+//	to `kernel/cell.CheckNotNoop`. Diagnostics reference the cell.yaml
+//	path; the does-not-call branch also embeds the Init Go file:line.
 //
 // # Blind-spot inventory
 //
@@ -402,7 +411,7 @@ func parseAndIncludeTarget(t *testing.T, rel string, content []byte, modPath str
 }
 
 // scanCellsForInitCheckNotNoop runs Phase B on a single Pass. It selects the
-// l2TargetCell whose pkgSuffix matches Pass.Pkg.Path() (at most one match),
+// l2TargetCell whose pkgPath equals Pass.Pkg.Path() (at most one match),
 // locates the Init FuncDecl on the receiver `*GoStructName`, and runs a same-
 // package BFS to find a CheckNotNoop callee. A diagnostic is emitted iff the
 // BFS does not find one (or the Init method is missing).
