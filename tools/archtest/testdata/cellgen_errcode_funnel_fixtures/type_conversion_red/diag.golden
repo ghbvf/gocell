@@ -1,0 +1,1 @@
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/type_conversion_red/usage.go:13: cellgen: reference to blacklisted error constructor: errors.New

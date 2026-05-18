@@ -454,6 +454,44 @@ linters:
                 Direct packages.Load access would allow reconstructing the INV-1 pattern
                 (pair AST nodes from one load with TypesInfo from another).
                 See ADR docs/architecture/202605141519-adr-archtest-pass-funnel.md.
+        cellgen-error-libs:
+          # CELLGEN-ERRCODE-FUNNEL-01 defence-in-depth: cellgen production code
+          # must construct errors only via pkg/errcode. The companion archtest
+          # tools/archtest/cellgen_errcode_funnel_test.go blocks known stdlib
+          # constructor callees ({fmt.Errorf, errors.New, errors.Join}) via
+          # types.Info-driven form uniqueness. This depguard rule closes the
+          # third-party escape route at the import boundary: AI cannot pull in
+          # an alternative error library to construct outside the errcode
+          # funnel, because the package import itself is statically rejected.
+          #
+          # Funnel double-lock evaluation (charter §Funnel 双向锁评级):
+          #   - Upstream Hard (this archtest + depguard): callee-resolved
+          #     blacklist on stdlib + import ban on listed third-party libs.
+          #   - Downstream Hard (existing): pkg/errcode funnel content locked
+          #     by ERRCODE-KIND-LITERAL-01 + MESSAGE-CONST-LITERAL-01 +
+          #     DETAILS-SLOG-ATTR-01.
+          #
+          # See ADR docs/architecture/202605171200-adr-cellgen-errcode-funnel-mechanism.md §D5.
+          list-mode: lax
+          # Recursive match: covers tools/codegen/cellgen/ itself and any
+          # future subpackages (e.g., tools/codegen/cellgen/subpkg/*.go).
+          # The companion archtest uses ./tools/codegen/cellgen/... which
+          # is also recursive; depguard must match the same surface.
+          files:
+            - "**/tools/codegen/cellgen/**"
+            - "!**/tools/codegen/cellgen/**/*_test.go"
+            - "!**/tools/codegen/cellgen/*_test.go"
+          deny:
+            - pkg: github.com/pkg/errors
+              desc: "cellgen must construct errors via pkg/errcode; pkg/errors is forbidden (CELLGEN-ERRCODE-FUNNEL-01 depguard companion)"
+            - pkg: golang.org/x/xerrors
+              desc: "cellgen must construct errors via pkg/errcode; xerrors is forbidden (CELLGEN-ERRCODE-FUNNEL-01 depguard companion)"
+            - pkg: go.uber.org/multierr
+              desc: "cellgen must construct errors via pkg/errcode; multierr is forbidden (CELLGEN-ERRCODE-FUNNEL-01 depguard companion)"
+            - pkg: github.com/hashicorp/go-multierror
+              desc: "cellgen must construct errors via pkg/errcode; go-multierror is forbidden (CELLGEN-ERRCODE-FUNNEL-01 depguard companion)"
+            - pkg: github.com/cockroachdb/errors
+              desc: "cellgen must construct errors via pkg/errcode; cockroachdb/errors is forbidden (CELLGEN-ERRCODE-FUNNEL-01 depguard companion)"
 
     forbidigo:
       forbid:

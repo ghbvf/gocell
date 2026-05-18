@@ -1,0 +1,1 @@
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/fmt_dot_import_errorf_red/usage.go:11: cellgen: reference to blacklisted error constructor: fmt.Errorf
