@@ -1,0 +1,21 @@
+{
+  "targetId": "accesscore/sessions",
+  "passed": false,
+  "results": [
+    {
+      "name": "TestStubbed",
+      "passed": false,
+      "output": "",
+      "zeroMatch": false,
+      "skippedOnly": true
+    }
+  ],
+  "errors": [
+    {
+      "code": "ERR_ZERO_TEST_MATCH",
+      "message": "pattern matched only skipped tests — replace stubs with executable checks",
+      "details": []
+    }
+  ],
+  "manualPending": []
+}

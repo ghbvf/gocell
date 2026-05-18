@@ -68,6 +68,21 @@ var verifyGoldenCases = []struct {
 		},
 	},
 	{
+		name: "skipped_only",
+		result: &verify.VerifyResult{
+			TargetID: "accesscore/sessions",
+			Passed:   false,
+			Results: []verify.TestResult{
+				{Name: "TestStubbed", Passed: false, SkippedOnly: true},
+			},
+			Errors: []error{errcode.New(
+				errcode.KindNotFound,
+				errcode.ErrZeroTestMatch,
+				"pattern matched only skipped tests — replace stubs with executable checks",
+			)},
+		},
+	},
+	{
 		name: "multi_test_mixed",
 		result: &verify.VerifyResult{
 			TargetID: "accesscore/all",
