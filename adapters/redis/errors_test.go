@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"testing"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -12,7 +13,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// fakeNetError is a synthetic net.Error used to exercise the Timeout() branch.
+// fakeNetError is a synthetic net.Error used to drive both the timeout and
+// non-timeout branches of the redis classifier.
 type fakeNetError struct {
 	timeout bool
 }
@@ -46,9 +48,26 @@ func TestClassifyRedisError(t *testing.T) {
 			transient: true,
 		},
 		{
-			name:      "net.Error Timeout false → permanent",
+			// Post-fix: any net.Error in chain → transient (symmetric with
+			// adapters/vault and adapters/s3, ADR 202605161800 §Adapter
+			// transient inventory). Non-timeout transport errors represent
+			// recoverable blips and must retry rather than DLX.
+			name:      "net.Error Timeout false → transient",
 			err:       &fakeNetError{timeout: false},
-			transient: false,
+			transient: true,
+		},
+		{
+			// Regression: dial-refused on a Redis container that is restarting
+			// surfaces as *net.OpError + syscall.ECONNREFUSED. Post-fix this
+			// is transient (S3-CLASSIFYERROR-CONN-REFUSED-01 funnel
+			// generalization).
+			name: "*net.OpError + ECONNREFUSED (dial refused) → transient",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: syscall.ECONNREFUSED,
+			},
+			transient: true,
 		},
 		{
 			name:      "context.DeadlineExceeded → transient",
