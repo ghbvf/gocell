@@ -30,7 +30,12 @@
 SET LOCAL lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS commands (
-    id                              UUID        PRIMARY KEY,
+    -- id is TEXT (not UUID) so it stays in lock-step with kernel/command.Entry.ID,
+    -- which is declared as `string` in kernel/command/entry.go. Calling code (and
+    -- the InMemQueue) generates hex IDs or accepts user-supplied identifiers;
+    -- forcing UUID here would diverge from the kernel contract and break the
+    -- mem+PG shared conformance suite. devices.id is TEXT for the same reason.
+    id                              TEXT        PRIMARY KEY,
     -- ON DELETE RESTRICT: deleting a device with pending/active commands is
     -- prevented at the DB level; operators must terminate commands first.
     device_id                       TEXT        NOT NULL REFERENCES devices(id) ON DELETE RESTRICT,

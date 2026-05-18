@@ -357,7 +357,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "devices", Column: "status", Type: "text", NotNull: true},
 	{Table: "devices", Column: "last_seen", Type: "timestamp with time zone", NotNull: true},
 	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
-	{Table: "commands", Column: "id", Type: "uuid", NotNull: true},
+	{Table: "commands", Column: "id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "command_type", Type: "text", NotNull: true},
 	{Table: "commands", Column: "payload", Type: "bytea", NotNull: true},
