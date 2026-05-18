@@ -1,0 +1,1 @@
+usage.go:8: time.Tick — must use injected clock.Clock.NewTicker instead

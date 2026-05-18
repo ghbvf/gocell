@@ -19,9 +19,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
@@ -52,8 +49,8 @@ func runTestTimeFixtureScan(t *testing.T, fixtureDir string) []string {
 }
 
 // TestTestTimeLiteralFixtures runs the TEST-TIME-LITERAL-01 scanner over the
-// test-specific fixture subpackages. Each fixture demonstrates one AST shape
-// the gate must (or must not) flag.
+// test-specific fixture subpackages and compares against diag.golden.
+// GREEN fixtures have an empty golden; RED fixtures capture the real output.
 func TestTestTimeLiteralFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -63,54 +60,23 @@ func TestTestTimeLiteralFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	fixturesBase := filepath.Join(root, "tools", "archtest", "testdata", "test_time_literal_fixtures")
 
-	cases := []struct {
-		pkg          string
-		wantViolLine []int // expected violation lines; nil = expect 0 violations
-	}{
-		{
-			pkg:          "table_field_violates",
-			wantViolLine: []int{18, 19}, // two struct-literal Timeout fields
-		},
-		{pkg: "eventually_named_const_passes"},
-		{pkg: "runtime_gosched_passes"},
+	dirs := []string{
+		// RED — two struct-literal Timeout fields.
+		"table_field_violates",
+		// GREEN — named const passes.
+		"eventually_named_const_passes",
+		// GREEN — runtime.Gosched passes.
+		"runtime_gosched_passes",
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.pkg, func(t *testing.T) {
-			fixtureDir := filepath.Join(fixturesBase, tc.pkg)
-			got := runTestTimeFixtureScan(t, fixtureDir)
-			if len(tc.wantViolLine) == 0 {
-				assert.Empty(t, got, "fixture %s: expected 0 violations, got: %v", tc.pkg, got)
-				return
-			}
-			require.Len(t, got, len(tc.wantViolLine), "fixture %s: violation count mismatch (got: %v)", tc.pkg, got)
-			for i, want := range tc.wantViolLine {
-				assert.Contains(t, got[i], formatLine(want),
-					"fixture %s: violation %d expected at line %d (got: %s)", tc.pkg, i, want, got[i])
-			}
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
+			t.Parallel()
+			fixtureDir := filepath.Join(fixturesBase, dir)
+			raw := runTestTimeFixtureScan(t, fixtureDir)
+			diags := parseDurationDiags(raw)
+			AssertGolden(t, filepath.Join(fixtureDir, "diag.golden"), diags)
 		})
 	}
-}
-
-// formatLine returns ":<n>:" — the substring used to anchor a violation
-// report at a specific source line, matching the "file.go:<n>: <expr>"
-// format produced by scanProdDurationAST.
-func formatLine(n int) string {
-	return ":" + itoa(n) + ":"
-}
-
-// itoa is a minimal int → string helper that avoids importing strconv just to
-// format a small line number. Mirrors the style of nearby helpers.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
 }

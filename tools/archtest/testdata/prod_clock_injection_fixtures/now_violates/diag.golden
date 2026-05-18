@@ -1,0 +1,1 @@
+usage.go:8: time.Now — must use injected clock.Clock.Now instead

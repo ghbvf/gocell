@@ -1,0 +1,2 @@
+usage.go:9: ErrAlpha = errors.New(...) — migrate to errcode.New(code, message)
+usage.go:10: ErrBeta = errors.New(...) — migrate to errcode.New(code, message)

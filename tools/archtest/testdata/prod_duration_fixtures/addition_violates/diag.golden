@@ -1,0 +1,2 @@
+usage.go:8: 30*time.Millisecond
+usage.go:8: 5*time.Second

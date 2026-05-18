@@ -1,0 +1,1 @@
+usage.go:7: time.AfterFunc — must use injected clock.Clock.AfterFunc instead

@@ -1,0 +1,1 @@
+usage.go:8: ErrAliased = errors.New(...) — migrate to errcode.New(code, message)
