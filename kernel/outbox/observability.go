@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -77,9 +78,11 @@ func (o ObservabilityMetadata) Validate() error {
 		return err
 	}
 	if o.TraceParent != "" && !validTraceParent(o.TraceParent) {
+		// Length is server-side diagnostic only — keep out of Details
+		// (4xx visible) to align with errcode three-layer redaction.
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: observability.traceParent is not a valid W3C traceparent",
-			errcode.WithDetails(slog.Int("length", len(o.TraceParent))))
+			errcode.WithInternal(fmt.Sprintf("traceParent length=%d", len(o.TraceParent))))
 	}
 	if err := validateObservabilitySafeID("requestId", o.RequestID); err != nil {
 		return err

@@ -85,11 +85,11 @@ func TestObservabilityMetadata_Validate(t *testing.T) {
 			TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", TraceParent: validTP,
 			RequestID: "req-1", CorrelationID: "corr-1",
 		}},
-		{name: "TraceID too long", o: ObservabilityMetadata{TraceID: tooLong}, wantError: "exceeds max"},
-		{name: "RequestID too long", o: ObservabilityMetadata{RequestID: tooLong}, wantError: "exceeds max"},
-		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "exceeds max"},
+		{name: "TraceID too long", o: ObservabilityMetadata{TraceID: tooLong}, wantError: "too long"},
+		{name: "RequestID too long", o: ObservabilityMetadata{RequestID: tooLong}, wantError: "too long"},
+		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "too long"},
 		{name: "TraceID unsafe chars", o: ObservabilityMetadata{TraceID: "trace; DROP TABLE"}, wantError: "unsafe characters"},
-		{name: "TraceParent malformed", o: ObservabilityMetadata{TraceParent: "not-a-valid-traceparent"}, wantError: "valid W3C traceparent"},
+		{name: "TraceParent malformed", o: ObservabilityMetadata{TraceParent: "not-a-valid-traceparent"}, wantError: "traceParent length"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -202,8 +202,28 @@ func TestUnmarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 			require.True(t, errors.As(err, &ce))
 			assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code,
 				"wire-boundary validation failures must surface as ErrEnvelopeSchema")
+			// Explicit assertion that rejection came from SafeID.UnmarshalJSON
+			// (not from a JSON parse error). Without this, future regressions
+			// that loosen IsSafeID could still pass by accident if JSON parsing
+			// happens to fail for unrelated reasons.
+			assert.Contains(t, err.Error(), "idutil: SafeID",
+				"rejection must originate from idutil.SafeID.UnmarshalJSON")
 		})
 	}
+}
+
+// TestUnmarshalEnvelope_RejectsNullID covers the JSON null path for an
+// ID-shaped field embedded in a struct. SafeID.UnmarshalJSON treats null
+// as zero-value (no error); the required-field check at envelope level
+// then rejects the empty ID.
+func TestUnmarshalEnvelope_RejectsNullID(t *testing.T) {
+	raw := []byte(`{"schemaVersion":"v1","id":null,"eventType":"foo.v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`)
+	_, err := UnmarshalEnvelope("foo.v1", raw)
+	require.Error(t, err)
+	var ce *errcode.Error
+	require.True(t, errors.As(err, &ce))
+	assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code)
+	assert.Contains(t, ce.Message, "missing required field: id")
 }
 
 func TestMarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
