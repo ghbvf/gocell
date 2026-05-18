@@ -1,7 +1,7 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
-**最后更新**：2026-05-17 v2（状态回灌：**Wave 6 +1 — PR-W6-1 CONTRACT-TEST-GATE ✅ PR #543**（038 Wave 6 PR-W6-1 一并 ship 3 子项：A SCHEMAREF-FAILFAST-01 zero-code close + B ENDPOINT-TEST-MAPPING-01 governance rule + C PATH-QUERY-EXECUTABLE-01 contracttest 4 API + 全覆盖 23 contract + archtest GATE；衍生 Hard 升级 backlog cap-14 `CONTRACT-ENDPOINT-TEST-MAPPING-HARD-CODEGEN-01`）。**Wave 4 4/5 ship**（新增 ADAPTER-CONNECT-BUDGET-01 ✅ **PR #541**），剩 R-01+G-08 batch ⏳；**Wave 5 1/3 ship — BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE ✅ PR #531**，剩 G-10 / SEALED-MARKER-DEFENSE 束；**Wave 6 2/? — S3-FAILURE-INJECTION-01 ✅ PR #538 + PR-W6-1 ✅ PR #543**。Wave 1 8/8 / Wave 2 PR-11 ✅ 不变。**前一版**：2026-05-17 v1 仅 Wave 6 1/?（S3 #538）；2026-05-16 Wave 4 3/5；Wave 5 0/3；无 Wave 6。）
+**最后更新**：2026-05-18 v3（状态回灌：**Wave 3 ship — PR-W3-1 TEST-JOURNEY-ROOT-HARNESS-01 ✅**（615-journey-useronboarding-harness）：(a) J-useronboarding lifecycle: experimental → active；(b) `tests/integration/journey_useronboarding_login_verify_test.go::TestJUseronboardingLoginVerify` (session.MemStore round-trip 真实持久化) 闭环 login-verify checkRef；(c) 其余 3 criteria mode: auto → manual，因 `cells/accesscore/internal/credentialinvalidate` 屏障 docker-free 无 load-bearing seam（激进自审拒绝 schema-only tautology）；(d) status-board J-useronboarding state: todo → doing；(e) 同 PR 登记 Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01`（非 silent carryover）。**前一版**：2026-05-17 v2（Wave 6 PR-W6-1 #543 + Wave 4 4/5 + Wave 5 1/3）；2026-05-16 v1 Wave 4 3/5；Wave 5 0/3；无 Wave 6。）
 **关系**：
 - [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S3+S5/S3F/S4.0/S4a/S4b 已 ship；S4c 串行推进）。本计划不重复 accesscore 路线
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
@@ -186,8 +186,8 @@ Wave 2（依赖 Wave 1，2 PR） — 1/2 ship：
   PR-5 GOV-NEW-RULES (GOVERNANCE-AUTH-PUBLIC + V-A11)
        ↑ 依赖 PR-6 ✅；**前置已达成，可立即排期**（Wave 2 唯一遗留）
 
-Wave 3（依赖 Wave 1）：
-  TEST-JOURNEY-ROOT-HARNESS-01      ← 依赖 PR-4 ✅ #520 → 前置已达成，可起（harness 本体未启动）
+Wave 3（依赖 Wave 1） — 1/1 ship：
+  TEST-JOURNEY-ROOT-HARNESS-01      ✅ PR-W3-1 (615-journey-useronboarding-harness, 2026-05-18) — J-useronboarding lifecycle active + 1 auto load-bearing test (login-verify, session.MemStore round-trip) + 3 manual carve-out (cells/accesscore/internal/credentialinvalidate 屏障) + Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01` 同 PR 登记
 
 Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突） — 4/5 ship：
   R-01 + G-08 同 batch（分 PR review）              ⏳ 未起
@@ -248,15 +248,15 @@ Wave 6（cap-x-cross 触发型小 PR 簇 / 发布前 contract 测试门禁簇）
 | PR-9 REPO-READYZ | 4h | 2h | ✅ PR #506 | typed funnel + conformance harness + 3-cell unification；Cx2→Cx3 |
 | PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8 ✅） | 4h | 2h | ✅ PR #504 | periodic re-discovery worker + refresh metric (A-02)；PR-8 unblock |
 | PR-5 GOV-NEW-RULES | 4h | 2h | ⏳ 可起（040 阶段 1 ✅ PR #492 解锁）| PR-6 ✅；保持合并；V-A11 archtest 走 `archtest.Run`/`RunTyped`（Wave 2 唯一遗留）|
-| Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 8h | 4h | ⏳ 可起（PR-4 ✅ #520 解锁）| integration harness |
+| Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 4h | 2h | ✅ PR-W3-1 | 615-journey-useronboarding-harness, 2026-05-18 — 1 auto load-bearing test + 3 manual carve-out + Hard 升级 backlog 同 PR 登记；激进自审 v2 拒绝 v1 schema-only tautology |
 | Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | 🟡 4/5 | ✅ **ADAPTER-ERR-CLASS PR #517** / **C-02 PR #518**（035 PR-CFG-CACHE-LIFECYCLE）/ **STARTUP-ROLLBACK PR #499** / **ADAPTER-CONN-BUDGET PR #541**；剩 1 项 ⏳：R-01+G-08 batch 10h+5h |
 | Wave 5 架构重构 | 独立排期 | — | 🟡 1/3 | ✅ BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE PR #531；剩 G-10 / SEALED 束 |
 | Wave 6 cap-x-cross 触发型 + 发布前 contract 测试门禁簇 | 独立排期 | — | 🟡 2/? | ✅ S3-FAILURE-INJECTION-01 PR #538；✅ PR-W6-1 CONTRACT-TEST-GATE PR #543（A/B/C 三子项一并 ship + Hard 升级 backlog 同 PR 登记）|
 
 **累计**：
-- ✅ shipped (9 Wave1 PR + Wave 2 PR-11 + Wave 4 4 项 + Wave 5 1 项 + Wave 6 1 项): ~87h dev / ~42h review（PR-1/2/3/4/6/7/8/9/11 + Wave 4: ADAPTER-ERR-CLASS #517 / C-02 #518 / STARTUP-ROLLBACK #499 / ADAPTER-CONN-BUDGET #541 + Wave 5: #531 + Wave 6: #538）
-- ⏳ 待启动 (Wave 2 剩余 + Wave 3 + Wave 4 剩余): ~22h dev / ~11h review（PR-5 + Wave 3 TEST-JOURNEY-ROOT-HARNESS + Wave 4: R-01+G-08）
-- 进度：Wave 1 8/8 ship（100%）；Wave 2 1/2 ship；Wave 4 4/5 ship；Wave 5 1/3 ship；038 整体 dev 进度 ~82%（按原计划 102h 总分母）
+- ✅ shipped (9 Wave1 PR + Wave 2 PR-11 + Wave 3 PR-W3-1 + Wave 4 4 项 + Wave 5 1 项 + Wave 6 2 项): ~91h dev / ~44h review（PR-1/2/3/4/6/7/8/9/11 + Wave 3: PR-W3-1 + Wave 4: ADAPTER-ERR-CLASS #517 / C-02 #518 / STARTUP-ROLLBACK #499 / ADAPTER-CONN-BUDGET #541 + Wave 5: #531 + Wave 6: #538 / #543）
+- ⏳ 待启动 (Wave 2 剩余 + Wave 4 剩余): ~14h dev / ~7h review（PR-5 + Wave 4: R-01+G-08）
+- 进度：Wave 1 8/8 ship（100%）；Wave 2 1/2 ship；Wave 3 1/1 ship（100%）；Wave 4 4/5 ship；Wave 5 1/3 ship；Wave 6 2/?；038 整体 dev 进度 ~87%（按原计划 102h 总分母）
 
 ---
 
@@ -267,7 +267,7 @@ Wave 6（cap-x-cross 触发型小 PR 簇 / 发布前 contract 测试门禁簇）
 3. **R-01 / G-08 不合并**，分 PR review（Wave 4 小 PR）
 4. **架构重构 Wave 5 独立排期**，不进本计划主线
 5. **METRICS-CTX-FUNNEL-01 不纳入本计划**：Cx4 跨 5+ 包接口重构，登记 cap-13 走触发型
-6. **下一波建议（2026-05-16 回灌后）**：Wave 1 8/8 + Wave 2 PR-11 + Wave 4 3/5（#517/#518/#499）已 ship；剩 **PR-5 GOV-NEW-RULES**（Wave 2 唯一遗留，前置 PR-6 ✅ + 040 阶段 1 ✅ 全解锁，随时可起）+ **Wave 3 TEST-JOURNEY-ROOT-HARNESS-01**（PR-4 ✅ #520 解锁）+ **Wave 4 剩 2 项**（R-01+G-08 batch / ADAPTER-CONNECT-BUDGET-01，触发型小 PR）
+6. **下一波建议（2026-05-18 回灌后）**：Wave 1 8/8 + Wave 2 PR-11 + Wave 3 PR-W3-1 + Wave 4 4/5 + Wave 5 1/3 + Wave 6 2/? 已 ship；剩 **PR-5 GOV-NEW-RULES**（Wave 2 唯一遗留，前置 PR-6 ✅ + 040 阶段 1 ✅ 全解锁，随时可起）+ **Wave 4 剩 1 项**（R-01+G-08 batch，触发型小 PR）+ Wave 5/6 架构重构与触发型簇独立排期
 7. **plan 040 与 038 并行**：阶段 2/3 重写 `tools/archtest/*_test.go` 自身，与 038 业务 PR 文件域互斥
 
 ---
