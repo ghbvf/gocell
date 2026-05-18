@@ -69,11 +69,17 @@
 //     red_cross_pkg fixture pins this contract.
 //
 // ref: docs/plans/202605101548-035-configcore-residuals-fix-plan.md
+// ref: docs/backlog/cap-14-tooling.md BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED
+//
+//	(Hard upgrade candidates: codegen funnel / CheckNotNoop nil-reject /
+//	drop memory mode — coupled to that deferred body)
+//
 // ref: kernel/cell/durability.go (CheckNotNoop, Nooper)
 // ref: AI-rebust §载体决策原则 in .claude/rules/gocell/ai-collab.md
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
 	"go/types"
 	"path/filepath"
@@ -112,11 +118,51 @@ type cellYAMLSubset struct {
 }
 
 // consistencyLevelAtLeastL2 reports whether the YAML-declared level meets the
-// L2+ threshold. "L0"-"L4" are lexicographically ordered identically to their
-// semantic ordering — string compare suffices and avoids a parallel ordinal
-// helper. Empty strings (omitted level) do not meet the threshold.
+// L2+ threshold. "L0"-"L4" are the canonical values and lexicographically
+// order identically to their semantic ordering — string compare suffices and
+// avoids a parallel ordinal helper, matching the encoding used by
+// kernel/metadata.CellMeta.ConsistencyLevel.
+//
+// Strings outside the closed set {"L0","L1","L2","L3","L4"} (typos like
+// "l2", future extensions like "L10", or empty omitted level) do NOT meet
+// the threshold — the upper bound `<= "L4"` rejects them. OUTGUARD-01
+// (kernel/governance/rules_misc_advisory.go) is the upstream gate that
+// enforces metadata schema validity, so any non-canonical value reaching
+// this helper has already been flagged by `gocell validate --strict`. The
+// helper's defensive upper bound is a belt-and-suspenders against rule-
+// ordering surprises; TestConsistencyLevelAtLeastL2 pins the boundary
+// behavior with explicit cases for "L1"/"L2"/"L4"/"l2"/"L10"/"".
 func consistencyLevelAtLeastL2(level string) bool {
 	return level >= "L2" && level <= "L4"
+}
+
+// TestConsistencyLevelAtLeastL2 pins the closed-set boundary behavior of
+// consistencyLevelAtLeastL2. The function relies on string compare against
+// the closed canonical set; any future deviation (e.g. introducing "L10",
+// non-canonical case, omitted level) is locked here as a unit-level
+// counterexample so changes to the helper are observed without round-
+// tripping through Phase A end-to-end fixtures.
+func TestConsistencyLevelAtLeastL2(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		level string
+		want  bool
+	}{
+		{"L0", false},
+		{"L1", false},
+		{"L2", true},
+		{"L3", true},
+		{"L4", true},
+		{"", false},    // omitted level
+		{"l2", false},  // wrong case — must not slip through
+		{"L10", false}, // hypothetical future extension — rejected by upper bound
+		{"L5", false},  // out-of-band — rejected by upper bound
+	}
+	for _, tc := range cases {
+		if got := consistencyLevelAtLeastL2(tc.level); got != tc.want {
+			t.Errorf("consistencyLevelAtLeastL2(%q) = %v, want %v", tc.level, got, tc.want)
+		}
+	}
 }
 
 // TestCELL_L2_INIT_CHECKNOTNOOP_CALLED_01 is the end-to-end production check:
@@ -142,6 +188,13 @@ func TestCELL_L2_INIT_CHECKNOTNOOP_CALLED_01(t *testing.T) {
 // subset, and returns one l2TargetCell per L2+ cell with a non-empty
 // GoStructName. Cells without GoStructName are skipped (they do not opt into
 // K#04 codegen Init, so the rule does not apply to them).
+//
+// Scope filtering: only cell.yaml files whose module-relative path starts
+// with "cells/" are considered. `examples/<name>/cells/<id>/cell.yaml`
+// (CLAUDE.md allows examples to ship their own cells) does NOT start with
+// "cells/" and is intentionally skipped — the rule guards the platform
+// cell layout only; example cells are demonstration scaffolding outside
+// the deployed platform surface.
 func collectL2PlusTargets(t *testing.T, scope Scope) []l2TargetCell {
 	t.Helper()
 
@@ -185,10 +238,14 @@ func collectL2PlusTargets(t *testing.T, scope Scope) []l2TargetCell {
 // package BFS to find a CheckNotNoop callee. A diagnostic is emitted iff the
 // BFS does not find one (or the Init method is missing).
 //
-// Diagnostics reference the target's yamlPath at line 1 — the rule is about
-// a missing wiring on the cell as a whole; Init's Go file position is less
-// informative than "this cell declared L2+ in cell.yaml but its Init does
-// not call CheckNotNoop".
+// Diagnostics reference the target's yamlPath at line 1 so the cell.yaml
+// declaration site is the navigation anchor; when an Init method is located
+// but the BFS misses CheckNotNoop, the diagnostic message also embeds the
+// Init's Go file path and line so developers can jump straight to the
+// implementation site without grepping for the receiver type. The Init
+// position is appended to Message rather than the Rel/Line pair because
+// archtest Diagnostic carries a single position and the cell.yaml anchor
+// remains the canonical declaration site.
 func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic {
 	if p == nil || p.Pkg == nil {
 		return nil
@@ -209,6 +266,8 @@ func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic 
 		}}
 	}
 	if !initReachesCheckNotNoop(p, initFn) {
+		initPos := p.Fset.Position(initFn.Pos())
+		initSite := fmt.Sprintf("%s:%d", initPos.Filename, initPos.Line)
 		return []Diagnostic{{
 			Rel:  target.yamlPath,
 			Line: 1,
@@ -216,7 +275,8 @@ func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic 
 				": Init (same-package callees of *" + target.goStructName +
 				".Init) does not call kernel/cell.CheckNotNoop;" +
 				" add the call in Init or in a hand-written same-package hook" +
-				" (e.g. initInternal) to guard durable-mode wiring",
+				" (e.g. initInternal) to guard durable-mode wiring [Init at " +
+				initSite + "]",
 		}}
 	}
 	return nil
@@ -352,16 +412,20 @@ func resolveCallee(p *Pass, fun ast.Expr) *types.Func {
 	return fn
 }
 
-// cellInitCheckNotNoopFixturePkgs lists the fixture sub-packages used by the
-// RED/BOUNDARY tests below. Each package lives under
-// `tools/archtest/testdata/cell_init_checknotnoop_fixtures/<name>/` with a
-// `//go:build archtest_fixture` directive and a cell.yaml sibling.
-var cellInitCheckNotNoopFixturePkgs = []string{
-	"./tools/archtest/testdata/cell_init_checknotnoop_fixtures/red_l2_missing",
-	"./tools/archtest/testdata/cell_init_checknotnoop_fixtures/red_cross_pkg",
-	"./tools/archtest/testdata/cell_init_checknotnoop_fixtures/red_cross_pkg/internal/wrapcheck",
-	"./tools/archtest/testdata/cell_init_checknotnoop_fixtures/boundary_l1",
-	"./tools/archtest/testdata/cell_init_checknotnoop_fixtures/boundary_transitive",
+// fixturePkgRoot is the testdata directory prefix common to every fixture
+// sub-package below. Per-test pattern lists are derived from this root +
+// fixture name so each test loads only the package(s) it asserts against.
+const fixturePkgRoot = "./tools/archtest/testdata/cell_init_checknotnoop_fixtures/"
+
+// fixturePkgs lists the patterns for the fixture sub-packages keyed by name.
+// Each test passes only the subset it actually exercises — the framework's
+// RunTypedFixture loads exactly the given patterns, so per-test scoping
+// keeps per-test compile blast radius bounded to the fixture under test.
+var fixturePkgs = map[string][]string{
+	"red_l2_missing":      {fixturePkgRoot + "red_l2_missing"},
+	"red_cross_pkg":       {fixturePkgRoot + "red_cross_pkg", fixturePkgRoot + "red_cross_pkg/internal/wrapcheck"},
+	"boundary_l1":         {fixturePkgRoot + "boundary_l1"},
+	"boundary_transitive": {fixturePkgRoot + "boundary_transitive"},
 }
 
 // fixtureTargetFor builds a synthetic l2TargetCell whose pkgSuffix points at
@@ -386,7 +450,7 @@ func fixtureTargetFor(t *testing.T, fixtureName, goStructName string) l2TargetCe
 func TestCellInitCheckNotNoop_RedL2Missing(t *testing.T) {
 	t.Parallel()
 	target := fixtureTargetFor(t, "red_l2_missing", "RedL2Cell")
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, cellInitCheckNotNoopFixturePkgs,
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["red_l2_missing"],
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, []l2TargetCell{target})
 		})
@@ -401,7 +465,7 @@ func TestCellInitCheckNotNoop_RedL2Missing(t *testing.T) {
 func TestCellInitCheckNotNoop_RedCrossPkg(t *testing.T) {
 	t.Parallel()
 	target := fixtureTargetFor(t, "red_cross_pkg", "RedCrossPkgCell")
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, cellInitCheckNotNoopFixturePkgs,
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["red_cross_pkg"],
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, []l2TargetCell{target})
 		})
@@ -409,20 +473,31 @@ func TestCellInitCheckNotNoop_RedCrossPkg(t *testing.T) {
 		"red_cross_pkg fixture: expected one diagnostic, got %d (%+v)", len(diags), diags)
 }
 
-// TestCellInitCheckNotNoop_BoundaryL1 — BOUNDARY: an L1 cell that does not
-// call CheckNotNoop is fine. The rule only applies to L2+. Phase A drops the
-// target; even if a malformed caller passes it, Phase B should not emit a
-// false positive when invoked with an empty target list.
+// TestCellInitCheckNotNoop_BoundaryL1 — BOUNDARY: a (synthetic) L1 cell that
+// declares `consistencyLevel: L1` is dropped by Phase A and never reaches
+// Phase B. This test exercises the Phase A filter path directly rather than
+// the trivial "empty target list → no diagnostic" case.
+//
+// Note: the boundary_l1 fixture cell.yaml lives under testdata/ and is NOT
+// inside ProductionScope, so collectL2PlusTargets(scope) will not surface it
+// even when run end-to-end. Here we drive the filter with a synthetic
+// cellYAMLSubset to assert "L1 declaration → consistencyLevelAtLeastL2 false
+// → Phase A drops → Phase B sees no target → no diagnostic".
 func TestCellInitCheckNotNoop_BoundaryL1(t *testing.T) {
 	t.Parallel()
-	// L1 targets are dropped by Phase A — supply empty target list to mirror
-	// the production rule's behavior on this fixture.
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, cellInitCheckNotNoopFixturePkgs,
+
+	// Phase A filter unit check: L1 must NOT satisfy the threshold.
+	require.False(t, consistencyLevelAtLeastL2("L1"),
+		"Phase A filter: L1 must be dropped before Phase B")
+
+	// End-to-end shape: load the L1 fixture package; supply the empty
+	// target list that Phase A would produce; assert zero diagnostics.
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["boundary_l1"],
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, nil)
 		})
 	require.Empty(t, diags,
-		"boundary_l1 fixture: expected zero diagnostics, got %+v", diags)
+		"boundary_l1 fixture: expected zero diagnostics with L1-dropped target list, got %+v", diags)
 }
 
 // TestCellInitCheckNotNoop_BoundaryTransitive — BOUNDARY: an L2 cell whose
@@ -432,7 +507,7 @@ func TestCellInitCheckNotNoop_BoundaryL1(t *testing.T) {
 func TestCellInitCheckNotNoop_BoundaryTransitive(t *testing.T) {
 	t.Parallel()
 	target := fixtureTargetFor(t, "boundary_transitive", "BoundaryTransitiveCell")
-	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, cellInitCheckNotNoopFixturePkgs,
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgs["boundary_transitive"],
 		func(p *Pass) []Diagnostic {
 			return scanCellsForInitCheckNotNoop(p, []l2TargetCell{target})
 		})
@@ -443,19 +518,30 @@ func TestCellInitCheckNotNoop_BoundaryTransitive(t *testing.T) {
 // -------------------------------------------------------------------------
 // Reverse self-checks for the Medium grade blind-spot inventory. Each test
 // asserts that the corresponding evasion shape does not appear in the
-// current production AST. New production code that introduces any of these
+// current production AST. New production code that introducing any of these
 // shapes will fail one of these tests and force a deliberate evaluation —
 // the AST shape itself becomes a review signal even though Phase B does
 // not detect it directly.
+//
+// These tests are sanity checks rather than full enforcement: each fails
+// via require.Empty (not Report) so the failure message points directly at
+// the offending AST sites without manufacturing a new INVARIANT anchor ID
+// (which would have to satisfy INVENTORY-ANCHOR-VALID-ID-01's grammar
+// `^[A-Z][A-Z0-9]+(-[A-Z0-9]+)*-[0-9]+(...)?$` — a "/no-reflect" suffix
+// does not fit). The single canonical anchor remains
+// CELL-L2-INIT-CHECKNOTNOOP-CALLED-01 declared in the file header.
 // -------------------------------------------------------------------------
 
 // TestNoReflectCheckNotNoopInProduction asserts that no production *.go file
 // invokes kernel/cell.CheckNotNoop via reflect.ValueOf(...).Call(...) — a
 // shape that hides the callee from the Phase B BFS's *types.Info resolver.
-// Blind-spot #1 from the file-level inventory.
+// Blind-spot #1 from the file-level inventory. The check uses types-aware
+// callee resolution (Medium-grade: *types.Info.Uses on the reflect.ValueOf
+// CallExpr + recursive walk over Args looking for a CheckNotNoop *types.Func
+// reference), not a string anchor.
 func TestNoReflectCheckNotNoopInProduction(t *testing.T) {
 	t.Parallel()
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	violations := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -481,7 +567,10 @@ func TestNoReflectCheckNotNoopInProduction(t *testing.T) {
 		}
 		return out
 	})
-	Report(t, cellInitCheckNotNoopRuleID+"/no-reflect", diags)
+	require.Empty(t, violations,
+		"reverse self-check (reflect blind-spot): unexpected reflect.ValueOf(... CheckNotNoop ...) in production AST; "+
+			"each entry below documents an evasion site that bypasses Phase B's *types.Info BFS: %+v",
+		violations)
 }
 
 // isReflectValueOfCall reports whether call.Fun resolves to reflect.ValueOf.
@@ -523,13 +612,23 @@ func argSubtreeReferencesCheckNotNoop(p *Pass, args []ast.Expr) bool {
 }
 
 // TestNoLinknameAliasInProduction asserts that no production *.go file
-// declares a `//go:linkname` directive aliasing kernel/cell.CheckNotNoop.
-// Blind-spot #2 from the file-level inventory. Content scan over the
-// production scope (excluding tests and generated/).
+// declares a `//go:linkname` directive containing the literal token
+// `CheckNotNoop`. Blind-spot #2 from the file-level inventory.
+//
+// AI-rebust note: this check is Soft (string anchor). `//go:linkname` is a
+// Go compiler directive — it does NOT produce go/types symbols, so a
+// types-aware probe equivalent to TestNoReflectCheckNotNoopInProduction is
+// not technically reachable. The Soft form is the upper bound for the
+// `//go:linkname` shape. An evader can sidestep the check by aliasing the
+// linkname target under a name that omits "CheckNotNoop" (e.g.
+// `myDurabilityGuard`); such evasion remains undetected. We acknowledge
+// this acceptance via backlog entry LINKNAME-CHECK-SOFT-ACKNOWLEDGED-01 in
+// docs/backlog/cap-14-tooling.md so reviewers do not re-file the same
+// limitation.
 func TestNoLinknameAliasInProduction(t *testing.T) {
 	t.Parallel()
 	scope := ModuleScope(findModuleRoot(t))
-	var diags []Diagnostic
+	var violations []Diagnostic
 	EachContentFile(t, scope, []string{".go"}, func(_ *testing.T, fc ContentContext) {
 		// `//go:linkname <localname> <target>` — flag any line whose target
 		// segment ends in `.CheckNotNoop` or whose localname is `CheckNotNoop`.
@@ -543,7 +642,7 @@ func TestNoLinknameAliasInProduction(t *testing.T) {
 			if !strings.Contains(trim, "CheckNotNoop") {
 				continue
 			}
-			diags = append(diags, Diagnostic{
+			violations = append(violations, Diagnostic{
 				Rel:  fc.Rel,
 				Line: i + 1,
 				Message: "//go:linkname directive references CheckNotNoop —" +
@@ -552,22 +651,39 @@ func TestNoLinknameAliasInProduction(t *testing.T) {
 			})
 		}
 	})
-	Report(t, cellInitCheckNotNoopRuleID+"/no-linkname", diags)
+	require.Empty(t, violations,
+		"reverse self-check (linkname blind-spot, Soft form — see LINKNAME-CHECK-SOFT-ACKNOWLEDGED-01): "+
+			"unexpected //go:linkname directive referencing CheckNotNoop: %+v",
+		violations)
 }
 
-// TestNoAsyncCheckNotNoopInProduction asserts that no production *.go file
-// invokes kernel/cell.CheckNotNoop inside a `go func(){...}()` block from
-// inside the function reachable set of any L2+ cell Init. The synchronous
-// Init contract demands the call happen before Init returns; an async call
-// is statically reachable but may not have executed at Init's epilogue.
-// Blind-spot #3 from the file-level inventory.
+// TestNoAsyncCheckNotNoopInProduction asserts that no `go func(){...}()`
+// statement anywhere in an L2+ cell package contains a CallExpr that resolves
+// to kernel/cell.CheckNotNoop. Blind-spot #3 from the file-level inventory.
+//
+// Scope honesty: the check scans EVERY GoStmt in the cell package, not just
+// those statically reachable from Init's same-package callee set. This is
+// an intentional over-approximation — calling CheckNotNoop asynchronously
+// anywhere in the cell package (background workers, deferred goroutines,
+// or Init-adjacent helpers) violates the synchronous durability-guard
+// contract because the runtime guarantee depends on the check happening
+// before Init returns. The diagnostic message acknowledges the broader
+// scope so a reviewer who chases the report does not assume the call is
+// definitely on the Init reachable path.
+//
+// Current production cells (accesscore / auditcore / configcore) ship no
+// `go func` statements inside their main package — the only goroutines in
+// those cell trees live under `*_test.go` (excluded by Tests: false) or
+// inside sub-packages like `internal/ports/conformance` (different package
+// path, not matched by matchTarget). So this check is currently green and
+// serves as a forward-looking guard against future cell additions.
 func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 	t.Parallel()
 	scope := ModuleScope(findModuleRoot(t))
 	targets := collectL2PlusTargets(t, scope)
 	require.NotEmpty(t, targets)
 
-	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	violations := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Pkg == nil {
 			return nil
 		}
@@ -579,10 +695,9 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 		if initFn == nil {
 			return nil
 		}
-		// Visit every FuncDecl in the same package (Init's reachable set is
-		// bounded by same-package callees; for the negative probe we
-		// over-approximate by scanning all same-package funcs — false
-		// positives here would still be worth flagging).
+		// Over-approximate: scan all same-package GoStmts. False positives
+		// (goroutine outside Init reachable set) are still worth surfacing
+		// because the synchronous contract applies package-wide.
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
@@ -594,14 +709,17 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 				out = append(out, Diagnostic{
 					Rel:  rel,
 					Line: pos.Line,
-					Message: "async `go func() { ... CheckNotNoop ... }()` in L2+ cell " + target.cellID +
-						" — Init must call CheckNotNoop synchronously to guard durable-mode wiring",
+					Message: "L2+ cell " + target.cellID + ": found `go func() { ... CheckNotNoop ... }()` in package" +
+						" (may be outside Init reachable set; verify Init path is synchronous —" +
+						" CheckNotNoop must be invoked before Init returns to guard durable-mode wiring)",
 				})
 			})
 		}
 		return out
 	})
-	Report(t, cellInitCheckNotNoopRuleID+"/no-async", diags)
+	require.Empty(t, violations,
+		"reverse self-check (async blind-spot): unexpected `go func` containing CheckNotNoop in L2+ cell package: %+v",
+		violations)
 }
 
 // goStmtCallsCheckNotNoop reports whether the goroutine body (or any

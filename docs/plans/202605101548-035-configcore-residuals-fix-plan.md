@@ -40,7 +40,7 @@
 | **PR-CFG-CACHE-LIFECYCLE** | configsubscribe 缓存生命周期统一治理 | #1, #2, #3 | Cx2 | 1-1.5d | 无 | ✅ shipped **PR #518**（含深度 review F1–F3：TTL clamp-up + GC 状态机）|
 | **PR-CFG-TEST-RESIDUALS** | configcore 测试补丁批 | #7, #9, #10 | Cx1 | 0.5d | ✅ 已完成（#7/#9/#10 代码端态核对落实，develop@67f5ce917）|
 | ~~**PR-CFG-PLACEHOLDER-CLEAN**~~ → **PR-CFG-CELL-ROUTES-CLEAN** | configcore + accesscore cell_routes.go 占位清理 | ~~#4,~~ #6 | Cx1 | 0.1d | 无（已合）|
-| **PR-CFG-L2-DIVERGENCE** | ConfigCore L2 与 memory 行为分歧治理 | #5 | Cx1（决策）+ Cx2（实施） | 1d 设计 + 4h 实施 | 🟢 archtest 防御已落 `CELL-L2-INIT-CHECKNOTNOOP-CALLED-01`（PR 014）+ 本体仍 deferred 至 backlog `BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED`（候选 (a) 已 RETRACTED #556→#559；(b)/(c) 待决，与 deferred 破坏面耦合）|
+| **PR-CFG-L2-DIVERGENCE** | ConfigCore L2 与 memory 行为分歧治理 | #5 | Cx1（决策）+ Cx2（实施） | 1d 设计 + 4h 实施 | 🟠 archtest 防御已落 `CELL-L2-INIT-CHECKNOTNOOP-CALLED-01`（PR 014）+ 本体 DEFERRED 至 backlog `BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED`（候选 (a) 已 RETRACTED #556→#559；(b)/(c) 与 deferred 破坏面耦合）—— 标记 🟠 而非 🟢：archtest 仅防御未来回归，finding 本体（memory 模式 nil-writer 分歧）未闭环 |
 | **PR-CFG-G1-FU6-RECYCLE** | ~~CONTRACT-PATH-ID-MAPPING-ARCHTEST~~ → **subsumed by FMT-21**; pin regression test + alias docstring | #8 | Cx1 | 0.5h | subsumed-by: FMT-21 (`validateFMTContractDirIDMatch01`) |
 | **PR-CFG-SLICE-DECOMPOSE** | auditappend / configread 多 verb 拆分 | #11 | Cx3 | 1.5-2d | ✅ **CLOSED**（reframed）— auditappend 4 拆 ✅（设计偏离 accepted：无 internal/dispatch.go）；configread 半部分 ✅ by **PR #529 (FMT-33)**——L3 重构为「HTTP 信任边界隔离」(`configread` 公有 + 新 `configreadinternal`；共享逻辑迁 `internal/configreader`)；同 PR 加 governance rule `SLICE-HTTP-VISIBILITY-SEGREGATION-01` repo-wide 锁防回归 |
 
