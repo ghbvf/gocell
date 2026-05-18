@@ -305,6 +305,15 @@ func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry)
 // goroutine sees rowsAffected=1 and commits, the other gets rowsAffected=0,
 // triggers `resolveUpdateConflict`, and returns ErrVersionConflict (409).
 //
+// AI-rebust classification: **Medium runtime integration regression guard**
+// (testcontainers + concurrent goroutines + CI assertion — runtime invariant
+// check, not "violation is unexpressible"). Removing the `AND version=$N`
+// predicate is a normal Go code change that compiles cleanly; the CI red is
+// what catches the regression. A Hard upgrade path (query funnel /
+// type-level CAS marker / codegen-derived predicate) is registered in
+// `docs/backlog/cap-14-tooling.md` `CONFIG-ROLLBACK-CAS-HARD-UPGRADE-01`
+// for the trigger conditions described there.
+//
 // Mirrors the audit-ledger PG concurrency proof
 // `TestAuditLedgerStore_AdvisoryLockSerializesAppend`.
 func TestConcurrentRollback_PG_ExactlyOneWins(t *testing.T) {
