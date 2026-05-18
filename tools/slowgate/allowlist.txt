@@ -151,3 +151,16 @@ github.com/ghbvf/gocell/tools/archtest	TestCellRepoReadyzProbe
 # type-aware scans (TestUserRepoConformanceEnrollment 22.3s,
 # TestCellRepoReadyzProbe 20.43s). R2-P2 PR-b.
 github.com/ghbvf/gocell/tools/archtest	TestTypesutilImplementsFunnel01
+
+# type-graph-load: CELLGEN-ERRCODE-FUNNEL-01 NoBuildTagFiles scan — fans
+# out over KnownNonDefaultTags() (multiple RunTyped invocations, one per
+# tag group; same pattern as TestPanicRegistered allowlisted above). Each
+# RunTyped triggers an independent packages.Load over
+# ./tools/codegen/cellgen/... with type info; cumulative cost on
+# ubuntu-latest 2-CPU runners exceeds 20s. Introduced by develop@44b8803f5
+# (PR #574, CELLGEN-ERRCODE-FUNNEL-01 Hard upgrade); surfaced on PR #576
+# verify-archtest shard 12 (24.53s > 20s) after PR #576's new fixture
+# packages shifted the 16-shard modulo distribution off the cached
+# SharedResolver — same modulo-shift SLOW-flake class as the entries
+# above (cumulative trigger evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestCellgenErrcodeFunnelNoBuildTagFiles
