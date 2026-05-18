@@ -198,6 +198,10 @@ func (s *Store) RoleRepository() *RoleRepository {
 // Using any other TxRunner (including cell.DemoTxRunner or a fake that injects
 // the sentinel without holding store.mu) does not break safety — repo methods
 // fall back to per-call locking — but it forfeits cross-method serialization.
+// As a visible consequence, ChangePassword may then return
+// ErrAuthOldPasswordIncorrect (if a concurrent write replaces the hash between
+// the read and the bcrypt comparison) in addition to ErrVersionConflict; the
+// Store-paired TxRunner's FOR-UPDATE-until-commit serialization prevents this.
 func (s *Store) TxRunner() persistence.TxRunner {
 	return memTxRunner{s: s}
 }
@@ -213,13 +217,13 @@ func (s *Store) TxRunner() persistence.TxRunner {
 // cross-method atomicity use Store.TxRunner().
 //
 // Token semantics: the injected token has store==nil and holdsLock==false.
-// txHoldsLock checks tok.holdsLock first, so the nil store is never
-// dereferenced (short-circuit: false && ... = false). Callers must not read
-// token.store for any purpose — it is nil by design in this path. The use
-// case is not limited to ForUpdate variants: any code that must enter the
-// in-tx branch (e.g. a fake TxRunner injecting transaction context without
-// holding the lock) can use this. Single-goroutine helpers are safe; for
-// multi-goroutine scenarios requiring cross-method atomicity, use
+// txHoldsLock's tok.store == s is a pointer comparison, which is safe for a
+// nil tok.store in Go (no field access); the holdsLock==false short-circuit
+// additionally means that comparison is never reached. Either way, there is no
+// nil dereference. The use case is not limited to ForUpdate variants: any code
+// that must enter the in-tx branch (e.g. a fake TxRunner injecting transaction
+// context without holding the lock) can use this. Single-goroutine helpers are
+// safe; for multi-goroutine scenarios requiring cross-method atomicity, use
 // Store.TxRunner() instead.
 func WithTxContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, memTxKey{}, &memTxToken{holdsLock: false})

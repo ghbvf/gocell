@@ -59,10 +59,13 @@ package archtest
 //     asserting the accessor FuncDecl is non-empty and contains at least one
 //     "holdsLock" SelectorExpr, preventing vacuous-pass when the function is
 //     renamed or its body is emptied. Rating: Medium (string-anchor, two-part
-//     match, companion-index guard).
+//     match, companion-index guard). Hard upgrade path: backlog
+//     MEM-TX-R2B-RECEIVER-HARD-UPGRADE (docs/backlog/cap-14-tooling.md).
 
 import (
+	"fmt"
 	"go/ast"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -211,16 +214,15 @@ func TestMemTxLockOwnership01(t *testing.T) {
 		return nil
 	})
 
-	if len(violations) > 0 {
-		t.Logf("%s: %d violation(s):", ruleMemTxLockOwnership01, len(violations))
-		for _, v := range violations {
-			t.Logf("  %s:%d  %s", v.file, v.line, v.detail)
-		}
+	var violationLines []string
+	for _, v := range violations {
+		violationLines = append(violationLines, fmt.Sprintf("  %s:%d  %s", v.file, v.line, v.detail))
 	}
-	assert.Empty(t, violations,
-		"%s: memTxToken (holdsLock truth token) may only be constructed in "+
+	assert.Empty(t, violationLines,
+		"%s: %d violation(s) — memTxToken (holdsLock truth token) may only be constructed in "+
 			"(memTxRunner).RunInTx / WithTxContext and never post-mutated; see ADR "+
-			"202605171846-adr-mem-tx-lock-ownership.md", ruleMemTxLockOwnership01)
+			"202605171846-adr-mem-tx-lock-ownership.md:\n%s",
+		ruleMemTxLockOwnership01, len(violationLines), strings.Join(violationLines, "\n"))
 }
 
 // TestMemTxLockOwnership01_FindsExactlyTheTwoSites is the companion-index
@@ -264,11 +266,16 @@ func TestMemTxLockOwnership01_FindsExactlyTheTwoSites(t *testing.T) {
 // accessor is renamed or its body emptied, this fails loudly instead of R2b
 // passing vacuously (no accessor found → everything outside the empty set
 // passes trivially).
+//
+// Medium rating transition note: receiver identification uses string anchors
+// (receiverTypeName == "Store"), per ai-collab.md §"Funnel 双向锁评级" this
+// is an allowed Medium upstream over transition. Hard upgrade is tracked in
+// backlog MEM-TX-R2B-RECEIVER-HARD-UPGRADE (docs/backlog/cap-14-tooling.md).
 func TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{memPkgRel})
 
-	var accessorFound bool
+	var accessorCount int
 	var holdsLockSelCount int
 
 	Run(t, scope, func(p *Pass) []Diagnostic {
@@ -280,7 +287,7 @@ func TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor(t *testing.T) {
 				if fd.Recv == nil || receiverTypeName(fd) != "Store" {
 					return
 				}
-				accessorFound = true
+				accessorCount++
 				EachInSubtree[ast.SelectorExpr](fd, func(sel *ast.SelectorExpr) {
 					if sel.Sel.Name == "holdsLock" {
 						holdsLockSelCount++
@@ -291,10 +298,11 @@ func TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor(t *testing.T) {
 		return nil
 	})
 
-	require.Truef(t, accessorFound,
-		"%s R2b companion-index: expected a FuncDecl named txHoldsLock with "+
-			"receiver *Store in %s; matcher may be stale after rename",
-		ruleMemTxLockOwnership01, memPkgRel)
+	require.Equalf(t, 1, accessorCount,
+		"%s R2b companion-index: expected exactly 1 FuncDecl named txHoldsLock with "+
+			"receiver *Store in %s; got %d — matcher may be stale after rename or "+
+			"a second same-named accessor was added (false-negative risk)",
+		ruleMemTxLockOwnership01, memPkgRel, accessorCount)
 	require.Positivef(t, holdsLockSelCount,
 		"%s R2b companion-index: expected at least one .holdsLock SelectorExpr "+
 			"inside (*Store).txHoldsLock; body may be empty or renamed",

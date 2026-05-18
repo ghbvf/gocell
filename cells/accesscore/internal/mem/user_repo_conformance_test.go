@@ -11,7 +11,10 @@ import (
 
 func TestMemUserRepo_Conformance(t *testing.T) {
 	conformance.RunUserRepoConformance(t, memUserRepoFactory, conformance.Features{
-		RequiresAmbientTx:   false,
+		RequiresAmbientTx: false,
+		// CAS conflict path is not exercised by this conformance suite.
+		// It is covered by identitymanage.TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds
+		// (non-store-bound TxRunner, exposes the CAS race, asserts exactly-one-success).
 		SupportsCASConflict: false,
 	})
 }

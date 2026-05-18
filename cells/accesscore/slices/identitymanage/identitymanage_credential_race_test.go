@@ -159,9 +159,14 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 // that after concurrent ChangePassword calls, authz_epoch is positive (each
 // successful ChangePassword increments by exactly 1 via the funnel).
 //
-// This test uses a serializing simpleTxRunner so operations are serialized
-// in memory — the race detector still checks for any internal data race
-// within the in-memory stores.
+// This test uses Store.TxRunner() (store-bound, holdsLock=true), which holds
+// store.mu for the entire transaction closure and serializes cross-method
+// operations atomically. That whole-closure atomicity is required here because
+// the epoch-positive terminal assertion needs every increment to be fully
+// committed before the final read. Contrast with
+// TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds, which deliberately
+// uses a non-store-bound runner to expose the CAS race and assert
+// exactly-one-success semantics.
 func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *testing.T) {
 	const goroutines = 20
 
