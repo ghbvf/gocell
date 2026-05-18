@@ -268,6 +268,8 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// relay; without it events stay in outbox_entries pending and subscribers
 	// never receive them. Mirrors cmd/corebundle/bundle_configcore_storage.go
 	// PG path (lines 109-118 + WithManagedResource).
+	// outbox_entries table health is covered by the pool-level postgres_ready probe —
+	// acceptable for this demo example; production bundles use per-cell repo probes.
 	pgOutboxStore := adapterpg.NewOutboxStore(pool.DB(), clock.Real())
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.Clock = clock.Real()
@@ -292,7 +294,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	// Demo only: HMAC and cursor keys are public source constants. Production
 	// deployments must inject fresh secrets from a secret manager.
-	auc, err := buildSSOBFFAuditCore(cfg.logger, eb, pool, txMgr)
+	auc, err := buildSSOBFFAuditCore(cfg.logger, eb, pgOutboxWriter, pool, txMgr)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, err
@@ -334,6 +336,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	primaryAuth, err := cell.NewAuthJWTFromAssembly(asm)
 	if err != nil {
+		_ = pool.Close(ctx)
 		return nil, fmt.Errorf("ssobff: primary listener auth plan: %w", err)
 	}
 
@@ -344,6 +347,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(cb),
 		bootstrap.WithManagedResource(pool),
+		// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
 		bootstrap.WithManagedResource(relayWorker),
 		listenerOption(cell.PrimaryListener, cfg.primary, []cell.ListenerAuth{primaryAuth}),
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
@@ -366,6 +370,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 func buildSSOBFFAuditCore(
 	logger *slog.Logger,
 	eb outbox.Publisher,
+	outboxWriter *adapterpg.OutboxWriter,
 	pool *adapterpg.Pool,
 	txMgr *adapterpg.TxManager,
 ) (*auditcore.AuditCore, error) {
@@ -395,7 +400,7 @@ func buildSSOBFFAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithLedgerProtocol(protocol),
 		auditcore.WithLedgerStore(pgLedgerStore),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(adapterpg.NewOutboxWriter(clock.Real()))),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(outboxWriter)),
 		auditcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		auditcore.WithCursorCodec(cursorCodec),
 		auditcore.WithLogger(logger),

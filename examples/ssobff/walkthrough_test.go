@@ -531,8 +531,10 @@ func TestWalkthrough(t *testing.T) {
 	})
 
 	t.Run("audit entries require auth and contain timestamp field not createdAt", func(t *testing.T) {
-		// In demo mode, audit events are delivered async via the in-memory
-		// eventbus; poll until at least one entry is visible.
+		// In durable PG mode, audit events travel handler→outbox_entries→relay
+		// poll→eventbus→auditcore consumer→ledger before appearing in the query
+		// API. The relay poll interval adds latency beyond the old in-memory
+		// path, so a longer timeout is required.
 		var entries []json.RawMessage
 		require.Eventually(t, func() bool {
 			data, ok := fetchAuditEntries(base+"/api/v1/audit/entries", adminToken)
@@ -540,7 +542,7 @@ func TestWalkthrough(t *testing.T) {
 				entries = data
 			}
 			return ok
-		}, testtime.D2s, testtime.MediumPoll, "expected at least one audit entry")
+		}, testtime.D5s, testtime.MediumPoll, "expected at least one audit entry")
 
 		for _, raw := range entries {
 			var entry map[string]json.RawMessage

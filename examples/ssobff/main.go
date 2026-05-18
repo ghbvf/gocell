@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 )
 
@@ -24,7 +25,7 @@ func main() {
 
 	app, err := NewSSOBFFApp(WithSSOBFFLogger(logger))
 	if err != nil {
-		logger.Error("failed to build ssobff app", slog.Any("error", err))
+		logger.Error("failed to build ssobff app", slog.String("error", redaction.RedactError(err).Error()))
 		os.Exit(1)
 	}
 
@@ -34,7 +35,7 @@ func main() {
 	defer stop()
 
 	logger.Info("ssobff: starting",
-		slog.String("mode", "in-memory"),
+		slog.String("mode", "durable-pg"),
 		slog.Int("cells", 3),
 		slog.String("primary_listen_addr", app.PrimaryListenAddr()),
 		slog.String("internal_listen_addr", app.InternalListenAddr()),

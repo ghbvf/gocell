@@ -36,7 +36,11 @@ func TestNewSSOBFFAppFailsFastWithoutDatabaseURL(t *testing.T) {
 
 func TestNewSSOBFFApp_AcceptsInjectedListeners(t *testing.T) {
 	if os.Getenv(ssobffDatabaseURLEnv) == "" {
-		t.Skipf("%s not set; skipping (requires a real PostgreSQL database)", ssobffDatabaseURLEnv)
+		const skipMsg = "walkthrough test requires %s (PG DSN). " +
+			"Start PG via `docker compose -f examples/ssobff/docker-compose.yml up -d` " +
+			"and export %s=postgres://gocell:$GOCELL_EXAMPLE_POSTGRES_PASSWORD" +
+			"@localhost:5432/sso_bff?sslmode=disable."
+		t.Skipf(skipMsg, ssobffDatabaseURLEnv, ssobffDatabaseURLEnv)
 	}
 	primary := newTestListener(t)
 	internal := newTestListener(t)
