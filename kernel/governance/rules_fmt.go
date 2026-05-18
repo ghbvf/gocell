@@ -1490,8 +1490,8 @@ func (v *Validator) validateFMT34() []ValidationResult {
 				"endpoints.http.auth.public",
 				fmt.Sprintf(
 					"contract %q declares auth.public:true on internal path %q; "+
-						"internal endpoints must not bypass JWT (use auth.bootstrap, "+
-						"auth.serviceOwned, or auth.clientsOnly instead); "+
+						"internal endpoints must not bypass JWT (use auth.serviceOwned "+
+						"or auth.clientsOnly instead); "+
 						"fix: remove auth.public or move the endpoint off /internal/v1/",
 					c.ID, path,
 				),

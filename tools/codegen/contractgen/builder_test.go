@@ -1339,12 +1339,12 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 			wantErrFrags: []string{"FMT-34", "auth.passwordResetExempt", "/internal/v1/foo"},
 		},
 		{
-			// both bypass flags — first emitted wins (public reported first).
+			// both bypass flags — errors.Join collects both violations.
 			name:         "both_flags_on_internal_path",
 			auth:         metadata.HTTPAuthMeta{Public: true, PasswordResetExempt: true},
 			path:         "/internal/v1/foo",
 			wantErr:      true,
-			wantErrFrags: []string{"FMT-34", "auth.public", "/internal/v1/foo"},
+			wantErrFrags: []string{"FMT-34", "auth.public", "auth.passwordResetExempt", "/internal/v1/foo"},
 		},
 		{
 			// exact prefix /internal/v1 boundary verification.
@@ -1379,6 +1379,14 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 			name:    "public_on_public_path_ok",
 			auth:    metadata.HTTPAuthMeta{Public: true},
 			path:    "/api/v1/auth/login",
+			wantErr: false,
+		},
+		{
+			// IsInternalHTTPPath is strictly /internal/v1 — future version paths
+			// must not be rejected by FMT-34 (locks oracle against version drift).
+			name:    "internal_v2_not_internal_path_ok",
+			auth:    metadata.HTTPAuthMeta{Public: true},
+			path:    "/internal/v2/foo",
 			wantErr: false,
 		},
 	} {

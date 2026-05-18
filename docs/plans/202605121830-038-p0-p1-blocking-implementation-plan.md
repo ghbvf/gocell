@@ -102,7 +102,7 @@
 - AI-rebust Medium（INV-1/2/3 自动守）；同 PR 显式登记两条 Hard 升级 backlog：`JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01`（P2/Cx3 🟠）+ `JOURNEY-CONTRACT-EXISTENCE-CODEGEN-DERIVE-01`（P3/Cx4 🟢）；rules_journey.go godoc 点名两个 backlog ID（参照 cap-14 PASS-PRODUCTION-UPSTREAM-HARD-01 / USAGE-02-HARD-UPGRADE-01 范式）
 - 验证：`gocell validate` 0 errors / 1 warning（J-ssologin active+doing 提醒）；`gocell verify journey --active` 双 active journey (J-ssologin platform + J-ordercreate example) 自动 checkRef 全 PASS
 
-#### PR-5 PR-GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN（单规则 PR，V-A11 ❌ subsumed 收口）— ✅ shipped as PR #XXX (2026-05-18)
+#### PR-5 PR-GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN（单规则 PR，V-A11 ❌ subsumed 收口）— ✅ shipped as PR #573 (2026-05-18)
 
 **包含**：仅 GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN（FMT-34）
 **V-A11 处置**：❌ subsumed by 025 archive plan — metadata.Parser `fs.WalkDir(".")` 已自然覆盖 `examples/**`，`kernel/governance/validate_test.go:4911 TestProjectWalksExamples` 回归测试固化；archive 显式"放弃新建 rules_examples.go"，原修复前提结构性消除。cap-14 backlog drift 同 PR 收口；V-A11b 字符串扫描分支仍触发型保留
@@ -111,7 +111,7 @@
 - PR-6 (G-13) ✅ PR #487 已落：直接用 `rulecodes.go` + `validateXxx()` + `; fix:` 后缀范式
 - 040 阶段 1 ✅ PR #492 已落（2026-05-14）：archtest 自动覆盖 (INV-1/2/3)，新规则零 archtest 工作量
 **合并决策**（v3 2026-05-18 用户裁决）：**拆 V-A11 出去 + 单规则 ship**——V-A11 backlog drift 不应通过"凑兄弟规则"重新立项；FMT-34 自身完成度足够独立 PR
-**ship 摘要（PR #XXX，2026-05-18）**：
+**ship 摘要（PR #573，2026-05-18）**：
 - B2 `kernel/governance/rules_fmt.go::validateFMT34`（下游 Medium）：遍历 contract，path 命中 `metadata.IsInternalHTTPPath` + auth.Public/PasswordResetExempt 任一 true 即独立 emit；godoc 显式点名上游 funnel + Hard 升级 backlog `G-13-FU-H3-RULES-AUTOREGISTER`（ai-collab funnel 双向锁评级强制要求）
 - B5 `tools/codegen/contractgen/builder.go::validateAuthOnInternalPath`（上游 Hard）：buildHTTPEndpointSpec 唯一 funnel；命名对齐 `validateAuth<X>` 形态；复用 `metadata.IsInternalHTTPPath` single oracle
 - 测试矩阵：A1 governance 9 cases（4 fail + 5 pass，覆盖与 FMT-26/28 边界正交）；A2 codegen 8 cases（4 fail + 4 pass）；INV-1/2/3 反射自动覆盖新 codeFMT34
@@ -190,7 +190,7 @@ Wave 1（独立并行，8 PR） — 8/8 ship：
 
 Wave 2（依赖 Wave 1，2 PR） — 2/2 ship：
   PR-11 OIDC-JWKS-ROTATION-WORKER-01 ✅ PR #504 (2026-05-16) — periodic re-discovery worker + refresh metric (A-02)
-  PR-5 GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN ✅ PR #XXX (2026-05-18) — FMT-34 双向锁 (governance 下游 Medium + codegen 上游 Hard funnel)；V-A11 ❌ subsumed by 025 (parser fs.WalkDir 已闭环)，单规则 PR ship
+  PR-5 GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN ✅ PR #573 (2026-05-18) — FMT-34 双向锁 (governance 下游 Medium + codegen 上游 Hard funnel)；V-A11 ❌ subsumed by 025 (parser fs.WalkDir 已闭环)，单规则 PR ship
 
 Wave 3（依赖 Wave 1） — 1/1 ship：
   TEST-JOURNEY-ROOT-HARNESS-01      ✅ PR-W3-1 (615-journey-useronboarding-harness, 2026-05-18) — J-useronboarding lifecycle active + 1 auto load-bearing test (login-verify, session.MemStore round-trip) + 3 manual carve-out (cells/accesscore/internal/credentialinvalidate 屏障) + Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01` 同 PR 登记

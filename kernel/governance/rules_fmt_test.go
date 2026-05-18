@@ -1319,6 +1319,7 @@ func TestFMT33_VisibilitySegregation(t *testing.T) {
 // FMT-26 catches the two-bypass mutex orthogonally (auth.public vs
 // auth.passwordResetExempt mutual exclusion) regardless of path.
 func TestFMT34_PublicBypassOnInternalPath(t *testing.T) {
+	t.Parallel()
 	type tc struct {
 		name       string
 		path       string
@@ -1400,6 +1401,14 @@ func TestFMT34_PublicBypassOnInternalPath(t *testing.T) {
 			wantCount: 0,
 		},
 		{
+			// IsInternalHTTPPath is strictly /internal/v1 — future version paths
+			// must not trigger FMT-34 (locks oracle against version drift).
+			name:      "internal_v2_not_internal_path",
+			path:      "/internal/v2/foo",
+			auth:      metadata.HTTPAuthMeta{Public: true},
+			wantCount: 0,
+		},
+		{
 			// non-HTTP contract (e.g. event) short-circuits FMT-34.
 			name:      "non_http_contract_skipped",
 			nilHTTP:   true,
@@ -1409,6 +1418,7 @@ func TestFMT34_PublicBypassOnInternalPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			contract := &metadata.ContractMeta{
 				ID:               "http.fmt34." + tt.name + ".v1",
 				Kind:             "http",
