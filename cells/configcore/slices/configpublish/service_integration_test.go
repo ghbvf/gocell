@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -79,6 +82,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
+	require.NoError(t, err)
 
 	cleanup := func() {
 		if err := pool.Close(ctx); err != nil {
@@ -301,4 +305,73 @@ func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry)
 		return w.err
 	}
 	return w.delegate.Write(ctx, entry)
+}
+
+// TestConcurrentRollback_PG_ExactlyOneWins ports the mem-store unit pattern
+// TestConcurrentRollback_ExactlyOneSucceeds (service_test.go) to a real
+// PostgreSQL backend. It proves the WHERE key=$X AND version=$expectedVersion
+// CAS predicate in cells/configcore/internal/adapters/postgres/config_repo.go
+// `doUpdate` serializes concurrent rollbacks at the SQL layer: exactly one
+// goroutine sees rowsAffected=1 and commits, the other gets rowsAffected=0,
+// triggers `resolveUpdateConflict`, and returns ErrVersionConflict (409).
+//
+// Closes D5 PR-V11-CONFIG-ROLLBACK-OPTLOCK (B2-T-01 + P3-TD-12) — the last
+// missing Hard regression guard against accidental removal of the CAS WHERE
+// clause. Mirrors the audit-ledger PG concurrency proof
+// `TestAuditLedgerStore_AdvisoryLockSerializesAppend`.
+func TestConcurrentRollback_PG_ExactlyOneWins(t *testing.T) {
+	bundle, cleanup := setupPublishBundle(t)
+	defer cleanup()
+	svcCtx := adminIntegCtx()
+
+	const key = "pg-cas-rollback-key"
+	seedConfigEntry(t, bundle, key, "v1")
+	// Publish v1 to create the config_versions snapshot Rollback targets.
+	// The live entry remains at version 1 after Publish — see the comment in
+	// TestRollback_AtomicWithOutbox above.
+	_, err := bundle.svc.Publish(svcCtx, key)
+	require.NoError(t, err)
+
+	const n = 2
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, rbErr := bundle.svc.Rollback(svcCtx, key, 1, 1)
+			switch {
+			case rbErr == nil:
+				successes.Add(1)
+			case isVersionConflictErr(rbErr):
+				versionConflicts.Add(1)
+			default:
+				t.Errorf("unexpected error in concurrent Rollback: %v", rbErr)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(),
+		"exactly one concurrent Rollback must succeed at the SQL CAS layer")
+	assert.Equal(t, int32(1), versionConflicts.Load(),
+		"exactly one concurrent Rollback must yield ErrVersionConflict (409)")
+
+	// Final-state check: the live entry version must have been bumped exactly
+	// once (1 → 2) — the losing goroutine must not have written anything.
+	finalEntry, err := bundle.repo.GetByKey(context.Background(), key)
+	require.NoError(t, err)
+	assert.Equal(t, 2, finalEntry.Version,
+		"config_entries.version must increment by exactly 1 across concurrent rollbacks")
+}
+
+// isVersionConflictErr unwraps wrapped errors (service.go wraps the repo CAS
+// failure via fmt.Errorf) and returns true when the underlying *errcode.Error
+// carries ErrVersionConflict.
+func isVersionConflictErr(err error) bool {
+	var ce *errcode.Error
+	return errors.As(err, &ce) && ce.Code == errcode.ErrVersionConflict
 }
