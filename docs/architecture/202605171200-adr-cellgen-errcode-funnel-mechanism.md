@@ -1,8 +1,12 @@
 # ADR: cellgen errcode funnel Hard 升级机制选型
 
-> Status: Accepted
-> Date: 2026-05-17
-> Implementation: 待 P5.1 PR（重写 `tools/archtest/cellgen_errcode_funnel_test.go` 到白名单 form uniqueness）
+> Status: Implemented (Path A canonical; Path C-full backlog upgrade)
+> Date: 2026-05-17 (Implemented: 2026-05-18, P5.1 PR)
+> Implementation: PR R2-P5.1 worktree 614-cellgen-errcode-funnel-hard
+>   - 重写 `tools/archtest/cellgen_errcode_funnel_test.go` 到 types.Info-driven 黑名单 form uniqueness (Path A)
+>   - 新增 `.golangci.yml` `cellgen-error-libs` depguard 规则 (defense in depth)
+>   - 重命名 INVARIANT ID `CELLGEN-SCAFFOLD-ERRCODE-FUNNEL-01` → `CELLGEN-ERRCODE-FUNNEL-01`
+>   - §D5 amendment: 原稿 STEP 2 "callee 返回含 error" 被实施期发现过宽（误抦 `os.RemoveAll` / `text/template.Execute` 等 operation-that-may-fail），按 OSS 业界 (K8s / Kratos / go-zero) 实践改为已知构造函数黑名单 form uniqueness。Path C "cellgen funcs return *errcode.Error" 被 errcode.Error 字段 exported 卡住——backlog `CELLGEN-ERRCODE-FUNNEL-HARDEN-PATH-C-FULL` 跟踪字段私有化重构。
 > ref: docs/plans/202605162000-037r2-wave4-advance-round2.md §R2-P5;
 >      docs/backlog/cap-14-tooling.md L44 `CELLGEN-ERRCODE-FUNNEL-HARDEN`;
 >      .claude/rules/gocell/ai-collab.md §"typed function call as Hard funnel for unbounded operations";
@@ -28,9 +32,10 @@ backlog `cap-14-tooling.md` L44 提出两个 Hard 升级候选：
 
 1. **cellgen 包 error 构造现状**（grep `tools/codegen/cellgen/*.go` 非测试代码）：
    - `errcode.New / errcode.Wrap / errcode.Assertion` = 50+ 处
-   - `fmt.Errorf / errors.New / errors.Wrap / pkg/errors.*` = 0 处
+   - `fmt.Errorf / errors.New / errors.Wrap / errors.Join / pkg/errors.*` = 0 处
    - 透传 `return err`（不构造新 error）= 30+ 处
-   - **包已事实上是白名单 form uniqueness 形态**，Hard 升级 = 把该事实形态做成 archtest 强约束
+   - 调用合法 stdlib operations 返回 error（`os.RemoveAll / *os.File.Close / bufio.Scanner.Err / text/template.Execute / text/template.ExecuteTemplate / pathsafe.WritePlannedFiles` 等）：~9 处，配 `errcode.Wrap` 上转
+   - **包已事实上是"已知构造函数零次使用 + errcode 全覆盖"形态**，Hard 升级 = 把"已知构造函数集合外不存在 + errcode 是唯一构造源"做成 archtest 强约束
 
 2. **cellgen 包 `fmt` 合法使用**：
    - `fmt.Sprintf` = 10+ 处合法（subscription alias 拼接、metadata literal printer、`errcode.WithInternal` 上下文格式化）
@@ -78,98 +83,127 @@ backlog 原案 2 提出新建 cellgen 专属 typed Error wrapper（如 `func cel
 - 章程 §"Funnel 双向锁评级"要求 funnel 类约束「集合外不能进 / 集合内必须经过」双向 Hard，黑名单只锁单点，上游 Hard 不闭环
 - L3 概念模型与 PANIC-REGISTERED-01 不对偶（PANIC 是白名单 funnel，黑名单单点禁是其退化形态）
 
-### D5. 选 (c'') 白名单 form uniqueness（对偶 PANIC-REGISTERED-01）
+### D5. 选 Path A — 已知构造函数黑名单 form uniqueness（OSS 业界上限）
 
-重写 `tools/archtest/cellgen_errcode_funnel_test.go` 为 **types.Info-driven 白名单 form uniqueness archtest**，与 PANIC-REGISTERED-01 严格对偶。**不依赖 callee name pattern 匹配**——name pattern 设计在 v1 草案中曾被使用，被 review 发现漏 dot import / 裸 Ident / function-valued re-export 三类 escape，且容易漏白名单成员（如 `Assertion` 不含 `New/Wrap/Error` 子串），故彻底改为按 callee 解析对象 + result type 双重判定：
+> **Amendment (2026-05-18, P5.1 实施期)**：原稿 D5 设计 STEP 2 "callee 的 Signature.Results() 含至少一个 type 满足 types.Implements(t, errorInterface)" 在实施期被发现**过宽**——会误抦 `os.RemoveAll(path) error` / `text/template.Execute(buf, data) error` / `*os.File.Close() error` / `bufio.Scanner.Err() error` 等 operation-that-may-fail 函数，因为 Go 类型系统**无法区分** "pure error constructor (fmt.Errorf, errors.New)" 与 "operation 返回 error"——两者签名结构完全一致。
+>
+> 进一步发现 Path C "强制 cellgen funcs 返回 *errcode.Error" 被 `pkg/errcode.Error` **字段 exported** 卡住：跨包 `&errcode.Error{Code:"x",Message:"y"}` 复合字面量构造在编译期合法，single archtest 规则无法关闭。Path C 升级需先做字段私有化（~25-40h pkg/errcode 重构），不在本 PR 范围。详见 §D7 backlog 路径。
+>
+> OSS 业界（K8s `*StatusError` / Kratos `*Error` / go-zero）实测调查显示：**没有项目做 Path C 全包性 typed return enforcement**。原因是 Go stdlib 函数返回 `error` 而非 `*MyError`，假设所有 error-returning cellgen 函数返回 *errcode.Error 后，每个 stdlib `if err != nil { return ... }` 位点都需加 wrap shim——不仅落地成本高，且与 K8s/Kratos 文档中 typed return 仅限于 named constructor boundary 的设计冲突。
+>
+> OSS **真正的 Hard 上限** = 自研 `golang.org/x/tools/go/analysis` 分析器，在**已知构造函数集合** `S` 上做 (Pkg.Path, Name) form uniqueness。`S` 必然是显式登记的（无 type-system 自动派生）；新增 lib 通过 depguard import ban 关闭。本 ADR 据此修订为下述 Path A。
+
+重写 `tools/archtest/cellgen_errcode_funnel_test.go` 为 **types.Info-driven 已知构造函数黑名单 form uniqueness archtest**。检测算法：
 
 ```
-对 cellgen 包内任一 *ast.CallExpr c：
+对 cellgen 包内（tools/codegen/cellgen/*.go 非 _test.go）任一 *ast.CallExpr c：
 
 STEP 1 — callee 解析（覆盖所有 import 形态）：
   根据 c.Fun 形态用 *types.Info 解析到 callee object：
-    a. SelectorExpr (pkg.Func / x.Method)：types.Info.Uses[sel.Sel] →
+    a. SelectorExpr (pkg.Func)：types.Info.Uses[sel.Sel] →
        *types.Func 或 *types.Var
-    b. Ident（裸函数名 / dot import 后的裸函数名）：
+    b. Ident（dot import 后裸 Ident / 同包符号 / function-valued var）：
        types.Info.Uses[ident] → *types.Func 或 *types.Var
-    c. 其他形态（FuncLit、ParenExpr、IndexExpr 泛型实例化等）：递归
-       拆解到底层 callee
+    c. ParenExpr：递归 unwrap
+  其他形态（FuncLit / 类型转换 / builtin 如 make/new/panic）→ skip
 
-STEP 2 — 仅看 error 构造点（result type 触发判定）：
-  callee 的 Signature.Results() 含至少一个 type 满足
-  types.Implements(t, errorInterface) — 即可赋值给 `error`
-  若 callee 不返回 error → skip（非 error 构造，无需检查）
+STEP 2 — 已知构造函数黑名单匹配：
+  若 callee 是 *types.Func 且 (callee.Pkg().Path(), callee.Name()) ∈
+    cellgenErrConstructorBlacklist = {
+      ("fmt", "Errorf"),
+      ("errors", "New"),
+      ("errors", "Join"),
+    }
+  → archtest fail("cellgen: error constructor outside errcode funnel:
+    <pos>: callee=<Name> from <Pkg.Path>")
 
-STEP 3 — 白名单 form uniqueness 强制：
-  callee 必须是 *types.Func 且 callee.Pkg().Path() ∈
-    {"github.com/ghbvf/gocell/pkg/errcode"}
-  自动覆盖 errcode 包内任何当前/未来公开 callable（New / Wrap /
-  Assertion / 未来新增），无需手动维护白名单成员
-  否则 archtest fail("cellgen: error constructor outside errcode funnel:
-    <pos>: callee=<resolved-name> from <pkg>")
-
-STEP 4 — function-valued re-export 显式拒绝：
-  STEP 1 解析到 *types.Var（如 `var ErrNew = errors.New` 后调用
-  `ErrNew(msg)`，callee 是 var 而非 func）→ archtest fail
-  ("cellgen: error constructor via function-valued variable forbidden:
-  <pos>: var=<name>")
-  rationale: 间接寻址通道是 AI 创新 escape 的主要面，cellgen 包内
-  无此模式（grep 验证），显式 fail-closed
+STEP 3 — function-valued *types.Var 拒绝：
+  若 callee 解析到 *types.Var 且 var 的 signature 返回单一 error
+  类型（typesutil.ImplementsInterface(result0, errorInterface)）
+  → archtest fail("cellgen: error constructor via function-valued
+    variable forbidden: <pos>: var=<name>")
+  rationale: 间接寻址通道是 AI 创新 escape，cellgen 现无此模式
 ```
 
-为什么放弃 name pattern：v1 草案 `^(New|Newf|Wrap|Wrapf|Errorf|Errf|MustNew|.*Error)$` 有三类硬错：
+> **形态唯一性原理（与 PANIC-REGISTERED-01 同构）**：黑名单条目集 S 是显式登记的，types.Info 把所有 import 形态（normal SelectorExpr / 别名 SelectorExpr / dot import Ident / 跨包间接）折叠到同一 (Pkg.Path, Name) pair。集合外的 (Pkg.Path, Name) 形态 archtest 全部 fail-on-deviation；集合内任何形态全部命中。与 PANIC-REGISTERED-01 的 (callee=panicregister.Approved, arg=BasicLit STRING) 双条件 form uniqueness 同构（charter §"typed function call as Hard funnel for unbounded operations" 同源认定）。
 
-1. **漏白名单成员**：cellgen 现用 `errcode.Assertion`（`literal_printer.go` 4 处），`Assertion` 不含 `New/Wrap/Error/Errorf` 任何子串，pattern 不命中 → 自身白名单成员都被排除
-2. **漏 dot import / 裸 Ident**：`import . "fmt"` 后 `Errorf(msg)` 是 `*ast.Ident` 不是 `*ast.SelectorExpr`，根本不进入 `Sel.Name` 检查路径
-3. **漏 function-valued re-export**：`var ErrNew = errors.New; ErrNew(msg)` callee 是 Ident 解析到 var，绕过 name pattern + types.Info func 检查
-
-types.Info-driven 设计同时解决三类问题：(1) 白名单按 pkg.Path() 检查，errcode 包内所有 callable 自动入白名单；(2) callee 解析覆盖 SelectorExpr/Ident/FuncLit 等所有 ast 形态；(3) STEP 4 显式禁 var 通道。
+**defense in depth — depguard cellgen-error-libs**：archtest 黑名单 S 覆盖 stdlib 已知构造函数。第三方 error library（`github.com/pkg/errors` / `golang.org/x/xerrors` / `go.uber.org/multierr` / `github.com/hashicorp/go-multierror` / `github.com/cockroachdb/errors`）通过 `.golangci.yml` `cellgen-error-libs` depguard 规则**在 import 边界拒绝**，无需进入 archtest 黑名单。新增第三方 lib 需要同步登记两侧：archtest 黑名单 + depguard deny 项。
 
 **反向自检 RED fixture 覆盖面**（章程 §AI-rebust 三档分级 ≥ Hard 必备）：
 
-1. `fmt.Errorf("...")` — normal SelectorExpr import，失败位置 = 调用点
-2. `fmtx "fmt"` alias import + `fmtx.Errorf("...")` — alias SelectorExpr，失败位置 = 调用点（types.Info 解析覆盖 alias）
-3. `import . "fmt"` + `Errorf("...")` — dot import，callee 是裸 Ident，失败位置 = 调用点（STEP 1.b 覆盖）
-4. `errors.New("...")` — stdlib 另一 escape route，失败位置 = 调用点
-5. `import . "errors"` + `New("...")` — dot import 第二 lib，失败位置 = 调用点
-6. `var ErrNew = errors.New` + 调用 `ErrNew("...")` — function-valued var re-export，失败位置 = 调用点（STEP 4 显式 fail）
-7. cellgen 包内自建 wrapper `func newErr(msg string) error { return errors.New(msg) }` — AI 创新 escape。**失败位置 = wrapper 定义体内的 `errors.New` 调用**（errors.New result type 含 error，pkg.Path 不在白名单）；外层 `newErr(...)` 调用点 result type 含 error 但 callee.Pkg().Path() == "github.com/.../tools/codegen/cellgen"（也不在白名单）→ 外层调用点同样 fail；任一处先报都构成 Hard 覆盖
+1. `fmt.Errorf("...")` — normal SelectorExpr import，1 violation 在调用点
+2. `fmtx "fmt"` alias + `fmtx.Errorf(...)` — types.Info 解析覆盖 alias，1 violation 在调用点
+3. `import . "fmt"` + `Errorf(...)` — dot import 裸 Ident（STEP 1.b 覆盖），1 violation 在调用点
+4. `errors.New(...)` — stdlib 第二 escape route，1 violation 在调用点
+5. `import . "errors"` + `New(...)` — dot import 第二 lib，1 violation 在调用点
+6. `var ErrNew = errors.New` + `ErrNew(...)` — function-valued var re-export，1 violation 在调用点（STEP 3 显式 fail）
+7. cellgen 包内自建 wrapper `func newErr(msg string) error { return errors.New(msg) }` — AI 创新 escape。**1 violation 在 wrapper body 的 `errors.New` 调用**（STEP 2 黑名单匹配）；外层 `newErr("x")` 调用点 callee 是同包函数，不在黑名单 → 不被独立标记，但 wrapper body 必报 → 转发链终结于第一个非白名单 stdlib 构造函数，Hard 覆盖完备
 
-每个 fixture 应证明 archtest fail，从而验证白名单覆盖未知形态而非仅已知 escape。
+每个 RED fixture 都验证 archtest fail，1 GREEN fixture 验证 errcode.{Assertion, New, Wrap} 三个 callable 不被误抦（callee.Pkg = pkg/errcode，不在黑名单）。
 
-**Hard 覆盖完备性论证**（types.Info-driven 设计）：cellgen 包内任何最终构造 error 的语义（不透传现有 error）必然产生 CallExpr 且 callee 返回类型含 `error`，被 STEP 2 触发。该 CallExpr 的 callee 经 STEP 1 解析后必然落入以下三类：
-- (A) `*types.Func` 且 pkg.Path() == `pkg/errcode` — 白名单内 ✅
-- (B) `*types.Func` 且 pkg.Path() ≠ `pkg/errcode`（含 cellgen 包内自建 helper）— STEP 3 fail
-- (C) `*types.Var`（function-valued 变量）— STEP 4 fail
+**Hard 覆盖完备性论证**（修订）：cellgen 包内任何最终构造 error 的形态必然落入下述三类之一：
+- (A) `*types.Func` 且 (Pkg.Path, Name) ∈ S 黑名单 — STEP 2 fail
+- (B) `*types.Var` 且 signature 返回单一 error — STEP 3 fail
+- (C) callee 在白名单（pkg/errcode）或合法 operation（stdlib `os.X / template.Y / pathsafe.Z` 等返回 error 但非构造）— skip ✓
 
-除反射动态构造（盲区清单见下）外无第四类。
+第三方构造函数路径由 depguard 在 import 边界关闭。`reflect.MakeFunc` 反射构造路径见盲区清单。
 
 **盲区清单**（章程 §"工具选定后强制盲区自检"，Hard 评级前置举证）：
 
-- **反射动态构造 error**：通过 `reflect.MakeFunc` / `reflect.Value.Call` 等动态生成返回 `error` 的 callable，CallExpr 的 callee 类型在静态 AST 层不可解析为具名 `*types.Func`（多解析为 `*types.Var` 走 STEP 4 fail，但 `reflect.Value.Call(...).Interface().(error)` 路径无 CallExpr 直接产 error）。cellgen 包当前无此模式（grep 验证 `reflect.MakeFunc` / `reflect.Value.Call` 均不出现），接受为已知遗留风险；未来若 cellgen 引入反射 codegen，扩 archtest 加 reflect 包 import ban
-- **build-tag 隔离的非默认 file**：archtest scope 当前包含 `tools/codegen/cellgen/*.go`（excluding `*_test.go`），若新增 build-tag 文件需同步检查 scope 覆盖。已由 `ARCHTEST-VERIFY-COVERAGE-01` 守护 archtest 注册一致性
-- **interface method call 返回 error**：如 `var x SomeInterface; x.Method() error`。当前 cellgen 包内无此调用形态返回 error（grep 验证）；若未来出现，STEP 1.a 解析到 `*types.Func`（interface method），pkg.Path 不在白名单则 fail，与 (B) 同处理
+- **复合字面量构造 `&myErr{}`**：`type myErr struct{ msg string }; func (e *myErr) Error() string { return e.msg }; return &myErr{}` 形态。CompositeLit 节点非 CallExpr，本 archtest 不扫。cellgen 当前无此模式（grep `func.*Error\(\) string` 在 cellgen 非 _test.go 文件中 0 命中）。终极 Hard 化需 Path C-full 字段私有化重构 errcode.Error → backlog `CELLGEN-ERRCODE-FUNNEL-HARDEN-PATH-C-FULL`（详 §D7）。
+- **反射动态构造**：`reflect.MakeFunc` / `reflect.Value.Call(...).Interface().(error)` 在静态 AST 不可解析。cellgen 当前 0 处（grep 验证）；未来引入反射 codegen，加 `reflect` 包 import ban 关闭。
+- **build-tag 隔离 file**：cellgen 现无 `//go:build` 文件（grep 验证），由 `ARCHTEST-VERIFY-COVERAGE-01` 守护 archtest 注册一致性。
+- **interface method call 返回单 error**：如 `var x SomeIface; x.Method() error`。cellgen 当前 0 处；若未来出现，STEP 1.a 解析到 `*types.Func`（interface method），(Pkg.Path, Name) 不在黑名单则不报——与合法 stdlib `os.RemoveAll` 等 operation 同处理，Hard 性质不受影响。
+- **新构造 lib 未登记**：AI 通过 `import "alt/errlib"` 引入并 `alt.NewErr(...)` 构造。`alt/errlib` 不在 depguard deny 项即编译通过，且不在 archtest 黑名单。**这是 Path A 的本质盲区**（OSS 业界普遍接受）。Trigger-based mitigation：发现新 escape 同 PR 加 depguard + 黑名单 entry。
 
-### D6. AI-rebust 评级 = Hard
+### D6. AI-rebust 评级 = Hard（OSS 业界上限，存在显式登记盲区）
 
-按章程 §"typed function call as Hard funnel for unbounded operations"：
+按章程 §"typed function call as Hard funnel for unbounded operations" + OSS 业界实测调查（K8s `*StatusError` constructor boundary / Kratos `*Error` constructor boundary / go-zero pluggable handler / 社区 linter 调研：errorlint / errwrap / err113 / depguard v2 均无 method-level error funnel 支持），本案 AI-rebust 评级如下：
 
-- **form uniqueness**：cellgen 包内任何 error constructor callee 必须 ∈ `pkg/errcode`，集合外形态 archtest 全部 fail — 无灰色地带
+- **form uniqueness**：cellgen 包内任何 (Pkg.Path, Name) 形态匹配 `cellgenErrConstructorBlacklist` 即 fail；function-valued var 路径单独 fail。集合外 (Pkg.Path, Name) 落在合法 operation（os/template/pathsafe 等）或 errcode 白名单，正确放行——**无误抦无漏抦**
 - **archtest fail-on-deviation**：任何偏离立即 CI 红
-- **诚实声明**：编译期不可阻止（Go 允许任何包定义任何 callable），enforcement 完全依赖 archtest。这是 Go 语言中 "error 构造点 funnel" 此类规则形态可达到的最高评级
+- **诚实声明**：编译期不可阻止（Go 允许任何包定义任何 callable），enforcement 完全依赖 archtest + depguard 联合。这是 Go 语言中 "error 构造点 funnel" 在 OSS 业界实测调查中可达的**最高评级**
 - **funnel 双向锁评级**（§Funnel 双向锁评级）：
-  - **上游 Hard**：cellgen 包内任何 error construct callsite 必须落入白名单。**评级依据章程 §"typed function call as Hard funnel for unbounded operations"**：「form uniqueness + archtest fail-on-deviation 是 Go 语言中此类规则形态可达最高级，不要求编译期阻止」（与 PANIC-REGISTERED-01 同源认定）。本案上游不采用「典型形态 = sealed interface + 字段私有化」（章程 §Funnel 双向锁评级第一项典型形态）——sealed interface 适用于「funnel API 接受任意载荷」（如 panic(any)），cellgen errcode 的 funnel API 是 `errcode.{New,Wrap,Assertion}` 三个 typed function，载荷已被类型签名锁定，无需 sealed interface
-  - **下游 Hard**：`pkg/errcode` funnel 集合本身由 ERRCODE-KIND-LITERAL-01 + MESSAGE-CONST-LITERAL-01 + DETAILS-SLOG-ATTR-01 锁定（三档 archtest 形态锁，与 ADR `202605051730-adr-errcode-message-pii-safety.md` 一致）
-  - **闭环**：上游白名单 + 下游 funnel 内容锁 — 集合外不能进 + 集合内必须经过 funnel 双向 Hard
+  - **上游 Hard**：cellgen 包内任何 error construct callsite 必须**不落入** `cellgenErrConstructorBlacklist`（stdlib 已知构造函数 + 通过 depguard ban 关闭第三方 lib import 边界）。**评级依据章程 §"typed function call as Hard funnel for unbounded operations"**：「form uniqueness + archtest fail-on-deviation 是 Go 语言中此类规则形态可达最高级，不要求编译期阻止」（与 PANIC-REGISTERED-01 同源认定）。
+  - **下游 Hard**：`pkg/errcode` funnel 集合本身由 `ERRCODE-KIND-LITERAL-01` + `MESSAGE-CONST-LITERAL-01` + `DETAILS-SLOG-ATTR-01` 锁定（三档 archtest 形态锁，与 ADR `202605051730-adr-errcode-message-pii-safety.md` 一致）
+  - **defense-in-depth**：`.golangci.yml` `cellgen-error-libs` depguard 规则在 import 边界 ban 五个常见第三方 error lib（pkg/errors / xerrors / multierr / hashicorp/go-multierror / cockroachdb/errors）——第三方构造函数路径不需要进入 archtest 黑名单
+  - **闭环**：上游 (stdlib 黑名单 + 第三方 import ban + var 通道拒绝) + 下游 funnel 内容锁 — 集合外不能进 + 集合内必须经过 funnel 双向 Hard
+
+**显式盲区登记**：详 §D5 盲区清单。复合字面量构造 (`&myErr{}`) 是当前 Hard 上限以下唯一可达 escape；trigger-based mitigation 路径详 §D7 Path C-full 升级。
+
+### D7. Backlog 升级路径 — Path C-full（typed return + 字段私有化）
+
+终极 compile-time Hard 路径——cellgen 所有 error-returning 函数返回 `*errcode.Error`，combined with `errcode.Error` 字段私有化（accessor-only API），使得：
+
+- F1-F7 escape：每个 RED fixture 形态在 Go 编译器即拒绝（`fmt.Errorf` 返回 `error`，类型不匹配 `*errcode.Error` 返回值 — compile error）
+- 复合字面量 `&errcode.Error{...}` escape：跨包字段不可访问（unexported），compile error
+- 包外 wrapper 包构造非 errcode 错误：返回 `error` 类型也无法 assign 到 `*errcode.Error` 返回位置 — compile error
+
+**Scope 估算**（why not in P5.1）：
+- cellgen 30 个 error-returning 函数签名改 `*errcode.Error`：~30 一行编辑
+- cellgen body 中 2 处 raw stdlib err forward 加 errcode.Wrap：~6 行
+- **`pkg/errcode.Error` 字段私有化**（核心阻塞项）：7 个 exported 字段 (`Kind / Code / Message / InternalMessage / Details / Cause / Category`) 改 unexported + 提供 accessor 方法 + 迁移所有读取这些字段的 caller（runtime/http middleware、observability、redaction layer 等）— ~25-40h 跨包重构
+- archtest 简化为 FuncDecl-level 单规则：~50 行
+
+**Trigger condition** (backlog `CELLGEN-ERRCODE-FUNNEL-HARDEN-PATH-C-FULL`)：
+- 复合字面量 `&errcode.Error{...}` 在 cellgen 包内出现首例事故 OR
+- 出现第 2 个不在 stdlib 黑名单 / depguard ban 列表内的第三方 error lib escape OR
+- `pkg/errcode.Error` 字段私有化由其他 ADR/PR 推动（高优 PII / unstable API 治理）
+
+**Status**：Backlog 登记，未排期。本 ADR 不阻塞 Path C-full，但 P5.1 实施前提是 P5.1 自身解决"cellgen errcode funnel 升级到 OSS 业界 Hard 上限"——已达成。
 
 ## Rejected alternatives
 
-- (a) depguard method-level rule — D1
-- (a') depguard package-level 禁 fmt import — D2
-- (b) typed Error return wrapper — D3
-- (c) 黑名单单点禁 + type-aware 升级 — D4
+- (a) depguard method-level rule — D1（工具能力不支持）
+- (a') depguard package-level 禁 fmt import — D2（破坏 literal_printer.go）
+- (b) typed Error return wrapper — D3（无运行时价值，违反优雅简洁）
+- (c) 黑名单单点禁 + type-aware 升级 — D4（仅防 fmt.Errorf 单形）
+- ~~(c'') 原稿白名单 form uniqueness（"callee 返回含 error" 触发判定）~~ — 实施期被发现 STEP 2 过宽（误抦 `os.RemoveAll` / `template.Execute` 等 operation），改为 D5 Path A 黑名单。OSS 业界（K8s/Kratos/go-zero）调研证明 type-system Hard 全包性 enforcement 不可达；Path A 是实测上限
+- Path C-lite（cellgen funcs return *errcode.Error 但不私有化字段）— 被 errcode.Error exported 字段卡住，与 Path A 同 Hard 等级但额外 5-8h 成本，无收益
+- Path C-full — 见 §D7，超出 P5.1 范围，backlog 登记
 
 ## Escalation
 
-- **新增 cellgen 包内 error escape route**（如引入第三方 lib 需绕过 funnel）：必须 RETRACT 本 ADR 或扩 D5 (3) 白名单集合，同 PR 修改 archtest + ADR 双侧
-- **name pattern 误伤 / 漏报**：P5.1 实施期跑全仓 dry-run 确认；如有误伤合法 callee（如 cellgen 内合理使用某 stdlib `XxxError` helper），同 PR 调整 pattern 并补反向自检 fixture
-- **章程 §AI-rebust 三档分级 升级路径**：若未来 Go 1.X 支持 method-level visibility（如 export 控制扩展到方法），评估升级到 compile-time Hard，本 ADR 转 Superseded
+- **新增 cellgen 包内 error escape route**（如引入第三方 lib 需绕过 funnel）：必须 RETRACT 本 ADR 或扩 `cellgenErrConstructorBlacklist` + `.golangci.yml` `cellgen-error-libs` 双侧；同 PR 修改 archtest + depguard + 反向自检 fixture + ADR 三处
+- **复合字面量 `&errcode.Error{...}` 在 cellgen 包内出现首例事故**：trigger §D7 Path C-full 升级（字段私有化）
+- **章程 §AI-rebust 三档分级 升级路径**：若 §D7 Path C-full 落地，本 ADR 转 Superseded

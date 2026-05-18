@@ -1,0 +1,1 @@
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/errors_new_red/usage.go:9: cellgen: error constructor outside errcode funnel: callee=New from errors

@@ -57,6 +57,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 const ruleCellgenErrcodeFunnel01 = "CELLGEN-ERRCODE-FUNNEL-01"
@@ -136,7 +138,7 @@ func scanFileForCellgenErrcodeViolations(
 				return
 			}
 			results := sig.Results()
-			if results.Len() != 1 || !types.Implements(results.At(0).Type(), errorInterface) {
+			if results.Len() != 1 || !typesutil.ImplementsInterface(results.At(0).Type(), errorInterface) {
 				return
 			}
 			violations = append(violations, cellgenErrcodeViolation{

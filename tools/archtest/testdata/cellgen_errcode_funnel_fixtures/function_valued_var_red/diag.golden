@@ -1,0 +1,1 @@
+tools/archtest/testdata/cellgen_errcode_funnel_fixtures/function_valued_var_red/usage.go:13: cellgen: error constructor via function-valued variable forbidden: var=ErrNew
