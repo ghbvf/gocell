@@ -112,6 +112,13 @@ var (
 // expensive LoadPackages call runs without the lock. singleflight
 // deduplicates concurrent loads of the same key so only one packages.Load
 // is in flight per key, while loads for different keys run in parallel.
+//
+// 为什么 cacheKey 保留 patterns 维度而不剥离：archtest 调用方实测分布显示
+// 主模块 subpath patterns（./cells/.../, ./cmd/.../, ./runtime/.../ 等）
+// 占 83.5%，"./..." 仅占 16.5%。每个 subpath patterns 加载不同 package 集
+// 合，必须区分 cacheKey。"./..." 形态的 cacheKey 合并已由
+// LoadProductionPackages typed wrapper 完成（固定 patterns="./..."）。
+// ref: ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md
 func SharedResolver(modRoot string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
 	testsFlag := "0"
 	if tests {

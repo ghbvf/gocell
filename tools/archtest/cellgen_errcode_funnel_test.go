@@ -264,57 +264,59 @@ func TestCellgenErrcodeFunnel(t *testing.T) {
 // KnownNonDefaultTags (mirroring panic_invariants_test.go pattern) AND
 // (b) update this test to allow the specific tag, all in the same PR.
 //
-// Implementation note: uses RunTyped with the cellgen package pattern
-// rather than filepath.Walk to comply with SCANNER-FRAMEWORK-USAGE-01.
-// RunTyped fans out KnownNonDefaultTags transparently, so files gated by
-// non-default tags would surface in some tag-group; we then inspect each
-// file's leading comments for build constraints.
+// Implementation note: uses two RunTyped calls to comply with
+// SCANNER-FRAMEWORK-USAGE-01 while covering the full build directive file set.
+// Load 1 (tags=nil) catches files active under the default context, including
+// those with reverse //go:build !X directives that a union-tag load would
+// silently exclude (go/build matchTag semantics). Load 2 (ProductionFlatTags)
+// catches files gated by positive non-default tags. The seen map deduplicates
+// across both loads.
 func TestCellgenErrcodeFunnelNoBuildTagFiles(t *testing.T) {
 	t.Parallel()
 
 	seen := make(map[string]struct{})
 	var offending []string
 
-	for _, tagGroup := range KnownNonDefaultTags() {
-		// Skip the archtest_fixture tag group — fixture sub-packages have
-		// their own build directives by design.
-		if containsTag(tagGroup, FixtureBuildTag) {
-			continue
+	scan := func(p *Pass) []Diagnostic {
+		if p.Fset == nil {
+			return nil
 		}
-		_ = RunTyped(t, TypedOpts{Tags: tagGroup},
-			[]string{"./tools/codegen/cellgen/..."},
-			func(p *Pass) []Diagnostic {
-				if p.Fset == nil {
-					return nil
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			packagePos := file.Package
+			for _, cg := range file.Comments {
+				// Build constraints must precede the package clause.
+				if cg.Pos() >= packagePos {
+					break
 				}
-				for _, file := range p.Files {
-					rel := p.Rel(file)
-					if strings.HasSuffix(rel, "_test.go") {
+				for _, c := range cg.List {
+					text := strings.TrimSpace(c.Text)
+					if !strings.HasPrefix(text, "//go:build") && !strings.HasPrefix(text, "// +build") {
 						continue
 					}
-					packagePos := file.Package
-					for _, cg := range file.Comments {
-						// Build constraints must precede the package clause.
-						if cg.Pos() >= packagePos {
-							break
-						}
-						for _, c := range cg.List {
-							text := strings.TrimSpace(c.Text)
-							if !strings.HasPrefix(text, "//go:build") && !strings.HasPrefix(text, "// +build") {
-								continue
-							}
-							key := rel + ":" + text
-							if _, dup := seen[key]; dup {
-								continue
-							}
-							seen[key] = struct{}{}
-							offending = append(offending, fmt.Sprintf("%s: %s", rel, text))
-						}
+					key := rel + ":" + text
+					if _, dup := seen[key]; dup {
+						continue
 					}
+					seen[key] = struct{}{}
+					offending = append(offending, fmt.Sprintf("%s: %s", rel, text))
 				}
-				return nil
-			})
+			}
+		}
+		return nil
 	}
+
+	// 两次 Load 覆盖全 build directive 文件集（含反向 //go:build !X）：
+	// Load 1 (tags=nil) 覆盖默认 build + 反向 directive 文件；
+	// Load 2 (ProductionFlatTags) 覆盖所有正向 tag 激活文件 union。
+	// 两次 Load 文件集有重合，seen map dedup 保证 offending 唯一。
+	// 单次 union Load 设计被拒绝：go/build matchTag 语义下 //go:build !X 在
+	// -tags=...,X,... 模式下静默排除（详见 ADR 202605190000 §Alternatives）。
+	_ = RunTyped(t, TypedOpts{}, []string{"./tools/codegen/cellgen/..."}, scan)
+	_ = RunTyped(t, TypedOpts{Tags: ProductionFlatTags()}, []string{"./tools/codegen/cellgen/..."}, scan)
 
 	if len(offending) > 0 {
 		for _, o := range offending {

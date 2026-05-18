@@ -360,44 +360,45 @@ func shouldSkipForPanicRegistered(rel string) bool {
 func TestPanicRegistered(t *testing.T) {
 	t.Parallel()
 
-	seen := make(map[string]struct{}) // dedup violations by "rel:line:msg"
+	seen := make(map[string]struct{}) // dedup across two loads by "rel:line:msg"
 	var violations []panicRegisteredViolation
 
-	for _, tagGroup := range KnownNonDefaultTags() {
-		// skip archtest_fixture — fixtures intentionally violate rules.
-		// Tag identity uses FixtureBuildTag const (single source: fixture.go);
-		// PASS-FUNNEL-FIXTURE-TAG-01 forbids the bare literal at this call site.
-		if containsTag(tagGroup, FixtureBuildTag) {
-			continue
+	// RunTyped with "./..." loads the whole module; the rule scans
+	// hand-written production panic sites only. shouldSkipForPanicRegistered
+	// excludes generated/, examples/, tools/archtest/, testdata/, _test.go
+	// (mirroring fileroles.IsProductionCode) at the file level. generated/
+	// is intentionally excluded — codegen templates are the single source
+	// guaranteeing emitted panics use panicregister.Approved, so scanning
+	// them would be redundant (no enforcement gap).
+	scan := func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
 		}
-		// RunTyped with "./..." loads the whole module; the rule scans
-		// hand-written production panic sites only. shouldSkipForPanicRegistered
-		// excludes generated/, examples/, tools/archtest/, testdata/, _test.go
-		// (mirroring fileroles.IsProductionCode) at the file level. generated/
-		// is intentionally excluded — codegen templates are the single source
-		// guaranteeing emitted panics use panicregister.Approved, so scanning
-		// them would be redundant (no enforcement gap).
-		_ = RunTyped(t, TypedOpts{Tags: tagGroup}, []string{"./..."}, func(p *Pass) []Diagnostic {
-			if p.TypesInfo == nil || p.Fset == nil {
-				return nil
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if shouldSkipForPanicRegistered(rel) {
+				continue
 			}
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if shouldSkipForPanicRegistered(rel) {
+			for _, v := range scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel) {
+				key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Reason)
+				if _, dup := seen[key]; dup {
 					continue
 				}
-				for _, v := range scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel) {
-					key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Reason)
-					if _, dup := seen[key]; dup {
-						continue
-					}
-					seen[key] = struct{}{}
-					violations = append(violations, v)
-				}
+				seen[key] = struct{}{}
+				violations = append(violations, v)
 			}
-			return nil
-		})
+		}
+		return nil
 	}
+
+	// 两次 Load 覆盖全 build directive 文件集（含反向 //go:build !X）：
+	// Load 1 (tags=nil) 覆盖默认 build + 反向 directive 文件；
+	// Load 2 (ProductionFlatTags) 覆盖所有正向 tag 激活文件 union。
+	// 两次 Load 文件集有重合，seen map dedup 保证 violations 唯一。
+	// 单次 union Load 设计被拒绝：go/build matchTag 语义下 //go:build !X 在
+	// -tags=...,X,... 模式下静默排除（详见 ADR 202605190000 §Alternatives）。
+	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, scan)
+	_ = RunTyped(t, TypedOpts{Tags: ProductionFlatTags()}, []string{"./..."}, scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
@@ -416,16 +417,6 @@ func TestPanicRegistered(t *testing.T) {
 		"%s: every production panic() call must use panic(panicregister.Approved(literal, value)). "+
 			"See pkg/panicregister and docs/architecture/202604270030-architectural-panic-whitelist.md.",
 		rulePanicRegistered01)
-}
-
-// containsTag reports whether tag appears in the given build tag group.
-func containsTag(group []string, tag string) bool {
-	for _, t := range group {
-		if t == tag {
-			return true
-		}
-	}
-	return false
 }
 
 // TestPanicRegisteredScannerFixtures verifies the PANIC-REGISTERED-01 rule
