@@ -47,6 +47,15 @@ const holderTimeout = 3 * time.Second
 // deadlock would block wg.Wait() until the `go test -timeout` global limit.
 const deadlockGracePeriod = 2 * time.Second
 
+// Auto-lockout conformance fixture gaps. Stale window for the test seed mirrors
+// the production cells/accesscore/internal/accountlockout policy (StaleWindow
+// = LockoutTTL = 15 minutes), kept as package-level consts to satisfy
+// TEST-TIME-LITERAL-01.
+const (
+	lockoutFixtureFailedGap   = -2 * time.Minute
+	lockoutFixtureLockedUntil = 15 * time.Minute
+)
+
 // UserRepoFactory constructs a fresh ports.UserRepository, its paired
 // persistence.TxRunner, and a cleanup func for use in a single test sub-case.
 // The factory is called once per sub-test; the cleanup func is registered via
@@ -542,8 +551,8 @@ func conformUpdateLockoutFieldsSucceeds(t *testing.T, factory UserRepoFactory) {
 
 	// Build updated lockout state in memory.
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	failedAt := now.Add(-2 * time.Minute)
-	lockedUntil := now.Add(15 * time.Minute)
+	failedAt := now.Add(lockoutFixtureFailedGap)
+	lockedUntil := now.Add(lockoutFixtureLockedUntil)
 	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:               u.ID,
 		Username:         u.Username,
