@@ -489,19 +489,34 @@ FU-1～4 全部 merged。计划 §"完成判据"（`docs/plans/202605082145-034-
 
 1. **FU-4 Journey 声明式覆盖**：`journeys/J-ssologin.yaml` 新增 auto
    passCriteria `error-paths-uniform`（checkRef →
-   `tests/integration/TestJSsologinErrorPathsUniform`），断言 missing-user /
-   wrong-password / inactive 三态经 `pkg/httputil.WriteError` 序列化后 wire
-   字节完全一致（§A13 防枚举不变量的声明式 journey 验收）。
-   `journeys/J-accountlockout.yaml` 的 `login-reject` criterion 补全
-   wire-shape 文本 + 配套 `TestJAccountlockoutLoginReject`。两者均 Docker-free——
-   J-ssologin 为 `lifecycle: active`，governance VERIFY-06
-   （`kernel/governance/rules_verify.go:352`）在 `gocell validate --strict`
-   （无 Docker 的 `make verify` 门）内**实际执行**该 checkRef test，故不可
-   走 testcontainers。**T4 ↔ FU-4 分工**（计划 §T4↔FU-4）：T4
-   `tests/integration/l2atomicity/TestL2_LoginUniform401` 是真实 HTTP+PG
-   roundtrip 的**编程式** e2e 证明 sessionlogin 三 service 路径确实返回该
-   errcode；FU-4 是 wire-shape contract 的**声明式 journey 验收**，二者
-   cross-link 不重复覆盖（见 `tests/integration/l2atomicity/doc.go:55-57`）。
+   `tests/integration/TestJSsologinErrorPathsUniform`），断言 3 个
+   client-observable 状态（missing-user 含 :484 in-tx race 变体 /
+   wrong-password / inactive 含 locked·suspended 及 :352 in-tx race 变体）—— sessionlogin
+   共 5 个构造点（service.go:262/:275/:280/:352/:484）——经 `pkg/httputil.WriteError`
+   序列化后 wire 字节完全一致（§A13 防枚举不变量的声明式 journey 验收）。FU-4
+   test 覆盖全部 5 个构造点，byte-identity 断言防止任一点未来加 WithInternal
+   致枚举旁路。`journeys/J-accountlockout.yaml` 的 `login-reject` criterion
+   补全 wire-shape 文本 + 配套 `TestJAccountlockoutLoginReject`（仅收口
+   login-reject；另 3 条 auto-lock / event-publish / admin-unlock 为
+   pre-existing experimental-exempt 缺口，不在 FU-4 范围）。两者均
+   Docker-free——J-ssologin 为 `lifecycle: active`，governance VERIFY-06
+   （`kernel/governance/rules_verify.go` 函数 `validateVERIFY06Journey`）在
+   `gocell validate --strict`（无 Docker 的 `make verify` 门）内**实际执行**
+   该 checkRef test，故不可走 testcontainers。
+
+   **T4 ↔ FU-4 分工与 §3 威胁矩阵回评**（ai-collab.md §"ADR amendment 落地必查"
+   要求）：
+
+   - (a) §3 威胁矩阵"账号枚举"/"revoked session 后置导致 wire 漂移"行 ✅ 的
+     **主防御载体仍是 T4** `tests/integration/l2atomicity/TestL2_LoginUniform401`
+     （真实 HTTP+PG roundtrip，验证 sessionlogin service 各路径实际路由到该
+     errcode，不可绕过）。
+   - (b) FU-4（本 amendment）是 **errcode → wire 序列化层的声明式规格补充**
+     （journey 验收），验证 sessionlogin 5 个构造点序列化后 wire 字节一致；它
+     **不验证 service 路由正确性**，因此不是 T4 的独立替代证据。
+   - (c) 本 amendment **无** §3 威胁矩阵格子从 ✅ 退化——FU-4 是增量声明式规格
+     覆盖，T4 持续支撑原 ✅，两者 cross-link（见
+     `tests/integration/l2atomicity/doc.go:55-57`）不重复覆盖。
 
 2. **5 项触发型 backlog 条目登记**（accept trade-off / 防御性，仅登记触发
    条件，触发前不立 PR）：

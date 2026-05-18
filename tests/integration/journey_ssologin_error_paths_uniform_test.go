@@ -22,36 +22,55 @@ import (
 // journey.J-ssologin.error-paths-uniform. The verify runner resolves that
 // ref to ^TestJSsologinErrorPathsUniform$ via verify.kebabToCamelCase and
 // executes it under -tags=integration. Because J-ssologin is
-// lifecycle: active, governance VERIFY-06 (kernel/governance/rules_verify.go)
-// runs this test inside `gocell validate --strict` (part of the Docker-less
-// `make verify` gate) — so this test MUST be Docker-free, mirroring the
-// layer-compromise rationale of TestJSsologinSessionDb in this package.
+// lifecycle: active, governance VERIFY-06 (kernel/governance/rules_verify.go
+// function validateVERIFY06Journey) runs this test inside
+// `gocell validate --strict` (part of the Docker-less `make verify` gate) —
+// so this test MUST be Docker-free, mirroring the layer-compromise rationale
+// of TestJSsologinSessionDb in this package.
 //
 // The journey criterion is the FU-1 (#513) anti-enumeration contract
 // (contracts/http/auth/login/v1/contract.yaml:24): missing-user /
-// wrong-password / inactive-account all collapse to ONE opaque HTTP 401
-// envelope so an attacker cannot distinguish "user does not exist" from
-// "wrong password" from "account locked".
+// wrong-password / inactive-account (including locked and suspended) all
+// collapse to ONE opaque HTTP 401 envelope so an attacker cannot distinguish
+// "user does not exist" from "wrong password" from "account locked".
 //
-// sessionlogin.loginInTx constructs three errcode values for these paths
-// (cells/accesscore/slices/sessionlogin/service.go:262 / :275 / :280):
-// all three share KindUnauthenticated + ErrAuthLoginFailed + "invalid
-// credentials"; only the WithInternal diagnostic (server-side slog only,
-// never on wire) differs, and path-3 (wrong password) carries none. This
-// test reconstructs the three errcode shapes and asserts their CLIENT-FACING
-// wire bytes are byte-identical after the canonical framework error writer
-// (pkg/httputil.WriteError, the single source of truth for the v1 error
-// envelope). Byte-identity is the load-bearing assertion: it proves the
-// WithInternal divergence does not leak to the wire and the three paths are
-// indistinguishable to a client.
+// sessionlogin constructs FIVE errcode values for login failure across its
+// two-phase (pre-bcrypt + loginInTx) code paths. All five share
+// KindUnauthenticated + ErrAuthLoginFailed + "invalid credentials"; only
+// the WithInternal diagnostic (server-side slog only, never on wire) differs:
+//
+//   - service.go:262 — user lookup fail (pre-bcrypt);
+//     WithInternal "user lookup failed: ..."
+//   - service.go:275 — pre-bcrypt baseline fail (inactive/locked/suspended);
+//     WithInternal "credentialauthority: pre-bcrypt baseline fail ..."
+//   - service.go:280 — wrong password; no WithInternal
+//   - service.go:352 — in-tx credentialauthority assert failed (concurrent
+//     deactivation race); WithInternal "credentialauthority: in-tx assert failed ..."
+//   - service.go:484 — in-tx FOR UPDATE user row vanished (concurrent delete
+//     race); no WithInternal (KindNotFound → classifyForUpdateErr)
+//
+// These five points represent 3 client-observable states:
+// missing-user (including its in-tx race variant at :484) /
+// wrong-password / inactive (including locked·suspended and their in-tx
+// race variant at :352). This test reconstructs all five errcode shapes
+// and asserts their CLIENT-FACING wire bytes are byte-identical after the
+// canonical framework error writer (pkg/httputil.WriteError, the single
+// source of truth for the v1 error envelope). Byte-identity is the
+// load-bearing assertion: it proves the WithInternal divergence (including
+// the presence/absence of WithInternal across the five points) does not leak
+// to the wire and all five paths are indistinguishable to a client.
 //
 // Layer compromise (same philosophy as TestJSsologinSessionDb): the wire
 // envelope is governed solely by pkg/errcode + pkg/httputil, so asserting at
 // that seam IS asserting the wire-shape contract. The full programmatic
-// proof that sessionlogin's three SERVICE paths actually return this errcode
-// over a real HTTP + PG roundtrip is owned by T4's
-// tests/integration/l2atomicity/TestL2_LoginUniform401 (testcontainers
-// e2e); see tests/integration/l2atomicity/doc.go:55-57 and plan
+// proof that sessionlogin's SERVICE paths actually return this errcode over a
+// real HTTP + PG roundtrip is owned by T4's
+// tests/integration/l2atomicity/TestL2_LoginUniform401 (testcontainers e2e)
+// — T4 is the PRIMARY defense carrier for the anti-enumeration ✅ in §3
+// threat matrix (real HTTP+PG roundtrip verifying service routing correctness);
+// FU-4 (this test) is a DECLARATIVE spec supplement covering the
+// errcode→wire serialization layer and is NOT a substitute for T4. See
+// tests/integration/l2atomicity/doc.go:55-57 and plan
 // docs/plans/202605082145-034-pg-corecell-b-route-plan.md §T4 ↔ FU-4 for
 // the explicit T4 (programmatic) ↔ FU-4 (declarative journey spec)
 // division of labor. Routing this test through PG/testcontainers would
@@ -65,9 +84,17 @@ func TestJSsologinErrorPathsUniform(t *testing.T) {
 
 	const wantMessage = "invalid credentials"
 
-	// The three login-failure paths, mirroring service.go:262 / :275 / :280.
-	// Only WithInternal differs (wrong-password carries none); it must never
-	// reach the wire.
+	// The five login-failure construction points, mirroring service.go:262 /
+	// :275 / :280 / :352 / :484. Only WithInternal differs across the five
+	// points; it must never reach the wire.
+	//
+	// NOTE on WithInternal literals: WithInternal content does NOT appear on
+	// the wire (the byte-identity assertion below is specifically founded on
+	// this). The string literals here ("u-123", "locked", "bob", etc.) are
+	// stand-in values used to construct "WithInternal present with some text" /
+	// "WithInternal absent" variants to prove that neither the presence nor the
+	// content of WithInternal leaks to the client. They are NOT server-side slog
+	// warning pattern templates and must not be used as such by ops tooling.
 	paths := []struct {
 		name string
 		err  *errcode.Error
@@ -91,6 +118,25 @@ func TestJSsologinErrorPathsUniform(t *testing.T) {
 			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				wantMessage),
 		},
+		{
+			// Mirrors service.go:352 — in-tx credentialauthority.Assert failed after
+			// FOR UPDATE re-fetch (concurrent deactivation race). WithInternal carries
+			// username + the assert error; content stays server-side only.
+			name: "in-tx-inactive-race",
+			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+				wantMessage,
+				errcode.WithInternal(fmt.Sprintf(
+					"credentialauthority: in-tx assert failed (user=%s): %v",
+					"bob", "account is locked"))),
+		},
+		{
+			// Mirrors service.go:484 — classifyForUpdateErr maps KindNotFound (user
+			// row vanished between pre-bcrypt read and FOR UPDATE re-fetch) to the
+			// uniform 401. No WithInternal (classifyForUpdateErr constructs bare).
+			name: "in-tx-missinguser-race",
+			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+				wantMessage),
+		},
 	}
 
 	var canonicalBody []byte
@@ -98,12 +144,9 @@ func TestJSsologinErrorPathsUniform(t *testing.T) {
 		rec := httptest.NewRecorder()
 		httputil.WriteError(context.Background(), rec, p.err)
 
-		res := rec.Result()
-		t.Cleanup(func() { _ = res.Body.Close() })
-
-		assert.Equal(t, http.StatusUnauthorized, res.StatusCode,
+		assert.Equal(t, http.StatusUnauthorized, rec.Code,
 			"%s: must collapse to HTTP 401", p.name)
-		assert.Equal(t, "application/json", res.Header.Get("Content-Type"),
+		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
 			"%s: canonical error envelope is JSON", p.name)
 
 		body := rec.Body.Bytes()

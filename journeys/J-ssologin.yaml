@@ -20,7 +20,7 @@ passCriteria:
   - text: Session 写入数据库
     mode: auto
     checkRef: journey.J-ssologin.session-db
-  - text: 登录失败三态归一 — missing-user / wrong-password / inactive 均返 HTTP 401 同一 envelope (code=ERR_AUTH_LOGIN_FAILED, message="invalid credentials")，防账号枚举
+  - text: 登录失败三态归一 — missing-user / wrong-password / inactive（含 locked / suspended）均返 HTTP 401 同一 envelope (code=ERR_AUTH_LOGIN_FAILED, message="invalid credentials")，防账号枚举；locked 账户同受此约束（见 J-accountlockout login-reject）
     mode: auto
     checkRef: journey.J-ssologin.error-paths-uniform
   - text: 安全审查签核

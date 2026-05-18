@@ -26,10 +26,11 @@ import (
 //
 // J-accountlockout is lifecycle: experimental, so governance VERIFY-06 does
 // NOT force-execute this test in `gocell validate --strict`
-// (kernel/governance/rules_verify.go:353 returns nil for non-active
-// journeys). It is kept Docker-free regardless so `gocell verify journey`
-// runs it without a container runtime, consistent with
-// TestJSsologinSessionDb / TestJSsologinErrorPathsUniform in this package.
+// (kernel/governance/rules_verify.go function validateVERIFY06Journey returns
+// nil for non-active journeys). It is kept Docker-free regardless so
+// `gocell verify journey` runs it without a container runtime, consistent
+// with TestJSsologinSessionDb / TestJSsologinErrorPathsUniform in this
+// package.
 //
 // The criterion asserts a locked account that attempts login receives the
 // SAME opaque 401 envelope as missing-user / wrong-password (FU-1 #513
@@ -55,6 +56,15 @@ import (
 // errMsgInvalidCredentials ("invalid credentials") is unexported in the
 // sessionlogin package; the literal here is the wire contract value pinned
 // in contracts/http/auth/login/v1/contract.yaml:24.
+//
+// J-accountlockout has 4 auto checkRef criteria. Only login-reject is
+// implemented here; the other 3 (auto-lock / event-publish / admin-unlock)
+// are pre-existing gaps with no test implementation. Because J-accountlockout
+// is lifecycle: experimental, VERIFY-06 exempts all 4 criteria from the
+// active gate / `make verify` green path. Running `gocell verify journey
+// --id=J-accountlockout` standalone will show those 3 criteria as FAIL —
+// that is a pre-existing known gap and is explicitly out of scope for plan
+// 034 §FU-4.
 func TestJAccountlockoutLoginReject(t *testing.T) {
 	t.Parallel()
 
@@ -63,6 +73,12 @@ func TestJAccountlockoutLoginReject(t *testing.T) {
 	// Locked-account login attempt — mirrors service.go:275 (pre-bcrypt
 	// credentialauthority baseline fail). The real "status=locked" reason is
 	// confined to WithInternal and must not surface on the wire.
+	//
+	// NOTE on WithInternal literals: WithInternal content does NOT appear on
+	// the wire. The string literals here ("u-locked-acct", "locked") are
+	// stand-in values to construct a "WithInternal present" variant and prove
+	// its content does not leak to the client. They are NOT server-side slog
+	// warning pattern templates and must not be used as such by ops tooling.
 	lockedErr := errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 		wantMessage,
 		errcode.WithInternal(fmt.Sprintf(
@@ -72,12 +88,9 @@ func TestJAccountlockoutLoginReject(t *testing.T) {
 	rec := httptest.NewRecorder()
 	httputil.WriteError(context.Background(), rec, lockedErr)
 
-	res := rec.Result()
-	t.Cleanup(func() { _ = res.Body.Close() })
-
-	assert.Equal(t, http.StatusUnauthorized, res.StatusCode,
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
 		"locked-account login must be rejected with HTTP 401")
-	assert.Equal(t, "application/json", res.Header.Get("Content-Type"),
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
 		"canonical error envelope is JSON")
 
 	var env struct {
