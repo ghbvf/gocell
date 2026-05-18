@@ -1,7 +1,7 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
-**最后更新**：2026-05-18 v3（状态回灌：**Wave 3 ship — PR-W3-1 TEST-JOURNEY-ROOT-HARNESS-01 ✅**（615-journey-useronboarding-harness）：(a) J-useronboarding lifecycle: experimental → active；(b) `tests/integration/journey_useronboarding_login_verify_test.go::TestJUseronboardingLoginVerify` (session.MemStore round-trip 真实持久化) 闭环 login-verify checkRef；(c) 其余 3 criteria mode: auto → manual，因 `cells/accesscore/internal/credentialinvalidate` 屏障 docker-free 无 load-bearing seam（激进自审拒绝 schema-only tautology）；(d) status-board J-useronboarding state: todo → doing；(e) 同 PR 登记 Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01`（非 silent carryover）。**前一版**：2026-05-17 v2（Wave 6 PR-W6-1 #543 + Wave 4 4/5 + Wave 5 1/3）；2026-05-16 v1 Wave 4 3/5；Wave 5 0/3；无 Wave 6。）
+**最后更新**：2026-05-18 v3（状态回灌：双 PR 同期 ship —— (1) **Wave 3 PR-W3-1 TEST-JOURNEY-ROOT-HARNESS-01 ✅**（615-journey-useronboarding-harness）：(a) J-useronboarding lifecycle: experimental → active；(b) `tests/integration/journey_useronboarding_login_verify_test.go::TestJUseronboardingLoginVerify` (session.MemStore round-trip 真实持久化) 闭环 login-verify checkRef；(c) 其余 3 criteria mode: auto → manual，因 `cells/accesscore/internal/credentialinvalidate` 屏障 docker-free 无 load-bearing seam（激进自审拒绝 schema-only tautology）；(d) status-board J-useronboarding state: todo → doing；(e) 同 PR 登记 Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01`（非 silent carryover）。 (2) **Wave 2 PR-5 GOV-AUTH-PUBLIC ✅ PR #573**：落 FMT-34 双向锁（governance 下游 Medium + codegen 上游 Hard funnel via buildHTTPEndpointSpec）；V-A11 GOVERNANCE-EXAMPLES-COVERAGE-01 ❌ subsumed by 025（parser fs.WalkDir + TestProjectWalksExamples 已结构性闭环，cap-14 backlog drift 同 PR 收口）；PR 标题改 `PR-GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN`（单规则 PR），原 `PR-GOV-NEW-RULES` 因 V-A11 退化作废；同 PR 登记 3 条 review-derived backlog（CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 / V-A11c / V-A11b 升 active）。 **Wave 2 2/2 + Wave 3 1/1 ship**，Wave 2/3 全清。**前一版**：2026-05-17 v2（Wave 6 PR-W6-1 #543 + Wave 4 4/5 + Wave 5 1/3）；2026-05-16 v1 Wave 4 3/5；Wave 5 0/3；无 Wave 6。）
 **关系**：
 - [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S3+S5/S3F/S4.0/S4a/S4b 已 ship；S4c 串行推进）。本计划不重复 accesscore 路线
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
@@ -17,10 +17,10 @@
 **P0 + 🔴**：
 - A-01 OIDC-FAILFAST-MR-COMPLETENESS 🔴 P0（含 A-07/A-08，cap-13）
 - K-02 JOURNEY-LIFECYCLE-CI-CLOSE 🔴 P0（cap-14）
-- GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN 🔴 P1（cap-02）
+- GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN ✅ P1 ship as FMT-34 (PR-5, 2026-05-18)（cap-02）
 - TEST-JOURNEY-ROOT-HARNESS-01 🔴（cap-14）
 - JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01 🔴（cap-14）
-- V-A11 GOVERNANCE-EXAMPLES-COVERAGE-01 🔴（cap-14）
+- V-A11 GOVERNANCE-EXAMPLES-COVERAGE-01 ❌ subsumed by 025 archive plan（parser fs.WalkDir + TestProjectWalksExamples 结构性闭环，cap-14 backlog drift 收口于 PR-5, 2026-05-18）
 
 **P1 高密度可合并**：
 - B2-R-05/06/07/08/09 OTel 5 件套（cap-13）
@@ -102,14 +102,21 @@
 - AI-rebust Medium（INV-1/2/3 自动守）；同 PR 显式登记两条 Hard 升级 backlog：`JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01`（P2/Cx3 🟠）+ `JOURNEY-CONTRACT-EXISTENCE-CODEGEN-DERIVE-01`（P3/Cx4 🟢）；rules_journey.go godoc 点名两个 backlog ID（参照 cap-14 PASS-PRODUCTION-UPSTREAM-HARD-01 / USAGE-02-HARD-UPGRADE-01 范式）
 - 验证：`gocell validate` 0 errors / 1 warning（J-ssologin active+doing 提醒）；`gocell verify journey --active` 双 active journey (J-ssologin platform + J-ordercreate example) 自动 checkRef 全 PASS
 
-#### PR-5 PR-GOV-NEW-RULES（合并 2 个 governance 新规则，PR-6 ✅ 阻塞解除）
+#### PR-5 PR-GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN（单规则 PR，V-A11 ❌ subsumed 收口）— ✅ shipped as PR #XXX (2026-05-18)
 
-**包含**：GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN + V-A11 GOVERNANCE-EXAMPLES-COVERAGE-01
-**依据**：都在 `kernel/governance/`（rules_fmt.go / rules_examples.go 兄弟文件），都是新增 rule，PR-6 注册框架已落
+**包含**：仅 GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN（FMT-34）
+**V-A11 处置**：❌ subsumed by 025 archive plan — metadata.Parser `fs.WalkDir(".")` 已自然覆盖 `examples/**`，`kernel/governance/validate_test.go:4911 TestProjectWalksExamples` 回归测试固化；archive 显式"放弃新建 rules_examples.go"，原修复前提结构性消除。cap-14 backlog drift 同 PR 收口；V-A11b 字符串扫描分支仍触发型保留
+**依据**：单规则 PR，避免凑数；FMT-34 双向锁同 PR 落地（cap-02 字面要求 + ai-collab funnel 双向锁评级）
 **依赖**（v5 2026-05-14 复核）：
 - PR-6 (G-13) ✅ PR #487 已落：直接用 `rulecodes.go` + `validateXxx()` + `; fix:` 后缀范式
-- 040 阶段 1 ✅ PR #492 已落（2026-05-14）：V-A11 EXAMPLES-COVERAGE 新增 archtest 走 `archtest.Run` / `archtest.RunTyped`，不进 LegacyAllowlist
-**合并决策**（v4 2026-05-14 收口）：**保持合并**——两条 governance 兄弟规则（rules_fmt.go / rules_examples.go），文件物理重叠 + 同 ADR 概念（governance 规则注册框架），单 PR review 合理；PR-6 落后回看结论：注册框架 ship 后两条挂入路径完全一致，无拆分必要
+- 040 阶段 1 ✅ PR #492 已落（2026-05-14）：archtest 自动覆盖 (INV-1/2/3)，新规则零 archtest 工作量
+**合并决策**（v3 2026-05-18 用户裁决）：**拆 V-A11 出去 + 单规则 ship**——V-A11 backlog drift 不应通过"凑兄弟规则"重新立项；FMT-34 自身完成度足够独立 PR
+**ship 摘要（PR #XXX，2026-05-18）**：
+- B2 `kernel/governance/rules_fmt.go::validateFMT34`（下游 Medium）：遍历 contract，path 命中 `metadata.IsInternalHTTPPath` + auth.Public/PasswordResetExempt 任一 true 即独立 emit；godoc 显式点名上游 funnel + Hard 升级 backlog `G-13-FU-H3-RULES-AUTOREGISTER`（ai-collab funnel 双向锁评级强制要求）
+- B5 `tools/codegen/contractgen/builder.go::validateAuthOnInternalPath`（上游 Hard）：buildHTTPEndpointSpec 唯一 funnel；命名对齐 `validateAuth<X>` 形态；复用 `metadata.IsInternalHTTPPath` single oracle
+- 测试矩阵：A1 governance 9 cases（4 fail + 5 pass，覆盖与 FMT-26/28 边界正交）；A2 codegen 8 cases（4 fail + 4 pass）；INV-1/2/3 反射自动覆盖新 codeFMT34
+- 仓库 0 现存违规验证：`gocell validate .` 0 errors（含 0 FMT-34 finding），1 already-existing J-ssologin lifecycle warning（与 PR-5 无关）
+- 顺手更新 `kernel/governance/CLAUDE.md` 规则范围注释 FMT-31 → FMT-34（实际已到 FMT-33，文档滞后一并清）
 **Cx**：Cx2
 
 #### PR-6 G-13 GOVERNANCE-RULES-REGISTRATION-GUARD（独立 P1）— ✅ shipped as PR #487
@@ -181,10 +188,9 @@ Wave 1（独立并行，8 PR） — 8/8 ship：
   PR-8 OIDC-MR-COMPLETENESS  ✅ PR #485
   PR-9 REPO-READYZ           ✅ PR #506 (2026-05-16) — +CELL-REPO-READYZ-PROBE-01 Hard funnel
 
-Wave 2（依赖 Wave 1，2 PR） — 1/2 ship：
+Wave 2（依赖 Wave 1，2 PR） — 2/2 ship：
   PR-11 OIDC-JWKS-ROTATION-WORKER-01 ✅ PR #504 (2026-05-16) — periodic re-discovery worker + refresh metric (A-02)
-  PR-5 GOV-NEW-RULES (GOVERNANCE-AUTH-PUBLIC + V-A11)
-       ↑ 依赖 PR-6 ✅；**前置已达成，可立即排期**（Wave 2 唯一遗留）
+  PR-5 GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN ✅ PR #XXX (2026-05-18) — FMT-34 双向锁 (governance 下游 Medium + codegen 上游 Hard funnel)；V-A11 ❌ subsumed by 025 (parser fs.WalkDir 已闭环)，单规则 PR ship
 
 Wave 3（依赖 Wave 1） — 1/1 ship：
   TEST-JOURNEY-ROOT-HARNESS-01      ✅ PR-W3-1 (615-journey-useronboarding-harness, 2026-05-18) — J-useronboarding lifecycle active + 1 auto load-bearing test (login-verify, session.MemStore round-trip) + 3 manual carve-out (cells/accesscore/internal/credentialinvalidate 屏障) + Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01` 同 PR 登记
@@ -247,27 +253,27 @@ Wave 6（cap-x-cross 触发型小 PR 簇 / 发布前 contract 测试门禁簇）
 | PR-8 OIDC-MR-COMPLETENESS | 18h | 8h | ✅ PR #485 | A-01 + A-07 + A-08 束 |
 | PR-9 REPO-READYZ | 4h | 2h | ✅ PR #506 | typed funnel + conformance harness + 3-cell unification；Cx2→Cx3 |
 | PR-11 OIDC-JWKS-ROTATION-WORKER（依赖 PR-8 ✅） | 4h | 2h | ✅ PR #504 | periodic re-discovery worker + refresh metric (A-02)；PR-8 unblock |
-| PR-5 GOV-NEW-RULES | 4h | 2h | ⏳ 可起（040 阶段 1 ✅ PR #492 解锁）| PR-6 ✅；保持合并；V-A11 archtest 走 `archtest.Run`/`RunTyped`（Wave 2 唯一遗留）|
+| PR-5 GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN | 4h | 2h | ✅ PR #573 (2026-05-18) | FMT-34 双向锁（governance 下游 Medium + codegen 上游 Hard funnel via buildHTTPEndpointSpec）；V-A11 ❌ subsumed by 025（parser fs.WalkDir 已闭环，cap-14 backlog drift 同 PR 收口）；单规则 PR；Hard 升级 backlog G-13-FU-H3-RULES-AUTOREGISTER godoc 点名；同 PR 登记 3 review-derived backlog |
 | Wave 3 TEST-JOURNEY-ROOT-HARNESS-01 | 4h | 2h | ✅ PR-W3-1 | 615-journey-useronboarding-harness, 2026-05-18 — 1 auto load-bearing test + 3 manual carve-out + Hard 升级 backlog 同 PR 登记；激进自审 v2 拒绝 v1 schema-only tautology |
 | Wave 4 小 PR 合计（5 项，精算） | ~27h | ~13.5h | 🟡 4/5 | ✅ **ADAPTER-ERR-CLASS PR #517** / **C-02 PR #518**（035 PR-CFG-CACHE-LIFECYCLE）/ **STARTUP-ROLLBACK PR #499** / **ADAPTER-CONN-BUDGET PR #541**；剩 1 项 ⏳：R-01+G-08 batch 10h+5h |
 | Wave 5 架构重构 | 独立排期 | — | 🟡 1/3 | ✅ BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE PR #531；剩 G-10 / SEALED 束 |
 | Wave 6 cap-x-cross 触发型 + 发布前 contract 测试门禁簇 | 独立排期 | — | 🟡 2/? | ✅ S3-FAILURE-INJECTION-01 PR #538；✅ PR-W6-1 CONTRACT-TEST-GATE PR #543（A/B/C 三子项一并 ship + Hard 升级 backlog 同 PR 登记）|
 
 **累计**：
-- ✅ shipped (9 Wave1 PR + Wave 2 PR-11 + Wave 3 PR-W3-1 + Wave 4 4 项 + Wave 5 1 项 + Wave 6 2 项): ~91h dev / ~44h review（PR-1/2/3/4/6/7/8/9/11 + Wave 3: PR-W3-1 + Wave 4: ADAPTER-ERR-CLASS #517 / C-02 #518 / STARTUP-ROLLBACK #499 / ADAPTER-CONN-BUDGET #541 + Wave 5: #531 + Wave 6: #538 / #543）
-- ⏳ 待启动 (Wave 2 剩余 + Wave 4 剩余): ~14h dev / ~7h review（PR-5 + Wave 4: R-01+G-08）
-- 进度：Wave 1 8/8 ship（100%）；Wave 2 1/2 ship；Wave 3 1/1 ship（100%）；Wave 4 4/5 ship；Wave 5 1/3 ship；Wave 6 2/?；038 整体 dev 进度 ~87%（按原计划 102h 总分母）
+- ✅ shipped (9 Wave1 PR + Wave 2 2 项 + Wave 3 PR-W3-1 + Wave 4 4 项 + Wave 5 1 项 + Wave 6 2 项): ~95h dev / ~46h review（PR-1/2/3/4/6/7/8/9/11 + Wave 2 PR-5 #573 + Wave 3: PR-W3-1 + Wave 4: ADAPTER-ERR-CLASS #517 / C-02 #518 / STARTUP-ROLLBACK #499 / ADAPTER-CONN-BUDGET #541 + Wave 5: #531 + Wave 6: #538 / #543）
+- ⏳ 待启动 (Wave 4 剩余): ~10h dev / ~5h review（Wave 4: R-01+G-08）
+- 进度：Wave 1 8/8 ship（100%）；Wave 2 2/2 ship（100%）；Wave 3 1/1 ship（100%）；Wave 4 4/5 ship；Wave 5 1/3 ship；Wave 6 2/?；038 整体 dev 进度 ~91%（按原计划 102h 总分母）
 
 ---
 
 ## 5. 决策点
 
 1. **Wave 1 8 PR 真并行**：文件冲突已核查，所有 PR 间无 rebase 阻塞（含 040 阶段 1 ✅ 解锁）
-2. **PR-5 保持合并**（GOVERNANCE-AUTH-PUBLIC + V-A11）：rules_fmt.go / rules_examples.go 兄弟规则，注册框架 (PR-6 ✅) ship 后挂入路径一致
+2. **PR-5 单规则 ship**（GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN = FMT-34）✅ shipped 2026-05-18：原计划合并 V-A11 被实事核对推翻 — V-A11 已被 025 archive plan 结构性闭环（parser fs.WalkDir + TestProjectWalksExamples），新建 rules_examples.go 是 backlog drift；不为凑兄弟规则硬上无语义规则，cap-14 backlog 同 PR 标 ❌ subsumed；FMT-34 双向锁（governance + codegen funnel）独立完成度足够
 3. **R-01 / G-08 不合并**，分 PR review（Wave 4 小 PR）
 4. **架构重构 Wave 5 独立排期**，不进本计划主线
 5. **METRICS-CTX-FUNNEL-01 不纳入本计划**：Cx4 跨 5+ 包接口重构，登记 cap-13 走触发型
-6. **下一波建议（2026-05-18 回灌后）**：Wave 1 8/8 + Wave 2 PR-11 + Wave 3 PR-W3-1 + Wave 4 4/5 + Wave 5 1/3 + Wave 6 2/? 已 ship；剩 **PR-5 GOV-NEW-RULES**（Wave 2 唯一遗留，前置 PR-6 ✅ + 040 阶段 1 ✅ 全解锁，随时可起）+ **Wave 4 剩 1 项**（R-01+G-08 batch，触发型小 PR）+ Wave 5/6 架构重构与触发型簇独立排期
+6. **下一波建议（2026-05-18 回灌后）**：Wave 1 8/8 + Wave 2 2/2（PR-11 + PR-5 #573 ✅）+ Wave 3 1/1（PR-W3-1 ✅）+ Wave 4 4/5（#517/#518/#499/#541）+ Wave 5 1/3（#531）+ Wave 6 2/?（#538/#543）已 ship；剩 **Wave 4 剩 1 项**（R-01+G-08 batch，触发型小 PR）+ **Wave 5 剩 G-10 / SEALED 束**（架构重构独立排期）+ Wave 6 触发型簇按需
 7. **plan 040 与 038 并行**：阶段 2/3 重写 `tools/archtest/*_test.go` 自身，与 038 业务 PR 文件域互斥
 
 ---

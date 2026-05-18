@@ -1305,3 +1305,117 @@ func TestLiftHTTPResponses_Validation(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath is the codegen-side
+// upstream Hard funnel for FMT-34 (kernel/governance/rules_fmt.go::validateFMT34
+// is the downstream Medium half). buildHTTPEndpointSpec is the sole production
+// HTTP codegen entry — so rejecting auth.public / auth.passwordResetExempt on
+// /internal/v1/* here makes the violation unrepresentable at build pipeline
+// level, complementing governance's static metadata enforcement.
+func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name         string
+		auth         metadata.HTTPAuthMeta
+		path         string
+		clients      []string
+		wantErr      bool
+		wantErrFrags []string
+	}{
+		// fail cases — internal path + bypass flag must be rejected.
+		{
+			name:         "public_on_internal_path",
+			auth:         metadata.HTTPAuthMeta{Public: true},
+			path:         "/internal/v1/foo",
+			wantErr:      true,
+			wantErrFrags: []string{"FMT-34", "auth.public", "/internal/v1/foo"},
+		},
+		{
+			name:         "password_reset_exempt_on_internal_path",
+			auth:         metadata.HTTPAuthMeta{PasswordResetExempt: true},
+			path:         "/internal/v1/foo",
+			wantErr:      true,
+			wantErrFrags: []string{"FMT-34", "auth.passwordResetExempt", "/internal/v1/foo"},
+		},
+		{
+			// both bypass flags — first emitted wins (public reported first).
+			name:         "both_flags_on_internal_path",
+			auth:         metadata.HTTPAuthMeta{Public: true, PasswordResetExempt: true},
+			path:         "/internal/v1/foo",
+			wantErr:      true,
+			wantErrFrags: []string{"FMT-34", "auth.public", "/internal/v1/foo"},
+		},
+		{
+			// exact prefix /internal/v1 boundary verification.
+			name:         "exact_prefix_internal_v1",
+			auth:         metadata.HTTPAuthMeta{Public: true},
+			path:         "/internal/v1",
+			wantErr:      true,
+			wantErrFrags: []string{"FMT-34", "auth.public", "/internal/v1"},
+		},
+
+		// pass cases — legitimate internal-path auth shapes must build.
+		{
+			name:    "bootstrap_on_internal_path_ok",
+			auth:    metadata.HTTPAuthMeta{Bootstrap: true},
+			path:    "/internal/v1/access/setup/admin",
+			wantErr: false,
+		},
+		{
+			name:    "service_owned_on_internal_path_ok",
+			auth:    metadata.HTTPAuthMeta{ServiceOwned: true},
+			path:    "/internal/v1/foo",
+			wantErr: false,
+		},
+		{
+			name:    "clients_only_on_internal_path_ok",
+			auth:    metadata.HTTPAuthMeta{ClientsOnly: true},
+			path:    "/internal/v1/foo",
+			clients: []string{"edge-bff"},
+			wantErr: false,
+		},
+		{
+			name:    "public_on_public_path_ok",
+			auth:    metadata.HTTPAuthMeta{Public: true},
+			path:    "/api/v1/auth/login",
+			wantErr: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			contract := &metadata.ContractMeta{
+				ID:   "http.fmt34." + tc.name + ".v1",
+				Kind: "http",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: tc.clients,
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          tc.path,
+						SuccessStatus: 200,
+						Auth:          tc.auth,
+						Responses: map[int]metadata.HTTPResponseMeta{
+							400: {Description: "Bad Request"},
+						},
+					},
+				},
+			}
+			http := contract.Endpoints.HTTP
+			_, err := buildHTTPEndpointSpec(contract, http, buildPathParams(http), buildQueryParams(http))
+			switch {
+			case tc.wantErr && err == nil:
+				t.Fatalf("expected FMT-34 codegen rejection, got nil")
+			case tc.wantErr && err != nil:
+				for _, frag := range tc.wantErrFrags {
+					if !strings.Contains(err.Error(), frag) {
+						t.Errorf("error %q missing expected fragment %q", err.Error(), frag)
+					}
+				}
+			case !tc.wantErr && err != nil:
+				t.Fatalf("unexpected error on legitimate internal-path auth shape: %v", err)
+			}
+		})
+	}
+}

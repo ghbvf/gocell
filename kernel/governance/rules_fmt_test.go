@@ -1308,3 +1308,163 @@ func TestFMT33_VisibilitySegregation(t *testing.T) {
 		})
 	}
 }
+
+// TestFMT34_PublicBypassOnInternalPath verifies that FMT-34 forbids
+// auth.public / auth.passwordResetExempt on /internal/v1/* paths while
+// remaining orthogonal to the legitimate internal-path auth shapes
+// (bootstrap, serviceOwned, clientsOnly).
+//
+// FMT-34 is the metadata-stage upstream of runtime/auth/route.go
+// validateBypassCompatibility, which catches the same shape at runtime.
+// FMT-26 catches the two-bypass mutex orthogonally (auth.public vs
+// auth.passwordResetExempt mutual exclusion) regardless of path.
+func TestFMT34_PublicBypassOnInternalPath(t *testing.T) {
+	type tc struct {
+		name       string
+		path       string
+		auth       metadata.HTTPAuthMeta
+		clients    []string
+		nilHTTP    bool
+		wantCount  int
+		wantFields []string
+	}
+
+	tests := []tc{
+		{
+			name:       "public_on_internal_path",
+			path:       "/internal/v1/foo",
+			auth:       metadata.HTTPAuthMeta{Public: true},
+			wantCount:  1,
+			wantFields: []string{"endpoints.http.auth.public"},
+		},
+		{
+			name:       "password_reset_exempt_on_internal_path",
+			path:       "/internal/v1/foo",
+			auth:       metadata.HTTPAuthMeta{PasswordResetExempt: true},
+			wantCount:  1,
+			wantFields: []string{"endpoints.http.auth.passwordResetExempt"},
+		},
+		{
+			// FMT-34 emits one finding per bypass flag (parallel to FMT-28's
+			// multi-finding shape); FMT-26 separately catches the mutex.
+			name:      "both_flags_on_internal_path",
+			path:      "/internal/v1/foo",
+			auth:      metadata.HTTPAuthMeta{Public: true, PasswordResetExempt: true},
+			wantCount: 2,
+			wantFields: []string{
+				"endpoints.http.auth.public",
+				"endpoints.http.auth.passwordResetExempt",
+			},
+		},
+		{
+			// IsInternalHTTPPath oracle covers exact prefix /internal/v1
+			// (no trailing slash) — locks the predicate boundary.
+			name:       "exact_prefix_internal_v1",
+			path:       "/internal/v1",
+			auth:       metadata.HTTPAuthMeta{Public: true},
+			wantCount:  1,
+			wantFields: []string{"endpoints.http.auth.public"},
+		},
+		{
+			// bootstrap is the legitimate setup-admin auth shape on
+			// internal paths (FMT-28 enforces path narrowing) — FMT-34
+			// must not over-fire.
+			name:      "bootstrap_on_internal_path_ok",
+			path:      "/internal/v1/foo",
+			auth:      metadata.HTTPAuthMeta{Bootstrap: true},
+			wantCount: 0,
+		},
+		{
+			// serviceOwned keeps listener JWT auth and delegates ownership
+			// to the service — legitimate on internal paths.
+			name:      "service_owned_on_internal_path_ok",
+			path:      "/internal/v1/foo",
+			auth:      metadata.HTTPAuthMeta{ServiceOwned: true},
+			wantCount: 0,
+		},
+		{
+			// clientsOnly is the standard caller-cell-allowlist shape on
+			// internal paths.
+			name:      "clients_only_on_internal_path_ok",
+			path:      "/internal/v1/foo",
+			auth:      metadata.HTTPAuthMeta{ClientsOnly: true},
+			clients:   []string{"edge-bff"},
+			wantCount: 0,
+		},
+		{
+			// path predicate must converge: public on /api/v1 is the standard
+			// public-endpoint shape and must never trigger FMT-34.
+			name:      "public_on_public_path_ok",
+			path:      "/api/v1/auth/login",
+			auth:      metadata.HTTPAuthMeta{Public: true},
+			wantCount: 0,
+		},
+		{
+			// non-HTTP contract (e.g. event) short-circuits FMT-34.
+			name:      "non_http_contract_skipped",
+			nilHTTP:   true,
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := &metadata.ContractMeta{
+				ID:               "http.fmt34." + tt.name + ".v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: tt.clients,
+				},
+				Dir:  "contracts/http/fmt34/" + tt.name + "/v1",
+				File: "contracts/http/fmt34/" + tt.name + "/v1/contract.yaml",
+			}
+			if !tt.nilHTTP {
+				contract.Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          tt.path,
+					SuccessStatus: 200,
+					Auth:          tt.auth,
+				}
+			}
+
+			project := &metadata.ProjectMeta{
+				Cells:      map[string]*metadata.CellMeta{},
+				Slices:     map[string]*metadata.SliceMeta{},
+				Contracts:  map[string]*metadata.ContractMeta{contract.ID: contract},
+				Journeys:   map[string]*metadata.JourneyMeta{},
+				Assemblies: map[string]*metadata.AssemblyMeta{},
+			}
+
+			v := NewValidator(project, "", clock.Real())
+			matches := findByCode(v.validateFMT34(), codeFMT34)
+			if len(matches) != tt.wantCount {
+				t.Fatalf("FMT-34 %s: expected %d findings, got %d: %v",
+					tt.name, tt.wantCount, len(matches), matches)
+			}
+
+			for _, m := range matches {
+				if m.Severity != SeverityError {
+					t.Errorf("FMT-34 %s: expected SeverityError, got %v", tt.name, m.Severity)
+				}
+				if !strings.Contains(m.Message, "; fix:") {
+					t.Errorf("FMT-34 %s: message must contain '; fix:' suffix, got: %q",
+						tt.name, m.Message)
+				}
+			}
+
+			gotFields := make(map[string]bool, len(matches))
+			for _, m := range matches {
+				gotFields[m.Field] = true
+			}
+			for _, want := range tt.wantFields {
+				if !gotFields[want] {
+					t.Errorf("FMT-34 %s: expected finding on field %q, got fields %v",
+						tt.name, want, gotFields)
+				}
+			}
+		})
+	}
+}

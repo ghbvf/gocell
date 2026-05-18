@@ -1449,6 +1449,72 @@ func (v *Validator) validateFMT33() []ValidationResult {
 	return results
 }
 
+// validateFMT34 forbids auth.public / auth.passwordResetExempt on
+// /internal/v1/* paths. Internal endpoints must not bypass JWT entirely
+// (auth.public) or accept JWTs carrying password_reset_required=true
+// (auth.passwordResetExempt); use auth.bootstrap (HTTP Basic Auth for
+// setup), auth.serviceOwned (service delegates ownership), or
+// auth.clientsOnly (caller-cell allowlist) instead.
+//
+// Funnel pair (ai-collab.md §Funnel 双向锁评级):
+//
+//	upstream Hard: tools/codegen/contractgen/builder.go::validateAuthOnInternalPath
+//	               (single funnel via buildHTTPEndpointSpec — sole HTTP codegen entry)
+//	downstream:    this rule (Medium — receiver-type + RuleCode const + fix suffix archtest)
+//
+// Hard-upgrade path for this side: G-13-FU-H3-RULES-AUTOREGISTER
+// (cap-02 backlog, reflect-derived rules() removes "forgot-to-register" gap →
+// downstream upgrades to Hard).
+//
+// Orthogonal to FMT-26 (two-bypass mutex, path-agnostic) and
+// runtime/auth/route.go validateBypassCompatibility (Route struct field
+// mutex, path-agnostic) — three-layer defense, metadata-first.
+//
+// FMT-34 emits one finding per violating flag (parallel to FMT-28's
+// multi-finding shape) so the report points at each offending field.
+func (v *Validator) validateFMT34() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Endpoints.HTTP == nil {
+			continue
+		}
+		path := c.Endpoints.HTTP.Path
+		if !metadata.IsInternalHTTPPath(path) {
+			continue
+		}
+		auth := c.Endpoints.HTTP.Auth
+		if auth.Public {
+			results = append(results, v.newResult(
+				codeFMT34, SeverityError, IssueForbidden,
+				contractFile(c),
+				"endpoints.http.auth.public",
+				fmt.Sprintf(
+					"contract %q declares auth.public:true on internal path %q; "+
+						"internal endpoints must not bypass JWT (use auth.bootstrap, "+
+						"auth.serviceOwned, or auth.clientsOnly instead); "+
+						"fix: remove auth.public or move the endpoint off /internal/v1/",
+					c.ID, path,
+				),
+			))
+		}
+		if auth.PasswordResetExempt {
+			results = append(results, v.newResult(
+				codeFMT34, SeverityError, IssueForbidden,
+				contractFile(c),
+				"endpoints.http.auth.passwordResetExempt",
+				fmt.Sprintf(
+					"contract %q declares auth.passwordResetExempt:true on internal "+
+						"path %q; internal endpoints are cell-to-cell only and must "+
+						"not accept the password-reset bypass token; "+
+						"fix: remove auth.passwordResetExempt or move the endpoint off /internal/v1/",
+					c.ID, path,
+				),
+			))
+		}
+	}
+	return results
+}
+
 // sliceMixesHTTPVisibility reports whether s serves at least one public
 // (/api/*) HTTP contract and at least one internal (/internal/v1) HTTP
 // contract via role=serve usages — the SLICE-HTTP-VISIBILITY-SEGREGATION-01

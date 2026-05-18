@@ -244,6 +244,10 @@ func buildHTTPEndpointSpec(
 		return nil, err
 	}
 
+	if err := validateAuthOnInternalPath(contract.ID, http.Path, http.Auth); err != nil {
+		return nil, err
+	}
+
 	spec := &HTTPEndpointSpec{
 		Method:                  http.Method,
 		Path:                    http.Path,
@@ -298,6 +302,39 @@ func validateAuthServiceOwned(contractID string, auth metadata.HTTPAuthMeta) err
 			"serviceOwned keeps listener JWT auth and delegates ownership authorization to the service, "+
 			"so it cannot be combined with auth modes that replace or bypass that route shape",
 		contractID)
+}
+
+// validateAuthOnInternalPath is the codegen-side upstream Hard funnel for
+// FMT-34 (kernel/governance/rules_fmt.go::validateFMT34 is the downstream
+// Medium half). buildHTTPEndpointSpec is the sole production HTTP codegen
+// caller (verified by grep) → rejecting auth.public / auth.passwordResetExempt
+// on /internal/v1/* here makes the violation unrepresentable at the build
+// pipeline level.
+//
+// Uses metadata.IsInternalHTTPPath as the single oracle for the /internal/v1
+// predicate (shared with governance + runtime), preventing prefix-string
+// divergence across layers.
+func validateAuthOnInternalPath(contractID, path string, auth metadata.HTTPAuthMeta) error {
+	if !metadata.IsInternalHTTPPath(path) {
+		return nil
+	}
+	if auth.Public {
+		return fmt.Errorf(
+			"contractgen build: contract %q [FMT-34] declares auth.public:true on "+
+				"internal path %q; internal endpoints must not bypass JWT "+
+				"(use auth.bootstrap, auth.serviceOwned, or auth.clientsOnly instead); "+
+				"remove auth.public or move the endpoint off /internal/v1/",
+			contractID, path)
+	}
+	if auth.PasswordResetExempt {
+		return fmt.Errorf(
+			"contractgen build: contract %q [FMT-34] declares auth.passwordResetExempt:true "+
+				"on internal path %q; internal endpoints are cell-to-cell only and must "+
+				"not accept the password-reset bypass token; "+
+				"remove auth.passwordResetExempt or move the endpoint off /internal/v1/",
+			contractID, path)
+	}
+	return nil
 }
 
 func validateAuthClientsOnly(
