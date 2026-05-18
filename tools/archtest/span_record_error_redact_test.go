@@ -27,7 +27,6 @@
 package archtest
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -82,16 +81,10 @@ const redactionImportPath = `"github.com/ghbvf/gocell/pkg/redaction"`
 // spanRedactViolMsg is the diagnostic message emitted when a RecordError call
 // does not wrap its argument with redaction.RedactError.
 //
-// Serialization protocol — two paths share this constant with different
-// surrounding context:
-//
-//  1. Fixture scanner (scanSpanRecordErrorFile): emits position-prefixed
-//     strings of the form "<rel>:<line>: <spanRedactViolMsg>", used only in
-//     test assertions within TestSpanRecordErrorRedactedFixtures.
-//
-//  2. Production enforcement (spanRecordErrorDirDiags): populates
-//     Diagnostic.Message directly (no prefix); the Diagnostic struct carries
-//     Rel and Line as separate fields, and Report formats them independently.
+// Used by spanRecordErrorDirDiags (production enforcement) and
+// runSpanRecordErrorFixtureDiags (fixture scan): populates Diagnostic.Message
+// directly; the Diagnostic struct carries Rel and Line as separate fields, and
+// Report formats them independently.
 //
 // Callers must not strip or reformat the constant value; add position context
 // via the Diagnostic struct rather than by mutating the message text.
@@ -211,31 +204,6 @@ func posInRanges(p token.Pos, ranges []token.Pos) bool {
 	return false
 }
 
-// scanSpanRecordErrorFile walks file and reports every `*.RecordError(...)`
-// call whose first argument is not `<redaction>.RedactError(...)`.
-func scanSpanRecordErrorFile(fset *token.FileSet, file *ast.File, rel string) []string {
-	redactionLocal := redactionLocalName(file)
-
-	var out []string
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "RecordError" {
-			return
-		}
-		// Bare `RecordError()` with no arg — only legal in tests; in prod
-		// code this is structurally wrong (RecordError requires error arg).
-		if len(call.Args) == 0 {
-			return
-		}
-		if isRedactErrorCall(call.Args[0], redactionLocal) {
-			return
-		}
-		line := fset.Position(call.Pos()).Line
-		out = append(out, fmt.Sprintf("%s:%d: %s", rel, line, spanRedactViolMsg))
-	})
-	return out
-}
-
 // spanRecordErrorDirDiags returns SPAN-RECORD-ERROR-REDACT-01 Diagnostics for dir.
 //
 // IncludeGenerated mirrors the option used by TestSpanRecordErrorScanDirsCoverage
@@ -330,41 +298,6 @@ func TestSpanRecordErrorScanDirsCoverage(t *testing.T) {
 		return ds
 	})
 	Report(t, "SPAN-RECORD-ERROR-REDACT-01-COVERAGE", diags)
-}
-
-// runSpanRecordErrorFixtureScan parses fixture .go files and reports
-// violations relative to fixtureDir. Uses DirsScope+IncludeTestdata to
-// funnel through the framework even though fixtures live under testdata/
-// (the default skip set excludes testdata; IncludeTestdata is the authorized
-// opt-in).
-//
-// This is a fixture-only helper — it does not follow the production Diagnostic
-// path. Run(...) is invoked solely to walk p.Files via the framework; the
-// closure always returns nil (no Diagnostics). Violations are instead
-// accumulated into the outer `out []string` slice by scanSpanRecordErrorFile,
-// which returns position-prefixed strings rather than Diagnostic structs.
-// DirsScope without IncludeTests() never includes *_test.go files, so no
-// explicit test-file guard is needed here.
-//
-// IncludeGenerated mirrors the option used by the production enforcement walk
-// spanRecordErrorDirDiags, so the violates_in_generated fixture (which buries
-// the offending file under a "generated" subdirectory) actually reaches the
-// scanner. Without it the default skip set drops the file and the fixture
-// silently passes — making the production IncludeGenerated() a no-op.
-//
-// fixtureDirRel is the module-relative slash path to the fixture directory.
-func runSpanRecordErrorFixtureScan(t *testing.T, root, fixtureDirRel string) []string {
-	t.Helper()
-	scope := DirsScope(root, []string{fixtureDirRel}, IncludeTestdata(), IncludeGenerated())
-	var out []string
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			out = append(out, scanSpanRecordErrorFile(p.Fset, file, filepath.Base(p.Abs(file)))...)
-		}
-		return nil
-	})
-	sort.Strings(out)
-	return out
 }
 
 // TestSpanRecordErrorRedactedFixtures verifies the AST scanner via static

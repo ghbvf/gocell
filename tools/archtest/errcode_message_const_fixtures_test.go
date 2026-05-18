@@ -64,8 +64,7 @@ func TestErrcodeMessageConstLiteralFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "errcode_message_const")
 
-	// GREEN fixture: 0 violations.
-	// RED fixture: 5 violations (3 errcode.New/Wrap + httputil.WritePublic + ctxcancel.WrapOrInfra).
+	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
 	dirs := []string{"compliant", "violates"}
 
 	for _, dir := range dirs {

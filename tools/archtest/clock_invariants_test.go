@@ -502,8 +502,7 @@ func TestClockInjectionCallsiteFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_injection_callsite_fixtures")
 
-	// GREEN fixture: 0 violations.
-	// RED fixture: 1 violation (NewService called without WithClock).
+	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
 	dirs := []string{"compliant", "violates"}
 
 	for _, dir := range dirs {
@@ -821,9 +820,7 @@ func TestKernelClockLeafFallbackFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_leaf_fallback_fixtures")
 
-	// GREEN fixture: 0 violations.
-	// RED fixture: 3 violations — direct call, import-alias call, nil-fallback
-	// constructor body (each on a distinct line, so 3 reports total).
+	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
 	dirs := []string{"compliant", "violates"}
 
 	for _, dir := range dirs {
@@ -1041,9 +1038,7 @@ func TestKernelClockResetRelativeFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_reset_relative_fixtures")
 
-	// GREEN fixture: 0 violations.
-	// RED fixture: 1 violation (Timer.Reset(d time.Duration) called on a
-	// Timer-like type that exposes ResetAt).
+	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
 	dirs := []string{"compliant", "violates"}
 
 	for _, dir := range dirs {
