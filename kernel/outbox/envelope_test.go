@@ -3,6 +3,7 @@ package outbox
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +160,55 @@ func TestUnmarshalEnvelope_PreservesObservability(t *testing.T) {
 	assert.Equal(t, obs.CorrelationID, got.Observability.CorrelationID)
 	// struct-equal 兜底：未来新增字段时测试自动失败
 	assert.Equal(t, obs, got.Observability)
+}
+
+func TestUnmarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
+	// CWE-117 log-injection trust boundary: every ID-shaped wire field
+	// must pass idutil.IsSafeID + length cap at decode time. Required-empty
+	// checks remain separate (covered by TestUnmarshalEnvelope_MissingRequiredFieldRejected).
+	tests := []struct {
+		name string
+		raw  []byte
+	}{
+		{
+			name: "ID with newline injection",
+			raw:  []byte(`{"schemaVersion":"v1","id":"evt-1\nlevel=error msg=injected","eventType":"foo.v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+		{
+			name: "ID with CR injection",
+			raw:  []byte(`{"schemaVersion":"v1","id":"evt-1\rINJECT","eventType":"foo.v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+		{
+			name: "ID overlong",
+			raw:  []byte(`{"schemaVersion":"v1","id":"` + strings.Repeat("a", 257) + `","eventType":"foo.v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+		{
+			name: "EventType with space",
+			raw:  []byte(`{"schemaVersion":"v1","id":"ok","eventType":"foo v1","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+		{
+			name: "Topic with newline",
+			raw:  []byte(`{"schemaVersion":"v1","id":"ok","eventType":"foo.v1","topic":"foo.v1\nx","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+		{
+			name: "AggregateID with angle brackets (XSS-like injection)",
+			raw:  []byte(`{"schemaVersion":"v1","id":"ok","eventType":"foo.v1","aggregateId":"<script>","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+		{
+			name: "AggregateType with space",
+			raw:  []byte(`{"schemaVersion":"v1","id":"ok","eventType":"foo.v1","aggregateType":"some type","payload":{"d":1},"createdAt":"2026-04-23T00:00:00Z"}`),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := UnmarshalEnvelope("foo.v1", tt.raw)
+			require.Error(t, err, "unsafe ID-shaped field must fail-closed at wire boundary")
+			var ce *errcode.Error
+			require.True(t, errors.As(err, &ce))
+			assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code,
+				"wire-boundary validation failures must surface as ErrEnvelopeSchema")
+		})
+	}
 }
 
 func TestEntryValidate_RejectsEmptyRequiredFields(t *testing.T) {
