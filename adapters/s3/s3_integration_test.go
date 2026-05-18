@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
@@ -193,14 +194,18 @@ func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 	// Baseline: Health should be OK before stop.
 	require.NoError(t, client.Health(ctx), "Health should be OK before stop")
 
-	// Stop the container. Health() should now fail.
-	// "connection refused" is classified permanent by classifyS3Error fail-closed;
-	// we only assert non-nil, not IsTransient.
+	// Stop the container. Health() should now fail with a transient error:
+	// "connection refused" surfaces as *net.OpError + syscall.ECONNREFUSED,
+	// which implements net.Error and is routed through errcode.IsTransientNet
+	// (S3-CLASSIFYERROR-CONN-REFUSED-01 fix). Consumers must Requeue, not DLX.
 	stopTimeout := testtime.D5s
 	require.NoError(t, ctr.Stop(ctx, &stopTimeout), "stop container")
 
 	healthErr := client.Health(ctx)
 	require.Error(t, healthErr, "Health should return an error after container stop")
+	assert.True(t, errcode.IsTransient(healthErr),
+		"dial refused on stopped container must classify as transient "+
+			"(S3-CLASSIFYERROR-CONN-REFUSED-01); got: %v", healthErr)
 
 	// Restart the container. Docker may assign a new host port, so we re-read
 	// ConnectionString after Start to get the current mapping.

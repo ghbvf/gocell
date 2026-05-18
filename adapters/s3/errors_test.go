@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"syscall"
 	"testing"
 
 	"github.com/aws/smithy-go"
@@ -14,8 +15,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// fakeNetError is a net.Error that reports Timeout()=true for testing the
-// net.Error.Timeout() branch of classifyS3Error.
+// fakeNetError is a net.Error used to drive both the timeout and non-timeout
+// branches of the classifyS3Error net.Error path.
 type fakeNetError struct{ timeout bool }
 
 func (e *fakeNetError) Error() string   { return "fake net error" }
@@ -121,9 +122,26 @@ func TestClassifyS3Error(t *testing.T) {
 			wantTrans: false,
 		},
 		{
-			name:      "net.Error Timeout=false → permanent",
+			// Post-fix: any net.Error is transient — symmetric with
+			// adapters/vault.isTransientVaultError and adapters/redis.
+			// Non-timeout transport errors (dial refused, connection reset)
+			// represent recoverable network blips that should retry.
+			name:      "net.Error Timeout=false → transient",
 			err:       &fakeNetError{timeout: false},
-			wantTrans: false,
+			wantTrans: true,
+		},
+		{
+			// Regression: PR #538 TestIntegration_S3_RecoveryAfterContainerRestart
+			// surfaced a *net.OpError + syscall.ECONNREFUSED on a stopped
+			// container — Timeout()==false but the next retry may reach a
+			// recovered endpoint. Must be transient.
+			name: "*net.OpError + ECONNREFUSED (dial refused) → transient",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: syscall.ECONNREFUSED,
+			},
+			wantTrans: true,
 		},
 
 		// ---- transient: AWS SDK API error codes (status-agnostic) ----
