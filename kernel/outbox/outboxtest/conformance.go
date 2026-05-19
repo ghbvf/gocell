@@ -738,19 +738,21 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 
 func testCloseIsIdempotent(t *testing.T, constructor PubSubConstructor) {
 	_, sub := constructor(t)
+	topic := TestTopic(t)
 
-	assertNoError(t, sub.Close(t.Context()))
+	assertNoError(t, closeWithBudget(t, sub, topic, defaultTimeout))
 
 	// Second close should not panic.
 	assertNotPanics(t, func() {
-		assertNoError(t, sub.Close(t.Context()))
+		assertNoError(t, closeWithBudget(t, sub, topic, defaultTimeout))
 	})
 }
 
 func testPublishAfterClose(t *testing.T, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
+	topic := TestTopic(t)
 
-	assertNoError(t, sub.Close(t.Context()))
+	assertNoError(t, closeWithBudget(t, sub, topic, defaultTimeout))
 
 	// Publishing after close should not panic.
 	assertNotPanics(t, func() {
