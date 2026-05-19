@@ -197,7 +197,7 @@ payload/schema 永久错误不应在正常生产流量中增长；任意持续�
 
 | outcome | 含义 |
 |---|---|
-| `clean` | 所有 ManagedResource teardown 成功，无超时 |
+| `success` | 所有 ManagedResource teardown 成功，无超时 |
 | `teardown_error` | 至少一个 teardown 返回非 nil 错误 |
 | `timeout` | shutCtx 超时，强制结束 LIFO teardown 循环 |
 | `signal_error` | shutdown 由组件失败触发（HTTP listener 崩溃 / worker 退出）而非用户 SIGTERM |
