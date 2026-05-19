@@ -31,6 +31,10 @@ import (
 // it is constructable directly from tests/integration/ without Docker wiring.
 // The service is currently observability-only (log-only, no side effects), so
 // Ack is the load-bearing assertion for "applied" in the current implementation.
+// Limitation: Ack alone cannot prove cache write, TTL refresh, or any real
+// side-effect; when configreceive introduces actual cache-apply side effects,
+// this test MUST be extended with direct state assertions (e.g. cache.GetVersion).
+// Tracked in docs/backlog/cap-14-tooling.md JOURNEY-CONFIGHOTRELOAD-CRITERIA-EXPANSION-01.
 //
 // Layer compromise: tests/integration/ cannot import
 // cells/accesscore/internal/... (Go internal-package barrier). configreceive
