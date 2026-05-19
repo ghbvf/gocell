@@ -1,3 +1,37 @@
+# Qodana — JetBrains code-quality analysis (advisory, non-blocking)
+#
+# WHY THIS WORKFLOW EXISTS ALONGSIDE CodeQL AND SEMGREP
+# -------------------------------------------------------
+# security-static.yml provides two SAST layers:
+#   - CodeQL   : data-flow / taint-tracking, semantic security analysis
+#                (CWE coverage, SQL injection, path traversal, etc.)
+#   - Semgrep  : pattern-based SAST + secrets scan (p/golang, p/owasp-top-ten,
+#                p/secrets community rulesets; blocks PRs on findings via --error)
+#
+# Qodana adds a DIFFERENT, incremental dimension that neither of the above covers:
+#   - JetBrains static inspections (unused symbols, shadowed variables,
+#     inefficient API usage, style inconsistencies, error-prone constructs)
+#   - Code-quality metrics and duplication detection
+#   - Results visible via the Qodana Cloud dashboard (https://qodana.cloud) for
+#     advisory review, not surfaced as PR check failures
+#
+# Qodana does NOT duplicate the security-focused taint / pattern analysis
+# provided by CodeQL and Semgrep; it covers developer-ergonomics quality issues.
+#
+# WHY pr-mode: false
+# -------------------
+# pr-mode: false means Qodana runs a full baseline scan on develop pushes rather
+# than an incremental PR diff scan.  Results are reviewed asynchronously through
+# the Qodana Cloud dashboard and do NOT gate PRs or block merges.  This is an
+# intentional advisory posture: Qodana findings inform refactoring decisions
+# without adding noise to the required-checks gate.
+#
+# RETENTION DECISION
+# ------------------
+# Qodana is retained while it provides incremental inspection coverage over
+# CodeQL + Semgrep.  If that incremental value disappears (e.g. rulesets
+# overlap, cloud dashboard unused), retire this workflow and revoke
+# QODANA_TOKEN_1820249425 from repository secrets (option b of F-05 backlog).
 name: Qodana
 on:
   workflow_dispatch:
