@@ -10,7 +10,7 @@ package bootstrap
 //   - validateInternalGuardForDeclaredRoutes / declaredInternalRoutes
 //   - validateAuthVerifierForDeclaredRoutes
 //   - buildListenerRouterOpts / autoWireHTTPMetricsCollector
-//   - autoWireOutboxConsumerCollector / buildAuthRouterOptions
+//   - buildAuthRouterOptions
 //
 // ref: kubernetes/kubernetes apiserver/pkg/server/genericapiserver.go —
 // per-listener apiHandler assembly: each listener gets its own handler chain
@@ -18,14 +18,12 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
-	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
@@ -43,10 +41,6 @@ import (
 //
 // ref: go-kratos/kratos app.go — per-server middleware at build time.
 func (b *Bootstrap) phase5BuildRouters(ctx context.Context, s *phaseState) error {
-	// Auto-wire outbox consumer collector once per phase5 run (not per-listener).
-	if err := b.autoWireOutboxConsumerCollector(); err != nil {
-		return err
-	}
 	if err := b.phase5InitHealthHandler(s); err != nil {
 		return err
 	}
@@ -391,55 +385,6 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 		b.httpCollector = collector
 	}
 	return append(opts, router.WithMetricsCollector(b.httpCollector)), nil
-}
-
-// autoWireOutboxConsumerCollector creates the OutboxConsumerCollector (once,
-// cached in b.outboxConsumerCollector) and wires it into ConsumerBase and Relay
-// when they are present. It is called once per phase5 run, not per-listener.
-//
-// cellID defaults to the _runtime sentinel when the bootstrap has no
-// single-cell identity — the cell label for outbox_consumer_rejected_total
-// flows from ObserveReject's argument anyway; _runtime is used only for the
-// outbox_pending_depth cell-scoped gauge (same sentinel pattern as HTTP metrics
-// RuntimeCellIDSentinel and Redis KeyNamespace _runtime).
-//
-// Skip conditions (return nil, no collector):
-//   - metricsProvider is nil (no backend configured)
-//   - metricsProvider is NopProvider (default; avoid no-op allocations at startup)
-//
-// ref: runtime/bootstrap/phases_http.go autoWireHTTPMetricsCollector — same
-// skip-on-nil/skip-on-Nop pattern, same cached-field approach.
-func (b *Bootstrap) autoWireOutboxConsumerCollector() error {
-	if b.metricsProvider == nil {
-		return nil
-	}
-	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
-		return nil
-	}
-	if b.outboxConsumerCollector == nil {
-		// Use _runtime sentinel: the collector is shared across all cells; the
-		// per-cell label on outbox_consumer_rejected_total flows from the
-		// ObserveReject call-site argument, not from construction.
-		collector, err := metricsmiddleware.NewOutboxConsumerCollector(b.metricsProvider, "_runtime")
-		if err != nil {
-			return fmt.Errorf(
-				"bootstrap: outbox metrics auto-wire conflict: WithMetricsProvider constructs the outbox collector; "+
-					"do not also register outbox_consumer_rejected_total manually on the same provider. "+
-					"Remove one side: %w", err)
-		}
-		b.outboxConsumerCollector = collector
-	}
-	if b.consumerBase != nil {
-		if err := b.consumerBase.AttachObserver(b.outboxConsumerCollector); err != nil {
-			if !errors.Is(err, kerneloutbox.ErrObserverAlreadyAttached) {
-				return fmt.Errorf("bootstrap: attach outbox consumer observer: %w", err)
-			}
-		}
-	}
-	if b.relay != nil {
-		b.relay.WithPendingDepthObserver(b.outboxConsumerCollector)
-	}
-	return nil
 }
 
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics

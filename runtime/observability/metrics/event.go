@@ -37,7 +37,7 @@ var eventRouterReadyWaitBuckets = []float64{0.001, 0.01, 0.1, 0.25, 0.5, 1, 5, 3
 // back LIFO before returning the error.
 func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, error) {
 	if p == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: event router Provider is required")
 	}
 

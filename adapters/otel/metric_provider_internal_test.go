@@ -96,7 +96,7 @@ func TestAttrCache_ConcurrentLookupRaceSafe(t *testing.T) {
 	c.mu.RLock()
 	size := len(c.m)
 	c.mu.RUnlock()
-	assert.LessOrEqual(t, size, capSize,
+	assert.LessOrEqualf(t, size, capSize,
 		"cache must remain bounded by cap under concurrent load; size=%d cap=%d", size, capSize)
 }
 

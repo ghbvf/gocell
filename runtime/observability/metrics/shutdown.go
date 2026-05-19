@@ -76,14 +76,15 @@ var defaultShutdownBuckets = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5
 type ShutdownCollector struct {
 	disabled bool
 
-	// phaseEntries counts each phase transition. Using a CounterVec (not a
-	// Gauge) because the kernel Provider interface does not expose Gauge.
-	// A counter-per-phase lets SREs detect missing phase entries (stuck
-	// shutdown) and build timeline views by comparing instance counts.
-	// This is a pragmatic adaptation: the plan requested a "gauge" but the
-	// kernel abstraction has no Gauge primitive. A single-label CounterVec
-	// encodes the same information for the SRE use cases described in the
-	// task spec.
+	// phaseEntries counts each phase transition. Counter is the correct
+	// instrument here: each shutdown phase transition is a discrete event that
+	// happens exactly once per shutdown (monotonically increasing), not a
+	// snapshot of "how many phases are currently in flight". Counter semantics
+	// let SREs detect missing phase entries (stuck shutdown) and build timeline
+	// views by comparing phase entry counts across instances or rate-of-change
+	// over time. A Gauge would collapse multiple restarts into a single current
+	// value, losing the event-stream semantics. Provider.GaugeVec is now
+	// available (D3a-1), but Counter remains the right choice for this metric.
 	phaseEntries kernelmetrics.CounterVec
 
 	// phaseDuration records wall-clock seconds for readiness_flip,

@@ -15,6 +15,13 @@ import (
 // observability dimensions, reason is a closed-set string drawn from
 // ConsumerRejectReason* constants.
 //
+// Implementers should NOT include consumerGroup in metric label sets — it is
+// provided here for slog/tracing dimensions but adding it as a Prometheus label
+// expands cardinality multiplicatively (every consumer group × topic × cell ×
+// reason combination becomes a unique time-series). See
+// runtime/observability/metrics.OutboxConsumerCollector for the sanctioned label
+// set {cell, topic, reason}.
+//
 // ref: kernel/outbox/relay_collector.go — RelayCollector is the analogous
 // interface for the Relay path; same kernel-defined-runtime-implemented
 // pattern keeps adapter-backend imports out of kernel.

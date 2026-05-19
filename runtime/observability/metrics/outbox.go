@@ -12,6 +12,12 @@ import (
 // the ConsumerObserver interface required by ConsumerBase as well as a
 // ObservePendingDepth method used by runtime/outbox.Relay.
 //
+// OutboxConsumerCollector implements BOTH outbox.ConsumerObserver (consumed by
+// ConsumerBase.AttachObserver for outbox_consumer_rejected_total) AND exposes
+// ObservePendingDepth(int64) (consumed by Relay.WithPendingDepthObserver for
+// outbox_pending_depth). Bootstrap.autoWireOutboxConsumerCollector wires both
+// paths from the same instance.
+//
 // Metrics registered:
 //   - outbox_consumer_rejected_total{cell,topic,reason}: total terminal Reject
 //     dispositions observed by ConsumerBase. The consumerGroup argument from
@@ -20,6 +26,11 @@ import (
 //     the same counter family.
 //   - outbox_pending_depth{cell}: current pending outbox entry depth, set on
 //     each Relay reclaim tick. Scoped to the cellID supplied at construction.
+//
+// Label set is {cell, topic, reason}; reason is a closed set of 2 values
+// (handler_reject + retry_exhausted); cardinality bound = num_cells ×
+// num_topics × 2. For deployments with >100 unique topics monitor /metrics
+// time-series count.
 //
 // ref: Watermill router metrics middleware — per-handler counters + gauges
 // mirroring the router's router_messages_processed_total pattern.
@@ -42,11 +53,11 @@ var _ outbox.ConsumerObserver = (*OutboxConsumerCollector)(nil)
 // when calling ObservePendingDepth.
 func NewOutboxConsumerCollector(p kernelmetrics.Provider, cellID string) (*OutboxConsumerCollector, error) {
 	if p == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: outbox Provider is required")
 	}
 	if cellID == "" {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: outbox cellID is required")
 	}
 
@@ -81,6 +92,11 @@ func NewOutboxConsumerCollector(p kernelmetrics.Provider, cellID string) (*Outbo
 // ObserveReject implements kernel/outbox.ConsumerObserver.
 // consumerGroup is received but not used as a label to keep cardinality
 // bounded; the label set is {cell, topic, reason}.
+//
+// Caller contract: topic MUST be a static contract identifier (ContractSpec.Topic).
+// Passing runtime-derived values (message IDs, tenant IDs) would cause unbounded
+// time-series cardinality. consumerGroup is deliberately excluded from the label
+// set for the same reason.
 func (c *OutboxConsumerCollector) ObserveReject(cellID, topic, _ /* consumerGroup */, reason string) {
 	if c == nil {
 		return // nil-receiver safe: observability must never panic on startup

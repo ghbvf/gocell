@@ -36,6 +36,27 @@ package calls these banned constructors directly.
 
 ## Decision
 
+### Int64ObservableGauge scope boundary
+
+`Int64ObservableGauge` (an Observable / callback-based instrument in the OTel
+API) is **NOT** in the banned constructor set enforced by `METRICS-GAUGEVEC-FUNNEL-01`.
+
+Rationale:
+- Observable instruments are registered via a `RegisterCallback` on the
+  `MeterProvider` and fire at collection time, not at call time.  They are
+  architecturally distinct from the synchronous `Float64UpDownCounter` used by
+  `otelGaugeVec.Set/Inc/Dec/Add`.
+- The current `MetricProvider.GaugeVec` implementation routes through
+  `Float64UpDownCounter`, not through any Observable pattern.  The archtest rule
+  bans the two primitives that `Provider.GaugeVec` replaces; banning
+  `Int64ObservableGauge` would over-reach into a different instrument class that
+  has no current Provider-level replacement.
+- If a future PR introduces Observable-based gauge usage that should route
+  through `MetricProvider`, a **new** funnel design (separate ADR + archtest
+  rule extension) is required at that time.  `METRICS-GAUGEVEC-FUNNEL-01` must
+  not be silently extended to cover Observable instruments without an explicit
+  scope amendment.
+
 ### Interface shape
 
 `metrics.Provider.GaugeVec(opts GaugeOpts) (GaugeVec, error)` exposes four

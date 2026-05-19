@@ -294,6 +294,14 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 // runtime-api.md §Option 范式分层). Bare-nil and typed-nil observers are
 // rejected with ErrValidationFailed.
 //
+// AttachObserver is the single public injection path for ConsumerObserver. The
+// internal observer field is private and is not exposed via ConsumerBaseConfig —
+// ConsumerBase is typically constructed at composition root (cmd/corebundle)
+// before the metrics provider is wired in bootstrap phase 5, so constructor
+// injection is not viable. bootstrap.autoWireOutboxConsumerCollector calls
+// AttachObserver in phase 6 (before subscriptions start consuming); business
+// code typically does not call this directly.
+//
 // ref: Temporal MetricsHandler observer-injected pattern
 func (cb *ConsumerBase) AttachObserver(o ConsumerObserver) error {
 	if isNilObserver(o) {

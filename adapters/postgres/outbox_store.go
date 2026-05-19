@@ -156,6 +156,7 @@ const cleanupDeadQuery = `DELETE FROM outbox_entries WHERE id IN (
 
 // countPendingQuery counts rows in pending status. May be approximate under
 // high concurrency; callers must tolerate transient errors as non-fatal.
+// status='pending' is a closed-set enum value; bound via $1 parameter (no string interpolation).
 const countPendingQuery = `SELECT count(*) FROM outbox_entries WHERE status = $1`
 
 // ---------------------------------------------------------------------------
