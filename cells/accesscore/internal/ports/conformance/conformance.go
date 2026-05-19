@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 )
 
 // concurrencyDeadlineBudget bounds the Concurrent_NoDeadlock sub-test so a
@@ -129,7 +130,10 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 		conformUpdateLockoutFieldsSucceeds(t, factory)
 	})
 	t.Run("UpdateLockoutFields_NotFound", func(t *testing.T) {
-		conformUpdateLockoutFieldsNotFound(t, factory)
+		err := conformUpdateLockoutFieldsNotFound(t, factory)
+		// POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01: typed funnel
+		// must be inline at the test site (archtest does not follow helpers).
+		errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	})
 }
 
@@ -605,8 +609,11 @@ func conformUpdateLockoutFieldsSucceeds(t *testing.T, factory UserRepoFactory) {
 }
 
 // conformUpdateLockoutFieldsNotFound (F22): UpdateLockoutFields on a
-// non-existent userID must return ErrAuthUserNotFound.
-func conformUpdateLockoutFieldsNotFound(t *testing.T, factory UserRepoFactory) {
+// non-existent userID must return ErrAuthUserNotFound. Returns the repo error
+// so the caller asserts via the typed funnel at the test site (required by
+// POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01: archtest does not
+// follow cross-function helpers).
+func conformUpdateLockoutFieldsNotFound(t *testing.T, factory UserRepoFactory) error {
 	t.Helper()
 	repo, _, cleanup := factory(t)
 	t.Cleanup(cleanup)
@@ -636,9 +643,7 @@ func conformUpdateLockoutFieldsNotFound(t *testing.T, factory UserRepoFactory) {
 	if err == nil {
 		t.Fatal("UpdateLockoutFields_NotFound: must return error for non-existent user, got nil")
 	}
-	if !isErrAuthUserNotFound(err) {
-		t.Errorf("UpdateLockoutFields_NotFound: must return ErrAuthUserNotFound, got %v", err)
-	}
+	return err
 }
 
 // conformGetByIDForUpdateLockContention verifies the lock-hold guarantee shared

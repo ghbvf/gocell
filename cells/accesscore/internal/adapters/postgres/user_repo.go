@@ -140,7 +140,7 @@ WHERE id = $1`
 
 	// maxFailedLoginCount caps the in-domain failed_login_count value before
 	// it crosses the PG int32 wire boundary (column type is INTEGER in
-	// migration 029). Real-world threshold = 5 and the counter resets on
+	// migration 032). Real-world threshold = 5 and the counter resets on
 	// stale-window / lazy-unlock / success, so this guard is a defensive
 	// upper bound rather than an operational limit.
 	maxFailedLoginCount = 1 << 30
@@ -155,7 +155,7 @@ WHERE id = $1`
 	// columns (those are owned by authzmutate.Mutator.ApplyInTx via the regular
 	// Update path or by the password / epoch mutators respectively).
 	//
-	// Migration 029 schema: failed_login_count (NOT NULL, CHECK >= 0),
+	// Migration 032 schema: failed_login_count (NOT NULL, CHECK >= 0),
 	// last_failed_at (NULL OK), locked_until (NULL OK).
 	updateLockoutFieldsSQL = `
 UPDATE users

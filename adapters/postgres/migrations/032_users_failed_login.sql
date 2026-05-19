@@ -1,4 +1,4 @@
--- Migration 029: add failed_login_count + last_failed_at + locked_until for
+-- Migration 032: add failed_login_count + last_failed_at + locked_until for
 -- ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 auto-lockout policy.
 --
 -- Schema:

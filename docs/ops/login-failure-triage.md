@@ -136,7 +136,7 @@ See `IssueForUser` godoc for the rationale.
 |-------|-------|--------------|------|------|
 | auto-lock 触发 | Warn | `account auto-locked` | `user_id` / `failed_count` / `reason=threshold_locked` | 用户连续失败达阈值，已自动锁定 |
 | lazy-unlock 触发 | Info | `account lazy-unlocked` | `user_id` / `locked_until` / `reason=lazy_unlocked` | TTL 到期，sessionlogin 自动解锁 |
-| lockout 计数器更新失败 | Error | `session-login: lockout record failure failed` | `error` / `user_id` / `reason` | DB/outbox 故障导致计数器无法持久化 |
+| lockout 计数器更新失败 | Error | `sessionlogin: lockout record failure failed` | `error` / `user_id` / `reason` | DB/outbox 故障导致计数器无法持久化 |
 
 ### 查询示例
 
@@ -149,7 +149,7 @@ jq 'select(.msg == "account auto-locked") | {time, user_id, failed_count}'
 lockout 计数器异常：
 
 ```
-jq 'select(.msg | startswith("session-login: lockout record failure"))'
+jq 'select(.msg | startswith("sessionlogin: lockout record failure"))'
 ```
 
 ## Break-glass：唯一 admin 被 auto-lock 后恢复

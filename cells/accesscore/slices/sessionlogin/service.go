@@ -368,7 +368,7 @@ func (s *Service) loginInTx(
 	// failed_login_count=0, locked_until=nil).
 	unlocked, err := s.lockout.TryLazyUnlock(ctx, txCtx, user)
 	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: lazy unlock: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("sessionlogin:lazy unlock: %w", err)
 	}
 	if unlocked {
 		user, err = s.userRepo.GetByUsernameForUpdate(txCtx, username)
@@ -413,7 +413,7 @@ func (s *Service) loginInTx(
 	// already clean) before minting tokens so the success path co-commits
 	// counter clear + session/refresh INSERT + outbox emit.
 	if err := s.lockout.RecordSuccess(txCtx, user); err != nil {
-		s.logger.Error("session-login: lockout reset failed",
+		s.logger.Error("sessionlogin:lockout reset failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
 		// Counter reset failure is non-fatal: the user has proven their
 		// password, so we proceed with token issuance. The stale counter
@@ -431,7 +431,7 @@ func (s *Service) loginInTx(
 		PasswordResetRequired: user.PasswordResetRequired(),
 	})
 	if err != nil {
-		s.logger.Error("session-login: token issuance failed",
+		s.logger.Error("sessionlogin:token issuance failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
 		return dto.TokenPair{}, err
 	}
@@ -454,11 +454,11 @@ func (s *Service) loginInTx(
 	}
 
 	if err := s.sessionStore.Create(txCtx, sess); err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: persist session: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("sessionlogin:persist session: %w", err)
 	}
 	refreshWire, _, err := s.refreshStore.Issue(txCtx, sess.ID, user.ID, user.AuthzEpoch())
 	if err != nil {
-		s.logger.Error("session-login: refresh store issue failed",
+		s.logger.Error("sessionlogin:refresh store issue failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
 		if isNoopTx(s.txRunner) {
 			_ = s.sessionStore.Revoke(context.WithoutCancel(txCtx), sess.ID)
@@ -472,7 +472,7 @@ func (s *Service) loginInTx(
 		if isNoopTx(s.txRunner) {
 			s.cleanupIssuedSession(txCtx, sess.ID)
 		}
-		return dto.TokenPair{}, fmt.Errorf("session-login: emit event: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("sessionlogin:emit event: %w", err)
 	}
 	return dto.TokenPair{
 		AccessToken:           minted.AccessToken,
@@ -504,7 +504,7 @@ func (s *Service) loginInTx(
 // 401 response is unchanged. See loginInTx comment block for the full flow.
 func (s *Service) recordFailureBestEffort(ctx, txCtx context.Context, user *domain.User, reason string) {
 	if err := s.lockout.RecordFailure(ctx, txCtx, user); err != nil {
-		s.logger.Error("session-login: lockout record failure failed",
+		s.logger.Error("sessionlogin:lockout record failure failed",
 			slog.Any("error", err),
 			slog.String("user_id", user.ID),
 			slog.String("reason", reason))
@@ -528,11 +528,11 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, sess *session.S
 	var refreshWire string
 	do := func(txCtx context.Context) error {
 		if err := s.sessionStore.Create(txCtx, sess); err != nil {
-			return fmt.Errorf("session-login: persist session: %w", err)
+			return fmt.Errorf("sessionlogin:persist session: %w", err)
 		}
 		wire, _, err := s.refreshStore.Issue(txCtx, sess.ID, userID, authzEpoch)
 		if err != nil {
-			s.logger.Error("session-login: refresh store issue failed",
+			s.logger.Error("sessionlogin:refresh store issue failed",
 				slog.Any("error", err), slog.String("user_id", userID))
 			// In demo/noop-tx mode, the session was already written without a real
 			// transaction; compensate explicitly. In durable-tx mode, the tx rollback
@@ -551,7 +551,7 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, sess *session.S
 			if isNoopTx(s.txRunner) {
 				s.cleanupIssuedSession(txCtx, sess.ID)
 			}
-			return fmt.Errorf("session-login: emit event: %w", err)
+			return fmt.Errorf("sessionlogin:emit event: %w", err)
 		}
 		return nil
 	}
@@ -593,13 +593,13 @@ func isNoopTx(r persistence.TxRunner) bool {
 func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 	cleanupCtx := context.WithoutCancel(ctx)
 	if err := s.refreshStore.RevokeSessionDetached(ctx, sessionID); err != nil {
-		s.logger.Error("session-login: cleanup refresh chain failed",
+		s.logger.Error("sessionlogin:cleanup refresh chain failed",
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}
 	// session.Store.Revoke is idempotent: missing IDs are no-ops returning nil
 	// (防枚举 — append-only revoke semantics per ADR-Session D3).
 	if err := s.sessionStore.Revoke(cleanupCtx, sessionID); err != nil {
-		s.logger.Error("session-login: cleanup session revoke failed",
+		s.logger.Error("sessionlogin:cleanup session revoke failed",
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}
 }
@@ -670,7 +670,7 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser get user: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
 	}
 	if err := credentialauthority.Assert(user); err != nil {
 		return dto.TokenPair{}, err
@@ -687,7 +687,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		PasswordResetRequired: user.PasswordResetRequired(),
 	})
 	if err != nil {
-		s.logger.Error("session-login: IssueForUser token issuance failed",
+		s.logger.Error("sessionlogin:IssueForUser token issuance failed",
 			slog.Any("error", err), slog.String("user_id", userID))
 		return dto.TokenPair{}, err
 	}
@@ -713,7 +713,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		return dto.TokenPair{}, err
 	}
 
-	s.logger.Info("session-login: IssueForUser issued new session",
+	s.logger.Info("sessionlogin:IssueForUser issued new session",
 		slog.String("user_id", userID), slog.String("session_id", sessionID))
 
 	return dto.TokenPair{

@@ -55,9 +55,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 028 adds CHECK(authz_epoch>0) + DROP DEFAULT on the 3 epoch columns (S4d P2.a — '0=unset' hard DB invariant);
 	// 029 creates the devices table (iotdevice devicecell L4 PG backend);
 	// 030 creates the commands table (iotdevice L4 command queue PG backend);
-	// 031 adds unique index on commands metadata->>'_idempotency_key' (DB-level TOCTOU-safe dedup).
-	assert.Equal(t, int64(31), v,
-		"expected version should be exactly 31 (current migration max)")
+	// 031 adds unique index on commands metadata->>'_idempotency_key' (DB-level TOCTOU-safe dedup);
+	// 032 adds users.failed_login_count / last_failed_at / locked_until (accesscore auto-lockout).
+	assert.Equal(t, int64(32), v,
+		"expected version should be exactly 32 (current migration max)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
