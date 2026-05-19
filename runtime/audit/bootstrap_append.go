@@ -25,9 +25,13 @@ import (
 )
 
 // Bootstrap auth-fail reason values are the authoritative source for valid
-// reason strings. runtime/auth/bootstrap.go must consume these exported
-// constants rather than hardcoding string literals — the direction of truth
-// is runtime/audit → runtime/auth for reason vocabulary.
+// reason strings. These constants mirror the literal vocabulary used by
+// runtime/auth/bootstrap.go and serve as the authoritative source for the
+// audit-side serialization shape (payload "reason" field, slog "reason"
+// attr). runtime/auth does NOT import runtime/audit (cells/runtime layering
+// rule documented in tools/archtest/bootstrap_audit_observer_funnel_test.go),
+// so the runtime/auth side keeps its own string literals — drift is
+// prevented by archtest-level testing rather than import-level coupling.
 //
 // The typed string funnel upgrade (`type BootstrapAuthFailReason string`
 // + sealed constructor) is tracked as backlog

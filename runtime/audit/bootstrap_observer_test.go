@@ -163,11 +163,17 @@ func TestNewBootstrapAuthFailObserver_NilDeps_Errors(t *testing.T) {
 		_, err := audit.NewBootstrapAuthFailObserver(slog.Default(), nil, clk)
 		require.Error(t, err, "nil store must be rejected")
 	})
-	t.Run("typed-nil store", func(t *testing.T) {
+	t.Run("typed-nil store (concrete pointer wrapped in interface)", func(t *testing.T) {
 		t.Parallel()
-		var typedNil ledger.Store
+		// True typed-nil: an interface value carrying type info (*ledger.MemStore)
+		// but a nil concrete pointer. A bare `var typedNil ledger.Store` is only
+		// a nil interface — distinct from the typed-nil shape, which is what
+		// validation.IsNilInterface must catch via reflect.
+		var nilMem *ledger.MemStore
+		var typedNil ledger.Store = nilMem
 		_, err := audit.NewBootstrapAuthFailObserver(slog.Default(), typedNil, clk)
-		require.Error(t, err, "typed-nil store must be rejected via validation.IsNilInterface")
+		require.Error(t, err,
+			"typed-nil store (concrete-pointer-in-interface) must be rejected via validation.IsNilInterface")
 	})
 	t.Run("nil clock", func(t *testing.T) {
 		t.Parallel()

@@ -160,12 +160,18 @@ func TestAppendBootstrapAuthFail_NilStoreOrClock_Errors(t *testing.T) {
 		require.True(t, errors.As(err, &coded))
 		assert.Equal(t, errcode.ErrValidationFailed, coded.Code)
 	})
-	t.Run("typed-nil store", func(t *testing.T) {
+	t.Run("typed-nil store (concrete pointer wrapped in interface)", func(t *testing.T) {
 		t.Parallel()
 		_, clk := buildTestLedgerStore(t)
-		var typedNil ledger.Store
+		// True typed-nil: an interface value carrying type info (*ledger.MemStore)
+		// but a nil concrete pointer. A bare `var typedNil ledger.Store` is only
+		// a nil interface — distinct shape, not what validation.IsNilInterface
+		// is meant to catch via reflect.
+		var nilMem *ledger.MemStore
+		var typedNil ledger.Store = nilMem
 		err := audit.AppendBootstrapAuthFail(context.Background(), typedNil, clk, "rate_limited", "")
-		require.Error(t, err, "typed-nil ledger.Store must be rejected via validation.IsNilInterface")
+		require.Error(t, err,
+			"typed-nil ledger.Store (concrete-pointer-in-interface) must be rejected via validation.IsNilInterface")
 	})
 	t.Run("nil clock", func(t *testing.T) {
 		t.Parallel()
