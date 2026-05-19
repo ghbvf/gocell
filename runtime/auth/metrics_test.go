@@ -77,6 +77,10 @@ func (p *lockoutSpyProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.H
 	return metrics.NopProvider{}.HistogramVec(opts)
 }
 
+func (p *lockoutSpyProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return metrics.NopProvider{}.GaugeVec(opts)
+}
+
 func (p *lockoutSpyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 func TestNewAuthMetrics_NopProvider(t *testing.T) {
