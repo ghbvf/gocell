@@ -87,7 +87,13 @@ func validateMetadata(m map[string]string) error {
 type Entry struct {
 	// ID is the canonical idempotency identifier. Consumers SHOULD use this
 	// field to construct idempotency keys.
-	ID            string
+	ID string
+	// AggregateID identifies the domain entity that owns this event (e.g. a
+	// session UUID or a config-entry slug). It MUST be a domain entity
+	// identifier (UUID or opaque slug validated by SafeID); it MUST NOT carry
+	// user PII (email, phone number, username, or display name). AggregateID
+	// is emitted verbatim in structured logs, including Error-level drop and
+	// dead-letter records, and is NOT redacted by pkg/redaction.
 	AggregateID   string
 	AggregateType string
 	EventType     string
