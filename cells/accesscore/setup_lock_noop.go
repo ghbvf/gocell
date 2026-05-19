@@ -17,7 +17,7 @@ import (
 // NoopSetupLock in PG mode is an upstream-Soft misconfiguration — the type
 // system here cannot distinguish "right shape per mode". The Hard upgrade
 // (TxRunner+SetupLock paired adapter factory) is tracked by backlog entry
-// ADMINPROVISION-SETUPLOCK-PAIRED-CTOR-HARD-02.
+// ADMINPROVISION-SETUPLOCK-PAIRED-CTOR-HARD-02 (see docs/backlog.md).
 type NoopSetupLock struct{}
 
 // Compile-time assertion: NoopSetupLock implements ports.SetupLock.

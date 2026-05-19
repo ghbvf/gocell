@@ -69,7 +69,7 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // RunInTx body before calling adminprovision.Ensure — the lock, user write,
 // and outbox emit share a single transaction scope.
 //
-// NewService rejects a missing or nil setupLock with ErrValidationFailed so
+// NewService rejects a missing or nil setupLock with ErrCellInvalidConfig so
 // that mis-wired assemblies fail at startup rather than at the first
 // CreateAdmin call. The cell-level WithSetupLock injects this option from
 // cells/accesscore composition; see accesscore.WithSetupLock godoc for the
@@ -176,7 +176,8 @@ type CreateAdminOutput struct {
 // Security: bcrypt runs AFTER the Status fast-path so a flood of POSTs after
 // admin exists returns 410 in ~milliseconds without CPU burn. bcrypt cost=12
 // is only paid on the single winning request (plus same-process concurrent
-// race-losers before the internal mutex in adminprovision serializes them).
+// race-losers serialized by memTxRunner.RunInTx holding store.mu in memstore
+// mode, or by pg_advisory_xact_lock in PG mode).
 func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*CreateAdminOutput, error) {
 	if err := validateCreateAdminInput(in); err != nil {
 		return nil, err
