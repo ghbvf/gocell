@@ -94,6 +94,10 @@ func (c *OutboxConsumerCollector) ObserveReject(cellID, topic, _ /* consumerGrou
 
 // ObservePendingDepth records the current pending outbox depth for the owner
 // cell. Called by Relay on each reclaim tick.
+//
+// Sampling cadence is bound to Relay.ReclaimInterval (default minutes), not
+// Prometheus scrape interval. SREs should treat this Gauge as "depth at last
+// reclaim tick", not real-time. For tighter sampling, decrease ReclaimInterval.
 func (c *OutboxConsumerCollector) ObservePendingDepth(n int64) {
 	if c == nil {
 		return

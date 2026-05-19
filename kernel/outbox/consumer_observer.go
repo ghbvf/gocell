@@ -41,7 +41,7 @@ const (
 // an observer has already been attached. Re-attaching would silently swap
 // the in-use observer and lose previous emissions; the wiring-fail-fast
 // pattern (runtime-api.md §Option 范式分层) requires it surface as an error.
-var ErrObserverAlreadyAttached = errcode.New(errcode.KindConflict, errcode.ErrValidationFailed,
+var ErrObserverAlreadyAttached = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 	"outbox: ConsumerObserver already attached; AttachObserver may only be called once per ConsumerBase")
 
 // NopConsumerObserver is the default ConsumerObserver used when no metrics

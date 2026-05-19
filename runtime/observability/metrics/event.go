@@ -28,7 +28,9 @@ type EventRouterCollector struct {
 
 // eventRouterReadyWaitBuckets are sensible default buckets for Ready wait time.
 // Ready usually completes in <100ms; bootstrap timeout is 30s.
-var eventRouterReadyWaitBuckets = []float64{0.001, 0.01, 0.1, 0.5, 1, 5, 30}
+// The 0.25s bucket improves P95 resolution in the 100-500ms range typical for
+// broker connection establishment.
+var eventRouterReadyWaitBuckets = []float64{0.001, 0.01, 0.1, 0.25, 0.5, 1, 5, 30}
 
 // NewEventRouterCollector registers all three event-router lifecycle metrics on
 // the given provider. On partial failure, already-registered metrics are rolled
@@ -94,7 +96,11 @@ func (c *EventRouterCollector) DecSubscriptionActive(cellID string) {
 }
 
 // RecordSetupError increments the setup error counter for the given cell, topic
-// and reason.
+// and reason. The reason argument is drawn from the closed set defined by the
+// eventrouter package constants:
+//   - eventrouter.SetupErrorReasonSetupError ("setup_error"): Subscriber.Setup failed (Phase 1)
+//   - eventrouter.SetupErrorReasonReadyTimeout ("ready_timeout"): Ready not signaled within timeout (Phase 3)
+//   - eventrouter.SetupErrorReasonPanic ("panic"): subscription goroutine panicked (Phase 2)
 func (c *EventRouterCollector) RecordSetupError(cellID, topic, reason string) {
 	if c == nil {
 		return

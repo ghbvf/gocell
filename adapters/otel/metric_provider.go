@@ -301,12 +301,18 @@ func (h *otelHistogram) Observe(v float64) {
 // gaugesMu guards the gauges map; attrCache.mu guards the attribute cache.
 // The two locks are independent and never held simultaneously to avoid
 // lock-ordering deadlocks.
+//
+// Cardinality defense: when attrCache reaches its cap, lookup returns the
+// package-level overflowOpt sentinel. In that case With() reuses a single
+// shared overflowGauge (created lazily) instead of inserting into gauges,
+// keeping len(gauges) ≤ attrCacheMaxSize + 1 (the +1 being the overflow slot).
 type otelGaugeVec struct {
-	inner    otelmetric.Float64UpDownCounter
-	labels   []string
-	cache    *attrCache
-	gaugesMu sync.Mutex
-	gauges   map[string]*otelGauge
+	inner         otelmetric.Float64UpDownCounter
+	labels        []string
+	cache         *attrCache
+	gaugesMu      sync.Mutex
+	gauges        map[string]*otelGauge
+	overflowGauge *otelGauge // lazily created; guarded by gaugesMu
 }
 
 func (v *otelGaugeVec) Registered() bool { return true }
@@ -315,9 +321,25 @@ func (v *otelGaugeVec) Registered() bool { return true }
 // use. The same *otelGauge is returned on every call for a given label tuple
 // so that Set(val) on one caller reflects the correct last value when another
 // caller calls Set() later for the same label set.
+//
+// When the attrCache is at capacity, lookup returns the overflowOpt sentinel;
+// With detects this via pointer identity (attrs == overflowOpt) and returns
+// a single shared overflowGauge instead of growing gauges unboundedly.
 func (v *otelGaugeVec) With(l metrics.Labels) metrics.Gauge {
 	metrics.MustValidateLabels(v.labels, l)
 	attrs := v.cache.lookup(v.labels, l)
+
+	// Overflow path: attrCache is at cap; reuse the single shared overflow slot.
+	if attrs == overflowOpt {
+		v.gaugesMu.Lock()
+		if v.overflowGauge == nil {
+			v.overflowGauge = &otelGauge{inner: v.inner, attrs: overflowOpt}
+		}
+		g := v.overflowGauge
+		v.gaugesMu.Unlock()
+		return g
+	}
+
 	key := v.cache.key(v.labels, l)
 
 	v.gaugesMu.Lock()

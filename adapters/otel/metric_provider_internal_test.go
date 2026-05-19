@@ -119,6 +119,54 @@ func TestAttrCache_OverflowIsStableAcrossLookups(t *testing.T) {
 		"overflow key must remain uninserted across repeats")
 }
 
+// TestMetricProvider_GaugeVec_OverflowGaugeSlotIsShared pins the F8 finding:
+// the otelGaugeVec.gauges map must not grow past attrCacheMaxSize + 1 even
+// when many distinct label sets are used. Overflow label sets must share a
+// single overflowGauge slot (the +1) rather than each getting their own entry.
+func TestMetricProvider_GaugeVec_OverflowGaugeSlotIsShared(t *testing.T) {
+	const cap = 3
+
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	provider, err := NewMetricProvider(mp.Meter("gocell.test"))
+	require.NoError(t, err)
+	provider.attrCacheMaxSize = cap
+
+	gvIface, err := provider.GaugeVec(metrics.GaugeOpts{
+		Name:       "gocell_test_gauge_overflow",
+		Help:       "Test gauge overflow.",
+		LabelNames: []string{"k"},
+	})
+	require.NoError(t, err)
+
+	gv, ok := gvIface.(*otelGaugeVec)
+	require.True(t, ok, "GaugeVec must return *otelGaugeVec")
+
+	// Emit cap distinct label sets — all should land in gauges map.
+	for i := 0; i < cap; i++ {
+		gvIface.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(1)
+	}
+	gv.gaugesMu.Lock()
+	sizeAtCap := len(gv.gauges)
+	gv.gaugesMu.Unlock()
+	require.Equal(t, cap, sizeAtCap, "gauges map must equal cap after filling to cap")
+
+	// Emit 10 more distinct overflow label sets — gauges must not grow beyond cap.
+	for i := cap; i < cap+10; i++ {
+		gvIface.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(float64(i))
+	}
+	gv.gaugesMu.Lock()
+	sizeAfterOverflow := len(gv.gauges)
+	overflowGauge := gv.overflowGauge
+	gv.gaugesMu.Unlock()
+
+	assert.Equal(t, cap, sizeAfterOverflow,
+		"gauges map must not grow past cap (%d) for overflow label sets; got %d", cap, sizeAfterOverflow)
+	assert.NotNil(t, overflowGauge,
+		"overflowGauge must be lazily created for the shared overflow slot")
+}
+
 // B2-R-09 end-to-end: emit through a real CounterVec past cap and verify
 // the downstream OTel reader sees a data point carrying
 // otel.metric.overflow=true — confirms the package-level overflowOpt

@@ -456,3 +456,32 @@ func (p *countingMetricsProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernel
 func (p *countingMetricsProvider) Unregister(c kernelmetrics.Collector) error {
 	return p.inner.Unregister(c)
 }
+
+// TestAutoWireOutboxConsumerCollector_DoubleCallWithConsumerBase_Idempotent
+// pins the F2 finding: a second call to autoWireOutboxConsumerCollector when
+// b.consumerBase is non-nil and the collector is already cached must not
+// return ErrObserverAlreadyAttached. The first call attaches the observer;
+// the second call sees the cached collector and must silently ignore the
+// already-attached sentinel instead of propagating it as an error.
+func TestAutoWireOutboxConsumerCollector_DoubleCallWithConsumerBase_Idempotent(t *testing.T) {
+	spy := &registrationSpy{}
+	cb := newTestConsumerBase(t)
+
+	b := New(
+		WithClock(clock.Real()),
+		WithMetricsProvider(spy),
+		WithConsumerBase(cb),
+	)
+
+	// First call: creates collector, attaches to ConsumerBase.
+	err := b.autoWireOutboxConsumerCollector()
+	require.NoError(t, err, "first autoWireOutboxConsumerCollector call must succeed")
+	require.NotNil(t, b.outboxConsumerCollector, "collector must be cached after first call")
+
+	// Second call: collector is cached; AttachObserver returns
+	// ErrObserverAlreadyAttached which must be silently ignored.
+	err2 := b.autoWireOutboxConsumerCollector()
+	require.NoError(t, err2,
+		"second autoWireOutboxConsumerCollector call must be idempotent — "+
+			"ErrObserverAlreadyAttached must not propagate (F2 regression guard)")
+}

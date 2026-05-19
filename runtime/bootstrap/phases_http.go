@@ -18,12 +18,14 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
@@ -429,7 +431,9 @@ func (b *Bootstrap) autoWireOutboxConsumerCollector() error {
 	}
 	if b.consumerBase != nil {
 		if err := b.consumerBase.AttachObserver(b.outboxConsumerCollector); err != nil {
-			return fmt.Errorf("bootstrap: attach outbox consumer observer: %w", err)
+			if !errors.Is(err, kerneloutbox.ErrObserverAlreadyAttached) {
+				return fmt.Errorf("bootstrap: attach outbox consumer observer: %w", err)
+			}
 		}
 	}
 	if b.relay != nil {

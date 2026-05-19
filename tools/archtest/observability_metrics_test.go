@@ -72,7 +72,11 @@ func TestMetricLabelErrcodeClassifiersRequireAck(t *testing.T) {
 // BS-3 Method-value indirection: `var fn = prom.NewGaugeVec; fn(...)` — the
 // function-value form has Fun as *ast.Ident (variable) not *ast.SelectorExpr,
 // so *types.Info.Uses resolve to a *types.Var, not *types.Func. Accepted:
-// production code has no such pattern. Reverse self-check: BS-3 check below.
+// production code has no such pattern. For the OTel side this manifests as
+// `var fn = meter.Float64UpDownCounter` (method-value capture): the
+// SelectorExpr exists but is not the Fun of a CallExpr, so it is also not
+// caught by the direct-call scan. Reverse self-check: BS-3 check below covers
+// both the Prom function-value form and the OTel method-value capture form.
 //
 // # RED fixture
 //
@@ -376,6 +380,19 @@ func gaugeVecBS3FuncValueCheck(p *Pass) []Diagnostic {
 // resolves to a banned symbol but is NOT the Fun of a CallExpr (i.e. used as a
 // function value, not a direct call). These represent BS-3 method-value
 // indirection patterns.
+//
+// Two forms are checked:
+//  1. Prom function-value: `var fn = prom.NewGaugeVec` — SelectorExpr resolves
+//     via ResolvePackageRef to bannedPromPkg.bannedPromFunc.
+//  2. OTel method-value capture: `var fn = meter.Float64UpDownCounter` —
+//     SelectorExpr whose Sel matches bannedOtelMethod AND whose receiver X
+//     resolves via *types.Info to otelmetric.Meter (checked via ResolveMethodCall
+//     on a synthetic call-shaped node, or by checking the selector name AND the
+//     receiver type's package path). We use a conservative name-only check for
+//     the method-value capture form: any non-call SelectorExpr whose Sel is
+//     bannedOtelMethod is flagged. This is conservative (could match other
+//     types with the same method name) but Float64UpDownCounter is
+//     OTel-specific and unlikely to collide in production GoCell code.
 func scanFuncValueIndirections(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	// Collect all CallExpr.Fun positions so we can exclude them below.
 	callFunPositions := make(map[token.Pos]bool)
@@ -389,11 +406,10 @@ func scanFuncValueIndirections(fset *token.FileSet, file *ast.File, rel string, 
 		if callFunPositions[sel.Pos()] {
 			return
 		}
+
+		// Check 1: Prom function-value indirection (prom.NewGaugeVec used as value).
 		pkgPath, name, ok := ResolvePackageRef(info, sel)
-		if !ok {
-			return
-		}
-		if pkgPath == bannedPromPkg && name == bannedPromFunc {
+		if ok && pkgPath == bannedPromPkg && name == bannedPromFunc {
 			diags = append(diags, Diagnostic{
 				Rel:  rel,
 				Line: fset.Position(sel.Pos()).Line,
@@ -401,6 +417,24 @@ func scanFuncValueIndirections(fset *token.FileSet, file *ast.File, rel string, 
 					"METRICS-GAUGEVEC-FUNNEL-01 BS-3: %s.%s used as function value (not called directly); "+
 						"route through metrics.Provider.GaugeVec", bannedPromPkg, bannedPromFunc),
 			})
+			return
+		}
+
+		// Check 2: OTel method-value capture (meter.Float64UpDownCounter used as value).
+		// We use ResolveMethodCall on a synthesized selector to get the full type info.
+		// If the selector name matches and the method resolves to the OTel banned pkg,
+		// it is a BS-3 violation.
+		if sel.Sel != nil && sel.Sel.Name == bannedOtelMethod {
+			fn, resolved := ResolveMethodCall(info, sel)
+			if resolved && fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == bannedOtelPkg {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: fset.Position(sel.Pos()).Line,
+					Message: fmt.Sprintf(
+						"METRICS-GAUGEVEC-FUNNEL-01 BS-3: %s.Meter.%s used as method value (not called directly); "+
+							"route through metrics.Provider.GaugeVec", bannedOtelPkg, bannedOtelMethod),
+				})
+			}
 		}
 	})
 	return diags

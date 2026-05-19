@@ -207,6 +207,7 @@ metrics:
         - "0.001"
         - "0.01"
         - "0.1"
+        - "0.25"
         - "0.5"
         - "1"
         - "5"
@@ -221,6 +222,14 @@ metrics:
         - cell
         - topic
         - reason
+      file: runtime/observability/metrics/event.go
+    - name: event_router_subscriptions_active
+      fqName: gocell_event_router_subscriptions_active
+      namespace: gocell
+      type: gauge
+      help: Number of currently active event router subscriptions.
+      labels:
+        - cell
       file: runtime/observability/metrics/event.go
     - name: eventbus_cache_tombstone_evicted_total
       fqName: gocell_eventbus_cache_tombstone_evicted_total
@@ -318,6 +327,14 @@ metrics:
         - cell
         - topic
       file: kernel/outbox/emitter.go
+    - name: outbox_pending_depth
+      fqName: gocell_outbox_pending_depth
+      namespace: gocell
+      type: gauge
+      help: Current number of pending outbox entries for the owner cell, set on each Relay reclaim tick.
+      labels:
+        - cell
+      file: runtime/observability/metrics/outbox.go
     - name: outbox_poll_duration_seconds
       fqName: gocell_outbox_poll_duration_seconds
       namespace: gocell

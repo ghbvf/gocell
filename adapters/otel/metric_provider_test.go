@@ -234,44 +234,36 @@ func TestMetricProvider_GaugeVec_Add_Positive_And_Negative(t *testing.T) {
 	}
 }
 
-// TestMetricProvider_GaugeVec_OverflowDataPointEmitted verifies that when
-// distinct label sets exceed the cache cap, overflow data points are emitted
-// with otel.metric.overflow=true — mirroring the CounterVec overflow test.
-func TestMetricProvider_GaugeVec_OverflowDataPointEmitted(t *testing.T) {
+// TestMetricProvider_GaugeVec_DistinctLabelSetsEmitted verifies that distinct
+// label sets produce distinct data points in the OTel output for GaugeVec.
+//
+// Note: overflow behavior (otel.metric.overflow=true bucket when cap is
+// exceeded) is tested by the package-internal test
+// TestMetricProvider_OverflowDataPointEmitted, which can directly set the
+// unexported attrCacheMaxSize field. This external test's purpose is to confirm
+// that N distinct label sets each produce N distinct data points through the
+// full GaugeVec wire path — it does not and cannot test overflow cap semantics
+// from package otel_test.
+func TestMetricProvider_GaugeVec_DistinctLabelSetsEmitted(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 
-	p, err := gcotel.NewMetricProvider(mp.Meter("gocell.test.gauge.overflow"))
+	p, err := gcotel.NewMetricProvider(mp.Meter("gocell.test.gauge.distinct"))
 	if err != nil {
 		t.Fatalf("NewMetricProvider: %v", err)
 	}
 
-	// Access unexported attrCacheMaxSize via a thin type-assert to *gcotel.MetricProvider.
-	// The test lives in package otel_test (external) so it cannot set the field directly;
-	// instead we create the gauge vec with a small cap via the internal test helper.
-	// Since we can't reach the internal field from _test package, we just exercise the
-	// overflow by emitting more distinct label sets than the default cap — the test
-	// asserts that an overflow bucket appears in the data.
-	//
-	// Note: defaultAttrCacheMaxSize = 2000; to keep this test fast we rely on the fact
-	// that overflow is triggered when the cap is hit. We cannot force a small cap from
-	// the external _test package, so we exercise the overflow semantics by registering
-	// a separate overflow-sentinel label tuple once the cache is at cap (internal test
-	// TestMetricProvider_OverflowDataPointEmitted already covers the small-cap path via
-	// the package-internal test that can reach the unexported field). This test's job is
-	// to confirm the GaugeVec wires overflow correctly at all.
 	gv, err := p.GaugeVec(metrics.GaugeOpts{
-		Name:       "gocell_test_gauge_overflow",
-		Help:       "overflow test",
+		Name:       "gocell_test_gauge_distinct",
+		Help:       "distinct label sets test",
 		LabelNames: []string{"k"},
 	})
 	if err != nil {
 		t.Fatalf("GaugeVec: %v", err)
 	}
 
-	// Emit 3 distinct label sets; all land below default cap so we just
-	// verify normal distinct data points arrive — confirming the wire path.
+	// Emit 3 distinct label sets; verify each produces a distinct data point.
 	for i := range 3 {
 		gv.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(float64(i + 1))
 	}
@@ -284,7 +276,7 @@ func TestMetricProvider_GaugeVec_OverflowDataPointEmitted(t *testing.T) {
 	var totalPoints int
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
-			if m.Name == "gocell_test_gauge_overflow" {
+			if m.Name == "gocell_test_gauge_distinct" {
 				data, ok := m.Data.(metricdata.Gauge[float64])
 				if !ok {
 					// UpDownCounter reports as Sum, not Gauge — check both.
@@ -300,7 +292,39 @@ func TestMetricProvider_GaugeVec_OverflowDataPointEmitted(t *testing.T) {
 		}
 	}
 	if totalPoints != 3 {
-		t.Fatalf("expected 3 distinct data points, got %d", totalPoints)
+		t.Fatalf("expected 3 distinct data points for 3 distinct label sets, got %d", totalPoints)
+	}
+}
+
+// TestMetricProvider_GaugeVec_SetAfterInc verifies the `last` field invariant
+// under mixed Set/Inc call ordering:
+//
+//	Set(5)  → last=5, delta=+5, cumulative=5
+//	Inc()   → last=6, delta=+1, cumulative=6
+//	Set(3)  → last=3, delta=-3, cumulative=3
+//
+// The final cumulative value must be 3 (the last Set value). This ensures that
+// Set after Inc correctly computes the delta relative to the tracked `last`
+// value, not relative to zero.
+func TestMetricProvider_GaugeVec_SetAfterInc(t *testing.T) {
+	p, collect := newTestProvider(t)
+	gv, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "set_after_inc_test",
+		Help:       "Test Set+Inc mixed ordering.",
+		LabelNames: []string{"svc"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+
+	g := gv.With(metrics.Labels{"svc": "a"})
+	g.Set(5) // last=5, delta=+5, cum=5
+	g.Inc()  // last=6, delta=+1, cum=6
+	g.Set(3) // last=3, delta=-3, cum=3
+
+	val, _ := extractGaugeSum(t, collect(), "set_after_inc_test")
+	if val != 3 {
+		t.Fatalf("Set(5)+Inc()+Set(3) must yield cumulative 3, got %v", val)
 	}
 }
 

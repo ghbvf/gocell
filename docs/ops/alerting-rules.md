@@ -393,6 +393,89 @@ missing_caller_cell / invalid_caller_cell）短时高峰。零星失败正常（
 
 ---
 
+## Event Router / Outbox Consumer 可观测性（D3a-1 新增）
+
+以下规则覆盖 D3a-1 PR #589 引入的 5 个新 metric family。
+
+### EventRouterSetupErrorRate
+
+事件路由器订阅建立持续失败，通常表示 broker/topic 配置问题。
+
+```yaml
+- alert: GoCellEventRouterSetupErrorRate
+  expr: sum(rate(gocell_event_router_setup_errors_total[5m])) by (cell, reason) > 0
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Event router setup errors ({{ $labels.cell }})"
+    description: |
+      Cell {{ $labels.cell }} has persistent event router subscription setup failures
+      (reason={{ $labels.reason }}) for 5m.
+      Likely causes: broker unreachable, topic not bound, or auth misconfiguration.
+      Check cell logs for "event router: subscription setup failed".
+```
+
+### OutboxConsumerRejectedSpike
+
+outbox consumer reject 速率高于阈值，表示消息被路由到 DLX。持续 reject 意味着
+handler 逻辑错误或上游 payload 格式问题。
+
+```yaml
+- alert: GoCellOutboxConsumerRejectedSpike
+  expr: sum(rate(gocell_outbox_consumer_rejected_total[5m])) by (cell, reason) > 0.1
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Outbox consumer reject spike ({{ $labels.cell }})"
+    description: |
+      Cell {{ $labels.cell }} outbox consumer reject rate > 0.1/sec for 10m
+      (reason={{ $labels.reason }}).
+      DLX-routed messages indicate permanent handler errors or upstream payload drift.
+      Check handler logs and compare event payloads against current contract schema.
+```
+
+### OutboxPendingDepthHigh
+
+outbox pending depth 增长表示 consumer 消费速率落后，或 broker 连接断开。
+
+注意：`outbox_pending_depth` Gauge 每次 Relay reclaim tick 更新一次（默认间隔为
+分钟级，而非 Prometheus scrape 间隔）。应使用较长的 `for:` 窗口避免 scrape
+窗口内的假阳性。
+
+```yaml
+- alert: GoCellOutboxPendingDepthHigh
+  expr: max(gocell_outbox_pending_depth) by (cell) > 1000
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Outbox pending depth high ({{ $labels.cell }})"
+    description: |
+      Cell {{ $labels.cell }} outbox pending depth > 1000 for 5m.
+      Consumer may be falling behind or broker connection dropped.
+      Note: this Gauge is updated once per Relay ReclaimInterval (default minutes),
+      not per scrape — treat the value as "depth at last reclaim tick".
+      For tighter sampling, decrease ReclaimInterval.
+```
+
+### 调试指标（无告警，仅 dashboard）
+
+以下两个新 metric 不设告警阈值，供运维排查使用：
+
+- **`gocell_event_router_subscriptions_active{cell}`**（Gauge）— 当前活跃订阅数。
+  用于 operational dashboard 展示 event router 健康度；cell 维度聚合可快速
+  发现某 cell 订阅掉零。
+
+- **`gocell_event_router_ready_wait_seconds{cell}`**（Histogram）— event router
+  等待 Ready 信号的耗时分布。关注 p95 spike（通常发生在 broker 重连期间）；
+  p99 持续高于 bootstrap 超时（30s）提示 broker 不可达或 topic 配置错误。
+  可通过以下 PromQL 监控：
+  `histogram_quantile(0.95, sum(rate(gocell_event_router_ready_wait_seconds_bucket[5m])) by (le, cell))`
+
+---
+
 ## 调试 / 仪表板查询
 
 以下 PromQL 片段可直接 paste 到 Grafana Explore 或 Dashboard panel。

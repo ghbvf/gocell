@@ -172,20 +172,49 @@ func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
 	require.NoError(t, err)
 	bodyStr := string(body)
 
-	newFamilies := []string{
-		"event_router_subscriptions_active",
-		"event_router_setup_errors_total",
-		"event_router_ready_wait_seconds",
-		"outbox_pending_depth",
-		"outbox_consumer_rejected_total",
+	// Each entry: (bare metric name, expected Prometheus type, label to probe for).
+	// label may be empty string to skip the label-presence check.
+	type metricSpec struct {
+		name       string
+		promType   string // "gauge", "counter", or "histogram"
+		labelProbe string // non-empty: regex `name\{labelProbe=` must match
 	}
-	for _, family := range newFamilies {
-		helpLine := "# HELP " + family
+	newFamilySpecs := []metricSpec{
+		{"event_router_subscriptions_active", "gauge", "cell"},
+		{"event_router_setup_errors_total", "counter", "cell"},
+		{"event_router_ready_wait_seconds", "histogram", "cell"},
+		{"outbox_pending_depth", "gauge", "cell"},
+		{"outbox_consumer_rejected_total", "counter", "cell"},
+	}
+	for _, spec := range newFamilySpecs {
+		fqName := "gocell_" + spec.name
+
+		// (a) HELP line must be present.
+		helpLine := "# HELP " + fqName
 		assert.Contains(t, bodyStr, helpLine,
-			"D3a-1: /metrics output must contain HELP line for new metric family %q at boot. "+
-				"This confirms the metric is registered with the Prometheus registry. "+
+			"D3a-1: /metrics output must contain HELP line for %q at boot. "+
 				"Got /metrics body (first 600 chars): %s",
-			family, truncateMetrics(bodyStr, 600))
+			fqName, truncateMetrics(bodyStr, 600))
+
+		// (b) TYPE line must be present with correct type.
+		typeLine := "# TYPE " + fqName + " " + spec.promType
+		assert.Contains(t, bodyStr, typeLine,
+			"D3a-1: /metrics output must contain TYPE line %q at boot. "+
+				"Got /metrics body (first 600 chars): %s",
+			typeLine, truncateMetrics(bodyStr, 600))
+
+		// (c) When a sample has been emitted, the label name must appear.
+		// Most gauges and counters are 0 or absent at boot when no subscriptions
+		// have been established; skip label check when no sample line present.
+		// We check the schema-shape only: if a sample line appears at all, it must
+		// carry the expected label key.
+		if spec.labelProbe != "" && strings.Contains(bodyStr, fqName+"{") {
+			labelPattern := fqName + `{` + spec.labelProbe + `=`
+			assert.True(t, strings.Contains(bodyStr, labelPattern),
+				"D3a-1: sample line for %q must carry label %q; pattern %q not found in body. "+
+					"Got /metrics body (first 600 chars): %s",
+				fqName, spec.labelProbe, labelPattern, truncateMetrics(bodyStr, 600))
+		}
 	}
 }
 

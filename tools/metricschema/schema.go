@@ -1309,6 +1309,8 @@ func kernelMetricType(typ string) (string, bool) {
 		return "counter", true
 	case "HistogramOpts":
 		return "histogram", true
+	case "GaugeOpts":
+		return "gauge", true
 	}
 	return "", false
 }
@@ -1629,7 +1631,7 @@ func (sp *scanPackage) metricIdentityFromCall(expr ast.Expr, rel string) (obs01M
 		return obs01MetricIdentity{}, false
 	}
 	switch {
-	case fn.Pkg().Path() == kernelMetricsPkg && (fn.Name() == "CounterVec" || fn.Name() == "HistogramVec"):
+	case fn.Pkg().Path() == kernelMetricsPkg && (fn.Name() == "CounterVec" || fn.Name() == "HistogramVec" || fn.Name() == "GaugeVec"):
 		return sp.kernelMetricIdentity(call.Args[0], rel)
 	case fn.Pkg().Path() == prometheusPkg:
 		_, vec, ok := prometheusConstructor(sp.pkg.TypesInfo, call)

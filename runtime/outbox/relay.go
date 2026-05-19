@@ -15,6 +15,7 @@ import (
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -139,11 +140,11 @@ type Relay struct {
 }
 
 // WithPendingDepthObserver wires a PendingDepthObserver that receives the
-// pending-entry count once per reclaim cycle. Typed-nil inputs are not stored
-// (builder noop); the relay operates without observation when no observer is
-// set. Must be called before Start().
+// pending-entry count once per reclaim cycle. Both bare-nil and typed-nil
+// inputs are silently ignored (no observer stored); the relay operates without
+// observation when no observer is set. Must be called before Start().
 func (r *Relay) WithPendingDepthObserver(o PendingDepthObserver) *Relay {
-	if o == nil {
+	if validation.IsNilInterface(o) {
 		return r
 	}
 	r.pendingDepthObserver = o
@@ -373,6 +374,9 @@ func (r *Relay) reclaimLoop(ctx context.Context) {
 			if r.reclaimBudget != nil {
 				r.reclaimBudget.Record(err)
 			}
+			// Note: pending depth is sampled once per ReclaimInterval, not per
+			// Prometheus scrape. The outbox_pending_depth Gauge reflects depth
+			// at last reclaim tick; decrease ReclaimInterval for tighter sampling.
 			r.observePendingDepth(ctx)
 		}
 	}

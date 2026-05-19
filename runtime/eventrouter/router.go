@@ -353,7 +353,7 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 				slog.String("consumer_group", sub.ConsumerGroup),
 				slog.String("cell_id", sub.CellID),
 				slog.Any("error", err))
-			r.collector.RecordSetupError(sub.CellID, sub.Topic, "setup_error")
+			r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonSetupError)
 			cancel()
 			return wrapped
 		}
@@ -375,7 +375,7 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 		r.wg.Go(func() {
 			defer func() {
 				if rv := recover(); rv != nil {
-					r.collector.RecordSetupError(sub.CellID, sub.Topic, "panic")
+					r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonPanic)
 					setupErr <- fmt.Errorf("eventrouter: topic %s panicked: %v", sub.Topic, rv)
 				}
 			}()
@@ -428,7 +428,7 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 		notReady := make([]string, len(notReadyHandlers))
 		for i, h := range notReadyHandlers {
 			notReady[i] = fmt.Sprintf("%s/%s/%s", h.cellID, h.consumerGroup, h.topic)
-			r.collector.RecordSetupError(h.cellID, h.topic, "ready_timeout")
+			r.collector.RecordSetupError(h.cellID, h.topic, SetupErrorReasonReadyTimeout)
 		}
 		err := fmt.Errorf("eventrouter: %d/%d subscriptions not ready after %s: %v",
 			len(notReady), len(handlers), r.readyTimeout, notReady)
