@@ -1,7 +1,7 @@
 # ADR 202605191500 — metrics.Provider.GaugeVec Funnel (METRICS-GAUGEVEC-FUNNEL-01)
 
-**Status**: accepted  
-**Date**: 2026-05-19  
+**Status**: accepted
+**Date**: 2026-05-19
 **Author**: D3a-1 (plan 030 R-01 GaugeVec wave)
 
 ---
@@ -16,8 +16,15 @@ metric families used by the event router and outbox consumer subsystems:
 | `event_router_subscriptions_active` | Gauge | `{cell}` |
 | `event_router_setup_errors_total` | Counter | `{cell,topic,reason}` |
 | `event_router_ready_wait_seconds` | Histogram | `{cell}` |
+| `event_router_runtime_errors_total` | Counter | `{cell,topic,reason}` |
 | `outbox_pending_depth` | Gauge | `{cell}` |
 | `outbox_consumer_rejected_total` | Counter | `{cell,topic,reason}` |
+
+`event_router_runtime_errors_total` was added in the Wave 2 fix-up batch (PR #589 follow-ups).
+The `reason` label is a closed set:
+- `subscribe_failure` — SubscribeEntry returned an error during Phase 3 (before Running())
+- `ready_wait_timeout` — subscription did not become ready within the Phase 3 ready-wait budget
+- `runtime_fault` — SubscribeEntry returned an error during Phase 4 (after Running())
 
 Before D3a-1 there was no `GaugeVec` method on `metrics.Provider`.  Ad-hoc code
 could call `prometheus.NewGaugeVec` or `otelmetric.Meter.Float64UpDownCounter`
@@ -99,7 +106,7 @@ slot, making the cumulative delta correct.
 
 ref: opentelemetry-go `sdk/metric/internal/aggregate/lastvalue.go` — the SDK uses
 this pattern internally for Observable gauges; we mirror it for synchronous gauge
-emulation.  
+emulation.
 ref: prometheus/client_golang `prometheus/gauge.go` — `NewGaugeVec` is the
 standard constructor routed through `registerOrReuse`.
 
@@ -150,7 +157,7 @@ backlog entry by name.
 
 | Option | Description | Decision |
 |--------|-------------|----------|
-| **Extend `Store.CountPending` (chosen)** | Relay calls `CountPending` on each tick, emits via `OutboxConsumerCollector.ObservePendingDepth` | Chosen (D2: single source of truth; count already available in PG adapter; no in-memory hook needed) |
+| **Extend `Store.CountPending` (chosen)** | Relay calls `CountPending` on each tick, emits via `OutboxPendingDepthCollector.ObservePendingDepth`; collector is a split per-metric type (Wave 2: `OutboxConsumerCollector` was split into `OutboxRejectCollector` + `OutboxPendingDepthCollector`, composition root injects per-relay `PendingDepthObserver`) | Chosen (D2: single source of truth; count already available in PG adapter; no in-memory hook needed) |
 | In-memory hook | Count maintained in relay memory, no DB query | Rejected — in-memory count diverges from DB truth after crash recovery; adds complexity |
 
 ### C. `eventbus_dropped_total` placement

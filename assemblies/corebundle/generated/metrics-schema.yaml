@@ -196,6 +196,16 @@ metrics:
         - disposition
         - result
       file: cmd/corebundle/shared_deps_build.go
+    - name: event_router_runtime_errors_total
+      fqName: gocell_event_router_runtime_errors_total
+      namespace: gocell
+      type: counter
+      help: Total number of event router runtime-phase errors (Phase 4), partitioned by cell, topic, and reason. reason is a closed set (subscribe_failure | ready_wait_timeout | runtime_fault).
+      labels:
+        - cell
+        - topic
+        - reason
+      file: runtime/observability/metrics/event.go
     - name: event_router_ready_wait_seconds
       fqName: gocell_event_router_ready_wait_seconds
       namespace: gocell

@@ -12,18 +12,25 @@ import (
 //   - event_router_subscriptions_active{cell} (Gauge): active subscription count
 //   - event_router_setup_errors_total{cell,topic,reason} (Counter): setup failures
 //   - event_router_ready_wait_seconds{cell} (Histogram): time waited for Ready signal
+//   - event_router_runtime_errors_total{cell,topic,reason} (Counter): runtime-phase errors
 //
 // Histogram buckets for ready_wait_seconds are: 0.001, 0.01, 0.1, 0.5, 1, 5, 30 seconds.
 // Ready usually completes in <100ms; bootstrap timeout is 30s, so the upper bound
 // covers the full expected range.
 //
+// The reason label for event_router_runtime_errors_total is a closed set:
+//   - "subscribe_failure": SubscribeEntry returned an error after startup
+//   - "ready_wait_timeout": subscription did not become ready within the ready-wait budget
+//   - "runtime_fault": any unclassified runtime fault in Phase 4
+//
 // ref: Watermill router metrics middleware — subscription lifecycle counters and
 // gauges matching the router_messages_processed_total / router_handler_active
 // pattern.
 type EventRouterCollector struct {
-	active    kernelmetrics.GaugeVec     // event_router_subscriptions_active{cell}
-	setupErr  kernelmetrics.CounterVec   // event_router_setup_errors_total{cell,topic,reason}
-	readyWait kernelmetrics.HistogramVec // event_router_ready_wait_seconds{cell}
+	active     kernelmetrics.GaugeVec     // event_router_subscriptions_active{cell}
+	setupErr   kernelmetrics.CounterVec   // event_router_setup_errors_total{cell,topic,reason}
+	readyWait  kernelmetrics.HistogramVec // event_router_ready_wait_seconds{cell}
+	runtimeErr kernelmetrics.CounterVec   // event_router_runtime_errors_total{cell,topic,reason}
 }
 
 // eventRouterReadyWaitBuckets are sensible default buckets for Ready wait time.
@@ -72,10 +79,23 @@ func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, e
 		return nil, fmt.Errorf("runtime/observability/metrics: register event_router_ready_wait_seconds: %w", err)
 	}
 
+	runtimeErr, err := p.CounterVec(kernelmetrics.CounterOpts{
+		Name:       "event_router_runtime_errors_total",
+		Help:       "Total number of event router runtime-phase errors (Phase 4), partitioned by cell, topic, and reason. reason is a closed set: subscribe_failure | ready_wait_timeout | runtime_fault.",
+		LabelNames: []string{"cell", "topic", "reason"},
+	})
+	if err != nil {
+		_ = p.Unregister(readyWait)
+		_ = p.Unregister(setupErr)
+		_ = p.Unregister(active)
+		return nil, fmt.Errorf("runtime/observability/metrics: register event_router_runtime_errors_total: %w", err)
+	}
+
 	return &EventRouterCollector{
-		active:    active,
-		setupErr:  setupErr,
-		readyWait: readyWait,
+		active:     active,
+		setupErr:   setupErr,
+		readyWait:  readyWait,
+		runtimeErr: runtimeErr,
 	}, nil
 }
 
@@ -120,11 +140,19 @@ func (c *EventRouterCollector) ObserveReadyWait(cellID string, d time.Duration) 
 	c.readyWait.With(kernelmetrics.Labels{"cell": cellID}).Observe(d.Seconds())
 }
 
-// RecordRuntimeError is a Wave 1 stub — Wave 2 will register
-// event_router_runtime_errors_total{cell,topic,reason} and implement this.
-// Currently a no-op so existing tests remain GREEN while new RED tests target
-// the calling paths in router.go (Phase 4) that haven't been wired yet.
-func (c *EventRouterCollector) RecordRuntimeError(_, _, _ string) {
-	// Wave 2: register counter + record here.
-	// Wave 1 stub: no-op to allow compilation.
+// RecordRuntimeError increments the runtime error counter for the given cell,
+// topic, and reason. The reason argument is drawn from the closed set defined
+// by the eventrouter package constants:
+//   - eventrouter.RuntimeErrorReasonSubscribeFailure ("subscribe_failure"): SubscribeEntry failed (Phase 4)
+//   - eventrouter.RuntimeErrorReasonReadyWaitTimeout ("ready_wait_timeout"): Ready not signaled within timeout (Phase 3)
+//   - eventrouter.RuntimeErrorReasonRuntimeFault ("runtime_fault"): unclassified runtime fault (Phase 4)
+func (c *EventRouterCollector) RecordRuntimeError(cellID, topic, reason string) {
+	if c == nil {
+		return
+	}
+	c.runtimeErr.With(kernelmetrics.Labels{
+		"cell":   cellID,
+		"topic":  topic,
+		"reason": reason,
+	}).Inc()
 }

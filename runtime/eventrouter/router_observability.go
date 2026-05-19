@@ -63,8 +63,17 @@ const (
 // no-ops so production code paths are always safe to call without a nil check.
 type NopEventCollector struct{}
 
-func (NopEventCollector) IncSubscriptionActive(string)            {}
-func (NopEventCollector) DecSubscriptionActive(string)            {}
+// IncSubscriptionActive is a no-op for NopEventCollector (default when no metrics backend is wired).
+func (NopEventCollector) IncSubscriptionActive(string) {}
+
+// DecSubscriptionActive is a no-op for NopEventCollector (default when no metrics backend is wired).
+func (NopEventCollector) DecSubscriptionActive(string) {}
+
+// RecordSetupError is a no-op for NopEventCollector (default when no metrics backend is wired).
 func (NopEventCollector) RecordSetupError(string, string, string) {}
-func (NopEventCollector) ObserveReadyWait(string, time.Duration)  {}
+
+// ObserveReadyWait is a no-op for NopEventCollector (default when no metrics backend is wired).
+func (NopEventCollector) ObserveReadyWait(string, time.Duration) {}
+
+// RecordRuntimeError is a no-op for NopEventCollector (default when no metrics backend is wired).
 func (NopEventCollector) RecordRuntimeError(string, string, string) {}

@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -353,7 +354,9 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 				slog.String("consumer_group", sub.ConsumerGroup),
 				slog.String("cell_id", sub.CellID),
 				slog.Any("error", err))
-			r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonSetupError)
+			observability.SafeObserve(slog.Default(), func() {
+				r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonSetupError)
+			})
 			cancel()
 			return wrapped
 		}
@@ -375,7 +378,9 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 		r.wg.Go(func() {
 			defer func() {
 				if rv := recover(); rv != nil {
-					r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonPanic)
+					observability.SafeObserve(slog.Default(), func() {
+						r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonPanic)
+					})
 					setupErr <- fmt.Errorf("eventrouter: topic %s panicked: %v", sub.Topic, rv)
 				}
 			}()
@@ -385,6 +390,18 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 				slog.String("cell_id", sub.CellID))
 			err := r.subscriber.SubscribeEntry(ctx, sub, h.handler)
 			if err != nil && ctx.Err() == nil {
+				// Choose reason based on whether the router entered Phase 4 (Running).
+				// If Running() is already closed the router was up and the error is a
+				// runtime fault; otherwise the error occurred during Phase 3 setup.
+				reason := RuntimeErrorReasonSubscribeFailure
+				select {
+				case <-r.running:
+					reason = RuntimeErrorReasonRuntimeFault
+				default:
+				}
+				observability.SafeObserve(slog.Default(), func() {
+					r.collector.RecordRuntimeError(sub.CellID, sub.Topic, reason)
+				})
 				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", sub.Topic, err)
 			}
 		})
@@ -428,7 +445,13 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 		notReady := make([]string, len(notReadyHandlers))
 		for i, h := range notReadyHandlers {
 			notReady[i] = fmt.Sprintf("%s/%s/%s", h.cellID, h.consumerGroup, h.topic)
-			r.collector.RecordSetupError(h.cellID, h.topic, SetupErrorReasonReadyTimeout)
+			hCopy := h
+			observability.SafeObserve(slog.Default(), func() {
+				r.collector.RecordSetupError(hCopy.cellID, hCopy.topic, SetupErrorReasonReadyTimeout)
+			})
+			observability.SafeObserve(slog.Default(), func() {
+				r.collector.RecordRuntimeError(hCopy.cellID, hCopy.topic, RuntimeErrorReasonReadyWaitTimeout)
+			})
 		}
 		err := fmt.Errorf("eventrouter: %d/%d subscriptions not ready after %s: %v",
 			len(notReady), len(handlers), r.readyTimeout, notReady)
@@ -477,8 +500,12 @@ func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-
 			select {
 			case <-r.subscriber.Ready(sub):
 				elapsed := r.clock.Since(start)
-				r.collector.ObserveReadyWait(sub.CellID, elapsed)
-				r.collector.IncSubscriptionActive(sub.CellID)
+				observability.SafeObserve(slog.Default(), func() {
+					r.collector.ObserveReadyWait(sub.CellID, elapsed)
+				})
+				observability.SafeObserve(slog.Default(), func() {
+					r.collector.IncSubscriptionActive(sub.CellID)
+				})
 				r.activeMu.Lock()
 				r.activeCells = append(r.activeCells, sub.CellID)
 				r.activeMu.Unlock()
@@ -632,7 +659,10 @@ func (r *Router) Close(ctx context.Context) error {
 	copy(activeCells, r.activeCells)
 	r.activeMu.Unlock()
 	for _, cellID := range activeCells {
-		r.collector.DecSubscriptionActive(cellID)
+		cid := cellID
+		observability.SafeObserve(slog.Default(), func() {
+			r.collector.DecSubscriptionActive(cid)
+		})
 	}
 
 	// Phase 3: wait for goroutines to drain or ctx expires.

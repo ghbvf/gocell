@@ -425,17 +425,25 @@ func (s *FakeStore) CleanupDead(_ context.Context, cutoff time.Time, batchSize i
 	return deleted, nil
 }
 
-// CountPending returns the count of rows in pending status. Thread-safe.
-// May be approximate if calls race with ClaimPending; callers must treat
-// errors as transient and skip the metric update.
+// CountPending returns the count of rows eligible for ClaimPending:
+// status=pending AND (next_retry_at IS NULL OR next_retry_at <= now()).
+// Rows in backoff (next_retry_at > now()) are excluded, consistent with the
+// ClaimPending eligibility predicate. Thread-safe. May be approximate if
+// calls race with ClaimPending; callers must treat errors as transient and
+// skip the metric update.
 func (s *FakeStore) CountPending(_ context.Context) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
 	var n int64
 	for _, r := range s.rows {
-		if r.status == statusPending {
-			n++
+		if r.status != statusPending {
+			continue
 		}
+		if r.nextRetryAt != nil && r.nextRetryAt.After(now) {
+			continue
+		}
+		n++
 	}
 	return n, nil
 }
