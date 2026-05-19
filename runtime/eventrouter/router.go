@@ -58,12 +58,12 @@ type subscribeFailure struct {
 func (sf subscribeFailure) Error() string { return sf.err.Error() }
 func (sf subscribeFailure) Unwrap() error { return sf.err }
 
-// panicErrSentinel is the fixed error returned on the recover() path. The
+// errSubscriptionPanicked is the fixed error returned on the recover() path. The
 // original panic value never enters the error chain so it cannot leak via
 // Health() / Run() / slog "error" fields. The redacted form of the panic
 // value is logged separately as a typed slog string field
 // "recovered_redacted", scrubbed by pkg/redaction.RedactString.
-var panicErrSentinel = errors.New("eventrouter: subscription panicked (redacted)")
+var errSubscriptionPanicked = errors.New("eventrouter: subscription panicked (redacted)")
 
 // DefaultReadyTimeout bounds Phase 3 of Run() so a subscriber that never
 // signals Ready (broker reconnect storm, mis-configured topology) does not
@@ -419,7 +419,7 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 // this pipeline without any lifting ceremony.
 //
 // The recover() path scrubs the panic value through pkg/redaction.RedactString
-// and forwards a fixed sentinel error (panicErrSentinel) so a panic value
+// and forwards a fixed sentinel error (errSubscriptionPanicked) so a panic value
 // containing credentials cannot leak via Health() / Run() / slog "error"
 // fields (P1#2 fix). The redacted form is emitted as a typed slog field
 // "recovered_redacted" for server-side diagnosis only.
@@ -437,7 +437,7 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 						cellID: sub.CellID,
 						topic:  sub.Topic,
 						reason: SetupErrorReasonPanic,
-						err:    panicErrSentinel,
+						err:    errSubscriptionPanicked,
 					}
 				}
 			}()
@@ -472,7 +472,12 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 // setup metric accordingly. ready-timeout records only the setup metric;
 // the previous double-write into the runtime metric was a phase-boundary
 // violation removed in PR #593 review fix-up (P2#3).
-func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, handlers []handlerConfig, setupErr <-chan subscribeFailure) error {
+func (r *Router) runAwaitReady(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	handlers []handlerConfig,
+	setupErr <-chan subscribeFailure,
+) error {
 	allReady := r.awaitAllReady(ctx, handlers)
 
 	var deadlineCh <-chan time.Time

@@ -25,12 +25,12 @@ import (
 // faults. The reason label set is therefore disjoint across the two metrics:
 //
 //   - event_router_setup_errors_total reasons:
-//       "setup_error":       Subscriber.Setup failed (Phase 1)
-//       "panic":             Subscribe goroutine panicked (Phase 2)
-//       "ready_timeout":     Ready not signaled within timeout (Phase 3)
-//       "subscribe_failure": SubscribeEntry failed before Running() (Phase 3)
+//     "setup_error":       Subscriber.Setup failed (Phase 1)
+//     "panic":             Subscribe goroutine panicked (Phase 2)
+//     "ready_timeout":     Ready not signaled within timeout (Phase 3)
+//     "subscribe_failure": SubscribeEntry failed before Running() (Phase 3)
 //   - event_router_runtime_errors_total reasons:
-//       "runtime_fault":     any fault detected in Phase 4 (after Running())
+//     "runtime_fault":     any fault detected in Phase 4 (after Running())
 //
 // ref: Watermill router metrics middleware — subscription lifecycle counters and
 // gauges matching the router_messages_processed_total / router_handler_active
