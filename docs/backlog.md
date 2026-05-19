@@ -2,6 +2,7 @@
 
 > **单源 backlog** — 按 14 capability units 主轴组织。  
 > 主轴权威源：[`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md) §1  
+> 评级规则：[`docs/backlog/RERATING-RUBRIC.md`](backlog/RERATING-RUBRIC.md)（2026-05-19 启动全量重评级，P/Cx/Flag 调整以本文件为准）  
 > 历史归档：[`docs/backlog/archive/`](backlog/archive/)
 >
 > 基线：`develop @ 7f886a621`
