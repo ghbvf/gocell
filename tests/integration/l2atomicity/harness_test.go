@@ -323,13 +323,7 @@ func buildPGStores(t *testing.T) *pgStores {
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
-	require.NoError(t, err)
-	userRepo, err := accesspg.NewUserRepository(pgDeps)
-	require.NoError(t, err)
-	roleRepo, err := accesspg.NewRoleRepository(pgDeps)
-	require.NoError(t, err)
-	setupLock, err := accesspg.NewSetupLock(pgDeps)
+	pgBundle, err := accesspg.NewBundle(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 
 	sessionProto, err := session.NewProtocol(
@@ -347,11 +341,9 @@ func buildPGStores(t *testing.T) *pgStores {
 		pool:  pool,
 		txMgr: txMgr,
 		storeOpts: []accesscore.Option{
-			accesscore.WithUserRepository(userRepo),
-			accesscore.WithRoleRepository(roleRepo),
+			accesscore.WithPGBundle(pgBundle),
 			accesscore.WithSessionStore(sessionStore),
 			accesscore.WithRefreshStore(refreshStore),
-			accesscore.WithSetupLock(setupLock),
 		},
 	}
 }
@@ -439,7 +431,6 @@ func buildCells(
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(a.jwtIssuer),
 		accesscore.WithJWTVerifier(a.jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(pg.txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(a.bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),

@@ -13,12 +13,18 @@ import (
 )
 
 // buildAccessCoreMemOptions returns the explicit option set that replaces the
-// removed accesscore.WithInMemoryDefaults() — user/role + session.Store +
-// refresh.Store. All four repositories share the same clock to keep time
-// semantics consistent across in-memory tests.
+// removed accesscore.WithInMemoryDefaults(). WithMemBundle wires the
+// (UserRepository, RoleRepository, SetupLock, store-paired TxRunner)
+// quadruple from a single backing mem.Store, guaranteeing the cross-repo
+// effective-admin invariant and serializing concurrent first-admin
+// provisioning via store.mu (PR #595 fix — previously this helper omitted
+// WithTxManager and integration tests silently fell back to
+// cell.DemoCellTxManager after Provisioner.mu was deleted).
+//
+// PG-mode integration tests use accesspg.NewBundle directly and do not
+// call this helper.
 func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Option {
 	tb.Helper()
-	userStore := accessmem.NewStore(clk)
 	sessionProto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
@@ -36,13 +42,8 @@ func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Opti
 		tb.Fatalf("buildAccessCoreMemOptions: refreshmem.New: %v", err)
 	}
 	return []accesscore.Option{
-		accesscore.WithUserRepository(userStore.UserRepository()),
-		accesscore.WithRoleRepository(userStore.RoleRepository()),
+		accesscore.WithMemBundle(accessmem.NewBundle(clk)),
 		accesscore.WithSessionStore(sessionStore),
 		accesscore.WithRefreshStore(refreshStore),
-		// Memstore mode default — memTxRunner.RunInTx already serializes via
-		// store.mu. PG-mode integration tests that need pg_advisory_xact_lock
-		// override by appending accesscore.WithSetupLock(pgSetupLock) after this.
-		accesscore.WithSetupLock(accesscore.NoopSetupLock{}),
 	}
 }

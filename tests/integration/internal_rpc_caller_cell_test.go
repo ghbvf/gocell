@@ -142,7 +142,6 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		callerCellAllowAllLimiter{},
 		nil,
 	)
-	acMemStore := accessmem.NewStore(clock.Real())
 	acSessionProto, err := session.NewProtocol(
 		session.WithFingerprint(session.FingerprintJTIRef{}),
 		session.WithOrdering(session.OrderingAuthzEpoch{}),
@@ -153,25 +152,21 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, err)
 	acRefreshStore, err := refreshmem.New(accesscore.DefaultRefreshPolicy(), clock.Real(), nil)
 	require.NoError(t, err)
+	// WithMemBundle wires (UserRepository, RoleRepository, SetupLock,
+	// store-paired TxRunner) from a single mem.Store — see accesscore.MemBundle
+	// godoc for the Hard funnel rationale.
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithUserRepository(acMemStore.UserRepository()),
-		accesscore.WithRoleRepository(acMemStore.RoleRepository()),
+		accesscore.WithMemBundle(accessmem.NewBundle(clock.Real())),
 		accesscore.WithSessionStore(acSessionStore),
 		accesscore.WithRefreshStore(acRefreshStore),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithCursorCodec(accessCursorCodec),
 		accesscore.WithBootstrapAuth(bootstrapMW),
-
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-		// Memstore mode: memTxRunner.RunInTx already holds store.mu for the
-		// whole closure. NoopSetupLock satisfies the mandatory WithSetupLock
-		// phase0 check without adding a redundant second lock.
-		accesscore.WithSetupLock(accesscore.NoopSetupLock{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),

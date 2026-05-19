@@ -47,8 +47,12 @@ const PasswordVersionField = "password_version"
 // Option configures an AccessCore Cell.
 type Option func(*AccessCore)
 
-// WithUserRepository sets the UserRepository.
-func WithUserRepository(r ports.UserRepository) Option {
+// withUserRepository sets the UserRepository. Unexported — composition roots
+// wire via WithMemBundle / WithPGBundle so the UserRepository, RoleRepository,
+// SetupLock and TxManager originate from the same backing Store. Hard funnel
+// (ACCESSCORE-BUNDLE-FUNNEL-01): no public symbol can wire UserRepository
+// independently of its sibling repositories or TxRunner.
+func withUserRepository(r ports.UserRepository) Option {
 	return func(c *AccessCore) { c.userRepo = r }
 }
 
@@ -72,8 +76,9 @@ func WithSessionStore(s session.Store) Option {
 	}
 }
 
-// WithRoleRepository sets the RoleRepository.
-func WithRoleRepository(r ports.RoleRepository) Option {
+// withRoleRepository sets the RoleRepository. Unexported — see
+// withUserRepository godoc for the bundle funnel rationale.
+func withRoleRepository(r ports.RoleRepository) Option {
 	return func(c *AccessCore) { c.roleRepo = r }
 }
 
@@ -142,9 +147,11 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *AccessCore) { c.cursorCodec = codec }
 }
 
-// WithTxManager sets the CellTxManager for transactional guarantees (L2
-// atomicity). Composition roots construct via persistence.WrapForCell.
-func WithTxManager(tx persistence.CellTxManager) Option {
+// withTxManager sets the CellTxManager for transactional guarantees (L2
+// atomicity). Unexported — bundles always carry the Store-paired TxRunner
+// alongside their repositories, so independent caller wiring of TxManager
+// is disallowed by design. See withUserRepository godoc.
+func withTxManager(tx persistence.CellTxManager) Option {
 	return func(c *AccessCore) { c.txRunner = tx }
 }
 
@@ -206,25 +213,15 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 	return func(ac *AccessCore) { ac.configGetter = c }
 }
 
-// WithSetupLock injects the cross-process advisory lock for the admin-provisioning
-// path. CreateAdmin acquires it at the start of the RunInTx body before calling
-// adminprovision.Ensure — the lock, user write, and outbox emit share one
-// transaction.
+// withSetupLock injects the cross-process advisory lock for the
+// admin-provisioning path. Unexported — bundles always carry the correct
+// SetupLock for their backend (NoopSetupLock for mem, pg_advisory_xact_lock
+// for PG). Composition roots cannot accidentally pair the wrong SetupLock
+// with a TxRunner from a different store.
 //
-// REQUIRED: initValidate() rejects a missing or nil setupLock with
-// ErrCellInvalidConfig so that the cell will not start without a properly-wired
-// serialization primitive. The previous in-process sync.Mutex inside
-// adminprovision.Provisioner has been removed; the only serialization path is
-// now ambient RunInTx + this setupLock.
-//
-// Composition roots wire:
-//   - PG mode: accesspg.NewSetupLock(deps) — pg_advisory_xact_lock across pods
-//     and goroutines (Closes backlog ADMINPROVISION-DIST-LOCK-01).
-//   - Memstore mode: accesscore.NoopSetupLock{} — memTxRunner.RunInTx already
-//     holds store.mu for the entire closure.
-//
-// Both bare-nil and typed-nil ports.SetupLock are rejected at phase0.
-func WithSetupLock(lock ports.SetupLock) Option {
+// Both bare-nil and typed-nil ports.SetupLock are rejected at phase0
+// (setupLockNil sentinel + initValidate check).
+func withSetupLock(lock ports.SetupLock) Option {
 	return func(c *AccessCore) {
 		if validation.IsNilInterface(lock) {
 			c.setupLockNil = true
