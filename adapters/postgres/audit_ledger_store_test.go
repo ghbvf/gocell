@@ -514,3 +514,90 @@ func TestAuditLedgerStore_RepoReadiness_Conformance(t *testing.T) {
 
 	celltest.RunRepoReadinessConformance(t, "ledger-pg", healthyStore, brokenStore)
 }
+
+// ---------------------------------------------------------------------------
+// TestAuditLedgerStore_ReadWithinAmbientTx (PR578-FU)
+// ---------------------------------------------------------------------------
+
+// errRollbackSentinel forces the outer RunInTx to roll back so the test can
+// assert that reads performed inside the ambient transaction observed the
+// uncommitted chain state while the post-rollback state is empty.
+var errRollbackSentinel = errors.New("intentional rollback")
+
+// TestAuditLedgerStore_ReadWithinAmbientTx makes the LedgerStore godoc caveat
+// ("when called within a caller's ambient transaction, the result reflects
+// that transaction's uncommitted chain state") falsifiable. Tail/GetBySeq/
+// Verify all route through pgExecutor, so an Append performed inside an outer
+// RunInTx must be visible to those reads in the SAME txCtx before commit, and
+// invisible after a rollback. A committed control proves the in-tx read is not
+// an artifact and the persisted path still works.
+func TestAuditLedgerStore_ReadWithinAmbientTx(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	protocol := newTestLedgerProtocol(t, ns)
+
+	p := isolatedSchemaPool(t, ctx, base)
+	t.Cleanup(func() { _ = p.Close(context.Background()) })
+	migrator, err := NewMigrator(p, testMigrationsFS(t), migrationsTableName(t, "schema_migrations_ambient_read_"))
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	fc := clockmock.New(storetest.EpochAnchor())
+	txm := NewTxManager(p)
+	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
+	require.NoError(t, err)
+
+	// --- Rolled-back transaction: in-tx reads see the uncommitted entry,
+	//     post-rollback reads see an empty ledger. ---
+	rbErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		e := storetest.NewEntryFixture(t, "ambient-read-1", "ambient.read", "actor", fc.Now())
+		require.NoError(t, store.Append(txCtx, e), "Append inside ambient tx")
+
+		tail, tErr := store.Tail(txCtx)
+		require.NoError(t, tErr)
+		assert.Equal(t, int64(1), tail.SeqNo, "Tail(txCtx) must see the uncommitted append")
+		assert.Equal(t, int64(1), tail.EntryCount, "EntryCount(txCtx) must reflect uncommitted state")
+
+		got, gErr := store.GetBySeq(txCtx, 1)
+		require.NoError(t, gErr, "GetBySeq(txCtx,1) must see the uncommitted append")
+		assert.Equal(t, int64(1), got.SeqNo)
+
+		valid, firstInvalid, vErr := store.Verify(txCtx, 1, 1)
+		require.NoError(t, vErr)
+		assert.True(t, valid, "Verify(txCtx,1,1) over uncommitted chain must be valid")
+		// Verify contract: firstInvalidSeq is -1 when the entire range is intact
+		// (LedgerStore mirrors mem_store.go:234 — `return true, -1, nil`).
+		assert.Equal(t, int64(-1), firstInvalid)
+
+		return errRollbackSentinel
+	})
+	require.ErrorIs(t, rbErr, errRollbackSentinel, "RunInTx must surface the rollback sentinel")
+
+	// Fresh context (no ambient tx) → pgExecutor falls back to the pool, which
+	// only sees committed state. The rolled-back append must be gone.
+	tail, err := store.Tail(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), tail.SeqNo, "post-rollback Tail must be empty")
+	assert.Equal(t, int64(0), tail.EntryCount, "post-rollback EntryCount must be 0")
+
+	_, err = store.GetBySeq(ctx, 1)
+	require.Error(t, err, "post-rollback GetBySeq(1) must not find the rolled-back entry")
+
+	// --- Committed control: a successful RunInTx persists; reads outside the
+	//     tx then observe it. ---
+	commitErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		e := storetest.NewEntryFixture(t, "ambient-read-2", "ambient.read", "actor", fc.Now())
+		require.NoError(t, store.Append(txCtx, e))
+		return nil
+	})
+	require.NoError(t, commitErr)
+
+	tail, err = store.Tail(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), tail.SeqNo, "committed entry must be seq 1 (rolled-back one consumed no seq)")
+	assert.Equal(t, int64(1), tail.EntryCount, "committed Tail must count the persisted entry")
+}

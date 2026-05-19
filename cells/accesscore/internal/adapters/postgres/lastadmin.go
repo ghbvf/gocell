@@ -1,10 +1,9 @@
 package postgres
 
 import (
-	"errors"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/ghbvf/gocell/pkg/pgquery"
 )
 
 // lastAdminTriggerSentinel is the message prefix emitted by the
@@ -29,20 +28,20 @@ const lastAdminTriggerSentinel = "effective_admin_invariant"
 // P0001 is a generic class used by any RAISE EXCEPTION site.
 //
 // The match requires both:
-//  1. SQLSTATE P0001 (PL/pgSQL RAISE EXCEPTION, SQLState code "P0001")
+//  1. SQLSTATE P0001 (PL/pgSQL RAISE EXCEPTION) — classified via the single
+//     source pgquery.AsRaiseException so this file never duplicates the
+//     SQLSTATE code knowledge (SQLSTATE-SINGLE-SOURCE-01). AsRaiseException
+//     returns the unwrapped *pgconn.PgError in one Unwrap walk so we never
+//     errors.As twice.
 //  2. Message starts with lastAdminTriggerSentinel + ":" — the colon delimiter
 //     ensures that a sibling trigger "effective_admin_invariant_v2: ..." does
-//     NOT match (P2-3 precision requirement).
+//     NOT match (P2-3 precision requirement). The message is a trigger-specific
+//     attribution signal, not a SQLSTATE code, so it stays local here.
 //
 // ref: adapters/postgres/migrations/024_effective_admin_invariant.sql
 func isLastAdminProtected(err error) bool {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return false
-	}
-	// "P0001" is the SQLSTATE for PL/pgSQL RAISE EXCEPTION (class P0 / code P0001).
-	// Inlined literal rather than importing pkg/pgquery solely for this constant.
-	if pgErr.Code != "P0001" {
+	pgErr, ok := pgquery.AsRaiseException(err)
+	if !ok {
 		return false
 	}
 	return strings.HasPrefix(pgErr.Message, lastAdminTriggerSentinel+":")

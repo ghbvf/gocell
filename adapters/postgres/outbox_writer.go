@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -34,8 +35,9 @@ var (
 )
 
 // OutboxWriter writes outbox entries within a PostgreSQL transaction.
-// It relies on TxFromContext to obtain the current transaction, ensuring
-// atomicity with the business state write (same DB transaction).
+// It relies on persistence.TxFromContext[pgx.Tx] to obtain the current
+// transaction, ensuring atomicity with the business state write (same DB
+// transaction).
 //
 // ref: ThreeDotsLabs/watermill-sql offset_adapter_postgresql.go — transactional outbox insert
 // Adopted: INSERT within caller-provided transaction, JSON metadata serialization.
@@ -54,7 +56,7 @@ func NewOutboxWriter(clk clock.Clock) *OutboxWriter {
 // transaction from the context. Returns ErrAdapterPGNoTx if no transaction
 // is present.
 func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
-	tx, ok := TxFromContext(ctx)
+	tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
 	if !ok {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx, "outbox write requires a transaction in context")
 	}
@@ -143,7 +145,7 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 		return nil
 	}
 
-	tx, ok := TxFromContext(ctx)
+	tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
 	if !ok {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx, "outbox batch write requires a transaction in context")
 	}

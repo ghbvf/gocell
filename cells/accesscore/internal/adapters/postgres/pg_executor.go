@@ -23,21 +23,21 @@ func newPGExecutor(pool *pgxpool.Pool) pgExecutor {
 }
 
 func (e pgExecutor) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
+	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
 		return tx.Exec(ctx, sql, args...)
 	}
 	return e.pool.Exec(ctx, sql, args...)
 }
 
 func (e pgExecutor) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
+	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
 		return tx.Query(ctx, sql, args...)
 	}
 	return e.pool.Query(ctx, sql, args...)
 }
 
 func (e pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
+	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
 		return tx.QueryRow(ctx, sql, args...)
 	}
 	return e.pool.QueryRow(ctx, sql, args...)
@@ -52,7 +52,7 @@ func (e pgExecutor) ExecDirect(ctx context.Context, sql string, args ...any) (pg
 // the lock is released at statement end, silently voiding the S4d serialization
 // guarantee. Call this as the first statement of any FOR UPDATE query method.
 func assertAmbientTx(ctx context.Context) error {
-	if _, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); !ok {
+	if _, ok := persistence.TxFromContext[pgx.Tx](ctx); !ok {
 		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"user_repo: FOR UPDATE row lock requires an ambient transaction; call inside RunInTx")
 	}

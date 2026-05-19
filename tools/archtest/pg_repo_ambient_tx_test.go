@@ -193,9 +193,18 @@ var r3ExecDirectAllowlist = map[string]struct{}{
 	"adapters/postgres/refresh_store.go::revokeSessionDetachedAt": {},
 }
 
+// modulePathPrefix is the go.mod module path plus trailing slash. Trimming it
+// from a pgRepoPackagePatterns entry yields the module-relative package
+// directory, which is the form Pass.Rel() / Diagnostic.Rel use. Deriving the
+// production-scope predicate from this single source (see isProductionRepoPkg)
+// removes the former hand-maintained literal list that silently drifted out of
+// sync with pgRepoPackagePatterns (the iotdevice pattern was missing from it).
+const modulePathPrefix = "github.com/ghbvf/gocell/"
+
 // pgRepoPackagePatterns lists the import patterns whose production .go files
-// the archtest must parse with full TypesInfo. Both adapters/postgres and the
-// cell-private adapters/postgres are included since both declare a pgExecutor
+// the archtest must parse with full TypesInfo. All three PG adapter packages
+// (adapters/postgres, the accesscore cell-private adapter, and the iotdevice
+// example cell-private adapter) are included since each declares a pgExecutor
 // and their repos are subject to the same funnel rule.
 //
 // Maintenance obligation: whenever a new PG adapter package is added to the
@@ -282,9 +291,10 @@ func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 		// Infrastructure files (pool.go, tx_manager.go, pg_executor.go, errors.go,
 		// etc.) legitimately need *pgxpool.Pool fields. Fixture files have no
 		// _repo/_store suffix but should still be checked for RED fixture coverage.
-		isProductionPkg := strings.Contains(rel, "adapters/postgres") ||
-			strings.Contains(rel, "cells/accesscore/internal/adapters/postgres")
-		if isProductionPkg {
+		// The production-scope predicate is DERIVED from pgRepoPackagePatterns
+		// (single source) so adding a fourth PG adapter package cannot leave the
+		// suffix filter silently disabled for it.
+		if isProductionRepoPkg(rel) {
 			if !strings.HasSuffix(base, "_repo.go") && !strings.HasSuffix(base, "_store.go") {
 				continue
 			}
@@ -294,6 +304,30 @@ func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 		diags = append(diags, scanR3UsagePoints(p.Fset, file, rel, p.TypesInfo, pkgPath)...)
 	}
 	return diags
+}
+
+// isProductionRepoPkg reports whether the module-relative file path rel lives
+// in one of the production PG adapter packages listed in pgRepoPackagePatterns.
+// It is the single-source replacement for the former hand-maintained substring
+// disjunction; the iotdevice package pattern was absent from that literal list,
+// so its files escaped the *_repo.go/*_store.go suffix filter. Fixture packages
+// (loaded under a separate tools/archtest/internal/... pattern) are never under
+// these prefixes, so they correctly return false and remain fully scanned.
+//
+// rel is always a *.go file path (from Pass.Rel), never the package directory,
+// so only HasPrefix("<dir>/") matches — equality against a bare directory is
+// not a reachable case and intentionally not checked.
+func isProductionRepoPkg(rel string) bool {
+	for _, pattern := range pgRepoPackagePatterns {
+		relDir := strings.TrimPrefix(pattern, modulePathPrefix)
+		if relDir == pattern {
+			continue // not a module-local pattern; defensive, should not happen
+		}
+		if strings.HasPrefix(rel, relDir+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // scanR1PoolFields implements R1: every struct field whose type resolves to
@@ -651,10 +685,10 @@ func isPgxPoolType(expr ast.Expr, info *types.Info) bool {
 	return obj.Pkg().Path() == pgxpoolImportPath && obj.Name() == pgxpoolTypeName
 }
 
-// assertProductionCoverage fails the test if either of the two production
-// package patterns did not yield at least one *_repo.go or *_store.go file.
-// This prevents a silent coverage zero-out caused by import-path drift or
-// package renaming.
+// assertProductionCoverage fails the test if any of the production package
+// patterns in pgRepoPackagePatterns did not yield at least one *_repo.go or
+// *_store.go file. This prevents a silent coverage zero-out caused by
+// import-path drift or package renaming.
 func assertProductionCoverage(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
