@@ -24,10 +24,10 @@
   blocker: ""
   updatedAt: 2026-04-05
 - journeyId: J-auditlogintrail
-  state: todo
+  state: done
   risk: low
   blocker: ""
-  updatedAt: 2026-04-05
+  updatedAt: 2026-05-19
 - journeyId: J-confighotreload
   state: todo
   risk: low
