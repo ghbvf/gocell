@@ -202,6 +202,19 @@ github.com/ghbvf/gocell/tools/archtest	TestCellgenErrcodeFunnelNoBuildTagFiles
 # on PR #594 verify-archtest shard 11 — same type-graph-load class as the
 # entries above (whole-module SharedResolver + Tests:true ≈ 20–46s on
 # ubuntu-latest 2-CPU). Pairs with TestExternalReasonLiteral (sibling main
-# rule, also whole-module scan but finishes under 20s on the cached resolver
-# path).
+# rule, also whole-module scan; round-2 fixture additions shifted modulo
+# off cached resolver, surfaced at 23.53s on shard 9 — allowlisted below).
 github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral_NoIndirectReferences
+
+# type-graph-load: TEST-POLLING-EXTERNAL-REASON-LITERAL-01 main rule scans
+# every testwait.External callsite module-wide. Two RunTyped passes
+# (default tags + ProductionFlatTags) over ./... with Tests:true; same
+# whole-module SharedResolver + Tests:true profile as the sibling reverse
+# self-test above. The earlier comment predicted this rule would stay
+# under 20s on the cached resolver path; PR #594 round-2 added 4 indirect
+# RED fixture packages + the *_NoIndirectReferences_Fixtures sub-test,
+# shifting the 16-shard modulo distribution off the cached resolver and
+# surfacing the main rule at 23.53s on shard 9 — same modulo-shift
+# SLOW-flake class as the entries above (cumulative trigger evidence for
+# ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral
