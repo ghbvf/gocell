@@ -23,7 +23,7 @@
 // into a marker that only runtime/audit can construct — which would force
 // runtime/auth to import runtime/audit, breaking the documented
 // non-dependency. Promotion to Hard is tracked as backlog
-// BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-HARD-UPGRADE-01 (cap-14).
+// BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01 (arm a: sealed marker, cap-14).
 //
 // Scope carve-out (must match the F2 plan decision):
 //   - examples/ssobff/app.go intentionally still wires the legacy
@@ -125,7 +125,7 @@ func TestBootstrapAuditObserverFunnelDownstreamHard01(t *testing.T) {
 // assignment with the same identifier as a legitimate funnel-built observer
 // could in principle smuggle a slog-only impl past this check. Hardening
 // requires sealing auth.BootstrapAuthFailObserver (see
-// BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-HARD-UPGRADE-01 backlog entry); the
+// BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01 arm a backlog entry); the
 // archtest defines the Medium ceiling reachable without that refactor.
 func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	t.Parallel()

@@ -31,7 +31,7 @@ import (
 //
 // The typed string funnel upgrade (`type BootstrapAuthFailReason string`
 // + sealed constructor) is tracked as backlog
-// BOOTSTRAP-AUTHFAIL-REASON-TYPED-FUNNEL-01.
+// BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01 (arm b: reason typed).
 const (
 	ReasonMissingHeader    = "missing_header"
 	ReasonWrongCredentials = "wrong_credentials"
