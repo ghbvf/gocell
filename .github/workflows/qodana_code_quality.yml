@@ -18,13 +18,14 @@
 # Qodana does NOT duplicate the security-focused taint / pattern analysis
 # provided by CodeQL and Semgrep; it covers developer-ergonomics quality issues.
 #
-# WHY pr-mode: false
-# -------------------
-# pr-mode: false means Qodana runs a full baseline scan on develop pushes rather
-# than an incremental PR diff scan.  Results are reviewed asynchronously through
-# the Qodana Cloud dashboard and do NOT gate PRs or block merges.  This is an
-# intentional advisory posture: Qodana findings inform refactoring decisions
-# without adding noise to the required-checks gate.
+# WHY QODANA NEVER RUNS ON / BLOCKS PULL REQUESTS
+# -------------------------------------------------
+# The workflow's `on:` triggers are workflow_dispatch and push to develop only —
+# there is NO pull_request trigger.  This is the structural guarantee that Qodana
+# never executes on a PR and therefore cannot gate or block merges.
+# pr-mode: false additionally configures a full-codebase baseline scan (not an
+# incremental PR-diff scan); results are reviewed asynchronously via the Qodana
+# Cloud dashboard.
 #
 # RETENTION DECISION
 # ------------------
