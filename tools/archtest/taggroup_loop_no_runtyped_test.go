@@ -88,7 +88,7 @@ import (
 //      and green_var_bound_parity.go (bind→len-assert, no range/RunTyped, the
 //      pass_test.go façade-parity idiom → NOT caught, no false positive).
 //      Narrow accepted sub-gap: only single-binding (`tags := f()` /
-//      `var tags = f()`) is recognised; multi-RHS positional binding
+//      `var tags = f()`) is recognized; multi-RHS positional binding
 //      (`a, tags := x, f()`) is not — it is not a copy template a fresh
 //      instance reproduces, and single-element indexed access keeps the
 //      collector compliant with SCANNER-FRAMEWORK-USAGE-01 (no for-range +
@@ -287,7 +287,7 @@ func callResolvesToKnownNonDefaultTags(p *Pass, call *ast.CallExpr) bool {
 // the binding in the same file as the loop.
 //
 // Only the single-binding shape `tags := KnownNonDefaultTags()` /
-// `var tags = KnownNonDefaultTags()` is recognised: that is the realistic
+// `var tags = KnownNonDefaultTags()` is recognized: that is the realistic
 // var-indirection copy template (and the shape of the pass_test.go
 // façade-parity idiom the green fixture guards). Multi-RHS positional binding
 // (`a, tags := x, KnownNonDefaultTags()`) is a narrow accepted sub-gap of
