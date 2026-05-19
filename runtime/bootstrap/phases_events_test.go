@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -430,27 +431,92 @@ func TestWithRelay_AutoLifecycle_CloseCalledDuringTeardown(t *testing.T) {
 		"WithRelay must populate managedResourceTeardowns via expandManagedResources")
 }
 
-// TestWithRelay_DoubleManaged_Phase0FailsFast verifies that calling both
-// WithRelay(relay) and WithManagedResource(relay) triggers a phase0 fail-fast
-// error, preventing a double-Close during shutdown.
-//
-// RED: phase0ValidateOptions has no duplicate-relay detection; currently
-// both options are silently accepted.
-func TestWithRelay_DoubleManaged_Phase0FailsFast(t *testing.T) {
+// TestWithRelay_DoubleManaged_PreflightFailsFast verifies that calling both
+// WithRelay(relay) and WithManagedResource(relay) triggers the preflight
+// fail-fast (ERR_BOOTSTRAP_DOUBLE_MANAGED), preventing a double-Close during
+// shutdown. PR #593 review fix-up P2#6 moved this check from
+// phase0ValidateOptions into preflightDoubleManagedRelay so it runs BEFORE
+// expandManagedResources — duplicate checker-name expansion of the same
+// Relay would otherwise mask the root cause with a misleading error.
+func TestWithRelay_DoubleManaged_PreflightFailsFast(t *testing.T) {
 	t.Parallel()
 
 	relay := newEventsTestRelay()
 	b := New(
 		WithClock(clock.Real()),
 		WithRelay(relay),
-		WithManagedResource(relay), // intentional double — target: phase0 rejects this
+		WithManagedResource(relay), // intentional double — target: preflight rejects this
 	)
 
-	err := b.phase0ValidateOptions()
+	err := b.preflightDoubleManagedRelay()
 	require.Error(t, err,
-		"phase0ValidateOptions must return an error when relay is registered via "+
+		"preflightDoubleManagedRelay must return an error when relay is registered via "+
 			"both WithRelay and WithManagedResource (double-Close prevention)")
 	assert.Contains(t, err.Error(), "relay",
 		"error message must mention relay to help diagnosis")
 }
+
+// TestWithRelay_DoubleManaged_PrioritizedOverDuplicateChecker pins the
+// invocation order: preflightDoubleManagedRelay must run before
+// expandManagedResources so the actionable ERR_BOOTSTRAP_DOUBLE_MANAGED
+// error surfaces, not the misleading "duplicate checker key" diagnostic
+// that would emerge if expand ran first against two copies of the same
+// Relay (Relay.Checkers() returns the same names each time).
+func TestWithRelay_DoubleManaged_PrioritizedOverDuplicateChecker(t *testing.T) {
+	t.Parallel()
+
+	relay := newEventsTestRelay()
+	b := New(
+		WithClock(clock.Real()),
+		WithRelay(relay),
+		WithManagedResource(relay), // double-registration on purpose
+	)
+
+	// Preflight runs before expand; the diagnostic must point at relay
+	// double-management, NOT at duplicate checker keys produced by
+	// expanding the same Relay twice.
+	err := b.preflightDoubleManagedRelay()
+	require.Error(t, err,
+		"preflight must reject double-managed relay before expandManagedResources runs")
+	assert.Contains(t, err.Error(), "relay",
+		"error must mention relay (not checker name) so the root cause is obvious")
+	assert.NotContains(t, err.Error(), "checker",
+		"error must NOT mention duplicate checker — expand has not run yet")
+}
+
+// TestWithRelay_DoubleManaged_NonComparableImpl_DoesNotPanic pins the
+// typed-pointer assert invariant: the loop must skip non-Relay
+// ManagedResource implementations without performing interface equality
+// (`mr == ManagedResource(b.relay)`), which panics at runtime when the
+// concrete type is not comparable (struct value with slice / map / func
+// fields). Pre-fix this scenario produced a hard-to-diagnose runtime panic
+// during phase0.
+func TestWithRelay_DoubleManaged_NonComparableImpl_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	relay := newEventsTestRelay()
+	b := New(
+		WithClock(clock.Real()),
+		WithRelay(relay),
+		WithManagedResource(&nonComparableManagedResource{names: []string{"slice-field"}}),
+	)
+
+	assert.NotPanics(t, func() {
+		_ = b.preflightDoubleManagedRelay()
+	}, "preflightDoubleManagedRelay must skip non-Relay types via typed-pointer assert")
+}
+
+// nonComparableManagedResource holds a slice field so the underlying value
+// type is non-comparable. The test above relies on this to prove that the
+// post-fix detection never reaches an `==` interface comparison on
+// non-Relay types.
+type nonComparableManagedResource struct {
+	names []string
+}
+
+func (m *nonComparableManagedResource) Checkers() map[string]func(context.Context) error {
+	return nil
+}
+func (m *nonComparableManagedResource) Worker() kworker.Worker        { return nil }
+func (m *nonComparableManagedResource) Close(_ context.Context) error { return nil }
 

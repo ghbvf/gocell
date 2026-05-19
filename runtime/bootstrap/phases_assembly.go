@@ -15,11 +15,11 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // phase0ValidateOptions checks all option preconditions before any side effects.
@@ -43,9 +43,6 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	}
 	if b.rateLimiterNil {
 		return fmt.Errorf("bootstrap: rate limiter must not be nil in WithRateLimiter")
-	}
-	if err := b.validateNoDoubleManagedRelay(); err != nil {
-		return err
 	}
 	if err := b.validateAuthJWTFromAssemblyPlans(); err != nil {
 		return err
@@ -77,37 +74,37 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	return nil
 }
 
-// preflightDoubleManagedRelay is the public entry point reserved for the
-// pre-expand call site (Wave 4 GREEN of PR #593 review fix-up will hoist this
-// to run before expandManagedResources, so the actionable
-// ERR_BOOTSTRAP_DOUBLE_MANAGED diagnostic surfaces instead of a misleading
-// "duplicate checker key" error from expand). Today it is a thin wrapper over
-// validateNoDoubleManagedRelay; Wave 4 swaps the implementation for a
-// typed-pointer assert that is panic-free on non-comparable
-// ManagedResource implementations.
-func (b *Bootstrap) preflightDoubleManagedRelay() error {
-	return b.validateNoDoubleManagedRelay()
-}
-
-// validateNoDoubleManagedRelay fails fast when the same relay object has been
-// registered via both WithRelay (which auto-appends to managedResources) and a
-// separate WithManagedResource(relay) call. Double-registration would cause
-// Close() to be invoked twice during shutdown.
+// preflightDoubleManagedRelay fails fast when the same relay object has been
+// registered via both WithRelay (which auto-appends to managedResources) and
+// a separate WithManagedResource(relay) call. Double-registration would
+// cause Close() to be invoked twice during shutdown, and—because the same
+// Relay pointer would expose the same readyz checker names twice—would also
+// surface as a misleading "duplicate checker key" inside
+// expandManagedResources. Bootstrap.Run calls this BEFORE
+// expandManagedResources so the actionable ERR_BOOTSTRAP_DOUBLE_MANAGED
+// diagnostic always wins.
+//
+// Detection is a typed pointer assert against *runtimeoutbox.Relay. Interface
+// equality (mr == ManagedResource(b.relay)) is intentionally avoided — it
+// panics at runtime when the slice contains a non-comparable ManagedResource
+// implementation (struct values with slice / map / func fields). Pointer
+// type-assert is nil-safe and panic-free for every ManagedResource type.
+//
+// Upstream Hard upgrade tracked at BOOTSTRAP-RELAY-DOUBLE-MANAGED-UPSTREAM-HARD-01
+// (docs/backlog/202605191800-pr589-review-fixup-backlog.md): hide Relay
+// behind a sealed wrapper so WithManagedResource(*Relay) is unexpressible
+// at the package boundary. Until then this runtime guard is the upstream
+// Medium under the §Funnel 双向锁评级 contract.
 //
 // WithRelay already handles lifecycle; callers must NOT additionally call
 // WithManagedResource(relay).
-func (b *Bootstrap) validateNoDoubleManagedRelay() error {
+func (b *Bootstrap) preflightDoubleManagedRelay() error {
 	if b.relay == nil {
 		return nil
 	}
-	// Identity comparison works because both registration paths (WithRelay's
-	// auto-append and an explicit WithManagedResource(relay)) store the same
-	// *Relay pointer without any intermediate wrapping. If either path wraps
-	// relay in a new heap allocation before storing, this comparison silently
-	// stops detecting double-registration — refactors must preserve raw pointer.
 	var count int
 	for _, mr := range b.managedResources {
-		if mr == kernellifecycle.ManagedResource(b.relay) {
+		if rel, ok := mr.(*runtimeoutbox.Relay); ok && rel == b.relay {
 			count++
 		}
 	}

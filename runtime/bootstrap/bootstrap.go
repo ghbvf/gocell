@@ -413,6 +413,15 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		return fmt.Errorf("bootstrap: Run called more than once")
 	}
 
+	// Pre-phase: detect WithRelay + WithManagedResource(relay) double-registration
+	// BEFORE expandManagedResources runs. If expand ran first the duplicate
+	// checker-name fail-fast inside it would surface a misleading error
+	// ("duplicate checker key") instead of the actionable
+	// ERR_BOOTSTRAP_DOUBLE_MANAGED diagnostic. PR #593 review fix-up P2#6.
+	if err := b.preflightDoubleManagedRelay(); err != nil {
+		return err
+	}
+
 	// Pre-phase: expand ManagedResources into health checkers, workers, and
 	// LIFO teardown callbacks. Must run before phase0 so checker validation
 	// in phase0ValidateOptions covers resource-contributed checkers.
