@@ -172,21 +172,40 @@ func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
 	require.NoError(t, err)
 	bodyStr := string(body)
 
-	// Each entry: (bare metric name, expected Prometheus type, label to probe for).
-	// label may be empty string to skip the label-presence check.
+	// Prometheus client_golang behavior: a CounterVec / GaugeVec / HistogramVec
+	// does NOT appear in /metrics output (not even HELP/TYPE lines) until at
+	// least one label-set has been observed via With(). The 5 new metric
+	// families therefore split into two categories at boot time:
+	//
+	//   boot-emits (subscription lifecycle fires deterministically on startup):
+	//     - event_router_subscriptions_active (Inc per ready subscription)
+	//     - event_router_ready_wait_seconds   (Observe per ready signal)
+	//
+	//   event-triggered (only emit on the corresponding event):
+	//     - event_router_setup_errors_total   (only on setup failure)
+	//     - outbox_consumer_rejected_total    (only on handler reject /
+	//                                          retry exhaustion)
+	//     - outbox_pending_depth              (Relay reclaim tick interval is
+	//                                          typically minutes — usually not
+	//                                          observed within integration-test
+	//                                          duration)
+	//
+	// We only assert wire-shape (HELP / TYPE / label key) for boot-emits.
+	// event-triggered families are verified by unit tests in
+	// runtime/observability/metrics/{outbox,event}_test.go (spy-collector
+	// pattern) and by archtest METRICS-GAUGEVEC-FUNNEL-01 (production
+	// callsite enforcement). Asserting them here would be a flaky test
+	// dependent on broker timing and Relay cadence.
 	type metricSpec struct {
 		name       string
 		promType   string // "gauge", "counter", or "histogram"
 		labelProbe string // non-empty: regex `name\{labelProbe=` must match
 	}
-	newFamilySpecs := []metricSpec{
+	bootEmitFamilies := []metricSpec{
 		{"event_router_subscriptions_active", "gauge", "cell"},
-		{"event_router_setup_errors_total", "counter", "cell"},
 		{"event_router_ready_wait_seconds", "histogram", "cell"},
-		{"outbox_pending_depth", "gauge", "cell"},
-		{"outbox_consumer_rejected_total", "counter", "cell"},
 	}
-	for _, spec := range newFamilySpecs {
+	for _, spec := range bootEmitFamilies {
 		fqName := "gocell_" + spec.name
 
 		// (a) HELP line must be present.
@@ -204,10 +223,6 @@ func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
 			typeLine, truncateMetrics(bodyStr, 600))
 
 		// (c) When a sample has been emitted, the label name must appear.
-		// Most gauges and counters are 0 or absent at boot when no subscriptions
-		// have been established; skip label check when no sample line present.
-		// We check the schema-shape only: if a sample line appears at all, it must
-		// carry the expected label key.
 		if spec.labelProbe != "" && strings.Contains(bodyStr, fqName+"{") {
 			labelPattern := fqName + `{` + spec.labelProbe + `=`
 			assert.True(t, strings.Contains(bodyStr, labelPattern),
