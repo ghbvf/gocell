@@ -192,3 +192,16 @@ github.com/ghbvf/gocell/tools/archtest	TestAuthzMutationApplyFunnel_SetStatus_01
 # SharedResolver — same modulo-shift SLOW-flake class as the entries
 # above (cumulative trigger evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
 github.com/ghbvf/gocell/tools/archtest	TestCellgenErrcodeFunnelNoBuildTagFiles
+
+# type-graph-load: TEST-POLLING-EXTERNAL-REASON-LITERAL-01 blind-spot reverse
+# self-test scans all types.Info.Uses entries module-wide to assert
+# testwait.External never appears outside *ast.CallExpr.Fun position (closes
+# 4 indirect-reference blind spots — function-variable, function-pointer
+# pass-through, method-value binding, reflect). Two RunTyped passes (default
+# tags + ProductionFlatTags) over ./... with Tests:true; surfaced at 23.23s
+# on PR #594 verify-archtest shard 11 — same type-graph-load class as the
+# entries above (whole-module SharedResolver + Tests:true ≈ 20–46s on
+# ubuntu-latest 2-CPU). Pairs with TestExternalReasonLiteral (sibling main
+# rule, also whole-module scan but finishes under 20s on the cached resolver
+# path).
+github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral_NoIndirectReferences
