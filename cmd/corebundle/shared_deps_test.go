@@ -322,20 +322,27 @@ func TestIsLoopbackBindAddr(t *testing.T) {
 	}
 }
 
-// TestSharedDepsValidate_NilBootstrapLedgerStore_FailsFast covers T7 from
-// the 037 P2 cleanup plan (BOOTSTRAP-AUDIT-CHAIN-WIRING-01). The new
-// SharedDeps.BootstrapLedgerStore field is strong-dependency wiring written
-// by AuditCoreModule.Provide and consumed by AccessCoreModule.Provide; an
-// unset value means the assembly.yaml module order regressed so that
-// auditcore no longer runs before accesscore. Surface it at startup, not on
-// the first failing bootstrap-auth request.
-func TestSharedDepsValidate_NilBootstrapLedgerStore_FailsFast(t *testing.T) {
+// TestSharedDepsValidate_DoesNotRequireBootstrapLedgerStore documents the
+// load-bearing decision in BOOTSTRAP-AUDIT-CHAIN-WIRING-01 (plan 039 W1-2):
+// SharedDeps.BootstrapLedgerStore is NOT a LoadSharedDepsFromEnv-time field —
+// it is wired by AuditCoreModule.Provide during BuildApp, which runs after
+// the LoadSharedDepsFromEnv → Validate() call. The fail-fast for a missing
+// store is owned by audit.NewBootstrapAuthFailObserver inside
+// AccessCoreModule.Provide; gating it from Validate() would make
+// LoadSharedDepsFromEnv unconditionally fail every real-mode startup.
+//
+// The negative form of this test (a Validate-time guard on
+// BootstrapLedgerStore) is intentionally absent. Any future PR that adds
+// one must also restructure BuildApp's call order so the field is set
+// before Validate fires.
+func TestSharedDepsValidate_DoesNotRequireBootstrapLedgerStore(t *testing.T) {
 	deps := &SharedDeps{
 		Topology: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
 		// BootstrapLedgerStore left as zero-value (nil interface) deliberately.
 	}
 	err := deps.Validate()
-	require.Error(t, err, "missing BootstrapLedgerStore must fail Validate")
-	assert.Contains(t, err.Error(), "BootstrapLedgerStore",
-		"validation error must name the field so operators can locate the missing wiring")
+	require.Error(t, err, "minimal SharedDeps must fail other required-field checks")
+	assert.NotContains(t, err.Error(), "BootstrapLedgerStore",
+		"BootstrapLedgerStore is wired by AuditCoreModule.Provide AFTER LoadSharedDepsFromEnv; "+
+			"Validate must not check it (see BOOTSTRAP-AUDIT-CHAIN-WIRING-01 plan 039 W1-2)")
 }

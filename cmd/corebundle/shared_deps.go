@@ -13,6 +13,7 @@ import (
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -67,6 +68,20 @@ type SharedDeps struct {
 	// GC evictions. Registered once against the shared metrics provider and
 	// injected into configcore (the only owner — Cache is service-private).
 	EventbusCacheCollector obmetrics.EventbusCacheCollector
+
+	// BootstrapLedgerStore is the audit hash-chain Store wired into the
+	// bootstrap auth-fail observer (audit.NewBootstrapAuthFailObserver).
+	//
+	// Happens-before contract (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2):
+	//   - AuditCoreModule.Provide MUST run before AccessCoreModule.Provide so
+	//     the store is populated before access reads it. Module order is
+	//     locked in assemblies/corebundle/assembly.yaml (configcore →
+	//     auditcore → accesscore) and guarded by
+	//     MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01 archtest.
+	//   - SharedDeps.Validate fails-fast on nil so a regression in module
+	//     ordering surfaces at startup, not on the first bootstrap-auth
+	//     401/429.
+	BootstrapLedgerStore ledger.Store
 
 	// SharedPGPool is the postgres pool created by ConfigCoreModule when running
 	// in StorageBackend == "postgres" mode. AccessCoreModule + AuditCoreModule

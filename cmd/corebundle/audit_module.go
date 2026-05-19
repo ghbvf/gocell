@@ -121,6 +121,15 @@ func (AuditCoreModule) Provide(
 
 	auditOpts = append(auditOpts, auditcore.WithLedgerStore(ledgerStore))
 
+	// Cross-module wiring (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2):
+	// publish the ledger store back into SharedDeps so AccessCoreModule.Provide
+	// can build the bootstrap auth-fail observer via
+	// audit.NewBootstrapAuthFailObserver. Module order
+	// (auditcore before accesscore in assemblies/corebundle/assembly.yaml) is
+	// the happens-before contract; SharedDeps.Validate fails-fast on nil so a
+	// regression surfaces at startup, not on the first 401/429.
+	shared.BootstrapLedgerStore = ledgerStore
+
 	c := auditcore.NewAuditCore(auditOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to auditOpts above
 	return c, nil, nil, nil
 }

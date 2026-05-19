@@ -89,14 +89,19 @@ func TestNewBootstrapAuthFailObserver_AuditAppendFails_LogsFallback(t *testing.T
 	obs(context.Background(), "rate_limited")
 
 	logged := buf.String()
-	// Original event still recorded so SRE alerting/grep keeps working.
-	assert.Equal(t, 1, strings.Count(logged, "bootstrap_auth_failed"),
+	// Two slog lines expected: the primary "bootstrap_auth_failed" event
+	// (SRE/grep contract) and the dedicated "bootstrap_audit_append_failed"
+	// fallback line carrying reason + underlying error. Line count protects
+	// against the regression where a future refactor silently swallows the
+	// primary line on the audit-fail branch.
+	lines := strings.Split(strings.TrimRight(logged, "\n"), "\n")
+	assert.Len(t, lines, 2, "exactly two slog lines: primary + fallback; got=%q", logged)
+	assert.Contains(t, lines[0], "msg=bootstrap_auth_failed",
 		"primary slog line must always be emitted, even when audit append fails")
-	// Fallback line carries the reason so dedupe by reason still works.
-	assert.Contains(t, logged, "bootstrap_audit_append_failed",
+	assert.Contains(t, lines[1], "msg=bootstrap_audit_append_failed",
 		"audit append failure must surface as a dedicated slog Error line")
-	assert.Contains(t, logged, "reason=rate_limited", "fallback line must include reason")
-	assert.Contains(t, logged, "ledger boom", "fallback line must include underlying error text")
+	assert.Contains(t, lines[1], "reason=rate_limited", "fallback line must include reason")
+	assert.Contains(t, lines[1], "ledger boom", "fallback line must include underlying error text")
 }
 
 // TestNewBootstrapAuthFailObserver_NilDeps_Errors covers T6.

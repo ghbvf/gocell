@@ -99,8 +99,11 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
-		AccessCoreModule{},
+		// auditcore before accesscore — wires SharedDeps.BootstrapLedgerStore
+		// for audit.NewBootstrapAuthFailObserver
+		// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01).
 		AuditCoreModule{},
+		AccessCoreModule{},
 	)
 	require.NoError(t, err, "BuildApp must succeed: env→pool wiring must complete without error")
 	require.Len(t, cells, 3, "BuildApp must return exactly 3 cells")

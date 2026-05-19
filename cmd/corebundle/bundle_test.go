@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -249,10 +250,37 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
 		// just waive it — nothing here exercises the verbose body.
 		VerboseDisabled: true,
+		// BOOTSTRAP-AUDIT-CHAIN-WIRING-01 (plan 039 W1-2): in production wiring
+		// AuditCoreModule.Provide fills this field for AccessCoreModule.Provide
+		// to consume via audit.NewBootstrapAuthFailObserver. Tests that bypass
+		// BuildApp (e.g. AccessCoreModule{}.Provide() directly) must pre-wire
+		// a real ledger.Store here so the observer constructor sees a non-nil
+		// dependency. Integration tests that run BuildApp end-to-end overwrite
+		// this field naturally.
+		BootstrapLedgerStore: buildTestBootstrapLedgerStore(t),
 		// Tests that drive the full BuildApp path inject pre-bound listeners via
 		// runtimeBaseOptions + WithListener, so SharedDeps listener addresses are
 		// not used by those helpers.
 	}
+}
+
+// buildTestBootstrapLedgerStore builds an in-memory ledger.Store suitable for
+// non-integration unit tests (no //go:build integration tag). Keep separate
+// from cmd/corebundle/audit_test_helper_test.go which is integration-tagged.
+func buildTestBootstrapLedgerStore(t *testing.T) ledger.Store {
+	t.Helper()
+	ns, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err, "audit namespace parse")
+	proto, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("test-hmac-key-32-bytes-long!!!!!")),
+		ledger.WithNamespace(ns),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err, "audit protocol")
+	store, err := ledger.NewMemStore(proto, clock.Real())
+	require.NoError(t, err, "audit mem store")
+	return store
 }
 
 // newValidatedSharedDeps returns a SharedDeps that passes Validate() for the
@@ -391,8 +419,10 @@ func buildBootstrapFromShared(
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
-		AccessCoreModule{},
+		// auditcore before accesscore — wires SharedDeps.BootstrapLedgerStore
+		// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01).
 		AuditCoreModule{},
+		AccessCoreModule{},
 	)
 	if err != nil {
 		return nil, err
@@ -640,8 +670,10 @@ func TestBuildApp_RejectsInvalidSharedDeps(t *testing.T) {
 
 	_, _, err := BuildApp(context.Background(), deps,
 		ConfigCoreModule{},
-		AccessCoreModule{},
+		// auditcore before accesscore — wires SharedDeps.BootstrapLedgerStore
+		// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01).
 		AuditCoreModule{},
+		AccessCoreModule{},
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_READYZ_VERBOSE_TOKEN")

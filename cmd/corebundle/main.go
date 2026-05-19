@@ -22,7 +22,7 @@ func main() {
 func run(ctx context.Context) error {
 	return runCorebundle(ctx, "corebundle", []string{
 		"configcore",
-		"accesscore",
 		"auditcore",
+		"accesscore",
 	})
 }

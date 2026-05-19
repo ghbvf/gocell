@@ -1,8 +1,8 @@
 id: corebundle
 cells:
   - configcore
-  - accesscore
   - auditcore
+  - accesscore
 owner:
   team: platform-core
   role: maintainer
