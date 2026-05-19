@@ -12,6 +12,7 @@ import (
 	internalmem "github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
 // Store is the shared backing for an in-memory accesscore deployment.
@@ -38,4 +39,20 @@ func (s *Store) UserRepository() ports.UserRepository {
 // All instances returned from a single Store share state.
 func (s *Store) RoleRepository() ports.RoleRepository {
 	return s.inner.RoleRepository()
+}
+
+// TxRunner returns the Store-paired persistence.TxRunner. Composition roots
+// must pass this value (wrapped via persistence.WrapForCell) to
+// accesscore.WithTxManager so that the setup service's RunInTx body acquires
+// store.mu for the entire first-admin provisioning closure — serializing
+// concurrent setup requests within a single process.
+//
+// Using any other TxRunner (including cell.DemoTxRunner) forfeits this
+// serialization: concurrent first-admin requests can then both pass the
+// CountByRole==0 fast-path before either commits, producing two admins
+// (TOCTOU). Always wire:
+//
+//	accesscore.WithTxManager(persistence.WrapForCell(userMemStore.TxRunner()))
+func (s *Store) TxRunner() persistence.TxRunner {
+	return s.inner.TxRunner()
 }

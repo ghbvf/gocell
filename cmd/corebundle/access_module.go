@@ -167,10 +167,17 @@ func (m AccessCoreModule) Provide(
 			accesscore.WithUserRepository(userMemStore.UserRepository()),
 			accesscore.WithRoleRepository(userMemStore.RoleRepository()),
 			accesscore.WithRefreshStore(refreshMemStore),
-			// Memstore mode: memTxRunner.RunInTx holds store.mu for the entire
-			// closure, already serializing first-admin provisioning across
-			// goroutines. Wire NoopSetupLock to satisfy WithSetupLock's
-			// mandatory phase0 check without a redundant second lock.
+			// Wire the Store-paired TxRunner so that RunInTx inside the setup
+			// service acquires userMemStore's store.mu for the entire first-admin
+			// provisioning closure. This serializes concurrent setup requests
+			// within a single process: the CountByRole==0 check, user write, and
+			// outbox emit all execute under the held mutex, closing the TOCTOU
+			// window that would otherwise allow two concurrent goroutines to both
+			// pass the no-admin check and each create an admin (S4.0 invariant).
+			// NoopSetupLock is correct here: store.mu already provides the
+			// within-process serialization that pg_advisory_xact_lock provides
+			// across pods in PG mode.
+			accesscore.WithTxManager(persistence.WrapForCell(userMemStore.TxRunner())),
 			accesscore.WithSetupLock(accesscore.NoopSetupLock{}),
 		)
 	}

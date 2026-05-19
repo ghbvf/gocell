@@ -548,6 +548,104 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 	assert.Equal(t, 1, cnt)
 }
 
+// TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin is the
+// concurrency regression guard for PR #595 / B2-PROVISIONER-MUTEX-REVIEW.
+//
+// Problem: the mem-mode composition root in cmd/corebundle/access_module.go
+// previously did NOT wire accesscore.WithTxManager(persistence.WrapForCell(
+// userMemStore.TxRunner())).  Cell.Init fell through to the
+// cell.DemoCellTxManager fallback, whose RunInTx is a no-op pass-through.
+// Two concurrent CreateAdmin calls both passed the CountByRole==0 fast-path
+// check before either committed, producing two admins (TOCTOU; S4.0 violated).
+//
+// Fix: wire the Store-paired TxRunner so that memTxRunner.RunInTx holds
+// store.mu for the entire closure — the CountByRole check, user write, and
+// role assignment are all serialized under the same mutex.
+//
+// Test structure:
+//   - Build service with the REAL store.TxRunner() (mutex-holding), not the
+//     noopTxRunner used elsewhere in this file.
+//   - Spin N goroutines all calling CreateAdmin simultaneously.
+//   - Assert exactly ONE succeeds; all others get ErrSetupAlreadyInitialized.
+//   - Assert the final admin count is exactly 1.
+//   - Run with -race to catch data races.
+//
+// NOTE: the existing TestService_CreateAdmin_Concurrent_OnlyOneSucceeds test
+// above uses noopTxRunner and relies on the UUID-collision path inside
+// adminprovision to prevent duplicates — it does NOT test the TOCTOU window.
+// This test exercises the mutex-serialization path directly.
+func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
+
+	prov, err := adminprovision.NewProvisioner(
+		userRepo, roleRepo, discardLogger(),
+		uuid.NewString, // real UUID generator — no artificial collision
+		clock.Real(),
+	)
+	require.NoError(t, err)
+
+	svc, err := setup.NewService(
+		prov, discardLogger(),
+		// Store-paired TxRunner: RunInTx holds store.mu for the entire closure.
+		// This is the wiring that cmd/corebundle/access_module.go must supply
+		// so that concurrent first-admin setup requests are serialized.
+		setup.WithTxManager(persistence.WrapForCell(store.TxRunner())),
+		setup.WithSetupLock(noopSetupLock{}),
+	)
+	require.NoError(t, err)
+
+	const workers = 10
+	type result struct {
+		out *setup.CreateAdminOutput
+		err error
+	}
+	results := make(chan result, workers)
+
+	var start sync.WaitGroup
+	start.Add(1)
+	var done sync.WaitGroup
+	done.Add(workers)
+	for i := range workers {
+		go func() {
+			defer done.Done()
+			start.Wait()
+			out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+				Username: "root" + strconv.Itoa(i),
+				Email:    "root" + strconv.Itoa(i) + "@local",
+				Password: "SecretPass!23",
+			})
+			results <- result{out: out, err: err}
+		}()
+	}
+	start.Done()
+	done.Wait()
+	close(results)
+
+	successes := 0
+	retired := 0
+	for r := range results {
+		switch {
+		case r.err == nil && r.out != nil:
+			successes++
+		case r.err != nil:
+			var ec *errcode.Error
+			require.ErrorAs(t, r.err, &ec,
+				"unexpected non-errcode error: %v", r.err)
+			require.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code,
+				"non-winner must return ErrSetupAlreadyInitialized, got %v", r.err)
+			retired++
+		}
+	}
+	assert.Equal(t, 1, successes, "exactly one goroutine must create the admin")
+	assert.Equal(t, workers-1, retired, "all other goroutines must see ErrSetupAlreadyInitialized")
+
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 1, cnt, "final admin count must be exactly 1 (S4.0 invariant)")
+}
+
 // TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword verifies that the
 // 410 fast-path short-circuits bcrypt — previous versions hashed the password
 // before checking Status, burning ~1-2s CPU per anonymous POST after admin
