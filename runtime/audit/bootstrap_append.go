@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 
@@ -23,10 +24,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
-// Bootstrap auth-fail reason values — these mirror the godoc-listed reason
-// strings in runtime/auth/bootstrap.go (BootstrapAuthFailObserver). Keep both
-// in sync; the typed string upgrade (`type BootstrapAuthFailReason string`)
-// is tracked as backlog BOOTSTRAP-AUTHFAIL-REASON-TYPED-FUNNEL-01.
+// Bootstrap auth-fail reason values are the authoritative source for valid
+// reason strings. runtime/auth/bootstrap.go must consume these exported
+// constants rather than hardcoding string literals — the direction of truth
+// is runtime/audit → runtime/auth for reason vocabulary.
+//
+// The typed string funnel upgrade (`type BootstrapAuthFailReason string`
+// + sealed constructor) is tracked as backlog
+// BOOTSTRAP-AUTHFAIL-REASON-TYPED-FUNNEL-01.
 const (
 	ReasonMissingHeader    = "missing_header"
 	ReasonWrongCredentials = "wrong_credentials"
@@ -62,6 +67,11 @@ type bootstrapAuthFailPayload struct {
 // persists it via store.Append. clientIP may be empty when the request did
 // not flow through middleware that sets ctxkeys.RealIP (e.g. health probes).
 //
+// Payload JSON shape (camelCase, additive evolution):
+//
+//	{"reason": "<one of: missing_header | wrong_credentials | rate_limited>",
+//	 "clientIp": "<IPv4/IPv6 or empty>"}
+//
 // Errors:
 //   - ErrValidationFailed when store / clock is nil, or reason is not in
 //     {missing_header, wrong_credentials, rate_limited}.
@@ -80,10 +90,14 @@ func AppendBootstrapAuthFail(ctx context.Context, store ledger.Store, clk clock.
 			errcode.WithInternal("nil clock"))
 	}
 	if _, ok := validBootstrapAuthFailReasons[reason]; !ok {
+		allowed := make([]string, 0, len(validBootstrapAuthFailReasons))
+		for k := range validBootstrapAuthFailReasons {
+			allowed = append(allowed, k)
+		}
+		sort.Strings(allowed)
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: bootstrap auth-fail reason not in whitelist",
-			errcode.WithInternal(fmt.Sprintf(
-				"reason=%q allowed={missing_header,wrong_credentials,rate_limited}", reason)))
+			errcode.WithInternal(fmt.Sprintf("reason=%q allowed=%v", reason, allowed)))
 	}
 	payload, err := json.Marshal(bootstrapAuthFailPayload{Reason: reason, ClientIP: clientIP})
 	if err != nil {

@@ -81,6 +81,10 @@ type SharedDeps struct {
 	//   - SharedDeps.Validate fails-fast on nil so a regression in module
 	//     ordering surfaces at startup, not on the first bootstrap-auth
 	//     401/429.
+	//
+	// Callers that bypass BuildApp (direct AccessCoreModule.Provide invocation)
+	// must pre-populate this field; see bundle_test.go::buildTestBootstrapLedgerStore
+	// for the test pattern.
 	BootstrapLedgerStore ledger.Store
 
 	// SharedPGPool is the postgres pool created by ConfigCoreModule when running

@@ -116,6 +116,37 @@ func TestAppendBootstrapAuthFail_RejectsUnknownReason(t *testing.T) {
 	}
 }
 
+// TestAppendBootstrapAuthFail_DuplicateFingerprintRejected covers T4.
+// IdempotencyContentFingerprint keys on (eventID + eventType + actorID + timestamp + payload).
+// Because AppendBootstrapAuthFail calls uuid.NewString() per invocation, each
+// call produces a distinct EventID — the fingerprint differs even when all
+// business fields are identical, so two consecutive Appends both succeed and
+// the ledger holds exactly two entries.
+// This test documents the real behavior as a regression guard; if the
+// implementation ever switches to a content-only fingerprint that ignores
+// EventID, it will immediately fail here.
+func TestAppendBootstrapAuthFail_DuplicateFingerprintRejected(t *testing.T) {
+	t.Parallel()
+	store, clk := buildTestLedgerStore(t)
+	ctx := context.Background()
+
+	// First append — must succeed.
+	err := audit.AppendBootstrapAuthFail(ctx, store, clk, "rate_limited", "192.0.2.1")
+	require.NoError(t, err, "first Append must succeed")
+
+	// Second append — same reason + clientIP, but uuid.NewString() gives a
+	// fresh EventID each time, so IdempotencyContentFingerprint yields a
+	// different key. Both entries are stored (store has 2 entries, not 1).
+	err = audit.AppendBootstrapAuthFail(ctx, store, clk, "rate_limited", "192.0.2.1")
+	require.NoError(t, err, "second Append must also succeed — EventID uniqueness prevents fingerprint collision")
+
+	entries, qerr := store.Query(ctx,
+		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+		ledger.QueryListParams{Limit: 10})
+	require.NoError(t, qerr)
+	assert.Len(t, entries, 2, "both Appends should produce distinct ledger entries due to unique EventIDs")
+}
+
 // TestAppendBootstrapAuthFail_NilStoreOrClock_Errors covers T3.
 // Both dependencies are strong-wired; bare-nil and typed-nil both reject.
 func TestAppendBootstrapAuthFail_NilStoreOrClock_Errors(t *testing.T) {

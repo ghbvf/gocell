@@ -48,12 +48,12 @@ func NewBootstrapAuthFailObserver(logger *slog.Logger, store ledger.Store, clk c
 	return func(ctx context.Context, reason string) {
 		ip, _ := ctxkeys.RealIPFrom(ctx)
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
-			slog.String("event", "bootstrap_auth_failed"),
 			slog.String("reason", reason),
 			slog.String("client_ip", ip))
 		if err := AppendBootstrapAuthFail(ctx, store, clk, reason, ip); err != nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("reason", reason),
+				slog.String("client_ip", ip),
 				slog.Any("error", err))
 		}
 	}, nil

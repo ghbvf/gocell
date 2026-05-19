@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -267,6 +268,14 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 // buildTestBootstrapLedgerStore builds an in-memory ledger.Store suitable for
 // non-integration unit tests (no //go:build integration tag). Keep separate
 // from cmd/corebundle/audit_test_helper_test.go which is integration-tagged.
+//
+// Why not merged with runtime/audit/bootstrap_append_test.go::buildTestLedgerStore:
+// That helper uses clockmock seeded to a fixed testNow value and is designed
+// for time-exact assertions against ledger entry Timestamps. This helper is
+// intended solely for BuildApp-bypass unit tests (e.g. AccessCoreModule{}.Provide
+// called directly); it does not assert timestamps, only that wiring succeeds
+// and the store is non-nil. Integration tests that run BuildApp end-to-end
+// get this field overwritten automatically by AuditCoreModule.Provide.
 func buildTestBootstrapLedgerStore(t *testing.T) ledger.Store {
 	t.Helper()
 	ns, err := ledger.ParseNamespaceID("auditcore")
@@ -278,7 +287,7 @@ func buildTestBootstrapLedgerStore(t *testing.T) ledger.Store {
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	require.NoError(t, err, "audit protocol")
-	store, err := ledger.NewMemStore(proto, clock.Real())
+	store, err := ledger.NewMemStore(proto, clockmock.New(time.Now()))
 	require.NoError(t, err, "audit mem store")
 	return store
 }

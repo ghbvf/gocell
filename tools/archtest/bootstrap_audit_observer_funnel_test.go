@@ -36,6 +36,7 @@
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
 	"strings"
 	"testing"
@@ -185,6 +186,89 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 		"%s: cmd/corebundle production callers of auth.%s must route through audit.%s; "+
 			"recovering to slog-only observers (the pre-PR shape) is what this rule prevents",
 		ruleBootstrapAuditObserverFunnelUpstreamMedium01, bootstrapMiddlewareName, observerFnName)
+}
+
+// TestBootstrapAuditObserverFunnelUpstreamMedium01_ReverseBlindSpot validates
+// the documented Medium ceiling of BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-UPSTREAM-MEDIUM-01.
+//
+// Blind spot: the upstream Medium check (TestBootstrapAuditObserverFunnelUpstreamMedium01)
+// would be fooled if a production file in cmd/corebundle contained an AssignStmt
+// of the form:
+//
+//	bootstrapAuthObserver := func(ctx context.Context, reason string) { /* slog-only */ }
+//
+// where the identifier name matched one registered by observerVarNamesInFile —
+// which only registers idents short-declared from audit.NewBootstrapAuthFailObserver.
+// In practice this blind-spot shape is distinct: an ident registered via
+// observerVarNamesInFile always has an audit.NewBootstrapAuthFailObserver RHS,
+// never a FuncLit. The reverse-blindspot test asserts no such FuncLit assignment
+// to a BootstrapAuthFailObserver-typed variable exists in production code,
+// confirming the shape is absent rather than just undetected.
+//
+// Implementation: scan cmd/corebundle non-test files for AssignStmt whose RHS
+// is a FuncLit with signature func(context.Context, string) — the raw shape of
+// auth.BootstrapAuthFailObserver — and assert none exist.
+func TestBootstrapAuditObserverFunnelUpstreamMedium01_ReverseBlindSpot(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	modPath := readModulePath(t, root)
+	corebundlePkgPath := modPath + corebundlePkgSuffix
+
+	type blindspot struct {
+		location string
+	}
+	var found []blindspot
+
+	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != corebundlePkgPath {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			EachInSubtree[ast.AssignStmt](file, func(stmt *ast.AssignStmt) {
+				if len(stmt.Rhs) != 1 {
+					return
+				}
+				fl, ok := stmt.Rhs[0].(*ast.FuncLit)
+				if !ok {
+					return
+				}
+				// Check for func(context.Context, string) signature — the raw
+				// shape of auth.BootstrapAuthFailObserver.
+				ft := fl.Type
+				if ft.Params == nil || len(ft.Params.List) != 2 {
+					return
+				}
+				// Second param must be a plain identifier (string type).
+				second := ft.Params.List[1]
+				if len(second.Names) == 0 {
+					return
+				}
+				// First param must mention "Context" somewhere — loose check
+				// sufficient for the blind-spot shape (formal params in go source).
+				firstExpr := fmt.Sprintf("%T", ft.Params.List[0].Type)
+				if !strings.Contains(firstExpr, "SelectorExpr") && !strings.Contains(firstExpr, "Ident") {
+					return
+				}
+				found = append(found, blindspot{
+					location: rel + ":" + p.Fset.Position(stmt.Pos()).String(),
+				})
+			})
+		}
+		return nil
+	})
+
+	// The blind-spot shape must NOT exist in production cmd/corebundle files.
+	// If it does, BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-UPSTREAM-MEDIUM-01 could be
+	// fooled. Zero occurrences = the reverse-blindspot is confirmed absent.
+	assert.Empty(t, found,
+		"BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-UPSTREAM-MEDIUM-01 blind-spot: "+
+			"cmd/corebundle production files must not assign a FuncLit with "+
+			"BootstrapAuthFailObserver signature — use audit.NewBootstrapAuthFailObserver instead; "+
+			"found: %v", found)
 }
 
 // observerVarNamesInFile returns the set of identifier names short-declared

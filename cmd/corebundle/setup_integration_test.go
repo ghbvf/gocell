@@ -444,18 +444,10 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode, "exhausted limiter must return 429")
 	assert.NotEmpty(t, resp.Header.Get("Retry-After"), "429 response must carry Retry-After header")
 
-	// Audit-chain assertion: the wired observer must have written one
-	// bootstrap.auth.fail entry per rejected request. The fixture exhausts
-	// `capacity` allowed requests first; only the very next request hits the
-	// limiter and triggers reason="rate_limited" — exactly one ledger entry.
-	require.Eventually(t, func() bool {
-		entries, qerr := auditStore.Query(context.Background(),
-			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-			ledger.QueryListParams{Limit: 10})
-		return qerr == nil && len(entries) >= 1
-	}, testtime.EventuallyDefault, testtime.MediumPoll,
-		"observer must append a bootstrap.auth.fail entry after the 429")
-
+	// Audit-chain assertion: the observer is called synchronously in
+	// runtime/auth/bootstrap.go (onAuthFail(r.Context(), reason) at line 107),
+	// before the HTTP response is closed. By the time resp.Body.Close() returns
+	// above, the ledger Append has already completed — no Eventually needed.
 	entries, qerr := auditStore.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		ledger.QueryListParams{Limit: 10})

@@ -61,6 +61,9 @@ const ssobffDatabaseURLEnv = "DATABASE_URL"
 
 // ssobffBootstrapAuthFailLogger returns the onAuthFail observer wired into the
 // demo bootstrap middleware.
+//
+// TODO(SSOBFF-BOOTSTRAP-AUDIT-CHAIN-WIRING-01): migrate to runtime/audit.NewBootstrapAuthFailObserver;
+// this is the legacy slog-only shape kept until the ssobff backlog item ships.
 func ssobffBootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailObserver {
 	return func(ctx context.Context, reason string) {
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
