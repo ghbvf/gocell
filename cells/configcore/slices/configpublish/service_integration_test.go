@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,8 +47,26 @@ type publishServiceBundle struct {
 
 // setupPublishBundle spins up a PostgreSQL container, applies migrations,
 // and returns a publish Service with PG repo + outbox writer + tx manager,
-// plus a cleanup function.
+// plus a cleanup function. Uses NoopTransformer (sensitive=false only).
 func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
+	return setupPublishBundleWithTransformer(t, crypto.NoopTransformer{})
+}
+
+// setupPublishBundleEncrypted is the sibling of setupPublishBundle wired with
+// a real LocalAES ValueTransformer so tests can exercise the sensitive=true
+// SQL branch end-to-end (Create + Publish + Rollback round-trip through
+// encrypt/decrypt). Uses a deterministic 32-byte hex master key for
+// reproducibility, matching the pattern in config_repo_integration_test.go.
+func setupPublishBundleEncrypted(t *testing.T) (publishServiceBundle, func()) {
+	kp, err := crypto.NewLocalAESKeyProviderFromKeys(
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "")
+	require.NoError(t, err)
+	return setupPublishBundleWithTransformer(t, crypto.NewValueTransformer(kp))
+}
+
+// setupPublishBundleWithTransformer is the shared body of the two factories;
+// callers pick the transformer that matches their test's sensitivity needs.
+func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTransformer) (publishServiceBundle, func()) {
 	t.Helper()
 	testutil.RequireDocker(t)
 
@@ -71,7 +91,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
+	repo := cellpg.NewConfigRepository(session, transformer, nil, clock.Real())
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
@@ -79,6 +99,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
+	require.NoError(t, err)
 
 	cleanup := func() {
 		if err := pool.Close(ctx); err != nil {
@@ -92,17 +113,25 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	return publishServiceBundle{svc: svc, repo: repo, pool: pool.DB(), txMgr: txMgr}, cleanup
 }
 
-// seedConfigEntry inserts a config_entries row through a real transaction.
-// The write path requires an ambient pgx.Tx (persistence.TxCtxKey); seeding
-// outside RunInTx would fail with ErrAdapterPGNoTx.
+// seedConfigEntry inserts a non-sensitive config_entries row through a real
+// transaction. The write path requires an ambient pgx.Tx
+// (persistence.TxCtxKey); seeding outside RunInTx would fail with
+// ErrAdapterPGNoTx.
 func seedConfigEntry(t *testing.T, b publishServiceBundle, key, value string) *domain.ConfigEntry {
+	return seedConfigEntryWithSensitivity(t, b, key, value, false)
+}
+
+// seedConfigEntryWithSensitivity is the sensitivity-aware variant of
+// seedConfigEntry; used by tests that need to exercise the
+// sensitive=true branch of doUpdate.
+func seedConfigEntryWithSensitivity(t *testing.T, b publishServiceBundle, key, value string, sensitive bool) *domain.ConfigEntry {
 	t.Helper()
 	now := time.Now()
 	entry := &domain.ConfigEntry{
 		ID:        uuid.NewString(),
 		Key:       key,
 		Value:     value,
-		Sensitive: false,
+		Sensitive: sensitive,
 		Version:   1,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -207,69 +236,34 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 // write fails during Rollback, both the config_entries update and the outbox write
 // are rolled back (transaction atomicity).
 func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
-	testutil.RequireDocker(t)
+	bundle, cleanup := setupPublishBundle(t)
+	defer cleanup()
 	ctx := context.Background()
 	svcCtx := adminIntegCtx()
 
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-	defer func() { _ = container.Terminate(ctx) }()
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-	defer func() {
-		if err := pool.Close(ctx); err != nil {
-			t.Logf("WARN: pool close: %v", err)
-		}
-	}()
-
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
-	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
-	txMgr := adapterpg.NewTxManager(pool)
-
-	// First: seed and publish using a good writer.
-	goodWriter := adapterpg.NewOutboxWriter(clock.Real())
-	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, goodWriter)),
-		WithTxManager(persistence.WrapForCell(txMgr)),
-	)
-	require.NoError(t, err)
-
-	b := publishServiceBundle{svc: svcGood, repo: repo, pool: pool.DB(), txMgr: txMgr}
-	seedConfigEntry(t, b, "rollback.failure.key", "initial-value")
-	_, err = svcGood.Publish(svcCtx, "rollback.failure.key")
+	// First: seed and publish using the default good writer wired into bundle.svc.
+	seedConfigEntry(t, bundle, "rollback.failure.key", "initial-value")
+	_, err := bundle.svc.Publish(svcCtx, "rollback.failure.key")
 	require.NoError(t, err)
 
 	// Capture the config_entries version before the failing Rollback.
-	entryBefore, err := repo.GetByKey(ctx, "rollback.failure.key")
+	entryBefore, err := bundle.repo.GetByKey(ctx, "rollback.failure.key")
 	require.NoError(t, err)
 	versionBefore := entryBefore.Version
-	beforeState := countOutboxRowsByEventType(t, pool.DB(), domain.TopicConfigEntryUpserted)
-	beforeAudit := countOutboxRowsByEventType(t, pool.DB(), domain.TopicConfigRollback)
+	beforeState := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted)
+	beforeAudit := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback)
 
-	// Now inject a writer that succeeds on the state-sync row and fails on the
-	// rollback audit row. The transaction must roll both the config update and
-	// the first outbox row back.
+	// Inject a writer that succeeds on the state-sync row and fails on the
+	// rollback audit row, sharing the bundle's repo/txMgr. The transaction
+	// must roll both the config update and the first outbox row back.
 	failingWriter := &failOnWriteNumberWriter{
 		delegate: adapterpg.NewOutboxWriter(clock.Real()),
 		failOn:   2,
 		err:      errors.New("outbox broker down"),
 	}
-	svcFail, err := NewService(repo, slog.Default(), clock.Real(),
+	svcFail, err := NewService(bundle.repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
-		WithTxManager(persistence.WrapForCell(txMgr)),
+		WithTxManager(persistence.WrapForCell(bundle.txMgr)),
 	)
 	require.NoError(t, err)
 
@@ -278,13 +272,13 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	assert.Contains(t, err.Error(), "outbox")
 
 	// config_entries version must NOT have changed (rolled back).
-	entryAfter, err := repo.GetByKey(ctx, "rollback.failure.key")
+	entryAfter, err := bundle.repo.GetByKey(ctx, "rollback.failure.key")
 	require.NoError(t, err)
 	assert.Equal(t, versionBefore, entryAfter.Version,
 		"config_entries version must not change when outbox write fails (atomic rollback)")
-	assert.Equal(t, beforeState, countOutboxRowsByEventType(t, pool.DB(), domain.TopicConfigEntryUpserted),
+	assert.Equal(t, beforeState, countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted),
 		"entry-upserted outbox row must roll back when the later rollback audit write fails")
-	assert.Equal(t, beforeAudit, countOutboxRowsByEventType(t, pool.DB(), domain.TopicConfigRollback),
+	assert.Equal(t, beforeAudit, countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback),
 		"rollback audit outbox row must not be committed after writer failure")
 }
 
@@ -301,4 +295,132 @@ func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry)
 		return w.err
 	}
 	return w.delegate.Write(ctx, entry)
+}
+
+// TestConcurrentRollback_PG_ExactlyOneWins ports the mem-store unit pattern
+// TestConcurrentRollback_ExactlyOneSucceeds (service_test.go) to a real
+// PostgreSQL backend. It proves the WHERE key=$X AND version=$expectedVersion
+// CAS predicate in cells/configcore/internal/adapters/postgres/config_repo.go
+// `doUpdate` serializes concurrent rollbacks at the SQL layer: exactly one
+// goroutine sees rowsAffected=1 and commits, the other gets rowsAffected=0,
+// triggers `resolveUpdateConflict`, and returns ErrVersionConflict (409).
+//
+// AI-rebust classification: **Medium runtime integration regression guard**
+// (testcontainers + concurrent goroutines + CI assertion — runtime invariant
+// check, not "violation is unexpressible"). Removing the `AND version=$N`
+// predicate is a normal Go code change that compiles cleanly; the CI red is
+// what catches the regression. A Hard upgrade path (query funnel /
+// type-level CAS marker / codegen-derived predicate) is registered in
+// `docs/backlog/cap-14-tooling.md` `CONFIG-ROLLBACK-CAS-HARD-UPGRADE-01`
+// for the trigger conditions described there.
+//
+// Mirrors the audit-ledger PG concurrency proof
+// `TestAuditLedgerStore_AdvisoryLockSerializesAppend`.
+func TestConcurrentRollback_PG_ExactlyOneWins(t *testing.T) {
+	t.Parallel()
+	bundle, cleanup := setupPublishBundle(t)
+	defer cleanup()
+	svcCtx := adminIntegCtx()
+
+	const key = "pg-cas-rollback-key"
+	seedConfigEntry(t, bundle, key, "v1")
+	// Publish v1 to create the config_versions snapshot Rollback targets.
+	// The live entry remains at version 1 after Publish — see the comment in
+	// TestRollback_AtomicWithOutbox above.
+	_, err := bundle.svc.Publish(svcCtx, key)
+	require.NoError(t, err)
+
+	const n = 2
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, rbErr := bundle.svc.Rollback(svcCtx, key, 1, 1)
+			switch {
+			case rbErr == nil:
+				successes.Add(1)
+			case isVersionConflictErr(rbErr):
+				versionConflicts.Add(1)
+			default:
+				t.Errorf("unexpected error in concurrent Rollback: %v", rbErr)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(),
+		"exactly one concurrent Rollback must succeed at the SQL CAS layer")
+	assert.Equal(t, int32(1), versionConflicts.Load(),
+		"exactly one concurrent Rollback must yield ErrVersionConflict (409)")
+
+	// Final-state check: the live entry version must have been bumped exactly
+	// once (1 → 2) — the losing goroutine must not have written anything.
+	finalEntry, err := bundle.repo.GetByKey(context.Background(), key)
+	require.NoError(t, err)
+	assert.Equal(t, 2, finalEntry.Version,
+		"config_entries.version must increment by exactly 1 across concurrent rollbacks")
+}
+
+// TestConcurrentRollback_PG_Sensitive_ExactlyOneWins mirrors
+// TestConcurrentRollback_PG_ExactlyOneWins for the sensitive=true SQL branch
+// of doUpdate (config_repo.go:553–558 — `UPDATE config_entries SET value=”,
+// sensitive=true, ..., value_cipher=$1, ... WHERE key=$5 AND version=$6`).
+// This branch lives independently of the sensitive=false branch (line 560–565);
+// without an explicit test it could regress (e.g., its CAS predicate removed)
+// while sensitive=false coverage keeps passing.
+//
+// Wires a real LocalAES ValueTransformer (setupPublishBundleEncrypted) so the
+// encrypt → BYTEA persist → decrypt round-trip works end-to-end on
+// sensitive=true rows; the SQL CAS layer is what's under test, not the cipher
+// math, but the encrypted path is required to reach UpdateForRollback at all.
+func TestConcurrentRollback_PG_Sensitive_ExactlyOneWins(t *testing.T) {
+	t.Parallel()
+	bundle, cleanup := setupPublishBundleEncrypted(t)
+	defer cleanup()
+	svcCtx := adminIntegCtx()
+
+	const key = "pg-cas-rollback-sensitive-key"
+	seedConfigEntryWithSensitivity(t, bundle, key, "v1-secret", true)
+	_, err := bundle.svc.Publish(svcCtx, key)
+	require.NoError(t, err)
+
+	const n = 2
+	var (
+		successes        atomic.Int32
+		versionConflicts atomic.Int32
+	)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, rbErr := bundle.svc.Rollback(svcCtx, key, 1, 1)
+			switch {
+			case rbErr == nil:
+				successes.Add(1)
+			case isVersionConflictErr(rbErr):
+				versionConflicts.Add(1)
+			default:
+				t.Errorf("unexpected error in sensitive concurrent Rollback: %v", rbErr)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), successes.Load(),
+		"exactly one concurrent Rollback must succeed at the SQL CAS layer (sensitive branch)")
+	assert.Equal(t, int32(1), versionConflicts.Load(),
+		"exactly one concurrent Rollback must yield ErrVersionConflict (sensitive branch)")
+
+	finalEntry, err := bundle.repo.GetByKey(context.Background(), key)
+	require.NoError(t, err)
+	assert.Equal(t, 2, finalEntry.Version,
+		"config_entries.version must increment by exactly 1 across concurrent sensitive rollbacks")
+	assert.True(t, finalEntry.Sensitive,
+		"final entry must remain sensitive=true after sensitive-branch rollback")
 }
