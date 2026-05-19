@@ -5,7 +5,7 @@
 **前一版**: 2026-05-17 v14（S4c T2 一致性等级 codegen funnel shipped PR #525；merged 8/9，剩 FU-4）；2026-05-17 v13（S4c T5 AUTH-CACHE-01 shipped；merged 7/9）；2026-05-16 v12（S4c T4 L2 e2e harness shipped — 新建 `tests/integration/l2atomicity/` 覆盖 7 场景 e2e 回归；接入 race-pg-integration lane；B2-C-13 闭环（accesscore scope）；doc.go 加 `//go:build integration` + FU-4 cross-link + Running locally 段。S4c 进度 merged 6/9，剩 T2 #525 / FU-4 / T5）；2026-05-16 v11（状态回灌：修正 T1/T3 PR 占位符为 #514/#515）；2026-05-16 v10（S4c T1 rbacassign 闭环 shipped）；2026-05-16 v9（S4-FU PR #501 review 闭环批）
 **对接来源**:
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`（B 路线源）
-- `docs/plans/202605071200-033-pg-implementation-plan.md`（A 路线，已被本计划取代）
+- `docs/plans/archive/202605071200-033-pg-implementation-plan.md`（A 路线，已被本计划取代，已归档）
 - `docs/plans/202605082130-pg-corecell-open-issues.md`（C/D/E/F 待办清单）
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`（v3 修订的范式锚点）
 
@@ -969,7 +969,7 @@ B2.B / D4 / DX4 / 路线外独立项可与 S4c / S4-FU 并行；D4 同 PR 吸收
 
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`：**v3 范式锚点**（typed-Go-heavy 协议 primitive）
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`：B 路线源
-- `docs/plans/202605071200-033-pg-implementation-plan.md`：A 路线（被本计划主线取代，PG migration 子任务保留；§6 archtest 大部分降级删除）
+- `docs/plans/archive/202605071200-033-pg-implementation-plan.md`：A 路线（被本计划主线取代，PG migration 子任务保留；§6 archtest 大部分降级删除；已归档）
 - `docs/plans/202605082130-pg-corecell-open-issues.md`：C/D/E/F 待办源
 - `docs/plans/archive/202604201800-pg-pilot-layering-refactor-plan.md`：历史 PG pilot 分层重构（同形态前例）
 - `.claude/rules/gocell/runtime-api.md`：Option 范式分层 / sealed AuthPlan / 强依赖 wiring
