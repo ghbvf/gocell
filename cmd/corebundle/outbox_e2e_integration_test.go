@@ -163,8 +163,9 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	subCtx, subCancel := context.WithCancel(ctx)
 	defer subCancel()
+	e2eSub := outbox.Subscription{Topic: topic, ConsumerGroup: "e2e-test", CellID: "e2e-test"}
 	go func() {
-		_ = eb.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "e2e-test", CellID: "e2e-test"}, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		_ = eb.Subscribe(subCtx, e2eSub, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			var p configEntryUpsertedBusinessPayload
 			err := json.Unmarshal(e.Payload, &p)
 			recvMu.Lock()
@@ -173,8 +174,15 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 			return outbox.Ack()
 		}))
 	}()
-	// Give subscriber goroutine a moment to register before first publish.
-	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking Subscribe; no started observable
+	// Wait until the subscriber goroutine has registered in the eventbus before
+	// publishing. eb.Ready returns a channel that eb.Subscribe closes once the
+	// subscription is registered and ready to receive messages, providing a
+	// deterministic synchronisation point instead of a fixed sleep.
+	select {
+	case <-eb.Ready(e2eSub):
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for e2e-test subscription to be ready")
+	}
 
 	// --- Step 5: Assemble cells ---
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
