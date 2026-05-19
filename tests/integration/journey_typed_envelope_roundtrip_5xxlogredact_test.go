@@ -67,41 +67,134 @@ func TestJTypedEnvelopeRoundtrip5xxLogRedact(t *testing.T) {
 	// Table-driven: each case has an attr whose string value contains an
 	// embedded `key=value` substring. RedactSlogAttr must mask the sensitive
 	// substring while preserving the non-sensitive parts.
+	// Each sensitive-key case uses slog.String("ctx", "<key>=<bare-secret>") so
+	// that RedactSlogAttr finds the key=value substring inside the attr value and
+	// masks the value portion while keeping the key prefix (partial mask).
+	// The three-assertion invariant for every wantMask=true case is:
+	//   (1) original key name is preserved verbatim in the redacted attr
+	//   (2) "<key>=" prefix still appears in the redacted value  ← partial mask
+	//   (3) the original bare secret does NOT appear in the redacted value
 	cases := []struct {
-		name     string
-		input    slog.Attr
-		wantMask bool
-		wantSub  string // substring that must appear in the output
+		name       string
+		input      slog.Attr
+		wantMask   bool
+		wantSub    string // substring that must appear in the output
+		keyPrefix  string // "<key>=" that must survive after masking (partial-mask assertion)
+		bareSecret string // raw secret that must NOT appear after masking
 	}{
 		{
-			name:     "password-in-value",
-			input:    slog.String("error_context", "login failed: password=super-secret details"),
-			wantMask: true,
-			wantSub:  mask,
+			name:       "password-in-value",
+			input:      slog.String("ctx", "login failed: password=super-secret details"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "password=",
+			bareSecret: "super-secret",
 		},
 		{
-			name:     "token-in-value",
-			input:    slog.String("error_context", "auth failed: token=eyJhbGciOiJSUzI1NiJ9.payload.sig"),
-			wantMask: true,
-			wantSub:  mask,
+			name:       "passwd-in-value",
+			input:      slog.String("ctx", "db error: passwd=bare-passwd-value extra"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "passwd=",
+			bareSecret: "bare-passwd-value",
+		},
+		{ //nolint:gosec // G101: intentional fake credential for redaction test
+			name:       "pwd-in-value",
+			input:      slog.String("ctx", "connect: pwd=bare-pwd-value remaining"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "pwd=",
+			bareSecret: "bare-pwd-value",
 		},
 		{
-			name:     "dsn-in-value",
-			input:    slog.String("error_context", "db error: dsn=postgres://user:pwd@host:5432/db"),
-			wantMask: true,
-			wantSub:  mask,
+			name:       "secret-in-value",
+			input:      slog.String("ctx", "config: secret=bare-secret-value next"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "secret=",
+			bareSecret: "bare-secret-value",
+		},
+		{ //nolint:gosec // G101: intentional fake credential for redaction test
+			name:       "token-in-value",
+			input:      slog.String("ctx", "auth failed: token=eyJhbGciOiJSUzI1NiJ9.payload.sig"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "token=",
+			bareSecret: "eyJhbGciOiJSUzI1NiJ9.payload.sig",
+		},
+		{ //nolint:gosec // G101: intentional fake credential for redaction test
+			// api_key form (underscore variant, matches api[_-]?key pattern)
+			name:       "api_key-in-value",
+			input:      slog.String("ctx", "request: api_key=bare-api-key-value end"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "api_key=",
+			bareSecret: "bare-api-key-value",
+		},
+		{ //nolint:gosec // G101: intentional fake credential for redaction test
+			// api-key form (hyphen variant, also matches api[_-]?key pattern)
+			name:       "api-key-in-value",
+			input:      slog.String("ctx", "request: api-key=bare-api-key-hyphen end"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "api-key=",
+			bareSecret: "bare-api-key-hyphen",
+		},
+		{ //nolint:gosec // G101: intentional fake credential for redaction test
+			name:       "authorization-in-value",
+			input:      slog.String("ctx", "header: authorization=Bearer bare-auth-token"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "authorization=",
+			bareSecret: "bare-auth-token",
 		},
 		{
-			name:     "connection-string-embedded",
-			input:    slog.String("details", "connect failed: connection_string=Server=host;Pwd=abc remaining"),
-			wantMask: true,
-			wantSub:  mask,
+			name:       "bearer-in-value",
+			input:      slog.String("ctx", "header: bearer=bare-bearer-value end"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "bearer=",
+			bareSecret: "bare-bearer-value",
 		},
 		{
-			name:     "non-sensitive-passthrough",
-			input:    slog.String("sessionId", "sess-non-sensitive-001"),
-			wantMask: false,
-			wantSub:  "sess-non-sensitive-001",
+			name:       "private_key-in-value",
+			input:      slog.String("ctx", "tls: private_key=bare-private-key-value end"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "private_key=",
+			bareSecret: "bare-private-key-value",
+		},
+		{
+			name:       "signing_key-in-value",
+			input:      slog.String("ctx", "jwt: signing_key=bare-signing-key-value end"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "signing_key=",
+			bareSecret: "bare-signing-key-value",
+		},
+		{ //nolint:gosec // G101: intentional fake credential for redaction test
+			name:       "dsn-in-value",
+			input:      slog.String("ctx", "db error: dsn=postgres://user:pwd@host:5432/db"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "dsn=",
+			bareSecret: "postgres://user:pwd@host:5432/db",
+		},
+		{
+			name:       "connection_string-embedded",
+			input:      slog.String("ctx", "connect failed: connection_string=Server=host;Pwd=abc remaining"),
+			wantMask:   true,
+			wantSub:    mask,
+			keyPrefix:  "connection_string=",
+			bareSecret: "Server=host",
+		},
+		{
+			name:       "non-sensitive-passthrough",
+			input:      slog.String("sessionId", "sess-non-sensitive-001"),
+			wantMask:   false,
+			wantSub:    "sess-non-sensitive-001",
+			keyPrefix:  "",
+			bareSecret: "",
 		},
 	}
 
@@ -124,6 +217,20 @@ func TestJTypedEnvelopeRoundtrip5xxLogRedact(t *testing.T) {
 				assert.NotEqualf(t, tc.input.Value.String(), val,
 					"RedactSlogAttr must have modified the value when masking occurred. "+
 						"input=%q output=%q", tc.input.Value.String(), val)
+				// Partial-mask assertion: the key name prefix must survive redaction
+				// (observability.md: "保留原 key 与大小写"). Total erasure would
+				// prevent operators from knowing which field was redacted.
+				if tc.keyPrefix != "" {
+					assert.Containsf(t, val, tc.keyPrefix,
+						"RedactSlogAttr must preserve the sensitive key name prefix %q in the "+
+							"masked output (partial mask, not total erasure). got %q",
+						tc.keyPrefix, val)
+				}
+				if tc.bareSecret != "" {
+					assert.NotContainsf(t, val, tc.bareSecret,
+						"RedactSlogAttr must not expose the bare secret %q in the masked output. "+
+							"got %q", tc.bareSecret, val)
+				}
 			} else {
 				assert.Equal(t, tc.input.Value.String(), val,
 					"RedactSlogAttr must not modify non-sensitive attr values")
@@ -144,6 +251,8 @@ func TestJTypedEnvelopeRoundtrip5xxLogRedact(t *testing.T) {
 		assert.Contains(t, redacted.Value.String(), mask,
 			"log5xx wiring: RedactSlogAttr applied to an attr value containing "+
 				"'password=...' must produce a value containing %q", mask)
+		assert.Contains(t, redacted.Value.String(), "password=",
+			"log5xx wiring: the key name prefix 'password=' must be preserved (partial mask)")
 		assert.NotContains(t, redacted.Value.String(), "super-secret-value",
 			"log5xx wiring: the original secret must not appear in the redacted value")
 	})
