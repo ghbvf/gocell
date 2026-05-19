@@ -65,9 +65,19 @@ type nopHistogram struct{}
 
 func (nopHistogram) Observe(value float64) {}
 
+// nopGauge is the no-op Gauge returned by NopProvider. All mutating methods are
+// deliberate no-ops: NopProvider implements the Provider contract without
+// recording anything, so any Gauge obtained from it silently discards writes.
 type nopGauge struct{}
 
+// Set is a no-op; see nopGauge.
 func (nopGauge) Set(value float64) {}
-func (nopGauge) Inc()              {}
-func (nopGauge) Dec()              {}
+
+// Inc is a no-op; see nopGauge.
+func (nopGauge) Inc() {}
+
+// Dec is a no-op; see nopGauge.
+func (nopGauge) Dec() {}
+
+// Add is a no-op; see nopGauge.
 func (nopGauge) Add(delta float64) {}

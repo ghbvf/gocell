@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/observability"
 )
 
 // Structured log field keys used across ConsumerBase and transport subscribers.
@@ -582,7 +583,9 @@ func (cb *ConsumerBase) retryLoop(
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Any("error", lastResult.Err))
-			cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonHandlerReject)
+			observability.SafeObserve(slog.Default(), func() {
+				cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonHandlerReject)
+			})
 			return HandleResult{
 				Disposition:         DispositionReject,
 				Err:                 lastResult.Err,
@@ -617,7 +620,9 @@ func (cb *ConsumerBase) retryLoop(
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.String("process_reason", "retry_exhausted"),
 		slog.Any("error", lastResult.Err))
-	cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonRetryExhausted)
+	observability.SafeObserve(slog.Default(), func() {
+		cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonRetryExhausted)
+	})
 	return HandleResult{
 		Disposition:         DispositionReject,
 		Err:                 lastResult.Err,
