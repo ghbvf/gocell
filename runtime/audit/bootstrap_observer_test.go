@@ -127,7 +127,7 @@ func TestNewBootstrapAuthFailObserver_DetachedCtxSurvivesCallerCancel(t *testing
 	obs, err := audit.NewBootstrapAuthFailObserver(logger, store, clk)
 	require.NoError(t, err)
 
-	// Pre-cancelled parent: simulates the client disconnecting before runtime/auth
+	// Pre-canceled parent: simulates the client disconnecting before runtime/auth
 	// gets to call the observer. The audit write must still land.
 	parent, cancel := context.WithCancel(ctxkeys.WithRealIP(context.Background(), "192.0.2.42"))
 	cancel()
@@ -138,7 +138,7 @@ func TestNewBootstrapAuthFailObserver_DetachedCtxSurvivesCallerCancel(t *testing
 		ledger.QueryListParams{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, entries, 1,
-		"detached ctx must let the ledger write complete even when the caller ctx is already cancelled; "+
+		"detached ctx must let the ledger write complete even when the caller ctx is already canceled; "+
 			"got %d entries (likely r.Context() leaked into Append)", len(entries))
 
 	// Fallback line must NOT appear — the write succeeded under the detached ctx.

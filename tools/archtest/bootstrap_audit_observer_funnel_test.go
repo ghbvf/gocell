@@ -157,8 +157,11 @@ func TestBootstrapAuditObserverFunnelDownstreamHard01(t *testing.T) {
 		}
 	})
 	assert.True(t, found,
-		"%s: returned closure body of %s must invoke typed %s.%s — otherwise the observer never reaches the audit ledger and downgrades back to slog-only (%s)",
-		ruleBootstrapAuditObserverFunnelDownstreamHard01, observerFnName, auditPkgPath, appendFnName, funcLocation)
+		"%s: returned closure body of %s must invoke typed %s.%s — "+
+			"otherwise the observer never reaches the audit ledger and "+
+			"downgrades back to slog-only (%s)",
+		ruleBootstrapAuditObserverFunnelDownstreamHard01,
+		observerFnName, auditPkgPath, appendFnName, funcLocation)
 }
 
 // TestBootstrapAuditObserverFunnelUpstreamMedium01 enforces the upstream
@@ -196,12 +199,11 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 			observerObjects := observerObjectsInFile(p, file, auditPkgPath)
 			// Reassign scan: a funnel-built object subsequently rebound to a
 			// non-funnel RHS (FuncLit, wrapper-returned closure, …) loses the
-			// audit-chain guarantee. The reassign upstreamViolation is reported even
+			// audit-chain guarantee. The reassign violation is reported even
 			// if the rebound object never reaches NewBootstrapMiddleware,
 			// because the shape itself is what the funnel forbids.
-			for _, v := range reassignViolations(p, file, observerObjects, auditPkgPath) {
-				upstreamViolations = append(upstreamViolations, v)
-			}
+			upstreamViolations = append(upstreamViolations,
+				reassignViolations(p, file, observerObjects, auditPkgPath)...)
 			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 				pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
 				if !ok || pkgPath != authPkgPath || name != bootstrapMiddlewareName {
