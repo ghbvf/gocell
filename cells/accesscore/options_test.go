@@ -57,7 +57,7 @@ func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
 		withTestBootstrapAuth(),
-		// WithSetupLock omitted on purpose.
+		// withTestSetupLock() omitted on purpose.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err, "missing WithSetupLock must produce a phase0 error")
@@ -84,7 +84,7 @@ func TestWithSetupLock_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
 		withTestBootstrapAuth(),
-		WithSetupLock(nil), // bare-nil intentionally
+		WithSetupLock(nil), // bare-nil intentionally — must NOT silently satisfy the required-dep check
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
@@ -105,6 +105,7 @@ func TestWithInMemoryDefaults(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	// userRepo, roleRepo, and sessionStore are all set eagerly via explicit options.
@@ -132,6 +133,7 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -158,6 +160,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -206,6 +209,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -227,6 +231,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -243,6 +248,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -267,6 +273,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -305,6 +312,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 			return p
 		}()),
 		withTestBootstrapAuth(),
+		withTestSetupLock(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
@@ -340,6 +348,7 @@ func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
+		withTestSetupLock(),
 		// withTestCASProtocol() omitted on purpose.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -366,6 +375,7 @@ func TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
+		withTestSetupLock(),
 		WithCASProtocol(nil), // bare-nil intentionally
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))

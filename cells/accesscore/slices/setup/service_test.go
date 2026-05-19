@@ -82,7 +82,13 @@ func newService(
 		return "00000000-0000-4000-8000-000000000001"
 	}, clock.Real())
 	require.NoError(t, err)
-	opts := []setup.Option{setup.WithTxManager(persistence.WrapForCell(noopTxRunner{}))}
+	opts := []setup.Option{
+		setup.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		// Default no-op setupLock so tests that don't exercise the lock path
+		// satisfy NewService's mandatory check. Tests that need to observe
+		// Acquire calls override with recordingSetupLock via extraOpts.
+		setup.WithSetupLock(noopSetupLock{}),
+	}
 	if w != nil {
 		opts = append(opts, setup.WithEmitter(testoutbox.MustEmitter(t, w)))
 	}
@@ -91,6 +97,12 @@ func newService(
 	require.NoError(t, err)
 	return svc
 }
+
+// noopSetupLock is the unit-test default — analogous to accesscore.NoopSetupLock
+// but defined locally to avoid a setup → accesscore import cycle.
+type noopSetupLock struct{}
+
+func (noopSetupLock) Acquire(context.Context) error { return nil }
 
 type recordingSetupLock struct {
 	err             error

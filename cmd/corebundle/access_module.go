@@ -167,6 +167,11 @@ func (m AccessCoreModule) Provide(
 			accesscore.WithUserRepository(userMemStore.UserRepository()),
 			accesscore.WithRoleRepository(userMemStore.RoleRepository()),
 			accesscore.WithRefreshStore(refreshMemStore),
+			// Memstore mode: memTxRunner.RunInTx holds store.mu for the entire
+			// closure, already serializing first-admin provisioning across
+			// goroutines. Wire NoopSetupLock to satisfy WithSetupLock's
+			// mandatory phase0 check without a redundant second lock.
+			accesscore.WithSetupLock(accesscore.NoopSetupLock{}),
 		)
 	}
 	// AUTH-CACHE-01 (T5): wrap the session store with a Redis read-through

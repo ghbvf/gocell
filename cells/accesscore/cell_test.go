@@ -124,6 +124,7 @@ func newTestCell(t testing.TB) *AccessCore {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 }
@@ -143,6 +144,7 @@ func newDurableTestCell(t testing.TB) *AccessCore {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(durableOutboxWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 }
@@ -159,6 +161,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -178,6 +181,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -194,6 +198,7 @@ func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.
 		WithRefreshStore(newTestRefreshStore()),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 
@@ -217,6 +222,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		// txRunner intentionally omitted
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -243,6 +249,7 @@ func TestInit_DemoMode_TxWithoutOutbox_PublisherMode_Succeeds(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 		// outboxWriter intentionally omitted — publisher-only mode
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -265,6 +272,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -288,6 +296,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -306,6 +315,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -390,6 +400,7 @@ func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithEmitter(emitter),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
@@ -413,6 +424,7 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -439,6 +451,7 @@ func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -841,6 +854,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	ctx := context.Background()
@@ -927,6 +941,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	ctx := context.Background()
@@ -1059,6 +1074,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
@@ -1109,6 +1125,7 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	ctx := context.Background()

@@ -40,5 +40,9 @@ func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Opti
 		accesscore.WithRoleRepository(userStore.RoleRepository()),
 		accesscore.WithSessionStore(sessionStore),
 		accesscore.WithRefreshStore(refreshStore),
+		// Memstore mode default — memTxRunner.RunInTx already serializes via
+		// store.mu. PG-mode integration tests that need pg_advisory_xact_lock
+		// override by appending accesscore.WithSetupLock(pgSetupLock) after this.
+		accesscore.WithSetupLock(accesscore.NoopSetupLock{}),
 	}
 }

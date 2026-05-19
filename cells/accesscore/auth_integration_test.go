@@ -179,6 +179,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		// must come from the same Store (guaranteed above).
 		WithTxManager(persistence.WrapForCell(store.TxRunner())),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	intReg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
