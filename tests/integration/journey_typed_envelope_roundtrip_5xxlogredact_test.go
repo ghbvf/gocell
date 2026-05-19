@@ -4,11 +4,15 @@ package integration
 
 import (
 	"log/slog"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
 // TestJTypedEnvelopeRoundtrip5xxLogRedact implements
@@ -237,23 +241,63 @@ func TestJTypedEnvelopeRoundtrip5xxLogRedact(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// Wiring verification: the log5xx path calls redaction.RedactSlogAttr on
-	// each Detail attr. Verify that an attr value containing "password=..."
-	// is redacted at the pkg layer — this is exactly what log5xx does in
-	// response.go via the for-loop `logAttrs = append(logAttrs, redaction.RedactSlogAttr(attr))`.
-	t.Run("log5xx-wiring", func(t *testing.T) {
-		// NOT t.Parallel() — sequential to avoid slog global swap races.
+// TestJTypedEnvelopeRoundtrip5xxLogRedactWiring drives the *real* log5xx path
+// end-to-end and asserts the slog Record emitted by the 5xx logger has
+// Details attrs masked. Together with the table-driven unit cases above (which
+// pin RedactSlogAttr's semantic contract), this guards the wiring in
+// pkg/httputil/response.go:229-231 — the for-loop that applies RedactSlogAttr
+// to each ecErr.Details attr before slog.Error. If that for-loop is dropped
+// or replaced with a non-redacting append, this test fails immediately;
+// without it, a pure pkg/redaction unit assertion (the prior log5xx-wiring
+// sub-test) would still pass while production silently leaked PII.
+//
+// NOT t.Parallel — slog.SetDefault swap is process-global, racing any
+// concurrent t.Parallel sibling that reads or writes the default logger.
+// Isolated as a top-level test so the parent unit table remains parallel.
+//
+// Test sink uses pkg/testutil/sloghelper.SyncBuffer per its godoc requirement
+// for concurrent-safe slog output capture (bare bytes.Buffer races under
+// -race when Handler writes are interleaved with String() reads).
+func TestJTypedEnvelopeRoundtrip5xxLogRedactWiring(t *testing.T) {
+	buf := sloghelper.NewSyncBuffer()
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
 
-		sensitiveAttr := slog.String("error_context", "connection failed: password=super-secret-value")
-		redacted := redaction.RedactSlogAttr(sensitiveAttr)
+	// Embed a sensitive `password=<secret>` substring inside a Details attr
+	// value so log5xx's for-loop (response.go:229-231) is the only thing
+	// standing between the raw secret and the slog backend.
+	ecErr := errcode.New(
+		errcode.KindInternal,
+		errcode.ErrInternal,
+		"internal server error",
+		errcode.WithDetails(slog.String("error_context",
+			"connection failed: password=super-secret-value")),
+	)
+	w := callWriteErrorWithStatus(http.StatusInternalServerError, ecErr)
+	assertHTTPStatus(t, w, http.StatusInternalServerError)
 
-		assert.Contains(t, redacted.Value.String(), mask,
-			"log5xx wiring: RedactSlogAttr applied to an attr value containing "+
-				"'password=...' must produce a value containing %q", mask)
-		assert.Contains(t, redacted.Value.String(), "password=",
-			"log5xx wiring: the key name prefix 'password=' must be preserved (partial mask)")
-		assert.NotContains(t, redacted.Value.String(), "super-secret-value",
-			"log5xx wiring: the original secret must not appear in the redacted value")
-	})
+	entry := sloghelper.FindLogEntry(buf.String(), "typed (5xx)")
+	require.NotNilf(t, entry,
+		"expected slog Error line with msg 'typed (5xx)' from log5xx; "+
+			"if absent, the 500 → log5xx path is broken. captured: %s",
+		buf.String())
+
+	ctxVal, ok := entry["error_context"].(string)
+	require.Truef(t, ok,
+		"slog line missing 'error_context' attr; log5xx must propagate Details "+
+			"attrs (after redaction) to slog. entry: %#v", entry)
+
+	assert.Containsf(t, ctxVal, redaction.Mask,
+		"log5xx wiring: Details attr containing 'password=...' must be routed "+
+			"through redaction.RedactSlogAttr before slog.Error. If "+
+			"pkg/httputil/response.go:229-231 for-loop is dropped or bypassed, "+
+			"this assertion exposes the regression. got %q", ctxVal)
+	assert.Containsf(t, ctxVal, "password=",
+		"log5xx wiring: sensitive key prefix 'password=' must survive masking "+
+			"(partial mask, not total erasure). got %q", ctxVal)
+	assert.NotContainsf(t, ctxVal, "super-secret-value",
+		"log5xx wiring: bare secret must never reach slog backend. got %q", ctxVal)
 }

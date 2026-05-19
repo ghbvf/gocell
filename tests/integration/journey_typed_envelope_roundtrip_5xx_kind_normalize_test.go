@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"log/slog"
 	"net/http"
 	"testing"
 
@@ -36,15 +37,25 @@ import (
 func TestJTypedEnvelopeRoundtrip5xxKindNormalize(t *testing.T) {
 	t.Parallel()
 
-	// Construct a 4xx-Kind errcode — simulating a service that accidentally
-	// builds a 500 typed response from a domain NotFound error without
-	// re-wrapping the Kind.
-	// Without normalization: IsClient()==true → MarshalJSON keeps Details →
-	// PII leak on 5xx path.
+	// Construct a 4xx-Kind errcode WITH Details — simulating a service that
+	// accidentally builds a 5xx typed response from a domain NotFound error
+	// without re-wrapping the Kind, while still emitting runtime Details.
+	//
+	// Without Details, Error.MarshalJSON's wire envelope renders details=[]
+	// unconditionally and the Empty(env.Error.Details) assertion below cannot
+	// distinguish "Kind normalized → strip applied" from "no details to begin
+	// with". Embedding a sensitive `dsn=...` attr forces the strip path to be
+	// the only thing keeping it off the wire — if WriteErrorWithStatus stops
+	// re-deriving Kind from status, IsClient() stays true (KindNotFound) and
+	// MarshalJSON leaks the dsn through, failing this test.
 	badKindErr := errcode.New(
-		errcode.KindNotFound, // 4xx Kind but wire status will be 500
+		errcode.KindNotFound, // 4xx Kind but wire status will be 500/503/504
 		errcode.ErrInternal,
 		"internal server error",
+		errcode.WithDetails(
+			slog.String("dsn", "postgres://user:pwd@host:5432/db"),
+			slog.String("query_id", "q-abc-123"),
+		),
 	)
 
 	// 500 wire status + 4xx Kind errcode body — normalization must produce
@@ -85,5 +96,9 @@ func TestJTypedEnvelopeRoundtrip5xxKindNormalize(t *testing.T) {
 		env504 := mustDecodeWireError(t, w504)
 		assert.Empty(t, env504.Error.Details,
 			"504 path must also strip Details via Kind normalization")
+		assert.Equal(t, "ERR_SERVER_TIMEOUT", env504.Error.Code,
+			"504 normalizes to ERR_SERVER_TIMEOUT "+
+				"(errcode.PublicCodeForStatus → errcode.ErrServerTimeout), "+
+				"not ERR_INTERNAL")
 	})
 }
