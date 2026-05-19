@@ -123,10 +123,11 @@ type Bootstrap struct {
 	shutdownMet        *metricsmiddleware.ShutdownCollector
 	shutdownMetricsErr error
 
-	// outboxConsumerCollector is cached after first construction so multiple
-	// ConsumerBase / Relay wirings share the same collector and avoid double-
-	// registering outbox_consumer_rejected_total / outbox_pending_depth.
-	outboxConsumerCollector *metricsmiddleware.OutboxConsumerCollector
+	// outboxRejectCollector is cached after first construction so multiple
+	// ConsumerBase wirings share the same collector and avoid double-registering
+	// outbox_consumer_rejected_total. PendingDepth is per-cell and wired
+	// directly by each composition-root module via relay.WithPendingDepthObserver.
+	outboxRejectCollector *metricsmiddleware.OutboxRejectCollector
 
 	// eventRouterCollector is cached so multiple Router instances (if a future
 	// multi-listener model arrives) share the same collector.

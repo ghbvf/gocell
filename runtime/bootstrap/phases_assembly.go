@@ -15,7 +15,9 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -41,6 +43,9 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	}
 	if b.rateLimiterNil {
 		return fmt.Errorf("bootstrap: rate limiter must not be nil in WithRateLimiter")
+	}
+	if err := b.validateNoDoubleManagedRelay(); err != nil {
+		return err
 	}
 	if err := b.validateAuthJWTFromAssemblyPlans(); err != nil {
 		return err
@@ -69,6 +74,31 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	// Advisory check (non-blocking): warn when the declared K8s grace period
 	// is smaller than the bootstrap shutdown budget plus a 10s safety margin.
 	b.warnTerminationGracePeriodInsufficient()
+	return nil
+}
+
+// validateNoDoubleManagedRelay fails fast when the same relay object has been
+// registered via both WithRelay (which auto-appends to managedResources) and a
+// separate WithManagedResource(relay) call. Double-registration would cause
+// Close() to be invoked twice during shutdown.
+//
+// WithRelay already handles lifecycle; callers must NOT additionally call
+// WithManagedResource(relay).
+func (b *Bootstrap) validateNoDoubleManagedRelay() error {
+	if b.relay == nil {
+		return nil
+	}
+	var count int
+	for _, mr := range b.managedResources {
+		if mr == kernellifecycle.ManagedResource(b.relay) {
+			count++
+		}
+	}
+	if count > 1 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrBootstrapDoubleManaged,
+			"bootstrap: relay registered via both WithRelay and WithManagedResource; "+
+				"WithRelay already handles lifecycle — remove the WithManagedResource(relay) call")
+	}
 	return nil
 }
 

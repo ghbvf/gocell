@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 )
 
@@ -115,7 +116,17 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 		relayCfg.Metrics = relayMetrics
 		relayCfg.Clock = cfg.Clock
 		pgStore := adapterpg.NewOutboxStore(pool.DB(), cfg.Clock)
+
+		// Explicit per-cell PendingDepthCollector: cell label = "configcore",
+		// not the _runtime sentinel that bootstrap auto-wire would have used.
+		pendingDepth, pdErr := obmetrics.NewOutboxPendingDepthCollector(cfg.MetricsProvider, "configcore")
+		if pdErr != nil {
+			_ = pool.Close(ctx)
+			return ConfigCoreModuleResult{}, fmt.Errorf("configcore pending-depth collector: %w", pdErr)
+		}
+
 		relayWorker := outboxruntime.NewRelay(pgStore, cfg.Publisher, relayCfg)
+		relayWorker.WithPendingDepthObserver(pendingDepth)
 
 		pgRes, storageOpt, storageErr := buildConfigCorePGStorage(pool, cfg)
 		if storageErr != nil {
@@ -130,13 +141,14 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			configcore.WithOutboxDeps(outbox.WrapPublisherForCell(cfg.Publisher), outbox.WrapWriterForCell(outboxWriter)),
 			configcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		}
-		// Relay is registered independently via bootstrap so its Worker()/Close()
-		// lifecycle is managed separately from the pool (PoolResource.Worker() == nil).
+		// WithRelay registers the relay for BOTH outbox wiring AND lifecycle
+		// (Start/Close). Do NOT add WithManagedResource(relayWorker) — that
+		// would double-register and trigger phase0 ErrBootstrapDoubleManaged.
 		return ConfigCoreModuleResult{
 			PoolResource:  pgRes,
 			PGPool:        pool,
 			CellOptions:   cellOpts,
-			BootstrapOpts: []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)},
+			BootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(relayWorker)},
 		}, nil
 
 	case "memory":
