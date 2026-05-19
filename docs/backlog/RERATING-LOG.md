@@ -336,4 +336,25 @@ M2-LIFECYCLE / M3-RULE-ENGINE：Cx3 → Cx4（跨 kernel 子系统 + ADR + codeg
 
 ### Commit
 
-`<待 commit>` — 54 处 row 编辑（cap-14 35 + cap-x-cross 19）通过 sed batch（ID-anchored）+ 少量 Edit 工具应用
+`d17e8d1a9` — 54 处 row 编辑（cap-14 35 + cap-x-cross 19）通过 sed batch（ID-anchored）+ 少量 Edit 工具应用
+
+---
+
+## Phase 5 — Review fix (2026-05-20)
+
+PR #604 review 后 3 个 reviewer agent 出 33 条 findings：
+
+| Reviewer | Findings |
+|---|---|
+| A 覆盖度 | 21 空 P + 3 非标格式 + 1 commit hash 占位 |
+| B P 升级正确性 | 5 P1 假阳（F-01 / F-02 / J-02 / F-06 降 P2；ADAPTER-FAKE-EXPORT-01 保留 P1 因架构跨 ≥ 8 adapter）|
+| C STALE/DUP 一致性 | C-DC9 ✅ 补 STALE-CLOSE 注 / FU2 补 STALE-CLOSE / PR266 路径漂移更新 / Phase 4 commit hash 补 |
+
+**应用修复**（~30 处 sed + Edit）：
+- 4 处 P1→P2（F-01 / F-02 / J-02 / F-06）— Type=feat/doc 不命中 rubric §4 架构 refactor 第一维度
+- 21 处空 P 补齐（A26-R3 / SECURECOOKIE-AEAD-NEG-01 / KERNEL-DEPGRAPH-OUT-EVAL-01 / IDUTIL-UUID-RAND / PR332-VERIFY / VERIFY-CODEGEN-SANDBOX / ADR-INDEX / PR250-F3 / MEM-STORE-RWMUTEX / L2-ATOMICITY-HARNESS / DEVOPS-INTEGRATION / PR-A41-FU1 / PR237-DX1 / PR467-FU-PANIC / P3-TD-04 / P3-TD-05 / P4-TD-01 / P4-TD-06 / B2-T-07-FU-4 / PR-BATCH2-RETRO-FU / B-FLOOR-FOLLOWUP）
+- 4 处描述/Source/Files 列注解（commit hash / C-DC9 STALE-CLOSE / FU2 STALE-CLOSE / PR266 路径漂移）
+
+### Commit
+
+`a17a00ca6` — Phase 5 review fix（~30 处行编辑：21 空 P 补齐 + 4 P1 假阳降级 + 3 STALE/路径漂移 + 1 commit hash 补全 + 1 LOG Phase 5 段落）
