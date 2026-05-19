@@ -1,7 +1,10 @@
 # PG / accesscore / auditcore / configcore 未完成清单
 
+> **🗄️ 已归档（2026-05-19）**：剩余 9 条未完成项全部在 active backlog（`backlog.md` cap-01 + `cap-13` + `cap-14`）有 canonical 落点，任务台账已被 active backlog 单源覆盖。本文件作历史脉络保存，不再更新；后续追踪以 active backlog 为准。
+
 **原始生成日期**: 2026-05-08
-**最近精简**: 2026-05-18（4 轮亲眼核查后归档 39 条闭环 → 仅保留未完成 12 条；PR-CFG-G1-FU6 经 PR #463 FMT-21 PATH-ID-MAPPING coverage RECYCLE 闭环，从清单移除）
+**最近精简**: 2026-05-19（看代码逐条核查：删 6 条已闭环 — ACCOUNT-LOCKOUT (#585) / CACHE-LIFECYCLE-OWNER (won't-do) / C-02 (#518) / B2-C-11 (#518) / PR320-FU-NOOP (`service_test.go:39` 已覆盖) / PR238-FU8 主项 (config_repo_test.go 双向锁就位)；剩 9 条未完成）
+**上一次精简**: 2026-05-18（4 轮亲眼核查后归档 39 条闭环 → 保留 12 条；PR-CFG-G1-FU6 经 PR #463 FMT-21 PATH-ID-MAPPING coverage RECYCLE 闭环）
 **完整闭环快照**: `docs/plans/archive/202605181530-pg-corecell-issues-closure-snapshot.md`
 **来源**: 整理自 `docs/backlog.md` + `docs/plans/archive/202605071200-033-pg-implementation-plan.md` + `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`
 
@@ -11,7 +14,6 @@
 
 | ID | 优先级 | 一句话 |
 |---|---|---|
-| ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01 | 🔴 P1 | sessionlogin 无失败累计 + 阈值 + auto-lock；`domain.StatusLocked` 框架存在但 schema (`failed_login_count` / `locked_at`) + 业务逻辑全缺 |
 | PR392-FU-AUDIT-CHAIN-WIRING | 🟠 P2 待合同 | event.session.auth-failed.v1 schema 未发布；`cells/auditcore/slices/auditappendsession/service.go:9-10` stub 占位待 contract 落地后补充订阅 |
 | B2-PROVISIONER-MUTEX-REVIEW | 🟠 P2 | setup 已加 cross-process `setupLock` advisory；provisioner.go:71-77 内部 sync.Mutex 必要性待 review |
 | PR250-F3 Event wire byte pinning | 🟡 | 缺 byte 级 golden 回归 |
@@ -22,38 +24,31 @@
 
 | ID | 优先级 | 一句话 |
 |---|---|---|
-| ~~B2-T-01 Config rollback 乐观锁缺~~ | ✅ closed | 实施侧 PR S6（service `expectedVersion` + PG SQL `WHERE version=$N` + handler 409 + mem 并发单元测试）；PG SQL Medium runtime regression guard PR-V11-CONFIG-ROLLBACK-OPTLOCK（029 D5, PR #583）；Hard 升级 backlog cap-14 `CONFIG-ROLLBACK-CAS-HARD-UPGRADE-01` |
-| ~~P3-TD-12 configpublish.Rollback 版本校验~~ | ✅ closed | 同 B2-T-01（同根源） |
-| CONFIGCORE-CACHE-LIFECYCLE-OWNER-01 | 🟠 Cx2 | 内存增长信号 |
-| C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE | 🟡 P1 | 进程内无界 + 未挂 Lifecycle |
-| B2-C-11 Configsubscribe tombstone 无 TTL | 🟡 P2 | 永久保留导致内存膨胀 |
 | CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01 | 🟠 P2 | **ID 名误导**：实际是「业务 reload 接入骨架已就位，等业务触发」。configreceive/service.go 已完整 ship event decode + ConfigGetter HTTP refetch + 错误分类 + DLQ + metrics（~10h 骨架），cell wiring 与 contract subscribers 真实就位；2026-05-10 激进自审撤回「直接删除」主方案；触发条件: 业务侧 JWT TTL hot-reload / key rotation 需求 |
-| PR-CFG-A-DEFER-2 ConfigCore L2 divergence | 🟡 Cx1 | L2 与 L1 表项 schema 偏差 |
-| PR320-FU-CONFIGCORE-CI-NOOP | 🟡 P3 | noop publisher CI 路径未覆盖 |
-| PR238-FU8 CONFIGREPO-UPDATE-ROLLBACK-OP-LABEL-TEST-01 | 🟠 P3 | 部分修复：PR#553 抽 opUpdate/opUpdateForRollback const + Update_NotFound 双向 NotContains（Medium）；Hard 升级 typed enum 跟 `CONFIGREPO-OP-LABEL-TYPED-ENUM-HARD-01` |
+| PR-CFG-A-DEFER-2 ConfigCore L2 divergence | 🟡 Cx1 | L2 与 L1 表项 schema 偏差（2026-05-19 复核：grep `cells/configcore/` 无 L2 divergence 匹配证据，描述疑过期，需进一步核实）|
 
 ## F. 横切（≥2 cell 或 PG 通用）
 
 | ID | 优先级 | 一句话 |
 |---|---|---|
 | C-04 CELLS-INIT-TEMPLATE-CONVERGE（含 C-07） | 🟡 P2 | 3 cell Init 切分各异：auditcore 已有 `registerHealthProbes` helper，accesscore + configcore 未提取 |
-| C-09 CELL-SPLIT-LAYOUT-NORMALIZE | 🟡 P2 | accesscore 比 configcore/auditcore 多 `mem/` `configgetter/` `refresh_gc.go` `refresh_policy.go` 等顶层文件，三 cell 命名层次不一致 |
+| C-09 CELL-SPLIT-LAYOUT-NORMALIZE | 🟡 P2 | **2026-05-19 重新校准**：原 `cell_routes.go` 命名 + `RegisterSubscriptions` 错位载体经 codegen 迁移已消失，原"依赖 K-07"也已脱钩。残留真问题：(a) 三 cell 切分形态不一致 — accesscore(`cell_init.go + cell_providers.go + refresh_*.go`) / auditcore(单 `cell.go`) / configcore(`cell_init.go + cell_lifecycle.go`)；(b) `ensureCursorCodec` pure helper 仍在 `cells/configcore/cell_init.go:166-169` 而非独立 helpers 文件；(c) accesscore 无 `cell_lifecycle.go` / `cell_helpers.go`，pure helper 与 lifecycle hook 混在 cell_init.go |
 
 ---
 
 ## 建议处理顺序
 
-**P0/P1 红旗**
-1. **ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01**（P1）— 完整设计 + schema migration（3-5 日）+ journey 测试（2 日）；无 spec/ADR 起点
-2. **PR392-FU-AUDIT-CHAIN-WIRING**（P2 待合同）— 依赖 `event.session.auth-failed.v1` contract 设计先行（accesscore 失败登录事件 schema）；contract 落地后审计消费接入 ~2 日
+**P2 等触发**
+1. **PR392-FU-AUDIT-CHAIN-WIRING** — 依赖 `event.session.auth-failed.v1` contract 设计先行（accesscore 失败登录事件 schema）；contract 落地后审计消费接入 ~2 日
+2. **CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01** — 等业务侧 JWT TTL hot-reload / key rotation 真实需求；不要走「清理」路线
 
-**P2 优化**
+**P2 可立做**
 3. **B2-PROVISIONER-MUTEX-REVIEW** — review-only task；PG advisory lock 落地后 sync.Mutex 多半冗余，删除验证 1 日
-4. **C-04 / C-09**（layout 收敛）— 一次性 refactor，提取 `registerHealthProbes` helper + 命名归一 2-3 日
-5. **PR238-FU8** Hard upgrade — `opUpdate` 字面量 → typed enum 1 日
+4. **C-04** — accesscore + configcore 抽 `registerHealthProbes` helper（auditcore 已抽，照搬即可）~1 日
+5. **C-09** — 三件套：(a) accesscore 新增 `cell_lifecycle.go` + `cell_helpers.go`，把 cell_init.go 里 lifecycle hook 和 pure helper 分文件；(b) configcore `ensureCursorCodec` 迁到 `cell_helpers.go`；(c) auditcore 单 `cell.go` 是否要切分待评估（slice 数少，分歧可接受）。2-3 日；与 K-07 已脱钩，无前置依赖
 
 **P3 长尾 / deferred**
-- PR250-F3 byte pinning、PR-CFG-A-DEFER-2、PR320 noop CI — 按 P3 优先级；触发条件达成时处理
+- PR250-F3 byte pinning、PR-CFG-A-DEFER-2 — 按 P3 优先级；触发条件达成或复核出实际证据后处理
 - X5 domain 拆分（卡 X1）、X13 refresh partition（触发流量阈值未达）— 真正 deferred
 
 ## 不要做的项
