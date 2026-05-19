@@ -32,9 +32,8 @@ Journey 是**业务/产品视角的端到端验收**。每个 `J-*.yaml` 必须�
 
 - `experimental` — 设计中 / 测试覆盖未稳定 — `board.state` 必须 `todo`
 - `active` — 至少 1 个 mode:auto criterion + 有 docker-free seam — `board.state` 可 `doing` 或 `done`
-- `deprecated` — 业务场景废弃 / 被更细粒度 journey 替代 — `board.state` 不约束；yaml 文件保留作历史记录，`contracts:` 保持以满足 `JOURNEY-CONTRACT-EXISTENCE-01`（若该 contract 仍 active），status-board entry 可保留或删除
 
-由 `kernel/governance/rules_journey.go` 中的 `validateJOURNEYSTATUSLIFECYCLE01` 强制（rule ID: `JOURNEY-STATUS-LIFECYCLE-01`）。
+合法值由 `kernel/metadata/schemas/journey.schema.json` enum + `kernel/governance/rules_fmt.go::validJourneyLifecycles` 共同收口（仅 `experimental` / `active`），废弃 journey 直接从 status-board / yaml 删除即可，无需引入第三档状态。状态机由 `kernel/governance/rules_journey.go` 中的 `validateJOURNEYSTATUSLIFECYCLE01` 强制（rule ID: `JOURNEY-STATUS-LIFECYCLE-01`）。
 
 ## passCriteria mode
 
