@@ -118,7 +118,7 @@ type Bootstrap struct {
 	// --- metrics: metrics provider + auto-wired HTTP collector + shutdown metrics ---
 	metricsProvider    kernelmetrics.Provider
 	httpCollector      metricsmiddleware.Collector
-	shutdownMet        *shutdownMetrics
+	shutdownMet        *metricsmiddleware.ShutdownCollector
 	shutdownMetricsErr error
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
@@ -287,11 +287,11 @@ func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
 
 // New creates a Bootstrap with the given options.
 //
-// shutdownMetrics are registered against the provider here (plan option B):
-// instruments live as long as the Bootstrap, matching the "register at
-// start-up" convention used by relay_collector.go and the hook dispatcher.
-// On registration failure the error is stored and surfaced by Run() at
-// phase0, before any side effects start.
+// ShutdownCollector metrics are registered against the provider here (plan
+// option B): instruments live as long as the Bootstrap, matching the
+// "register at start-up" convention used by relay_collector.go and the hook
+// dispatcher. On registration failure the error is stored and surfaced by
+// Run() at phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{}
 	b.shutdownTimeout = shutdown.DefaultTimeout
@@ -317,8 +317,8 @@ func New(opts ...Option) *Bootstrap {
 		reg(b.lifecycle)
 	}
 	// Register shutdown metrics against the (potentially Nop) provider.
-	// newShutdownMetrics returns a disabled metrics object for a nil provider.
-	m, err := newShutdownMetrics(b.metricsProvider)
+	// NewShutdownCollector returns a disabled metrics object for a nil provider.
+	m, err := metricsmiddleware.NewShutdownCollector(b.metricsProvider)
 	if err != nil {
 		// Store error; phase0 will surface it before any component starts.
 		b.shutdownMetricsErr = err

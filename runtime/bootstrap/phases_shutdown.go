@@ -21,6 +21,8 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+
+	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // drainHTTPErrors collects the first error and any additional errors already
@@ -123,19 +125,19 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	totalStart := b.clock.Now()
 
 	// --- stage 1: readiness flip ---
-	m.recordPhaseEntry(shutdownPhaseReadinessFlip)
+	m.RecordPhaseEntry(metricsmiddleware.ShutdownPhaseReadinessFlip)
 	flipStart := b.clock.Now()
 	b.phase10ReadinessFlip(drainCtx, s)
-	m.observePhaseDuration(shutdownPhaseReadinessFlip, b.clock.Since(flipStart))
+	m.ObservePhaseDuration(metricsmiddleware.ShutdownPhaseReadinessFlip, b.clock.Since(flipStart))
 
 	// --- stage 2: HTTP drain (explicit; runs BEFORE LIFO teardown) ---
-	m.recordPhaseEntry(shutdownPhaseHTTPDrain)
+	m.RecordPhaseEntry(metricsmiddleware.ShutdownPhaseHTTPDrain)
 	drainStart := b.clock.Now()
 	var httpDrainErr error
 	if s.httpDrain != nil {
 		httpDrainErr = s.httpDrain(drainCtx)
 	}
-	m.observePhaseDuration(shutdownPhaseHTTPDrain, b.clock.Since(drainStart))
+	m.ObservePhaseDuration(metricsmiddleware.ShutdownPhaseHTTPDrain, b.clock.Since(drainStart))
 
 	// --- stage 3: LIFO teardown — fresh tearCtx, independent of drainCtx ---
 	// A blocked HTTP drain cannot starve LIFO teardown of its budget; this
@@ -143,14 +145,14 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	// TestPhase10_BudgetIsolation_LIFOTeardownGetsFreshCtx.
 	tearCtx, tearCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 	defer tearCancel()
-	m.recordPhaseEntry(shutdownPhaseLIFOTeardown)
+	m.RecordPhaseEntry(metricsmiddleware.ShutdownPhaseLIFOTeardown)
 	tearStart := b.clock.Now()
 	teardownErrs := b.phase10LIFOTeardown(tearCtx, s)
-	m.observePhaseDuration(shutdownPhaseLIFOTeardown, b.clock.Since(tearStart))
+	m.ObservePhaseDuration(metricsmiddleware.ShutdownPhaseLIFOTeardown, b.clock.Since(tearStart))
 
 	// --- stage 4: finalize ---
-	m.recordPhaseEntry(shutdownPhaseClosed)
-	m.observePhaseDuration(shutdownPhaseTotal, b.clock.Since(totalStart))
+	m.RecordPhaseEntry(metricsmiddleware.ShutdownPhaseClosed)
+	m.ObservePhaseDuration(metricsmiddleware.ShutdownPhaseTotal, b.clock.Since(totalStart))
 
 	// Aggregate HTTP drain error with LIFO teardown errors. HTTP drain is
 	// best-effort just like LIFO: a failure here does not prevent backend
@@ -183,7 +185,7 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	case sig.err != nil:
 		outcome = "signal_error"
 	}
-	m.countOutcome(outcome)
+	m.CountOutcome(outcome)
 
 	// Safety net: cancel runCtx after all teardowns complete so any goroutine
 	// still holding runCtx eventually unblocks.
