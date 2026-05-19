@@ -19,10 +19,11 @@ import (
 
 func TestDeviceRepository_Create(t *testing.T) {
 	tests := []struct {
-		name    string
-		setup   func(*DeviceRepository)
-		device  *domain.Device
-		wantErr bool
+		name     string
+		setup    func(*DeviceRepository)
+		device   *domain.Device
+		wantErr  bool
+		wantCode errcode.Code
 	}{
 		{
 			name:  "creates new device",
@@ -43,7 +44,8 @@ func TestDeviceRepository_Create(t *testing.T) {
 			device: &domain.Device{
 				ID: "dev-dup", Name: "second", Status: "online",
 			},
-			wantErr: true,
+			wantErr:  true,
+			wantCode: errcode.ErrConflict,
 		},
 	}
 
@@ -55,6 +57,11 @@ func TestDeviceRepository_Create(t *testing.T) {
 			err := repo.Create(context.Background(), tc.device)
 			if tc.wantErr {
 				assert.Error(t, err)
+				if tc.wantCode != "" {
+					var ecErr *errcode.Error
+					require.ErrorAs(t, err, &ecErr)
+					assert.Equal(t, tc.wantCode, ecErr.Code)
+				}
 			} else {
 				require.NoError(t, err)
 			}

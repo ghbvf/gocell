@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -420,6 +421,12 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 // makeDeliveryBody serializes an outbox.Entry into a WireMessage envelope
 // suitable for delivery to unmarshalDelivery. RabbitMQ now only accepts relay
 // envelope format (legacy PascalCase Entry JSON is no longer supported).
+//
+// The SafeID direct casts below (e.g. idutil.SafeID(entry.ID)) are safe here
+// because all callers pass known-safe literal or fixture IDs. Tests that
+// construct attack vectors (e.g. IDs containing "\n") must assert that the
+// downstream decoder (UnmarshalEnvelope / unmarshalDelivery) rejects the
+// resulting bytes rather than relying on this helper to sanitize inputs.
 func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 	t.Helper()
 	payload := entry.Payload
@@ -428,11 +435,11 @@ func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 	}
 	wire := outbox.WireMessage{
 		SchemaVersion: outbox.EnvelopeSchemaV1, // required since P1-14 A1 (fail-closed envelope schema)
-		ID:            entry.ID,
-		AggregateID:   entry.AggregateID,
-		AggregateType: entry.AggregateType,
-		EventType:     entry.EventType,
-		Topic:         entry.Topic,
+		ID:            idutil.SafeID(entry.ID),
+		AggregateID:   idutil.SafeID(entry.AggregateID),
+		AggregateType: idutil.SafeID(entry.AggregateType),
+		EventType:     idutil.SafeID(entry.EventType),
+		Topic:         idutil.SafeID(entry.Topic),
 		Payload:       json.RawMessage(payload),
 		Metadata:      entry.Metadata,
 		Observability: entry.Observability,

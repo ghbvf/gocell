@@ -108,7 +108,7 @@ STEP 2 — 黑名单匹配：
     <Pkg.Path>.<Name>")
 ```
 
-> **形态唯一性原理（与 PANIC-REGISTERED-01 同构）**：黑名单条目集 S 是显式登记的，`types.Info.Uses[]` 把每个 Ident 的引用对象**无视语法位置**（CallExpr.Fun / var RHS / 切片字面量元素 / 结构体字面量字段 / 类型转换实参 / 类型断言目标 / 函数值传递）折叠到同一 *types.Func。集合外的 (Pkg.Path, Name) 形态 archtest 全部 fail-on-deviation；集合内任何形态全部命中，无视 CallExpr 包装。与 PANIC-REGISTERED-01 的 `(callee=panicregister.Approved via types.Info.Uses[sel.Sel])` form uniqueness 同源（charter §"typed function call as Hard funnel for unbounded operations"）。
+> **形态唯一性原理（与 PANIC-REGISTERED-01 同构）**：黑名单条目集 S 是显式登记的，`types.Info.Uses[]` 把每个 Ident 的引用对象**无视语法位置**（CallExpr.Fun / var RHS / 切片字面量元素 / 结构体字面量字段 / 类型转换实参 / 类型断言目标 / 函数值传递）折叠到同一 *types.Func。注册集合内的 (Pkg.Path, Name) 形态 archtest 全部 fail-on-deviation——集合内任何引用形态全部命中，无视 CallExpr 包装；集合外形态落 skip 分支（显式盲区，详 §D5/§Escalation）。与 PANIC-REGISTERED-01 的 `(callee=panicregister.Approved via types.Info.Uses[sel.Sel])` form uniqueness 同源（charter §"typed function call as Hard funnel for unbounded operations"）。
 
 **为什么 Ident-scan 而非 CallExpr-driven**：CallExpr-only 扫描会漏 4 类引用形态——
 1. **命名函数类型 var**：`type Ctor func(string) error; var c Ctor = errors.New` — RHS Ident `New` 嵌入 var-init 而非直接 CallExpr.Fun

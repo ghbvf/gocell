@@ -54,10 +54,28 @@ Adapter transient inventory:
 
 | Adapter | Transient when |
 |---------|----------------|
-| postgres | `pgconn.SafeToRetry`; SQLSTATE `40001` / `40P01`; class `08*`; ctx deadline; `net.Error.Timeout()` |
-| redis | net timeout / ctx deadline / `i/o timeout`; server-recovering `CLUSTERDOWN` / `LOADING` / `TRYAGAIN` / `MASTERDOWN` |
-| s3 | HTTP 429 / 408 / 5xx; net timeout / ctx deadline |
+| postgres | `pgconn.SafeToRetry` (covers dial refused before bytes sent); SQLSTATE `40001` / `40P01`; class `08*`; ctx deadline; `net.Error.Timeout()` (query-path fallback after SafeToRetry) |
+| redis | ctx deadline; `goredis.ErrPoolTimeout`; `errcode.IsTransientNet` (any net.Error in chain — timeout, *net.OpError dial refused / reset, *net.DNSError); `i/o timeout` string fallback; server-recovering `CLUSTERDOWN` / `LOADING` / `TRYAGAIN` / `MASTERDOWN` |
+| s3 | HTTP 429 / 408 / 5xx; AWS API retryable error codes (`RequestTimeout` / `SlowDown` / `Throttling` / `InternalError` / …); ctx deadline; `errcode.IsTransientNet` (any net.Error in chain — covers PR #538 `*net.OpError + ECONNREFUSED` regression `S3-CLASSIFYERROR-CONN-REFUSED-01`) |
+| vault | `errcode.IsTransient` Tier 1 codes; HTTP status 429 / 408 / 5xx; `errcode.IsTransientNet` (any net.Error in chain) (transit path only; `classifyAuthLoginError` is a metric-label function with its own `Timeout()` discriminator, not part of the WrapInfra funnel) |
 | rabbitmq | dial `net.Error.Timeout()` (substituted to `ErrAdapterAMQPConnectTimeout`); unclassified dial failures (fail-open transient under `ErrAdapterAMQPConnect`); `AcquireChannel` race-window (`conn.IsClosed()` but `c.closed=false`); `Health()` race-window (StateConnected with nil/closed conn). Explicit `Connection.Close()` (`c.closed=true`) is non-transient terminal `ErrAdapterAMQPClosed`. |
+
+> Amendment (2026-05-18, `S3-CLASSIFYERROR-CONN-REFUSED-01`): S3 / Redis /
+> Vault net.Error decision points collapse onto the single-source helper
+> `pkg/errcode.IsTransientNet`. Funnel double-lock = ADAPTER-NET-TRANSIENT-
+> FUNNEL-01 (downstream Hard: every `var x net.Error` declaration in
+> production must reside in an enumerated allowlist) + TRANSIENT-NET-HELPER-
+> FORM-01 (upstream Hard: helper body locked to `var n net.Error; return
+> errors.As(err, &n)` form — no Timeout() filter, no `*net.OpError` /
+> `*net.DNSError` narrowing). Postgres `isRetryablePGError` /
+> `isConnectTimeout`, rabbitmq `classifyStructuredDialError`, vault
+> `classifyAuthLoginError` keep inline `var x net.Error` Timeout filters as
+> documented allowlist members — those sites use Timeout for code
+> substitution or metric-label discrimination, not transient gating.
+> `IsTransient` Tier 2 raw-error `net.Error.Timeout()` filter intentionally
+> unchanged — Tier 2 only applies to unclassified raw errors; adapter
+> classifiers route through `WrapInfra` (Tier 1 marker) so ECONNREFUSED is
+> correctly classified transient before reaching Tier 2.
 
 Consumer demonstrator: the auditcore appender now Requeues a positively-
 transient error, Rejects a positively-permanent classified error
@@ -71,7 +89,9 @@ losing an event on a transient blip. Mirrors the `configreceive` precedent.
 |------|-----------|-------|
 | Upstream | transient marker producible only via `WrapInfra`; the field is unexported (Go type system forbids any package outside `pkg/errcode` from setting it) + archtest locks the in-package writer to func `WrapInfra` | **Hard** (type system + form-uniqueness archtest, the `panicregister.Approved` 范本) |
 | Downstream | `IsTransient`'s `*Error` positive branch keys only on the private marker — a transient-looking code built via `New`/`Wrap` is type-inexpressibly not transient | **Hard** |
-| Adapter routing presence | archtest `RunTypedProduction` resolves (via `*types.Info`) that each of postgres/redis/s3/rabbitmq calls `errcode.WrapInfra` | **Medium→Hard** (type-aware, fail-on-deviation) |
+| Adapter routing presence | archtest `RunTypedProduction` resolves (via `*types.Info`) that each of postgres/redis/s3/rabbitmq calls `errcode.WrapInfra` | **Hard** (type-aware, fail-on-deviation) |
+| Adapter net.Error funnel (downstream) | archtest `ADAPTER-NET-TRANSIENT-FUNNEL-01` allowlists `var x net.Error` declarations to {errcode.IsTransientNet, errcode.IsTransient, postgres.isRetryablePGError, postgres.isConnectTimeout, rabbitmq.classifyStructuredDialError, vault.classifyAuthLoginError}; every other production occurrence is RED. Allowlist drift requires same-PR ADR amendment | **Hard** (form-uniqueness on canonical `var x net.Error` zero-value-then-As pattern + enumerated allowlist, panicregister.Approved 范本) |
+| Adapter net.Error funnel (upstream) | archtest `TRANSIENT-NET-HELPER-FORM-01` locks `pkg/errcode.IsTransientNet` body to `var n net.Error; return errors.As(err, &n)` — Timeout() SelectorExpr or `*net.OpError` / `*net.DNSError` narrowing inside the body is RED; reverse fixture `nettransientfunnelfixture` asserts the detector catches both regressed forms, each verified independently | **Hard** |
 
 Declared blind spot (compensated, not silent): archtest does **not** enforce
 that *every* adapter error site calls its `classify…`. An unclassified error
@@ -92,7 +112,8 @@ reported (exact count, both false-negative and false-positive drift caught).
 | dual truth source (code string vs marker) | n/a | ✅ single marker; vault migrated; old branch deleted |
 | transient-looking error forged outside funnel | ⚠️ any code | ✅ unexported field + archtest = Hard |
 | oidc/websocket adapters classified | ❌ | ❌ (declared out of scope; fail-closed safe) |
-| classifier unknown-error default symmetry | ⚠️ vault step-4 was fail-open (any unknown → transient) | ✅ all four classifiers fail-closed-on-unknown: vault step-4 now requires `*net.OpError`/`net.Error`, else permanent — symmetric with classifyPG/Redis/S3 |
+| classifier unknown-error default symmetry | ⚠️ vault step-4 was fail-open (any unknown → transient) | ✅ all four classifiers fail-closed-on-unknown: net.Error branch routes through single-source `errcode.IsTransientNet`; truly unknown (JSON decode, SDK bug) → permanent. S3 / Redis / Vault net.Error branches collapsed onto helper (amendment 2026-05-18 `S3-CLASSIFYERROR-CONN-REFUSED-01`) |
+| S3 / Redis connection refused → transient | ⚠️ Timeout-only filter dropped `*net.OpError + ECONNREFUSED` (PR #538 integration test surfaced the regression) | ✅ `errcode.IsTransientNet` covers any net.Error in chain — dial refused / connection reset / DNS errors all transient. ADAPTER-NET-TRANSIENT-FUNNEL-01 + TRANSIENT-NET-HELPER-FORM-01 Hard double-lock prevents reintroduction |
 
 ## Consequences
 
@@ -100,8 +121,15 @@ reported (exact count, both false-negative and false-positive drift caught).
   `errcode.IsTransient`.
 - New adapter classifiers must route transient through `errcode.WrapInfra` or
   the archtest fails CI.
-- `net.Error.Temporary()` is never used (deprecated); the codebase standardizes
-  on `Timeout()` + `errors.As`.
+- `net.Error.Temporary()` is never used (deprecated); the adapter net.Error
+  classification branch standardizes on `errors.As(err, &n)` (any net.Error
+  in chain → transient), routed through the single-source
+  `errcode.IsTransientNet` helper. The `Timeout()` filter is retained only
+  in the allowlisted sites (postgres `isRetryablePGError` /
+  `isConnectTimeout`, rabbitmq `classifyStructuredDialError`, vault
+  `classifyAuthLoginError`) where it serves code-substitution or metric-
+  label discrimination, not transient gating — see §"Adapter transient
+  inventory" and ADAPTER-NET-TRANSIENT-FUNNEL-01 allowlist.
 
 ref: jackc/pgx `pgconn` SafeToRetry; aws/aws-sdk-go-v2 `aws/retry`
 RetryableConnectionError/RetryableHTTPStatusCode; ThreeDotsLabs/watermill

@@ -380,11 +380,11 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	assert.False(t, hasReqIDInMeta,
 		"request_id must not be in business metadata — it belongs in entry.Observability")
 
-	assert.Equal(t, "req-full-chain-001", got.entry.Observability.RequestID,
+	assert.Equal(t, "req-full-chain-001", string(got.entry.Observability.RequestID),
 		"request_id should be in entry.Observability, injected from context at write time")
-	assert.Equal(t, "corr-full-chain-001", got.entry.Observability.CorrelationID,
+	assert.Equal(t, "corr-full-chain-001", string(got.entry.Observability.CorrelationID),
 		"correlation_id should be in entry.Observability")
-	assert.Equal(t, "trace-full-chain-001", got.entry.Observability.TraceID,
+	assert.Equal(t, "trace-full-chain-001", string(got.entry.Observability.TraceID),
 		"trace_id should survive the full chain via entry.Observability")
 
 	assert.Equal(t, "req-full-chain-001", got.requestID,
@@ -618,9 +618,9 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 		"request_id must not be in business metadata — it belongs in entry.Observability")
 
 	// request_id and correlation_id round-trip via entry.Observability.
-	assert.Equal(t, "req-no-trace-001", got.entry.Observability.RequestID,
+	assert.Equal(t, "req-no-trace-001", string(got.entry.Observability.RequestID),
 		"request_id should be in entry.Observability, injected from context at write time")
-	assert.Equal(t, "corr-no-trace-001", got.entry.Observability.CorrelationID,
+	assert.Equal(t, "corr-no-trace-001", string(got.entry.Observability.CorrelationID),
 		"correlation_id should be in entry.Observability")
 
 	// trace_id should NOT be present in Observability (was never in context).

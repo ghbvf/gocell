@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -181,12 +182,12 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 }
 
 func sessionCreateError(err error, sessionID, subjectID string) error {
-	if IsUniqueViolation(err) {
+	if pgquery.IsUniqueViolation(err) {
 		return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
 			"session: duplicate ID",
 			errcode.WithDetails(slog.String("sessionID", sessionID)))
 	}
-	if IsForeignKeyViolation(err) {
+	if pgquery.IsForeignKeyViolation(err) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
 			"session: subject user not found",
 			errcode.WithCategory(errcode.CategoryDomain),

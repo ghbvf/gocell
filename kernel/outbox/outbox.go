@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metautil"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -192,11 +193,43 @@ func (e Entry) Validate() error {
 			"outbox: payload size exceeds max",
 			errcode.WithDetails(slog.Int("size", len(e.Payload)), slog.Int("max", MaxPayloadBytes)))
 	}
+	// CWE-117 defense in depth at the in-memory boundary. Wire-side enforcement
+	// lives in WireMessage's SafeID fields; this guards programmer-constructed
+	// Entries (e.g., business-code literal Entry{ID: "evil\n"} that never enters
+	// the wire decode funnel). Without this check, an unsafe in-memory Entry can
+	// reach adapters/postgres.Write → INSERT → relay log injection.
+	if err := validateEntryIDField("id", e.ID); err != nil {
+		return err
+	}
+	if err := validateEntryIDField("eventType", e.EventType); err != nil {
+		return err
+	}
+	if err := validateEntryIDField("topic", e.Topic); err != nil {
+		return err
+	}
+	if err := validateEntryIDField("aggregateId", e.AggregateID); err != nil {
+		return err
+	}
+	if err := validateEntryIDField("aggregateType", e.AggregateType); err != nil {
+		return err
+	}
 	if err := validateMetadata(e.Metadata); err != nil {
 		return err
 	}
 	if err := e.Observability.Validate(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateEntryIDField runs idutil.SafeID-equivalent validation on the
+// in-memory string Entry fields. Empty values pass (required-field checks
+// happen separately above). Errors wrap the field name for log triage.
+func validateEntryIDField(name, value string) error {
+	if err := idutil.SafeID(value).Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"outbox: entry field invalid", err,
+			errcode.WithDetails(slog.String("field", name)))
 	}
 	return nil
 }
@@ -288,12 +321,16 @@ func WriteBatchFallback(ctx context.Context, w Writer, entries []Entry) error {
 		slog.Int("count", len(entries)))
 	for i, e := range entries {
 		if err := w.Write(ctx, e); err != nil {
+			// CWE-117: e.ID may be unsafe when Write fails on Entry.Validate
+			// itself. Surface entry_index unconditionally; surface entry_id
+			// only when SafeID-shaped to avoid log injection vector.
+			details := []slog.Attr{slog.Int("entry_index", i)}
+			if idutil.SafeID(e.ID).Validate() == nil {
+				details = append(details, slog.String("entry_id", e.ID))
+			}
 			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"outbox: batch sequential write failed", err,
-				errcode.WithDetails(
-					slog.Int("entry_index", i),
-					slog.String("entry_id", e.ID),
-				))
+				errcode.WithDetails(details...))
 		}
 	}
 	return nil

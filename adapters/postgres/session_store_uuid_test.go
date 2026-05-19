@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
 )
@@ -75,7 +76,7 @@ func TestPGSessionStore_CreateForeignKeyViolationMapsUserNotFound(t *testing.T) 
 	t.Parallel()
 
 	err := sessionCreateError(&pgconn.PgError{
-		Code:           SQLStateForeignKeyViolation,
+		Code:           pgquery.SQLStateForeignKeyViolation,
 		ConstraintName: "sessions_subject_id_fkey",
 	}, "sess-test-id", uuid.NewString())
 

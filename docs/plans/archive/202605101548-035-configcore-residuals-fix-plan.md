@@ -5,6 +5,17 @@
 **来源**: 用户口头列出 11 项 backlog；逐项核实代码现状（见 `docs/backlog.md` + 以下条目对应 source）
 **用途**: 把 ConfigCore 域 + 跨 cell 受影响的 11 项收口为 6 个 PR，给出每项的最新修复方向、文件域、估时与依赖。**不重写 backlog 详情**，只把执行口径补齐。
 
+---
+
+> **🗄️ 已归档（2026-05-19，develop @ `eb49e0414`）**
+>
+> 11 项全部清账：**9 项 shipped/done**（#1/#2/#3 PR #518 · #6 · #7/#9/#10 测试硬化 · #8 subsumed by FMT-21 · #11 PR #529 FMT-33 reframe + auditappend 早拆）；**2 项残余完整迁移到有追踪的 backlog 条目，本 plan 不再承载任何 backlog 未覆盖的追踪信息**：
+>
+> - **#4 configreceive**（撤回直接删除主方案，改业务触发）→ `docs/backlog.md` `CONFIGCORE-RECEIVE-PLACEHOLDER-CLEANUP-01`（P2/Cx2 🟠，业务侧 JWT TTL hot-reload / key rotation 需求触发）
+> - **#5 L2-DIVERGENCE**：候选 (a) `durabilityMode` runtime alignment 已实证否决（PR #556 → #559 RETRACT）；Medium archtest 静态防御层 `CELL-L2-INIT-CHECKNOTNOOP-CALLED-01` 已落地（**PR #576**，强制 L2+ cell `Init` 必调 `cell.CheckNotNoop`）；finding 本体（memory 模式 nil-writer 分歧）+ (b)/(c) 决策 deferred 至 `docs/backlog/cap-14-tooling.md` `BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED`（P3/Cx3 🟢，待 architect）；Hard 升级路径分列于 `CELL-L2-CHECKNOTNOOP-CODEGEN-HARD-UPGRADE-01` / `ARCHTEST-WALKER-BOUNDARY-CONTROL-01` / `ARCHTEST-FIXTURE-NAMING-CONVENTION-DRIFT-01`
+>
+> §1 矩阵 6 个 PR 全部 done/closed/deferred，无 in-flight。后续追踪以上述 backlog 条目为准；本文件冻结作历史脉络。
+
 > 标记说明：
 > 🟢 已纳入计划/已合并 = 不再独立维护
 > 🟡 可延后 = 不卡正确性或安全；技术债 / 测试覆盖 / 信号待发

@@ -5,7 +5,7 @@
 **前一版**: 2026-05-17 v14（S4c T2 一致性等级 codegen funnel shipped PR #525；merged 8/9，剩 FU-4）；2026-05-17 v13（S4c T5 AUTH-CACHE-01 shipped；merged 7/9）；2026-05-16 v12（S4c T4 L2 e2e harness shipped — 新建 `tests/integration/l2atomicity/` 覆盖 7 场景 e2e 回归；接入 race-pg-integration lane；B2-C-13 闭环（accesscore scope）；doc.go 加 `//go:build integration` + FU-4 cross-link + Running locally 段。S4c 进度 merged 6/9，剩 T2 #525 / FU-4 / T5）；2026-05-16 v11（状态回灌：修正 T1/T3 PR 占位符为 #514/#515）；2026-05-16 v10（S4c T1 rbacassign 闭环 shipped）；2026-05-16 v9（S4-FU PR #501 review 闭环批）
 **对接来源**:
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`（B 路线源）
-- `docs/plans/202605071200-033-pg-implementation-plan.md`（A 路线，已被本计划取代）
+- `docs/plans/archive/202605071200-033-pg-implementation-plan.md`（A 路线，已被本计划取代，已归档）
 - `docs/plans/202605082130-pg-corecell-open-issues.md`（C/D/E/F 待办清单）
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`（v3 修订的范式锚点）
 
@@ -80,7 +80,7 @@ archive `202604201800-pg-pilot-layering-refactor-plan.md` 是同形态的前一�
 | **S6** ✅ | `runtime/state/cas` typed Protocol + configcore + accesscore password_version 接入 | typed primitive + 双消费 | S1 | **shipped #464** | E 表 2 项 + C 表 1 项 |
 | **S7** ✅ | `runtime/audit/ledger` typed Protocol + PG + auditcore 接入 | typed primitive + adapter + cell | S1 | **shipped #450** | D 表 9 项 + PR392-FU |
 | **W9** ✅ | outbox factory adoption | 机械迁移 | — | **shipped #434** | 033 W9 |
-| **B2.B** | PG-DEVICECELL-REPO | adapter + migration | — | ✅ 与 examples 业务无关 | 033 B2.B |
+| **B2.B** ✅ | PG-DEVICECELL-REPO（device_repo + command_queue PG impl + 2 migrations + shared conformance suite mem/PG + cell.go strict fail-fast + composition root explicit wiring + readiness probe + idempotency unique index + slog redaction） | adapter + migration | — | **shipped #575** | 033 B2.B + L4 review F-A-001 / F-S-001 / F-S-002 / F-T-001 / F-T-002 / F-O-001 / F-O-002 / F-D-001 / F-P-001 + 顺路收 10 项 P2 Cx1 |
 
 **~~ADR-B 接口归属决议~~**：v3 删除。6 条边界规则由 typed Go 类型系统天然画出（sealed interface 决定接口归属，import 方向决定路径归属，`runtime-api.md` Option 范式决定事务关系），无需文字 ADR。
 
@@ -260,7 +260,7 @@ runtime/auth/session/
 - B2-X-03 PG invalid index warn continue（PG schema 启动 fail-fast 在此 PR 配套）
 - B2-A-13 PG pool tx rollback 日志泄漏（顺路，PG adapter 同主题）
 - PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE（PG integration test 加 -race）
-- **PR444-FU-SESSIONSTORE-BENCH-01** 🟡 P2（PR #444 review carry-over）：不进 S3+S5/S4 correctness 主线，移入 DX4/后续 benchmark PR；等 durable session/refresh 正确性落定后，再在 `runtime/auth/session/storetest/` 新增 1000+ session × subject scope `RevokeForSubject` 与 mixed Create/Get/Revoke 并发 benchmark suite
+- **PR444-FU-SESSIONSTORE-BENCH-01** ✅ done（bench 已随 #449 落 `runtime/auth/session/storetest/bench.go`：`RevokeForSubject_1000` + `MixedConcurrent`，mem/PG 共享 `Bench(b, factory, protocol)`；DX4 PR 核验时一并修复 #490 后 seed 缺 `AuthzEpochAtIssue` 回归）
 
 ---
 
@@ -722,7 +722,7 @@ Wave C
 **进度（v15，2026-05-18）**：
 - ✅ merged 9/9：**T1 #514** / **T2 #525** / **T3 #515** / **T4 #523** / **T5 #524+#533** / **FU-1 #513** / **FU-2 #512** / **FU-3 #516** / **FU-4 本批**（branch `claude/continue-s4c-tasks-5TveC`）
 - ✅ 收尾项全达成：ADR §A14「S4-FU 收口标注（2026-05-18）」已添加（A12 已被 Wave 5 P1-1 占用、A13 被 wire-uniformity 占用，故新增 A14）；5 项触发型 backlog 已登记——`IDENTITYMANAGE-UPDATE-CO-TX-UPGRADE-01` / `MIGRATION-NONEMPTY-DB-UPGRADE-GUIDE-01` / `AUTHZMUTATE-MUTATION-EVENT-OPTIONAL-01` → `docs/backlog/cap-x-cross.md` §x.2；`ARCHTEST-FUNNEL-CALLSITE-LEVEL-01` / `GOLANGCI-GOPACKAGES-EXEMPTION-CLEANUP-01` → `docs/backlog/cap-14-tooling.md` §14.1（backlog.md 索引计数同步 61→63 / 36→39）
-- ⬜ 独立侧线 **D4** / **DX4** / **B2.B** git log 未见 commit，均未 ship（与 S4c/S4-FU 无依赖，状态不变）
+- 独立侧线：**DX4** ✅ shipped（本 PR #578；实施细节见本节 §DX4 内容；4 子项全收口 + PR444-FU bench 核验/修复）；**D4** / **B2.B** ⬜ 仍未 ship（与 S4c/S4-FU 无依赖，状态不变）
 
 > **历史（v11，2026-05-16）**：merged 5/9（T1 #514 / T3 #515 / FU-1 #513 / FU-2 #512 / FU-3 #516）；剩 T2 / T4 / FU-4 / T5；收尾项未落。v12-v14 逐步 ship T4 / T5 / T2，v15 ship FU-4 + 收口。
 
@@ -757,22 +757,22 @@ Wave C
 
 ---
 
-### DX4 PG adapter maintainability（S4 后或低风险并行）
+### DX4 PG adapter maintainability（S4 后或低风险并行）✅ shipped（本 PR）
 
 **目的**：降低 PG accesscore wiring 的维护风险，但不阻塞 S4 correctness 主线。
 
 **建议排序**：S3F 与 S4a 之后；若人力充足可并行，但不与 S4a/S4b 共 PR。
 
-**内容**：
-- `cells/accesscore/postgres.NewDeps(pool any, ...)` 改为 typed `*pgxpool.Pool` 或小接口，消除运行时 type assertion
-- PG user/role repo 的 query/constraint 错误码与 `adapters/postgres` 统一分类，避免全部映射成泛化 `ErrInternal`
-- ambient tx archtest 从手写文件清单改为自动扫描 PG repo，或引入显式 marker / executor abstraction
-- `PR444-FU-SESSIONSTORE-BENCH-01` 从 S3+S5/S4 correctness 主线移出，等 durable session/refresh 正确性落定后单独跑 benchmark
+**内容**（实施见 §DX4 + PR #578）：
+- ✅ `cells/accesscore/postgres.NewDeps(pool any, ...)` → typed `*pgxpool.Pool`，删运行时 type assertion（编译期拦错）
+- ✅ PG user/role repo 错误码与 `adapters/postgres` **单一源统一分类**：分类器收口到 `pkg/pgquery`（删 `adapters/postgres/errors.go` + `cells/.../pgerrors.go` 两份重复，`.golangci.yml` LAYER-02 加 `pgconn`）；under-classification 审计确认 `user.Create`/`Update` unique、`role.AssignToUser` FK、last-admin 等路径**已正确分类**；`role.Create` 为 PK-only upsert（`ON CONFLICT (id) DO UPDATE`），`roles` 表仅有 PK unique index，23505 结构上不可能触发，`ErrInternal` blanket 分类正确（非欠分类，PR review 确认并删除死代码 `roleCreateError` 分支）
+- ✅ ambient tx archtest `PG-REPO-AMBIENT-TX-01` 从手写 5 文件清单升 **Hard（form-uniqueness）**：sealed `pgExecutor` 单一 holder（R1 struct-field funnel + R2 ctor-param funnel，`*types.Info` resolve），`audit_ledger_store` 收敛，companion 覆盖守卫 + RED fixture
+- ✅ `PR444-FU-SESSIONSTORE-BENCH-01`：核验确认 bench 已随 #449 实现于 `runtime/auth/session/storetest/bench.go`（`RevokeForSubject_1000` + `MixedConcurrent`，mem/PG）；核验中发现 develop 上 seed fixture 缺 `AuthzEpochAtIssue`（#490 后回归）导致 bench 不可执行——本 PR 一并修复 seed
 
 **验收**：
-- 类型签名能在编译期拦错 pool 注入
-- 新增/迁移 PG repo 时 archtest 不需要手动补文件清单
-- benchmark PR 只报告性能与索引验证，不夹带行为语义改动
+- ✅ 类型签名编译期拦错 pool 注入
+- ✅ 新增/迁移 PG repo 时 archtest 不需手动补文件清单（form-uniqueness 自动覆盖 `*_repo.go`/`*_store.go`）
+- ✅ bench 可执行（seed 修复后 mem/PG 套件通过），refactor 行为保真不夹带 write 语义改动
 
 ---
 
@@ -969,7 +969,7 @@ B2.B / D4 / DX4 / 路线外独立项可与 S4c / S4-FU 并行；D4 同 PR 吸收
 
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`：**v3 范式锚点**（typed-Go-heavy 协议 primitive）
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`：B 路线源
-- `docs/plans/202605071200-033-pg-implementation-plan.md`：A 路线（被本计划主线取代，PG migration 子任务保留；§6 archtest 大部分降级删除）
+- `docs/plans/archive/202605071200-033-pg-implementation-plan.md`：A 路线（被本计划主线取代，PG migration 子任务保留；§6 archtest 大部分降级删除；已归档）
 - `docs/plans/202605082130-pg-corecell-open-issues.md`：C/D/E/F 待办源
 - `docs/plans/archive/202604201800-pg-pilot-layering-refactor-plan.md`：历史 PG pilot 分层重构（同形态前例）
 - `.claude/rules/gocell/runtime-api.md`：Option 范式分层 / sealed AuthPlan / 强依赖 wiring

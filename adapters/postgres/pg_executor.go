@@ -33,6 +33,13 @@ func (e pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.R
 	return e.pool.QueryRow(ctx, sql, args...)
 }
 
+func (e pgExecutor) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if tx, ok := TxFromContext(ctx); ok {
+		return tx.Query(ctx, sql, args...)
+	}
+	return e.pool.Query(ctx, sql, args...)
+}
+
 func (e pgExecutor) ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return e.pool.Exec(ctx, sql, args...)
 }

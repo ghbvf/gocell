@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-05-14. Refactor 574 is the stage-1 PR-1 implementation; stages 2 / 3 / 4 are tracked in `docs/plans/202605141519-040-archtest-pass-funnel-plan.md`.
+Accepted — 2026-05-14. Refactor 574 is the stage-1 PR-1 implementation; stages 2 / 3 / 4 are tracked in `docs/plans/archive/202605141519-040-archtest-pass-funnel-plan.md`.
 
 ## Context
 
@@ -154,7 +154,7 @@ The `*types.Package` (not `*packages.Package`) shape is the **load-bearing** det
 
 ## Migration path (four stages)
 
-Strategic plan: `docs/plans/202605141519-040-archtest-pass-funnel-plan.md`. Summary:
+Strategic plan: `docs/plans/archive/202605141519-040-archtest-pass-funnel-plan.md`. Summary:
 
 - **Stage 1** (this PR, refactor/574): Land the Pass framework + 3 Hard defenses + LegacyAllowlist of 53 existing archtests. Zero business archtest changes; the new framework coexists with the legacy entry points behind allowlist exemption.
 - **Stage 1.5** (PR #495): Framework completion — `Pass.Abs`, `IsFileInScope`, `IsGenerated`, `resolve.go` façade free funcs, `PASS-FUNNEL-RESOLVE-01` meta-archtest. Closes all known API gaps so Stages 2/3/dual become zero-framework-return mechanical migrations.
@@ -304,7 +304,7 @@ Rejected: merging would force signature changes on all call sites shipped in PR 
 
 ## References
 
-- `docs/plans/202605141519-040-archtest-pass-funnel-plan.md` — strategic plan with 4-stage migration and parallelism analysis.
+- `docs/plans/archive/202605141519-040-archtest-pass-funnel-plan.md` — strategic plan with 4-stage migration and parallelism analysis.
 - `.claude/rules/gocell/ai-collab.md` — AI-rebust charter (Hard / Medium / Soft grading, vehicle decision principles, archtest naming).
 - `tools/archtest/scanner_framework_usage_test.go` — `SCANNER-FRAMEWORK-USAGE-01` (sibling Hard meta-archtest; structural template for `pass_funnel_test.go`).
 - `go/analysis.Pass` — upstream Pass shape ([pkg.go.dev/golang.org/x/tools/go/analysis](https://pkg.go.dev/golang.org/x/tools/go/analysis)).

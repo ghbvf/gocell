@@ -227,6 +227,26 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 // needs no allowlist entry in productionLoaderFunnelAllowlist even though it
 // is in the same diagsLoadPackages banned symbol set: business *_test.go code
 // is banned from calling it directly, but the anchor test never does.
+//
+// # Known blind spot — non-test .go files
+//
+// PASS-FUNNEL-LOADPACKAGES-01 scope filters by HasSuffix("_test.go"), so
+// non-test .go files in tools/archtest/ can directly call typeseval.
+// {LoadPackages, SharedResolver, LoadProductionPackages, EachFileInPackage}
+// without tripping the rule. This is currently exempted by design for the
+// TestMain warm-up bridge: tools/archtest/warm.go calls LoadProductionPackages
+// from a non-test .go file to keep testmain_test.go free of typeseval imports
+// (which would trip the rule).
+//
+// The blind spot is bounded by the structural property that non-test .go files
+// in package archtest are framework-internal code — they cannot be reached by
+// business archtest *_test.go callers, so the typeseval call set still flows
+// through the PASS-FUNNEL contract from the user-facing surface.
+//
+// Backlog: PASS-FUNNEL-NONTESTGO-EXEMPT-UPGRADE-01 (in cap-14-tooling.md)
+// tracks the path to Hard — extending the scope filter to scan non-test .go
+// files with a warm.go allowlist, or sealing warm.go behind a stronger
+// typed boundary.
 func diagsLoadPackages(tgt passFunnelTarget) []scanner.Diagnostic {
 	return scanForForbiddenCallees(
 		tgt,

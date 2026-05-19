@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -174,6 +175,9 @@ WHERE ra.role_id = 'admin' AND u.status = 'active'`
 )
 
 // Create upserts a role (seed/bootstrap semantics: existing role is overwritten).
+// The SQL uses ON CONFLICT (id) DO UPDATE — the only unique index on `roles` is
+// the PK. A unique-violation (SQLSTATE 23505) is therefore structurally impossible
+// here; any error is a genuine infra failure, classified as ErrInternal.
 func (r *PGRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 	permJSON, err := json.Marshal(role.Permissions)
 	if err != nil {
@@ -249,7 +253,7 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 		r.clock.Now(),
 	)
 	if err != nil {
-		if isForeignKeyViolation(err) {
+		if pgquery.IsForeignKeyViolation(err) {
 			switch fkConstraintName(err) {
 			case "role_assignments_user_id_fkey":
 				return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",

@@ -115,6 +115,29 @@ func KnownNonDefaultTags() [][]string {
 	return typeseval.KnownNonDefaultTags()
 }
 
+// ProductionFlatTags returns [FlatNonDefaultTags] minus [FixtureBuildTag].
+// Use it as TypedOpts.Tags for the single RunTyped call that scans
+// hand-written production code under all tag-gated activations at once —
+// the compliant idiom for TAGGROUP-LOOP-FORBIDS-RUNTYPED-01.
+//
+// **Always pair with** a second RunTyped(t, TypedOpts{}, ...) call (tags=nil)
+// to cover reverse build directives (//go:build !X) which are silently
+// excluded from a -tags=...,X,... union load. Omitting the nil-tags call is
+// safe only if no //go:build !<tag> files exist in the scanned tree — prefer
+// the two-call idiom by default. See go/build matchTag and ADR
+// docs/architecture/202605190000-adr-archtest-in-process-warmup.md §2.
+func ProductionFlatTags() []string {
+	flat := typeseval.FlatNonDefaultTags()
+	out := make([]string, 0, len(flat))
+	for _, t := range flat {
+		if t == FixtureBuildTag {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // BuildContextPredicate returns a tag predicate suitable for
 // constraint.Expr.Eval. It returns true for any tag the Go toolchain sets
 // implicitly under a standard CI context, plus any extraTags supplied by

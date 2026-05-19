@@ -703,7 +703,8 @@ func TestUpload_5xxTransient(t *testing.T) {
 }
 
 // TestUpload_TimeoutTransient verifies that a network-level timeout during
-// Upload is classified as transient (net.Error.Timeout()==true branch).
+// Upload is classified as transient (net.Error path via errcode.IsTransientNet —
+// covers timeout class + *net.OpError dial refused / reset).
 func TestUpload_TimeoutTransient(t *testing.T) {
 	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondNetError()}}
@@ -797,7 +798,8 @@ func TestHealth_5xxTransient(t *testing.T) {
 }
 
 // TestHealth_TimeoutTransient verifies that a network-level timeout during
-// Health() is classified as transient (net.Error.Timeout()==true branch).
+// Health() is classified as transient (net.Error path via errcode.IsTransientNet —
+// covers timeout class + *net.OpError dial refused / reset).
 func TestHealth_TimeoutTransient(t *testing.T) {
 	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondNetError()}}

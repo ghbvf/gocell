@@ -151,9 +151,10 @@ func isRetryablePGError(err error) bool {
 //	errcode.Wrap(errcode.KindInternal, permanentCode, "postgres: operation failed", err,
 //	    errcode.WithInternal(opContext))
 //
-// Constraint-violation helpers (IsUniqueViolation / IsForeignKeyViolation /
-// IsLastAdminProtected) remain separate and are NOT routed through this
-// function — they produce domain signals, not infra signals.
+// Constraint-violation helpers (IsUniqueViolation / IsForeignKeyViolation in
+// pkg/pgquery, and the accesscore-internal isLastAdminProtected) remain
+// separate and are NOT routed through this function — they produce domain
+// signals, not infra signals.
 //
 // ref: jackc/pgx pgconn SafeToRetry
 // ref: archtest ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
