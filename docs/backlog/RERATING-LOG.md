@@ -164,4 +164,99 @@ cap-05 X3/X5/T5 + cap-10 S14a + cap-12 V-A8/PR448/COREBUNDLE 等原表缺 Cx 列
 
 ### Commit
 
-`<待 commit>` — 36 处 row 编辑（其中 FOUR-CHANNEL / T3 / P4-TD-03 / C-AC7 / X5 / PR252-F1 等 6 处含描述列 STALE re-scope 或证据补充）
+`46b383987` — 36 处 row 编辑（其中 FOUR-CHANNEL / T3 / P4-TD-03 / C-AC7 / X5 / PR252-F1 等 6 处含描述列 STALE re-scope 或证据补充）
+
+---
+
+## Phase 3 — cap-02 + cap-13 (2026-05-20)
+
+**扫描条目**：49（cap-02: 25 / cap-13: 24）
+
+### 统计
+
+| 维度 | 数量 |
+|---|---|
+| DONE 候选 | 7 |
+| STALE re-scope / STALE-CLOSE | 7 |
+| DUP | 1（B2-R-05 已 ↩ 维持）|
+| P 升级 | 13 |
+| P 降级 | 11 |
+| Flag 调整 | 9 |
+
+### DONE 候选（7）
+
+| ID | cap | 证据 |
+|---|---|---|
+| KERNEL-INTERNAL-DAG-GUARD-01 | cap-02 | archtest ship + extract contractspec/cellvocab (#451) |
+| PR411-AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01 | cap-02 | PR #432 single oracle + value-true semantics |
+| B2-K-05 | cap-02 | STALE-CLOSE：errcode 三层 redaction 已落（WithInternal 不下发 wire） |
+| R3 | cap-13 | STALE-CLOSE：SafeObserve DI 已收口（commit 4c332aa4c + 530c30866） |
+| PR284-FU-COMPOSE-HEALTH | cap-13 | 三个 example docker-compose 都已含 healthcheck |
+| P4-TD-10 | cap-13 | STALE-CLOSE：route template resolver 已落 + observability.md §HTTP Metrics 写明 |
+| ROADMAP-D3A2-UNBLOCK-ANNOTATION-01 | cap-13 | STALE-CLOSE：029 roadmap 已归档，annotation 漂移失去 enforcement 价值 |
+
+### STALE re-scope（4）
+
+| ID | cap | 处理 |
+|---|---|---|
+| G-1 | cap-02 | FMT-11 编号已被复用为新语义；trigger 改为"确认 ADV 矩阵覆盖度后归档 OR 重新分配 rule code"；P2→P3，🟡→🟠 |
+| OBS-SSA-ANALYZER-01 | cap-13 | 三份归档 roadmap 均判触发型；缺 P 补 P3，🟡→🟠 |
+| A5a-R3 / A5a-R12 | cap-13 | 描述无具体路径锚点 / gap 项；候选 DUP-of-METRICS-CTX-FUNNEL-01 + STALE 触发型 P3 |
+
+### P 升级（13，cap-02 主导）
+
+| ID | cap | 原 → 新 | 命中维度 |
+|---|---|---|---|
+| KERNEL-CONTRACTSPEC-CONTRACTMETA-DUAL-DEF-01 | cap-02 | 缺 → P1 | 架构去重 single-source |
+| SHARED-ERROR-SCHEMA-GENERATION-01 | cap-02 | P2 → P1 | single-source funnel（4 份 mirror）|
+| PR-FIXTURE-CELLID-TYPED-BUILDER-01 | cap-02 | P2 → P1 | Soft→Hard charter mandate |
+| CLOCK-INJECTION-STRUCT-FIELD-CTOR-01 | cap-02 | P2 → P1 | funnel 双向锁未闭 |
+| M2-LIFECYCLE | cap-02 | P2/Cx3 → P1/Cx4 | 跨 kernel 子系统 state-machine 显式化 |
+| M3-RULE-ENGINE | cap-02 | P2/Cx3 → P1/Cx4 | data-driven 架构 refactor |
+| G-13-FU-H2-VALIDATIONRESULT-SEALED | cap-02 | P2 → P1 | Soft→Hard sealed Result types |
+| CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 | cap-02 | P2 → P1 | funnel 双向锁 |
+| ARCHTEST-LAYER10-PASS-MIGRATION-01 | cap-02 | P3 → P2 | charter mandated（pass_funnel_test.go 点名）|
+| M1-OBSERVED | cap-13 | P2 → P1 | 38 处 Health 收口 + 新 kernel 接口包 + codegen |
+| CONFIGPUBLISH-FAILOPEN-METRIC-ASSERT-HARD-01 | cap-13 | P3 → P2 | Soft→Hard + charter mandate |
+| SAFEID-UPSTREAM-FUNNEL-HARD-01 | cap-13 | P2 → P1 | charter Funnel 双向锁 mandate |
+| METRICS-GAUGEVEC-UPSTREAM-HARD-01 | cap-13 | P2 → P1 | charter Funnel 双向锁 mandate |
+
+### P 降级（11）
+
+| ID | cap | 原 → 新 | 信号 |
+|---|---|---|---|
+| P1-5 | cap-02 | P1 → P3 | 推测性 perf bench 无 outcome |
+| DURABLE-TYPE-01 | cap-02 | P2 → P3 | "探索" + v1.1 触发未达 |
+| J-03 | cap-02 | P1 → P2 | doc 演练非架构 refactor + 触发未达 |
+| B2-T-07-FU-3 | cap-02 | 缺 → P3 | 触发型 + 无业务方 |
+| PR-CI-5-FU-HEALTH-LATE-WATCHER | cap-13 | 缺 → P3 | 触发型补丁 |
+| PR237-OB2 | cap-13 | 缺 → P3 | 常规 metric 增强 + D3a-2 未起 |
+| PR283-OTEL-SLOG-ERROR-ATTR | cap-13 | P2 → P3 | 触发型 |
+| A5a-R3 / R12 | cap-13 | 缺 → P3 | STALE 描述无 outcome |
+| WS-DX-01 | cap-13 | 缺 → P3 | 触发型 observability 增强 |
+| BOOTSTRAP-SHUTDOWN-OUTCOME-LABEL-ALIGNMENT-01 | cap-13 | P2 → P3 | 文档对齐项 |
+
+### Flag 调整（9）
+
+| ID | cap | 原 → 新 | 理由 |
+|---|---|---|---|
+| KERNEL-INTERNAL-DAG-GUARD-01 / PR411-AUTH-SCHEMA-* / B2-K-05 | cap-02 | 🟡 → ✅ | DONE / STALE-CLOSE |
+| G-1 / B2-T-07-FU-3 / DURABLE-TYPE-01 / P1-5 | cap-02 | 🟡 → 🟠 | re-scope 触发型 |
+| R3 / PR284-FU-COMPOSE-HEALTH / P4-TD-10 / ROADMAP-D3A2 | cap-13 | 🟡 → ✅ | DONE / STALE-CLOSE |
+| PR392-FU-AUDIT-CHAIN-WIRING | cap-13 | 🟠 → 🟡 | trigger 已达成（PR #450） |
+| USER-REPO-READYZ-PROBE-01 | cap-13 | 🟢 → 🟠 | PR-618 review F7 未实际收口（仍触发型） |
+| OBS-SSA-ANALYZER / A5a-R3/R12 | cap-13 | 🟡 → 🟠 | STALE 触发型 |
+
+### Cx 调整（2）
+
+M2-LIFECYCLE / M3-RULE-ENGINE：Cx3 → Cx4（跨 kernel 子系统 + ADR + codegen）
+
+### 规则边界发现（3 项登记，待 P4 末复盘）
+
+1. **"编号语义复用" STALE 形态**：G-1 暴露的 FMT-11 case：rule code 字面在仓库 active 但语义已替换。rubric §2 应补"代码搜锚点命中但语义已漂移" 也属 STALE 信号。
+2. **触发型架构条目升级冲突**：KERNEL-DEPGRAPH-OUT-EVAL / ARCHTEST-LAYER10 在"架构去重升级"与"触发未达降级"间张力。本阶段策略：触发未达优先 + charter mandated（funnel godoc 直接点名 backlog ID）单独 +1（不顶 P1）。
+3. **WONT-FIX 决策定案的 Flag**：PR432-FU-AUTH-COMBO-ARCHTEST 是 architect "不立"决策占位，建议增 ⚪ Flag（决策定案，永久 OPEN 作历史追溯但不进 P 升降矩阵）。
+
+### Commit
+
+`<待 commit>` — 35 处 row 编辑（cap-02 17 + cap-13 18，含 G-1 / OBS-SSA / A5a-R3-R12 等 5 处 STALE re-scope 描述补注）
