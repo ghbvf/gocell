@@ -658,6 +658,12 @@ func chanFromWaitGroup(wg *sync.WaitGroup) <-chan struct{} {
 // on to teardown. The defer sentinel defends against runtime.Goexit() / panic
 // inside Close (e.g. a fake that calls t.FailNow): without it, the chan
 // receive would block forever because nothing ever sends on errCh.
+//
+// CONVENTION: all Subscriber.Close call sites in the conformance suite MUST
+// route through closeWithBudget — never call sub.Close(ctx) directly. This
+// ensures every Close in conformance tests gets timeout enforcement and
+// goroutine-leak detection. The topic argument is used only for diagnostic
+// messages; callers without an active subscription should pass TestTopic(t).
 func closeWithBudget(t *testing.T, sub outbox.Subscriber, topic string, budget time.Duration) error {
 	t.Helper()
 	closeCtx, cancel := context.WithTimeout(t.Context(), budget)
