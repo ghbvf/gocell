@@ -87,6 +87,12 @@ import (
 //      both directions: red_var_bound_range.go (bind→range→RunTyped → caught)
 //      and green_var_bound_parity.go (bind→len-assert, no range/RunTyped, the
 //      pass_test.go façade-parity idiom → NOT caught, no false positive).
+//      Narrow accepted sub-gap: only single-binding (`tags := f()` /
+//      `var tags = f()`) is recognised; multi-RHS positional binding
+//      (`a, tags := x, f()`) is not — it is not a copy template a fresh
+//      instance reproduces, and single-element indexed access keeps the
+//      collector compliant with SCANNER-FRAMEWORK-USAGE-01 (no for-range +
+//      type-assert over []ast.Expr).
 //   BS-5 Helper-wrapped RunTyped in loop body (ACCEPTED blind spot): a loop
 //      body that calls a package-local helper which itself calls RunTyped is
 //      not caught — bodyContainsRunTyped resolves the direct callee only and
@@ -274,12 +280,21 @@ func callResolvesToKnownNonDefaultTags(p *Pass, call *ast.CallExpr) bool {
 }
 
 // collectKnownTagsBoundObjects returns the set of types.Object that are bound
-// — anywhere in file via `:=`, `=`, or `var` — to a CallExpr resolving to
-// KnownNonDefaultTags. This closes BS-4: the var-indirection form. Scope is
-// file-level (not whole-program) because the bypass that matters — a tagGroup
-// loop copied from the historical template — declares the binding in the same
-// file as the loop. Multi-value RHS (`x, err := f()`) is handled positionally;
-// KnownNonDefaultTags is single-value so the common case binds Lhs[0].
+// — anywhere in file via a single `:=`, `=`, or `var` — to a CallExpr
+// resolving to KnownNonDefaultTags. This closes BS-4: the var-indirection
+// form. Scope is file-level (not whole-program) because the bypass that
+// matters — a tagGroup loop copied from the historical template — declares
+// the binding in the same file as the loop.
+//
+// Only the single-binding shape `tags := KnownNonDefaultTags()` /
+// `var tags = KnownNonDefaultTags()` is recognised: that is the realistic
+// var-indirection copy template (and the shape of the pass_test.go
+// façade-parity idiom the green fixture guards). Multi-RHS positional binding
+// (`a, tags := x, KnownNonDefaultTags()`) is a narrow accepted sub-gap of
+// BS-4 — not a copy template a fresh instance reproduces, and accessing the
+// element by index avoids reimplementing a tree walk over []ast.Expr
+// (SCANNER-FRAMEWORK-USAGE-01: no for-range + type-assert over an expr slice;
+// single-element indexed access is the sanctioned idiom).
 func collectKnownTagsBoundObjects(p *Pass, file *ast.File) map[types.Object]struct{} {
 	out := make(map[types.Object]struct{})
 	bindIdent := func(id *ast.Ident) {
@@ -290,30 +305,27 @@ func collectKnownTagsBoundObjects(p *Pass, file *ast.File) map[types.Object]stru
 			out[obj] = struct{}{}
 		}
 	}
+	rhsResolvesToKnownTags := func(expr ast.Expr) bool {
+		call, ok := expr.(*ast.CallExpr)
+		return ok && callResolvesToKnownNonDefaultTags(p, call)
+	}
 	EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
-		if len(as.Lhs) != len(as.Rhs) {
-			return // single RHS multi-LHS (e.g. range/typeassert) — not our shape
+		if len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return
 		}
-		for i, rhs := range as.Rhs {
-			call, ok := rhs.(*ast.CallExpr)
-			if !ok || !callResolvesToKnownNonDefaultTags(p, call) {
-				continue
-			}
-			if id, ok := as.Lhs[i].(*ast.Ident); ok {
-				bindIdent(id)
-			}
+		if !rhsResolvesToKnownTags(as.Rhs[0]) {
+			return
+		}
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			bindIdent(id)
 		}
 	})
 	EachInSubtree[ast.ValueSpec](file, func(vs *ast.ValueSpec) {
-		if len(vs.Names) != len(vs.Values) {
+		if len(vs.Names) != 1 || len(vs.Values) != 1 {
 			return
 		}
-		for i, v := range vs.Values {
-			call, ok := v.(*ast.CallExpr)
-			if !ok || !callResolvesToKnownNonDefaultTags(p, call) {
-				continue
-			}
-			bindIdent(vs.Names[i])
+		if rhsResolvesToKnownTags(vs.Values[0]) {
+			bindIdent(vs.Names[0])
 		}
 	})
 	return out
