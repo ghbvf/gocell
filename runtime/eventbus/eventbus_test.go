@@ -1510,6 +1510,43 @@ func (r *failingReleaseReceipt) Extend(_ context.Context, _ time.Duration) error
 // R-02: drop-path log level + contextual fields
 // ---------------------------------------------------------------------------
 
+// assertNoPayloadLeak asserts that the given slog.Record does not contain
+// payloadMarker anywhere in its Message or attribute values. This is the
+// negative regression guard for R-02: the drop-path log must never include
+// business payload bytes, preventing accidental PII exposure.
+//
+// Rationale: a future refactor could accidentally add slog.Any("entry", entry)
+// or slog.Any("payload", entry.Payload) to the drop log. This helper catches
+// that regression by asserting on a recognizable sentinel string embedded in
+// the payload at publish time.
+func assertNoPayloadLeak(t *testing.T, r slog.Record, payloadMarker string) {
+	t.Helper()
+
+	if strings.Contains(r.Message, payloadMarker) {
+		t.Errorf("drop log Message must not contain payload marker %q; message=%q",
+			payloadMarker, r.Message)
+	}
+
+	r.Attrs(func(a slog.Attr) bool {
+		// Render the attribute value to its string representation and scan for
+		// the marker. This catches:
+		//   slog.String("payload", string(entry.Payload))
+		//   slog.Any("payload", entry.Payload)
+		//   slog.Any("entry", entry) — whole Entry serialized
+		rendered := fmt.Sprintf("%v", a.Value.Any())
+		if strings.Contains(rendered, payloadMarker) {
+			t.Errorf("drop log attr %q value must not contain payload marker %q; rendered=%q",
+				a.Key, payloadMarker, rendered)
+		}
+		// Also check the raw string value.
+		if strings.Contains(a.Value.String(), payloadMarker) {
+			t.Errorf("drop log attr %q string value must not contain payload marker %q; value=%q",
+				a.Key, payloadMarker, a.Value.String())
+		}
+		return true
+	})
+}
+
 // findLogAttr returns the first slog.Attr with the given key from a Record.
 func findLogAttr(r slog.Record, key string) (slog.Attr, bool) {
 	var found slog.Attr
@@ -1546,6 +1583,11 @@ func findDropRecord(records []slog.Record, msgSubstr string) *slog.Record {
 //
 // Strategy: inject a subscription directly into groupSubs with a pre-filled
 // channel (no goroutine draining it) so the drop is deterministic.
+//
+// Negative regression guard (R-02): the drop log must NOT contain the business
+// payload — assertNoPayloadLeak verifies this using a unique sentinel marker
+// embedded in the published entry's Payload. Any future change that accidentally
+// adds slog.Any("payload", ...) or slog.Any("entry", ...) will fail this test.
 func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	cap := healthtest.NewCapture(t)
 
@@ -1571,13 +1613,16 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	}
 	bus.mu.Unlock()
 
+	// Sentinel marker embedded in the payload — must NOT appear in any log attr.
+	const payloadMarker = "SECRET_PAYLOAD_MARKER_DO_NOT_LOG"
+
 	// Build and publish the entry-under-test.
 	entry := outbox.Entry{
 		ID:          "evt-broadcast-drop-2",
 		AggregateID: "agg-bcast-002",
 		EventType:   "drop.broadcast.v1",
 		Topic:       "drop.broadcast.v1",
-		Payload:     []byte(`{"x":2}`),
+		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
 	}
 	env, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
@@ -1602,6 +1647,9 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	evtTypeAttr, ok := findLogAttr(*dropRecord, "event_type")
 	require.True(t, ok, "drop record must carry 'event_type'")
 	assert.Equal(t, "drop.broadcast.v1", evtTypeAttr.Value.String())
+
+	// Negative regression: payload bytes must not appear in the drop log record.
+	assertNoPayloadLeak(t, *dropRecord, payloadMarker)
 }
 
 // TestRoundRobin_BufferFull_LogsErrorWithContextualFields verifies R-02:
@@ -1609,6 +1657,10 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 // and carry entry_id, aggregate_id, event_type, and consumer_group attributes.
 //
 // Strategy: same as broadcast test — inject pre-filled subscription directly.
+//
+// Negative regression guard (R-02): the drop log must NOT contain the business
+// payload — assertNoPayloadLeak verifies this using a unique sentinel marker
+// embedded in the published entry's Payload.
 func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	cap := healthtest.NewCapture(t)
 
@@ -1631,12 +1683,15 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	}
 	bus.mu.Unlock()
 
+	// Sentinel marker embedded in the payload — must NOT appear in any log attr.
+	const payloadMarker = "SECRET_PAYLOAD_MARKER_DO_NOT_LOG"
+
 	entry := outbox.Entry{
 		ID:          "evt-rr-drop-2",
 		AggregateID: "agg-rr-002",
 		EventType:   "drop.roundrobin.v1",
 		Topic:       "drop.roundrobin.v1",
-		Payload:     []byte(`{"x":2}`),
+		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
 	}
 	env, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
@@ -1664,6 +1719,9 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	evtTypeAttr, ok := findLogAttr(*dropRecord, "event_type")
 	require.True(t, ok, "drop record must carry 'event_type'")
 	assert.Equal(t, "drop.roundrobin.v1", evtTypeAttr.Value.String())
+
+	// Negative regression: payload bytes must not appear in the drop log record.
+	assertNoPayloadLeak(t, *dropRecord, payloadMarker)
 }
 
 // TestNotifyRetryExhausted_LogsErrorWithContextualFields verifies F1:
@@ -1672,6 +1730,10 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 //
 // Strategy: publish to a subscriber that always returns Requeue; wait for
 // the retry budget to exhaust and the dead-letter path to fire.
+//
+// Negative regression guard (R-02): the retries-exhausted log must NOT contain
+// the business payload — assertNoPayloadLeak verifies this using a unique
+// sentinel marker embedded in the published entry's Payload.
 func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
 	cap := healthtest.NewCapture(t)
 
@@ -1689,12 +1751,15 @@ func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
 	}()
 	<-bus.Ready(outbox.Subscription{Topic: topic})
 
+	// Sentinel marker embedded in the payload — must NOT appear in any log attr.
+	const payloadMarker = "SECRET_PAYLOAD_MARKER_DO_NOT_LOG"
+
 	entry := outbox.Entry{
 		ID:          "evt-exhaust-1",
 		AggregateID: "agg-exhaust-001",
 		EventType:   topic,
 		Topic:       topic,
-		Payload:     []byte(`{"x":1}`),
+		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
 	}
 	env, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
@@ -1723,6 +1788,9 @@ func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
 	evtTypeAttr, ok := findLogAttr(*exhaustedRecord, "event_type")
 	require.True(t, ok, "retries-exhausted record must carry 'event_type'")
 	assert.Equal(t, topic, evtTypeAttr.Value.String())
+
+	// Negative regression: payload bytes must not appear in the retries-exhausted log.
+	assertNoPayloadLeak(t, *exhaustedRecord, payloadMarker)
 
 	cancel()
 	<-done
