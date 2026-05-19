@@ -22,7 +22,8 @@
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |
 |---|---|---|---|---|---|---|---|
-| PR392-FU-AUDIT-CHAIN-WIRING | **BOOTSTRAP-AUDIT-CHAIN-WIRING-01** — 现状: onAuthFail 用 slog 未接 audit chain；修复: 升级为 audit.AppendBootstrapAuthFail。**trigger 已达成（PR #450 S7 ship auditcore framework + runtime/audit/ledger Protocol）**，cross-cell wiring 接口已就绪 — 待 plan 039 P2 整理收口 | arch-opt | P2/Cx2 | 🟠 | trigger 已达成（PR #450）— 待 plan 039 排期 | `cmd/corebundle/access_module.go` | PR #392 ADR §D10 + PR #450 unblock |
+| PR392-FU-AUDIT-CHAIN-WIRING | **BOOTSTRAP-AUDIT-CHAIN-WIRING-01** ✅ shipped (637-bootstrap-audit-chain-wiring, plan 039 W1-2) — onAuthFail observer 收口到 `runtime/audit.NewBootstrapAuthFailObserver` typed funnel：slog（SRE 告警）+ audit hash-chain（合规链）双写；assembly module 顺序 `configcore → auditcore → accesscore` 落地，funnel 双向锁 `BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-{DOWNSTREAM-HARD,UPSTREAM-MEDIUM}-01` + `MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01` archtest 守 | arch-opt | P2/Cx2 | ✅ | — (shipped) | `runtime/audit/{bootstrap_append,bootstrap_observer}.go` + `cmd/corebundle/{access,audit,shared_deps}_module*.go` + `assemblies/corebundle/assembly.yaml` | PR #392 ADR §D10 + PR #450 unblock; plan 039 W1-2 |
+| SSOBFF-BOOTSTRAP-AUDIT-CHAIN-WIRING-01 | **ssobff 同步 bootstrap audit observer** — 现状: `examples/ssobff/app.go::ssobffBootstrapAuthFailLogger` 仍是 slog-only，未走 `runtime/audit.NewBootstrapAuthFailObserver` funnel；ssobff 已自建 auditcore + `buildSSOBFFAuditCore` 持有 `ledger.Store`，可直接复用 corebundle 同款 funnel。修复: 改 ssobff observer 构造为 `audit.NewBootstrapAuthFailObserver(slog.Default(), ledgerStore, clock.Real())`；同步把 `examples/ssobff/app.go` 也纳入 `BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-UPSTREAM-MEDIUM-01` archtest 扫描范围（当前仅 `cmd/corebundle/` 非 _test.go） | arch-opt | P3/Cx1 | 🟠 | corebundle PR (637) ship 后立即触发 — F2 carve-out 解锁 | `examples/ssobff/app.go` + `tools/archtest/bootstrap_audit_observer_funnel_test.go` | plan 039 W1-2 §F2 carve-out |
 
 ## 13.3 metrics / collector
 
