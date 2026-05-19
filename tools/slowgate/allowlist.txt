@@ -35,6 +35,14 @@ github.com/ghbvf/gocell/tools/archtest	TestClockInjectionProdCallsite
 github.com/ghbvf/gocell/tools/archtest	TestErrcodeMessageConstLiteral
 # type-graph-load: exported error-new scan over module
 github.com/ghbvf/gocell/tools/archtest	TestExportedErrorNew
+# subprocess-overhead: ARCHTEST-VERIFY-COVERAGE-01 spawns 1 verify-archtest.sh
+# DRY_RUN + K=4 LIST_SHARD_TESTS subprocesses, each running `go test -list`
+# over tools/archtest. ~5×subprocess go-test-list ≈ 25-30s on GHA. Not a
+# cache-miss bottleneck (subprocess cache is independent of TestMain warmup),
+# so PR #584 in-process warmup does not help. Cleanup path (K=4 → K=2 or
+# bash-script-side dispatch consolidation) tracked by
+# ARCHTEST-VERIFY-COVERAGE-DISPATCH-OPTIMIZE-01 in cap-14-tooling.md.
+github.com/ghbvf/gocell/tools/archtest	TestArchtestVerifyCoverage01
 # type-graph-load: PANIC-REGISTERED-01 scan over module — iterates 7 build-tag
 # sets (typeseval.KnownNonDefaultTags), each driving its own packages.Load
 github.com/ghbvf/gocell/tools/archtest	TestPanicRegistered
