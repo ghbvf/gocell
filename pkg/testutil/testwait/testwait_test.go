@@ -16,17 +16,25 @@ package testwait_test
 
 import (
 	"fmt"
-	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
+
+// TestMain delegates goroutine-leak detection to goleak.VerifyTestMain,
+// which checks for unexpected goroutines after all tests in the package
+// complete. This replaces the manual runtime.NumGoroutine before/after
+// pattern which was prone to scheduling noise.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 // fakeT records t.Fatalf invocations without aborting the test, letting us
 // assert that External / Deterministic fail in the expected scenarios.
@@ -85,19 +93,49 @@ func TestExternal_TimesOutAndReportsReason(t *testing.T) {
 		"failure message must include reason literal; got %q", rendered)
 }
 
+// TestExternal_TimeoutFiresWhenTickExceedsTimeout verifies that the timeout
+// fires promptly even when tick > timeout. Previously the for-range-ticker.C
+// loop would not check the deadline until the next tick arrived, causing
+// false-green results. The separate timer in select ensures timeout fires
+// within ~timeout, not ~tick.
+func TestExternal_TimeoutFiresWhenTickExceedsTimeout(t *testing.T) {
+	t.Parallel()
+	ft := &fakeT{T: t}
+	start := time.Now()
+	// tick=100ms > timeout=10ms: with the old loop the test would block for
+	// ~100ms before declaring timeout; with the timer+select it fires at ~10ms.
+	testwait.External(ft, "tick-exceeds-timeout",
+		func() bool { return false },
+		testtime.D10ms, testtime.D100ms,
+		"tick exceeds timeout probe")
+	elapsed := time.Since(start)
+	require.True(t, ft.failed.Load(), "expected t.Fatalf to fire when condition always false")
+	require.Less(t, elapsed, testtime.D80ms,
+		"timeout should fire ~10ms (not ~100ms tick); elapsed=%v", elapsed)
+}
+
+// TestExternal_ConditionFlipAfterDeadlineFailsAsTimeout verifies that a
+// condition that flips to true AFTER the deadline causes External to call
+// t.Fatalf, not return success. With the old ticker loop the condition could
+// be checked after the deadline had passed, masking real timeouts.
+func TestExternal_ConditionFlipAfterDeadlineFailsAsTimeout(t *testing.T) {
+	t.Parallel()
+	ft := &fakeT{T: t}
+	// condition becomes true after 30ms; timeout is 10ms.
+	// External must report timeout, not success.
+	flipAt := time.Now().Add(testtime.D30ms)
+	testwait.External(ft, "condition-flip-after-deadline",
+		func() bool { return time.Now().After(flipAt) },
+		testtime.D10ms, testtime.D2ms,
+		"condition flips after deadline")
+	require.True(t, ft.failed.Load(),
+		"External must call t.Fatalf when condition only becomes true after timeout fires")
+}
+
 func TestExternal_NoGoroutineLeakAfterTimeout(t *testing.T) {
 	t.Parallel()
-	// Warm up: run External once and let goroutines settle.
-	ft0 := &fakeT{T: t}
-	testwait.External(ft0, "warmup",
-		func() bool { return false },
-		testtime.D20ms, testtime.D2ms,
-		"warmup")
-	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep goroutine-settle-after-warmup
-	runtime.GC()
-
-	before := runtime.NumGoroutine()
-	// Drive 50 timeouts back to back.
+	// Drive 50 timeouts back to back. Goroutine-leak detection is delegated to
+	// goleak.VerifyTestMain at package teardown — see TestMain above.
 	for range 50 {
 		ft := &fakeT{T: t}
 		testwait.External(ft, "leak-probe",
@@ -105,18 +143,6 @@ func TestExternal_NoGoroutineLeakAfterTimeout(t *testing.T) {
 			testtime.D5ms, testtime.D1ms,
 			"leak probe")
 	}
-	// Give any leaked goroutines a chance to register before counting — this
-	// is the core property under test (no leak), so we deliberately wait real
-	// wall-clock time before sampling NumGoroutine.
-	time.Sleep(testtime.D100ms) //archtest:allow:test-sleep allow-any-leaked-goroutines-to-register
-	runtime.GC()
-	after := runtime.NumGoroutine()
-	t.Logf("NumGoroutine before=%d after=%d", before, after)
-	// Tolerate +3 (CI scheduling noise); a real leak would be proportional to
-	// the iteration count (50x), so +3 is a safe upper bound for noise.
-	require.LessOrEqual(t, after, before+3,
-		"goroutine count grew %d → %d after 50 timeouts; condition closures may be leaking",
-		before, after)
 }
 
 func TestExternal_ConditionPanicPropagates(t *testing.T) {

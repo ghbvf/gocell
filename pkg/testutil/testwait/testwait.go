@@ -5,8 +5,13 @@
 //   - External: polling REQUIRED because no channel signal is producible
 //     (HTTP /healthz, container readiness, subprocess signal handler).
 //     Caller MUST provide a const-literal kebab-case reason documenting
-//     why polling is unavoidable. archtest TEST-POLLING-EXTERNAL-REASON-
-//     LITERAL-01 (Hard, downstream funnel) enforces the (callee, arg) form.
+//     why polling is unavoidable. Downstream form-uniqueness is locked by
+//     archtest TEST-POLLING-EXTERNAL-REASON-LITERAL-01; upstream funnel
+//     closure (banning bare require.Eventually) is tracked by backlog
+//     TEST-EVENTUALLY-FUNNEL-01 (see docs/backlog/cap-14-tooling.md) and is
+//     the prerequisite for promoting this funnel from Soft transitional to Hard.
+//     Per ai-collab.md §"Funnel 双向锁评级", until upstream closes this funnel
+//     is classified Soft overall (Hard downstream + Soft upstream).
 //   - Deterministic: blocks on a channel signal with timeout — no polling,
 //     no race window. The default choice; use External only as carve-out.
 //     Hard via Go type system: <-chan T signature makes "polling via
@@ -15,13 +20,8 @@
 // Polling is the leading source of race-CI flakes in GoCell tests; see
 // docs/plans/202605181600-042-archtest.md §1.1 (TEST-POLLING-DETERMINISM).
 //
-// Upstream funnel closure (banning bare require.Eventually / assert.Eventually)
-// is deferred to PR3 per the plan above (TEST-EVENTUALLY-FUNNEL-01). Until
-// then this funnel is "Hard downstream + Soft upstream" transitional. AI-rebust
-// §"Funnel 双向锁评级" permits this with backlog registration; the registration
-// anchor is plan §1.1 PR3 — see .claude/rules/gocell/ai-collab.md.
 // Upstream funnel closure backlog anchor: TEST-EVENTUALLY-FUNNEL-01 (registered
-// in docs/plans/202605181600-042-archtest.md §1.1 PR3).
+// in docs/backlog/cap-14-tooling.md §14.1).
 //
 // ref: stretchr/testify pull/1657 (synchronous Eventually proposal — root of
 //
@@ -74,29 +74,35 @@ type TB interface {
 // is not recovered, mirroring `require.Eventually`'s synchronous main-thread
 // runner semantics from testify pull/1657.
 //
+// tick should be < timeout to ensure at least one poll occurs before the
+// timeout fires.
+//
 // Prefer Deterministic whenever a channel signal is producible from the
 // system under test.
 func External(t TB, reason string, condition func() bool,
 	timeout, tick time.Duration, msgAndArgs ...any,
 ) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
 	// Initial check before the first tick so a condition that is already
 	// true returns immediately (mirrors k8s wait.PollUntilContextTimeout
 	// immediate=true semantics).
 	if condition() {
 		return
 	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
-	for range ticker.C {
-		if condition() {
-			return
-		}
-		if !time.Now().Before(deadline) {
+	for {
+		select {
+		case <-timer.C:
 			t.Fatalf("testwait.External: timeout after %v waiting for %q: %s",
 				timeout, reason, formatMsgAndArgs(msgAndArgs))
 			return
+		case <-ticker.C:
+			if condition() {
+				return
+			}
 		}
 	}
 }
@@ -125,10 +131,12 @@ func Deterministic[T any](t TB, signal <-chan T, timeout time.Duration,
 ) T {
 	t.Helper()
 	var zero T
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case v := <-signal:
 		return v
-	case <-time.After(timeout):
+	case <-timer.C:
 		t.Fatalf("testwait.Deterministic: timeout after %v waiting on signal: %s",
 			timeout, formatMsgAndArgs(msgAndArgs))
 		return zero

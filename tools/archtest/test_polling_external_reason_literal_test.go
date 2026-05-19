@@ -441,6 +441,105 @@ func TestExternalReasonLiteral_NoIndirectReferences(t *testing.T) {
 		ruleTestPollingExternalReasonLiteral01)
 }
 
+// TestExternalReasonLiteral_NoIndirectReferences_Fixtures proves the indirect
+// reference scanner is wired correctly by loading each of the four RED fixture
+// packages and asserting the diagnostics match the expected golden output.
+// Without these RED fixtures, TestExternalReasonLiteral_NoIndirectReferences
+// would pass even if the scanner logic regressed (current tree has no indirect
+// references, so the module-wide test is always green regardless of scanner
+// health).
+//
+// Fixture categories:
+//   - indirect_var_red:          var f = testwait.External
+//   - indirect_funcarg_red:      passThrough(testwait.External)
+//   - indirect_reflect_red:      reflect.ValueOf(testwait.External)
+//   - indirect_struct_field_red: wrapper{F: testwait.External}
+func TestExternalReasonLiteral_NoIndirectReferences_Fixtures(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+
+	fixtures := []string{
+		"indirect_var_red",
+		"indirect_funcarg_red",
+		"indirect_reflect_red",
+		"indirect_struct_field_red",
+	}
+
+	for _, dir := range fixtures {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
+			t.Parallel()
+
+			fixturePattern := "./tools/archtest/testdata/testwait_external_fixtures/" + dir
+
+			diags := RunTypedFixture(t, FixtureOpts{}, []string{fixturePattern},
+				func(p *Pass) []Diagnostic {
+					if p.TypesInfo == nil || p.Fset == nil {
+						return nil
+					}
+					var out []Diagnostic
+					for _, file := range p.Files {
+						rel := p.Rel(file)
+
+						// Pass 1: gather CallExpr.Fun positions whose Fun resolves to
+						// testwait.External (these are the legal direct-call sites).
+						legalCallFun := make(map[*ast.Ident]struct{})
+						EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+							sel, ok := call.Fun.(*ast.SelectorExpr)
+							if !ok || sel.Sel == nil {
+								return
+							}
+							if !isExternalIdentUse(sel.Sel, p.TypesInfo) {
+								return
+							}
+							legalCallFun[sel.Sel] = struct{}{}
+						})
+
+						// Pass 2: every Ident in types.Info.Uses pointing at External
+						// must be in legalCallFun; otherwise it's an indirect reference.
+						for ident, obj := range p.TypesInfo.Uses {
+							if ident == nil || obj == nil {
+								continue
+							}
+							if !isExternalIdentObj(obj) {
+								continue
+							}
+							// Ensure this ident belongs to the current file.
+							identFile := p.Fset.Position(ident.Pos()).Filename
+							absFile := p.Abs(file)
+							if identFile != absFile {
+								continue
+							}
+							if _, ok := legalCallFun[ident]; ok {
+								continue
+							}
+							out = append(out, Diagnostic{
+								Rel:  rel,
+								Line: p.Fset.Position(ident.Pos()).Line,
+								Message: "indirect reference to testwait.External (function value, " +
+									"pointer pass-through, method binding, or reflect); only direct " +
+									"call testwait.External(...) is permitted",
+							})
+						}
+					}
+					// Sort for deterministic golden output.
+					sort.Slice(out, func(i, j int) bool {
+						if out[i].Rel != out[j].Rel {
+							return out[i].Rel < out[j].Rel
+						}
+						return out[i].Line < out[j].Line
+					})
+					return out
+				})
+
+			goldenPath := filepath.Join(root, "tools", "archtest", "testdata",
+				"testwait_external_fixtures", dir, "diag.golden")
+			AssertGolden(t, goldenPath, diags)
+		})
+	}
+}
+
 // isExternalIdentUse reports whether ident's *types.Info.Uses entry resolves
 // to testwait.External. Used by the blind-spot self-test.
 func isExternalIdentUse(ident *ast.Ident, info *types.Info) bool {

@@ -87,7 +87,7 @@
 
   ref: `tools/archtest/pg_repo_ambient_tx_test.go` + `tools/archtest/internal/pgrepoambienttxfixture/fixture.go` + ADR `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4.5.1.
 
-- **typed function call for test-side wall-clock polling** — `pkg/testutil/testwait.External` is the only approved entry for synchronous polling waits in tests; archtest `TEST-POLLING-EXTERNAL-REASON-LITERAL-01` enforces (callee, arg) form-uniqueness on (`External`, kebab-case `*ast.BasicLit` STRING reason). Hard downstream + Soft upstream transitional; upstream funnel closure (banning bare `require.Eventually`) backlog `TEST-EVENTUALLY-FUNNEL-01` (registered in `docs/plans/202605181600-042-archtest.md` §1.1 PR3). See `pkg/testutil/testwait/testwait.go` godoc.
+- **typed function call for test-side wall-clock polling** *(Soft-transitional — not yet a Hard 范本)* — `pkg/testutil/testwait.External` is the approved entry for synchronous polling waits in tests; archtest `TEST-POLLING-EXTERNAL-REASON-LITERAL-01` enforces (callee, arg) form-uniqueness on (`External`, kebab-case `*ast.BasicLit` STRING reason). Per §"Funnel 双向锁评级": Hard downstream + Soft upstream → overall Soft transitional. Upstream funnel closure (banning bare `require.Eventually`) is tracked by backlog `TEST-EVENTUALLY-FUNNEL-01` (`docs/backlog/cap-14-tooling.md` §14.1); that closure is the prerequisite for promoting this entry to a Hard 范本 sibling of panicregister.Approved above. See `pkg/testutil/testwait/testwait.go` godoc.
 
 ## archtest 文件命名
 
