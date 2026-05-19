@@ -9,6 +9,10 @@
 //   - RowScanner helper for reducing boilerplate in repository implementations.
 //
 // For parameterized PostgreSQL query construction, see pkg/pgquery.Builder.
+// For generic PG SQLSTATE wire-error classification, see pkg/pgquery.IsUniqueViolation
+// and IsForeignKeyViolation. The last-admin trigger sentinel classification
+// (effective_admin_invariant_fn, migration 024) is accesscore-internal:
+// cells/accesscore/internal/adapters/postgres.isLastAdminProtected.
 //
 // Error codes use the ERR_ADAPTER_PG_* prefix (see errcode.go in this package).
 //

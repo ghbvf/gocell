@@ -110,5 +110,5 @@ func pgBenchFactory(b *testing.B) (session.Store, *clockmock.FakeClock, func()) 
 //	BenchmarkPGSessionStore/RevokeForSubject_1000 — credential-event revoke fan-out
 //	BenchmarkPGSessionStore/MixedConcurrent       — login/validate/logout interleave
 func BenchmarkPGSessionStore(b *testing.B) {
-	storetest.Bench(b, pgBenchFactory, storetest.NewBenchProtocol(b))
+	storetest.Bench(b, pgBenchFactory)
 }

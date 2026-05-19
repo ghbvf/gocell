@@ -17,7 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/pgquery"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -112,7 +112,7 @@ LIMIT 1`
 // ref: google/trillian storage/log_storage.go ReadWriteTransaction pattern.
 // ref: adapters/postgres/refresh_store.go — advisory lock + ambient tx model.
 type LedgerStore struct {
-	pool     *pgxpool.Pool
+	db       pgExecutor
 	txRunner persistence.TxRunner
 	protocol *ledger.Protocol
 	clock    clock.Clock
@@ -126,9 +126,9 @@ type LedgerStore struct {
 //   - protocol nil → ErrValidationFailed
 //   - clk nil or typed-nil → ErrValidationFailed
 //
-// pool is retained for read-only paths (Tail, GetBySeq, Query, Verify).
-// All mutation paths (Append) go through txRunner.RunInTx to participate in
-// the caller's ambient transaction.
+// pool is wrapped in a pgExecutor so all SQL paths (Append, Tail, GetBySeq,
+// Query, Verify, RepoReady) route through the ambient transaction when ctx
+// carries one, and fall back to pool otherwise.
 func NewLedgerStore(
 	pool *pgxpool.Pool,
 	txRunner persistence.TxRunner,
@@ -152,7 +152,7 @@ func NewLedgerStore(
 			"postgres.NewLedgerStore: clock must not be nil")
 	}
 	return &LedgerStore{
-		pool:     pool,
+		db:       newPGExecutor(pool),
 		txRunner: txRunner,
 		protocol: protocol,
 		clock:    clk,
@@ -161,34 +161,6 @@ func NewLedgerStore(
 
 // namespace returns the string form of the configured NamespaceID.
 func (s *LedgerStore) namespace() string { return string(s.protocol.Namespace()) }
-
-// execCtx executes SQL against the ambient transaction in ctx when one is
-// present, or falls back to the pool. Pattern mirrors refresh_store.execCtx.
-func (s *LedgerStore) execCtx(ctx context.Context, sql string, args ...any) error {
-	if tx, ok := TxFromContext(ctx); ok {
-		_, err := tx.Exec(ctx, sql, args...)
-		return err
-	}
-	_, err := s.pool.Exec(ctx, sql, args...)
-	return err
-}
-
-// queryRowCtx queries a single row against the ambient transaction in ctx or
-// falls back to the pool.
-func (s *LedgerStore) queryRowCtx(ctx context.Context, sql string, args ...any) pgx.Row {
-	if tx, ok := TxFromContext(ctx); ok {
-		return tx.QueryRow(ctx, sql, args...)
-	}
-	return s.pool.QueryRow(ctx, sql, args...)
-}
-
-// queryCtx runs a multi-row query against the ambient transaction or pool.
-func (s *LedgerStore) queryCtx(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if tx, ok := TxFromContext(ctx); ok {
-		return tx.Query(ctx, sql, args...)
-	}
-	return s.pool.Query(ctx, sql, args...)
-}
 
 // Append persists a new audit entry in the namespace's hash chain.
 //
@@ -224,7 +196,7 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 		// Must run BEFORE the fingerprint check to prevent TOCTOU: two concurrent
 		// goroutines with identical payloads would both pass a pre-lock fingerprint
 		// check and both attempt to INSERT, causing a duplicate chain entry.
-		if lockErr := s.execCtx(txCtx, lockNamespaceSQL, ns); lockErr != nil {
+		if _, lockErr := s.db.Exec(txCtx, lockNamespaceSQL, ns); lockErr != nil {
 			return ctxcancel.WrapOrInfra(lockErr, "advisory_lock", ns,
 				ErrAdapterPGQuery, "audit ledger: namespace advisory lock failed")
 		}
@@ -252,7 +224,7 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 
 		// Step 7: insert the row.
 		id := uuid.New()
-		if insertErr := s.execCtx(txCtx, insertEntrySQL,
+		if _, insertErr := s.db.Exec(txCtx, insertEntrySQL,
 			id.String(), ns, e.SeqNo,
 			e.EventID, e.EventType, e.ActorID, e.Timestamp,
 			e.Payload, e.PrevHash, e.Hash,
@@ -271,7 +243,7 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 // may change between retries and must not be part of the fingerprint.
 func (s *LedgerStore) checkFingerprint(ctx context.Context, ns string, e *ledger.Entry) (bool, error) {
 	var marker int
-	err := s.queryRowCtx(ctx, selectFingerprintSQL, ns, e.EventID).Scan(&marker)
+	err := s.db.QueryRow(ctx, selectFingerprintSQL, ns, e.EventID).Scan(&marker)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -287,7 +259,7 @@ func (s *LedgerStore) checkFingerprint(ctx context.Context, ns string, e *ledger
 func (s *LedgerStore) readTailForUpdate(ctx context.Context, ns string) (prevHash string, nextSeqNo int64, err error) {
 	var tailSeqNo int64
 	var tailHash string
-	scanErr := s.queryRowCtx(ctx, selectTailForUpdateSQL, ns).Scan(&tailSeqNo, &tailHash)
+	scanErr := s.db.QueryRow(ctx, selectTailForUpdateSQL, ns).Scan(&tailSeqNo, &tailHash)
 	if errors.Is(scanErr, pgx.ErrNoRows) {
 		return "", 1, nil
 	}
@@ -312,16 +284,22 @@ ORDER BY seq_no DESC
 LIMIT 1`
 
 // Tail returns the current chain tail snapshot. Returns zero TailSnapshot for
-// an empty namespace (not an error). Uses the pool directly (read path).
+// an empty namespace (not an error). Routes through pgExecutor (ambient-tx
+// aware; falls back to pool when no tx in ctx).
 //
 // F13: uses a single SQL query to retrieve seq_no, hash, and total count.
+//
+// Caveat: when called within a caller's ambient transaction, the result
+// reflects that transaction's uncommitted chain state. Callers requiring
+// post-commit integrity verification must call Tail after the transaction
+// commits.
 func (s *LedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 	ns := s.namespace()
 
 	var seqNo int64
 	var hash string
 	var count int64
-	err := s.pool.QueryRow(ctx, tailWithCountSQL, ns).Scan(&seqNo, &hash, &count)
+	err := s.db.QueryRow(ctx, tailWithCountSQL, ns).Scan(&seqNo, &hash, &count)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ledger.TailSnapshot{}, nil
 	}
@@ -348,8 +326,12 @@ const ledgerRepoReadySQL = `SELECT 1 FROM audit_entries WHERE false`
 // that schema/migration drift and table-level permission loss are surfaced as a
 // differentiated failure domain distinct from the pool-level postgres_ready
 // probe registered by *Pool.
+//
+// The ambient-tx fallback in pgExecutor is a no-op for this probe: health
+// handler contexts never carry a pgx.Tx, so pgExecutor routes directly to the
+// pool, keeping the health check independent of any caller transaction state.
 func (s *LedgerStore) RepoReady(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, ledgerRepoReadySQL)
+	_, err := s.db.Exec(ctx, ledgerRepoReadySQL)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"audit ledger: repo ready", err)
@@ -362,7 +344,7 @@ func (s *LedgerStore) RepoReady(ctx context.Context) error {
 func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, error) {
 	ns := s.namespace()
 	var e ledger.Entry
-	err := s.queryRowCtx(ctx, selectBySeqSQL, ns, seq).Scan(
+	err := s.db.QueryRow(ctx, selectBySeqSQL, ns, seq).Scan(
 		&e.ID, &e.SeqNo,
 		&e.EventID, &e.EventType, &e.ActorID, &e.Timestamp,
 		&e.Payload, &e.PrevHash, &e.Hash,
@@ -402,7 +384,7 @@ FROM audit_entries WHERE namespace = `, ns)
 	}
 
 	sql, args := b.Build()
-	rows, err := s.queryCtx(ctx, sql, args...)
+	rows, err := s.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, ctxcancel.WrapOrInfra(err, "query", ns,
 			ErrAdapterPGQuery, "audit ledger: query failed")
@@ -443,13 +425,18 @@ func (s *LedgerStore) scanEntries(rows pgx.Rows, ns string) ([]*ledger.Entry, er
 
 // Verify re-computes HMAC-SHA256 hash for each entry in [fromSeq, toSeq]
 // and checks chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1
-// when all entries are intact. Uses the pool directly (read-only path).
+// when all entries are intact. Routes through pgExecutor (ambient-tx aware).
 //
 // Sub-range correctness: when fromSeq > 1 the first entry in the range has a
 // non-empty PrevHash pointing at entries[fromSeq-1]. Verify fetches that
 // predecessor's hash as the baseline so the first PrevHash linkage check is
 // evaluated against the correct expected value rather than the empty string used
 // for the chain's genesis entry.
+//
+// Caveat: when called within a caller's ambient transaction, the result
+// reflects that transaction's uncommitted chain state. Callers requiring
+// post-commit integrity verification must call Verify after the transaction
+// commits.
 func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
 	ns := s.namespace()
 
@@ -474,7 +461,7 @@ func (s *LedgerStore) verifyBaseline(ctx context.Context, ns string, fromSeq int
 		return "", nil
 	}
 	var baselineHash string
-	err := s.pool.QueryRow(ctx,
+	err := s.db.QueryRow(ctx,
 		`SELECT hash FROM audit_entries WHERE namespace=$1 AND seq_no=$2`,
 		ns, fromSeq-1,
 	).Scan(&baselineHash)
@@ -494,7 +481,7 @@ func (s *LedgerStore) verifyBaseline(ctx context.Context, ns string, fromSeq int
 // PrevHash linkage, and hash recomputation. prevHash is the expected PrevHash
 // of the first scanned entry (empty string for the chain genesis).
 func (s *LedgerStore) verifyRange(ctx context.Context, ns string, fromSeq, toSeq int64, prevHash string) (bool, int64, error) {
-	rows, queryErr := s.pool.Query(ctx, selectRangeSQL, ns, fromSeq, toSeq)
+	rows, queryErr := s.db.Query(ctx, selectRangeSQL, ns, fromSeq, toSeq)
 	if queryErr != nil {
 		return false, 0, ctxcancel.WrapOrInfra(queryErr, "verify_query", ns,
 			ErrAdapterPGQuery, "audit ledger: verify range query failed")

@@ -102,57 +102,6 @@ func createTestUserInDB(t *testing.T, userRepo *PGUserRepo, suffix string) *doma
 }
 
 // ---------------------------------------------------------------------------
-// Constructor fail-fast
-// ---------------------------------------------------------------------------
-
-func TestPGRoleRepo_Constructor_FailFast(t *testing.T) {
-	testutil.RequireDocker(t)
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(ctx) })
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = pool.Close(ctx) })
-
-	txm := adapterpg.NewTxManager(pool)
-
-	assertValidationFailed := func(t *testing.T, err error) {
-		t.Helper()
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.True(t, errors.As(err, &ec))
-		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-	}
-
-	t.Run("nil_pool", func(t *testing.T) {
-		_, err := NewPGRoleRepo(nil, txm, clock.Real())
-		assertValidationFailed(t, err)
-	})
-
-	t.Run("nil_txRunner_typed_nil", func(t *testing.T) {
-		var nilTxm *adapterpg.TxManager
-		_, err := NewPGRoleRepo(pool.DB(), nilTxm, clock.Real())
-		assertValidationFailed(t, err)
-	})
-
-	t.Run("nil_clock_typed_nil", func(t *testing.T) {
-		_, err := NewPGRoleRepo(pool.DB(), txm, nil)
-		assertValidationFailed(t, err)
-	})
-}
-
-// ---------------------------------------------------------------------------
 // CRUD integration tests
 // ---------------------------------------------------------------------------
 

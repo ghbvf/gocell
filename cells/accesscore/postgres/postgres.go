@@ -18,26 +18,23 @@ import (
 // PG-backed repositories. Callers in cmd/* construct this once via NewDeps and
 // pass it to NewUserRepository / NewRoleRepository / NewSetupLock.
 //
-// The unexported pool field intentionally hides *pgxpool.Pool from the root
-// accesscore API surface. NewDeps accepts pool as any so composition roots can
-// pass adapterpg.Pool.DB() without exporting pgx types from cells/accesscore.
+// The fields (pool, txRunner, clock) are unexported to encapsulate
+// cell-internal wiring: callers must go through NewDeps rather than
+// constructing Deps directly. NewDeps intentionally accepts a typed
+// *pgxpool.Pool parameter so that injecting the wrong pool is a compile error
+// (DX4-1 compile-time pool-injection guard) — the pgx type is not hidden from
+// the caller; it is the constructor's parameter type.
 type Deps struct {
 	pool     *pgxpool.Pool
 	txRunner persistence.TxRunner
 	clock    clock.Clock
 }
 
-// NewDeps constructs a Deps bundle. Fails fast when any dependency is nil or
-// when pool is not a *pgxpool.Pool.
-func NewDeps(pool any, tx persistence.TxRunner, clk clock.Clock) (Deps, error) {
+// NewDeps constructs a Deps bundle. Fails fast when any dependency is nil.
+func NewDeps(pool *pgxpool.Pool, tx persistence.TxRunner, clk clock.Clock) (Deps, error) {
 	if pool == nil {
 		return Deps{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"accesscore/postgres.NewDeps: pool must not be nil")
-	}
-	p, ok := pool.(*pgxpool.Pool)
-	if !ok {
-		return Deps{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"accesscore/postgres.NewDeps: pool must be *pgxpool.Pool")
 	}
 	if validation.IsNilInterface(tx) {
 		return Deps{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -47,7 +44,7 @@ func NewDeps(pool any, tx persistence.TxRunner, clk clock.Clock) (Deps, error) {
 		return Deps{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"accesscore/postgres.NewDeps: clock must not be nil")
 	}
-	return Deps{pool: p, txRunner: tx, clock: clk}, nil
+	return Deps{pool: pool, txRunner: tx, clock: clk}, nil
 }
 
 // NewUserRepository constructs the PG-backed cell-private UserRepository.

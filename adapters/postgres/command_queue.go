@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -237,13 +238,13 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 		}
 		return nil
 	}
-	if IsUniqueViolation(insertErr) {
+	if pgquery.IsUniqueViolation(insertErr) {
 		// PK collision (same id, no matching idempotency key) → ErrConflict.
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"command already exists",
 			errcode.WithInternal(fmt.Sprintf("id=%q", entry.ID)))
 	}
-	if IsForeignKeyViolation(insertErr) {
+	if pgquery.IsForeignKeyViolation(insertErr) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 			"device not found",
 			errcode.WithDetails(slog.String("deviceId", entry.DeviceID)))

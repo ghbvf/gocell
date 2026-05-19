@@ -45,13 +45,13 @@ type BenchFactory func(b *testing.B) (store session.Store, fakeClock *clockmock.
 //
 //	BenchmarkRevokeForSubject_1000  — credential-event revoke fan-out
 //	BenchmarkMixedConcurrent        — login/validate/logout interleave
-func Bench(b *testing.B, factory BenchFactory, protocol *session.Protocol) {
+//
+// The Protocol is constructed inside factory (e.g. via NewBenchProtocol), so
+// Bench itself does not need a protocol parameter.
+func Bench(b *testing.B, factory BenchFactory) {
 	b.Helper()
 	if factory == nil {
 		b.Fatal("storetest.Bench: factory must not be nil")
-	}
-	if protocol == nil {
-		b.Fatal("storetest.Bench: protocol must not be nil")
 	}
 
 	b.Run("RevokeForSubject_1000", func(b *testing.B) {
@@ -108,11 +108,12 @@ func benchMixedConcurrent(b *testing.B, factory BenchFactory) {
 			switch n % 3 {
 			case 0:
 				fix := &session.Session{
-					ID:        fmt.Sprintf("sess-mix-%d", n),
-					SubjectID: benchSubject,
-					JTI:       fmt.Sprintf("jti-mix-%d", n),
-					CreatedAt: now,
-					ExpiresAt: now.Add(benchTTL),
+					ID:                fmt.Sprintf("sess-mix-%d", n),
+					SubjectID:         benchSubject,
+					JTI:               fmt.Sprintf("jti-mix-%d", n),
+					AuthzEpochAtIssue: 1,
+					CreatedAt:         now,
+					ExpiresAt:         now.Add(benchTTL),
 				}
 				if err := store.Create(ctx, fix); err != nil && !isAcceptableBenchErr(err) {
 					b.Errorf("mixed Create: %v", err)
@@ -138,11 +139,12 @@ func seedSubjectSessions(b *testing.B, store session.Store, now time.Time, n int
 		go func(i int) {
 			defer wg.Done()
 			fix := &session.Session{
-				ID:        fmt.Sprintf("sess-jti-bench-seed-%d", i),
-				SubjectID: benchSubject,
-				JTI:       fmt.Sprintf("jti-bench-seed-%d", i),
-				CreatedAt: now,
-				ExpiresAt: now.Add(benchTTL),
+				ID:                fmt.Sprintf("sess-jti-bench-seed-%d", i),
+				SubjectID:         benchSubject,
+				JTI:               fmt.Sprintf("jti-bench-seed-%d", i),
+				AuthzEpochAtIssue: 1,
+				CreatedAt:         now,
+				ExpiresAt:         now.Add(benchTTL),
 			}
 			if err := store.Create(ctx, fix); err != nil && !isAcceptableBenchErr(err) {
 				errs <- err

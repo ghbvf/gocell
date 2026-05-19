@@ -46,8 +46,8 @@
 
 | ID | 优先级 | 一句话 |
 |---|---|---|
-| B2-T-01 Config rollback 乐观锁缺 | 🟡 P1 | 加版本号（与 P3-TD-12 同根源） |
-| P3-TD-12 configpublish.Rollback 版本校验 | 🟠 P2 | 卡 post-v1.0 + 持久化版本管理 |
+| ~~B2-T-01 Config rollback 乐观锁缺~~ | ✅ closed | 实施侧 PR S6（service `expectedVersion` + PG SQL `WHERE version=$N` + handler 409 + mem 并发单元测试）；PG SQL Medium runtime regression guard PR-V11-CONFIG-ROLLBACK-OPTLOCK（029 D5）；Hard 升级 backlog cap-14 `CONFIG-ROLLBACK-CAS-HARD-UPGRADE-01` |
+| ~~P3-TD-12 configpublish.Rollback 版本校验~~ | ✅ closed | 同 B2-T-01（同根源） |
 | CONFIGCORE-CACHE-LIFECYCLE-OWNER-01 | 🟠 Cx2 | 内存增长信号 |
 | C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE | 🟡 P1 | 进程内无界 + 未挂 Lifecycle |
 | B2-C-11 Configsubscribe tombstone 无 TTL | 🟡 P2 | 永久保留导致内存膨胀 |

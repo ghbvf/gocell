@@ -519,6 +519,15 @@ func (concurrentSafeTxRunner) RunInTx(ctx context.Context, fn func(context.Conte
 	return fn(ctx)
 }
 
+// isVersionConflictErr unwraps wrapped errors (service.go wraps the repo CAS
+// failure via fmt.Errorf) and returns true when the underlying *errcode.Error
+// carries ErrVersionConflict. Defined here (no build tag) so the integration
+// test file (//go:build integration, same package) can also reference it.
+func isVersionConflictErr(err error) bool {
+	var ce *errcode.Error
+	return errors.As(err, &ce) && ce.Code == errcode.ErrVersionConflict
+}
+
 // TestConcurrentRollback_ExactlyOneSucceeds verifies that when two goroutines race
 // to rollback the same config entry with the same expectedVersion, exactly one
 // succeeds and the other receives ErrVersionConflict.
@@ -543,15 +552,13 @@ func TestConcurrentRollback_ExactlyOneSucceeds(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_, rbErr := svc.Rollback(adminSvcCtx(), "cas-rollback-key", 1, 1)
-			if rbErr == nil {
+			switch {
+			case rbErr == nil:
 				successes.Add(1)
-			} else {
-				var ce *errcode.Error
-				if errors.As(rbErr, &ce) && ce.Code == errcode.ErrVersionConflict {
-					versionConflicts.Add(1)
-				} else {
-					t.Errorf("unexpected error in concurrent Rollback: %v", rbErr)
-				}
+			case isVersionConflictErr(rbErr):
+				versionConflicts.Add(1)
+			default:
+				t.Errorf("unexpected error in concurrent Rollback: %v", rbErr)
 			}
 		}()
 	}
