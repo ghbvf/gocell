@@ -1,0 +1,1 @@
+tools/archtest/testdata/testwait_external_fixtures/reason_placeholder_red/usage.go:16: reason "todo-fill-later" is a placeholder identifier (todo/fixme/tbd/xxx/placeholder/wip); replace with descriptive kebab-case

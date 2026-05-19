@@ -1072,8 +1072,23 @@ func runClockResetRelativeFixtureScan(t *testing.T, fixtureDir string) []Diagnos
 
 // allowedRealClockPaths lists the prefixes whose files may legitimately
 // reference stdlib time symbols directly. See package doc for rationale.
+//
+// Entries:
+//   - kernel/clock/: the canonical wall-clock injection abstraction; the
+//     primitive layer where stdlib time is unwrappable.
+//   - pkg/testutil/testwait/: the typed-marker funnel for test-side polling
+//     waits (External + Deterministic). Test code uses this in lieu of bare
+//     require.Eventually; the pkg/ layer cannot import kernel/clock (see
+//     .claude/rules/gocell/go-standards.md), so wall-clock polling here is
+//     unavoidable and is structurally the same "primitive" tier as
+//     kernel/clock for tests. See docs/plans/202605181600-042-archtest.md
+//     §1.1 TEST-POLLING-DETERMINISM and TEST-POLLING-EXTERNAL-REASON-
+//     LITERAL-01 archtest (test_polling_external_reason_literal_test.go),
+//     which is the downstream Hard funnel enforcing that callsites only
+//     reach this primitive via const-literal reason.
 var allowedRealClockPaths = []string{
 	"kernel/clock/",
+	"pkg/testutil/testwait/",
 }
 
 // forbiddenTimeFns maps each forbidden stdlib time function to the equivalent
