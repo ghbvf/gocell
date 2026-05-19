@@ -336,9 +336,15 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 }
 
 // loginOutcome carries the result of the in-tx login decision back to the
-// outer Login wrapper. Exactly one of pair / failureErr is populated on a
-// non-infra completion; an infrastructure failure is signaled via the
-// second return value of loginInTx (which causes RunInTx to roll back).
+// outer Login wrapper. Combined with the second return of loginInTx (an
+// infra error) it encodes three mutually-exclusive states:
+//
+//  1. Success — outcome.pair non-zero, outcome.failureErr nil, infra error nil.
+//  2. Credential-domain rejection — outcome.pair zero, outcome.failureErr
+//     non-nil (the 401), infra error nil. RunInTx must commit so the
+//     auto-lockout counter UPDATE persists; the caller returns failureErr.
+//  3. Infrastructure failure — outcome zero-value, infra error non-nil.
+//     RunInTx will roll back; the caller propagates the infra error as 5xx.
 type loginOutcome struct {
 	pair       dto.TokenPair
 	failureErr error // non-nil = credential-domain 401 to return after the tx commits
@@ -453,15 +459,20 @@ func (s *Service) loginInTx(
 	// of the user row in the same tx see status=Locked. Return the unified
 	// 401 either way.
 	//
-	//nolint:nilerr // bcryptErr is a credential-domain rejection, not an
-	// infra error. It is carried back via outcome.failureErr (NOT via the
+	// The closure-level nolint below is intentional: golangci-lint's nilerr
+	// check would flag the `return ..., nil` because bcryptErr (observed on
+	// the line just above) is dropped. That is exactly the contract this
+	// branch implements — bcryptErr is a credential-domain rejection, not an
+	// infra error; it is carried back via outcome.failureErr (NOT via the
 	// second error return) so the caller can return nil from the closure
 	// and let PG commit the auto-lockout counter UPDATE. Returning a real
 	// error here would cause RunInTx → ROLLBACK and silently drop the
-	// counter (PR #585 review P1#1).
+	// counter (PR #585 review P1#1). The nolint is placed on the `return`
+	// line itself so golangci-lint's "must be on same line as offender"
+	// scope rule applies precisely.
 	if bcryptErr != nil {
 		s.recordFailureBestEffort(ctx, txCtx, user, "wrong_password")
-		return loginOutcome{
+		return loginOutcome{ //nolint:nilerr // see godoc above; failureErr path
 			failureErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				errMsgInvalidCredentials),
 		}, nil

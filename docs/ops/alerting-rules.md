@@ -481,6 +481,10 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 lazy-unlock 频率持续偏高，可能意味着攻击者在利用 TTL 边界周期性尝试。
 
 ```yaml
+# rate() returns events-per-second; `> 0.5` fires when the smoothed
+# lazy-unlock rate exceeds 0.5/sec (≈ 30/min) over the trailing 15-minute
+# window. Same unit-conversion guidance as GoCellAuthAccountAutoLockSpike:
+# `(target_unlocks_per_min)/60` (e.g. 0.5 unlocks/min → > 0.0083).
 - alert: GoCellAuthAccountLazyUnlockUnusualFrequency
   expr: sum(rate(gocell_auth_account_lockout_total{reason="lazy_unlocked"}[15m])) > 0.5
   for: 15m
@@ -489,7 +493,7 @@ lazy-unlock 频率持续偏高，可能意味着攻击者在利用 TTL 边界周
     cell: accesscore
   annotations:
     summary: "High lazy-unlock frequency"
-    description: "lazy-unlock rate exceeds 0.5/min sustained over 15min. Indicates attackers may be exploiting TTL boundary."
+    description: "lazy-unlock rate exceeds 0.5/sec (≈ 30/min) sustained over 15min. Indicates attackers may be exploiting TTL boundary."
 ```
 
 ---

@@ -177,8 +177,12 @@ func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user
 // the credentialauthority assert. Caller must invoke from within the login
 // tx so the reset co-commits with the session/refresh INSERTs.
 //
-// No-op when the user already has FailedLoginCount==0 and LastFailedAt==nil
-// (avoids a redundant UPDATE on every successful login).
+// No-op when the user is already in the clean state — FailedLoginCount==0
+// AND LastFailedAt==nil AND AutoLockoutDeadline()==nil. All three must hold;
+// the third condition matters because a TryLazyUnlock that ran in the same
+// tx earlier may leave the in-memory state clean while the persisted row
+// already has these columns zeroed (the implementation guard mirrors the
+// in-memory predicate to avoid a redundant UPDATE on every successful login).
 func (s *Service) RecordSuccess(txCtx context.Context, user *domain.User) error {
 	if user == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

@@ -58,8 +58,23 @@ BEGIN
 END $$;
 -- +goose StatementEnd
 
+-- lock_timeout is set AFTER the GUC gate by design (same convention as
+-- migration 028): the fail-closed path (RAISE EXCEPTION above) does not
+-- reach any DDL, so a timeout is only needed once we know the rollback is
+-- authorized.
 SET LOCAL lock_timeout = '5s';
 
+-- Drop the CHECK constraint explicitly before the columns. PG would
+-- cascade-drop it with the column, but writing it out keeps the Down path
+-- symmetric with the Up path (where the constraint is added explicitly)
+-- and matches the established 023/028 convention. IF EXISTS is defensive
+-- in case Up was partial; Up runs both the column and the constraint in a
+-- single statement so this is normally a no-op.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_failed_login_count_positive;
+
+-- DROP COLUMN IF EXISTS (vs ADD COLUMN in Up) is intentional: it lets a
+-- partial Up + Down sequence converge to the migration-031 schema instead
+-- of failing on a missing column.
 ALTER TABLE users
     DROP COLUMN IF EXISTS locked_until,
     DROP COLUMN IF EXISTS last_failed_at,

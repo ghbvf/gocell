@@ -151,6 +151,14 @@ WHERE id = $1`
 	// migration 032). Real-world threshold = 5 and the counter resets on
 	// stale-window / lazy-unlock / success, so this guard is a defensive
 	// upper bound rather than an operational limit.
+	//
+	// 1<<30 (≈ 1.07e9) is chosen instead of math.MaxInt32 (≈ 2.14e9) so the
+	// cap is clearly distinguishable from a "real" counter in forensic
+	// queries — any row with failed_login_count >= 1<<30 is unambiguously
+	// a data-integrity signal (corrupted aggregate state, etc.), not a
+	// legitimate counter value. The 2x headroom under int32 also leaves
+	// room for a future migration to widen the column without revisiting
+	// this constant.
 	maxFailedLoginCount = 1 << 30
 
 	// bumpAuthzEpochSQL atomically increments authz_epoch and returns the new value.
@@ -188,6 +196,27 @@ SET password_hash = $1,
 WHERE id = $4 AND password_version = $5
 RETURNING password_version`
 )
+
+// validateFailedLoginCount is the shared range guard for the auto-lockout
+// counter at the PG wire boundary. Update and UpdateLockoutFields both call
+// it before passing the int32 value to pgx; the in-domain counter is
+// expected to satisfy 0 <= count <= maxFailedLoginCount, so a violation
+// here signals corrupt aggregate state and is returned as KindInternal
+// (operators should see a 5xx, not a silent overflow / wrap).
+//
+// Returns the bounds-checked int32 value alongside any error so callers can
+// pass the result straight into pgx without a second int32 conversion at
+// the call site (which would trip gosec G115 — the bounds check moved into
+// the helper, so the conversion must happen here too).
+func validateFailedLoginCount(userID string, count int) (int32, error) {
+	if count < 0 || int64(count) > int64(maxFailedLoginCount) {
+		return 0, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"user_repo: failed_login_count out of range",
+			errcode.WithInternal(fmt.Sprintf("id=%s count=%d", userID, count)))
+	}
+	// G115 bounds-check is performed above; the int32 conversion is safe.
+	return int32(count), nil
+}
 
 // Create inserts a new user row. Returns ErrAuthUserDuplicate on unique
 // constraint violation (username or email already taken).
@@ -321,11 +350,9 @@ func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string
 // application-layer guard so client handlers match a single business
 // invariant regardless of which layer caught the violation.
 func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
-	count := user.FailedLoginCount()
-	if count < 0 || int64(count) > int64(maxFailedLoginCount) {
-		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			"user_repo: failed_login_count out of range",
-			errcode.WithInternal(fmt.Sprintf("id=%s count=%d", user.ID, count)))
+	count32, err := validateFailedLoginCount(user.ID, user.FailedLoginCount())
+	if err != nil {
+		return err
 	}
 	tag, err := r.db.Exec(ctx, updateUserSQL,
 		user.ID,
@@ -336,9 +363,7 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		string(user.Status()),
 		string(user.CreationSource),
 		user.UpdatedAt,
-		// G115 bounds-check is performed above against maxFailedLoginCount; the
-		// int32 conversion below cannot overflow.
-		int32(count),
+		count32,
 		user.LastFailedAt(),
 		user.AutoLockoutDeadline(),
 	)
@@ -502,17 +527,13 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 // remain owned by authzmutate.Mutator.ApplyInTx (Update / BumpAuthzEpoch) and
 // the password-change path (UpdatePassword); they are NOT mutated here.
 func (r *PGUserRepo) UpdateLockoutFields(ctx context.Context, user *domain.User) error {
-	count := user.FailedLoginCount()
-	if count < 0 || int64(count) > int64(maxFailedLoginCount) {
-		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			"user_repo: failed_login_count out of range",
-			errcode.WithInternal(fmt.Sprintf("id=%s count=%d", user.ID, count)))
+	count32, err := validateFailedLoginCount(user.ID, user.FailedLoginCount())
+	if err != nil {
+		return err
 	}
-	// G115 bounds-check is performed above against maxFailedLoginCount; the
-	// int32 conversion below cannot overflow.
 	tag, err := r.db.Exec(ctx, updateLockoutFieldsSQL,
 		user.ID,
-		int32(count),
+		count32,
 		user.LastFailedAt(),
 		user.AutoLockoutDeadline(),
 		user.UpdatedAt,

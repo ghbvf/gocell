@@ -1377,51 +1377,16 @@ func TestLogin_SuspendedUser_DoesNotIncrementCounter(t *testing.T) {
 		"no TTL must be set for a non-Active user")
 }
 
-// TestLogin_BaselineAssertFailure_CounterStillPersistsOnActiveUser covers the
-// edge of P1#1: a user that fails the credentialauthority baseline assertion
-// inside the tx (e.g. race with a concurrent ChangePassword that bumped the
-// password version). For an Active user this still counts as a failed attempt
-// and the counter must persist; for a non-Active user the P1#2 short-circuit
-// kicks in. This case asserts the Active branch.
-func TestLogin_BaselineAssertFailure_CounterStillPersistsOnActiveUser(t *testing.T) {
-	// Active user; we trigger the in-tx baseline failure by deactivating the
-	// user via authzmutate.Mutator BEFORE Login() opens its tx. Because the
-	// pre-bcrypt user lookup happens outside the tx, the in-tx FOR UPDATE
-	// re-fetch returns the (now-Suspended) user, which fails CanAuthenticate.
-	//
-	// Pre-fix: the closure returns err → counter UPDATE rolled back.
-	// Post-fix: the closure returns nil → counter UPDATE commits.
-	const password = "correct"
-	userRepo := mem.NewStore(clock.Real()).UserRepository()
-	sessionStore := testutil.RealSessionRepo(t)
-	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
-	refreshStore := newTestRefreshStore()
-	tx := &stubTxRunner{}
-	svc := mustNewService(userRepo, sessionStore, roleRepo, refreshStore,
-		testIssuer, slog.Default(),
-		WithClock(clock.Real()),
-		WithTxManager(persistence.WrapForCell(tx)),
-		WithSessionTTL(time.Hour),
-	)
-
-	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
-	u, _ := domain.NewUser("race-bob", "race@test.com", string(hash), time.Now())
-	u.ID = "usr-race-bob"
-	require.NoError(t, userRepo.Create(context.Background(), u))
-
-	// Login with the CORRECT password: bcrypt would pass, but the in-tx
-	// baseline assert short-circuits because... we'll simulate by leaving
-	// the user Active and asserting the success path commits cleanly. The
-	// pure baseline-fail-during-active path is hard to engineer without
-	// real concurrent writes; instead verify that the wrong-password path
-	// (which also triggers recordFailureBestEffort) commits.
-	_, err := svc.Login(context.Background(), LoginInput{Username: "race-bob", Password: "wrong"})
-	require.Error(t, err)
-
-	require.Len(t, tx.committedCleanly, 1)
-	assert.True(t, tx.committedCleanly[0],
-		"wrong-password tx must commit so the counter UPDATE persists")
-	persisted, err := userRepo.GetByID(context.Background(), u.ID)
-	require.NoError(t, err)
-	assert.Equal(t, 1, persisted.FailedLoginCount())
-}
+// Note on the baseline-assert path:
+//
+// The in-tx credentialauthority.Assert failure branch (service.go:441) shares
+// the same recordFailureBestEffort → outcome.failureErr structural pattern as
+// the wrong-password branch covered by TestLogin_WrongPassword_*. A pure
+// baseline-assert-during-Active test would require simulating a concurrent
+// ChangePassword that lands inside the test's RunInTx window — the mem-store
+// TxRunner is single-goroutine so this race is not expressible at the unit
+// level. The PG-level race is implicitly covered by the testcontainers e2e
+// TestL2_LoginUniform401 (the locked-account sub-case enters loginInTx with a
+// pre-bcrypt-suspended user and exits the same loginOutcome path). Keeping a
+// mem-store stub for the baseline branch would duplicate the wrong-password
+// fixture without exercising new code (PR #585 review F2).
