@@ -1,6 +1,13 @@
-// SQLSTATE classifier helpers (isUniqueViolation etc.) and the package-level
-// doc comment explaining why this package does NOT import adapters/postgres are
-// in pgerrors.go. Read that file first when adding new error-handling logic.
+// Package postgres provides cell-private PostgreSQL implementations of the
+// devicecell port interfaces. These implementations live inside the cell's
+// internal package tree so they can import the cell's own internal/domain
+// without violating Go module visibility rules — adapters/ cannot import
+// examples/*/internal/..., but the reverse is allowed.
+//
+// Layering note: this package does NOT import adapters/postgres. SQLSTATE error
+// classification goes through the single source pkg/pgquery (importable from
+// examples/ — it is a leaf wire-error helper, see SQLSTATE-SINGLE-SOURCE-01);
+// no local classifier is duplicated here.
 package postgres
 
 import (
@@ -18,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -78,7 +86,7 @@ func (r *PGDeviceRepository) Create(ctx context.Context, device *domain.Device) 
 		device.LastSeen,
 	)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if pgquery.IsUniqueViolation(err) {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"device already exists",
 				errcode.WithInternal(fmt.Sprintf("id=%q", device.ID)))

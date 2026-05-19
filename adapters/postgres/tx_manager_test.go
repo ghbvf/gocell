@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
 // mockTx implements pgx.Tx for unit testing.
@@ -43,20 +45,20 @@ func TestCtxWithTx_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	// No tx in fresh context.
-	tx, ok := TxFromContext(ctx)
+	tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
 	assert.False(t, ok)
 	assert.Nil(t, tx)
 
 	// Store and retrieve.
 	mock := &mockTx{}
 	ctx = CtxWithTx(ctx, mock)
-	tx, ok = TxFromContext(ctx)
+	tx, ok = persistence.TxFromContext[pgx.Tx](ctx)
 	assert.True(t, ok)
 	assert.Same(t, mock, tx)
 }
 
 func TestTxFromContext_NilContext(t *testing.T) {
-	tx, ok := TxFromContext(context.Background())
+	tx, ok := persistence.TxFromContext[pgx.Tx](context.Background())
 	assert.False(t, ok)
 	assert.Nil(t, tx)
 }
@@ -106,7 +108,7 @@ func TestRunInTx_Savepoint_ExecSequence(t *testing.T) {
 		assert.Equal(t, 1, savepointDepth(innerCtx))
 
 		// The tx in context should be the same mock.
-		tx, ok := TxFromContext(innerCtx)
+		tx, ok := persistence.TxFromContext[pgx.Tx](innerCtx)
 		assert.True(t, ok)
 		assert.Same(t, mock, tx)
 		return nil

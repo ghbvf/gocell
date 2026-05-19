@@ -54,3 +54,58 @@ func TestIsForeignKeyViolation(t *testing.T) {
 		})
 	}
 }
+
+// TestIsRaiseException covers nil, non-pg, wrong-code, match, and wrapped-chain cases.
+func TestIsRaiseException(t *testing.T) {
+	raiseErr := &pgconn.PgError{Code: "P0001"}
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil error", err: nil, want: false},
+		{name: "plain error", err: errors.New("plain"), want: false},
+		{name: "pgError wrong code", err: &pgconn.PgError{Code: "23505"}, want: false},
+		{name: "pgError match P0001", err: raiseErr, want: true},
+		{name: "wrapped pgError match", err: fmt.Errorf("ctx: %w", raiseErr), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsRaiseException(tt.err))
+		})
+	}
+}
+
+// TestAsRaiseException covers the same cases as TestIsRaiseException plus
+// asserts the returned *pgconn.PgError identity on match (callers rely on it
+// to read Message without doing a second errors.As walk).
+func TestAsRaiseException(t *testing.T) {
+	raiseErr := &pgconn.PgError{Code: "P0001", Message: "trigger: rule"}
+
+	tests := []struct {
+		name    string
+		err     error
+		wantOK  bool
+		wantPtr *pgconn.PgError
+	}{
+		{name: "nil error", err: nil, wantOK: false},
+		{name: "plain error", err: errors.New("plain"), wantOK: false},
+		{name: "pgError wrong code", err: &pgconn.PgError{Code: "23505"}, wantOK: false},
+		{name: "pgError match P0001", err: raiseErr, wantOK: true, wantPtr: raiseErr},
+		{name: "wrapped pgError match", err: fmt.Errorf("ctx: %w", raiseErr), wantOK: true, wantPtr: raiseErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := AsRaiseException(tt.err)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Same(t, tt.wantPtr, got)
+			} else {
+				assert.Nil(t, got)
+			}
+		})
+	}
+}

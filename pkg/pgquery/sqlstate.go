@@ -44,3 +44,33 @@ func IsForeignKeyViolation(err error) bool {
 	}
 	return pgErr.Code == SQLStateForeignKeyViolation
 }
+
+// IsRaiseException reports whether err (or any error in its Unwrap chain) is a
+// PL/pgSQL RAISE EXCEPTION (SQLSTATE P0001). P0001 is the generic class used by
+// any RAISE EXCEPTION site, so a true result only tells the caller the error
+// originated from a trigger/function RAISE — callers that need to attribute it
+// to a specific trigger must additionally inspect pgconn.PgError.Message
+// (e.g. accesscore isLastAdminProtected matches the trigger message prefix).
+// Keeping the SQLSTATE classification here keeps pkg/pgquery the single source
+// for PG error-code knowledge.
+func IsRaiseException(err error) bool {
+	pgErr, ok := AsRaiseException(err)
+	_ = pgErr
+	return ok
+}
+
+// AsRaiseException returns the unwrapped *pgconn.PgError if err (or any error
+// in its Unwrap chain) is a PL/pgSQL RAISE EXCEPTION (SQLSTATE P0001), so
+// callers that need both the SQLSTATE classification AND the trigger Message
+// attribution can do so in a single Unwrap walk. ok=false when err is nil, not
+// a pgconn.PgError, or carries a different SQLSTATE.
+func AsRaiseException(err error) (*pgconn.PgError, bool) {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return nil, false
+	}
+	if pgErr.Code != SQLStateRaiseException {
+		return nil, false
+	}
+	return pgErr, true
+}

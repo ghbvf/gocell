@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
@@ -264,7 +266,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// Use publishCtx so InjectObservabilityFromContext picks up the obs IDs.
 	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
 		// Business write.
-		tx, ok := postgres.TxFromContext(txCtx)
+		tx, ok := persistence.TxFromContext[pgx.Tx](txCtx)
 		if !ok {
 			t.Fatal("transaction must be in context")
 		}
@@ -527,7 +529,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 
 	// Use publishCtx so InjectObservabilityFromContext picks up the obs IDs.
 	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
-		tx, ok := postgres.TxFromContext(txCtx)
+		tx, ok := persistence.TxFromContext[pgx.Tx](txCtx)
 		if !ok {
 			t.Fatal("transaction must be in context")
 		}

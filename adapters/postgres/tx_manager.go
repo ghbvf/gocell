@@ -24,18 +24,12 @@ var _ persistence.TxRunner = (*TxManager)(nil)
 type savepointDepthKey struct{}
 
 // CtxWithTx returns a new context carrying the given pgx.Tx.
-// Downstream code (e.g. OutboxWriter) retrieves it via TxFromContext.
-// Uses persistence.TxCtxKey so cell-local adapters can participate
-// in ambient transactions without importing adapters/postgres.
+// Downstream code (e.g. OutboxWriter) retrieves it via
+// persistence.TxFromContext[pgx.Tx]. Uses persistence.TxCtxKey so cell-local
+// adapters can participate in ambient transactions without importing
+// adapters/postgres.
 func CtxWithTx(ctx context.Context, tx pgx.Tx) context.Context {
 	return context.WithValue(ctx, persistence.TxCtxKey, tx)
-}
-
-// TxFromContext extracts a pgx.Tx from the context.
-// The boolean return indicates whether a transaction was present.
-func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
-	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
-	return tx, ok
 }
 
 // savepointDepth returns the current savepoint nesting depth from context.
@@ -61,7 +55,8 @@ func NewTxManager(p *Pool) *TxManager {
 }
 
 // RunInTx executes fn inside a database transaction. The pgx.Tx is stored in
-// the context so that downstream code can retrieve it via TxFromContext.
+// the context so that downstream code can retrieve it via
+// persistence.TxFromContext[pgx.Tx].
 //
 // Nesting: if the context already carries a transaction, RunInTx creates a
 // savepoint instead of a new top-level transaction. Savepoints are released on
@@ -71,7 +66,7 @@ func NewTxManager(p *Pool) *TxManager {
 // before being re-raised.
 func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) error) (retErr error) {
 	// Check for an existing transaction (nesting).
-	if existingTx, ok := TxFromContext(ctx); ok {
+	if existingTx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
 		return tm.runInSavepoint(ctx, existingTx, fn)
 	}
 

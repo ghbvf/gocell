@@ -160,6 +160,26 @@ github.com/ghbvf/gocell/tools/archtest	TestCellRepoReadyzProbe
 # TestCellRepoReadyzProbe 20.43s). R2-P2 PR-b.
 github.com/ghbvf/gocell/tools/archtest	TestTypesutilImplementsFunnel01
 
+# type-graph-load: PG-REPO-AMBIENT-TX-01 R1/R2/R3 scan — type-aware
+# whole-module SharedResolver over the 3 pgRepoPackagePatterns
+# (adapters/postgres + 2 cell-private PG adapters). PR #586 added iotdevice
+# to the production-scope predicate (was previously a silent literal-list
+# blind spot), bringing TestPGRepoAmbientTx's scan to all 3 patterns and
+# pushing it 0.28s over the 20s slowgate budget on a cold-resolver shard.
+# Same modulo-shift SLOW-flake class as the entries above (cumulative
+# trigger evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestPGRepoAmbientTx
+
+# type-graph-load: AUTHZ-MUTATION-APPLY-FUNNEL Rule (a) SetStatus scan — same
+# whole-module SharedResolver profile as the credential funnel siblings above.
+# Pre-existing borderline test (~17-19s on cached resolver). Surfaced on PR
+# #586 verify-archtest shard 6 (21.17s > 20s) after #586's three new
+# SQLSTATE-SINGLE-SOURCE tests shifted the 16-shard modulo distribution off
+# the cached SharedResolver — same modulo-shift SLOW-flake class as the
+# entries above (cumulative trigger evidence for
+# ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestAuthzMutationApplyFunnel_SetStatus_01
+
 # type-graph-load: CELLGEN-ERRCODE-FUNNEL-01 NoBuildTagFiles scan — fans
 # out over KnownNonDefaultTags() (multiple RunTyped invocations, one per
 # tag group; same pattern as TestPanicRegistered allowlisted above). Each

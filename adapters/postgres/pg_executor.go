@@ -6,6 +6,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
 // pgExecutor routes SQL through the ambient transaction when ctx carries one.
@@ -20,21 +22,21 @@ func newPGExecutor(pool *pgxpool.Pool) pgExecutor {
 }
 
 func (e pgExecutor) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if tx, ok := TxFromContext(ctx); ok {
+	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
 		return tx.Exec(ctx, sql, args...)
 	}
 	return e.pool.Exec(ctx, sql, args...)
 }
 
 func (e pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if tx, ok := TxFromContext(ctx); ok {
+	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
 		return tx.QueryRow(ctx, sql, args...)
 	}
 	return e.pool.QueryRow(ctx, sql, args...)
 }
 
 func (e pgExecutor) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if tx, ok := TxFromContext(ctx); ok {
+	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
 		return tx.Query(ctx, sql, args...)
 	}
 	return e.pool.Query(ctx, sql, args...)
