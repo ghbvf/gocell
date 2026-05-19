@@ -1,9 +1,9 @@
 # 038 P0/P1 阻塞项实施计划（独立于 034 accesscore 路线）
 
 **生成日期**：2026-05-12
-**最后更新**：2026-05-18 v3（状态回灌：双 PR 同期 ship —— (1) **Wave 3 PR-W3-1 TEST-JOURNEY-ROOT-HARNESS-01 ✅**（615-journey-useronboarding-harness）：(a) J-useronboarding lifecycle: experimental → active；(b) `tests/integration/journey_useronboarding_login_verify_test.go::TestJUseronboardingLoginVerify` (session.MemStore round-trip 真实持久化) 闭环 login-verify checkRef；(c) 其余 3 criteria mode: auto → manual，因 `cells/accesscore/internal/credentialinvalidate` 屏障 docker-free 无 load-bearing seam（激进自审拒绝 schema-only tautology）；(d) status-board J-useronboarding state: todo → doing；(e) 同 PR 登记 Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01`（非 silent carryover）。 (2) **Wave 2 PR-5 GOV-AUTH-PUBLIC ✅ PR #573**：落 FMT-34 双向锁（governance 下游 Medium + codegen 上游 Hard funnel via buildHTTPEndpointSpec）；V-A11 GOVERNANCE-EXAMPLES-COVERAGE-01 ❌ subsumed by 025（parser fs.WalkDir + TestProjectWalksExamples 已结构性闭环，cap-14 backlog drift 同 PR 收口）；PR 标题改 `PR-GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN`（单规则 PR），原 `PR-GOV-NEW-RULES` 因 V-A11 退化作废；同 PR 登记 3 条 review-derived backlog（CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 / V-A11c / V-A11b 升 active）。 **Wave 2 2/2 + Wave 3 1/1 ship**，Wave 2/3 全清。**前一版**：2026-05-17 v2（Wave 6 PR-W6-1 #543 + Wave 4 4/5 + Wave 5 1/3）；2026-05-16 v1 Wave 4 3/5；Wave 5 0/3；无 Wave 6。）
+**最后更新**：2026-05-19 v4（状态回灌：**Wave 4 全清 5/5** —— item #1 R-01 + G-08 batch 两半分别 ship：R-01 EVENT-OBSERVABILITY-METRIC-PACK ✅ PR #589（D3a-1 R-METRIC-PACK-CORE，吸收 G-05）；G-08 OUTBOX-FAILOPEN-COUNTER（改名 OUTBOX-ENVELOPE-ID-INJECTION）✅ PR #582（SafeID typed funnel）。至此 038 全部 Wave 清零。**前一版**：2026-05-18 v3（状态回灌：双 PR 同期 ship —— (1) **Wave 3 PR-W3-1 TEST-JOURNEY-ROOT-HARNESS-01 ✅**（615-journey-useronboarding-harness）：(a) J-useronboarding lifecycle: experimental → active；(b) `tests/integration/journey_useronboarding_login_verify_test.go::TestJUseronboardingLoginVerify` (session.MemStore round-trip 真实持久化) 闭环 login-verify checkRef；(c) 其余 3 criteria mode: auto → manual，因 `cells/accesscore/internal/credentialinvalidate` 屏障 docker-free 无 load-bearing seam（激进自审拒绝 schema-only tautology）；(d) status-board J-useronboarding state: todo → doing；(e) 同 PR 登记 Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01`（非 silent carryover）。 (2) **Wave 2 PR-5 GOV-AUTH-PUBLIC ✅ PR #573**：落 FMT-34 双向锁（governance 下游 Medium + codegen 上游 Hard funnel via buildHTTPEndpointSpec）；V-A11 GOVERNANCE-EXAMPLES-COVERAGE-01 ❌ subsumed by 025（parser fs.WalkDir + TestProjectWalksExamples 已结构性闭环，cap-14 backlog drift 同 PR 收口）；PR 标题改 `PR-GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN`（单规则 PR），原 `PR-GOV-NEW-RULES` 因 V-A11 退化作废；同 PR 登记 3 条 review-derived backlog（CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 / V-A11c / V-A11b 升 active）。 **Wave 2 2/2 + Wave 3 1/1 ship**，Wave 2/3 全清。**前一版**：2026-05-17 v2（Wave 6 PR-W6-1 #543 + Wave 4 4/5 + Wave 5 1/3）；2026-05-16 v1 Wave 4 3/5；Wave 5 0/3；无 Wave 6。）
 **关系**：
-- [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S3+S5/S3F/S4.0/S4a/S4b 已 ship；S4c 串行推进）。本计划不重复 accesscore 路线
+- [`docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md`](archive/202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（全部 shipped 并归档 v16，2026-05-19）。本计划不重复 accesscore 路线
 - 本计划聚焦 backlog 中**未被 034 路线覆盖**的 P0/🔴 阻塞项 + 高密度可合并 P1，按依赖关系 + 文件物理重叠 + 同 ADR 概念模型三原则给合并决策
 
 **触发**：用户 2026-05-12 要求把 P0/P1/🔴 项整理成实施计划，要求给合并决策的依据。
@@ -20,7 +20,7 @@
 
 | # | 任务 | Wave | 类型 | 估时 | 状态 | 排期/依赖 |
 |---|---|---|---|---|---|---|
-| 1 | **R-01 EVENT-OBSERVABILITY-METRIC-PACK + G-08 OUTBOX-FAILOPEN-COUNTER**（同 batch ship，分 PR review）| Wave 4 | 触发型小 PR | ~10h dev / ~5h review | ⏳ 未起 | 与其他 wave 文件域互斥可并行（详 §1 P1 独立小 PR / §3 Wave 4）|
+| 1 | ~~**R-01 EVENT-OBSERVABILITY-METRIC-PACK + G-08 OUTBOX-FAILOPEN-COUNTER**~~（同 batch ship，分 PR review）| Wave 4 | 触发型小 PR | ~~~10h dev / ~5h review~~ | ✅ **全闭环** | R-01 ✅ PR #589 (D3a-1 R-METRIC-PACK-CORE，吸收 G-05，2026-05-19)；G-08 OUTBOX-FAILOPEN-COUNTER（→ 改名 OUTBOX-ENVELOPE-ID-INJECTION）✅ PR #582 (SafeID typed funnel，2026-05-18)。两半已分别 ship |
 | 2 | **G-10 KERNEL-CELL-PACKAGE-DECOMPOSE**（与 PR-A22 协同）| Wave 5 | 架构性大重构 | 独立排期 | ⏳ 未起 | 不阻塞发布（详 §1 架构性大重构 / §3 Wave 5）|
 | 3 | **SEALED-MARKER-DEFENSE-EXPANSION-BUNDLE**（7 子条束）| Wave 5 | 架构性大重构 | 独立排期 | ⏳ 未起 | 不阻塞发布（详 §3 Wave 5）|
 
@@ -50,7 +50,7 @@
 - OIDC-JWKS-ROTATION-WORKER-01（cap-05，依赖 A-01）
 - ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 🟠 P1（cap-x-cross）
 - ADAPTER-CONNECT-BUDGET-01 🟡 P1（cap-x-cross）
-- R-01 EVENT-OBSERVABILITY-METRIC-PACK + G-08 OUTBOX-FAILOPEN-COUNTER（同 batch ship 但分 PR review）
+- ~~R-01 EVENT-OBSERVABILITY-METRIC-PACK + G-08 OUTBOX-FAILOPEN-COUNTER~~ ✅ R-01 PR #589 / G-08 PR #582
 - C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE
 - STARTUP-ROLLBACK-ERR-JOIN-01
 
@@ -211,8 +211,8 @@ Wave 2（依赖 Wave 1，2 PR） — 2/2 ship：
 Wave 3（依赖 Wave 1） — 1/1 ship：
   TEST-JOURNEY-ROOT-HARNESS-01      ✅ PR-W3-1 (615-journey-useronboarding-harness, 2026-05-18) — J-useronboarding lifecycle active + 1 auto load-bearing test (login-verify, session.MemStore round-trip) + 3 manual carve-out (cells/accesscore/internal/credentialinvalidate 屏障) + Hard 升级 backlog `JOURNEY-USERONBOARDING-AUTO-EXPANSION-01` 同 PR 登记
 
-Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突） — 4/5 ship：
-  R-01 + G-08 同 batch（分 PR review）              ⏳ 未起
+Wave 4（独立小 PR，触发型 / 与上面 wave 并行不冲突） — 5/5 ship（全清）：
+  R-01 + G-08 同 batch（分 PR review）              ✅ R-01 PR #589 / G-08 PR #582
   C-02 CONFIGSUBSCRIBE-CACHE-LIFECYCLE              ✅ PR #518 (035 PR-CFG-CACHE-LIFECYCLE)
   STARTUP-ROLLBACK-ERR-JOIN-01                      ✅ PR #499
   ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01         ✅ PR #517
@@ -240,6 +240,6 @@ Wave 6（cap-x-cross 触发型小 PR 簇 / 发布前 contract 测试门禁簇）
 
 ## 4. 引用
 
-- [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S4a/S4b/S4c 串行未 ship）
+- [`docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md`](archive/202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（全部 shipped 并归档 v16，2026-05-19）
 - [`docs/backlog.md`](../backlog.md) + 4 子表：本计划承担项的 backlog 来源
 - [`docs/plans/archive/202605121750-037-wave4-advance-plan.md`](archive/202605121750-037-wave4-advance-plan.md)：036 charter wave 4 触发型 3 条提前推进（独立于本计划，已归档）

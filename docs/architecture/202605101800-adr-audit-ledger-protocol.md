@@ -3,7 +3,7 @@
 **Date**: 2026-05-10
 **Status**: Accepted
 **Accepted by**: PR #450 / 2026-05-10
-**Related plan**: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` S7
+**Related plan**: `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` S7
 **Related ADRs**:
 
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`（typed-Go-heavy 范式锚点）

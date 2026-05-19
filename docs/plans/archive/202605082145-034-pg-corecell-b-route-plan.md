@@ -1,8 +1,8 @@
 # 034 PG / accesscore / auditcore / configcore B 路线实施计划
 
 **生成日期**: 2026-05-08
-**最后更新**: 2026-05-18（v15 — **S4c FU-4 Journey 验收升级 shipped + S4-FU 收口完成**：`journeys/J-ssologin.yaml` 新增 auto passCriteria `error-paths-uniform`（checkRef → `tests/integration/TestJSsologinErrorPathsUniform`，Docker-free，断言 missing-user/wrong-password/inactive 三态经 `httputil.WriteError` 序列化 wire 字节完全一致）；`journeys/J-accountlockout.yaml` `login-reject` criterion 补 wire-shape 文本 + `TestJAccountlockoutLoginReject`。T4↔FU-4 显式分工（T4 `TestL2_LoginUniform401` 编程式 PG e2e / FU-4 声明式 journey 验收，cross-link 不重复）。J-ssologin 为 active journey，VERIFY-06 在 Docker-less `make verify` 内实际执行该 test，故走 errcode→wire 序列化断言而非 testcontainers。收口三项全达成：ADR §A14 S4-FU 收口标注；5 项触发型 backlog 条目登记（cap-x-cross ×3 / cap-14 ×2）；plan 回灌 9/9。**S4c 全部 merged 9/9**（T1 #514 / T2 #525 / T3 #515 / T4 #523 / T5 #524+#533 / FU-1 #513 / FU-2 #512 / FU-3 #516 / FU-4 本批）。）
-**前一版**: 2026-05-17 v14（S4c T2 一致性等级 codegen funnel shipped PR #525；merged 8/9，剩 FU-4）；2026-05-17 v13（S4c T5 AUTH-CACHE-01 shipped；merged 7/9）；2026-05-16 v12（S4c T4 L2 e2e harness shipped — 新建 `tests/integration/l2atomicity/` 覆盖 7 场景 e2e 回归；接入 race-pg-integration lane；B2-C-13 闭环（accesscore scope）；doc.go 加 `//go:build integration` + FU-4 cross-link + Running locally 段。S4c 进度 merged 6/9，剩 T2 #525 / FU-4 / T5）；2026-05-16 v11（状态回灌：修正 T1/T3 PR 占位符为 #514/#515）；2026-05-16 v10（S4c T1 rbacassign 闭环 shipped）；2026-05-16 v9（S4-FU PR #501 review 闭环批）
+**最后更新**: 2026-05-19（v16 — **D4 / B2.B 状态回灌 + 计划归档**：(1) D4 5 项工作项核验全部已落地（setup admin 410 description / README bootstrap env / delete·lock·role-revoke 403 `ERR_AUTH_LAST_ADMIN_PROTECTED [S4.0]` / `schema_guard.go` 顶部表清单 / S4a FU-3a login 401 uniform + refresh 403 `ERR_AUTH_USER_NOT_ACTIVE`），并非独立 PR 而是随 FU-1 #513 / S4.0 #476 / S4a #482 / S4b #490 等顺路完成；(2) B2.B v15 进度行滞后误标 ⬜，实际 PR #575 已合（commit `ef97d698c`）；(3) 主线全部 ship，计划归档至 `docs/plans/archive/`；引用方 038/039/005-framework-capability 链接路径同步更新。**完成判据全达成**：S0/S1/S2/S3+S5/S3F/S4.0/S4a/S4b/S4c (9/9) /S4d/S4e/S-next/S6/S7/W9/B2.B/D4/DX4 全部 shipped；路线外独立项 + 触发型 backlog 不在本计划收口范围。）
+**前一版**: 2026-05-18 v15（S4c FU-4 Journey 验收升级 shipped + S4-FU 收口完成 9/9）；2026-05-17 v14（S4c T2 一致性等级 codegen funnel shipped PR #525；merged 8/9）；2026-05-17 v13（S4c T5 AUTH-CACHE-01 shipped；merged 7/9）；2026-05-16 v12（S4c T4 L2 e2e harness shipped）；2026-05-16 v11（状态回灌）；2026-05-16 v10（S4c T1 rbacassign 闭环 shipped）；2026-05-16 v9（S4-FU PR #501 review 闭环批）
 **对接来源**:
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md`（B 路线源）
 - `docs/plans/archive/202605071200-033-pg-implementation-plan.md`（A 路线，已被本计划取代，已归档）
@@ -719,12 +719,21 @@ Wave C
 
 **完成判据**：T1-T5 + FU-1～4 共 9 个 PR 全部 merged + 5 项触发型 backlog 条目落地 `docs/backlog/*` + ADR `202605101400-adr-credential-session-protocol.md` §A12 增"S4-FU 收口"标注。预计总跨度 **2-3 个工作日**（实施 ~17h S4c + ~12h S4-FU = ~29h，并行收益压到 ~16-20h wall time）。
 
-**进度（v15，2026-05-18）**：
-- ✅ merged 9/9：**T1 #514** / **T2 #525** / **T3 #515** / **T4 #523** / **T5 #524+#533** / **FU-1 #513** / **FU-2 #512** / **FU-3 #516** / **FU-4 本批**（branch `claude/continue-s4c-tasks-5TveC`）
-- ✅ 收尾项全达成：ADR §A14「S4-FU 收口标注（2026-05-18）」已添加（A12 已被 Wave 5 P1-1 占用、A13 被 wire-uniformity 占用，故新增 A14）；5 项触发型 backlog 已登记——`IDENTITYMANAGE-UPDATE-CO-TX-UPGRADE-01` / `MIGRATION-NONEMPTY-DB-UPGRADE-GUIDE-01` / `AUTHZMUTATE-MUTATION-EVENT-OPTIONAL-01` → `docs/backlog/cap-x-cross.md` §x.2；`ARCHTEST-FUNNEL-CALLSITE-LEVEL-01` / `GOLANGCI-GOPACKAGES-EXEMPTION-CLEANUP-01` → `docs/backlog/cap-14-tooling.md` §14.1（backlog.md 索引计数同步 61→63 / 36→39）
-- 独立侧线：**DX4** ✅ shipped（本 PR #578；实施细节见本节 §DX4 内容；4 子项全收口 + PR444-FU bench 核验/修复）；**D4** / **B2.B** ⬜ 仍未 ship（与 S4c/S4-FU 无依赖，状态不变）
+**进度（v16，2026-05-19，归档版）**：
+- ✅ S4c merged 9/9：**T1 #514** / **T2 #525** / **T3 #515** / **T4 #523** / **T5 #524+#533** / **FU-1 #513** / **FU-2 #512** / **FU-3 #516** / **FU-4**（v15 本批，branch `claude/continue-s4c-tasks-5TveC`）
+- ✅ S4-FU 收尾项全达成：ADR §A14「S4-FU 收口标注（2026-05-18）」已添加；5 项触发型 backlog 已登记（cap-x-cross ×3 / cap-14 ×2，backlog.md 索引 61→63 / 36→39）
+- ✅ 独立侧线全 ship：**DX4** ✅ shipped（PR #578；4 子项 + PR444-FU bench 核验/修复）；**D4** ✅ 实际落地（5 项随 FU-1 #513 / S4.0 #476 / S4a #482 / S4b #490 顺路完成，非独立 PR — 详见本节末「D4 v16 状态回灌」）；**B2.B** ✅ shipped（PR #575，commit `ef97d698c` — v15 进度行误标 ⬜ 是写完后才合的滞后记录）
 
-> **历史（v11，2026-05-16）**：merged 5/9（T1 #514 / T3 #515 / FU-1 #513 / FU-2 #512 / FU-3 #516）；剩 T2 / T4 / FU-4 / T5；收尾项未落。v12-v14 逐步 ship T4 / T5 / T2，v15 ship FU-4 + 收口。
+**D4 v16 状态回灌**（2026-05-19）：
+| 工作项 | 落地位置 | 承载 PR |
+|---|---|---|
+| setup admin `410 ERR_SETUP_ALREADY_INITIALIZED` | `contracts/http/auth/setup/admin/v1/contract.yaml:29-30` + ADR `202605101400-adr-admin-invariant.md:46,108,111` | S4.0 #476 顺路 |
+| README `GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD` 文档化 | `README.md:326-327` | S4a #482 顺路 |
+| delete/lock/role revoke 403 加 `ERR_AUTH_LAST_ADMIN_PROTECTED [S4.0]` | 三个 `contract.yaml` 403 description | S4.0 #476 |
+| `schema_guard.go` 顶部表清单覆盖 users/sessions/roles/role_assignments | `adapters/postgres/schema_guard.go:27-37,296-332` | S3F #465 + 后续 PR 增量维护 |
+| S4a FU-3a：login 401 uniform + refresh 403 `ERR_AUTH_USER_NOT_ACTIVE` | `contracts/.../login/v1/contract.yaml:23-25` + `.../refresh/v1/contract.yaml:24-25` | FU-1 #513（login）+ S4b #490（refresh） |
+
+> **历史**：v15（2026-05-18）S4c FU-4 + S4-FU 收口完成 9/9；v11-v14 逐步 ship T4/T5/T2；v10 S4c T1 rbacassign 闭环 shipped；v9 S4-FU PR #501 review 闭环批。
 
 ---
 

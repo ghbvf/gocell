@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-10
 **Status**: Accepted
-**Related plan**: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` S1
+**Related plan**: `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` S1
 **Related ADRs**:
 
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`（typed-Go-heavy 范式锚点）
@@ -485,7 +485,7 @@ repoErr → 401（不漂 503）。
 ### A14 S4-FU 收口标注（2026-05-18）
 
 **收口**：S4c FU-4（Journey 验收升级）落地，S4c 全部 **9/9** 完成、S4-FU
-FU-1～4 全部 merged。计划 §"完成判据"（`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`）三项收尾全部达成：
+FU-1～4 全部 merged。计划 §"完成判据"（`docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md`）三项收尾全部达成：
 
 1. **FU-4 Journey 声明式覆盖**：`journeys/J-ssologin.yaml` 新增 auto
    passCriteria `error-paths-uniform`（checkRef →
@@ -929,7 +929,7 @@ CLAUDE.md "Review 和重构时不考虑向后兼容" 原则适用于代码层；
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4 session protocol 原型 — 本 ADR 是其在 session 域的实例化
 - `docs/architecture/202605101400-adr-admin-invariant.md` — admin 不变量配套决议（同 PR）
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md` §3-§7、§12 — 5 个 P0/P1 缺口分析 + 决策点
-- `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` §4 S1 — PR 范围与产物形态
+- `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` §4 S1 — PR 范围与产物形态
 - `docs/plans/202605082130-pg-corecell-open-issues.md` — 关联 backlog（B2-C-02、ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01、P3-TD-10、PR280-FU1 等）
 - `.claude/rules/gocell/runtime-api.md` § Option 范式分层 — wiring vs builder option 判定
 - PR262 typed AuthPlan / PR-MODE-1 typed-nil reject / PR-MODE-6 error-first constructor — typed-Go-heavy 演化前例

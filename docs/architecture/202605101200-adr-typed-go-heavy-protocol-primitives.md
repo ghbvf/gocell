@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-10
 **Status**: Accepted
-**Related plans**: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md`
+**Related plans**: `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md`
 **Supersedes (architectural intent)**: 034 §4 ADR-B 6 条边界规则（被 typed Go 类型系统天然画出）
 
 ---
@@ -439,7 +439,7 @@ Phase 2/3 不在本 ADR 范围；本 ADR 仅锁 Phase 1 方向。
 
 ## 8. References
 
-- `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` — B 路线计划（本 ADR 触发其重写）
+- `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` — B 路线计划（本 ADR 触发其重写）
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md` — PR#417 分析（路线源）
 - `docs/plans/archive/202604201800-pg-pilot-layering-refactor-plan.md` — 历史 PG pilot 分层重构（同形态前例）
 - `.claude/rules/gocell/runtime-api.md` — Option 范式分层 / sealed AuthPlan / 强依赖 wiring

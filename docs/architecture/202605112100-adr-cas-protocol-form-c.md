@@ -3,7 +3,7 @@
 **Date**: 2026-05-11
 **Status**: Accepted
 **Accepted by**: PR #464 / 2026-05-11
-**Related plan**: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` §4 S6
+**Related plan**: `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` §4 S6
 **Related ADRs**:
 
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`（typed-Go-heavy 范式锚点）
@@ -135,7 +135,7 @@ session 和 ledger 各有 Store + storetest，CAS 没有。这是**有意的**�
 
 ## 5. References
 
-- plan: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` §4 S6
+- plan: `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` §4 S6
 - 范式锚点: `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`
 - session（Form A 对比）: `docs/architecture/202605101400-adr-credential-session-protocol.md`
 - audit ledger（Form B 对比）: `docs/architecture/202605101800-adr-audit-ledger-protocol.md`

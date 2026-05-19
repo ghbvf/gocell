@@ -79,7 +79,7 @@ observability.md 称"与 `pkg/redaction.RedactError` 同源 key 列表"，但列
 > - PG-backed Store（S8 PR 实施）
 > - auditcore cell 接入（S9 PR 实施）
 
-但实际上 PG Store 和 auditcore cell 接入均在本 PR（S7）完成，`docs/plans/202605082145-034-pg-corecell-b-route-plan.md` 也已更新 S7 为 `✅ shipped`。
+但实际上 PG Store 和 auditcore cell 接入均在本 PR（S7）完成，`docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` 也已更新 S7 为 `✅ shipped`。
 
 ADR §1.2 的"S8/S9"是最初写作时的计划，未随实施提前而同步修订，与当前状态不符。
 

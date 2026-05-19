@@ -15,7 +15,7 @@
 | 既有 plan | 轨道 | 与本计划关系 |
 |---|---|---|
 | `202605101839-029-master-roadmap.md` | 关键路径 12/12 ✅ + errcode/K/G 残余 + F4/F5 | 不同轨道。029 是**收尾既有承诺**；本计划是**新增框架能力**，独立 lane |
-| `202605082145-034-pg-corecell-b-route-plan.md` | accesscore PG 链 | 不同轨道。本计划不触 accesscore 实施路线 |
+| `archive/202605082145-034-pg-corecell-b-route-plan.md` | accesscore PG 链（已归档 v16，2026-05-19） | 不同轨道。本计划不触 accesscore 实施路线 |
 | `202605112000-036` / `037` / `037r2` | archtest/governance Wave 推进 | 正交。036 系列守"现有能力的约束 enforcement"；本计划是"新能力抽象"。新能力落地时其 enforcement 进 036 体系，不在此重复 |
 | `202605121830-038` / `039` / `040` | P0/P1 阻塞 + archtest pass funnel | 正交。本计划不含 backlog 阻塞项 |
 

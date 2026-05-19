@@ -2,7 +2,7 @@
 
 **生成日期**：2026-05-13
 **关系**：
-- [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md) accesscore PG 链（S4b/S4c 串行未 ship）
+- [`docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md`](archive/202605082145-034-pg-corecell-b-route-plan.md) accesscore PG 链（全部 shipped 并归档 v16，2026-05-19）
 - [`docs/plans/202605121830-038-p0-p1-blocking-implementation-plan.md`](202605121830-038-p0-p1-blocking-implementation-plan.md) P0/P1 阻塞项（Wave 1 4/8 ship + 1/8 in review，Wave 2/3/4 未启动）
 - **本计划在 034 + 038 全部完结后启动**（用户裁决 2026-05-13：039 不与 034/038 并行）
 
@@ -286,7 +286,7 @@ Wave 4（10 项 watch only，不排期）：
 
 ## 6. 引用
 
-- [`docs/plans/202605082145-034-pg-corecell-b-route-plan.md`](202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（S4a ✅ PR #482；S4b/S4c 待 ship）
+- [`docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md`](archive/202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（全部 shipped 并归档 v16，2026-05-19）
 - [`docs/plans/202605121830-038-p0-p1-blocking-implementation-plan.md`](202605121830-038-p0-p1-blocking-implementation-plan.md)：P0/P1 阻塞项（Wave 1 4/8 ship；其余待 ship）
 - [`docs/backlog.md`](../backlog.md) + 4 子表：本计划承担项的 backlog 来源（`develop @ ad98b8b7` 快照）
 - 合并三原则参考：038 plan §2 + ai-collab.md "Review checklist"

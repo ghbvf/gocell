@@ -4,7 +4,7 @@
 >
 > A 路线（在 cell 内一次落地 PG repo）经 PR#417 验证不可行：accesscore PG 接入暴露 5 个 P0/P1 协议缺口（token 重放 / role revoke 排序 / admin 不变量 / credential 失效 / CAS），review 抓表层 bug 后协议问题再爆。
 >
-> 路线已切换到 `docs/plans/202605082145-034-pg-corecell-b-route-plan.md`（v3 修订：typed-Go-heavy 协议 primitive 范式），锚于 `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`。
+> 路线已切换到 `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md`（v3 修订：typed-Go-heavy 协议 primitive 范式），锚于 `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`。
 >
 > 本计划保留作为：
 > - migration 编号预分配（017-022）记录 → 034 重新组织调用

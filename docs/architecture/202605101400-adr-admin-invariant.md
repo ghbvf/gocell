@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-10
 **Status**: Proposed
-**Related plan**: `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` S1
+**Related plan**: `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` S1
 **Related ADRs**:
 
 - `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md`（typed-Go-heavy 范式）
@@ -151,7 +151,7 @@ mem 模式当前已是"至少一个 admin"语义（`Provisioner.Ensure` 仅在 c
 ## 5. References
 
 - `docs/reviews/202605082044-pr417-pg-corecell-framework-analysis.md` §12 — admin 不变量 决策点（PR#417 review 倾向"至少一个"）
-- `docs/plans/202605082145-034-pg-corecell-b-route-plan.md` §4 S1 — admin 不变量 ADR 出处
+- `docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md` §4 S1 — admin 不变量 ADR 出处
 - `docs/plans/202605082130-pg-corecell-open-issues.md` — B2-C-02 SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT / B2-PROVISIONER-MUTEX-REVIEW
 - `cells/accesscore/internal/adminprovision/provisioner.go` — 当前 mem 模式 Ensure 实现
 - `cells/accesscore/slices/setup/handler.go` — 当前 setup endpoint
