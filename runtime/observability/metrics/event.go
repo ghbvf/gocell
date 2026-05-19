@@ -80,8 +80,10 @@ func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, e
 	}
 
 	runtimeErr, err := p.CounterVec(kernelmetrics.CounterOpts{
-		Name:       "event_router_runtime_errors_total",
-		Help:       "Total number of event router runtime-phase errors (Phase 4), partitioned by cell, topic, and reason. reason is a closed set: subscribe_failure | ready_wait_timeout | runtime_fault.",
+		Name: "event_router_runtime_errors_total",
+		Help: "Total number of event router runtime-phase errors (Phase 4), " +
+			"partitioned by cell, topic, and reason. reason is a closed set: " +
+			"subscribe_failure | ready_wait_timeout | runtime_fault.",
 		LabelNames: []string{"cell", "topic", "reason"},
 	})
 	if err != nil {

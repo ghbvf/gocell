@@ -442,15 +442,19 @@ type panicEventCollector struct{}
 func (panicEventCollector) IncSubscriptionActive(_ string) {
 	panic("panicEventCollector: IncSubscriptionActive panics")
 }
+
 func (panicEventCollector) DecSubscriptionActive(_ string) {
 	panic("panicEventCollector: DecSubscriptionActive panics")
 }
+
 func (panicEventCollector) RecordSetupError(_, _, _ string) {
 	panic("panicEventCollector: RecordSetupError panics")
 }
+
 func (panicEventCollector) ObserveReadyWait(_ string, _ time.Duration) {
 	panic("panicEventCollector: ObserveReadyWait panics")
 }
+
 func (panicEventCollector) RecordRuntimeError(_, _, _ string) {
 	panic("panicEventCollector: RecordRuntimeError panics")
 }

@@ -12,7 +12,6 @@ package metrics_test
 // with real implementations, these tests turn GREEN.
 
 import (
-	"errors"
 	"testing"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -294,25 +293,3 @@ func (g *outboxSpyGauge) Set(v float64) {
 func (g *outboxSpyGauge) Inc()          { g.Add(1) }
 func (g *outboxSpyGauge) Dec()          { g.Add(-1) }
 func (g *outboxSpyGauge) Add(d float64) { g.Set(d) }
-
-// ---------------------------------------------------------------------------
-// outboxPartialFailProvider: succeeds CounterVec, fails GaugeVec, tracks Unregister.
-// ---------------------------------------------------------------------------
-
-type outboxPartialFailProvider struct {
-	kernelmetrics.NopProvider
-	unregisterCalled bool
-}
-
-func (p *outboxPartialFailProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
-	return &outboxSpyCounterVec{parent: newOutboxSpyProvider(), name: opts.Name, labelNames: opts.LabelNames}, nil
-}
-
-func (p *outboxPartialFailProvider) GaugeVec(_ kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
-	return nil, errors.New("gauge registration failed")
-}
-
-func (p *outboxPartialFailProvider) Unregister(_ kernelmetrics.Collector) error {
-	p.unregisterCalled = true
-	return nil
-}

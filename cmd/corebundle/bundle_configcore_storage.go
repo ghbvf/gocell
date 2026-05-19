@@ -76,80 +76,7 @@ type ConfigCoreModuleResult struct {
 func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, error) {
 	switch cfg.Topology.StorageBackend {
 	case "postgres":
-		if cfg.PGConfig.DSN == "" {
-			return ConfigCoreModuleResult{}, fmt.Errorf("configcore postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
-		}
-		pool, err := adapterpg.NewPool(ctx, cfg.PGConfig)
-		if err != nil {
-			return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG pool: %w", err)
-		}
-		// A12: fail-fast on schema version mismatch.
-		if schemaErr := verifyConfigCorePGSchema(ctx, pool); schemaErr != nil {
-			_ = pool.Close(ctx)
-			return ConfigCoreModuleResult{}, schemaErr
-		}
-		// S3+S5: fail-fast on schema shape (column existence post-migration).
-		// Catches partial migrations where the version table reports N but
-		// the migration's DDL never reached the column (e.g. sessions.jti
-		// missing while sessions.access_token still present).
-		if shapeErr := adapterpg.VerifyExpectedShape(ctx, pool); shapeErr != nil {
-			_ = pool.Close(ctx)
-			return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG schema shape: %w", shapeErr)
-		}
-		// B2-X-03: fail-fast on INVALID indexes (replaces prior warn-continue).
-		// Operators must DROP INDEX manually before the binary will start —
-		// silent continue can hide INSERT-time failures in tests / staging.
-		if idxErr := adapterpg.VerifyNoInvalidIndexes(ctx, pool); idxErr != nil {
-			_ = pool.Close(ctx)
-			return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG invalid indexes: %w", idxErr)
-		}
-
-		outboxWriter := adapterpg.NewOutboxWriter(cfg.Clock)
-		txMgr := adapterpg.NewTxManager(pool)
-
-		relayCfg := outboxruntime.DefaultRelayConfig()
-		relayMetrics, rmErr := outbox.NewProviderRelayCollector(cfg.MetricsProvider, "configcore")
-		if rmErr != nil {
-			_ = pool.Close(ctx)
-			return ConfigCoreModuleResult{}, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
-		}
-		relayCfg.Metrics = relayMetrics
-		relayCfg.Clock = cfg.Clock
-		pgStore := adapterpg.NewOutboxStore(pool.DB(), cfg.Clock)
-
-		// Explicit per-cell PendingDepthCollector: cell label = "configcore",
-		// not the _runtime sentinel that bootstrap auto-wire would have used.
-		pendingDepth, pdErr := obmetrics.NewOutboxPendingDepthCollector(cfg.MetricsProvider, "configcore")
-		if pdErr != nil {
-			_ = pool.Close(ctx)
-			return ConfigCoreModuleResult{}, fmt.Errorf("configcore pending-depth collector: %w", pdErr)
-		}
-
-		relayWorker := outboxruntime.NewRelay(pgStore, cfg.Publisher, relayCfg)
-		relayWorker.WithPendingDepthObserver(pendingDepth)
-
-		pgRes, storageOpt, storageErr := buildConfigCorePGStorage(pool, cfg)
-		if storageErr != nil {
-			_ = pool.Close(ctx)
-			return ConfigCoreModuleResult{}, storageErr
-		}
-		slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", cfg.Topology.StorageBackend))
-		cellOpts := []configcore.Option{
-			storageOpt,
-			// PG adapter path: publisher + real outbox.Writer compose a
-			// WriterEmitter at Cell boundary; L2 transactional atomicity applies.
-			configcore.WithOutboxDeps(outbox.WrapPublisherForCell(cfg.Publisher), outbox.WrapWriterForCell(outboxWriter)),
-			configcore.WithTxManager(persistence.WrapForCell(txMgr)),
-		}
-		// WithRelay registers the relay for BOTH outbox wiring AND lifecycle
-		// (Start/Close). Do NOT add WithManagedResource(relayWorker) — that
-		// would double-register and trigger phase0 ErrBootstrapDoubleManaged.
-		return ConfigCoreModuleResult{
-			PoolResource:  pgRes,
-			PGPool:        pool,
-			CellOptions:   cellOpts,
-			BootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(relayWorker)},
-		}, nil
+		return buildConfigCorePostgresOpts(ctx, cfg)
 
 	case "memory":
 		slog.Info("configcore: using in-memory storage", slog.String("cell_adapter_mode", cfg.Topology.StorageBackend))
@@ -168,6 +95,99 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			"buildConfigCoreOpts: unexpected StorageBackend (topology validation bypass)",
 			errcode.WithInternal(fmt.Sprintf("backend=%q", cfg.Topology.StorageBackend)))
 	}
+}
+
+// buildConfigCorePostgresOpts builds the configcore module result for the
+// "postgres" StorageBackend. Extracted from buildConfigCoreOpts to keep that
+// dispatcher's cognitive complexity ≤ 15 (the schema/shape/index/metrics
+// fail-fast checks plus relay wiring exceed the budget when inlined).
+func buildConfigCorePostgresOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, error) {
+	if cfg.PGConfig.DSN == "" {
+		return ConfigCoreModuleResult{}, fmt.Errorf("configcore postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
+	}
+	pool, err := adapterpg.NewPool(ctx, cfg.PGConfig)
+	if err != nil {
+		return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG pool: %w", err)
+	}
+	// A12 / S3+S5 / B2-X-03: fail-fast on schema version, shape, and invalid indexes
+	// before any further wiring. Closes the pool on any failure.
+	if vErr := verifyPGPreconditions(ctx, pool); vErr != nil {
+		_ = pool.Close(ctx)
+		return ConfigCoreModuleResult{}, vErr
+	}
+
+	outboxWriter := adapterpg.NewOutboxWriter(cfg.Clock)
+	txMgr := adapterpg.NewTxManager(pool)
+
+	relayWorker, rwErr := buildConfigCorePGRelay(pool, cfg)
+	if rwErr != nil {
+		_ = pool.Close(ctx)
+		return ConfigCoreModuleResult{}, rwErr
+	}
+
+	pgRes, storageOpt, storageErr := buildConfigCorePGStorage(pool, cfg)
+	if storageErr != nil {
+		_ = pool.Close(ctx)
+		return ConfigCoreModuleResult{}, storageErr
+	}
+	slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", cfg.Topology.StorageBackend))
+	cellOpts := []configcore.Option{
+		storageOpt,
+		// PG adapter path: publisher + real outbox.Writer compose a
+		// WriterEmitter at Cell boundary; L2 transactional atomicity applies.
+		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(cfg.Publisher), outbox.WrapWriterForCell(outboxWriter)),
+		configcore.WithTxManager(persistence.WrapForCell(txMgr)),
+	}
+	// WithRelay registers the relay for BOTH outbox wiring AND lifecycle
+	// (Start/Close). Do NOT add WithManagedResource(relayWorker) — that
+	// would double-register and trigger phase0 ErrBootstrapDoubleManaged.
+	return ConfigCoreModuleResult{
+		PoolResource:  pgRes,
+		PGPool:        pool,
+		CellOptions:   cellOpts,
+		BootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(relayWorker)},
+	}, nil
+}
+
+// verifyPGPreconditions runs the three configcore PG fail-fast checks in
+// order. Caller owns pool lifecycle; on error caller must close the pool.
+func verifyPGPreconditions(ctx context.Context, pool *adapterpg.Pool) error {
+	if schemaErr := verifyConfigCorePGSchema(ctx, pool); schemaErr != nil {
+		return schemaErr
+	}
+	// S3+S5: column-existence fail-fast catches partial migrations.
+	if shapeErr := adapterpg.VerifyExpectedShape(ctx, pool); shapeErr != nil {
+		return fmt.Errorf("configcore PG schema shape: %w", shapeErr)
+	}
+	// B2-X-03: operators must DROP INVALID indexes manually before start —
+	// silent continue can hide INSERT-time failures in tests / staging.
+	if idxErr := adapterpg.VerifyNoInvalidIndexes(ctx, pool); idxErr != nil {
+		return fmt.Errorf("configcore PG invalid indexes: %w", idxErr)
+	}
+	return nil
+}
+
+// buildConfigCorePGRelay constructs the configcore PG relay with per-cell
+// pending-depth observer (cell label = "configcore", not the _runtime sentinel
+// that bootstrap auto-wire would have used).
+func buildConfigCorePGRelay(pool *adapterpg.Pool, cfg ConfigCoreModuleConfig) (*outboxruntime.Relay, error) {
+	relayCfg := outboxruntime.DefaultRelayConfig()
+	relayMetrics, rmErr := outbox.NewProviderRelayCollector(cfg.MetricsProvider, "configcore")
+	if rmErr != nil {
+		return nil, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
+	}
+	relayCfg.Metrics = relayMetrics
+	relayCfg.Clock = cfg.Clock
+
+	pendingDepth, pdErr := obmetrics.NewOutboxPendingDepthCollector(cfg.MetricsProvider, "configcore")
+	if pdErr != nil {
+		return nil, fmt.Errorf("configcore pending-depth collector: %w", pdErr)
+	}
+
+	pgStore := adapterpg.NewOutboxStore(pool.DB(), cfg.Clock)
+	relayWorker := outboxruntime.NewRelay(pgStore, cfg.Publisher, relayCfg)
+	relayWorker.WithPendingDepthObserver(pendingDepth)
+	return relayWorker, nil
 }
 
 func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {

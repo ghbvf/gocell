@@ -1548,7 +1548,7 @@ func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T)
 		return Reject(errors.New("permanent"))
 	})
 
-	// Must not panic — target behaviour: panic is recovered inside ConsumerBase.
+	// Must not panic — target behavior: panic is recovered inside ConsumerBase.
 	require.NotPanics(t, func() {
 		_, _ = handler(context.Background(), Entry{ID: "evt-panic-observer"})
 	}, "panic from ConsumerObserver.ObserveReject must NOT escape the Wrap handler")

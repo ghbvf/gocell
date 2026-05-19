@@ -90,7 +90,7 @@ func TestSafeObserve(t *testing.T) {
 	}{
 		{
 			name:      "non-panicking fn runs normally",
-			logger:    func() *slog.Logger { return slog.Default() },
+			logger:    slog.Default,
 			fn:        func() { /* no-op */ },
 			wantPanic: false,
 		},
