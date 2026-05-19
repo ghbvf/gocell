@@ -1,4 +1,4 @@
-// Package audit centralises bootstrap-period audit-chain helpers used by
+// Package audit centralizes bootstrap-period audit-chain helpers used by
 // composition roots that wire runtime/auth.NewBootstrapMiddleware.
 //
 // The single dependency direction is runtime/audit → runtime/auth (type
@@ -42,7 +42,7 @@ const (
 )
 
 // validBootstrapAuthFailReasons is the whitelist that gates payload entry.
-// Centralising the set as a map keeps O(1) membership while making the three
+// Centralizing the set as a map keeps O(1) membership while making the three
 // public constants the single source of truth.
 var validBootstrapAuthFailReasons = map[string]struct{}{
 	ReasonMissingHeader:    {},

@@ -20,8 +20,10 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-const ruleModuleOrderConfigCoreFirst01 = "MODULE-ORDER-CONFIGCORE-FIRST-01"
-const ruleModuleOrderAuditcoreBeforeAccesscore01 = "MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01"
+const (
+	ruleModuleOrderConfigCoreFirst01           = "MODULE-ORDER-CONFIGCORE-FIRST-01"
+	ruleModuleOrderAuditcoreBeforeAccesscore01 = "MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01"
+)
 
 type assemblyOrderFixture struct {
 	ID    string   `yaml:"id"`

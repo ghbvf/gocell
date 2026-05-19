@@ -48,7 +48,7 @@ func TestNewBootstrapAuthFailObserver_DoubleWriteSlogAndAudit(t *testing.T) {
 
 	// slog channel: must include the standard label, the reason, and the
 	// client_ip captured from context — the wire shape access_module's old
-	// test asserted on, now owned by the centralised funnel.
+	// test asserted on, now owned by the centralized funnel.
 	logged := buf.String()
 	assert.Contains(t, logged, "bootstrap_auth_failed", "slog event label must remain stable")
 	assert.Contains(t, logged, "reason=wrong_credentials", "slog must carry reason field")
