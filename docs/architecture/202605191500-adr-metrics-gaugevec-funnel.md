@@ -21,23 +21,30 @@ metric families used by the event router and outbox consumer subsystems:
 | `outbox_consumer_rejected_total` | Counter | `{cell,topic,reason}` |
 
 `event_router_runtime_errors_total` was added in the Wave 2 fix-up batch (PR #589 follow-ups).
-The `reason` label is a closed set:
-- `subscribe_failure` — SubscribeEntry returned an error during Phase 3 (before Running())
-- `ready_wait_timeout` — subscription did not become ready within the Phase 3 ready-wait budget
-- `runtime_fault` — SubscribeEntry returned an error during Phase 4 (after Running())
+After PR #593 review fix-up (P2#3) the `reason` label set is partitioned by
+phase, not by error variety:
+
+- `event_router_setup_errors_total.reason` ∈ {`setup_error`, `panic`,
+  `ready_timeout`, `subscribe_failure`} — Phase 1–3 failures
+- `event_router_runtime_errors_total.reason` ∈ {`runtime_fault`} — Phase 4
+  faults only
 
 Before D3a-1 there was no `GaugeVec` method on `metrics.Provider`.  Ad-hoc code
-could call `prometheus.NewGaugeVec` or `otelmetric.Meter.Float64UpDownCounter`
-directly, bypassing the kernel interface.  This creates two problems:
+could call `prometheus.NewGaugeVec` or either of the OTel Meter gauge
+primitives (`Float64UpDownCounter` historically, `Float64Gauge` since
+PR #625) directly, bypassing the kernel interface.  This creates two
+problems:
 
 1. The Prometheus adapter uses `registerOrReuse` to avoid duplicate-registration
    panics; direct callers skip that safety layer.
-2. The OTel adapter wraps `Float64UpDownCounter` in a per-label-set last-value
-   cache (sync-diff emulation for `Set` semantics); direct callers bypass the
-   cache and produce incorrect cumulative delta accounting.
+2. The OTel adapter wraps `Float64Gauge.Record` in a per-label-set last-value
+   slot (LastValue semantics for `Set/Inc/Dec/Add`); direct callers bypass the
+   slot and lose the cumulative semantics emulation.
 
 W8 adds archtest `METRICS-GAUGEVEC-FUNNEL-01` to enforce that no business
-package calls these banned constructors directly.
+package calls these banned constructors directly. PR #593 review fix-up (P2#4)
+extends the OTel ban set to cover both `Float64UpDownCounter` (the historical
+leak surface) and `Float64Gauge` (the current adapter primitive).
 
 ---
 
@@ -51,13 +58,14 @@ API) is **NOT** in the banned constructor set enforced by `METRICS-GAUGEVEC-FUNN
 Rationale:
 - Observable instruments are registered via a `RegisterCallback` on the
   `MeterProvider` and fire at collection time, not at call time.  They are
-  architecturally distinct from the synchronous `Float64UpDownCounter` used by
-  `otelGaugeVec.Set/Inc/Dec/Add`.
+  architecturally distinct from the synchronous gauge primitives
+  (`Float64UpDownCounter` / `Float64Gauge`) used by `otelGaugeVec.Set/Inc/Dec/Add`.
 - The current `MetricProvider.GaugeVec` implementation routes through
-  `Float64UpDownCounter`, not through any Observable pattern.  The archtest rule
-  bans the two primitives that `Provider.GaugeVec` replaces; banning
-  `Int64ObservableGauge` would over-reach into a different instrument class that
-  has no current Provider-level replacement.
+  `Float64Gauge.Record` (OTel v1.33+ synchronous gauge, LastValue semantics),
+  not through any Observable pattern.  The archtest rule bans the two
+  synchronous primitives that `Provider.GaugeVec` replaces; banning
+  `Int64ObservableGauge` would over-reach into a different instrument class
+  that has no current Provider-level replacement.
 - If a future PR introduces Observable-based gauge usage that should route
   through `MetricProvider`, a **new** funnel design (separate ADR + archtest
   rule extension) is required at that time.  `METRICS-GAUGEVEC-FUNNEL-01` must
@@ -90,23 +98,25 @@ fresh `promGaugeVec`; any other error surfaces as `ErrAdapterPromRegister`.
 
 ### OTel adapter (`adapters/otel`)
 
-`MetricProvider.GaugeVec` calls `meter.Float64UpDownCounter` and wraps the
-result in `otelGaugeVec`.  `Set(v)` semantics are emulated via a per-label-set
-last-value slot protected by `sync.Mutex`:
+`MetricProvider.GaugeVec` calls `meter.Float64Gauge` (OTel v1.33+ synchronous
+gauge) and wraps the result in `otelGaugeVec`.  `Set(v)` calls `Record(v)`
+directly — `Float64Gauge.Record` takes an absolute value with LastValue export
+semantics, so no delta arithmetic is needed.  `Inc/Dec/Add` still maintain a
+per-label-set last-value slot protected by `sync.Mutex` to compute the new
+absolute value:
 
 ```
-delta = v − last
-Float64UpDownCounter.Add(ctx, delta, attrs)
-last = v
+Inc:  last++; Record(ctx, last, attrs)
+Dec:  last--; Record(ctx, last, attrs)
+Add:  last += delta; Record(ctx, last, attrs)
 ```
 
 Each `With(labels)` call returns the same `*otelGauge` for a given label tuple
-so concurrent callers sharing the same label set operate on the same last-value
-slot, making the cumulative delta correct.
+so concurrent callers sharing the same label set operate on the same
+last-value slot, making the cumulative semantics correct.
 
-ref: opentelemetry-go `sdk/metric/internal/aggregate/lastvalue.go` — the SDK uses
-this pattern internally for Observable gauges; we mirror it for synchronous gauge
-emulation.
+ref: opentelemetry-go `metric.Meter.Float64Gauge` (v1.33+) — synchronous gauge
+with LastValue / `metricdata.Gauge` export semantics.
 ref: prometheus/client_golang `prometheus/gauge.go` — `NewGaugeVec` is the
 standard constructor routed through `registerOrReuse`.
 
@@ -116,7 +126,7 @@ standard constructor routed through `registerOrReuse`.
 
 | Side | Grade | Mechanism |
 |------|-------|-----------|
-| Downstream | **Hard** | Callee resolved via `*types.Info.Uses` (package-level func) and `*types.Info.Selections` (interface method) to `github.com/prometheus/client_golang/prometheus.NewGaugeVec` and `go.opentelemetry.io/otel/metric.Meter.Float64UpDownCounter`; form-uniqueness — no gray zone |
+| Downstream | **Hard** | Callee resolved via `*types.Info.Uses` (package-level func) and `*types.Info.Selections` (interface method) to `github.com/prometheus/client_golang/prometheus.NewGaugeVec` and the OTel ban set `{Float64UpDownCounter, Float64Gauge}` on `go.opentelemetry.io/otel/metric.Meter`; form-uniqueness — no gray zone. The OTel side covers both the historical leak surface and the current adapter primitive (PR #593 review fix-up P2#4). |
 | Upstream | **Medium** | `prom.NewGaugeVec` is a public exported function; Go type system cannot prevent import + call in business packages; archtest scope filter (excluding `adapters/prometheus/` and `adapters/otel/`) is the caller-allowlist mechanism |
 
 Backlog entry for upstream Hard upgrade: **`METRICS-GAUGEVEC-UPSTREAM-HARD-01`**
@@ -141,7 +151,8 @@ backlog entry by name.
 | archtest bypass via function-value indirection (`var fn = prom.NewGaugeVec`) | BS-3 blind spot | `TestGaugeVecFunnel_SelfCheck` BS-3 asserts no production SelectorExpr resolves to a banned symbol outside a direct call position | ⚠️ accepted Medium risk; production code does not use function-value indirection for metrics |
 | archtest bypass via cross-package Registry forwarding | BS-2 blind spot | Out of scope — forwarding a Registry does not itself call NewGaugeVec; legitimate provider-internal usage | ⚠️ accepted; no violation possible via this path |
 | Duplicate registration panic (Prometheus) | Bootstrap failure | `registerOrReuse` pattern converts `AlreadyRegisteredError` to safe reuse or `ErrAdapterPromRegister` | ✅ no panic path in adapter |
-| Adapter self-misuse: `adapters/otel/` reverts from `Float64Gauge` to `Float64UpDownCounter` | OTel sync-diff emulation bypassed; incorrect last-value deltas | `adapters/otel/` is the sanctioned implementation site and is excluded from the archtest ban; regressions are caught by OTel adapter unit tests (sync-diff correctness), not by `METRICS-GAUGEVEC-FUNNEL-01` | ⚠️ accepted (adapter is sanctioned implementation site; see `bannedOtelMethod` godoc in `tools/archtest/observability_metrics_test.go`) |
+| Business code calls OTel synchronous gauge primitive directly (`meter.Float64Gauge` or `meter.Float64UpDownCounter`) | GaugeVec funnel bypassed; LastValue semantics + sync.Mutex slot lost | `METRICS-GAUGEVEC-FUNNEL-01` ban set covers BOTH primitives (Wave 3 of PR #593 review fix-up); `bannedOtelMethods` map keyed on method name; BS-1 reflect-string self-check + BS-3 method-value-capture self-check iterate over the full set | ✅ Hard downstream — `*types.Info`-resolved (callee, name) pair against the ban set; form-uniqueness across both primitives |
+| Adapter self-misuse: `adapters/otel/` switches to a third OTel gauge primitive (not in ban set) | OTel emulation bypassed in adapter; incorrect cumulative semantics | `adapters/otel/` is the sanctioned implementation site and is excluded from the archtest ban; any switch to a new primitive must be made visible by extending `bannedOtelMethods` in the same PR; regressions are also caught by OTel adapter unit tests (sync-diff correctness) | ⚠️ accepted (adapter is sanctioned implementation site; a primitive switch is a 1-PR amendment — see `bannedOtelMethods` godoc in `tools/archtest/observability_metrics_test.go`) |
 
 ---
 
