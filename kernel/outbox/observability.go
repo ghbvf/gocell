@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -42,11 +43,16 @@ const MaxObservabilityTotalSize = 4 * idutil.MaxMetadataIDLen
 // Adopted: separate struct for system-owned fields vs. producer-owned Metadata map.
 // Deviated: only 4 fields (no sampled flag, no traceFlags struct) to keep the
 // async boundary narrow; TraceParent is the W3C canonical form.
+//
+// TraceID/RequestID/CorrelationID use idutil.SafeID — UnmarshalJSON
+// fail-closes on unsafe characters at wire boundary (CWE-117). TraceParent
+// keeps `string`: its 55-byte W3C format has its own validator
+// (validTraceParent) and is not in the IsSafeID character set.
 type ObservabilityMetadata struct {
-	TraceID       string `json:"traceId,omitempty"`
-	TraceParent   string `json:"traceParent,omitempty"`
-	RequestID     string `json:"requestId,omitempty"`
-	CorrelationID string `json:"correlationId,omitempty"`
+	TraceID       idutil.SafeID `json:"traceId,omitempty"`
+	TraceParent   string        `json:"traceParent,omitempty"`
+	RequestID     idutil.SafeID `json:"requestId,omitempty"`
+	CorrelationID idutil.SafeID `json:"correlationId,omitempty"`
 }
 
 // IsZero reports whether all fields are empty.
@@ -57,8 +63,9 @@ func (o ObservabilityMetadata) IsZero() bool {
 
 // Validate enforces per-field size + charset bounds. Each non-empty ID
 // field (TraceID/RequestID/CorrelationID) must satisfy idutil.IsSafeID
-// and len ≤ idutil.MaxMetadataIDLen; TraceParent must be a valid W3C
-// traceparent (fixed 55-byte format, checked via validTraceParent).
+// and len ≤ idutil.MaxMetadataIDLen via SafeID.Validate; TraceParent must
+// be a valid W3C traceparent (fixed 55-byte format, checked via
+// validTraceParent).
 //
 // No aggregate size check: per-field caps already cover the worst case
 // (see MaxObservabilityTotalSize doc).
@@ -67,38 +74,32 @@ func (o ObservabilityMetadata) IsZero() bool {
 // every Writer.Write impl) so size violations surface at write time
 // rather than as silent broker rejections or downstream OOMs.
 func (o ObservabilityMetadata) Validate() error {
-	if err := validateObservabilityID("traceId", o.TraceID); err != nil {
+	if err := validateObservabilitySafeID("traceId", o.TraceID); err != nil {
 		return err
 	}
 	if o.TraceParent != "" && !validTraceParent(o.TraceParent) {
+		// Length is server-side diagnostic only — keep out of Details
+		// (4xx visible) to align with errcode three-layer redaction.
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: observability.traceParent is not a valid W3C traceparent",
-			errcode.WithDetails(slog.Int("length", len(o.TraceParent))))
+			errcode.WithInternal(fmt.Sprintf("traceParent length=%d", len(o.TraceParent))))
 	}
-	if err := validateObservabilityID("requestId", o.RequestID); err != nil {
+	if err := validateObservabilitySafeID("requestId", o.RequestID); err != nil {
 		return err
 	}
-	if err := validateObservabilityID("correlationId", o.CorrelationID); err != nil {
+	if err := validateObservabilitySafeID("correlationId", o.CorrelationID); err != nil {
 		return err
 	}
 	return nil
 }
 
-// validateObservabilityID enforces the per-field size + safe-charset
-// invariant for ID-shaped observability fields (traceId/requestId/
-// correlationId). Empty value is valid (zero-field semantic).
-func validateObservabilityID(name, value string) error {
-	if value == "" {
-		return nil
-	}
-	if len(value) > idutil.MaxMetadataIDLen {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"outbox: observability field length exceeds max",
-			errcode.WithDetails(slog.String("field", name), slog.Int("length", len(value)), slog.Int("max", idutil.MaxMetadataIDLen)))
-	}
-	if !idutil.IsSafeID(value) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"outbox: observability field contains unsafe characters",
+// validateObservabilitySafeID wraps SafeID.Validate failures with the
+// field-name tag that observability errcode consumers (logs, metrics)
+// rely on. Returns nil for the zero value (absent semantic).
+func validateObservabilitySafeID(name string, id idutil.SafeID) error {
+	if err := id.Validate(); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"outbox: observability field invalid", err,
 			errcode.WithDetails(slog.String("field", name)))
 	}
 	return nil
@@ -111,14 +112,18 @@ func validateObservabilityID(name, value string) error {
 func ContextObservability(ctx context.Context) ObservabilityMetadata {
 	var o ObservabilityMetadata
 
+	// Ctx values were already validated upstream (HTTP middleware /
+	// generators). Cast to SafeID without re-checking; producer-side
+	// Validate (invoked by Entry.Validate at Writer.Write) catches any
+	// drift before reaching wire.
 	if requestID, ok := ctxkeys.RequestIDFrom(ctx); ok && requestID != "" {
-		o.RequestID = requestID
+		o.RequestID = idutil.SafeID(requestID)
 	}
 	if correlationID, ok := ctxkeys.CorrelationIDFrom(ctx); ok && correlationID != "" {
-		o.CorrelationID = correlationID
+		o.CorrelationID = idutil.SafeID(correlationID)
 	}
 	if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok && traceID != "" {
-		o.TraceID = traceID
+		o.TraceID = idutil.SafeID(traceID)
 	}
 	if traceparent, ok := ctxkeys.TraceParentFrom(ctx); ok && validTraceParent(traceparent) {
 		o.TraceParent = traceparent
@@ -152,9 +157,9 @@ func ContextObservability(ctx context.Context) ObservabilityMetadata {
 // on the consumer side the wire-captured TraceParent is the canonical
 // truth. If it's empty, no synthesis can recover the original parent-id.
 func (o ObservabilityMetadata) RestoreToContext(ctx context.Context) context.Context {
-	ctx = withContextMetadata(ctx, o.RequestID, ctxkeys.RequestIDFrom, ctxkeys.WithRequestID)
-	ctx = withContextMetadata(ctx, o.CorrelationID, ctxkeys.CorrelationIDFrom, ctxkeys.WithCorrelationID)
-	ctx = withContextMetadata(ctx, o.TraceID, ctxkeys.TraceIDFrom, ctxkeys.WithTraceID)
+	ctx = withContextMetadata(ctx, string(o.RequestID), ctxkeys.RequestIDFrom, ctxkeys.WithRequestID)
+	ctx = withContextMetadata(ctx, string(o.CorrelationID), ctxkeys.CorrelationIDFrom, ctxkeys.WithCorrelationID)
+	ctx = withContextMetadata(ctx, string(o.TraceID), ctxkeys.TraceIDFrom, ctxkeys.WithTraceID)
 	ctx = withTraceParentMetadata(ctx, o.TraceParent)
 	return ctx
 }

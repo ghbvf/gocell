@@ -39,6 +39,8 @@
 | MIGRATION-NONEMPTY-DB-UPGRADE-GUIDE-01 | **非空历史 DB 升级指引（触发型）** — 现状: migration 026/027/028 链以"项目无生产 + 表证明为空"为前提；非空历史 DB 升级会被 CHECK (>0) 拦住（DEFAULT 0 行先存在再加 CHECK）。修复方向: 触发后新建 `docs/ops/migration-nonempty-db-upgrade.md` 给出 backfill + 分步加约束的升级 runbook | docs+arch-opt | P3/Cx2 | 🟠 | 第一个外部部署 / fork 项目 | `adapters/postgres/migrations/028_authz_epoch_positive_constraints.sql` + `docs/ops/migration-nonempty-db-upgrade.md` (触发后新建) | 计划 034 §"Backlog only（U-4）" + S4-FU PR #501 review |
 | AUTHZMUTATE-MUTATION-EVENT-OPTIONAL-01 | **authzmutate.Mutation.Event() 占位事件 API shape 易误用（触发型）** — 现状: `authzmutate.Mutation.Event()` 对 additive variant（`ActivateUser` / `ClearPasswordReset`）返回"不会被读"的占位事件；caller 看到 `Event()` 会误以为必发。修复方向: sealed Mutation 加 variant 或第 2 次误读时，改为 `Event() (Event, bool)` 或拆分 emitting/additive 两类 sealed 子接口 | arch-opt | P2/Cx2 | 🟠 | 第 2 次有人误读占位事件 / sealed Mutation 加 variant 时 | `cells/accesscore/internal/authzmutate/mutation.go` | 计划 034 §"Backlog only（U-7）" + S4-FU PR #501 review |
 
+| SAFEID-WIRE-BOUNDARY-ADR-01 | **SafeID wire-boundary ADR 补充** — ✅ closed by PR #582 (round-2 review fix)：新增 ADR `docs/architecture/202605190900-adr-safeid-wire-boundary-funnel.md` 覆盖 CWE-117 threat model / 字符集选择 / WireMessage vs Entry 两层信任模型 / Funnel 双向锁评级（下游 Hard / 上游 Medium-by-necessity）+ 升级路径 SAFEID-UPSTREAM-FUNNEL-HARD-01 | doc | P3/Cx1 | ✅ | — | `docs/architecture/202605190900-adr-safeid-wire-boundary-funnel.md` | PR #582 review F4 (B,C) → 同 PR closed |
+
 ## x.3 B-floor findings (B-FLOOR-FOLLOWUP + F-* 系列)
 
 | ID | 描述 | Type | P/Cx | Flag | Trigger | Files | Source |

@@ -131,9 +131,9 @@ func TestOutboxWriter_Write_InjectsObservabilityFromContext(t *testing.T) {
 	require.True(t, obsOK)
 	var obs outbox.ObservabilityMetadata
 	require.NoError(t, json.Unmarshal(obsJSON, &obs))
-	assert.Equal(t, "req-123", obs.RequestID)
-	assert.Equal(t, "corr-123", obs.CorrelationID)
-	assert.Equal(t, "trace-123", obs.TraceID)
+	assert.Equal(t, "req-123", string(obs.RequestID))
+	assert.Equal(t, "corr-123", string(obs.CorrelationID))
+	assert.Equal(t, "trace-123", string(obs.TraceID))
 }
 
 func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
@@ -409,18 +409,18 @@ func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {
 	require.True(t, ok)
 	var firstObs outbox.ObservabilityMetadata
 	require.NoError(t, json.Unmarshal(firstObsJSON, &firstObs))
-	assert.Equal(t, "req-batch", firstObs.RequestID)
-	assert.Equal(t, "corr-batch", firstObs.CorrelationID)
-	assert.Equal(t, "trace-batch", firstObs.TraceID)
+	assert.Equal(t, "req-batch", string(firstObs.RequestID))
+	assert.Equal(t, "corr-batch", string(firstObs.CorrelationID))
+	assert.Equal(t, "trace-batch", string(firstObs.TraceID))
 
 	// Second entry: observability also from ctx.
 	secondObsJSON, ok := tx.execCalls[0].args[19].([]byte)
 	require.True(t, ok)
 	var secondObs outbox.ObservabilityMetadata
 	require.NoError(t, json.Unmarshal(secondObsJSON, &secondObs))
-	assert.Equal(t, "req-batch", secondObs.RequestID)
-	assert.Equal(t, "corr-batch", secondObs.CorrelationID)
-	assert.Equal(t, "trace-batch", secondObs.TraceID)
+	assert.Equal(t, "req-batch", string(secondObs.RequestID))
+	assert.Equal(t, "corr-batch", string(secondObs.CorrelationID))
+	assert.Equal(t, "trace-batch", string(secondObs.TraceID))
 }
 
 func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
@@ -574,7 +574,7 @@ func TestOutboxWriter_Write_ObservabilityInjectedBeforeValidate(t *testing.T) {
 	// same ctx, carries the request_id; the writer follows that same path.
 	probe := entry
 	probe.InjectObservabilityFromContext(ctx)
-	assert.Equal(t, requestID, probe.Observability.RequestID,
+	assert.Equal(t, requestID, string(probe.Observability.RequestID),
 		"observability injection must surface ctx request_id")
 
 	assert.Empty(t, tx.execCalls, "no INSERT should be issued for invalid entry")

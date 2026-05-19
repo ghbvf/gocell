@@ -352,20 +352,31 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 			slog.Int("size", len(observabilityJSON)),
 			slog.Int("max", maxObservabilityJSONBytes))
 	} else if len(observabilityJSON) > 0 {
-		if err := json.Unmarshal(observabilityJSON, &ce.Observability); err != nil {
-			slog.Warn("outbox store: failed to unmarshal observability",
+		// Decode-validate-assign atomic (PR #582 round-3 review F4):
+		// `json.Unmarshal` is documented to leave partial values in the dst
+		// when it errors mid-decode (e.g., SafeID.UnmarshalJSON rejects field
+		// N while fields 1..N-1 already succeeded). Without a local-var
+		// staging variable, an unsafe row would leak partially-valid
+		// observability into ce.Observability. Mirrors etcd clientv3 /
+		// K8s runtime.Decode pattern.
+		var obs kout.ObservabilityMetadata
+		if err := json.Unmarshal(observabilityJSON, &obs); err != nil {
+			slog.Warn("outbox store: failed to unmarshal observability — dropping",
 				slog.String("entry_id", ce.ID),
 				slog.String("event_type", ce.EventType),
 				slog.Any("error", err))
-		} else if validateErr := ce.Observability.Validate(); validateErr != nil {
+			// ce.Observability stays zero-value
+		} else if validateErr := obs.Validate(); validateErr != nil {
 			// Persisted row violates field-size invariants (older row written
-			// before the invariant existed, or schema drift). Clear and warn —
+			// before the invariant existed, or schema drift). Drop entirely —
 			// downstream restore must not see partially valid IDs.
-			slog.Warn("outbox store: observability fails validation, clearing",
+			slog.Warn("outbox store: observability fails validation — dropping",
 				slog.String("entry_id", ce.ID),
 				slog.String("event_type", ce.EventType),
 				slog.Any("error", validateErr))
-			ce.Observability = kout.ObservabilityMetadata{}
+			// ce.Observability stays zero-value
+		} else {
+			ce.Observability = obs
 		}
 	}
 	return ce, nil

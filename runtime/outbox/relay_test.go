@@ -598,10 +598,10 @@ func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 
 	var msg kout.WireMessage
 	require.NoError(t, json.Unmarshal(captured[0].payload, &msg))
-	assert.Equal(t, "env-test", msg.ID)
-	assert.Equal(t, "agg-1", msg.AggregateID)
-	assert.Equal(t, "order", msg.AggregateType)
-	assert.Equal(t, "order.created", msg.EventType)
+	assert.Equal(t, "env-test", string(msg.ID))
+	assert.Equal(t, "agg-1", string(msg.AggregateID))
+	assert.Equal(t, "order", string(msg.AggregateType))
+	assert.Equal(t, "order.created", string(msg.EventType))
 	assert.JSONEq(t, `{"amount":42}`, string(msg.Payload))
 }
 
