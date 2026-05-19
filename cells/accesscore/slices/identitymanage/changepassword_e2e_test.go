@@ -31,6 +31,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -41,6 +43,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -135,19 +138,28 @@ func newE2EFixture() *e2eFixture {
 	// TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive.
 	tx := &stubTxRunner{}
 
+	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
+	if err != nil {
+		panic("newE2EFixture: invalidator setup failed: " + err.Error())
+	}
+	mut, err := authzmutate.New(inv, userRepo)
+	if err != nil {
+		panic("newE2EFixture: mutator setup failed: " + err.Error())
+	}
+	lockoutSvc, err := accountlockout.NewService(userRepo, mut, outbox.NewNoopEmitter(), clock.Real())
+	if err != nil {
+		panic("newE2EFixture: accountlockout setup failed: " + err.Error())
+	}
+
 	loginSvc, err := sessionlogin.NewService(
 		userRepo, sessionStore, roleRepo, refreshStore, e2eIssuer, slog.Default(),
 		sessionlogin.WithClock(clock.Real()),
 		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
 		sessionlogin.WithSessionTTL(time.Hour),
+		sessionlogin.WithAccountLockout(lockoutSvc),
 	)
 	if err != nil {
 		panic("newE2EFixture: loginSvc setup failed: " + err.Error())
-	}
-
-	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
-	if err != nil {
-		panic("newE2EFixture: invalidator setup failed: " + err.Error())
 	}
 	idmSvc, err := NewService(
 		userRepo, inv, slog.Default(),
