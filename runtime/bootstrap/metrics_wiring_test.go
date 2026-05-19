@@ -14,9 +14,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
 // registrationSpy counts every CounterVec registration so tests can assert
@@ -285,4 +288,171 @@ func (p *alwaysFailCounterProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kern
 
 func (p *alwaysFailCounterProvider) Unregister(col kernelmetrics.Collector) error {
 	return p.nop.Unregister(col)
+}
+
+// ---------------------------------------------------------------------------
+// R3: autoWireOutboxConsumerCollector tests
+// ---------------------------------------------------------------------------
+
+// TestAutoWireOutboxConsumerCollector_NopProvider_Skips verifies that when the
+// metrics provider is NopProvider (default), autoWireOutboxConsumerCollector
+// returns nil without creating a collector. No outbox counters should be registered.
+func TestAutoWireOutboxConsumerCollector_NopProvider_Skips(t *testing.T) {
+	b := New(WithClock(clock.Real())) // NopProvider default
+
+	err := b.autoWireOutboxConsumerCollector()
+	require.NoError(t, err)
+	assert.Nil(t, b.outboxConsumerCollector,
+		"NopProvider must not create an outbox consumer collector")
+}
+
+// TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToConsumerBase verifies
+// that when a real provider is injected and a ConsumerBase is set, the collector
+// is created, cached, and attached to ConsumerBase as an observer.
+func TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToConsumerBase(t *testing.T) {
+	spy := &registrationSpy{}
+	cb := newTestConsumerBase(t)
+
+	b := New(
+		WithClock(clock.Real()),
+		WithMetricsProvider(spy),
+		WithConsumerBase(cb),
+	)
+
+	err := b.autoWireOutboxConsumerCollector()
+	require.NoError(t, err, "autoWireOutboxConsumerCollector must succeed with a real provider")
+	require.NotNil(t, b.outboxConsumerCollector, "collector must be cached on b.outboxConsumerCollector")
+
+	// Verify the counter name was registered.
+	spy.mu.Lock()
+	names := append([]string(nil), spy.counterNames...)
+	spy.mu.Unlock()
+	assert.True(t, slices.Contains(names, "outbox_consumer_rejected_total"),
+		"outbox_consumer_rejected_total must be registered; got counters %v", names)
+
+	// Attaching a second observer must fail with ErrObserverAlreadyAttached,
+	// which proves the first AttachObserver call succeeded.
+	attachErr := cb.AttachObserver(b.outboxConsumerCollector)
+	assert.ErrorIs(t, attachErr, kerneloutbox.ErrObserverAlreadyAttached,
+		"second AttachObserver call must fail with ErrObserverAlreadyAttached, "+
+			"confirming the collector was attached on the first autoWire call")
+}
+
+// TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToRelay verifies
+// that when a Relay is wired, autoWireOutboxConsumerCollector creates the
+// collector and calls WithPendingDepthObserver on the relay without error.
+func TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToRelay(t *testing.T) {
+	spy := &registrationSpy{}
+	store := &outboxtest.FakeStore{}
+	relay := runtimeoutbox.NewRelay(store, &kerneloutbox.DiscardPublisher{}, runtimeoutbox.RelayConfig{
+		Clock: clock.Real(),
+	})
+
+	b := New(
+		WithClock(clock.Real()),
+		WithMetricsProvider(spy),
+		WithRelay(relay),
+	)
+
+	err := b.autoWireOutboxConsumerCollector()
+	require.NoError(t, err, "autoWireOutboxConsumerCollector must succeed when relay is wired")
+	require.NotNil(t, b.outboxConsumerCollector,
+		"collector must be cached even when only relay (no ConsumerBase) is present")
+
+	// Calling again must be idempotent: the collector is cached; no new
+	// registration attempt occurs, so no Prometheus duplicate error.
+	err2 := b.autoWireOutboxConsumerCollector()
+	require.NoError(t, err2, "second autoWireOutboxConsumerCollector call must not error (cached collector)")
+}
+
+// ---------------------------------------------------------------------------
+// R4: autoWireEventRouterCollector tests
+// ---------------------------------------------------------------------------
+
+// TestAutoWireEventRouterCollector_NopProvider_Skips verifies that when the
+// metrics provider is NopProvider, autoWireEventRouterCollector returns an
+// empty option slice without creating a collector.
+func TestAutoWireEventRouterCollector_NopProvider_Skips(t *testing.T) {
+	b := New(WithClock(clock.Real())) // NopProvider default
+
+	opts, err := b.autoWireEventRouterCollector()
+	require.NoError(t, err)
+	assert.Empty(t, opts, "NopProvider must return no eventrouter options")
+	assert.Nil(t, b.eventRouterCollector,
+		"NopProvider must not create an event router collector")
+}
+
+// TestAutoWireEventRouterCollector_RealProvider_Wired verifies that when a
+// real provider is injected, autoWireEventRouterCollector creates the collector,
+// caches it, and returns a non-empty option slice containing
+// WithEventRouterCollector.
+func TestAutoWireEventRouterCollector_RealProvider_Wired(t *testing.T) {
+	spy := &registrationSpy{}
+	b := New(WithClock(clock.Real()), WithMetricsProvider(spy))
+
+	opts, err := b.autoWireEventRouterCollector()
+	require.NoError(t, err, "autoWireEventRouterCollector must succeed with a real provider")
+	require.Len(t, opts, 1, "must return exactly one eventrouter.Option (WithEventRouterCollector)")
+	require.NotNil(t, b.eventRouterCollector, "collector must be cached on b.eventRouterCollector")
+
+	// Verify one of the expected gauge names was registered.
+	spy.mu.Lock()
+	counters := append([]string(nil), spy.counterNames...)
+	spy.mu.Unlock()
+	assert.True(t, slices.Contains(counters, "event_router_setup_errors_total"),
+		"event_router_setup_errors_total must be registered; got counters %v", counters)
+}
+
+// TestAutoWire_DoubleListenerDoesNotDoubleRegister verifies that calling
+// autoWireEventRouterCollector twice (which could happen if buildEventRouter
+// were ever invoked more than once on the same Bootstrap) returns the cached
+// collector and does not attempt to re-register Prometheus metrics, preventing
+// a duplicate-name registration error.
+func TestAutoWire_DoubleListenerDoesNotDoubleRegister(t *testing.T) {
+	registrationCount := 0
+	counting := &countingMetricsProvider{
+		inner:     newFakeMetricsProvider(),
+		onCounter: func() { registrationCount++ },
+	}
+
+	b := New(WithClock(clock.Real()), WithMetricsProvider(counting))
+
+	opts1, err := b.autoWireEventRouterCollector()
+	require.NoError(t, err)
+	require.Len(t, opts1, 1)
+
+	firstCount := registrationCount
+
+	// Second call: collector is cached; no new registrations must happen.
+	opts2, err := b.autoWireEventRouterCollector()
+	require.NoError(t, err)
+	require.Len(t, opts2, 1, "second call must still return an option slice")
+
+	assert.Equal(t, firstCount, registrationCount,
+		"no new metric registrations must occur on the second autoWireEventRouterCollector call; "+
+			"cached collector must be reused")
+}
+
+// countingMetricsProvider wraps a provider and increments onCounter on each
+// CounterVec registration — used to detect unexpected double-registration.
+type countingMetricsProvider struct {
+	inner     kernelmetrics.Provider
+	onCounter func()
+}
+
+func (p *countingMetricsProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	p.onCounter()
+	return p.inner.CounterVec(opts)
+}
+
+func (p *countingMetricsProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	return p.inner.HistogramVec(opts)
+}
+
+func (p *countingMetricsProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return p.inner.GaugeVec(opts)
+}
+
+func (p *countingMetricsProvider) Unregister(c kernelmetrics.Collector) error {
+	return p.inner.Unregister(c)
 }

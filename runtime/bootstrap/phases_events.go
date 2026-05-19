@@ -6,6 +6,8 @@ package bootstrap
 //   - phase6StartEventRouter: subscription registration + evtRouter.Run on runCtx
 //   - checkNoSubscriptionsWhenSubscriberNil: fail-fast when cells declared
 //     subscriptions but no subscriber is configured
+//   - autoWireEventRouterCollector: creates EventRouterCollector when a real
+//     provider is configured and injects it into Router via WithEventRouterCollector
 //
 // ref: uber-go/fx app.go — Run vs stop ctx separation: event router uses runCtx
 // (independent of external ctx) so lifecycle is owned by phase10 teardown, not
@@ -17,8 +19,10 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventrouter"
+	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // phase6StartEventRouter registers subscriptions and starts the event router
@@ -71,6 +75,36 @@ func cellSnapshotsHaveSubscriptions(s *phaseState) bool {
 	return false
 }
 
+// autoWireEventRouterCollector creates an EventRouterCollector (once, cached in
+// b.eventRouterCollector) and returns it as an eventrouter.Option slice so the
+// Router can record subscription lifecycle metrics.
+//
+// Skip conditions (return nil slice):
+//   - metricsProvider is nil
+//   - metricsProvider is NopProvider (default; avoid no-op allocations at startup)
+//
+// ref: runtime/bootstrap/phases_http.go autoWireHTTPMetricsCollector — same
+// skip-on-nil/skip-on-Nop pattern and cached-field approach.
+func (b *Bootstrap) autoWireEventRouterCollector() ([]eventrouter.Option, error) {
+	if b.metricsProvider == nil {
+		return nil, nil
+	}
+	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
+		return nil, nil
+	}
+	if b.eventRouterCollector == nil {
+		collector, err := metricsmiddleware.NewEventRouterCollector(b.metricsProvider)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"bootstrap: event router metrics auto-wire conflict: WithMetricsProvider constructs the event router collector; "+
+					"do not also register event_router_subscriptions_active manually on the same provider. "+
+					"Remove one side: %w", err)
+		}
+		b.eventRouterCollector = collector
+	}
+	return []eventrouter.Option{eventrouter.WithEventRouterCollector(b.eventRouterCollector)}, nil
+}
+
 // buildEventRouter creates the event router with middleware and validators.
 //
 // The SubscriberWithMiddleware wires the business middleware chain and
@@ -82,6 +116,13 @@ func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) (*eventrouter.Router
 	if b.routerReadyTimeoutSet {
 		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.routerReadyTimeout))
 	}
+	// R2: auto-wire event router collector when a real Provider is configured.
+	collectorOpts, err := b.autoWireEventRouterCollector()
+	if err != nil {
+		return nil, err
+	}
+	evtRouterOpts = append(evtRouterOpts, collectorOpts...)
+
 	swm, err := outbox.NewSubscriberWithMiddleware(
 		eventrouter.NewContractTracingSubscriber(sub, b.wrapperTracer),
 		b.consumerBase,

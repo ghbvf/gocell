@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -110,5 +111,31 @@ func WithEventRouterReadyTimeout(d time.Duration) Option {
 func WithSubscriptionValidator(v ...cell.SubscriptionValidator) Option {
 	return func(b *Bootstrap) {
 		b.subscriptionValidators = append(b.subscriptionValidators, v...)
+	}
+}
+
+// WithRelay injects the PG outbox Relay so that bootstrap can attach the
+// auto-wired OutboxConsumerCollector as a PendingDepthObserver during phase5.
+// This wires the outbox_pending_depth gauge without requiring cmd/* to reach
+// into the collector directly.
+//
+// Nil inputs are silently ignored (cumulative builder noop pattern,
+// runtime-api.md §Option 范式分层): the relay remains unset, and
+// autoWireOutboxConsumerCollector skips the depth-observer attachment.
+//
+// Must be called before Run(). Typical usage:
+//
+//	relay := runtimeoutbox.NewRelay(store, pub, cfg)
+//	bootstrap.New(
+//	    bootstrap.WithRelay(relay),
+//	    bootstrap.WithWorkers(relay),
+//	    ...
+//	)
+func WithRelay(r *runtimeoutbox.Relay) Option {
+	return func(b *Bootstrap) {
+		if r == nil {
+			return
+		}
+		b.relay = r
 	}
 }

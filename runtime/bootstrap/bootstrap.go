@@ -33,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -98,6 +99,7 @@ type Bootstrap struct {
 	routerReadyTimeout     time.Duration
 	routerReadyTimeoutSet  bool
 	subscriptionValidators []cell.SubscriptionValidator
+	relay                  *runtimeoutbox.Relay // optional: wired by WithRelay; nil = no relay depth metric
 
 	// --- lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets ---
 	lifecycle                Lifecycle
@@ -120,6 +122,15 @@ type Bootstrap struct {
 	httpCollector      metricsmiddleware.Collector
 	shutdownMet        *metricsmiddleware.ShutdownCollector
 	shutdownMetricsErr error
+
+	// outboxConsumerCollector is cached after first construction so multiple
+	// ConsumerBase / Relay wirings share the same collector and avoid double-
+	// registering outbox_consumer_rejected_total / outbox_pending_depth.
+	outboxConsumerCollector *metricsmiddleware.OutboxConsumerCollector
+
+	// eventRouterCollector is cached so multiple Router instances (if a future
+	// multi-listener model arrives) share the same collector.
+	eventRouterCollector *metricsmiddleware.EventRouterCollector
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.
