@@ -40,9 +40,17 @@ import (
 // 's in-package conformance suite.
 func TestJAuditlogintrailEventConsume(t *testing.T) {
 	t.Parallel()
-	handler, _, ctx, entry := buildAuditcoreChain(t)
+	handler, store, ctx, entry := buildAuditcoreChain(t)
 	result := handler(ctx, entry)
 	require.Equalf(t, outbox.DispositionAck, result.Disposition,
 		"auditcore.auditappendsession must Ack session.created; got disposition=%v error=%v",
 		result.Disposition, result.Err)
+	// Lock "consume = write": Ack alone does not prove the handler actually
+	// persisted the event. The audit append path is consume + ledger.Append
+	// inside the same RunInTx; without this assertion an emitter-only Ack
+	// implementation would silently pass the criterion.
+	tail, err := store.Tail(ctx)
+	require.NoError(t, err, "store.Tail after Ack")
+	require.GreaterOrEqualf(t, tail.SeqNo, int64(1),
+		"audit ledger must have at least one entry after Ack; tail.SeqNo=%d", tail.SeqNo)
 }

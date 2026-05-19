@@ -1,10 +1,20 @@
 //go:build integration
 
+// Package-internal helpers for the two J-auditlogintrail integration tests
+// (event_consume + hash_chain). Both criteria share an identical
+// docker-free auditcore wiring; this file is their single source so the
+// per-criterion files stay focused on assertions.
+//
+// Scope: J-auditlogintrail only. Other journeys keep their inline setup
+// per the existing journey_*_test.go convention. If a third
+// J-auditlogintrail criterion is added later, it should also funnel
+// through buildAuditcoreChain rather than duplicating wiring.
 package integration
 
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -20,17 +30,28 @@ import (
 
 // buildAuditcoreChain wires a docker-free auditcore Cell at the seam that
 // J-auditlogintrail criteria observe: the auditappendsession subscription
-// declared in cells/auditcore/cell.go (line ~162) and its underlying
-// ledger.Store. It returns the bound EntryHandler, the in-memory Store
-// (so callers can probe Tail/Verify), the cell context, and an
-// outbox.Entry pre-built with a canonical event.session.created.v1
-// payload that satisfies appender.ActorAcceptUserFallback (userId
-// present).
+// declared in cells/auditcore/cell.go and its underlying ledger.Store. It
+// returns the bound EntryHandler, the in-memory Store (so callers can probe
+// Tail/Verify), the cell context, and an outbox.Entry pre-built with a
+// canonical event.session.created.v1 payload that satisfies
+// appender.ActorAcceptUserFallback (userId present).
 //
 // The seam is the same one used by cells/auditcore/cell_test.go
 // newTestCell — we re-build it here because tests/integration cannot
 // import internal helpers from cells/auditcore. ledger.Protocol,
 // MemStore, and the wiring options are public surface area.
+//
+// Coverage boundary (informational): this chain exercises auditcore's
+// L2 OutboxFact handler logic + ledger.Store hash chain semantics. The
+// emitter is outbox.NewNoopEmitter() — outbox-to-broker publish
+// atomicity is NOT verified here; that is owned by
+// tests/integration/l2atomicity/ + adapters/rabbitmq integration suites.
+//
+// Context lifetime (informational): ctx is context.Background() with no
+// deadline. MemStore is in-process and never blocks on I/O, so a deadline
+// is unnecessary; if this helper is ever upgraded to PG-backed
+// testcontainers, the caller must wrap ctx with WithTimeout before
+// Append/Tail/Verify.
 //
 // ref: cells/auditcore/cell_test.go newTestCell (in-package mirror).
 func buildAuditcoreChain(t *testing.T) (
@@ -55,6 +76,14 @@ func buildAuditcoreChain(t *testing.T) (
 	memStore, err := ledger.NewMemStore(proto, clock.Real())
 	require.NoError(t, err, "memstore")
 
+	// Silence demo-mode lifecycle WARN/INFO logs ("using cell.DemoCellTxManager",
+	// "using default cursor codec", "audit entry appended") so VERIFY-06's
+	// `gocell validate --strict` execution under -v doesn't surface them as
+	// pseudo-anomalies. Real operational health for auditcore is exercised
+	// by tests/integration/l2atomicity/ + cells/auditcore/cell_test.go,
+	// which use their own logger fixtures.
+	testLogger := slog.New(slog.DiscardHandler)
+
 	c := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithLedgerProtocol(proto),
@@ -62,6 +91,7 @@ func buildAuditcoreChain(t *testing.T) (
 		auditcore.WithEmitter(outbox.NewNoopEmitter()),
 		auditcore.WithTxManager(cell.DemoCellTxManager()),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
+		auditcore.WithLogger(testLogger),
 	)
 	ctx = context.Background()
 	recorder := cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)
@@ -74,9 +104,10 @@ func buildAuditcoreChain(t *testing.T) (
 	// cells/accesscore/internal/dto.SessionCreatedEvent. The dto package is
 	// under cells/accesscore/internal/ and unreachable from tests/integration;
 	// the canonical schema lives in contracts/event/session/created/v1/
-	// payload.schema.json (independent of any Go type). Per cell-patterns.md
-	// "跨 cell decode 重复属于预期成本", we duplicate the shape here rather
-	// than introduce a cross-cell shared Go type.
+	// payload.schema.json (sessionId + userId required; no eventId field —
+	// outbox idempotency is keyed off entry.ID, not payload). Per
+	// cell-patterns.md "跨 cell decode 重复属于预期成本", we duplicate the
+	// shape here rather than introduce a cross-cell shared Go type.
 	// ref: cells/accesscore/internal/dto/session_events.go SessionCreatedEvent
 	payload, err := json.Marshal(struct {
 		SessionID string `json:"sessionId"`
@@ -110,5 +141,5 @@ func findSubscriptionHandler(t *testing.T, subs []cell.SubscriptionRequest, topi
 		}
 	}
 	t.Fatalf("no subscription found for topic %q (auditcore wiring drift)", topic)
-	return nil
+	return nil // unreachable: t.Fatalf calls runtime.Goexit(); kept to satisfy compiler.
 }

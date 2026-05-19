@@ -53,7 +53,13 @@ func TestJAuditlogintrailHashChain(t *testing.T) {
 		"exactly one entry must be appended for one consumed session.created event")
 	require.Equal(t, int64(1), tail.EntryCount,
 		"EntryCount must agree with SeqNo for a single-append chain")
+	require.NotEmpty(t, tail.PrevHash,
+		"tail.PrevHash (HMAC of the appended entry) must be non-empty; "+
+			"empty hash would mean ledger.Protocol.ComputeHash silently degenerated")
 
+	// fromSeq=1: this MemStore is freshly built per test, so the first (and
+	// only) appended entry has SeqNo=1 (ledger sequences are 1-based, not
+	// 0-based — see runtime/audit/ledger storetest conformance).
 	valid, firstInvalidSeq, err := store.Verify(ctx, 1, tail.SeqNo)
 	require.NoError(t, err, "store.Verify after single Append")
 	require.True(t, valid,
