@@ -119,6 +119,76 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
 }
 
+// TestR2_NewMetricFamilies_RegisteredAtBoot asserts that the five new metric
+// families introduced in D3a-1 are registered with the Prometheus registry at
+// bootstrap time, even when no subscriptions or rejects have occurred yet.
+//
+// We assert the presence of each metric family via the "# HELP <name>" line in
+// the Prometheus text output rather than asserting sample values — most gauges
+// and counters are 0 or absent at boot when no event-router subscriptions have
+// been established in the memory-topology test bootstrap.
+//
+// The five families are:
+//   - event_router_subscriptions_active
+//   - event_router_setup_errors_total
+//   - event_router_ready_wait_seconds
+//   - outbox_pending_depth
+//   - outbox_consumer_rejected_total
+func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
+
+	app, err := buildBootstrapFromShared(t, shared, ln,
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+	require.NoError(t, err)
+	require.NotNil(t, app)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(testtime.SelectAsyncSettle):
+			t.Error("bootstrap did not shut down in time")
+		}
+	})
+
+	healthAddr := healthLn.Addr().String()
+	waitForHealthy(t, healthAddr)
+
+	// Scrape /metrics and assert each new metric family's HELP line is present.
+	metricsResp, err := http.Get("http://" + healthAddr + "/metrics")
+	require.NoError(t, err)
+	defer metricsResp.Body.Close()
+	require.Equal(t, http.StatusOK, metricsResp.StatusCode)
+
+	body, err := io.ReadAll(metricsResp.Body)
+	require.NoError(t, err)
+	bodyStr := string(body)
+
+	newFamilies := []string{
+		"event_router_subscriptions_active",
+		"event_router_setup_errors_total",
+		"event_router_ready_wait_seconds",
+		"outbox_pending_depth",
+		"outbox_consumer_rejected_total",
+	}
+	for _, family := range newFamilies {
+		helpLine := "# HELP " + family
+		assert.Contains(t, bodyStr, helpLine,
+			"D3a-1: /metrics output must contain HELP line for new metric family %q at boot. "+
+				"This confirms the metric is registered with the Prometheus registry. "+
+				"Got /metrics body (first 600 chars): %s",
+			family, truncateMetrics(bodyStr, 600))
+	}
+}
+
 // truncateMetrics returns at most n characters of s for use in assertion messages.
 func truncateMetrics(s string, n int) string {
 	if len(s) <= n {

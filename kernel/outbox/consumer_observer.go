@@ -1,8 +1,7 @@
 package outbox
 
 import (
-	"errors"
-
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -42,7 +41,8 @@ const (
 // an observer has already been attached. Re-attaching would silently swap
 // the in-use observer and lose previous emissions; the wiring-fail-fast
 // pattern (runtime-api.md §Option 范式分层) requires it surface as an error.
-var ErrObserverAlreadyAttached = errors.New("outbox: ConsumerObserver already attached; AttachObserver may only be called once per ConsumerBase")
+var ErrObserverAlreadyAttached = errcode.New(errcode.KindConflict, errcode.ErrValidationFailed,
+	"outbox: ConsumerObserver already attached; AttachObserver may only be called once per ConsumerBase")
 
 // NopConsumerObserver is the default ConsumerObserver used when no metrics
 // provider is wired. ObserveReject is a no-op.

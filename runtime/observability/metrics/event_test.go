@@ -9,6 +9,11 @@ import (
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
+// testReadyWaitDuration is a representative ready-wait observation used by
+// TestEventRouterCollector_ObserveReadyWait. The exact value is incidental
+// (a non-zero duration that's neither at zero nor at the histogram tail).
+const testReadyWaitDuration = 75 * time.Millisecond
+
 // ---------------------------------------------------------------------------
 // EventRouterCollector tests
 // ---------------------------------------------------------------------------
@@ -98,7 +103,7 @@ func TestEventRouterCollector_ObserveReadyWait_EmitsHistogramLabel(t *testing.T)
 		t.Fatalf("NewEventRouterCollector: %v", err)
 	}
 
-	c.ObserveReadyWait("accesscore", 75*time.Millisecond)
+	c.ObserveReadyWait("accesscore", testReadyWaitDuration)
 
 	ops := p.histogramOps["event_router_ready_wait_seconds"]
 	if len(ops) != 1 {

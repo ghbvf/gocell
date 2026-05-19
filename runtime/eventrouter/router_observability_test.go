@@ -14,6 +14,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
+// testReadyTimeout bounds Phase 3 ready-wait for the timeout test. Picked
+// short enough to keep the test fast but long enough that scheduling jitter
+// on a busy CI host does not race the deadline.
+const testReadyTimeout = 10 * time.Millisecond
+
 // ---------------------------------------------------------------------------
 // Spy EventCollector
 // ---------------------------------------------------------------------------
@@ -186,7 +191,7 @@ func TestRouter_runAwaitReady_Timeout_ObserveSetupError_ReadyTimeout(t *testing.
 	neverReady := &neverReadySubscriber{}
 	r := New(wrap(neverReady), clock.Real(),
 		WithEventRouterCollector(spy),
-		WithReadyTimeout(10*time.Millisecond), // very short timeout
+		WithReadyTimeout(testReadyTimeout), // very short timeout
 	)
 
 	require.NoError(t, r.AddContractHandler(testEventSpec("topic.stuck"), noopHandler, "cell-stuck", "cell-stuck"))
