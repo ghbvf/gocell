@@ -5,6 +5,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/types"
 	"strings"
 	"testing"
 )
@@ -28,14 +29,19 @@ import (
 // Hard form-uniqueness (callee, body) — pairs with ai-collab.md §"Hard 范本"
 // 第 2 条 (panic register Approved):
 //
-//   (i) RangeStmt.X must be *ast.CallExpr whose Fun resolves via *types.Info
-//       to typeseval.KnownNonDefaultTags (covers archtest re-export and direct
-//       typeseval import; both lower to the same *types.Func identity).
+//   (i) RangeStmt.X resolves via *types.Info to typeseval.KnownNonDefaultTags,
+//       either as a direct *ast.CallExpr (covers archtest re-export, direct
+//       typeseval import, and aliased import — all lower to the same
+//       *types.Func identity) OR as an *ast.Ident bound — within the same
+//       FuncDecl/FuncLit — by `:=` / `=` / `var` from such a CallExpr (the
+//       var-indirection form; see blind-spot closure BS-4 below).
 //   (ii) RangeStmt.Body, walked recursively, must contain *ast.CallExpr whose
 //        Fun resolves via *types.Info to tools/archtest.RunTyped.
 //
 // Both conditions AND → violation. Either side alone is fine: a tagGroup
-// loop that only inspects the slice (no RunTyped) is OK; a RunTyped call
+// loop that only inspects the slice (no RunTyped) is OK — this is a real
+// legitimate idiom: pass_test.go binds KnownNonDefaultTags() to a var for
+// façade↔oracle parity assertion (no range, no RunTyped); a RunTyped call
 // outside a tagGroup loop is OK.
 //
 // Compliant idioms (see fixture green_*):
@@ -53,26 +59,56 @@ import (
 // tools/archtest/internal/taggrouploopfixtures/ are excluded from the live
 // scan and exercised by Test_TaggroupLoopFixturePrecisionGate below).
 //
-// Blind-spot self-checks (ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot self-checks (ai-collab.md §"工具选定后强制盲区自检").
 //
-//   1. Façade vs internal callee: a fixture must exercise both
+// rangeExprCallsKnownNonDefaultTags / bodyContainsRunTyped resolve callee
+// identity through *types.Info — staticcheck SA4000 style (direct AST +
+// types.Info form-matching, no value-flow chasing). The forms below are
+// outside that resolver's declared range; each is either CLOSED with a RED
+// fixture or an ACCEPTED blind spot with rationale + backlog upgrade entry.
+//
+//   BS-1 Façade vs internal callee (CLOSED): fixtures exercise both
 //      archtest.KnownNonDefaultTags (façade re-export in resolve.go) and
 //      typeseval.KnownNonDefaultTags (direct internal import). Both point at
 //      the same *types.Func object — covered by red_panic_invariants_style.go
 //      and red_typeseval_qualified.go. Alias import form (kt "…/typeseval")
-//      also resolves to the same *types.Func identity — covered by
-//      red_aliased_import.go.
-//   2. Nested-closure body: RunTyped invoked inside an IIFE within the loop
-//      body must still be caught (subtree walk, not direct-child walk).
-//      Covered by red_nested_closure.go.
-//   3. Patterns variance: the loop-amortization invariant is independent of
-//      the patterns arg shape; subpath patterns like ./cells/... must also
-//      be caught when wrapped in a tagGroup loop. Covered by
-//      red_subpath_runtyped.go.
+//      also resolves to the same *types.Func identity — red_aliased_import.go.
+//   BS-2 Nested-closure body (CLOSED): RunTyped invoked inside an IIFE within
+//      the loop body must still be caught (subtree walk, not direct-child
+//      walk). Covered by red_nested_closure.go.
+//   BS-3 Patterns variance (CLOSED): the loop-amortization invariant is
+//      independent of the patterns arg shape; subpath patterns like
+//      ./cells/... must also be caught when wrapped in a tagGroup loop.
+//      Covered by red_subpath_runtyped.go.
+//   BS-4 RangeStmt.X var-indirection (CLOSED): `tags := KnownNonDefaultTags();
+//      for _, g := range tags { RunTyped(...) }`. condition (i) now also
+//      matches an *ast.Ident bound from KnownNonDefaultTags() within the same
+//      FuncDecl/FuncLit (collectKnownTagsBoundObjects). Precision is proven
+//      both directions: red_var_bound_range.go (bind→range→RunTyped → caught)
+//      and green_var_bound_parity.go (bind→len-assert, no range/RunTyped, the
+//      pass_test.go façade-parity idiom → NOT caught, no false positive).
+//   BS-5 Helper-wrapped RunTyped in loop body (ACCEPTED blind spot): a loop
+//      body that calls a package-local helper which itself calls RunTyped is
+//      not caught — bodyContainsRunTyped resolves the direct callee only and
+//      does not perform intra-package call-graph reachability. Rationale:
+//      (a) closing it requires one-level (or recursive) call-graph analysis,
+//      disproportionate to a rule whose purpose is anti-copy of one specific
+//      historical template — the template a fresh-instance Claude reproduces
+//      is the *direct* RunTyped-in-body shape (the now-removed
+//      panic_invariants loop / the red fixtures), not a helper-wrapped one;
+//      (b) a precise reverse self-check is infeasible — `func foo(){ RunTyped
+//      (...) }` local helpers are a pervasive legitimate idiom across the
+//      archtest suite, so any blanket "no local helper reaches RunTyped"
+//      assertion would false-positive (the same accepted trade-off
+//      staticcheck SA4000 documents for fn()==fn() side-effect blindness).
+//      Upgrade path (one-level call-graph) tracked by backlog
+//      TAGGROUP-LOOP-HELPER-WRAP-UPGRADE-01 (cap-14-tooling.md); trigger =
+//      first real event of a helper-wrapped tagGroup loop reaching CI.
 //
-// Reverse fixture-precision self-check enforces that GREEN fixtures (single
-// RunTyped(ProductionFlatTags()), two-load nil+ProductionFlatTags) do NOT
-// trip the rule.
+// Reverse fixture-precision self-check (Test_TaggroupLoopFixturePrecisionGate)
+// enforces that GREEN fixtures (single RunTyped(ProductionFlatTags()),
+// two-load nil+ProductionFlatTags, and the BS-4 parity binding) do NOT trip
+// the rule.
 
 const (
 	taggroupLoopRuleID         = "TAGGROUP-LOOP-FORBIDS-RUNTYPED-01"
@@ -90,6 +126,15 @@ const (
 // tools/archtest/internal/taggrouploopfixtures/ are excluded — the live scan
 // is _test.go-only by RunTyped's package selection, and fixture .go files
 // live in a separate package outside that selection.
+//
+// F3 cacheKey note: this scan's cacheKey is (modRoot, Tests=true, nil,
+// "./tools/archtest/...") — deliberately NOT the (modRoot, false, nil,
+// "./...") key TestMain warms. The amortization in ADR 202605190000 does not
+// cover this rule's own scan; it pays one cold packages.Load. That is
+// accepted (a single test, scope is bounded to one package). If it lands
+// borderline on the 20s slowgate post-merge, that is expected behavior, not
+// a regression — it is tracked under the slowgate cleanup backlog
+// ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01 (subprocess/cache-miss triage).
 func TestTagGroupLoopForbidsRunTyped(t *testing.T) {
 	t.Parallel()
 
@@ -149,6 +194,7 @@ func Test_TaggroupLoopFixturePrecisionGate(t *testing.T) {
 		"red_panic_invariants_style",
 		"red_subpath_runtyped",
 		"red_typeseval_qualified",
+		"red_var_bound_range",
 	}
 	for _, name := range expectedRed {
 		if hits[name] == 0 {
@@ -159,6 +205,7 @@ func Test_TaggroupLoopFixturePrecisionGate(t *testing.T) {
 	disallowedGreen := []string{
 		"green_single_load_production_flat",
 		"green_two_loads_nil_and_flat",
+		"green_var_bound_parity",
 	}
 	for _, name := range disallowedGreen {
 		if hits[name] > 0 {
@@ -174,8 +221,9 @@ func Test_TaggroupLoopFixturePrecisionGate(t *testing.T) {
 // the inner CallExpr search.
 func scanFileForTaggroupViolations(p *Pass, file *ast.File, rel string) []Diagnostic {
 	var out []Diagnostic
+	boundObjs := collectKnownTagsBoundObjects(p, file)
 	EachInSubtree[ast.RangeStmt](file, func(rs *ast.RangeStmt) {
-		if !rangeExprCallsKnownNonDefaultTags(p, rs.X) {
+		if !rangeExprCallsKnownNonDefaultTags(p, rs.X, boundObjs) {
 			return
 		}
 		bodyHit, hitLine := bodyContainsRunTyped(p, rs.Body)
@@ -197,22 +245,88 @@ func scanFileForTaggroupViolations(p *Pass, file *ast.File, rel string) []Diagno
 	return out
 }
 
-// rangeExprCallsKnownNonDefaultTags reports whether expr is a CallExpr whose
-// Fun resolves to KnownNonDefaultTags in either archtest (façade re-export)
-// or typeseval (internal).
-func rangeExprCallsKnownNonDefaultTags(p *Pass, expr ast.Expr) bool {
-	call, ok := expr.(*ast.CallExpr)
-	if !ok {
-		return false
+// rangeExprCallsKnownNonDefaultTags reports whether expr is (a) a direct
+// CallExpr whose Fun resolves via *types.Info to KnownNonDefaultTags in
+// either archtest (façade re-export) or typeseval (internal), or (b) an
+// *ast.Ident whose declared object is in boundObjs — the BS-4 var-indirection
+// form `tags := KnownNonDefaultTags(); for _, g := range tags`.
+func rangeExprCallsKnownNonDefaultTags(p *Pass, expr ast.Expr, boundObjs map[types.Object]struct{}) bool {
+	if call, ok := expr.(*ast.CallExpr); ok {
+		return callResolvesToKnownNonDefaultTags(p, call)
 	}
+	if id, ok := expr.(*ast.Ident); ok {
+		if obj := taggroupObjectOf(p.TypesInfo, id); obj != nil {
+			_, hit := boundObjs[obj]
+			return hit
+		}
+	}
+	return false
+}
+
+// callResolvesToKnownNonDefaultTags reports whether call.Fun resolves via
+// *types.Info to KnownNonDefaultTags in the archtest façade or typeseval.
+func callResolvesToKnownNonDefaultTags(p *Pass, call *ast.CallExpr) bool {
 	pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-	if !ok {
-		return false
-	}
-	if name != taggroupLoopKnownTagsName {
+	if !ok || name != taggroupLoopKnownTagsName {
 		return false
 	}
 	return pkgPath == taggroupLoopArchtestPkg || pkgPath == taggroupLoopTypesevalPkg
+}
+
+// collectKnownTagsBoundObjects returns the set of types.Object that are bound
+// — anywhere in file via `:=`, `=`, or `var` — to a CallExpr resolving to
+// KnownNonDefaultTags. This closes BS-4: the var-indirection form. Scope is
+// file-level (not whole-program) because the bypass that matters — a tagGroup
+// loop copied from the historical template — declares the binding in the same
+// file as the loop. Multi-value RHS (`x, err := f()`) is handled positionally;
+// KnownNonDefaultTags is single-value so the common case binds Lhs[0].
+func collectKnownTagsBoundObjects(p *Pass, file *ast.File) map[types.Object]struct{} {
+	out := make(map[types.Object]struct{})
+	bindIdent := func(id *ast.Ident) {
+		if id == nil || id.Name == "_" {
+			return
+		}
+		if obj := taggroupObjectOf(p.TypesInfo, id); obj != nil {
+			out[obj] = struct{}{}
+		}
+	}
+	EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
+		if len(as.Lhs) != len(as.Rhs) {
+			return // single RHS multi-LHS (e.g. range/typeassert) — not our shape
+		}
+		for i, rhs := range as.Rhs {
+			call, ok := rhs.(*ast.CallExpr)
+			if !ok || !callResolvesToKnownNonDefaultTags(p, call) {
+				continue
+			}
+			if id, ok := as.Lhs[i].(*ast.Ident); ok {
+				bindIdent(id)
+			}
+		}
+	})
+	EachInSubtree[ast.ValueSpec](file, func(vs *ast.ValueSpec) {
+		if len(vs.Names) != len(vs.Values) {
+			return
+		}
+		for i, v := range vs.Values {
+			call, ok := v.(*ast.CallExpr)
+			if !ok || !callResolvesToKnownNonDefaultTags(p, call) {
+				continue
+			}
+			bindIdent(vs.Names[i])
+		}
+	})
+	return out
+}
+
+// taggroupObjectOf returns the types.Object an identifier refers to, checking
+// Defs (declaration site, e.g. LHS of `:=` / `var`) then Uses (reference
+// site, e.g. range expression or LHS of plain `=`).
+func taggroupObjectOf(info *types.Info, id *ast.Ident) types.Object {
+	if obj := info.Defs[id]; obj != nil {
+		return obj
+	}
+	return info.Uses[id]
 }
 
 // bodyContainsRunTyped walks body recursively and reports whether any
