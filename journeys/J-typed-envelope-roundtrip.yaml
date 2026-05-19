@@ -1,6 +1,6 @@
 id: J-typed-envelope-roundtrip
 goal: typed response envelope 在 wire 层 success/error/framework-fallback 三类响应均符合 v1 schema 与 PII safety 约束
-lifecycle: experimental
+lifecycle: active
 owner:
   team: platform
   role: framework

@@ -39,7 +39,7 @@
   blocker: ""
   updatedAt: 2026-04-05
 - journeyId: J-typed-envelope-roundtrip
-  state: doing
+  state: done
   risk: low
   blocker: ""
-  updatedAt: 2026-05-06
+  updatedAt: 2026-05-19
