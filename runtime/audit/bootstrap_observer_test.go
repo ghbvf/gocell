@@ -51,6 +51,10 @@ func TestNewBootstrapAuthFailObserver_DoubleWriteSlogAndAudit(t *testing.T) {
 	// test asserted on, now owned by the centralized funnel.
 	logged := buf.String()
 	assert.Contains(t, logged, "bootstrap_auth_failed", "slog event label must remain stable")
+	// The explicit "event" attr mirrors the pre-funnel ssobffBootstrapAuthFailLogger
+	// shape so SRE alerts can pivot on either msg or attr until ssobff migrates
+	// off the legacy slog-only observer (SSOBFF-BOOTSTRAP-AUDIT-CHAIN-WIRING-01).
+	assert.Contains(t, logged, "event=bootstrap_auth_failed", "slog must carry explicit event attr (parity with legacy ssobff shape)")
 	assert.Contains(t, logged, "reason=wrong_credentials", "slog must carry reason field")
 	assert.Contains(t, logged, "client_ip=192.0.2.99", "slog must carry client_ip field")
 	assert.NotContains(t, logged, "bootstrap_audit_append_failed",
@@ -100,8 +104,46 @@ func TestNewBootstrapAuthFailObserver_AuditAppendFails_LogsFallback(t *testing.T
 		"primary slog line must always be emitted, even when audit append fails")
 	assert.Contains(t, lines[1], "msg=bootstrap_audit_append_failed",
 		"audit append failure must surface as a dedicated slog Error line")
+	assert.Contains(t, lines[1], "event=bootstrap_audit_append_failed",
+		"fallback line must carry explicit event attr (parity with primary line)")
 	assert.Contains(t, lines[1], "reason=rate_limited", "fallback line must include reason")
 	assert.Contains(t, lines[1], "ledger boom", "fallback line must include underlying error text")
+}
+
+// TestNewBootstrapAuthFailObserver_DetachedCtxSurvivesCallerCancel covers H1.
+// runtime/auth invokes the observer AFTER writing 401/429, so client disconnect
+// cancels r.Context() and would otherwise abort the ledger Append mid-flight.
+// The observer wraps Append with ctxutil.WithDetachedTimeout so the audit
+// hash-chain write completes (up to the detached budget) regardless of caller
+// cancellation. This guards the fail-closed compliance contract documented on
+// NewBootstrapAuthFailObserver.
+func TestNewBootstrapAuthFailObserver_DetachedCtxSurvivesCallerCancel(t *testing.T) {
+	t.Parallel()
+	store, clk := buildTestLedgerStore(t)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	obs, err := audit.NewBootstrapAuthFailObserver(logger, store, clk)
+	require.NoError(t, err)
+
+	// Pre-cancelled parent: simulates the client disconnecting before runtime/auth
+	// gets to call the observer. The audit write must still land.
+	parent, cancel := context.WithCancel(ctxkeys.WithRealIP(context.Background(), "192.0.2.42"))
+	cancel()
+	obs(parent, "wrong_credentials")
+
+	entries, err := store.Query(context.Background(),
+		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+		ledger.QueryListParams{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, entries, 1,
+		"detached ctx must let the ledger write complete even when the caller ctx is already cancelled; "+
+			"got %d entries (likely r.Context() leaked into Append)", len(entries))
+
+	// Fallback line must NOT appear — the write succeeded under the detached ctx.
+	assert.NotContains(t, buf.String(), "bootstrap_audit_append_failed",
+		"detached write should succeed; any 'audit_append_failed' indicates ctx cancel leaked into Append")
 }
 
 // TestNewBootstrapAuthFailObserver_NilDeps_Errors covers T6.

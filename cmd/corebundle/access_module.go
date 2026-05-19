@@ -181,6 +181,23 @@ func (m AccessCoreModule) Provide(
 		return nil, nil, nil, err
 	}
 	accessOpts = append(accessOpts, accesscore.WithSessionStore(sessionStore))
+	// Double-write bootstrap auth-fail observer (BOOTSTRAP-AUDIT-CHAIN-WIRING-01,
+	// plan 039 W1-2): slog for SRE alerting + audit hash-chain for compliance.
+	// The constructor is the only sanctioned path that produces a wired
+	// observer — see tools/archtest/bootstrap_audit_observer_funnel_test.go
+	// (downstream Hard / upstream Medium).
+	//
+	// Construct BEFORE ratelimit.New: observer is a pure nil-check (no
+	// goroutine, no resource), so its fail-fast must precede the limiter
+	// which spawns a cleanup goroutine that needs ManagedResource teardown.
+	// Reversing the order leaks the limiter goroutine when observer
+	// construction fails before line 219's ManagedResource registration.
+	bootstrapAuthObserver, err := audit.NewBootstrapAuthFailObserver(
+		slog.Default(), shared.BootstrapLedgerStore, shared.Clock,
+	)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("accesscore: build bootstrap audit observer: %w", err)
+	}
 	// Bootstrap credential auth + per-IP token bucket rate limiter protects
 	// the setup/admin endpoint (ADR §D2 operator credential via env).
 	//
@@ -194,17 +211,6 @@ func (m AccessCoreModule) Provide(
 		Rate:  bootstrapRateLimitPerSec, // 5 req/min ≈ 0.0833/sec
 		Burst: bootstrapRateLimitBurst,
 	}, shared.Clock)
-	// Double-write bootstrap auth-fail observer (BOOTSTRAP-AUDIT-CHAIN-WIRING-01,
-	// plan 039 W1-2): slog for SRE alerting + audit hash-chain for compliance.
-	// The constructor is the only sanctioned path that produces a wired
-	// observer — see tools/archtest/bootstrap_audit_observer_funnel_test.go
-	// (downstream Hard / upstream Medium).
-	bootstrapAuthObserver, err := audit.NewBootstrapAuthFailObserver(
-		slog.Default(), shared.BootstrapLedgerStore, shared.Clock,
-	)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("accesscore: build bootstrap audit observer: %w", err)
-	}
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{Username: creds.Username, Password: creds.Password},
 		rlLimiter,
