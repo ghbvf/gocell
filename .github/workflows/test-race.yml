@@ -67,7 +67,8 @@ jobs:
             ./runtime/... \
             ./pkg/... \
             ./adapters/prometheus/... \
-            ./tools/archtest/internal/typeseval/...
+            ./tools/archtest/internal/typeseval/... \
+            ./cells/accesscore/slices/setup/...
 
   race-pg-integration:
     name: go test -race -tags=integration (postgres)

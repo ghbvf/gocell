@@ -76,9 +76,10 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // PG vs memstore wiring choice.
 func WithSetupLock(lock ports.SetupLock) Option {
 	return func(s *Service) {
-		if lock != nil {
-			s.setupLock = lock
+		if validation.IsNilInterface(lock) {
+			return
 		}
+		s.setupLock = lock
 	}
 }
 
@@ -114,10 +115,10 @@ func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, op
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "setup: TxRunner required; use WithTxManager")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "setup: TxRunner required; use WithTxManager")
 	}
 	if validation.IsNilInterface(s.setupLock) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"setup: setupLock required; use WithSetupLock — PG callers wire "+
 				"accesspg.NewSetupLock(deps), memstore callers wire "+
 				"accesscore.NoopSetupLock{}")

@@ -171,7 +171,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
@@ -294,7 +294,16 @@ func TestService_CreateAdmin_SetupLockFailure_ShortCircuitsNoSideEffects(t *test
 	assert.Equal(t, 0, cnt, "lock failure must not assign admin role")
 }
 
-func TestService_CreateAdmin_NoSetupLock_StillCreates(t *testing.T) {
+// TestService_CreateAdmin_NilSetupLockOptionIgnored_PriorLockWins verifies that
+// calling setup.WithSetupLock(nil) after a non-nil default is silently ignored.
+// newService already injects noopSetupLock{} as the default; the subsequent
+// WithSetupLock(nil) is not stored because the option body's
+// validation.IsNilInterface check returns early. The prior default lock
+// therefore remains in s.setupLock and CreateAdmin succeeds normally.
+// This test does NOT cover the genuine fail-fast path (NewService rejecting a
+// missing setupLock entirely) — that is covered by
+// TestNewService_NilSetupLock_ReturnsErrcode.
+func TestService_CreateAdmin_NilSetupLockOptionIgnored_PriorLockWins(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	userRepo := store.UserRepository()
 	roleRepo := store.RoleRepository()
@@ -312,6 +321,31 @@ func TestService_CreateAdmin_NoSetupLock_StillCreates(t *testing.T) {
 	cnt, countErr := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, countErr)
 	assert.Equal(t, 1, cnt)
+}
+
+// TestNewService_NilSetupLock_ReturnsErrcode covers the genuine fail-fast path:
+// calling setup.NewService without any WithSetupLock option (or with only a nil
+// setupLock, where prior defaults are absent) must return an errcode.Error with
+// ErrCellInvalidConfig code. This is operator wiring, not user input — the
+// sentinel matches cells/accesscore/cell_init.go's WithSetupLock / WithCASProtocol
+// / WithBootstrapAuth fail-fast checks.
+func TestNewService_NilSetupLock_ReturnsErrcode(t *testing.T) {
+	prov, err := adminprovision.NewProvisioner(
+		mem.NewStore(clock.Real()).UserRepository(),
+		mem.NewStore(clock.Real()).RoleRepository(),
+		discardLogger(),
+		func() string { return "x" },
+		clock.Real(),
+	)
+	require.NoError(t, err)
+	_, err = setup.NewService(prov, discardLogger(),
+		setup.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		// No WithSetupLock — triggers the mandatory-dep fail-fast.
+	)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "setupLock nil check must return errcode.Error")
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 }
 
 func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
@@ -447,11 +481,16 @@ func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
 
 // --- New in S-5: concurrent, bcrypt-skip, rollback ------------------------
 
-// TestService_CreateAdmin_Concurrent_OnlyOneSucceeds exercises the Provisioner
-// mutex: 10 goroutines all POST distinct usernames into a fresh repo; exactly
-// one must return a CreateAdminOutput and the other nine must return
-// ErrSetupAlreadyInitialized. This is the primary verification of the
-// read-after-check atomicity fix (round-1 P0).
+// TestService_CreateAdmin_Concurrent_OnlyOneSucceeds verifies the
+// OutcomeRaceSkipped → ErrSetupAlreadyInitialized path under 10 concurrent
+// goroutines. newService injects a fixed UUID generator (always returns the
+// same ID), so the second-onward goroutines that reach UserRepo.Create get
+// ErrAuthUserDuplicate from the UUID collision; createAdminUser then recounts
+// admins (recount > 0) and returns OutcomeRaceSkipped, which CreateAdmin
+// surfaces as ErrSetupAlreadyInitialized. mem.Store's per-call store.mu
+// protects map safety; the noopTxRunner means no transactional serialization in
+// this test — the race-skip path is driven purely by the duplicate-UUID
+// detection in adminprovision.Provisioner.
 func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	userRepo := store.UserRepository()
