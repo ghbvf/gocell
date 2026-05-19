@@ -168,6 +168,10 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
+		// Memstore mode: memTxRunner.RunInTx already holds store.mu for the
+		// whole closure. NoopSetupLock satisfies the mandatory WithSetupLock
+		// phase0 check without adding a redundant second lock.
+		accesscore.WithSetupLock(accesscore.NoopSetupLock{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
