@@ -141,6 +141,29 @@ type errEnvelope struct {
 	} `json:"error"`
 }
 
+// TestHttpConfigPublishV1_Serve_NotFound exercises the 404 path declared in
+// http.config.publish.v1: publishing a key that does not exist returns 404 with
+// ERR_CONFIG_NOT_FOUND, validated against the contract's declared error schema.
+func TestHttpConfigPublishV1_Serve_NotFound(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
+	svc, _, _ := newContractService(t)
+	mux := newContractMux(svc)
+
+	path := strings.Replace(c.HTTP.Path, "{key}", "no-such-key", 1)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, path, nil).
+		WithContext(auth.TestContext("contract-admin", []string{"admin"}))
+	mux.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+	var env errEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+	require.Equal(t, "ERR_CONFIG_NOT_FOUND", env.Error.Code,
+		"missing key must produce ERR_CONFIG_NOT_FOUND")
+}
+
 // TestHttpConfigPublishV1_Serve_Unauthorized exercises the real handler for
 // 401 (no auth ctx) and 403 (authenticated but lacks admin role) paths, then
 // validates the response body shape against the contract's declared error schema
