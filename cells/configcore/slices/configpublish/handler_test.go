@@ -18,6 +18,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	configpublishgen "github.com/ghbvf/gocell/generated/contracts/http/config/publish/v1"
 	rollbackgen "github.com/ghbvf/gocell/generated/contracts/http/config/rollback/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -525,4 +526,44 @@ func TestRollbackAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 	typed, ok := resp.(rollbackgen.Rollback409ErrorResponse)
 	require.True(t, ok, "expected Rollback409ErrorResponse, got %T", resp)
 	assert.Equal(t, errcode.ErrVersionConflict, typed.Body.Code)
+}
+
+// ---------------------------------------------------------------------------
+// B2-T-08: typed 404 envelope for PublishAdapter — ErrConfigRepoNotFound path.
+// PublishAdapter.Publish maps both ErrConfigRepoNotFound (PG repo) and
+// ErrConfigNotFound (mem repo) to configpublishgen.Publish404ErrorResponse.
+// The ErrConfigNotFound path is covered by TestHandler_HandlePublish_NotFound
+// (via the full HTTP stack). This test directly exercises the PG-repo error
+// path by injecting ErrConfigRepoNotFound via a fakeConfigRepoForPublish that
+// overrides GetByKey — the first repo call in Service.Publish.
+// ---------------------------------------------------------------------------
+
+type fakeConfigRepoForPublish struct {
+	*mem.ConfigRepository
+	getByKeyErr error
+}
+
+func (f *fakeConfigRepoForPublish) GetByKey(_ context.Context, _ string) (*domain.ConfigEntry, error) {
+	return nil, f.getByKeyErr
+}
+
+func newPublishAdapter(t *testing.T, getByKeyErr error) PublishAdapter {
+	t.Helper()
+	repo := &fakeConfigRepoForPublish{
+		ConfigRepository: mem.NewConfigRepository(clock.Real()),
+		getByKeyErr:      getByKeyErr,
+	}
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+	require.NoError(t, err)
+	return PublishAdapter{S: svc}
+}
+
+func TestPublishAdapter_RepoNotFound_Returns404Typed(t *testing.T) {
+	publishAd := newPublishAdapter(t,
+		errcode.New(errcode.KindNotFound, errcode.ErrConfigRepoNotFound, "config not found"))
+	resp, err := publishAd.Publish(adminCtx(), &configpublishgen.Request{Key: "k-publish"})
+	require.NoError(t, err, "adapter must map ErrConfigRepoNotFound to typed 404")
+	typed, ok := resp.(configpublishgen.Publish404ErrorResponse)
+	require.True(t, ok, "expected Publish404ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, typed.Body.Code)
 }
