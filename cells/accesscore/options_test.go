@@ -38,12 +38,59 @@ func TestWithSetupLock(t *testing.T) {
 	assert.Equal(t, lock, c.setupLock)
 }
 
-// TestWithSetupLock_NilNoop verifies that passing nil keeps the cell's setupLock
-// unset (mem-mode contract: intra-process sync.Mutex in adminprovision.Provisioner
-// is sufficient when no cross-process lock is wired).
-func TestWithSetupLock_NilNoop(t *testing.T) {
-	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(nil), withTestCASProtocol())
-	assert.Nil(t, c.setupLock)
+// TestInit_MissingSetupLock_FailsFast verifies that omitting WithSetupLock
+// from the composition root causes Init() to return ErrCellInvalidConfig at
+// phase0 — closing the upstream-Soft gap that was previously plugged by the
+// in-process sync.Mutex inside adminprovision.Provisioner (removed in this PR).
+// Memstore composition roots wire accesscore.NoopSetupLock{}; PG composition
+// roots wire accesspg.NewSetupLock(deps).
+func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
+	c := NewAccessCore(
+		WithClock(clock.Real()),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
+		withTestBootstrapAuth(),
+		// WithSetupLock omitted on purpose.
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err, "missing WithSetupLock must produce a phase0 error")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, ec.Message, "WithSetupLock is required",
+		"diagnostic must point operators at the missing wiring")
+}
+
+// TestWithSetupLock_NilOption_IgnoredAndCaughtAtInit verifies that a typed-nil
+// ports.SetupLock passed via WithSetupLock does NOT silently override a real
+// lock (it is ignored, leaving phase0 to reject when nothing else wired one).
+func TestWithSetupLock_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
+	c := NewAccessCore(
+		WithClock(clock.Real()),
+		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
+		withTestBootstrapAuth(),
+		WithSetupLock(nil), // bare-nil intentionally
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 }
 
 func TestWithInMemoryDefaults(t *testing.T) {
