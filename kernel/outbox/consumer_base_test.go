@@ -1,9 +1,12 @@
 package outbox
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/bits"
 	"sync"
 	"sync/atomic"
@@ -1237,4 +1240,286 @@ func TestConsumerBase_CtxCancelDuringBackoff_PreservesSettlementObservers(t *tes
 	res.SettlementObservers[0].ObserveSettlement(context.Background(), SettlementObservation{})
 	assert.True(t, observerCalled,
 		"preserved SettlementObserver must be callable after ctx-cancel abort")
+}
+
+// =============================================================================
+// ConsumerObserver wiring tests (W2: wire ConsumerObserver into ConsumerBase)
+// =============================================================================
+
+// captureDefaultSlogForConsumerBase replaces the global slog default with a
+// JSON handler writing to a buffer; the original logger is restored via
+// t.Cleanup. Callers must NOT call t.Parallel() when using this helper.
+func captureDefaultSlogForConsumerBase(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	return &buf
+}
+
+// logLevelFromBuf scans JSON log lines in buf for the first entry whose "msg"
+// matches wantMsg and returns its "level" field. Returns "" if not found.
+func logLevelFromBuf(buf *bytes.Buffer, wantMsg string) string {
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		if rec["msg"] == wantMsg {
+			if lvl, ok := rec["level"].(string); ok {
+				return lvl
+			}
+		}
+	}
+	return ""
+}
+
+// TestConsumerBase_HandlerReject_CallsObserveReject_WithHandlerRejectReason
+// verifies that when the business handler returns DispositionReject,
+// ConsumerBase calls ObserveReject exactly once with reason=handler_reject.
+func TestConsumerBase_HandlerReject_CallsObserveReject_WithHandlerRejectReason(t *testing.T) {
+	obs := &fakeObserver{}
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		RetryCount:           3,
+		RetryBaseDelay:       time.Millisecond,
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+	require.NoError(t, cb.AttachObserver(obs))
+
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Reject(errors.New("bad payload"))
+	})
+
+	res, _ := handler(context.Background(), Entry{ID: "evt-reject"})
+
+	assert.Equal(t, DispositionReject, res.Disposition)
+	require.Len(t, obs.calls, 1)
+	assert.Equal(t, rejectCall{
+		cellID:        "testcell",
+		topic:         "event.test.v1",
+		consumerGroup: "cg-test",
+		reason:        ConsumerRejectReasonHandlerReject,
+	}, obs.calls[0])
+}
+
+// TestConsumerBase_RetryExhausted_CallsObserveReject_WithRetryExhaustedReason
+// verifies that when the retry budget is exhausted, ConsumerBase calls
+// ObserveReject exactly once with reason=retry_exhausted.
+func TestConsumerBase_RetryExhausted_CallsObserveReject_WithRetryExhaustedReason(t *testing.T) {
+	obs := &fakeObserver{}
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		RetryCount:           2,
+		RetryBaseDelay:       time.Millisecond,
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+	require.NoError(t, cb.AttachObserver(obs))
+
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Requeue(errors.New("always transient"))
+	})
+
+	res, _ := handler(context.Background(), Entry{ID: "evt-exhaust"})
+
+	assert.Equal(t, DispositionReject, res.Disposition)
+	require.Len(t, obs.calls, 1)
+	assert.Equal(t, rejectCall{
+		cellID:        "testcell",
+		topic:         "event.test.v1",
+		consumerGroup: "cg-test",
+		reason:        ConsumerRejectReasonRetryExhausted,
+	}, obs.calls[0])
+}
+
+// TestConsumerBase_AckPath_DoesNotCallObserveReject verifies that the clean
+// Ack path does not trigger the observer.
+func TestConsumerBase_AckPath_DoesNotCallObserveReject(t *testing.T) {
+	obs := &fakeObserver{}
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+	require.NoError(t, cb.AttachObserver(obs))
+
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Ack()
+	})
+
+	res, _ := handler(context.Background(), Entry{ID: "evt-ack"})
+
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.Empty(t, obs.calls, "ObserveReject must not be called on Ack path")
+}
+
+// TestConsumerBase_Wrap_NilObserver_FallsBackToNop verifies that a freshly
+// constructed ConsumerBase (no AttachObserver call) does not panic when
+// processing a reject — the Nop observer is active and silently discards.
+func TestConsumerBase_Wrap_NilObserver_FallsBackToNop(t *testing.T) {
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+	// Deliberately do NOT call AttachObserver — Nop must be active.
+
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Reject(errors.New("permanent"))
+	})
+
+	// Must not panic.
+	res, _ := handler(context.Background(), Entry{ID: "evt-nop"})
+	assert.Equal(t, DispositionReject, res.Disposition)
+}
+
+// TestConsumerBase_AttachObserver_Idempotent_ReturnsError verifies that a
+// second AttachObserver call returns ErrObserverAlreadyAttached.
+func TestConsumerBase_AttachObserver_Idempotent_ReturnsError(t *testing.T) {
+	cb := testConsumerBase(t)
+
+	require.NoError(t, cb.AttachObserver(&fakeObserver{}))
+	err := cb.AttachObserver(&fakeObserver{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrObserverAlreadyAttached)
+}
+
+// TestConsumerBase_AttachObserver_NilObserver_ReturnsError verifies that both
+// bare-nil and typed-nil observers are rejected with a validation error.
+func TestConsumerBase_AttachObserver_NilObserver_ReturnsError(t *testing.T) {
+	t.Run("bare_nil", func(t *testing.T) {
+		cb := testConsumerBase(t)
+		err := cb.AttachObserver(nil)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrObserverAlreadyAttached,
+			"nil rejection must not be confused with already-attached error")
+	})
+
+	t.Run("typed_nil", func(t *testing.T) {
+		cb := testConsumerBase(t)
+		var p *fakeObserver
+		var o ConsumerObserver = p
+		err := cb.AttachObserver(o)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrObserverAlreadyAttached)
+	})
+}
+
+// TestConsumerBase_RetryExhausted_LogLevelError verifies that the
+// retry-budget-exhausted log entry is emitted at ERROR level (upgraded from
+// WARN per observability.md: DLX-routed reject is correctness-affecting).
+func TestConsumerBase_RetryExhausted_LogLevelError(t *testing.T) {
+	// Do NOT call t.Parallel(): this test mutates the global slog default logger.
+	buf := captureDefaultSlogForConsumerBase(t)
+
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Requeue(errors.New("always fail"))
+	})
+
+	res, _ := handler(context.Background(), Entry{ID: "evt-loglevel"})
+	assert.Equal(t, DispositionReject, res.Disposition)
+
+	level := logLevelFromBuf(buf, "outbox: retry budget exhausted, rejecting to DLX")
+	assert.Equal(t, "ERROR", level,
+		"retry-exhausted log entry must be at ERROR level (observability.md §slog 日志级别)")
+}
+
+// TestConsumerBase_HandlerReject_ObserveReject_CellIDFromSubscription verifies
+// that the cellID forwarded to ObserveReject is taken from sub.CellID, not
+// from consumerGroup or a fallback. This guards the F10 capture-chain.
+func TestConsumerBase_HandlerReject_ObserveReject_CellIDFromSubscription(t *testing.T) {
+	obs := &fakeObserver{}
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+	require.NoError(t, cb.AttachObserver(obs))
+
+	// CellID and ConsumerGroup are deliberately different to prove CellID wins.
+	sub := Subscription{
+		Topic:         "event.distinct.v1",
+		ConsumerGroup: "cg-for-broker-partitioning",
+		CellID:        "distinct-cell-id",
+	}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Reject(errors.New("permanent"))
+	})
+
+	_, _ = handler(context.Background(), Entry{ID: "evt-cellid"})
+
+	require.Len(t, obs.calls, 1)
+	assert.Equal(t, "distinct-cell-id", obs.calls[0].cellID,
+		"ObserveReject cellID must equal sub.CellID, not consumerGroup")
+	assert.Equal(t, "cg-for-broker-partitioning", obs.calls[0].consumerGroup)
+}
+
+// TestConsumerBase_RetryExhausted_NoObserveReject_OnCtxCancel verifies that
+// ctx-cancel Requeue paths do not call ObserveReject (not a terminal Reject).
+func TestConsumerBase_RetryExhausted_NoObserveReject_OnCtxCancel(t *testing.T) {
+	obs := &fakeObserver{}
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		RetryCount:           5,
+		RetryBaseDelay:       testtime.D5s,
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+	require.NoError(t, cb.AttachObserver(obs))
+
+	started := make(chan struct{}, 1)
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		return Requeue(errors.New("transient"))
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	res, _ := handler(ctx, Entry{ID: "evt-ctxcancel"})
+
+	assert.Equal(t, DispositionRequeue, res.Disposition)
+	assert.Empty(t, obs.calls, "ObserveReject must NOT be called on ctx-cancel Requeue path")
 }

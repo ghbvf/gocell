@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Structured log field keys used across ConsumerBase and transport subscribers.
@@ -227,6 +228,13 @@ type ConsumerBase struct {
 	config  ConsumerBaseConfig
 	clk     clock.Clock
 
+	// observer receives notifications on terminal Reject paths. Initialized to
+	// NopConsumerObserver{} by NewConsumerBase so it is never nil. Replaced at
+	// most once via AttachObserver; observerAttached tracks whether a non-Nop
+	// observer has been wired.
+	observer         ConsumerObserver
+	observerAttached bool
+
 	// built marks the value as the product of NewConsumerBase rather than a
 	// zero-value struct literal (`&ConsumerBase{}`). It is the single source of
 	// truth consulted by IsConstructed; production wiring (runtime/bootstrap
@@ -271,11 +279,33 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 	}
 	config.SetDefaults()
 	return &ConsumerBase{
-		claimer: claimer,
-		config:  config,
-		clk:     clk,
-		built:   true,
+		claimer:  claimer,
+		config:   config,
+		clk:      clk,
+		observer: NopConsumerObserver{},
+		built:    true,
 	}, nil
+}
+
+// AttachObserver wires a ConsumerObserver that receives notifications on every
+// terminal Reject disposition (handler-explicit reject or retry-budget
+// exhaustion). AttachObserver may be called at most once per ConsumerBase;
+// repeat calls return ErrObserverAlreadyAttached (wiring fail-fast per
+// runtime-api.md §Option 范式分层). Bare-nil and typed-nil observers are
+// rejected with ErrValidationFailed.
+//
+// ref: Temporal MetricsHandler observer-injected pattern
+func (cb *ConsumerBase) AttachObserver(o ConsumerObserver) error {
+	if isNilObserver(o) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"outbox: AttachObserver requires a non-nil ConsumerObserver")
+	}
+	if cb.observerAttached {
+		return ErrObserverAlreadyAttached
+	}
+	cb.observer = o
+	cb.observerAttached = true
+	return nil
 }
 
 // Wrap returns an EntryHandler that wraps the given business handler with
@@ -318,6 +348,7 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberHandler {
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
+	cellID := sub.CellID
 	return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
 		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.ID)
 
@@ -330,9 +361,9 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyConsumerGroup, consumerGroup),
 					slog.Any("error", err))
-				return cb.retryLoop(ctx, consumerGroup, topic, entry, handler), nil
+				return cb.retryLoop(ctx, cellID, consumerGroup, topic, entry, handler), nil
 			}
-			return cb.handleClaimState(ctx, consumerGroup, topic, entry, handler, state, receipt)
+			return cb.handleClaimState(ctx, cellID, consumerGroup, topic, entry, handler, state, receipt)
 		}
 
 		// Fail-closed: claimWithRetry handles all attempts with backoff + jitter.
@@ -346,7 +377,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 				slog.Any("error", err))
 			return Requeue(err), nil
 		}
-		return cb.handleClaimState(ctx, consumerGroup, topic, entry, handler, state, receipt)
+		return cb.handleClaimState(ctx, cellID, consumerGroup, topic, entry, handler, state, receipt)
 	}
 }
 
@@ -422,6 +453,7 @@ func (cb *ConsumerBase) claimWithRetry(
 // Settlement is nil for ClaimDone and ClaimBusy (no idempotency state to settle).
 func (cb *ConsumerBase) handleClaimState(
 	ctx context.Context,
+	cellID string,
 	consumerGroup string,
 	topic string,
 	entry Entry,
@@ -451,7 +483,7 @@ func (cb *ConsumerBase) handleClaimState(
 		return Requeue(nil), nil
 	default:
 		// ClaimAcquired -- start lease-renewal goroutine before invoking handler.
-		result := cb.runWithRenewal(ctx, consumerGroup, topic, entry, handler, receipt)
+		result := cb.runWithRenewal(ctx, cellID, consumerGroup, topic, entry, handler, receipt)
 		return result, receipt
 	}
 }
@@ -513,8 +545,13 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 // final returned HandleResult so that business-middleware observers (e.g.
 // ConfigEventMiddleware) are notified after ConsumerBase resolves the final
 // broker disposition.
+//
+// cellID is the observability owner dimension forwarded to the ConsumerObserver
+// on terminal Reject paths. It is captured from sub.CellID by Wrap and passed
+// through runWithRenewal → retryLoop so no ambient state is required.
 func (cb *ConsumerBase) retryLoop(
 	ctx context.Context,
+	cellID string,
 	consumerGroup string,
 	topic string,
 	entry Entry,
@@ -537,6 +574,7 @@ func (cb *ConsumerBase) retryLoop(
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Any("error", lastResult.Err))
+			cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonHandlerReject)
 			return HandleResult{
 				Disposition:         DispositionReject,
 				Err:                 lastResult.Err,
@@ -562,13 +600,16 @@ func (cb *ConsumerBase) retryLoop(
 	}
 
 	// Exhausted all retries -- reject so broker routes to DLX.
-	logWithContext(ctx, slog.LevelWarn, "outbox: retry budget exhausted, rejecting to DLX",
+	// Upgraded from LevelWarn to LevelError: retry-exhausted routes to DLX
+	// (correctness-affecting) per observability.md §slog 日志级别.
+	logWithContext(ctx, slog.LevelError, "outbox: retry budget exhausted, rejecting to DLX",
 		slog.String(logKeyEventID, entry.ID),
 		slog.String(logKeyTopic, topic),
 		slog.String(logKeyConsumerGroup, consumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.String("process_reason", "retry_exhausted"),
 		slog.Any("error", lastResult.Err))
+	cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonRetryExhausted)
 	return HandleResult{
 		Disposition:         DispositionReject,
 		Err:                 lastResult.Err,
@@ -594,6 +635,7 @@ func (cb *ConsumerBase) retryLoop(
 // Cognitive complexity is kept ≤15 by delegating the ticker loop to leaseRenewalLoop.
 func (cb *ConsumerBase) runWithRenewal(
 	ctx context.Context,
+	cellID string,
 	consumerGroup string,
 	topic string,
 	entry Entry,
@@ -603,7 +645,7 @@ func (cb *ConsumerBase) runWithRenewal(
 	interval := cb.config.LeaseRenewalInterval
 	// Skip renewal when disabled (negative) or receipt is nil.
 	if interval <= 0 || receipt == nil {
-		return cb.retryLoop(ctx, consumerGroup, topic, entry, handler)
+		return cb.retryLoop(ctx, cellID, consumerGroup, topic, entry, handler)
 	}
 
 	var leaseLost atomic.Bool
@@ -620,7 +662,7 @@ func (cb *ConsumerBase) runWithRenewal(
 		})
 	}()
 
-	result := cb.retryLoop(renewCtx, consumerGroup, topic, entry, handler)
+	result := cb.retryLoop(renewCtx, cellID, consumerGroup, topic, entry, handler)
 
 	// Signal the renewal goroutine to stop and wait for it.
 	cancelRenew()
