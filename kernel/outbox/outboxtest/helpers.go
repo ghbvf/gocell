@@ -714,7 +714,10 @@ func closeWithBudget(t *testing.T, sub outbox.Subscriber, topic string, budget t
 	select {
 	case err := <-errCh:
 		return err
-	case <-time.After(budget):
-		return fmt.Errorf("Close did not return within %s (topic=%q, goroutine leaked) — implementation may ignore ctx", budget, topic)
+	case <-closeCtx.Done():
+		cause := context.Cause(closeCtx)
+		return fmt.Errorf(
+			"Close did not return within budget (topic=%q, cause=%w, goroutine leaked) — implementation may ignore ctx",
+			topic, cause)
 	}
 }
