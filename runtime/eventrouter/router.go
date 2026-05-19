@@ -29,8 +29,41 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/observability"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
+
+// subscribeFailure carries a Phase 2 subscription error from the producer
+// goroutine in runSubscribe to the Phase 3 or Phase 4 consumer point. The
+// producer never decides which phase classification to record — that is the
+// consumer's responsibility, owned by phase context. This pattern eliminates
+// the producer-side race between `select <-r.running` and `closeRunning()`
+// that previously caused reason flicker between subscribe_failure and
+// runtime_fault.
+//
+// The reason field is populated by the producer with the *setup-phase* reason
+// (SetupErrorReasonSubscribeFailure or SetupErrorReasonPanic) and is consumed
+// only by the Phase 3 consumer. The Phase 4 consumer always records
+// RuntimeErrorReasonRuntimeFault and ignores reason — by Phase 4 the failure
+// is by definition a runtime fault regardless of its underlying cause.
+//
+// ref: PR #593 review fix-up (P1#1 reason flicker, P1#2 panic redaction).
+type subscribeFailure struct {
+	cellID string
+	topic  string
+	reason string
+	err    error
+}
+
+func (sf subscribeFailure) Error() string { return sf.err.Error() }
+func (sf subscribeFailure) Unwrap() error { return sf.err }
+
+// panicErrSentinel is the fixed error returned on the recover() path. The
+// original panic value never enters the error chain so it cannot leak via
+// Health() / Run() / slog "error" fields. The redacted form of the panic
+// value is logged separately as a typed slog string field
+// "recovered_redacted", scrubbed by pkg/redaction.RedactString.
+var panicErrSentinel = errors.New("eventrouter: subscription panicked (redacted)")
 
 // DefaultReadyTimeout bounds Phase 3 of Run() so a subscriber that never
 // signals Ready (broker reconnect storm, mis-configured topology) does not
@@ -307,9 +340,9 @@ func (r *Router) Run(ctx context.Context) error {
 		return err
 	}
 
-	// setupErr receives the first subscription runtime error.
+	// setupErr receives the first subscription failure as a typed sentinel.
 	// Buffer size = len(handlers) to avoid goroutine leaks if multiple fail.
-	setupErr := make(chan error, len(handlers))
+	setupErr := make(chan subscribeFailure, len(handlers))
 
 	// Phase 2: launch Subscribe goroutines concurrently.
 	r.runSubscribe(runCtx, handlers, setupErr)
@@ -325,13 +358,23 @@ func (r *Router) Run(ctx context.Context) error {
 	r.closeRunning()
 
 	// Phase 4: block until context canceled or a runtime error surfaces.
+	// The Phase 4 consumer always records runtime_fault — by Phase 4 the
+	// router is running, so any failure is a runtime fault regardless of
+	// the underlying cause. The reason field on the sentinel is ignored
+	// here (it belongs to the Phase 3 consumer).
 	select {
 	case <-runCtx.Done():
 		r.markShutdown()
-	case err := <-setupErr:
+	case sf := <-setupErr:
+		err := fmt.Errorf("eventrouter: topic %s: %w", sf.topic, sf.err)
 		r.markHealthError(err)
 		slog.Error("eventrouter: subscription failed at runtime",
-			slog.Any("error", err))
+			slog.String("cell_id", sf.cellID),
+			slog.String("topic", sf.topic),
+			slog.Any("error", sf.err))
+		observability.SafeObserve(slog.Default(), func() {
+			r.collector.RecordRuntimeError(sf.cellID, sf.topic, RuntimeErrorReasonRuntimeFault)
+		})
 		cancel()
 		r.wg.Wait()
 		return err
@@ -365,23 +408,37 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 }
 
 // runSubscribe starts one goroutine per handler that calls SubscribeEntry
-// (Phase 2). Errors are sent to setupErr.
+// (Phase 2). Failures are forwarded as typed subscribeFailure sentinels to
+// the Phase 3 / Phase 4 consumer point of setupErr; the producer goroutine
+// MUST NOT read r.running or otherwise classify by phase (P1#1 fix).
 //
 // r.subscriber.SubscribeEntry orchestrates the full business pipeline:
 // business middleware chain → ConsumerBase.Wrap (EntryHandler→SubscriberHandler
 // conversion) → observability restore → Inner.Subscribe. The business handler
 // stored in handlerConfig.handler is an EntryHandler and flows directly into
 // this pipeline without any lifting ceremony.
-func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, setupErr chan<- error) {
+//
+// The recover() path scrubs the panic value through pkg/redaction.RedactString
+// and forwards a fixed sentinel error (panicErrSentinel) so a panic value
+// containing credentials cannot leak via Health() / Run() / slog "error"
+// fields (P1#2 fix). The redacted form is emitted as a typed slog field
+// "recovered_redacted" for server-side diagnosis only.
+func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, setupErr chan<- subscribeFailure) {
 	for _, h := range handlers {
 		sub := h.subscription()
 		r.wg.Go(func() {
 			defer func() {
 				if rv := recover(); rv != nil {
-					observability.SafeObserve(slog.Default(), func() {
-						r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonPanic)
-					})
-					setupErr <- fmt.Errorf("eventrouter: topic %s panicked: %v", sub.Topic, rv)
+					slog.Error("eventrouter: subscription goroutine panicked",
+						slog.String("topic", sub.Topic),
+						slog.String("cell_id", sub.CellID),
+						slog.String("recovered_redacted", redaction.RedactString(fmt.Sprint(rv))))
+					setupErr <- subscribeFailure{
+						cellID: sub.CellID,
+						topic:  sub.Topic,
+						reason: SetupErrorReasonPanic,
+						err:    panicErrSentinel,
+					}
 				}
 			}()
 			slog.Info("eventrouter: starting subscription",
@@ -390,19 +447,12 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 				slog.String("cell_id", sub.CellID))
 			err := r.subscriber.SubscribeEntry(ctx, sub, h.handler)
 			if err != nil && ctx.Err() == nil {
-				// Choose reason based on whether the router entered Phase 4 (Running).
-				// If Running() is already closed the router was up and the error is a
-				// runtime fault; otherwise the error occurred during Phase 3 setup.
-				reason := RuntimeErrorReasonSubscribeFailure
-				select {
-				case <-r.running:
-					reason = RuntimeErrorReasonRuntimeFault
-				default:
+				setupErr <- subscribeFailure{
+					cellID: sub.CellID,
+					topic:  sub.Topic,
+					reason: SetupErrorReasonSubscribeFailure,
+					err:    err,
 				}
-				observability.SafeObserve(slog.Default(), func() {
-					r.collector.RecordRuntimeError(sub.CellID, sub.Topic, reason)
-				})
-				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", sub.Topic, err)
 			}
 		})
 	}
@@ -415,7 +465,14 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 //
 // It also monitors setupErr and ctx cancellation. On error, it cancels the
 // context, waits for goroutines, and returns the error.
-func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, handlers []handlerConfig, setupErr <-chan error) error {
+//
+// The Phase 3 consumer is the single owner of setup-phase reason
+// classification: it reads the sentinel's reason field
+// (SetupErrorReasonSubscribeFailure / SetupErrorReasonPanic) and records the
+// setup metric accordingly. ready-timeout records only the setup metric;
+// the previous double-write into the runtime metric was a phase-boundary
+// violation removed in PR #593 review fix-up (P2#3).
+func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, handlers []handlerConfig, setupErr <-chan subscribeFailure) error {
 	allReady := r.awaitAllReady(ctx, handlers)
 
 	var deadlineCh <-chan time.Time
@@ -429,10 +486,17 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 	case <-allReady:
 		// All subscriptions are ready.
 		return nil
-	case err := <-setupErr:
+	case sf := <-setupErr:
+		err := fmt.Errorf("eventrouter: topic %s: %w", sf.topic, sf.err)
 		r.markHealthError(err)
 		slog.Error("eventrouter: subscription error during ready wait, shutting down",
-			slog.Any("error", err))
+			slog.String("cell_id", sf.cellID),
+			slog.String("topic", sf.topic),
+			slog.String("reason", sf.reason),
+			slog.Any("error", sf.err))
+		observability.SafeObserve(slog.Default(), func() {
+			r.collector.RecordSetupError(sf.cellID, sf.topic, sf.reason)
+		})
 		cancel()
 		r.wg.Wait()
 		// No drain needed: setupErr buffer == len(handlers) guarantees every
@@ -448,9 +512,6 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 			hCopy := h
 			observability.SafeObserve(slog.Default(), func() {
 				r.collector.RecordSetupError(hCopy.cellID, hCopy.topic, SetupErrorReasonReadyTimeout)
-			})
-			observability.SafeObserve(slog.Default(), func() {
-				r.collector.RecordRuntimeError(hCopy.cellID, hCopy.topic, RuntimeErrorReasonReadyWaitTimeout)
 			})
 		}
 		err := fmt.Errorf("eventrouter: %d/%d subscriptions not ready after %s: %v",

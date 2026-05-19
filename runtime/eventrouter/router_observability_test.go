@@ -322,29 +322,50 @@ func (s *neverReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscript
 }
 func (s *neverReadySubscriber) Close(_ context.Context) error { return nil }
 
-// ---------------------------------------------------------------------------
-// Wave 1 RED tests — RecordRuntimeError (P2#5)
-// ---------------------------------------------------------------------------
-//
-// These tests assert that router.go Phase 4 error paths call
-// collector.RecordRuntimeError with the correct cellID, topic, and reason.
-//
-// All three tests FAIL against the current production code because
-// router.go has no RecordRuntimeError call-sites yet (Wave 2 wires them).
-//
-// When Wave 2 adds `r.collector.RecordRuntimeError(...)` to Phase 4 paths,
-// these tests turn GREEN.
+// preReadySubscribeFailSubscriber models the realistic "broker connection
+// refused at startup" scenario: Subscribe returns an error immediately and
+// Ready never closes. The Phase 3 setupErr consumer therefore deterministically
+// wins the runAwaitReady select (allReady cannot close because Ready never
+// closes), so the failure is unambiguously classified as
+// SetupErrorReasonSubscribeFailure on the setup metric.
+type preReadySubscribeFailSubscriber struct {
+	err error
+}
 
-// TestRouter_RecordRuntimeError_SubscribeFailure verifies that when
-// SubscribeEntry returns an error (Phase 4 runtime fault), the collector
-// receives RecordRuntimeError with reason=RuntimeErrorReasonSubscribeFailure.
+func (s *preReadySubscribeFailSubscriber) Setup(_ context.Context, _ outbox.Subscription) error {
+	return nil
+}
+
+func (s *preReadySubscribeFailSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	return make(chan struct{}) // never closes — keeps Phase 3 active
+}
+
+func (s *preReadySubscribeFailSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	return s.err
+}
+func (s *preReadySubscribeFailSubscriber) Close(_ context.Context) error { return nil }
+
+// ---------------------------------------------------------------------------
+// Phase-classified reason tests (PR #593 review fix-up P1#1 + P2#3)
+// ---------------------------------------------------------------------------
 //
-// Wave 1 RED: RecordRuntimeError is never called in the current production
-// code, so runtimeErrors will be empty and the assertion fails.
-func TestRouter_RecordRuntimeError_SubscribeFailure(t *testing.T) {
+// router.go classifies failures by *phase*: Phase 1–3 record on the setup
+// metric (event_router_setup_errors_total), Phase 4 records on the runtime
+// metric (event_router_runtime_errors_total). The reason set is therefore
+// disjoint between the two metrics.
+
+// TestRouter_RecordSetupError_SubscribeFailureBeforeRunning verifies that
+// when SubscribeEntry returns an error before the router reaches Running(),
+// the collector records on the SETUP metric with reason=subscribe_failure.
+// Pre-fix this used to land on the runtime metric (subscribe_failure /
+// runtime_fault depending on race timing).
+//
+// preReadySubscribeFailSubscriber models the realistic "broker connection
+// refused" scenario: Ready never closes (broker never reachable), Subscribe
+// returns an error immediately. The Phase 3 consumer deterministically wins.
+func TestRouter_RecordSetupError_SubscribeFailureBeforeRunning(t *testing.T) {
 	spy := &spyEventCollector{}
-	// failingSubscriber: Setup+Ready succeed immediately, Subscribe returns error.
-	failSub := &failingSubscriber{err: assert.AnError}
+	failSub := &preReadySubscribeFailSubscriber{err: assert.AnError}
 	r := New(wrap(failSub), clock.Real(), WithEventRouterCollector(spy))
 
 	require.NoError(t, r.AddContractHandler(testEventSpec("topic.rtfail"), noopHandler, "cell-rt", "cell-rt"))
@@ -353,52 +374,21 @@ func TestRouter_RecordRuntimeError_SubscribeFailure(t *testing.T) {
 	err := r.Run(ctx)
 	require.Error(t, err)
 
-	rtErrs := spy.runtimeErrorsCopy()
-	// Wave 1 RED: this assertion fails because RecordRuntimeError is not called.
-	require.Len(t, rtErrs, 1,
-		"RecordRuntimeError must be called once when SubscribeEntry returns an error "+
-			"(Phase 4 subscribe_failure path not yet wired in Wave 2)")
-	assert.Equal(t, "cell-rt", rtErrs[0].cellID)
-	assert.Equal(t, "topic.rtfail", rtErrs[0].topic)
-	assert.Equal(t, string(RuntimeErrorReasonSubscribeFailure), rtErrs[0].reason)
-}
-
-// TestRouter_RecordRuntimeError_ReadyWaitTimeout verifies that when the ready
-// timeout fires (Phase 3 timeout surfaced as Phase 4 error), the collector
-// receives RecordRuntimeError with reason=RuntimeErrorReasonReadyWaitTimeout.
-//
-// Wave 1 RED: RecordRuntimeError is never called.
-func TestRouter_RecordRuntimeError_ReadyWaitTimeout(t *testing.T) {
-	spy := &spyEventCollector{}
-	neverReady := &neverReadySubscriber{}
-	r := New(
-		wrap(neverReady), clock.Real(),
-		WithEventRouterCollector(spy),
-		WithReadyTimeout(testReadyTimeout),
-	)
-
-	require.NoError(t, r.AddContractHandler(testEventSpec("topic.rttimeout"), noopHandler, "cell-rtt", "cell-rtt"))
-
-	ctx := t.Context()
-	err := r.Run(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not ready")
+	setupErrs := spy.errorsCopy()
+	require.Len(t, setupErrs, 1,
+		"RecordSetupError must be called once when SubscribeEntry fails before Running()")
+	assert.Equal(t, "cell-rt", setupErrs[0].cellID)
+	assert.Equal(t, "topic.rtfail", setupErrs[0].topic)
+	assert.Equal(t, SetupErrorReasonSubscribeFailure, setupErrs[0].reason)
 
 	rtErrs := spy.runtimeErrorsCopy()
-	// Wave 1 RED: this assertion fails because RecordRuntimeError is not called.
-	require.Len(t, rtErrs, 1,
-		"RecordRuntimeError must be called once on ready-wait timeout "+
-			"(Phase 4 ready_wait_timeout path not yet wired in Wave 2)")
-	assert.Equal(t, "cell-rtt", rtErrs[0].cellID)
-	assert.Equal(t, "topic.rttimeout", rtErrs[0].topic)
-	assert.Equal(t, string(RuntimeErrorReasonReadyWaitTimeout), rtErrs[0].reason)
+	assert.Empty(t, rtErrs,
+		"Phase 3 subscribe failure must NOT touch the runtime metric (Phase 4 is single-owner)")
 }
 
 // TestRouter_RecordRuntimeError_RuntimeFault verifies that when a subscription
 // goroutine encounters a delayed failure (Phase 4 runtime fault), the collector
 // receives RecordRuntimeError with reason=RuntimeErrorReasonRuntimeFault.
-//
-// Wave 1 RED: RecordRuntimeError is never called.
 func TestRouter_RecordRuntimeError_RuntimeFault(t *testing.T) {
 	spy := &spyEventCollector{}
 	// delayedFailSubscriber: ready immediately, then returns error after delay.
@@ -419,13 +409,15 @@ func TestRouter_RecordRuntimeError_RuntimeFault(t *testing.T) {
 	require.Error(t, err)
 
 	rtErrs := spy.runtimeErrorsCopy()
-	// Wave 1 RED: this assertion fails because RecordRuntimeError is not called.
 	require.Len(t, rtErrs, 1,
-		"RecordRuntimeError must be called once on delayed Subscribe error "+
-			"(Phase 4 runtime_fault path not yet wired in Wave 2)")
+		"RecordRuntimeError must be called once on delayed Subscribe error (Phase 4 runtime_fault)")
 	assert.Equal(t, "cell-rtf", rtErrs[0].cellID)
 	assert.Equal(t, "topic.rtfault", rtErrs[0].topic)
 	assert.Equal(t, string(RuntimeErrorReasonRuntimeFault), rtErrs[0].reason)
+
+	setupErrs := spy.errorsCopy()
+	assert.Empty(t, setupErrs,
+		"Phase 4 runtime fault must NOT touch the setup metric (setup is single-owner of Phase 1-3)")
 }
 
 // ---------------------------------------------------------------------------
@@ -612,14 +604,16 @@ func TestRouter_CollectorPanic_DecSubscriptionActive_DoesNotEscape(t *testing.T)
 // iterations land in the runtime metric. The post-fix design moves
 // classification to the router phase-consumer point, eliminating the race.
 //
-// Wave 2 GREEN removes t.Skip after the producer no longer reads r.running.
+// Post-fix design: classification owned by the consumer; producer never
+// reads r.running. The test uses preReadySubscribeFailSubscriber (Ready
+// never closes) so the Phase 3 consumer is the deterministic owner across
+// all 50 iterations — pre-fix the producer-side select <-r.running flickered
+// roughly 10–30% of iterations into runtime_fault on a busy host.
 func TestRouter_RecordRuntimeError_SubscribeFailure_NoFlicker(t *testing.T) {
-	t.Skip("RED — Wave 2 (W2 GREEN) removes the producer-side select <-r.running flicker; un-skip then")
-
 	const iterations = 50
 	for i := 0; i < iterations; i++ {
 		spy := &spyEventCollector{}
-		failSub := &failingSubscriber{err: assert.AnError}
+		failSub := &preReadySubscribeFailSubscriber{err: assert.AnError}
 		r := New(wrap(failSub), clock.Real(), WithEventRouterCollector(spy))
 
 		require.NoError(t,
@@ -648,11 +642,9 @@ func TestRouter_RecordRuntimeError_SubscribeFailure_NoFlicker(t *testing.T) {
 // "subscription panicked (redacted)" appears on the error path; the original
 // value lives only in server-side slog as a redacted typed field.
 //
-// Wave 2 GREEN removes t.Skip after the recover branch swaps `fmt.Errorf("%v", rv)`
-// for the fixed sentinel.
+// Post-fix design: recover wraps panic value via pkg/redaction.RedactString
+// into a typed slog field and returns a fixed sentinel error to setupErr.
 func TestRouter_PanicRecover_ErrorMessageRedacted(t *testing.T) {
-	t.Skip("RED — Wave 2 (W2 GREEN) wires pkg/redaction into the recover branch; un-skip then")
-
 	spy := &spyEventCollector{}
 	const secret = "secret123abc"
 	panicSub := &panicWithSecretSubscriber{payload: "password=" + secret}
@@ -674,13 +666,14 @@ func TestRouter_PanicRecover_ErrorMessageRedacted(t *testing.T) {
 
 	setupErrs := spy.errorsCopy()
 	require.Len(t, setupErrs, 1, "panic must record exactly one setup error")
-	assert.Equal(t, string(SetupErrorReasonPanic), setupErrs[0].reason,
+	assert.Equal(t, SetupErrorReasonPanic, setupErrs[0].reason,
 		"reason must be panic (Phase 2 unrecoverable failure)")
 }
 
 // panicWithSecretSubscriber panics with a value that includes a key=value pair
-// matching pkg/redaction's sensitive-key list. Used to verify that recovered
-// panic values are redacted before entering error chains.
+// matching pkg/redaction's sensitive-key list. Ready never closes so that the
+// panic-derived sentinel deterministically reaches the Phase 3 consumer of
+// setupErr (Phase 4 would otherwise truncate the reason to runtime_fault).
 type panicWithSecretSubscriber struct {
 	payload string
 }
@@ -690,9 +683,7 @@ func (s *panicWithSecretSubscriber) Setup(_ context.Context, _ outbox.Subscripti
 }
 
 func (s *panicWithSecretSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
-	ch := make(chan struct{})
-	close(ch)
-	return ch
+	return make(chan struct{}) // never closes — keeps Phase 3 active
 }
 
 func (s *panicWithSecretSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {

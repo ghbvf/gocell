@@ -19,11 +19,12 @@ type EventCollector interface {
 	DecSubscriptionActive(cellID string)
 	RecordSetupError(cellID, topic, reason string)
 	ObserveReadyWait(cellID string, d time.Duration)
-	// RecordRuntimeError records a runtime-phase error for the given cell+topic.
+	// RecordRuntimeError records a runtime-phase fault for the given cell+topic.
 	// reason is a closed-set value drawn from RuntimeErrorReason* constants;
 	// the typed parameter prevents callers from drifting to free-form strings.
-	// Wave 2: wired into router.go Phase 4 error paths (subscribe_failure,
-	// ready_wait_timeout, runtime_fault).
+	// Phase 4 owner — any failure detected after Running() closes is recorded
+	// here as runtime_fault. Phase 1–3 failures live on the setup metric via
+	// RecordSetupError (PR #593 review fix-up P2#3).
 	RecordRuntimeError(cellID, topic string, reason RuntimeErrorReason)
 }
 
@@ -61,18 +62,17 @@ const (
 // EventCollector.RecordRuntimeError. Runtime errors occur after startup
 // (Phase 4) and are semantically distinct from setup errors (Phase 1-3).
 //
-// Wave 2: wired into router.go Phase 4 paths.
+// PR #593 review fix-up (P1#1 + P2#3): the reason set is intentionally
+// single-valued. Phase 3 setup-phase failures (SubscribeEntry returning an
+// error before Running(), or ready timeout) are owned by the setup metric
+// only; the previous RuntimeErrorReasonSubscribeFailure / ReadyWaitTimeout
+// reasons were a phase-boundary violation that produced double-counting and
+// reason flicker. The Phase 4 consumer always records runtime_fault — the
+// router is running, so the underlying cause is by definition a runtime
+// fault.
 const (
-	// RuntimeErrorReasonSubscribeFailure is emitted when a subscription
-	// goroutine's SubscribeEntry returns an error after the router is running.
-	RuntimeErrorReasonSubscribeFailure RuntimeErrorReason = "subscribe_failure"
-
-	// RuntimeErrorReasonReadyWaitTimeout is emitted when a subscription does
-	// not become ready within the ready-wait budget at runtime (Phase 4).
-	RuntimeErrorReasonReadyWaitTimeout RuntimeErrorReason = "ready_wait_timeout"
-
-	// RuntimeErrorReasonRuntimeFault is emitted for any unclassified runtime
-	// fault detected in Phase 4.
+	// RuntimeErrorReasonRuntimeFault is emitted for any runtime fault
+	// detected in Phase 4 (after Running() closes).
 	RuntimeErrorReasonRuntimeFault RuntimeErrorReason = "runtime_fault"
 )
 

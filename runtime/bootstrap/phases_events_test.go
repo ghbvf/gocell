@@ -31,7 +31,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -455,81 +454,3 @@ func TestWithRelay_DoubleManaged_Phase0FailsFast(t *testing.T) {
 		"error message must mention relay to help diagnosis")
 }
 
-// ---------------------------------------------------------------------------
-// W1 RED tests — PR #593 review fix-up P2#6 (WithRelay double-managed)
-// ---------------------------------------------------------------------------
-//
-// These tests assert the post-fix invariants expected after Fix 6 lands in
-// Wave 4 GREEN. They are guarded by t.Skip so the W1 RED commit keeps CI green
-// while documenting the target invariants in test form.
-
-// TestWithRelay_DoubleManaged_PrioritizedOverDuplicateChecker verifies that
-// when WithRelay(relay) and WithManagedResource(relay) are both called, the
-// phase0 fail-fast must surface ERR_BOOTSTRAP_DOUBLE_MANAGED *before* the
-// expand step trips on duplicate checker names. The pre-fix Run() ordering
-// runs expandManagedResources first, so the operator sees a misleading
-// "duplicate checker key" error instead of the actionable double-managed
-// diagnostic.
-//
-// Wave 4 GREEN removes t.Skip after preflightDoubleManagedRelay is hoisted
-// to run before expandManagedResources.
-func TestWithRelay_DoubleManaged_PrioritizedOverDuplicateChecker(t *testing.T) {
-	t.Skip("RED — Wave 4 (W4 GREEN) hoists preflightDoubleManagedRelay before expandManagedResources; un-skip then")
-
-	relay := newEventsTestRelay()
-	b := New(
-		WithClock(clock.Real()),
-		WithRelay(relay),
-		WithManagedResource(relay), // double-registration on purpose
-	)
-
-	// In the post-fix order: preflight runs before expand. The fail-fast
-	// error must point at relay double-management, NOT at duplicate
-	// checker keys produced by expanding the same Relay twice.
-	err := b.preflightDoubleManagedRelay()
-	require.Error(t, err,
-		"preflight must reject double-managed relay before expandManagedResources runs")
-	assert.Contains(t, err.Error(), "relay",
-		"error must mention relay (not checker name) so the root cause is obvious")
-	assert.NotContains(t, err.Error(), "checker",
-		"error must NOT mention duplicate checker — expand has not run yet")
-}
-
-// TestWithRelay_DoubleManaged_NonComparableImpl_DoesNotPanic verifies that
-// the double-managed detection uses a typed-pointer assert (`*runtimeoutbox.Relay`),
-// not interface equality (`mr == ManagedResource(b.relay)`). Interface equality
-// panics at runtime when a ManagedResource implementation contains a
-// non-comparable field (e.g. a slice). The post-fix loop must skip non-Relay
-// types entirely without touching the interface comparison.
-//
-// Wave 4 GREEN removes t.Skip after validateNoDoubleManagedRelay swaps to
-// typed-pointer assert.
-func TestWithRelay_DoubleManaged_NonComparableImpl_DoesNotPanic(t *testing.T) {
-	t.Skip("RED — Wave 4 (W4 GREEN) swaps interface equality for typed-pointer assert; un-skip then")
-
-	relay := newEventsTestRelay()
-	b := New(
-		WithClock(clock.Real()),
-		WithRelay(relay),
-		WithManagedResource(&nonComparableManagedResource{names: []string{"slice-field"}}),
-	)
-
-	// Must not panic on non-comparable ManagedResource implementation.
-	assert.NotPanics(t, func() {
-		_ = b.preflightDoubleManagedRelay()
-	}, "preflightDoubleManagedRelay must skip non-Relay types via typed-pointer assert")
-}
-
-// nonComparableManagedResource holds a slice field, making struct values
-// non-comparable for the purposes of `==` interface equality. The test above
-// relies on this to prove that the post-fix detection never reaches the
-// interface equality operator on non-Relay types.
-type nonComparableManagedResource struct {
-	names []string
-}
-
-func (m *nonComparableManagedResource) Checkers() map[string]func(context.Context) error {
-	return nil
-}
-func (m *nonComparableManagedResource) Worker() kworker.Worker      { return nil }
-func (m *nonComparableManagedResource) Close(_ context.Context) error { return nil }

@@ -217,7 +217,7 @@ metrics:
       fqName: gocell_event_router_runtime_errors_total
       namespace: gocell
       type: counter
-      help: 'Total number of event router runtime-phase errors (Phase 4), partitioned by cell, topic, and reason. reason is a closed set: subscribe_failure | ready_wait_timeout | runtime_fault.'
+      help: 'Total number of event router runtime-phase faults (Phase 4, after Running()), partitioned by cell, topic, and reason. reason is a closed set: runtime_fault.'
       labels:
         - cell
         - topic
@@ -227,7 +227,7 @@ metrics:
       fqName: gocell_event_router_setup_errors_total
       namespace: gocell
       type: counter
-      help: Total number of event router subscription setup failures.
+      help: 'Total number of event router subscription setup-phase failures (Phase 1-3), partitioned by cell, topic, and reason. reason is a closed set: setup_error | panic | ready_timeout | subscribe_failure.'
       labels:
         - cell
         - topic
