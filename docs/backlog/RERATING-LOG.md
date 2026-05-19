@@ -259,4 +259,81 @@ M2-LIFECYCLE / M3-RULE-ENGINE：Cx3 → Cx4（跨 kernel 子系统 + ADR + codeg
 
 ### Commit
 
-`<待 commit>` — 35 处 row 编辑（cap-02 17 + cap-13 18，含 G-1 / OBS-SSA / A5a-R3-R12 等 5 处 STALE re-scope 描述补注）
+`ab566c1b9` — 35 处 row 编辑（cap-02 17 + cap-13 18，含 G-1 / OBS-SSA / A5a-R3-R12 等 5 处 STALE re-scope 描述补注）
+
+---
+
+## Phase 4 — cap-14 + cap-x-cross (2026-05-20)
+
+**扫描条目**：131（cap-14: 90 / cap-x-cross: 44；cap-14 拆 3 agent，cap-x-cross 拆 2 agent，5 agent 并行）
+
+### 统计
+
+| 维度 | 数量 |
+|---|---|
+| DONE 候选 | 13 |
+| STALE re-scope / STALE-CLOSE | 8 |
+| P 升级 | 22 |
+| P 降级 | 25+ |
+| Flag 调整 | 14+ |
+
+### DONE 候选（13）
+
+| ID | cap | 证据 |
+|---|---|---|
+| B2-K-08 | cap-14.1 | snapshots_race_test.go 已用 helper 拆分 |
+| FIXTURE-DIAGNOSTIC-GOLDEN-MIGRATION | cap-14.1 | scope A/B/C 全部 ship（PR #562-566） |
+| C-L6 | cap-14.3 | `pathx.ContractIDToPackagePath` 单源 funnel 已落 |
+| JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION-01 | cap-14.4 | PR #585 ship + 4 criteria mode:auto + e2e test |
+| FU2-GOVERNANCE-STATIC | cap-14.5 | 描述无明确 outcome，候选归档 |
+| B2-A-13 | cap-14.6 | STALE-CLOSE：pool.go 无 SQL dump，前提失效 |
+| ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 | x.1 | PR #517 ship + archtest 双向 Hard 闭环 |
+| S3-CLASSIFYERROR-CONN-REFUSED-01 | x.1 | PR #581 ship（已 ✅）|
+| PR238-FU4 | x.2 | legacy NotFound 测试已删 |
+| PR464-FU-CAS-PROTOCOL-ARCHTEST-TYPESEVAL-UPGRADE-01 | x.2 | RunTyped + ResolvePackageRef typed funnel 已升 |
+| PR237-F06 | x.2 | STALE-CLOSE：internalGuardFromEnv 已 fail-fast |
+| C-DC9 | x.5 | STALE：auditarchive slice 不存在 |
+
+### STALE re-scope（4）
+
+| ID | cap | 处理 |
+|---|---|---|
+| K05-ARCHTEST-PACKAGES-LOAD-UPGRADE | cap-14.1 | codegen_unified_test.go 已不存在；补 P3/Cx3 + Flag 注解 |
+| V-A13 | cap-14.5 | phase3b 在 main.go.tpl grep 不到；降 P3 |
+| PR266-AUDITAPPEND-STRICT | cap-14.6 | auditappend 已拆为 4 slice，lenient 落在 internal/appender/actor.go |
+| PR-BATCH2-RETRO-FU | x.2 | BR-P2-06 已 DONE，剩余 5 条 OPEN |
+
+### P 升级（22）
+
+**P→P1（cap-14: 8 / cap-x-cross: 5 = 13 项）**：
+- cap-14.1：SERVICEOWNED-HANDLER-OWNER-CHECK / PASS-PRODUCTION-UPSTREAM / ARCHTEST-FUNNEL-CALLSITE / PG-REPO-AMBIENT-TX / CLI-TOPLEVEL-HELP-REGISTRY（charter mandated funnel godoc 点名 backlog ID）
+- cap-14.4：JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST（charter mandate）
+- cap-14.5/6：M4-COVERAGE / MEM-TX-R2B-RECEIVER / REQUIRED-DEP-NIL-GUARD
+- cap-x-cross：OPS-CONTRACT-STRING-FUNNEL / F-06（V 模型追溯链路） / F-A-002（Funnel 双向锁）/ USER-REPO-UPDATE-USE-CASE-SPLIT / CONTRACT-SHARED-MIXIN-FUNNEL（codegen funnel #1 载体）
+
+**P→P2（9 项）**：BASECELL-DURABILITYMODE-DEFERRED（P3→P2）/ ARCHTEST-LAYER10-PASS-MIGRATION（已升 P3→P2 在 cap-02）/ JOURNEY-CONTRACT-EXISTENCE-CODEGEN-DERIVE / CONTRACT-ENDPOINT-TEST-MAPPING / CONTRACT-PATH-QUERY-COVERAGE / ACCOUNTLOCKOUT-THRESHOLD-DRIFT / AUTH-CACHE-AFTER-COMMIT-INVALIDATION / TYPED-NIL-ARCHTEST-ADAPTERS-EXTENSION / SCAFFOLD-TEST-FIXTURE-DEDUP / SESSIONLOGIN-LOCKOUT-ARCHTEST-BLINDSPOT / CONFIG-ROLLBACK-CAS-HARD-UPGRADE / SLICE-ISP-DEFERRED / T7
+
+### P 降级（25+）
+
+**P2→P3**：
+- cap-14.3：CONTRACT-BREAKING / CONTRACT-CODEGEN / CONTRACT-STUB（V1.1 远期推测性）
+- cap-14.4：JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION（主体已 ship）
+- cap-14.5/6：NOLINT-AUDIT / B2-A-34 / B2-X-01 / D2-FU-01 / B2-X-08 / PR266-AUDITAPPEND（含 STALE）/ L2-ATOMICITY-HARNESS-FOLLOWUPS / MEM-STORE-RWMUTEX
+- cap-x-cross：ADAPTER-POSITIVE-PERMANENT (P1→P2) / PR464-FU-CHANGEPASSWORD-BCRYPT / F-04 / F-05 / F-S-005 / SSOBFF-REDIS-CLAIMER / KERNEL-WEBHOOK / RUNTIME-SCHEDULER / L3-EXAMPLE-PROJECTION
+
+**缺 P 补 P3**：cap-14 多条（PR332-VERIFY-GENERATED / VERIFY-CODEGEN-SANDBOX / PR250-F3 / T6 / T10）+ cap-x-cross 多条（DEVOPS-INTEGRATION / PR-A41-FU1 / PR237-DX1 / PR467-FU-PANIC / P3-TD-04 / P3-TD-05 / P4-TD-01 / P4-TD-06 / X4 / B2-T-07-FU-4）
+
+### Flag 调整（14+）
+
+✅ 13 项（见 DONE 列表）+ SLICE-ISP-DEFERRED 🔴→🟠 + USER-REPO-READYZ-PROBE-01 🟢→🟠 (P3) + 多条 🟡→🟠 STALE 触发型。
+
+### 规则边界发现（4 项登记，待 P5 收尾复盘）
+
+1. **charter mandate 信号高频复现**：cap-14.1 中 ≥5 条触发型 funnel 升级条目（SERVICEOWNED / PASS-PRODUCTION / PG-REPO-AMBIENT-TX / ARCHTEST-FUNNEL-CALLSITE / CLI-TOPLEVEL-HELP-REGISTRY）archtest godoc 显式点名 backlog ID，rubric §4 "charter mandate" 是稳定的 P 升级判定锚点。建议下版 rubric §4 增"charter godoc/archtest 注释直接点名 backlog ID 信号"作显式升级因子。
+2. **触发型 + charter mandate 冲突优先级**：x.5 USER-REPO-UPDATE-USE-CASE-SPLIT 等命中"charter §载体决策原则 Soft→Hard"同时是触发型；本次按"charter mandate 优先于触发型"4 条升 P1。建议 rubric §4.5 显式优先级。
+3. **bundle 子条 ✅ + 主条目仍 OPEN 形态**：INTERFACE-EXPORT-SURFACE-CLOSURE-BUNDLE 内 A-04 已 ship 但 A-05/A-08 等仍 OPEN，主条目维持 P1 OPEN。rubric §6.1 应允许 bundle 描述列内 ✅ 子条标注。
+4. **路径漂移 STALE re-scope 集中爆发**：P4 阶段 5 条 STALE re-scope（K05/V-A13/PR266/C-DC9/PR-BATCH2）暴露 backlog 描述未跟代码 refactor 同步问题。归档前应统一治理。
+
+### Commit
+
+`<待 commit>` — 54 处 row 编辑（cap-14 35 + cap-x-cross 19）通过 sed batch（ID-anchored）+ 少量 Edit 工具应用
