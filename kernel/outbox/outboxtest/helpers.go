@@ -655,15 +655,36 @@ func chanFromWaitGroup(wg *sync.WaitGroup) <-chan struct{} {
 // closeWithBudget enforces a caller-side budget on Subscriber.Close. Close
 // runs in a goroutine; on budget exhaustion the leaked goroutine is an
 // accepted cost — the caller exits promptly so the test framework can move
-// on to teardown. The defer sentinel defends against runtime.Goexit() / panic
-// inside Close (e.g. a fake that calls t.FailNow): without it, the chan
-// receive would block forever because nothing ever sends on errCh.
+// on to teardown.
+//
+// The defer sentinel defends against all three abnormal goroutine exits:
+//
+//   - (a) normal return: sub.Close returns → errCh receives its return value →
+//     callbackExited = true → defer is a no-op (no double-send).
+//
+//   - (b) panic: recover() returns the non-nil panic value → errCh receives a
+//     descriptive error wrapping that value → the panic is absorbed (process
+//     does not crash). This is the load-bearing case: a misbehaving adapter's
+//     Close panic must become a focused test failure, not a binary crash.
+//
+//   - (c) runtime.Goexit (e.g. t.FailNow inside Close): recover() returns nil
+//     during Goexit — Go spec guarantees this — so callbackExited remains false
+//     and recover() == nil; the sentinel sends the Goexit diagnostic string.
+//     Goexit continues propagating after the deferred function returns (the
+//     goroutine still terminates), but errCh has already been fed.
+//
+// In all three cases exactly one value is sent on the buffered (cap 1) errCh.
+// The guard `!callbackExited` prevents a double-send when Close returns
+// normally: callbackExited is set to true immediately after the send on the
+// normal path, so the defer body is skipped.
 //
 // CONVENTION: all Subscriber.Close call sites in the conformance suite MUST
 // route through closeWithBudget — never call sub.Close(ctx) directly. This
 // ensures every Close in conformance tests gets timeout enforcement and
 // goroutine-leak detection. The topic argument is used only for diagnostic
 // messages; callers without an active subscription should pass TestTopic(t).
+//
+// ref: uber-go/fx app.go withTimeout (caller race + Goexit/panic defense)
 func closeWithBudget(t *testing.T, sub outbox.Subscriber, topic string, budget time.Duration) error {
 	t.Helper()
 	closeCtx, cancel := context.WithTimeout(t.Context(), budget)
@@ -673,8 +694,17 @@ func closeWithBudget(t *testing.T, sub outbox.Subscriber, topic string, budget t
 	go func() {
 		callbackExited := false
 		defer func() {
-			if !callbackExited {
-				errCh <- fmt.Errorf("Close goroutine exited via Goexit/panic before returning")
+			if callbackExited {
+				// Normal return already sent on errCh — nothing to do.
+				return
+			}
+			// recover() returns non-nil only for a panic; it returns nil
+			// during runtime.Goexit (Go spec §"Handling panics").
+			if r := recover(); r != nil {
+				errCh <- fmt.Errorf("Close panicked: %v", r)
+			} else {
+				// Goexit path: goroutine terminated without returning.
+				errCh <- fmt.Errorf("Close goroutine exited via Goexit before returning")
 			}
 		}()
 		errCh <- sub.Close(closeCtx)
