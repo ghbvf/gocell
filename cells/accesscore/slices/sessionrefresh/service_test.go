@@ -636,6 +636,10 @@ func (refreshUnavailableUserRepo) GetByUsernameForUpdate(_ context.Context, _ st
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
 
+func (refreshUnavailableUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+	return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
+}
+
 // TestService_Refresh_TwoAssertOrdering_BaselineOnly_Returns403 verifies the
 // converse: an active user with a revoked session — only the session-revoked
 // gate fails, baseline passes — surfaces 401 ErrAuthRefreshFailed (preserved

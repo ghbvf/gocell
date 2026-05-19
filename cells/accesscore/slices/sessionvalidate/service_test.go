@@ -330,6 +330,10 @@ func (r *stubUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*dom
 	panic("not implemented")
 }
 
+func (r *stubUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+	panic("not implemented")
+}
+
 // newSvcWithUserRepo is a helper that builds a Service wired with both a
 // session store and a user repo. Existing tests that don't exercise epoch logic
 // use newTestSvc (nil userRepo) via the sessionStore-only path.
@@ -452,6 +456,10 @@ func (r *capturingUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*doma
 }
 
 func (r *capturingUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
+	panic("not implemented")
+}
+
+func (r *capturingUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
 	panic("not implemented")
 }
 

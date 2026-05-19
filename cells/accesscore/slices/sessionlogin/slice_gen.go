@@ -18,6 +18,8 @@ var sliceMeta = &metadata.SliceMeta{
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.auth.login.v1", Role: "serve"},
 		{Contract: "event.session.created.v1", Role: "publish"},
+		{Contract: "event.user.locked.v1", Role: "publish"},
+		{Contract: "event.user.unlocked.v1", Role: "publish"},
 		{Contract: "http.config.get.v1", Role: "call"},
 	},
 	Verify: metadata.SliceVerifyMeta{
@@ -27,6 +29,8 @@ var sliceMeta = &metadata.SliceMeta{
 		Contract: []string{
 			"contract.http.auth.login.v1.serve",
 			"contract.event.session.created.v1.publish",
+			"contract.event.user.locked.v1.publish",
+			"contract.event.user.unlocked.v1.publish",
 		},
 		Waivers: []metadata.WaiverMeta{
 			{Contract: "http.config.get.v1", Owner: "platform-team", Reason: "只读配置调用，集成测试已覆盖", ExpiresAt: "2026-06-01"},

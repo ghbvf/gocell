@@ -13,6 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -126,12 +129,38 @@ func mustNewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
+	lockoutSvc := newTestLockout(userRepo, sessionStore, refreshStore)
+	// CLOCK-INJECTION-TEST-CALLSITE-01 scans the NewService argument tree for
+	// a WithClock literal; the slice-literal form here keeps the call site
+	// statically detectable (caller opts are spread on top as in the original
+	// mustNewService).
 	s, err := NewService(userRepo, sessionStore, roleRepo, refreshStore, issuer, logger,
-		append([]Option{WithClock(clock.Real())}, opts...)...)
+		append([]Option{WithClock(clock.Real()), WithAccountLockout(lockoutSvc)}, opts...)...)
 	if err != nil {
 		panic("mustNewService: " + err.Error())
 	}
 	return s
+}
+
+// newTestLockout wires a real accountlockout.Service from the same repo / stores
+// used by the test so the auto-lock decision exercises the real funnel
+// (authzmutate.LockUser → credentialinvalidate.Apply → counter UPDATE).
+// Tests inject this directly via WithAccountLockout (the depguard rule
+// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01 excludes _test.go).
+func newTestLockout(userRepo ports.UserRepository, sessionStore session.Store, refreshStore refresh.Store) *accountlockout.Service {
+	inv, err := credentialinvalidate.New(userRepo, sessionStore, refreshStore)
+	if err != nil {
+		panic("newTestLockout invalidator: " + err.Error())
+	}
+	mut, err := authzmutate.New(inv, userRepo)
+	if err != nil {
+		panic("newTestLockout mutator: " + err.Error())
+	}
+	svc, err := accountlockout.NewService(userRepo, mut, outbox.NewNoopEmitter(), clock.Real())
+	if err != nil {
+		panic("newTestLockout service: " + err.Error())
+	}
+	return svc
 }
 
 func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
@@ -1074,6 +1103,49 @@ func TestLoginInTx_UnavailableError_NotCollapsedTo401(t *testing.T) {
 
 // --- P1.3a: IssueForUser active-gate tests ---
 
+// TestService_Login_ConsecutiveFailures_TriggersAutoLock (F23) is an end-to-end
+// test that exercises the real auto-lockout funnel (newTestLockout wires the
+// genuine accountlockout.Service). It verifies:
+//   - 5 consecutive wrong-password attempts each return ErrAuthLoginFailed,
+//   - the 5th attempt causes the account to be auto-locked (StatusLocked in repo),
+//   - a 6th attempt with the CORRECT password is still rejected with ErrAuthLoginFailed
+//     because the account is now locked (lazy-unlock window has not elapsed).
+func TestService_Login_ConsecutiveFailures_TriggersAutoLock(t *testing.T) {
+	svc, userRepo := newTestService(t)
+	const (
+		username       = "lockout-test-user"
+		correctPass    = "correct-pass-123"
+		wrongPass      = "wrong-pass"
+		failuresNeeded = 5 // matches accountlockout.Threshold
+	)
+	seedUser(userRepo, username, correctPass)
+
+	// 5 consecutive wrong-password logins. Each must return ErrAuthLoginFailed.
+	for i := range failuresNeeded {
+		_, err := svc.Login(context.Background(), LoginInput{Username: username, Password: wrongPass})
+		require.Error(t, err, "attempt %d: expected error", i+1)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec, "attempt %d: expected errcode.Error", i+1)
+		assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code,
+			"attempt %d: expected ErrAuthLoginFailed", i+1)
+	}
+
+	// After threshold failures, the user must be in StatusLocked.
+	u, err := userRepo.GetByUsername(context.Background(), username)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusLocked, u.Status(),
+		"user must be StatusLocked after %d consecutive failures", failuresNeeded)
+
+	// A 6th attempt with the CORRECT password must still return ErrAuthLoginFailed
+	// because the lockout TTL has not elapsed.
+	_, err = svc.Login(context.Background(), LoginInput{Username: username, Password: correctPass})
+	require.Error(t, err, "locked user must be rejected even with correct password")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code,
+		"locked user: expected ErrAuthLoginFailed (防枚举)")
+}
+
 // TestIssueForUser_NonActiveUser_Rejected (P1.3a) verifies that IssueForUser
 // fail-closes for non-active users (suspended, locked), mirroring the Login
 // pre-check. The control (active user) must still succeed.
@@ -1156,3 +1228,165 @@ func TestIssueForUser_NonActiveUser_Rejected(t *testing.T) {
 		})
 	}
 }
+
+// --- PR #585 review P1 RED tests ---
+//
+// These four tests reproduce the bugs called out in PR #585 review:
+//   - P1#1: counter persists across wrong-password / baseline-fail (no rollback)
+//   - P1#1: auto-lock fires when threshold reached via real Login path
+//   - P1#2: suspended users must not engage the auto-lockout counter
+//
+// They use the standard stubTxRunner whose committedCleanly flag — added for
+// this fix — mirrors PG semantics: fn returning err means PG would ROLLBACK
+// and discard the counter UPDATE.
+
+// loginWithThresholdLockoutSetup wires a sessionlogin.Service with a real
+// accountlockout.Service so the auto-lock decision exercises the production
+// funnel (counter UPDATE → ApplyInTx(LockUser) → epoch bump → event emit).
+// Returns the assembled service, the user repo (for assertion on counter),
+// the tx stub (for committedCleanly assertions), and the seeded user's id.
+func loginWithThresholdLockoutSetup(
+	t *testing.T, username, password string, status domain.UserStatus,
+) (*Service, *mem.UserRepository, *stubTxRunner, string) {
+	t.Helper()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	sessionStore := testutil.RealSessionRepo(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	refreshStore := newTestRefreshStore()
+	tx := &stubTxRunner{}
+	svc := mustNewService(userRepo, sessionStore, roleRepo, refreshStore,
+		testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(tx)),
+		WithSessionTTL(time.Hour),
+	)
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	uid := "usr-" + username
+	if status == domain.StatusActive {
+		u, _ := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
+		u.ID = uid
+		require.NoError(t, userRepo.Create(context.Background(), u))
+	} else {
+		// Suspended / locked test users go through ReconstituteUser (the only
+		// path that yields a non-active aggregate without funneling through
+		// authzmutate). Direct seed lets us simulate "admin previously
+		// suspended this user" without needing a full admin flow.
+		u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+			ID:              uid,
+			Username:        username,
+			Email:           username + "@test.com",
+			PasswordHash:    string(hash),
+			PasswordVersion: 1,
+			Status:          status,
+			Source:          domain.UserSourceIdentity,
+			AuthzEpoch:      1,
+			CreatedAt:       time.Now(),
+			UpdatedAt:       time.Now(),
+		})
+		require.NoError(t, err)
+		require.NoError(t, userRepo.Create(context.Background(), u))
+	}
+	return svc, userRepo, tx, uid
+}
+
+// TestLogin_WrongPassword_CounterPersistsAcrossTx is the P1#1 RED: a single
+// wrong-password login must commit the counter increment. The previous
+// implementation returned an errcode from the RunInTx closure for the
+// wrong-password branch, which PG translates to ROLLBACK — silently dropping
+// the counter UPDATE that recordFailureBestEffort had just written.
+//
+// Wire shape: still 401 + ERR_AUTH_LOGIN_FAILED. The only observable change
+// is that the persisted counter advances by 1 per failed attempt instead of
+// staying at 0 forever.
+func TestLogin_WrongPassword_CounterPersistsAcrossTx(t *testing.T) {
+	svc, userRepo, tx, uid := loginWithThresholdLockoutSetup(t, "rollback-bob", "correct", domain.StatusActive)
+
+	_, err := svc.Login(context.Background(), LoginInput{Username: "rollback-bob", Password: "wrong"})
+	require.Error(t, err, "wrong-password must return error to caller")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthLoginFailed, ec.Code, "wire code is ERR_AUTH_LOGIN_FAILED")
+
+	require.Len(t, tx.committedCleanly, 1, "exactly one tx for the login attempt")
+	assert.True(t, tx.committedCleanly[0],
+		"the login tx must commit so the auto-lockout counter UPDATE persists "+
+			"(PG ROLLBACK on error would silently drop the counter — PR #585 review P1#1)")
+
+	persisted, err := userRepo.GetByID(context.Background(), uid)
+	require.NoError(t, err)
+	assert.Equal(t, 1, persisted.FailedLoginCount(),
+		"failed_login_count must advance to 1 even though Login returned 401")
+}
+
+// TestLogin_ThresholdReached_AccountLocks is the P1#1 GREEN companion:
+// Threshold consecutive wrong-password attempts auto-lock the account through
+// the real Login path. Pre-fix, the counter never persisted so the threshold
+// was unreachable; post-fix, attempt N flips status to Locked.
+func TestLogin_ThresholdReached_AccountLocks(t *testing.T) {
+	const password = "correct"
+	svc, userRepo, tx, uid := loginWithThresholdLockoutSetup(t, "lockchain-eve", password, domain.StatusActive)
+
+	for i := 0; i < accountlockout.Threshold; i++ {
+		_, err := svc.Login(context.Background(), LoginInput{Username: "lockchain-eve", Password: "wrong"})
+		require.Error(t, err, "attempt %d: wrong password rejected", i+1)
+	}
+
+	require.Len(t, tx.committedCleanly, accountlockout.Threshold,
+		"each wrong-password attempt opens exactly one login tx")
+	for i, ok := range tx.committedCleanly {
+		assert.True(t, ok, "tx #%d must commit so the counter advances", i+1)
+	}
+
+	persisted, err := userRepo.GetByID(context.Background(), uid)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusLocked, persisted.Status(),
+		"after %d wrong attempts the account must be auto-locked", accountlockout.Threshold)
+	assert.Equal(t, accountlockout.Threshold, persisted.FailedLoginCount(),
+		"failed_login_count must equal the threshold")
+	assert.NotNil(t, persisted.AutoLockoutDeadline(),
+		"auto-lock must set the locked_until TTL")
+}
+
+// TestLogin_SuspendedUser_DoesNotIncrementCounter is the P1#2 RED: an admin
+// suspension must not be escalated to a Locked status via the failure-counter
+// path. Pre-fix, RecordFailure only short-circuited on StatusLocked; suspended
+// users went through RegisterFailedLogin → UpdateLockoutFields → eventually
+// ApplyInTx(LockUser) which flipped status Suspended → Locked. Worse, once
+// flipped to Locked, the TTL expires and TryLazyUnlock calls ActivateUser,
+// silently re-activating an admin-suspended account.
+func TestLogin_SuspendedUser_DoesNotIncrementCounter(t *testing.T) {
+	svc, userRepo, _, uid := loginWithThresholdLockoutSetup(t, "suspended-alice", "correct", domain.StatusSuspended)
+
+	// Drive Threshold + a couple extra wrong-password attempts at the
+	// suspended user. None of them should advance the counter or change
+	// the status: a suspended user is not a candidate for auto-lock.
+	for i := 0; i < accountlockout.Threshold+2; i++ {
+		_, err := svc.Login(context.Background(), LoginInput{Username: "suspended-alice", Password: "wrong"})
+		require.Error(t, err, "attempt %d: suspended user rejected", i+1)
+	}
+
+	persisted, err := userRepo.GetByID(context.Background(), uid)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusSuspended, persisted.Status(),
+		"suspended user must remain Suspended; the failure counter must not "+
+			"flip an admin suspension into auto-Locked (PR #585 review P1#2)")
+	assert.Equal(t, 0, persisted.FailedLoginCount(),
+		"failed_login_count must remain 0 for non-Active users")
+	assert.Nil(t, persisted.AutoLockoutDeadline(),
+		"no TTL must be set for a non-Active user")
+}
+
+// Note on the baseline-assert path:
+//
+// The in-tx credentialauthority.Assert failure branch (service.go:441) shares
+// the same recordFailureBestEffort → outcome.failureErr structural pattern as
+// the wrong-password branch covered by TestLogin_WrongPassword_*. A pure
+// baseline-assert-during-Active test would require simulating a concurrent
+// ChangePassword that lands inside the test's RunInTx window — the mem-store
+// TxRunner is single-goroutine so this race is not expressible at the unit
+// level. The PG-level race is implicitly covered by the testcontainers e2e
+// TestL2_LoginUniform401 (the locked-account sub-case enters loginInTx with a
+// pre-bcrypt-suspended user and exits the same loginOutcome path). Keeping a
+// mem-store stub for the baseline branch would duplicate the wrong-password
+// fixture without exercising new code (PR #585 review F2).

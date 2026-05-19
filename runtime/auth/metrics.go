@@ -23,6 +23,18 @@ type AuthMetrics struct {
 	serviceVerifyTotal  metrics.CounterVec
 }
 
+// AccountLockoutMetrics is the standalone observability instrument for the
+// auto-lockout transitions emitted by cells/accesscore/internal/accountlockout.
+// It registers a single CounterVec (`auth_account_lockout_total`) and lives
+// apart from AuthMetrics so the cell composition root can wire it
+// independently of bootstrap's router-level auth metrics — the two use the
+// same metrics.Provider but register disjoint metric names, avoiding the
+// "already registered" error that would result from constructing AuthMetrics
+// twice with the same provider.
+type AccountLockoutMetrics struct {
+	total metrics.CounterVec
+}
+
 // NewAuthMetrics registers auth metric instruments with the given provider.
 func NewAuthMetrics(p metrics.Provider) (*AuthMetrics, error) {
 	if p == nil {
@@ -62,6 +74,43 @@ func NewAuthMetrics(p metrics.Provider) (*AuthMetrics, error) {
 		tokenVerifyDuration: tvd,
 		serviceVerifyTotal:  svt,
 	}, nil
+}
+
+// NewAccountLockoutMetrics registers the `auth_account_lockout_total`
+// CounterVec for ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01. The composition
+// root wires this into AccessCore via WithLockoutMetrics; the cell hands the
+// returned recorder to accountlockout.NewService.
+//
+// reason label ∈ {"threshold_locked", "lazy_unlocked"}.
+// "threshold_locked" — consecutive-failure threshold reached → user auto-locked.
+// "lazy_unlocked" — locked_until elapsed; sessionlogin transparently
+// reactivated the account inside the login tx (silent on the outbox,
+// visible only via this counter + slog per ADR §"lazy-unlock 审计策略").
+func NewAccountLockoutMetrics(p metrics.Provider) (*AccountLockoutMetrics, error) {
+	if p == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"auth: metrics provider must not be nil")
+	}
+	c, err := p.CounterVec(metrics.CounterOpts{
+		Name:       "auth_account_lockout_total",
+		Help:       "Total number of account auto-lockout transitions, by reason (threshold_locked / lazy_unlocked).",
+		LabelNames: []string{"reason"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("auth: register auth_account_lockout_total: %w", err)
+	}
+	return &AccountLockoutMetrics{total: c}, nil
+}
+
+// IncAccountLockout implements accountlockout.MetricsRecorder. reason MUST be
+// one of {"threshold_locked", "lazy_unlocked"}; arbitrary strings are
+// recorded as-is, but the accountlockout package only emits the two values
+// listed.
+func (m *AccountLockoutMetrics) IncAccountLockout(reason string) {
+	if m == nil {
+		return
+	}
+	m.total.With(metrics.Labels{"reason": reason}).Inc()
 }
 
 func (m *AuthMetrics) recordTokenVerify(result, reason string, duration time.Duration) {

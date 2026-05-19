@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -143,6 +144,23 @@ type Service struct {
 	clock           clock.Clock
 	sessionTTL      time.Duration
 	comparePassword passwordComparer // defaults to bcrypt.CompareHashAndPassword
+	// lockout drives ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01: it owns the
+	// failure-window policy, persists the counter, and routes lock/unlock
+	// through authzmutate. Required (fail-fast in NewService) — sessionlogin
+	// MUST NOT import authzmutate directly (depguard upstream Hard funnel
+	// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01).
+	lockout *accountlockout.Service
+}
+
+// WithAccountLockout injects the auto-lockout mediator. Required for sessionlogin;
+// the upstream depguard rule SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01 forces
+// every lock decision through this funnel.
+func WithAccountLockout(svc *accountlockout.Service) Option {
+	return func(s *Service) {
+		if svc != nil {
+			s.lockout = svc
+		}
+	}
 }
 
 // NewService creates a session-login Service. refreshStore issues the opaque
@@ -196,6 +214,11 @@ func NewService(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"sessionlogin: SessionTTL required; use WithSessionTTL (typically accesscore.DefaultRefreshMaxAge)")
 	}
+	if s.lockout == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sessionlogin: AccountLockout required; use WithAccountLockout "+
+				"(sessionlogin must route lock decisions through accountlockout, not authzmutate)")
+	}
 	return s, nil
 }
 
@@ -221,6 +244,17 @@ type LoginInput struct {
 // ChangePassword committing in the race window bumps PasswordVersion; this
 // mismatch causes loginInTx to return ErrAuthLoginFailed, closing the
 // old-password-mints-new-epoch-session race.
+//
+// PR #585 review P1#1 fix: credential-failure paths (baseline assert fail,
+// wrong password) do NOT return an error from the RunInTx closure. PG
+// translates any non-nil return into ROLLBACK, which would silently drop the
+// auto-lockout counter UPDATE that recordFailureBestEffort just wrote. The
+// closure now returns nil on credential failures and signals the 401 via the
+// outer-scope `failureErr` variable; the tx commits the counter increment
+// (and, on threshold, the LockUser mutation + locked event), and Login
+// returns the prepared 401 after RunInTx succeeds. Only infrastructure
+// failures (DB / refresh-store / outbox emit) still return error from the
+// closure to trigger a real ROLLBACK.
 func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
 	if err := validation.RequireNotEmpty(
 		errcode.ErrAuthLoginInvalidInput,
@@ -255,71 +289,75 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	// sidechannels regardless of user-lookup outcome or account status.
 	bcryptErr := s.comparePassword(hashToCompare, []byte(input.Password))
 
-	// Evaluate the unified failure condition. Internal reasons are logged via
-	// WithInternal only; they never appear in the 4xx response body.
-	switch {
-	case userLookupErr != nil:
+	// Missing user → unified 401 without entering a tx. There is no user row to
+	// lock or to increment failure counters against; the dummyBcryptHash above
+	// already paid the timing cost so the latency profile matches the
+	// wrong-password / inactive-account paths within their own bcrypt budget.
+	if userLookupErr != nil {
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
 			errcode.WithInternal(fmt.Sprintf("user lookup failed: %v", userLookupErr)))
-	case credentialauthority.Assert(preUser) != nil:
-		// C1: inactive account → same 401 as bad password. Real reason in WithInternal.
-		// R4: log only preUser.ID and preUser.Status() — NOT the full struct which
-		// contains PasswordHash. Using %v on *domain.User would leak the hash into
-		// slog/trace via errcode Internal (PR #501 RC-E, R4 fix).
-		//
-		// P2-C fix: bcrypt_ok was previously logged here, which leaked
-		// "password matched" truth for inactive/locked accounts and let
-		// attackers verify credentials against a disabled account. The
-		// bcryptErr value is intentionally NOT logged.
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
-			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("credentialauthority: pre-bcrypt baseline fail (user_id=%s status=%v)",
-				preUser.ID, preUser.Status())))
-	case bcryptErr != nil:
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
-			errMsgInvalidCredentials)
 	}
 
-	// Pin the PasswordVersion from the pre-bcrypt snapshot. loginInTx will
-	// re-check this against the FOR UPDATE locked row to detect a concurrent
-	// ChangePassword committed in the race window (P1.1). The snapshot is
-	// captured through credentialauthority.SnapshotPasswordVersion so this
-	// slice file never reads domain.User.PasswordVersion directly (Hard
-	// funnel CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream prong).
+	// User exists. Open a tx that holds the row lock across:
+	//   1. TryLazyUnlock (locked + TTL elapsed → flip back to Active + reset counter)
+	//   2. credentialauthority.Assert baseline (inactive / suspended → 401 + RecordFailure)
+	//   3. bcrypt result check (wrong password → 401 + RecordFailure)
+	//   4. session/refresh issue + outbox emit + RecordSuccess on the happy path
+	//
+	// pwVersionPin is the opaque WithPasswordVersionPin Check captured from the
+	// pre-bcrypt snapshot via credentialauthority.SnapshotPasswordVersion so this
+	// slice file never reads domain.User.PasswordVersion directly (Hard funnel
+	// CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 upstream prong).
 	pwVersionPin := credentialauthority.SnapshotPasswordVersion(preUser)
-
-	// Re-fetch inside tx with FOR UPDATE to pin authz_epoch atomically.
-	// If the user was deactivated between the pre-check and the tx, the
-	// credentialauthority.Assert baseline inside loginInTx rejects it — no
-	// silent credential issuance. The transactional body is extracted to keep
-	// Login's cognitive complexity within the CLAUDE.md ≤15 budget after
-	// S4d added the FOR UPDATE re-fetch + post-check.
 	sessionID := uuid.NewString()
-	var pair dto.TokenPair
+	var outcome loginOutcome
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		p, err := s.loginInTx(txCtx, input.Username, sessionID, pwVersionPin)
-		if err != nil {
-			return err
+		o, infraErr := s.loginInTx(ctx, txCtx, input.Username, sessionID, pwVersionPin, bcryptErr)
+		if infraErr != nil {
+			return infraErr // real infra error → tx rollback
 		}
-		pair = p
+		outcome = o
+		// Returning nil even on credential failure is intentional: the
+		// auto-lockout counter UPDATE (and any threshold-triggered LockUser
+		// mutation) must commit. The 401 surfaces via outcome.failureErr
+		// after RunInTx returns. PR #585 review P1#1.
 		return nil
 	}); err != nil {
 		return dto.TokenPair{}, err
 	}
+	if outcome.failureErr != nil {
+		return dto.TokenPair{}, outcome.failureErr
+	}
 
 	s.logger.Info("user logged in",
-		slog.String("user_id", pair.UserID), slog.String("session_id", sessionID))
-	return pair, nil
+		slog.String("user_id", outcome.pair.UserID), slog.String("session_id", sessionID))
+	return outcome.pair, nil
+}
+
+// loginOutcome carries the result of the in-tx login decision back to the
+// outer Login wrapper. Combined with the second return of loginInTx (an
+// infra error) it encodes three mutually-exclusive states:
+//
+//  1. Success — outcome.pair non-zero, outcome.failureErr nil, infra error nil.
+//  2. Credential-domain rejection — outcome.pair zero, outcome.failureErr
+//     non-nil (the 401), infra error nil. RunInTx must commit so the
+//     auto-lockout counter UPDATE persists; the caller returns failureErr.
+//  3. Infrastructure failure — outcome zero-value, infra error non-nil.
+//     RunInTx will roll back; the caller propagates the infra error as 5xx.
+type loginOutcome struct {
+	pair       dto.TokenPair
+	failureErr error // non-nil = credential-domain 401 to return after the tx commits
 }
 
 // loginInTx is the FOR-UPDATE-locked body of Login. It re-fetches the user
-// inside the ambient transaction (acquiring the user-row write lock), checks
-// CanAuthenticate, mints the access token, creates the session row, issues
-// the refresh chain root, and emits the session.created outbox entry — all
-// while holding the row lock so concurrent Invalidator.Apply cannot advance
-// users.authz_epoch between the snapshot read and the session/refresh
-// INSERTs (S4d §D2; PR #490 review P1-#3 fix).
+// inside the ambient transaction (acquiring the user-row write lock),
+// invokes lazy-unlock if applicable, checks CanAuthenticate + password-version
+// pin + bcrypt result, then on success mints the access token, creates the
+// session row, issues the refresh chain root, and emits the session.created
+// outbox entry — all while holding the row lock so concurrent Invalidator.Apply
+// cannot advance users.authz_epoch between the snapshot read and the
+// session/refresh INSERTs (S4d §D2; PR #490 review P1-#3 fix).
 //
 // pwVersionPin is the opaque WithPasswordVersionPin Check captured from the
 // pre-bcrypt snapshot via credentialauthority.SnapshotPasswordVersion. If
@@ -327,20 +365,71 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 // concurrent ChangePassword committed in the race window — the old password
 // must be rejected (P1.1).
 //
+// bcryptErr is the result of the pre-bcrypt password comparison performed
+// outside the tx (timing-anchor). A non-nil value means the password did not
+// match the user's stored hash; combined with a passing baseline assert this
+// is the wrong-password failure path and increments the auto-lockout counter.
+//
 // R3 error classification: only credential-domain errors (user not found:
 // KindNotFound) are collapsed into the opaque 401 ErrAuthLoginFailed.
 // Infrastructure errors (KindInternal, KindUnavailable, etc.) are passed
 // through as-is to preserve their HTTP status (5xx / 503), preventing
 // infra faults from being silently disguised as authentication failures.
+//
+// multi-stage auto-lockout decision (lazy-unlock → baseline assert → bcrypt
+// → mint+emit). Further extraction would scatter the row-lock invariant
+// across helpers, breaking the "single tx, single locked row" contract that
+// makes auto-lockout race-safe.
+//
+// loginInTx returns the in-tx login decision. The first return is the
+// outcome — exactly one of outcome.pair / outcome.failureErr is populated
+// on a non-infra completion (success vs credential-domain 401). The second
+// return is reserved for infrastructure failures (DB / refresh-store / outbox);
+// a non-nil error here causes the caller's RunInTx closure to return and
+// PG to roll back the whole tx.
+//
+// PR #585 review P1#1: credential-domain failures (baseline assert / wrong
+// password) are carried back via outcome.failureErr (not via the second
+// error return) so the caller can return nil from the closure and let PG
+// commit the auto-lockout counter UPDATE + threshold-triggered LockUser
+// mutation. The previous signature returned the 401 as a real error from
+// loginInTx, which the caller propagated to RunInTx → ROLLBACK, silently
+// dropping the counter.
+//
+// multi-stage auto-lockout decision (lazy-unlock → baseline assert → bcrypt
+// → mint+emit). Further extraction would scatter the row-lock invariant
+// across helpers, breaking the "single tx, single locked row" contract that
+// makes auto-lockout race-safe.
+//
+//nolint:gocognit,funlen // cognitive complexity + length are driven by the
 func (s *Service) loginInTx(
+	ctx context.Context,
 	txCtx context.Context,
 	username, sessionID string,
 	pwVersionPin credentialauthority.Check,
-) (dto.TokenPair, error) {
+	bcryptErr error,
+) (loginOutcome, error) {
 	user, err := s.userRepo.GetByUsernameForUpdate(txCtx, username)
 	if err != nil {
-		return dto.TokenPair{}, classifyForUpdateErr(err)
+		return loginOutcome{}, classifyForUpdateErr(err)
 	}
+
+	// Lazy-unlock: if the user is auto-locked and the TTL has elapsed,
+	// transparently flip status back to Active and clear the counter. On
+	// unlock we re-fetch the row inside the same tx so the rest of this
+	// function operates on the post-mutation view (status=Active,
+	// failed_login_count=0, locked_until=nil).
+	unlocked, err := s.lockout.TryLazyUnlock(ctx, txCtx, user)
+	if err != nil {
+		return loginOutcome{}, fmt.Errorf("sessionlogin:lazy unlock: %w", err)
+	}
+	if unlocked {
+		user, err = s.userRepo.GetByUsernameForUpdate(txCtx, username)
+		if err != nil {
+			return loginOutcome{}, classifyForUpdateErr(err)
+		}
+	}
+
 	// Credentialauthority funnel: baseline (CanAuthenticate) re-check after the
 	// FOR UPDATE lock closes the concurrent-deactivation race (C1), and
 	// the password-version pin re-checks the version captured pre-bcrypt to
@@ -348,10 +437,57 @@ func (s *Service) loginInTx(
 	// (P1.1). Both failure classes collapse to the uniform 401 with internal
 	// reason; the caller may not branch on err to discover which check failed
 	// (防枚举).
+	//
+	// Baseline + pwVersionPin failure also increments the auto-lockout counter
+	// for Active users: concurrent-ChangePassword races are rare but
+	// indistinguishable from a genuinely wrong password from the caller's
+	// perspective; not counting them would create a small but real timing oracle.
+	// For non-Active users accountlockout.RecordFailure short-circuits and does
+	// not touch the counter (P1#2).
 	if err := credentialauthority.Assert(user, pwVersionPin); err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
-			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("credentialauthority: in-tx assert failed (user=%s): %v", username, err)))
+		s.recordFailureBestEffort(ctx, txCtx, user, "baseline_assert")
+		return loginOutcome{
+			failureErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+				errMsgInvalidCredentials,
+				errcode.WithInternal(fmt.Sprintf("credentialauthority: in-tx assert failed (user_id=%s): %v", user.ID, err))),
+		}, nil
+	}
+
+	// Wrong-password (post-baseline): increment auto-lockout counter. If the
+	// new count >= threshold, accountlockout.RecordFailure runs the LockUser
+	// mutation + emits event.user.locked.v1 inside this tx; subsequent reads
+	// of the user row in the same tx see status=Locked. Return the unified
+	// 401 either way.
+	//
+	// The closure-level nolint below is intentional: golangci-lint's nilerr
+	// check would flag the `return ..., nil` because bcryptErr (observed on
+	// the line just above) is dropped. That is exactly the contract this
+	// branch implements — bcryptErr is a credential-domain rejection, not an
+	// infra error; it is carried back via outcome.failureErr (NOT via the
+	// second error return) so the caller can return nil from the closure
+	// and let PG commit the auto-lockout counter UPDATE. Returning a real
+	// error here would cause RunInTx → ROLLBACK and silently drop the
+	// counter (PR #585 review P1#1). The nolint is placed on the `return`
+	// line itself so golangci-lint's "must be on same line as offender"
+	// scope rule applies precisely.
+	if bcryptErr != nil {
+		s.recordFailureBestEffort(ctx, txCtx, user, "wrong_password")
+		return loginOutcome{ //nolint:nilerr // see godoc above; failureErr path
+			failureErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
+				errMsgInvalidCredentials),
+		}, nil
+	}
+
+	// Successful credentials. Reset the auto-lockout counter (no-op if it was
+	// already clean) before minting tokens so the success path co-commits
+	// counter clear + session/refresh INSERT + outbox emit.
+	if err := s.lockout.RecordSuccess(txCtx, user); err != nil {
+		s.logger.Error("sessionlogin:lockout reset failed",
+			slog.Any("error", err), slog.String("user_id", user.ID))
+		// Counter reset failure is non-fatal: the user has proven their
+		// password, so we proceed with token issuance. The stale counter
+		// remains and may auto-lock prematurely on the next failure, but
+		// the alternative (rejecting a valid login) is worse.
 	}
 
 	minted, err := sessionmint.MintAccess(txCtx, sessionmint.Deps{
@@ -364,9 +500,9 @@ func (s *Service) loginInTx(
 		PasswordResetRequired: user.PasswordResetRequired(),
 	})
 	if err != nil {
-		s.logger.Error("session-login: token issuance failed",
+		s.logger.Error("sessionlogin:token issuance failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
-		return dto.TokenPair{}, err
+		return loginOutcome{}, err
 	}
 
 	now := s.clock.Now()
@@ -387,16 +523,16 @@ func (s *Service) loginInTx(
 	}
 
 	if err := s.sessionStore.Create(txCtx, sess); err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: persist session: %w", err)
+		return loginOutcome{}, fmt.Errorf("sessionlogin:persist session: %w", err)
 	}
 	refreshWire, _, err := s.refreshStore.Issue(txCtx, sess.ID, user.ID, user.AuthzEpoch())
 	if err != nil {
-		s.logger.Error("session-login: refresh store issue failed",
+		s.logger.Error("sessionlogin:refresh store issue failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
 		if isNoopTx(s.txRunner) {
 			_ = s.sessionStore.Revoke(context.WithoutCancel(txCtx), sess.ID)
 		}
-		return dto.TokenPair{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+		return loginOutcome{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 	}
 	if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
 		SessionID: sess.ID,
@@ -405,16 +541,47 @@ func (s *Service) loginInTx(
 		if isNoopTx(s.txRunner) {
 			s.cleanupIssuedSession(txCtx, sess.ID)
 		}
-		return dto.TokenPair{}, fmt.Errorf("session-login: emit event: %w", err)
+		return loginOutcome{}, fmt.Errorf("sessionlogin:emit event: %w", err)
 	}
-	return dto.TokenPair{
-		AccessToken:           minted.AccessToken,
-		RefreshToken:          refreshWire,
-		ExpiresAt:             minted.ExpiresAt,
-		SessionID:             sessionID,
-		UserID:                user.ID,
-		PasswordResetRequired: user.PasswordResetRequired(),
+	return loginOutcome{
+		pair: dto.TokenPair{
+			AccessToken:           minted.AccessToken,
+			RefreshToken:          refreshWire,
+			ExpiresAt:             minted.ExpiresAt,
+			SessionID:             sessionID,
+			UserID:                user.ID,
+			PasswordResetRequired: user.PasswordResetRequired(),
+		},
 	}, nil
+}
+
+// recordFailureBestEffort calls accountlockout.RecordFailure inside the
+// existing tx, logging (but not returning) any error so the caller can always
+// return the unified 401. The failure modes (counter UPDATE failure, lock
+// mutation failure, outbox emit failure) all degrade gracefully: the user is
+// still rejected by the 401, only the auto-lockout bookkeeping is incomplete.
+//
+// reason is a free-form label used in slog Error context to disambiguate
+// "wrong_password" vs "baseline_assert" failures; it is NOT exposed on the
+// wire (account-status enumeration prevention) and is NOT the metric
+// `reason` label (which is fixed by accountlockout to {threshold_locked,
+// lazy_unlocked}).
+//
+// Decision: returning 401 to the caller takes priority over lockout counter
+// accuracy. After PR #585 P1#1 fix the failure-path closure returns nil
+// from RunInTx so the counter UPDATE (and any threshold-triggered LockUser
+// mutation) commits with the rest of the tx. If RecordFailure itself
+// errored mid-way, PG places the tx in failed state and Commit translates
+// to ROLLBACK at the connection level — the upstream caller then sees a
+// 5xx instead of the 401, which is correct: infra failure should surface,
+// not be disguised as a credential rejection.
+func (s *Service) recordFailureBestEffort(ctx, txCtx context.Context, user *domain.User, reason string) {
+	if err := s.lockout.RecordFailure(ctx, txCtx, user); err != nil {
+		s.logger.Error("sessionlogin:lockout record failure failed",
+			slog.Any("error", err),
+			slog.String("user_id", user.ID),
+			slog.String("reason", reason))
+	}
 }
 
 // persistSessionWithRefresh writes the session, issues the refresh root, and
@@ -434,11 +601,11 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, sess *session.S
 	var refreshWire string
 	do := func(txCtx context.Context) error {
 		if err := s.sessionStore.Create(txCtx, sess); err != nil {
-			return fmt.Errorf("session-login: persist session: %w", err)
+			return fmt.Errorf("sessionlogin:persist session: %w", err)
 		}
 		wire, _, err := s.refreshStore.Issue(txCtx, sess.ID, userID, authzEpoch)
 		if err != nil {
-			s.logger.Error("session-login: refresh store issue failed",
+			s.logger.Error("sessionlogin:refresh store issue failed",
 				slog.Any("error", err), slog.String("user_id", userID))
 			// In demo/noop-tx mode, the session was already written without a real
 			// transaction; compensate explicitly. In durable-tx mode, the tx rollback
@@ -457,7 +624,7 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, sess *session.S
 			if isNoopTx(s.txRunner) {
 				s.cleanupIssuedSession(txCtx, sess.ID)
 			}
-			return fmt.Errorf("session-login: emit event: %w", err)
+			return fmt.Errorf("sessionlogin:emit event: %w", err)
 		}
 		return nil
 	}
@@ -499,13 +666,13 @@ func isNoopTx(r persistence.TxRunner) bool {
 func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 	cleanupCtx := context.WithoutCancel(ctx)
 	if err := s.refreshStore.RevokeSessionDetached(ctx, sessionID); err != nil {
-		s.logger.Error("session-login: cleanup refresh chain failed",
+		s.logger.Error("sessionlogin:cleanup refresh chain failed",
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}
 	// session.Store.Revoke is idempotent: missing IDs are no-ops returning nil
 	// (防枚举 — append-only revoke semantics per ADR-Session D3).
 	if err := s.sessionStore.Revoke(cleanupCtx, sessionID); err != nil {
-		s.logger.Error("session-login: cleanup session revoke failed",
+		s.logger.Error("sessionlogin:cleanup session revoke failed",
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}
 }
@@ -576,7 +743,7 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser get user: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
 	}
 	if err := credentialauthority.Assert(user); err != nil {
 		return dto.TokenPair{}, err
@@ -593,7 +760,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		PasswordResetRequired: user.PasswordResetRequired(),
 	})
 	if err != nil {
-		s.logger.Error("session-login: IssueForUser token issuance failed",
+		s.logger.Error("sessionlogin:IssueForUser token issuance failed",
 			slog.Any("error", err), slog.String("user_id", userID))
 		return dto.TokenPair{}, err
 	}
@@ -619,7 +786,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		return dto.TokenPair{}, err
 	}
 
-	s.logger.Info("session-login: IssueForUser issued new session",
+	s.logger.Info("sessionlogin:IssueForUser issued new session",
 		slog.String("user_id", userID), slog.String("session_id", sessionID))
 
 	return dto.TokenPair{

@@ -406,6 +406,10 @@ func (r *duplicateUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) 
 	panic("duplicateUserRepo.GetByUsernameForUpdate: unexpected call")
 }
 
+func (r *duplicateUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+	panic("duplicateUserRepo.UpdateLockoutFields: unexpected call")
+}
+
 // scriptedRoleRepo returns CountByRole values from a scripted sequence; tracks
 // whether AssignToUser / Create was called.
 type scriptedRoleRepo struct {
@@ -579,4 +583,8 @@ func (r *errUserRepo) GetByIDForUpdate(_ context.Context, _ string) (*domain.Use
 
 func (r *errUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*domain.User, error) {
 	panic("errUserRepo.GetByUsernameForUpdate: unexpected call")
+}
+
+func (r *errUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+	panic("errUserRepo.UpdateLockoutFields: unexpected call")
 }

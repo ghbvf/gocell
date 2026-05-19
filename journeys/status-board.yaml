@@ -19,10 +19,10 @@
   blocker: ""
   updatedAt: 2026-05-18
 - journeyId: J-accountlockout
-  state: todo
+  state: done
   risk: low
   blocker: ""
-  updatedAt: 2026-04-05
+  updatedAt: 2026-05-19
 - journeyId: J-auditlogintrail
   state: done
   risk: low

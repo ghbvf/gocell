@@ -65,6 +65,10 @@ func (s *stubUserRepo) GetByUsernameForUpdate(_ context.Context, _ string) (*dom
 	panic("stubUserRepo.GetByUsernameForUpdate: unexpected call")
 }
 
+func (s *stubUserRepo) UpdateLockoutFields(_ context.Context, _ *domain.User) error {
+	panic("stubUserRepo.UpdateLockoutFields: unexpected call")
+}
+
 var _ ports.UserRepository = (*stubUserRepo)(nil)
 
 // stubSessionStore stubs session.Store for testing. Only RevokeForSubject

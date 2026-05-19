@@ -491,6 +491,53 @@ linters:
                 Direct packages.Load access would allow reconstructing the INV-1 pattern
                 (pair AST nodes from one load with TypesInfo from another).
                 See ADR docs/architecture/202605141519-adr-archtest-pass-funnel.md.
+        sessionlogin-lockout-funnel:
+          # SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01: sessionlogin must NOT
+          # directly import authzmutate or credentialinvalidate. The
+          # auto-lockout path is the only place sessionlogin needs to mutate
+          # authz state (status=Locked + epoch bump + session revoke), and
+          # that path MUST go through cells/accesscore/internal/accountlockout,
+          # which is the typed mediator that:
+          #   - applies the failure-window policy (threshold / stale-window /
+          #     TTL)
+          #   - records observability via auth_account_lockout_total metric
+          #   - emits event.user.locked.v1 with ActorID="system"
+          #
+          # Upstream Hard funnel (lint-level, CI-blocking) per
+          # docs/plans/202605121830-038-p0-p1-blocking-implementation-plan.md
+          # and CLAUDE.md ai-collab.md §3 "路径级 import ban → depguard".
+          #
+          # Downstream Hard (type-system, existing): domain.User authz fields
+          # are private + authzmutate.Mutation is sealed + Mutator.ApplyInTx
+          # is the only mutation funnel (DOMAIN-AUTHZ-FIELD-PRIVATE-01 +
+          # AUTHZ-MUTATION-APPLY-FUNNEL-01).
+          #
+          # Two-way funnel closure: sessionlogin cannot drop down to
+          # authzmutate/credentialinvalidate (depguard at lint time), and the
+          # type system makes any non-funnel SetStatus impossible from any
+          # package. Together: every sessionlogin lock attempt provably runs
+          # the accountlockout policy.
+          list-mode: lax
+          files:
+            - "**/cells/accesscore/slices/sessionlogin/**"
+            - "!**/cells/accesscore/slices/sessionlogin/*_test.go"
+            - "!**/cells/accesscore/slices/sessionlogin/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate
+              desc: |
+                sessionlogin must NOT directly import authzmutate. The
+                auto-lockout path goes through
+                cells/accesscore/internal/accountlockout, which is the typed
+                mediator owning failure-window policy + metric + outbox event.
+                (SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01 upstream Hard funnel)
+            - pkg: github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate
+              desc: |
+                sessionlogin must NOT directly import credentialinvalidate. The
+                auto-lockout path goes through
+                cells/accesscore/internal/accountlockout, which routes through
+                authzmutate.Mutator.ApplyInTx (which in turn calls
+                credentialinvalidate inside the same tx).
+                (SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01 upstream Hard funnel)
         cellgen-error-libs:
           # CELLGEN-ERRCODE-FUNNEL-01 defence-in-depth: cellgen production code
           # must construct errors only via pkg/errcode. The companion archtest

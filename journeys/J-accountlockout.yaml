@@ -1,6 +1,6 @@
 id: J-accountlockout
 goal: 多次登录失败后账户自动锁定，管理员可手动解锁
-lifecycle: experimental
+lifecycle: active
 owner:
   team: platform
   role: journey-owner
@@ -12,15 +12,45 @@ contracts:
   - http.auth.user.lock.v1
   - http.auth.user.unlock.v1
 passCriteria:
+  # PR #585 P2#4 promotion: the auto-lock / event-publish / admin-unlock
+  # criteria are now covered by the testcontainers e2e
+  # tests/integration/l2atomicity/journey_accountlockout_e2e_test.go
+  # (TestJAccountlockoutAutoLockCycle) — this is path (b) from the prior
+  # "load-bearing harness" gate: a real wire-level run over PG that drives
+  # Threshold wrong-password POSTs → auto-lock → uniform 401 on locked
+  # account → admin unlock → post-unlock login succeeds. The single e2e
+  # asserts all three criteria as side effects, so they share its checkRef.
+  #
+  # Lazy-unlock by TTL remains mode: manual until the l2 harness exposes a
+  # clock-advance seam (backlog
+  # JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION-01-LAZYUNLOCK); LockoutTTL=15min
+  # makes a real-time test infeasible in CI.
+  #
+  # Per-criterion observable in the shared e2e (see godoc of
+  # TestJAccountlockoutAutoLockCycle for the load-bearing assertion line
+  # numbers — keep this list and the test godoc in sync):
+  #   1. "连续失败达阈值后账户锁定" — loop of Threshold wrong-password POSTs +
+  #      observation that the immediate-next CORRECT-password POST also 401s.
+  #   2. "user.locked 事件发布成功" — Eventually-bounded countAuditEntries
+  #      query asserting an auditcore-consumed event.user.locked.v1 entry
+  #      appears (proves outbox relay + handler actually fired, not just
+  #      that publishLocked was invoked).
+  #   3. "锁定期间登录被拒绝" — byte-equal compare between a wrong-password
+  #      401 envelope and the auto-locked 401 envelope (anti-enumeration
+  #      assertion local to the auto-lock path; complements
+  #      TestL2_LoginUniform401's admin-lock coverage).
+  #   4. "管理员解锁后可正常登录" — admin-unlock + post-unlock CORRECT-password
+  #      login returns a fresh token triple; one wrong-password attempt does
+  #      not re-lock (proves the counter was actually persisted as 0).
   - text: 连续失败达阈值后账户锁定
     mode: auto
-    checkRef: journey.J-accountlockout.auto-lock
+    checkRef: journey.J-accountlockout.auto-lock-cycle
   - text: user.locked 事件发布成功
     mode: auto
-    checkRef: journey.J-accountlockout.event-publish
+    checkRef: journey.J-accountlockout.auto-lock-cycle
   - text: 锁定期间登录被拒绝 — 锁定账户登录返回 HTTP 401 + code=ERR_AUTH_LOGIN_FAILED + message="invalid credentials"（与 missing-user / wrong-password 归一，防账号枚举）
     mode: auto
-    checkRef: journey.J-accountlockout.login-reject
+    checkRef: journey.J-accountlockout.auto-lock-cycle
   - text: 管理员解锁后可正常登录
     mode: auto
-    checkRef: journey.J-accountlockout.admin-unlock
+    checkRef: journey.J-accountlockout.auto-lock-cycle

@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 31 migrations (001-031, contiguous).
+	// Currently 32 migrations (001-032, contiguous).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
 	// 020 adds audit_entries table for the ledger.Store PG backend; 021 adds the
 	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard;
@@ -55,9 +55,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 028 adds CHECK(authz_epoch>0) + DROP DEFAULT on the 3 epoch columns (S4d P2.a — '0=unset' hard DB invariant);
 	// 029 creates the devices table (iotdevice devicecell L4 PG backend);
 	// 030 creates the commands table (iotdevice L4 command queue PG backend);
-	// 031 adds unique index on commands metadata->>'_idempotency_key' (DB-level TOCTOU-safe dedup).
-	assert.Equal(t, int64(31), v,
-		"expected version should be exactly 31 (current migration max)")
+	// 031 adds unique index on commands metadata->>'_idempotency_key' (DB-level TOCTOU-safe dedup);
+	// 032 adds users.failed_login_count / last_failed_at / locked_until (accesscore auto-lockout).
+	assert.Equal(t, int64(32), v,
+		"expected version should be exactly 32 (current migration max)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
@@ -318,4 +319,44 @@ func TestVerifyExpectedShape_RequiresAuthzEpochPositiveChecks(t *testing.T) {
 			)
 		})
 	}
+}
+
+// TestVerifyExpectedShape_RequiresLockoutColumns verifies that migration 032's
+// three auto-lockout bookkeeping columns are declared in expectedColumns.
+// authzmutate.Mutator.ApplyInTx(ActivateUser{}) calls
+// domain.User.ResetFailedLogins() in its apply() and persists via repo.Update;
+// without these columns the schema_guard would not catch a future migration
+// that accidentally dropped them, and admin Unlock would silently leave
+// stored counters non-zero (PR #585 review P1#3 / F5).
+func TestVerifyExpectedShape_RequiresLockoutColumns(t *testing.T) {
+	tests := []struct {
+		column string
+		typ    string
+	}{
+		{column: "failed_login_count", typ: "integer"},
+		{column: "last_failed_at", typ: "timestamp with time zone"},
+		{column: "locked_until", typ: "timestamp with time zone"},
+	}
+	for _, tc := range tests {
+		t.Run("users/"+tc.column, func(t *testing.T) {
+			assert.True(t,
+				containsColumn("users", tc.column),
+				"expectedColumns must include users.%s (migration 032 auto-lockout)",
+				tc.column,
+			)
+		})
+	}
+}
+
+// TestVerifyExpectedShape_RequiresLockoutCountPositiveCheck verifies that the
+// CHECK constraint added by migration 032 is declared in expectedChecks.
+// The constraint enforces failed_login_count >= 0 at the DB level so any
+// application path that bypasses the domain layer (which clamps to
+// maxFailedLoginCount via the in-memory aggregate) is still caught at storage.
+func TestVerifyExpectedShape_RequiresLockoutCountPositiveCheck(t *testing.T) {
+	assert.True(t,
+		containsCheck("users", "users_failed_login_count_positive"),
+		"expectedChecks must include users.users_failed_login_count_positive "+
+			"(migration 032 auto-lockout counter non-negativity)",
+	)
 }

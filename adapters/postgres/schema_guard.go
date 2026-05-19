@@ -309,6 +309,13 @@ var expectedColumns = []expectedColumn{
 	{Table: "users", Column: "password_version", Type: "bigint", NotNull: true}, // S6 022
 	{Table: "users", Column: "created_at", Type: "timestamp with time zone", NotNull: true},
 	{Table: "users", Column: "updated_at", Type: "timestamp with time zone", NotNull: true},
+	// Auto-lockout bookkeeping (032_users_failed_login.sql) — ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01.
+	// failed_login_count carries a NOT NULL DEFAULT 0 + CHECK(>=0) (registered
+	// in expectedChecks below as users_failed_login_count_positive); the two
+	// timestamp columns are NULL-able (NULL == no failure yet / no TTL).
+	{Table: "users", Column: "failed_login_count", Type: "integer", NotNull: true},
+	{Table: "users", Column: "last_failed_at", Type: "timestamp with time zone", NotNull: false},
+	{Table: "users", Column: "locked_until", Type: "timestamp with time zone", NotNull: false},
 	// config_entries.version + feature_flags.version — PR449-F7 carry-over
 	// gate columns. Original tables predate S3F structural checks; only the
 	// version column is asserted here (existence + type + NOT NULL).
@@ -499,6 +506,11 @@ var expectedChecks = []expectedCheck{
 	{Table: "users", Name: "users_status_chk"},
 	{Table: "users", Name: "users_creation_source_chk"},
 	{Table: "users", Name: "users_authz_epoch_positive"},
+	// Auto-lockout counter non-negativity (032_users_failed_login.sql) —
+	// ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01. Named explicitly in the
+	// migration via CONSTRAINT users_failed_login_count_positive so the
+	// guard can pin it independently of PG's auto-naming convention.
+	{Table: "users", Name: "users_failed_login_count_positive"},
 	{Table: "sessions", Name: "sessions_authz_epoch_at_issue_positive"},
 	{Table: "refresh_tokens", Name: "refresh_tokens_authz_epoch_at_issue_positive"},
 	// devices / commands (029, 030) — B2.B.

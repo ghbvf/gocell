@@ -66,11 +66,24 @@ func (s *stubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
 	return nil
 }
 
-type stubTxRunner struct{ calls int }
+type stubTxRunner struct {
+	calls int
+	// committedCleanly records the result of fn for each RunInTx call. true
+	// means fn returned nil (PG would COMMIT); false means fn returned err
+	// (PG would ROLLBACK and discard all writes). This is the test seam for
+	// the auto-lockout counter rollback bug (#585 review P1#1): the previous
+	// `stubTxRunner` always ran fn and ignored its return value, so a closure
+	// that returned 401-error would still appear to "commit" the counter
+	// UPDATE — masking the production-PG rollback semantics. Tests should
+	// assert committedCleanly[N] to enforce the real PG contract.
+	committedCleanly []bool
+}
 
 func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
 	s.calls++
-	return fn(mem.WithTxContext(context.Background()))
+	err := fn(mem.WithTxContext(context.Background()))
+	s.committedCleanly = append(s.committedCleanly, err == nil)
+	return err
 }
 
 // noopTxRunner is a pass-through TxRunner that implements cell.Nooper (Noop()==true),

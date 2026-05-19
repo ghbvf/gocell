@@ -296,6 +296,177 @@ func TestUser_CanAuthenticate(t *testing.T) {
 	}
 }
 
+// Auto-lockout test deadlines extracted to package-level consts to satisfy
+// TEST-TIME-LITERAL-01: every time.Duration literal in test code must appear
+// in a package-level const initializer (or come from
+// pkg/testutil/testtime). These are site-specific failure-window values, not
+// cross-cutting timeouts, so they live here rather than in testtime/.
+const (
+	testStaleWindow         = 15 * time.Minute
+	testLockoutTTL          = 15 * time.Minute
+	testRecentFailureGap    = -1 * time.Minute
+	testStaleFailureGap     = -20 * time.Minute
+	testInWindowFailureGap  = -10 * time.Minute
+	testExactStaleBoundary  = -16 * time.Minute
+	testCreatedAtBackdate   = -1 * time.Hour
+	testResetCaseLastGap    = -5 * time.Minute
+	testResetCaseUntilDelta = 15 * time.Minute
+	// testExactStaleEqual is exactly -StaleWindow (== boundary, not > boundary)
+	// so the stale-reset branch is NOT taken and the counter increments.
+	testExactStaleEqual = -15 * time.Minute
+)
+
+func TestUser_RegisterFailedLogin(t *testing.T) {
+	const threshold = 5
+	staleWindow := testStaleWindow
+	lockoutTTL := testLockoutTTL
+	baseTime := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name            string
+		seedCount       int
+		seedLastFailed  *time.Time
+		seedLockedUntil *time.Time
+		now             time.Time
+		wantShouldLock  bool
+		wantCount       int
+		wantLocked      bool // locked_until set?
+	}{
+		{
+			name:           "T1: count=4 + new failure → shouldLock=true at count=5",
+			seedCount:      4,
+			seedLastFailed: ptr(baseTime.Add(testRecentFailureGap)),
+			now:            baseTime,
+			wantShouldLock: true,
+			wantCount:      5,
+			wantLocked:     true,
+		},
+		{
+			name:           "T2: stale-window reset (count=0, last=20min ago) → count=1",
+			seedCount:      0,
+			seedLastFailed: ptr(baseTime.Add(testStaleFailureGap)),
+			now:            baseTime,
+			wantShouldLock: false,
+			wantCount:      1,
+			wantLocked:     false,
+		},
+		{
+			name:           "T3: count=4 + last=10min ago (in window) → count=5 shouldLock",
+			seedCount:      4,
+			seedLastFailed: ptr(baseTime.Add(testInWindowFailureGap)),
+			now:            baseTime,
+			wantShouldLock: true,
+			wantCount:      5,
+			wantLocked:     true,
+		},
+		{
+			name:           "stale-window reset when count=4 + last=16min ago → count=1",
+			seedCount:      4,
+			seedLastFailed: ptr(baseTime.Add(testExactStaleBoundary)),
+			now:            baseTime,
+			wantShouldLock: false,
+			wantCount:      1,
+			wantLocked:     false,
+		},
+		{
+			name:           "first ever failure (no lastFailedAt) → count=1",
+			seedCount:      0,
+			seedLastFailed: nil,
+			now:            baseTime,
+			wantShouldLock: false,
+			wantCount:      1,
+			wantLocked:     false,
+		},
+		// F19: implementation uses strict > comparison for stale detection, so
+		// exactly ==StaleWindow is NOT stale — the counter increments normally.
+		{
+			name:           "exact stale boundary (==StaleWindow) is NOT stale → count increments",
+			seedCount:      4,
+			seedLastFailed: ptr(baseTime.Add(testExactStaleEqual)), // exactly StaleWindow ago
+			now:            baseTime,
+			wantShouldLock: true,
+			wantCount:      5,
+			wantLocked:     true,
+		},
+		// F20: count already at threshold (5) — further failures keep accumulating
+		// and re-trigger shouldLock on each call.
+		{
+			name:           "count=5 → count=6 (past threshold accumulates and re-triggers shouldLock)",
+			seedCount:      5,
+			seedLastFailed: ptr(baseTime.Add(testRecentFailureGap)),
+			now:            baseTime,
+			wantShouldLock: true,
+			wantCount:      6,
+			wantLocked:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u, err := ReconstituteUser(ReconstituteUserParams{
+				ID:               "uid",
+				Username:         "alice",
+				Email:            "alice@example.com",
+				PasswordHash:     "$2a$10$hash",
+				Status:           StatusActive,
+				Source:           UserSourceIdentity,
+				AuthzEpoch:       1,
+				CreatedAt:        baseTime.Add(testCreatedAtBackdate),
+				UpdatedAt:        baseTime.Add(testCreatedAtBackdate),
+				FailedLoginCount: tt.seedCount,
+				LastFailedAt:     tt.seedLastFailed,
+				LockedUntil:      tt.seedLockedUntil,
+			})
+			require.NoError(t, err)
+
+			shouldLock := u.RegisterFailedLogin(tt.now, staleWindow, lockoutTTL, threshold)
+
+			assert.Equal(t, tt.wantShouldLock, shouldLock, "shouldLock decision")
+			assert.Equal(t, tt.wantCount, u.FailedLoginCount(), "failedLoginCount")
+			require.NotNil(t, u.LastFailedAt(), "lastFailedAt must be set after RegisterFailedLogin")
+			assert.True(t, u.LastFailedAt().Equal(tt.now), "lastFailedAt must equal now")
+			if tt.wantLocked {
+				require.NotNil(t, u.AutoLockoutDeadline(), "lockedUntil must be set on shouldLock")
+				assert.True(t, u.AutoLockoutDeadline().Equal(tt.now.Add(lockoutTTL)), "lockedUntil = now + lockoutTTL")
+			} else {
+				assert.Nil(t, u.AutoLockoutDeadline(), "lockedUntil must remain nil when not locking")
+			}
+		})
+	}
+}
+
+func TestUser_ResetFailedLogins(t *testing.T) {
+	baseTime := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	failed := baseTime.Add(testResetCaseLastGap)
+	locked := baseTime.Add(testResetCaseUntilDelta)
+	u, err := ReconstituteUser(ReconstituteUserParams{
+		ID:               "uid",
+		Username:         "alice",
+		Email:            "alice@example.com",
+		PasswordHash:     "$2a$10$hash",
+		Status:           StatusLocked,
+		Source:           UserSourceIdentity,
+		AuthzEpoch:       1,
+		CreatedAt:        baseTime.Add(testCreatedAtBackdate),
+		UpdatedAt:        baseTime,
+		FailedLoginCount: 5,
+		LastFailedAt:     &failed,
+		LockedUntil:      &locked,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 5, u.FailedLoginCount())
+	require.NotNil(t, u.LastFailedAt())
+	require.NotNil(t, u.AutoLockoutDeadline())
+
+	u.ResetFailedLogins()
+
+	assert.Equal(t, 0, u.FailedLoginCount(), "count must be 0")
+	assert.Nil(t, u.LastFailedAt(), "lastFailedAt must be nil")
+	assert.Nil(t, u.AutoLockoutDeadline(), "lockedUntil must be nil")
+}
+
+func ptr[T any](v T) *T { return &v }
+
 func TestValidUserSource(t *testing.T) {
 	tests := []struct {
 		in   UserSource

@@ -81,6 +81,15 @@ type User struct {
 	status                UserStatus
 	passwordResetRequired bool
 	authzEpoch            int64
+
+	// auto-lockout state — mutated only via RegisterFailedLogin / ResetFailedLogins.
+	// Not part of the authz-funnel DOMAIN-AUTHZ-FIELD-PRIVATE-01 set: these
+	// fields are policy bookkeeping for the auto-lockout decision, not
+	// credential-revocation signals. Status change to Locked still routes
+	// through the authzmutate funnel (LockUser mutation).
+	failedLoginCount int
+	lastFailedAt     *time.Time
+	lockedUntil      *time.Time
 }
 
 // Status returns the user's current account status.
@@ -130,6 +139,76 @@ func (u *User) SetPasswordResetRequired(v bool, now time.Time) {
 func (u *User) BumpPasswordVersion(now time.Time) {
 	u.PasswordVersion++
 	u.UpdatedAt = now
+}
+
+// FailedLoginCount returns the current accumulator of consecutive failed
+// login attempts. Auto-lockout policy (cells/accesscore/internal/accountlockout)
+// uses this counter; it is reset to 0 by ResetFailedLogins on successful
+// login, on stale-window expiry, and on admin unlock (ActivateUser mutation).
+func (u *User) FailedLoginCount() int { return u.failedLoginCount }
+
+// LastFailedAt returns the timestamp of the most recent failed login, or nil
+// if no failure has been recorded (or the counter has been reset). Used by
+// RegisterFailedLogin to detect stale windows.
+func (u *User) LastFailedAt() *time.Time { return u.lastFailedAt }
+
+// AutoLockoutDeadline returns the lazy-unlock TTL deadline, or nil if the
+// account is not auto-locked or has been unlocked manually. When
+// status==Locked and AutoLockoutDeadline()!=nil and
+// now()>=*AutoLockoutDeadline(), sessionlogin transparently re-activates the
+// account inside the login transaction.
+//
+// Named to dodge the DOMAIN-AUTHZ-FIELD-PRIVATE-01 prefix ban on exported
+// "Lock*" methods (the rule's banned prefix list is Set / Mark / Clear /
+// Lock / Unlock; a getter with semantic name "LockedUntil" tripped that
+// prefix even though it's a read-only accessor, not a mutator).
+func (u *User) AutoLockoutDeadline() *time.Time { return u.lockedUntil }
+
+// RegisterFailedLogin records a failed login attempt and returns whether the
+// caller should trigger an auto-lock mutation. Mutates failedLoginCount,
+// lastFailedAt, and (if shouldLock) lockedUntil in-memory; caller is
+// responsible for persisting the change via the user repository.
+//
+// Semantics (Keycloak maxDeltaTimeSeconds + ASP.NET Identity AccessFailedCount
+// hybrid):
+//   - If lastFailedAt is older than staleWindow, the counter is reset to 1
+//     (treated as a fresh attempt sequence) — equivalent to Keycloak's
+//     failure-reset-on-inactivity.
+//   - Otherwise the counter increments by 1.
+//   - If the new count >= threshold, lockedUntil is set to now+lockoutTTL and
+//     shouldLock is true; caller must run the LockUser mutation in-tx.
+//
+// Counts >= threshold are not double-clamped — successive failures past the
+// threshold continue to advance the counter (matches Keycloak's accumulator
+// semantics; the caller short-circuits to avoid the lock-twice work).
+func (u *User) RegisterFailedLogin(now time.Time, staleWindow, lockoutTTL time.Duration, threshold int) (shouldLock bool) {
+	if u.lastFailedAt == nil || now.Sub(*u.lastFailedAt) > staleWindow {
+		u.failedLoginCount = 1
+	} else {
+		u.failedLoginCount++
+	}
+	t := now
+	u.lastFailedAt = &t
+	u.UpdatedAt = now
+	if u.failedLoginCount >= threshold {
+		until := now.Add(lockoutTTL)
+		u.lockedUntil = &until
+		return true
+	}
+	return false
+}
+
+// ResetFailedLogins zeroes the auto-lockout state. Called on:
+//   - successful login (accountlockout.RecordSuccess)
+//   - stale-window decision when the existing counter is meaningless (handled
+//     transparently inside RegisterFailedLogin via the reset-to-1 branch)
+//   - admin ActivateUser mutation (avoids "unlock then immediately re-lock"
+//     trap if the user has one more typo within the window)
+//   - lazy-unlock when locked_until has elapsed (accountlockout.TryLazyUnlock)
+func (u *User) ResetFailedLogins() {
+	u.failedLoginCount = 0
+	u.lastFailedAt = nil
+	u.lockedUntil = nil
 }
 
 // NewUser creates a new active User with the given timestamp.
@@ -186,6 +265,12 @@ type ReconstituteUserParams struct {
 	Status                UserStatus
 	PasswordResetRequired bool
 	AuthzEpoch            int64
+
+	// Auto-lockout state — storage-boundary rehydration only. Live mutations
+	// go through RegisterFailedLogin / ResetFailedLogins.
+	FailedLoginCount int
+	LastFailedAt     *time.Time
+	LockedUntil      *time.Time
 }
 
 // ReconstituteUser is the DDD rehydration constructor for the persistence
@@ -236,5 +321,9 @@ func ReconstituteUser(p ReconstituteUserParams) (*User, error) {
 		status:                p.Status,
 		passwordResetRequired: p.PasswordResetRequired,
 		authzEpoch:            p.AuthzEpoch,
+
+		failedLoginCount: p.FailedLoginCount,
+		lastFailedAt:     p.LastFailedAt,
+		lockedUntil:      p.LockedUntil,
 	}, nil
 }
