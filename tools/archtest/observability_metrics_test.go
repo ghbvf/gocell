@@ -152,7 +152,14 @@ const bannedPromFunc = "NewGaugeVec"
 // are banned outside the adapter.
 const bannedOtelPkg = "go.opentelemetry.io/otel/metric"
 
-// bannedOtelMethod is the Meter method name banned by METRICS-GAUGEVEC-FUNNEL-01.
+// bannedOtelMethod is the Meter method name banned by METRICS-GAUGEVEC-FUNNEL-01
+// in production code outside adapters/.
+//
+// Float64UpDownCounter is BANNED outside adapter because gauge semantics
+// must go through metrics.Provider.GaugeVec funnel, not direct OTel SDK
+// usage. (Note: the adapter itself uses Float64Gauge as of PR #625, but
+// the funnel ban target stays Float64UpDownCounter because it is the
+// historical leak surface; adapter is allow-listed via isGaugeVecAdapterPkg.)
 const bannedOtelMethod = "Float64UpDownCounter"
 
 // gaugeVecFunnelRuleRaw is the core rule for METRICS-GAUGEVEC-FUNNEL-01 without
