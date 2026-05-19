@@ -26,13 +26,13 @@ Journey 是**业务/产品视角的端到端验收**。每个 `J-*.yaml` 必须�
 3. **archtest 守卫的运行时重复** — 已有 archtest 静态守的约束不应再以 journey criterion 形式跑 runtime smoke
 4. **interface conformance** — 测某 interface 所有实现的行为一致性
 
-判定方法：候选 criterion 的主谓宾不含业务实体词（user / session / config / role / policy / device / order / audit / event 等），大概率不是 journey。
+判定方法：候选 criterion 的主谓宾不含业务实体词（user / session / config / role / policy / device / order / audit / event 等），大概率不是 journey。即使含业务实体词，若 criterion 的核心断言是关于序列化 / 协议 / 类型系统本身（而非用户可感知的业务结果），仍应归类为 framework invariant — 例如 "envelope 正确序列化后 session 能恢复" 含 session 但实质测序列化，归 archtest。
 
 ## Lifecycle 状态机
 
 - `experimental` — 设计中 / 测试覆盖未稳定 — `board.state` 必须 `todo`
 - `active` — 至少 1 个 mode:auto criterion + 有 docker-free seam — `board.state` 可 `doing` 或 `done`
-- `deprecated` — 已废弃 — `board.state` 不约束
+- `deprecated` — 业务场景废弃 / 被更细粒度 journey 替代 — `board.state` 不约束；yaml 文件保留作历史记录，`contracts:` 保持以满足 `JOURNEY-CONTRACT-EXISTENCE-01`（若该 contract 仍 active），status-board entry 可保留或删除
 
 由 `kernel/governance/rules_journey.go` 中的 `validateJOURNEYSTATUSLIFECYCLE01` 强制（rule ID: `JOURNEY-STATUS-LIFECYCLE-01`）。
 
