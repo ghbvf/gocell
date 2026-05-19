@@ -14,6 +14,11 @@ type EventCollector interface {
 	DecSubscriptionActive(cellID string)
 	RecordSetupError(cellID, topic, reason string)
 	ObserveReadyWait(cellID string, d time.Duration)
+	// RecordRuntimeError records a runtime-phase error for the given cell+topic.
+	// reason is a closed-set string drawn from RuntimeErrorReason* constants.
+	// Wave 2: wired into router.go Phase 4 error paths (subscribe_failure,
+	// ready_wait_timeout, runtime_fault).
+	RecordRuntimeError(cellID, topic, reason string)
 }
 
 // SetupErrorReason* are the closed-set values passed to
@@ -35,6 +40,25 @@ const (
 	SetupErrorReasonPanic = "panic"
 )
 
+// RuntimeErrorReason* are the closed-set values passed to
+// EventCollector.RecordRuntimeError. Runtime errors occur after startup
+// (Phase 4) and are semantically distinct from setup errors (Phase 1-3).
+//
+// Wave 2: wired into router.go Phase 4 paths.
+const (
+	// RuntimeErrorReasonSubscribeFailure is emitted when a subscription
+	// goroutine's SubscribeEntry returns an error after the router is running.
+	RuntimeErrorReasonSubscribeFailure = "subscribe_failure"
+
+	// RuntimeErrorReasonReadyWaitTimeout is emitted when a subscription does
+	// not become ready within the ready-wait budget at runtime (Phase 4).
+	RuntimeErrorReasonReadyWaitTimeout = "ready_wait_timeout"
+
+	// RuntimeErrorReasonRuntimeFault is emitted for any unclassified runtime
+	// fault detected in Phase 4.
+	RuntimeErrorReasonRuntimeFault = "runtime_fault"
+)
+
 // NopEventCollector is the default when no collector is wired. All methods are
 // no-ops so production code paths are always safe to call without a nil check.
 type NopEventCollector struct{}
@@ -43,3 +67,4 @@ func (NopEventCollector) IncSubscriptionActive(string)            {}
 func (NopEventCollector) DecSubscriptionActive(string)            {}
 func (NopEventCollector) RecordSetupError(string, string, string) {}
 func (NopEventCollector) ObserveReadyWait(string, time.Duration)  {}
+func (NopEventCollector) RecordRuntimeError(string, string, string) {}

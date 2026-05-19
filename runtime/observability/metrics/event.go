@@ -119,3 +119,12 @@ func (c *EventRouterCollector) ObserveReadyWait(cellID string, d time.Duration) 
 	}
 	c.readyWait.With(kernelmetrics.Labels{"cell": cellID}).Observe(d.Seconds())
 }
+
+// RecordRuntimeError is a Wave 1 stub — Wave 2 will register
+// event_router_runtime_errors_total{cell,topic,reason} and implement this.
+// Currently a no-op so existing tests remain GREEN while new RED tests target
+// the calling paths in router.go (Phase 4) that haven't been wired yet.
+func (c *EventRouterCollector) RecordRuntimeError(_, _, _ string) {
+	// Wave 2: register counter + record here.
+	// Wave 1 stub: no-op to allow compilation.
+}

@@ -34,6 +34,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
 // stubEventCell is a minimal cell that registers a single contract-first
@@ -344,4 +346,79 @@ func TestPhase6_SubscriptionsWithConsumerBase_Succeeds(t *testing.T) {
 	for _, v := range slices.Backward(s.teardowns) {
 		_ = v.fn(context.Background())
 	}
+}
+
+// newEventsTestRelay creates a minimal Relay suitable for WithRelay lifecycle tests.
+func newEventsTestRelay() *runtimeoutbox.Relay {
+	cfg := runtimeoutbox.RelayConfig{
+		PollInterval:         testtime.FastPoll,
+		ReclaimInterval:      testtime.D10ms,
+		BatchSize:            10,
+		MaxAttempts:          3,
+		BaseRetryDelay:       testtime.D1ms,
+		MaxRetryDelay:        testtime.D10ms,
+		ClaimTTL:             testtime.D100ms,
+		RetentionPeriod:      testtime.D1h,
+		DeadRetentionPeriod:  testtime.D24h,
+		CleanupWaitFloor:     testtime.FastPoll,
+		PollFailureBudget:    3,
+		ReclaimFailureBudget: 3,
+		CleanupFailureBudget: 3,
+		Clock:                clock.Real(),
+	}
+	return runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, cfg)
+}
+
+// TestWithRelay_AutoLifecycle_RelayAddedToManagedResources verifies that
+// WithRelay(r) automatically registers r in b.managedResources so the relay
+// participates in Bootstrap's managed-resource shutdown lifecycle without a
+// separate WithManagedResource(relay) call.
+//
+// RED: current WithRelay only sets b.relay; managedResources is not updated.
+func TestWithRelay_AutoLifecycle_RelayAddedToManagedResources(t *testing.T) {
+	t.Parallel()
+
+	relay := newEventsTestRelay()
+	b := New(
+		WithClock(clock.Real()),
+		WithRelay(relay),
+	)
+
+	// The relay must appear in managedResources — target: WithRelay auto-appends.
+	// RED: currently len(b.managedResources) == 0.
+	found := false
+	for _, r := range b.managedResources {
+		if r == relay {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"WithRelay must auto-register the relay in managedResources; "+
+			"currently managedResources is empty (len=%d) — WithRelay only sets b.relay",
+		len(b.managedResources))
+}
+
+// TestWithRelay_DoubleManaged_Phase0FailsFast verifies that calling both
+// WithRelay(relay) and WithManagedResource(relay) triggers a phase0 fail-fast
+// error, preventing a double-Close during shutdown.
+//
+// RED: phase0ValidateOptions has no duplicate-relay detection; currently
+// both options are silently accepted.
+func TestWithRelay_DoubleManaged_Phase0FailsFast(t *testing.T) {
+	t.Parallel()
+
+	relay := newEventsTestRelay()
+	b := New(
+		WithClock(clock.Real()),
+		WithRelay(relay),
+		WithManagedResource(relay), // intentional double — target: phase0 rejects this
+	)
+
+	err := b.phase0ValidateOptions()
+	require.Error(t, err,
+		"phase0ValidateOptions must return an error when relay is registered via "+
+			"both WithRelay and WithManagedResource (double-Close prevention)")
+	assert.Contains(t, err.Error(), "relay",
+		"error message must mention relay to help diagnosis")
 }

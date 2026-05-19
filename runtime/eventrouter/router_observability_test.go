@@ -35,11 +35,12 @@ type spyDuration struct {
 }
 
 type spyEventCollector struct {
-	mu          sync.Mutex
-	setupErrors []spyEvent
-	inc         []string
-	dec         []string
-	readyWaits  []spyDuration
+	mu            sync.Mutex
+	setupErrors   []spyEvent
+	runtimeErrors []spyEvent
+	inc           []string
+	dec           []string
+	readyWaits    []spyDuration
 }
 
 func (s *spyEventCollector) IncSubscriptionActive(cellID string) {
@@ -58,6 +59,12 @@ func (s *spyEventCollector) RecordSetupError(cellID, topic, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.setupErrors = append(s.setupErrors, spyEvent{cellID: cellID, topic: topic, reason: reason})
+}
+
+func (s *spyEventCollector) RecordRuntimeError(cellID, topic, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runtimeErrors = append(s.runtimeErrors, spyEvent{cellID: cellID, topic: topic, reason: reason})
 }
 
 func (s *spyEventCollector) ObserveReadyWait(cellID string, d time.Duration) {
@@ -87,6 +94,14 @@ func (s *spyEventCollector) errorsCopy() []spyEvent {
 	defer s.mu.Unlock()
 	out := make([]spyEvent, len(s.setupErrors))
 	copy(out, s.setupErrors)
+	return out
+}
+
+func (s *spyEventCollector) runtimeErrorsCopy() []spyEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]spyEvent, len(s.runtimeErrors))
+	copy(out, s.runtimeErrors)
 	return out
 }
 
@@ -306,3 +321,280 @@ func (s *neverReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscript
 	return ctx.Err()
 }
 func (s *neverReadySubscriber) Close(_ context.Context) error { return nil }
+
+// ---------------------------------------------------------------------------
+// Wave 1 RED tests — RecordRuntimeError (P2#5)
+// ---------------------------------------------------------------------------
+//
+// These tests assert that router.go Phase 4 error paths call
+// collector.RecordRuntimeError with the correct cellID, topic, and reason.
+//
+// All three tests FAIL against the current production code because
+// router.go has no RecordRuntimeError call-sites yet (Wave 2 wires them).
+//
+// When Wave 2 adds `r.collector.RecordRuntimeError(...)` to Phase 4 paths,
+// these tests turn GREEN.
+
+// TestRouter_RecordRuntimeError_SubscribeFailure verifies that when
+// SubscribeEntry returns an error (Phase 4 runtime fault), the collector
+// receives RecordRuntimeError with reason=RuntimeErrorReasonSubscribeFailure.
+//
+// Wave 1 RED: RecordRuntimeError is never called in the current production
+// code, so runtimeErrors will be empty and the assertion fails.
+func TestRouter_RecordRuntimeError_SubscribeFailure(t *testing.T) {
+	spy := &spyEventCollector{}
+	// failingSubscriber: Setup+Ready succeed immediately, Subscribe returns error.
+	failSub := &failingSubscriber{err: assert.AnError}
+	r := New(wrap(failSub), clock.Real(), WithEventRouterCollector(spy))
+
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.rtfail"), noopHandler, "cell-rt", "cell-rt"))
+
+	ctx := t.Context()
+	err := r.Run(ctx)
+	require.Error(t, err)
+
+	rtErrs := spy.runtimeErrorsCopy()
+	// Wave 1 RED: this assertion fails because RecordRuntimeError is not called.
+	require.Len(t, rtErrs, 1,
+		"RecordRuntimeError must be called once when SubscribeEntry returns an error "+
+			"(Phase 4 subscribe_failure path not yet wired in Wave 2)")
+	assert.Equal(t, "cell-rt", rtErrs[0].cellID)
+	assert.Equal(t, "topic.rtfail", rtErrs[0].topic)
+	assert.Equal(t, RuntimeErrorReasonSubscribeFailure, rtErrs[0].reason)
+}
+
+// TestRouter_RecordRuntimeError_ReadyWaitTimeout verifies that when the ready
+// timeout fires (Phase 3 timeout surfaced as Phase 4 error), the collector
+// receives RecordRuntimeError with reason=RuntimeErrorReasonReadyWaitTimeout.
+//
+// Wave 1 RED: RecordRuntimeError is never called.
+func TestRouter_RecordRuntimeError_ReadyWaitTimeout(t *testing.T) {
+	spy := &spyEventCollector{}
+	neverReady := &neverReadySubscriber{}
+	r := New(
+		wrap(neverReady), clock.Real(),
+		WithEventRouterCollector(spy),
+		WithReadyTimeout(testReadyTimeout),
+	)
+
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.rttimeout"), noopHandler, "cell-rtt", "cell-rtt"))
+
+	ctx := t.Context()
+	err := r.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not ready")
+
+	rtErrs := spy.runtimeErrorsCopy()
+	// Wave 1 RED: this assertion fails because RecordRuntimeError is not called.
+	require.Len(t, rtErrs, 1,
+		"RecordRuntimeError must be called once on ready-wait timeout "+
+			"(Phase 4 ready_wait_timeout path not yet wired in Wave 2)")
+	assert.Equal(t, "cell-rtt", rtErrs[0].cellID)
+	assert.Equal(t, "topic.rttimeout", rtErrs[0].topic)
+	assert.Equal(t, RuntimeErrorReasonReadyWaitTimeout, rtErrs[0].reason)
+}
+
+// TestRouter_RecordRuntimeError_RuntimeFault verifies that when a subscription
+// goroutine encounters a delayed failure (Phase 4 runtime fault), the collector
+// receives RecordRuntimeError with reason=RuntimeErrorReasonRuntimeFault.
+//
+// Wave 1 RED: RecordRuntimeError is never called.
+func TestRouter_RecordRuntimeError_RuntimeFault(t *testing.T) {
+	spy := &spyEventCollector{}
+	// delayedFailSubscriber: ready immediately, then returns error after delay.
+	delayFail := &delayedFailSubscriber{
+		delay: testtime.D10ms,
+		err:   assert.AnError,
+	}
+	r := New(
+		wrap(delayFail), clock.Real(),
+		WithEventRouterCollector(spy),
+		WithReadyTimeout(0), // disable ready timeout so only runtime fault fires
+	)
+
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.rtfault"), noopHandler, "cell-rtf", "cell-rtf"))
+
+	ctx := t.Context()
+	err := r.Run(ctx)
+	require.Error(t, err)
+
+	rtErrs := spy.runtimeErrorsCopy()
+	// Wave 1 RED: this assertion fails because RecordRuntimeError is not called.
+	require.Len(t, rtErrs, 1,
+		"RecordRuntimeError must be called once on delayed Subscribe error "+
+			"(Phase 4 runtime_fault path not yet wired in Wave 2)")
+	assert.Equal(t, "cell-rtf", rtErrs[0].cellID)
+	assert.Equal(t, "topic.rtfault", rtErrs[0].topic)
+	assert.Equal(t, RuntimeErrorReasonRuntimeFault, rtErrs[0].reason)
+}
+
+// ---------------------------------------------------------------------------
+// Wave 1 RED tests — panic isolation (P2#6) for EventCollector
+// ---------------------------------------------------------------------------
+//
+// These tests verify that a panicking EventCollector does not escape the router
+// and crash the subscriber goroutine. Currently these panic isolation wraps do
+// not exist in production code, so the tests FAIL (panic propagates, test panics).
+
+// panicEventCollector panics on every method call.
+type panicEventCollector struct{}
+
+func (panicEventCollector) IncSubscriptionActive(_ string) {
+	panic("panicEventCollector: IncSubscriptionActive panics")
+}
+func (panicEventCollector) DecSubscriptionActive(_ string) {
+	panic("panicEventCollector: DecSubscriptionActive panics")
+}
+func (panicEventCollector) RecordSetupError(_, _, _ string) {
+	panic("panicEventCollector: RecordSetupError panics")
+}
+func (panicEventCollector) ObserveReadyWait(_ string, _ time.Duration) {
+	panic("panicEventCollector: ObserveReadyWait panics")
+}
+func (panicEventCollector) RecordRuntimeError(_, _, _ string) {
+	panic("panicEventCollector: RecordRuntimeError panics")
+}
+
+// mustNotPanic is a table-driven helper for running a function that should
+// not panic; used across the panic-isolation sub-tests below.
+func mustNotPanic(t *testing.T, name string, fn func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("%s: collector panic escaped the router — must be isolated via SafeObserve: %v", name, r)
+		}
+	}()
+	fn()
+}
+
+// TestRouter_CollectorPanic_IncSubscriptionActive_DoesNotEscape verifies that
+// a panic from IncSubscriptionActive does not propagate.
+//
+// Wave 1 RED: no SafeObserve wrapping exists yet; the panic will propagate and
+// the test will fail with a recovered panic.
+func TestRouter_CollectorPanic_IncSubscriptionActive_DoesNotEscape(t *testing.T) {
+	sub := &blockingSubscriber{}
+	r := New(wrap(sub), clock.Real(), WithEventRouterCollector(panicEventCollector{}))
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.panic-inc"), noopHandler, "cell-p", "cell-p"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	// Wave 1 RED: Run itself will panic due to unprotected IncSubscriptionActive.
+	// If panic isolation is in place, Run succeeds and Running() closes.
+	mustNotPanic(t, "IncSubscriptionActive", func() {
+		select {
+		case <-r.Running():
+		case err := <-done:
+			t.Errorf("Run exited early: %v", err)
+		case <-time.After(testtime.D2s):
+			t.Error("Router did not become ready within timeout")
+		}
+	})
+
+	cancel()
+	<-done
+}
+
+// TestRouter_CollectorPanic_RecordSetupError_DoesNotEscape verifies that a
+// panic from RecordSetupError does not propagate.
+//
+// Wave 1 RED: no SafeObserve wrapping; panic propagates.
+func TestRouter_CollectorPanic_RecordSetupError_DoesNotEscape(t *testing.T) {
+	setupFail := &setupFailSubscriber{err: assert.AnError}
+	r := New(wrap(setupFail), clock.Real(), WithEventRouterCollector(panicEventCollector{}))
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.panic-setup"), noopHandler, "cell-ps", "cell-ps"))
+
+	ctx := t.Context()
+	mustNotPanic(t, "RecordSetupError", func() {
+		err := r.Run(ctx)
+		// Run should return an error (setup failed), but must NOT panic.
+		require.Error(t, err, "Run must return setup error even when RecordSetupError panics")
+	})
+}
+
+// TestRouter_CollectorPanic_ObserveReadyWait_DoesNotEscape verifies that a
+// panic from ObserveReadyWait does not propagate.
+//
+// Wave 1 RED: no SafeObserve wrapping; panic propagates.
+func TestRouter_CollectorPanic_ObserveReadyWait_DoesNotEscape(t *testing.T) {
+	sub := &blockingSubscriber{}
+	r := New(wrap(sub), clock.Real(), WithEventRouterCollector(panicEventCollector{}))
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.panic-rw"), noopHandler, "cell-prw", "cell-prw"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	mustNotPanic(t, "ObserveReadyWait", func() {
+		select {
+		case <-r.Running():
+		case err := <-done:
+			t.Errorf("Run exited early: %v", err)
+		case <-time.After(testtime.D2s):
+			t.Error("Router did not become ready")
+		}
+	})
+
+	cancel()
+	<-done
+}
+
+// TestRouter_CollectorPanic_RecordRuntimeError_DoesNotEscape verifies that a
+// panic from RecordRuntimeError (new method, Phase 4) does not propagate.
+//
+// Wave 1 RED: no SafeObserve wrapping + RecordRuntimeError not called yet.
+func TestRouter_CollectorPanic_RecordRuntimeError_DoesNotEscape(t *testing.T) {
+	failSub := &failingSubscriber{err: assert.AnError}
+	r := New(wrap(failSub), clock.Real(), WithEventRouterCollector(panicEventCollector{}))
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.panic-rte"), noopHandler, "cell-prte", "cell-prte"))
+
+	ctx := t.Context()
+	mustNotPanic(t, "RecordRuntimeError", func() {
+		err := r.Run(ctx)
+		require.Error(t, err, "Run must return error even when RecordRuntimeError panics")
+	})
+}
+
+// TestRouter_CollectorPanic_DecSubscriptionActive_DoesNotEscape verifies that
+// a panic from DecSubscriptionActive does not propagate during router shutdown.
+//
+// Wave 1 RED: no SafeObserve wrapping; panic propagates.
+func TestRouter_CollectorPanic_DecSubscriptionActive_DoesNotEscape(t *testing.T) {
+	sub := &blockingSubscriber{}
+	r := New(wrap(sub), clock.Real(), WithEventRouterCollector(panicEventCollector{}))
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.panic-dec"), noopHandler, "cell-pd", "cell-pd"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	// Wait for router to start (IncSubscriptionActive will panic — skip that in this test).
+	// Separate isolation: this test specifically targets DecSubscriptionActive on teardown.
+	// Since IncSubscriptionActive also panics from the same collector, if we reach
+	// Running() it means either IncSubscriptionActive is already isolated (Green world)
+	// or Running() closes before IncSubscriptionActive is called (not our concern here).
+	// In Wave 1, the panic from Inc will prevent Running() from closing, so we'll
+	// see a timeout and skip gracefully.
+	select {
+	case <-r.Running():
+		// Got here: IncSubscriptionActive didn't panic (already isolated).
+		// Now test DecSubscriptionActive isolation during cancel.
+		cancel()
+		mustNotPanic(t, "DecSubscriptionActive", func() {
+			select {
+			case <-done:
+			case <-time.After(testtime.D2s):
+				t.Error("Run did not exit after cancel")
+			}
+		})
+	case <-time.After(testtime.D500ms):
+		// Wave 1: IncSubscriptionActive panicked before Running() closed.
+		// This test is superseded by TestRouter_CollectorPanic_IncSubscriptionActive_DoesNotEscape.
+		cancel()
+		<-done
+		t.Skip("Wave 1: IncSubscriptionActive panic prevents reaching DecSubscriptionActive test; " +
+			"fix IncSubscriptionActive isolation first (TestRouter_CollectorPanic_IncSubscriptionActive_DoesNotEscape)")
+	}
+}
