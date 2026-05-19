@@ -160,6 +160,14 @@ const bannedOtelPkg = "go.opentelemetry.io/otel/metric"
 // usage. (Note: the adapter itself uses Float64Gauge as of PR #625, but
 // the funnel ban target stays Float64UpDownCounter because it is the
 // historical leak surface; adapter is allow-listed via isGaugeVecAdapterPkg.)
+//
+// Residual risk — adapter self-misuse: adapters/otel/ is excluded from this
+// ban (it is the sanctioned implementation site). If adapters/otel/ were to
+// revert from Float64Gauge back to Float64UpDownCounter this archtest would NOT
+// catch it — the exclusion covers all methods in that package. This is an
+// accepted risk (documented in ADR 202605191500 §威胁矩阵); adapters/otel/ is
+// a single, easily audited file and any regression would surface via the OTel
+// adapter unit tests (sync-diff correctness) rather than this archtest.
 const bannedOtelMethod = "Float64UpDownCounter"
 
 // gaugeVecFunnelRuleRaw is the core rule for METRICS-GAUGEVEC-FUNNEL-01 without

@@ -141,6 +141,7 @@ backlog entry by name.
 | archtest bypass via function-value indirection (`var fn = prom.NewGaugeVec`) | BS-3 blind spot | `TestGaugeVecFunnel_SelfCheck` BS-3 asserts no production SelectorExpr resolves to a banned symbol outside a direct call position | ⚠️ accepted Medium risk; production code does not use function-value indirection for metrics |
 | archtest bypass via cross-package Registry forwarding | BS-2 blind spot | Out of scope — forwarding a Registry does not itself call NewGaugeVec; legitimate provider-internal usage | ⚠️ accepted; no violation possible via this path |
 | Duplicate registration panic (Prometheus) | Bootstrap failure | `registerOrReuse` pattern converts `AlreadyRegisteredError` to safe reuse or `ErrAdapterPromRegister` | ✅ no panic path in adapter |
+| Adapter self-misuse: `adapters/otel/` reverts from `Float64Gauge` to `Float64UpDownCounter` | OTel sync-diff emulation bypassed; incorrect last-value deltas | `adapters/otel/` is the sanctioned implementation site and is excluded from the archtest ban; regressions are caught by OTel adapter unit tests (sync-diff correctness), not by `METRICS-GAUGEVEC-FUNNEL-01` | ⚠️ accepted (adapter is sanctioned implementation site; see `bannedOtelMethod` godoc in `tools/archtest/observability_metrics_test.go`) |
 
 ---
 

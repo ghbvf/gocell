@@ -118,7 +118,7 @@ func WithSubscriptionValidator(v ...cell.SubscriptionValidator) Option {
 // (Start/Close). Calling WithRelay is the ONLY step required to integrate a
 // relay — do NOT separately call WithManagedResource(relay). That would
 // double-register Close and is detected by phase0 fail-fast
-// (ErrBootstrapDoubleManaged).
+// (ErrBootstrapDoubleManaged — code: "ERR_BOOTSTRAP_DOUBLE_MANAGED").
 //
 // Nil inputs are silently ignored (cumulative builder noop pattern,
 // runtime-api.md §Option 范式分层): the relay remains unset, and

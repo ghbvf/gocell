@@ -395,7 +395,7 @@ missing_caller_cell / invalid_caller_cell）短时高峰。零星失败正常（
 
 ## Event Router / Outbox Consumer 可观测性（D3a-1 新增）
 
-以下规则覆盖 D3a-1 PR #589 引入的 5 个新 metric family。
+以下规则覆盖 D3a-1 PR #589 引入的 6 个新 metric family。
 
 ### EventRouterSetupErrorRate
 
@@ -414,6 +414,26 @@ missing_caller_cell / invalid_caller_cell）短时高峰。零星失败正常（
       (reason={{ $labels.reason }}) for 5m.
       Likely causes: broker unreachable, topic not bound, or auth misconfiguration.
       Check cell logs for "event router: subscription setup failed".
+```
+
+### EventRouterRuntimeErrorRate
+
+事件路由器运行时持续出现错误，通常表示订阅交付故障或 broker 连接不稳定。
+
+```yaml
+- alert: GoCellEventRouterRuntimeErrorRate
+  expr: sum(rate(gocell_event_router_runtime_errors_total[5m])) by (cell, reason) > 0
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Event router runtime errors ({{ $labels.cell }})"
+    description: |
+      Cell {{ $labels.cell }} has persistent event router runtime errors
+      (reason={{ $labels.reason }}) for 5m.
+      Likely causes: SubscribeEntry delivery failure, broker reconnect loop,
+      or ready-wait timeout exceeded after Phase 3.
+      Check cell logs for "event router: runtime error".
 ```
 
 ### OutboxConsumerRejectedSpike
@@ -443,6 +463,8 @@ outbox pending depth 增长表示 consumer 消费速率落后，或 broker 连�
 注意：`outbox_pending_depth` Gauge 每次 Relay reclaim tick 更新一次（默认间隔为
 分钟级，而非 Prometheus scrape 间隔）。应使用较长的 `for:` 窗口避免 scrape
 窗口内的假阳性。
+
+注: 此告警仅在 storage_backend=postgres 部署生效；memory 模式无 Relay，指标不产生 sample。
 
 ```yaml
 - alert: GoCellOutboxPendingDepthHigh
@@ -506,7 +528,7 @@ sum(increase(gocell_bootstrap_shutdown_total[1h])) by (outcome)
 ```promql
 histogram_quantile(
   0.99,
-  sum(rate(gocell_outbox_relay_duration_seconds_bucket[5m])) by (le, cell)
+  sum(rate(gocell_outbox_poll_duration_seconds_bucket[5m])) by (le, cell, phase)
 )
 ```
 

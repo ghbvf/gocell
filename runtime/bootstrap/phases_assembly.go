@@ -88,6 +88,11 @@ func (b *Bootstrap) validateNoDoubleManagedRelay() error {
 	if b.relay == nil {
 		return nil
 	}
+	// Identity comparison works because both registration paths (WithRelay's
+	// auto-append and an explicit WithManagedResource(relay)) store the same
+	// *Relay pointer without any intermediate wrapping. If either path wraps
+	// relay in a new heap allocation before storing, this comparison silently
+	// stops detecting double-registration — refactors must preserve raw pointer.
 	var count int
 	for _, mr := range b.managedResources {
 		if mr == kernellifecycle.ManagedResource(b.relay) {

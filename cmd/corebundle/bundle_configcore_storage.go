@@ -103,7 +103,8 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 // fail-fast checks plus relay wiring exceed the budget when inlined).
 func buildConfigCorePostgresOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, error) {
 	if cfg.PGConfig.DSN == "" {
-		return ConfigCoreModuleResult{}, fmt.Errorf("configcore postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
+		return ConfigCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"configcore postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
 	}
 	pool, err := adapterpg.NewPool(ctx, cfg.PGConfig)
 	if err != nil {
