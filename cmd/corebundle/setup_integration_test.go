@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -29,6 +30,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/audit"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -295,11 +298,14 @@ func (l *setupTestBlockAfterNLimiter) Allow(string) bool {
 	return false
 }
 
-// TestSetupAdminBootstrap_RateLimited_Returns429 verifies that when the
-// bootstrap rate limiter is exhausted, POST /api/v1/access/setup/admin returns
-// 429 with a Retry-After header. Uses a capacity=2 limiter so the test is fast.
-// F7 RED until Wave 1 (F1: onAuthFail rate_limited) and assembly wiring are complete.
-func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
+// TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain verifies
+// the rate-limit path end-to-end: the 4th POST returns 429 + Retry-After AND
+// the bootstrap auth-fail observer writes a "bootstrap.auth.fail" entry
+// into the auditcore ledger (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2).
+// The capacity=2 limiter keeps the test fast; the assertion on
+// ledger.Query closes the F7-RED gap from the pre-PR shape where the rate-
+// limited path silently dropped on the floor.
+func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testing.T) {
 	const capacity = 2
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -322,6 +328,16 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
 	require.NoError(t, err)
 
+	// Build the audit ledger protocol + store inline so the test holds a
+	// reference to the store for the post-fact Query assertion. This replaces
+	// the auditcoreLedgerOpts(...) helper which hides the store inside the
+	// returned Option slice.
+	auditProtocol := buildTestAuditProtocol(t, []byte("test-hmac-key-32-bytes-long!!!!!"))
+	auditStore := buildTestAuditStore(t, auditProtocol)
+
+	auditObserver, err := audit.NewBootstrapAuthFailObserver(slog.Default(), auditStore, clock.Real())
+	require.NoError(t, err, "build bootstrap audit observer")
+
 	limiter := &setupTestBlockAfterNLimiter{remaining: capacity}
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
@@ -329,7 +345,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 			Password: []byte(setupTestBootstrapPassword),
 		},
 		limiter,
-		nil,
+		auditObserver,
 	)
 
 	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
@@ -353,13 +369,15 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
+	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+		auditcore.WithLedgerProtocol(auditProtocol),
+		auditcore.WithLedgerStore(auditStore),
+	) //archtest:allow:clock-injection:via-slice WithClock at the front; positional spread avoided
 
 	asm := assembly.New(assembly.Config{ID: "ratelimit-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
@@ -425,4 +443,30 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode, "exhausted limiter must return 429")
 	assert.NotEmpty(t, resp.Header.Get("Retry-After"), "429 response must carry Retry-After header")
+
+	// Audit-chain assertion: the wired observer must have written one
+	// bootstrap.auth.fail entry per rejected request. The fixture exhausts
+	// `capacity` allowed requests first; only the very next request hits the
+	// limiter and triggers reason="rate_limited" — exactly one ledger entry.
+	require.Eventually(t, func() bool {
+		entries, qerr := auditStore.Query(context.Background(),
+			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+			ledger.QueryListParams{Limit: 10})
+		return qerr == nil && len(entries) >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll,
+		"observer must append a bootstrap.auth.fail entry after the 429")
+
+	entries, qerr := auditStore.Query(context.Background(),
+		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+		ledger.QueryListParams{Limit: 10})
+	require.NoError(t, qerr)
+	require.Len(t, entries, 1, "exactly one rate_limited entry expected")
+
+	var payload struct {
+		Reason   string `json:"reason"`
+		ClientIP string `json:"clientIp"`
+	}
+	require.NoError(t, json.Unmarshal(entries[0].Payload, &payload))
+	assert.Equal(t, "rate_limited", payload.Reason)
+	assert.Equal(t, "system:bootstrap", entries[0].ActorID)
 }

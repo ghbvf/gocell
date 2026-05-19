@@ -1,4 +1,6 @@
-// INVARIANT: MODULE-ORDER-CONFIGCORE-FIRST-01
+// invariants:
+//   - INVARIANT: MODULE-ORDER-CONFIGCORE-FIRST-01
+//   - INVARIANT: MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01
 
 package archtest
 
@@ -19,6 +21,7 @@ import (
 )
 
 const ruleModuleOrderConfigCoreFirst01 = "MODULE-ORDER-CONFIGCORE-FIRST-01"
+const ruleModuleOrderAuditcoreBeforeAccesscore01 = "MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01"
 
 type assemblyOrderFixture struct {
 	ID    string   `yaml:"id"`
@@ -36,6 +39,42 @@ func TestModuleOrderConfigCoreFirst01(t *testing.T) {
 	assert.Equal(t, "configcore", asm.Cells[0],
 		"%s: assemblies/corebundle/assembly.yaml cells order is the runtime module order; configcore must stay first",
 		ruleModuleOrderConfigCoreFirst01)
+}
+
+// TestModuleOrderAuditcoreBeforeAccesscore01 enforces that auditcore's
+// CellModule.Provide runs before accesscore's so that
+// SharedDeps.BootstrapLedgerStore is populated by the time AccessCoreModule
+// builds the bootstrap auth-fail observer via audit.NewBootstrapAuthFailObserver
+// (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2).
+//
+// MODULE-ORDER-CONFIGCORE-FIRST-01 still owns the slot-zero invariant;
+// this rule constrains the relative order of auditcore and accesscore
+// without coupling to the configcore-first check.
+func TestModuleOrderAuditcoreBeforeAccesscore01(t *testing.T) {
+	root := findModuleRoot(t)
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "assemblies", "corebundle", "assembly.yaml")))
+	require.NoError(t, err)
+
+	var asm assemblyOrderFixture
+	require.NoError(t, yaml.Unmarshal(body, &asm))
+
+	auditIdx, accessIdx := -1, -1
+	for i, c := range asm.Cells {
+		switch c {
+		case "auditcore":
+			auditIdx = i
+		case "accesscore":
+			accessIdx = i
+		}
+	}
+	require.NotEqual(t, -1, auditIdx,
+		"%s: corebundle assembly must include auditcore", ruleModuleOrderAuditcoreBeforeAccesscore01)
+	require.NotEqual(t, -1, accessIdx,
+		"%s: corebundle assembly must include accesscore", ruleModuleOrderAuditcoreBeforeAccesscore01)
+	assert.Less(t, auditIdx, accessIdx,
+		"%s: auditcore must Provide before accesscore so SharedDeps.BootstrapLedgerStore "+
+			"is wired before AccessCoreModule reads it (audit.NewBootstrapAuthFailObserver)",
+		ruleModuleOrderAuditcoreBeforeAccesscore01)
 }
 
 func TestCorebundleGeneratedMainDoesNotInlineModules(t *testing.T) {
