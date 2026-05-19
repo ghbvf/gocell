@@ -232,6 +232,35 @@ func (r *mockRows) RawValues() [][]byte                          { return nil }
 func (r *mockRows) Conn() *pgx.Conn                              { return nil }
 
 // ---------------------------------------------------------------------------
+// mockInt64Row — pgx.Row that scans a single int64 value (for CountPending)
+// ---------------------------------------------------------------------------
+
+type mockInt64Row struct {
+	val int64
+}
+
+func (r *mockInt64Row) Scan(dest ...any) error {
+	if len(dest) != 1 {
+		return fmt.Errorf("mockInt64Row.Scan: expected 1 dest, got %d", len(dest))
+	}
+	if p, ok := dest[0].(*int64); ok {
+		*p = r.val
+		return nil
+	}
+	return fmt.Errorf("mockInt64Row.Scan: unsupported type %T", dest[0])
+}
+
+// mockErrorRow — pgx.Row that always returns an error on Scan.
+
+type mockErrorRow struct {
+	err error
+}
+
+func (r *mockErrorRow) Scan(_ ...any) error {
+	return r.err
+}
+
+// ---------------------------------------------------------------------------
 // mockDBTXIterErr — relayDB whose Query returns rows with a rows.Err()
 // ---------------------------------------------------------------------------
 

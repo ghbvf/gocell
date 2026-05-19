@@ -83,6 +83,8 @@ func newEntryAt(id string, createdAt time.Time) outbox.ClaimedEntry {
 // the same layer as the interface it tests.
 func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Helper()
+	t.Run("CountPending_ReflectsSeeded", func(t *testing.T) { conformCountPendingSeeded(t, factory) })
+	t.Run("CountPending_DecreasesAfterMarkPublished", func(t *testing.T) { conformCountPendingAfterPublish(t, factory) })
 	t.Run("ClaimPending_Empty", func(t *testing.T) { conformClaimPendingEmpty(t, factory) })
 	t.Run("ClaimPending_BatchCap", func(t *testing.T) { conformClaimPendingBatchCap(t, factory) })
 	t.Run("ClaimPending_SecondCallReturnsRemaining", func(t *testing.T) { conformClaimPendingSecondCall(t, factory) })
@@ -779,5 +781,60 @@ func conformOldestEligibleAtInvalid(t *testing.T, factory StoreFactory) {
 		if err == nil {
 			t.Errorf("OldestEligibleAt(%q): expected error, got nil", bad)
 		}
+	}
+}
+
+// conformCountPendingSeeded verifies that CountPending returns the number of
+// seeded pending entries.
+func conformCountPendingSeeded(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := t.Context()
+	const n = 3
+	seed := make([]outbox.ClaimedEntry, n)
+	for i := range n {
+		seed[i] = newEntry(fmt.Sprintf("cp-e%d", i), 0)
+	}
+	store := factory(t, seed)
+
+	got, err := store.CountPending(ctx)
+	if err != nil {
+		t.Fatalf("CountPending: %v", err)
+	}
+	if got != n {
+		t.Errorf("CountPending: got %d, want %d", got, n)
+	}
+}
+
+// conformCountPendingAfterPublish verifies that CountPending decreases after
+// entries are published: seeding N entries and publishing M leaves N-M pending.
+func conformCountPendingAfterPublish(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := t.Context()
+	const total = 4
+	const publishN = 2
+	seed := make([]outbox.ClaimedEntry, total)
+	for i := range total {
+		seed[i] = newEntry(fmt.Sprintf("cp-pub-e%d", i), 0)
+	}
+	store := factory(t, seed)
+
+	// Claim and publish publishN entries.
+	claimed, err := store.ClaimPending(ctx, publishN)
+	if err != nil || len(claimed) != publishN {
+		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+	}
+	for _, ce := range claimed {
+		if _, err := store.MarkPublished(ctx, ce.ID, ce.LeaseID); err != nil {
+			t.Fatalf("MarkPublished(%s): %v", ce.ID, err)
+		}
+	}
+
+	got, err := store.CountPending(ctx)
+	if err != nil {
+		t.Fatalf("CountPending after publish: %v", err)
+	}
+	want := int64(total - publishN)
+	if got != want {
+		t.Errorf("CountPending after publishing %d: got %d, want %d", publishN, got, want)
 	}
 }
