@@ -15,6 +15,7 @@ import (
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -73,6 +74,17 @@ type pollStats struct {
 // Relay
 // ---------------------------------------------------------------------------
 
+// PendingDepthObserver receives the current pending-entry count once per
+// reclaim cycle. The production implementation is
+// *runtime/observability/metrics.OutboxConsumerCollector; tests may use a
+// simple func adapter. A nil observer is silently ignored (no-op).
+//
+// Intentionally defined here (not imported from runtime/observability/metrics)
+// to avoid coupling runtime/outbox to its sibling package.
+type PendingDepthObserver interface {
+	ObservePendingDepth(n int64)
+}
+
 // Relay polls unpublished outbox entries via a Store interface and publishes
 // them via the provided outbox.Publisher using a three-phase approach:
 //
@@ -119,7 +131,24 @@ type Relay struct {
 	reclaimBudget *FailureBudget
 	cleanupBudget *FailureBudget
 
+	// pendingDepthObserver, when non-nil, receives the pending entry count once
+	// per reclaim tick. Nil means "do not observe" (opt-in via
+	// WithPendingDepthObserver).
+	pendingDepthObserver PendingDepthObserver
+
 	clock clock.Clock
+}
+
+// WithPendingDepthObserver wires a PendingDepthObserver that receives the
+// pending-entry count once per reclaim cycle. Both bare-nil and typed-nil
+// inputs are silently ignored (no observer stored); the relay operates without
+// observation when no observer is set. Must be called before Start().
+func (r *Relay) WithPendingDepthObserver(o PendingDepthObserver) *Relay {
+	if validation.IsNilInterface(o) {
+		return r
+	}
+	r.pendingDepthObserver = o
+	return r
 }
 
 // clk returns the relay's clock.
@@ -324,7 +353,8 @@ func (r *Relay) pollLoop(ctx context.Context) {
 	}
 }
 
-// reclaimLoop periodically runs reclaimStale at ReclaimInterval.
+// reclaimLoop periodically runs reclaimStale at ReclaimInterval, then probes
+// pending depth when a PendingDepthObserver is configured.
 func (r *Relay) reclaimLoop(ctx context.Context) {
 	ticker := r.clk().NewTicker(r.cfg.ReclaimInterval)
 	defer ticker.Stop()
@@ -344,8 +374,28 @@ func (r *Relay) reclaimLoop(ctx context.Context) {
 			if r.reclaimBudget != nil {
 				r.reclaimBudget.Record(err)
 			}
+			// Note: pending depth is sampled once per ReclaimInterval, not per
+			// Prometheus scrape. The outbox_pending_depth Gauge reflects depth
+			// at last reclaim tick; decrease ReclaimInterval for tighter sampling.
+			r.observePendingDepth(ctx)
 		}
 	}
+}
+
+// observePendingDepth calls Store.CountPending and forwards the result to the
+// configured PendingDepthObserver, if any. Errors are logged as Warn and do
+// not propagate — this is a best-effort observability call on a non-hot path.
+func (r *Relay) observePendingDepth(ctx context.Context) {
+	if r.pendingDepthObserver == nil {
+		return
+	}
+	n, err := r.store.CountPending(ctx)
+	if err != nil {
+		slog.Warn("outbox relay: CountPending failed, skipping pending_depth metric",
+			slog.Any("error", err))
+		return
+	}
+	r.pendingDepthObserver.ObservePendingDepth(n)
 }
 
 // cleanupLoop runs cleanup data-driven: after each pass it asks the store for

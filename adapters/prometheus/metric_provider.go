@@ -65,6 +65,12 @@ func NewMetricProvider(cfg MetricProviderConfig) (*MetricProvider, error) {
 // multiple cells share a single MetricProvider), the existing collector is
 // returned — matching the standard prometheus AlreadyRegisteredError pattern.
 // Any other registration error surfaces as ErrAdapterPromRegister.
+//
+// CounterVec / HistogramVec / GaugeVec share intentional shape; the
+// registerOrReuse generic factors the common path, so further collapse would
+// obscure the per-metric-type construction details.
+//
+//nolint:dupl // see godoc above.
 func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
 	cv := prom.NewCounterVec(prom.CounterOpts{
 		Namespace: p.cfg.Namespace,
@@ -131,6 +137,36 @@ func registerOrReuse[T prom.Collector](
 			slog.String("name", name))
 		return existing, nil
 	}
+}
+
+// GaugeVec registers and returns a GaugeVec bound to the provider's
+// registry. Gauges can be Set/Inc/Dec/Add-ed and represent point-in-time
+// values (queue depth, active workers). If the same metric name has already
+// been registered, the existing collector is returned — same
+// AlreadyRegisteredError pattern as CounterVec.
+//
+//nolint:dupl // see CounterVec godoc above for the shared-shape rationale.
+func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	gv := prom.NewGaugeVec(prom.GaugeOpts{
+		Namespace: p.cfg.Namespace,
+		Name:      opts.Name,
+		Help:      opts.Help,
+	}, opts.LabelNames)
+	existing, err := registerOrReuse[*prom.GaugeVec](
+		p.cfg.Registry, gv, opts.Name, "gauge", opts.LabelNames,
+		p.lookupGaugeVecLabels,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return &promGaugeVec{inner: existing, labels: append([]string(nil), opts.LabelNames...)}, nil
+	}
+	vec := &promGaugeVec{inner: gv, labels: append([]string(nil), opts.LabelNames...)}
+	p.mu.Lock()
+	p.vecs[vec] = gv
+	p.mu.Unlock()
+	return vec, nil
 }
 
 // HistogramVec registers and returns a HistogramVec bound to the provider's
@@ -207,6 +243,17 @@ func (v *promHistogramVec) With(l metrics.Labels) metrics.Histogram {
 	return promHistogram{inner: v.inner.With(prom.Labels(l))}
 }
 
+type promGaugeVec struct {
+	inner  *prom.GaugeVec
+	labels []string // Expected label-name set, validated on every With().
+}
+
+func (v *promGaugeVec) Registered() bool { return true }
+func (v *promGaugeVec) With(l metrics.Labels) metrics.Gauge {
+	metrics.MustValidateLabels(v.labels, l)
+	return promGauge{inner: v.inner.With(prom.Labels(l))}
+}
+
 // lookupCounterVecLabels returns the label names for a previously registered
 // *prom.CounterVec by finding its wrapper in our vecs map. Returns nil when
 // the collector was not registered through this provider instance (safe to reuse).
@@ -234,6 +281,20 @@ func (p *MetricProvider) lookupHistogramVecLabels(hv *prom.HistogramVec) []strin
 	return nil
 }
 
+// lookupGaugeVecLabels returns the label names for a previously registered
+// *prom.GaugeVec by finding its wrapper in our vecs map. Returns nil when
+// the collector was not registered through this provider instance (safe to reuse).
+func (p *MetricProvider) lookupGaugeVecLabels(gv *prom.GaugeVec) []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for wrapper := range p.vecs {
+		if w, ok := wrapper.(*promGaugeVec); ok && w.inner == gv {
+			return w.labels
+		}
+	}
+	return nil
+}
+
 // join produces a compact comma-separated string for error messages.
 func join(ss []string) string {
 	var out strings.Builder
@@ -255,3 +316,10 @@ func (c promCounter) Add(d float64) { c.inner.Add(d) }
 type promHistogram struct{ inner prom.Observer }
 
 func (h promHistogram) Observe(v float64) { h.inner.Observe(v) }
+
+type promGauge struct{ inner prom.Gauge }
+
+func (g promGauge) Set(value float64) { g.inner.Set(value) }
+func (g promGauge) Inc()              { g.inner.Inc() }
+func (g promGauge) Dec()              { g.inner.Dec() }
+func (g promGauge) Add(delta float64) { g.inner.Add(delta) }

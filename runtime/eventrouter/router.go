@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // DefaultReadyTimeout bounds Phase 3 of Run() so a subscriber that never
@@ -59,6 +60,22 @@ type Option func(*Router)
 // disables the timeout (waits indefinitely on Ready channels and ctx).
 func WithReadyTimeout(d time.Duration) Option {
 	return func(r *Router) { r.readyTimeout = d }
+}
+
+// WithEventRouterCollector wires an EventCollector into the Router so that
+// subscription lifecycle events (setup errors, ready-wait durations, active
+// counts) are recorded. Typed-nil inputs are silently ignored; the final
+// fallback to NopEventCollector{} occurs at New() after all options are applied.
+//
+// Follows the cumulative builder noop pattern (runtime-api.md §Option 范式分层):
+// nil input ≠ "remove the collector", it means "no change this call".
+func WithEventRouterCollector(c EventCollector) Option {
+	return func(r *Router) {
+		if validation.IsNilInterface(c) {
+			return
+		}
+		r.collector = c
+	}
 }
 
 type handlerConfig struct {
@@ -102,6 +119,9 @@ type Router struct {
 	shutdown     bool
 	healthErr    error
 	clock        clock.Clock
+	collector    EventCollector
+	activeMu     sync.Mutex
+	activeCells  []string // cellIDs of handlers that have been Inc'd; used by Close to Dec
 }
 
 // Compile-time interface checks.
@@ -124,6 +144,9 @@ func New(sub *outbox.SubscriberWithMiddleware, clk clock.Clock, opts ...Option) 
 	}
 	for _, o := range opts {
 		o(r)
+	}
+	if r.collector == nil {
+		r.collector = NopEventCollector{}
 	}
 	return r
 }
@@ -330,6 +353,7 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 				slog.String("consumer_group", sub.ConsumerGroup),
 				slog.String("cell_id", sub.CellID),
 				slog.Any("error", err))
+			r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonSetupError)
 			cancel()
 			return wrapped
 		}
@@ -351,6 +375,7 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 		r.wg.Go(func() {
 			defer func() {
 				if rv := recover(); rv != nil {
+					r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonPanic)
 					setupErr <- fmt.Errorf("eventrouter: topic %s panicked: %v", sub.Topic, rv)
 				}
 			}()
@@ -399,7 +424,12 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 		// channel when Run returns.
 		return err
 	case <-deadlineCh:
-		notReady := r.diagnoseNotReady(handlers)
+		notReadyHandlers := r.diagnoseNotReadyHandlers(handlers)
+		notReady := make([]string, len(notReadyHandlers))
+		for i, h := range notReadyHandlers {
+			notReady[i] = fmt.Sprintf("%s/%s/%s", h.cellID, h.consumerGroup, h.topic)
+			r.collector.RecordSetupError(h.cellID, h.topic, SetupErrorReasonReadyTimeout)
+		}
 		err := fmt.Errorf("eventrouter: %d/%d subscriptions not ready after %s: %v",
 			len(notReady), len(handlers), r.readyTimeout, notReady)
 		r.markHealthError(err)
@@ -416,18 +446,18 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 	}
 }
 
-// diagnoseNotReady returns "consumerGroup/topic" identifiers for subscriptions
-// whose Ready channel has not closed. Used by ready-timeout error reporting
-// so operators can see which subscription is stuck without trawling logs.
-func (r *Router) diagnoseNotReady(handlers []handlerConfig) []string {
-	var notReady []string
+// diagnoseNotReadyHandlers returns handlerConfigs for subscriptions whose Ready
+// channel has not closed. It is the typed form of diagnoseNotReady, used both
+// for error reporting and for collector RecordSetupError calls.
+func (r *Router) diagnoseNotReadyHandlers(handlers []handlerConfig) []handlerConfig {
+	var notReady []handlerConfig
 	for _, h := range handlers {
 		sub := h.subscription()
 		select {
 		case <-r.subscriber.Ready(sub):
 			// ready
 		default:
-			notReady = append(notReady, fmt.Sprintf("%s/%s/%s", h.cellID, h.consumerGroup, h.topic))
+			notReady = append(notReady, h)
 		}
 	}
 	return notReady
@@ -435,15 +465,25 @@ func (r *Router) diagnoseNotReady(handlers []handlerConfig) []string {
 
 // awaitAllReady launches one goroutine per handler that waits on Ready, then
 // returns a channel that closes when all goroutines complete (or ctx cancels).
+// When a Ready signal fires, it records the wait duration and increments the
+// active subscription gauge via the EventCollector.
 func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-chan struct{} {
 	doneCh := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, h := range handlers {
 		sub := h.subscription()
 		wg.Go(func() {
+			start := r.clock.Now()
 			select {
 			case <-r.subscriber.Ready(sub):
+				elapsed := r.clock.Since(start)
+				r.collector.ObserveReadyWait(sub.CellID, elapsed)
+				r.collector.IncSubscriptionActive(sub.CellID)
+				r.activeMu.Lock()
+				r.activeCells = append(r.activeCells, sub.CellID)
+				r.activeMu.Unlock()
 			case <-ctx.Done():
+				// Handler never readied — do not observe or increment.
 			}
 		})
 	}
@@ -583,6 +623,16 @@ func (r *Router) Close(ctx context.Context) error {
 
 	if cancel != nil {
 		cancel()
+	}
+
+	// Decrement active subscription gauges for every handler that was Inc'd
+	// during awaitAllReady. This mirrors the Inc in awaitAllReady exactly.
+	r.activeMu.Lock()
+	activeCells := make([]string, len(r.activeCells))
+	copy(activeCells, r.activeCells)
+	r.activeMu.Unlock()
+	for _, cellID := range activeCells {
+		r.collector.DecSubscriptionActive(cellID)
 	}
 
 	// Phase 3: wait for goroutines to drain or ctx expires.

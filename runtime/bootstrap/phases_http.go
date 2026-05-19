@@ -9,7 +9,8 @@ package bootstrap
 //   - phase5FinalizeAllRouters
 //   - validateInternalGuardForDeclaredRoutes / declaredInternalRoutes
 //   - validateAuthVerifierForDeclaredRoutes
-//   - buildListenerRouterOpts / autoWireHTTPMetricsCollector / buildAuthRouterOptions
+//   - buildListenerRouterOpts / autoWireHTTPMetricsCollector
+//   - buildAuthRouterOptions
 //
 // ref: kubernetes/kubernetes apiserver/pkg/server/genericapiserver.go —
 // per-listener apiHandler assembly: each listener gets its own handler chain

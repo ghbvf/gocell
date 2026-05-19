@@ -77,12 +77,14 @@ func TestProviderCollector_PerCallCellLabel(t *testing.T) {
 	}
 }
 
-// spyProvider captures Counter/Histogram emissions for label-set assertions.
-// Defined local to this test file to keep runtime/observability/metrics free
-// of cross-test dependencies (the package does not export spy types).
+// spyProvider captures Counter/Histogram/Gauge emissions for label-set
+// assertions. Defined local to this test file to keep
+// runtime/observability/metrics free of cross-test dependencies (the package
+// does not export spy types).
 type spyProvider struct {
 	counterOps   map[string][]spyOp
 	histogramOps map[string][]spyOp
+	gaugeOps     map[string][]spyOp
 }
 
 type spyOp struct {
@@ -94,6 +96,7 @@ func newSpyProvider() *spyProvider {
 	return &spyProvider{
 		counterOps:   map[string][]spyOp{},
 		histogramOps: map[string][]spyOp{},
+		gaugeOps:     map[string][]spyOp{},
 	}
 }
 
@@ -103,6 +106,10 @@ func (s *spyProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.
 
 func (s *spyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
 	return spyHistogramVec{parent: s, name: opts.Name, labels: opts.LabelNames}, nil
+}
+
+func (s *spyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return spyGaugeVec{parent: s, name: opts.Name, labels: opts.LabelNames}, nil
 }
 
 func (s *spyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
@@ -150,6 +157,33 @@ type spyHistogram struct {
 
 func (h spyHistogram) Observe(v float64) {
 	h.parent.histogramOps[h.name] = append(h.parent.histogramOps[h.name], spyOp{labels: h.labels, value: v})
+}
+
+type spyGaugeVec struct {
+	parent *spyProvider
+	name   string
+	labels []string
+}
+
+func (v spyGaugeVec) Registered() bool { return true }
+func (v spyGaugeVec) With(l kernelmetrics.Labels) kernelmetrics.Gauge {
+	kernelmetrics.MustValidateLabels(v.labels, l)
+	return spyGauge{parent: v.parent, name: v.name, labels: l}
+}
+
+type spyGauge struct {
+	parent *spyProvider
+	name   string
+	labels kernelmetrics.Labels
+}
+
+func (g spyGauge) Set(v float64) {
+	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], spyOp{labels: g.labels, value: v})
+}
+func (g spyGauge) Inc() { g.Add(1) }
+func (g spyGauge) Dec() { g.Add(-1) }
+func (g spyGauge) Add(d float64) {
+	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], spyOp{labels: g.labels, value: d})
 }
 
 // silence unused import if toolchain introduces new helpers during refactors.

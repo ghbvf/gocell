@@ -425,6 +425,21 @@ func (s *FakeStore) CleanupDead(_ context.Context, cutoff time.Time, batchSize i
 	return deleted, nil
 }
 
+// CountPending returns the count of rows in pending status. Thread-safe.
+// May be approximate if calls race with ClaimPending; callers must treat
+// errors as transient and skip the metric update.
+func (s *FakeStore) CountPending(_ context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int64
+	for _, r := range s.rows {
+		if r.status == statusPending {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // OldestEligibleAt returns the smallest published_at (status="published") or
 // dead_at (status="dead") across all rows. Returns ok=false when no rows of
 // the given status exist or all such rows have a nil timestamp.

@@ -154,6 +154,11 @@ const cleanupPublishedQuery = `DELETE FROM outbox_entries WHERE id IN (
 const cleanupDeadQuery = `DELETE FROM outbox_entries WHERE id IN (
 	SELECT id FROM outbox_entries WHERE status = $1 AND dead_at < $2 LIMIT $3)`
 
+// countPendingQuery counts rows in pending status. May be approximate under
+// high concurrency; callers must tolerate transient errors as non-fatal.
+// status='pending' is a closed-set enum value; bound via $1 parameter (no string interpolation).
+const countPendingQuery = `SELECT count(*) FROM outbox_entries WHERE status = $1`
+
 // ---------------------------------------------------------------------------
 // Store method implementations
 // ---------------------------------------------------------------------------
@@ -380,6 +385,17 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		}
 	}
 	return ce, nil
+}
+
+// CountPending returns the number of rows in pending status. The count may be
+// approximate under high concurrency; callers should treat errors as transient
+// and skip the metric update rather than panicking.
+func (s *PGOutboxStore) CountPending(ctx context.Context) (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(ctx, countPendingQuery, statusPending).Scan(&n); err != nil {
+		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: CountPending failed", err)
+	}
+	return n, nil
 }
 
 // OldestEligibleAt returns the oldest published_at (status="published") or

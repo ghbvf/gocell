@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -511,4 +512,38 @@ func TestPGOutboxStore_ClaimPending_RowsIterError(t *testing.T) {
 	_, err := store.ClaimPending(context.Background(), 10)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ClaimPending rows iteration failed")
+}
+
+// ---------------------------------------------------------------------------
+// CountPending unit tests
+// ---------------------------------------------------------------------------
+
+func TestPGOutboxStore_CountPending_ReturnsCount(t *testing.T) {
+	const wantCount int64 = 7
+	db := &mockDBTX{}
+	db.queryRowFn = func(_ string, _ ...any) pgx.Row {
+		return &mockInt64Row{val: wantCount}
+	}
+	store := NewOutboxStore(db, clock.Real())
+
+	got, err := store.CountPending(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, wantCount, got)
+
+	require.Len(t, db.queryRowSQLs, 1)
+	assert.Contains(t, db.queryRowSQLs[0].sql, "count(*)")
+	assert.Contains(t, db.queryRowSQLs[0].sql, "WHERE status = $1")
+	assert.Equal(t, statusPending, db.queryRowSQLs[0].args[0])
+}
+
+func TestPGOutboxStore_CountPending_ScanError(t *testing.T) {
+	db := &mockDBTX{}
+	db.queryRowFn = func(_ string, _ ...any) pgx.Row {
+		return &mockErrorRow{err: errors.New("scan failed")}
+	}
+	store := NewOutboxStore(db, clock.Real())
+
+	_, err := store.CountPending(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CountPending failed")
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	obsmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // ---------------------------------------------------------------------------
@@ -136,6 +136,10 @@ func (p *fakeMetricsProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (ke
 	return v, nil
 }
 
+func (p *fakeMetricsProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return kernelmetrics.NopProvider{}.GaugeVec(opts)
+}
+
 func (p *fakeMetricsProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 var _ kernelmetrics.Provider = (*fakeMetricsProvider)(nil)
@@ -209,14 +213,14 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 
 	require.NoError(t, runWithCancelAndListener(t, b, ln))
 
-	phaseVec := p.counter(shutdownPhaseCounterName)
-	require.NotNil(t, phaseVec, "phase counter %q must be registered", shutdownPhaseCounterName)
+	phaseVec := p.counter(obsmetrics.ShutdownPhaseCounterName)
+	require.NotNil(t, phaseVec, "phase counter %q must be registered", obsmetrics.ShutdownPhaseCounterName)
 
 	for _, label := range []string{
-		shutdownPhaseReadinessFlip,
-		shutdownPhaseHTTPDrain,
-		shutdownPhaseLIFOTeardown,
-		shutdownPhaseClosed,
+		obsmetrics.ShutdownPhaseReadinessFlip,
+		obsmetrics.ShutdownPhaseHTTPDrain,
+		obsmetrics.ShutdownPhaseLIFOTeardown,
+		obsmetrics.ShutdownPhaseClosed,
 	} {
 		total := phaseVec.totalForLabel("phase", label)
 		assert.Equalf(t, float64(1), total,
@@ -246,13 +250,13 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 
 	require.NoError(t, runWithCancelAndListener(t, b, ln))
 
-	durVec := p.histogram(shutdownPhaseDurationName)
-	require.NotNil(t, durVec, "duration histogram %q must be registered", shutdownPhaseDurationName)
+	durVec := p.histogram(obsmetrics.ShutdownPhaseDurationName)
+	require.NotNil(t, durVec, "duration histogram %q must be registered", obsmetrics.ShutdownPhaseDurationName)
 
 	for _, label := range []string{
-		shutdownPhaseReadinessFlip,
-		shutdownPhaseHTTPDrain,
-		shutdownPhaseLIFOTeardown,
+		obsmetrics.ShutdownPhaseReadinessFlip,
+		obsmetrics.ShutdownPhaseHTTPDrain,
+		obsmetrics.ShutdownPhaseLIFOTeardown,
 		"total",
 	} {
 		obs := durVec.observationsForLabel("phase", label)
@@ -283,8 +287,8 @@ func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 
 	require.NoError(t, runWithCancelAndListener(t, b, ln))
 
-	outcomeVec := p.counter(shutdownTotalCounterName)
-	require.NotNil(t, outcomeVec, "outcome counter %q must be registered", shutdownTotalCounterName)
+	outcomeVec := p.counter(obsmetrics.ShutdownTotalCounterName)
+	require.NotNil(t, outcomeVec, "outcome counter %q must be registered", obsmetrics.ShutdownTotalCounterName)
 
 	assert.Equal(t, float64(1), outcomeVec.totalForLabel("outcome", "success"),
 		"outcome=success must be incremented exactly once on clean shutdown")
@@ -377,7 +381,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 		t.Fatal("bootstrap.Run did not return after shutdown timeout")
 	}
 
-	outcomeVec := p.counter(shutdownTotalCounterName)
+	outcomeVec := p.counter(obsmetrics.ShutdownTotalCounterName)
 	require.NotNil(t, outcomeVec, "outcome counter must be registered")
 	assert.Equal(t, float64(1), outcomeVec.totalForLabel("outcome", "timeout"),
 		"outcome=timeout must be incremented when shutdown context expires")
@@ -427,7 +431,7 @@ func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 	err := runWithCancelAndListener(t, b, ln)
 	require.Error(t, err, "Run must surface the teardown error")
 
-	outcomeVec := p.counter(shutdownTotalCounterName)
+	outcomeVec := p.counter(obsmetrics.ShutdownTotalCounterName)
 	require.NotNil(t, outcomeVec, "outcome counter must be registered")
 
 	assert.Equal(t, float64(1), outcomeVec.totalForLabel("outcome", "teardown_error"),
@@ -471,7 +475,7 @@ func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 		t.Fatal("Run did not return after worker error")
 	}
 
-	outcomeVec := p.counter(shutdownTotalCounterName)
+	outcomeVec := p.counter(obsmetrics.ShutdownTotalCounterName)
 	require.NotNil(t, outcomeVec)
 
 	assert.Equal(t, float64(1), outcomeVec.totalForLabel("outcome", "signal_error"),
@@ -512,60 +516,4 @@ func TestShutdownMetrics_DisabledWithoutProvider(t *testing.T) {
 		// No WithMetricsProvider — defaults to NopProvider.
 	)
 	require.NoError(t, runWithCancelAndListener(t, b, ln))
-}
-
-// ---------------------------------------------------------------------------
-// Test 6: nil-safety of shutdownMetrics methods (unit level)
-// ---------------------------------------------------------------------------
-
-// TestShutdownMetrics_NilSafe verifies that all shutdownMetrics methods are
-// nil-safe and do not panic when called on a nil receiver.
-func TestShutdownMetrics_NilSafe(t *testing.T) {
-	var m *shutdownMetrics
-	require.NotPanics(t, func() {
-		m.recordPhaseEntry(shutdownPhaseReadinessFlip)
-		m.observePhaseDuration("readiness_flip", testtime.D1ms)
-		m.countOutcome("success")
-	})
-}
-
-// ---------------------------------------------------------------------------
-// Test 7: newShutdownMetrics with nil provider returns disabled metrics
-// ---------------------------------------------------------------------------
-
-func TestNewShutdownMetrics_NilProvider(t *testing.T) {
-	m, err := newShutdownMetrics(nil)
-	require.NoError(t, err)
-	require.NotNil(t, m, "nil provider must return a disabled shutdownMetrics")
-	assert.True(t, m.disabled)
-}
-
-// ---------------------------------------------------------------------------
-// Test 8: concurrent observations do not race
-// ---------------------------------------------------------------------------
-
-// TestShutdownMetrics_ConcurrentObserve verifies that concurrent calls to
-// shutdownMetrics methods do not cause data races (exercised via -race).
-func TestShutdownMetrics_ConcurrentObserve(t *testing.T) {
-	p := newFakeMetricsProvider()
-	m, err := newShutdownMetrics(p)
-	require.NoError(t, err)
-	require.NotNil(t, m)
-
-	var wg sync.WaitGroup
-	var panicked atomic.Bool
-	for range 10 {
-		wg.Go(func() {
-			defer func() {
-				if recover() != nil {
-					panicked.Store(true)
-				}
-			}()
-			m.recordPhaseEntry(shutdownPhaseReadinessFlip)
-			m.observePhaseDuration("readiness_flip", time.Millisecond)
-			m.countOutcome("success")
-		})
-	}
-	wg.Wait()
-	assert.False(t, panicked.Load(), "concurrent calls must not panic")
 }

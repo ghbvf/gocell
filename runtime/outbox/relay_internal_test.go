@@ -221,6 +221,18 @@ func (s *minimalStore) CleanupDead(_ context.Context, cutoff time.Time, batchSiz
 	return deleted, nil
 }
 
+func (s *minimalStore) CountPending(_ context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int64
+	for _, r := range s.rows {
+		if r.status == "pending" {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (s *minimalStore) OldestEligibleAt(_ context.Context, status string) (time.Time, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

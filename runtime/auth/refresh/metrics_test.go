@@ -41,11 +41,22 @@ func (p *gcMetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.His
 	return v, nil
 }
 
+func (p *gcMetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	if opts.Name == p.failName {
+		return nil, fmt.Errorf("forced failure")
+	}
+	v := gcGaugeVec{name: opts.Name}
+	p.registered[opts.Name] = v
+	return v, nil
+}
+
 func (p *gcMetricProvider) Unregister(c metrics.Collector) error {
 	switch v := c.(type) {
 	case gcCounterVec:
 		delete(p.registered, v.name)
 	case gcHistogramVec:
+		delete(p.registered, v.name)
+	case gcGaugeVec:
 		delete(p.registered, v.name)
 	}
 	return nil
@@ -73,6 +84,20 @@ func (gcCounter) Add(delta float64) {}
 type gcHistogram struct{}
 
 func (gcHistogram) Observe(float64) {}
+
+type gcGaugeVec struct {
+	name string
+}
+
+func (gcGaugeVec) Registered() bool                  { return true }
+func (gcGaugeVec) With(metrics.Labels) metrics.Gauge { return gcGauge{} }
+
+type gcGauge struct{}
+
+func (gcGauge) Set(float64) {}
+func (gcGauge) Inc()        {}
+func (gcGauge) Dec()        {}
+func (gcGauge) Add(float64) {}
 
 func TestNewProviderGCCollector_CleansUpPartialRegistration(t *testing.T) {
 	p := newGCMetricProvider("auth_refresh_gc_removed_total")

@@ -63,14 +63,24 @@ type Collector interface {
 type Provider interface {
 	CounterVec(opts CounterOpts) (CounterVec, error)
 	HistogramVec(opts HistogramOpts) (HistogramVec, error)
+	// GaugeVec registers a gauge metric family. Gauges are arbitrary-valued
+	// instruments that can move up or down (Set / Inc / Dec / Add). Typical
+	// uses: queue depth, active workers, in-flight requests — point-in-time
+	// snapshots where Counter monotonicity is unsuitable.
+	//
+	// ref: prometheus/client_golang prometheus/gauge.go — Gauge interface
+	// methods (Set / Inc / Dec / Add) adopted; Sub omitted (use Add(-delta));
+	// SetToCurrentTime omitted (no business need; introduces implicit clock
+	// dependency at kernel layer).
+	GaugeVec(opts GaugeOpts) (GaugeVec, error)
 	// Unregister removes a previously registered collector from the provider's
 	// registry. It is safe for concurrent use and idempotent — unregistering a
 	// collector that was never registered (or already unregistered) returns nil
 	// without error.
 	//
 	// Implementations must maintain the invariant that a collector successfully
-	// Unregistered can be re-registered via CounterVec/HistogramVec under the
-	// same name without conflict.
+	// Unregistered can be re-registered via CounterVec/HistogramVec/GaugeVec
+	// under the same name without conflict.
 	//
 	// ref: prometheus/client_golang Registry.Unregister — bool return simplified
 	// to error for GoCell consistency (nil = success or not-found; non-nil =
@@ -95,6 +105,20 @@ type HistogramOpts struct {
 	// supply explicit buckets for any metric that leaves kernel, to keep
 	// cardinality predictable across backends.
 	Buckets []float64
+}
+
+// GaugeOpts declares a gauge metric family. Shape mirrors CounterOpts —
+// Name + Help + LabelNames. No bucket field (gauges are not aggregated
+// histograms).
+//
+// High-cardinality warning: every unique label tuple creates a separate
+// time series held in the Provider's registry; for dimensions with
+// unbounded value spaces (request id, user id), prefer pre-currying with
+// fixed dimensions or use a different metric type.
+type GaugeOpts struct {
+	Name       string
+	Help       string
+	LabelNames []string // Order-sensitive; used by adapters to compose the underlying vec.
 }
 
 // Labels carries label values at record time. Keys MUST exactly match the
@@ -124,6 +148,17 @@ type HistogramVec interface {
 	With(Labels) Histogram
 }
 
+// GaugeVec returns a pre-bound Gauge given a label set. Implementations
+// panic (via MustValidateLabels) when Labels does not exactly match the
+// LabelNames set at registration.
+//
+// GaugeVec embeds Collector so that callers can pass it directly to
+// Provider.Unregister without an explicit type cast.
+type GaugeVec interface {
+	Collector
+	With(Labels) Gauge
+}
+
 // Counter is a monotonically increasing counter, pre-bound to a label set.
 type Counter interface {
 	Inc()
@@ -134,6 +169,21 @@ type Counter interface {
 // label set.
 type Histogram interface {
 	Observe(value float64)
+}
+
+// Gauge is an arbitrary-valued instrument that can move up or down,
+// pre-bound to a label set. Use Set for point-in-time snapshots
+// (queue depth, active workers); Inc/Dec/Add for delta updates.
+//
+// Sub is deliberately omitted: Add(-delta) expresses the same semantics
+// and keeps the method set symmetric with Counter.
+//
+// ref: prometheus/client_golang prometheus/gauge.go — Gauge interface.
+type Gauge interface {
+	Set(value float64)
+	Inc()
+	Dec()
+	Add(delta float64)
 }
 
 // ErrLabelMismatch is returned / panic-wrapped by ValidateLabels /

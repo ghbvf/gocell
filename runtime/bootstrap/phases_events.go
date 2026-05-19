@@ -6,6 +6,11 @@ package bootstrap
 //   - phase6StartEventRouter: subscription registration + evtRouter.Run on runCtx
 //   - checkNoSubscriptionsWhenSubscriberNil: fail-fast when cells declared
 //     subscriptions but no subscriber is configured
+//   - autoWireEventRouterCollector: creates EventRouterCollector when a real
+//     provider is configured and injects it into Router via WithEventRouterCollector
+//   - autoWireOutboxConsumerCollector: creates OutboxConsumerCollector and wires
+//     it into ConsumerBase (AttachObserver) and Relay (WithPendingDepthObserver)
+//     before subscriptions start consuming in phase6
 //
 // ref: uber-go/fx app.go — Run vs stop ctx separation: event router uses runCtx
 // (independent of external ctx) so lifecycle is owned by phase10 teardown, not
@@ -13,13 +18,22 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventrouter"
+	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
+
+// Compile-time check: EventRouterCollector satisfies eventrouter.EventCollector.
+// Cannot live in runtime/observability/metrics because that would create
+// a metrics → eventrouter import cycle (bootstrap drains eventrouter
+// subscriptions via the metrics-side collector).
+var _ eventrouter.EventCollector = (*metricsmiddleware.EventRouterCollector)(nil)
 
 // phase6StartEventRouter registers subscriptions and starts the event router
 // using state.runCtx (independent of the external context).
@@ -29,6 +43,13 @@ import (
 // that closes runCtx internally, causing Run to return.
 // ref: uber-go/fx app.go:L545-567 (run vs stop ctx separation).
 func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState) error {
+	// Auto-wire outbox consumer collector before subscriptions start consuming.
+	// Must run before buildEventRouter so AttachObserver is called before
+	// ConsumerBase begins processing any delivered entries.
+	if err := b.autoWireOutboxConsumerCollector(); err != nil {
+		return err
+	}
+
 	sub := s.sub
 	if sub == nil {
 		return b.checkNoSubscriptionsWhenSubscriberNil(s)
@@ -71,6 +92,36 @@ func cellSnapshotsHaveSubscriptions(s *phaseState) bool {
 	return false
 }
 
+// autoWireEventRouterCollector creates an EventRouterCollector (once, cached in
+// b.eventRouterCollector) and returns it as an eventrouter.Option slice so the
+// Router can record subscription lifecycle metrics.
+//
+// Skip conditions (return nil slice):
+//   - metricsProvider is nil
+//   - metricsProvider is NopProvider (default; avoid no-op allocations at startup)
+//
+// ref: runtime/bootstrap/phases_http.go autoWireHTTPMetricsCollector — same
+// skip-on-nil/skip-on-Nop pattern and cached-field approach.
+func (b *Bootstrap) autoWireEventRouterCollector() ([]eventrouter.Option, error) {
+	if b.metricsProvider == nil {
+		return nil, nil
+	}
+	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
+		return nil, nil
+	}
+	if b.eventRouterCollector == nil {
+		collector, err := metricsmiddleware.NewEventRouterCollector(b.metricsProvider)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"bootstrap: event router metrics auto-wire conflict: WithMetricsProvider constructs the event router collector; "+
+					"do not also register event_router_subscriptions_active manually on the same provider. "+
+					"Remove one side: %w", err)
+		}
+		b.eventRouterCollector = collector
+	}
+	return []eventrouter.Option{eventrouter.WithEventRouterCollector(b.eventRouterCollector)}, nil
+}
+
 // buildEventRouter creates the event router with middleware and validators.
 //
 // The SubscriberWithMiddleware wires the business middleware chain and
@@ -82,6 +133,13 @@ func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) (*eventrouter.Router
 	if b.routerReadyTimeoutSet {
 		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.routerReadyTimeout))
 	}
+	// R2: auto-wire event router collector when a real Provider is configured.
+	collectorOpts, err := b.autoWireEventRouterCollector()
+	if err != nil {
+		return nil, err
+	}
+	evtRouterOpts = append(evtRouterOpts, collectorOpts...)
+
 	swm, err := outbox.NewSubscriberWithMiddleware(
 		eventrouter.NewContractTracingSubscriber(sub, b.wrapperTracer),
 		b.consumerBase,
@@ -180,6 +238,55 @@ func (b *Bootstrap) checkNoSubscriptionsWhenSubscriberNil(s *phaseState) error {
 				"bootstrap: cell %s registered subscriptions but no subscriber is configured; "+
 					"add WithSubscriber to bootstrap options", id)
 		}
+	}
+	return nil
+}
+
+// autoWireOutboxConsumerCollector creates the OutboxConsumerCollector (once,
+// cached in b.outboxConsumerCollector) and wires it into ConsumerBase and Relay
+// when they are present. Called at the start of phase6, before subscriptions
+// begin consuming, so AttachObserver runs before ConsumerBase processes any entry.
+//
+// cellID defaults to the _runtime sentinel — the cell label for
+// outbox_consumer_rejected_total flows from ObserveReject's argument anyway;
+// _runtime is used only for the outbox_pending_depth cell-scoped gauge (same
+// sentinel pattern as HTTP metrics RuntimeCellIDSentinel and Redis KeyNamespace).
+//
+// Skip conditions:
+//   - metricsProvider is nil (no backend configured)
+//   - metricsProvider is NopProvider (default; avoid no-op allocations at startup)
+//
+// ref: runtime/bootstrap/phases_http.go autoWireHTTPMetricsCollector — same
+// skip-on-nil/skip-on-Nop pattern, same cached-field approach.
+func (b *Bootstrap) autoWireOutboxConsumerCollector() error {
+	if b.metricsProvider == nil {
+		return nil
+	}
+	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
+		return nil
+	}
+	if b.outboxConsumerCollector == nil {
+		// Use _runtime sentinel: the collector is shared across all cells; the
+		// per-cell label on outbox_consumer_rejected_total flows from the
+		// ObserveReject call-site argument, not from construction.
+		collector, err := metricsmiddleware.NewOutboxConsumerCollector(b.metricsProvider, "_runtime")
+		if err != nil {
+			return fmt.Errorf(
+				"bootstrap: outbox metrics auto-wire conflict: WithMetricsProvider constructs the outbox collector; "+
+					"do not also register outbox_consumer_rejected_total manually on the same provider. "+
+					"Remove one side: %w", err)
+		}
+		b.outboxConsumerCollector = collector
+	}
+	if b.consumerBase != nil {
+		if err := b.consumerBase.AttachObserver(b.outboxConsumerCollector); err != nil {
+			if !errors.Is(err, outbox.ErrObserverAlreadyAttached) {
+				return fmt.Errorf("bootstrap: attach outbox consumer observer: %w", err)
+			}
+		}
+	}
+	if b.relay != nil {
+		b.relay.WithPendingDepthObserver(b.outboxConsumerCollector)
 	}
 	return nil
 }

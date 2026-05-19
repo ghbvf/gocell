@@ -94,6 +94,39 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 	}, nil
 }
 
+// GaugeVec creates a Float64UpDownCounter instrument and wraps it in
+// otelGaugeVec. OTel does not have a synchronous "last-value gauge"
+// primitive; Float64UpDownCounter is the closest — it accepts positive
+// and negative deltas, matching Gauge.Inc / Dec / Add semantics.
+//
+// Set(v) semantics are emulated via a per-label-set last-value cache:
+//
+//	delta = v - last
+//	UpDownCounter.Add(ctx, delta, attrs)
+//	last = v
+//
+// Each call to With() returns the *same* otelGauge for a given label set
+// so that concurrent callers sharing a label set operate on the same
+// last-value slot (the slot is protected by a sync.Mutex per otelGauge).
+//
+// ref: opentelemetry-go metric/sdk/metric/internal/aggregate/lastvalue.go
+// — the SDK uses this pattern internally for Observable gauges; we mirror
+// it here for synchronous gauge emulation.
+func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	c, err := p.meter.Float64UpDownCounter(opts.Name, otelmetric.WithDescription(opts.Help))
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
+			"otel metric provider: create gauge failed", err,
+			errcode.WithDetails(slog.String("metric", opts.Name)))
+	}
+	return &otelGaugeVec{
+		inner:  c,
+		labels: append([]string(nil), opts.LabelNames...),
+		cache:  newAttrCache(p.attrCacheMaxSize),
+		gauges: make(map[string]*otelGauge),
+	}, nil
+}
+
 // Unregister is a no-op for the OTel provider. OTel instruments are
 // registered with the MeterProvider at SDK level; individual instrument
 // deregistration is not part of the OTel API. Returns nil (idempotent,
@@ -258,4 +291,113 @@ type otelHistogram struct {
 
 func (h *otelHistogram) Observe(v float64) {
 	h.inner.Record(context.Background(), v, h.attrs)
+}
+
+// otelGaugeVec wraps Float64UpDownCounter and emulates per-label-set
+// last-value semantics. With() is the hot path; it returns a stable
+// *otelGauge per label-set so that concurrent callers sharing the same
+// label tuple operate on the same last-value slot.
+//
+// gaugesMu guards the gauges map; attrCache.mu guards the attribute cache.
+// The two locks are independent and never held simultaneously to avoid
+// lock-ordering deadlocks.
+//
+// Cardinality defense: when attrCache reaches its cap, lookup returns the
+// package-level overflowOpt sentinel. In that case With() reuses a single
+// shared overflowGauge (created lazily) instead of inserting into gauges,
+// keeping len(gauges) ≤ attrCacheMaxSize + 1 (the +1 being the overflow slot).
+type otelGaugeVec struct {
+	inner         otelmetric.Float64UpDownCounter
+	labels        []string
+	cache         *attrCache
+	gaugesMu      sync.Mutex
+	gauges        map[string]*otelGauge
+	overflowGauge *otelGauge // lazily created; guarded by gaugesMu
+}
+
+func (v *otelGaugeVec) Registered() bool { return true }
+
+// With returns the otelGauge for the given label set, creating it on first
+// use. The same *otelGauge is returned on every call for a given label tuple
+// so that Set(val) on one caller reflects the correct last value when another
+// caller calls Set() later for the same label set.
+//
+// When the attrCache is at capacity, lookup returns the overflowOpt sentinel;
+// With detects this via pointer identity (attrs == overflowOpt) and returns
+// a single shared overflowGauge instead of growing gauges unboundedly.
+func (v *otelGaugeVec) With(l metrics.Labels) metrics.Gauge {
+	metrics.MustValidateLabels(v.labels, l)
+	attrs := v.cache.lookup(v.labels, l)
+
+	// Overflow path: attrCache is at cap; reuse the single shared overflow slot.
+	if attrs == overflowOpt {
+		v.gaugesMu.Lock()
+		if v.overflowGauge == nil {
+			v.overflowGauge = &otelGauge{inner: v.inner, attrs: overflowOpt}
+		}
+		g := v.overflowGauge
+		v.gaugesMu.Unlock()
+		return g
+	}
+
+	key := v.cache.key(v.labels, l)
+
+	v.gaugesMu.Lock()
+	g, ok := v.gauges[key]
+	if !ok {
+		g = &otelGauge{inner: v.inner, attrs: attrs}
+		v.gauges[key] = g
+	}
+	v.gaugesMu.Unlock()
+	return g
+}
+
+// otelGauge is a single label-set binding to a Float64UpDownCounter.
+// It maintains a last-value slot so that Set(v) can compute the delta
+// and keep the cumulative counter equal to the current gauge value.
+//
+// mu guards last; all four methods acquire it as a write lock so that
+// concurrent Set / Inc / Dec / Add calls are serialized on the same slot.
+// The OTel SDK's Add call itself is goroutine-safe; we only need mu to make
+// the read-modify-write (last → delta → new last) atomic.
+type otelGauge struct {
+	inner otelmetric.Float64UpDownCounter
+	attrs otelmetric.MeasurementOption
+	mu    sync.Mutex
+	last  float64
+}
+
+// Set records the gauge as value v. It computes delta = v − last so that
+// the underlying UpDownCounter's cumulative value equals v after the call.
+//
+// See METRICS-CTX-FUNNEL-01 in docs/backlog/cap-13-observability.md for the
+// open work to propagate context through the kernel metrics interface; until
+// then context.Background() is the correct placeholder here (mirrors Counter).
+func (g *otelGauge) Set(v float64) {
+	g.mu.Lock()
+	delta := v - g.last
+	g.last = v
+	g.mu.Unlock()
+	g.inner.Add(context.Background(), delta, g.attrs)
+}
+
+func (g *otelGauge) Inc() {
+	g.mu.Lock()
+	g.last++
+	g.mu.Unlock()
+	g.inner.Add(context.Background(), 1, g.attrs)
+}
+
+func (g *otelGauge) Dec() {
+	g.mu.Lock()
+	g.last--
+	g.mu.Unlock()
+	g.inner.Add(context.Background(), -1, g.attrs)
+}
+
+func (g *otelGauge) Add(delta float64) {
+	g.mu.Lock()
+	g.last += delta
+	g.mu.Unlock()
+	g.inner.Add(context.Background(), delta, g.attrs)
 }

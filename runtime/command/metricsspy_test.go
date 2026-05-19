@@ -29,6 +29,16 @@ func newTestProvider() *testProvider {
 }
 
 // CounterVec registers (or retrieves) a counter family by name.
+func (p *testProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	return kernelmetrics.NopProvider{}.HistogramVec(opts)
+}
+
+func (p *testProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return kernelmetrics.NopProvider{}.GaugeVec(opts)
+}
+
+func (p *testProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
+
 func (p *testProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

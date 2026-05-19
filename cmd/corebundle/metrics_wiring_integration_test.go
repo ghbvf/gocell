@@ -119,6 +119,120 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
 }
 
+// TestR2_NewMetricFamilies_RegisteredAtBoot asserts that the five new metric
+// families introduced in D3a-1 are registered with the Prometheus registry at
+// bootstrap time, even when no subscriptions or rejects have occurred yet.
+//
+// We assert the presence of each metric family via the "# HELP <name>" line in
+// the Prometheus text output rather than asserting sample values — most gauges
+// and counters are 0 or absent at boot when no event-router subscriptions have
+// been established in the memory-topology test bootstrap.
+//
+// The five families are:
+//   - event_router_subscriptions_active
+//   - event_router_setup_errors_total
+//   - event_router_ready_wait_seconds
+//   - outbox_pending_depth
+//   - outbox_consumer_rejected_total
+func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
+
+	app, err := buildBootstrapFromShared(t, shared, ln,
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+	require.NoError(t, err)
+	require.NotNil(t, app)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(testtime.SelectAsyncSettle):
+			t.Error("bootstrap did not shut down in time")
+		}
+	})
+
+	healthAddr := healthLn.Addr().String()
+	waitForHealthy(t, healthAddr)
+
+	// Scrape /metrics and assert each new metric family's HELP line is present.
+	metricsResp, err := http.Get("http://" + healthAddr + "/metrics")
+	require.NoError(t, err)
+	defer metricsResp.Body.Close()
+	require.Equal(t, http.StatusOK, metricsResp.StatusCode)
+
+	body, err := io.ReadAll(metricsResp.Body)
+	require.NoError(t, err)
+	bodyStr := string(body)
+
+	// Prometheus client_golang behavior: a CounterVec / GaugeVec / HistogramVec
+	// does NOT appear in /metrics output (not even HELP/TYPE lines) until at
+	// least one label-set has been observed via With(). The 5 new metric
+	// families therefore split into two categories at boot time:
+	//
+	//   boot-emits (subscription lifecycle fires deterministically on startup):
+	//     - event_router_subscriptions_active (Inc per ready subscription)
+	//     - event_router_ready_wait_seconds   (Observe per ready signal)
+	//
+	//   event-triggered (only emit on the corresponding event):
+	//     - event_router_setup_errors_total   (only on setup failure)
+	//     - outbox_consumer_rejected_total    (only on handler reject /
+	//                                          retry exhaustion)
+	//     - outbox_pending_depth              (Relay reclaim tick interval is
+	//                                          typically minutes — usually not
+	//                                          observed within integration-test
+	//                                          duration)
+	//
+	// We only assert wire-shape (HELP / TYPE / label key) for boot-emits.
+	// event-triggered families are verified by unit tests in
+	// runtime/observability/metrics/{outbox,event}_test.go (spy-collector
+	// pattern) and by archtest METRICS-GAUGEVEC-FUNNEL-01 (production
+	// callsite enforcement). Asserting them here would be a flaky test
+	// dependent on broker timing and Relay cadence.
+	type metricSpec struct {
+		name       string
+		promType   string // "gauge", "counter", or "histogram"
+		labelProbe string // non-empty: regex `name\{labelProbe=` must match
+	}
+	bootEmitFamilies := []metricSpec{
+		{"event_router_subscriptions_active", "gauge", "cell"},
+		{"event_router_ready_wait_seconds", "histogram", "cell"},
+	}
+	for _, spec := range bootEmitFamilies {
+		fqName := "gocell_" + spec.name
+
+		// (a) HELP line must be present.
+		helpLine := "# HELP " + fqName
+		assert.Contains(t, bodyStr, helpLine,
+			"D3a-1: /metrics output must contain HELP line for %q at boot. "+
+				"Got /metrics body (first 600 chars): %s",
+			fqName, truncateMetrics(bodyStr, 600))
+
+		// (b) TYPE line must be present with correct type.
+		typeLine := "# TYPE " + fqName + " " + spec.promType
+		assert.Contains(t, bodyStr, typeLine,
+			"D3a-1: /metrics output must contain TYPE line %q at boot. "+
+				"Got /metrics body (first 600 chars): %s",
+			typeLine, truncateMetrics(bodyStr, 600))
+
+		// (c) When a sample has been emitted, the label name must appear.
+		if spec.labelProbe != "" && strings.Contains(bodyStr, fqName+"{") {
+			labelPattern := fqName + `{` + spec.labelProbe + `=`
+			assert.True(t, strings.Contains(bodyStr, labelPattern),
+				"D3a-1: sample line for %q must carry label %q; pattern %q not found in body. "+
+					"Got /metrics body (first 600 chars): %s",
+				fqName, spec.labelProbe, labelPattern, truncateMetrics(bodyStr, 600))
+		}
+	}
+}
+
 // truncateMetrics returns at most n characters of s for use in assertion messages.
 func truncateMetrics(s string, n int) string {
 	if len(s) <= n {

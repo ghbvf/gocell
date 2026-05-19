@@ -74,6 +74,15 @@ type Store interface {
 	// CleanupDead deletes a batch of dead rows older than cutoff.
 	CleanupDead(ctx context.Context, cutoff time.Time, batchSize int) (deleted int, err error)
 
+	// CountPending returns the number of pending entries available for ClaimPending.
+	// May be approximate under high concurrency — multiple concurrent ClaimPending
+	// calls can race between the COUNT and the next claim. Callers should treat
+	// any error as transient and skip the metric update without panicking.
+	//
+	// ref: Eventuate transactional-outbox events_pending;
+	// Debezium MilliSecondsBehindSource — non-blocking depth probe on reclaim cadence.
+	CountPending(ctx context.Context) (int64, error)
+
 	// OldestEligibleAt returns the oldest published_at (when status="published")
 	// or dead_at (when status="dead") in the table. The relay uses this to schedule
 	// data-driven cleanup wake-ups: sleep until oldest+retention instead of polling

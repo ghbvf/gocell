@@ -33,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -98,6 +99,7 @@ type Bootstrap struct {
 	routerReadyTimeout     time.Duration
 	routerReadyTimeoutSet  bool
 	subscriptionValidators []cell.SubscriptionValidator
+	relay                  *runtimeoutbox.Relay // optional: wired by WithRelay; nil = no relay depth metric
 
 	// --- lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets ---
 	lifecycle                Lifecycle
@@ -118,8 +120,17 @@ type Bootstrap struct {
 	// --- metrics: metrics provider + auto-wired HTTP collector + shutdown metrics ---
 	metricsProvider    kernelmetrics.Provider
 	httpCollector      metricsmiddleware.Collector
-	shutdownMet        *shutdownMetrics
+	shutdownMet        *metricsmiddleware.ShutdownCollector
 	shutdownMetricsErr error
+
+	// outboxConsumerCollector is cached after first construction so multiple
+	// ConsumerBase / Relay wirings share the same collector and avoid double-
+	// registering outbox_consumer_rejected_total / outbox_pending_depth.
+	outboxConsumerCollector *metricsmiddleware.OutboxConsumerCollector
+
+	// eventRouterCollector is cached so multiple Router instances (if a future
+	// multi-listener model arrives) share the same collector.
+	eventRouterCollector *metricsmiddleware.EventRouterCollector
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.
@@ -287,11 +298,11 @@ func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
 
 // New creates a Bootstrap with the given options.
 //
-// shutdownMetrics are registered against the provider here (plan option B):
-// instruments live as long as the Bootstrap, matching the "register at
-// start-up" convention used by relay_collector.go and the hook dispatcher.
-// On registration failure the error is stored and surfaced by Run() at
-// phase0, before any side effects start.
+// ShutdownCollector metrics are registered against the provider here (plan
+// option B): instruments live as long as the Bootstrap, matching the
+// "register at start-up" convention used by relay_collector.go and the hook
+// dispatcher. On registration failure the error is stored and surfaced by
+// Run() at phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{}
 	b.shutdownTimeout = shutdown.DefaultTimeout
@@ -317,8 +328,8 @@ func New(opts ...Option) *Bootstrap {
 		reg(b.lifecycle)
 	}
 	// Register shutdown metrics against the (potentially Nop) provider.
-	// newShutdownMetrics returns a disabled metrics object for a nil provider.
-	m, err := newShutdownMetrics(b.metricsProvider)
+	// NewShutdownCollector returns a disabled metrics object for a nil provider.
+	m, err := metricsmiddleware.NewShutdownCollector(b.metricsProvider)
 	if err != nil {
 		// Store error; phase0 will surface it before any component starts.
 		b.shutdownMetricsErr = err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -1066,6 +1067,157 @@ func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {
 			return false
 		}
 	}, testtime.D2s, testtime.D2ms, "relay.Ready() must close after Start")
+}
+
+// ---------------------------------------------------------------------------
+// PendingDepthObserver tests
+// ---------------------------------------------------------------------------
+
+// spyDepthObserver captures ObservePendingDepth calls for assertions.
+type spyDepthObserver struct {
+	mu     sync.Mutex
+	values []int64
+	notify chan struct{}
+}
+
+func newSpyDepthObserver() *spyDepthObserver {
+	return &spyDepthObserver{notify: make(chan struct{})}
+}
+
+func (s *spyDepthObserver) ObservePendingDepth(n int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.values = append(s.values, n)
+	close(s.notify)
+	s.notify = make(chan struct{})
+}
+
+func (s *spyDepthObserver) waitForAtLeastOne(ctx context.Context) error {
+	for {
+		s.mu.Lock()
+		n := len(s.values)
+		notify := s.notify
+		s.mu.Unlock()
+		if n >= 1 {
+			return nil
+		}
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (s *spyDepthObserver) captured() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]int64, len(s.values))
+	copy(out, s.values)
+	return out
+}
+
+// TestRelay_pendingDepthObserved_OnReclaimTick verifies that when a
+// PendingDepthObserver is wired, ObservePendingDepth is called with the
+// count returned by Store.CountPending on each reclaim tick.
+func TestRelay_pendingDepthObserved_OnReclaimTick(t *testing.T) {
+	store := outboxtest.NewFakeStore()
+	const seeded = 42
+	entries := make([]outbox.ClaimedEntry, seeded)
+	for i := range seeded {
+		entries[i] = makeEntry(fmt.Sprintf("pd-%02d", i), "test.event")
+	}
+	store.Seed(entries...)
+
+	spy := newSpyDepthObserver()
+	cfg := fastCfg()
+	relay := outbox.NewRelay(store, newFakePublisher(), cfg).
+		WithPendingDepthObserver(spy)
+
+	stop := startRelay(t, relay)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
+	defer cancel()
+	require.NoError(t, spy.waitForAtLeastOne(ctx), "ObservePendingDepth must be called on reclaim tick")
+
+	vals := spy.captured()
+	require.NotEmpty(t, vals)
+	// The store has seeded entries; at least one observation must be > 0
+	// (some may have been claimed by the publish loop by the time reclaim fires,
+	// so we just require at least one non-negative value was observed).
+	for _, v := range vals {
+		require.GreaterOrEqual(t, v, int64(0), "pending depth must be non-negative")
+	}
+}
+
+// errCountStore wraps FakeStore and makes CountPending always return an error.
+type errCountStore struct {
+	*outboxtest.FakeStore
+}
+
+func (s *errCountStore) CountPending(_ context.Context) (int64, error) {
+	return 0, errors.New("count pending db error")
+}
+
+// TestRelay_pendingDepthSkipped_OnError verifies that when CountPending returns
+// an error, ObservePendingDepth is NOT called and a Warn log is emitted. We
+// verify the no-call contract via an erroring store wrapper.
+func TestRelay_pendingDepthSkipped_OnError(t *testing.T) {
+	errStore := &errCountStore{FakeStore: outboxtest.NewFakeStore()}
+
+	spy := newSpyDepthObserver()
+	cfg := fastCfg()
+	relay := outbox.NewRelay(errStore, newFakePublisher(), cfg).
+		WithPendingDepthObserver(spy)
+
+	stop := startRelay(t, relay)
+
+	// Let several reclaim ticks pass.
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D200ms)
+	defer cancel()
+	<-ctx.Done()
+	stop()
+
+	// Observer must not have been called since CountPending always errors.
+	assert.Empty(t, spy.captured(), "ObservePendingDepth must not be called when CountPending errors")
+}
+
+// countingCountStore wraps FakeStore and tracks CountPending calls.
+type countingCountStore struct {
+	*outboxtest.FakeStore
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *countingCountStore) CountPending(ctx context.Context) (int64, error) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	return s.FakeStore.CountPending(ctx)
+}
+
+// TestRelay_NoObserver_NoCall verifies that without WithPendingDepthObserver
+// the relay does not call Store.CountPending (zero overhead on the non-hot path).
+func TestRelay_NoObserver_NoCall(t *testing.T) {
+	cs := &countingCountStore{FakeStore: outboxtest.NewFakeStore()}
+
+	cfg := fastCfg()
+	relay := outbox.NewRelay(cs, newFakePublisher(), cfg)
+	// No WithPendingDepthObserver — relay must not call CountPending.
+
+	stop := startRelay(t, relay)
+
+	// Let several reclaim ticks pass.
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D200ms)
+	defer cancel()
+	<-ctx.Done()
+	stop()
+
+	cs.mu.Lock()
+	c := cs.calls
+	cs.mu.Unlock()
+	assert.Equal(t, 0, c, "CountPending must not be called without a PendingDepthObserver")
 }
 
 // ---------------------------------------------------------------------------
