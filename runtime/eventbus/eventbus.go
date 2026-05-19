@@ -123,7 +123,7 @@ func New(opts ...Option) *InMemoryEventBus {
 //   - For the empty-group ("") bucket: send to ALL subscribers (broadcast)
 //
 // Non-blocking: if a subscriber's buffer is full, the message is dropped
-// (logged as warning).
+// (logged at Error level — indicates message loss and impacts correctness).
 //
 // The bus unwraps the envelope so subscribers always see the business payload
 // in Entry.Payload, matching the semantics of the RabbitMQ subscriber path.
@@ -445,6 +445,8 @@ func (b *InMemoryEventBus) notifyRetryExhausted(
 	slog.Error("eventbus: retries exhausted, routing to dead letter",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID),
+		slog.String("aggregate_id", entry.AggregateID),
+		slog.String("event_type", entry.EventType),
 		slog.Any("error", err),
 	)
 }
@@ -550,6 +552,8 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 		slog.Error("eventbus: invalid disposition, retry budget exhausted",
 			slog.String("topic", topic),
 			slog.String("entry_id", entry.ID),
+			slog.String("aggregate_id", entry.AggregateID),
+			slog.String("event_type", entry.EventType),
 			slog.String("disposition", res.Disposition.String()),
 			slog.Int("attempt", attempt+1),
 		)
@@ -559,6 +563,8 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 	slog.Error("eventbus: invalid disposition, treating as requeue",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID),
+		slog.String("aggregate_id", entry.AggregateID),
+		slog.String("event_type", entry.EventType),
 		slog.String("disposition", res.Disposition.String()),
 		slog.Int("attempt", attempt+1),
 		slog.Duration("retry_delay", delay),

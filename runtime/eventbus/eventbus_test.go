@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
 )
 
 // busEventually2x is testtime.EventuallyShort × 2 for standard eventually timeouts.
@@ -1509,23 +1510,6 @@ func (r *failingReleaseReceipt) Extend(_ context.Context, _ time.Duration) error
 // R-02: drop-path log level + contextual fields
 // ---------------------------------------------------------------------------
 
-// captureSlogHandler is a test-only slog.Handler that captures every Record.
-// Mirrors the pattern used in cells/configcore/slogtest_helper_test.go.
-type captureSlogHandler struct {
-	mu      sync.Mutex
-	records []slog.Record
-}
-
-func (h *captureSlogHandler) Enabled(context.Context, slog.Level) bool { return true }
-func (h *captureSlogHandler) Handle(_ context.Context, r slog.Record) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.records = append(h.records, r.Clone())
-	return nil
-}
-func (h *captureSlogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-func (h *captureSlogHandler) WithGroup(string) slog.Handler      { return h }
-
 // findLogAttr returns the first slog.Attr with the given key from a Record.
 func findLogAttr(r slog.Record, key string) (slog.Attr, bool) {
 	var found slog.Attr
@@ -1541,18 +1525,29 @@ func findLogAttr(r slog.Record, key string) (slog.Attr, bool) {
 	return found, ok
 }
 
+// findDropRecord scans records captured by healthtest.CaptureHandler and
+// returns the first Error-level record whose message contains msgSubstr.
+func findDropRecord(records []slog.Record, msgSubstr string) *slog.Record {
+	for i := range records {
+		if records[i].Level == slog.LevelError && strings.Contains(records[i].Message, msgSubstr) {
+			r := records[i]
+			return &r
+		}
+	}
+	return nil
+}
+
 // TestBroadcast_BufferFull_LogsErrorWithContextualFields verifies R-02:
 // when the broadcast drop path fires, the log record must be at slog.LevelError
 // and carry entry_id, aggregate_id, and event_type attributes.
 //
+// Uses healthtest.NewCapture (pkg/testutil/sloghelper-safe layer; no import
+// cycle: runtime/http/health/healthtest does not import runtime/eventbus).
+//
 // Strategy: inject a subscription directly into groupSubs with a pre-filled
 // channel (no goroutine draining it) so the drop is deterministic.
 func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
-	cap := &captureSlogHandler{}
-	logger := slog.New(cap)
-	prev := slog.Default()
-	slog.SetDefault(logger)
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	cap := healthtest.NewCapture(t)
 
 	bus := New(WithClock(clock.Real()), WithBufferSize(1))
 	defer func() { _ = bus.Close(context.Background()) }()
@@ -1589,17 +1584,7 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	require.NoError(t, bus.Publish(context.Background(), "drop.broadcast.v1", env))
 
 	// Drop fires synchronously inside Publish, so the record is already captured.
-	cap.mu.Lock()
-	var dropRecord *slog.Record
-	for i := range cap.records {
-		if cap.records[i].Level == slog.LevelError &&
-			strings.Contains(cap.records[i].Message, "dropped") {
-			r := cap.records[i]
-			dropRecord = &r
-			break
-		}
-	}
-	cap.mu.Unlock()
+	dropRecord := findDropRecord(cap.Snapshot(), "dropped")
 	require.NotNil(t, dropRecord, "slog.Error drop record must be captured synchronously")
 
 	topicAttr, ok := findLogAttr(*dropRecord, "topic")
@@ -1625,11 +1610,7 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 //
 // Strategy: same as broadcast test — inject pre-filled subscription directly.
 func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
-	cap := &captureSlogHandler{}
-	logger := slog.New(cap)
-	prev := slog.Default()
-	slog.SetDefault(logger)
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	cap := healthtest.NewCapture(t)
 
 	bus := New(WithClock(clock.Real()), WithBufferSize(1))
 	defer func() { _ = bus.Close(context.Background()) }()
@@ -1661,17 +1642,7 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, bus.Publish(context.Background(), "drop.roundrobin.v1", env))
 
-	cap.mu.Lock()
-	var dropRecord *slog.Record
-	for i := range cap.records {
-		if cap.records[i].Level == slog.LevelError &&
-			strings.Contains(cap.records[i].Message, "dropped") {
-			r := cap.records[i]
-			dropRecord = &r
-			break
-		}
-	}
-	cap.mu.Unlock()
+	dropRecord := findDropRecord(cap.Snapshot(), "dropped")
 	require.NotNil(t, dropRecord, "slog.Error drop record must be captured synchronously")
 
 	topicAttr, ok := findLogAttr(*dropRecord, "topic")
@@ -1693,6 +1664,68 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	evtTypeAttr, ok := findLogAttr(*dropRecord, "event_type")
 	require.True(t, ok, "drop record must carry 'event_type'")
 	assert.Equal(t, "drop.roundrobin.v1", evtTypeAttr.Value.String())
+}
+
+// TestNotifyRetryExhausted_LogsErrorWithContextualFields verifies F1:
+// notifyRetryExhausted must log at Error level and carry aggregate_id and
+// event_type (aligned with R-02 contextual field standard).
+//
+// Strategy: publish to a subscriber that always returns Requeue; wait for
+// the retry budget to exhaust and the dead-letter path to fire.
+func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
+	cap := healthtest.NewCapture(t)
+
+	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	const topic = "retry.exhaust.fields.v1"
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: topic},
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.Requeue(errors.New("always-transient"))
+			}))
+	}()
+	<-bus.Ready(outbox.Subscription{Topic: topic})
+
+	entry := outbox.Entry{
+		ID:          "evt-exhaust-1",
+		AggregateID: "agg-exhaust-001",
+		EventType:   topic,
+		Topic:       topic,
+		Payload:     []byte(`{"x":1}`),
+	}
+	env, err := outbox.MarshalEnvelope(entry)
+	require.NoError(t, err)
+	require.NoError(t, bus.Publish(context.Background(), topic, env))
+
+	// Wait for the retry budget to exhaust and the dead-letter record to appear.
+	require.Eventually(t, func() bool {
+		return bus.DeadLetterLen() > 0
+	}, busEventually10x, testtime.MediumPoll, "dead letter must be populated after retries exhausted")
+
+	// Find the Error-level "retries exhausted" record.
+	var exhaustedRecord *slog.Record
+	for _, r := range cap.Snapshot() {
+		if r.Level == slog.LevelError && strings.Contains(r.Message, "retries exhausted") {
+			rc := r
+			exhaustedRecord = &rc
+			break
+		}
+	}
+	require.NotNil(t, exhaustedRecord, "slog.Error 'retries exhausted' record must be captured")
+
+	aggIDAttr, ok := findLogAttr(*exhaustedRecord, "aggregate_id")
+	require.True(t, ok, "retries-exhausted record must carry 'aggregate_id'")
+	assert.Equal(t, "agg-exhaust-001", aggIDAttr.Value.String())
+
+	evtTypeAttr, ok := findLogAttr(*exhaustedRecord, "event_type")
+	require.True(t, ok, "retries-exhausted record must carry 'event_type'")
+	assert.Equal(t, topic, evtTypeAttr.Value.String())
+
+	cancel()
+	<-done
 }
 
 // Verify interface compliance at compile time.
