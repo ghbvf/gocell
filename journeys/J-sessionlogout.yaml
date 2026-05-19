@@ -8,6 +8,7 @@ cells:
   - accesscore
   - auditcore
 contracts:
+  - http.auth.session.delete.v1
   - event.session.revoked.v1
 passCriteria:
   - text: Session 标记为已吊销

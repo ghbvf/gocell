@@ -302,7 +302,6 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 | J-auditlogintrail | auditcore, accesscore | 跨 Cell |
 | J-confighotreload | configcore, accesscore, auditcore | 跨 Cell |
 | J-configrollback | configcore, accesscore, auditcore | 跨 Cell |
-| J-typed-envelope-roundtrip | accesscore | 单 Cell |
 
 ---
 
