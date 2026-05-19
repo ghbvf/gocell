@@ -15,7 +15,7 @@
 | **cmd/** | 2 CLI | 全部 IMPL | gocell (validate/scaffold/generate/check/verify) + corebundle |
 | **pkg/** | 5 包 | 全部 IMPL | errcode/ctxkeys/httputil/id/uid |
 | **contracts/** | 66 active YAML | 声明完成 | 47 platform + 19 examples |
-| **journeys/** | 9 YAML | 声明完成 | SSO/onboarding/lockout/refresh/logout/audit-trail/hot-reload/rollback/typed-envelope-roundtrip |
+| **journeys/** | 8 YAML | 声明完成 | SSO/onboarding/lockout/refresh/logout/audit-trail/hot-reload/rollback |
 | **infra** | 4 服务 | 配置完成 | Docker Compose (PG/Redis/RabbitMQ/MinIO) + Makefile |
 | **docs** | 28 文件 | 完成 | 架构/指南/评审/参考 |
 
@@ -290,7 +290,7 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 
 ---
 
-## 8. Journeys（9 个）
+## 8. Journeys（8 个）
 
 | Journey | 涉及 Cell | 类型 |
 |---------|----------|------|
@@ -302,7 +302,6 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 | J-auditlogintrail | auditcore, accesscore | 跨 Cell |
 | J-confighotreload | configcore, accesscore, auditcore | 跨 Cell |
 | J-configrollback | configcore, accesscore, auditcore | 跨 Cell |
-| J-typed-envelope-roundtrip | accesscore | 单 Cell |
 
 ---
 
