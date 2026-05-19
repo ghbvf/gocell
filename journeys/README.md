@@ -34,16 +34,16 @@ Journey 是**业务/产品视角的端到端验收**。每个 `J-*.yaml` 必须�
 - `active` — 至少 1 个 mode:auto criterion + 有 docker-free seam — `board.state` 可 `doing` 或 `done`
 - `deprecated` — 已废弃 — `board.state` 不约束
 
-由 `kernel/governance/rules_journey.go::JOURNEY-STATUS-LIFECYCLE-01` 强制。
+由 `kernel/governance/rules_journey.go` 中的 `validateJOURNEYSTATUSLIFECYCLE01` 强制（rule ID: `JOURNEY-STATUS-LIFECYCLE-01`）。
 
 ## passCriteria mode
 
-- `mode: auto` — 必须有 `checkRef: journey.<id>.<suffix>`，解析到 `tests/integration/` 内 `TestJ<CamelCase(id)><CamelCase(suffix)>` 测试，`-tags=integration` 跑通，docker-free
+- `mode: auto` — 必须有 `checkRef: journey.<id>.<suffix>`；当 lifecycle 进入 active 时，该 checkRef 必须解析到 `tests/integration/` 内 `TestJ<CamelCase(id)><CamelCase(suffix)>` 测试，`-tags=integration` 跑通，docker-free。experimental 阶段允许 checkRef 对应测试尚未实现（由 VERIFY-06 仅对 active journey 强制守护）
 - `mode: manual` — 必须 inline 注释说明为什么不能 auto + 引用 backlog ID 跟踪升级路径
 
 mode:manual 合法理由：
 - 架构上不可达 docker-free seam — 必须 backlog 引用 unblock 条目
-- 由更强的静态守替代（archtest rule）— 必须 inline 引用 archtest rule ID
+- 由更强的静态守完全替代时**应删除该 criterion**，而非长留 manual；若 archtest 仅部分覆盖（如只覆盖单一调用点）保留 manual 并 inline 引用 archtest rule ID + 说明剩余覆盖缺口
 
 mode:manual 非合法理由：
 - "现在没时间写" / "测试复杂" / "等业务完整后再补"（这种情况应当 lifecycle: experimental）
@@ -53,7 +53,7 @@ mode:manual 非合法理由：
 1. 这是不是真正的业务场景？产品方能用一句话说出来吗？
 2. passCriteria 主谓宾是不是业务实体？
 3. 是否已有 archtest / cell conformance / pkg unit test 覆盖？如有，不要重复
-4. 每个 mode:auto criterion 的 seam 在 docker-free 下可达吗？参考 `.claude/rules/gocell/cell-patterns.md` 中 criterion semantic form → seam 选择表
+4. 每个 mode:auto criterion 的 seam 在 docker-free 下可达吗？参考 `.claude/rules/gocell/cell-patterns.md` 中 criterion semantic form → seam 选择表（待 plan 044 §5 落地）
 
 ## 现有 journey 一览
 
