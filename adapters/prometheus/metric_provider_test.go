@@ -635,14 +635,11 @@ func TestMetricProvider_GaugeVec_Register(t *testing.T) {
 		t.Fatalf("GaugeVec: %v", err)
 	}
 
-	got := testutil.CollectAndCount(reg, "gocelltest_queue_depth")
-	if got != 0 {
-		// No observations yet — family exists but no series until With is called.
-		// CollectAndCount returns 0 for an empty GaugeVec (no label sets observed).
-		// This is correct Prometheus behaviour; we merely assert registration
-		// succeeded (no error above) and that the name is discoverable.
-	}
-	// Trigger a With() so the series is emitted.
+	// No observations yet — family exists but no series until With is called.
+	// CollectAndCount returns 0 for an empty GaugeVec; this is correct Prometheus
+	// behavior. Registration is asserted by the absence of an error above and the
+	// successful CollectAndCount call. Trigger a With() so the series is emitted.
+	_ = testutil.CollectAndCount(reg, "gocelltest_queue_depth")
 	gv, err := p.GaugeVec(metrics.GaugeOpts{
 		Name:       "queue_depth",
 		Help:       "Queue depth.",
@@ -672,11 +669,11 @@ func TestMetricProvider_GaugeVec_SetInc(t *testing.T) {
 	}
 
 	g := gv.With(metrics.Labels{"pool": "default"})
-	g.Set(10)  // 10
-	g.Inc()    // 11
-	g.Dec()    // 10
-	g.Add(5)   // 15
-	g.Add(-3)  // 12
+	g.Set(10) // 10
+	g.Inc()   // 11
+	g.Dec()   // 10
+	g.Add(5)  // 15
+	g.Add(-3) // 12
 
 	if v := testutil.ToFloat64(collectGauge(t, reg, "gocelltest_workers_active", prom.Labels{"pool": "default"})); v != 12 {
 		t.Fatalf("gauge value = %v, want 12", v)

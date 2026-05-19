@@ -65,6 +65,12 @@ func NewMetricProvider(cfg MetricProviderConfig) (*MetricProvider, error) {
 // multiple cells share a single MetricProvider), the existing collector is
 // returned — matching the standard prometheus AlreadyRegisteredError pattern.
 // Any other registration error surfaces as ErrAdapterPromRegister.
+//
+// CounterVec / HistogramVec / GaugeVec share intentional shape; the
+// registerOrReuse generic factors the common path, so further collapse would
+// obscure the per-metric-type construction details.
+//
+//nolint:dupl // see godoc above.
 func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
 	cv := prom.NewCounterVec(prom.CounterOpts{
 		Namespace: p.cfg.Namespace,
@@ -138,6 +144,8 @@ func registerOrReuse[T prom.Collector](
 // values (queue depth, active workers). If the same metric name has already
 // been registered, the existing collector is returned — same
 // AlreadyRegisteredError pattern as CounterVec.
+//
+//nolint:dupl // see CounterVec godoc above for the shared-shape rationale.
 func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	gv := prom.NewGaugeVec(prom.GaugeOpts{
 		Namespace: p.cfg.Namespace,

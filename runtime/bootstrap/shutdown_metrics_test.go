@@ -15,8 +15,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
-	obsmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	obsmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // ---------------------------------------------------------------------------

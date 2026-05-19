@@ -335,7 +335,7 @@ func (v *otelGaugeVec) With(l metrics.Labels) metrics.Gauge {
 // and keep the cumulative counter equal to the current gauge value.
 //
 // mu guards last; all four methods acquire it as a write lock so that
-// concurrent Set / Inc / Dec / Add calls are serialised on the same slot.
+// concurrent Set / Inc / Dec / Add calls are serialized on the same slot.
 // The OTel SDK's Add call itself is goroutine-safe; we only need mu to make
 // the read-modify-write (last → delta → new last) atomic.
 type otelGauge struct {

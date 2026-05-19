@@ -189,7 +189,8 @@ func TestRouter_runAwaitReady_Timeout_ObserveSetupError_ReadyTimeout(t *testing.
 
 	// neverReadySubscriber: Setup succeeds, Ready never closes, Subscribe blocks on ctx.
 	neverReady := &neverReadySubscriber{}
-	r := New(wrap(neverReady), clock.Real(),
+	r := New(
+		wrap(neverReady), clock.Real(),
 		WithEventRouterCollector(spy),
 		WithReadyTimeout(testReadyTimeout), // very short timeout
 	)
@@ -299,6 +300,7 @@ func (s *neverReadySubscriber) Setup(_ context.Context, _ outbox.Subscription) e
 func (s *neverReadySubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	return make(chan struct{}) // never closes
 }
+
 func (s *neverReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	<-ctx.Done()
 	return ctx.Err()

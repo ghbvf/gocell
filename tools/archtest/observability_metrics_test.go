@@ -124,17 +124,13 @@ func TestGaugeVecFunnel_SelfCheck(t *testing.T) {
 
 	// BS-1 reverse self-check: no reflect.ValueOf call in production references
 	// the banned symbol names as string literals.
-	bs1Diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
-		return gaugeVecBS1ReflectCheck(p)
-	})
+	bs1Diags := RunTypedProduction(t, TypedOpts{}, gaugeVecBS1ReflectCheck)
 	assert.Empty(t, bs1Diags,
 		"METRICS-GAUGEVEC-FUNNEL-01 BS-1: found reflect.ValueOf with banned symbol name string; "+
 			"production code must not construct metrics via reflection")
 
 	// BS-3 reverse self-check: no function-value indirection for the banned symbols.
-	bs3Diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
-		return gaugeVecBS3FuncValueCheck(p)
-	})
+	bs3Diags := RunTypedProduction(t, TypedOpts{}, gaugeVecBS3FuncValueCheck)
 	assert.Empty(t, bs3Diags,
 		"METRICS-GAUGEVEC-FUNNEL-01 BS-3: found function-value indirection for banned symbol; "+
 			"production code must not store NewGaugeVec/Float64UpDownCounter in a variable")

@@ -14,12 +14,12 @@ func TestNopConsumerObserver_ObserveReject_DoesNotPanic(t *testing.T) {
 
 func TestConsumerRejectReason_Constants(t *testing.T) {
 	tests := map[string]string{
-		"ConsumerRejectReasonHandlerReject":   ConsumerRejectReasonHandlerReject,
-		"ConsumerRejectReasonRetryExhausted":  ConsumerRejectReasonRetryExhausted,
+		"ConsumerRejectReasonHandlerReject":  ConsumerRejectReasonHandlerReject,
+		"ConsumerRejectReasonRetryExhausted": ConsumerRejectReasonRetryExhausted,
 	}
 	want := map[string]string{
-		"ConsumerRejectReasonHandlerReject":   "handler_reject",
-		"ConsumerRejectReasonRetryExhausted":  "retry_exhausted",
+		"ConsumerRejectReasonHandlerReject":  "handler_reject",
+		"ConsumerRejectReasonRetryExhausted": "retry_exhausted",
 	}
 	for name, got := range tests {
 		if got != want[name] {

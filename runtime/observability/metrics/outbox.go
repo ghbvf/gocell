@@ -51,8 +51,9 @@ func NewOutboxConsumerCollector(p kernelmetrics.Provider, cellID string) (*Outbo
 	}
 
 	rejected, err := p.CounterVec(kernelmetrics.CounterOpts{
-		Name:       "outbox_consumer_rejected_total",
-		Help:       "Total number of terminal Reject dispositions from outbox ConsumerBase. consumerGroup is not included as a label to bound time-series cardinality.",
+		Name: "outbox_consumer_rejected_total",
+		Help: "Total number of terminal Reject dispositions from outbox ConsumerBase. " +
+			"consumerGroup is not included as a label to bound time-series cardinality.",
 		LabelNames: []string{"cell", "topic", "reason"},
 	})
 	if err != nil {

@@ -67,7 +67,7 @@ func (nopHistogram) Observe(value float64) {}
 
 type nopGauge struct{}
 
-func (nopGauge) Set(value float64)   {}
-func (nopGauge) Inc()                {}
-func (nopGauge) Dec()                {}
-func (nopGauge) Add(delta float64)   {}
+func (nopGauge) Set(value float64) {}
+func (nopGauge) Inc()              {}
+func (nopGauge) Dec()              {}
+func (nopGauge) Add(delta float64) {}

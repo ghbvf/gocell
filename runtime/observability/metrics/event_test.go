@@ -267,8 +267,8 @@ func (g *eventSpyGauge) Add(d float64) { g.Set(d) }
 
 type eventPartialFailProvider struct {
 	kernelmetrics.NopProvider
-	failOnCounter   bool
-	failOnHistogram bool
+	failOnCounter    bool
+	failOnHistogram  bool
 	unregisterCalled bool
 	unregisterCount  int
 }
