@@ -1,4 +1,8 @@
-// Package pgquery provides PostgreSQL query-building helpers.
+// Package pgquery provides PostgreSQL helpers: SQL query building (Builder) and
+// generic PG SQLSTATE wire-error classification (IsUniqueViolation /
+// IsForeignKeyViolation). Business-specific classification (e.g. last-admin
+// trigger sentinel) belongs in the cell-internal adapter package that owns
+// the corresponding migration.
 package pgquery
 
 import (

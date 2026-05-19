@@ -24,5 +24,5 @@ func memBenchFactory(b *testing.B) (session.Store, *clockmock.FakeClock, func())
 // BenchmarkMemStore_Suite drives the canonical bench suite against MemStore so
 // PG-backed adapters have a shared baseline (PR444-FU-SESSIONSTORE-BENCH-01).
 func BenchmarkMemStore_Suite(b *testing.B) {
-	storetest.Bench(b, memBenchFactory, storetest.NewBenchProtocol(b))
+	storetest.Bench(b, memBenchFactory)
 }
