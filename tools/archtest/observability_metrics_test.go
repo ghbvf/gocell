@@ -117,6 +117,39 @@ func TestGaugeVecFunnel(t *testing.T) {
 			"kernel/observability/metrics.Provider.GaugeVec")
 }
 
+// TestGaugeVecFunnel_BansFloat64Gauge is the W1 RED test for PR #593 review
+// fix-up Fix 4: the OTel ban set must cover Float64Gauge (current adapter
+// primitive since PR #625), not just Float64UpDownCounter (the historical
+// leak surface). Before Wave 3 turns this on, the production rule only flags
+// Float64UpDownCounter, so BadOtelFloat64Gauge in the RED fixture is invisible
+// — a regression silently bypasses the GaugeVec funnel.
+//
+// Wave 3 GREEN removes t.Skip after the ban set is extended in
+// observability_metrics_test.go.
+func TestGaugeVecFunnel_BansFloat64Gauge(t *testing.T) {
+	t.Skip("RED — Wave 3 (W3 GREEN) extends the OTel ban set to include Float64Gauge; un-skip then")
+
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	redDiags := RunTypedFixture(t,
+		FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/metricsgaugevecfixture/..."},
+		gaugeVecFunnelRuleRaw,
+	)
+
+	var float64GaugeHits int
+	for _, d := range redDiags {
+		if strings.Contains(d.Message, "Float64Gauge") {
+			float64GaugeHits++
+		}
+	}
+	assert.Equal(t, 1, float64GaugeHits,
+		"METRICS-GAUGEVEC-FUNNEL-01 must flag the BadOtelFloat64Gauge fixture call "+
+			"(Wave 3 extends ban set to current adapter primitive)")
+}
+
 // TestGaugeVecFunnel_SelfCheck verifies the blind-spot reverse self-checks for
 // METRICS-GAUGEVEC-FUNNEL-01. These asserts confirm that the AST forms listed
 // as blind spots (BS-1, BS-3) do not appear in production code, so the rule's

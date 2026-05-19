@@ -77,6 +77,18 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	return nil
 }
 
+// preflightDoubleManagedRelay is the public entry point reserved for the
+// pre-expand call site (Wave 4 GREEN of PR #593 review fix-up will hoist this
+// to run before expandManagedResources, so the actionable
+// ERR_BOOTSTRAP_DOUBLE_MANAGED diagnostic surfaces instead of a misleading
+// "duplicate checker key" error from expand). Today it is a thin wrapper over
+// validateNoDoubleManagedRelay; Wave 4 swaps the implementation for a
+// typed-pointer assert that is panic-free on non-comparable
+// ManagedResource implementations.
+func (b *Bootstrap) preflightDoubleManagedRelay() error {
+	return b.validateNoDoubleManagedRelay()
+}
+
 // validateNoDoubleManagedRelay fails fast when the same relay object has been
 // registered via both WithRelay (which auto-appends to managedResources) and a
 // separate WithManagedResource(relay) call. Double-registration would cause

@@ -44,6 +44,17 @@ const (
 	// SetupErrorReasonPanic is emitted when a subscription goroutine panics
 	// inside runSubscribe (Phase 2 unrecoverable failure).
 	SetupErrorReasonPanic = "panic"
+
+	// SetupErrorReasonSubscribeFailure is emitted when a subscription
+	// goroutine's SubscribeEntry returns an error before the router reaches
+	// Running() — i.e. the failure surfaces during Phase 3 await-ready, so
+	// it is a setup-phase fault, not a runtime fault.
+	//
+	// Wave 2 (PR #593 review fix-up): introduced to anchor the
+	// phase-classified reason at the Phase 3 consumer point of setupErr,
+	// removing the producer-side `select <-r.running` flicker that mixed
+	// this failure with RuntimeErrorReasonRuntimeFault.
+	SetupErrorReasonSubscribeFailure = "subscribe_failure"
 )
 
 // RuntimeErrorReason* are the closed-set values passed to

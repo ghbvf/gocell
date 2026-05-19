@@ -595,3 +595,107 @@ func TestRouter_CollectorPanic_DecSubscriptionActive_DoesNotEscape(t *testing.T)
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// W1 RED tests — PR #593 review fix-up (P1#1 reason flicker + P1#2 panic redaction)
+// ---------------------------------------------------------------------------
+//
+// These tests assert the post-fix behavior expected after Fix 1/2/3 land in
+// Wave 2 GREEN. They are guarded by t.Skip so the W1 RED commit keeps CI green
+// while documenting the target invariants in test form.
+
+// TestRouter_RecordRuntimeError_SubscribeFailure_NoFlicker drives the P1#1
+// repro: a single subscription whose SubscribeEntry fails immediately must
+// classify deterministically as a setup-phase subscribe_failure, never as a
+// Phase 4 runtime_fault. The pre-fix producer-side `select <-r.running` races
+// against markRunning/closeRunning, so on a busy host roughly 10–30% of
+// iterations land in the runtime metric. The post-fix design moves
+// classification to the router phase-consumer point, eliminating the race.
+//
+// Wave 2 GREEN removes t.Skip after the producer no longer reads r.running.
+func TestRouter_RecordRuntimeError_SubscribeFailure_NoFlicker(t *testing.T) {
+	t.Skip("RED — Wave 2 (W2 GREEN) removes the producer-side select <-r.running flicker; un-skip then")
+
+	const iterations = 50
+	for i := 0; i < iterations; i++ {
+		spy := &spyEventCollector{}
+		failSub := &failingSubscriber{err: assert.AnError}
+		r := New(wrap(failSub), clock.Real(), WithEventRouterCollector(spy))
+
+		require.NoError(t,
+			r.AddContractHandler(testEventSpec("topic.noflicker"), noopHandler, "cell-nf", "cell-nf"))
+
+		err := r.Run(t.Context())
+		require.Error(t, err, "iter %d: Run must return Subscribe error", i)
+
+		setupErrs := spy.errorsCopy()
+		rtErrs := spy.runtimeErrorsCopy()
+
+		require.Lenf(t, setupErrs, 1,
+			"iter %d: immediate Subscribe failure must record exactly one setup error", i)
+		assert.Equalf(t, string(SetupErrorReasonSubscribeFailure), setupErrs[0].reason,
+			"iter %d: reason must be subscribe_failure (Phase 3 setup)", i)
+		assert.Emptyf(t, rtErrs,
+			"iter %d: immediate Subscribe failure must NOT record any runtime metric "+
+				"(Phase 4 runtime_fault is reserved for delayed failures after Running())", i)
+	}
+}
+
+// TestRouter_PanicRecover_ErrorMessageRedacted verifies that when a
+// subscription goroutine panics, the recovered value never leaks into the
+// error message returned by Run / surfaced by Health. The panic value is fed
+// through pkg/redaction.RedactString and only the sentinel constant
+// "subscription panicked (redacted)" appears on the error path; the original
+// value lives only in server-side slog as a redacted typed field.
+//
+// Wave 2 GREEN removes t.Skip after the recover branch swaps `fmt.Errorf("%v", rv)`
+// for the fixed sentinel.
+func TestRouter_PanicRecover_ErrorMessageRedacted(t *testing.T) {
+	t.Skip("RED — Wave 2 (W2 GREEN) wires pkg/redaction into the recover branch; un-skip then")
+
+	spy := &spyEventCollector{}
+	const secret = "secret123abc"
+	panicSub := &panicWithSecretSubscriber{payload: "password=" + secret}
+	r := New(wrap(panicSub), clock.Real(), WithEventRouterCollector(spy))
+
+	require.NoError(t,
+		r.AddContractHandler(testEventSpec("topic.panic-redact"), noopHandler, "cell-pr", "cell-pr"))
+
+	err := r.Run(t.Context())
+	require.Error(t, err)
+
+	assert.NotContains(t, err.Error(), secret,
+		"Run error must not leak the panic value; redaction is fail-closed")
+
+	if hErr := r.Health(); hErr != nil {
+		assert.NotContains(t, hErr.Error(), secret,
+			"Health() error must not leak the panic value; redaction is fail-closed")
+	}
+
+	setupErrs := spy.errorsCopy()
+	require.Len(t, setupErrs, 1, "panic must record exactly one setup error")
+	assert.Equal(t, string(SetupErrorReasonPanic), setupErrs[0].reason,
+		"reason must be panic (Phase 2 unrecoverable failure)")
+}
+
+// panicWithSecretSubscriber panics with a value that includes a key=value pair
+// matching pkg/redaction's sensitive-key list. Used to verify that recovered
+// panic values are redacted before entering error chains.
+type panicWithSecretSubscriber struct {
+	payload string
+}
+
+func (s *panicWithSecretSubscriber) Setup(_ context.Context, _ outbox.Subscription) error {
+	return nil
+}
+
+func (s *panicWithSecretSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (s *panicWithSecretSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	panic(s.payload)
+}
+func (s *panicWithSecretSubscriber) Close(_ context.Context) error { return nil }
