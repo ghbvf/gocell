@@ -113,7 +113,7 @@ metrics:
         - "10"
         - "30"
         - "60"
-      file: runtime/bootstrap/shutdown_metrics.go
+      file: runtime/observability/metrics/shutdown.go
     - name: bootstrap_shutdown_phase_entries_total
       fqName: gocell_bootstrap_shutdown_phase_entries_total
       namespace: gocell
@@ -121,7 +121,7 @@ metrics:
       help: Total entries into each shutdown phase.
       labels:
         - phase
-      file: runtime/bootstrap/shutdown_metrics.go
+      file: runtime/observability/metrics/shutdown.go
     - name: bootstrap_shutdown_total
       fqName: gocell_bootstrap_shutdown_total
       namespace: gocell
@@ -129,7 +129,7 @@ metrics:
       help: Total completed shutdowns by outcome (success|timeout|teardown_error|signal_error).
       labels:
         - outcome
-      file: runtime/bootstrap/shutdown_metrics.go
+      file: runtime/observability/metrics/shutdown.go
     - name: cached_key_version
       fqName: gocell_vault_cached_key_version
       namespace: gocell
@@ -196,6 +196,32 @@ metrics:
         - disposition
         - result
       file: cmd/corebundle/shared_deps_build.go
+    - name: event_router_ready_wait_seconds
+      fqName: gocell_event_router_ready_wait_seconds
+      namespace: gocell
+      type: histogram
+      help: Time in seconds waited for event router Ready signal. Ready usually completes in <100ms; bootstrap timeout is 30s.
+      labels:
+        - cell
+      buckets:
+        - "0.001"
+        - "0.01"
+        - "0.1"
+        - "0.5"
+        - "1"
+        - "5"
+        - "30"
+      file: runtime/observability/metrics/event.go
+    - name: event_router_setup_errors_total
+      fqName: gocell_event_router_setup_errors_total
+      namespace: gocell
+      type: counter
+      help: Total number of event router subscription setup failures.
+      labels:
+        - cell
+        - topic
+        - reason
+      file: runtime/observability/metrics/event.go
     - name: eventbus_cache_tombstone_evicted_total
       fqName: gocell_eventbus_cache_tombstone_evicted_total
       namespace: gocell
@@ -273,6 +299,16 @@ metrics:
         - cell
         - status
       file: cmd/corebundle/bundle_configcore_storage.go
+    - name: outbox_consumer_rejected_total
+      fqName: gocell_outbox_consumer_rejected_total
+      namespace: gocell
+      type: counter
+      help: Total number of terminal Reject dispositions from outbox ConsumerBase. consumerGroup is not included as a label to bound time-series cardinality.
+      labels:
+        - cell
+        - topic
+        - reason
+      file: runtime/observability/metrics/outbox.go
     - name: outbox_emit_failopen_dropped_total
       fqName: gocell_outbox_emit_failopen_dropped_total
       namespace: gocell
