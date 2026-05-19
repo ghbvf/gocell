@@ -519,4 +519,3 @@ func (m *nonComparableManagedResource) Checkers() map[string]func(context.Contex
 }
 func (m *nonComparableManagedResource) Worker() kworker.Worker        { return nil }
 func (m *nonComparableManagedResource) Close(_ context.Context) error { return nil }
-

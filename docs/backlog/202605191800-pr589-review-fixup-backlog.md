@@ -1,6 +1,6 @@
 # GoCell Backlog — PR #589 review fix-up OOS items
 
-> 来源：PR #589 (D3a-1 metric pack) review fix-up wave 3 cleanup + PR #593 review (6 reviewer)  
+> 来源：PR #589 (D3a-1 metric pack) review fix-up wave 3 cleanup + PR #593 review (6 reviewer)
 > 本文件登记所有因超出当前 PR scope 推迟的事项，防止 silent carryover。
 
 ---

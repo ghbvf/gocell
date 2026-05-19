@@ -341,7 +341,7 @@ metrics:
       fqName: gocell_outbox_pending_depth
       namespace: gocell
       type: gauge
-      help: Current number of pending outbox entries for the owner cell, set on each Relay reclaim tick.
+      help: Current eligible pending outbox entries for the owner cell (status=pending AND next_retry_at IS NULL OR <= now(); excludes rows in retry backoff). Set on each Relay reclaim tick.
       labels:
         - cell
       file: runtime/observability/metrics/outbox.go

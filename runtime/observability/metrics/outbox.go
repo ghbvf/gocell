@@ -76,12 +76,21 @@ func (c *OutboxRejectCollector) ObserveReject(cellID, topic, _ /* consumerGroup 
 // the owner cell supplied at construction. One collector per relay.
 //
 // Metric registered:
-//   - outbox_pending_depth{cell}: current pending outbox entry depth, set on
-//     each Relay reclaim tick. Scoped to the cellID supplied at construction.
+//   - outbox_pending_depth{cell}: current ELIGIBLE pending outbox entry depth
+//     — rows with status=pending AND (next_retry_at IS NULL OR next_retry_at
+//     <= now()). Rows still in retry backoff are EXCLUDED, matching the
+//     ClaimPending eligibility predicate (Store.CountPending). Set on each
+//     Relay reclaim tick.
 //
 // Sampling cadence is bound to Relay.ReclaimInterval (default minutes), not
-// Prometheus scrape interval. SREs should treat this Gauge as "depth at last
-// reclaim tick", not real-time.
+// Prometheus scrape interval. SREs should treat this Gauge as "eligible
+// depth at last reclaim tick", not real-time. A growing retry backlog will
+// not inflate this value — sustained retry backlog must be diagnosed via
+// outbox_consumer_rejected_total or the reclaim-budget readyz probe.
+//
+// PR #593 review fix-up (P2#5) aligned the help text and dashboards with
+// the eligibility semantics introduced when Store.CountPending narrowed
+// to claimable rows.
 //
 // ref: Watermill router metrics middleware — gauge mirroring router queue depth.
 type OutboxPendingDepthCollector struct {
@@ -108,8 +117,10 @@ func NewOutboxPendingDepthCollector(p kernelmetrics.Provider, cellID string) (*O
 	}
 
 	pending, err := p.GaugeVec(kernelmetrics.GaugeOpts{
-		Name:       "outbox_pending_depth",
-		Help:       "Current number of pending outbox entries for the owner cell, set on each Relay reclaim tick.",
+		Name: "outbox_pending_depth",
+		Help: "Current eligible pending outbox entries for the owner cell " +
+			"(status=pending AND next_retry_at IS NULL OR <= now(); excludes rows in retry backoff). " +
+			"Set on each Relay reclaim tick.",
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
