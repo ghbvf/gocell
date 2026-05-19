@@ -2,6 +2,11 @@ package eventrouter
 
 import "time"
 
+// RuntimeErrorReason is the type-safe closed-set for RecordRuntimeError's
+// reason argument. Using a named type prevents callers from passing arbitrary
+// strings and documents the full value set at the type level.
+type RuntimeErrorReason string
+
 // EventCollector receives EventRouter lifecycle observations. The concrete
 // production impl is *runtime/observability/metrics.EventRouterCollector.
 // Defined here as an interface so router_test.go can use a spy implementation
@@ -15,10 +20,11 @@ type EventCollector interface {
 	RecordSetupError(cellID, topic, reason string)
 	ObserveReadyWait(cellID string, d time.Duration)
 	// RecordRuntimeError records a runtime-phase error for the given cell+topic.
-	// reason is a closed-set string drawn from RuntimeErrorReason* constants.
+	// reason is a closed-set value drawn from RuntimeErrorReason* constants;
+	// the typed parameter prevents callers from drifting to free-form strings.
 	// Wave 2: wired into router.go Phase 4 error paths (subscribe_failure,
 	// ready_wait_timeout, runtime_fault).
-	RecordRuntimeError(cellID, topic, reason string)
+	RecordRuntimeError(cellID, topic string, reason RuntimeErrorReason)
 }
 
 // SetupErrorReason* are the closed-set values passed to
@@ -48,15 +54,15 @@ const (
 const (
 	// RuntimeErrorReasonSubscribeFailure is emitted when a subscription
 	// goroutine's SubscribeEntry returns an error after the router is running.
-	RuntimeErrorReasonSubscribeFailure = "subscribe_failure"
+	RuntimeErrorReasonSubscribeFailure RuntimeErrorReason = "subscribe_failure"
 
 	// RuntimeErrorReasonReadyWaitTimeout is emitted when a subscription does
 	// not become ready within the ready-wait budget at runtime (Phase 4).
-	RuntimeErrorReasonReadyWaitTimeout = "ready_wait_timeout"
+	RuntimeErrorReasonReadyWaitTimeout RuntimeErrorReason = "ready_wait_timeout"
 
 	// RuntimeErrorReasonRuntimeFault is emitted for any unclassified runtime
 	// fault detected in Phase 4.
-	RuntimeErrorReasonRuntimeFault = "runtime_fault"
+	RuntimeErrorReasonRuntimeFault RuntimeErrorReason = "runtime_fault"
 )
 
 // NopEventCollector is the default when no collector is wired. All methods are
@@ -76,4 +82,4 @@ func (NopEventCollector) RecordSetupError(string, string, string) {}
 func (NopEventCollector) ObserveReadyWait(string, time.Duration) {}
 
 // RecordRuntimeError is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) RecordRuntimeError(string, string, string) {}
+func (NopEventCollector) RecordRuntimeError(string, string, RuntimeErrorReason) {}

@@ -6,6 +6,7 @@ import (
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/eventrouter"
 )
 
 // EventRouterCollector registers event-router lifecycle metrics:
@@ -148,13 +149,13 @@ func (c *EventRouterCollector) ObserveReadyWait(cellID string, d time.Duration) 
 //   - eventrouter.RuntimeErrorReasonSubscribeFailure ("subscribe_failure"): SubscribeEntry failed (Phase 4)
 //   - eventrouter.RuntimeErrorReasonReadyWaitTimeout ("ready_wait_timeout"): Ready not signaled within timeout (Phase 3)
 //   - eventrouter.RuntimeErrorReasonRuntimeFault ("runtime_fault"): unclassified runtime fault (Phase 4)
-func (c *EventRouterCollector) RecordRuntimeError(cellID, topic, reason string) {
+func (c *EventRouterCollector) RecordRuntimeError(cellID, topic string, reason eventrouter.RuntimeErrorReason) {
 	if c == nil {
 		return
 	}
 	c.runtimeErr.With(kernelmetrics.Labels{
 		"cell":   cellID,
 		"topic":  topic,
-		"reason": reason,
+		"reason": string(reason),
 	}).Inc()
 }

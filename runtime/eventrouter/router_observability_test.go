@@ -61,10 +61,10 @@ func (s *spyEventCollector) RecordSetupError(cellID, topic, reason string) {
 	s.setupErrors = append(s.setupErrors, spyEvent{cellID: cellID, topic: topic, reason: reason})
 }
 
-func (s *spyEventCollector) RecordRuntimeError(cellID, topic, reason string) {
+func (s *spyEventCollector) RecordRuntimeError(cellID, topic string, reason RuntimeErrorReason) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.runtimeErrors = append(s.runtimeErrors, spyEvent{cellID: cellID, topic: topic, reason: reason})
+	s.runtimeErrors = append(s.runtimeErrors, spyEvent{cellID: cellID, topic: topic, reason: string(reason)})
 }
 
 func (s *spyEventCollector) ObserveReadyWait(cellID string, d time.Duration) {
@@ -360,7 +360,7 @@ func TestRouter_RecordRuntimeError_SubscribeFailure(t *testing.T) {
 			"(Phase 4 subscribe_failure path not yet wired in Wave 2)")
 	assert.Equal(t, "cell-rt", rtErrs[0].cellID)
 	assert.Equal(t, "topic.rtfail", rtErrs[0].topic)
-	assert.Equal(t, RuntimeErrorReasonSubscribeFailure, rtErrs[0].reason)
+	assert.Equal(t, string(RuntimeErrorReasonSubscribeFailure), rtErrs[0].reason)
 }
 
 // TestRouter_RecordRuntimeError_ReadyWaitTimeout verifies that when the ready
@@ -391,7 +391,7 @@ func TestRouter_RecordRuntimeError_ReadyWaitTimeout(t *testing.T) {
 			"(Phase 4 ready_wait_timeout path not yet wired in Wave 2)")
 	assert.Equal(t, "cell-rtt", rtErrs[0].cellID)
 	assert.Equal(t, "topic.rttimeout", rtErrs[0].topic)
-	assert.Equal(t, RuntimeErrorReasonReadyWaitTimeout, rtErrs[0].reason)
+	assert.Equal(t, string(RuntimeErrorReasonReadyWaitTimeout), rtErrs[0].reason)
 }
 
 // TestRouter_RecordRuntimeError_RuntimeFault verifies that when a subscription
@@ -425,7 +425,7 @@ func TestRouter_RecordRuntimeError_RuntimeFault(t *testing.T) {
 			"(Phase 4 runtime_fault path not yet wired in Wave 2)")
 	assert.Equal(t, "cell-rtf", rtErrs[0].cellID)
 	assert.Equal(t, "topic.rtfault", rtErrs[0].topic)
-	assert.Equal(t, RuntimeErrorReasonRuntimeFault, rtErrs[0].reason)
+	assert.Equal(t, string(RuntimeErrorReasonRuntimeFault), rtErrs[0].reason)
 }
 
 // ---------------------------------------------------------------------------
@@ -455,7 +455,7 @@ func (panicEventCollector) ObserveReadyWait(_ string, _ time.Duration) {
 	panic("panicEventCollector: ObserveReadyWait panics")
 }
 
-func (panicEventCollector) RecordRuntimeError(_, _, _ string) {
+func (panicEventCollector) RecordRuntimeError(_, _ string, _ RuntimeErrorReason) {
 	panic("panicEventCollector: RecordRuntimeError panics")
 }
 
@@ -564,41 +564,34 @@ func TestRouter_CollectorPanic_RecordRuntimeError_DoesNotEscape(t *testing.T) {
 // TestRouter_CollectorPanic_DecSubscriptionActive_DoesNotEscape verifies that
 // a panic from DecSubscriptionActive does not propagate during router shutdown.
 //
-// Wave 1 RED: no SafeObserve wrapping; panic propagates.
+// Wave 2: IncSubscriptionActive is now protected by SafeObserve, so the router
+// reaches Running() and we can independently test Dec panic isolation during teardown.
 func TestRouter_CollectorPanic_DecSubscriptionActive_DoesNotEscape(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(wrap(sub), clock.Real(), WithEventRouterCollector(panicEventCollector{}))
 	require.NoError(t, r.AddContractHandler(testEventSpec("topic.panic-dec"), noopHandler, "cell-pd", "cell-pd"))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
 
-	// Wait for router to start (IncSubscriptionActive will panic — skip that in this test).
-	// Separate isolation: this test specifically targets DecSubscriptionActive on teardown.
-	// Since IncSubscriptionActive also panics from the same collector, if we reach
-	// Running() it means either IncSubscriptionActive is already isolated (Green world)
-	// or Running() closes before IncSubscriptionActive is called (not our concern here).
-	// In Wave 1, the panic from Inc will prevent Running() from closing, so we'll
-	// see a timeout and skip gracefully.
+	// Wait for router to reach Running() — IncSubscriptionActive is already
+	// protected by SafeObserve (Wave 2), so the panic does not block startup.
 	select {
 	case <-r.Running():
-		// Got here: IncSubscriptionActive didn't panic (already isolated).
-		// Now test DecSubscriptionActive isolation during cancel.
-		cancel()
-		mustNotPanic(t, "DecSubscriptionActive", func() {
-			select {
-			case <-done:
-			case <-time.After(testtime.D2s):
-				t.Error("Run did not exit after cancel")
-			}
-		})
-	case <-time.After(testtime.D500ms):
-		// Wave 1: IncSubscriptionActive panicked before Running() closed.
-		// This test is superseded by TestRouter_CollectorPanic_IncSubscriptionActive_DoesNotEscape.
-		cancel()
-		<-done
-		t.Skip("Wave 1: IncSubscriptionActive panic prevents reaching DecSubscriptionActive test; " +
-			"fix IncSubscriptionActive isolation first (TestRouter_CollectorPanic_IncSubscriptionActive_DoesNotEscape)")
+	case <-time.After(testtime.D2s):
+		t.Fatal("router did not reach Running() within deadline; " +
+			"IncSubscriptionActive panic may still be escaping SafeObserve")
 	}
+
+	// Cancel and verify DecSubscriptionActive panic does not escape.
+	cancel()
+	mustNotPanic(t, "DecSubscriptionActive", func() {
+		select {
+		case <-done:
+		case <-time.After(testtime.D2s):
+			t.Error("Run did not exit after cancel")
+		}
+	})
 }

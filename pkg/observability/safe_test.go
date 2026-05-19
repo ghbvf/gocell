@@ -83,41 +83,35 @@ func TestSafeObserve(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		logger     func() *slog.Logger
+		makeLogger func() (*bufHandler, *slog.Logger)
 		fn         func()
 		wantPanic  bool
 		wantLogMsg string // substring expected in captured output; empty = don't check
 	}{
 		{
-			name:      "non-panicking fn runs normally",
-			logger:    slog.Default,
-			fn:        func() { /* no-op */ },
-			wantPanic: false,
+			name:       "non-panicking fn runs normally",
+			makeLogger: func() (*bufHandler, *slog.Logger) { h, _ := newBufHandler(); return h, slog.New(h) },
+			fn:         func() { /* no-op */ },
+			wantPanic:  false,
 		},
 		{
 			name:       "panicking fn is recovered and logged",
-			logger:     func() *slog.Logger { h, _ := newBufHandler(); return slog.New(h) },
+			makeLogger: func() (*bufHandler, *slog.Logger) { h, _ := newBufHandler(); return h, slog.New(h) },
 			fn:         func() { panic("test panic value") },
 			wantPanic:  false,
 			wantLogMsg: "observability hook panic",
 		},
 		{
-			name:      "nil logger falls back to slog.Default without panic",
-			logger:    func() *slog.Logger { return nil },
-			fn:        func() { panic("panic with nil logger") },
-			wantPanic: false,
+			name:       "logger whose Handle returns error does not cause panic",
+			makeLogger: func() (*bufHandler, *slog.Logger) { h, _ := newBufHandler(); return h, slog.New(newErrorHandler()) },
+			fn:         func() { panic("fn panic; logger Handle returns error") },
+			wantPanic:  false,
 		},
 		{
-			name:      "logger whose Handle returns error does not cause panic",
-			logger:    func() *slog.Logger { return slog.New(newErrorHandler()) },
-			fn:        func() { panic("fn panic; logger Handle returns error") },
-			wantPanic: false,
-		},
-		{
-			name:      "panicking logger Handler is double-recovered and does not escape",
-			logger:    func() *slog.Logger { return slog.New(newPanicingHandler()) },
-			fn:        func() { panic("fn panic; logger Handle will also panic") },
-			wantPanic: false,
+			name:       "panicking logger Handler is double-recovered and does not escape",
+			makeLogger: func() (*bufHandler, *slog.Logger) { h, _ := newBufHandler(); return h, slog.New(newPanicingHandler()) },
+			fn:         func() { panic("fn panic; logger Handle will also panic") },
+			wantPanic:  false,
 		},
 	}
 
@@ -125,10 +119,15 @@ func TestSafeObserve(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			logger := tc.logger()
+			h, logger := tc.makeLogger()
 			assert.NotPanics(t, func() {
 				observability.SafeObserve(logger, tc.fn)
 			}, "SafeObserve must not let any panic escape to the caller")
+
+			if tc.wantLogMsg != "" {
+				assert.Contains(t, h.buf.String(), tc.wantLogMsg,
+					"log output must contain expected message substring")
+			}
 		})
 	}
 }

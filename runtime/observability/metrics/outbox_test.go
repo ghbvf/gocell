@@ -106,6 +106,10 @@ func TestOutboxRejectCollector_ObserveReject_IncrementsCounterWithLabels(t *test
 	if _, ok := got["consumerGroup"]; ok {
 		t.Error("consumerGroup must not be a label on outbox_consumer_rejected_total")
 	}
+	// Cardinality lock: exactly 3 labels {cell, topic, reason} — no extras allowed.
+	if len(got) != 3 {
+		t.Errorf("outbox_consumer_rejected_total must have exactly 3 labels, got %d: %v", len(got), got)
+	}
 }
 
 // TestOutboxRejectCollector_NilReceiver_DoesNotPanic verifies nil-safe call.

@@ -41,7 +41,7 @@ func SafeObserve(logger *slog.Logger, fn func()) {
 				defer func() { _ = recover() }()
 				logger.Error("observability hook panic",
 					slog.Any("panic", redaction.RedactAny(v)),
-					slog.String("stack", string(debug.Stack())),
+					slog.String("stack", redaction.RedactString(string(debug.Stack()))),
 				)
 			}()
 		}
