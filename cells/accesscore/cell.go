@@ -206,16 +206,31 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 	return func(ac *AccessCore) { ac.configGetter = c }
 }
 
-// WithSetupLock injects a cross-process advisory lock for the admin-provisioning
-// path (multi-pod PG deployments). When set, CreateAdmin acquires the lock at
-// the start of the RunInTx body before calling adminprovision.Ensure — the lock,
-// user write, and outbox emit share one transaction. Nil is a no-op (mem mode
-// keeps the intra-process sync.Mutex). Closes backlog ADMINPROVISION-DIST-LOCK-01.
+// WithSetupLock injects the cross-process advisory lock for the admin-provisioning
+// path. CreateAdmin acquires it at the start of the RunInTx body before calling
+// adminprovision.Ensure — the lock, user write, and outbox emit share one
+// transaction.
+//
+// REQUIRED: initValidate() rejects a missing or nil setupLock with
+// ErrCellInvalidConfig so that the cell will not start without a properly-wired
+// serialization primitive. The previous in-process sync.Mutex inside
+// adminprovision.Provisioner has been removed; the only serialization path is
+// now ambient RunInTx + this setupLock.
+//
+// Composition roots wire:
+//   - PG mode: accesspg.NewSetupLock(deps) — pg_advisory_xact_lock across pods
+//     and goroutines (Closes backlog ADMINPROVISION-DIST-LOCK-01).
+//   - Memstore mode: accesscore.NoopSetupLock{} — memTxRunner.RunInTx already
+//     holds store.mu for the entire closure.
+//
+// Both bare-nil and typed-nil ports.SetupLock are rejected at phase0.
 func WithSetupLock(lock ports.SetupLock) Option {
 	return func(c *AccessCore) {
-		if lock != nil {
-			c.setupLock = lock
+		if validation.IsNilInterface(lock) {
+			c.setupLockNil = true
+			return
 		}
+		c.setupLock = lock
 	}
 }
 
@@ -320,10 +335,19 @@ type AccessCore struct {
 	// Persistent operator authenticator on the single setup-driven admin path (ADR §D2).
 	bootstrapAuth func(http.Handler) http.Handler
 
-	// setupLock is an optional cross-process advisory lock injected by the PG
-	// composition root (accesscore/postgres.NewSetupLock). Nil in mem mode — the
-	// intra-process sync.Mutex in adminprovision.Provisioner is sufficient.
-	// Closes backlog ADMINPROVISION-DIST-LOCK-01.
+	// setupLockNil is the sentinel flag set when WithSetupLock receives a
+	// bare-nil or typed-nil ports.SetupLock. initValidate() checks both this
+	// flag and setupLock itself so that explicitly passing nil cannot bypass
+	// the required-dependency check.
+	setupLockNil bool
+
+	// setupLock is the REQUIRED serialization primitive for the admin-provisioning
+	// path. PG composition roots wire accesspg.NewSetupLock(deps)
+	// (pg_advisory_xact_lock — Closes backlog ADMINPROVISION-DIST-LOCK-01);
+	// memstore composition roots wire accesscore.NoopSetupLock{} because
+	// memTxRunner.RunInTx already holds store.mu for the whole closure.
+	// initValidate() rejects nil — the previous in-process sync.Mutex inside
+	// adminprovision.Provisioner has been deleted.
 	setupLock ports.SetupLock
 
 	// casProtocol is the CAS primitive for the ChangePassword path (S6).

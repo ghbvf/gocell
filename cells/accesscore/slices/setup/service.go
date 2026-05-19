@@ -64,12 +64,16 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	}
 }
 
-// WithSetupLock injects a cross-process advisory lock for the admin-provisioning
-// path. When set, CreateAdmin acquires the lock at the start of the RunInTx body
-// before calling adminprovision.Ensure — the lock, user write, and outbox emit
-// share a single transaction scope. A nil argument is a silent no-op (mem mode
-// keeps the intra-process sync.Mutex serialization). Closes backlog
-// ADMINPROVISION-DIST-LOCK-01.
+// WithSetupLock injects the REQUIRED serialization primitive for the
+// admin-provisioning path. CreateAdmin acquires the lock at the start of the
+// RunInTx body before calling adminprovision.Ensure — the lock, user write,
+// and outbox emit share a single transaction scope.
+//
+// NewService rejects a missing or nil setupLock with ErrValidationFailed so
+// that mis-wired assemblies fail at startup rather than at the first
+// CreateAdmin call. The cell-level WithSetupLock injects this option from
+// cells/accesscore composition; see accesscore.WithSetupLock godoc for the
+// PG vs memstore wiring choice.
 func WithSetupLock(lock ports.SetupLock) Option {
 	return func(s *Service) {
 		if lock != nil {
@@ -84,10 +88,11 @@ type Service struct {
 	txRunner    persistence.CellTxManager
 	emitter     outbox.Emitter
 	logger      *slog.Logger
-	// setupLock is an optional cross-process advisory lock (PG mode). When set,
-	// CreateAdmin acquires it inside RunInTx before calling provisioner.Ensure so
-	// that multi-pod deployments cannot both persist an admin concurrently.
-	// Nil in mem mode — the intra-process sync.Mutex in Provisioner is sufficient.
+	// setupLock is the REQUIRED serialization primitive for the admin-provisioning
+	// path. CreateAdmin acquires it inside RunInTx before calling
+	// provisioner.Ensure. PG mode uses pg_advisory_xact_lock (cross-pod);
+	// memstore mode uses accesscore.NoopSetupLock{} because memTxRunner.RunInTx
+	// already serializes goroutines via store.mu. NewService rejects nil.
 	setupLock ports.SetupLock
 }
 
@@ -110,6 +115,12 @@ func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, op
 	}
 	if s.txRunner == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "setup: TxRunner required; use WithTxManager")
+	}
+	if validation.IsNilInterface(s.setupLock) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"setup: setupLock required; use WithSetupLock — PG callers wire "+
+				"accesspg.NewSetupLock(deps), memstore callers wire "+
+				"accesscore.NoopSetupLock{}")
 	}
 	return s, nil
 }
@@ -187,15 +198,14 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 
 	var out *CreateAdminOutput
 	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		// Acquire the cross-process advisory lock first so that concurrent pods
-		// cannot both pass the CountByRole==0 fast-path and each persist an admin
-		// row. The xact-scoped lock is released automatically at tx commit/rollback.
-		// In mem mode setupLock is nil and the existing sync.Mutex in Provisioner
-		// serializes within-process concurrency.
-		if s.setupLock != nil {
-			if err := s.setupLock.Acquire(txCtx); err != nil {
-				return fmt.Errorf("setup: acquire setup lock: %w", err)
-			}
+		// Acquire the setup lock first so that the CountByRole==0 fast-path,
+		// user write, and outbox emit all run under the same serialization
+		// boundary. PG mode uses pg_advisory_xact_lock (cross-pod); memstore
+		// mode uses NoopSetupLock — memTxRunner.RunInTx itself holds store.mu
+		// for the whole closure, already serializing within-process goroutines.
+		// NewService rejects nil at construction so this call is always safe.
+		if err := s.setupLock.Acquire(txCtx); err != nil {
+			return fmt.Errorf("setup: acquire setup lock: %w", err)
 		}
 		user, err := s.provisionAndMaybeEmit(txCtx, in, hash)
 		if err != nil {

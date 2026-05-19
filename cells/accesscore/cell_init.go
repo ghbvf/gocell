@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
@@ -327,6 +328,14 @@ func (c *AccessCore) initSlices() error {
 				"need a per-route replacement authenticator; composition root must wire "+
 				"runtime/auth.NewBootstrapMiddleware via WithBootstrapAuth). "+
 				"See docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D1.")
+	}
+	if c.setupLockNil || validation.IsNilInterface(c.setupLock) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: WithSetupLock is required for admin-provisioning serialization; "+
+				"PG composition roots wire accesspg.NewSetupLock(deps), memstore callers "+
+				"wire accesscore.NoopSetupLock{} (memTxRunner.RunInTx already serializes "+
+				"via store.mu). The previous in-process sync.Mutex inside "+
+				"adminprovision.Provisioner has been removed.")
 	}
 	setupProv, err := adminprovision.NewProvisioner(c.userRepo, c.roleRepo, c.logger, uuid.NewString, c.clk)
 	if err != nil {
