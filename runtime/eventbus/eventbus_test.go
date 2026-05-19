@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1502,6 +1504,196 @@ func (r *failingReleaseReceipt) Release(_ context.Context) error {
 	return r.err
 }
 func (r *failingReleaseReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
+
+// ---------------------------------------------------------------------------
+// R-02: drop-path log level + contextual fields
+// ---------------------------------------------------------------------------
+
+// captureSlogHandler is a test-only slog.Handler that captures every Record.
+// Mirrors the pattern used in cells/configcore/slogtest_helper_test.go.
+type captureSlogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureSlogHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureSlogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *captureSlogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureSlogHandler) WithGroup(string) slog.Handler      { return h }
+
+// findLogAttr returns the first slog.Attr with the given key from a Record.
+func findLogAttr(r slog.Record, key string) (slog.Attr, bool) {
+	var found slog.Attr
+	var ok bool
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			found = a
+			ok = true
+			return false
+		}
+		return true
+	})
+	return found, ok
+}
+
+// TestBroadcast_BufferFull_LogsErrorWithContextualFields verifies R-02:
+// when the broadcast drop path fires, the log record must be at slog.LevelError
+// and carry entry_id, aggregate_id, and event_type attributes.
+//
+// Strategy: inject a subscription directly into groupSubs with a pre-filled
+// channel (no goroutine draining it) so the drop is deterministic.
+func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
+	cap := &captureSlogHandler{}
+	logger := slog.New(cap)
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	bus := New(WithClock(clock.Real()), WithBufferSize(1))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	// Inject a subscription with a pre-filled channel directly.
+	// The subscriber channel has capacity 1 and is already full, so any Publish
+	// must take the default (drop) branch. No goroutine is draining it.
+	_, cancelSub := context.WithCancel(context.Background())
+	t.Cleanup(cancelSub)
+	sub := &subscription{
+		ch:     make(chan outbox.Entry, 1),
+		cancel: cancelSub,
+		done:   make(chan struct{}),
+	}
+	filler := outbox.Entry{ID: "filler", EventType: "drop.broadcast.v1", Topic: "drop.broadcast.v1"}
+	sub.ch <- filler // pre-fill to capacity
+
+	bus.mu.Lock()
+	bus.groupSubs["drop.broadcast.v1"] = map[string]*groupState{
+		"": {subs: []*subscription{sub}},
+	}
+	bus.mu.Unlock()
+
+	// Build and publish the entry-under-test.
+	entry := outbox.Entry{
+		ID:          "evt-broadcast-drop-2",
+		AggregateID: "agg-bcast-002",
+		EventType:   "drop.broadcast.v1",
+		Topic:       "drop.broadcast.v1",
+		Payload:     []byte(`{"x":2}`),
+	}
+	env, err := outbox.MarshalEnvelope(entry)
+	require.NoError(t, err)
+	require.NoError(t, bus.Publish(context.Background(), "drop.broadcast.v1", env))
+
+	// Drop fires synchronously inside Publish, so the record is already captured.
+	cap.mu.Lock()
+	var dropRecord *slog.Record
+	for i := range cap.records {
+		if cap.records[i].Level == slog.LevelError &&
+			strings.Contains(cap.records[i].Message, "dropped") {
+			r := cap.records[i]
+			dropRecord = &r
+			break
+		}
+	}
+	cap.mu.Unlock()
+	require.NotNil(t, dropRecord, "slog.Error drop record must be captured synchronously")
+
+	topicAttr, ok := findLogAttr(*dropRecord, "topic")
+	require.True(t, ok, "drop record must carry 'topic'")
+	assert.Equal(t, "drop.broadcast.v1", topicAttr.Value.String())
+
+	entryIDAttr, ok := findLogAttr(*dropRecord, "entry_id")
+	require.True(t, ok, "drop record must carry 'entry_id'")
+	assert.Equal(t, "evt-broadcast-drop-2", entryIDAttr.Value.String())
+
+	aggIDAttr, ok := findLogAttr(*dropRecord, "aggregate_id")
+	require.True(t, ok, "drop record must carry 'aggregate_id'")
+	assert.Equal(t, "agg-bcast-002", aggIDAttr.Value.String())
+
+	evtTypeAttr, ok := findLogAttr(*dropRecord, "event_type")
+	require.True(t, ok, "drop record must carry 'event_type'")
+	assert.Equal(t, "drop.broadcast.v1", evtTypeAttr.Value.String())
+}
+
+// TestRoundRobin_BufferFull_LogsErrorWithContextualFields verifies R-02:
+// when the roundRobin drop path fires, the log record must be at slog.LevelError
+// and carry entry_id, aggregate_id, event_type, and consumer_group attributes.
+//
+// Strategy: same as broadcast test — inject pre-filled subscription directly.
+func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
+	cap := &captureSlogHandler{}
+	logger := slog.New(cap)
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	bus := New(WithClock(clock.Real()), WithBufferSize(1))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	_, cancelSub := context.WithCancel(context.Background())
+	t.Cleanup(cancelSub)
+	sub := &subscription{
+		ch:     make(chan outbox.Entry, 1),
+		cancel: cancelSub,
+		done:   make(chan struct{}),
+	}
+	filler := outbox.Entry{ID: "filler", EventType: "drop.roundrobin.v1", Topic: "drop.roundrobin.v1"}
+	sub.ch <- filler
+
+	bus.mu.Lock()
+	bus.groupSubs["drop.roundrobin.v1"] = map[string]*groupState{
+		"drop-cg": {subs: []*subscription{sub}},
+	}
+	bus.mu.Unlock()
+
+	entry := outbox.Entry{
+		ID:          "evt-rr-drop-2",
+		AggregateID: "agg-rr-002",
+		EventType:   "drop.roundrobin.v1",
+		Topic:       "drop.roundrobin.v1",
+		Payload:     []byte(`{"x":2}`),
+	}
+	env, err := outbox.MarshalEnvelope(entry)
+	require.NoError(t, err)
+	require.NoError(t, bus.Publish(context.Background(), "drop.roundrobin.v1", env))
+
+	cap.mu.Lock()
+	var dropRecord *slog.Record
+	for i := range cap.records {
+		if cap.records[i].Level == slog.LevelError &&
+			strings.Contains(cap.records[i].Message, "dropped") {
+			r := cap.records[i]
+			dropRecord = &r
+			break
+		}
+	}
+	cap.mu.Unlock()
+	require.NotNil(t, dropRecord, "slog.Error drop record must be captured synchronously")
+
+	topicAttr, ok := findLogAttr(*dropRecord, "topic")
+	require.True(t, ok, "drop record must carry 'topic'")
+	assert.Equal(t, "drop.roundrobin.v1", topicAttr.Value.String())
+
+	cgAttr, ok := findLogAttr(*dropRecord, "consumer_group")
+	require.True(t, ok, "drop record must carry 'consumer_group'")
+	assert.Equal(t, "drop-cg", cgAttr.Value.String())
+
+	entryIDAttr, ok := findLogAttr(*dropRecord, "entry_id")
+	require.True(t, ok, "drop record must carry 'entry_id'")
+	assert.Equal(t, "evt-rr-drop-2", entryIDAttr.Value.String())
+
+	aggIDAttr, ok := findLogAttr(*dropRecord, "aggregate_id")
+	require.True(t, ok, "drop record must carry 'aggregate_id'")
+	assert.Equal(t, "agg-rr-002", aggIDAttr.Value.String())
+
+	evtTypeAttr, ok := findLogAttr(*dropRecord, "event_type")
+	require.True(t, ok, "drop record must carry 'event_type'")
+	assert.Equal(t, "drop.roundrobin.v1", evtTypeAttr.Value.String())
+}
 
 // Verify interface compliance at compile time.
 var (

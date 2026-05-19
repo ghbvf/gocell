@@ -180,8 +180,11 @@ func (b *InMemoryEventBus) broadcast(topic string, gs *groupState, entry outbox.
 		select {
 		case sub.ch <- entry:
 		default:
-			slog.Warn("eventbus: subscriber buffer full, message dropped",
+			slog.Error("eventbus: subscriber buffer full, message dropped",
 				slog.String("topic", topic),
+				slog.String("entry_id", entry.ID),
+				slog.String("aggregate_id", entry.AggregateID),
+				slog.String("event_type", entry.EventType),
 			)
 		}
 	}
@@ -195,9 +198,12 @@ func (b *InMemoryEventBus) roundRobin(topic, group string, gs *groupState, entry
 	select {
 	case sub.ch <- entry:
 	default:
-		slog.Warn("eventbus: subscriber buffer full, message dropped",
+		slog.Error("eventbus: subscriber buffer full, message dropped",
 			slog.String("topic", topic),
 			slog.String("consumer_group", group),
+			slog.String("entry_id", entry.ID),
+			slog.String("aggregate_id", entry.AggregateID),
+			slog.String("event_type", entry.EventType),
 		)
 	}
 }
