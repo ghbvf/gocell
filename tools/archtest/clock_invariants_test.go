@@ -1088,7 +1088,15 @@ func runClockResetRelativeFixtureScan(t *testing.T, fixtureDir string) []Diagnos
 //     reach this primitive via const-literal reason.
 var allowedRealClockPaths = []string{
 	"kernel/clock/",
-	"pkg/testutil/testwait/",
+	// pkg/testutil/testwait/testwait.go — file-scoped allowlist entry.
+	// fileroles.IsProductionCode("pkg/testutil/testwait/testwait.go") returns
+	// true (testwait.go is not a _test.go file, not under examples/, vendor/,
+	// generated/, testdata/, or tools/archtest/). The allowlist entry IS
+	// functionally needed, not defensive: testwait.go uses time.NewTicker and
+	// time.After directly in External / Deterministic — the typed-marker funnel
+	// itself must call stdlib time. File-scoped matching prevents a future
+	// sibling file in the same directory from silently inheriting the exemption.
+	"pkg/testutil/testwait/testwait.go",
 }
 
 // forbiddenTimeFns maps each forbidden stdlib time function to the equivalent

@@ -87,6 +87,8 @@
 
   ref: `tools/archtest/pg_repo_ambient_tx_test.go` + `tools/archtest/internal/pgrepoambienttxfixture/fixture.go` + ADR `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4.5.1.
 
+- **typed function call for test-side wall-clock polling** — `pkg/testutil/testwait.External` is the only approved entry for synchronous polling waits in tests; archtest `TEST-POLLING-EXTERNAL-REASON-LITERAL-01` enforces (callee, arg) form-uniqueness on (`External`, kebab-case `*ast.BasicLit` STRING reason). Hard downstream + Soft upstream transitional; upstream funnel closure (banning bare `require.Eventually`) backlog `TEST-EVENTUALLY-FUNNEL-01` (registered in `docs/plans/202605181600-042-archtest.md` §1.1 PR3). See `pkg/testutil/testwait/testwait.go` godoc.
+
 ## archtest 文件命名
 
 - 单条独立规则 → `{rule}_test.go`

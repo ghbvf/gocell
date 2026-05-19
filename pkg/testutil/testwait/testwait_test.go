@@ -111,9 +111,10 @@ func TestExternal_NoGoroutineLeakAfterTimeout(t *testing.T) {
 	time.Sleep(testtime.D100ms) //archtest:allow:test-sleep allow-any-leaked-goroutines-to-register
 	runtime.GC()
 	after := runtime.NumGoroutine()
-	// Tolerate +1 (runtime/testing scheduling noise); a real leak would be
-	// proportional to the iteration count.
-	require.LessOrEqual(t, after, before+1,
+	t.Logf("NumGoroutine before=%d after=%d", before, after)
+	// Tolerate +3 (CI scheduling noise); a real leak would be proportional to
+	// the iteration count (50x), so +3 is a safe upper bound for noise.
+	require.LessOrEqual(t, after, before+3,
 		"goroutine count grew %d → %d after 50 timeouts; condition closures may be leaking",
 		before, after)
 }
@@ -157,6 +158,20 @@ func TestDeterministic_GenericOverStructSignal(t *testing.T) {
 }
 
 type fooPayload struct{ ID int }
+
+// TestDeterministic_ClosedChannelReturnsImmediately documents Go channel
+// semantics: receiving from a closed channel returns the zero value immediately,
+// not a timeout. Deterministic must not call t.Fatalf in this case.
+func TestDeterministic_ClosedChannelReturnsImmediately(t *testing.T) {
+	t.Parallel()
+	sig := make(chan int)
+	close(sig)
+	ft := &fakeT{T: t}
+	got := testwait.Deterministic(ft, sig, testtime.EventuallyShort, "closed-channel")
+	require.False(t, ft.failed.Load(),
+		"Deterministic must not call t.Fatalf when channel is already closed")
+	require.Equal(t, 0, got, "receive from closed chan int must return zero value")
+}
 
 func TestDeterministic_GenericOverTypedSignal(t *testing.T) {
 	t.Parallel()

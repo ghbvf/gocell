@@ -1,7 +1,6 @@
 package archtest
 
-// invariants:
-//   - INVARIANT: TEST-POLLING-EXTERNAL-REASON-LITERAL-01
+// INVARIANT: TEST-POLLING-EXTERNAL-REASON-LITERAL-01
 //
 // test_polling_external_reason_literal_test.go — Hard downstream funnel for
 // pkg/testutil/testwait.External:
@@ -20,6 +19,8 @@ package archtest
 // Until then this rule is "Hard downstream + Soft upstream" transitional;
 // AI-rebust §"Funnel 双向锁评级" explicitly permits this with backlog
 // registration, anchored at plan §1.1.
+// Upstream funnel closure backlog anchor: TEST-EVENTUALLY-FUNNEL-01 (registered
+// in docs/plans/202605181600-042-archtest.md §1.1 PR3).
 
 import (
 	"fmt"
@@ -51,10 +52,13 @@ const testwaitExternalFunc = "External"
 var testwaitReasonFormat = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
 
 // testwaitReasonPlaceholder matches reason literals that are placeholder
-// identifiers (todo / fixme / tbd / xxx / placeholder / wip) optionally followed
-// by a hyphen and more text. These are rejected because they provide no
-// descriptive information about the polling site.
-var testwaitReasonPlaceholder = regexp.MustCompile(`^(todo|fixme|tbd|xxx|placeholder|wip)(-|$)`)
+// identifiers (todo / fixme / tbd / xxx / placeholder / wip / hack / temp /
+// test / dummy) optionally followed by a hyphen and more text. These are
+// rejected because they provide no descriptive information about the polling
+// site. "test" and "dummy" are included because they leak test scaffolding
+// as permanent reason labels; "hack" and "temp" signal explicitly temporary
+// explanations that should be replaced before merging.
+var testwaitReasonPlaceholder = regexp.MustCompile(`^(todo|fixme|tbd|xxx|placeholder|wip|hack|temp|test|dummy)(-|$)`)
 
 type testwaitExternalViolation struct {
 	File   string
@@ -274,13 +278,16 @@ func TestExternalReasonLiteral(t *testing.T) {
 	}
 	assert.Empty(t, violations,
 		"%s: every testwait.External call must pass a const kebab-case string literal "+
-			"as args[1]. See pkg/testutil/testwait and docs/plans/202605181600-042-archtest.md §1.1.",
+			"as args[1]. See pkg/testutil/testwait and docs/plans/202605181600-042-archtest.md §1.1. "+
+			"Run: go test ./tools/archtest/... -run TestExternalReasonLiteral$ for local repro.",
 		ruleTestPollingExternalReasonLiteral01)
 }
 
 // TestExternalReasonLiteralFixtures verifies the rule logic against static
 // fixture packages under tools/archtest/testdata/testwait_external_fixtures/.
 // Each fixture dir owns a diag.golden capturing the rule's real output.
+//
+// To regenerate golden files: go test ./tools/archtest/... -run TestExternalReasonLiteralFixtures$ -update.
 func TestExternalReasonLiteralFixtures(t *testing.T) {
 	t.Parallel()
 
@@ -292,6 +299,12 @@ func TestExternalReasonLiteralFixtures(t *testing.T) {
 		"reason_sprintf_red",
 		"reason_concat_red",
 		"reason_const_ident_red",
+		// reason_cross_pkg_const_red proves that cross-package SelectorExpr
+		// const references (helper.ReasonConst) are rejected by the
+		// "not BasicLit" check, complementing reason_const_ident_red (same-pkg
+		// Ident). See the archtest blind-spot analysis in TestExternalReasonLiteral
+		// godoc: both paths hit the same rejection branch.
+		"reason_cross_pkg_const_red",
 		"reason_format_invalid_red",
 		"reason_placeholder_red",
 	}

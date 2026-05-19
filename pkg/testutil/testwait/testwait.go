@@ -20,6 +20,8 @@
 // then this funnel is "Hard downstream + Soft upstream" transitional. AI-rebust
 // §"Funnel 双向锁评级" permits this with backlog registration; the registration
 // anchor is plan §1.1 PR3 — see .claude/rules/gocell/ai-collab.md.
+// Upstream funnel closure backlog anchor: TEST-EVENTUALLY-FUNNEL-01 (registered
+// in docs/plans/202605181600-042-archtest.md §1.1 PR3).
 //
 // ref: stretchr/testify pull/1657 (synchronous Eventually proposal — root of
 //
@@ -48,8 +50,16 @@ type TB interface {
 	Fatalf(format string, args ...any)
 }
 
-// External polls condition until it returns true or timeout fires. reason
-// MUST be a const string literal in kebab-case form (matching
+// External polls condition until it returns true or timeout fires.
+//
+// Note: parameter order is (t, reason, condition, ...) which DIFFERS from
+// testify's (t, condition, ...). reason precedes condition by design — see
+// archtest TEST-POLLING-EXTERNAL-REASON-LITERAL-01 for the rationale: the
+// reason must be a visible const literal at the callsite, placing it as the
+// second argument (immediately after t) makes it hard to omit accidentally
+// and easy to find when grep-scanning CI failure output.
+//
+// reason MUST be a const string literal in kebab-case form (matching
 // ^[a-z][a-z0-9-]+$); archtest TEST-POLLING-EXTERNAL-REASON-LITERAL-01
 // rejects any other form (variable, fmt.Sprintf, concatenation, const ident).
 //
@@ -103,6 +113,13 @@ func External(t TB, reason string, condition func() bool,
 // Hard via Go type system: signal's <-chan T signature lets callers receive
 // any payload type but forbids "polling via Deterministic" — the API name
 // and signature together pin the channel-blocking semantics.
+//
+// For CI grep-ability, pass a short label string as the first msgAndArg:
+//
+//	testwait.Deterministic(t, sig, testtime.EventuallyShort, "session-created")
+//
+// The label appears verbatim in the t.Fatalf output, making the timeout
+// site findable via `grep "session-created" ci.log`.
 func Deterministic[T any](t TB, signal <-chan T, timeout time.Duration,
 	msgAndArgs ...any,
 ) T {
