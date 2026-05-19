@@ -36,7 +36,7 @@ SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE users
     ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0
-        CHECK (failed_login_count >= 0),
+        CONSTRAINT users_failed_login_count_positive CHECK (failed_login_count >= 0),
     ADD COLUMN last_failed_at TIMESTAMPTZ,
     ADD COLUMN locked_until TIMESTAMPTZ;
 
@@ -57,6 +57,8 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
+
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE users
     DROP COLUMN IF EXISTS locked_until,

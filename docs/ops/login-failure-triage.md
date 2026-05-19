@@ -162,9 +162,11 @@ jq 'select(.msg | startswith("sessionlogin: lockout record failure"))'
 
 **首选：BootstrapAuth setup endpoint（FMT-28）**
 
-`/api/v1/*/setup/admin` endpoint 走独立认证面（HTTP Basic via env `GOCELL_SETUP_ADMIN_USERNAME` + `GOCELL_SETUP_ADMIN_PASSWORD`），不参与 password-login lockout：
+`/api/v1/*/setup/admin` endpoint 走独立认证面（HTTP Basic via env `GOCELL_BOOTSTRAP_ADMIN_USERNAME` + `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`），不参与 password-login lockout：
 1. 确认 env 凭证仍可用（生产部署应保留）
 2. 用 setup endpoint 重置 admin 密码 / 状态（具体 endpoint 参考 contracts/http/auth/setup/admin/*）
+
+> ref: `cmd/corebundle/access_module.go::loadBootstrapCredentials`、Keycloak `KC_BOOTSTRAP_ADMIN_USERNAME`
 
 **次选：DB-level recovery（ops 操作）**
 
@@ -179,10 +181,12 @@ WHERE id='<admin-user-id>';
 注意：此操作不通过 authzmutate funnel，不会 bump authz_epoch。如果担心 stale session，配合：
 
 ```sql
-UPDATE sessions SET revoked_at=NOW() WHERE user_id='<admin-user-id>' AND revoked_at IS NULL;
-UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id='<admin-user-id>' AND revoked_at IS NULL;
+-- sessions.subject_id is the FK to users.id (migration 018);
+-- refresh_tokens.user_id is the FK to users.id (migration 007).
+UPDATE sessions       SET revoked_at=NOW() WHERE subject_id='<admin-user-id>' AND revoked_at IS NULL;
+UPDATE refresh_tokens SET revoked_at=NOW() WHERE user_id='<admin-user-id>'    AND revoked_at IS NULL;
 ```
 
 ### 防御
 
-监控 `auth_account_lockout_total{reason="threshold_locked"}` rate。设置告警阈值（如 > 1/min 持续 5min）。
+监控 `auth_account_lockout_total{reason="threshold_locked"}` rate。`rate()` 单位是 events-per-second，`docs/ops/alerting-rules.md` 的 GoCellAuthAccountAutoLockSpike 规则用 `rate(...[5m]) > 1`（≈ 60 锁定/min 持续 5min）作为触发条件。如需更敏感阈值（例如 1 锁定/min ≈ rate ≈ 0.017），按 `(events_per_min)/60` 换算 PromQL 数值。

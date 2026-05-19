@@ -117,10 +117,18 @@ func NewService(
 // RunInTx closure; user MUST have been fetched with GetByUsernameForUpdate
 // inside the same tx so the row lock holds across the read-decide-write.
 //
-// Short-circuit: if user.Status() == StatusLocked already, RecordFailure is
-// a no-op (returns nil without touching the counter or the funnel) — once
-// locked, additional failures don't deepen the lock (avoids unbounded counter
-// growth and double-emit of event.user.locked.v1).
+// Short-circuit: if user.Status() != StatusActive (i.e. already Locked or
+// Suspended), RecordFailure is a no-op (returns nil without touching the
+// counter or the funnel). The auto-lockout counter is meaningful only for
+// candidates that could otherwise authenticate; non-active states are owned
+// by other lifecycle paths:
+//
+//   - StatusLocked: already auto- or admin-locked; additional failures must
+//     not re-emit the lock event or grow the counter unboundedly.
+//   - StatusSuspended: admin holds the lifecycle. The failure counter must
+//     NOT silently escalate Suspended → Locked, because TryLazyUnlock's TTL
+//     would then later flip the row back to Active (re-activating an
+//     admin-suspended account). PR #585 review P1#2.
 //
 // Mutation sequence (when status==Active and a lock is triggered):
 //  1. user.RegisterFailedLogin(now, StaleWindow, LockoutTTL, Threshold) —
@@ -136,9 +144,10 @@ func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"accountlockout.RecordFailure: user must not be nil")
 	}
-	if user.Status() == domain.StatusLocked {
-		// Already locked — short-circuit so the lock is not re-emitted and the
-		// counter does not grow unboundedly.
+	if user.Status() != domain.StatusActive {
+		// Non-Active short-circuit — the auto-lockout counter is meaningful
+		// only for Active users. See godoc for the Locked / Suspended
+		// rationale (PR #585 review P1#2).
 		return nil
 	}
 	now := s.clk.Now()

@@ -461,6 +461,10 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
 短时内多个账户被自动锁定，可能意味着暴力破解攻击或系统性认证问题。
 
 ```yaml
+# rate() returns events-per-second. The expr `rate(...[5m]) > 1` therefore
+# fires when the smoothed lockout rate exceeds 1 lock/second (≈ 60 locks/min)
+# over the trailing 5-minute window. Tune by `(target_locks_per_min)/60`
+# (e.g. 1 lock/min → > 0.017). Description text matches this semantics.
 - alert: GoCellAuthAccountAutoLockSpike
   expr: sum(rate(gocell_auth_account_lockout_total{reason="threshold_locked"}[5m])) > 1
   for: 5m
@@ -469,7 +473,7 @@ sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition
     cell: accesscore
   annotations:
     summary: "Account auto-lockout spike detected"
-    description: "Accounts are being auto-locked at >1/min. Possible brute-force attack or systemic auth issue. Runbook: docs/ops/login-failure-triage.md#auto-lockout-相关-slog-事件"
+    description: "Accounts are being auto-locked at >1/sec (≈ 60/min) over a 5-minute window. Possible brute-force attack or systemic auth issue. Runbook: docs/ops/login-failure-triage.md#auto-lockout-相关-slog-事件"
 ```
 
 ### GoCellAuthAccountLazyUnlockUnusualFrequency

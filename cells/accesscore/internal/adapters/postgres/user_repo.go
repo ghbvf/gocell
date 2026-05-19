@@ -130,10 +130,18 @@ FOR UPDATE`
 	// (S4 wires the per-event bump path). Calling Update() after a credential
 	// state change (role revoke, password reset, lock, delete) does NOT bump
 	// authz_epoch. Use UpdateAuthzEpoch for that purpose.
+	//
+	// PR #585 review P1#3: the lockout-bookkeeping columns
+	// (failed_login_count, last_failed_at, locked_until) ARE included so that
+	// authzmutate.ActivateUser — whose apply() calls domain.User.ResetFailedLogins()
+	// — persists the zeroing via the standard Update path. Without these columns
+	// the in-memory zeroing never reached PG, and admin unlock / TryLazyUnlock
+	// silently left the stored counter at its pre-unlock value.
 	updateUserSQL = `
 UPDATE users
 SET username = $2, email = $3, password_hash = $4, password_reset_required = $5,
-    status = $6, creation_source = $7, updated_at = $8
+    status = $6, creation_source = $7, updated_at = $8,
+    failed_login_count = $9, last_failed_at = $10, locked_until = $11
 WHERE id = $1`
 
 	deleteUserSQL = `DELETE FROM users WHERE id = $1`
@@ -313,6 +321,12 @@ func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string
 // application-layer guard so client handlers match a single business
 // invariant regardless of which layer caught the violation.
 func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
+	count := user.FailedLoginCount()
+	if count < 0 || int64(count) > int64(maxFailedLoginCount) {
+		return errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"user_repo: failed_login_count out of range",
+			errcode.WithInternal(fmt.Sprintf("id=%s count=%d", user.ID, count)))
+	}
 	tag, err := r.db.Exec(ctx, updateUserSQL,
 		user.ID,
 		user.Username,
@@ -322,6 +336,11 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		string(user.Status()),
 		string(user.CreationSource),
 		user.UpdatedAt,
+		// G115 bounds-check is performed above against maxFailedLoginCount; the
+		// int32 conversion below cannot overflow.
+		int32(count),
+		user.LastFailedAt(),
+		user.AutoLockoutDeadline(),
 	)
 	if err != nil {
 		if isLastAdminProtected(err) {

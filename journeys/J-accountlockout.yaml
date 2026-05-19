@@ -12,27 +12,28 @@ contracts:
   - http.auth.user.lock.v1
   - http.auth.user.unlock.v1
 passCriteria:
-  # NOTE: auto-lock / event-publish / admin-unlock are mode: manual because the
-  # production code paths cross the cells/accesscore/internal/ boundary
-  # (accountlockout.Service / authzmutate.Mutator / identitymanage.Service all
-  # require the internal credentialinvalidate.Invalidator + authzmutate funnel)
-  # and have no Docker-free load-bearing seam reachable from tests/integration/.
-  # They will be promoted back to mode: auto by
-  # JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION-01 (docs/backlog/cap-14-tooling.md)
-  # once either (a) cmd/corebundle is extracted to a library package and a
-  # tests/testutil/corebundle/ harness becomes importable, or (b)
-  # tests/integration/l2atomicity/ adds a J-accountlockout testcontainers e2e
-  # sub-suite (extends the existing TestL2_LoginUniform401 inactive_account_locked
-  # path with N consecutive failed attempts → wire-level lock event observation).
-  # Do not silently revert mode: manual → mode: auto without providing one of
-  # those harnesses first; the load-bearing requirement is genuine "real-behavior"
-  # coverage, not schema-validation tautology.
+  # PR #585 P2#4 promotion: the auto-lock / event-publish / admin-unlock
+  # criteria are now covered by the testcontainers e2e
+  # tests/integration/l2atomicity/journey_accountlockout_e2e_test.go
+  # (TestJAccountlockoutAutoLockCycle) — this is path (b) from the prior
+  # "load-bearing harness" gate: a real wire-level run over PG that drives
+  # Threshold wrong-password POSTs → auto-lock → uniform 401 on locked
+  # account → admin unlock → post-unlock login succeeds. The single e2e
+  # asserts all three criteria as side effects, so they share its checkRef.
+  #
+  # Lazy-unlock by TTL remains mode: manual until the l2 harness exposes a
+  # clock-advance seam (backlog
+  # JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION-01-LAZYUNLOCK); LockoutTTL=15min
+  # makes a real-time test infeasible in CI.
   - text: 连续失败达阈值后账户锁定
-    mode: manual
+    mode: auto
+    checkRef: journey.J-accountlockout.auto-lock-cycle
   - text: user.locked 事件发布成功
-    mode: manual
+    mode: auto
+    checkRef: journey.J-accountlockout.auto-lock-cycle
   - text: 锁定期间登录被拒绝 — 锁定账户登录返回 HTTP 401 + code=ERR_AUTH_LOGIN_FAILED + message="invalid credentials"（与 missing-user / wrong-password 归一，防账号枚举）
     mode: auto
-    checkRef: journey.J-accountlockout.login-reject
+    checkRef: journey.J-accountlockout.auto-lock-cycle
   - text: 管理员解锁后可正常登录
-    mode: manual
+    mode: auto
+    checkRef: journey.J-accountlockout.auto-lock-cycle

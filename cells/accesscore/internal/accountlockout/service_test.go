@@ -350,6 +350,39 @@ func TestService_RecordFailure_TriggersLock(t *testing.T) {
 	assert.True(t, persisted.AutoLockoutDeadline().Equal(now.Add(LockoutTTL)), "lockedUntil = now + TTL")
 }
 
+// TestService_RecordFailure_SuspendedShortCircuits is the PR #585 review P1#2
+// RED: a user in StatusSuspended must NOT engage the failure-counter path.
+// Pre-fix, RecordFailure only short-circuited on StatusLocked, so a suspended
+// user would accumulate failures and eventually be flipped to StatusLocked by
+// authzmutate.ApplyInTx(LockUser{}) — silently mutating an admin-driven
+// suspension. After the TTL elapses, TryLazyUnlock would then run
+// ActivateUser, re-activating an account the admin explicitly suspended.
+func TestService_RecordFailure_SuspendedShortCircuits(t *testing.T) {
+	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	last := now.Add(testRecentFailureGap)
+	// Seed at count=4 with Suspended status: pre-fix this would tip the
+	// counter to 5 and call ApplyInTx(LockUser{}), corrupting the status.
+	seed := newSeedUser(t, domain.StatusSuspended, 4, &last, nil)
+	svc, repo, emitter, metrics := newTestService(t, now, seed)
+
+	require.NoError(t, svc.RecordFailure(context.Background(), context.Background(), seed))
+
+	assert.Zero(t, repo.updateLockoutFieldsCalls,
+		"no counter update for a Suspended user (P1#2)")
+	assert.Zero(t, repo.bumpEpochCalls,
+		"no epoch bump for a Suspended user — admin still owns the lifecycle")
+	assert.Empty(t, emitter.snapshot(),
+		"no event.user.locked.v1 must be emitted for a Suspended user")
+	assert.Zero(t, metrics.count("threshold_locked"))
+
+	persisted, err := repo.GetByID(context.Background(), seed.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusSuspended, persisted.Status(),
+		"failure counter must never escalate Suspended into Locked")
+	assert.Equal(t, 4, persisted.FailedLoginCount(),
+		"counter must remain at the seeded value — no in-place mutation")
+}
+
 func TestService_RecordFailure_AlreadyLockedIsNoOp(t *testing.T) {
 	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
 	last := now.Add(testRecentFailureGap)

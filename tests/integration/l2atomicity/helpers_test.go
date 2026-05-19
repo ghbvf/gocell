@@ -204,6 +204,23 @@ func httpLockUser(t *testing.T, base, adminAccessToken, userID string) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, "user lock must return 200; body=%s", respBody)
 }
 
+// httpUnlockUser calls POST /api/v1/access/users/{userID}/unlock and expects
+// 200. Unlock routes through authzmutate.Mutator.ApplyInTx(ActivateUser{})
+// whose apply() calls domain.User.ResetFailedLogins() — the zeroing is then
+// persisted via PGUserRepo.Update / updateUserSQL (PR #585 review P1#3).
+func httpUnlockUser(t *testing.T, base, adminAccessToken, userID string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/users/"+userID+"/unlock", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Authorization", "Bearer "+adminAccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "user unlock must return 200; body=%s", respBody)
+}
+
 // changePasswordResult is the success-path response shape from change-password.
 type changePasswordResult struct {
 	AccessToken           string
