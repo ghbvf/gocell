@@ -83,4 +83,85 @@
 
 ### Commit
 
-`<待 commit>` — 13 处 row 编辑（不动 ID/描述主体；F-03 描述按 rubric §6.1 STALE re-scope 允许重写）
+`5f5f1e6b1` — 13 处 row 编辑（不动 ID/描述主体；F-03 描述按 rubric §6.1 STALE re-scope 允许重写）
+
+---
+
+## Phase 2 — cap-04/05/06/08/10/12 主体 (2026-05-20)
+
+**扫描条目**：60（cap-04: 14 / cap-05: 21 / cap-06: 3 / cap-08: 9 / cap-10: 3 / cap-12: 10）
+
+### 统计
+
+| 维度 | 数量 |
+|---|---|
+| DONE 候选 | 9 |
+| STALE re-scope | 3 |
+| STALE-CLOSE | 1 |
+| OPEN（含 P/Cx/Flag 调整）| 47 |
+
+### DONE 候选（9）
+
+| ID | cap | 证据 |
+|---|---|---|
+| T11 | cap-06 | `runtime/auth/roles.go:3-4` RoleAdmin const + 生产代码无裸字面量比较 |
+| B2-T-07-FU-2 | cap-06 | `runtime/auth/principal.go:53-78` + archtest `no_deleted_auth_symbols_test.go` 锁 3 符号删除 |
+| PR-V1-PG-STARTUP-HARDEN-FU-RACE-COVERAGE | cap-10 | `.github/workflows/test-race.yml:50-105` race-pg-integration job + CI-RACE-LANE-SUBSET-01 archtest |
+| X1 | cap-10 | 5 个 Repo PG 实现全部落地（user/role/session/command/device + PR#575 ship） |
+| PR333-BOOTSTRAP-OPTION-CROSS-CONCERN | cap-12 | PR-A66 `7c9816558` ship，5 个 options_*.go 按 concern 拆分 |
+| B2-X-04 | cap-12 | `shared_deps_validate.go:177-189` validateHealthReachability real-mode fail-fast 已落 |
+| B2-X-03 | cap-12 | `bundle_configcore_storage.go:98-104` + `schema_guard.go:1007` VerifyNoInvalidIndexes fail-fast |
+| S1-CO-02-WIRING-OPTION-STICKY-DOCTRINE | cap-05 | `runtime-api.md:268-274` §Option 范式分层 + `protocol_test.go:329,348` sticky test |
+
+### STALE 处理（4）
+
+| ID | cap | 类型 | 处理 |
+|---|---|---|---|
+| FOUR-CHANNEL-HANDLER-EXTENSION-01 | cap-04 | STALE re-scope | §5 扩展协议 3 步已写，仅 §6 funnel matrix 表残留；Cx2→Cx1 |
+| T3 | cap-06 | STALE re-scope | Files 路径刷新 `cells/devicecell/` → `examples/iotdevice/cells/devicecell/`；补 P3/Cx2 |
+| P4-TD-03 | cap-05 | STALE-CLOSE | IssueTestToken 已强制 RS256，HS256 仅在 negative test → ✅ |
+
+### P 升级（3）
+
+| ID | cap | 原 P → 新 P | 命中维度 |
+|---|---|---|---|
+| ROUTE-ERROR-POLICY-01 | cap-04 | 缺 P → P2 | 架构 + 共享 policy 抽象，已有 trigger 临界 |
+| AUTHZ-MUTATION-FUNNEL-UPSTREAM-HARD-01 | cap-05 | P3 → P2 | charter mandated 显式登记项 |
+| CREDENTIAL-AUTHORITY-FUNNEL-SCOPE-AUTO-DERIVE-01 | cap-05 | P3 → P2 | Soft → Hard funnel auto-derive |
+| PR252-F1 | cap-12 | 缺 P → P2 | trigger 已达（PGCommandQueue ship），bootstrap wiring 缺口 |
+
+### P 降级（11）
+
+| ID | cap | 原 P → 新 P | 信号 |
+|---|---|---|---|
+| LISTENER-API-SPEC-01 | cap-04 | 缺 P → P3 | arch-opt 无 outcome |
+| T4 | cap-04 | 缺 P → P3 | refactor 触发型 + 无 trigger |
+| WM-32 | cap-04 | P2 → P3 | feat 折中 + 业界 mesh 解决 |
+| READYZ-PROBE-FAILURE-METRIC-01 | cap-04 | P2 → P3 | trigger 型 + 无业务方 |
+| C-AC7 | cap-05 | P2 → P3 | jti 主体已支持，仅 blacklist 残留 |
+| 多个 cap-05 缺 P 项 | cap-05 | 缺 → P3 | PR-A8 / PR267-* / X3 / X5 / T5（补 P/Cx）|
+| KERNEL-RECONCILE-01 | cap-08 | P2 → P3 | 纯 feat + 无业务方 |
+| WM-18 | cap-08 | P2 → P3 | 纯 feat + 无 outcome |
+| RELAY-RETRYDELAY / CELL-CONSUMER 缺 P | cap-08 | 缺 → P3 | test/feat 触发型 |
+| S14a | cap-10 | 缺 → P3 | 触发型 feat |
+| V-A8 / PR252-F2 / PR448 / COREBUNDLE-MAINTEST 缺 P | cap-12 | 缺 → P3 | 触发型/test 类 |
+
+### Flag 调整（1）
+
+| ID | cap | 原 → 新 | 理由 |
+|---|---|---|---|
+| PR252-F1 | cap-12 | 🟠 → 🟡 | trigger 已达成（PGCommandQueue ship） |
+
+### Cx 补齐（多条）
+
+cap-05 X3/X5/T5 + cap-10 S14a + cap-12 V-A8/PR448/COREBUNDLE 等原表缺 Cx 列的 OPEN 项，按 rubric §3 反推补全。
+
+### 规则边界发现
+
+1. **触发型 P2 命中架构升级的边界**：K07-NO-WRAPPER / OUTBOX-HANDLERESULT-SLIM 命中"架构 + Soft→Hard"信号但有显式触发门槛未达；维持 P2，未升 P1。rubric §4.2 升级规则缺"P2 + 触发门槛未达 → 维持 P2，不升 P1"显式条款。下一阶段建议补。
+2. **缺 P/Cx 项的处理**：旧表大量 OPEN 行 P/Cx 列空缺，rubric 未覆盖。本阶段一律按 rubric §3/§4 反推补全（无业务方推动 = P3 + Cx 按描述具体度评）。
+3. **DONE 项 Source 列补充证据**：本阶段沿用 P1 实践（DONE 行在 Source 列追加 "— YYYY-MM-DD 核实落地 + 证据 file:line"）。rubric §6.1 严格只允 P/Cx/Flag/Trigger，但实践证明 Source 注解可追溯，建议下版 rubric 放宽。
+
+### Commit
+
+`<待 commit>` — 36 处 row 编辑（其中 FOUR-CHANNEL / T3 / P4-TD-03 / C-AC7 / X5 / PR252-F1 等 6 处含描述列 STALE re-scope 或证据补充）
