@@ -105,6 +105,10 @@ func (s *spyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetr
 	return spyHistogramVec{parent: s, name: opts.Name, labels: opts.LabelNames}, nil
 }
 
+func (s *spyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return kernelmetrics.NopProvider{}.GaugeVec(opts)
+}
+
 func (s *spyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 type spyCounterVec struct {

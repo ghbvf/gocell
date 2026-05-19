@@ -69,6 +69,10 @@ func (s *spyProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histogra
 	return &spyHistogramVec{parent: s, name: opts.Name, labels: opts.LabelNames}, nil
 }
 
+func (s *spyProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return &spyGaugeVec{parent: s, name: opts.Name, labels: opts.LabelNames}, nil
+}
+
 func (s *spyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 type spyCounterVec struct {
@@ -307,6 +311,16 @@ func (p *failingProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Hist
 	return hv, nil
 }
 
+func (p *failingProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	p.callCount++
+	if p.callCount == p.failOnCall {
+		return nil, errors.New("simulated gauge registration failure")
+	}
+	gv := &spyGaugeVec{parent: newSpyProvider(), name: opts.Name, labels: opts.LabelNames}
+	p.registered = append(p.registered, failingCollector{name: opts.Name, vec: gv})
+	return gv, nil
+}
+
 func (p *failingProvider) Unregister(c metrics.Collector) error {
 	p.unregistered = append(p.unregistered, failingCollector{vec: c, name: collectorName(c)})
 	return nil
@@ -337,6 +351,26 @@ func collectorName(c metrics.Collector) string {
 	return "<unknown>"
 }
 
+type spyGaugeVec struct {
+	parent *spyProvider
+	name   string
+	labels []string
+}
+
+func (v *spyGaugeVec) Registered() bool { return true }
+func (v *spyGaugeVec) With(l metrics.Labels) metrics.Gauge {
+	metrics.MustValidateLabels(v.labels, l)
+	return spyGauge{}
+}
+
+type spyGauge struct{}
+
+func (spyGauge) Set(_ float64) {}
+func (spyGauge) Inc()          {}
+func (spyGauge) Dec()          {}
+func (spyGauge) Add(_ float64) {}
+
 // MetricName exposes the name so collectorName can extract it in tests.
 func (v *spyCounterVec) MetricName() string   { return v.name }
 func (v *spyHistogramVec) MetricName() string { return v.name }
+func (v *spyGaugeVec) MetricName() string     { return v.name }

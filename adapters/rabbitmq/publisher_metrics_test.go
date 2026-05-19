@@ -136,6 +136,10 @@ func (p *errProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVe
 	return nil, p.err
 }
 
+func (p *errProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return nil, p.err
+}
+
 func (p *errProvider) Unregister(_ metrics.Collector) error { return nil }
 
 // publisherSpyProvider records counter registrations and Inc/Add operations so
@@ -164,6 +168,10 @@ func (p *publisherSpyProvider) CounterVec(opts metrics.CounterOpts) (metrics.Cou
 
 func (p *publisherSpyProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	return nil, errors.New("publisherSpyProvider: HistogramVec not implemented")
+}
+
+func (p *publisherSpyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
 }
 
 func (p *publisherSpyProvider) Unregister(_ metrics.Collector) error { return nil }

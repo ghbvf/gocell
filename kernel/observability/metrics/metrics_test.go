@@ -216,3 +216,82 @@ func TestNopHistogramVec_Registered_ReturnsTrue(t *testing.T) {
 		t.Fatal("nopHistogramVec.Registered() must return true")
 	}
 }
+
+func TestNopProvider_Gauge(t *testing.T) {
+	p := metrics.NopProvider{}
+
+	gv, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "nop_gauge",
+		Help:       "nop gauge",
+		LabelNames: []string{"cell"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+	g := gv.With(metrics.Labels{"cell": "outbox"})
+	// All four methods must not panic on the no-op gauge.
+	g.Set(42)
+	g.Inc()
+	g.Dec()
+	g.Add(-1.5)
+}
+
+func TestNopProvider_GaugeVec_PanicsOnLabelMismatch(t *testing.T) {
+	p := metrics.NopProvider{}
+	gv, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "nop_gauge",
+		LabelNames: []string{"a", "b"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on label mismatch, got nothing")
+		}
+		var ec *errcode.Error
+		if !errors.As(r.(error), &ec) {
+			t.Fatalf("panic must be *errcode.Error, got %T: %v", r, r)
+		}
+		if !strings.Contains(ec.Message, "metrics: invalid labels") {
+			t.Fatalf("panic message must contain 'metrics: invalid labels', got %q", ec.Message)
+		}
+	}()
+	gv.With(metrics.Labels{"a": "x"}) // missing "b"
+}
+
+func TestNopProvider_GaugeVec_AcceptsEmptyLabels(t *testing.T) {
+	p := metrics.NopProvider{}
+	gv, err := p.GaugeVec(metrics.GaugeOpts{Name: "no_labels_gauge", Help: "h"})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+	gv.With(nil).Set(0)
+	gv.With(metrics.Labels{}).Inc()
+}
+
+func TestNopGaugeVec_Registered_ReturnsTrue(t *testing.T) {
+	p := metrics.NopProvider{}
+	gv, err := p.GaugeVec(metrics.GaugeOpts{Name: "reg_gauge", Help: "h"})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+	if !gv.Registered() {
+		t.Fatal("nopGaugeVec.Registered() must return true")
+	}
+}
+
+func TestNopProvider_Unregister_Gauge_Idempotent(t *testing.T) {
+	p := metrics.NopProvider{}
+	gv, err := p.GaugeVec(metrics.GaugeOpts{Name: "unreg_gauge", Help: "h", LabelNames: []string{"x"}})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+	if err := p.Unregister(gv); err != nil {
+		t.Fatalf("first Unregister: want nil, got %v", err)
+	}
+	if err := p.Unregister(gv); err != nil {
+		t.Fatalf("second Unregister: want nil, got %v", err)
+	}
+}

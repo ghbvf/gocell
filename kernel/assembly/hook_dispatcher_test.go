@@ -97,6 +97,11 @@ func (p *spyProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVe
 	return metrics.NopProvider{}.HistogramVec(metrics.HistogramOpts{})
 }
 
+func (p *spyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	// Unused by the dispatcher but required for the Provider contract.
+	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
+}
+
 // Unregister is a no-op for the spy; tests that care about rollback use
 // the failingProvider in relay_collector_test.go instead.
 func (p *spyProvider) Unregister(_ metrics.Collector) error { return nil }

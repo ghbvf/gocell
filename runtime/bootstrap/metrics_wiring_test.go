@@ -44,6 +44,10 @@ func (s *registrationSpy) HistogramVec(opts kernelmetrics.HistogramOpts) (kernel
 	return s.nop.HistogramVec(opts)
 }
 
+func (s *registrationSpy) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return s.nop.GaugeVec(opts)
+}
+
 func (s *registrationSpy) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 func (s *registrationSpy) counters() []string {
@@ -273,6 +277,10 @@ func (p *alwaysFailCounterProvider) CounterVec(opts kernelmetrics.CounterOpts) (
 
 func (p *alwaysFailCounterProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
 	return p.nop.HistogramVec(opts)
+}
+
+func (p *alwaysFailCounterProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return p.nop.GaugeVec(opts)
 }
 
 func (p *alwaysFailCounterProvider) Unregister(col kernelmetrics.Collector) error {

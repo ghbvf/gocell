@@ -617,6 +617,246 @@ func TestMetricProvider_ConcurrentCounterVec_RaceDetector(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// GaugeVec
+// ---------------------------------------------------------------------------
+
+// TestMetricProvider_GaugeVec_Register verifies that a fresh GaugeVec
+// registration lands exactly one metric family in the registry.
+func TestMetricProvider_GaugeVec_Register(t *testing.T) {
+	p, reg := newTestProvider(t)
+
+	_, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "queue_depth",
+		Help:       "Queue depth.",
+		LabelNames: []string{"queue"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+
+	got := testutil.CollectAndCount(reg, "gocelltest_queue_depth")
+	if got != 0 {
+		// No observations yet — family exists but no series until With is called.
+		// CollectAndCount returns 0 for an empty GaugeVec (no label sets observed).
+		// This is correct Prometheus behaviour; we merely assert registration
+		// succeeded (no error above) and that the name is discoverable.
+	}
+	// Trigger a With() so the series is emitted.
+	gv, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "queue_depth",
+		Help:       "Queue depth.",
+		LabelNames: []string{"queue"},
+	})
+	if err != nil {
+		t.Fatalf("second GaugeVec (reuse): %v", err)
+	}
+	gv.With(metrics.Labels{"queue": "main"}).Set(1)
+	if n := testutil.CollectAndCount(reg, "gocelltest_queue_depth"); n != 1 {
+		t.Fatalf("expected 1 series after Set, got %d", n)
+	}
+}
+
+// TestMetricProvider_GaugeVec_SetInc verifies that Set/Inc/Dec/Add are
+// forwarded to the underlying Prometheus gauge and produce the expected value.
+func TestMetricProvider_GaugeVec_SetInc(t *testing.T) {
+	p, reg := newTestProvider(t)
+
+	gv, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "workers_active",
+		Help:       "Active workers.",
+		LabelNames: []string{"pool"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+
+	g := gv.With(metrics.Labels{"pool": "default"})
+	g.Set(10)  // 10
+	g.Inc()    // 11
+	g.Dec()    // 10
+	g.Add(5)   // 15
+	g.Add(-3)  // 12
+
+	if v := testutil.ToFloat64(collectGauge(t, reg, "gocelltest_workers_active", prom.Labels{"pool": "default"})); v != 12 {
+		t.Fatalf("gauge value = %v, want 12", v)
+	}
+}
+
+// TestMetricProvider_GaugeVec_AlreadyRegistered_Reuse verifies that a second
+// GaugeVec registration with the same name returns the existing collector
+// (AlreadyRegisteredError reuse path) and that writes from both handles share
+// the same underlying series.
+func TestMetricProvider_GaugeVec_AlreadyRegistered_Reuse(t *testing.T) {
+	p, reg := newTestProvider(t)
+	opts := metrics.GaugeOpts{Name: "dup_gauge", Help: "h", LabelNames: []string{"a"}}
+
+	gv1, err := p.GaugeVec(opts)
+	if err != nil {
+		t.Fatalf("first GaugeVec: %v", err)
+	}
+	gv2, err := p.GaugeVec(opts)
+	if err != nil {
+		t.Fatalf("duplicate GaugeVec must succeed (return existing), got error: %v", err)
+	}
+	// Both write to the same underlying series; last write wins (Set semantics).
+	gv1.With(metrics.Labels{"a": "x"}).Set(5)
+	gv2.With(metrics.Labels{"a": "x"}).Inc() // 6
+	if v := testutil.ToFloat64(collectGauge(t, reg, "gocelltest_dup_gauge", prom.Labels{"a": "x"})); v != 6 {
+		t.Fatalf("shared gauge = %v, want 6", v)
+	}
+}
+
+// TestMetricProvider_GaugeVec_LabelMismatch_RegisterError verifies that a
+// GaugeVec re-registration with different label names (descriptor conflict)
+// returns an ErrAdapterPromRegister error — mirroring the Counter/Histogram
+// descriptor-conflict path.
+func TestMetricProvider_GaugeVec_LabelMismatch_RegisterError(t *testing.T) {
+	p, _ := newTestProvider(t)
+	_, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "label_conflict_gauge",
+		Help:       "h",
+		LabelNames: []string{"a", "b"},
+	})
+	if err != nil {
+		t.Fatalf("first GaugeVec: %v", err)
+	}
+	// Different label names → Prometheus descriptor conflict.
+	_, err = p.GaugeVec(metrics.GaugeOpts{
+		Name:       "label_conflict_gauge",
+		Help:       "h",
+		LabelNames: []string{"x", "y"},
+	})
+	if err == nil {
+		t.Fatal("expected error for conflicting gauge descriptor, got nil")
+	}
+	if !strings.Contains(err.Error(), "ERR_ADAPTER_PROM_REGISTER") {
+		t.Fatalf("error should be ErrAdapterPromRegister, got: %v", err)
+	}
+}
+
+// TestMetricProvider_GaugeVec_Unregister verifies that Unregister removes a
+// GaugeVec from both the provider's internal map and the Prometheus registry,
+// allowing the same name to be re-registered without conflict.
+func TestMetricProvider_GaugeVec_Unregister(t *testing.T) {
+	p, reg := newTestProvider(t)
+
+	gv, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "unreg_gauge",
+		Help:       "h",
+		LabelNames: []string{"k"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+	if err := p.Unregister(gv); err != nil {
+		t.Fatalf("Unregister: %v", err)
+	}
+	// Re-register: must succeed (no AlreadyRegisteredError from the prom registry).
+	gv2, err := p.GaugeVec(metrics.GaugeOpts{
+		Name:       "unreg_gauge",
+		Help:       "h",
+		LabelNames: []string{"k"},
+	})
+	if err != nil {
+		t.Fatalf("re-register after Unregister: %v", err)
+	}
+	gv2.With(metrics.Labels{"k": "v"}).Set(1)
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var seen int
+	for _, f := range families {
+		if strings.HasSuffix(f.GetName(), "unreg_gauge") {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("expected exactly 1 unreg_gauge metric family after re-register, got %d", seen)
+	}
+}
+
+// TestMetricProvider_ConcurrentGaugeVec_RaceDetector verifies that N goroutines
+// concurrently calling GaugeVec + With + Set are race-free under the -race
+// detector. Exercises the registerOrReuse AlreadyRegisteredError path under
+// high contention.
+//
+// Run with `go test -race`.
+func TestMetricProvider_ConcurrentGaugeVec_RaceDetector(t *testing.T) {
+	p, _ := newTestProvider(t)
+
+	opts := metrics.GaugeOpts{
+		Name:       "race_gauge",
+		Help:       "race test gauge",
+		LabelNames: []string{"k"},
+	}
+
+	var wg sync.WaitGroup
+	var firstErr atomic.Value
+	wg.Add(raceConcurrency)
+	for i := 0; i < raceConcurrency; i++ {
+		go func() {
+			defer wg.Done()
+			gv, err := p.GaugeVec(opts)
+			if err != nil {
+				firstErr.CompareAndSwap(nil, err)
+				return
+			}
+			gv.With(metrics.Labels{"k": "v"}).Set(1)
+		}()
+	}
+	wg.Wait()
+
+	if err := firstErr.Load(); err != nil {
+		t.Fatalf("concurrent GaugeVec returned error: %v", err)
+	}
+}
+
+// collectGauge fetches a single labeled Gauge from the registry for use with
+// testutil.ToFloat64. Mirrors collect() but reads GetGauge().GetValue() instead
+// of GetCounter().GetValue().
+func collectGauge(t *testing.T, reg *prom.Registry, name string, labels prom.Labels) prom.Collector {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			match := true
+			for _, lp := range m.GetLabel() {
+				if v, ok := labels[lp.GetName()]; ok && v != lp.GetValue() {
+					match = false
+					break
+				}
+			}
+			if match {
+				return singletonGauge{val: m.GetGauge().GetValue()}
+			}
+		}
+	}
+	t.Fatalf("no metric %s with labels %v", name, labels)
+	return nil
+}
+
+type singletonGauge struct{ val float64 }
+
+func (s singletonGauge) Describe(ch chan<- *prom.Desc) {
+	ch <- prom.NewDesc("singleton_gauge", "test helper", nil, nil)
+}
+
+func (s singletonGauge) Collect(ch chan<- prom.Metric) {
+	ch <- prom.MustNewConstMetric(prom.NewDesc("singleton_gauge", "test helper", nil, nil), prom.GaugeValue, s.val)
+}
+
+// ---------------------------------------------------------------------------
+// TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector (counter)
+// ---------------------------------------------------------------------------
+
 // TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector verifies
 // that interleaved CounterVec / Unregister calls do not race on the
 // provider's internal vecs map (the RWMutex contract). Each goroutine

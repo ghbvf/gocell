@@ -326,8 +326,24 @@ type spyHistogram struct{}
 
 func (spyHistogram) Observe(_ float64) {}
 
+type spyGaugeVec struct{ labels []string }
+
+func (v *spyGaugeVec) Registered() bool { return true }
+func (v *spyGaugeVec) With(l metrics.Labels) metrics.Gauge {
+	metrics.MustValidateLabels(v.labels, l)
+	return spyGauge{}
+}
+
+type spyGauge struct{}
+
+func (spyGauge) Set(_ float64) {}
+func (spyGauge) Inc()          {}
+func (spyGauge) Dec()          {}
+func (spyGauge) Add(_ float64) {}
+
 type spyMetricsProvider struct {
 	counter *spyCounter
+	gauge   *spyGaugeVec
 }
 
 func (p *spyMetricsProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
@@ -337,6 +353,11 @@ func (p *spyMetricsProvider) CounterVec(opts metrics.CounterOpts) (metrics.Count
 
 func (p *spyMetricsProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	return &spyHistogramVec{labels: opts.LabelNames}, nil
+}
+
+func (p *spyMetricsProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	p.gauge = &spyGaugeVec{labels: opts.LabelNames}
+	return p.gauge, nil
 }
 
 func (p *spyMetricsProvider) Unregister(_ metrics.Collector) error { return nil }
@@ -401,6 +422,10 @@ func (alwaysFailProvider) CounterVec(_ metrics.CounterOpts) (metrics.CounterVec,
 
 func (alwaysFailProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	return nil, errors.New("simulated histogram registration failure")
+}
+
+func (alwaysFailProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return nil, errors.New("simulated gauge registration failure")
 }
 
 func (alwaysFailProvider) Unregister(_ metrics.Collector) error { return nil }

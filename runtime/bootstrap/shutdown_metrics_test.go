@@ -136,6 +136,10 @@ func (p *fakeMetricsProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (ke
 	return v, nil
 }
 
+func (p *fakeMetricsProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return kernelmetrics.NopProvider{}.GaugeVec(opts)
+}
+
 func (p *fakeMetricsProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 var _ kernelmetrics.Provider = (*fakeMetricsProvider)(nil)

@@ -22,6 +22,12 @@ func (NopProvider) HistogramVec(opts HistogramOpts) (HistogramVec, error) {
 	return nopHistogramVec{labels: append([]string(nil), opts.LabelNames...)}, nil
 }
 
+// GaugeVec returns a no-op GaugeVec that still enforces label correctness
+// at With() time.
+func (NopProvider) GaugeVec(opts GaugeOpts) (GaugeVec, error) {
+	return nopGaugeVec{labels: append([]string(nil), opts.LabelNames...)}, nil
+}
+
 // Unregister is a no-op; the NopProvider does not maintain a registry.
 // Returns nil (idempotent, as per the Unregister contract).
 func (NopProvider) Unregister(_ Collector) error { return nil }
@@ -42,6 +48,14 @@ func (v nopHistogramVec) With(l Labels) Histogram {
 	return nopHistogram{}
 }
 
+type nopGaugeVec struct{ labels []string }
+
+func (v nopGaugeVec) Registered() bool { return true }
+func (v nopGaugeVec) With(l Labels) Gauge {
+	MustValidateLabels(v.labels, l)
+	return nopGauge{}
+}
+
 type nopCounter struct{}
 
 func (nopCounter) Inc()              {}
@@ -50,3 +64,10 @@ func (nopCounter) Add(delta float64) {}
 type nopHistogram struct{}
 
 func (nopHistogram) Observe(value float64) {}
+
+type nopGauge struct{}
+
+func (nopGauge) Set(value float64)   {}
+func (nopGauge) Inc()                {}
+func (nopGauge) Dec()                {}
+func (nopGauge) Add(delta float64)   {}
