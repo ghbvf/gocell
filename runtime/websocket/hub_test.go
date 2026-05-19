@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -165,17 +166,19 @@ func startHub(t *testing.T, cfg HubConfig, handler MessageHandler) *Hub {
 		<-startErr
 	})
 	// Wait until hub is running.
-	require.Eventually(t, func() bool {
-		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	testwait.External(t, "hub-start-state-transition",
+		func() bool { return hub.state.Load() == stateRunning },
+		testtime.EventuallyShort, testtime.D1ms,
+		"hub failed to reach stateRunning after Start")
 	return hub
 }
 
 func waitForHubPingTicker(t *testing.T, fc *clockmock.FakeClock) {
 	t.Helper()
-	require.Eventually(t, func() bool {
-		return fc.PendingTickers() == 1
-	}, testtime.EventuallyShort, testtime.D1ms)
+	testwait.External(t, "hub-ping-ticker-registered",
+		func() bool { return fc.PendingTickers() == 1 },
+		testtime.EventuallyShort, testtime.D1ms,
+		"hub ping ticker did not register with fake clock")
 }
 
 // ---------------------------------------------------------------------------
