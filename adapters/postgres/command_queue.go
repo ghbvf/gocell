@@ -441,7 +441,7 @@ func (q *PGCommandQueue) ScanActive(ctx context.Context, filter command.ScanFilt
 	// Use ambient tx when available; fall back to pool for read-only path.
 	var rows pgx.Rows
 	var err error
-	if tx, ok := TxFromContext(ctx); ok {
+	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
 		rows, err = tx.Query(ctx, scanActiveSQL, deviceID)
 	} else {
 		rows, err = q.pool.Query(ctx, scanActiveSQL, deviceID)

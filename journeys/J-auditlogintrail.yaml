@@ -1,6 +1,6 @@
 id: J-auditlogintrail
 goal: 登录事件跨 cell 传播并写入审计 hash chain，完整性可验证
-lifecycle: experimental
+lifecycle: active
 owner:
   team: platform
   role: journey-owner
@@ -10,7 +10,19 @@ cells:
 contracts:
   - event.session.created.v1
   - event.audit.appended.v1
+  # http.audit.list.v1 is listed for journey scope (PR-4 fix/208 reverse
+  # cover JOURNEY-CONTRACT-EXISTENCE-01). It has no corresponding
+  # passCriteria below — extension is tracked by backlog
+  # JOURNEY-AUDITLOGINTRAIL-CRITERIA-EXPANSION-01 (cap-14-tooling.md).
+  # Adding a query criterion here without closing that backlog entry is
+  # a silent carryover and forbidden.
   - http.audit.list.v1
+# passCriteria scope (PR #588): 2 mode:auto criteria cover the publish →
+# consume → hash-chain path. A future "accesscore projection" criterion
+# (roadmap 029 C6 三段 describe) requires accesscore to subscribe to
+# event.audit.appended.v1 first; tracked by backlog
+# JOURNEY-AUDITLOGINTRAIL-CRITERIA-EXPANSION-01. Inline criteria expansion
+# must close that backlog entry in the same PR.
 passCriteria:
   - text: session.created 事件被 auditcore 消费
     mode: auto

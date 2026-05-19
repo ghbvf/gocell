@@ -13,9 +13,13 @@
 //   - Routes lock/unlock transitions through authzmutate.Mutator.ApplyInTx
 //     (LockUser → epoch bump + session/refresh revoke; ActivateUser →
 //     additive status flip).
-//   - Emits event.user.locked.v1 (ActorID="system") on auto-lock; lazy-unlock
-//     is silent on the outbox (slog + auth_account_lockout_total counter only,
-//     per Keycloak alignment — see ADR / plan).
+//   - Emits event.user.locked.v1 (ActorID="system") on auto-lock and
+//     event.user.unlocked.v1 (ActorID="system") on lazy-unlock — both via
+//     publishLocked / publishUnlocked, both wired through the same outbox
+//     emitter, both observable through `auth_account_lockout_total{reason}`
+//     counter + slog. ActorID="system" lets consumers (auditcore /
+//     downstream projectors) distinguish framework-driven mutations from
+//     admin-initiated lock/unlock without breaking wire-shape symmetry.
 //
 // # Policy constants (hardcoded, no Policy struct — YAGNI per plan §Context)
 //

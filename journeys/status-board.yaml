@@ -19,15 +19,15 @@
   blocker: ""
   updatedAt: 2026-05-18
 - journeyId: J-accountlockout
-  state: doing
+  state: done
   risk: low
   blocker: ""
   updatedAt: 2026-05-19
 - journeyId: J-auditlogintrail
-  state: todo
+  state: done
   risk: low
   blocker: ""
-  updatedAt: 2026-04-05
+  updatedAt: 2026-05-19
 - journeyId: J-confighotreload
   state: todo
   risk: low

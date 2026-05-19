@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
@@ -149,7 +151,7 @@ func TestIntegration_TxManager(t *testing.T) {
 
 	t.Run("commit_path", func(t *testing.T) {
 		err := txm.RunInTx(ctx, func(txCtx context.Context) error {
-			tx, ok := TxFromContext(txCtx)
+			tx, ok := persistence.TxFromContext[pgx.Tx](txCtx)
 			require.True(t, ok, "transaction must be in context")
 
 			_, err := tx.Exec(txCtx, "INSERT INTO tx_test (name) VALUES ($1)", "committed")
@@ -167,7 +169,7 @@ func TestIntegration_TxManager(t *testing.T) {
 	t.Run("rollback_on_error", func(t *testing.T) {
 		handlerErr := errors.New("simulated failure")
 		err := txm.RunInTx(ctx, func(txCtx context.Context) error {
-			tx, ok := TxFromContext(txCtx)
+			tx, ok := persistence.TxFromContext[pgx.Tx](txCtx)
 			require.True(t, ok)
 
 			_, execErr := tx.Exec(txCtx, "INSERT INTO tx_test (name) VALUES ($1)", "rolled_back")
@@ -188,7 +190,7 @@ func TestIntegration_TxManager(t *testing.T) {
 	t.Run("rollback_on_panic", func(t *testing.T) {
 		assert.Panics(t, func() {
 			_ = txm.RunInTx(ctx, func(txCtx context.Context) error {
-				tx, ok := TxFromContext(txCtx)
+				tx, ok := persistence.TxFromContext[pgx.Tx](txCtx)
 				if !ok {
 					return errors.New("no tx")
 				}
