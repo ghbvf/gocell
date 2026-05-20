@@ -228,6 +228,12 @@ func runScaffold(ctx context.Context, args []string) error {
 	return runScaffoldWithRoot(ctx, root, args)
 }
 
+// scaffoldIDNote is the help-text note repeated for every scaffold sub-command
+// that accepts a --id flag subject to the no-dash identifier constraint.
+// Extracted to avoid duplicating the literal (go:S1192).
+const scaffoldIDNote = "Note: --id must match ^[a-z][a-z0-9]+$" +
+	" (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots)."
+
 // scaffoldSubcommands is the single source of truth for `gocell scaffold`
 // (see subcommand.go / CLI-UNIMPL-HIDE-01). The handler also takes the
 // resolved project root so tests drive a temp dir via runScaffoldWithRoot
@@ -243,7 +249,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"[--type=core|edge|support] [--level=L0..L4]",
 			"[--with-http] [--with-events] [--with-both]",
 			"[--skip-generate] [--dry-run]",
-			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
+			scaffoldIDNote,
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldCell(root, a) },
 	},
@@ -252,7 +258,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 		help: []string{
 			"Create cells/<cellID>/slices/<id>/slice.yaml.",
 			"--id=<id> --cell=<cellID> [--dry-run]",
-			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
+			scaffoldIDNote,
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldSlice(root, a) },
 	},
@@ -279,7 +285,7 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
 			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
 			"[--deploy=k8s|compose|binary] (default: k8s) [--skip-generate] [--dry-run]",
-			"Note: --id must match ^[a-z][a-z0-9]+$ (lowercase letters and digits only, at least 2 chars; no dashes / underscores / dots).",
+			scaffoldIDNote,
 		},
 		run: func(_ context.Context, root string, a []string) error { return scaffoldAssembly(root, a) },
 	},
