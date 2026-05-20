@@ -117,6 +117,7 @@ func (m ConfigCoreModule) Provide(
 	// constructor (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces this).
 	casProto, err := newConfigCoreCASProtocol()
 	if err != nil {
+		shared.SharedPGPool = nil
 		return nil, nil, nil, err
 	}
 
@@ -173,6 +174,7 @@ func buildConfigCoreResult(
 		provisional = append(provisional, modResult.PoolResource)
 	}
 
+	// rollback is only invoked before kpRes append; if reordered, capture provisional through a function arg.
 	rollback := func() {
 		closeProvisional(ctx, provisional)
 	}

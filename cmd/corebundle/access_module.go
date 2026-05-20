@@ -140,11 +140,11 @@ func (m AccessCoreModule) Provide(
 		accesscore.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
 		accesscore.WithCASProtocol(casProto),
 	}
-	innerSessionStore, extraOpts, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
+	innerSessionStore, storageOpts, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	accessOpts = extraOpts
+	accessOpts = storageOpts
 	// AUTH-CACHE-01 (T5): wrap the session store with a Redis read-through
 	// cache when env knob + Redis client are both present. Default-off — env
 	// unset / empty / non-positive / un-parseable Duration / nil Redis client
