@@ -94,26 +94,25 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 	}, nil
 }
 
-// GaugeVec creates a Float64UpDownCounter instrument and wraps it in
-// otelGaugeVec. OTel does not have a synchronous "last-value gauge"
-// primitive; Float64UpDownCounter is the closest — it accepts positive
-// and negative deltas, matching Gauge.Inc / Dec / Add semantics.
+// GaugeVec creates a Float64Gauge instrument (OTel v1.33+ synchronous gauge,
+// LastValue / metricdata.Gauge export semantics) and wraps it in otelGaugeVec.
 //
-// Set(v) semantics are emulated via a per-label-set last-value cache:
+// Set(v) calls Float64Gauge.Record(v) directly — Record takes an absolute
+// value, so no delta arithmetic is needed for Set. Inc/Dec/Add maintain a
+// per-label-set last-value slot (protected by sync.Mutex) to compute the new
+// absolute value before calling Record:
 //
-//	delta = v - last
-//	UpDownCounter.Add(ctx, delta, attrs)
-//	last = v
+//	Inc:  last++; Record(ctx, last)
+//	Dec:  last--; Record(ctx, last)
+//	Add:  last += delta; Record(ctx, last)
 //
 // Each call to With() returns the *same* otelGauge for a given label set
 // so that concurrent callers sharing a label set operate on the same
-// last-value slot (the slot is protected by a sync.Mutex per otelGauge).
+// last-value slot.
 //
-// ref: opentelemetry-go metric/sdk/metric/internal/aggregate/lastvalue.go
-// — the SDK uses this pattern internally for Observable gauges; we mirror
-// it here for synchronous gauge emulation.
+// ref: opentelemetry-go metric.Meter.Float64Gauge (v1.33+)
 func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
-	c, err := p.meter.Float64UpDownCounter(opts.Name, otelmetric.WithDescription(opts.Help))
+	c, err := p.meter.Float64Gauge(opts.Name, otelmetric.WithDescription(opts.Help))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create gauge failed", err,
@@ -293,10 +292,10 @@ func (h *otelHistogram) Observe(v float64) {
 	h.inner.Record(context.Background(), v, h.attrs)
 }
 
-// otelGaugeVec wraps Float64UpDownCounter and emulates per-label-set
-// last-value semantics. With() is the hot path; it returns a stable
-// *otelGauge per label-set so that concurrent callers sharing the same
-// label tuple operate on the same last-value slot.
+// otelGaugeVec wraps Float64Gauge and provides per-label-set last-value
+// semantics. With() is the hot path; it returns a stable *otelGauge per
+// label-set so that concurrent callers sharing the same label tuple operate
+// on the same last-value slot.
 //
 // gaugesMu guards the gauges map; attrCache.mu guards the attribute cache.
 // The two locks are independent and never held simultaneously to avoid
@@ -307,7 +306,7 @@ func (h *otelHistogram) Observe(v float64) {
 // shared overflowGauge (created lazily) instead of inserting into gauges,
 // keeping len(gauges) ≤ attrCacheMaxSize + 1 (the +1 being the overflow slot).
 type otelGaugeVec struct {
-	inner         otelmetric.Float64UpDownCounter
+	inner         otelmetric.Float64Gauge
 	labels        []string
 	cache         *attrCache
 	gaugesMu      sync.Mutex
@@ -352,52 +351,55 @@ func (v *otelGaugeVec) With(l metrics.Labels) metrics.Gauge {
 	return g
 }
 
-// otelGauge is a single label-set binding to a Float64UpDownCounter.
-// It maintains a last-value slot so that Set(v) can compute the delta
-// and keep the cumulative counter equal to the current gauge value.
+// otelGauge is a single label-set binding to a Float64Gauge.
+// Float64Gauge.Record takes an absolute value (LastValue semantics), so
+// Set(v) calls Record(v) directly. Inc/Dec/Add need read-modify-write
+// semantics because they must compute the new absolute value from the
+// previous one; last + mu provide that RMW slot.
 //
 // mu guards last; all four methods acquire it as a write lock so that
 // concurrent Set / Inc / Dec / Add calls are serialized on the same slot.
-// The OTel SDK's Add call itself is goroutine-safe; we only need mu to make
-// the read-modify-write (last → delta → new last) atomic.
+// The OTel SDK's Record call itself is goroutine-safe; we only need mu to
+// make the read-modify-write atomic for Inc/Dec/Add.
 type otelGauge struct {
-	inner otelmetric.Float64UpDownCounter
+	inner otelmetric.Float64Gauge
 	attrs otelmetric.MeasurementOption
 	mu    sync.Mutex
 	last  float64
 }
 
-// Set records the gauge as value v. It computes delta = v − last so that
-// the underlying UpDownCounter's cumulative value equals v after the call.
+// Set records the gauge as absolute value v (Float64Gauge.Record semantics).
 //
 // See METRICS-CTX-FUNNEL-01 in docs/backlog/cap-13-observability.md for the
 // open work to propagate context through the kernel metrics interface; until
 // then context.Background() is the correct placeholder here (mirrors Counter).
 func (g *otelGauge) Set(v float64) {
 	g.mu.Lock()
-	delta := v - g.last
 	g.last = v
 	g.mu.Unlock()
-	g.inner.Add(context.Background(), delta, g.attrs)
+	g.inner.Record(context.Background(), v, g.attrs)
 }
 
 func (g *otelGauge) Inc() {
 	g.mu.Lock()
 	g.last++
+	v := g.last
 	g.mu.Unlock()
-	g.inner.Add(context.Background(), 1, g.attrs)
+	g.inner.Record(context.Background(), v, g.attrs)
 }
 
 func (g *otelGauge) Dec() {
 	g.mu.Lock()
 	g.last--
+	v := g.last
 	g.mu.Unlock()
-	g.inner.Add(context.Background(), -1, g.attrs)
+	g.inner.Record(context.Background(), v, g.attrs)
 }
 
 func (g *otelGauge) Add(delta float64) {
 	g.mu.Lock()
 	g.last += delta
+	v := g.last
 	g.mu.Unlock()
-	g.inner.Add(context.Background(), delta, g.attrs)
+	g.inner.Record(context.Background(), v, g.attrs)
 }

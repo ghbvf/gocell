@@ -1,0 +1,1 @@
+tools/archtest/testdata/testwait_external_fixtures/reason_const_ident_red/usage.go:20: testwait.External reason must be a const string literal (no const ident / fmt.Sprintf / concat / variable)

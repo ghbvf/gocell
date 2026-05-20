@@ -12,6 +12,7 @@
 //   - INVARIANT: OUTBOX-SERVICE-05
 //   - INVARIANT: OUTBOX-TOPIC-FAILOPEN-01
 //   - INVARIANT: METADATA-LIMITS-SINGLE-SOURCE-01
+//   - INVARIANT: OUTBOXTEST-CLOSE-VIA-BUDGET-01
 //
 // Package archtest — outbox invariants.
 //
@@ -1742,6 +1743,238 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 			"before removing the IsGeneratedRelPath skip")
 	}
 	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — Wave 3's IsGeneratedRelPath must skip these", len(generatedFiles))
+}
+
+// ---------------------------------------------------------------------------
+// OUTBOXTEST-CLOSE-VIA-BUDGET-01
+// ---------------------------------------------------------------------------
+
+// INVARIANT: OUTBOXTEST-CLOSE-VIA-BUDGET-01
+//
+// TestOutboxtestCloseViaBudget01 enforces OUTBOXTEST-CLOSE-VIA-BUDGET-01:
+// every call to Subscriber.Close within package kernel/outbox/outboxtest
+// must reside inside the FuncDecl named closeWithBudget — the single
+// sanctioned holder that wraps Close with timeout enforcement and
+// goroutine-leak detection.
+//
+// AI-rebust: Medium
+//   - Callee check: ResolveMethodCall resolves the CallExpr.Fun SelectorExpr to a
+//     *types.Func, then confirms the receiver type's owning package is
+//     kernel/outbox (i.e. the method belongs to an outbox.Subscriber
+//     implementor). No string anchor — the type system disambiguates which
+//     Close method was called.
+//   - Enclosing-FuncDecl check: structural AST traversal confirms the call
+//     site is inside the FuncDecl body whose Name.Name == "closeWithBudget".
+//   - Combined: Medium ceiling (callee is type-aware; enclosing-holder
+//     detection is structural, not type-aware).
+//
+// Funnel shape:
+//   - Down-stream Medium: every outbox.Subscriber Close call in outboxtest
+//     must occur inside closeWithBudget. Any other caller produces a violation.
+//   - Up-stream: doc.go + helpers.go godoc state the convention; no compile-time
+//     gate prevents adding a bare sub.Close(ctx) in a new _test.go file.
+//     Hard up-stream upgrade tracked as backlog ARCHTEST-FUNNEL-CALLSITE-LEVEL-01.
+//
+// Blind spots (AST forms outside ResolveMethodCall's documented scope):
+//
+//  1. Method-value assignment: fn := sub.Close; fn(ctx)
+//     The second call's Fun is *ast.Ident, not *ast.SelectorExpr; ResolveMethodCall
+//     returns (nil, false). The main rule misses it.
+//     Reverse self-check: TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue
+//     asserts this form does not appear in kernel/outbox/outboxtest production AST.
+//
+//  2. reflect.Value.Call on sub.Close:
+//     Completely opaque to static AST analysis.
+//     Reverse self-check: TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue
+//     also guards against reflect.MethodByName("Close") in outboxtest.
+//
+// Note on the PubSubConstructor t.Cleanup exemption: doc.go documents that
+// PubSubConstructor callers may register `t.Cleanup(func() { _ = bus.Close() })`
+// for the full bus object. These calls appear in external test files (outside
+// kernel/outbox/outboxtest itself) and are therefore NOT scanned by this rule,
+// which targets only kernel/outbox/outboxtest. Furthermore, even if such a
+// cleanup were added inside outboxtest/_test.go, it would close the Publisher
+// (or a combined bus), whose type is outbox.Publisher (not necessarily
+// outbox.Subscriber) — the receiver-type check would reject it naturally only
+// if the Publisher also implements Subscriber. The structural approach (enclosing
+// FuncDecl == closeWithBudget) is the load-bearing gate; the receiver-type check
+// narrows false-positives from unrelated Close methods.
+func TestOutboxtestCloseViaBudget01(t *testing.T) {
+	t.Parallel()
+
+	const (
+		outboxPkgPath     = "github.com/ghbvf/gocell/kernel/outbox"
+		sanctionedHolder  = "closeWithBudget"
+		outboxtestPattern = "./kernel/outbox/outboxtest/..."
+	)
+
+	type violation struct {
+		rel  string
+		line int
+	}
+	var violations []violation
+
+	// enclosingFuncDecl returns the name of the innermost FuncDecl whose body
+	// contains pos, or "" if none is found. It walks all FuncDecls in file and
+	// checks whether pos is within [body.Lbrace, body.Rbrace].
+	enclosingFuncName := func(file *ast.File, pos token.Pos) string {
+		name := ""
+		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			if fd.Body == nil {
+				return
+			}
+			if pos >= fd.Body.Lbrace && pos <= fd.Body.Rbrace {
+				name = fd.Name.Name
+			}
+		})
+		return name
+	}
+
+	// isSubscriberCloseMethod reports whether fn is the Close method of a type
+	// whose package path is the kernel/outbox package — i.e. it belongs to an
+	// outbox.Subscriber implementor loaded from that package.
+	isSubscriberCloseMethod := func(fn *types.Func) bool {
+		if fn == nil || fn.Name() != "Close" {
+			return false
+		}
+		sig, ok := fn.Type().(*types.Signature)
+		if !ok || sig.Recv() == nil {
+			return false
+		}
+		recv := sig.Recv().Type()
+		// Unwrap pointer receiver.
+		if ptr, ok := recv.(*types.Pointer); ok {
+			recv = ptr.Elem()
+		}
+		// Unwrap interface or named type — the package is on the origin Named.
+		named, ok := types.Unalias(recv).(*types.Named)
+		if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+			return false
+		}
+		return named.Obj().Pkg().Path() == outboxPkgPath
+	}
+
+	_ = RunTyped(t, TypedOpts{Tests: true},
+		[]string{outboxtestPattern},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil || p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel == nil || sel.Sel.Name != "Close" {
+						return
+					}
+					fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+					if !ok || !isSubscriberCloseMethod(fn) {
+						return
+					}
+					// This is a Subscriber.Close call — it must be inside closeWithBudget.
+					holder := enclosingFuncName(file, call.Pos())
+					if holder == sanctionedHolder {
+						return
+					}
+					violations = append(violations, violation{
+						rel:  rel,
+						line: p.Fset.Position(call.Pos()).Line,
+					})
+				})
+			}
+			return nil
+		})
+
+	for _, v := range violations {
+		t.Errorf(
+			"OUTBOXTEST-CLOSE-VIA-BUDGET-01: %s:%d: direct Subscriber.Close call outside %s — "+
+				"route through closeWithBudget to enforce timeout and goroutine-leak detection",
+			v.rel, v.line, sanctionedHolder)
+	}
+}
+
+// TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue asserts that the two
+// AST forms invisible to ResolveMethodCall do NOT appear in the outboxtest package:
+//
+//  1. Method-value assignment: `fn := sub.Close` (SelectorExpr not in CallExpr.Fun position)
+//  2. reflect.MethodByName("Close") invocations
+//
+// If either pattern appeared, the main scanner would silently miss the actual
+// Close invocation, invalidating the Medium guarantee.
+func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
+	t.Parallel()
+
+	const outboxtestPattern = "./kernel/outbox/outboxtest/..."
+
+	type violation struct {
+		rel  string
+		line int
+		msg  string
+	}
+	var violations []violation
+
+	_ = RunTyped(t, TypedOpts{Tests: true},
+		[]string{outboxtestPattern},
+		func(p *Pass) []Diagnostic {
+			if p.Fset == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+
+				// Collect all SelectorExpr positions that are in CallExpr.Fun position.
+				callFunPositions := map[ast.Node]bool{}
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+						callFunPositions[sel] = true
+					}
+				})
+
+				// Blind spot 1: SelectorExpr with Sel.Name == "Close" that is NOT
+				// in a CallExpr.Fun position — potential method-value assignment.
+				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+					if sel.Sel == nil || sel.Sel.Name != "Close" {
+						return
+					}
+					if callFunPositions[sel] {
+						return // legitimate direct call already covered by the main rule
+					}
+					violations = append(violations, violation{
+						rel:  rel,
+						line: p.Fset.Position(sel.Pos()).Line,
+						msg:  "method-value assignment of Close detected — OUTBOXTEST-CLOSE-VIA-BUDGET-01 would miss the deferred call site",
+					})
+				})
+
+				// Blind spot 2: reflect.MethodByName("Close")
+				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
+						return
+					}
+					if len(call.Args) != 1 {
+						return
+					}
+					lit, ok := call.Args[0].(*ast.BasicLit)
+					if !ok {
+						return
+					}
+					name := strings.Trim(lit.Value, `"`)
+					if name == "Close" {
+						violations = append(violations, violation{
+							rel:  rel,
+							line: p.Fset.Position(call.Pos()).Line,
+							msg:  `reflect.MethodByName("Close") detected — OUTBOXTEST-CLOSE-VIA-BUDGET-01 cannot see reflect-based invocations`,
+						})
+					}
+				})
+			}
+			return nil
+		})
+
+	for _, v := range violations {
+		t.Errorf("OUTBOXTEST-CLOSE-VIA-BUDGET-01 blind-spot: %s:%d: %s", v.rel, v.line, v.msg)
+	}
 }
 
 // scanForHandleResultLiterals scans file for HandleResult composite literals.

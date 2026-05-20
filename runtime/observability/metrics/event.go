@@ -6,24 +6,40 @@ import (
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/eventrouter"
 )
 
 // EventRouterCollector registers event-router lifecycle metrics:
 //   - event_router_subscriptions_active{cell} (Gauge): active subscription count
-//   - event_router_setup_errors_total{cell,topic,reason} (Counter): setup failures
+//   - event_router_setup_errors_total{cell,topic,reason} (Counter): setup-phase failures (Phase 1-3)
 //   - event_router_ready_wait_seconds{cell} (Histogram): time waited for Ready signal
+//   - event_router_runtime_errors_total{cell,topic,reason} (Counter): runtime-phase faults (Phase 4)
 //
 // Histogram buckets for ready_wait_seconds are: 0.001, 0.01, 0.1, 0.5, 1, 5, 30 seconds.
 // Ready usually completes in <100ms; bootstrap timeout is 30s, so the upper bound
 // covers the full expected range.
 //
+// PR #593 review fix-up (P2#3): the setup vs runtime metrics partition the
+// router lifecycle by phase, NOT by error variety. event_router_setup_errors_total
+// owns Phase 1–3 failures; event_router_runtime_errors_total owns Phase 4
+// faults. The reason label set is therefore disjoint across the two metrics:
+//
+//   - event_router_setup_errors_total reasons:
+//     "setup_error":       Subscriber.Setup failed (Phase 1)
+//     "panic":             Subscribe goroutine panicked (Phase 2)
+//     "ready_timeout":     Ready not signaled within timeout (Phase 3)
+//     "subscribe_failure": SubscribeEntry failed before Running() (Phase 3)
+//   - event_router_runtime_errors_total reasons:
+//     "runtime_fault":     any fault detected in Phase 4 (after Running())
+//
 // ref: Watermill router metrics middleware — subscription lifecycle counters and
 // gauges matching the router_messages_processed_total / router_handler_active
 // pattern.
 type EventRouterCollector struct {
-	active    kernelmetrics.GaugeVec     // event_router_subscriptions_active{cell}
-	setupErr  kernelmetrics.CounterVec   // event_router_setup_errors_total{cell,topic,reason}
-	readyWait kernelmetrics.HistogramVec // event_router_ready_wait_seconds{cell}
+	active     kernelmetrics.GaugeVec     // event_router_subscriptions_active{cell}
+	setupErr   kernelmetrics.CounterVec   // event_router_setup_errors_total{cell,topic,reason}
+	readyWait  kernelmetrics.HistogramVec // event_router_ready_wait_seconds{cell}
+	runtimeErr kernelmetrics.CounterVec   // event_router_runtime_errors_total{cell,topic,reason}
 }
 
 // eventRouterReadyWaitBuckets are sensible default buckets for Ready wait time.
@@ -51,8 +67,10 @@ func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, e
 	}
 
 	setupErr, err := p.CounterVec(kernelmetrics.CounterOpts{
-		Name:       "event_router_setup_errors_total",
-		Help:       "Total number of event router subscription setup failures.",
+		Name: "event_router_setup_errors_total",
+		Help: "Total number of event router subscription setup-phase failures (Phase 1-3), " +
+			"partitioned by cell, topic, and reason. reason is a closed set: " +
+			"setup_error | panic | ready_timeout | subscribe_failure.",
 		LabelNames: []string{"cell", "topic", "reason"},
 	})
 	if err != nil {
@@ -72,10 +90,24 @@ func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, e
 		return nil, fmt.Errorf("runtime/observability/metrics: register event_router_ready_wait_seconds: %w", err)
 	}
 
+	runtimeErr, err := p.CounterVec(kernelmetrics.CounterOpts{
+		Name: "event_router_runtime_errors_total",
+		Help: "Total number of event router runtime-phase faults (Phase 4, after Running()), " +
+			"partitioned by cell, topic, and reason. reason is a closed set: runtime_fault.",
+		LabelNames: []string{"cell", "topic", "reason"},
+	})
+	if err != nil {
+		_ = p.Unregister(readyWait)
+		_ = p.Unregister(setupErr)
+		_ = p.Unregister(active)
+		return nil, fmt.Errorf("runtime/observability/metrics: register event_router_runtime_errors_total: %w", err)
+	}
+
 	return &EventRouterCollector{
-		active:    active,
-		setupErr:  setupErr,
-		readyWait: readyWait,
+		active:     active,
+		setupErr:   setupErr,
+		readyWait:  readyWait,
+		runtimeErr: runtimeErr,
 	}, nil
 }
 
@@ -99,8 +131,9 @@ func (c *EventRouterCollector) DecSubscriptionActive(cellID string) {
 // and reason. The reason argument is drawn from the closed set defined by the
 // eventrouter package constants:
 //   - eventrouter.SetupErrorReasonSetupError ("setup_error"): Subscriber.Setup failed (Phase 1)
-//   - eventrouter.SetupErrorReasonReadyTimeout ("ready_timeout"): Ready not signaled within timeout (Phase 3)
 //   - eventrouter.SetupErrorReasonPanic ("panic"): subscription goroutine panicked (Phase 2)
+//   - eventrouter.SetupErrorReasonReadyTimeout ("ready_timeout"): Ready not signaled within timeout (Phase 3)
+//   - eventrouter.SetupErrorReasonSubscribeFailure ("subscribe_failure"): SubscribeEntry failed before Running() (Phase 3)
 func (c *EventRouterCollector) RecordSetupError(cellID, topic, reason string) {
 	if c == nil {
 		return
@@ -118,4 +151,19 @@ func (c *EventRouterCollector) ObserveReadyWait(cellID string, d time.Duration) 
 		return
 	}
 	c.readyWait.With(kernelmetrics.Labels{"cell": cellID}).Observe(d.Seconds())
+}
+
+// RecordRuntimeError increments the runtime error counter for the given cell,
+// topic, and reason. The reason argument is drawn from the closed set defined
+// by the eventrouter package constants:
+//   - eventrouter.RuntimeErrorReasonRuntimeFault ("runtime_fault"): any fault detected in Phase 4
+func (c *EventRouterCollector) RecordRuntimeError(cellID, topic string, reason eventrouter.RuntimeErrorReason) {
+	if c == nil {
+		return
+	}
+	c.runtimeErr.With(kernelmetrics.Labels{
+		"cell":   cellID,
+		"topic":  topic,
+		"reason": string(reason),
+	}).Inc()
 }

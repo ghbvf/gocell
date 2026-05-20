@@ -19,6 +19,13 @@
 
 **示例**：输入校验、纯计算、本地格式化。
 
+> **当前状态（C-06-L0-CELL-DECISION）**：L0 Cell 是已建模的未来扩展点，
+> 平台三个 cell（accesscore / auditcore / configcore）当前均无 L0 实例。
+> 所有平台 cell.yaml 的 `l0Dependencies: []` 为空是**预期行为**，不是 schema 缺陷。
+> 未来如需将共享纯计算逻辑（如哈希、编码工具）提升为独立 L0 Cell，
+> 消费方在 `l0Dependencies` 中声明依赖即可。
+> 详见 `kernel/metadata.L0DepMeta` godoc。
+
 ---
 
 ## L1 — LocalTx

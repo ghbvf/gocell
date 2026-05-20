@@ -58,6 +58,15 @@ func (goexitCloseSubscriber) Close(_ context.Context) error {
 	return nil // unreachable
 }
 
+// panicCloseSubscriber.Close calls panic, simulating a misbehaving adapter
+// whose Close panics. Without recover() in closeWithBudget this would crash
+// the entire test binary; with it, the panic is caught and returned as an error.
+type panicCloseSubscriber struct{ hangingCloseSubscriber }
+
+func (panicCloseSubscriber) Close(_ context.Context) error {
+	panic("boom")
+}
+
 // fastCloseSubscriber.Close returns the wrapped error immediately. Verifies
 // the happy path passes the error through unchanged.
 type fastCloseSubscriber struct {
@@ -97,7 +106,7 @@ func TestCloseWithBudget_DefendsAgainstGoexitInClose(t *testing.T) {
 		t.Fatalf("Goexit defense should surface error before budget elapses; took %s (budget=%s)", elapsed, budget)
 	}
 	assertTrue(t, strings.Contains(err.Error(), "Goexit"),
-		"error must explain Goexit/panic exit, got: "+err.Error())
+		"error must explain Goexit exit, got: "+err.Error())
 }
 
 func TestCloseWithBudget_PassesErrorThroughOnHappyPath(t *testing.T) {
@@ -148,4 +157,26 @@ func TestCloseWithBudget_ConcurrentSafety(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return done.Load() >= goroutines
 	}, testtime.D5s, testtime.D10ms, "all %d concurrent closeWithBudget calls must return", goroutines)
+}
+
+// TestCloseWithBudget_RecoversClosePanic verifies that a panic inside
+// Subscriber.Close is recovered by closeWithBudget and surfaced as a
+// non-nil error containing the panic value. The process must NOT crash —
+// the outer test binary must remain alive (the test would itself crash if
+// recover() were absent, proving the fix is load-bearing).
+//
+// This test validates case (b) in the closeWithBudget goroutine flow:
+//   - sub.Close panics → recover() in deferred sentinel catches the value
+//   - errCh receives fmt.Errorf("Close panicked: %v", r)
+//   - caller receives a non-nil error; process continues
+func TestCloseWithBudget_RecoversClosePanic(t *testing.T) {
+	t.Parallel()
+
+	err := closeWithBudget(t, panicCloseSubscriber{}, "topic-panic", time.Second)
+
+	assertTrue(t, err != nil, "expected non-nil error when Close panics")
+	assertTrue(t, strings.Contains(err.Error(), "panicked"),
+		"error must indicate Close panicked, got: "+err.Error())
+	assertTrue(t, strings.Contains(err.Error(), "boom"),
+		"error must contain the panic value, got: "+err.Error())
 }

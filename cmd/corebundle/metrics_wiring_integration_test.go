@@ -188,7 +188,12 @@ func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
 	//     - outbox_pending_depth              (Relay reclaim tick interval is
 	//                                          typically minutes — usually not
 	//                                          observed within integration-test
-	//                                          duration)
+	//                                          duration; the three-segment
+	//                                          end-to-end chain is asserted at
+	//                                          unit level instead — see
+	//                                          OUTBOX-PENDING-DEPTH-E2E-PROM-SCRAPE-01
+	//                                          backlog for full /metrics scrape
+	//                                          variant)
 	//
 	// We only assert wire-shape (HELP / TYPE / label key) for boot-emits.
 	// event-triggered families are verified by unit tests in

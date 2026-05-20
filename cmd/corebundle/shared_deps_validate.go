@@ -100,6 +100,12 @@ func (d *SharedDeps) validateCore() []error {
 	if d.ConsumerClaimer == nil {
 		missing("ConsumerClaimer")
 	}
+	// BootstrapLedgerStore is intentionally NOT checked here. It is wired by
+	// AuditCoreModule.Provide during BuildApp (after LoadSharedDepsFromEnv
+	// has already called Validate). The fail-fast is owned by
+	// AccessCoreModule.Provide via audit.NewBootstrapAuthFailObserver, which
+	// rejects a nil store at construction time before any 401/429 can fire.
+	// See BOOTSTRAP-AUDIT-CHAIN-WIRING-01 / MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01.
 	return errs
 }
 

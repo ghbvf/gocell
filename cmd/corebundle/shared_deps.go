@@ -13,6 +13,7 @@ import (
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -67,6 +68,29 @@ type SharedDeps struct {
 	// GC evictions. Registered once against the shared metrics provider and
 	// injected into configcore (the only owner — Cache is service-private).
 	EventbusCacheCollector obmetrics.EventbusCacheCollector
+
+	// BootstrapLedgerStore is the audit hash-chain Store wired into the
+	// bootstrap auth-fail observer (audit.NewBootstrapAuthFailObserver).
+	//
+	// Happens-before contract (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2):
+	//   - AuditCoreModule.Provide MUST run before AccessCoreModule.Provide so
+	//     the store is populated before access reads it. Module order is
+	//     locked in assemblies/corebundle/assembly.yaml (configcore →
+	//     auditcore → accesscore) and guarded by
+	//     MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01 archtest.
+	//   - The nil fail-fast is owned by AccessCoreModule.Provide via
+	//     audit.NewBootstrapAuthFailObserver, which rejects a nil store at
+	//     construction time (validation.IsNilInterface check) before any
+	//     bootstrap-auth 401/429 can fire. SharedDeps.Validate intentionally
+	//     does NOT check BootstrapLedgerStore here because
+	//     LoadSharedDepsFromEnv runs Validate BEFORE BuildApp populates this
+	//     field; see shared_deps_validate.go::validateCore for the rationale
+	//     comment kept beside the code path.
+	//
+	// Callers that bypass BuildApp (direct AccessCoreModule.Provide invocation)
+	// must pre-populate this field; see bundle_test.go::buildTestBootstrapLedgerStore
+	// for the test pattern.
+	BootstrapLedgerStore ledger.Store
 
 	// SharedPGPool is the postgres pool created by ConfigCoreModule when running
 	// in StorageBackend == "postgres" mode. AccessCoreModule + AuditCoreModule

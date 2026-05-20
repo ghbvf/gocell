@@ -46,6 +46,13 @@ type PublishAdapter struct{ S *Service }
 func (a PublishAdapter) Publish(ctx context.Context, req *configpublishgen.Request) (configpublishgen.PublishResponseObject, error) {
 	version, err := a.S.Publish(ctx, req.Key)
 	if err != nil {
+		var ce *errcode.Error
+		if errors.As(err, &ce) {
+			switch ce.Code {
+			case errcode.ErrConfigRepoNotFound, errcode.ErrConfigNotFound:
+				return configpublishgen.Publish404ErrorResponse{Body: *ce}, nil
+			}
+		}
 		return nil, err
 	}
 	return configpublishgen.Publish201JSONResponse{Data: toPublishResponseData(version)}, nil

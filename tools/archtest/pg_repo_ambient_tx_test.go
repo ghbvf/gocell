@@ -118,18 +118,16 @@
 // resolve to the same underlying *types.Named so isPgxPoolType still matches.
 // Not truly a blind spot; documented for completeness.
 //
-// BS-5 cells/accesscore/postgres DI helper: the composition-root DI package
-// cells/accesscore/postgres (NOT cells/accesscore/internal/adapters/postgres)
-// contains a Deps struct that legitimately holds pool *pgxpool.Pool and a
-// NewDeps constructor that accepts *pgxpool.Pool. This is NOT a repo/store file —
-// it is the DI wiring layer that bridges cmd/* to the cell's internal adapters.
-// It is intentionally excluded from pgRepoPackagePatterns (which only includes
-// internal/adapters/postgres, not the parent postgres package). Reverse
-// self-check: TestPGRepoAmbientTx_SelfCheck BS-5 asserts three properties: (1)
-// exactly one struct named "Deps" holds *pgxpool.Pool (positive anchor — deleting
-// or renaming Deps fails), (2) no other non-pgExecutor struct holds *pgxpool.Pool
-// (second-struct guard). The former check asserted only (2); adding (1) means
-// renaming/removing Deps is also caught immediately.
+// BS-5 cells/accesscore PGBundle helper: after the Bundle funnel
+// (PR #595 follow-up), the composition-root PG wiring for accesscore lives
+// in cells/accesscore/pg_bundle.go (package accesscore). NewPGBundle accepts
+// *pgxpool.Pool as a constructor parameter but the PGBundle struct does NOT
+// retain it — only derived primitives (userRepo / roleRepo / setupLock /
+// txRunner). cells/accesscore is intentionally excluded from
+// pgRepoPackagePatterns. Reverse self-check: TestPGRepoAmbientTx_SelfCheck
+// BS-5 now asserts no struct in cells/accesscore (outside pgExecutor and
+// internal/) carries *pgxpool.Pool as a field — function-signature usage in
+// NewPGBundle is permitted because it does not persist the pool.
 //
 // BS-6 R3 method-value indirection: `var fn = s.db.ExecDirect; fn(ctx, sql)` —
 // R3's ExecDirect detection looks for a CallExpr whose Fun is a SelectorExpr with
@@ -214,9 +212,11 @@ const modulePathPrefix = "github.com/ghbvf/gocell/"
 // assertProductionCoverage guard only validates packages already listed here;
 // it cannot detect entirely missing packages.
 //
-// Note: cells/accesscore/postgres (the DI wiring helper) is intentionally NOT
-// in this list — it is a composition-root bridge package, not a repo/store
-// package. Its *pgxpool.Pool usage is covered by the BS-5 self-check.
+// Note: cells/accesscore (the PGBundle host) is intentionally NOT in this
+// list — it is a composition-root bridge package, not a repo/store package.
+// NewPGBundle's *pgxpool.Pool function-signature usage is covered by the
+// BS-5 self-check, which asserts no struct in cells/accesscore (outside the
+// internal/ tree) carries *pgxpool.Pool as a field.
 var pgRepoPackagePatterns = []string{
 	"github.com/ghbvf/gocell/adapters/postgres",
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres",
@@ -840,7 +840,7 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 
 // TestPGRepoAmbientTx_SelfCheck verifies the blind-spot list by asserting that
 // prohibited AST forms are absent from production packages and that the BS-5
-// intentional exclusion (cells/accesscore/postgres.Deps) remains exactly bounded.
+// intentional exclusion (cells/accesscore) remains exactly bounded.
 // This makes the blind-spot documentation falsifiable rather than purely commentary.
 //
 // BS-3: identity-based detection via EachInSubtree[ast.Ident]+*types.Info.Uses
@@ -848,9 +848,10 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 // return, composite-literal), not just AssignStmt. Any Ident resolving to
 // newPGExecutor that is NOT in the callee position of a direct call is flagged.
 //
-// BS-5: positive anchor asserts Deps exists exactly once with *pgxpool.Pool, AND
-// no other non-pgExecutor struct holds *pgxpool.Pool. Deleting/renaming Deps now
-// also fails the check.
+// BS-5: after the Bundle funnel collapse (PR #595), no struct in
+// cells/accesscore (outside internal/) may carry *pgxpool.Pool as a field —
+// NewPGBundle is the sole sanctioned consumer and uses pool only as a
+// function parameter without persisting it.
 //
 // BS-6: identity-based detection via EachInSubtree[ast.Ident]+*types.Info.Uses
 // covers all method-value forms of ExecDirect on pgExecutor (ValueSpec, call
@@ -949,18 +950,13 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		"BS-3 self-check: newPGExecutor must not be used as a function value in production; "+
 			"all non-callee Ident references to newPGExecutor are covered by identity resolution")
 
-	// BS-5 reverse check: cells/accesscore/postgres (DI wiring helper, intentionally
-	// NOT in pgRepoPackagePatterns) legitimately holds *pgxpool.Pool in its Deps
-	// struct. This check enforces three properties simultaneously:
-	//   1. There is EXACTLY ONE non-pgExecutor struct in the package holding *pgxpool.Pool.
-	//   2. That struct is named "Deps" (positive anchor: deleting/renaming Deps fails check).
-	//   3. No OTHER non-pgExecutor struct holds *pgxpool.Pool (second-struct guard).
-	//
-	// The former check only asserted (3). Without (1)+(2), renaming Deps or deleting
-	// it would let bs5NonDepsCount stay 0 and the check would trivially pass even
-	// though the invariant was broken.
-	bs5Patterns := []string{"github.com/ghbvf/gocell/cells/accesscore/postgres"}
-	var bs5DepsCount, bs5NonDepsCount int
+	// BS-5 reverse check: after Bundle funnel collapse (PR #595), no struct
+	// in cells/accesscore (outside the internal/ tree, intentionally NOT in
+	// pgRepoPackagePatterns) may carry *pgxpool.Pool as a field. NewPGBundle
+	// accepts *pgxpool.Pool as a function parameter to derive repos/setupLock,
+	// but PGBundle itself stores only derived primitives — never the pool.
+	bs5Patterns := []string{"github.com/ghbvf/gocell/cells/accesscore"}
+	var bs5PoolFieldCount int
 	_ = RunTyped(t, TypedOpts{}, bs5Patterns, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
@@ -979,13 +975,8 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 						return
 					}
 					for _, field := range st.Fields.List {
-						if !isPgxPoolType(field.Type, p.TypesInfo) {
-							continue
-						}
-						if ts.Name.Name == "Deps" {
-							bs5DepsCount++
-						} else {
-							bs5NonDepsCount++
+						if isPgxPoolType(field.Type, p.TypesInfo) {
+							bs5PoolFieldCount++
 						}
 					}
 				})
@@ -993,16 +984,12 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		}
 		return nil
 	})
-	// Positive anchor: the Deps struct must exist exactly once with a *pgxpool.Pool field.
-	assert.Equal(t, 1, bs5DepsCount,
-		"BS-5 self-check: cells/accesscore/postgres must contain exactly one 'Deps' struct "+
-			"with a *pgxpool.Pool field — the DI wiring pool holder; "+
-			"if Deps was renamed or its pool field removed, update this check and pgRepoPackagePatterns")
-	// Second-struct guard: no other non-pgExecutor struct may hold *pgxpool.Pool.
-	assert.Equal(t, 0, bs5NonDepsCount,
-		"BS-5 self-check: cells/accesscore/postgres must not introduce a second "+
-			"non-pgExecutor, non-Deps struct holding *pgxpool.Pool; "+
-			"if a second such struct appears, add it to pgRepoPackagePatterns instead")
+	// Bundle funnel anchor: PGBundle holds only derived primitives, never the pool.
+	assert.Equal(t, 0, bs5PoolFieldCount,
+		"BS-5 self-check: no struct in cells/accesscore (outside the internal/ tree) "+
+			"may carry *pgxpool.Pool as a field — PGBundle must hold only derived "+
+			"primitives (userRepo/roleRepo/setupLock/txRunner). If a new struct "+
+			"legitimately needs to hold the pool, add it to pgRepoPackagePatterns instead.")
 
 	// BS-6 reverse check: ExecDirect must not appear as a method value (i.e., used
 	// as a value rather than directly called) in any production file. A method-value

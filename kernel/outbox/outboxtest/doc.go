@@ -16,6 +16,16 @@
 //	    })
 //	}
 //
+// # Close convention
+//
+// All Subscriber.Close call sites inside the conformance suite must route
+// through the package-internal closeWithBudget helper (defined in helpers.go),
+// never via a bare sub.Close(ctx). closeWithBudget wraps Close with a
+// caller-side timeout budget and goroutine-leak detection, turning a
+// misbehaving implementation into a focused per-test failure rather than a
+// process-level hang. PubSubConstructor t.Cleanup callbacks that close the
+// full bus object are exempt — their lifetime is managed by the test framework.
+//
 // ref: ThreeDotsLabs/watermill pubsub/tests/test_pubsub.go — universal
 // conformance suite pattern (Features flags + constructor injection).
 package outboxtest

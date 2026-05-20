@@ -291,25 +291,25 @@ func (p *alwaysFailCounterProvider) Unregister(col kernelmetrics.Collector) erro
 }
 
 // ---------------------------------------------------------------------------
-// R3: autoWireOutboxConsumerCollector tests
+// R3: autoWireOutboxRejectCollector tests
 // ---------------------------------------------------------------------------
 
-// TestAutoWireOutboxConsumerCollector_NopProvider_Skips verifies that when the
-// metrics provider is NopProvider (default), autoWireOutboxConsumerCollector
+// TestAutoWireOutboxRejectCollector_NopProvider_Skips verifies that when the
+// metrics provider is NopProvider (default), autoWireOutboxRejectCollector
 // returns nil without creating a collector. No outbox counters should be registered.
-func TestAutoWireOutboxConsumerCollector_NopProvider_Skips(t *testing.T) {
+func TestAutoWireOutboxRejectCollector_NopProvider_Skips(t *testing.T) {
 	b := New(WithClock(clock.Real())) // NopProvider default
 
-	err := b.autoWireOutboxConsumerCollector()
+	err := b.autoWireOutboxRejectCollector()
 	require.NoError(t, err)
-	assert.Nil(t, b.outboxConsumerCollector,
-		"NopProvider must not create an outbox consumer collector")
+	assert.Nil(t, b.outboxRejectCollector,
+		"NopProvider must not create an outbox reject collector")
 }
 
-// TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToConsumerBase verifies
+// TestAutoWireOutboxRejectCollector_RealProvider_AttachesToConsumerBase verifies
 // that when a real provider is injected and a ConsumerBase is set, the collector
 // is created, cached, and attached to ConsumerBase as an observer.
-func TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToConsumerBase(t *testing.T) {
+func TestAutoWireOutboxRejectCollector_RealProvider_AttachesToConsumerBase(t *testing.T) {
 	spy := &registrationSpy{}
 	cb := newTestConsumerBase(t)
 
@@ -319,9 +319,9 @@ func TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToConsumerBase(t *
 		WithConsumerBase(cb),
 	)
 
-	err := b.autoWireOutboxConsumerCollector()
-	require.NoError(t, err, "autoWireOutboxConsumerCollector must succeed with a real provider")
-	require.NotNil(t, b.outboxConsumerCollector, "collector must be cached on b.outboxConsumerCollector")
+	err := b.autoWireOutboxRejectCollector()
+	require.NoError(t, err, "autoWireOutboxRejectCollector must succeed with a real provider")
+	require.NotNil(t, b.outboxRejectCollector, "collector must be cached on b.outboxRejectCollector")
 
 	// Verify the counter name was registered.
 	spy.mu.Lock()
@@ -332,16 +332,16 @@ func TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToConsumerBase(t *
 
 	// Attaching a second observer must fail with ErrObserverAlreadyAttached,
 	// which proves the first AttachObserver call succeeded.
-	attachErr := cb.AttachObserver(b.outboxConsumerCollector)
+	attachErr := cb.AttachObserver(b.outboxRejectCollector)
 	assert.ErrorIs(t, attachErr, kerneloutbox.ErrObserverAlreadyAttached,
 		"second AttachObserver call must fail with ErrObserverAlreadyAttached, "+
 			"confirming the collector was attached on the first autoWire call")
 }
 
-// TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToRelay verifies
-// that when a Relay is wired, autoWireOutboxConsumerCollector creates the
-// collector and calls WithPendingDepthObserver on the relay without error.
-func TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToRelay(t *testing.T) {
+// TestAutoWireOutboxRejectCollector_RealProvider_NoRelayWiring verifies that
+// autoWireOutboxRejectCollector does NOT call WithPendingDepthObserver on the
+// relay. PendingDepth wiring is done explicitly by each composition-root module.
+func TestAutoWireOutboxRejectCollector_RealProvider_NoRelayWiring(t *testing.T) {
 	spy := &registrationSpy{}
 	store := &outboxtest.FakeStore{}
 	relay := runtimeoutbox.NewRelay(store, &kerneloutbox.DiscardPublisher{}, runtimeoutbox.RelayConfig{
@@ -354,15 +354,15 @@ func TestAutoWireOutboxConsumerCollector_RealProvider_AttachesToRelay(t *testing
 		WithRelay(relay),
 	)
 
-	err := b.autoWireOutboxConsumerCollector()
-	require.NoError(t, err, "autoWireOutboxConsumerCollector must succeed when relay is wired")
-	require.NotNil(t, b.outboxConsumerCollector,
+	err := b.autoWireOutboxRejectCollector()
+	require.NoError(t, err, "autoWireOutboxRejectCollector must succeed when relay is wired")
+	require.NotNil(t, b.outboxRejectCollector,
 		"collector must be cached even when only relay (no ConsumerBase) is present")
 
 	// Calling again must be idempotent: the collector is cached; no new
 	// registration attempt occurs, so no Prometheus duplicate error.
-	err2 := b.autoWireOutboxConsumerCollector()
-	require.NoError(t, err2, "second autoWireOutboxConsumerCollector call must not error (cached collector)")
+	err2 := b.autoWireOutboxRejectCollector()
+	require.NoError(t, err2, "second autoWireOutboxRejectCollector call must not error (cached collector)")
 }
 
 // ---------------------------------------------------------------------------
@@ -457,13 +457,13 @@ func (p *countingMetricsProvider) Unregister(c kernelmetrics.Collector) error {
 	return p.inner.Unregister(c)
 }
 
-// TestAutoWireOutboxConsumerCollector_DoubleCallWithConsumerBase_Idempotent
-// pins the F2 finding: a second call to autoWireOutboxConsumerCollector when
+// TestAutoWireOutboxRejectCollector_DoubleCallWithConsumerBase_Idempotent
+// pins the F2 finding: a second call to autoWireOutboxRejectCollector when
 // b.consumerBase is non-nil and the collector is already cached must not
 // return ErrObserverAlreadyAttached. The first call attaches the observer;
 // the second call sees the cached collector and must silently ignore the
 // already-attached sentinel instead of propagating it as an error.
-func TestAutoWireOutboxConsumerCollector_DoubleCallWithConsumerBase_Idempotent(t *testing.T) {
+func TestAutoWireOutboxRejectCollector_DoubleCallWithConsumerBase_Idempotent(t *testing.T) {
 	spy := &registrationSpy{}
 	cb := newTestConsumerBase(t)
 
@@ -474,14 +474,14 @@ func TestAutoWireOutboxConsumerCollector_DoubleCallWithConsumerBase_Idempotent(t
 	)
 
 	// First call: creates collector, attaches to ConsumerBase.
-	err := b.autoWireOutboxConsumerCollector()
-	require.NoError(t, err, "first autoWireOutboxConsumerCollector call must succeed")
-	require.NotNil(t, b.outboxConsumerCollector, "collector must be cached after first call")
+	err := b.autoWireOutboxRejectCollector()
+	require.NoError(t, err, "first autoWireOutboxRejectCollector call must succeed")
+	require.NotNil(t, b.outboxRejectCollector, "collector must be cached after first call")
 
 	// Second call: collector is cached; AttachObserver returns
 	// ErrObserverAlreadyAttached which must be silently ignored.
-	err2 := b.autoWireOutboxConsumerCollector()
+	err2 := b.autoWireOutboxRejectCollector()
 	require.NoError(t, err2,
-		"second autoWireOutboxConsumerCollector call must be idempotent — "+
+		"second autoWireOutboxRejectCollector call must be idempotent — "+
 			"ErrObserverAlreadyAttached must not propagate (F2 regression guard)")
 }

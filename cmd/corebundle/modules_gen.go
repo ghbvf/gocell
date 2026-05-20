@@ -5,7 +5,7 @@ package main
 func generatedCellModules() []CellModule {
 	return []CellModule{
 		ConfigCoreModule{},
-		AccessCoreModule{},
 		AuditCoreModule{},
+		AccessCoreModule{},
 	}
 }

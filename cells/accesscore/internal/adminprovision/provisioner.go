@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -63,18 +62,23 @@ type UUIDGenerator func() string
 // it with their own TxRunner if atomicity across Ensure + adjacent writes is
 // required.
 //
-// Concurrency: Ensure is serialized through an internal mutex so the
-// CountByRole fast-path → Create → Assign sequence is atomic within a single
-// process. This closes the read-after-check window that would otherwise let
-// two concurrent callers with different usernames both pass the fast-path and
-// each persist an admin row (UserRepo's per-username uniqueness does not
-// protect against "admin role has two holders"). The mutex is sufficient for
-// single-process deployments (demo, single-instance PG). Multi-instance PG
-// deployments must layer a cross-process lock on top — the PG adapter is
-// expected to acquire pg_advisory_xact_lock at Ensure entry; see
-// ADMINPROVISION-DIST-LOCK-01 in docs/backlog.md.
+// Concurrency: Ensure is NOT internally serialized. Callers must serialize
+// concurrent invocations through a transactional boundary that locks the
+// CountByRole-Create-Assign window:
+//
+//   - PG mode: open a transaction via persistence.TxRunner.RunInTx and call
+//     ports.SetupLock.Acquire inside it. The PG implementation (PGSetupLock)
+//     uses pg_advisory_xact_lock, which is exclusive across pods and
+//     goroutines until tx commit/rollback.
+//   - Memstore mode: use Store.TxRunner — memTxRunner.RunInTx holds store.mu
+//     for the entire closure, serializing all goroutines (equivalent to PG
+//     SELECT FOR UPDATE held until commit).
+//
+// The single production caller (cells/accesscore/slices/setup.Service.CreateAdmin)
+// wires both via RunInTx + the mandatory accesscore.WithSetupLock option. PG
+// composition roots inject accesspg.NewSetupLock(deps); memstore callers
+// inject accesscore.NoopSetupLock{} (no second lock — store.mu does the work).
 type Provisioner struct {
-	mu       sync.Mutex
 	userRepo ports.UserRepository
 	roleRepo ports.RoleRepository
 	logger   *slog.Logger
@@ -146,12 +150,6 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 	if len(in.PasswordHash) == 0 {
 		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: PasswordHash is required")
 	}
-
-	// Serialize the fast-path → Create → Assign sequence so two concurrent
-	// Ensure callers cannot both pass CountByRole==0 and each persist a
-	// distinct admin user. Single-process scope only; see Provisioner godoc.
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	// 1. Fast path.
 	exists, err := p.Status(ctx)

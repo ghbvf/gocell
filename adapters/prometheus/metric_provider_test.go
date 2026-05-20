@@ -810,6 +810,25 @@ func TestMetricProvider_ConcurrentGaugeVec_RaceDetector(t *testing.T) {
 	}
 }
 
+// matchLabelPairs reports whether all label pairs in labelPairs match the wanted
+// labels map. A pair is considered matching if its name is not present in labels,
+// or if its value equals the wanted value.
+//
+// labelPairs is typed as []interface{ GetName() string; GetValue() string } to
+// avoid importing the dto package in the test binary; the concrete slice element
+// type is *dto.LabelPair from Gather().
+func matchLabelPairs[LP interface {
+	GetName() string
+	GetValue() string
+}](labelPairs []LP, labels prom.Labels) bool {
+	for _, lp := range labelPairs {
+		if v, ok := labels[lp.GetName()]; ok && v != lp.GetValue() {
+			return false
+		}
+	}
+	return true
+}
+
 // collectGauge fetches a single labeled Gauge from the registry for use with
 // testutil.ToFloat64. Mirrors collect() but reads GetGauge().GetValue() instead
 // of GetCounter().GetValue().
@@ -824,14 +843,7 @@ func collectGauge(t *testing.T, reg *prom.Registry, name string, labels prom.Lab
 			continue
 		}
 		for _, m := range f.GetMetric() {
-			match := true
-			for _, lp := range m.GetLabel() {
-				if v, ok := labels[lp.GetName()]; ok && v != lp.GetValue() {
-					match = false
-					break
-				}
-			}
-			if match {
+			if matchLabelPairs(m.GetLabel(), labels) {
 				return singletonGauge{val: m.GetGauge().GetValue()}
 			}
 		}

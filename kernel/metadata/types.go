@@ -68,6 +68,29 @@ type CellVerifyMeta struct {
 }
 
 // L0DepMeta declares a direct dependency on an L0 (LocalOnly) Cell.
+//
+// L0 Cell status: sanctioned future extension point
+//
+// L0 (LocalOnly, pure-compute library cell) is a first-class member of the
+// consistency-level model (L0-L4). An L0 Cell has no state machine, no
+// outbox, and no contracts; it exposes shared pure-computation logic (e.g.
+// hashing, validation algorithms, encoding helpers) that other cells in the
+// same Assembly may import directly.
+//
+// As of this writing there is no L0 Cell instance in the platform cells
+// (accesscore / auditcore / configcore). Every platform cell.yaml therefore
+// carries `l0Dependencies: []` — this empty slice is expected and correct;
+// it is not a schema defect or dead-code path.
+//
+// When a future L0 Cell is created (e.g. a shared pure-compute package
+// elevated to a first-class Cell), consuming cells would add an entry here:
+//
+//	l0Dependencies:
+//	  - cell: sharedcrypto
+//	    reason: deterministic hashing for cursor tokens
+//
+// Decision record: C-06-L0-CELL-DECISION — user chose doc-only (option b)
+// over elevating an existing package to a concrete L0 instance (option a).
 type L0DepMeta struct {
 	Cell   string `yaml:"cell"`
 	Reason string `yaml:"reason"`

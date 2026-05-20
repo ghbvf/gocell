@@ -1,20 +1,26 @@
 // Package adminprovision encapsulates the idempotent, race-safe "bring the
-// first admin into existence" domain logic shared by two consumers:
-//
-//   - cells/accesscore/initialadmin: headless startup Lifecycle that writes
-//     a credential file (auto-generated password) on first run.
-//   - cells/accesscore/slices/setup: interactive POST /api/v1/access/setup/admin
-//     HTTP endpoint (operator-supplied password).
+// first admin into existence" domain logic. After PR #392 the only consumer
+// is cells/accesscore/slices/setup (the interactive POST /api/v1/access/setup/admin
+// endpoint with an operator-supplied password); the headless initialadmin
+// Lifecycle has been deleted.
 //
 // The package is caller-tx-neutral: Ensure does not open its own transaction
 // and does not emit events, so callers compose it with whichever persistence
-// boundary they own (no tx for initialadmin, TxRunner + outbox for setup).
-// Ensure is serialized internally via sync.Mutex so fast-path → Create → Assign
-// is atomic within a single process; multi-instance deployments must add a
-// cross-process lock (e.g. pg_advisory_xact_lock) in the PG adapter.
+// boundary they own (TxRunner + outbox for setup). Ensure is NOT internally
+// serialized — the in-process sync.Mutex was removed once PR #482 wired the
+// PG adapter; concurrent invocations must be serialized by the caller through
+// a RunInTx + ports.SetupLock pair:
+//
+//   - PG mode: accesspg.NewSetupLock uses pg_advisory_xact_lock for cross-pod
+//     mutual exclusion (Closes backlog ADMINPROVISION-DIST-LOCK-01).
+//   - Memstore mode: accesscore.NoopSetupLock — memTxRunner.RunInTx holds
+//     store.mu for the whole closure, already serializing goroutines.
+//
+// The cell-level accesscore.WithSetupLock is mandatory and rejects nil at
+// phase0 (cells/accesscore/cell.go), so a composition root that forgets to
+// wire either lock fails fast at startup, not at the first concurrent setup.
 //
 // Outcomes are modeled as a ProvisionOutcome enum rather than a boolean so
 // callers can distinguish fresh creates (write credfile / emit event), prior
-// completions (silent skip / 410), concurrent-replica races (silent skip),
-// and orphan-recovery resumption (previous crashed run).
+// completions (silent skip / 410), and concurrent-replica races (silent skip).
 package adminprovision

@@ -82,14 +82,15 @@ func TestMetricLabelErrcodeClassifiersRequireAck(t *testing.T) {
 //
 // tools/archtest/internal/metricsgaugevecfixture/fixture.go provides two
 // intentional violations: BadPromGaugeVec (prom.NewGaugeVec) and
-// BadOtelUpDownCounter (meter.Float64UpDownCounter). The RED check asserts
-// exactly 2 diagnostics; the GREEN check asserts 0 production diagnostics.
+// BadOtelUpDownCounter (meter.Float64UpDownCounter), and BadOtelFloat64Gauge
+// (meter.Float64Gauge). The RED check asserts exactly 3 diagnostics; the
+// GREEN check asserts 0 production diagnostics.
 func TestGaugeVecFunnel(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	// RED check: fixture must produce exactly 2 violations.
+	// RED check: fixture must produce exactly 3 violations.
 	// The fixture rule does NOT exclude the fixture package itself — only the
 	// adapter allowlist exclusions apply. This is what allows the RED check to
 	// detect the violations in the fixture.
@@ -101,9 +102,10 @@ func TestGaugeVecFunnel(t *testing.T) {
 	for _, d := range redDiags {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
-	require.Len(t, redDiags, 2,
-		"RED fixture must trigger METRICS-GAUGEVEC-FUNNEL-01 for both bad calls "+
-			"(BadPromGaugeVec + BadOtelUpDownCounter); got %d diagnostics", len(redDiags))
+	require.Len(t, redDiags, 3,
+		"RED fixture must trigger METRICS-GAUGEVEC-FUNNEL-01 for all three bad calls "+
+			"(BadPromGaugeVec + BadOtelUpDownCounter + BadOtelFloat64Gauge); got %d diagnostics",
+		len(redDiags))
 
 	// GREEN check: production code must produce zero violations.
 	// gaugeVecFunnelRule (with full exclusion set) is used for production.
@@ -112,9 +114,37 @@ func TestGaugeVecFunnel(t *testing.T) {
 		t.Errorf("METRICS-GAUGEVEC-FUNNEL-01 %s:%d: %s", d.Rel, d.Line, d.Message)
 	}
 	assert.Empty(t, prodDiags,
-		"METRICS-GAUGEVEC-FUNNEL-01: production code must not call prom.NewGaugeVec or "+
-			"otelmetric.Meter.Float64UpDownCounter directly; route through "+
-			"kernel/observability/metrics.Provider.GaugeVec")
+		"METRICS-GAUGEVEC-FUNNEL-01: production code must not call prom.NewGaugeVec, "+
+			"otelmetric.Meter.Float64UpDownCounter, or otelmetric.Meter.Float64Gauge "+
+			"directly; route through kernel/observability/metrics.Provider.GaugeVec")
+}
+
+// TestGaugeVecFunnel_BansFloat64Gauge pins the PR #593 review fix-up Fix 4
+// invariant: the OTel ban set must cover Float64Gauge (the current adapter
+// primitive since PR #625), not just Float64UpDownCounter (the historical
+// leak surface). The RED fixture's BadOtelFloat64Gauge call must produce a
+// diagnostic naming Float64Gauge.
+func TestGaugeVecFunnel_BansFloat64Gauge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	redDiags := RunTypedFixture(t,
+		FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/metricsgaugevecfixture/..."},
+		gaugeVecFunnelRuleRaw,
+	)
+
+	var float64GaugeHits int
+	for _, d := range redDiags {
+		if strings.Contains(d.Message, "Float64Gauge") {
+			float64GaugeHits++
+		}
+	}
+	assert.Equal(t, 1, float64GaugeHits,
+		"METRICS-GAUGEVEC-FUNNEL-01 must flag the BadOtelFloat64Gauge fixture call "+
+			"so the funnel covers the current adapter primitive; got %d Float64Gauge hits",
+		float64GaugeHits)
 }
 
 // TestGaugeVecFunnel_SelfCheck verifies the blind-spot reverse self-checks for
@@ -152,8 +182,23 @@ const bannedPromFunc = "NewGaugeVec"
 // are banned outside the adapter.
 const bannedOtelPkg = "go.opentelemetry.io/otel/metric"
 
-// bannedOtelMethod is the Meter method name banned by METRICS-GAUGEVEC-FUNNEL-01.
-const bannedOtelMethod = "Float64UpDownCounter"
+// bannedOtelMethods is the set of OTel Meter method names banned by
+// METRICS-GAUGEVEC-FUNNEL-01 in production code outside adapters/. Gauge
+// semantics MUST go through metrics.Provider.GaugeVec funnel, not direct OTel
+// SDK usage. Both the historical leak surface (Float64UpDownCounter, used by
+// the adapter pre-PR #625) and the current adapter primitive (Float64Gauge,
+// OTel v1.33+ synchronous gauge) are covered.
+//
+// Residual risk — adapter self-misuse: adapters/otel/ is excluded from this
+// ban (it is the sanctioned implementation site). If adapters/otel/ were to
+// switch to yet another OTel gauge primitive this archtest would NOT catch
+// it — the exclusion covers all methods in that package. Mitigation: the
+// adapter is a single, easily audited file; sync-diff correctness is also
+// covered by adapter unit tests. Documented in ADR 202605191500 §威胁矩阵.
+var bannedOtelMethods = map[string]struct{}{
+	"Float64UpDownCounter": {}, // historical leak surface (pre-PR #625)
+	"Float64Gauge":         {}, // current adapter primitive (PR #625+)
+}
 
 // gaugeVecFunnelRuleRaw is the core rule for METRICS-GAUGEVEC-FUNNEL-01 without
 // fixture-package exclusion. It is used by the RED fixture check so that the
@@ -249,7 +294,7 @@ func scanGaugeVecCallsInFile(
 			diags = append(diags, *d)
 			return
 		}
-		if d := checkOtelFloat64UpDownCounter(fset, call, rel, info); d != nil {
+		if d := checkOtelBannedGaugeMethod(fset, call, rel, info); d != nil {
 			diags = append(diags, *d)
 		}
 	})
@@ -277,14 +322,15 @@ func checkPromNewGaugeVec(fset *token.FileSet, call *ast.CallExpr, rel string, i
 	}
 }
 
-// checkOtelFloat64UpDownCounter returns a Diagnostic when call resolves to
-// otelmetric.Meter.Float64UpDownCounter, or nil if it does not.
-func checkOtelFloat64UpDownCounter(fset *token.FileSet, call *ast.CallExpr, rel string, info *types.Info) *Diagnostic {
+// checkOtelBannedGaugeMethod returns a Diagnostic when call resolves to any
+// Meter method in bannedOtelMethods (Float64UpDownCounter or Float64Gauge),
+// or nil if it does not.
+func checkOtelBannedGaugeMethod(fset *token.FileSet, call *ast.CallExpr, rel string, info *types.Info) *Diagnostic {
 	fn, ok := ResolveMethodCall(info, callFunAsSel(call))
 	if !ok || fn == nil {
 		return nil
 	}
-	if fn.Name() != bannedOtelMethod {
+	if _, banned := bannedOtelMethods[fn.Name()]; !banned {
 		return nil
 	}
 	if fn.Pkg() == nil || fn.Pkg().Path() != bannedOtelPkg {
@@ -297,7 +343,7 @@ func checkOtelFloat64UpDownCounter(fset *token.FileSet, call *ast.CallExpr, rel 
 		Message: fmt.Sprintf(
 			"METRICS-GAUGEVEC-FUNNEL-01: %s calls forbidden %s.Meter.%s; "+
 				"route through kernel/observability/metrics.Provider.GaugeVec",
-			rel, bannedOtelPkg, bannedOtelMethod),
+			rel, bannedOtelPkg, fn.Name()),
 	}
 }
 
@@ -339,18 +385,29 @@ func gaugeVecBS1ReflectCheck(p *Pass) []Diagnostic {
 			if !ok || xIdent.Name != "reflect" {
 				return
 			}
-			// Check if any string arg contains a banned symbol name.
+			// Check if any string arg contains a banned symbol name (prom funcs or
+			// any of the OTel ban-set method names).
 			for _, arg := range call.Args {
-				if s, ok := EvaluateConstString(p.TypesInfo, arg); ok {
-					if strings.Contains(s, bannedPromFunc) || strings.Contains(s, bannedOtelMethod) {
-						diags = append(diags, Diagnostic{
-							Rel:  rel,
-							Line: p.Fset.Position(call.Pos()).Line,
-							Message: fmt.Sprintf(
-								"METRICS-GAUGEVEC-FUNNEL-01 BS-1: reflect.ValueOf with banned symbol name %q", s),
-						})
+				s, ok := EvaluateConstString(p.TypesInfo, arg)
+				if !ok {
+					continue
+				}
+				match := strings.Contains(s, bannedPromFunc)
+				for methodName := range bannedOtelMethods {
+					if strings.Contains(s, methodName) {
+						match = true
+						break
 					}
 				}
+				if !match {
+					continue
+				}
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(call.Pos()).Line,
+					Message: fmt.Sprintf(
+						"METRICS-GAUGEVEC-FUNNEL-01 BS-1: reflect.ValueOf with banned symbol name %q", s),
+				})
 			}
 		})
 	}
@@ -358,9 +415,10 @@ func gaugeVecBS1ReflectCheck(p *Pass) []Diagnostic {
 }
 
 // gaugeVecBS3FuncValueCheck implements the BS-3 reverse self-check: no production
-// code stores prom.NewGaugeVec or meter.Float64UpDownCounter in a function value
-// variable. We detect this by scanning ValueSpec and AssignStmt nodes where the
-// RHS is a SelectorExpr (not a CallExpr) that resolves to a banned symbol.
+// code stores prom.NewGaugeVec or any banned OTel Meter gauge method
+// (Float64UpDownCounter / Float64Gauge) in a function value variable. We detect
+// this by scanning ValueSpec and AssignStmt nodes where the RHS is a
+// SelectorExpr (not a CallExpr) that resolves to a banned symbol.
 func gaugeVecBS3FuncValueCheck(p *Pass) []Diagnostic {
 	if p.TypesInfo == nil || p.Fset == nil {
 		return nil
@@ -384,15 +442,12 @@ func gaugeVecBS3FuncValueCheck(p *Pass) []Diagnostic {
 // Two forms are checked:
 //  1. Prom function-value: `var fn = prom.NewGaugeVec` — SelectorExpr resolves
 //     via ResolvePackageRef to bannedPromPkg.bannedPromFunc.
-//  2. OTel method-value capture: `var fn = meter.Float64UpDownCounter` —
-//     SelectorExpr whose Sel matches bannedOtelMethod AND whose receiver X
-//     resolves via *types.Info to otelmetric.Meter (checked via ResolveMethodCall
-//     on a synthetic call-shaped node, or by checking the selector name AND the
-//     receiver type's package path). We use a conservative name-only check for
-//     the method-value capture form: any non-call SelectorExpr whose Sel is
-//     bannedOtelMethod is flagged. This is conservative (could match other
-//     types with the same method name) but Float64UpDownCounter is
-//     OTel-specific and unlikely to collide in production GoCell code.
+//  2. OTel method-value capture: `var fn = meter.Float64Gauge` (or
+//     Float64UpDownCounter) — SelectorExpr whose Sel matches any entry in
+//     bannedOtelMethods AND whose receiver X resolves via *types.Info to
+//     otelmetric.Meter. Name-only match is conservative but the banned
+//     primitive names are OTel-specific and unlikely to collide in
+//     production GoCell code.
 func scanFuncValueIndirections(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	// Collect all CallExpr.Fun positions so we can exclude them below.
 	callFunPositions := make(map[token.Pos]bool)
@@ -420,21 +475,22 @@ func scanFuncValueIndirections(fset *token.FileSet, file *ast.File, rel string, 
 			return
 		}
 
-		// Check 2: OTel method-value capture (meter.Float64UpDownCounter used as value).
-		// We use ResolveMethodCall on a synthesized selector to get the full type info.
-		// If the selector name matches and the method resolves to the OTel banned pkg,
-		// it is a BS-3 violation.
-		if sel.Sel != nil && sel.Sel.Name == bannedOtelMethod {
-			fn, resolved := ResolveMethodCall(info, sel)
-			if resolved && fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == bannedOtelPkg {
-				diags = append(diags, Diagnostic{
-					Rel:  rel,
-					Line: fset.Position(sel.Pos()).Line,
-					Message: fmt.Sprintf(
-						"METRICS-GAUGEVEC-FUNNEL-01 BS-3: %s.Meter.%s used as method value (not called directly); "+
-							"route through metrics.Provider.GaugeVec", bannedOtelPkg, bannedOtelMethod),
-				})
-			}
+		// Check 2: OTel method-value capture (any banned Meter gauge method used as value).
+		if sel.Sel == nil {
+			return
+		}
+		if _, banned := bannedOtelMethods[sel.Sel.Name]; !banned {
+			return
+		}
+		fn, resolved := ResolveMethodCall(info, sel)
+		if resolved && fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == bannedOtelPkg {
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: fset.Position(sel.Pos()).Line,
+				Message: fmt.Sprintf(
+					"METRICS-GAUGEVEC-FUNNEL-01 BS-3: %s.Meter.%s used as method value (not called directly); "+
+						"route through metrics.Provider.GaugeVec", bannedOtelPkg, fn.Name()),
+			})
 		}
 	})
 	return diags

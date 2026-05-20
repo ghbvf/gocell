@@ -85,6 +85,7 @@ func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	t.Run("CountPending_ReflectsSeeded", func(t *testing.T) { conformCountPendingSeeded(t, factory) })
 	t.Run("CountPending_DecreasesAfterMarkPublished", func(t *testing.T) { conformCountPendingAfterPublish(t, factory) })
+	t.Run("CountPending_ExcludesFutureRetry", func(t *testing.T) { conformCountPendingExcludesFutureRetry(t, factory) })
 	t.Run("ClaimPending_Empty", func(t *testing.T) { conformClaimPendingEmpty(t, factory) })
 	t.Run("ClaimPending_BatchCap", func(t *testing.T) { conformClaimPendingBatchCap(t, factory) })
 	t.Run("ClaimPending_SecondCallReturnsRemaining", func(t *testing.T) { conformClaimPendingSecondCall(t, factory) })
@@ -765,6 +766,76 @@ func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
 	}
 	if at.IsZero() {
 		t.Error("OldestEligibleAt: returned zero time after MarkDead")
+	}
+}
+
+// conformCountPendingExcludesFutureRetry verifies that CountPending only counts
+// rows eligible for ClaimPending — status=pending AND (next_retry_at IS NULL OR
+// next_retry_at <= now()). A row with next_retry_at in the future must NOT be
+// counted, matching ClaimPending semantics.
+//
+// RED: FakeStore.CountPending counts ALL statusPending rows without the
+// next_retry_at predicate; PGOutboxStore countPendingQuery also lacks it.
+// Wave 2 fixes both; until then this test is RED.
+func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := t.Context()
+
+	now := time.Now()
+	futureRetry := now.Add(time.Hour) // well in the future — must be excluded
+
+	// Seed three pending rows:
+	//   e1: next_retry_at = nil          → eligible, CountPending must include
+	//   e2: next_retry_at = nil          → eligible, CountPending must include
+	//   e3: next_retry_at = now+1h       → NOT eligible, CountPending must exclude
+	//
+	// We seed e1/e2 as plain pending (no nextRetryAt).
+	// e3 must be seeded as pending with a future nextRetryAt.
+	// The easiest way: seed as plain pending then call MarkRetry to set the delay.
+	seed := []outbox.ClaimedEntry{
+		newEntry("cp-excl-e1", 0),
+		newEntry("cp-excl-e2", 0),
+		newEntry("cp-excl-e3", 1), // attempts=1 to have a plausible retry scenario
+	}
+	store := factory(t, seed)
+
+	// Claim e3 so we can MarkRetry with a future next_retry_at.
+	// We claim one at a time to get a deterministic lease for e3.
+	// First two claims are e1/e2 (FakeStore orders nil-nextRetryAt first).
+	// Then claim e3.
+	var e3LeaseID string
+	for range 3 {
+		claimed, err := store.ClaimPending(ctx, 1)
+		if err != nil || len(claimed) != 1 {
+			t.Fatalf("ClaimPending single: err=%v len=%d", err, len(claimed))
+		}
+		if claimed[0].ID == "cp-excl-e3" {
+			e3LeaseID = claimed[0].LeaseID
+		} else {
+			// Release e1/e2 back to pending via MarkRetry with past next_retry_at.
+			_, _ = store.MarkRetry(ctx, claimed[0].ID, claimed[0].LeaseID, 0, now.Add(-time.Second), "reset")
+		}
+	}
+	if e3LeaseID == "" {
+		t.Fatal("did not claim e3 — test setup error")
+	}
+
+	// Set e3's retry time to the future → it must not be counted.
+	updated, err := store.MarkRetry(ctx, "cp-excl-e3", e3LeaseID, 2, futureRetry, "future retry")
+	if err != nil || !updated {
+		t.Fatalf("MarkRetry e3 future: err=%v updated=%v", err, updated)
+	}
+
+	// At this point: e1, e2 have next_retry_at <= now; e3 has next_retry_at = now+1h.
+	// CountPending target: 2 (e1 + e2).
+	// CountPending current (RED): 3 (counts all statusPending without predicate).
+	got, err := store.CountPending(ctx)
+	if err != nil {
+		t.Fatalf("CountPending: %v", err)
+	}
+	if got != 2 {
+		t.Errorf("CountPending must exclude rows with future next_retry_at: got %d, want 2"+
+			" (row cp-excl-e3 has next_retry_at=%v, must not count)", got, futureRetry)
 	}
 }
 

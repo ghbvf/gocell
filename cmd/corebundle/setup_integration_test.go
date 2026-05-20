@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -29,6 +30,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/audit"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -90,20 +93,32 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
 	require.NoError(t, err)
 
+	// Shared ledger store: auditcore and the bootstrap auth-fail observer
+	// both write into the same MemStore so the test can assert that 401/429
+	// paths actually persist hash-chain entries (M4 — pre-funnel test fixture
+	// passed nil observer and missed bootstrap.auth.fail entries entirely).
+	auditHMAC := []byte("test-hmac-key-32-bytes-long!!!!!")
+	auditProto := buildTestAuditProtocol(t, auditHMAC)
+	auditStore := buildTestAuditStore(t, auditProto)
+
+	bootstrapAuthObserver, err := audit.NewBootstrapAuthFailObserver(
+		slog.Default(), auditStore, clock.Real(),
+	)
+	require.NoError(t, err)
+
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
 			Username: []byte(setupTestBootstrapUsername),
 			Password: []byte(setupTestBootstrapPassword),
 		},
 		setupTestAllowAllLimiter{},
-		nil,
+		bootstrapAuthObserver,
 	)
 	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
@@ -119,13 +134,15 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
+	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+		auditcore.WithLedgerProtocol(auditProto),
+		auditcore.WithLedgerStore(auditStore),
+	) //archtest:allow:clock-injection:via-slice WithClock prepended to positional opts
 
 	asm := assembly.New(assembly.Config{ID: "setup-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
@@ -185,7 +202,11 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	// 2a. POST without Basic Auth must 401 — proves the closed contract: the
 	//     bootstrap middleware is wired in front of the generated handler, and
 	//     ERR_AUTH_BOOTSTRAP_FAILED is the canonical envelope (no oracle).
-	t.Run("create_admin_no_auth_returns_401", func(t *testing.T) {
+	//     M4: also asserts the audit hash-chain captures reason=missing_header
+	//     (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2). Before the funnel
+	//     wiring this test passed nil observer and the 401 path silently
+	//     dropped on the floor.
+	t.Run("create_admin_no_auth_returns_401_writes_audit_chain", func(t *testing.T) {
 		payload := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
@@ -200,9 +221,60 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		raw, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 		assert.Contains(t, string(raw), "ERR_AUTH_BOOTSTRAP_FAILED")
+
+		entries, err := auditStore.Query(context.Background(),
+			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+			ledger.QueryListParams{Limit: 10})
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(entries), 1, "401 missing-header path must write a bootstrap.auth.fail ledger entry")
+		var payloadStruct struct {
+			Reason   string `json:"reason"`
+			ClientIP string `json:"clientIp"`
+		}
+		require.NoError(t, json.Unmarshal(entries[0].Payload, &payloadStruct))
+		assert.Equal(t, "missing_header", payloadStruct.Reason,
+			"first failure (no Basic Auth) must record reason=missing_header")
 	})
 
-	// 2b. Create first admin (with Basic Auth).
+	// 2b. POST with wrong credentials must 401 — same wire shape but observer
+	//     records reason=wrong_credentials. Adds the second hash-chain entry,
+	//     proving each rejected attempt is independently captured.
+	t.Run("create_admin_wrong_password_returns_401_writes_audit_chain", func(t *testing.T) {
+		payload := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(setupTestBootstrapUsername, "wrong-password-not-the-real-one")
+		resp, err := setupHTTPClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+			"setup/admin with wrong Basic Auth password must 401")
+
+		entries, err := auditStore.Query(context.Background(),
+			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+			ledger.QueryListParams{Limit: 10})
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(entries), 2,
+			"wrong-credentials path must add a second bootstrap.auth.fail entry (missing_header from 2a is first)")
+		// Scan reasons regardless of result ordering — the contract is that BOTH
+		// reasons appear in the chain at this point, not the ordering itself.
+		var seen []string
+		for _, e := range entries {
+			var p struct {
+				Reason string `json:"reason"`
+			}
+			require.NoError(t, json.Unmarshal(e.Payload, &p))
+			seen = append(seen, p.Reason)
+		}
+		assert.Contains(t, seen, "missing_header",
+			"first failure (no Basic Auth) must remain in the chain")
+		assert.Contains(t, seen, "wrong_credentials",
+			"second failure (wrong Basic Auth) must record reason=wrong_credentials")
+	})
+
+	// 2c. Create first admin (with correct Basic Auth).
 	password := "SecretPass!23"
 	t.Run("create_admin_returns_201", func(t *testing.T) {
 		payload := `{"username":"root","email":"root@local","password":"` + password + `"}`
@@ -295,11 +367,14 @@ func (l *setupTestBlockAfterNLimiter) Allow(string) bool {
 	return false
 }
 
-// TestSetupAdminBootstrap_RateLimited_Returns429 verifies that when the
-// bootstrap rate limiter is exhausted, POST /api/v1/access/setup/admin returns
-// 429 with a Retry-After header. Uses a capacity=2 limiter so the test is fast.
-// F7 RED until Wave 1 (F1: onAuthFail rate_limited) and assembly wiring are complete.
-func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
+// TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain verifies
+// the rate-limit path end-to-end: the 4th POST returns 429 + Retry-After AND
+// the bootstrap auth-fail observer writes a "bootstrap.auth.fail" entry
+// into the auditcore ledger (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2).
+// The capacity=2 limiter keeps the test fast; the assertion on
+// ledger.Query closes the F7-RED gap from the pre-PR shape where the rate-
+// limited path silently dropped on the floor.
+func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testing.T) {
 	const capacity = 2
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -322,6 +397,16 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
 	require.NoError(t, err)
 
+	// Build the audit ledger protocol + store inline so the test holds a
+	// reference to the store for the post-fact Query assertion. This replaces
+	// the auditcoreLedgerOpts(...) helper which hides the store inside the
+	// returned Option slice.
+	auditProtocol := buildTestAuditProtocol(t, []byte("test-hmac-key-32-bytes-long!!!!!"))
+	auditStore := buildTestAuditStore(t, auditProtocol)
+
+	auditObserver, err := audit.NewBootstrapAuthFailObserver(slog.Default(), auditStore, clock.Real())
+	require.NoError(t, err, "build bootstrap audit observer")
+
 	limiter := &setupTestBlockAfterNLimiter{remaining: capacity}
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
@@ -329,7 +414,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 			Password: []byte(setupTestBootstrapPassword),
 		},
 		limiter,
-		nil,
+		auditObserver,
 	)
 
 	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
@@ -337,7 +422,6 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
@@ -353,13 +437,15 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
+	auc := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+		auditcore.WithLedgerProtocol(auditProtocol),
+		auditcore.WithLedgerStore(auditStore),
+	) //archtest:allow:clock-injection:via-slice WithClock at the front; positional spread avoided
 
 	asm := assembly.New(assembly.Config{ID: "ratelimit-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
@@ -425,4 +511,22 @@ func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
 
 	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode, "exhausted limiter must return 429")
 	assert.NotEmpty(t, resp.Header.Get("Retry-After"), "429 response must carry Retry-After header")
+
+	// Audit-chain assertion: the observer is called synchronously in
+	// runtime/auth/bootstrap.go (onAuthFail(r.Context(), reason) at line 107),
+	// before the HTTP response is closed. By the time resp.Body.Close() returns
+	// above, the ledger Append has already completed — no Eventually needed.
+	entries, qerr := auditStore.Query(context.Background(),
+		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
+		ledger.QueryListParams{Limit: 10})
+	require.NoError(t, qerr)
+	require.Len(t, entries, 1, "exactly one rate_limited entry expected")
+
+	var payload struct {
+		Reason   string `json:"reason"`
+		ClientIP string `json:"clientIp"`
+	}
+	require.NoError(t, json.Unmarshal(entries[0].Payload, &payload))
+	assert.Equal(t, "rate_limited", payload.Reason)
+	assert.Equal(t, "system:bootstrap", entries[0].ActorID)
 }

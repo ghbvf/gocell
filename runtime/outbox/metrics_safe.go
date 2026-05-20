@@ -2,21 +2,20 @@ package outbox
 
 import (
 	"log/slog"
-	"runtime/debug"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/pkg/observability"
 )
 
 // safeRelayCollector wraps a kout.RelayCollector and recovers from any
 // panic so that a misbehaving collector cannot crash relay worker goroutines.
 //
-// This follows the same pattern as runtime/http/middleware/safe_observe.go
-// which protects HTTP metrics collection from crashing request handlers.
+// This follows the same pattern as pkg/observability.SafeObserve (pkg/observability/safe.go)
+// which protects observability hooks from crashing the calling goroutine.
 //
 // Typed-nil implementations (e.g. a nil *prometheus.RelayCollector stored in
 // an interface value) are handled implicitly: the nil-pointer dereference
-// panic is caught by the deferred recover() in safeCall.
+// panic is caught by SafeObserve's deferred recover().
 type safeRelayCollector struct {
 	inner kout.RelayCollector
 }
@@ -41,15 +40,8 @@ func (s *safeRelayCollector) RecordCleanup(publishedDeleted, deadDeleted int64) 
 }
 
 // safeCall runs fn and recovers from any panic, logging it instead of
-// letting it propagate to the relay goroutine.
+// letting it propagate to the relay goroutine. Delegates to
+// pkg/observability.SafeObserve for single-source panic isolation logic.
 func (s *safeRelayCollector) safeCall(fn func()) {
-	defer func() {
-		if v := recover(); v != nil {
-			slog.Error("outbox relay: metrics collector panic (dropped observation)",
-				slog.Any("panic", redaction.RedactAny(v)),
-				slog.String("stack", string(debug.Stack())),
-			)
-		}
-	}()
-	fn()
+	observability.SafeObserve(slog.Default(), fn)
 }

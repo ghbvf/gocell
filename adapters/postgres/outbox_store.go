@@ -154,10 +154,13 @@ const cleanupPublishedQuery = `DELETE FROM outbox_entries WHERE id IN (
 const cleanupDeadQuery = `DELETE FROM outbox_entries WHERE id IN (
 	SELECT id FROM outbox_entries WHERE status = $1 AND dead_at < $2 LIMIT $3)`
 
-// countPendingQuery counts rows in pending status. May be approximate under
-// high concurrency; callers must tolerate transient errors as non-fatal.
+// countPendingQuery counts rows eligible for ClaimPending: status=pending AND
+// (next_retry_at IS NULL OR next_retry_at <= now()). Rows still in backoff
+// (next_retry_at > now()) are excluded, consistent with the ClaimPending
+// eligibility predicate. May be approximate under high concurrency; callers
+// must tolerate transient errors as non-fatal.
 // status='pending' is a closed-set enum value; bound via $1 parameter (no string interpolation).
-const countPendingQuery = `SELECT count(*) FROM outbox_entries WHERE status = $1`
+const countPendingQuery = `SELECT count(*) FROM outbox_entries WHERE status = $1 AND (next_retry_at IS NULL OR next_retry_at <= now())`
 
 // ---------------------------------------------------------------------------
 // Store method implementations

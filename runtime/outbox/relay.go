@@ -15,6 +15,7 @@ import (
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -395,7 +396,7 @@ func (r *Relay) observePendingDepth(ctx context.Context) {
 			slog.Any("error", err))
 		return
 	}
-	r.pendingDepthObserver.ObservePendingDepth(n)
+	observability.SafeObserve(slog.Default(), func() { r.pendingDepthObserver.ObservePendingDepth(n) })
 }
 
 // cleanupLoop runs cleanup data-driven: after each pass it asks the store for

@@ -213,11 +213,21 @@ metrics:
         - "5"
         - "30"
       file: runtime/observability/metrics/event.go
+    - name: event_router_runtime_errors_total
+      fqName: gocell_event_router_runtime_errors_total
+      namespace: gocell
+      type: counter
+      help: 'Total number of event router runtime-phase faults (Phase 4, after Running()), partitioned by cell, topic, and reason. reason is a closed set: runtime_fault.'
+      labels:
+        - cell
+        - topic
+        - reason
+      file: runtime/observability/metrics/event.go
     - name: event_router_setup_errors_total
       fqName: gocell_event_router_setup_errors_total
       namespace: gocell
       type: counter
-      help: Total number of event router subscription setup failures.
+      help: 'Total number of event router subscription setup-phase failures (Phase 1-3), partitioned by cell, topic, and reason. reason is a closed set: setup_error | panic | ready_timeout | subscribe_failure.'
       labels:
         - cell
         - topic
@@ -331,7 +341,7 @@ metrics:
       fqName: gocell_outbox_pending_depth
       namespace: gocell
       type: gauge
-      help: Current number of pending outbox entries for the owner cell, set on each Relay reclaim tick.
+      help: Current eligible pending outbox entries for the owner cell (status=pending AND next_retry_at IS NULL OR <= now(); excludes rows in retry backoff). Set on each Relay reclaim tick.
       labels:
         - cell
       file: runtime/observability/metrics/outbox.go

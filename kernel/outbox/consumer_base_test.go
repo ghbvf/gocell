@@ -1523,3 +1523,53 @@ func TestConsumerBase_RetryExhausted_NoObserveReject_OnCtxCancel(t *testing.T) {
 	assert.Equal(t, DispositionRequeue, res.Disposition)
 	assert.Empty(t, obs.calls, "ObserveReject must NOT be called on ctx-cancel Requeue path")
 }
+
+// TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape verifies that
+// a panic from ConsumerObserver.ObserveReject does not propagate out of the
+// Wrap-produced handler. The goroutine must survive and a log line must be
+// emitted.
+//
+// RED: consumer_base.go calls cb.observer.ObserveReject(...) without a
+// panic-recovery wrapper, so the panic currently escapes.
+func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T) {
+	buf := captureDefaultSlogForConsumerBase(t)
+
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+	require.NoError(t, cb.AttachObserver(&panicingObserver{}))
+
+	sub := Subscription{Topic: "event.test.v1", ConsumerGroup: "cg-test", CellID: "testcell"}
+	handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+		return Reject(errors.New("permanent"))
+	})
+
+	// Must not panic — target behavior: panic is recovered inside ConsumerBase.
+	require.NotPanics(t, func() {
+		_, _ = handler(context.Background(), Entry{ID: "evt-panic-observer"})
+	}, "panic from ConsumerObserver.ObserveReject must NOT escape the Wrap handler")
+
+	// A WARN or ERROR log line must be emitted to record the recovered panic.
+	_ = buf // accessed by logLevelFromBuf when the log sentinel is checked
+	found := false
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if bytes.Contains(line, []byte("observer")) || bytes.Contains(line, []byte("panic")) {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"expected a log line mentioning observer panic, but found none in captured slog output")
+}
+
+// panicingObserver is a ConsumerObserver that always panics in ObserveReject,
+// used to verify panic isolation in ConsumerBase.Wrap.
+type panicingObserver struct{}
+
+func (p *panicingObserver) ObserveReject(_, _, _, _ string) {
+	panic("panicingObserver: intentional panic for isolation test")
+}

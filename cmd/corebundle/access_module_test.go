@@ -1,16 +1,11 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"log/slog"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -59,25 +54,14 @@ func TestInternalAddrToBaseURL(t *testing.T) {
 	}
 }
 
-// TestBootstrapAuthFailLogger_RecordsClientIP verifies that bootstrapAuthFailLogger
-// writes a slog record containing the "client_ip" field when the context carries
-// a real IP. Logger is injected directly (no slog.SetDefault) so the test is
-// safe to run with t.Parallel().
-func TestBootstrapAuthFailLogger_RecordsClientIP(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})
-	logger := slog.New(handler)
-
-	observer := bootstrapAuthFailLogger(logger)
-	ctx := ctxkeys.WithRealIP(context.Background(), "192.0.2.1")
-	observer(ctx, "rate_limited")
-
-	logged := buf.String()
-	assert.True(t, strings.Contains(logged, "client_ip=192.0.2.1"),
-		"bootstrapAuthFailLogger must log client_ip field; got: %q", logged)
-}
+// The former TestBootstrapAuthFailLogger_RecordsClientIP unit test has moved
+// to runtime/audit/bootstrap_observer_test.go. The replacement
+// TestNewBootstrapAuthFailObserver_DoubleWriteSlogAndAudit now owns both the
+// slog client_ip assertion and the audit hash-chain assertion in one place,
+// matching the wiring funnel collapsed under BOOTSTRAP-AUDIT-CHAIN-WIRING-01
+// (plan 039 W1-2). Static enforcement that this composition root reaches the
+// funnel lives in tools/archtest/bootstrap_audit_observer_funnel_test.go
+// (BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-UPSTREAM-MEDIUM-01).
 
 // TestAccessCoreModule_BootstrapMissingCredentials_FailsFast verifies that
 // Provide returns an error when only USERNAME is set but PASSWORD is missing (XOR violation).
