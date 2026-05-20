@@ -114,7 +114,7 @@ type HMACKeyRing struct {
 // NewHMACKeyRing creates an HMACKeyRing. current must be at least MinHMACKeyBytes
 // (32 bytes). previous may be nil for single-secret mode; if set, it must also
 // meet the minimum length.
-func NewHMACKeyRing(current []byte, previous []byte) (*HMACKeyRing, error) {
+func NewHMACKeyRing(current, previous []byte) (*HMACKeyRing, error) {
 	if len(current) == 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing, "current HMAC secret must not be empty")
 	}
