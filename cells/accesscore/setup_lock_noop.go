@@ -13,7 +13,7 @@ import (
 // memTxRunner.RunInTx), which by itself serializes all in-process goroutines
 // equivalently to PG SELECT FOR UPDATE held until commit.
 //
-// PG composition roots MUST use accesspg.NewSetupLock(deps) instead. Wiring
+// PG composition roots MUST use accesspg.NewBundle(pool, txm, clk).SetupLock() instead. Wiring
 // NoopSetupLock in PG mode is an upstream-Soft misconfiguration — the type
 // system here cannot distinguish "right shape per mode". The Hard upgrade
 // (TxRunner+SetupLock paired adapter factory) is tracked by backlog entry

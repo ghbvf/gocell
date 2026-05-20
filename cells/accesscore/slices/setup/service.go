@@ -120,7 +120,7 @@ func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, op
 	if validation.IsNilInterface(s.setupLock) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"setup: setupLock required; use WithSetupLock — PG callers wire "+
-				"accesspg.NewSetupLock(deps), memstore callers wire "+
+				"accesspg.NewBundle(pool, txm, clk).SetupLock(), memstore callers wire "+
 				"accesscore.NoopSetupLock{}")
 	}
 	return s, nil

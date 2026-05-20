@@ -11,7 +11,7 @@
 // PG adapter; concurrent invocations must be serialized by the caller through
 // a RunInTx + ports.SetupLockAcquirer pair:
 //
-//   - PG mode: accesspg.NewSetupLock uses pg_advisory_xact_lock for cross-pod
+//   - PG mode: accesspg.NewBundle(pool, txm, clk).SetupLock() uses pg_advisory_xact_lock for cross-pod
 //     mutual exclusion (Closes backlog ADMINPROVISION-DIST-LOCK-01).
 //   - Memstore mode: accesscore.NoopSetupLock — memTxRunner.RunInTx holds
 //     store.mu for the whole closure, already serializing goroutines.

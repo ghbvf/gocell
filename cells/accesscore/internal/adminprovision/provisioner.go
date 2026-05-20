@@ -76,7 +76,7 @@ type UUIDGenerator func() string
 //
 // The single production caller (cells/accesscore/slices/setup.Service.CreateAdmin)
 // wires both via RunInTx + the mandatory accesscore.WithSetupLock option. PG
-// composition roots inject accesspg.NewSetupLock(deps); memstore callers
+// composition roots inject accesspg.NewBundle(pool, txm, clk).SetupLock(); memstore callers
 // inject accesscore.NoopSetupLock{} (no second lock — store.mu does the work).
 type Provisioner struct {
 	userRepo ports.UserRepository

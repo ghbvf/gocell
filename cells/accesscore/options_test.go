@@ -44,7 +44,7 @@ func TestWithSetupLock(t *testing.T) {
 // phase0 — closing the upstream-Soft gap that was previously plugged by the
 // in-process sync.Mutex inside adminprovision.Provisioner (removed in this PR).
 // Memstore composition roots wire accesscore.NoopSetupLock{}; PG composition
-// roots wire accesspg.NewSetupLock(deps).
+// roots wire accesspg.NewBundle(pool, txm, clk).SetupLock().
 func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
