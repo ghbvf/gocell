@@ -60,8 +60,11 @@ type Shared struct {
 //   - contains only lowercase ASCII letters, digits, and underscores
 //   - must not contain NUL bytes (\x00) or double-quote characters (")
 //
-// Violations panic immediately — this is a programmer error caught at test
-// binary start-up, consistent with testcontainers-go's own fail-fast style.
+// Validation runs at first NewPerTestPool call (lazy): an invalid name
+// produces a `t.Fatalf` rather than panicking at binary start. This keeps
+// pgshare panic-free (PANIC-REGISTERED-01 archtest forbids unwrapped
+// panic in non-test production code, and pgshare.go is build-tag-gated
+// but not a `_test.go` file).
 //
 // Use a unique name per Go test binary (`gocell_<pkg>_test_template` is
 // the convention) so a future caller that opens multiple Shared instances
@@ -69,29 +72,36 @@ type Shared struct {
 //
 // The instance is dormant until the first NewPerTestPool call.
 func New(templateDB string) *Shared {
+	return &Shared{templateDB: templateDB}
+}
+
+// validateTemplateDB returns nil if the name is a legal Postgres identifier
+// under the rules documented on New. Called from init() so violations
+// surface as a `t.Fatalf` at first NewPerTestPool — see New godoc for
+// why this is lazy and not enforced in the constructor.
+func validateTemplateDB(templateDB string) error {
 	switch {
 	case templateDB == "":
-		panic("pgshare.New: templateDB must not be empty")
+		return fmt.Errorf("pgshare: templateDB must not be empty")
 	case len(templateDB) > 63:
-		panic("pgshare.New: templateDB exceeds Postgres NAMEDATALEN limit of 63 chars, got " + templateDB)
+		return fmt.Errorf("pgshare: templateDB exceeds Postgres NAMEDATALEN limit of 63 chars, got %q", templateDB)
 	case strings.ContainsRune(templateDB, '\x00'):
-		panic("pgshare.New: templateDB must not contain NUL bytes, got " + templateDB)
+		return fmt.Errorf("pgshare: templateDB must not contain NUL bytes, got %q", templateDB)
 	case strings.ContainsRune(templateDB, '"'):
-		panic("pgshare.New: templateDB must not contain double-quote characters, got " + templateDB)
-	default:
-		for i, ch := range templateDB {
-			if i == 0 {
-				if !((ch >= 'a' && ch <= 'z') || ch == '_') {
-					panic("pgshare.New: templateDB must start with [a-z_], got " + templateDB)
-				}
-			} else {
-				if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_') {
-					panic("pgshare.New: templateDB must contain only lowercase ascii letters, digits, and underscores (no uppercase), got " + templateDB)
-				}
+		return fmt.Errorf("pgshare: templateDB must not contain double-quote characters, got %q", templateDB)
+	}
+	for i, ch := range templateDB {
+		if i == 0 {
+			if !((ch >= 'a' && ch <= 'z') || ch == '_') {
+				return fmt.Errorf("pgshare: templateDB must start with [a-z_], got %q", templateDB)
 			}
+			continue
+		}
+		if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_') {
+			return fmt.Errorf("pgshare: templateDB must contain only lowercase ascii letters, digits, and underscores (no uppercase), got %q", templateDB)
 		}
 	}
-	return &Shared{templateDB: templateDB}
+	return nil
 }
 
 // NewPerTestPool clones the shared template database into a fresh
@@ -147,6 +157,10 @@ func (s *Shared) Shutdown() {
 }
 
 func (s *Shared) init() {
+	if err := validateTemplateDB(s.templateDB); err != nil {
+		s.initErr = err
+		return
+	}
 	migrationsFS, err := adapterpg.MigrationsFS()
 	if err != nil {
 		s.initErr = fmt.Errorf("migrations fs: %w", err)
