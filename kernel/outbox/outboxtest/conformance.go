@@ -24,6 +24,19 @@ const (
 	skipNoReceipt = "implementation does not support receipt"
 )
 
+// Broadcast conformance fixture consumer-group IDs. Each subscriber in the
+// broadcast fan-out sub-test uses a distinct group so the bus Ready() channel
+// (keyed on consumerGroup+topic) tracks each independently.
+const (
+	broadcastCG1 = "broadcast-1"
+	broadcastCG2 = "broadcast-2"
+)
+
+// conformanceCG is the consumer group used in idempotency and consumer-base
+// conformance sub-tests. A stable name keeps the RabbitMQ queue name
+// (derived from topic+consumerGroup) deterministic across test runs.
+const conformanceCG = "conformance-cg"
+
 // subscribeReadyTimeout caps how long waitForSubscription waits on the
 // subscriber's Ready() channel before falling through. It is a select-arm
 // timeout (not a sleep), used for adapters whose Setup is fire-and-forget
@@ -332,8 +345,8 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	// time.Sleep tail-window race. For broadcast bus semantics (inmem),
 	// distinct groups still receive every published message; competing-group
 	// brokers (RabbitMQ) skip this entire test path via BroadcastSubscribe=false.
-	sub1Spec := outbox.Subscription{Topic: topic, ConsumerGroup: "broadcast-1", CellID: "broadcast-1"}
-	sub2Spec := outbox.Subscription{Topic: topic, ConsumerGroup: "broadcast-2", CellID: "broadcast-2"}
+	sub1Spec := outbox.Subscription{Topic: topic, ConsumerGroup: broadcastCG1, CellID: broadcastCG1}
+	sub2Spec := outbox.Subscription{Topic: topic, ConsumerGroup: broadcastCG2, CellID: broadcastCG2}
 
 	wg.Go(func() {
 		_ = sub.Subscribe(subCtx, sub1Spec, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -349,8 +362,8 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 		})
 	})
 
-	waitForSubscription(t, ctx, sub, topic, "broadcast-1")
-	waitForSubscription(t, ctx, sub, topic, "broadcast-2")
+	waitForSubscription(t, ctx, sub, topic, broadcastCG1)
+	waitForSubscription(t, ctx, sub, topic, broadcastCG2)
 
 	assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, []byte(`{"test":"fan-out"}`))))
 
@@ -837,8 +850,8 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 		err := wrappedSub.SubscribeEntry(ctx,
 			outbox.Subscription{
 				Topic:             h.Topic,
-				ConsumerGroup:     "conformance-cg",
-				CellID:            "conformance-cg",
+				ConsumerGroup:     conformanceCG,
+				CellID:            conformanceCG,
 				ContractID:        "event." + h.Topic + ".v1",
 				ContractKind:      "event",
 				ContractTransport: "memory",
@@ -857,7 +870,7 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	// queue name from (topic, consumerGroup), so a mismatch declares two
 	// queues bound to the same exchange and the consumer reads from the
 	// wrong one — flaky timeout under broker scheduling jitter.
-	waitForSubscription(t, ctx, h.Sub, h.Topic, "conformance-cg")
+	waitForSubscription(t, ctx, h.Sub, h.Topic, conformanceCG)
 
 	h.publishAndWait([]byte(`{"test":"middleware"}`))
 	assertTrue(t, middlewareCalled.Load(), "middleware should have been called")
