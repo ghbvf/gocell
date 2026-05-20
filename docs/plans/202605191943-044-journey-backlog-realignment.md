@@ -216,26 +216,43 @@ func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (handler outbox
 func CanonicalSessionCreatedEntry(sessionID, userID string) outbox.Entry
 ```
 
-### 2.5 archtest 边界守卫（既有 TESTUTIL-BOUNDARY-01 已 cover）
+### 2.5 archtest 边界守卫（TESTUTIL-BOUNDARY-01 + CELLTEST-IMPORT-SCOPE-01）
 
-> **修订记录（PR0）**：原计划新建 `CELLTEST-IMPORT-SCOPE-01` archtest，PR0 实施前勘察发现既有 `tools/archtest/testutil_boundary_test.go` 的 `TESTUTIL-BOUNDARY-01` 已 cover 同一下游 ban — 其 `isTestInfraPath` 自动发现含 `testutil` 段或长度 > 4 的 `*test` 段的路径，`cells/{X}/{X}test/` 自动落入发现集，production 文件 import 立即失败。新建规则纯属重复造轮子，撤销。
+`CELLTEST-IMPORT-SCOPE-01` archtest 已在 PR0（feat/647-testutil-build-tag）落地，文件为
+`tools/archtest/celltest_import_scope_test.go`。
 
-既有规则形态摘要（供 review 核对，源在 `tools/archtest/testutil_boundary_test.go`）：
+**规则设计**：
 
-- discovery-based：扫描 module 内全部 .go 文件，按路径段匹配自动聚合 testutil/test-infra 包集合
-- 下游 ban：production .go 文件（非 `_test.go` 且非 test-infra 路径）import 该集合中任意包即 fail
-- 上游评级 path-pattern Medium：archtest 自动发现 + 路径段匹配，不依赖 hand-crafted allowlist
+- 扫描 module 内所有 production .go 文件（非 `_test.go` 且非 test-infra 路径）
+- 对每个 import 声明，检查是否匹配正则 `^github\.com/[^/]+/[^/]+/cells/[a-z]+/[a-z]+test$`
+- 命中即 fail，diagnostic 指向违规文件 + import 路径
 
-**与 plan 044 §0 软处理批评的关系**：build tag 全栈迁移（`//go:build testutil` + archtest 守 header consistency）能把上游从 path-pattern Medium 升到编译期 Hard，但代价是 50+ 既有 testutil 包统一改造 + 所有 `go test ./...` → `-tags=testutil` + CI/IDE 配置同步。任务 1 scope 内不做该迁移；若未来真要升级，作为独立 plan 处理而非 backlog 软处理。
+**与 TESTUTIL-BOUNDARY-01 的互补关系**：
+
+| 规则 | 覆盖形态 | 守卫路径举例 |
+|------|---------|------------|
+| TESTUTIL-BOUNDARY-01 | 含 `testutil` 段的路径 | `cells/{X}/internal/testutil/`、`pkg/testutil/` |
+| CELLTEST-IMPORT-SCOPE-01 | `cells/{X}/{X}test$` 命名形态 | `cells/configcore/configcoretest`、`cells/accesscore/accesscoretest` |
+
+TESTUTIL-BOUNDARY-01 的 `isTestInfraPath` 识别含 `testutil` 段或长度 > 4 的 `*test` 后缀段路径，
+但 `extractTestutilRoot` 严格按 `testutil` 段字面匹配，**不**识别 `*test` 后缀段 —— 因此
+`cells/{X}/{X}test/` 的 import ban 依赖本规则独立补充。
+
+**AI-rebust 评级**：
+
+- **下游 Hard**：archtest path-pattern match（正则锁 import 路径字面值，无字符串锚点，violation 形态唯一）
+- **上游 Medium**：archtest 自动发现 production 文件，路径段匹配，未达 codegen funnel Hard（生产代码无法编译期阻止 import ——需 sealed interface 才能升 Hard）
+- **整体 Medium**：满足 ai-collab.md §"立项硬门槛" ≥ Medium 要求
 
 ### 2.6 验证
 
 ```
-go test ./kernel/outbox/outboxtest/... -run='^TestRecorder'    # PR0
-go test ./cells/configcore/configcoretest/...                  # PR A
-go test ./cells/accesscore/accesscoretest/...                  # PR B
-go test ./cells/auditcore/auditcoretest/...                    # PR C
-go test ./tools/archtest/ -run='^TestLayerTestutil$'           # 既有规则回归覆盖新增 *test/ 包
+go test ./kernel/outbox/outboxtest/... -race -run='^TestRecorder'   # PR0 recorder + 并发安全
+go test ./cells/configcore/configcoretest/...                       # PR A
+go test ./cells/accesscore/accesscoretest/...                       # PR B
+go test ./cells/auditcore/auditcoretest/...                         # PR C
+go test ./tools/archtest/ -run='^TestLayerTestutil$'                # 既有规则回归覆盖新增 *test/ 包
+go test ./tools/archtest/ -run='^TestCelltestImportScope$'          # PR0 新增规则
 ```
 
 解锁的后续工作：
