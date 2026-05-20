@@ -395,11 +395,8 @@ type loginOutcome struct {
 // mutation. The previous signature returned the 401 as a real error from
 // loginInTx, which the caller propagated to RunInTx → ROLLBACK, silently
 // dropping the counter.
-//
-// multi-stage auto-lockout decision (lazy-unlock → baseline assert → bcrypt
-// → mint+emit). Further extraction would scatter the row-lock invariant
-// across helpers, breaking the "single tx, single locked row" contract that
-// makes auto-lockout race-safe.
+// ctx is the outer (pre-tx) context used exclusively by lockout.TryLazyUnlock;
+// txCtx carries the FOR UPDATE row lock for the credential authority chain.
 func (s *Service) loginInTx(
 	ctx context.Context,
 	txCtx context.Context,
@@ -496,6 +493,9 @@ func (s *Service) loginInTx(
 // transaction (txCtx). Called by loginInTx only after credential validation
 // succeeds. Semantics are unchanged — all writes remain in the same txCtx as
 // the FOR-UPDATE user-row lock (S4d §D2 epoch-snapshot invariant).
+//
+// Unlike persistSessionWithRefresh (which opens its own RunInTx for IssueForUser),
+// mintAndPersistSession must be called inside an already-held txCtx (Login path).
 func (s *Service) mintAndPersistSession(
 	txCtx context.Context,
 	user *domain.User,
@@ -541,6 +541,8 @@ func (s *Service) mintAndPersistSession(
 		s.logger.Error("sessionlogin:refresh store issue failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
 		if isNoopTx(s.txRunner) {
+			// txCtx carries mem-tx sentinel; WithoutCancel strips deadline from parent.
+			// In noop-tx mode txCtx == outer ctx modulo sentinel.
 			_ = s.sessionStore.Revoke(context.WithoutCancel(txCtx), sess.ID)
 		}
 		return loginOutcome{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)

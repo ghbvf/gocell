@@ -67,7 +67,7 @@ type UUIDGenerator func() string
 // CountByRole-Create-Assign window:
 //
 //   - PG mode: open a transaction via persistence.TxRunner.RunInTx and call
-//     ports.SetupLock.Acquire inside it. The PG implementation (PGSetupLock)
+//     ports.SetupLockAcquirer.Acquire inside it. The PG implementation (PGSetupLock)
 //     uses pg_advisory_xact_lock, which is exclusive across pods and
 //     goroutines until tx commit/rollback.
 //   - Memstore mode: use Store.TxRunner — memTxRunner.RunInTx holds store.mu

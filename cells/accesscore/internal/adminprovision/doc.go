@@ -9,7 +9,7 @@
 // boundary they own (TxRunner + outbox for setup). Ensure is NOT internally
 // serialized — the in-process sync.Mutex was removed once PR #482 wired the
 // PG adapter; concurrent invocations must be serialized by the caller through
-// a RunInTx + ports.SetupLock pair:
+// a RunInTx + ports.SetupLockAcquirer pair:
 //
 //   - PG mode: accesspg.NewSetupLock uses pg_advisory_xact_lock for cross-pod
 //     mutual exclusion (Closes backlog ADMINPROVISION-DIST-LOCK-01).

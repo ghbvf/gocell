@@ -82,7 +82,8 @@ type Rows interface {
 	Err() error
 }
 
-// RowScanner abstracts a single-row result.
+// RowScanner is a local copy of adapters/postgres.RowScanner; cells/ cannot
+// import adapters/ — intentional per layering rules.
 type RowScanner interface {
 	Scan(dest ...any) error
 }
