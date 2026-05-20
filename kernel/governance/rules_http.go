@@ -36,6 +36,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+const (
+	fieldHTTPPath         = "endpoints.http.path"
+	fieldHTTPResponsesFmt = "endpoints.http.responses[%d]"
+)
+
 // =============================================================================
 // CH-04 — HTTP response alignment
 // =============================================================================
@@ -170,7 +175,7 @@ func (v *Validator) checkResponseAlignmentForContract(
 		if errors.Is(err, errCorrelationMissing) {
 			return []ValidationResult{v.newResult(
 				codeCH04, SeverityError, IssueRequired,
-				c.File, "endpoints.http.path",
+				c.File, fieldHTTPPath,
 				fmt.Sprintf(advHintCH04CorrelationFailed, c.ID, handlerFile),
 			)}
 		}
@@ -216,7 +221,7 @@ func buildAlignmentFindings(v *Validator, c *metadata.ContractMeta, observed, de
 	for _, status := range diffStatuses(observed, declared) {
 		results = append(results, v.newResult(
 			codeCH04, SeverityError, IssueRequired,
-			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status),
+			c.File, fmt.Sprintf(fieldHTTPResponsesFmt, status),
 			fmt.Sprintf("%s: handler returns %d but contract does not declare it;"+
 				" fix: add responses[%d] to the contract or remove the handler return path", c.ID, status, status),
 		))
@@ -833,7 +838,7 @@ func (v *Validator) checkPathParamUUIDForContract(
 	if !ok {
 		return []ValidationResult{v.newResult(
 			codeCH05, SeverityError, IssueRequired,
-			c.File, "endpoints.http.path",
+			c.File, fieldHTTPPath,
 			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
 		)}
 	}
@@ -842,7 +847,7 @@ func (v *Validator) checkPathParamUUIDForContract(
 	if !ok {
 		return []ValidationResult{v.newResult(
 			codeCH05, SeverityError, IssueRequired,
-			c.File, "endpoints.http.path",
+			c.File, fieldHTTPPath,
 			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
 		)}
 	}
@@ -1004,7 +1009,7 @@ func (v *Validator) checkTypedEnvelopeForContract(
 	for _, status := range diffStatuses(declared, implemented) {
 		results = append(results, v.newResult(
 			codeCH06, SeverityError, IssueRequired,
-			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status),
+			c.File, fmt.Sprintf(fieldHTTPResponsesFmt, status),
 			fmt.Sprintf("%s: contract declares status %d but generated types_gen.go has no matching typed"+
 				" response struct; fix: run `gocell generate contract --all` to regenerate typed response structs", c.ID, status),
 		))
@@ -1012,7 +1017,7 @@ func (v *Validator) checkTypedEnvelopeForContract(
 	for _, status := range diffStatuses(implemented, declared) {
 		results = append(results, v.newResult(
 			codeCH06, SeverityError, IssueRequired,
-			c.File, fmt.Sprintf("endpoints.http.responses[%d]", status),
+			c.File, fmt.Sprintf(fieldHTTPResponsesFmt, status),
 			fmt.Sprintf("%s: generated types_gen.go has typed response struct for status %d but contract.yaml"+
 				" does not declare it (orphan struct); fix: add responses[%d] to contract.yaml or rerun `gocell generate contract --all`",
 				c.ID, status, status),

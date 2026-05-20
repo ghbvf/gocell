@@ -302,7 +302,7 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 					fmt.Sprintf(
 						"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
 							"fix: set durabilityMode to demo or durable in the cell.yaml "+
-							"(use demo for examples/tests, durable for production assemblies)",
+							durabilityModeHintSuffix,
 						c.ID, c.DurabilityMode),
 				))
 			}
@@ -317,7 +317,7 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 					"cell %q declares %s consistency but has no durabilityMode; "+
 						"L2+ cells must declare durabilityMode: demo or durable; "+
 						"fix: add durabilityMode: demo or durabilityMode: durable to the cell.yaml "+
-						"(use demo for examples/tests, durable for production assemblies)",
+						durabilityModeHintSuffix,
 					c.ID, c.ConsistencyLevel),
 			))
 			continue
@@ -330,7 +330,7 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 				fmt.Sprintf(
 					"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
 						"fix: set durabilityMode to demo or durable in the cell.yaml "+
-						"(use demo for examples/tests, durable for production assemblies)",
+						durabilityModeHintSuffix,
 					c.ID, c.DurabilityMode),
 			))
 		}
@@ -702,7 +702,15 @@ func formatVarSpecNames(vs *ast.ValueSpec) string {
 // DOC-NAME-01 implementation (formerly rules_docs.go)
 // =============================================================================
 
-const docNamingGuardRelPath = "docs/architecture/naming-guard.yaml"
+const (
+	// docNamingGuardRelPath is the repo-relative path to the naming-guard config
+	// consumed by DOC-NAME-01.
+	docNamingGuardRelPath = "docs/architecture/naming-guard.yaml"
+
+	// durabilityModeHintSuffix is user-facing guidance appended to OUTGUARD-01
+	// error messages to steer authors toward the correct durabilityMode value.
+	durabilityModeHintSuffix = "(use demo for examples/tests, durable for production assemblies)"
+)
 
 type docNamingGuardConfig struct {
 	Include      []string               `yaml:"include"`

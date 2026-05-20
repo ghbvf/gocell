@@ -8,6 +8,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+const fieldContractUsagesRoleFmt = "contractUsages[%d].role"
+
 // validateTOPO01 checks that contractUsages[].role is valid for the contract's kind.
 func (v *Validator) validateTOPO01() []ValidationResult {
 	var results []ValidationResult
@@ -22,7 +24,7 @@ func (v *Validator) validateTOPO01() []ValidationResult {
 				results = append(results, v.newResult(
 					codeTOPO01, SeverityError, IssueInvalid,
 					sliceFile(s),
-					fmt.Sprintf("contractUsages[%d].role", i),
+					fmt.Sprintf(fieldContractUsagesRoleFmt, i),
 					fmt.Sprintf("role %q is not valid for contract kind %q (contract %q);"+
 						" fix: use a valid role for this contract kind", cu.Role, c.Kind, cu.Contract),
 				))
@@ -49,7 +51,7 @@ func (v *Validator) validateTOPO02() []ValidationResult {
 				results = append(results, v.newResult(
 					codeTOPO02, SeverityError, IssueMismatch,
 					sliceFile(s),
-					fmt.Sprintf("contractUsages[%d].role", i),
+					fmt.Sprintf(fieldContractUsagesRoleFmt, i),
 					fmt.Sprintf(
 						"slice %q (cell %q) has provider role %q but contract %q provider is %q;"+
 							" fix: move this slice to the owning cell or remove the provider role",
@@ -79,7 +81,7 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 				results = append(results, v.newResult(
 					codeTOPO03, SeverityError, IssueMismatch,
 					sliceFile(s),
-					fmt.Sprintf("contractUsages[%d].role", i),
+					fmt.Sprintf(fieldContractUsagesRoleFmt, i),
 					fmt.Sprintf(
 						"slice %q (cell %q) has consumer role %q but is not in contract %q consumers %v;"+
 							" fix: add this cell to the contract's consumers or remove the consumer role from the slice",

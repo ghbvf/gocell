@@ -86,35 +86,41 @@ func checkStruct(t *testing.T, typ reflect.Type, path string, depth, maxDepth in
 	for i := range typ.NumField() {
 		f := typ.Field(i)
 		fieldPath := path + "." + f.Name
+		checkStructField(t, f, fieldPath)
+		// Recurse into struct fields (and slices/maps whose elements are structs).
+		recurseType(t, f.Type, fieldPath, depth+1, maxDepth)
+	}
+}
 
-		// Check for map[string]any / map[string]interface{} — these bypass
-		// KnownFields because all unknown keys are silently absorbed.
-		if isCatchallMap(f.Type) {
+// checkStructField asserts that a single struct field does not carry a
+// catch-all map type or a yaml:",inline" tag unless explicitly allowed.
+func checkStructField(t *testing.T, f reflect.StructField, fieldPath string) {
+	t.Helper()
+
+	// Check for map[string]any / map[string]interface{} — these bypass
+	// KnownFields because all unknown keys are silently absorbed.
+	if isCatchallMap(f.Type) {
+		if !allowedInlineFields[shortPath(fieldPath)] {
+			t.Errorf(
+				"field %s has type %s which acts as a catch-all and may bypass KnownFields(true); "+
+					"add to allowedInlineFields with justification if intentional",
+				fieldPath, f.Type,
+			)
+		}
+	}
+
+	// Check for yaml:",inline" — when combined with a map type (even
+	// map[string]string) it absorbs unknown YAML keys.
+	if tag, ok := f.Tag.Lookup("yaml"); ok {
+		if strings.Contains(tag, ",inline") {
 			if !allowedInlineFields[shortPath(fieldPath)] {
 				t.Errorf(
-					"field %s has type %s which acts as a catch-all and may bypass KnownFields(true); "+
+					"field %s has yaml:\",inline\" tag which absorbs unknown YAML keys and may bypass KnownFields(true); "+
 						"add to allowedInlineFields with justification if intentional",
-					fieldPath, f.Type,
+					fieldPath,
 				)
 			}
 		}
-
-		// Check for yaml:",inline" — when combined with a map type (even
-		// map[string]string) it absorbs unknown YAML keys.
-		if tag, ok := f.Tag.Lookup("yaml"); ok {
-			if strings.Contains(tag, ",inline") {
-				if !allowedInlineFields[shortPath(fieldPath)] {
-					t.Errorf(
-						"field %s has yaml:\",inline\" tag which absorbs unknown YAML keys and may bypass KnownFields(true); "+
-							"add to allowedInlineFields with justification if intentional",
-						fieldPath,
-					)
-				}
-			}
-		}
-
-		// Recurse into struct fields (and slices/maps whose elements are structs).
-		recurseType(t, f.Type, fieldPath, depth+1, maxDepth)
 	}
 }
 

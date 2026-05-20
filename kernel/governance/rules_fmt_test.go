@@ -1074,21 +1074,29 @@ func TestFMT32_OwnershipDeclarationRequired(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			v := NewValidator(tc.project, "", clock.Real())
 			matches := findByCode(v.validateFMT32(), codeFMT32)
-			if len(matches) != tc.wantCount {
-				t.Fatalf("FMT-32 %s: expected %d findings, got %d: %v", tc.name, tc.wantCount, len(matches), matches)
-			}
-			if tc.wantCount == 1 {
-				if matches[0].IssueType != tc.wantIssue {
-					t.Errorf("FMT-32: expected IssueType=%v, got %v", tc.wantIssue, matches[0].IssueType)
-				}
-				if matches[0].Field != tc.wantField {
-					t.Errorf("FMT-32: expected Field=%q, got %q", tc.wantField, matches[0].Field)
-				}
-				if matches[0].Severity != SeverityError {
-					t.Errorf("FMT-32: expected SeverityError, got %v", matches[0].Severity)
-				}
-			}
+			assertFMT32Result(t, tc.name, matches, tc.wantCount, tc.wantIssue, tc.wantField)
 		})
+	}
+}
+
+// assertFMT32Result checks the FMT-32 finding count and, when exactly one
+// finding is expected, validates its IssueType, Field, and Severity.
+func assertFMT32Result(t *testing.T, caseName string, matches []ValidationResult, wantCount int, wantIssue IssueType, wantField string) {
+	t.Helper()
+	if len(matches) != wantCount {
+		t.Fatalf("FMT-32 %s: expected %d findings, got %d: %v", caseName, wantCount, len(matches), matches)
+	}
+	if wantCount != 1 {
+		return
+	}
+	if matches[0].IssueType != wantIssue {
+		t.Errorf("FMT-32: expected IssueType=%v, got %v", wantIssue, matches[0].IssueType)
+	}
+	if matches[0].Field != wantField {
+		t.Errorf("FMT-32: expected Field=%q, got %q", wantField, matches[0].Field)
+	}
+	if matches[0].Severity != SeverityError {
+		t.Errorf("FMT-32: expected SeverityError, got %v", matches[0].Severity)
 	}
 }
 

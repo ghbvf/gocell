@@ -4858,6 +4858,7 @@ func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueInvalid, got[0].IssueType)
 	assert.Contains(t, got[0].Message, "banana")
+	assert.Contains(t, got[0].Message, "use demo for examples/tests", "durabilityModeHintSuffix must appear in OUTGUARD-01 message")
 }
 
 // TestOUTGUARD01_InvalidDurabilityMode_L0L1 covers the L0/L1 branch: the field

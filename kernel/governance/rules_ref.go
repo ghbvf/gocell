@@ -7,6 +7,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+const fieldBuildEntrypoint = "build.entrypoint"
+
 // validateREF01 checks that slice.belongsToCell references an existing cell.
 func (v *Validator) validateREF01() []ValidationResult {
 	var results []ValidationResult
@@ -185,7 +187,7 @@ func (v *Validator) validateREF10() []ValidationResult {
 			results = append(results, v.newResult(
 				codeREF10, SeverityError, IssueRequired,
 				assemblyFile(a),
-				"build.entrypoint",
+				fieldBuildEntrypoint,
 				fmt.Sprintf("assembly %q must have build.entrypoint; fix: set build.entrypoint to the main package path", a.ID),
 			))
 		}
@@ -211,7 +213,7 @@ func (v *Validator) validateREF11() []ValidationResult {
 			results = append(results, v.newResult(
 				codeREF11, SeverityError, IssueInvalid,
 				assemblyFile(a),
-				"build.entrypoint",
+				fieldBuildEntrypoint,
 				fmt.Sprintf("assembly %q build.entrypoint %q: path escapes project root;"+
 					" fix: use a path relative to the repository root", a.ID, a.Build.Entrypoint),
 			))
@@ -221,7 +223,7 @@ func (v *Validator) validateREF11() []ValidationResult {
 			results = append(results, v.newResult(
 				codeREF11, SeverityError, IssueRefNotFound,
 				assemblyFile(a),
-				"build.entrypoint",
+				fieldBuildEntrypoint,
 				fmt.Sprintf("assembly %q build.entrypoint %q does not exist;"+
 					" fix: create the entrypoint file or correct the path", a.ID, a.Build.Entrypoint),
 			))

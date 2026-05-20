@@ -275,62 +275,86 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			const contractID = "http.test.v1"
-			sliceRelDir := "cells/testcell/slices/testslice"
-
-			// Write slice directory and handler file unless the test wants no handler.
-			sliceAbsDir := filepath.Join(root, sliceRelDir)
-			require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
-			if !tc.noHandler && tc.handlerSrc != "" {
-				if tc.noAuthMount {
-					// Write handler src without auth.Mount boilerplate to test fail-closed.
-					path := filepath.Join(sliceAbsDir, "handler.go")
-					content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\n\n" + tc.handlerSrc
-					require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-				} else {
-					writeHandlerFile(t, sliceAbsDir, contractID, tc.handlerSrc)
-				}
-			}
-
-			project := makeProject(contractID, sliceRelDir)
-			if tc.noHandler {
-				// No slice registered → findHandlerFile returns "".
-				project = &metadata.ProjectMeta{
-					Cells:      map[string]*metadata.CellMeta{},
-					Slices:     map[string]*metadata.SliceMeta{},
-					Contracts:  map[string]*metadata.ContractMeta{},
-					Journeys:   map[string]*metadata.JourneyMeta{},
-					Assemblies: map[string]*metadata.AssemblyMeta{},
-				}
-			}
-
-			c := makeContract(contractID, "contracts/http/test/v1/contract.yaml", tc.responses)
-			if tc.name == "non-http contract is skipped" {
-				c.Kind = "event"
-			}
-
-			validator := NewValidator(project, root, clock.Real())
-			results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
-
-			var errs []ValidationResult
-			for _, r := range results {
-				if r.Severity == SeverityError {
-					errs = append(errs, r)
-				}
-			}
-			// CH-04 only emits SeverityError findings; extra declarations are
-			// intentionally not reported (see CodeContractHealthResponseAlignment doc).
-			require.Len(t, errs, len(tc.wantErrors), "error count mismatch")
-			for i, want := range tc.wantErrors {
-				assert.Contains(t, errs[i].Message, want)
-			}
-
-			if tc.noHandler {
-				assert.Empty(t, results, "expected no findings when no handler exists")
-			}
+			runCheckHTTPResponseAlignmentCase(t, tc.name, tc.handlerSrc, tc.responses, tc.wantErrors, tc.noHandler, tc.noAuthMount)
 		})
 	}
+}
+
+// runCheckHTTPResponseAlignmentCase exercises a single TestCheckHTTPResponseAlignment
+// table entry. Extracted to keep the parent test within cognitive complexity limits.
+func runCheckHTTPResponseAlignmentCase(
+	t *testing.T,
+	caseName, handlerSrc string,
+	responses map[int]metadata.HTTPResponseMeta,
+	wantErrors []string,
+	noHandler, noAuthMount bool,
+) {
+	t.Helper()
+	root := t.TempDir()
+	const contractID = "http.test.v1"
+	sliceRelDir := "cells/testcell/slices/testslice"
+
+	// Write slice directory and handler file unless the test wants no handler.
+	sliceAbsDir := filepath.Join(root, sliceRelDir)
+	require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+	writeHTTPAlignmentHandlerFile(t, sliceAbsDir, contractID, handlerSrc, noHandler, noAuthMount)
+
+	project := buildHTTPAlignmentProject(contractID, sliceRelDir, noHandler)
+
+	c := makeContract(contractID, "contracts/http/test/v1/contract.yaml", responses)
+	if caseName == "non-http contract is skipped" {
+		c.Kind = "event"
+	}
+
+	validator := NewValidator(project, root, clock.Real())
+	results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
+
+	var errs []ValidationResult
+	for _, r := range results {
+		if r.Severity == SeverityError {
+			errs = append(errs, r)
+		}
+	}
+	// CH-04 only emits SeverityError findings; extra declarations are
+	// intentionally not reported (see CodeContractHealthResponseAlignment doc).
+	require.Len(t, errs, len(wantErrors), "error count mismatch")
+	for i, want := range wantErrors {
+		assert.Contains(t, errs[i].Message, want)
+	}
+	if noHandler {
+		assert.Empty(t, results, "expected no findings when no handler exists")
+	}
+}
+
+// writeHTTPAlignmentHandlerFile writes the handler file for a CH-04 test case.
+func writeHTTPAlignmentHandlerFile(t *testing.T, sliceAbsDir, contractID, handlerSrc string, noHandler, noAuthMount bool) {
+	t.Helper()
+	if noHandler || handlerSrc == "" {
+		return
+	}
+	if noAuthMount {
+		// Write handler src without auth.Mount boilerplate to test fail-closed.
+		path := filepath.Join(sliceAbsDir, "handler.go")
+		content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\n\n" + handlerSrc
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+		return
+	}
+	writeHandlerFile(t, sliceAbsDir, contractID, handlerSrc)
+}
+
+// buildHTTPAlignmentProject builds the project metadata for a CH-04 test case.
+func buildHTTPAlignmentProject(contractID, sliceRelDir string, noHandler bool) *metadata.ProjectMeta {
+	if noHandler {
+		// No slice registered → findHandlerFile returns "".
+		return &metadata.ProjectMeta{
+			Cells:      map[string]*metadata.CellMeta{},
+			Slices:     map[string]*metadata.SliceMeta{},
+			Contracts:  map[string]*metadata.ContractMeta{},
+			Journeys:   map[string]*metadata.JourneyMeta{},
+			Assemblies: map[string]*metadata.AssemblyMeta{},
+		}
+	}
+	return makeProject(contractID, sliceRelDir)
 }
 
 // writeGeneratedHandlerFile writes a minimal handler_gen.go under
