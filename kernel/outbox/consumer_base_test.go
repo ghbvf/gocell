@@ -669,6 +669,30 @@ func TestConsumerBase_Wrap_ClaimError_FailOpen_ProceedsWithoutReceipt(t *testing
 	assert.Nil(t, settlement, "no settlement when claim failed under fail-open")
 }
 
+func TestConsumerBase_Wrap_FailOpen_ClaimSucceeds_RoutesViaHandleClaimState(t *testing.T) {
+	// Covers the fail-open path where claimWithRetry succeeds (ClaimAcquired),
+	// so Wrap calls handleClaimState (consumer_base.go line 375).
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ClaimPolicy:          ClaimPolicyFailOpen,
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+
+	called := false
+	handler := cb.Wrap(Subscription{Topic: "t", ConsumerGroup: "cg", CellID: "cell"}, func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return Ack()
+	})
+
+	res, settlement := handler(context.Background(), Entry{ID: "evt-fo-claim-ok"})
+	assert.True(t, called, "handler must be invoked when claim acquired under fail-open")
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.NotNil(t, settlement, "settlement must be non-nil when claim acquired")
+}
+
 func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 	claimer := &fakeClaimer{err: errors.New("redis down")}
 

@@ -338,6 +338,34 @@ func TestResolveSlicePkg_FallbackToMetadata(t *testing.T) {
 	assert.Contains(t, pkg, "nonexistent")
 }
 
+func TestResolveSlicePkg_UsesSliceIDDirWhenStrippedHasNoGoFiles(t *testing.T) {
+	// Covers the second branch: hasGoFiles(base, sliceID) = true,
+	// hasGoFiles(base, stripped) = false.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "cells", "c", "slices")
+	// Create Go package in the hyphenated dir (sliceID), not in stripped dir.
+	goDir := filepath.Join(base, "my-slice")
+	require.NoError(t, os.MkdirAll(goDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "handler.go"), []byte("package myslice"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "c", "my-slice")
+	assert.Contains(t, pkg, "my-slice", "should use sliceID dir when stripped dir has no Go files")
+}
+
+func TestResolveSlicePkg_FallbackToStrippedDirWhenNoGoFiles(t *testing.T) {
+	// Covers the third branch: dirExists(base, stripped) = true but
+	// hasGoFiles = false for both stripped and sliceID dirs.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "cells", "c", "slices")
+	// Create stripped dir with only a YAML file (no Go files).
+	strippedDir := filepath.Join(base, "myslice")
+	require.NoError(t, os.MkdirAll(strippedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(strippedDir, "slice.yaml"), []byte("id: my-slice"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "c", "my-slice")
+	assert.Contains(t, pkg, "myslice", "should use stripped dir when it exists but has no Go files")
+}
+
 func TestIsZeroMatch(t *testing.T) {
 	assert.True(t, isZeroMatch("testing: warning: no tests to run\nPASS"))
 	assert.True(t, isZeroMatch("?   \tpkg\t[no test files]"))
