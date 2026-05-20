@@ -178,7 +178,7 @@ func TestCompileInlineParamSchema_RejectsUnsupportedType(t *testing.T) {
 
 	func() {
 		defer func() {
-			if r := recover(); r == nil {
+			if recover() == nil {
 				t.Errorf("compileInlineParamSchema with unsupported type should have called t.Fatalf (panic sentinel)")
 			}
 		}()
