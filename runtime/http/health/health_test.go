@@ -733,28 +733,35 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.ReadyzHandler().ServeHTTP(rec, req)
 
-			assert.Equal(t, tt.wantStatus, rec.Code)
-
-			if tt.wantDeniedBody {
-				errField := errorBody(t, rec)
-				assert.Equal(t, string(errcode.ErrReadyzVerboseDenied), errField["code"])
-				assert.Contains(t, errField["message"].(string), "X-Readyz-Token")
-				_, hasDetails := errField["details"].([]any)
-				assert.True(t, hasDetails,
-					"denied envelope must include the standard details array (may be empty)")
-				return
-			}
-
-			// Non-denied paths always come back as 200 under the data envelope.
-			data := dataBody(t, rec)
-			if tt.wantVerboseBody {
-				_, hasCells := data["cells"]
-				assert.True(t, hasCells, "verbose response must include cells under data")
-			} else {
-				_, hasCells := data["cells"]
-				assert.False(t, hasCells, "non-verbose response must not include cells under data")
-			}
+			assertVerboseTokenResponse(t, rec, tt.wantStatus, tt.wantDeniedBody, tt.wantVerboseBody)
 		})
+	}
+}
+
+// assertVerboseTokenResponse verifies the HTTP response for a verbose-token
+// test case. Extracted to reduce cognitive complexity of
+// TestReadyz_VerboseToken_StrictDeny (S3776).
+func assertVerboseTokenResponse(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantDeniedBody, wantVerboseBody bool) {
+	t.Helper()
+	assert.Equal(t, wantStatus, rec.Code)
+
+	if wantDeniedBody {
+		errField := errorBody(t, rec)
+		assert.Equal(t, string(errcode.ErrReadyzVerboseDenied), errField["code"])
+		assert.Contains(t, errField["message"].(string), "X-Readyz-Token")
+		_, hasDetails := errField["details"].([]any)
+		assert.True(t, hasDetails,
+			"denied envelope must include the standard details array (may be empty)")
+		return
+	}
+
+	// Non-denied paths always come back as 200 under the data envelope.
+	data := dataBody(t, rec)
+	_, hasCells := data["cells"]
+	if wantVerboseBody {
+		assert.True(t, hasCells, "verbose response must include cells under data")
+	} else {
+		assert.False(t, hasCells, "non-verbose response must not include cells under data")
 	}
 }
 
