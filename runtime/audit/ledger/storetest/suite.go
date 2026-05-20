@@ -40,6 +40,13 @@ import (
 // simulation test cases (F-CR-2 idempotency regression guard).
 const redeliveryAdvance = 5 * time.Second
 
+// Fatalf format strings extracted per go:S1192 (used 3+ times each).
+const (
+	msgAppend    = "Append: %v"
+	msgVerify    = "Verify: %v"
+	msgAppendIdx = "Append %d: %v"
+)
+
 // Factory constructs a fresh Store with a deterministic clock. Backends with
 // per-test setup (e.g. PG schema reset) do it inside Factory; cleanup is the
 // returned func and must be safe to call exactly once.
@@ -149,7 +156,7 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 
 	e := NewEntryFixture(t, "evt-round-trip", "audit.test", "actor-1", fc.Now())
 	if err := store.Append(context.Background(), e); err != nil {
-		t.Fatalf("Append: %v", err)
+		t.Fatalf(msgAppend, err)
 	}
 
 	tail, err := store.Tail(context.Background())
@@ -365,7 +372,7 @@ func runConcurrentAppendHashChainValid(t *testing.T, factory Factory) {
 
 	valid, firstInvalid, err := store.Verify(context.Background(), 1, tail.SeqNo)
 	if err != nil {
-		t.Fatalf("Verify: %v", err)
+		t.Fatalf(msgVerify, err)
 	}
 	if !valid {
 		t.Errorf("hash chain invalid starting at seq %d", firstInvalid)
@@ -402,13 +409,13 @@ func runVerifyFullRange(t *testing.T, factory Factory) {
 	for i := 1; i <= 5; i++ {
 		e := NewEntryFixture(t, fmt.Sprintf("vf-%d", i), "verify.test", "actor", fc.Now())
 		if err := store.Append(context.Background(), e); err != nil {
-			t.Fatalf("Append %d: %v", i, err)
+			t.Fatalf(msgAppendIdx, i, err)
 		}
 	}
 
 	valid, firstInvalid, err := store.Verify(context.Background(), 1, 5)
 	if err != nil {
-		t.Fatalf("Verify: %v", err)
+		t.Fatalf(msgVerify, err)
 	}
 	if !valid {
 		t.Errorf("Verify: expected valid, first invalid at seq %d", firstInvalid)
@@ -428,7 +435,7 @@ func runVerifyTamperedHash(t *testing.T, factory Factory, protocol *ledger.Proto
 
 	e := NewEntryFixture(t, "tamper-hash-evt", "tamper.test", "actor", fc.Now())
 	if err := store.Append(context.Background(), e); err != nil {
-		t.Fatalf("Append: %v", err)
+		t.Fatalf(msgAppend, err)
 	}
 
 	ms, ok := store.(*ledger.MemStore)
@@ -473,7 +480,7 @@ func runVerifyTamperedPrevHash(t *testing.T, factory Factory, protocol *ledger.P
 	for i, id := range []string{"prev-hash-evt-1", "prev-hash-evt-2"} {
 		e := NewEntryFixture(t, id, "tamper.test", "actor", fc.Now())
 		if err := store.Append(context.Background(), e); err != nil {
-			t.Fatalf("Append %d: %v", i+1, err)
+			t.Fatalf(msgAppendIdx, i+1, err)
 		}
 	}
 
@@ -516,7 +523,7 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 			Payload:   []byte(`{}`),
 		}
 		if err := store.Append(context.Background(), e); err != nil {
-			t.Fatalf("Append %d: %v", i, err)
+			t.Fatalf(msgAppendIdx, i, err)
 		}
 	}
 
@@ -551,7 +558,7 @@ func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
 		Payload:   payload,
 	}
 	if err := store.Append(context.Background(), e); err != nil {
-		t.Fatalf("Append: %v", err)
+		t.Fatalf(msgAppend, err)
 	}
 
 	got, err := store.GetBySeq(context.Background(), 1)
@@ -567,7 +574,7 @@ func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
 	// Verify must succeed: the hash was computed over the original payload bytes.
 	valid, firstInvalid, err := store.Verify(context.Background(), 1, 1)
 	if err != nil {
-		t.Fatalf("Verify: %v", err)
+		t.Fatalf(msgVerify, err)
 	}
 	if !valid {
 		t.Errorf("Verify: chain invalid at seq %d after multi-key payload round-trip", firstInvalid)

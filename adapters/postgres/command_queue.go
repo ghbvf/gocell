@@ -72,6 +72,10 @@ func NewCommandQueue(pool *pgxpool.Pool, txRunner persistence.TxRunner, clk cloc
 	}, nil
 }
 
+// msgCommandNotFound is the canonical error message for ErrCommandNotFound
+// responses. Extracted to satisfy go:S1192 (string used in 5 call sites).
+const msgCommandNotFound = "command not found"
+
 // ---------------------------------------------------------------------------
 // SQL constants
 // ---------------------------------------------------------------------------
@@ -302,7 +306,7 @@ func (q *PGCommandQueue) Report(ctx context.Context, commandID string, now time.
 		err2 := q.db.QueryRow(txCtx, reportStatusCheckSQL, commandID).Scan(&cur)
 		if errors.Is(err2, pgx.ErrNoRows) {
 			return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
-				"command not found")
+				msgCommandNotFound)
 		}
 		if err2 != nil {
 			return fmt.Errorf("command_queue: report status check: %w", err2)
@@ -335,7 +339,7 @@ func (q *PGCommandQueue) ackInTx(txCtx context.Context, commandID string, target
 	err := q.db.QueryRow(txCtx, selectStatusForUpdateSQL, commandID).Scan(&current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
-			"command not found")
+			msgCommandNotFound)
 	}
 	if err != nil {
 		return fmt.Errorf("command_queue: ack select: %w", err)
@@ -388,7 +392,7 @@ func (q *PGCommandQueue) Cancel(ctx context.Context, commandID string, now time.
 		err := q.db.QueryRow(txCtx, selectStatusForUpdateSQL, commandID).Scan(&current)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
-				"command not found")
+				msgCommandNotFound)
 		}
 		if err != nil {
 			return fmt.Errorf("command_queue: cancel select: %w", err)
@@ -477,7 +481,7 @@ func (q *PGCommandQueue) GetCommand(ctx context.Context, id string) (*command.En
 	e, err := scanCommandRow(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
-			"command not found")
+			msgCommandNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("command_queue: get command: %w", err)
@@ -577,14 +581,14 @@ func durationFromNs(ns *int64) time.Duration {
 	return time.Duration(*ns)
 }
 
-// notFoundOrInvalidLease distinguishes "command not found" from "no active
+// notFoundOrInvalidLease distinguishes msgCommandNotFound from "no active
 // lease" when an ExtendLease UPDATE affected 0 rows.
 func (q *PGCommandQueue) notFoundOrInvalidLease(ctx context.Context, commandID string) error {
 	var dummy int
 	err := q.db.QueryRow(ctx, existsSQL, commandID).Scan(&dummy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound,
-			"command not found")
+			msgCommandNotFound)
 	}
 	if err != nil {
 		return fmt.Errorf("command_queue: lease existence check: %w", err)

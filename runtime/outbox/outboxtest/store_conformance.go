@@ -40,6 +40,7 @@ const (
 	msgExpect1Claimed      = "expected 1 claimed, got %d"
 	idEntryRace            = "e-race"
 	errSome                = "some error"
+	idCPExclE3             = "cp-excl-e3" // used in conformCountPendingExcludesFutureRetry
 )
 
 // StoreFactory constructs a fresh Store (typically with pre-seeded rows)
@@ -713,7 +714,7 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	// the lease the batch carried.
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil {
-		t.Fatalf("ClaimPending: %v", err)
+		t.Fatalf(msgClaimPending, err)
 	}
 	if len(claimed) != len(seed) {
 		t.Fatalf("ClaimPending: expected %d, got %d", len(seed), len(claimed))
@@ -748,7 +749,7 @@ func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
 
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil {
-		t.Fatalf("ClaimPending: %v", err)
+		t.Fatalf(msgClaimPending, err)
 	}
 	if len(claimed) != 1 {
 		t.Fatalf(msgExpect1Claimed, len(claimed))
@@ -795,7 +796,7 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	seed := []outbox.ClaimedEntry{
 		newEntry("cp-excl-e1", 0),
 		newEntry("cp-excl-e2", 0),
-		newEntry("cp-excl-e3", 1), // attempts=1 to have a plausible retry scenario
+		newEntry(idCPExclE3, 1), // attempts=1 to have a plausible retry scenario
 	}
 	store := factory(t, seed)
 
@@ -809,7 +810,7 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 		if err != nil || len(claimed) != 1 {
 			t.Fatalf("ClaimPending single: err=%v len=%d", err, len(claimed))
 		}
-		if claimed[0].ID == "cp-excl-e3" {
+		if claimed[0].ID == idCPExclE3 {
 			e3LeaseID = claimed[0].LeaseID
 		} else {
 			// Release e1/e2 back to pending via MarkRetry with past next_retry_at.
@@ -821,7 +822,7 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	}
 
 	// Set e3's retry time to the future → it must not be counted.
-	updated, err := store.MarkRetry(ctx, "cp-excl-e3", e3LeaseID, 2, futureRetry, "future retry")
+	updated, err := store.MarkRetry(ctx, idCPExclE3, e3LeaseID, 2, futureRetry, "future retry")
 	if err != nil || !updated {
 		t.Fatalf("MarkRetry e3 future: err=%v updated=%v", err, updated)
 	}
@@ -892,7 +893,7 @@ func conformCountPendingAfterPublish(t *testing.T, factory StoreFactory) {
 	// Claim and publish publishN entries.
 	claimed, err := store.ClaimPending(ctx, publishN)
 	if err != nil || len(claimed) != publishN {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
 	for _, ce := range claimed {
 		if _, err := store.MarkPublished(ctx, ce.ID, ce.LeaseID); err != nil {

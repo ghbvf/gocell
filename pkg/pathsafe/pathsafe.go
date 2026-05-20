@@ -422,6 +422,10 @@ const (
 // consistent and avoids the MESSAGE-CONST-LITERAL-01 string-duplication smell.
 const errMsgForceOverwriteKindGate = "pathsafe: ForceOverwrite supports regular files and symlinks only"
 
+// fmtPath is the WithInternal format string used in 4 errcode call sites
+// to log the path that triggered an error. Extracted per go:S1192.
+const fmtPath = "path=%s"
+
 // writeRecord pairs the written path with the captured original-inode state
 // needed to make ForceOverwrite plans transactional. The default zero value
 // is {kindNone}, matching the non-ForceOverwrite case where rollback only
@@ -457,7 +461,7 @@ func captureOriginal(path string) (writeRecord, error) {
 		}
 		return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: lstat original for ForceOverwrite capture", err,
-			errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+			errcode.WithInternal(fmt.Sprintf(fmtPath, path)))
 	}
 	mode := info.Mode()
 	if !forceOverwriteRestorable(mode) {
@@ -473,7 +477,7 @@ func captureOriginal(path string) (writeRecord, error) {
 		if readErr != nil {
 			return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"pathsafe: read original for ForceOverwrite capture", readErr,
-				errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+				errcode.WithInternal(fmt.Sprintf(fmtPath, path)))
 		}
 		return writeRecord{
 			path:          path,
@@ -488,7 +492,7 @@ func captureOriginal(path string) (writeRecord, error) {
 	if readErr != nil {
 		return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: readlink original for ForceOverwrite capture", readErr,
-			errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+			errcode.WithInternal(fmt.Sprintf(fmtPath, path)))
 	}
 	return writeRecord{
 		path:           path,
@@ -534,7 +538,7 @@ func forceOverwritePreflightPass(plan []PlannedFile) error {
 			}
 			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"pathsafe: lstat ForceOverwrite target (preflight)", err,
-				errcode.WithInternal(fmt.Sprintf("path=%s", f.AbsPath)))
+				errcode.WithInternal(fmt.Sprintf(fmtPath, f.AbsPath)))
 		}
 		if !forceOverwriteRestorable(info.Mode()) {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
