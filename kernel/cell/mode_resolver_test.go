@@ -228,23 +228,31 @@ func TestResolveEmitter(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			outcome, err := cell.ResolveEmitter(tc.cfg)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil (outcome=%+v)", outcome)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if outcome.Emitter == nil {
-				t.Fatal("expected non-nil Emitter")
-			}
-			if outcome.Durable != tc.wantDurable {
-				t.Fatalf("Durable: got %v, want %v", outcome.Durable, tc.wantDurable)
-			}
+			assertResolveEmitter(t, tc.cfg, tc.wantErr, tc.wantDurable)
 		})
+	}
+}
+
+// assertResolveEmitter calls cell.ResolveEmitter and asserts the expected
+// outcome. Extracted from TestResolveEmitter to reduce that function's
+// cognitive complexity.
+func assertResolveEmitter(t *testing.T, cfg cell.EmitterConfig, wantErr bool, wantDurable bool) {
+	t.Helper()
+	outcome, err := cell.ResolveEmitter(cfg)
+	if wantErr {
+		if err == nil {
+			t.Fatalf("expected error, got nil (outcome=%+v)", outcome)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome.Emitter == nil {
+		t.Fatal("expected non-nil Emitter")
+	}
+	if outcome.Durable != wantDurable {
+		t.Fatalf("Durable: got %v, want %v", outcome.Durable, wantDurable)
 	}
 }
 
