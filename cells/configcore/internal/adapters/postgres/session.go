@@ -70,7 +70,7 @@ func (a *dbtxAdapter) Query(ctx context.Context, sql string, args ...any) (Rows,
 	return a.tx.Query(ctx, sql, args...)
 }
 
-func (a *dbtxAdapter) QueryRow(ctx context.Context, sql string, args ...any) Row {
+func (a *dbtxAdapter) QueryRow(ctx context.Context, sql string, args ...any) RowScanner {
 	return a.tx.QueryRow(ctx, sql, args...)
 }
 
@@ -91,6 +91,6 @@ func (a *poolAdapter) Query(ctx context.Context, sql string, args ...any) (Rows,
 	return a.pool.Query(ctx, sql, args...)
 }
 
-func (a *poolAdapter) QueryRow(ctx context.Context, sql string, args ...any) Row {
+func (a *poolAdapter) QueryRow(ctx context.Context, sql string, args ...any) RowScanner {
 	return a.pool.QueryRow(ctx, sql, args...)
 }

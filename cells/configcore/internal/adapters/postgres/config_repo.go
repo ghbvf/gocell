@@ -71,7 +71,7 @@ func (r *ConfigRepository) cryptoOpError(code errcode.Code, op, identifier strin
 type DBTX interface {
 	Exec(ctx context.Context, sql string, args ...any) (int64, error)
 	Query(ctx context.Context, sql string, args ...any) (Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) Row
+	QueryRow(ctx context.Context, sql string, args ...any) RowScanner
 }
 
 // Rows abstracts a query result set.
@@ -82,8 +82,8 @@ type Rows interface {
 	Err() error
 }
 
-// Row abstracts a single-row result.
-type Row interface {
+// RowScanner abstracts a single-row result.
+type RowScanner interface {
 	Scan(dest ...any) error
 }
 
@@ -345,7 +345,7 @@ const listEntryColumns = "id, key, value, sensitive, version, created_at, update
 // scanConfigRow scans one row (order matches configEntryColumns) into a
 // ConfigEntry plus the raw cipher tuple. The caller is responsible for
 // decrypting the cipher tuple via decryptScannedEntry.
-func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKeyID *string, valueEDK []byte, valueNonce []byte, err error) {
+func scanConfigRow(row RowScanner) (e *domain.ConfigEntry, valueCipher []byte, valueKeyID *string, valueEDK []byte, valueNonce []byte, err error) {
 	var entry domain.ConfigEntry
 	if scanErr := row.Scan(
 		&entry.ID, &entry.Key, &entry.Value, &entry.Sensitive, &entry.Version,
@@ -375,7 +375,7 @@ func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKey
 // pkg/ctxcancel.Wrap for the ctx-cancel branch — the canonical helper
 // already handles 499 vs 504 split and slog routing.
 func (r *ConfigRepository) scanConfigOrMapError(
-	_ context.Context, row Row, op, key string,
+	_ context.Context, row RowScanner, op, key string,
 ) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
 	e, ct, keyID, edk, nonce, err := scanConfigRow(row)
 	if err == nil {
@@ -543,7 +543,7 @@ func (r *ConfigRepository) doUpdate(
 ) (*domain.ConfigEntry, error) {
 	var (
 		rowsAffected int64
-		row          Row
+		row          RowScanner
 	)
 	if sensitive {
 		payload, encErr := r.encryptValue(ctx, key, value)

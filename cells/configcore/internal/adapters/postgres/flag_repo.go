@@ -88,7 +88,7 @@ func (r *FlagRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 //
 // op is the method name (e.g. "Update") used only in InternalMessage for
 // operator-side debugging; key is the lookup key surfaced the same way.
-func (r *FlagRepository) scanFlagOrMapError(_ context.Context, row Row, op, key string) (*domain.FeatureFlag, error) {
+func (r *FlagRepository) scanFlagOrMapError(_ context.Context, row RowScanner, op, key string) (*domain.FeatureFlag, error) {
 	flag, err := scanFlagRow(row)
 	if err == nil {
 		return flag, nil
@@ -111,9 +111,9 @@ func (r *FlagRepository) scanFlagOrMapError(_ context.Context, row Row, op, key 
 // scanFlagRow scans a single row (order matches flagColumns) into a
 // domain.FeatureFlag. Called by GetByKey/Update/Delete/Toggle so the field
 // order stays in sync with the SELECT/RETURNING projections. Accepts the
-// local Row interface (matches both DBTX.QueryRow output and Rows during
+// local RowScanner interface (matches both DBTX.QueryRow output and Rows during
 // iteration), keeping pgx as an internal adapter detail.
-func scanFlagRow(row Row) (*domain.FeatureFlag, error) {
+func scanFlagRow(row RowScanner) (*domain.FeatureFlag, error) {
 	var f domain.FeatureFlag
 	if err := row.Scan(
 		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
