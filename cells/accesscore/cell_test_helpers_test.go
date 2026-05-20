@@ -30,3 +30,11 @@ func withTestCASProtocol() Option {
 	}
 	return WithCASProtocol(p)
 }
+
+// withTestSetupLock returns the standard withSetupLock option used by all
+// cell-level tests that exercise Init(). NoopSetupLock is the production
+// memstore-mode wiring; cell-level tests inherit it as the default. Tests
+// that exercise the lock path (Acquire counts, error injection) should pass
+// their own stub via withSetupLock(...) appended after this helper, since the
+// strong-dependency wiring option's last non-nil value wins.
+func withTestSetupLock() Option { return withSetupLock(NoopSetupLock{}) }

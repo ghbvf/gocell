@@ -14,7 +14,7 @@
 L0 Cell 是特殊模型：
 - 纯计算分区（无状态机、无契约）
 - 同 Assembly 内直接导入
-- 必须通过 `l0Dependencies` 显式声明
+- 消费方 Cell 通过 `l0Dependencies` 声明对此 L0 Cell 的直接依赖（L0 Cell 自身由 `consistencyLevel: L0` 标识）
 
 ### Slice
 

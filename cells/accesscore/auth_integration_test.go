@@ -166,9 +166,9 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithUserRepository(userRepo),
+		withUserRepository(userRepo),
 		WithSessionStore(testutil.RealSessionRepo(t)),
-		WithRoleRepository(roleRepo),
+		withRoleRepository(roleRepo),
 		WithOutboxDeps(outbox.WrapPublisherForCell(noopPublisher{}), nil),
 		WithJWTIssuer(issuer),
 		WithJWTVerifier(verifier),
@@ -177,8 +177,9 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		// R2: Wire the Store-bound TxRunner so GetByUsernameForUpdate's
 		// assertMemTx is satisfied inside loginInTx. Both userRepo and roleRepo
 		// must come from the same Store (guaranteed above).
-		WithTxManager(persistence.WrapForCell(store.TxRunner())),
+		withTxManager(persistence.WrapForCell(store.TxRunner())),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	intReg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)

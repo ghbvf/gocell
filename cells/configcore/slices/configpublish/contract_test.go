@@ -21,6 +21,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -139,6 +141,33 @@ type errEnvelope struct {
 	Error struct {
 		Code string `json:"code"`
 	} `json:"error"`
+}
+
+// TestHttpConfigPublishV1_Serve_NotFound exercises the 404 path declared in
+// http.config.publish.v1: publishing a key that does not exist returns 404 with
+// ERR_CONFIG_NOT_FOUND, validated against the contract's declared error schema.
+func TestHttpConfigPublishV1_Serve_NotFound(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
+	svc, _, _ := newContractService(t)
+	mux := newContractMux(svc)
+
+	path := strings.Replace(c.HTTP.Path, "{key}", "no-such-key", 1)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, path, nil).
+		WithContext(auth.TestContext("contract-admin", []string{"admin"}))
+	mux.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+	// Typed funnel assertion required by POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01:
+	// every _NotFound test must call errcodetest.AssertWireCode with a typed errcode.Err*NotFound
+	// selector. The mem repo returns ErrConfigNotFound for missing keys (see service_test.go L299).
+	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrConfigNotFound)
+	var env errEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+	require.Equal(t, "ERR_CONFIG_NOT_FOUND", env.Error.Code,
+		"missing key must produce ERR_CONFIG_NOT_FOUND")
 }
 
 // TestHttpConfigPublishV1_Serve_Unauthorized exercises the real handler for

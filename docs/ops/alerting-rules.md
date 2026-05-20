@@ -197,7 +197,7 @@ payload/schema 永久错误不应在正常生产流量中增长；任意持续�
 
 | outcome | 含义 |
 |---|---|
-| `clean` | 所有 ManagedResource teardown 成功，无超时 |
+| `success` | 所有 ManagedResource teardown 成功，无超时 |
 | `teardown_error` | 至少一个 teardown 返回非 nil 错误 |
 | `timeout` | shutCtx 超时，强制结束 LIFO teardown 循环 |
 | `signal_error` | shutdown 由组件失败触发（HTTP listener 崩溃 / worker 退出）而非用户 SIGTERM |
@@ -395,7 +395,7 @@ missing_caller_cell / invalid_caller_cell）短时高峰。零星失败正常（
 
 ## Event Router / Outbox Consumer 可观测性（D3a-1 新增）
 
-以下规则覆盖 D3a-1 PR #589 引入的 5 个新 metric family。
+以下规则覆盖 D3a-1 PR #589 引入的 6 个新 metric family。
 
 ### EventRouterSetupErrorRate
 
@@ -414,6 +414,26 @@ missing_caller_cell / invalid_caller_cell）短时高峰。零星失败正常（
       (reason={{ $labels.reason }}) for 5m.
       Likely causes: broker unreachable, topic not bound, or auth misconfiguration.
       Check cell logs for "event router: subscription setup failed".
+```
+
+### EventRouterRuntimeErrorRate
+
+事件路由器运行时持续出现错误，通常表示订阅交付故障或 broker 连接不稳定。
+
+```yaml
+- alert: GoCellEventRouterRuntimeErrorRate
+  expr: sum(rate(gocell_event_router_runtime_errors_total[5m])) by (cell, reason) > 0
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Event router runtime errors ({{ $labels.cell }})"
+    description: |
+      Cell {{ $labels.cell }} has persistent event router runtime errors
+      (reason={{ $labels.reason }}) for 5m.
+      Likely causes: SubscribeEntry delivery failure, broker reconnect loop,
+      or ready-wait timeout exceeded after Phase 3.
+      Check cell logs for "event router: runtime error".
 ```
 
 ### OutboxConsumerRejectedSpike
@@ -438,11 +458,17 @@ handler 逻辑错误或上游 payload 格式问题。
 
 ### OutboxPendingDepthHigh
 
-outbox pending depth 增长表示 consumer 消费速率落后，或 broker 连接断开。
+outbox **eligible** pending depth（不含 backoff 中的重试 entry）增长表示
+consumer 消费速率落后，或 broker 连接断开。
 
-注意：`outbox_pending_depth` Gauge 每次 Relay reclaim tick 更新一次（默认间隔为
-分钟级，而非 Prometheus scrape 间隔）。应使用较长的 `for:` 窗口避免 scrape
+注意：`outbox_pending_depth` Gauge 仅统计 `status=pending` 且
+`next_retry_at IS NULL OR <= now()` 的可领取行——重试 backoff 中的 entry 不计入。
+持续的重试堆积需通过 `outbox_consumer_rejected_total` 或 reclaim-budget readyz
+探针诊断，本 Gauge 不会随之增长。每次 Relay reclaim tick 更新一次（默认间隔为
+分钟级，而非 Prometheus scrape 间隔），应使用较长的 `for:` 窗口避免 scrape
 窗口内的假阳性。
+
+注: 此告警仅在 storage_backend=postgres 部署生效；memory 模式无 Relay，指标不产生 sample。
 
 ```yaml
 - alert: GoCellOutboxPendingDepthHigh
@@ -451,13 +477,15 @@ outbox pending depth 增长表示 consumer 消费速率落后，或 broker 连�
   labels:
     severity: warning
   annotations:
-    summary: "Outbox pending depth high ({{ $labels.cell }})"
+    summary: "Outbox eligible pending depth high ({{ $labels.cell }})"
     description: |
-      Cell {{ $labels.cell }} outbox pending depth > 1000 for 5m.
+      Cell {{ $labels.cell }} outbox eligible pending depth > 1000 for 5m
+      (excludes rows still in retry backoff).
       Consumer may be falling behind or broker connection dropped.
       Note: this Gauge is updated once per Relay ReclaimInterval (default minutes),
-      not per scrape — treat the value as "depth at last reclaim tick".
-      For tighter sampling, decrease ReclaimInterval.
+      not per scrape — treat the value as "eligible depth at last reclaim tick".
+      For tighter sampling, decrease ReclaimInterval. Retry backlog is not
+      reflected here; diagnose via outbox_consumer_rejected_total.
 ```
 
 ### 调试指标（无告警，仅 dashboard）
@@ -506,7 +534,7 @@ sum(increase(gocell_bootstrap_shutdown_total[1h])) by (outcome)
 ```promql
 histogram_quantile(
   0.99,
-  sum(rate(gocell_outbox_relay_duration_seconds_bucket[5m])) by (le, cell)
+  sum(rate(gocell_outbox_poll_duration_seconds_bucket[5m])) by (le, cell, phase)
 )
 ```
 

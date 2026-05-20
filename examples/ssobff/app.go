@@ -289,7 +289,6 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
 		accesscore.WithCASProtocol(accessCAS),
 		accesscore.WithLogger(cfg.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
@@ -465,27 +464,17 @@ func buildSSOBFFConfigCoreStorageOpts(pool *adapterpg.Pool) ([]configcore.Option
 
 // buildSSOBFFAccessCoreStorageOpts constructs all PG-backed repository/store
 // options required by accesscore. Extracted to keep NewSSOBFFApp below the
-// gocognit ≤ 15 limit.
+// gocognit ≤ 15 limit. WithPGBundle bundles
+// (UserRepository, RoleRepository, SetupLock, TxRunner) into a single typed
+// funnel so the four primitives provably share the same (pool, txMgr, clk).
 func buildSSOBFFAccessCoreStorageOpts(
 	pool *adapterpg.Pool,
 	txMgr *adapterpg.TxManager,
 	sessionProto *session.Protocol,
 ) ([]accesscore.Option, error) {
-	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
+	pgBundle, err := accesspg.NewBundle(pool.DB(), txMgr, clock.Real())
 	if err != nil {
-		return nil, fmt.Errorf("ssobff: accesspg.NewDeps: %w", err)
-	}
-	userRepo, err := accesspg.NewUserRepository(pgDeps)
-	if err != nil {
-		return nil, fmt.Errorf("ssobff: accesspg.NewUserRepository: %w", err)
-	}
-	roleRepo, err := accesspg.NewRoleRepository(pgDeps)
-	if err != nil {
-		return nil, fmt.Errorf("ssobff: accesspg.NewRoleRepository: %w", err)
-	}
-	setupLock, err := accesspg.NewSetupLock(pgDeps)
-	if err != nil {
-		return nil, fmt.Errorf("ssobff: accesspg.NewSetupLock: %w", err)
+		return nil, fmt.Errorf("ssobff: accesspg.NewBundle: %w", err)
 	}
 	sessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
 	if err != nil {
@@ -496,9 +485,7 @@ func buildSSOBFFAccessCoreStorageOpts(
 		return nil, fmt.Errorf("ssobff: adapterpg.NewRefreshStore: %w", err)
 	}
 	return []accesscore.Option{
-		accesscore.WithUserRepository(userRepo),
-		accesscore.WithRoleRepository(roleRepo),
-		accesscore.WithSetupLock(setupLock),
+		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithSessionStore(sessionStore),
 		accesscore.WithRefreshStore(refreshStore),
 	}, nil

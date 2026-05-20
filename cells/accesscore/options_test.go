@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -34,30 +35,94 @@ func (stubSetupLock) Acquire(_ context.Context) error { return nil }
 
 func TestWithSetupLock(t *testing.T) {
 	lock := stubSetupLock{}
-	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(lock), withTestCASProtocol())
+	c := NewAccessCore(WithClock(clock.Real()), withSetupLock(lock), withTestCASProtocol())
 	assert.Equal(t, lock, c.setupLock)
 }
 
-// TestWithSetupLock_NilNoop verifies that passing nil keeps the cell's setupLock
-// unset (mem-mode contract: intra-process sync.Mutex in adminprovision.Provisioner
-// is sufficient when no cross-process lock is wired).
-func TestWithSetupLock_NilNoop(t *testing.T) {
-	c := NewAccessCore(WithClock(clock.Real()), WithSetupLock(nil), withTestCASProtocol())
-	assert.Nil(t, c.setupLock)
-}
-
-func TestWithInMemoryDefaults(t *testing.T) {
+// TestInit_MissingSetupLock_FailsFast verifies that omitting WithSetupLock
+// from the composition root causes Init() to return ErrCellInvalidConfig at
+// phase0 — closing the upstream-Soft gap that was previously plugged by the
+// in-process sync.Mutex inside adminprovision.Provisioner (removed in this PR).
+// Memstore composition roots wire accesscore.NoopSetupLock{}; PG composition
+// roots wire accesspg.NewSetupLock(deps).
+func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestBootstrapAuth(),
+		// withTestSetupLock() omitted on purpose.
+	)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	require.Error(t, err, "missing WithSetupLock must produce a phase0 error")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, ec.Message, "setupLock is required",
+		"diagnostic must point operators at the missing wiring")
+}
+
+// TestWithSetupLock_NilOption_RejectedAtInit verifies that nil ports.SetupLock
+// — in any of three forms (bare nil, typed-nil interface, typed-nil concrete
+// pointer) — never satisfies the WithSetupLock required-dep check. Each form
+// must produce ErrCellInvalidConfig at phase0; the option body's
+// validation.IsNilInterface check is the upstream funnel.
+func TestWithSetupLock_NilOption_RejectedAtInit(t *testing.T) {
+	var typedNilIface ports.SetupLock // typed-nil interface
+	var typedNilPtr *stubSetupLock    // typed-nil concrete pointer (still nil via IsNilInterface)
+	cases := []struct {
+		name string
+		lock ports.SetupLock
+	}{
+		{"bare nil", nil},
+		{"typed nil interface", typedNilIface},
+		{"typed nil pointer", typedNilPtr},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewAccessCore(
+				WithClock(clock.Real()),
+				withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+				withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+				WithSessionStore(testutil.RealSessionRepo(t)),
+				WithJWTIssuer(testIssuer),
+				WithJWTVerifier(testVerifier),
+				WithRefreshStore(newTestRefreshStore()),
+				WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+				withTxManager(persistence.WrapForCell(durableTxRunner{})),
+				withTestCASProtocol(),
+				withTestBootstrapAuth(),
+				withSetupLock(tc.lock),
+			)
+			err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+		})
+	}
+}
+
+func TestWithInMemoryDefaults(t *testing.T) {
+	c := NewAccessCore(
+		WithClock(clock.Real()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		WithSessionStore(testutil.RealSessionRepo(t)),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	// userRepo, roleRepo, and sessionStore are all set eagerly via explicit options.
@@ -76,15 +141,16 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 	// MemStore.RepoReady returns nil — in-memory always ready.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -104,13 +170,14 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -157,8 +224,9 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -171,15 +239,16 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
@@ -194,8 +263,9 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -210,16 +280,17 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
+		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -244,20 +315,21 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	// so no outbox-failopen-rate checker is produced.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithCASProtocol(func() *cas.Protocol {
 			p, err := cas.NewProtocol(cas.WithVersionField("password_version"))
 			require.NoError(t, err)
 			return p
 		}()),
 		withTestBootstrapAuth(),
+		withTestSetupLock(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
@@ -284,15 +356,16 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
+		withTestSetupLock(),
 		// withTestCASProtocol() omitted on purpose.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -310,15 +383,16 @@ func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 func TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
-		WithUserRepository(mem.NewStore(clock.Real()).UserRepository()),
-		WithRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
+		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
+		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
+		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestBootstrapAuth(),
+		withTestSetupLock(),
 		WithCASProtocol(nil), // bare-nil intentionally
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))

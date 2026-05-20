@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/observability"
 )
 
 // Structured log field keys used across ConsumerBase and transport subscribers.
@@ -298,7 +299,7 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 // internal observer field is private and is not exposed via ConsumerBaseConfig —
 // ConsumerBase is typically constructed at composition root (cmd/corebundle)
 // before the metrics provider is wired in bootstrap phase 5, so constructor
-// injection is not viable. bootstrap.autoWireOutboxConsumerCollector calls
+// injection is not viable. bootstrap.autoWireOutboxRejectCollector calls
 // AttachObserver in phase 6 (before subscriptions start consuming); business
 // code typically does not call this directly.
 //
@@ -582,7 +583,13 @@ func (cb *ConsumerBase) retryLoop(
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Any("error", lastResult.Err))
-			cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonHandlerReject)
+			observability.SafeObserve(slog.Default().With(
+				slog.String("cell", cellID),
+				slog.String("topic", topic),
+				slog.String("consumer_group", consumerGroup),
+			), func() {
+				cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonHandlerReject)
+			})
 			return HandleResult{
 				Disposition:         DispositionReject,
 				Err:                 lastResult.Err,
@@ -617,7 +624,13 @@ func (cb *ConsumerBase) retryLoop(
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.String("process_reason", "retry_exhausted"),
 		slog.Any("error", lastResult.Err))
-	cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonRetryExhausted)
+	observability.SafeObserve(slog.Default().With(
+		slog.String("cell", cellID),
+		slog.String("topic", topic),
+		slog.String("consumer_group", consumerGroup),
+	), func() {
+		cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonRetryExhausted)
+	})
 	return HandleResult{
 		Disposition:         DispositionReject,
 		Err:                 lastResult.Err,

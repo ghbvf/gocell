@@ -1,0 +1,1 @@
+tools/archtest/testdata/testwait_external_fixtures/indirect_funcarg_red/usage.go:23: indirect reference to testwait.External (function value, pointer pass-through, method binding, or reflect); only direct call testwait.External(...) is permitted

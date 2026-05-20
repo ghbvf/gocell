@@ -158,10 +158,11 @@ func TestMetricProvider_GaugeVec_Register(t *testing.T) {
 	}
 }
 
-// TestMetricProvider_GaugeVec_RecordsViaUpDownCounter verifies that Set()
-// correctly emulates last-value semantics via a Float64UpDownCounter:
-// Set(10) then Set(20) must produce a single cumulative value of 20.
-func TestMetricProvider_GaugeVec_RecordsViaUpDownCounter(t *testing.T) {
+// TestMetricProvider_GaugeVec_RecordsViaFloat64Gauge verifies that Set()
+// uses Float64Gauge (LastValue semantics, NOT UpDownCounter/Sum):
+// Set(10) then Set(20) must produce a single data point with value 20
+// reported as metricdata.Gauge[float64], NOT metricdata.Sum[float64].
+func TestMetricProvider_GaugeVec_RecordsViaFloat64Gauge(t *testing.T) {
 	p, collect := newTestProvider(t)
 	gv, err := p.GaugeVec(metrics.GaugeOpts{
 		Name:       "gocell_test_gauge_set",
@@ -174,12 +175,12 @@ func TestMetricProvider_GaugeVec_RecordsViaUpDownCounter(t *testing.T) {
 
 	g := gv.With(metrics.Labels{"instance": "a"})
 	g.Set(10)
-	g.Set(20) // delta = +10 → cumulative = 20
+	g.Set(20) // absolute last-write-wins: current value = 20
 
 	rm := collect()
-	val, points := extractGaugeSum(t, rm, "gocell_test_gauge_set")
+	val, points := extractGauge(t, rm, "gocell_test_gauge_set")
 	if val != 20 {
-		t.Fatalf("gauge cumulative value = %v, want 20", val)
+		t.Fatalf("gauge value = %v, want 20 (Float64Gauge LastValue semantics)", val)
 	}
 	if points != 1 {
 		t.Fatalf("gauge data points = %d, want 1", points)
@@ -187,7 +188,7 @@ func TestMetricProvider_GaugeVec_RecordsViaUpDownCounter(t *testing.T) {
 }
 
 // TestMetricProvider_GaugeVec_IncDec verifies that Inc then Dec results in
-// a cumulative value of zero.
+// a value of zero, reported as metricdata.Gauge[float64].
 func TestMetricProvider_GaugeVec_IncDec(t *testing.T) {
 	p, collect := newTestProvider(t)
 	gv, err := p.GaugeVec(metrics.GaugeOpts{
@@ -204,14 +205,15 @@ func TestMetricProvider_GaugeVec_IncDec(t *testing.T) {
 	g.Dec()
 
 	rm := collect()
-	val, _ := extractGaugeSum(t, rm, "gocell_test_gauge_incdec")
+	val, _ := extractGauge(t, rm, "gocell_test_gauge_incdec")
 	if val != 0 {
 		t.Fatalf("Inc then Dec must yield 0, got %v", val)
 	}
 }
 
 // TestMetricProvider_GaugeVec_Add_Positive_And_Negative verifies that
-// Add with positive and negative deltas correctly updates the gauge.
+// Add with positive and negative deltas correctly updates the gauge,
+// reported as metricdata.Gauge[float64].
 func TestMetricProvider_GaugeVec_Add_Positive_And_Negative(t *testing.T) {
 	p, collect := newTestProvider(t)
 	gv, err := p.GaugeVec(metrics.GaugeOpts{
@@ -228,7 +230,7 @@ func TestMetricProvider_GaugeVec_Add_Positive_And_Negative(t *testing.T) {
 	g.Add(-3)
 
 	rm := collect()
-	val, _ := extractGaugeSum(t, rm, "gocell_test_gauge_add")
+	val, _ := extractGauge(t, rm, "gocell_test_gauge_add")
 	if val != 2 {
 		t.Fatalf("Add(5)+Add(-3) must yield 2, got %v", val)
 	}
@@ -277,17 +279,15 @@ func TestMetricProvider_GaugeVec_DistinctLabelSetsEmitted(t *testing.T) {
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
 			if m.Name == "gocell_test_gauge_distinct" {
+				// Target: Float64Gauge emits metricdata.Gauge[float64], NOT Sum.
+				// If this assertion fails, the production code still uses
+				// Float64UpDownCounter — the P1 fix has not been applied yet.
 				data, ok := m.Data.(metricdata.Gauge[float64])
 				if !ok {
-					// UpDownCounter reports as Sum, not Gauge — check both.
-					sumData, ok2 := m.Data.(metricdata.Sum[float64])
-					if !ok2 {
-						t.Fatalf("metric data is %T, want Gauge or Sum", m.Data)
-					}
-					totalPoints = len(sumData.DataPoints)
-				} else {
-					totalPoints = len(data.DataPoints)
+					t.Fatalf("metric data is %T, want metricdata.Gauge[float64] — "+
+						"GaugeVec must use Float64Gauge (not Float64UpDownCounter)", m.Data)
 				}
+				totalPoints = len(data.DataPoints)
 			}
 		}
 	}
@@ -322,9 +322,9 @@ func TestMetricProvider_GaugeVec_SetAfterInc(t *testing.T) {
 	g.Inc()  // last=6, delta=+1, cum=6
 	g.Set(3) // last=3, delta=-3, cum=3
 
-	val, _ := extractGaugeSum(t, collect(), "set_after_inc_test")
+	val, _ := extractGauge(t, collect(), "set_after_inc_test")
 	if val != 3 {
-		t.Fatalf("Set(5)+Inc()+Set(3) must yield cumulative 3, got %v", val)
+		t.Fatalf("Set(5)+Inc()+Set(3) must yield 3 (Float64Gauge last-value), got %v", val)
 	}
 }
 
@@ -418,28 +418,36 @@ func extractHistogram(t *testing.T, rm metricdata.ResourceMetrics, name string) 
 	return 0, 0
 }
 
-// extractGaugeSum returns the total cumulative value across all data points
-// of a Float64UpDownCounter (the OTel instrument backing GaugeVec) and the
-// number of distinct attribute sets. UpDownCounter reports as
-// metricdata.Sum[float64] with Temporality=Cumulative, IsMonotonic=false.
-func extractGaugeSum(t *testing.T, rm metricdata.ResourceMetrics, name string) (float64, int) {
+// extractGauge returns the value of the last DataPoint and the number of
+// distinct attribute sets for a Float64Gauge metric (metricdata.Gauge[float64]).
+//
+// Target semantics (Wave 1 RED): GaugeVec must be backed by Float64Gauge
+// (absolute last-value), NOT Float64UpDownCounter (cumulative Sum). If the
+// production code still uses UpDownCounter, m.Data will be metricdata.Sum and
+// this helper will fail with a clear type-assertion error.
+//
+// "Last DataPoint" aggregation: Float64Gauge.Record is absolute (not delta),
+// so the last emitted value IS the current gauge value. For tests asserting
+// a single emission, first == last == only DataPoint.
+func extractGauge(t *testing.T, rm metricdata.ResourceMetrics, name string) (float64, int) {
 	t.Helper()
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
 			if m.Name != name {
 				continue
 			}
-			data, ok := m.Data.(metricdata.Sum[float64])
+			data, ok := m.Data.(metricdata.Gauge[float64])
 			if !ok {
-				t.Fatalf("gauge metric %s is not Sum[float64] (UpDownCounter), got %T", name, m.Data)
+				t.Fatalf("gauge metric %q must be metricdata.Gauge[float64] "+
+					"(Float64Gauge, not Float64UpDownCounter), got %T — "+
+					"P1 fix (Float64Gauge migration) not yet applied", name, m.Data)
 			}
-			var total float64
-			for _, dp := range data.DataPoints {
-				total += dp.Value
+			if len(data.DataPoints) == 0 {
+				t.Fatalf("gauge metric %q has no data points", name)
 			}
-			return total, len(data.DataPoints)
+			return data.DataPoints[len(data.DataPoints)-1].Value, len(data.DataPoints)
 		}
 	}
-	t.Fatalf("metric %s not found", name)
+	t.Fatalf("metric %q not found", name)
 	return 0, 0
 }

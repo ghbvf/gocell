@@ -20,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/audit"
@@ -150,9 +149,12 @@ func (m AccessCoreModule) Provide(
 		innerSessionStore = pgSessionStore
 		accessOpts = append(accessOpts, pgOpts...)
 	} else {
-		// mem mode: explicit construction so UserRepository + RoleRepository share
-		// a single Store (required for cross-repo effective-admin invariant, S4.0).
-		userMemStore := accessmem.NewStore(shared.Clock)
+		// mem mode: WithMemBundle yields a (UserRepository, RoleRepository,
+		// SetupLock, store-paired TxRunner) quadruple all derived from the
+		// same backing mem.Store. The Bundle funnel makes mis-pairing (e.g.
+		// non-store-paired TxRunner) inexpressible at compile time and
+		// guarantees the cross-repo effective-admin invariant (S4.0) +
+		// store.mu serialization of concurrent first-admin provisioning.
 		sessionMemStore, err := session.NewMemStore(sessionProto, shared.Clock)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("accesscore: session.NewMemStore: %w", err)
@@ -164,8 +166,7 @@ func (m AccessCoreModule) Provide(
 		innerSessionStore = sessionMemStore
 		accessOpts = append(
 			accessOpts,
-			accesscore.WithUserRepository(userMemStore.UserRepository()),
-			accesscore.WithRoleRepository(userMemStore.RoleRepository()),
+			accesscore.WithMemBundle(accessmem.NewBundle(shared.Clock)),
 			accesscore.WithRefreshStore(refreshMemStore),
 		)
 	}
@@ -236,29 +237,12 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 	}
 	writer := adapterpg.NewOutboxWriter(shared.Clock)
 	txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
-	// Accumulative WithOutboxDeps: adds writer without replacing the publisher
-	// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
-	accessOpts := []accesscore.Option{
-		accesscore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
-		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
-	}
-	// Build PG deps once and share across all PG-backed repo factories so the
-	// underlying pool/txRunner/clock are not repeated at each call site.
-	deps, err := accesspg.NewDeps(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+	// WithPGBundle collapses (UserRepository, RoleRepository, SetupLock,
+	// store-paired TxRunner) into a single typed funnel — the four primitives
+	// are guaranteed to originate from the same (pool, txMgr, clk) triple.
+	pgBundle, err := accesspg.NewBundle(shared.SharedPGPool.DB(), txMgr, shared.Clock)
 	if err != nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: PGDeps: %w", err)
-	}
-	pgUserRepo, err := accesspg.NewUserRepository(deps)
-	if err != nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: PGUserRepository: %w", err)
-	}
-	pgRoleRepo, err := accesspg.NewRoleRepository(deps)
-	if err != nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: PGRoleRepository: %w", err)
-	}
-	pgSetupLock, err := accesspg.NewSetupLock(deps)
-	if err != nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: PGSetupLock: %w", err)
+		return nil, nil, fmt.Errorf("AccessCoreModule: PGBundle: %w", err)
 	}
 	pgSessionStore, err := adapterpg.NewSessionStore(shared.SharedPGPool.DB(), txMgr, sessionProto, shared.Clock)
 	if err != nil {
@@ -271,13 +255,11 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
 	}
-	accessOpts = append(
-		accessOpts,
-		accesscore.WithUserRepository(pgUserRepo),
-		accesscore.WithRoleRepository(pgRoleRepo),
-		accesscore.WithSetupLock(pgSetupLock),
+	accessOpts := []accesscore.Option{
+		accesscore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
+		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithRefreshStore(pgRefreshStore),
-	)
+	}
 	// Wire the ConfigGetter for the configreceive slice to fetch entry values
 	// from configcore's internal GET /internal/v1/config/{key} endpoint after
 	// an upsert event (contract: http.config.internal.get.v1).

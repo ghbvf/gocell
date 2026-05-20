@@ -1070,10 +1070,32 @@ func runClockResetRelativeFixtureScan(t *testing.T, fixtureDir string) []Diagnos
 // PROD-CLOCK-INJECTION-01
 // ---------------------------------------------------------------------------
 
-// allowedRealClockPaths lists the prefixes whose files may legitimately
+// allowedRealClockPaths lists the paths whose files may legitimately
 // reference stdlib time symbols directly. See package doc for rationale.
+//
+// Entry semantics: a trailing "/" marks a directory prefix (all files under
+// that directory are allowed); otherwise the entry is an exact file path.
+// This distinction prevents a file-scoped exemption from silently covering
+// sibling files added later (e.g. a new "testwait_extra.go" in the same dir).
+//
+// Entries:
+//   - kernel/clock/: the canonical wall-clock injection abstraction; the
+//     primitive layer where stdlib time is unwrappable.
+//   - pkg/testutil/testwait/testwait.go: the typed-marker funnel for test-side
+//     polling waits (External + Deterministic). Test code uses this in lieu of
+//     bare require.Eventually; the pkg/ layer cannot import kernel/clock (see
+//     .claude/rules/gocell/go-standards.md), so wall-clock polling here is
+//     unavoidable and is structurally the same "primitive" tier as
+//     kernel/clock for tests. See docs/plans/202605181600-042-archtest.md
+//     §1.1 TEST-POLLING-DETERMINISM and TEST-POLLING-EXTERNAL-REASON-
+//     LITERAL-01 archtest (test_polling_external_reason_literal_test.go),
+//     which is the downstream Hard funnel enforcing that callsites only
+//     reach this primitive via const-literal reason.
+//     File-scoped (no trailing "/") so a future sibling file in the same
+//     directory does NOT silently inherit the exemption.
 var allowedRealClockPaths = []string{
 	"kernel/clock/",
+	"pkg/testutil/testwait/testwait.go",
 }
 
 // forbiddenTimeFns maps each forbidden stdlib time function to the equivalent
@@ -1160,11 +1182,18 @@ func TestProdClockInjection(t *testing.T) {
 	Report(t, "PROD-CLOCK-INJECTION-01", diags)
 }
 
-// isAllowedRealClockPath reports whether rel falls under one of the
-// allowedRealClockPaths roots.
+// isAllowedRealClockPath reports whether rel is covered by one of the
+// allowedRealClockPaths entries. Entries with a trailing "/" are directory
+// prefixes (match any file under that directory); entries without "/" are
+// exact file paths. The exact-file form prevents a sibling file from silently
+// inheriting a per-file exemption.
 func isAllowedRealClockPath(rel string) bool {
-	for _, prefix := range allowedRealClockPaths {
-		if strings.HasPrefix(rel, prefix) {
+	for _, p := range allowedRealClockPaths {
+		if strings.HasSuffix(p, "/") {
+			if strings.HasPrefix(rel, p) {
+				return true
+			}
+		} else if rel == p {
 			return true
 		}
 	}
