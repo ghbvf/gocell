@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
@@ -26,7 +25,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // adminIntegCtx returns a context carrying an admin principal for integration
@@ -46,9 +44,9 @@ type publishServiceBundle struct {
 }
 
 // setupPublishBundle spins up a PostgreSQL container, applies migrations,
-// and returns a publish Service with PG repo + outbox writer + tx manager,
-// plus a cleanup function. Uses NoopTransformer (sensitive=false only).
-func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
+// and returns a publish Service with PG repo + outbox writer + tx manager.
+// Uses NoopTransformer (sensitive=false only).
+func setupPublishBundle(t *testing.T) publishServiceBundle {
 	return setupPublishBundleWithTransformer(t, crypto.NoopTransformer{})
 }
 
@@ -57,7 +55,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 // SQL branch end-to-end (Create + Publish + Rollback round-trip through
 // encrypt/decrypt). Uses a deterministic 32-byte hex master key for
 // reproducibility, matching the pattern in config_repo_integration_test.go.
-func setupPublishBundleEncrypted(t *testing.T) (publishServiceBundle, func()) {
+func setupPublishBundleEncrypted(t *testing.T) publishServiceBundle {
 	kp, err := crypto.NewLocalAESKeyProviderFromKeys(
 		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "")
 	require.NoError(t, err)
@@ -66,30 +64,12 @@ func setupPublishBundleEncrypted(t *testing.T) (publishServiceBundle, func()) {
 
 // setupPublishBundleWithTransformer is the shared body of the two factories;
 // callers pick the transformer that matches their test's sensitivity needs.
-func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTransformer) (publishServiceBundle, func()) {
+// Pool + per-test DB lifecycle is owned by t.Cleanup inside
+// sharedPG.NewPerTestPool (see testmain_integration_test.go).
+func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTransformer) publishServiceBundle {
 	t.Helper()
-	testutil.RequireDocker(t)
 
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
+	pool := sharedPG.NewPerTestPool(t)
 	session := cellpg.NewSession(pool.DB())
 	repo := cellpg.NewConfigRepository(session, transformer, nil, clock.Real())
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
@@ -101,16 +81,7 @@ func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTra
 	)
 	require.NoError(t, err)
 
-	cleanup := func() {
-		if err := pool.Close(ctx); err != nil {
-			t.Logf("WARN: pool close: %v", err)
-		}
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: failed to terminate postgres container: %v", err)
-		}
-	}
-
-	return publishServiceBundle{svc: svc, repo: repo, pool: pool.DB(), txMgr: txMgr}, cleanup
+	return publishServiceBundle{svc: svc, repo: repo, pool: pool.DB(), txMgr: txMgr}
 }
 
 // seedConfigEntry inserts a non-sensitive config_entries row through a real
@@ -160,8 +131,7 @@ func countOutboxRowsByEventType(t *testing.T, pool *pgxpool.Pool, eventType stri
 // outbox_entries rows are both committed in the same transaction (L2 atomicity).
 // Uses a real PostgreSQL backend with migration 004 applied.
 func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
-	bundle, cleanup := setupPublishBundle(t)
-	defer cleanup()
+	bundle := setupPublishBundle(t)
 	repoCtx := context.Background()
 	svcCtx := adminIntegCtx()
 
@@ -195,8 +165,7 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 // outbox_entries rows are both committed in the same transaction (L2 atomicity)
 // during Rollback. Uses a real PostgreSQL backend.
 func TestRollback_AtomicWithOutbox(t *testing.T) {
-	bundle, cleanup := setupPublishBundle(t)
-	defer cleanup()
+	bundle := setupPublishBundle(t)
 	svcCtx := adminIntegCtx()
 
 	// Seed an entry and publish a version so Rollback has a target.
@@ -236,8 +205,7 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 // write fails during Rollback, both the config_entries update and the outbox write
 // are rolled back (transaction atomicity).
 func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
-	bundle, cleanup := setupPublishBundle(t)
-	defer cleanup()
+	bundle := setupPublishBundle(t)
 	ctx := context.Background()
 	svcCtx := adminIntegCtx()
 
@@ -318,8 +286,7 @@ func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry)
 // `TestAuditLedgerStore_AdvisoryLockSerializesAppend`.
 func TestConcurrentRollback_PG_ExactlyOneWins(t *testing.T) {
 	t.Parallel()
-	bundle, cleanup := setupPublishBundle(t)
-	defer cleanup()
+	bundle := setupPublishBundle(t)
 	svcCtx := adminIntegCtx()
 
 	const key = "pg-cas-rollback-key"
@@ -380,8 +347,7 @@ func TestConcurrentRollback_PG_ExactlyOneWins(t *testing.T) {
 // math, but the encrypted path is required to reach UpdateForRollback at all.
 func TestConcurrentRollback_PG_Sensitive_ExactlyOneWins(t *testing.T) {
 	t.Parallel()
-	bundle, cleanup := setupPublishBundleEncrypted(t)
-	defer cleanup()
+	bundle := setupPublishBundleEncrypted(t)
 	svcCtx := adminIntegCtx()
 
 	const key = "pg-cas-rollback-sensitive-key"

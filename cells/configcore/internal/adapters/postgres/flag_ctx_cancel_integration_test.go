@@ -30,8 +30,7 @@ func TestFlagWrite_CtxCancel_PGTxRollback(t *testing.T) {
 		t.Setenv("CI", "1")
 	}
 
-	repo, txMgr, cleanup := setupFlagPG(t)
-	defer cleanup()
+	repo, txMgr := setupFlagPG(t)
 
 	ctx := context.Background()
 	key := "ctx-cancel-pg-" + uuid.NewString()
@@ -72,8 +71,7 @@ func TestFlagWrite_UpdateCtxCancel_PGTxRollback(t *testing.T) {
 		t.Setenv("CI", "1")
 	}
 
-	repo, txMgr, cleanup := setupFlagPG(t)
-	defer cleanup()
+	repo, txMgr := setupFlagPG(t)
 
 	ctx := context.Background()
 	key := "ctx-cancel-update-pg-" + uuid.NewString()
@@ -120,8 +118,7 @@ func TestFlagWrite_DeleteCtxCancel_PGTxRollback(t *testing.T) {
 		t.Setenv("CI", "1")
 	}
 
-	repo, txMgr, cleanup := setupFlagPG(t)
-	defer cleanup()
+	repo, txMgr := setupFlagPG(t)
 
 	ctx := context.Background()
 	key := "ctx-cancel-delete-pg-" + uuid.NewString()
@@ -163,8 +160,7 @@ func TestFlagWrite_DeleteCtxCancel_PGTxRollback(t *testing.T) {
 // RunInTx returns an error, the transaction is rolled back and no partial
 // writes are visible.
 func TestFlagWrite_TxRollback_OnRepoError(t *testing.T) {
-	repo, txMgr, cleanup := setupFlagPG(t)
-	defer cleanup()
+	repo, txMgr := setupFlagPG(t)
 
 	ctx := context.Background()
 	key := "tx-rollback-test-" + uuid.NewString()
