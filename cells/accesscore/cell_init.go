@@ -196,7 +196,7 @@ func (c *AccessCore) initRefreshGC() error {
 // constraints (login before identity, accountlockout before login, etc.) outweigh
 // the funlen / cognitive-complexity budgets.
 //
-//nolint:funlen,gocognit,cyclop // sequential cell composition root; readability and ordering
+//nolint:funlen,cyclop // sequential cell composition root; readability and ordering
 func (c *AccessCore) initSlices() error {
 	// credentialinvalidate: shared invalidator for identity-manage, rbac-assign,
 	// session-refresh, and accountlockout. Atomically bumps authz_epoch, revokes
