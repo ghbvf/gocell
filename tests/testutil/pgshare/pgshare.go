@@ -52,15 +52,45 @@ type Shared struct {
 	shutdown func()
 }
 
-// New returns a *Shared bound to the given template database name. Names
-// must satisfy PostgreSQL identifier rules (lowercase + underscores
-// recommended, ≤63 chars). The instance is dormant until the first
-// NewPerTestPool call.
+// New returns a *Shared bound to the given template database name. The
+// name must satisfy PostgreSQL identifier rules:
+//   - non-empty
+//   - ≤ 63 characters (Postgres NAMEDATALEN limit)
+//   - starts with [a-z_] (no uppercase, no digit-prefix)
+//   - contains only lowercase ASCII letters, digits, and underscores
+//   - must not contain NUL bytes (\x00) or double-quote characters (")
+//
+// Violations panic immediately — this is a programmer error caught at test
+// binary start-up, consistent with testcontainers-go's own fail-fast style.
 //
 // Use a unique name per Go test binary (`gocell_<pkg>_test_template` is
 // the convention) so a future caller that opens multiple Shared instances
 // in one process cannot accidentally collide.
+//
+// The instance is dormant until the first NewPerTestPool call.
 func New(templateDB string) *Shared {
+	switch {
+	case templateDB == "":
+		panic("pgshare.New: templateDB must not be empty")
+	case len(templateDB) > 63:
+		panic("pgshare.New: templateDB exceeds Postgres NAMEDATALEN limit of 63 chars, got " + templateDB)
+	case strings.ContainsRune(templateDB, '\x00'):
+		panic("pgshare.New: templateDB must not contain NUL bytes, got " + templateDB)
+	case strings.ContainsRune(templateDB, '"'):
+		panic("pgshare.New: templateDB must not contain double-quote characters, got " + templateDB)
+	default:
+		for i, ch := range templateDB {
+			if i == 0 {
+				if !((ch >= 'a' && ch <= 'z') || ch == '_') {
+					panic("pgshare.New: templateDB must start with [a-z_], got " + templateDB)
+				}
+			} else {
+				if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_') {
+					panic("pgshare.New: templateDB must contain only lowercase ascii letters, digits, and underscores (no uppercase), got " + templateDB)
+				}
+			}
+		}
+	}
 	return &Shared{templateDB: templateDB}
 }
 
@@ -108,6 +138,8 @@ func (s *Shared) NewPerTestPool(t *testing.T) *adapterpg.Pool {
 // Shutdown terminates the shared container if it was booted. Safe to call
 // even when the singleton was never initialized; mirrors
 // rabbitmq.testmain_integration_test.go pattern.
+// If init() failed (Docker unavailable, migration error, etc.), s.shutdown
+// remains nil and this method is a no-op — there is no container to terminate.
 func (s *Shared) Shutdown() {
 	if s.shutdown != nil {
 		s.shutdown()
@@ -128,6 +160,9 @@ func (s *Shared) init() {
 // of truth for PG integration tests today).
 func (s *Shared) initWithMigrationsFS(migrationsFS fs.FS) {
 	ctx := context.Background()
+	// password/user/db are container-internal credentials — the container
+	// lives only within this test binary's process and never accepts external
+	// traffic; reused literal across pgshare-using packages is intentional.
 	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
@@ -140,20 +175,29 @@ func (s *Shared) initWithMigrationsFS(migrationsFS fs.FS) {
 	}
 	adminDSN, err := container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		_ = container.Terminate(ctx)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			slog.Default().Error("pgshare: terminate after init failure also failed",
+				"templateDB", s.templateDB, "init_err", err, "terminate_err", termErr)
+		}
 		s.initErr = fmt.Errorf("admin DSN: %w", err)
 		return
 	}
 
 	if err := createTemplateDB(ctx, adminDSN, s.templateDB); err != nil {
-		_ = container.Terminate(ctx)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			slog.Default().Error("pgshare: terminate after init failure also failed",
+				"templateDB", s.templateDB, "init_err", err, "terminate_err", termErr)
+		}
 		s.initErr = fmt.Errorf("create template DB: %w", err)
 		return
 	}
 
 	templateDSN := swapDatabaseInDSN(adminDSN, s.templateDB)
 	if err := applyMigrationsToTemplate(ctx, templateDSN, migrationsFS); err != nil {
-		_ = container.Terminate(ctx)
+		if termErr := container.Terminate(ctx); termErr != nil {
+			slog.Default().Error("pgshare: terminate after init failure also failed",
+				"templateDB", s.templateDB, "init_err", err, "terminate_err", termErr)
+		}
 		s.initErr = fmt.Errorf("apply migrations to template: %w", err)
 		return
 	}
@@ -164,7 +208,10 @@ func (s *Shared) initWithMigrationsFS(migrationsFS fs.FS) {
 			// TestMain runs outside any test context, so *testing.T is
 			// unavailable. Emit to slog so CI log scrapers pick up
 			// cleanup failures; Ryuk fallback handles the actual reap.
-			slog.Default().Warn("pgshare: shared container terminate failed",
+			// Error level: container leak impacts ops; Ryuk fallback
+			// eventually reaps, but operators should see the failure
+			// during normal runs.
+			slog.Default().Error("pgshare: shared container terminate failed",
 				"templateDB", s.templateDB, "error", err)
 		}
 	}
