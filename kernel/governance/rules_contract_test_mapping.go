@@ -64,6 +64,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+const examplesPathPrefix = "examples/"
+
 // validateCONTRACTENDPOINTTESTMAPPING01 runs the bidirectional check:
 //   - Direction A (contract → slice): every active HTTP contract has at least
 //     one slice in its server cell declaring "contract.<id>.serve".
@@ -231,7 +233,7 @@ func (v *Validator) ctmCheckExamplesArrow(
 	s *metadata.SliceMeta, c *metadata.ContractMeta,
 	fieldPath, entry, contractID string,
 ) *ValidationResult {
-	if !strings.HasPrefix(c.File, "examples/") || strings.HasPrefix(sliceFile(s), "examples/") {
+	if !strings.HasPrefix(c.File, examplesPathPrefix) || strings.HasPrefix(sliceFile(s), examplesPathPrefix) {
 		return nil
 	}
 	r := v.newResult(
@@ -306,7 +308,7 @@ func isActiveHTTPPlatformContract(c *metadata.ContractMeta) bool {
 	return c != nil &&
 		c.Kind == "http" &&
 		c.Lifecycle == "active" &&
-		!strings.HasPrefix(c.File, "examples/")
+		!strings.HasPrefix(c.File, examplesPathPrefix)
 }
 
 // buildCellServeIndex maps each cell ID to the set of contract IDs that any of

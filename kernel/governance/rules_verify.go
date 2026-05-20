@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	fieldCritCheckRefTmpl = "passCriteria[%d].checkRef"
+	fieldCritCheckRefTmpl    = "passCriteria[%d].checkRef"
+	fieldWaiversExpiresAtFmt = "verify.waivers[%d].expiresAt"
 
 	// defaultWaiverExpiryTruncation is the granularity used when comparing a
 	// waiver's expiresAt date against the current time. Day-level truncation
@@ -124,7 +125,7 @@ func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.Waiver
 		results = append(results, v.newResult(
 			codeVERIFY02, SeverityError, IssueRequired,
 			file,
-			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
 			fmt.Sprintf("waiver.expiresAt is required for contract %q; fix: add an expiresAt field (YYYY-MM-DD) to this waiver entry", w.Contract),
 		))
 		return results
@@ -134,7 +135,7 @@ func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.Waiver
 		results = append(results, v.newResult(
 			codeVERIFY02, SeverityError, IssueInvalid,
 			file,
-			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
 			fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD); fix: use a YYYY-MM-DD formatted date", w.ExpiresAt),
 		))
 		return results
@@ -143,7 +144,7 @@ func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.Waiver
 		results = append(results, v.newResult(
 			codeVERIFY02, SeverityError, IssueInvalid,
 			file,
-			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
 			fmt.Sprintf("waiver for contract %q expired on %s;"+
 				" fix: extend the waiver expiresAt or add a proper verify.contract entry", w.Contract, w.ExpiresAt),
 		))
