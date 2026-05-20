@@ -25,6 +25,16 @@ var (
 // type externalRestartRecovery struct{}
 // func (externalRestartRecovery) restartRecoveryModeOK() {} // would not compile
 
+// containsAny returns true if s contains any of the given substrings.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestNewProtocol_NoOptions_Error: NewProtocol with zero options must fail
 // because all 4 wiring options are required.
 func TestNewProtocol_NoOptions_Error(t *testing.T) {
@@ -387,16 +397,6 @@ func TestWithIdempotency_NilReturnsError_Immediate(t *testing.T) {
 		t.Errorf("A-06 RED: WithIdempotency(nil) should immediately error "+
 			"mentioning nil/invalid, got deferred sentinel: %q", errStr)
 	}
-}
-
-// containsAny returns true if s contains any of the given substrings.
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
 }
 
 // TestNewProtocol_OK: NewProtocol succeeds with valid options.
