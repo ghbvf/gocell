@@ -2053,30 +2053,40 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	ch.mu.Unlock()
 }
 
-func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testing.T) {
+// subscribeWithCanceledCtx is a test helper that wires a fresh connection,
+// subscribes with a pre-canceled context, and returns the mock channel for
+// assertion. Shared by queue-name derivation tests (S4144).
+func subscribeWithCanceledCtx(t *testing.T, cfg SubscriberConfig, sub outbox.Subscription) *mockChannel {
+	t.Helper()
 	conn, mockConn := newTestConnection(t)
-
 	ch := newMockChannel()
 	mockConn.mu.Lock()
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:     "my-explicit-queue",
-		ConsumerGroup: "auditcore", // Should be ignored when QueueName is set.
-		DLXExchange:   "test.dlx",
-		Clock:         clock.Real(),
-	})
+	s := NewSubscriber(conn, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created", CellID: "test-cell"},
+	err := s.Subscribe(ctx, sub,
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.Ack()
 		}))
 	assert.NoError(t, err)
+	return ch
+}
 
+func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testing.T) {
+	ch := subscribeWithCanceledCtx(t,
+		SubscriberConfig{
+			QueueName:     "my-explicit-queue",
+			ConsumerGroup: "auditcore", // Should be ignored when QueueName is set.
+			DLXExchange:   "test.dlx",
+			Clock:         clock.Real(),
+		},
+		outbox.Subscription{Topic: "session.created", CellID: "test-cell"},
+	)
 	ch.mu.Lock()
 	// Explicit QueueName takes precedence over ConsumerGroup derivation.
 	assert.Contains(t, ch.queuesDeclared, "my-explicit-queue")
@@ -2085,28 +2095,14 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 }
 
 func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
-	conn, mockConn := newTestConnection(t)
-
-	ch := newMockChannel()
-	mockConn.mu.Lock()
-	mockConn.nextCh = ch
-	mockConn.mu.Unlock()
-
-	sub := NewSubscriber(conn, SubscriberConfig{
-		// Both QueueName and ConsumerGroup empty — backward compat.
-		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic", CellID: "test-cell"},
-		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.Ack()
-		}))
-	assert.NoError(t, err)
-
+	ch := subscribeWithCanceledCtx(t,
+		SubscriberConfig{
+			// Both QueueName and ConsumerGroup empty — backward compat.
+			DLXExchange: "test.dlx",
+			Clock:       clock.Real(),
+		},
+		outbox.Subscription{Topic: "my.topic", CellID: "test-cell"},
+	)
 	ch.mu.Lock()
 	assert.Contains(t, ch.queuesDeclared, "my.topic") // Falls back to topic name.
 	ch.mu.Unlock()

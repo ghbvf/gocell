@@ -8,10 +8,8 @@
 -- the NO TRANSACTION annotation.
 --
 -- If this migration is interrupted, the index may be left in INVALID state.
--- Detect: SELECT indexname FROM pg_indexes WHERE indexname = 'idx_refresh_tokens_token'
---         INTERSECT
---         SELECT relname FROM pg_class WHERE relkind = 'i' AND NOT indisvalid;
--- Cleanup: DROP INDEX CONCURRENTLY IF EXISTS idx_refresh_tokens_token; then re-run migration.
+-- Detect via pg_indexes joined with pg_class (relkind='i', NOT indisvalid).
+-- Cleanup: drop idx_refresh_tokens_token with CONCURRENTLY, then re-run migration.
 --
 -- ref: PR#213 review finding P1-Cx1 + multi-seat review P1.
 

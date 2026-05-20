@@ -25,6 +25,16 @@ var (
 // type externalRestartRecovery struct{}
 // func (externalRestartRecovery) restartRecoveryModeOK() {} // would not compile
 
+// containsAny returns true if s contains any of the given substrings.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestNewProtocol_NoOptions_Error: NewProtocol with zero options must fail
 // because all 4 wiring options are required.
 func TestNewProtocol_NoOptions_Error(t *testing.T) {
@@ -70,6 +80,38 @@ func TestNewProtocol_AllOptions_OK(t *testing.T) {
 	}
 }
 
+// assertHMACKeyError checks that NewProtocol with a given key length behaves as
+// expected and, on error, does not leak key material. Extracted to reduce the
+// cognitive complexity of TestNewProtocol_HMACKeyTooShort (go:S3776 CC=22).
+func assertHMACKeyError(t *testing.T, ns ledger.NamespaceID, keyLen int, wantErr bool) {
+	t.Helper()
+	key := make([]byte, keyLen)
+	_, err := ledger.NewProtocol(
+		ledger.WithChainHMAC(key),
+		ledger.WithNamespace(ns),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	if wantErr && err == nil {
+		t.Fatalf("expected error for key length %d, got nil", keyLen)
+	}
+	if !wantErr && err != nil {
+		t.Fatalf("unexpected error for key length %d: %v", keyLen, err)
+	}
+	if !wantErr || err == nil {
+		return
+	}
+	// Must not expose key material in error message.
+	var coded *errcode.Error
+	if !errors.As(err, &coded) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	// Only check for key material leakage when the key is non-empty.
+	if len(key) > 0 && strings.Contains(coded.Message, string(key)) {
+		t.Error("error message must not contain key material")
+	}
+}
+
 // TestNewProtocol_HMACKeyTooShort: keys shorter than 32 bytes must be rejected.
 func TestNewProtocol_HMACKeyTooShort(t *testing.T) {
 	t.Parallel()
@@ -88,30 +130,7 @@ func TestNewProtocol_HMACKeyTooShort(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			key := make([]byte, tc.keyLen)
-			_, err := ledger.NewProtocol(
-				ledger.WithChainHMAC(key),
-				ledger.WithNamespace(ns),
-				ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-				ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-			)
-			if tc.wantErr && err == nil {
-				t.Fatalf("expected error for key length %d, got nil", tc.keyLen)
-			}
-			if !tc.wantErr && err != nil {
-				t.Fatalf("unexpected error for key length %d: %v", tc.keyLen, err)
-			}
-			if tc.wantErr && err != nil {
-				// Must not expose key material in error message.
-				var coded *errcode.Error
-				if !errors.As(err, &coded) {
-					t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-				}
-				// Only check for key material leakage when the key is non-empty.
-				if len(key) > 0 && strings.Contains(coded.Message, string(key)) {
-					t.Error("error message must not contain key material")
-				}
-			}
+			assertHMACKeyError(t, ns, tc.keyLen, tc.wantErr)
 		})
 	}
 }
@@ -378,16 +397,6 @@ func TestWithIdempotency_NilReturnsError_Immediate(t *testing.T) {
 		t.Errorf("A-06 RED: WithIdempotency(nil) should immediately error "+
 			"mentioning nil/invalid, got deferred sentinel: %q", errStr)
 	}
-}
-
-// containsAny returns true if s contains any of the given substrings.
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
 }
 
 // TestNewProtocol_OK: NewProtocol succeeds with valid options.

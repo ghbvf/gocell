@@ -124,6 +124,7 @@ func RunQueueConformance(t *testing.T, factory QueueFactory, features Features) 
 
 	t.Run("Cancel/PendingToCanceled", func(t *testing.T) { runCancelPending(t, factory, features) })
 	t.Run("Cancel/TerminalRejected", func(t *testing.T) { runCancelTerminal(t, factory, features) })
+	t.Run("Cancel/NotFound", func(t *testing.T) { runCancelNotFound(t, factory, features) })
 
 	t.Run("ScanActive/FilterByDevice", func(t *testing.T) { runScanActiveByDevice(t, factory, features) })
 	t.Run("ScanActive/FilterByStatus", func(t *testing.T) { runScanActiveByStatus(t, factory, features) })
@@ -733,6 +734,17 @@ func runCancelTerminal(t *testing.T, factory QueueFactory, features Features) {
 		return q.Cancel(c, fixtureCancelT, n())
 	})
 	requireErrCode(t, err, errcode.ErrValidationFailed)
+}
+
+func runCancelNotFound(t *testing.T, factory QueueFactory, features Features) {
+	t.Helper()
+	q, _, tx, n, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+	err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Cancel(c, "cancel-nonexistent", n())
+	})
+	requireErrCode(t, err, errcode.ErrCommandNotFound)
 }
 
 // ---------------------------------------------------------------------------

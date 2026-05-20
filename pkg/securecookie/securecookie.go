@@ -199,7 +199,7 @@ func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
 
 // Decode verifies signature, checks freshness, decrypts, and returns the
 // original value.
-func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
+func (sc *SecureCookie) Decode(name, encoded string) ([]byte, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,

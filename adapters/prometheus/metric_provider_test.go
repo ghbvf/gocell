@@ -10,6 +10,7 @@ import (
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -525,20 +526,89 @@ func collect(t *testing.T, reg *prom.Registry, name string, labels prom.Labels) 
 			continue
 		}
 		for _, m := range f.GetMetric() {
-			match := true
-			for _, lp := range m.GetLabel() {
-				if v, ok := labels[lp.GetName()]; ok && v != lp.GetValue() {
-					match = false
-					break
-				}
-			}
-			if match {
+			if promLabelsMatch(labels, m.GetLabel()) {
 				return singletonCounter{val: m.GetCounter().GetValue()}
 			}
 		}
 	}
 	t.Fatalf("no metric %s with labels %v", name, labels)
 	return nil
+}
+
+// promLabelsMatch reports whether all entries in want are present in got with
+// matching values. Extra labels in got are allowed (subset match). Extracted
+// from collect to reduce cognitive complexity (S3776).
+func promLabelsMatch(want prom.Labels, got []*dto.LabelPair) bool {
+	// Build a name→value index from got for O(1) lookup.
+	gotIndex := make(map[string]string, len(got))
+	for _, lp := range got {
+		gotIndex[lp.GetName()] = lp.GetValue()
+	}
+	for k, v := range want {
+		if gotIndex[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// TestPromLabelsMatch verifies subset-match semantics: all want entries must be
+// present in got with matching values; extra labels in got are allowed.
+func TestPromLabelsMatch(t *testing.T) {
+	lp := func(name, value string) *dto.LabelPair {
+		return &dto.LabelPair{Name: &name, Value: &value}
+	}
+	tests := []struct {
+		name string
+		want prom.Labels
+		got  []*dto.LabelPair
+		ok   bool
+	}{
+		{
+			name: "exact match",
+			want: prom.Labels{"k": "v"},
+			got:  []*dto.LabelPair{lp("k", "v")},
+			ok:   true,
+		},
+		{
+			name: "extra label in got allowed",
+			want: prom.Labels{"k": "v"},
+			got:  []*dto.LabelPair{lp("k", "v"), lp("extra", "x")},
+			ok:   true,
+		},
+		{
+			name: "want label absent from got",
+			want: prom.Labels{"k": "v"},
+			got:  []*dto.LabelPair{lp("other", "v")},
+			ok:   false,
+		},
+		{
+			name: "empty got does not satisfy non-empty want",
+			want: prom.Labels{"k": "v"},
+			got:  nil,
+			ok:   false,
+		},
+		{
+			name: "empty want always matches",
+			want: prom.Labels{},
+			got:  []*dto.LabelPair{lp("k", "v")},
+			ok:   true,
+		},
+		{
+			name: "value mismatch",
+			want: prom.Labels{"k": "v"},
+			got:  []*dto.LabelPair{lp("k", "wrong")},
+			ok:   false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := promLabelsMatch(tc.want, tc.got)
+			if got != tc.ok {
+				t.Errorf("promLabelsMatch(%v, %v) = %v, want %v", tc.want, tc.got, got, tc.ok)
+			}
+		})
+	}
 }
 
 type singletonCounter struct{ val float64 }

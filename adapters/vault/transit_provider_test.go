@@ -1744,6 +1744,28 @@ func TestNewTransitKeyProviderFromEnv_RealModeGuardPrecedesVaultIO(t *testing.T)
 	}
 }
 
+// assertResolveStartupTimeout calls resolveStartupTimeout and checks the result
+// against wantErr/want. Extracted to reduce cognitive complexity (go:S3776 CC=18).
+func assertResolveStartupTimeout(t *testing.T, env string, want time.Duration, wantErr bool) {
+	t.Helper()
+	got, err := resolveStartupTimeout()
+	if wantErr {
+		if err == nil {
+			t.Fatalf("resolveStartupTimeout(%q) = nil err; want error", env)
+		}
+		if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
+			t.Errorf("wrong error code; got: %v", err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("resolveStartupTimeout(%q) unexpected err: %v", env, err)
+	}
+	if got != want {
+		t.Errorf("resolveStartupTimeout(%q) = %v, want %v", env, got, want)
+	}
+}
+
 // TestResolveStartupTimeout_EnvOverride verifies the GOCELL_VAULT_STARTUP_TIMEOUT
 // escape hatch works and rejects malformed / non-positive values.
 func TestResolveStartupTimeout_EnvOverride(t *testing.T) {
@@ -1764,22 +1786,7 @@ func TestResolveStartupTimeout_EnvOverride(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			setEnv(t, startupTimeoutEnvVar, tc.env)
 			// setEnv treats empty string as unset, matching our "default" case.
-			got, err := resolveStartupTimeout()
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("resolveStartupTimeout(%q) = nil err; want error", tc.env)
-				}
-				if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
-					t.Errorf("wrong error code; got: %v", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("resolveStartupTimeout(%q) unexpected err: %v", tc.env, err)
-			}
-			if got != tc.want {
-				t.Errorf("resolveStartupTimeout(%q) = %v, want %v", tc.env, got, tc.want)
-			}
+			assertResolveStartupTimeout(t, tc.env, tc.want, tc.wantErr)
 		})
 	}
 }

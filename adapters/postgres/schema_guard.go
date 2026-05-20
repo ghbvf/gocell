@@ -289,6 +289,10 @@ type expectedCheck struct {
 	Name  string
 }
 
+// pgTypeTSTZ is the PostgreSQL column type name for a timezone-aware timestamp.
+// Extracted to satisfy go:S1192 (used in 16 expectedColumns entries).
+const pgTypeTSTZ = "timestamp with time zone"
+
 // ---------------------------------------------------------------------------
 // Expected shape registries (hardcoded per ADR-credential §5.1.3)
 // ---------------------------------------------------------------------------
@@ -307,15 +311,15 @@ var expectedColumns = []expectedColumn{
 	{Table: "users", Column: "creation_source", Type: "text", NotNull: true},
 	{Table: "users", Column: "authz_epoch", Type: "bigint", NotNull: true},
 	{Table: "users", Column: "password_version", Type: "bigint", NotNull: true}, // S6 022
-	{Table: "users", Column: "created_at", Type: "timestamp with time zone", NotNull: true},
-	{Table: "users", Column: "updated_at", Type: "timestamp with time zone", NotNull: true},
+	{Table: "users", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "users", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
 	// Auto-lockout bookkeeping (032_users_failed_login.sql) — ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01.
 	// failed_login_count carries a NOT NULL DEFAULT 0 + CHECK(>=0) (registered
 	// in expectedChecks below as users_failed_login_count_positive); the two
 	// timestamp columns are NULL-able (NULL == no failure yet / no TTL).
 	{Table: "users", Column: "failed_login_count", Type: "integer", NotNull: true},
-	{Table: "users", Column: "last_failed_at", Type: "timestamp with time zone", NotNull: false},
-	{Table: "users", Column: "locked_until", Type: "timestamp with time zone", NotNull: false},
+	{Table: "users", Column: "last_failed_at", Type: pgTypeTSTZ, NotNull: false},
+	{Table: "users", Column: "locked_until", Type: pgTypeTSTZ, NotNull: false},
 	// config_entries.version + feature_flags.version — PR449-F7 carry-over
 	// gate columns. Original tables predate S3F structural checks; only the
 	// version column is asserted here (existence + type + NOT NULL).
@@ -325,9 +329,9 @@ var expectedColumns = []expectedColumn{
 	{Table: "sessions", Column: "id", Type: "text", NotNull: true},
 	{Table: "sessions", Column: "subject_id", Type: "uuid", NotNull: true},
 	{Table: "sessions", Column: "jti", Type: "text", NotNull: true},
-	{Table: "sessions", Column: "expires_at", Type: "timestamp with time zone", NotNull: true},
-	{Table: "sessions", Column: "created_at", Type: "timestamp with time zone", NotNull: true},
-	{Table: "sessions", Column: "revoked_at", Type: "timestamp with time zone", NotNull: false},
+	{Table: "sessions", Column: "expires_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "sessions", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "sessions", Column: "revoked_at", Type: pgTypeTSTZ, NotNull: false},
 	// S4d: row-level credential provenance. ADR-credential §A8 — sessionvalidate
 	// compares user.authz_epoch with view.authz_epoch_at_issue, NOT JWT claim.
 	// Migration 028 adds CHECK(>0) as the hard DB guarantee; schema_guard
@@ -342,11 +346,11 @@ var expectedColumns = []expectedColumn{
 	{Table: "roles", Column: "id", Type: "text", NotNull: true},
 	{Table: "roles", Column: "name", Type: "text", NotNull: true},
 	{Table: "roles", Column: "permissions", Type: "jsonb", NotNull: true},
-	{Table: "roles", Column: "created_at", Type: "timestamp with time zone", NotNull: true},
+	{Table: "roles", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
 	// role_assignments (019_roles.sql)
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
-	{Table: "role_assignments", Column: "granted_at", Type: "timestamp with time zone", NotNull: true},
+	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
 	// audit_entries (020_audit_ledger.sql)
 	{Table: "audit_entries", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "audit_entries", Column: "namespace", Type: "text", NotNull: true},
@@ -354,7 +358,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "audit_entries", Column: "event_id", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "event_type", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "actor_id", Type: "text", NotNull: true},
-	{Table: "audit_entries", Column: "timestamp", Type: "timestamp with time zone", NotNull: true},
+	{Table: "audit_entries", Column: "timestamp", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
 	{Table: "audit_entries", Column: "prev_hash", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "hash", Type: "text", NotNull: true},
@@ -362,7 +366,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "devices", Column: "id", Type: "text", NotNull: true},
 	{Table: "devices", Column: "name", Type: "text", NotNull: true},
 	{Table: "devices", Column: "status", Type: "text", NotNull: true},
-	{Table: "devices", Column: "last_seen", Type: "timestamp with time zone", NotNull: true},
+	{Table: "devices", Column: "last_seen", Type: pgTypeTSTZ, NotNull: true},
 	// commands (030_commands.sql) — kernel/command.Queue PG adapter (B2.B).
 	{Table: "commands", Column: "id", Type: "text", NotNull: true},
 	{Table: "commands", Column: "device_id", Type: "text", NotNull: true},
@@ -371,11 +375,11 @@ var expectedColumns = []expectedColumn{
 	{Table: "commands", Column: "metadata", Type: "jsonb", NotNull: true},
 	{Table: "commands", Column: "status", Type: "smallint", NotNull: true},
 	{Table: "commands", Column: "attempt", Type: "integer", NotNull: true},
-	{Table: "commands", Column: "created_at", Type: "timestamp with time zone", NotNull: true},
-	{Table: "commands", Column: "sent_at", Type: "timestamp with time zone", NotNull: false},
-	{Table: "commands", Column: "delivered_at", Type: "timestamp with time zone", NotNull: false},
-	{Table: "commands", Column: "completed_at", Type: "timestamp with time zone", NotNull: false},
-	{Table: "commands", Column: "lease_expiry", Type: "timestamp with time zone", NotNull: false},
+	{Table: "commands", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "commands", Column: "sent_at", Type: pgTypeTSTZ, NotNull: false},
+	{Table: "commands", Column: "delivered_at", Type: pgTypeTSTZ, NotNull: false},
+	{Table: "commands", Column: "completed_at", Type: pgTypeTSTZ, NotNull: false},
+	{Table: "commands", Column: "lease_expiry", Type: pgTypeTSTZ, NotNull: false},
 	{Table: "commands", Column: "timeouts_schedule_to_send_ns", Type: "bigint", NotNull: false},
 	{Table: "commands", Column: "timeouts_send_to_complete_ns", Type: "bigint", NotNull: false},
 	{Table: "commands", Column: "timeouts_overall_ns", Type: "bigint", NotNull: false},
