@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"testing"
 	"time"
 
@@ -13,110 +12,43 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // sqlStateCheckViolation is SQLSTATE 23514 (check constraint violation).
 const sqlStateCheckViolation = "23514"
 
-// setupUserRepoPGWithPool is like setupUserRepoPG but also returns the Pool
-// for tests that need direct SQL access (e.g. to bypass domain validation).
+// setupUserRepoPGWithPool clones the package-shared pre-migrated template
+// database into a fresh per-test DB and returns a PGUserRepo + Pool for
+// tests that need direct SQL access (e.g. to bypass domain validation).
+// Container + per-test DB lifecycle is owned by t.Cleanup inside
+// newPerTestPool (see testmain_integration_test.go).
 func setupUserRepoPGWithPool(t *testing.T) (*PGUserRepo, *adapterpg.Pool, func()) {
 	t.Helper()
-	testutil.RequireDocker(t)
 
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
+	pool := newPerTestPool(t)
 	txMgr := adapterpg.NewTxManager(pool)
 	repo, err := NewPGUserRepo(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 
-	cleanup := func() {
-		if err := pool.Close(ctx); err != nil {
-			t.Logf("WARN: pool close: %v", err)
-		}
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: failed to terminate postgres container: %v", err)
-		}
-	}
-
-	return repo, pool, cleanup
+	return repo, pool, func() {}
 }
 
-// testAdapterMigrationsFS returns the shared adapters/postgres migration FS.
-// Duplicate of adapters/postgres/embed_test.go:testMigrationsFS — needed
-// because Go _test.go files cannot be imported across packages.
-func testAdapterMigrationsFS(t testing.TB) fs.FS {
-	t.Helper()
-	fsys, err := adapterpg.MigrationsFS()
-	require.NoError(t, err)
-	return fsys
-}
-
-// setupUserRepoPG starts a PostgreSQL testcontainer, applies all migrations,
-// and returns a PGUserRepo + TxManager + cleanup func.
+// setupUserRepoPG clones the package-shared pre-migrated template database
+// into a fresh per-test DB and returns a PGUserRepo + TxManager.
 func setupUserRepoPG(t *testing.T) (*PGUserRepo, *adapterpg.TxManager, func()) {
 	t.Helper()
-	testutil.RequireDocker(t)
 
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
+	pool := newPerTestPool(t)
 	txMgr := adapterpg.NewTxManager(pool)
 	repo, err := NewPGUserRepo(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 
-	cleanup := func() {
-		if err := pool.Close(ctx); err != nil {
-			t.Logf("WARN: pool close: %v", err)
-		}
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: failed to terminate postgres container: %v", err)
-		}
-	}
-
-	return repo, txMgr, cleanup
+	return repo, txMgr, func() {}
 }
 
 // newTestUser builds a minimal domain.User with a unique username and email.
@@ -148,28 +80,11 @@ func newTestUser(suffix string) *domain.User {
 // ---------------------------------------------------------------------------
 
 // TestPGUserRepo_Constructor_FailFast verifies that NewPGUserRepo returns a
-// structured error for each nil dependency, using a single container so all
-// subtests share one Docker lifecycle.
+// structured error for each nil dependency. Uses one per-test database
+// (cloned from the package-shared template) for all subtests; lifetime is
+// owned by t.Cleanup inside newPerTestPool.
 func TestPGUserRepo_Constructor_FailFast(t *testing.T) {
-	testutil.RequireDocker(t)
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(ctx) })
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = pool.Close(ctx) })
-
+	pool := newPerTestPool(t)
 	txm := adapterpg.NewTxManager(pool)
 
 	assertValidationFailed := func(t *testing.T, err error) {

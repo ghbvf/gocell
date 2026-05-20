@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
@@ -24,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // adminIntegCtx returns a context carrying an admin principal for integration
@@ -41,32 +39,14 @@ type writeBundle struct {
 	pool *pgxpool.Pool
 }
 
-// setupWriteService spins up a PostgreSQL container, applies migrations,
-// and returns a Service wired with PG repo + outbox writer + tx manager.
+// setupWriteService clones the package-shared pre-migrated template DB
+// into a fresh per-test database and returns a Service wired with PG repo
+// + outbox writer + tx manager. Container + per-test DB lifecycle is
+// owned by t.Cleanup inside newPerTestPool (see testmain_integration_test.go).
 func setupWriteService(t *testing.T) (writeBundle, func()) {
 	t.Helper()
-	testutil.RequireDocker(t)
 
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
+	pool := newPerTestPool(t)
 	session := cellpg.NewSession(pool.DB())
 	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
@@ -76,15 +56,9 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
+	require.NoError(t, err)
 
-	cleanup := func() {
-		_ = pool.Close(ctx)
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: failed to terminate container: %v", err)
-		}
-	}
-
-	return writeBundle{svc: svc, pool: pool.DB()}, cleanup
+	return writeBundle{svc: svc, pool: pool.DB()}, func() {}
 }
 
 // countOutboxRowsByEventType returns the number of outbox_entries rows for
@@ -192,32 +166,8 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 // returns a permanent error, the config_entries row is absent (transaction
 // rolled back atomically).
 func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
-	testutil.RequireDocker(t)
 	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-	defer func() { _ = container.Terminate(ctx) }()
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-	defer func() {
-		if err := pool.Close(ctx); err != nil {
-			t.Logf("WARN: pool close: %v", err)
-		}
-	}()
-
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	pool := newPerTestPool(t)
 
 	session := cellpg.NewSession(pool.DB())
 	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
@@ -230,6 +180,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
+	require.NoError(t, err)
 
 	_, err = svc.Create(adminIntegCtx(), CreateInput{Key: "rollback.test", Value: "v"})
 	require.Error(t, err)
