@@ -74,7 +74,12 @@ type Store interface {
 	// CleanupDead deletes a batch of dead rows older than cutoff.
 	CleanupDead(ctx context.Context, cutoff time.Time, batchSize int) (deleted int, err error)
 
-	// CountPending returns the number of pending entries available for ClaimPending.
+	// CountPending returns the number of pending entries eligible for ClaimPending:
+	// status=pending AND (next_retry_at IS NULL OR next_retry_at <= now()).
+	// Rows that are pending but still in backoff (next_retry_at > now()) are
+	// intentionally excluded so the count reflects actual work available to relay
+	// workers — consistent with the ClaimPending eligibility predicate.
+	//
 	// May be approximate under high concurrency — multiple concurrent ClaimPending
 	// calls can race between the COUNT and the next claim. Callers should treat
 	// any error as transient and skip the metric update without panicking.

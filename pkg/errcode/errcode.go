@@ -327,6 +327,13 @@ const (
 	// operators can route runtime lifecycle faults separately.
 	ErrBootstrapLifecycle Code = "ERR_BOOTSTRAP_LIFECYCLE"
 
+	// ErrBootstrapDoubleManaged signals that the same resource (e.g. a relay)
+	// was registered via two paths that both result in lifecycle management
+	// (e.g. WithRelay and WithManagedResource on the same object). This would
+	// cause Close() to be called twice during shutdown. Detected at phase0
+	// before any side effects start.
+	ErrBootstrapDoubleManaged Code = "ERR_BOOTSTRAP_DOUBLE_MANAGED"
+
 	// Refresh token store error code (runtime/auth/refresh).
 	//
 	// ErrRefreshTokenRejected is the single public sentinel emitted by

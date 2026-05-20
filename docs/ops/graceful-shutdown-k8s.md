@@ -68,7 +68,7 @@ phase10 emit 的 `bootstrap_shutdown_phase_duration_seconds`（histogram）按 s
 - `lifo_teardown` ≤ `shutdownTimeout`（tearCtx 另一个 bucket）
 - `total` ≈ 两段总和
 
-`bootstrap_shutdown_outcome_total{outcome="timeout"}` 在任一 ctx 超时时增加；不区分哪个 bucket 超时（dashboards 简化）。具体哪段超时通过 `phaseError.Phase` 字段诊断（`teardown_http_drain` / `teardown_<component>`）。
+`bootstrap_shutdown_total{outcome="timeout"}` 在任一 ctx 超时时增加；不区分哪个 bucket 超时（dashboards 简化）。具体哪段超时通过 `phaseError.Phase` 字段诊断（`teardown_http_drain` / `teardown_<component>`）。
 
 ## 相关文档
 

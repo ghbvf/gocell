@@ -114,21 +114,22 @@ func WithSubscriptionValidator(v ...cell.SubscriptionValidator) Option {
 	}
 }
 
-// WithRelay injects the PG outbox Relay so that bootstrap can attach the
-// auto-wired OutboxConsumerCollector as a PendingDepthObserver during phase5.
-// This wires the outbox_pending_depth gauge without requiring cmd/* to reach
-// into the collector directly.
+// WithRelay registers the relay BOTH for outbox wiring AND for lifecycle
+// (Start/Close). Calling WithRelay is the ONLY step required to integrate a
+// relay — do NOT separately call WithManagedResource(relay). That would
+// double-register Close and is detected by phase0 fail-fast
+// (ErrBootstrapDoubleManaged — code: "ERR_BOOTSTRAP_DOUBLE_MANAGED").
 //
 // Nil inputs are silently ignored (cumulative builder noop pattern,
 // runtime-api.md §Option 范式分层): the relay remains unset, and
-// autoWireOutboxConsumerCollector skips the depth-observer attachment.
+// autoWireOutboxRejectCollector skips relay-specific wiring.
 //
 // Must be called before Run(). Typical usage:
 //
 //	relay := runtimeoutbox.NewRelay(store, pub, cfg)
+//	relay.WithPendingDepthObserver(pendingDepthCollector)
 //	bootstrap.New(
-//	    bootstrap.WithRelay(relay),
-//	    bootstrap.WithWorkers(relay),
+//	    bootstrap.WithRelay(relay), // handles lifecycle; no WithManagedResource needed
 //	    ...
 //	)
 func WithRelay(r *runtimeoutbox.Relay) Option {
@@ -137,5 +138,6 @@ func WithRelay(r *runtimeoutbox.Relay) Option {
 			return
 		}
 		b.relay = r
+		b.managedResources = append(b.managedResources, r) // auto-lifecycle
 	}
 }

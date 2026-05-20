@@ -1,46 +1,89 @@
 package metrics_test
 
+// Wave 1 RED tests for P1#2/#3 — collector split.
+//
+// These tests assert the TARGET semantics after the split:
+//   - OutboxRejectCollector: only outbox_consumer_rejected_total, no cellID ctor arg
+//   - OutboxPendingDepthCollector: only outbox_pending_depth, cellID required
+//
+// All tests in this file FAIL against the current production code because
+// OutboxRejectCollector / OutboxPendingDepthCollector do not exist yet (stubs
+// added in outbox_stubs.go to allow compilation). When Wave 2 replaces the stubs
+// with real implementations, these tests turn GREEN.
+
 import (
-	"errors"
 	"testing"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // ---------------------------------------------------------------------------
-// OutboxConsumerCollector tests
+// Compile-time interface checks
 // ---------------------------------------------------------------------------
 
-func TestNewOutboxConsumerCollector_RegistersMetrics(t *testing.T) {
-	c, err := obmetrics.NewOutboxConsumerCollector(kernelmetrics.NopProvider{}, "accesscore")
+// OutboxRejectCollector must implement outbox.ConsumerObserver.
+var _ outbox.ConsumerObserver = (*obmetrics.OutboxRejectCollector)(nil)
+
+// OutboxPendingDepthCollector must implement runtimeoutbox.PendingDepthObserver.
+var _ runtimeoutbox.PendingDepthObserver = (*obmetrics.OutboxPendingDepthCollector)(nil)
+
+// ---------------------------------------------------------------------------
+// OutboxRejectCollector tests
+// ---------------------------------------------------------------------------
+
+// TestNewOutboxRejectCollector_ConstructorTakesNoCell asserts that
+// NewOutboxRejectCollector takes ONLY a Provider (no cellID argument).
+// The reject counter is shared across all cells; cell label comes from
+// ObserveReject call-site args.
+func TestNewOutboxRejectCollector_ConstructorTakesNoCell(t *testing.T) {
+	c, err := obmetrics.NewOutboxRejectCollector(kernelmetrics.NopProvider{})
 	if err != nil {
-		t.Fatalf("NewOutboxConsumerCollector: %v", err)
+		t.Fatalf("NewOutboxRejectCollector: %v", err)
 	}
 	if c == nil {
-		t.Fatal("expected non-nil collector")
+		t.Fatal("expected non-nil OutboxRejectCollector")
 	}
 }
 
-func TestNewOutboxConsumerCollector_RejectsEmptyCellID(t *testing.T) {
-	_, err := obmetrics.NewOutboxConsumerCollector(kernelmetrics.NopProvider{}, "")
-	if err == nil {
-		t.Fatal("expected error for empty cellID, got nil")
-	}
-}
-
-func TestNewOutboxConsumerCollector_RejectsNilProvider(t *testing.T) {
-	_, err := obmetrics.NewOutboxConsumerCollector(nil, "accesscore")
+// TestNewOutboxRejectCollector_RejectsNilProvider verifies fail-fast on nil.
+func TestNewOutboxRejectCollector_RejectsNilProvider(t *testing.T) {
+	_, err := obmetrics.NewOutboxRejectCollector(nil)
 	if err == nil {
 		t.Fatal("expected error for nil provider, got nil")
 	}
 }
 
-func TestOutboxConsumerCollector_ObserveReject_IncrementsCounterWithLabels(t *testing.T) {
+// TestOutboxRejectCollector_RegistersOnlyRejectedCounter asserts that the
+// collector registers outbox_consumer_rejected_total but NOT outbox_pending_depth.
+//
+// Wave 1 RED: the current stub wraps OutboxConsumerCollector which registers
+// BOTH metrics, so the "does NOT register outbox_pending_depth" assertion fails.
+func TestOutboxRejectCollector_RegistersOnlyRejectedCounter(t *testing.T) {
 	p := newOutboxSpyProvider()
-	c, err := obmetrics.NewOutboxConsumerCollector(p, "accesscore")
+	_, err := obmetrics.NewOutboxRejectCollector(p)
 	if err != nil {
-		t.Fatalf("NewOutboxConsumerCollector: %v", err)
+		t.Fatalf("NewOutboxRejectCollector: %v", err)
+	}
+
+	if _, ok := p.counterNames["outbox_consumer_rejected_total"]; !ok {
+		t.Error("OutboxRejectCollector must register outbox_consumer_rejected_total")
+	}
+	if _, ok := p.gaugeNames["outbox_pending_depth"]; ok {
+		t.Error("OutboxRejectCollector must NOT register outbox_pending_depth — " +
+			"that belongs to OutboxPendingDepthCollector (P1#3 split)")
+	}
+}
+
+// TestOutboxRejectCollector_ObserveReject_IncrementsCounterWithLabels verifies
+// the label set {cell, topic, reason} without consumerGroup.
+func TestOutboxRejectCollector_ObserveReject_IncrementsCounterWithLabels(t *testing.T) {
+	p := newOutboxSpyProvider()
+	c, err := obmetrics.NewOutboxRejectCollector(p)
+	if err != nil {
+		t.Fatalf("NewOutboxRejectCollector: %v", err)
 	}
 
 	c.ObserveReject("accesscore", "event.session.created.v1", "cg-accesscore-session", "handler_reject")
@@ -60,23 +103,85 @@ func TestOutboxConsumerCollector_ObserveReject_IncrementsCounterWithLabels(t *te
 			t.Errorf("label %s = %q, want %q (all=%v)", k, got[k], v, got)
 		}
 	}
-	// consumerGroup must NOT appear as a label (kept out of label set to bound cardinality)
 	if _, ok := got["consumerGroup"]; ok {
 		t.Error("consumerGroup must not be a label on outbox_consumer_rejected_total")
 	}
+	// Cardinality lock: exactly 3 labels {cell, topic, reason} — no extras allowed.
+	if len(got) != 3 {
+		t.Errorf("outbox_consumer_rejected_total must have exactly 3 labels, got %d: %v", len(got), got)
+	}
 }
 
-func TestOutboxConsumerCollector_ObserveReject_NilReceiverDoesNotPanic(t *testing.T) {
-	var c *obmetrics.OutboxConsumerCollector
-	// must not panic
-	c.ObserveReject("accesscore", "event.session.created.v1", "cg", "handler_reject")
+// TestOutboxRejectCollector_NilReceiver_DoesNotPanic verifies nil-safe call.
+func TestOutboxRejectCollector_NilReceiver_DoesNotPanic(t *testing.T) {
+	var c *obmetrics.OutboxRejectCollector
+	c.ObserveReject("cell", "topic", "cg", "handler_reject") // must not panic
 }
 
-func TestOutboxConsumerCollector_ObservePendingDepth_SetsGauge(t *testing.T) {
-	p := newOutboxSpyProvider()
-	c, err := obmetrics.NewOutboxConsumerCollector(p, "accesscore")
+// ---------------------------------------------------------------------------
+// OutboxPendingDepthCollector tests
+// ---------------------------------------------------------------------------
+
+// TestNewOutboxPendingDepthCollector_RequiresCellID verifies that empty cellID
+// returns an error (fail-fast at construction).
+func TestNewOutboxPendingDepthCollector_RequiresCellID(t *testing.T) {
+	_, err := obmetrics.NewOutboxPendingDepthCollector(kernelmetrics.NopProvider{}, "")
+	if err == nil {
+		t.Fatal("expected error for empty cellID, got nil — " +
+			"OutboxPendingDepthCollector must fail-fast on empty cellID")
+	}
+}
+
+// TestNewOutboxPendingDepthCollector_RejectsNilProvider verifies fail-fast on nil provider.
+func TestNewOutboxPendingDepthCollector_RejectsNilProvider(t *testing.T) {
+	_, err := obmetrics.NewOutboxPendingDepthCollector(nil, "configcore")
+	if err == nil {
+		t.Fatal("expected error for nil provider, got nil")
+	}
+}
+
+// TestNewOutboxPendingDepthCollector_Success verifies happy path.
+func TestNewOutboxPendingDepthCollector_Success(t *testing.T) {
+	c, err := obmetrics.NewOutboxPendingDepthCollector(kernelmetrics.NopProvider{}, "configcore")
 	if err != nil {
-		t.Fatalf("NewOutboxConsumerCollector: %v", err)
+		t.Fatalf("NewOutboxPendingDepthCollector: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected non-nil OutboxPendingDepthCollector")
+	}
+}
+
+// TestOutboxPendingDepthCollector_RegistersOnlyPendingDepthGauge asserts that the
+// collector registers outbox_pending_depth but NOT outbox_consumer_rejected_total.
+//
+// Wave 1 RED: the current stub wraps OutboxConsumerCollector which registers
+// BOTH metrics, so the "does NOT register outbox_consumer_rejected_total" assertion fails.
+func TestOutboxPendingDepthCollector_RegistersOnlyPendingDepthGauge(t *testing.T) {
+	p := newOutboxSpyProvider()
+	_, err := obmetrics.NewOutboxPendingDepthCollector(p, "configcore")
+	if err != nil {
+		t.Fatalf("NewOutboxPendingDepthCollector: %v", err)
+	}
+
+	if _, ok := p.gaugeNames["outbox_pending_depth"]; !ok {
+		t.Error("OutboxPendingDepthCollector must register outbox_pending_depth")
+	}
+	if _, ok := p.counterNames["outbox_consumer_rejected_total"]; ok {
+		t.Error("OutboxPendingDepthCollector must NOT register outbox_consumer_rejected_total — " +
+			"that belongs to OutboxRejectCollector (P1#2 split)")
+	}
+}
+
+// TestOutboxPendingDepthCollector_ObservePendingDepth_UsesConstructedCellID verifies
+// that ObservePendingDepth records with cell={constructed cellID}, NOT "_runtime".
+//
+// Wave 1 RED: the stub delegates to OutboxConsumerCollector("_stub"), so the
+// cell label will be "_stub" (or "_runtime" in the auto-wire path), not "configcore".
+func TestOutboxPendingDepthCollector_ObservePendingDepth_UsesConstructedCellID(t *testing.T) {
+	p := newOutboxSpyProvider()
+	c, err := obmetrics.NewOutboxPendingDepthCollector(p, "configcore")
+	if err != nil {
+		t.Fatalf("NewOutboxPendingDepthCollector: %v", err)
 	}
 
 	c.ObservePendingDepth(42)
@@ -88,34 +193,24 @@ func TestOutboxConsumerCollector_ObservePendingDepth_SetsGauge(t *testing.T) {
 	if ops[0].value != 42 {
 		t.Errorf("gauge value = %v, want 42", ops[0].value)
 	}
-	if ops[0].labels["cell"] != "accesscore" {
-		t.Errorf("cell label = %q, want %q", ops[0].labels["cell"], "accesscore")
+	// The cell label MUST be the cellID passed at construction ("configcore"),
+	// NOT the "_runtime" sentinel or the "_stub" placeholder used in the stub.
+	if ops[0].labels["cell"] != "configcore" {
+		t.Errorf("cell label = %q, want %q — OutboxPendingDepthCollector must use "+
+			"the constructed cellID, not a runtime sentinel",
+			ops[0].labels["cell"], "configcore")
 	}
 }
 
-func TestOutboxConsumerCollector_ObservePendingDepth_NilReceiverDoesNotPanic(t *testing.T) {
-	var c *obmetrics.OutboxConsumerCollector
-	c.ObservePendingDepth(7)
-}
-
-func TestNewOutboxConsumerCollector_RollbackOnPartialFailure(t *testing.T) {
-	// failAfterFirstGaugeProvider succeeds the CounterVec registration but
-	// fails the GaugeVec registration so we can assert that the first
-	// registration is rolled back (Unregister called).
-	p := &outboxPartialFailProvider{}
-	_, err := obmetrics.NewOutboxConsumerCollector(p, "accesscore")
-	if err == nil {
-		t.Fatal("expected error from partial failure, got nil")
-	}
-	if !p.unregisterCalled {
-		t.Error("expected Unregister to be called on rollback, but it was not")
-	}
+// TestOutboxPendingDepthCollector_NilReceiver_DoesNotPanic verifies nil-safe call.
+func TestOutboxPendingDepthCollector_NilReceiver_DoesNotPanic(t *testing.T) {
+	var c *obmetrics.OutboxPendingDepthCollector
+	c.ObservePendingDepth(7) // must not panic
 }
 
 // ---------------------------------------------------------------------------
-// outboxSpyProvider — tracks counter + gauge emissions for label assertions.
-// Independent of the spyProvider in provider_collector_test.go to avoid
-// coupling through the shared struct.
+// outboxSpyProvider — tracks counter + gauge registrations and emissions.
+// Independent of provider_collector_test.go to avoid coupling.
 // ---------------------------------------------------------------------------
 
 type outboxSpyRecord struct {
@@ -124,18 +219,23 @@ type outboxSpyRecord struct {
 }
 
 type outboxSpyProvider struct {
-	counterOps map[string][]outboxSpyRecord
-	gaugeOps   map[string][]outboxSpyRecord
+	counterNames map[string]struct{}
+	gaugeNames   map[string]struct{}
+	counterOps   map[string][]outboxSpyRecord
+	gaugeOps     map[string][]outboxSpyRecord
 }
 
 func newOutboxSpyProvider() *outboxSpyProvider {
 	return &outboxSpyProvider{
-		counterOps: map[string][]outboxSpyRecord{},
-		gaugeOps:   map[string][]outboxSpyRecord{},
+		counterNames: make(map[string]struct{}),
+		gaugeNames:   make(map[string]struct{}),
+		counterOps:   make(map[string][]outboxSpyRecord),
+		gaugeOps:     make(map[string][]outboxSpyRecord),
 	}
 }
 
 func (p *outboxSpyProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	p.counterNames[opts.Name] = struct{}{}
 	return &outboxSpyCounterVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
 }
 
@@ -144,6 +244,7 @@ func (p *outboxSpyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kern
 }
 
 func (p *outboxSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	p.gaugeNames[opts.Name] = struct{}{}
 	return &outboxSpyGaugeVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
 }
 
@@ -196,25 +297,3 @@ func (g *outboxSpyGauge) Set(v float64) {
 func (g *outboxSpyGauge) Inc()          { g.Add(1) }
 func (g *outboxSpyGauge) Dec()          { g.Add(-1) }
 func (g *outboxSpyGauge) Add(d float64) { g.Set(d) }
-
-// ---------------------------------------------------------------------------
-// outboxPartialFailProvider: succeeds CounterVec, fails GaugeVec, tracks Unregister.
-// ---------------------------------------------------------------------------
-
-type outboxPartialFailProvider struct {
-	kernelmetrics.NopProvider
-	unregisterCalled bool
-}
-
-func (p *outboxPartialFailProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
-	return &outboxSpyCounterVec{parent: newOutboxSpyProvider(), name: opts.Name, labelNames: opts.LabelNames}, nil
-}
-
-func (p *outboxPartialFailProvider) GaugeVec(_ kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
-	return nil, errors.New("gauge registration failed")
-}
-
-func (p *outboxPartialFailProvider) Unregister(_ kernelmetrics.Collector) error {
-	p.unregisterCalled = true
-	return nil
-}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -50,6 +51,44 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 	assert.Nil(t, result.PoolResource, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
 	assert.NotEmpty(t, result.CellOptions, "in-memory mode must return cell options (WithInMemoryDefaults)")
 	assert.Empty(t, result.BootstrapOpts, "in-memory mode must not return bootstrap opts (no relay)")
+}
+
+// TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape asserts that the postgres
+// path returns exactly one bootstrap.Option (the WithRelay option) and a non-nil
+// PoolResource, without any spurious WithManagedResource for the relay.
+//
+// This test requires a real PostgreSQL database with the configcore schema
+// applied; run with:
+//
+//	GOCELL_CONFIGCORE_DATABASE_URL=postgres://... \
+//	  go test -run TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape \
+//	  -tags=integration ./cmd/corebundle/...
+//
+// Without the integration tag the test is skipped via t.Skip so the standard
+// test suite (no DB required) stays green.
+func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
+	dsn := os.Getenv("GOCELL_CONFIGCORE_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("GOCELL_CONFIGCORE_DATABASE_URL not set; skipping PG integration test")
+	}
+
+	ctx := context.Background()
+	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
+	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         topo,
+		PGConfig:         adapterpg.Config{DSN: dsn},
+		Publisher:        discardPublisher{},
+		MetricsProvider:  metrics.NopProvider{},
+		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, result.PoolResource,
+		"postgres mode must return a non-nil PoolResource (PG pool)")
+	assert.Len(t, result.BootstrapOpts, 1,
+		"postgres mode must return exactly one bootstrap.Option (WithRelay) — "+
+			"no extra WithManagedResource; double-register triggers phase0 ErrBootstrapDoubleManaged")
 }
 
 // TestBuildConfigCoreOpts_UnknownMode_Error asserts that an unrecognized

@@ -6,6 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -47,7 +48,7 @@ func metricsWithClock(collector metrics.Collector, clk clock.Clock) func(http.Ha
 
 			next.ServeHTTP(w, r)
 
-			safeObserve(slog.Default(), func() {
+			observability.SafeObserve(slog.Default(), func() {
 				route := RouteFor(r.Context(), r.Method, r.URL.Path)
 				cellID := RuntimeCellIDSentinel
 				if v, ok := ctxkeys.CellIDFrom(r.Context()); ok && v != "" {

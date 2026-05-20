@@ -10,6 +10,7 @@ import (
 	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	pkgctxkeys "github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -62,7 +63,7 @@ func logAccessRequest(start time.Time, r *http.Request, state *RecorderState, cl
 	path := logutil.Sanitize(r.URL.Path)
 	route := RouteFor(r.Context(), r.Method, r.URL.Path)
 	ctx := r.Context()
-	safeObserve(slog.Default(), func() {
+	observability.SafeObserve(slog.Default(), func() {
 		slog.Info("http request", accessLogAttrs(start, method, path, route, state, ctx, clk)...)
 	})
 }

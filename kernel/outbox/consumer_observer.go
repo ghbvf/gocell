@@ -7,7 +7,7 @@ import (
 
 // ConsumerObserver receives notifications from ConsumerBase when a delivery
 // reaches a terminal Reject disposition. Implementations are provided by
-// runtime/observability/metrics (OutboxConsumerCollector) so kernel/outbox
+// runtime/observability/metrics (OutboxRejectCollector) so kernel/outbox
 // stays free of metric backend imports.
 //
 // ObserveReject is called exactly once per terminal Reject (handler-explicit
@@ -19,8 +19,12 @@ import (
 // provided here for slog/tracing dimensions but adding it as a Prometheus label
 // expands cardinality multiplicatively (every consumer group × topic × cell ×
 // reason combination becomes a unique time-series). See
-// runtime/observability/metrics.OutboxConsumerCollector for the sanctioned label
+// runtime/observability/metrics.OutboxRejectCollector for the sanctioned label
 // set {cell, topic, reason}.
+//
+// Note: PendingDepthObserver is a SEPARATE interface defined in runtime/outbox
+// (not here) covering the Relay path's pending-depth Gauge. The two interfaces
+// serve different subsystems and are wired independently.
 //
 // ref: kernel/outbox/relay_collector.go — RelayCollector is the analogous
 // interface for the Relay path; same kernel-defined-runtime-implemented
@@ -55,7 +59,10 @@ var ErrObserverAlreadyAttached = errcode.New(errcode.KindInvalid, errcode.ErrVal
 // provider is wired. ObserveReject is a no-op.
 type NopConsumerObserver struct{}
 
-// ObserveReject discards the observation.
+// ObserveReject is a no-op: NopConsumerObserver is the default observer when no
+// metrics collector is wired. Discarding the observation is deliberate — the
+// no-op exists so ConsumerBase can always call ObserveReject unconditionally
+// without a nil guard.
 func (NopConsumerObserver) ObserveReject(_, _, _, _ string) {}
 
 // compile-time interface check — fail at build if ConsumerObserver shape changes.
