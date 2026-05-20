@@ -753,45 +753,60 @@ func TestPlanAssemblyScaffold_ConflictDetection_AllSixSlots(t *testing.T) {
 		slotIdx := slotIdx
 		t.Run(rels[slotIdx], func(t *testing.T) {
 			t.Parallel()
-
-			root, pm := scaffoldTestProject(t)
-			gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
-
-			// 预置第 slotIdx 个文件
-			dir := filepath.Join(root, parentDirs[slotIdx])
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			name := filepath.Base(rels[slotIdx])
-			if err := os.WriteFile(filepath.Join(root, rels[slotIdx]), []byte("# preexisting\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			_ = name
-
-			plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
-				ID:        mustID(t, "slotasm"),
-				Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
-				OwnerTeam: "platform",
-				OwnerRole: "maintainer",
-			})
-			if err != nil {
-				t.Fatalf("PlanAssemblyScaffold: %v", err)
-			}
-			realRoot, _ := pathsafe.ResolveRoot(root)
-			writeErr := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
-			if writeErr == nil {
-				t.Fatal("expected conflict error, got nil")
-			}
-
-			// 其他 5 个 slot 不应存在
-			for otherIdx, otherRel := range rels {
-				if otherIdx == slotIdx {
-					continue // 预置的不检查
-				}
-				if _, statErr := os.Stat(filepath.Join(root, otherRel)); statErr == nil {
-					t.Errorf("slot %d conflict: file must not exist: %s", slotIdx, otherRel)
-				}
-			}
+			runSlotConflictSubtest(t, slotIdx, rels, parentDirs)
 		})
+	}
+}
+
+// runSlotConflictSubtest pre-places the file at rels[slotIdx], asserts that
+// WritePlannedFiles returns a conflict error, and verifies that none of the
+// other slots were written. Extracted from
+// TestPlanAssemblyScaffold_ConflictDetection_AllSixSlots to reduce that
+// function's cognitive complexity.
+func runSlotConflictSubtest(t *testing.T, slotIdx int, rels []string, parentDirs []string) {
+	t.Helper()
+
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+
+	// 预置第 slotIdx 个文件
+	dir := filepath.Join(root, parentDirs[slotIdx])
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, rels[slotIdx]), []byte("# preexisting\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := gen.PlanAssemblyScaffold(AssemblyScaffoldSpec{
+		ID:        mustID(t, "slotasm"),
+		Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
+		OwnerTeam: "platform",
+		OwnerRole: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("PlanAssemblyScaffold: %v", err)
+	}
+	realRoot, _ := pathsafe.ResolveRoot(root)
+	writeErr := pathsafe.WritePlannedFiles(realRoot, mustPlanSet(t, plan), false)
+	if writeErr == nil {
+		t.Fatal("expected conflict error, got nil")
+	}
+
+	// 其他 5 个 slot 不应存在
+	assertNoOtherSlots(t, root, slotIdx, rels)
+}
+
+// assertNoOtherSlots verifies that none of the slots other than slotIdx exist
+// in root after a failed write.
+func assertNoOtherSlots(t *testing.T, root string, slotIdx int, rels []string) {
+	t.Helper()
+	for otherIdx, otherRel := range rels {
+		if otherIdx == slotIdx {
+			continue // 预置的不检查
+		}
+		if _, statErr := os.Stat(filepath.Join(root, otherRel)); statErr == nil {
+			t.Errorf("slot %d conflict: file must not exist: %s", slotIdx, otherRel)
+		}
 	}
 }

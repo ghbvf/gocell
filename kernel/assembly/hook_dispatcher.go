@@ -173,7 +173,7 @@ func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 // defer overhead because runtime channel sends never panic in that case.
 func (d *hookDispatcher) emit(e cell.HookEvent) {
 	defer func() {
-		if r := recover(); r != nil {
+		if recover() != nil {
 			// Send on closed channel after stop(). Count as queue_full
 			// because from the emitter's perspective the queue is
 			// unavailable.
@@ -199,7 +199,7 @@ func (d *hookDispatcher) emit(e cell.HookEvent) {
 // observer state.
 func (d *hookDispatcher) flush(timeout time.Duration) (ok bool) {
 	defer func() {
-		if r := recover(); r != nil {
+		if recover() != nil {
 			// Same recovery as emit: sending on a closed channel means the
 			// dispatcher has already stopped accepting events. A post-stop
 			// flush is therefore a no-op success for callers that only need

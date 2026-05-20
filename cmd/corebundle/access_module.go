@@ -140,36 +140,11 @@ func (m AccessCoreModule) Provide(
 		accesscore.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
 		accesscore.WithCASProtocol(casProto),
 	}
-	var innerSessionStore session.Store
-	if shared.Topology.StorageBackend == "postgres" {
-		pgOpts, pgSessionStore, err := accessPostgresOptions(shared, sessionProto)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		innerSessionStore = pgSessionStore
-		accessOpts = append(accessOpts, pgOpts...)
-	} else {
-		// mem mode: WithMemBundle yields a (UserRepository, RoleRepository,
-		// SetupLock, store-paired TxRunner) quadruple all derived from the
-		// same backing mem.Store. The Bundle funnel makes mis-pairing (e.g.
-		// non-store-paired TxRunner) inexpressible at compile time and
-		// guarantees the cross-repo effective-admin invariant (S4.0) +
-		// store.mu serialization of concurrent first-admin provisioning.
-		sessionMemStore, err := session.NewMemStore(sessionProto, shared.Clock)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("accesscore: session.NewMemStore: %w", err)
-		}
-		refreshMemStore, err := refreshmem.New(accesscore.DefaultRefreshPolicy(), shared.Clock, nil)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("accesscore: refreshmem.New: %w", err)
-		}
-		innerSessionStore = sessionMemStore
-		accessOpts = append(
-			accessOpts,
-			accesscore.WithMemBundle(accessmem.NewBundle(shared.Clock)),
-			accesscore.WithRefreshStore(refreshMemStore),
-		)
+	innerSessionStore, storageOpts, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
+	if err != nil {
+		return nil, nil, nil, err
 	}
+	accessOpts = storageOpts
 	// AUTH-CACHE-01 (T5): wrap the session store with a Redis read-through
 	// cache when env knob + Redis client are both present. Default-off — env
 	// unset / empty / non-positive / un-parseable Duration / nil Redis client
@@ -276,6 +251,43 @@ func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) (
 		)
 	}
 	return accessOpts, pgSessionStore, nil
+}
+
+// resolveAccessStorageOpts selects postgres or memory storage options for
+// accesscore and returns the inner session.Store together with the updated
+// option slice. It is extracted from AccessCoreModule.Provide to keep that
+// function's cognitive complexity within the project limit.
+func resolveAccessStorageOpts(
+	shared *SharedDeps,
+	sessionProto *session.Protocol,
+	base []accesscore.Option,
+) (session.Store, []accesscore.Option, error) {
+	if shared.Topology.StorageBackend == "postgres" {
+		pgOpts, pgSessionStore, err := accessPostgresOptions(shared, sessionProto)
+		if err != nil {
+			return nil, nil, err
+		}
+		return pgSessionStore, append(base, pgOpts...), nil
+	}
+	// mem mode: WithMemBundle yields a (UserRepository, RoleRepository,
+	// SetupLock, store-paired TxRunner) quadruple all derived from the
+	// same backing mem.Store. The Bundle funnel makes mis-pairing (e.g.
+	// non-store-paired TxRunner) inexpressible at compile time and
+	// guarantees the cross-repo effective-admin invariant (S4.0) +
+	// store.mu serialization of concurrent first-admin provisioning.
+	sessionMemStore, err := session.NewMemStore(sessionProto, shared.Clock)
+	if err != nil {
+		return nil, nil, fmt.Errorf("accesscore: session.NewMemStore: %w", err)
+	}
+	refreshMemStore, err := refreshmem.New(accesscore.DefaultRefreshPolicy(), shared.Clock, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("accesscore: refreshmem.New: %w", err)
+	}
+	base = append(base,
+		accesscore.WithMemBundle(accessmem.NewBundle(shared.Clock)),
+		accesscore.WithRefreshStore(refreshMemStore),
+	)
+	return sessionMemStore, base, nil
 }
 
 // wrapSessionStoreWithCache decides whether to wrap inner with the

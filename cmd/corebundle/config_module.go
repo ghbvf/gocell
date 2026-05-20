@@ -50,8 +50,6 @@ var configStaleCipherOpts = prom.CounterOpts{
 // provisional resources that BuildApp must close if a subsequent module's
 // Provide fails. It reads configcore-specific environment variables directly
 // via the LoadPGConfig / LoadCursorKeys / LoadConfigCoreKeyProvider helpers.
-//
-//nolint:gocognit // B2-K-02: 16/15 — 7 linear if-err per-step env / pool / counter setup; split adds no readability gain.
 func (m ConfigCoreModule) Provide(
 	ctx context.Context, shared *SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
@@ -71,16 +69,9 @@ func (m ConfigCoreModule) Provide(
 	}
 
 	// 2. KeyProvider: read configcore-namespaced env (or use test override).
-	kp := m.KeyProviderOverride
-	if kp == nil {
-		providerName, masterKey, prevMasterKey := LoadConfigCoreKeyProvider()
-		kp, err = buildKeyProvider(
-			shared.Topology.StorageBackend, shared.Topology.AdapterMode,
-			providerName, masterKey, prevMasterKey, shared.Clock,
-		)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("configcore key provider: %w", err)
-		}
+	kp, err := resolveConfigKeyProvider(m.KeyProviderOverride, shared)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	vt := keyProviderToTransformer(kp)
 
@@ -113,23 +104,7 @@ func (m ConfigCoreModule) Provide(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	pgRes := modResult.PoolResource
-	cellOpts := modResult.CellOptions
-	relayOpts := modResult.BootstrapOpts
-	var opts []bootstrap.Option
-	var provisional []kernellifecycle.ManagedResource
-	if pgRes != nil {
-		opts = append(opts, bootstrap.WithManagedResource(pgRes))
-		provisional = append(provisional, pgRes)
-	}
-	rollback := func() {
-		for _, v := range slices.Backward(provisional) {
-			if closeErr := v.Close(ctx); closeErr != nil {
-				slog.Warn("configcore: provisional rollback close failed",
-					slog.Any("error", closeErr))
-			}
-		}
-	}
+
 	// Expose the pool through SharedDeps so AccessCoreModule + AuditCoreModule
 	// can wire their own outbox.Writer + TxManager from the same pool in
 	// postgres mode. In memory mode modResult.PGPool is nil — SharedPGPool
@@ -142,6 +117,7 @@ func (m ConfigCoreModule) Provide(
 	// constructor (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces this).
 	casProto, err := newConfigCoreCASProtocol()
 	if err != nil {
+		shared.SharedPGPool = nil
 		return nil, nil, nil, err
 	}
 
@@ -155,7 +131,53 @@ func (m ConfigCoreModule) Provide(
 		configcore.WithEventbusCacheCollector(shared.EventbusCacheCollector),
 		configcore.WithCASProtocol(casProto),
 	}
-	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...) //archtest:allow:clock-injection:via-slice WithClock in baseOpts
+	baseOpts = append(baseOpts, modResult.CellOptions...) //archtest:allow:clock-injection:via-slice WithClock in baseOpts
+	c := configcore.NewConfigCore(baseOpts...)
+
+	return buildConfigCoreResult(ctx, c, kp, shared, modResult)
+}
+
+// resolveConfigKeyProvider returns m.KeyProviderOverride when set, otherwise
+// builds the key provider from the environment. Extracted to reduce Provide's
+// cognitive complexity.
+func resolveConfigKeyProvider(override kcrypto.KeyProvider, shared *SharedDeps) (kcrypto.KeyProvider, error) {
+	if override != nil {
+		return override, nil
+	}
+	providerName, masterKey, prevMasterKey := LoadConfigCoreKeyProvider()
+	kp, err := buildKeyProvider(
+		shared.Topology.StorageBackend, shared.Topology.AdapterMode,
+		providerName, masterKey, prevMasterKey, shared.Clock,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("configcore key provider: %w", err)
+	}
+	return kp, nil
+}
+
+// buildConfigCoreResult wires the provisional resources, relay opts, and
+// key-provider managed resource, then registers Vault diagnostics. It is
+// extracted from Provide to keep that function's cognitive complexity within
+// the project limit.
+func buildConfigCoreResult(
+	ctx context.Context,
+	c cell.Cell,
+	kp kcrypto.KeyProvider,
+	shared *SharedDeps,
+	modResult ConfigCoreModuleResult,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	var opts []bootstrap.Option
+	var provisional []kernellifecycle.ManagedResource
+
+	if modResult.PoolResource != nil {
+		opts = append(opts, bootstrap.WithManagedResource(modResult.PoolResource))
+		provisional = append(provisional, modResult.PoolResource)
+	}
+
+	// rollback is only invoked before kpRes append; if reordered, capture provisional through a function arg.
+	rollback := func() {
+		closeProvisional(ctx, provisional)
+	}
 
 	// Register Vault diagnostics when the KeyProvider exposes them.
 	if err := registerKeyProviderMetrics(kp, shared); err != nil {
@@ -166,7 +188,8 @@ func (m ConfigCoreModule) Provide(
 
 	// Relay opts: in postgres mode, relayOpts contains WithManagedResource(relay)
 	// so the relay worker is independently managed by bootstrap (Worker/Close/Checkers).
-	opts = append(opts, relayOpts...)
+	opts = append(opts, modResult.BootstrapOpts...)
+
 	// A19: when the KeyProvider opts into lifecycle.ManagedResource (today:
 	// vault-transit via TransitKeyProvider.Checkers()["vault_transit_ready"]),
 	// register it with bootstrap so its probes flow into /readyz. Local-aes
@@ -178,6 +201,16 @@ func (m ConfigCoreModule) Provide(
 		provisional = append(provisional, kpRes)
 	}
 	return c, opts, provisional, nil
+}
+
+// closeProvisional closes managed resources in LIFO order, logging failures.
+func closeProvisional(ctx context.Context, resources []kernellifecycle.ManagedResource) {
+	for _, v := range slices.Backward(resources) {
+		if closeErr := v.Close(ctx); closeErr != nil {
+			slog.Warn("configcore: provisional rollback close failed",
+				slog.Any("error", closeErr))
+		}
+	}
 }
 
 var _ CellModule = ConfigCoreModule{}

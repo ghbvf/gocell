@@ -586,29 +586,41 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 // classifyBoundary categorizes a single contract as exported, imported, or internal
 // relative to the assembly cell set.
 func classifyBoundary(contractID, provider string, consumers []string, cellSet, exportedSet, importedSet map[string]bool) {
-	providerInAssembly := cellSet[provider]
-
-	if providerInAssembly {
-		if len(consumers) == 0 {
+	if cellSet[provider] {
+		if isExportedContract(consumers, cellSet) {
 			exportedSet[contractID] = true
-		} else {
-			for _, c := range consumers {
-				if !cellSet[c] {
-					exportedSet[contractID] = true
-					break
-				}
-			}
+		}
+	} else {
+		if hasInternalConsumer(consumers, cellSet) {
+			importedSet[contractID] = true
 		}
 	}
+}
 
-	if !providerInAssembly {
-		for _, c := range consumers {
-			if cellSet[c] {
-				importedSet[contractID] = true
-				break
-			}
+// isExportedContract reports whether a provider-in-assembly contract is
+// exported: it has no consumers, or at least one consumer is outside the
+// assembly.
+func isExportedContract(consumers []string, cellSet map[string]bool) bool {
+	if len(consumers) == 0 {
+		return true
+	}
+	for _, c := range consumers {
+		if !cellSet[c] {
+			return true
 		}
 	}
+	return false
+}
+
+// hasInternalConsumer reports whether at least one consumer of a
+// provider-outside-assembly contract belongs to the assembly.
+func hasInternalConsumer(consumers []string, cellSet map[string]bool) bool {
+	for _, c := range consumers {
+		if cellSet[c] {
+			return true
+		}
+	}
+	return false
 }
 
 // collectSmokeTargets gathers all verify.smoke entries from cells in the assembly.
