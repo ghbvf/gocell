@@ -358,3 +358,27 @@ PR #604 review 后 3 个 reviewer agent 出 33 条 findings：
 ### Commit
 
 `a17a00ca6` — Phase 5 review fix（~30 处行编辑：21 空 P 补齐 + 4 P1 假阳降级 + 3 STALE/路径漂移 + 1 commit hash 补全 + 1 LOG Phase 5 段落）
+
+---
+
+## Phase 6 — develop 增量关闭回灌 (2026-05-20)
+
+PR 604 基线（`7f886a621`）之后 develop 上 11 个 PR 已 merge，其中 7 个落地了 OPEN backlog 条目，回灌为 ✅。基线合并已写入 merge commit `154f4e631`（B2-PROVISIONER-MUTEX-REVIEW + ADMINPROVISION-SETUPLOCK + PR392-FU-AUDIT-CHAIN-WIRING 三条由 develop 侧带入），本阶段补齐剩余 7 条：
+
+| ID | PR | 落地证据 |
+|---|---|---|
+| R-02 | #599 | `runtime/eventbus/eventbus.go` broadcast/roundRobin drop → Error 级 + 三字段 |
+| B2-T-08 | #598 | `contracts/http/config/publish/v1/contract.yaml` + handler 补 404 失败码声明 |
+| PR341-FU-OUTBOXTEST-CLOSE-BUDGET-COVERAGE | #596 | `kernel/outbox/outboxtest/{conformance,helpers,doc}.go` route Close 全部走 closeWithBudget |
+| C-06 | #602 | `docs/architecture/{consistency,glossary}.md` 选 option (b) 明确 L0 cell 为未来扩展点 |
+| F-04 | #600 | `cmd/CLAUDE.md` 文首 gocell CLI vs corebundle 对照段 |
+| F-05 | #601 | `.github/workflows/qodana_code_quality.yml` 选 option (a) 头部注释差异化覆盖说明 |
+| B2-X-01 | #597 | `cmd/corebundle/outbox_e2e_integration_test.go` 固定 sleep → deterministic subscribe-ready wait |
+
+### 未关闭但 OPEN-tracking 状态变化
+
+无——其余 PR (#593 / #594 / #592 / #605) 不直接关闭已有 OPEN 条目；#593 + #594 review fix-up 在 develop 侧新增的 follow-up 已通过基线合并自动并入（`docs/backlog/202605191800-pr589-review-fixup-backlog.md` + cap-13 SSOBFF/PII/observer-ops 三条 + cap-14 TEST-EVENTUALLY-FUNNEL-01）。
+
+### Commit
+
+本 Phase commit（Phase 6 关闭回灌：4 文件 — 7 条 backlog ✅ + 本段记录）。基线合并见 `154f4e631`。
