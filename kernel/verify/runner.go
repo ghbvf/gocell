@@ -42,6 +42,11 @@ const (
 	ModeManual = "manual"
 )
 
+// fmtSlicePkgPath is the format string for constructing a Go package path
+// relative to the module root when resolving a slice's test package.
+// Used in resolveSlicePkg; extracted as a const to satisfy go:S1192.
+const fmtSlicePkgPath = "./%s/%s/..."
+
 // Runner executes metadata-driven verification tests.
 type Runner struct {
 	project   *metadata.ProjectMeta
@@ -419,17 +424,17 @@ func resolveSlicePkg(root, cellID, sliceID string) string {
 	// Prefer the dir that actually contains Go files.
 	stripped := strings.ReplaceAll(sliceID, "-", "")
 	if hasGoFiles(filepath.Join(root, base, stripped)) {
-		return fmt.Sprintf("./%s/%s/...", base, stripped)
+		return fmt.Sprintf(fmtSlicePkgPath, base, stripped)
 	}
 	if hasGoFiles(filepath.Join(root, base, sliceID)) {
-		return fmt.Sprintf("./%s/%s/...", base, sliceID)
+		return fmt.Sprintf(fmtSlicePkgPath, base, sliceID)
 	}
 	// Fallback: try stripped dir existence (may have Go files in subdirs).
 	if dirExists(filepath.Join(root, base, stripped)) {
-		return fmt.Sprintf("./%s/%s/...", base, stripped)
+		return fmt.Sprintf(fmtSlicePkgPath, base, stripped)
 	}
 	// Last resort: metadata-style path (go test will give clear error).
-	return fmt.Sprintf("./%s/%s/...", base, sliceID)
+	return fmt.Sprintf(fmtSlicePkgPath, base, sliceID)
 }
 
 func dirExists(path string) bool {
