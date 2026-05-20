@@ -1,0 +1,1 @@
+tools/archtest/testdata/testwait_external_fixtures/reason_format_invalid_red/usage.go:16: testwait.External reason must be kebab-case identifier (got: "Bad_Reason")
