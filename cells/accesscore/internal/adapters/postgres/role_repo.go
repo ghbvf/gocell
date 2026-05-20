@@ -58,6 +58,10 @@ func NewPGRoleRepo(
 	}, nil
 }
 
+// fmtRoleIDUserID is the internal-message format string for role/user pair
+// diagnostics. Used in RemoveFromUser and RemoveFromUserIfNotLast (3 sites).
+const fmtRoleIDUserID = "role_id=%q user_id=%q"
+
 const (
 	upsertRoleSQL = `
 INSERT INTO roles (id, name, permissions, created_at)
@@ -292,7 +296,7 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) 
 		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",
-				errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
+				errcode.WithInternal(fmt.Sprintf(fmtRoleIDUserID, roleID, userID)))
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: remove-from-user", err)
 	}
@@ -348,7 +352,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
 			return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",
-				errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
+				errcode.WithInternal(fmt.Sprintf(fmtRoleIDUserID, roleID, userID)))
 		}
 		return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"role_repo: remove-if-not-last", err)
@@ -367,7 +371,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 		// as the DB trigger path — single business invariant.
 		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 			"cannot revoke admin: removing this assignment would leave the system with no effective admin; assign admin to an active user first",
-			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
+			errcode.WithInternal(fmt.Sprintf(fmtRoleIDUserID, roleID, userID)))
 	}
 }
 
