@@ -16,12 +16,16 @@ import (
 type lockID = uint64
 
 // lockState holds the runtime state for a single active lock.
+//
+// All fields except lock are read-only after construction; lock is the
+// public-facing *Lock handle and the manager invokes lock.markCause(...)
+// to signal lock-end events (release, lost, shutdown).
 type lockState struct {
-	id     lockID
-	key    string
-	token  string
-	ttl    time.Duration
-	cancel context.CancelCauseFunc
+	id    lockID
+	key   string
+	token string
+	ttl   time.Duration
+	lock  *Lock
 }
 
 // heapItem is an element of the renewal min-heap ordered by nextRenew time.
@@ -385,7 +389,7 @@ func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*hea
 				"key", state.key,
 				"op", "Renew",
 				"ttl", state.ttl)
-			state.cancel(ErrLockLost)
+			state.lock.markCause(ErrLockLost)
 			delete(locks, item.id)
 			m.mu.Lock()
 			m.snapshotLocks = len(locks)
@@ -425,7 +429,7 @@ func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*hea
 		"ttl", state.ttl,
 		"attempts", maxAttempts,
 		"error", lastErr)
-	state.cancel(ErrLockLost)
+	state.lock.markCause(ErrLockLost)
 	delete(locks, item.id)
 	m.mu.Lock()
 	m.snapshotLocks = len(locks)
@@ -447,7 +451,7 @@ func (m *Manager) handleRemove(ev managerEvent, locks map[lockID]*lockState, ite
 		m.mu.Lock()
 		m.snapshotLocks = len(locks)
 		m.mu.Unlock()
-		state.cancel(ErrLockReleased)
+		state.lock.markCause(ErrLockReleased)
 	}
 
 	if ok {

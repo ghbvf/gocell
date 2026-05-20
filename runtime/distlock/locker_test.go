@@ -121,7 +121,7 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 	l := newTestLocker(fc, fd)
 
 	ttl := testtime.D10s
-	lockCtx, release, err := l.Acquire(context.Background(), "key1", ttl)
+	lock, err := l.Acquire(context.Background(), "key1", ttl)
 	if err != nil {
 		t.Fatalf("TC-1 Acquire: %v", err)
 	}
@@ -140,17 +140,17 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 		t.Errorf("TC-1: expected at least 1 Renew call, got %d", fd.Calls("Renew"))
 	}
 
-	if err := release(); err != nil {
-		t.Errorf("TC-1: release() returned unexpected error: %v", err)
+	if err := lock.Release(); err != nil {
+		t.Errorf("TC-1: lock.Release() returned unexpected error: %v", err)
 	}
 
 	select {
-	case <-lockCtx.Done():
+	case <-lock.Done():
 	case <-time.After(testTimeout):
-		t.Fatal("TC-1: lockCtx should be Done after release()")
+		t.Fatal("TC-1: lock should be Done after lock.Release()")
 	}
 
-	cause := context.Cause(lockCtx)
+	cause := lock.Cause()
 	assertSameErrorIdentity(t, cause, distlock.ErrLockReleased, "TC-1 cause")
 }
 
@@ -163,12 +163,12 @@ func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
 	ttl := testtime.D10s
 	renewAt := time.Duration(float64(ttl) * 0.5)
 
-	_, release, err := l.Acquire(context.Background(), "key2", ttl)
+	lock, err := l.Acquire(context.Background(), "key2", ttl)
 	if err != nil {
 		t.Fatalf("TC-2 Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -192,7 +192,7 @@ func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
 	}
 }
 
-// TC-3: RenewError exhausts retry budget → lockCtx canceled with ErrLockLost.
+// TC-3: RenewError exhausts retry budget → lock canceled with ErrLockLost.
 // Also verifies sibling-lock isolation: after key3a is lost, key3b continues
 // to be renewed independently.
 //
@@ -209,23 +209,23 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 
 	ttl := testtime.D10s
 
-	lockCtx1, release1, err := l.Acquire(context.Background(), "key3a", ttl)
+	lock1, err := l.Acquire(context.Background(), "key3a", ttl)
 	if err != nil {
 		t.Fatalf("TC-3 Acquire key3a: %v", err)
 	}
 	defer func() {
-		if err := release1(); err != nil {
+		if err := lock1.Release(); err != nil {
 			t.Logf("release1: %v", err)
 		}
 	}()
 
 	// Acquire key3b before advancing so both locks are in the manager heap.
-	_, release2, err := l.Acquire(context.Background(), "key3b", ttl)
+	lock2, err := l.Acquire(context.Background(), "key3b", ttl)
 	if err != nil {
 		t.Fatalf("TC-3 Acquire key3b: %v", err)
 	}
 	defer func() {
-		if err := release2(); err != nil {
+		if err := lock2.Release(); err != nil {
 			t.Logf("release2: %v", err)
 		}
 	}()
@@ -256,14 +256,14 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	// Advance to trigger the first renew (key3a, earlier in heap).
 	fc.Advance(time.Duration(float64(ttl) * 0.5))
 
-	// lockCtx1 should be canceled with ErrLockLost.
+	// lock1 should be canceled with ErrLockLost.
 	select {
-	case <-lockCtx1.Done():
+	case <-lock1.Done():
 	case <-time.After(testTimeout):
-		t.Fatal("TC-3: lockCtx1 should be Done after renew error budget exhausted")
+		t.Fatal("TC-3: lock1 should be Done after renew error budget exhausted")
 	}
 
-	cause := context.Cause(lockCtx1)
+	cause := lock1.Cause()
 	assertSameErrorIdentity(t, cause, distlock.ErrLockLost, "TC-3 cause")
 
 	// Sibling isolation: advance past key3b's next renewal window and verify
@@ -282,7 +282,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	}
 }
 
-// TC-4: NextRenewHeld=false → lockCtx canceled with ErrLockLost.
+// TC-4: NextRenewHeld=false → lock canceled with ErrLockLost.
 // Distinct from TC-3 (error vs held=false).
 func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 	fc := clockmock.New(time.Time{})
@@ -291,12 +291,12 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 
 	ttl := testtime.D10s
 
-	lockCtx, release, err := l.Acquire(context.Background(), "key4", ttl)
+	lock, err := l.Acquire(context.Background(), "key4", ttl)
 	if err != nil {
 		t.Fatalf("TC-4 Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -308,12 +308,12 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 	fc.Advance(time.Duration(float64(ttl) * 0.5))
 
 	select {
-	case <-lockCtx.Done():
+	case <-lock.Done():
 	case <-time.After(testTimeout):
-		t.Fatal("TC-4: lockCtx should be Done when held=false")
+		t.Fatal("TC-4: lock should be Done when held=false")
 	}
 
-	assertSameErrorIdentity(t, context.Cause(lockCtx), distlock.ErrLockLost, "TC-4 cause")
+	assertSameErrorIdentity(t, lock.Cause(), distlock.ErrLockLost, "TC-4 cause")
 
 	// Lock should be removed from heap snapshot.
 	snap := mgr(l).Snapshot()
@@ -322,14 +322,20 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 	}
 }
 
-// TC-5: Parent ctx cancel → lockCtx.Done(), Cause == parentErr.
-// release() is still callable without panic.
+// TC-5: Parent ctx cancel does NOT release a held lock.
+//
+// Under the Lock-as-Resource contract (ADR
+// docs/architecture/202605200000-adr-distlock-lock-as-resource.md, GH #20),
+// caller-ctx cancellation is scoped to the Acquire RPC only. Once held, the
+// lock lifecycle is independent — only Release(), renewal failure, or
+// manager shutdown ends it.
 //
 // Sub-cases:
-//   - TC-5a: plain context.WithCancel → Cause == context.Canceled
-//   - TC-5b: context.WithCancelCause with custom cause → Cause propagated exactly
-func TestLocker_TC5_ParentCancel(t *testing.T) {
-	t.Run("TC5a_PlainCancel", func(t *testing.T) {
+//   - TC5a_HeldThroughCancel: parent cancel; Renew keeps firing; lock.Done not closed.
+//   - TC5b_ValuesPropagateButCancelDoesNot: values flow into lock.Value; cancel
+//     does not affect lock.
+func TestLocker_TC5_ParentCancelDoesNotReleaseLock(t *testing.T) {
+	t.Run("TC5a_HeldThroughCancel", func(t *testing.T) {
 		fc := clockmock.New(time.Time{})
 		fd := locktest.NewFakeDriver()
 		l := newTestLocker(fc, fd)
@@ -338,63 +344,98 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 
 		parentCtx, parentCancel := context.WithCancel(context.Background())
 
-		lockCtx, release, err := l.Acquire(parentCtx, "key5a", ttl)
+		lock, err := l.Acquire(parentCtx, "key5a", ttl)
 		if err != nil {
 			t.Fatalf("TC-5a Acquire: %v", err)
 		}
 
 		<-mgr(l).Started()
+		waitPendingTimers(t, fc)
+
+		renewBefore := fd.Calls("Renew")
+		releaseBefore := fd.Calls("Release")
+
 		parentCancel()
 
+		// Give the manager a moment to (incorrectly) react to the cancellation.
+		// Under the new contract it must NOT react.
+		runtime.Gosched()
+
+		// Advance the fake clock to trigger the next renewal tick. The renewal
+		// must still fire — the lock is held independently of parent ctx.
+		fc.Advance(lockerTTLHalf)
+		waitForRenewL(t, l, fd, renewBefore+1)
+
+		if fd.Calls("Renew") < renewBefore+1 {
+			t.Errorf("TC-5a: renewal did not fire after parent cancel; before=%d after=%d",
+				renewBefore, fd.Calls("Renew"))
+		}
+		if fd.Calls("Release") != releaseBefore {
+			t.Errorf("TC-5a: Driver.Release fired on parent cancel; before=%d after=%d",
+				releaseBefore, fd.Calls("Release"))
+		}
 		select {
-		case <-lockCtx.Done():
+		case <-lock.Done():
+			t.Fatalf("TC-5a: lock.Done() should NOT be closed by parent cancel; got Cause=%v", lock.Cause())
+		default:
+		}
+		if cause := lock.Cause(); cause != nil {
+			t.Errorf("TC-5a: lock.Cause() should be nil while held; got %v", cause)
+		}
+
+		// Explicit Release ends the lock.
+		if err := lock.Release(); err != nil {
+			t.Errorf("TC-5a: lock.Release() returned unexpected error: %v", err)
+		}
+		select {
+		case <-lock.Done():
 		case <-time.After(testTimeout):
-			t.Fatal("TC-5a: lockCtx should be Done after parent cancel")
+			t.Fatal("TC-5a: lock.Done() should close after explicit Release()")
 		}
-
-		// Cause should propagate parent's cause (context.Canceled for plain cancel).
-		cause := context.Cause(lockCtx)
-		assertSameErrorIdentity(t, cause, context.Canceled, "TC-5a cause")
-
-		// release() should not panic (error is intentionally discarded after context cancel).
-		if err := release(); err != nil {
-			t.Logf("release after cancel: %v", err)
-		}
+		assertSameErrorIdentity(t, lock.Cause(), distlock.ErrLockReleased, "TC-5a cause after release")
 	})
 
-	t.Run("TC5b_CustomCausePropagation", func(t *testing.T) {
+	t.Run("TC5b_ValuesPropagateButCancelDoesNot", func(t *testing.T) {
 		fc := clockmock.New(time.Time{})
 		fd := locktest.NewFakeDriver()
 		l := newTestLocker(fc, fd)
 
-		ttl := testtime.D10s
+		type ctxKey struct{ name string }
+		key := ctxKey{"trace-id"}
+		val := "trace-xyz-789"
 
-		customErr := errors.New("custom-parent-cause")
-		parentCtx, parentCancelCause := context.WithCancelCause(context.Background())
+		parentCtx, parentCancel := context.WithCancel(context.WithValue(context.Background(), key, val))
 
-		lockCtx, release, err := l.Acquire(parentCtx, "key5b", ttl)
+		lock, err := l.Acquire(parentCtx, "key5b", testtime.D10s)
 		if err != nil {
 			t.Fatalf("TC-5b Acquire: %v", err)
 		}
+		defer func() {
+			if err := lock.Release(); err != nil {
+				t.Logf("release: %v", err)
+			}
+		}()
 
 		<-mgr(l).Started()
-		parentCancelCause(customErr)
 
-		select {
-		case <-lockCtx.Done():
-		case <-time.After(testTimeout):
-			t.Fatal("TC-5b: lockCtx should be Done after parent cancel with custom cause")
+		// Value visible before cancel.
+		if got := lock.Value(key); got != val {
+			t.Errorf("TC-5b: lock.Value(key) before cancel = %v, want %v", got, val)
 		}
 
-		// context.Cause(lockCtx) must equal context.Cause(parentCtx) == customErr.
-		cause := context.Cause(lockCtx)
-		parentCause := context.Cause(parentCtx)
-		assertSameErrorIdentity(t, cause, parentCause, "TC-5b parent cause")
-		assertSameErrorIdentity(t, cause, customErr, "TC-5b custom cause")
+		parentCancel()
 
-		// release() should not panic (error is intentionally discarded after context cancel).
-		if err := release(); err != nil {
-			t.Logf("release after cancel: %v", err)
+		// Value still visible after cancel — context.WithoutCancel shields the
+		// lock from caller-ctx cancellation while preserving values.
+		if got := lock.Value(key); got != val {
+			t.Errorf("TC-5b: lock.Value(key) after cancel = %v, want %v", got, val)
+		}
+
+		// lock.Done() is NOT closed.
+		select {
+		case <-lock.Done():
+			t.Fatalf("TC-5b: lock.Done() should NOT be closed by parent cancel; got Cause=%v", lock.Cause())
+		default:
 		}
 	})
 }
@@ -407,18 +448,18 @@ func TestLocker_TC6_DoubleRelease(t *testing.T) {
 
 	ttl := testtime.D10s
 
-	_, release, err := l.Acquire(context.Background(), "key6", ttl)
+	lock, err := l.Acquire(context.Background(), "key6", ttl)
 	if err != nil {
 		t.Fatalf("TC-6 Acquire: %v", err)
 	}
 
 	<-mgr(l).Started()
 
-	if err := release(); err != nil {
-		t.Errorf("TC-6: first release() returned unexpected error: %v", err)
+	if err := lock.Release(); err != nil {
+		t.Errorf("TC-6: first lock.Release() returned unexpected error: %v", err)
 	}
-	if err := release(); err != nil { // second call — must not panic, must return nil (idempotent)
-		t.Errorf("TC-6: second release() should return nil (idempotent), got: %v", err)
+	if err := lock.Release(); err != nil { // second call — must not panic, must return nil (idempotent)
+		t.Errorf("TC-6: second lock.Release() should return nil (idempotent), got: %v", err)
 	}
 
 	// Wait for manager to drain.
@@ -443,12 +484,12 @@ func TestLocker_TC7_AcquireBusy(t *testing.T) {
 
 	ttl := testtime.D10s
 
-	lockCtx, _, err := l.Acquire(context.Background(), "key7", ttl)
+	lock, err := l.Acquire(context.Background(), "key7", ttl)
 	if err == nil {
 		t.Fatal("TC-7: expected error when SetNX returns false")
 	}
-	if lockCtx != nil {
-		t.Error("TC-7: lockCtx should be nil on error")
+	if lock != nil {
+		t.Error("TC-7: lock should be nil on error")
 	}
 
 	// Manager should not have been started (Snapshot.Locks == 0).
@@ -458,7 +499,7 @@ func TestLocker_TC7_AcquireBusy(t *testing.T) {
 	}
 }
 
-// TC-8: Pre-canceled ctx → Acquire returns ctx.Err() without calling SetNX.
+// TC-8: Pre-canceled ctx → Acquire returns wrapped ctx.Err() without calling SetNX.
 func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
@@ -467,9 +508,12 @@ func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := l.Acquire(canceledCtx, "key8", testtime.D10s)
+	_, err := l.Acquire(canceledCtx, "key8", testtime.D10s)
 	if err == nil {
 		t.Fatal("TC-8: expected error for pre-canceled ctx")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("TC-8: expected wrapped context.Canceled, got %v", err)
 	}
 	if fd.Calls("SetNX") != 0 {
 		t.Errorf("TC-8: SetNX should not be called for pre-canceled ctx, got %d calls", fd.Calls("SetNX"))
@@ -479,8 +523,8 @@ func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
 // TC-9: 100 concurrent Acquire → goroutine count == 1 (manager only) above baseline.
 //
 // Resource model: 1 manager goroutine for all N held locks (0 per-lock goroutines).
-// lockCtx is derived from ctx, so parent cancellation propagates via stdlib
-// context machinery — no watcher goroutines are needed.
+// *Lock is a value handle; lock-end is signaled by the manager via markCause
+// (close Done() channel) — no per-lock watcher goroutines are needed.
 // After all releases and drain, goroutine count returns to baseline.
 func TestLocker_TC9_GoroutineCount(t *testing.T) {
 	fc := clockmock.New(time.Time{})
@@ -492,11 +536,7 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 
 	baseline := runtime.NumGoroutine()
 
-	type result struct {
-		lCtx    context.Context
-		release func() error
-	}
-	results := make([]result, 0, n)
+	locks := make([]*distlock.Lock, 0, n)
 	var mu sync.Mutex
 
 	var wg sync.WaitGroup
@@ -505,13 +545,13 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := "key9-" + strconv.Itoa(i)
-			lCtx, release, err := l.Acquire(context.Background(), key, ttl)
+			lock, err := l.Acquire(context.Background(), key, ttl)
 			if err != nil {
 				t.Errorf("TC-9 goroutine %d Acquire: %v", i, err)
 				return
 			}
 			mu.Lock()
-			results = append(results, result{lCtx, release})
+			locks = append(locks, lock)
 			mu.Unlock()
 		}(i)
 	}
@@ -520,7 +560,7 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 	<-mgr(l).Started()
 
 	// Expected goroutine count above baseline: exactly 1 (the manager goroutine).
-	// No per-lock watcher goroutines — lockCtx derives from ctx directly.
+	// No per-lock watcher goroutines — *Lock is a value handle, no watchers.
 	// Allow +2 slack for test-framework goroutines.
 	after := runtime.NumGoroutine()
 	managerGoroutines := after - baseline
@@ -532,8 +572,8 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 	}
 
 	// Release all.
-	for _, r := range results {
-		if err := r.release(); err != nil {
+	for _, lk := range locks {
+		if err := lk.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}
@@ -570,13 +610,13 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 	ttl := testtime.D10s
 
 	// First acquisition.
-	_, release, err := l.Acquire(context.Background(), "key10", ttl)
+	lock, err := l.Acquire(context.Background(), "key10", ttl)
 	if err != nil {
 		t.Fatalf("TC-10 first Acquire: %v", err)
 	}
 	<-mgr(l).Started()
 
-	if err := release(); err != nil {
+	if err := lock.Release(); err != nil {
 		t.Logf("release: %v", err)
 	}
 	select {
@@ -586,12 +626,12 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 	}
 
 	// Second acquisition — manager must restart.
-	_, release2, err := l.Acquire(context.Background(), "key10b", ttl)
+	lock2, err := l.Acquire(context.Background(), "key10b", ttl)
 	if err != nil {
 		t.Fatalf("TC-10 second Acquire: %v", err)
 	}
 	defer func() {
-		if err := release2(); err != nil {
+		if err := lock2.Release(); err != nil {
 			t.Logf("release2: %v", err)
 		}
 	}()
@@ -621,12 +661,12 @@ func TestLocker_TC11_SmallTTLNoSpinLoop(t *testing.T) {
 
 	ttl := lockerSmallTTL // small TTL; large enough for race-detector scheduling overhead (renew timeout = 495ms)
 
-	_, release, err := l.Acquire(context.Background(), "key11", ttl)
+	lock, err := l.Acquire(context.Background(), "key11", ttl)
 	if err != nil {
 		t.Fatalf("TC-11 Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -675,12 +715,12 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 	// larger than race-detector goroutine scheduling overhead.
 	ttl := testtime.D10s
 
-	_, release, err := l.Acquire(context.Background(), "key12", ttl)
+	lock, err := l.Acquire(context.Background(), "key12", ttl)
 	if err != nil {
 		t.Fatalf("TC-12 Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -736,9 +776,11 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 	}
 }
 
-// TestLocker_LockCtxValuePropagation verifies that context values stored in the
-// parent ctx are accessible via lockCtx (lockCtx derives from ctx).
-func TestLocker_LockCtxValuePropagation(t *testing.T) {
+// TestLocker_ValuePropagation verifies that context values stored in the parent
+// ctx are accessible via Lock.Value. The lock retains values via
+// context.WithoutCancel(callerCtx); cancellation and deadline are NOT
+// propagated (verified by TC-5).
+func TestLocker_ValuePropagation(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
@@ -749,49 +791,19 @@ func TestLocker_LockCtxValuePropagation(t *testing.T) {
 
 	parentCtx := context.WithValue(context.Background(), key, val)
 
-	lockCtx, release, err := l.Acquire(parentCtx, "key-val-prop", testtime.D10s)
+	lock, err := l.Acquire(parentCtx, "key-val-prop", testtime.D10s)
 	if err != nil {
 		t.Fatalf("ValuePropagation Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
 
-	got := lockCtx.Value(key)
+	got := lock.Value(key)
 	if got != val {
-		t.Errorf("ValuePropagation: lockCtx.Value(key) = %v, want %v", got, val)
-	}
-}
-
-// TestLocker_LockCtxDeadlinePropagation verifies that the parent deadline is
-// propagated into lockCtx (lockCtx derives from ctx).
-func TestLocker_LockCtxDeadlinePropagation(t *testing.T) {
-	fc := clockmock.New(time.Time{})
-	fd := locktest.NewFakeDriver()
-	l := newTestLocker(fc, fd)
-
-	deadline := time.Now().Add(testtime.D10min)
-	parentCtx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
-
-	lockCtx, release, err := l.Acquire(parentCtx, "key-deadline-prop", testtime.D10s)
-	if err != nil {
-		t.Fatalf("DeadlinePropagation Acquire: %v", err)
-	}
-	defer func() {
-		if err := release(); err != nil {
-			t.Logf("release: %v", err)
-		}
-	}()
-
-	gotDeadline, ok := lockCtx.Deadline()
-	if !ok {
-		t.Fatal("DeadlinePropagation: lockCtx has no deadline, want parent deadline propagated")
-	}
-	if !gotDeadline.Equal(deadline) {
-		t.Errorf("DeadlinePropagation: lockCtx.Deadline() = %v, want %v", gotDeadline, deadline)
+		t.Errorf("ValuePropagation: lock.Value(key) = %v, want %v", got, val)
 	}
 }
 
@@ -948,28 +960,26 @@ func TestLocker_Acquire_RejectsZeroTTL(t *testing.T) {
 			fd := locktest.NewFakeDriver()
 			l := newTestLocker(fc, fd)
 
-			lockCtx, release, err := l.Acquire(context.Background(), "key-zero-ttl", tc.ttl)
+			lock, err := l.Acquire(context.Background(), "key-zero-ttl", tc.ttl)
 			if err == nil {
 				t.Errorf("Acquire with TTL=%v should return error", tc.ttl)
-				releaseIfNotNil(t, release)
+				releaseIfNotNil(t, lock)
 			}
-			if lockCtx != nil {
-				t.Error("Acquire with invalid TTL should return nil lockCtx")
+			if lock != nil {
+				t.Error("Acquire with invalid TTL should return nil lock")
 			}
 		})
 	}
 }
 
-// releaseIfNotNil invokes release if it is non-nil and logs any error from
-// it. Used to keep the unexpected-success path of TTL-rejection tests flat,
-// since test bodies shouldn't carry the cognitive overhead of nested
-// release-and-handle chains.
-func releaseIfNotNil(t *testing.T, release func() error) {
+// releaseIfNotNil invokes lock.Release if lock is non-nil and logs any error.
+// Used to keep the unexpected-success path of TTL-rejection tests flat.
+func releaseIfNotNil(t *testing.T, lock *distlock.Lock) {
 	t.Helper()
-	if release == nil {
+	if lock == nil {
 		return
 	}
-	if err := release(); err != nil {
+	if err := lock.Release(); err != nil {
 		t.Logf("release: %v", err)
 	}
 }
@@ -984,27 +994,27 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 	const n = 100
 	ttl := testtime.D1min
 
-	releases := make([]func() error, n)
+	locks := make([]*distlock.Lock, n)
 	for i := range n {
 		key := "concurrent-release-" + strconv.Itoa(i)
-		_, rel, err := l.Acquire(context.Background(), key, ttl)
+		lock, err := l.Acquire(context.Background(), key, ttl)
 		if err != nil {
 			t.Fatalf("ConcurrentRelease Acquire[%d]: %v", i, err)
 		}
-		releases[i] = rel
+		locks[i] = lock
 	}
 
 	<-mgr(l).Started()
 
-	// Release all 100 concurrently. All release() calls should return nil.
+	// Release all 100 concurrently. All lock.Release() calls should return nil.
 	var wg sync.WaitGroup
-	for _, rel := range releases {
+	for _, lk := range locks {
 		wg.Add(1)
-		rel := rel
+		lk := lk
 		go func() {
 			defer wg.Done()
-			if err := rel(); err != nil {
-				t.Errorf("ConcurrentRelease: release() returned unexpected error: %v", err)
+			if err := lk.Release(); err != nil {
+				t.Errorf("ConcurrentRelease: lock.Release() returned unexpected error: %v", err)
 			}
 		}()
 	}
@@ -1033,12 +1043,12 @@ func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 	ttl := time.Hour
 	renewAt := time.Duration(float64(ttl) * 0.5) // 30 minutes
 
-	_, release, err := l.Acquire(context.Background(), "extreme-long-ttl", ttl)
+	lock, err := l.Acquire(context.Background(), "extreme-long-ttl", ttl)
 	if err != nil {
 		t.Fatalf("ExtremeTTL_Long Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -1067,12 +1077,12 @@ func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
 	ttl := time.Millisecond
 	renewAt := time.Duration(float64(ttl) * 0.5)
 
-	_, release, err := l.Acquire(context.Background(), "extreme-short-ttl", ttl)
+	lock, err := l.Acquire(context.Background(), "extreme-short-ttl", ttl)
 	if err != nil {
 		t.Fatalf("ExtremeTTL_Short Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -1103,12 +1113,12 @@ func TestLocker_TC13_TransientRenewError_ThenSuccess(t *testing.T) {
 
 	ttl := testtime.D10s
 
-	lockCtx, release, err := l.Acquire(context.Background(), "key13", ttl)
+	lock, err := l.Acquire(context.Background(), "key13", ttl)
 	if err != nil {
 		t.Fatalf("TC-13 Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -1128,11 +1138,11 @@ func TestLocker_TC13_TransientRenewError_ThenSuccess(t *testing.T) {
 	// have been made.
 	waitForRenewL(t, l, fd, 2)
 
-	// Lock must NOT be lost — lockCtx should still be live.
+	// Lock must NOT be lost — lock should still be live.
 	select {
-	case <-lockCtx.Done():
-		t.Errorf("TC-13: lockCtx should NOT be canceled after transient error + successful retry; cause=%v",
-			context.Cause(lockCtx))
+	case <-lock.Done():
+		t.Errorf("TC-13: lock should NOT be canceled after transient error + successful retry; cause=%v",
+			lock.Cause())
 	default:
 		// Good — lock still live.
 	}
@@ -1153,12 +1163,12 @@ func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
 
 	ttl := testtime.D10s
 
-	lockCtx, release, err := l.Acquire(context.Background(), "key14", ttl)
+	lock, err := l.Acquire(context.Background(), "key14", ttl)
 	if err != nil {
 		t.Fatalf("TC-14 Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -1174,12 +1184,12 @@ func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
 
 	// Lock must be lost.
 	select {
-	case <-lockCtx.Done():
+	case <-lock.Done():
 	case <-time.After(testTimeout):
-		t.Fatal("TC-14: lockCtx should be Done after budget exhausted")
+		t.Fatal("TC-14: lock should be Done after budget exhausted")
 	}
 
-	cause := context.Cause(lockCtx)
+	cause := lock.Cause()
 	assertSameErrorIdentity(t, cause, distlock.ErrLockLost, "TC-14 cause")
 
 	// Exactly 3 Renew calls (default budget=3).
@@ -1198,12 +1208,12 @@ func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
 
 	ttl := testtime.D10s
 
-	lockCtx, release, err := l.Acquire(context.Background(), "key15", ttl)
+	lock, err := l.Acquire(context.Background(), "key15", ttl)
 	if err != nil {
 		t.Fatalf("TC-15 Acquire: %v", err)
 	}
 	defer func() {
-		if err := release(); err != nil {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}()
@@ -1219,12 +1229,12 @@ func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
 
 	// Lock must be lost immediately.
 	select {
-	case <-lockCtx.Done():
+	case <-lock.Done():
 	case <-time.After(testTimeout):
-		t.Fatal("TC-15: lockCtx should be Done immediately on ownership lost")
+		t.Fatal("TC-15: lock should be Done immediately on ownership lost")
 	}
 
-	cause := context.Cause(lockCtx)
+	cause := lock.Cause()
 	assertSameErrorIdentity(t, cause, distlock.ErrLockLost, "TC-15 cause")
 
 	// Exactly 1 Renew call — no retry on permanent ownership loss.
@@ -1253,13 +1263,13 @@ func TestLocker_WithMaxRenewAttempts_Validation(t *testing.T) {
 	}
 }
 
-// TestLocker_Release_ReturnsError verifies that release() propagates Driver.Release errors.
+// TestLocker_Release_ReturnsError verifies that lock.Release() propagates Driver.Release errors.
 func TestLocker_Release_ReturnsError(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	_, release, err := l.Acquire(context.Background(), "key-release-err", testtime.D10s)
+	lock, err := l.Acquire(context.Background(), "key-release-err", testtime.D10s)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -1269,12 +1279,12 @@ func TestLocker_Release_ReturnsError(t *testing.T) {
 	// Inject a release error.
 	fd.SetNextReleaseError(locktest.ErrDriverIO)
 
-	releaseErr := release()
+	releaseErr := lock.Release()
 	if releaseErr == nil {
-		t.Error("release() should return an error when Driver.Release fails")
+		t.Error("lock.Release() should return an error when Driver.Release fails")
 	}
 	if !errors.Is(releaseErr, locktest.ErrDriverIO) {
-		t.Errorf("release() error = %v, want wrapping ErrDriverIO", releaseErr)
+		t.Errorf("lock.Release() error = %v, want wrapping ErrDriverIO", releaseErr)
 	}
 }
 
@@ -1296,9 +1306,9 @@ func TestLocker_Stats_AfterAcquire(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	_, r1, _ := l.Acquire(context.Background(), "stats-key1", testtime.D1min)
-	_, r2, _ := l.Acquire(context.Background(), "stats-key2", testtime.D1min)
-	_, r3, _ := l.Acquire(context.Background(), "stats-key3", testtime.D1min)
+	lock1, _ := l.Acquire(context.Background(), "stats-key1", testtime.D1min)
+	lock2, _ := l.Acquire(context.Background(), "stats-key2", testtime.D1min)
+	lock3, _ := l.Acquire(context.Background(), "stats-key3", testtime.D1min)
 
 	<-mgr(l).Started()
 
@@ -1316,16 +1326,16 @@ func TestLocker_Stats_AfterAcquire(t *testing.T) {
 	}
 
 	defer func() {
-		if err := r1(); err != nil {
+		if err := lock1.Release(); err != nil {
 			t.Logf("r1: %v", err)
 		}
 	}()
 	defer func() {
-		if err := r2(); err != nil {
+		if err := lock2.Release(); err != nil {
 			t.Logf("r2: %v", err)
 		}
 	}()
-	if err := r3(); err != nil {
+	if err := lock3.Release(); err != nil {
 		t.Logf("r3: %v", err)
 	}
 }
@@ -1336,16 +1346,16 @@ func TestLocker_Stats_AfterRelease(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	_, r1, _ := l.Acquire(context.Background(), "stats-rel-key1", testtime.D1min)
-	_, r2, _ := l.Acquire(context.Background(), "stats-rel-key2", testtime.D1min)
-	_, r3, _ := l.Acquire(context.Background(), "stats-rel-key3", testtime.D1min)
+	lock1, _ := l.Acquire(context.Background(), "stats-rel-key1", testtime.D1min)
+	lock2, _ := l.Acquire(context.Background(), "stats-rel-key2", testtime.D1min)
+	lock3, _ := l.Acquire(context.Background(), "stats-rel-key3", testtime.D1min)
 	defer func() {
-		if err := r2(); err != nil {
+		if err := lock2.Release(); err != nil {
 			t.Logf("r2: %v", err)
 		}
 	}()
 	defer func() {
-		if err := r3(); err != nil {
+		if err := lock3.Release(); err != nil {
 			t.Logf("r3: %v", err)
 		}
 	}()
@@ -1362,7 +1372,7 @@ func TestLocker_Stats_AfterRelease(t *testing.T) {
 	}
 
 	// Release one lock.
-	if err := r1(); err != nil {
+	if err := lock1.Release(); err != nil {
 		t.Logf("r1: %v", err)
 	}
 

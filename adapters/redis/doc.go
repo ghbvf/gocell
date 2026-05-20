@@ -30,15 +30,18 @@
 //
 //	driver, err := redis.NewRedisDriver(client, redis.KeyNamespace("accesscore"))
 //	if err != nil { return err }
-//	locker := distlock.MustNew(driver,
+//	locker, err := distlock.New(driver, clock.Real(),
 //	    distlock.WithRenewFraction(0.5),
 //	    distlock.WithReleaseTimeout(5*time.Second),
 //	)
-//
-//	lockCtx, release, err := locker.Acquire(reqCtx, "key", 30*time.Second)
 //	if err != nil { return err }
-//	defer func() { _ = release() }()
-//	// pass lockCtx to DB / HTTP / outbox calls — they auto-cancel on lock loss
+//
+//	lock, err := locker.Acquire(reqCtx, "key", 30*time.Second)
+//	if err != nil { return err }
+//	defer func() { _ = lock.Release() }()
+//	// pair work with lock-end:
+//	//   select { case <-lock.Done(): abort with lock.Cause(); default: proceed }
+//	// caller-ctx cancellation does NOT release the held lock; use Release() in defer.
 //
 // The Cache, IdempotencyClaimer, and NonceStore constructors follow the
 // same shape:

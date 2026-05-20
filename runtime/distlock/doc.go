@@ -5,18 +5,25 @@
 // # Design rationale
 //
 // GoCell's layering rule prohibits runtime/ from importing adapters/, so the
-// Locker / Lock interfaces must live here rather than in adapters/redis.
+// Locker / Driver interfaces must live here rather than in adapters/redis.
 // The shape follows PR#177's runtime/outbox.Store precedent exactly.
+//
+// # Lock-as-Resource contract (see Lock type godoc)
+//
+// Locker.Acquire returns a *Lock, NOT a context.Context. Caller-ctx is
+// consumed for the acquire RPC only; once held, the lock lifecycle is
+// independent of caller ctx and ends only via Release(), renewal failure,
+// or manager shutdown. This matches the prevailing industry convention
+// (bsm/redislock, go-redsync, etcd, consul, Curator) and prevents the
+// misuse class identified in GH #20.
 //
 // # Resource model
 //
 // Each call to New() creates one Manager. The Manager's resource footprint per
 // active lock set is:
 //   - 1 manager goroutine: owns the renewal min-heap and all Driver I/O calls
-//   - 0 per-lock goroutines: lockCtx is derived from the caller's ctx, so parent
-//     cancellation (including custom causes set via context.WithCancelCause),
-//     values, and deadlines propagate automatically via Go's context machinery.
-//     No watcher goroutine is needed.
+//   - 0 per-lock goroutines: *Lock is a value handle; lock-end is delivered
+//     by the manager via markCause (closes Done() channel, sets Cause()).
 //
 // N active locks = 1 manager goroutine + O(N) heap. One goroutine for N locks.
 //
@@ -30,11 +37,10 @@
 //
 // # References
 //
-//   - ref: github.com/go-redsync/redsync mutex.go — Lock/Unlock/Extend shape
-//     rejected because GoCell auto-renews; Extend on the contract is backend-specific
-//   - ref: github.com/etcd-io/etcd client/v3/concurrency/mutex.go — CAS-storage
-//     shape, not adopted (over-specified for the GoCell use case)
-//   - ref: github.com/hashicorp/consul/api lock.go — lostCh pattern adopted as Lost()
-//   - ref: github.com/temporalio/sdk-go internal/internal_worker.go — stopC signal-by-close idiom
+//   - ref: github.com/go-redsync/redsync mutex.go — caller-ctx scoped to acquire
+//   - ref: github.com/etcd-io/etcd client/v3/concurrency/session.go — session-scoped keepalive
+//   - ref: github.com/hashicorp/consul/api lock.go — explicit Unlock contract
+//   - ref: github.com/bsm/redislock — refresh as application concern
 //   - ref: PR#177 runtime/outbox.Store — identical layering rationale
+//   - ref: ADR docs/architecture/202605200000-adr-distlock-lock-as-resource.md
 package distlock
