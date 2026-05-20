@@ -92,8 +92,8 @@ parse_row() {
   case "$flag" in *✅*) return 1 ;; esac
   case "$id" in '~~'*'~~') return 1 ;; esac
 
-  # parse P/Cx
-  local pri=$(echo "$pcx" | grep -oE 'P[1-4]' | head -1 || echo "")
+  # parse P/Cx — rubric 真值 P0/P1/P2/P3 & Cx1/Cx2/Cx3/Cx4
+  local pri=$(echo "$pcx" | grep -oE 'P[0-3]' | head -1 || echo "")
   local cx=$(echo "$pcx" | grep -oE 'Cx[1-4]' | head -1 || echo "")
 
   echo "$cap_hint|$id|$desc|$type|$pri|$cx|$flag|$trigger|$files|$source"

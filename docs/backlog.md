@@ -72,7 +72,7 @@ EOF
 | Field | Type | Values | 用途 |
 |---|---|---|---|
 | Status | single-select | `Backlog` / `Ready` / `In Progress` / `In Review` / `Done` | 工作流 lane |
-| Priority | single-select | `P1` / `P2` / `P3` / `P4` | 优先级 |
+| Priority | single-select | `P0` / `P1` / `P2` / `P3` | 优先级 — P0 红线见 `RERATING-RUBRIC.md` §"P0 红线"，仅 incident-driven |
 | Estimate | single-select | `Cx1` / `Cx2` / `Cx3` / `Cx4` | 复杂度（模板原是 number，改为 single-select）|
 | Iteration | iteration | 可选，PR review batch / sprint，初期不开 | sprint planning |
 
@@ -136,7 +136,7 @@ Phase 决策叙事如需文档化，新建 `docs/backlog/RERATING-LOG-<YYYY-qN>.
 1. ✅ Project v2 #3 已建（Iterative development 模板）
 2. ✅ 31 个 labels 已建（cap-XX/flag-XX/type-XX + backlog/bundle-parent/pr-fu/wontfix）
 3. **Project 调整模板字段**（web UI）：
-   - `Priority` 值改为 `P1` / `P2` / `P3` / `P4`
+   - `Priority` 值改为 `P0` / `P1` / `P2` / `P3`（P0 = incident-driven 红线，详见 `backlog/20260520/RERATING-RUBRIC.md` §"P0 红线"）
    - `Estimate` 改为 single-select，值 `Cx1` / `Cx2` / `Cx3` / `Cx4`
 4. **Project view 配置**（web UI）：
    - 默认 "Board"（by Status）保留
