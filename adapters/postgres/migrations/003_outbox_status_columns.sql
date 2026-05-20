@@ -17,7 +17,7 @@ ALTER TABLE outbox_entries
 -- Backfill: map existing published state to new status column BEFORE dropping
 -- the old column. Without this, published=true rows default to status='pending'
 -- and the relay would re-publish them (event replay).
-UPDATE outbox_entries SET status = 'published' WHERE published = true;
+UPDATE outbox_entries SET status = 'published' WHERE published;
 
 -- Remove old boolean column — no external consumers (CLAUDE.md: no backward compat).
 ALTER TABLE outbox_entries DROP COLUMN published;
@@ -54,6 +54,6 @@ ALTER TABLE outbox_entries
 ALTER TABLE outbox_entries
   ADD COLUMN published BOOLEAN NOT NULL DEFAULT false;
 UPDATE outbox_entries SET published = true WHERE published_at IS NOT NULL;
-CREATE INDEX idx_outbox_unpublished ON outbox_entries (created_at) WHERE published = false;
+CREATE INDEX idx_outbox_unpublished ON outbox_entries (created_at) WHERE NOT published;
 -- Narrow id back to UUID (may fail if non-UUID IDs exist).
 ALTER TABLE outbox_entries ALTER COLUMN id TYPE UUID USING id::uuid;
