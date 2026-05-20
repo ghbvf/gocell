@@ -50,6 +50,9 @@ const (
 	shutdownD8s = 8 * time.Second
 	// shutdownD3s is the RabbitMQ ReconnectMaxBackoff; not in testtime table.
 	shutdownD3s = 3 * time.Second
+	// shutdownAccountingSettleD20s is the poll budget for the no-loss accounting
+	// settle check; local to this file to avoid cross-file constant coupling.
+	shutdownAccountingSettleD20s = 20 * time.Second
 )
 
 // ---------------------------------------------------------------------------
@@ -73,11 +76,15 @@ func startShutdownTestBroker(t *testing.T) (amqpURL, mgmtURL string, container *
 	require.NoError(t, err, "get amqp url")
 
 	var mgmt string
+	var attemptCount int
 	testwait.External(t, "rabbitmq-management-http-url-mapped", func() bool {
 		var httpErr error
 		mgmt, httpErr = c.HttpURL(ctx)
 		if httpErr != nil {
-			t.Logf("rabbitmq-management-http-url-mapped: attempt failed: %v", httpErr)
+			attemptCount++
+			if attemptCount <= 3 || attemptCount%10 == 0 {
+				t.Logf("rabbitmq-management-http-url-mapped: attempt %d failed: %v", attemptCount, httpErr)
+			}
 		}
 		return httpErr == nil
 	}, testtime.SelectAsyncSettle, testtime.SlowPoll, "management http url should be mapped")
@@ -286,7 +293,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 		t.Logf("shutdown e2e no-loss poll: processed=%d queue=%d sum=%d",
 			processedFinal, queueDepth, processedFinal+int64(queueDepth))
 		return int(processedFinal)+queueDepth >= total
-	}, fullchainD20s, testtime.D500ms,
+	}, shutdownAccountingSettleD20s, testtime.D500ms,
 		"broker queue + processed must eventually total 100 messages")
 
 	t.Logf("shutdown e2e no-loss: processed=%d queue=%d total=%d", processedFinal, queueDepth, total)

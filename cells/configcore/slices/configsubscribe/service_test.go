@@ -738,7 +738,7 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	svc.StartTombstoneGC()
 
 	// Wait for the GC goroutine to create its ticker.
-	// MIGRATION-NOTE: assert.Eventually used here; subsequent fc.Advance calls and assert.GreaterOrEqual follow and intend to continue.
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); downstream fc.Advance + assert.GreaterOrEqual would test GC sweep on a ticker that never registered — abort is correct.
 	testwait.External(t, "config-subscriber-gc-ticker-started", func() bool {
 		return fc.PendingTickers() >= 1
 	}, testGCEventuallyTimeout, testGCEventuallyTick, "GC goroutine must create a ticker")
@@ -751,7 +751,7 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	fc.Advance(interval + time.Second) // 12h+1s = 24h+1s total
 
 	// The GC goroutine should pick up the tick and sweep keyC.
-	// MIGRATION-NOTE: assert.Eventually used here; sibling assert.GreaterOrEqual follows and intends to continue.
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); downstream assert.GreaterOrEqual would test metric count on a GC sweep that never fired — abort is correct.
 	testwait.External(t, "config-subscriber-tombstone-evicted", func() bool {
 		v, present := svc.Cache().GetVersion("keyC")
 		return !present && v == 0

@@ -116,7 +116,7 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 	// Wait for the loop to consume the renewal before canceling.
 	testwait.External(t, "vault-auth-renewed", func() bool {
 		return testutil.ToFloat64(successCtr) >= 1
-	}, time.Second, time.Millisecond)
+	}, time.Second, time.Millisecond, "successCtr must reach 1 after renewal event")
 	cancel()
 
 	select {
@@ -176,7 +176,7 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 	// Wait for all three to be consumed.
 	testwait.External(t, "vault-auth-renewed", func() bool {
 		return testutil.ToFloat64(successCtr) >= 3
-	}, time.Second, time.Millisecond)
+	}, time.Second, time.Millisecond, "successCtr must reach 3 after three renewal events")
 	cancel()
 
 	select {
@@ -340,7 +340,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 	// Wait for the renewal to be consumed before canceling.
 	testwait.External(t, "vault-auth-renewed", func() bool {
 		return len(fw.renewCh) == 0
-	}, time.Second, time.Millisecond)
+	}, time.Second, time.Millisecond, "renewCh must be drained after renewal event is sent")
 	cancel()
 
 	select {
@@ -449,7 +449,7 @@ func TestRenewalWorker_DoneChError_TriggersReauth(t *testing.T) {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 1
-	}, testtime.D2s, time.Millisecond)
+	}, testtime.D2s, time.Millisecond, "fakeAuth.calls must reach 1 after DoneCh triggers re-auth")
 	cancel()
 
 	select {
@@ -569,7 +569,7 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 1
-	}, testtime.D2s, time.Millisecond)
+	}, testtime.D2s, time.Millisecond, "fakeAuth.calls must reach 1 before ctx cancel to confirm backoff started")
 
 	// Cancel now — reauthenticate must wake from the sleep and return.
 	cancel()

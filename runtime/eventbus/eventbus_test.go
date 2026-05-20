@@ -212,7 +212,7 @@ func TestPublishSubscribe(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return len(received) == 2
-	}, testtime.EventuallyShort, testtime.D10ms)
+	}, testtime.EventuallyShort, testtime.D10ms, "both published messages must be received before cancel")
 
 	cancel()
 	<-done
@@ -258,13 +258,13 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
 	testwait.External(t, "eventbus-redelivery-attempted", func() bool {
 		return attempts.Load() >= 3
-	}, testtime.EventuallyDefault, testtime.MediumPoll)
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "handler must be called 3 times before retries exhaust")
 
 	// Message should be in dead letter.
 	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
 	testwait.External(t, "eventbus-entry-received", func() bool {
 		return bus.DeadLetterLen() == 1
-	}, testtime.EventuallyShort, testtime.MediumPoll)
+	}, testtime.EventuallyShort, testtime.MediumPoll, "dead letter must have exactly one entry after redelivery budget exhausted")
 
 	dl := bus.DrainDeadLetters()
 	require.Len(t, dl, 1)
@@ -304,7 +304,7 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
 	testwait.External(t, "eventbus-entry-received", func() bool {
 		return bus.DeadLetterLen() == 1
-	}, testtime.EventuallyShort, testtime.MediumPoll)
+	}, testtime.EventuallyShort, testtime.MediumPoll, "rejected message must reach dead letter on first attempt without retries")
 
 	assert.Equal(t, int32(1), attempts.Load(), "reject should not trigger retries")
 
@@ -486,7 +486,7 @@ func TestMultipleSubscribers(t *testing.T) {
 	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
 	testwait.External(t, "eventbus-entry-received", func() bool {
 		return count1.Load() == 1 && count2.Load() == 1
-	}, testtime.EventuallyShort, testtime.D10ms)
+	}, testtime.EventuallyShort, testtime.D10ms, "both subscribers must each receive exactly one message")
 
 	cancel()
 	wg.Wait()

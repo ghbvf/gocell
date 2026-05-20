@@ -296,7 +296,7 @@ func TestRunWith_KillsProcessTree(t *testing.T) {
 	require.NoError(t, findErr, "os.FindProcess should not fail on Unix even for dead processes")
 	// Signal(0) does not send a signal; it probes whether the process exists
 	// and is reachable. An error means the process is gone or we cannot reach it.
-	// MIGRATION-NOTE: assert.Eventually used here; no sibling asserts follow in this test — External FailNow is acceptable.
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); no downstream asserts follow — FailNow is correct, a live grandchild PID means process tree teardown failed.
 	testwait.External(t, "cmdrun-process-exited", func() bool {
 		return proc.Signal(os.Signal(syscall.Signal(0))) != nil
 	}, processTreeDeathSettleTimeout, processTreePollInterval,
