@@ -41,12 +41,12 @@ type writeBundle struct {
 
 // setupWriteService clones the package-shared pre-migrated template DB
 // into a fresh per-test database and returns a Service wired with PG repo
-// + outbox writer + tx manager. Container + per-test DB lifecycle is
-// owned by t.Cleanup inside newPerTestPool (see testmain_integration_test.go).
-func setupWriteService(t *testing.T) (writeBundle, func()) {
+// + outbox writer + tx manager. Pool + per-test DB lifecycle is
+// owned by t.Cleanup inside sharedPG.NewPerTestPool (see testmain_integration_test.go).
+func setupWriteService(t *testing.T) writeBundle {
 	t.Helper()
 
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 	session := cellpg.NewSession(pool.DB())
 	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
@@ -58,7 +58,7 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	)
 	require.NoError(t, err)
 
-	return writeBundle{svc: svc, pool: pool.DB()}, func() {}
+	return writeBundle{svc: svc, pool: pool.DB()}
 }
 
 // countOutboxRowsByEventType returns the number of outbox_entries rows for
@@ -77,8 +77,7 @@ func countOutboxRowsByEventType(t *testing.T, pool *pgxpool.Pool, eventType stri
 // TestCreate_AtomicWithOutbox verifies that config_entries and outbox_entries
 // rows are both committed in the same transaction (L2 atomicity).
 func TestCreate_AtomicWithOutbox(t *testing.T) {
-	bundle, cleanup := setupWriteService(t)
-	defer cleanup()
+	bundle := setupWriteService(t)
 
 	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted)
 	require.Equal(t, 0, before, "baseline outbox count must be 0")
@@ -101,8 +100,7 @@ func TestCreate_AtomicWithOutbox(t *testing.T) {
 // TestUpdate_AtomicWithOutbox verifies that the config_entries row is updated
 // and an outbox_entries row is co-committed in the same transaction (L2 atomicity).
 func TestUpdate_AtomicWithOutbox(t *testing.T) {
-	bundle, cleanup := setupWriteService(t)
-	defer cleanup()
+	bundle := setupWriteService(t)
 
 	// Seed an entry via Create (which itself commits atomically).
 	_, err := bundle.svc.Create(adminIntegCtx(), CreateInput{
@@ -132,8 +130,7 @@ func TestUpdate_AtomicWithOutbox(t *testing.T) {
 // TestDelete_AtomicWithOutbox verifies that the config_entries row is deleted
 // and an outbox_entries row is co-committed in the same transaction (L2 atomicity).
 func TestDelete_AtomicWithOutbox(t *testing.T) {
-	bundle, cleanup := setupWriteService(t)
-	defer cleanup()
+	bundle := setupWriteService(t)
 
 	// Seed an entry via Create.
 	_, err := bundle.svc.Create(adminIntegCtx(), CreateInput{
@@ -167,7 +164,7 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 // rolled back atomically).
 func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	ctx := context.Background()
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 
 	session := cellpg.NewSession(pool.DB())
 	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())

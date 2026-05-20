@@ -25,26 +25,24 @@ import (
 
 // setupConfigPG clones the package-shared pre-migrated template database
 // into a fresh per-test database and returns a ConfigRepository wired
-// over it. The returned cleanup is retained for source compatibility;
-// the actual pool + per-test DB lifecycle is owned by t.Cleanup registered
-// inside newPerTestPool (see testmain_integration_test.go).
-func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func()) {
+// over it. Pool + per-test DB lifecycle is owned by t.Cleanup registered
+// inside sharedPG.NewPerTestPool (see testmain_integration_test.go).
+func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager) {
 	t.Helper()
 
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 	session := NewSession(pool.DB())
 	repo := NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	return repo, txMgr, func() {}
+	return repo, txMgr
 }
 
 // TestConfigRepo_Integration_CRUD exercises all 7 repository methods
 // (Create / GetByKey / Update / Delete / List / PublishVersion / GetVersion)
 // against a real PostgreSQL instance with migration 004 applied.
 func TestConfigRepo_Integration_CRUD(t *testing.T) {
-	repo, txMgr, cleanup := setupConfigPG(t)
-	defer cleanup()
+	repo, txMgr := setupConfigPG(t)
 	ctx := context.Background()
 
 	t.Run("Create_and_GetByKey", func(t *testing.T) {
@@ -176,8 +174,7 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 // errors.Is(err, pgx.ErrNoRows) chain and ErrConfigRepoNotFound code.
 // This is the canonical REPO-SCAN-CLASSIFY-01 end-to-end check.
 func TestGetByKey_NotFound_AgainstRealPG(t *testing.T) {
-	repo, _, cleanup := setupConfigPG(t)
-	defer cleanup()
+	repo, _ := setupConfigPG(t)
 
 	_, err := repo.GetByKey(context.Background(), "definitely-does-not-exist")
 	require.Error(t, err)
@@ -195,8 +192,7 @@ func TestGetByKey_NotFound_AgainstRealPG(t *testing.T) {
 // outbox_entries are written in the same transaction and rolled back together
 // on failure — the L2 atomicity guarantee.
 func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
-	repo, txMgr, cleanup := setupConfigPG(t)
-	defer cleanup()
+	repo, txMgr := setupConfigPG(t)
 	ctx := context.Background()
 
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
@@ -258,10 +254,10 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 // AES-GCM with AAD binding) so sensitive-value tests exercise the full
 // encrypt → BYTEA persist → decrypt path end-to-end rather than the mock
 // unit-test shortcut.
-func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func()) {
+func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManager) {
 	t.Helper()
 
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 
 	// Real LocalAES master key (32-byte hex, deterministic for reproducibility).
 	kp, err := crypto.NewLocalAESKeyProviderFromKeys(
@@ -273,7 +269,7 @@ func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManag
 	repo := NewConfigRepository(session, transformer, nil, clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	return repo, txMgr, func() {}
+	return repo, txMgr
 }
 
 // TestConfigRepo_Integration_Encryption_RoundTrip verifies the full
@@ -283,8 +279,7 @@ func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManag
 // exercising BYTEA column ordering, NULL handling, and base64 key decoding
 // end-to-end in the same way production code runs.
 func TestConfigRepo_Integration_Encryption_RoundTrip(t *testing.T) {
-	repo, txMgr, cleanup := setupConfigPGEncrypted(t)
-	defer cleanup()
+	repo, txMgr := setupConfigPGEncrypted(t)
 	ctx := context.Background()
 
 	t.Run("create_sensitive_then_read_returns_plaintext", func(t *testing.T) {
@@ -344,12 +339,12 @@ const (
 
 // setupBrokenConfigPG spins up a PostgreSQL container, applies all migrations,
 // runs dropSQL to simulate schema drift, and returns a ConfigRepository backed
-// by that broken database plus cleanup func. The returned repo is used as the
-// "broken" prober in RunRepoReadinessConformance / targeted branch tests.
-func setupBrokenConfigPG(t *testing.T, dropSQL string) (*ConfigRepository, func()) {
+// by that broken database. The returned repo is used as the "broken" prober in
+// RunRepoReadinessConformance / targeted branch tests.
+func setupBrokenConfigPG(t *testing.T, dropSQL string) *ConfigRepository {
 	t.Helper()
 
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 
 	// Drop table(s) to simulate schema drift / missing migration. Per-test
 	// DB isolation (TEMPLATE clone) ensures the DROP cannot leak across
@@ -359,9 +354,7 @@ func setupBrokenConfigPG(t *testing.T, dropSQL string) (*ConfigRepository, func(
 	require.NoError(t, dropErr, "dropping tables to create broken repo")
 
 	session := NewSession(pool.DB())
-	repo := NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
-
-	return repo, func() {}
+	return NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 }
 
 // TestConfigRepo_Integration_RepoReadiness exercises the differentiated repo
@@ -369,11 +362,8 @@ func setupBrokenConfigPG(t *testing.T, dropSQL string) (*ConfigRepository, func(
 // healthy: full migrations applied — probe must return nil.
 // broken: config_entries and feature_flags dropped — probe must return an error.
 func TestConfigRepo_Integration_RepoReadiness(t *testing.T) {
-	healthy, _, cleanupHealthy := setupConfigPG(t)
-	defer cleanupHealthy()
-
-	broken, cleanupBroken := setupBrokenConfigPG(t, dropBothProbeTablesSQL)
-	defer cleanupBroken()
+	healthy, _ := setupConfigPG(t)
+	broken := setupBrokenConfigPG(t, dropBothProbeTablesSQL)
 
 	celltest.RunRepoReadinessConformance(t, "configcore-pg", healthy, broken)
 }
@@ -385,8 +375,7 @@ func TestConfigRepo_Integration_RepoReadiness(t *testing.T) {
 // error), so this targeted injection is required for full branch coverage of
 // the differentiated probe.
 func TestConfigRepo_Integration_RepoReadiness_FeatureFlagsDrop(t *testing.T) {
-	repo, cleanup := setupBrokenConfigPG(t, dropFeatureFlagsOnlySQL)
-	defer cleanup()
+	repo := setupBrokenConfigPG(t, dropFeatureFlagsOnlySQL)
 
 	err := repo.RepoReady(context.Background())
 	require.Error(t, err, "feature_flags dropped — RepoReady must surface the second-probe failure")

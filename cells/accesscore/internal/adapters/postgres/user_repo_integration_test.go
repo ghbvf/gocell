@@ -25,30 +25,30 @@ const sqlStateCheckViolation = "23514"
 // setupUserRepoPGWithPool clones the package-shared pre-migrated template
 // database into a fresh per-test DB and returns a PGUserRepo + Pool for
 // tests that need direct SQL access (e.g. to bypass domain validation).
-// Container + per-test DB lifecycle is owned by t.Cleanup inside
-// newPerTestPool (see testmain_integration_test.go).
-func setupUserRepoPGWithPool(t *testing.T) (*PGUserRepo, *adapterpg.Pool, func()) {
+// Pool + per-test DB lifecycle is owned by t.Cleanup inside
+// sharedPG.NewPerTestPool (see testmain_integration_test.go).
+func setupUserRepoPGWithPool(t *testing.T) (*PGUserRepo, *adapterpg.Pool) {
 	t.Helper()
 
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 	txMgr := adapterpg.NewTxManager(pool)
 	repo, err := NewPGUserRepo(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 
-	return repo, pool, func() {}
+	return repo, pool
 }
 
 // setupUserRepoPG clones the package-shared pre-migrated template database
 // into a fresh per-test DB and returns a PGUserRepo + TxManager.
-func setupUserRepoPG(t *testing.T) (*PGUserRepo, *adapterpg.TxManager, func()) {
+func setupUserRepoPG(t *testing.T) (*PGUserRepo, *adapterpg.TxManager) {
 	t.Helper()
 
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 	txMgr := adapterpg.NewTxManager(pool)
 	repo, err := NewPGUserRepo(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 
-	return repo, txMgr, func() {}
+	return repo, txMgr
 }
 
 // newTestUser builds a minimal domain.User with a unique username and email.
@@ -82,9 +82,9 @@ func newTestUser(suffix string) *domain.User {
 // TestPGUserRepo_Constructor_FailFast verifies that NewPGUserRepo returns a
 // structured error for each nil dependency. Uses one per-test database
 // (cloned from the package-shared template) for all subtests; lifetime is
-// owned by t.Cleanup inside newPerTestPool.
+// owned by t.Cleanup inside sharedPG.NewPerTestPool.
 func TestPGUserRepo_Constructor_FailFast(t *testing.T) {
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 	txm := adapterpg.NewTxManager(pool)
 
 	assertValidationFailed := func(t *testing.T, err error) {
@@ -117,8 +117,7 @@ func TestPGUserRepo_Constructor_FailFast(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPGUserRepo_Integration(t *testing.T) {
-	repo, txMgr, cleanup := setupUserRepoPG(t)
-	defer cleanup()
+	repo, txMgr := setupUserRepoPG(t)
 	ctx := context.Background()
 
 	t.Run("Create_GetByID_roundtrip", func(t *testing.T) {
@@ -353,8 +352,7 @@ func TestPGUserRepo_Integration(t *testing.T) {
 // loudly the moment the column is dropped from either select query or from
 // scanUser's row.Scan ordering.
 func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
-	repo, txMgr, cleanup := setupUserRepoPG(t)
-	defer cleanup()
+	repo, txMgr := setupUserRepoPG(t)
 	ctx := context.Background()
 
 	u := newTestUser("authz_readback_" + uuid.NewString())
@@ -419,8 +417,7 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 // users_status_chk CHECK constraint (migration 023) rejects direct INSERTs with
 // an invalid status value, even if the domain layer is bypassed. SQLSTATE 23514.
 func TestUserRepo_Create_RejectsInvalidStatus_DBCheck(t *testing.T) {
-	_, pool, cleanup := setupUserRepoPGWithPool(t)
-	defer cleanup()
+	_, pool := setupUserRepoPGWithPool(t)
 	ctx := context.Background()
 
 	// Bypass domain/repo layer and INSERT directly with an invalid status.
@@ -447,8 +444,7 @@ func TestUserRepo_Create_RejectsInvalidStatus_DBCheck(t *testing.T) {
 // users_creation_source_chk CHECK constraint (migration 023) rejects direct
 // INSERTs with an invalid creation_source value. SQLSTATE 23514.
 func TestUserRepo_Create_RejectsInvalidCreationSource_DBCheck(t *testing.T) {
-	_, pool, cleanup := setupUserRepoPGWithPool(t)
-	defer cleanup()
+	_, pool := setupUserRepoPGWithPool(t)
 	ctx := context.Background()
 
 	// Use authz_epoch=1 so that the migration 028 CHECK(authz_epoch > 0) does
@@ -474,8 +470,7 @@ func TestUserRepo_Create_RejectsInvalidCreationSource_DBCheck(t *testing.T) {
 // To bypass the DB CHECK constraint (migration 023), we temporarily DROP the
 // constraint, write the bad row, then restore it, then call GetByID.
 func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
-	repo, pool, cleanup := setupUserRepoPGWithPool(t)
-	defer cleanup()
+	repo, pool := setupUserRepoPGWithPool(t)
 	ctx := context.Background()
 
 	// Temporarily drop the CHECK constraints to allow writing an invalid status.
@@ -521,8 +516,7 @@ func TestUserRepo_Scan_RejectsInvalidStatus(t *testing.T) {
 // enum value. Mirrors TestUserRepo_Scan_RejectsInvalidStatus for the
 // orthogonal enum column.
 func TestUserRepo_Scan_RejectsInvalidCreationSource(t *testing.T) {
-	repo, pool, cleanup := setupUserRepoPGWithPool(t)
-	defer cleanup()
+	repo, pool := setupUserRepoPGWithPool(t)
 	ctx := context.Background()
 
 	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_creation_source_chk`)
@@ -552,8 +546,7 @@ func TestUserRepo_Scan_RejectsInvalidCreationSource(t *testing.T) {
 // TestUserRepo_GetByUsername_RejectsInvalidStatus exercises the
 // GetByUsername path's ErrPGSchemaShape propagation (parallel to GetByID).
 func TestUserRepo_GetByUsername_RejectsInvalidStatus(t *testing.T) {
-	repo, pool, cleanup := setupUserRepoPGWithPool(t)
-	defer cleanup()
+	repo, pool := setupUserRepoPGWithPool(t)
 	ctx := context.Background()
 
 	_, err := pool.DB().Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_chk`)
@@ -584,8 +577,7 @@ func TestUserRepo_GetByUsername_RejectsInvalidStatus(t *testing.T) {
 // valid creation_source values ('identity' and 'setup') can be created
 // and read back without error.
 func TestUserRepo_CreationSource_BothValid(t *testing.T) {
-	repo, _, cleanup := setupUserRepoPGWithPool(t)
-	defer cleanup()
+	repo, _ := setupUserRepoPGWithPool(t)
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Millisecond)

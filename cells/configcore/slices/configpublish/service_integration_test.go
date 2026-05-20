@@ -44,9 +44,9 @@ type publishServiceBundle struct {
 }
 
 // setupPublishBundle spins up a PostgreSQL container, applies migrations,
-// and returns a publish Service with PG repo + outbox writer + tx manager,
-// plus a cleanup function. Uses NoopTransformer (sensitive=false only).
-func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
+// and returns a publish Service with PG repo + outbox writer + tx manager.
+// Uses NoopTransformer (sensitive=false only).
+func setupPublishBundle(t *testing.T) publishServiceBundle {
 	return setupPublishBundleWithTransformer(t, crypto.NoopTransformer{})
 }
 
@@ -55,7 +55,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 // SQL branch end-to-end (Create + Publish + Rollback round-trip through
 // encrypt/decrypt). Uses a deterministic 32-byte hex master key for
 // reproducibility, matching the pattern in config_repo_integration_test.go.
-func setupPublishBundleEncrypted(t *testing.T) (publishServiceBundle, func()) {
+func setupPublishBundleEncrypted(t *testing.T) publishServiceBundle {
 	kp, err := crypto.NewLocalAESKeyProviderFromKeys(
 		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "")
 	require.NoError(t, err)
@@ -64,13 +64,12 @@ func setupPublishBundleEncrypted(t *testing.T) (publishServiceBundle, func()) {
 
 // setupPublishBundleWithTransformer is the shared body of the two factories;
 // callers pick the transformer that matches their test's sensitivity needs.
-// Container + per-test DB lifecycle is owned by t.Cleanup inside
-// newPerTestPool (see testmain_integration_test.go); the returned cleanup
-// is retained as a no-op for source compatibility with callers.
-func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTransformer) (publishServiceBundle, func()) {
+// Pool + per-test DB lifecycle is owned by t.Cleanup inside
+// sharedPG.NewPerTestPool (see testmain_integration_test.go).
+func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTransformer) publishServiceBundle {
 	t.Helper()
 
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 	session := cellpg.NewSession(pool.DB())
 	repo := cellpg.NewConfigRepository(session, transformer, nil, clock.Real())
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
@@ -82,7 +81,7 @@ func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTra
 	)
 	require.NoError(t, err)
 
-	return publishServiceBundle{svc: svc, repo: repo, pool: pool.DB(), txMgr: txMgr}, func() {}
+	return publishServiceBundle{svc: svc, repo: repo, pool: pool.DB(), txMgr: txMgr}
 }
 
 // seedConfigEntry inserts a non-sensitive config_entries row through a real
@@ -132,8 +131,7 @@ func countOutboxRowsByEventType(t *testing.T, pool *pgxpool.Pool, eventType stri
 // outbox_entries rows are both committed in the same transaction (L2 atomicity).
 // Uses a real PostgreSQL backend with migration 004 applied.
 func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
-	bundle, cleanup := setupPublishBundle(t)
-	defer cleanup()
+	bundle := setupPublishBundle(t)
 	repoCtx := context.Background()
 	svcCtx := adminIntegCtx()
 
@@ -167,8 +165,7 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 // outbox_entries rows are both committed in the same transaction (L2 atomicity)
 // during Rollback. Uses a real PostgreSQL backend.
 func TestRollback_AtomicWithOutbox(t *testing.T) {
-	bundle, cleanup := setupPublishBundle(t)
-	defer cleanup()
+	bundle := setupPublishBundle(t)
 	svcCtx := adminIntegCtx()
 
 	// Seed an entry and publish a version so Rollback has a target.
@@ -208,8 +205,7 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 // write fails during Rollback, both the config_entries update and the outbox write
 // are rolled back (transaction atomicity).
 func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
-	bundle, cleanup := setupPublishBundle(t)
-	defer cleanup()
+	bundle := setupPublishBundle(t)
 	ctx := context.Background()
 	svcCtx := adminIntegCtx()
 
@@ -290,8 +286,7 @@ func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry)
 // `TestAuditLedgerStore_AdvisoryLockSerializesAppend`.
 func TestConcurrentRollback_PG_ExactlyOneWins(t *testing.T) {
 	t.Parallel()
-	bundle, cleanup := setupPublishBundle(t)
-	defer cleanup()
+	bundle := setupPublishBundle(t)
 	svcCtx := adminIntegCtx()
 
 	const key = "pg-cas-rollback-key"
@@ -352,8 +347,7 @@ func TestConcurrentRollback_PG_ExactlyOneWins(t *testing.T) {
 // math, but the encrypted path is required to reach UpdateForRollback at all.
 func TestConcurrentRollback_PG_Sensitive_ExactlyOneWins(t *testing.T) {
 	t.Parallel()
-	bundle, cleanup := setupPublishBundleEncrypted(t)
-	defer cleanup()
+	bundle := setupPublishBundleEncrypted(t)
 	svcCtx := adminIntegCtx()
 
 	const key = "pg-cas-rollback-sensitive-key"

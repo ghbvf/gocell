@@ -6,7 +6,6 @@ import (
 	"os"
 	"testing"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/tests/testutil/pgshare"
 )
 
@@ -27,10 +26,3 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// newPerTestPool clones the package-shared template DB into a fresh
-// per-test database and registers cleanup via t.Cleanup. Thin wrapper
-// for source compatibility with the existing setup helpers.
-func newPerTestPool(t *testing.T) *adapterpg.Pool {
-	t.Helper()
-	return sharedPG.NewPerTestPool(t)
-}

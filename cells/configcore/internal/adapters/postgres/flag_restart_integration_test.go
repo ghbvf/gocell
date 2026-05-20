@@ -18,25 +18,24 @@ import (
 
 // setupFlagPG clones the package-shared pre-migrated template database
 // into a fresh per-test database and returns a FlagRepository wired over
-// it. Container + per-test DB lifecycle is owned by t.Cleanup inside
-// newPerTestPool (see testmain_integration_test.go).
-func setupFlagPG(t *testing.T) (*FlagRepository, *adapterpg.TxManager, func()) {
+// it. Pool + per-test DB lifecycle is owned by t.Cleanup inside
+// sharedPG.NewPerTestPool (see testmain_integration_test.go).
+func setupFlagPG(t *testing.T) (*FlagRepository, *adapterpg.TxManager) {
 	t.Helper()
 
-	pool := newPerTestPool(t)
+	pool := sharedPG.NewPerTestPool(t)
 	session := NewSession(pool.DB())
 	repo := NewFlagRepository(session, clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	return repo, txMgr, func() {}
+	return repo, txMgr
 }
 
 // TestFlagRepo_Restart_Persistence verifies that a flag created in one
 // FlagRepository instance is visible after the repository is recreated
 // (simulating a process restart with the same PG container).
 func TestFlagRepo_Restart_Persistence(t *testing.T) {
-	repo, txMgr, cleanup := setupFlagPG(t)
-	defer cleanup()
+	repo, txMgr := setupFlagPG(t)
 	ctx := context.Background()
 
 	now := time.Now()
@@ -74,8 +73,7 @@ func TestFlagRepo_Restart_Persistence(t *testing.T) {
 // TestFlagRepo_Toggle_Persistence verifies that Toggle increments version and
 // the updated version persists in PG (survives repository re-creation).
 func TestFlagRepo_Toggle_Persistence(t *testing.T) {
-	repo, txMgr, cleanup := setupFlagPG(t)
-	defer cleanup()
+	repo, txMgr := setupFlagPG(t)
 	ctx := context.Background()
 
 	now := time.Now()

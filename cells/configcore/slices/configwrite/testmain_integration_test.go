@@ -6,7 +6,6 @@ import (
 	"os"
 	"testing"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/tests/testutil/pgshare"
 )
 
@@ -26,7 +25,3 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func newPerTestPool(t *testing.T) *adapterpg.Pool {
-	t.Helper()
-	return sharedPG.NewPerTestPool(t)
-}
