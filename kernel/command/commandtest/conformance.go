@@ -37,6 +37,21 @@ type TxRunner interface {
 // TEST-TIME-LITERAL-01 archtest and documents the intent at a single location.
 const fifoSeedSpacing = 2 * time.Second
 
+// Conformance test format strings and fixture IDs used across multiple
+// sub-tests. Extracted as constants to satisfy go:S1192 (duplicate literal
+// threshold ≥ 3).
+const (
+	fmtGetCommand = "GetCommand: %v"
+	fmtDequeue    = "Dequeue: %v"
+	fmtAck        = "Ack: %v"
+	fmtScanActive = "ScanActive: %v"
+
+	fixtureRepIdem1 = "rep-idem-1"
+	fixtureAckMM    = "ack-mm"
+	fixtureCancelP  = "cancel-p"
+	fixtureCancelT  = "cancel-t"
+)
+
 // QueueFactory builds a fresh Queue + ActiveScanner pair (typically the same
 // concrete type) plus the matching TxRunner. The returned cleanup MUST be
 // idempotent and tolerate being called even if no resources were acquired.
@@ -195,7 +210,7 @@ func runEnqueueHappy(t *testing.T, factory QueueFactory, features Features) {
 
 	got, err := scanner.GetCommand(ctx, "enq-1")
 	if err != nil {
-		t.Fatalf("GetCommand: %v", err)
+		t.Fatalf(fmtGetCommand, err)
 	}
 	if got.Status != command.StatusPending {
 		t.Fatalf("expected Pending after Enqueue, got %s", got.Status)
@@ -302,7 +317,7 @@ func runDequeueFIFO(t *testing.T, factory QueueFactory, features Features) {
 		got, derr = q.Dequeue(c, "dev-x", 2, command.DefaultLeaseDuration)
 		return derr
 	}); err != nil {
-		t.Fatalf("Dequeue: %v", err)
+		t.Fatalf(fmtDequeue, err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(got))
@@ -324,7 +339,7 @@ func runDequeueEmpty(t *testing.T, factory QueueFactory, features Features) {
 		got, derr = q.Dequeue(c, "missing-device", 5, command.DefaultLeaseDuration)
 		return derr
 	}); err != nil {
-		t.Fatalf("Dequeue: %v", err)
+		t.Fatalf(fmtDequeue, err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected 0 entries from empty queue, got %d", len(got))
@@ -345,7 +360,7 @@ func runDequeueNTooLarge(t *testing.T, factory QueueFactory, features Features) 
 		got, derr = q.Dequeue(c, "dev-y", 10, command.DefaultLeaseDuration)
 		return derr
 	}); err != nil {
-		t.Fatalf("Dequeue: %v", err)
+		t.Fatalf(fmtDequeue, err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("expected 1 entry (n>available), got %d", len(got))
@@ -372,7 +387,7 @@ func runDequeueAdvancesToSent(t *testing.T, factory QueueFactory, features Featu
 
 	stored, err := scanner.GetCommand(ctx, "adv-1")
 	if err != nil {
-		t.Fatalf("GetCommand: %v", err)
+		t.Fatalf(fmtGetCommand, err)
 	}
 	if stored.Status != command.StatusSent {
 		t.Fatalf("expected persisted Status=Sent, got %s", stored.Status)
@@ -400,7 +415,7 @@ func runReportSentToDelivered(t *testing.T, factory QueueFactory, features Featu
 
 	got, err := scanner.GetCommand(ctx, "rep-1")
 	if err != nil {
-		t.Fatalf("GetCommand: %v", err)
+		t.Fatalf(fmtGetCommand, err)
 	}
 	if got.Status != command.StatusDelivered {
 		t.Fatalf("expected Delivered, got %s", got.Status)
@@ -416,17 +431,17 @@ func runReportIdempotent(t *testing.T, factory QueueFactory, features Features) 
 	defer cleanup()
 	ctx := context.Background()
 
-	seedEntry(t, ctx, q, tx, features, makeEntry("rep-idem-1", "dev-a", n()))
+	seedEntry(t, ctx, q, tx, features, makeEntry(fixtureRepIdem1, "dev-a", n()))
 	dequeueOne(t, ctx, q, tx, features, "dev-a")
 
 	// First Report — advances Sent→Delivered and sets delivered_at.
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return q.Report(c, "rep-idem-1", n())
+		return q.Report(c, fixtureRepIdem1, n())
 	}); err != nil {
 		t.Fatalf("Report first call: %v", err)
 	}
 
-	first, err := scanner.GetCommand(ctx, "rep-idem-1")
+	first, err := scanner.GetCommand(ctx, fixtureRepIdem1)
 	if err != nil {
 		t.Fatalf("GetCommand after first Report: %v", err)
 	}
@@ -437,12 +452,12 @@ func runReportIdempotent(t *testing.T, factory QueueFactory, features Features) 
 
 	// Second Report — must be idempotent: no error and delivered_at unchanged.
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return q.Report(c, "rep-idem-1", n())
+		return q.Report(c, fixtureRepIdem1, n())
 	}); err != nil {
 		t.Fatalf("Report second call: %v", err)
 	}
 
-	second, err := scanner.GetCommand(ctx, "rep-idem-1")
+	second, err := scanner.GetCommand(ctx, fixtureRepIdem1)
 	if err != nil {
 		t.Fatalf("GetCommand after second Report: %v", err)
 	}
@@ -529,7 +544,7 @@ func runAckTerminalViaDelivered(
 	}
 	got, err := scanner.GetCommand(ctx, id)
 	if err != nil {
-		t.Fatalf("GetCommand: %v", err)
+		t.Fatalf(fmtGetCommand, err)
 	}
 	if got.Status != want {
 		t.Fatalf("expected %s after Delivered→Ack, got %s", want, got.Status)
@@ -551,11 +566,11 @@ func runAckTerminal(t *testing.T, factory QueueFactory, features Features, id st
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
 		return q.Ack(c, id, reason, n())
 	}); err != nil {
-		t.Fatalf("Ack: %v", err)
+		t.Fatalf(fmtAck, err)
 	}
 	got, err := scanner.GetCommand(ctx, id)
 	if err != nil {
-		t.Fatalf("GetCommand: %v", err)
+		t.Fatalf(fmtGetCommand, err)
 	}
 	if got.Status != want {
 		t.Fatalf("expected %s, got %s", want, got.Status)
@@ -589,16 +604,16 @@ func runAckMismatchTerminal(t *testing.T, factory QueueFactory, features Feature
 	defer cleanup()
 	ctx := context.Background()
 
-	seedEntry(t, ctx, q, tx, features, makeEntry("ack-mm", "dev-a", n()))
+	seedEntry(t, ctx, q, tx, features, makeEntry(fixtureAckMM, "dev-a", n()))
 	dequeueOne(t, ctx, q, tx, features, "dev-a")
 
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return q.Ack(c, "ack-mm", command.AckSuccess, n())
+		return q.Ack(c, fixtureAckMM, command.AckSuccess, n())
 	}); err != nil {
 		t.Fatalf("first Ack: %v", err)
 	}
 	err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return q.Ack(c, "ack-mm", command.AckFailed, n())
+		return q.Ack(c, fixtureAckMM, command.AckFailed, n())
 	})
 	requireErrCode(t, err, errcode.ErrValidationFailed)
 }
@@ -684,16 +699,16 @@ func runCancelPending(t *testing.T, factory QueueFactory, features Features) {
 	defer cleanup()
 	ctx := context.Background()
 
-	seedEntry(t, ctx, q, tx, features, makeEntry("cancel-p", "dev-a", n()))
+	seedEntry(t, ctx, q, tx, features, makeEntry(fixtureCancelP, "dev-a", n()))
 
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return q.Cancel(c, "cancel-p", n())
+		return q.Cancel(c, fixtureCancelP, n())
 	}); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	got, err := scanner.GetCommand(ctx, "cancel-p")
+	got, err := scanner.GetCommand(ctx, fixtureCancelP)
 	if err != nil {
-		t.Fatalf("GetCommand: %v", err)
+		t.Fatalf(fmtGetCommand, err)
 	}
 	if got.Status != command.StatusCanceled {
 		t.Fatalf("expected Canceled, got %s", got.Status)
@@ -706,16 +721,16 @@ func runCancelTerminal(t *testing.T, factory QueueFactory, features Features) {
 	defer cleanup()
 	ctx := context.Background()
 
-	seedEntry(t, ctx, q, tx, features, makeEntry("cancel-t", "dev-a", n()))
+	seedEntry(t, ctx, q, tx, features, makeEntry(fixtureCancelT, "dev-a", n()))
 	dequeueOne(t, ctx, q, tx, features, "dev-a")
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return q.Ack(c, "cancel-t", command.AckSuccess, n())
+		return q.Ack(c, fixtureCancelT, command.AckSuccess, n())
 	}); err != nil {
-		t.Fatalf("Ack: %v", err)
+		t.Fatalf(fmtAck, err)
 	}
 
 	err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return q.Cancel(c, "cancel-t", n())
+		return q.Cancel(c, fixtureCancelT, n())
 	})
 	requireErrCode(t, err, errcode.ErrValidationFailed)
 }
@@ -736,7 +751,7 @@ func runScanActiveByDevice(t *testing.T, factory QueueFactory, features Features
 
 	got, err := scanner.ScanActive(ctx, command.ScanFilter{DeviceID: "dev-a"})
 	if err != nil {
-		t.Fatalf("ScanActive: %v", err)
+		t.Fatalf(fmtScanActive, err)
 	}
 	if len(got) != 1 || got[0].ID != "sa-1" {
 		t.Fatalf("expected only sa-1, got %#v", got)
@@ -756,7 +771,7 @@ func runScanActiveByStatus(t *testing.T, factory QueueFactory, features Features
 
 	got, err := scanner.ScanActive(ctx, command.ScanFilter{Statuses: []command.Status{command.StatusPending}})
 	if err != nil {
-		t.Fatalf("ScanActive: %v", err)
+		t.Fatalf(fmtScanActive, err)
 	}
 	// FIFO dequeue advances st-pend (oldest) to Sent; st-sent remains Pending.
 	// Filtering by StatusPending must return only the still-Pending entry st-sent.
@@ -777,12 +792,12 @@ func runScanActiveExcludesTerminal(t *testing.T, factory QueueFactory, features 
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
 		return q.Ack(c, "term-1", command.AckSuccess, n())
 	}); err != nil {
-		t.Fatalf("Ack: %v", err)
+		t.Fatalf(fmtAck, err)
 	}
 
 	got, err := scanner.ScanActive(ctx, command.ScanFilter{})
 	if err != nil {
-		t.Fatalf("ScanActive: %v", err)
+		t.Fatalf(fmtScanActive, err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected no active entries (only one terminal), got %d", len(got))
@@ -802,7 +817,7 @@ func runScanActiveSorted(t *testing.T, factory QueueFactory, features Features) 
 
 	got, err := scanner.ScanActive(ctx, command.ScanFilter{})
 	if err != nil {
-		t.Fatalf("ScanActive: %v", err)
+		t.Fatalf(fmtScanActive, err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(got))
@@ -825,7 +840,7 @@ func runGetCommandHappy(t *testing.T, factory QueueFactory, features Features) {
 	seedEntry(t, ctx, q, tx, features, makeEntry("get-1", "dev-a", n()))
 	got, err := scanner.GetCommand(ctx, "get-1")
 	if err != nil {
-		t.Fatalf("GetCommand: %v", err)
+		t.Fatalf(fmtGetCommand, err)
 	}
 	if got.ID != "get-1" {
 		t.Fatalf("expected ID get-1, got %s", got.ID)

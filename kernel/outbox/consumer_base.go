@@ -372,7 +372,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 					slog.Any("error", err))
 				return cb.retryLoop(ctx, cellID, consumerGroup, topic, entry, handler), nil
 			}
-			return cb.handleClaimState(ctx, cellID, consumerGroup, topic, entry, handler, state, receipt)
+			return cb.handleClaimState(ctx, deliveryDims{cellID: cellID, consumerGroup: consumerGroup, topic: topic}, entry, handler, state, receipt)
 		}
 
 		// Fail-closed: claimWithRetry handles all attempts with backoff + jitter.
@@ -386,7 +386,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 				slog.Any("error", err))
 			return Requeue(err), nil
 		}
-		return cb.handleClaimState(ctx, cellID, consumerGroup, topic, entry, handler, state, receipt)
+		return cb.handleClaimState(ctx, deliveryDims{cellID: cellID, consumerGroup: consumerGroup, topic: topic}, entry, handler, state, receipt)
 	}
 }
 
@@ -456,20 +456,29 @@ func (cb *ConsumerBase) claimWithRetry(
 	return 0, zeroReceipt, lastErr
 }
 
+// deliveryDims groups the observability and idempotency dimensions that flow
+// together through handleClaimState → runWithRenewal → retryLoop. Bundling
+// the three string fields into one struct keeps handleClaimState within the
+// 7-parameter limit (go:S107) without altering the inner-function signatures.
+type deliveryDims struct {
+	cellID        string
+	consumerGroup string
+	topic         string
+}
+
 // handleClaimState dispatches on the Claim result state. Both fail-open and
 // fail-closed paths share the same ClaimDone / ClaimBusy / ClaimAcquired logic.
 // Returns (HandleResult, Settlement) so Settlement flows to the Subscriber.
 // Settlement is nil for ClaimDone and ClaimBusy (no idempotency state to settle).
 func (cb *ConsumerBase) handleClaimState(
 	ctx context.Context,
-	cellID string,
-	consumerGroup string,
-	topic string,
+	dims deliveryDims,
 	entry Entry,
 	handler EntryHandler,
 	state idempotency.ClaimState,
 	receipt idempotency.Receipt,
 ) (HandleResult, Settlement) {
+	cellID, consumerGroup, topic := dims.cellID, dims.consumerGroup, dims.topic
 	switch state {
 	case idempotency.ClaimDone:
 		logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",

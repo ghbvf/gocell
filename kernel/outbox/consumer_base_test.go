@@ -669,6 +669,30 @@ func TestConsumerBase_Wrap_ClaimError_FailOpen_ProceedsWithoutReceipt(t *testing
 	assert.Nil(t, settlement, "no settlement when claim failed under fail-open")
 }
 
+func TestConsumerBase_Wrap_FailOpen_ClaimSucceeds_RoutesViaHandleClaimState(t *testing.T) {
+	// Covers the fail-open path where claimWithRetry succeeds (ClaimAcquired),
+	// so Wrap calls handleClaimState (consumer_base.go line 375).
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ClaimPolicy:          ClaimPolicyFailOpen,
+		LeaseRenewalInterval: disableLeaseRenewal,
+	}, clock.Real())
+	require.NoError(t, err)
+
+	called := false
+	handler := cb.Wrap(Subscription{Topic: "t", ConsumerGroup: "cg", CellID: "cell"}, func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return Ack()
+	})
+
+	res, settlement := handler(context.Background(), Entry{ID: "evt-fo-claim-ok"})
+	assert.True(t, called, "handler must be invoked when claim acquired under fail-open")
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.NotNil(t, settlement, "settlement must be non-nil when claim acquired")
+}
+
 func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 	claimer := &fakeClaimer{err: errors.New("redis down")}
 
@@ -1572,4 +1596,70 @@ type panicingObserver struct{}
 
 func (p *panicingObserver) ObserveReject(_, _, _, _ string) {
 	panic("panicingObserver: intentional panic for isolation test")
+}
+
+// TestConsumerBase_DeliveryDims_AllThreeFieldsForwardedToObserveReject asserts
+// that deliveryDims.cellID, deliveryDims.consumerGroup, and deliveryDims.topic
+// are all independently forwarded to ObserveReject on a handler-reject path.
+// Each sub-case uses a distinct value for each field so a field swap or
+// truncation is immediately visible.
+func TestConsumerBase_DeliveryDims_AllThreeFieldsForwardedToObserveReject(t *testing.T) {
+	cases := []struct {
+		name          string
+		cellID        string
+		consumerGroup string
+		topic         string
+	}{
+		{
+			name:          "distinct_values",
+			cellID:        "cell-alpha",
+			consumerGroup: "cg-beta",
+			topic:         "event.gamma.v1",
+		},
+		{
+			name:          "long_topic",
+			cellID:        "accesscore",
+			consumerGroup: "cg-accesscore-session",
+			topic:         "event.session.created.v1",
+		},
+		{
+			name:          "minimal_ids",
+			cellID:        "c",
+			consumerGroup: "g",
+			topic:         "t",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := &fakeObserver{}
+			receipt := &fakeReceipt{}
+			claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+			cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+				LeaseRenewalInterval: disableLeaseRenewal,
+			}, clock.Real())
+			require.NoError(t, err)
+			require.NoError(t, cb.AttachObserver(obs))
+
+			sub := Subscription{
+				CellID:        tc.cellID,
+				ConsumerGroup: tc.consumerGroup,
+				Topic:         tc.topic,
+			}
+			handler := cb.Wrap(sub, func(_ context.Context, _ Entry) HandleResult {
+				return Reject(errors.New("bad payload"))
+			})
+
+			_, _ = handler(context.Background(), Entry{ID: "evt-dims"})
+
+			require.Len(t, obs.calls, 1, "ObserveReject must be called exactly once")
+			assert.Equal(t, tc.cellID, obs.calls[0].cellID,
+				"deliveryDims.cellID must flow to ObserveReject")
+			assert.Equal(t, tc.consumerGroup, obs.calls[0].consumerGroup,
+				"deliveryDims.consumerGroup must flow to ObserveReject")
+			assert.Equal(t, tc.topic, obs.calls[0].topic,
+				"deliveryDims.topic must flow to ObserveReject")
+			assert.Equal(t, ConsumerRejectReasonHandlerReject, obs.calls[0].reason)
+		})
+	}
 }

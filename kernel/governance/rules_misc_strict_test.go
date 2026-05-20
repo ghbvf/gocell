@@ -18,6 +18,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/verify"
 )
 
 // =============================================================================
@@ -155,7 +156,7 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 func TestValidateStrict_IncludesVERIFY06OnlyWhenStrict(t *testing.T) {
 	project := validProject()
 	project.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-		{Text: "manual signoff", Mode: "manual"},
+		{Text: "manual signoff", Mode: verify.ModeManual},
 	}
 
 	v := NewValidator(project, "", clock.Real())
@@ -184,7 +185,7 @@ func TestValidateStrict_IncludesVERIFY06OnlyWhenStrict(t *testing.T) {
 func TestValidateStrictFailFast_IncludesVERIFY06WhenBaseClean(t *testing.T) {
 	project := validProject()
 	project.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-		{Text: "manual signoff", Mode: "manual"},
+		{Text: "manual signoff", Mode: verify.ModeManual},
 	}
 
 	results, err := NewValidator(project, "", clock.Real()).ValidateStrict(t.Context(), true, true)

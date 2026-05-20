@@ -86,8 +86,8 @@ func TestRunJourney_ManualPending(t *testing.T) {
 			"J-test": {
 				ID: "J-test",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "manual", Text: "Check the UI renders correctly"},
-					{Mode: "manual", Text: "Verify email was sent"},
+					{Mode: ModeManual, Text: "Check the UI renders correctly"},
+					{Mode: ModeManual, Text: "Verify email was sent"},
 				},
 			},
 		},
@@ -111,7 +111,7 @@ func TestRunJourney_AutoNoCheckRef(t *testing.T) {
 			"J-test": {
 				ID: "J-test",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "auto", Text: "Unverifiable criterion", CheckRef: ""},
+					{Mode: ModeAuto, Text: "Unverifiable criterion", CheckRef: ""},
 				},
 			},
 		},
@@ -130,7 +130,7 @@ func TestRunJourney_InvalidRef(t *testing.T) {
 			"J-test": {
 				ID: "J-test",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "auto", CheckRef: "bad-ref"},
+					{Mode: ModeAuto, CheckRef: "bad-ref"},
 				},
 			},
 		},
@@ -150,7 +150,7 @@ func TestRunActiveJourneys_ManualOnlyActiveFails(t *testing.T) {
 				ID:        "J-test",
 				Lifecycle: "active",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "manual", Text: "Security signoff"},
+					{Mode: ModeManual, Text: "Security signoff"},
 				},
 			},
 		},
@@ -183,7 +183,7 @@ func TestRunActiveJourneys_EmptyActiveSetFails(t *testing.T) {
 				ID:        "J-draft",
 				Lifecycle: "experimental",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "manual", Text: "Explore manually"},
+					{Mode: ModeManual, Text: "Explore manually"},
 				},
 			},
 		},
@@ -215,7 +215,7 @@ func TestJActiveHappyPath(t *testing.T) {}
 				ID:        "J-active",
 				Lifecycle: "active",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "auto", Text: "Happy path", CheckRef: "journey.J-active.happy-path"},
+					{Mode: ModeAuto, Text: "Happy path", CheckRef: "journey.J-active.happy-path"},
 				},
 			},
 		},
@@ -336,6 +336,34 @@ func TestResolveSlicePkg_PrefersGoFiles(t *testing.T) {
 func TestResolveSlicePkg_FallbackToMetadata(t *testing.T) {
 	pkg := resolveSlicePkg(t.TempDir(), "c", "nonexistent")
 	assert.Contains(t, pkg, "nonexistent")
+}
+
+func TestResolveSlicePkg_UsesSliceIDDirWhenStrippedHasNoGoFiles(t *testing.T) {
+	// Covers the second branch: hasGoFiles(base, sliceID) = true,
+	// hasGoFiles(base, stripped) = false.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "cells", "c", "slices")
+	// Create Go package in the hyphenated dir (sliceID), not in stripped dir.
+	goDir := filepath.Join(base, "my-slice")
+	require.NoError(t, os.MkdirAll(goDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "handler.go"), []byte("package myslice"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "c", "my-slice")
+	assert.Contains(t, pkg, "my-slice", "should use sliceID dir when stripped dir has no Go files")
+}
+
+func TestResolveSlicePkg_FallbackToStrippedDirWhenNoGoFiles(t *testing.T) {
+	// Covers the third branch: dirExists(base, stripped) = true but
+	// hasGoFiles = false for both stripped and sliceID dirs.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "cells", "c", "slices")
+	// Create stripped dir with only a YAML file (no Go files).
+	strippedDir := filepath.Join(base, "myslice")
+	require.NoError(t, os.MkdirAll(strippedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(strippedDir, "slice.yaml"), []byte("id: my-slice"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "c", "my-slice")
+	assert.Contains(t, pkg, "myslice", "should use stripped dir when it exists but has no Go files")
 }
 
 func TestIsZeroMatch(t *testing.T) {

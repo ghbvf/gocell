@@ -187,8 +187,8 @@ func validProject() *metadata.ProjectMeta {
 					"projection.session.active.v1",
 				},
 				PassCriteria: []metadata.PassCriterion{
-					{Text: "login returns token", Mode: "auto", CheckRef: "journey.J-ssologin.login-returns-token"},
-					{Text: "manual review", Mode: "manual"},
+					{Text: "login returns token", Mode: verify.ModeAuto, CheckRef: "journey.J-ssologin.login-returns-token"},
+					{Text: "manual review", Mode: verify.ModeManual},
 				},
 				File: "journeys/J-ssologin.yaml",
 			},
@@ -1335,7 +1335,7 @@ func TestVERIFY05(t *testing.T) {
 			name: "journey checkRef valid format",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "login ok", Mode: "auto", CheckRef: "journey.J-ssologin.login-ok"},
+					{Text: "login ok", Mode: verify.ModeAuto, CheckRef: "journey.J-ssologin.login-ok"},
 				}
 			},
 			wantCount: 0,
@@ -1344,7 +1344,7 @@ func TestVERIFY05(t *testing.T) {
 			name: "journey checkRef invalid prefix",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "login ok", Mode: "auto", CheckRef: "unknown.J-ssologin.login-ok"},
+					{Text: "login ok", Mode: verify.ModeAuto, CheckRef: "unknown.J-ssologin.login-ok"},
 				}
 			},
 			wantCount: 1,
@@ -1353,7 +1353,7 @@ func TestVERIFY05(t *testing.T) {
 			name: "journey checkRef too few segments",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "login ok", Mode: "auto", CheckRef: "journey.login"},
+					{Text: "login ok", Mode: verify.ModeAuto, CheckRef: "journey.login"},
 				}
 			},
 			wantCount: 1,
@@ -1369,7 +1369,7 @@ func TestVERIFY05(t *testing.T) {
 			name: "empty checkRef is skipped",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "manual step", Mode: "manual", CheckRef: ""},
+					{Text: "manual step", Mode: verify.ModeManual, CheckRef: ""},
 				}
 			},
 			wantCount: 0,
@@ -1417,7 +1417,7 @@ func TestVERIFY06(t *testing.T) {
 			name: "active journey with stale auto check fails strict",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "stale check", Mode: "auto", CheckRef: "journey.J-ssologin.missing"},
+					{Text: "stale check", Mode: verify.ModeAuto, CheckRef: "journey.J-ssologin.missing"},
 				}
 			},
 			verifier: func(_ context.Context, _ *metadata.JourneyMeta, ref string) (verify.TestResult, []error) {
@@ -1429,7 +1429,7 @@ func TestVERIFY06(t *testing.T) {
 			name: "active journey with only manual criteria fails strict",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "security signoff", Mode: "manual"},
+					{Text: "security signoff", Mode: verify.ModeManual},
 				}
 			},
 			wantCount: 1,
@@ -1438,7 +1438,7 @@ func TestVERIFY06(t *testing.T) {
 			name: "active journey auto criterion without checkRef does not count",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "unwired check", Mode: "auto"},
+					{Text: "unwired check", Mode: verify.ModeAuto},
 				}
 			},
 			wantCount: 1,
@@ -1447,7 +1447,7 @@ func TestVERIFY06(t *testing.T) {
 			name: "active journey cannot borrow another journey checkRef",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "other journey check", Mode: "auto", CheckRef: "journey.J-other.session-db"},
+					{Text: "other journey check", Mode: verify.ModeAuto, CheckRef: "journey.J-other.session-db"},
 				}
 			},
 			wantCount: 1,
@@ -1457,7 +1457,7 @@ func TestVERIFY06(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].Lifecycle = "experimental"
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "explore user flow", Mode: "manual"},
+					{Text: "explore user flow", Mode: verify.ModeManual},
 				}
 			},
 			wantCount: 0,
@@ -1555,7 +1555,7 @@ func TestFMT24(t *testing.T) {
 			name: "auto criterion requires checkRef",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "unwired", Mode: "auto"},
+					{Text: "unwired", Mode: verify.ModeAuto},
 				}
 			},
 			wantCount: 1,
@@ -1564,7 +1564,7 @@ func TestFMT24(t *testing.T) {
 			name: "manual criterion must not carry checkRef",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
-					{Text: "manual signoff", Mode: "manual", CheckRef: "journey.J-ssologin.signoff"},
+					{Text: "manual signoff", Mode: verify.ModeManual, CheckRef: "journey.J-ssologin.signoff"},
 				}
 			},
 			wantCount: 1,
