@@ -41,6 +41,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -145,7 +146,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 		finalUser.AuthzEpoch(), successCount.Load())
 
 	// All sessions for the subject must be revoked after the concurrent storm.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "identity-credential-race-resolved", func() bool {
 		view, getErr := sessionStore.Get(context.Background(), seedSessionID)
 		if getErr != nil {
 			return true // session gone → effectively revoked

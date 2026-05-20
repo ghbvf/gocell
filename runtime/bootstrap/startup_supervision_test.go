@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // Site-specific startup-budget durations (TEST-TIME-LITERAL-01: no inline
@@ -117,7 +118,7 @@ func TestSuperviseLifecycleStart_StartupBudgetElapsed(t *testing.T) {
 	// Advance the fake clock in the Eventually loop until the goroutine exits.
 	var got error
 	var closed bool
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-budget-elapsed", func() bool {
 		fc.Advance(superviseBudgetOvershoot)
 		select {
 		case err := <-resultCh:
@@ -163,7 +164,7 @@ func TestSuperviseLifecycleStart_CtxIgnoringHookDetaches(t *testing.T) {
 	// way superviseLifecycleStart returns is the detach (grace-timer) branch.
 	var got error
 	var closed bool
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-budget-elapsed", func() bool {
 		fc.Advance(superviseBudgetOvershoot + startupUnwindGraceTimeout)
 		select {
 		case err := <-resultCh:

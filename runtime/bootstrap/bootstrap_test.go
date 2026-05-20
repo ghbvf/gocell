@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -115,7 +116,7 @@ type testListeners struct {
 // In the PR-A14b model, /healthz lives on the HealthListener, not the primary.
 func waitForHealthy(t *testing.T, addr string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -572,7 +573,7 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -636,7 +637,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	}
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -708,7 +709,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 
 	// Wait for the HTTP server to be ready.
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -768,7 +769,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 
 	// Wait for the HTTP server to be ready.
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -828,7 +829,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -906,7 +907,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -1062,7 +1063,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -1130,7 +1131,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -1197,7 +1198,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -1206,7 +1207,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-watcher-ready", func() bool {
 		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 		if err != nil {
 			return false
@@ -1265,7 +1266,7 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-watcher-ready", func() bool {
 		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 		if err != nil {
 			return false
@@ -1401,7 +1402,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 
 	addr := ln.Addr().String()
 	// Wait for server to be ready (healthy initially — no drift yet).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 		if err != nil {
 			return false
@@ -1418,7 +1419,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	// 5xx redaction strips wire details), so we pair the HTTP poll with the
 	// driftSlogCapture installed above. configDriftCheckerName must appear
 	// unhealthy in the captured breakdown.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-drift-detected", func() bool {
 		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 		if err != nil {
 			return false
@@ -1515,7 +1516,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -1740,7 +1741,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -1753,7 +1754,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 
 	// Wait just long enough for the callback to start but not finish.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return slow.called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.D10ms, "slow handler should have started")
 
@@ -1800,7 +1801,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 
 	// Wait for HTTP ready.
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -1813,7 +1814,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\nnew_key: added\n"), 0o644))
 
 	// Wait for callback.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected OnConfigReload to fire")
 
@@ -1860,7 +1861,7 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -1873,7 +1874,7 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 
 	// Wait for callback to be called (even though it returns error).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -1915,7 +1916,7 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -1928,7 +1929,7 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 
 	// Wait for panic to fire and be recovered.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.panicCount.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected OnConfigReload panic to fire")
 
@@ -1974,7 +1975,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -1987,7 +1988,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 
 	// Wait for all cells to be called.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return cells[2].eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -2032,7 +2033,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -2045,7 +2046,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 
 	// Wait for reloader cell to be called.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -2089,7 +2090,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -2100,7 +2101,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 
 	// First: write different content to confirm the callback pipeline works.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected first config change to fire callback")
 
@@ -2117,7 +2118,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	// Third: write different content — proves the watcher is still alive
 	// after the no-diff reload.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.eventCount() >= 2
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected third config change to fire callback")
 
@@ -2192,7 +2193,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -2205,7 +2206,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\nnew_key: added\n"), 0o644))
 
 	// Wait for both cells to be called.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return observer.eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -2254,7 +2255,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -2317,7 +2318,7 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -2381,7 +2382,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if e != nil {
 			return false
@@ -2394,7 +2395,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	time.Sleep(fsnotifySettleDelay) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
 	prevCount := rc.eventCount()
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.eventCount() > prevCount
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -2407,7 +2408,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	time.Sleep(fsnotifySettleDelay) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
 	prevCount = rc.eventCount()
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.eventCount() > prevCount
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -2541,7 +2542,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -2640,7 +2641,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -3543,7 +3544,7 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 	// Change any key — plain reloader must receive notification.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: db-primary\n"), 0o644))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
 		return rc.eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "plain OnConfigReload (no prefixes) must receive all notifications")
 

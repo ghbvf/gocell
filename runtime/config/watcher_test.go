@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 const watcherMaxDebounceCeiling = 400 * time.Millisecond
@@ -76,7 +77,7 @@ func TestWatcher_OnChange(t *testing.T) {
 
 	touchFile(t, file, "key: val2")
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected OnChange callback to fire")
 
@@ -125,7 +126,7 @@ func TestWatcher_AtomicReplace_RenameCreate(t *testing.T) {
 	require.NoError(t, os.Rename(file, file+".bak"))
 	touchFile(t, file, "key: v2")
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected callback after atomic rename+create")
 }
@@ -147,7 +148,7 @@ func TestWatcher_AtomicReplace_RemoveRecreate(t *testing.T) {
 	require.NoError(t, os.Remove(file))
 	touchFile(t, file, "key: v2")
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected callback after remove+recreate")
 }
@@ -186,7 +187,7 @@ func TestWatcher_StartWithContext(t *testing.T) {
 
 	cancel()
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-close-completed", func() bool {
 		_ = w.Close(context.Background())
 		return true
 	}, testtime.D2s, testtime.MediumPoll)
@@ -253,7 +254,7 @@ func TestWatcher_Debounce_CoalescesRapidWrites(t *testing.T) {
 		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 	}
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() == 1
 	}, testtime.D2s, testtime.D20ms, "debounce should coalesce rapid schedules into one callback")
 
@@ -292,7 +293,7 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 	}()
 
 	// Wait for at least 2 ceiling-forced callbacks (tolerant of slow CI).
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 2
 	}, testtime.EventuallyLong, testtime.MediumPoll, "max ceiling should force at least 2 callbacks")
 
@@ -320,7 +321,7 @@ func TestWatcher_Debounce_ZeroMeansImmediate(t *testing.T) {
 
 	touchFile(t, file, "key: v1")
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 1
 	}, testtime.D2s, testtime.MediumPoll, "zero debounce should fire immediately")
 }
@@ -372,7 +373,7 @@ func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
 	// when assertion ran. Anchoring Eventually on gotPivot keeps the loop
 	// alive until the SymlinkPivot signal arrives or the budget expires,
 	// matching the property the test is meant to lock down.
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-symlink-pivot-detected", func() bool {
 		return gotPivot.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "WatchEvent.SymlinkPivot should be true")
 
@@ -420,7 +421,7 @@ func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {
 	require.NoError(t, os.Remove(dataLink))
 	require.NoError(t, os.Symlink("..2024_v2", dataLink))
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "K8s-style symlink pivot should fire callback")
 }
@@ -450,7 +451,7 @@ func TestWatcher_SymlinkPivot_RegularFileUnaffected(t *testing.T) {
 
 	touchFile(t, file, "key: v2")
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -513,7 +514,7 @@ func TestWatcher_WithMetrics_RecordsEvents(t *testing.T) {
 
 	touchFile(t, file, "key: v1")
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-metrics-recorded", func() bool {
 		return spy.events.Load() >= 1 && spy.lastTime.Load() > 0
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "metrics should record events and timestamp")
 }
@@ -542,7 +543,7 @@ func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
 		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 	}
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.D20ms, "rapid writes should still dispatch a debounced callback")
 
@@ -678,7 +679,7 @@ func TestWatcher_FullLifecycle_AllOptions(t *testing.T) {
 
 	// Write and verify debounced callback.
 	touchFile(t, file, "key: v1")
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-watcher-update-received", func() bool {
 		return called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -909,7 +910,7 @@ func TestWatcher_PivotTick_CoversPositiveBranch(t *testing.T) {
 	require.NoError(t, os.Symlink(v2, link))
 
 	// Wait for the first pivot callback (event path on Linux, tick on macOS).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "config-symlink-pivot-detected", func() bool {
 		return pivotCount.Load() >= 1
 	}, testtime.D2s, testtime.FastPoll, "first pivot must be detected")
 
@@ -920,7 +921,7 @@ func TestWatcher_PivotTick_CoversPositiveBranch(t *testing.T) {
 	w.mu.Unlock()
 
 	// The next tick (≤5ms) will call checkSymlinkPivot → true → cover lines 302-304.
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-symlink-pivot-detected", func() bool {
 		return pivotCount.Load() >= 2
 	}, testtime.D2s, testtime.FastPoll, "tick path positive branch must fire second callback")
 }
@@ -987,7 +988,7 @@ func TestWatcher_WithSymlinkPollInterval_CustomInterval(t *testing.T) {
 	require.NoError(t, os.Remove(link))
 	require.NoError(t, os.Symlink(v2, link))
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "config-symlink-pivot-detected", func() bool {
 		return gotPivot.Load() >= 1
 	}, testtime.D2s, testtime.D20ms, "custom poll interval must detect symlink pivot")
 }

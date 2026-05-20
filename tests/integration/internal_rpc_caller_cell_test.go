@@ -46,6 +46,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -244,7 +245,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 
 	// Wait for the primary listener to serve /healthz (signals full bootstrap).
 	primaryAddr := primaryLn.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "integration-internal-rpc-caller-cell-asserted", func() bool {
 		resp, err := callerCellHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false

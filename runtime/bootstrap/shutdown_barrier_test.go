@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
@@ -92,7 +93,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	// Wait for /readyz to flip to 503 (SetShuttingDown fires at the start of
 	// phase10 before preShutdownDelay). This replaces a fixed sleep so the
 	// test is robust on slow CI runners.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-readyz-unhealthy", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 		if err != nil {
 			return false

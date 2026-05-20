@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
@@ -69,12 +70,12 @@ func TestL2_RefreshReuseTriggersCascade(t *testing.T) {
 	// returns. The require.Eventually wrapper exists only to absorb the small
 	// CI-side gap between handler completion and SELECT visibility under load;
 	// the cascade itself is not eventually-consistent.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "l2-reuse-epoch-advanced", func() bool {
 		return queryUserAuthzEpoch(t, h, victimID) > epochBefore
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"users.authz_epoch must advance after reuse cascade (epochBefore=%d)", epochBefore)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "l2-reuse-sessions-revoked", func() bool {
 		return countLiveSessions(t, h, victimID) == 0
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"all victim sessions must be revoked after reuse cascade")
@@ -83,7 +84,7 @@ func TestL2_RefreshReuseTriggersCascade(t *testing.T) {
 	// this assertion the test would still pass if RevokeUser degraded to a no-op
 	// (epoch bump + session revoke alone would still make access tokens 401).
 	// Verify both the DB-row terminal state and the HTTP-surface effect.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "l2-reuse-refresh-tokens-revoked", func() bool {
 		return countLiveRefreshTokensForSubject(t, h, victimID) == 0
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"all victim refresh tokens must be revoked after reuse cascade (RevokeUser third op)")

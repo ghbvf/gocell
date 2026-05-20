@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -135,7 +136,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	go func() { done <- app.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-listener-started", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -366,7 +367,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 	addr := ln.Addr().String()
 	internalAddr := internalLn.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-listener-started", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -597,7 +598,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	primaryAddr := primaryLn.Addr().String()
 
 	// Wait for health listener to become ready (health endpoints live there now).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-listener-started", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
 		if err != nil {
 			return false

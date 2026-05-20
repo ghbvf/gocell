@@ -16,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 func TestNewTool(t *testing.T) {
@@ -294,7 +296,8 @@ func TestRunWith_KillsProcessTree(t *testing.T) {
 	require.NoError(t, findErr, "os.FindProcess should not fail on Unix even for dead processes")
 	// Signal(0) does not send a signal; it probes whether the process exists
 	// and is reachable. An error means the process is gone or we cannot reach it.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually used here; no sibling asserts follow in this test — External FailNow is acceptable.
+	testwait.External(t, "cmdrun-process-exited", func() bool {
 		return proc.Signal(os.Signal(syscall.Signal(0))) != nil
 	}, processTreeDeathSettleTimeout, processTreePollInterval,
 		"grandchild process %d should be dead within 1s of ctx cancellation", grandchildPID)

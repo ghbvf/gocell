@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
@@ -399,7 +400,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 9: Verify the relay marked the outbox entry as published.
 	// ---------------------------------------------------------------
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-fullchain-relay-published", func() bool {
 		queryErr := pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&status)
 		if queryErr != nil {
 			return false
@@ -727,7 +728,7 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 
 	// Verify the entry was marked as published.
 	var pubStatus string
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-mock-relay-published", func() bool {
 		queryErr := pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&pubStatus)
 		return queryErr == nil && pubStatus == "published"
 	}, testtime.SelectShutdown, testtime.SlowPoll, "outbox entry should have status='published' after relay")

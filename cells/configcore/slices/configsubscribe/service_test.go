@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -737,7 +738,8 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	svc.StartTombstoneGC()
 
 	// Wait for the GC goroutine to create its ticker.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually used here; subsequent fc.Advance calls and assert.GreaterOrEqual follow and intend to continue.
+	testwait.External(t, "config-subscriber-gc-ticker-started", func() bool {
 		return fc.PendingTickers() >= 1
 	}, testGCEventuallyTimeout, testGCEventuallyTick, "GC goroutine must create a ticker")
 
@@ -749,7 +751,8 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 	fc.Advance(interval + time.Second) // 12h+1s = 24h+1s total
 
 	// The GC goroutine should pick up the tick and sweep keyC.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually used here; sibling assert.GreaterOrEqual follows and intends to continue.
+	testwait.External(t, "config-subscriber-tombstone-evicted", func() bool {
 		v, present := svc.Cache().GetVersion("keyC")
 		return !present && v == 0
 	}, testGCEventuallyTimeout, testGCEventuallyTick, "GC goroutine must evict expired tombstone")
@@ -817,7 +820,7 @@ func TestStopTombstoneGC_CtxTimeout(t *testing.T) {
 	svc.StartTombstoneGC()
 
 	// Wait for the GC goroutine to actually start and create its ticker.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "config-subscriber-gc-ticker-confirmed", func() bool {
 		return fc.PendingTickers() >= 1
 	}, testGCEventuallyTimeout, testGCEventuallyTick,
 		"GC goroutine must be running before we test ctx-timeout stop")
@@ -905,7 +908,7 @@ func TestStopTombstoneGC_TimeoutThenNoRestartThenDrains(t *testing.T) {
 	svc.StartTombstoneGC()
 
 	// Wait for GC goroutine to create its ticker.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "config-subscriber-gc-ticker-running", func() bool {
 		return fc.PendingTickers() >= 1
 	}, testGCEventuallyTimeout, testGCEventuallyTick,
 		"GC goroutine must start before test proceeds")

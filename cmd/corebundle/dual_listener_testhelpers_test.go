@@ -5,9 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // newCorebundleLocalListener returns an ephemeral TCP listener bound to
@@ -35,7 +34,7 @@ func newCorebundleLocalListener(t *testing.T) net.Listener {
 // attached the chi.Mux.
 func waitForHealthy(t *testing.T, addr string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-dual-listener-served", func() bool {
 		req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/healthz", nil)
 		if err != nil {
 			return false

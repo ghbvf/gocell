@@ -24,6 +24,7 @@ import (
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
@@ -561,7 +562,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	}
 
 	// Phase 1: store failing — budget trips — /readyz must return 503.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-relay-unhealthy", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 		if err != nil {
 			return false
@@ -586,7 +587,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 
 	// Phase 2: store recovers — budget resets — /readyz must return 200.
 	store.setClaimErr(nil)
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-relay-recovered", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 		if err != nil {
 			return false

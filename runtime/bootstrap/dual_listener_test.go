@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -181,7 +182,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
 	// Wait for primary to accept. Health endpoints fall back to primary when no HealthListener.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false
@@ -283,7 +284,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 
 	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false
@@ -448,7 +449,7 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 
 	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false
@@ -473,7 +474,7 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 	}
 
 	// Allow short settle window for goroutine cleanup.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-goroutines-drained", func() bool {
 		return runtime.NumGoroutine() <= before
 	}, testtime.D2s, testtime.MediumPoll, "goroutine count did not return to baseline")
 
@@ -515,7 +516,7 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	healthAddr := healthLn.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
 		if err != nil {
 			return false
@@ -540,7 +541,7 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 	}
 
 	// Allow short settle window for goroutine cleanup.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-goroutines-drained", func() bool {
 		return runtime.NumGoroutine() <= before
 	}, testtime.D2s, testtime.MediumPoll, "goroutine count did not return to baseline after triple listener shutdown")
 }
@@ -912,7 +913,7 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	primaryAddr := primaryLn.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := noCloseRaceHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false
@@ -1049,7 +1050,7 @@ func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	primaryAddr := primaryLn.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false
@@ -1108,7 +1109,7 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
 	// Wait for primary healthy.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false
@@ -1164,7 +1165,7 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	primaryAddr := primaryLn.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
 			return false
@@ -1193,7 +1194,7 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 	// frames synchronously; after Run returns the net/http server and internal
 	// goroutines are in the process of exiting.  2 s is generous enough to
 	// tolerate slow CI machines while still catching real leaks.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-goroutines-drained", func() bool {
 		return runtime.NumGoroutine() <= baseline
 	}, testtime.D2s, testtime.MediumPoll,
 		"goroutine count must not exceed baseline after clean shutdown")

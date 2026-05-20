@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // eventRoleRevokedV1 mirrors cells/accesscore/internal/dto.TopicRoleRevoked.
@@ -84,12 +85,12 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 	// require.Eventually wrapper absorbs the small CI-side gap between handler
 	// completion and SELECT visibility under load; the cascade itself is not
 	// eventually-consistent.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "l2-revoke-epoch-advanced", func() bool {
 		return queryUserAuthzEpoch(t, h, victimID) > epochBefore
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"users.authz_epoch must advance after role revoke cascade (epochBefore=%d)", epochBefore)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "l2-revoke-sessions-cleared", func() bool {
 		return countLiveSessions(t, h, victimID) == 0
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"all victim sessions must be revoked after role revoke cascade")
@@ -111,7 +112,7 @@ func TestL2_RbacRevokeRevokesSessions(t *testing.T) {
 	// "accesscore" per assignRole / revokeRole), satisfying the auditcore
 	// role consumer's ActorRequireExplicit mode. Without that fix the
 	// event would DLX and this assertion would (correctly) fail.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "l2-revoke-audit-appended", func() bool {
 		return countAuditEntries(t, ctx, h, eventRoleRevokedV1) > revokedAuditedBefore
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"auditcore must append an additional event.role.revoked.v1 entry after the role revoke (before=%d)",

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // jAccountlockoutThreshold mirrors cells/accesscore/internal/accountlockout.Threshold.
@@ -117,7 +118,7 @@ func TestJAccountlockoutAutoLockCycle(t *testing.T) {
 	// "user.locked 事件发布成功" criterion would only be inferred from the
 	// status-flip side effect — a noop emitter would silently satisfy the
 	// rest of the test.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "l2-user-locked-event-audited", func() bool {
 		return countAuditEntries(t, ctx, h, eventUserLockedV1) > lockedAuditBaseline
 	}, testtime.EventuallyLong, testtime.D100ms,
 		"event.user.locked.v1 must be published to outbox and consumed by auditcore on auto-lock")

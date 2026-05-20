@@ -8,10 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 func TestTestTopic_UniquePerTest(t *testing.T) {
@@ -536,7 +535,7 @@ func TestHarness_CheckNoMoreDeliveries_DrainsThenWaits(t *testing.T) {
 
 func waitForCount(t *testing.T, get func() int, want int, timeout time.Duration) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outboxtest-delivery-count-reached", func() bool {
 		return get() >= want
 	}, timeout, testtime.FastPoll, "waitForCount: want %d, got %d after %v", want, get(), timeout)
 }

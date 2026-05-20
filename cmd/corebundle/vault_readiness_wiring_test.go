@@ -19,6 +19,7 @@ import (
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -249,7 +250,7 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 	go func() { errCh <- app.Run(ctx) }()
 
 	healthAddr2 := healthLn2.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-vault-readiness-flipped", func() bool {
 		resp, err := http.Get("http://" + healthAddr2 + "/readyz")
 		if err != nil {
 			return false

@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // errSweepTickMock is a SweepTicker mock that returns an error from SweepTick.
@@ -111,8 +112,8 @@ func TestSweeperLifecycle_TickerDrivesSweepTick(t *testing.T) {
 
 	require.NoError(t, lc.Start(ownerCtx))
 
-	// Wait for at least one SweepTick call via require.Eventually.
-	require.Eventually(t, func() bool {
+	// Wait for at least one SweepTick call.
+	testwait.External(t, "command-sweep-tick-fired", func() bool {
 		return mock.calls.Load() >= 1
 	}, tickWait, testtime.D1ms, "SweepTick must be called at least once")
 
@@ -136,8 +137,8 @@ func TestSweeperLifecycle_SweepTickErrorLogged(t *testing.T) {
 
 	require.NoError(t, lc.Start(ownerCtx))
 
-	// Wait for at least one SweepTick call (which returns error) via require.Eventually.
-	require.Eventually(t, func() bool {
+	// Wait for at least one SweepTick call (which returns error).
+	testwait.External(t, "command-sweep-tick-fired", func() bool {
 		return mock.calls.Load() >= 1
 	}, tickWait, testtime.D1ms, "SweepTick must be called even when error returned")
 
@@ -265,8 +266,8 @@ func TestSweeperLifecycle_SweepErrorCounter(t *testing.T) {
 
 	require.NoError(t, lc.Start(ownerCtx))
 
-	// Wait for at least one error tick via require.Eventually.
-	require.Eventually(t, func() bool {
+	// Wait for at least one error tick.
+	testwait.External(t, "command-sweep-tick-fired", func() bool {
 		return mock.calls.Load() >= 1
 	}, tickWait, testtime.D1ms, "SweepTick error tick must fire at least once")
 
@@ -319,7 +320,7 @@ func TestSweeperLifecycle_BusinessNow_FromInjectedClock(t *testing.T) {
 	defer ownerCancel()
 	require.NoError(t, lc.Start(ownerCtx))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "command-sweep-tick-fired", func() bool {
 		return mock.calls.Load() >= 1
 	}, tickWait, testtime.D1ms, "SweepTick must fire at least once")
 

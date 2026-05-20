@@ -30,6 +30,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -173,7 +174,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	}()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-setup-completed", func() bool {
 		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -476,7 +477,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	}()
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-setup-completed", func() bool {
 		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false

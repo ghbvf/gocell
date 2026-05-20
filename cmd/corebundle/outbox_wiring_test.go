@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -256,7 +257,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	// "corebundle" ConsumerGroup caused the second cell to see ClaimDone and
 	// silently Ack without calling its handler — one of the two counts would
 	// stay at 0.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-both-consumer-groups-claimed", func() bool {
 		return accessCalls.Load() == 1 && auditCalls.Load() == 1
 	}, testtime.EventuallyDefault, testtime.FastPoll,
 		"P0 regression: both consumer groups must receive the event; "+

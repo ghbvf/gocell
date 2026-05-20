@@ -15,6 +15,7 @@ import (
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // testWorker is a simple Worker implementation for testing.
@@ -68,7 +69,7 @@ func TestWorkerGroup_StartStop(t *testing.T) {
 	}()
 
 	// Wait for workers to start.
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "worker-started", func() bool {
 		return w1.started.Load() && w2.started.Load()
 	}, testtime.EventuallyShort, testtime.D10ms)
 
@@ -172,7 +173,7 @@ func TestPeriodicWorker_ExecutesFunction(t *testing.T) {
 	}()
 
 	// Wait for at least 3 executions.
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "worker-tick-executed", func() bool {
 		return count.Load() >= 3
 	}, testtime.EventuallyShort, testtime.FastPoll)
 
@@ -196,7 +197,7 @@ func TestPeriodicWorker_PanicIsolation(t *testing.T) {
 	}()
 
 	// After panic on first call, subsequent calls should still work.
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "worker-tick-executed", func() bool {
 		return count.Load() >= 3
 	}, testtime.EventuallyShort, testtime.FastPoll)
 
@@ -236,7 +237,7 @@ func TestPeriodicWorker_RestartAfterStop(t *testing.T) {
 		done <- pw.Start(context.Background())
 	}()
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "worker-tick-executed", func() bool {
 		return count.Load() >= 2
 	}, testtime.EventuallyShort, testtime.FastPoll)
 
@@ -253,7 +254,7 @@ func TestPeriodicWorker_RestartAfterStop(t *testing.T) {
 		done2 <- pw.Start(context.Background())
 	}()
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "worker-tick-executed", func() bool {
 		return count.Load() >= countAfterFirstStop+2
 	}, testtime.EventuallyShort, testtime.FastPoll)
 

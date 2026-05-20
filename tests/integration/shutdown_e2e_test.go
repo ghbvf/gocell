@@ -40,6 +40,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -72,10 +73,13 @@ func startShutdownTestBroker(t *testing.T) (amqpURL, mgmtURL string, container *
 	require.NoError(t, err, "get amqp url")
 
 	var mgmt string
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+	testwait.External(t, "rabbitmq-management-http-url-mapped", func() bool {
 		var httpErr error
 		mgmt, httpErr = c.HttpURL(ctx)
-		require.NoError(collect, httpErr, "get management http url")
+		if httpErr != nil {
+			t.Logf("rabbitmq-management-http-url-mapped: attempt failed: %v", httpErr)
+		}
+		return httpErr == nil
 	}, testtime.SelectAsyncSettle, testtime.SlowPoll, "management http url should be mapped")
 
 	cleanup = func() {
@@ -239,7 +243,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	require.NoError(t, publishMessages(pubCtx, pub, topic, total), "publish 100 messages")
 
 	// Wait until at least 1 message is processed (subscriber is actively consuming).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "shutdown-at-least-one-processed", func() bool {
 		return processed.Load() > 0
 	}, testtime.SelectAsyncSettle, testtime.MediumPoll, "at least one message must be processed before shutdown")
 
@@ -276,7 +280,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	// poll until the sum stabilises at 100 or until the timeout.
 	var queueDepth int
 	processedFinal := processed.Load()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "shutdown-accounting-sum-stable", func() bool {
 		queueDepth = getQueueDepth(t, mgmtURL, queueName)
 		processedFinal = processed.Load()
 		t.Logf("shutdown e2e no-loss poll: processed=%d queue=%d sum=%d",
@@ -378,7 +382,7 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 
 	// Wait until at least one message has been consumed before hard-stopping
 	// the broker, to ensure we have in-flight state to exercise.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "shutdown-conn-drained", func() bool {
 		return consumed.Load() > 0
 	}, testtime.SelectShutdown, testtime.MediumPoll,
 		"at least one message should be consumed before broker stop")
