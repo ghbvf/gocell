@@ -151,8 +151,9 @@ func readRaceIntegrationStep(t *testing.T) workflowStep {
 // TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages asserts
 // the walker discovers a non-empty set AND every package in a small
 // sentinel list. Sentinels are foundational integration coverage anchors
-// (PG adapter, integration-test root, shared testcontainer helpers) whose
-// disappearance signals either walker breakage or major refactor — the
+// (PG adapter, integration-test root, shared testcontainer helpers, shared
+// PG container template) whose disappearance signals either walker breakage
+// or major refactor — the
 // latter requiring an explicit update of this list rather than a silent
 // numeric-threshold drift. Avoiding a free-floating count threshold (which
 // ages with the codebase) keeps the gate stable across legitimate package
@@ -168,6 +169,7 @@ func TestArchtest_CIIntegrationDiscovery_DiscoversIntegrationPackages(t *testing
 		"adapters/postgres",
 		"tests/integration",
 		"tests/testutil",
+		"tests/testutil/pgshare",
 	}
 	for _, s := range sentinels {
 		assert.Contains(t, pkgs, s,
