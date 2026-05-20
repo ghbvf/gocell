@@ -31,6 +31,35 @@ if ! command -v gh >/dev/null; then
   exit 1
 fi
 
+# 续跑：先抓所有已建 backlog issue 的 ID（title 形如 [ID] ...）
+EXISTING_IDS=""
+if [[ "$APPLY" == "1" ]]; then
+  EXISTING_IDS=$(gh issue list --repo "$OWNER/$REPO" --label backlog --state all \
+    --limit 1000 --json title --jq '.[].title' \
+    | sed -nE 's/^\[([^]]+)\].*/\1/p' \
+    | sort -u)
+  echo "${DRY_PREFIX}skip-existing: 已建 $(echo "$EXISTING_IDS" | grep -c .) issues"
+fi
+is_existing() {
+  echo "$EXISTING_IDS" | grep -Fxq "$1"
+}
+
+# 带 retry 的 issue create — HTTP 4xx/5xx / GraphQL hiccup 自动 sleep 重试 3 次
+create_issue_with_retry() {
+  local title="$1" labels="$2" body_file="$3"
+  local attempt=1
+  while [[ $attempt -le 3 ]]; do
+    if url=$(gh issue create --repo "$OWNER/$REPO" --title "$title" --label "$labels" --body-file "$body_file" 2>&1); then
+      echo "$url"
+      return 0
+    fi
+    echo "WARN attempt $attempt failed: $url" >&2
+    sleep $((attempt * 2))
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 trim() {
   printf '%s' "${1-}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
 }
@@ -60,7 +89,13 @@ type_label() {
   local first=$(echo "$t" | sed -E 's/[+,/].*$//')
   case "$first" in
     feat|bug|refactor|arch-opt|doc|test|debt|fu) echo "type-$first" ;;
-    perf-opt) echo "type-arch-opt" ;;
+    # 历史别名归一（来自 backlog/20260520 实测分布）
+    docs) echo "type-doc" ;;          # typo "docs"
+    perf-opt|perf) echo "type-arch-opt" ;;
+    arch|arch-hard) echo "type-arch-opt" ;;
+    archtest) echo "type-test" ;;     # archtest 是测试治理
+    tech-debt) echo "type-debt" ;;
+    compliance) echo "type-doc" ;;    # 合规评估属文档/审计类
     *) echo "" ;;
   esac
 }
@@ -152,7 +187,13 @@ for f in "${INPUT_FILES[@]}"; do
     echo "${DRY_PREFIX}priority=$pri cx=$cx (set in Project UI separately)"
 
     if [[ "$APPLY" == "1" ]]; then
-      body=$(cat <<EOF
+      # skip if already created (续跑)
+      if is_existing "$id"; then
+        echo "  -> SKIP $id (already exists)"
+        continue
+      fi
+      body_file=$(mktemp)
+      cat > "$body_file" <<EOF
 ## 现状 / 修复方向
 
 $desc
@@ -173,13 +214,12 @@ $source
 *Migrated from \`docs/backlog/20260520/\` on $(date +%Y-%m-%d) by \`scripts/migrate-backlog-to-project.sh\`.*
 *Priority=\`$pri\` Estimate=\`$cx\` — 设置到 Project v2 fields by admin（需 project scope token）。*
 EOF
-)
-      issue_url=$(gh issue create \
-        --repo "$OWNER/$REPO" \
-        --title "[$id] $short_title" \
-        --label "$labels" \
-        --body "$body")
-      echo "  -> created $issue_url"
+      if issue_url=$(create_issue_with_retry "[$id] $short_title" "$labels" "$body_file"); then
+        echo "  -> created $issue_url"
+      else
+        echo "  -> FAILED after 3 retries: [$id]" >&2
+      fi
+      rm -f "$body_file"
     fi
   done <"$f"
 done
