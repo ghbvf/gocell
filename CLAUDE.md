@@ -11,6 +11,7 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 - 涉及功能或行为变更时，同步更新对应文档
 - 被 `.gitignore` 忽略的文件禁止 `git add -f`
 - Review 和重构时不考虑向后兼容——当前只有 gocell 自身，没有外部调用方
+- 新 backlog 条目走 `gh issue create --label backlog` + 设 Project v2 fields，不写 markdown 表；schema 见 `docs/backlog.md`
 
 ## 核心架构约束
 
