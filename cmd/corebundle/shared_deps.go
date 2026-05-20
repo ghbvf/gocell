@@ -78,9 +78,14 @@ type SharedDeps struct {
 	//     locked in assemblies/corebundle/assembly.yaml (configcore →
 	//     auditcore → accesscore) and guarded by
 	//     MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01 archtest.
-	//   - SharedDeps.Validate fails-fast on nil so a regression in module
-	//     ordering surfaces at startup, not on the first bootstrap-auth
-	//     401/429.
+	//   - The nil fail-fast is owned by AccessCoreModule.Provide via
+	//     audit.NewBootstrapAuthFailObserver, which rejects a nil store at
+	//     construction time (validation.IsNilInterface check) before any
+	//     bootstrap-auth 401/429 can fire. SharedDeps.Validate intentionally
+	//     does NOT check BootstrapLedgerStore here because
+	//     LoadSharedDepsFromEnv runs Validate BEFORE BuildApp populates this
+	//     field; see shared_deps_validate.go::validateCore for the rationale
+	//     comment kept beside the code path.
 	//
 	// Callers that bypass BuildApp (direct AccessCoreModule.Provide invocation)
 	// must pre-populate this field; see bundle_test.go::buildTestBootstrapLedgerStore
