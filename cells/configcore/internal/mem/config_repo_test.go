@@ -615,6 +615,51 @@ func TestConfigRepository_List_SubsecondPrecision_UpdatedAt(t *testing.T) {
 
 // TestConfigRepository_ConcurrentCRUDAndList verifies that concurrent
 // CRUD and List calls do not race and maintain semantic invariants.
+// configConcurrentWriterN creates `iterations` unique ConfigEntry rows for writer id,
+// incrementing writeErrors on any failure. Extracted from
+// TestConfigRepository_ConcurrentCRUDAndList to reduce cognitive complexity.
+func configConcurrentWriterN(ctx context.Context, repo *ConfigRepository, id, iterations int, writeErrors *atomic.Int64) {
+	for i := range iterations {
+		now := time.Now()
+		if err := repo.Create(ctx, &domain.ConfigEntry{
+			ID:        fmt.Sprintf("id-w%d-i%d", id, i),
+			Key:       fmt.Sprintf("key-w%d-i%d", id, i),
+			Value:     "val",
+			Version:   1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}); err != nil {
+			writeErrors.Add(1)
+		}
+	}
+}
+
+// configConcurrentReaderN runs `iterations` sorted-list reads against the repo,
+// counting errors and asserting sort order invariant. Extracted from
+// TestConfigRepository_ConcurrentCRUDAndList to reduce cognitive complexity.
+func configConcurrentReaderN(t *testing.T, ctx context.Context, repo *ConfigRepository, iterations int, readErrors *atomic.Int64) {
+	t.Helper()
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "key", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	for range iterations {
+		items, err := repo.List(ctx, params)
+		if err != nil {
+			readErrors.Add(1)
+			continue
+		}
+		for j := 1; j < len(items); j++ {
+			if items[j].Key < items[j-1].Key {
+				t.Errorf("list results not sorted: %s < %s", items[j].Key, items[j-1].Key)
+			}
+		}
+	}
+}
+
 func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
 	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
@@ -630,45 +675,13 @@ func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := range iterations {
-				now := time.Now()
-				if err := repo.Create(ctx, &domain.ConfigEntry{
-					ID:        fmt.Sprintf("id-w%d-i%d", id, i),
-					Key:       fmt.Sprintf("key-w%d-i%d", id, i),
-					Value:     "val",
-					Version:   1,
-					CreatedAt: now,
-					UpdatedAt: now,
-				}); err != nil {
-					writeErrors.Add(1)
-				}
-			}
+			configConcurrentWriterN(ctx, repo, id, iterations, &writeErrors)
 		}(w)
 	}
 
-	for r := range readers {
+	for range readers {
 		wg.Go(func() {
-			params := query.ListParams{
-				Limit: 10,
-				Sort: []query.SortColumn{
-					{Name: "key", Direction: query.SortASC},
-					{Name: "id", Direction: query.SortASC},
-				},
-			}
-			for range iterations {
-				items, err := repo.List(ctx, params)
-				if err != nil {
-					readErrors.Add(1)
-					continue
-				}
-				// Semantic invariant: results must be sorted.
-				for j := 1; j < len(items); j++ {
-					if items[j].Key < items[j-1].Key {
-						t.Errorf("list results not sorted: %s < %s", items[j].Key, items[j-1].Key)
-					}
-				}
-			}
-			_ = r
+			configConcurrentReaderN(t, ctx, repo, iterations, &readErrors)
 		})
 	}
 
