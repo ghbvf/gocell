@@ -23,4 +23,3 @@ func TestMain(m *testing.M) {
 	sharedPG.Shutdown()
 	os.Exit(code)
 }
-

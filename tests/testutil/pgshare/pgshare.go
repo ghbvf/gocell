@@ -76,7 +76,7 @@ func New(templateDB string) *Shared {
 }
 
 // validateTemplateDB returns nil if the name is a legal Postgres identifier
-// under the rules documented on New. Called from init() so violations
+// under the rules documented on New. Called from boot() so violations
 // surface as a `t.Fatalf` at first NewPerTestPool — see New godoc for
 // why this is lazy and not enforced in the constructor.
 func validateTemplateDB(templateDB string) error {
@@ -92,13 +92,15 @@ func validateTemplateDB(templateDB string) error {
 	}
 	for i, ch := range templateDB {
 		if i == 0 {
-			if !((ch >= 'a' && ch <= 'z') || ch == '_') {
+			if (ch < 'a' || ch > 'z') && ch != '_' {
 				return fmt.Errorf("pgshare: templateDB must start with [a-z_], got %q", templateDB)
 			}
 			continue
 		}
-		if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_') {
-			return fmt.Errorf("pgshare: templateDB must contain only lowercase ascii letters, digits, and underscores (no uppercase), got %q", templateDB)
+		if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '_' {
+			return fmt.Errorf(
+				"pgshare: templateDB must contain only lowercase ascii letters, digits, and underscores (no uppercase), got %q",
+				templateDB)
 		}
 	}
 	return nil
@@ -204,7 +206,8 @@ func (s *Shared) boot(t *testing.T) {
 	// password/user/db are container-internal credentials — the container
 	// lives only within this test binary's process and never accepts external
 	// traffic; reused literal across pgshare-using packages is intentional.
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+	container, err := tcpostgres.Run(
+		ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
@@ -268,7 +271,7 @@ func createTemplateDB(ctx context.Context, adminDSN, templateDB string) error {
 	if err != nil {
 		return fmt.Errorf("connect admin: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 	if _, err := conn.Exec(ctx, "CREATE DATABASE "+pgQuoteIdent(templateDB)); err != nil {
 		return fmt.Errorf("create database: %w", err)
 	}
@@ -304,7 +307,7 @@ func cloneTemplateDB(ctx context.Context, adminDSN, templateDB, newDB string) er
 	if err != nil {
 		return fmt.Errorf("connect admin: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 	q := fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s",
 		pgQuoteIdent(newDB), pgQuoteIdent(templateDB))
 	if _, err := conn.Exec(ctx, q); err != nil {
@@ -322,7 +325,7 @@ func dropDB(ctx context.Context, adminDSN, dbName string) error {
 	if err != nil {
 		return fmt.Errorf("connect admin: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 	q := "DROP DATABASE IF EXISTS " + pgQuoteIdent(dbName) + " WITH (FORCE)"
 	if _, err := conn.Exec(ctx, q); err != nil {
 		return fmt.Errorf("drop: %w", err)
