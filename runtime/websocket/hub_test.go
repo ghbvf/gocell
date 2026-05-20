@@ -221,7 +221,7 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 		hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 		startErr := make(chan error, 1)
 		go func() { startErr <- hub.Start(context.Background()) }()
-		require.Eventually(t, func() bool {
+		testwait.External(t, "hub-state-running", func() bool {
 			return hub.state.Load() == stateRunning
 		}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -236,7 +236,7 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 		go func() { stopDone <- hub.Stop(stopCtx) }()
 
 		// Wait until hub is stopping.
-		require.Eventually(t, func() bool {
+		testwait.External(t, "hub-state-stopping", func() bool {
 			return hub.state.Load() >= stateStopping
 		}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -258,7 +258,7 @@ func TestHub_ManagedResource_CloseIsIdempotent(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -281,7 +281,7 @@ func TestHub_ManagedResource_WorkerDrivesStartAndStop(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- w.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -340,7 +340,7 @@ func TestHub_BoundedConcurrentClose_RespectsLimit(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -350,7 +350,7 @@ func TestHub_BoundedConcurrentClose_RespectsLimit(t *testing.T) {
 		blockers[i] = newCloseBlockerConn(fmt.Sprintf("blocker-%d", i))
 		require.NoError(t, hub.Register(context.Background(), blockers[i]))
 	}
-	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+	testwait.External(t, "hub-conn-count-reached", func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D50ms)
 	defer cancel()
@@ -389,7 +389,7 @@ func TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -399,7 +399,7 @@ func TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt(t *testing.T) {
 		blockers[i] = newCloseBlockerConn(fmt.Sprintf("blocker-%d", i))
 		require.NoError(t, hub.Register(context.Background(), blockers[i]))
 	}
-	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+	testwait.External(t, "hub-conn-count-reached", func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D50ms)
 	defer cancel()
@@ -416,7 +416,7 @@ func TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt(t *testing.T) {
 	// Contract: every entry's Close() must complete after release.
 	// Pre-fix this would FAIL — only the first ConcurrentCloseLimit entries
 	// would have been launched; the rest would never observe Close().
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-closed-all", func() bool {
 		for _, b := range blockers {
 			if !b.isClosed() {
 				return false
@@ -446,7 +446,7 @@ func TestHub_BoundedConcurrentClose_ParallelDrain(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -455,7 +455,7 @@ func TestHub_BoundedConcurrentClose_ParallelDrain(t *testing.T) {
 		fc.closeDelay = closeDelay
 		require.NoError(t, hub.Register(context.Background(), fc))
 	}
-	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+	testwait.External(t, "hub-conn-count-reached", func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), serialBound)
 	defer cancel()
@@ -482,7 +482,7 @@ func TestHub_ExternalCancel_UsesConfiguredShutdownTimeout(t *testing.T) {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(ctx) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -492,7 +492,7 @@ func TestHub_ExternalCancel_UsesConfiguredShutdownTimeout(t *testing.T) {
 		blockers[i] = newCloseBlockerConn(fmt.Sprintf("ext-%d", i))
 		require.NoError(t, hub.Register(context.Background(), blockers[i]))
 	}
-	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+	testwait.External(t, "hub-conn-count-reached", func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
 
 	start := time.Now()
 	cancelCtx()
@@ -534,7 +534,7 @@ func TestHub_StopAndExternalCancel_RaceCAS(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(ctx) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -604,7 +604,7 @@ func TestHub_StopUnblocksStart(t *testing.T) {
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -632,7 +632,7 @@ func TestHub_DoubleStop(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -665,7 +665,7 @@ func TestHub_StopTimeout(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -692,7 +692,7 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(ctx) }()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -750,7 +750,7 @@ func TestHub_RegisterAndReadLoop(t *testing.T) {
 
 	conn.readCh <- []byte("hello server")
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-message-delivered", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return gotMsg != ""
@@ -781,7 +781,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 		<-startErr
 	})
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -802,7 +802,7 @@ func TestHub_RegisterDuringStop(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -844,7 +844,7 @@ func TestHub_Unregister(t *testing.T) {
 	assert.Equal(t, 1, hub.ConnCount())
 	hub.Unregister("c1")
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-count-zero", func() bool {
 		return hub.ConnCount() == 0
 	}, testtime.EventuallyShort, testtime.D10ms)
 	assert.True(t, conn.isClosed())
@@ -860,7 +860,7 @@ func TestHub_UnregisterIdempotent(t *testing.T) {
 	hub.Unregister("c1")
 	hub.Unregister("c1") // should not panic
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-count-zero", func() bool {
 		return hub.ConnCount() == 0
 	}, testtime.EventuallyShort, testtime.D10ms)
 }
@@ -884,7 +884,7 @@ func TestHub_RegisterDuplicateID(t *testing.T) {
 	// Send to "dup" should reach connB, not connA.
 	// Send enqueues on the per-conn channel; writeLoop delivers asynchronously.
 	require.NoError(t, hub.Send(context.Background(), "dup", []byte("hello")))
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-message-delivered", func() bool {
 		return len(connB.getWrites()) == 1
 	}, testtime.D2s, testtime.D10ms)
 	assert.Equal(t, [][]byte{[]byte("hello")}, connB.getWrites())
@@ -922,7 +922,7 @@ func TestHub_RegisterStopRace(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -960,7 +960,7 @@ func TestHub_Send(t *testing.T) {
 
 	require.NoError(t, hub.Send(context.Background(), "target", []byte("direct")))
 	// Send enqueues on the per-conn channel; writeLoop delivers asynchronously.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-message-delivered", func() bool {
 		return len(conn.getWrites()) == 1
 	}, testtime.D2s, testtime.D10ms)
 	assert.Equal(t, [][]byte{[]byte("direct")}, conn.getWrites())
@@ -999,7 +999,7 @@ func TestHub_MessageHandler(t *testing.T) {
 
 	conn.readCh <- []byte("payload")
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-message-delivered", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return gotMsg != ""
@@ -1029,7 +1029,7 @@ func TestHub_PingMissThreshold(t *testing.T) {
 	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-closed", func() bool {
 		return hub.ConnCount() == 0 && conn.isClosed()
 	}, testtime.D2s, testtime.D10ms)
 }
@@ -1048,7 +1048,7 @@ func TestHub_PingMissReset(t *testing.T) {
 	<-conn.readyCh
 
 	// Let 2 ping misses accumulate (below threshold).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-ping-miss-accumulated", func() bool {
 		hub.connMu.Lock()
 		e, ok := hub.conns["resilient"]
 		var misses int
@@ -1065,7 +1065,7 @@ func TestHub_PingMissReset(t *testing.T) {
 	conn.mu.Unlock()
 
 	// Wait for a successful ping to reset misses.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-ping-miss-reset", func() bool {
 		hub.connMu.Lock()
 		e, ok := hub.conns["resilient"]
 		var misses int
@@ -1167,7 +1167,7 @@ func TestHub_IsRunning(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.EventuallyShort, testtime.D1ms)
+	testwait.External(t, "hub-is-running", func() bool { return hub.IsRunning() }, testtime.EventuallyShort, testtime.D1ms)
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
@@ -1180,7 +1180,7 @@ func TestHub_StopDeadlineHonored(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 
@@ -1418,7 +1418,7 @@ func startHubBackground(t *testing.T) *Hub {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
 	}, testtime.EventuallyShort, testtime.D1ms)
 	t.Cleanup(func() {
@@ -1498,7 +1498,7 @@ func TestHub_IsRunning_Contract(t *testing.T) {
 	// running
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.EventuallyShort, testtime.D1ms)
+	testwait.External(t, "hub-is-running", func() bool { return hub.IsRunning() }, testtime.EventuallyShort, testtime.D1ms)
 
 	// stop → not running
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
@@ -1539,7 +1539,7 @@ func TestHub_BroadcastFilter_AllConns(t *testing.T) {
 	require.NoError(t, hub.BroadcastFilter(context.Background(), []byte("hi"),
 		func(c Conn) bool { return true }))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-broadcast-delivered", func() bool {
 		return len(a.getWrites()) == 1 && len(b.getWrites()) == 1
 	}, testtime.D2s, testtime.D10ms)
 }
@@ -1558,7 +1558,7 @@ func TestHub_BroadcastFilter_SelectiveBySubject(t *testing.T) {
 	require.NoError(t, hub.BroadcastFilter(context.Background(), []byte("only-alice"),
 		func(c Conn) bool { return c.Principal() != nil && c.Principal().Subject == "alice" }))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-broadcast-delivered", func() bool {
 		return len(a.getWrites()) == 1
 	}, testtime.D2s, testtime.D10ms)
 
@@ -1589,7 +1589,7 @@ func TestHub_BroadcastToSubject_HitsAllConnsForSubject(t *testing.T) {
 
 	require.NoError(t, hub.BroadcastToSubject(context.Background(), "alice", []byte("ping-alice")))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-broadcast-delivered", func() bool {
 		return len(a1.getWrites()) == 1 && len(a2.getWrites()) == 1
 	}, testtime.D2s, testtime.D10ms)
 	assert.Never(t, func() bool { return len(b.getWrites()) > 0 }, testtime.D100ms, testtime.D10ms)
@@ -1629,7 +1629,7 @@ func TestHub_TokenExpiry_EvictsOnPing(t *testing.T) {
 	waitForHubPingTicker(t, fc)
 	fc.Advance(testtime.D2h)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-closed", func() bool {
 		return hub.ConnCount() == 0 && conn.isClosed()
 	}, testtime.D2s, testtime.D10ms)
 }
@@ -1662,7 +1662,7 @@ func TestHub_TokenExpiry_AtBoundaryEvicts(t *testing.T) {
 	waitForHubPingTicker(t, fc)
 	fc.Advance(testtime.D10ms)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-closed", func() bool {
 		return hub.ConnCount() == 0 && conn.isClosed()
 	}, testtime.D2s, testtime.D10ms,
 		"ExpiresAt == clock.Now() must evict (RFC 7519: on-or-after exp = expired)")
@@ -1739,7 +1739,7 @@ func TestHub_SlowClient_EvictedWhenSendBufferFull(t *testing.T) {
 		_ = hub.BroadcastToSubject(context.Background(), "slow", []byte("burst"))
 	}
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-count-zero", func() bool {
 		return hub.ConnCount() == 0
 	}, testtime.D2s, testtime.D10ms,
 		"slow client must be evicted once send buffer fills")
@@ -1757,7 +1757,7 @@ func TestHub_SubjectIdx_EmptyAfterRegisterUnregister(t *testing.T) {
 	<-conn.readyCh
 
 	hub.Unregister("a")
-	require.Eventually(t, func() bool { return hub.ConnCount() == 0 }, testtime.D2s, testtime.D10ms)
+	testwait.External(t, "hub-conn-count-zero", func() bool { return hub.ConnCount() == 0 }, testtime.D2s, testtime.D10ms)
 
 	// Idx must be empty so a future BroadcastToSubject is a no-op.
 	err := hub.BroadcastToSubject(context.Background(), "alice", []byte("x"))
@@ -1780,7 +1780,7 @@ func TestHub_SubjectIdx_EmptyAfterTokenExpiry(t *testing.T) {
 	waitForHubPingTicker(t, fc)
 	fc.Advance(testtime.D2h)
 
-	require.Eventually(t, func() bool { return hub.ConnCount() == 0 }, testtime.D2s, testtime.D10ms)
+	testwait.External(t, "hub-conn-count-zero", func() bool { return hub.ConnCount() == 0 }, testtime.D2s, testtime.D10ms)
 
 	err := hub.BroadcastToSubject(context.Background(), "alice", []byte("x"))
 	assert.NoError(t, err)
@@ -1836,7 +1836,7 @@ func TestHub_BroadcastFilter_FilterRunsWithoutLock(t *testing.T) {
 	}
 
 	// The direct Send inside the filter should have enqueued one message.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-message-delivered", func() bool {
 		return len(conn.getWrites()) >= 1
 	}, testtime.D2s, testtime.D10ms)
 }
@@ -1946,7 +1946,7 @@ func TestHub_PrincipalSnapshot_StableAfterMutation(t *testing.T) {
 
 	// BroadcastToSubject with the original subject must still reach the conn.
 	require.NoError(t, hub.BroadcastToSubject(context.Background(), "original", []byte("ping")))
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-broadcast-delivered", func() bool {
 		return len(conn.getWrites()) == 1
 	}, testtime.D2s, testtime.D10ms,
 		"subjectIdx must use snapshotted subject, not the mutated one")
@@ -2005,7 +2005,7 @@ func TestHub_WriteFailureEvictsConnection(t *testing.T) {
 	}
 
 	// After write failure, writeLoop should have evicted the connection.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-count-zero", func() bool {
 		return hub.ConnCount() == 0
 	}, testtime.D2s, testtime.D10ms,
 		"write failure must evict connection")
@@ -2027,7 +2027,7 @@ func TestHub_PanicSafe_NoSendOnClosedChannel(t *testing.T) {
 	}
 
 	// Wait for all readLoops to be active.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hub-conn-count-reached", func() bool {
 		return hub.ConnCount() == n
 	}, testtime.EventuallyShort, testtime.D1ms)
 
