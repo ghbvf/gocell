@@ -131,18 +131,22 @@ Phase 决策叙事如需文档化，新建 `docs/backlog/RERATING-LOG-<YYYY-qN>.
 
 历史 RERATING-LOG / RUBRIC 见 [`backlog/20260520/`](backlog/20260520/)。
 
-## 前置操作（admin，一次性）
+## 一次性迁移记录（2026-05-20）
 
-1. ✅ Project v2 #3 已建（Iterative development 模板）
-2. ✅ 31 个 labels 已建（cap-XX/flag-XX/type-XX + backlog/bundle-parent/pr-fu/wontfix）
-3. **Project 调整模板字段**（web UI）：
-   - `Priority` 值改为 `P0` / `P1` / `P2` / `P3`（P0 = incident-driven 红线，详见 `backlog/20260520/RERATING-RUBRIC.md` §"P0 红线"）
+已完成（PR #612）：
+
+- ✅ Project v2 #3 建好（Iterative development 模板）
+- ✅ 31 个 labels（cap-XX × 15 / flag-XX × 4 / type-XX × 8 / backlog / bundle-parent / pr-fu / wontfix）
+- ✅ 222 个 OPEN issues（#613–#836）从 `docs/backlog/20260520/` markdown 表迁出，全贴 cap/flag/type label
+- ✅ 各 issue body 末尾保留原 `Priority=Px Estimate=Cxy` 字符串供 Project field 批量回填对照
+
+剩余 admin 一次性操作（web UI）：
+
+1. Project #3 模板字段调整：
+   - `Priority` 值改为 `P0` / `P1` / `P2` / `P3`（P0 红线见 `backlog/20260520/RERATING-RUBRIC.md`）
    - `Estimate` 改为 single-select，值 `Cx1` / `Cx2` / `Cx3` / `Cx4`
-4. **Project view 配置**（web UI）：
-   - 默认 "Board"（by Status）保留
-   - 新建 "By Cap"（Table, group by `Capability` label，但 label 不能 group——改 group by Status filter `-Status:Done`）
-   - 实际可行 view 取决于 Projects v2 对 label 的 filter/group 支持；推荐做 4 个 saved table view 用 label filter：`Hard queue` (filter `flag-hard`) / `Cond queue` (filter `flag-cond`) / `By cap-05` (filter `cap-05`) / `Closed Q` (filter `is:closed`)
-5. **Project automation**（web UI）：
-   - `Auto-add to project`：filter `repo:ghbvf/gocell is:issue label:backlog` → enabled
-   - `Item closed`：built-in workflow → enabled（issue closed → Status=Done）
-6. 跑迁移脚本 [`scripts/migrate-backlog-to-project.sh`](../scripts/migrate-backlog-to-project.sh) `--apply`（203 OPEN 条目 → issues + labels）
+2. Project automation 启用：
+   - `Auto-add to project`：filter `repo:ghbvf/gocell is:issue label:backlog`
+   - `Item closed`：内置 workflow（issue closed → Status=Done）
+3. Project view（按需配，可后置）：4 个 saved table view 用 label filter（Hard queue / Cond queue / By cap-XX / Closed Q）
+4. 批量回填 Priority / Estimate（Project table view 多选编辑，对照 issue body 末尾字符串）
