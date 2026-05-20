@@ -60,13 +60,13 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	}
 }
 
-// invalidatorApply is the minimal interface sessionrefresh needs from the
+// invalidatorApplier is the minimal interface sessionrefresh needs from the
 // credential-invalidation funnel. Using an interface (rather than a concrete
 // *credentialinvalidate.Invalidator field) keeps the slice unit-testable with a
 // spy and decouples it from the concrete invalidator package at the type level.
 // Production code injects *credentialinvalidate.Invalidator which satisfies
 // this interface by method set.
-type invalidatorApply interface {
+type invalidatorApplier interface {
 	Apply(ctx context.Context, subjectID string, event session.CredentialEvent) error
 }
 
@@ -94,7 +94,7 @@ type Service struct {
 	// fails fast when nil. On refresh-token reuse detection, Apply is called
 	// inside the outer transaction to atomically bump authz_epoch, revoke all
 	// sessions, and revoke all refresh chains for the subject.
-	invalidator invalidatorApply
+	invalidator invalidatorApplier
 	issuer      *auth.JWTIssuer
 	logger      *slog.Logger
 	clock       clock.Clock
