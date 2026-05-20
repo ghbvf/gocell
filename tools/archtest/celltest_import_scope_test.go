@@ -18,10 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// celltestImportPathPattern matches module-relative import paths of the form
-// cells/[a-z]+/[a-z]+test (e.g. cells/configcore/configcoretest). The pattern
-// anchors at the full path tail so that nested sub-packages
-// (cells/configcore/configcoretest/sub) are also caught.
+// celltestImportPathPattern matches module-relative import paths whose final
+// segment is `[a-z]+test` under cells/{X}/ (e.g. cells/configcore/configcoretest).
+// The trailing `$` anchors the match to the top-level testutil package — nested
+// sub-packages (cells/configcore/configcoretest/sub) are intentionally NOT
+// matched here; they should be ban-covered by their parent package's
+// boundary, which an importer must traverse through the matched root first.
 var celltestImportPathPattern = regexp.MustCompile(`^github\.com/[^/]+/[^/]+/cells/[a-z]+/[a-z]+test$`)
 
 // isCellTestImportPath reports whether an absolute import path matches the
