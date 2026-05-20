@@ -86,8 +86,8 @@ func TestRunJourney_ManualPending(t *testing.T) {
 			"J-test": {
 				ID: "J-test",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "manual", Text: "Check the UI renders correctly"},
-					{Mode: "manual", Text: "Verify email was sent"},
+					{Mode: ModeManual, Text: "Check the UI renders correctly"},
+					{Mode: ModeManual, Text: "Verify email was sent"},
 				},
 			},
 		},
@@ -111,7 +111,7 @@ func TestRunJourney_AutoNoCheckRef(t *testing.T) {
 			"J-test": {
 				ID: "J-test",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "auto", Text: "Unverifiable criterion", CheckRef: ""},
+					{Mode: ModeAuto, Text: "Unverifiable criterion", CheckRef: ""},
 				},
 			},
 		},
@@ -130,7 +130,7 @@ func TestRunJourney_InvalidRef(t *testing.T) {
 			"J-test": {
 				ID: "J-test",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "auto", CheckRef: "bad-ref"},
+					{Mode: ModeAuto, CheckRef: "bad-ref"},
 				},
 			},
 		},
@@ -150,7 +150,7 @@ func TestRunActiveJourneys_ManualOnlyActiveFails(t *testing.T) {
 				ID:        "J-test",
 				Lifecycle: "active",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "manual", Text: "Security signoff"},
+					{Mode: ModeManual, Text: "Security signoff"},
 				},
 			},
 		},
@@ -183,7 +183,7 @@ func TestRunActiveJourneys_EmptyActiveSetFails(t *testing.T) {
 				ID:        "J-draft",
 				Lifecycle: "experimental",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "manual", Text: "Explore manually"},
+					{Mode: ModeManual, Text: "Explore manually"},
 				},
 			},
 		},
@@ -215,7 +215,7 @@ func TestJActiveHappyPath(t *testing.T) {}
 				ID:        "J-active",
 				Lifecycle: "active",
 				PassCriteria: []metadata.PassCriterion{
-					{Mode: "auto", Text: "Happy path", CheckRef: "journey.J-active.happy-path"},
+					{Mode: ModeAuto, Text: "Happy path", CheckRef: "journey.J-active.happy-path"},
 				},
 			},
 		},
