@@ -6,9 +6,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        建后请到 Project v2 "GoCell Backlog" 设置 custom fields：
-        **Capability** / **Priority** / **Complexity** / **Flag** / **Type**，
-        以及 `Flag=cond` 时必填的 **Trigger**。
+        建后请追加 labels（除 `backlog` 自动贴外）：
+        - **cap-XX**（1 个）：cap-01..cap-14 或 cap-x-cross
+        - **flag-XX**（1 个）：flag-hard / flag-cond / flag-soft / flag-planned
+        - **type-XX**（1 个）：type-feat / type-bug / type-refactor / type-arch-opt / type-doc / type-test / type-debt / type-fu
+
+        Project v2 字段（Priority / Estimate）建后在 Project UI table view 设。
         Schema 详见 [`docs/backlog.md`](../blob/develop/docs/backlog.md)。
 
   - type: textarea
