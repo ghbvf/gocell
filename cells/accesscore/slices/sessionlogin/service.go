@@ -490,6 +490,19 @@ func (s *Service) loginInTx(
 		// the alternative (rejecting a valid login) is worse.
 	}
 
+	return s.mintAndPersistSession(txCtx, user, sessionID)
+}
+
+// mintAndPersistSession mints an access token, creates the session row, issues
+// the refresh chain root and emits session.created inside the caller's
+// transaction (txCtx). Called by loginInTx only after credential validation
+// succeeds. Semantics are unchanged — all writes remain in the same txCtx as
+// the FOR-UPDATE user-row lock (S4d §D2 epoch-snapshot invariant).
+func (s *Service) mintAndPersistSession(
+	txCtx context.Context,
+	user *domain.User,
+	sessionID string,
+) (loginOutcome, error) {
 	minted, err := sessionmint.MintAccess(txCtx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
