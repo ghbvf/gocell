@@ -21,8 +21,8 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/worker"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/auth"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
@@ -182,6 +182,23 @@ func (m AccessCoreModule) Provide(
 		return nil, nil, nil, err
 	}
 	accessOpts = append(accessOpts, accesscore.WithSessionStore(sessionStore))
+	// Double-write bootstrap auth-fail observer (BOOTSTRAP-AUDIT-CHAIN-WIRING-01,
+	// plan 039 W1-2): slog for SRE alerting + audit hash-chain for compliance.
+	// The constructor is the only sanctioned path that produces a wired
+	// observer — see tools/archtest/bootstrap_audit_observer_funnel_test.go
+	// (downstream Hard / upstream Medium).
+	//
+	// Construct BEFORE ratelimit.New: observer is a pure nil-check (no
+	// goroutine, no resource), so its fail-fast must precede the limiter
+	// which spawns a cleanup goroutine that needs ManagedResource teardown.
+	// Reversing the order leaks the limiter goroutine when observer
+	// construction fails before line 219's ManagedResource registration.
+	bootstrapAuthObserver, err := audit.NewBootstrapAuthFailObserver(
+		slog.Default(), shared.BootstrapLedgerStore, shared.Clock,
+	)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("accesscore: build bootstrap audit observer: %w", err)
+	}
 	// Bootstrap credential auth + per-IP token bucket rate limiter protects
 	// the setup/admin endpoint (ADR §D2 operator credential via env).
 	//
@@ -198,7 +215,7 @@ func (m AccessCoreModule) Provide(
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{Username: creds.Username, Password: creds.Password},
 		rlLimiter,
-		bootstrapAuthFailLogger(slog.Default()),
+		bootstrapAuthObserver,
 	)
 	accessOpts = append(accessOpts, accesscore.WithBootstrapAuth(bootstrapMW))
 
@@ -330,23 +347,6 @@ const bootstrapRateLimitPerSec = 5.0 / 60.0
 // bootstrapRateLimitBurst allows short legitimate retries (operator typo
 // followed by correction) without immediately tripping the limiter.
 const bootstrapRateLimitBurst = 10
-
-// bootstrapAuthFailLogger returns the onAuthFail observer wired into the
-// bootstrap middleware. logger is injected (not slog.Default) so tests assert
-// on a captured handler without mutating global state — composition root passes
-// slog.Default(); tests pass a buffer-backed logger.
-// client_ip is empty when the context carries no real IP (health checks, unit
-// tests without middleware that sets ctxkeys.RealIP).
-// Audit cell integration is tracked as backlog BOOTSTRAP-AUDIT-CHAIN-WIRING-01.
-func bootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailObserver {
-	return func(ctx context.Context, reason string) {
-		ip, _ := ctxkeys.RealIPFrom(ctx)
-		logger.ErrorContext(ctx, "bootstrap_auth_failed",
-			slog.String("event", "bootstrap_auth_failed"),
-			slog.String("reason", reason),
-			slog.String("client_ip", ip))
-	}
-}
 
 // bootstrapLimiterResource adapts the rate limiter to the ManagedResource
 // contract so phase10 shutdown stops the cleanup goroutine.

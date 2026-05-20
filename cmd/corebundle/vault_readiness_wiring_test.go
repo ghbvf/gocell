@@ -90,8 +90,10 @@ func buildBootstrapWithFakeKeyProvider(
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{KeyProviderOverride: kp},
-		AccessCoreModule{},
+		// Module order matches assemblies/corebundle/assembly.yaml
+		// (configcore → auditcore → accesscore); MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01.
 		AuditCoreModule{},
+		AccessCoreModule{},
 	)
 	if err != nil {
 		return nil, err
