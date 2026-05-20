@@ -47,8 +47,12 @@ const PasswordVersionField = "password_version"
 // Option configures an AccessCore Cell.
 type Option func(*AccessCore)
 
-// WithUserRepository sets the UserRepository.
-func WithUserRepository(r ports.UserRepository) Option {
+// withUserRepository sets the UserRepository. Unexported — composition roots
+// wire via WithMemBundle / WithPGBundle so the UserRepository, RoleRepository,
+// SetupLock and TxManager originate from the same backing Store. Hard funnel
+// (ACCESSCORE-BUNDLE-FUNNEL-01): no public symbol can wire UserRepository
+// independently of its sibling repositories or TxRunner.
+func withUserRepository(r ports.UserRepository) Option {
 	return func(c *AccessCore) { c.userRepo = r }
 }
 
@@ -72,8 +76,9 @@ func WithSessionStore(s session.Store) Option {
 	}
 }
 
-// WithRoleRepository sets the RoleRepository.
-func WithRoleRepository(r ports.RoleRepository) Option {
+// withRoleRepository sets the RoleRepository. Unexported — see
+// withUserRepository godoc for the bundle funnel rationale.
+func withRoleRepository(r ports.RoleRepository) Option {
 	return func(c *AccessCore) { c.roleRepo = r }
 }
 
@@ -142,9 +147,11 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *AccessCore) { c.cursorCodec = codec }
 }
 
-// WithTxManager sets the CellTxManager for transactional guarantees (L2
-// atomicity). Composition roots construct via persistence.WrapForCell.
-func WithTxManager(tx persistence.CellTxManager) Option {
+// withTxManager sets the CellTxManager for transactional guarantees (L2
+// atomicity). Unexported — bundles always carry the Store-paired TxRunner
+// alongside their repositories, so independent caller wiring of TxManager
+// is disallowed by design. See withUserRepository godoc.
+func withTxManager(tx persistence.CellTxManager) Option {
 	return func(c *AccessCore) { c.txRunner = tx }
 }
 
@@ -206,16 +213,21 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 	return func(ac *AccessCore) { ac.configGetter = c }
 }
 
-// WithSetupLock injects a cross-process advisory lock for the admin-provisioning
-// path (multi-pod PG deployments). When set, CreateAdmin acquires the lock at
-// the start of the RunInTx body before calling adminprovision.Ensure — the lock,
-// user write, and outbox emit share one transaction. Nil is a no-op (mem mode
-// keeps the intra-process sync.Mutex). Closes backlog ADMINPROVISION-DIST-LOCK-01.
-func WithSetupLock(lock ports.SetupLock) Option {
+// withSetupLock injects the cross-process advisory lock for the
+// admin-provisioning path. Unexported — bundles always carry the correct
+// SetupLock for their backend (NoopSetupLock for mem, pg_advisory_xact_lock
+// for PG). Composition roots cannot accidentally pair the wrong SetupLock
+// with a TxRunner from a different store.
+//
+// Both bare-nil and typed-nil ports.SetupLock are rejected at phase0
+// (setupLockNil sentinel + initValidate check).
+func withSetupLock(lock ports.SetupLock) Option {
 	return func(c *AccessCore) {
-		if lock != nil {
-			c.setupLock = lock
+		if validation.IsNilInterface(lock) {
+			c.setupLockNil = true
+			return
 		}
+		c.setupLock = lock
 	}
 }
 
@@ -320,10 +332,19 @@ type AccessCore struct {
 	// Persistent operator authenticator on the single setup-driven admin path (ADR §D2).
 	bootstrapAuth func(http.Handler) http.Handler
 
-	// setupLock is an optional cross-process advisory lock injected by the PG
-	// composition root (accesscore/postgres.NewSetupLock). Nil in mem mode — the
-	// intra-process sync.Mutex in adminprovision.Provisioner is sufficient.
-	// Closes backlog ADMINPROVISION-DIST-LOCK-01.
+	// setupLockNil is the sentinel flag set when WithSetupLock receives a
+	// bare-nil or typed-nil ports.SetupLock. initValidate() checks both this
+	// flag and setupLock itself so that explicitly passing nil cannot bypass
+	// the required-dependency check.
+	setupLockNil bool
+
+	// setupLock is the REQUIRED serialization primitive for the admin-provisioning
+	// path. PG composition roots wire accesspg.NewSetupLock(deps)
+	// (pg_advisory_xact_lock — Closes backlog ADMINPROVISION-DIST-LOCK-01);
+	// memstore composition roots wire accesscore.NoopSetupLock{} because
+	// memTxRunner.RunInTx already holds store.mu for the whole closure.
+	// initValidate() rejects nil — the previous in-process sync.Mutex inside
+	// adminprovision.Provisioner has been deleted.
 	setupLock ports.SetupLock
 
 	// casProtocol is the CAS primitive for the ChangePassword path (S6).

@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
@@ -127,7 +128,7 @@ func (c *AccessCore) validateRequiredDeps() error {
 	}
 	if c.userRepo == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accesscore requires a user repository: use WithUserRepository")
+			"accesscore requires a user repository: wire WithMemBundle or WithPGBundle")
 	}
 	if c.sessionStoreNil || c.sessionStore == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
@@ -135,11 +136,31 @@ func (c *AccessCore) validateRequiredDeps() error {
 	}
 	if c.roleRepo == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accesscore requires a role repository: use WithRoleRepository")
+			"accesscore requires a role repository: wire WithMemBundle or WithPGBundle")
 	}
 	if c.refreshStore == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
 			"refresh.Store required: use WithRefreshStore")
+	}
+	if c.casProtocol == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: WithCASProtocol is required for ChangePassword concurrent-write guard (S6); "+
+				"composition root must wire cas.NewProtocol(cas.WithVersionField(\"password_version\")) "+
+				"via WithCASProtocol")
+	}
+	if c.bootstrapAuth == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: WithBootstrapAuth is required (auth.bootstrap:true contracts "+
+				"need a per-route replacement authenticator; composition root must wire "+
+				"runtime/auth.NewBootstrapMiddleware via WithBootstrapAuth). "+
+				"See docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D1.")
+	}
+	if c.setupLockNil || validation.IsNilInterface(c.setupLock) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: setupLock is required for admin-provisioning serialization; "+
+				"wire WithMemBundle (NoopSetupLock — memTxRunner.RunInTx serializes via store.mu) "+
+				"or WithPGBundle (pg_advisory_xact_lock across pods). The previous in-process "+
+				"sync.Mutex inside adminprovision.Provisioner has been removed.")
 	}
 	return nil
 }
@@ -315,19 +336,9 @@ func (c *AccessCore) initSlices() error {
 
 	// setup: first-run admin provisioning.
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
-	if c.casProtocol == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accesscore: WithCASProtocol is required for ChangePassword concurrent-write guard (S6); "+
-				"composition root must wire cas.NewProtocol(cas.WithVersionField(\"password_version\")) "+
-				"via WithCASProtocol")
-	}
-	if c.bootstrapAuth == nil {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accesscore: WithBootstrapAuth is required (auth.bootstrap:true contracts "+
-				"need a per-route replacement authenticator; composition root must wire "+
-				"runtime/auth.NewBootstrapMiddleware via WithBootstrapAuth). "+
-				"See docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D1.")
-	}
+	// casProtocol / bootstrapAuth / setupLock required-dep checks are
+	// enforced by validateRequiredDeps (phase0); they have already passed
+	// when execution reaches here.
 	setupProv, err := adminprovision.NewProvisioner(c.userRepo, c.roleRepo, c.logger, uuid.NewString, c.clk)
 	if err != nil {
 		return err

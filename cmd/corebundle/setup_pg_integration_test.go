@@ -81,13 +81,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
-	require.NoError(t, err)
-	pgUserRepo, err := accesspg.NewUserRepository(pgDeps)
-	require.NoError(t, err)
-	pgRoleRepo, err := accesspg.NewRoleRepository(pgDeps)
-	require.NoError(t, err)
-	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
+	pgBundle, err := accesspg.NewBundle(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -118,20 +112,18 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	// buildAccessCoreMemOptions provides session + refresh mem stores and a mem
-	// user/role repo pair; the subsequent WithUserRepository / WithRoleRepository
-	// calls override only those two with the PG-backed implementations.
-	// Session/refresh stores remain in-memory for this harness (S3+S5 scope;
-	// PG session/refresh wiring is exercised separately in the S4a PG sub-tests below).
+	// buildAccessCoreMemOptions provides session + refresh mem stores; the
+	// subsequent WithPGBundle replaces the mem (UserRepo, RoleRepo, SetupLock,
+	// TxRunner) quadruple with PG-backed primitives derived from the same
+	// (pool, txMgr, clk) triple. Session/refresh stores remain in-memory for
+	// this harness (S3+S5 scope; PG session/refresh wiring is exercised
+	// separately in the S4a PG sub-tests below).
 	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithUserRepository(pgUserRepo),
-		accesscore.WithRoleRepository(pgRoleRepo),
-		accesscore.WithSetupLock(pgSetupLock),
+		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
@@ -371,13 +363,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	pgDeps, err := accesspg.NewDeps(pool.DB(), txMgr, clock.Real())
-	require.NoError(t, err)
-	pgUserRepo, err := accesspg.NewUserRepository(pgDeps)
-	require.NoError(t, err)
-	pgRoleRepo, err := accesspg.NewRoleRepository(pgDeps)
-	require.NoError(t, err)
-	pgSetupLock, err := accesspg.NewSetupLock(pgDeps)
+	pgBundle, err := accesspg.NewBundle(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 
 	sessionProto, err := session.NewProtocol(
@@ -439,15 +425,12 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	)
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
-		accesscore.WithUserRepository(pgUserRepo),
-		accesscore.WithRoleRepository(pgRoleRepo),
+		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithSessionStore(pgSessionStore),
 		accesscore.WithRefreshStore(pgRefreshStore),
-		accesscore.WithSetupLock(pgSetupLock),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.WrapForCell(txMgr)),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),

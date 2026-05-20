@@ -82,7 +82,13 @@ func newService(
 		return "00000000-0000-4000-8000-000000000001"
 	}, clock.Real())
 	require.NoError(t, err)
-	opts := []setup.Option{setup.WithTxManager(persistence.WrapForCell(noopTxRunner{}))}
+	opts := []setup.Option{
+		setup.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		// Default no-op setupLock so tests that don't exercise the lock path
+		// satisfy NewService's mandatory check. Tests that need to observe
+		// Acquire calls override with recordingSetupLock via extraOpts.
+		setup.WithSetupLock(noopSetupLock{}),
+	}
 	if w != nil {
 		opts = append(opts, setup.WithEmitter(testoutbox.MustEmitter(t, w)))
 	}
@@ -91,6 +97,12 @@ func newService(
 	require.NoError(t, err)
 	return svc
 }
+
+// noopSetupLock is the unit-test default — analogous to accesscore.NoopSetupLock
+// but defined locally to avoid a setup → accesscore import cycle.
+type noopSetupLock struct{}
+
+func (noopSetupLock) Acquire(context.Context) error { return nil }
 
 type recordingSetupLock struct {
 	err             error
@@ -159,7 +171,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
@@ -282,7 +294,16 @@ func TestService_CreateAdmin_SetupLockFailure_ShortCircuitsNoSideEffects(t *test
 	assert.Equal(t, 0, cnt, "lock failure must not assign admin role")
 }
 
-func TestService_CreateAdmin_NoSetupLock_StillCreates(t *testing.T) {
+// TestService_CreateAdmin_NilSetupLockOptionIgnored_PriorLockWins verifies that
+// calling setup.WithSetupLock(nil) after a non-nil default is silently ignored.
+// newService already injects noopSetupLock{} as the default; the subsequent
+// WithSetupLock(nil) is not stored because the option body's
+// validation.IsNilInterface check returns early. The prior default lock
+// therefore remains in s.setupLock and CreateAdmin succeeds normally.
+// This test does NOT cover the genuine fail-fast path (NewService rejecting a
+// missing setupLock entirely) — that is covered by
+// TestNewService_NilSetupLock_ReturnsErrcode.
+func TestService_CreateAdmin_NilSetupLockOptionIgnored_PriorLockWins(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	userRepo := store.UserRepository()
 	roleRepo := store.RoleRepository()
@@ -300,6 +321,31 @@ func TestService_CreateAdmin_NoSetupLock_StillCreates(t *testing.T) {
 	cnt, countErr := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, countErr)
 	assert.Equal(t, 1, cnt)
+}
+
+// TestNewService_NilSetupLock_ReturnsErrcode covers the genuine fail-fast path:
+// calling setup.NewService without any WithSetupLock option (or with only a nil
+// setupLock, where prior defaults are absent) must return an errcode.Error with
+// ErrCellInvalidConfig code. This is operator wiring, not user input — the
+// sentinel matches cells/accesscore/cell_init.go's WithSetupLock / WithCASProtocol
+// / WithBootstrapAuth fail-fast checks.
+func TestNewService_NilSetupLock_ReturnsErrcode(t *testing.T) {
+	prov, err := adminprovision.NewProvisioner(
+		mem.NewStore(clock.Real()).UserRepository(),
+		mem.NewStore(clock.Real()).RoleRepository(),
+		discardLogger(),
+		func() string { return "x" },
+		clock.Real(),
+	)
+	require.NoError(t, err)
+	_, err = setup.NewService(prov, discardLogger(),
+		setup.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		// No WithSetupLock — triggers the mandatory-dep fail-fast.
+	)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "setupLock nil check must return errcode.Error")
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 }
 
 func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
@@ -435,11 +481,16 @@ func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
 
 // --- New in S-5: concurrent, bcrypt-skip, rollback ------------------------
 
-// TestService_CreateAdmin_Concurrent_OnlyOneSucceeds exercises the Provisioner
-// mutex: 10 goroutines all POST distinct usernames into a fresh repo; exactly
-// one must return a CreateAdminOutput and the other nine must return
-// ErrSetupAlreadyInitialized. This is the primary verification of the
-// read-after-check atomicity fix (round-1 P0).
+// TestService_CreateAdmin_Concurrent_OnlyOneSucceeds verifies the
+// OutcomeRaceSkipped → ErrSetupAlreadyInitialized path under 10 concurrent
+// goroutines. newService injects a fixed UUID generator (always returns the
+// same ID), so the second-onward goroutines that reach UserRepo.Create get
+// ErrAuthUserDuplicate from the UUID collision; createAdminUser then recounts
+// admins (recount > 0) and returns OutcomeRaceSkipped, which CreateAdmin
+// surfaces as ErrSetupAlreadyInitialized. mem.Store's per-call store.mu
+// protects map safety; the noopTxRunner means no transactional serialization in
+// this test — the race-skip path is driven purely by the duplicate-UUID
+// detection in adminprovision.Provisioner.
 func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	userRepo := store.UserRepository()
@@ -495,6 +546,104 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
+}
+
+// TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin is the
+// concurrency regression guard for PR #595 / B2-PROVISIONER-MUTEX-REVIEW.
+//
+// Problem: the mem-mode composition root in cmd/corebundle/access_module.go
+// previously did NOT wire accesscore.WithTxManager(persistence.WrapForCell(
+// userMemStore.TxRunner())).  Cell.Init fell through to the
+// cell.DemoCellTxManager fallback, whose RunInTx is a no-op pass-through.
+// Two concurrent CreateAdmin calls both passed the CountByRole==0 fast-path
+// check before either committed, producing two admins (TOCTOU; S4.0 violated).
+//
+// Fix: wire the Store-paired TxRunner so that memTxRunner.RunInTx holds
+// store.mu for the entire closure — the CountByRole check, user write, and
+// role assignment are all serialized under the same mutex.
+//
+// Test structure:
+//   - Build service with the REAL store.TxRunner() (mutex-holding), not the
+//     noopTxRunner used elsewhere in this file.
+//   - Spin N goroutines all calling CreateAdmin simultaneously.
+//   - Assert exactly ONE succeeds; all others get ErrSetupAlreadyInitialized.
+//   - Assert the final admin count is exactly 1.
+//   - Run with -race to catch data races.
+//
+// NOTE: the existing TestService_CreateAdmin_Concurrent_OnlyOneSucceeds test
+// above uses noopTxRunner and relies on the UUID-collision path inside
+// adminprovision to prevent duplicates — it does NOT test the TOCTOU window.
+// This test exercises the mutex-serialization path directly.
+func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing.T) {
+	store := mem.NewStore(clock.Real())
+	userRepo := store.UserRepository()
+	roleRepo := store.RoleRepository()
+
+	prov, err := adminprovision.NewProvisioner(
+		userRepo, roleRepo, discardLogger(),
+		uuid.NewString, // real UUID generator — no artificial collision
+		clock.Real(),
+	)
+	require.NoError(t, err)
+
+	svc, err := setup.NewService(
+		prov, discardLogger(),
+		// Store-paired TxRunner: RunInTx holds store.mu for the entire closure.
+		// This is the wiring that cmd/corebundle/access_module.go must supply
+		// so that concurrent first-admin setup requests are serialized.
+		setup.WithTxManager(persistence.WrapForCell(store.TxRunner())),
+		setup.WithSetupLock(noopSetupLock{}),
+	)
+	require.NoError(t, err)
+
+	const workers = 10
+	type result struct {
+		out *setup.CreateAdminOutput
+		err error
+	}
+	results := make(chan result, workers)
+
+	var start sync.WaitGroup
+	start.Add(1)
+	var done sync.WaitGroup
+	done.Add(workers)
+	for i := range workers {
+		go func() {
+			defer done.Done()
+			start.Wait()
+			out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+				Username: "root" + strconv.Itoa(i),
+				Email:    "root" + strconv.Itoa(i) + "@local",
+				Password: "SecretPass!23",
+			})
+			results <- result{out: out, err: err}
+		}()
+	}
+	start.Done()
+	done.Wait()
+	close(results)
+
+	successes := 0
+	retired := 0
+	for r := range results {
+		switch {
+		case r.err == nil && r.out != nil:
+			successes++
+		case r.err != nil:
+			var ec *errcode.Error
+			require.ErrorAs(t, r.err, &ec,
+				"unexpected non-errcode error: %v", r.err)
+			require.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code,
+				"non-winner must return ErrSetupAlreadyInitialized, got %v", r.err)
+			retired++
+		}
+	}
+	assert.Equal(t, 1, successes, "exactly one goroutine must create the admin")
+	assert.Equal(t, workers-1, retired, "all other goroutines must see ErrSetupAlreadyInitialized")
+
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 1, cnt, "final admin count must be exactly 1 (S4.0 invariant)")
 }
 
 // TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword verifies that the
