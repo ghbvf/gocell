@@ -183,40 +183,40 @@ func TestShared_Shutdown_NoOpWhenUninitialized(t *testing.T) {
 	}
 }
 
-// TestShared_init_RejectsInvalidTemplateDB asserts that init() catches
-// invalid template names and surfaces them via s.initErr — the lazy
-// validation path that replaced the constructor panic. Verifies the
-// PANIC-REGISTERED-01 refactor preserves fail-loud behavior.
-func TestShared_init_RejectsInvalidTemplateDB(t *testing.T) {
+// TestShared_boot_RejectsInvalidTemplateDB asserts that boot() catches
+// invalid template names at the validation gate and surfaces them via
+// s.initErr — the lazy validation path that replaced the constructor
+// panic (PANIC-REGISTERED-01 fix). Validation runs at the top of boot,
+// before RequireDocker, so this test does NOT require Docker.
+func TestShared_boot_RejectsInvalidTemplateDB(t *testing.T) {
 	t.Parallel()
 	s := New("Bad_Name") // uppercase → rejected by validateTemplateDB
-	// Call init directly (bypass NewPerTestPool's Docker dependency).
-	s.init()
+	s.boot(t)
 	if s.initErr == nil {
-		t.Fatal("init() must populate initErr for invalid templateDB")
+		t.Fatal("boot() must populate initErr for invalid templateDB")
 	}
 	if !strings.Contains(s.initErr.Error(), "must start with") {
 		t.Fatalf("initErr %q must reference the validation rule", s.initErr.Error())
 	}
-	// Subsequent inits via sync.Once would also short-circuit — verify
+	// Subsequent boots via sync.Once would also short-circuit — verify
 	// the once gate is consistent with the manual call above.
 	s2 := New("Bad_Name")
-	s2.once.Do(s2.init)
+	s2.once.Do(func() { s2.boot(t) })
 	if s2.initErr == nil {
-		t.Fatal("init() through sync.Once must populate initErr")
+		t.Fatal("boot() through sync.Once must populate initErr")
 	}
 }
 
 // TestShared_zeroValueIsInvalid pins the godoc-stated contract that the
-// zero value is not usable. Calling init() with an empty templateDB
-// (the zero-value field) must produce a validation error rather than
-// silently proceeding to Docker.
+// zero value is not usable. Calling boot() with an empty templateDB
+// (the zero-value field) must produce a validation error at the top of
+// boot, before RequireDocker is reached.
 func TestShared_zeroValueIsInvalid(t *testing.T) {
 	t.Parallel()
 	var s Shared // zero value
-	s.init()
+	s.boot(t)
 	if s.initErr == nil {
-		t.Fatal("zero-value *Shared must yield validation error on init()")
+		t.Fatal("zero-value *Shared must yield validation error on boot()")
 	}
 	if !strings.Contains(s.initErr.Error(), "must not be empty") {
 		t.Fatalf("zero-value initErr %q must mention empty-name rule", s.initErr.Error())

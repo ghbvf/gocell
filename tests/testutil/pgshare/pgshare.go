@@ -113,9 +113,21 @@ func validateTemplateDB(templateDB string) error {
 // for the test binary). Subsequent calls pay only the file-clone cost.
 func (s *Shared) NewPerTestPool(t *testing.T) *adapterpg.Pool {
 	t.Helper()
+	// Per-call skip-or-fatal gate. RequireDocker either skips (local dev,
+	// Docker absent) or fatals (CI with GOCELL_TEST_DOCKER_REQUIRED=1).
+	// Called outside sync.Once so the gate fires for every caller even
+	// after init has run once — keeps test-binary semantics consistent
+	// when Docker disappears mid-suite.
 	testutil.RequireDocker(t)
 
-	s.once.Do(s.init)
+	// sync.Once cannot accept arguments; wrap to plumb t into boot so the
+	// archtest TestTestcontainerHelpersRequireDockerBeforeRun (function
+	// containing tcpostgres.Run must call RequireDocker first) is satisfied
+	// by boot itself, not solely by the outer NewPerTestPool. The wrapper
+	// closure captures the first caller's t — failure paths set s.initErr
+	// (no t.Fatal inside boot) so subsequent callers observe the same error
+	// via the read below.
+	s.once.Do(func() { s.boot(t) })
 	if s.initErr != nil {
 		t.Fatalf("shared postgres unavailable: %v", s.initErr)
 	}
@@ -156,7 +168,24 @@ func (s *Shared) Shutdown() {
 	}
 }
 
-func (s *Shared) init() {
+// boot validates the template name, starts the container, applies
+// migrations to the template DB, and stores the admin DSN. Runs exactly
+// once per *Shared (guarded by sync.Once in NewPerTestPool).
+//
+// boot takes *testing.T because the testcontainer archtest
+// TestTestcontainerHelpersRequireDockerBeforeRun requires the function
+// that calls tcpostgres.Run to also call testutil.RequireDocker first
+// (same-function check). The outer NewPerTestPool already calls
+// RequireDocker for the per-call skip gate; the second call here is
+// mildly redundant but satisfies the archtest and is defensive if
+// Docker disappears between the two checks.
+//
+// Errors set s.initErr; no t.Fatal is invoked inside boot so that the
+// sync.Once gate cannot leave the singleton in a half-initialized
+// state — the outer NewPerTestPool reads s.initErr and surfaces it.
+func (s *Shared) boot(t *testing.T) {
+	t.Helper()
+
 	if err := validateTemplateDB(s.templateDB); err != nil {
 		s.initErr = err
 		return
@@ -166,13 +195,11 @@ func (s *Shared) init() {
 		s.initErr = fmt.Errorf("migrations fs: %w", err)
 		return
 	}
-	s.initWithMigrationsFS(migrationsFS)
-}
 
-// initWithMigrationsFS is split out for clarity; the public API always
-// uses the adapter's embedded migrations FS (the only migration source
-// of truth for PG integration tests today).
-func (s *Shared) initWithMigrationsFS(migrationsFS fs.FS) {
+	// RequireDocker inside the function with tcpostgres.Run — see boot
+	// godoc for the archtest rationale.
+	testutil.RequireDocker(t)
+
 	ctx := context.Background()
 	// password/user/db are container-internal credentials — the container
 	// lives only within this test binary's process and never accepts external
