@@ -11,6 +11,55 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/poolstats"
 )
 
+// messagingChannelAggregated holds the per-state and per-pool-max aggregations
+// collected from ResourceMetrics for messaging channel metrics.
+type messagingChannelAggregated struct {
+	perState           map[string]int64
+	maxPerPool         map[string]int64
+	sawMessagingSystem bool
+}
+
+// aggregateMessagingChannelMetrics walks rm and aggregates gocell.messaging.channel.*
+// data points into a messagingChannelAggregated. Called from the test to separate
+// aggregation from assertion and reduce cognitive complexity (S3776 CC=29).
+func aggregateMessagingChannelMetrics(t *testing.T, rm metricdata.ResourceMetrics) messagingChannelAggregated {
+	t.Helper()
+	result := messagingChannelAggregated{
+		perState:   map[string]int64{},
+		maxPerPool: map[string]int64{},
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "gocell.messaging.channel.count" && m.Name != "gocell.messaging.channel.max" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("metric %s is not Sum[int64], got %T", m.Name, m.Data)
+			}
+			aggregateDataPoints(t, &result, m.Name, sum.DataPoints)
+		}
+	}
+	return result
+}
+
+// aggregateDataPoints processes one metric's data points into the aggregation result.
+func aggregateDataPoints(t *testing.T, result *messagingChannelAggregated, metricName string, dps []metricdata.DataPoint[int64]) {
+	t.Helper()
+	for _, dp := range dps {
+		if v, ok := dp.Attributes.Value("messaging.system"); ok && v.AsString() == "rabbitmq" {
+			result.sawMessagingSystem = true
+		}
+		pool, _ := dp.Attributes.Value("messaging.channel.pool.name")
+		if metricName == "gocell.messaging.channel.count" {
+			state, _ := dp.Attributes.Value("messaging.channel.state")
+			result.perState[pool.AsString()+":"+state.AsString()] = dp.Value
+		} else {
+			result.maxPerPool[pool.AsString()] = dp.Value
+		}
+	}
+}
+
 func TestRegisterMessagingChannelMetrics_EmitsPerStateAndMax(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -37,41 +86,16 @@ func TestRegisterMessagingChannelMetrics_EmitsPerStateAndMax(t *testing.T) {
 		t.Fatalf("Collect: %v", err)
 	}
 
-	perState := map[string]int64{}
-	maxPerPool := map[string]int64{}
-	sawMessagingSystem := false
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name != "gocell.messaging.channel.count" && m.Name != "gocell.messaging.channel.max" {
-				continue
-			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				t.Fatalf("metric %s is not Sum[int64], got %T", m.Name, m.Data)
-			}
-			for _, dp := range sum.DataPoints {
-				if v, ok := dp.Attributes.Value("messaging.system"); ok && v.AsString() == "rabbitmq" {
-					sawMessagingSystem = true
-				}
-				pool, _ := dp.Attributes.Value("messaging.channel.pool.name")
-				if m.Name == "gocell.messaging.channel.count" {
-					state, _ := dp.Attributes.Value("messaging.channel.state")
-					perState[pool.AsString()+":"+state.AsString()] = dp.Value
-				} else {
-					maxPerPool[pool.AsString()] = dp.Value
-				}
-			}
-		}
-	}
+	agg := aggregateMessagingChannelMetrics(t, rm)
 
-	if !sawMessagingSystem {
+	if !agg.sawMessagingSystem {
 		t.Fatal("messaging.system attribute missing; broker-pivoting dashboard would break")
 	}
-	if perState["rmq-outbox:idle"] != 3 || perState["rmq-outbox:used"] != 5 {
-		t.Errorf("rmq-outbox idle/used = %d/%d, want 3/5", perState["rmq-outbox:idle"], perState["rmq-outbox:used"])
+	if agg.perState["rmq-outbox:idle"] != 3 || agg.perState["rmq-outbox:used"] != 5 {
+		t.Errorf("rmq-outbox idle/used = %d/%d, want 3/5", agg.perState["rmq-outbox:idle"], agg.perState["rmq-outbox:used"])
 	}
-	if maxPerPool["rmq-outbox"] != 8 {
-		t.Errorf("rmq-outbox max = %d, want 8", maxPerPool["rmq-outbox"])
+	if agg.maxPerPool["rmq-outbox"] != 8 {
+		t.Errorf("rmq-outbox max = %d, want 8", agg.maxPerPool["rmq-outbox"])
 	}
 }
 

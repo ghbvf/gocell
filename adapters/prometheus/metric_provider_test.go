@@ -10,6 +10,7 @@ import (
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -525,20 +526,25 @@ func collect(t *testing.T, reg *prom.Registry, name string, labels prom.Labels) 
 			continue
 		}
 		for _, m := range f.GetMetric() {
-			match := true
-			for _, lp := range m.GetLabel() {
-				if v, ok := labels[lp.GetName()]; ok && v != lp.GetValue() {
-					match = false
-					break
-				}
-			}
-			if match {
+			if promLabelsMatch(labels, m.GetLabel()) {
 				return singletonCounter{val: m.GetCounter().GetValue()}
 			}
 		}
 	}
 	t.Fatalf("no metric %s with labels %v", name, labels)
 	return nil
+}
+
+// promLabelsMatch reports whether all entries in want are present in got.
+// Extra labels in got are allowed (subset match). Extracted from collect
+// to reduce cognitive complexity (S3776).
+func promLabelsMatch(want prom.Labels, got []*dto.LabelPair) bool {
+	for _, lp := range got {
+		if v, ok := want[lp.GetName()]; ok && v != lp.GetValue() {
+			return false
+		}
+	}
+	return true
 }
 
 type singletonCounter struct{ val float64 }
