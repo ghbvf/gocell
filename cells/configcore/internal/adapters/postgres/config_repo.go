@@ -345,7 +345,14 @@ const listEntryColumns = "id, key, value, sensitive, version, created_at, update
 // scanConfigRow scans one row (order matches configEntryColumns) into a
 // ConfigEntry plus the raw cipher tuple. The caller is responsible for
 // decrypting the cipher tuple via decryptScannedEntry.
-func scanConfigRow(row RowScanner) (e *domain.ConfigEntry, valueCipher []byte, valueKeyID *string, valueEDK []byte, valueNonce []byte, err error) {
+func scanConfigRow(row RowScanner) (
+	e *domain.ConfigEntry,
+	valueCipher []byte,
+	valueKeyID *string,
+	valueEDK []byte,
+	valueNonce []byte,
+	err error,
+) {
 	var entry domain.ConfigEntry
 	if scanErr := row.Scan(
 		&entry.ID, &entry.Key, &entry.Value, &entry.Sensitive, &entry.Version,

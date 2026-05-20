@@ -400,8 +400,6 @@ type loginOutcome struct {
 // → mint+emit). Further extraction would scatter the row-lock invariant
 // across helpers, breaking the "single tx, single locked row" contract that
 // makes auto-lockout race-safe.
-//
-//nolint:gocognit,funlen // cognitive complexity + length are driven by the
 func (s *Service) loginInTx(
 	ctx context.Context,
 	txCtx context.Context,

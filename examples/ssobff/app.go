@@ -193,8 +193,6 @@ func WithSSOBFFListener(ref cell.ListenerRef, ln net.Listener) SSOBFFAppOption {
 //
 // ref: uber-go/fx app.go — single app factory shared by production and tests.
 // Deviates by keeping explicit typed construction instead of DI reflection.
-//
-//nolint:gocognit,cyclop // B2-K-02: 19/15 — 4 fail-fast err branches (linear wiring).
 func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	cfg := defaultSSOBFFAppConfig()
 	for _, opt := range opts {
