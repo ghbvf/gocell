@@ -43,7 +43,7 @@ func (noopSetupLock) Acquire(context.Context) error { return nil }
 type Bundle struct {
 	userRepo  ports.UserRepository
 	roleRepo  ports.RoleRepository
-	setupLock ports.SetupLock
+	setupLock ports.SetupLockAcquirer
 	txRunner  persistence.CellTxManager
 }
 
@@ -72,7 +72,7 @@ func (b Bundle) RoleRepository() ports.RoleRepository { return b.roleRepo }
 
 // SetupLock returns the bundle-paired SetupLock (NoopSetupLock for mem;
 // the store-paired TxRunner already serializes via store.mu).
-func (b Bundle) SetupLock() ports.SetupLock { return b.setupLock }
+func (b Bundle) SetupLock() ports.SetupLockAcquirer { return b.setupLock }
 
 // TxRunner returns the bundle-paired Store-bound CellTxManager.
 func (b Bundle) TxRunner() persistence.CellTxManager { return b.txRunner }

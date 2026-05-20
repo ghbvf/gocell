@@ -28,7 +28,7 @@ func TestWithLogger(t *testing.T) {
 	assert.Equal(t, logger, c.logger)
 }
 
-// stubSetupLock is a minimal ports.SetupLock used to verify WithSetupLock wiring.
+// stubSetupLock is a minimal ports.SetupLockAcquirer used to verify WithSetupLock wiring.
 type stubSetupLock struct{}
 
 func (stubSetupLock) Acquire(_ context.Context) error { return nil }
@@ -69,17 +69,17 @@ func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
 		"diagnostic must point operators at the missing wiring")
 }
 
-// TestWithSetupLock_NilOption_RejectedAtInit verifies that nil ports.SetupLock
+// TestWithSetupLock_NilOption_RejectedAtInit verifies that nil ports.SetupLockAcquirer
 // — in any of three forms (bare nil, typed-nil interface, typed-nil concrete
 // pointer) — never satisfies the WithSetupLock required-dep check. Each form
 // must produce ErrCellInvalidConfig at phase0; the option body's
 // validation.IsNilInterface check is the upstream funnel.
 func TestWithSetupLock_NilOption_RejectedAtInit(t *testing.T) {
-	var typedNilIface ports.SetupLock // typed-nil interface
-	var typedNilPtr *stubSetupLock    // typed-nil concrete pointer (still nil via IsNilInterface)
+	var typedNilIface ports.SetupLockAcquirer // typed-nil interface
+	var typedNilPtr *stubSetupLock            // typed-nil concrete pointer (still nil via IsNilInterface)
 	cases := []struct {
 		name string
-		lock ports.SetupLock
+		lock ports.SetupLockAcquirer
 	}{
 		{"bare nil", nil},
 		{"typed nil interface", typedNilIface},

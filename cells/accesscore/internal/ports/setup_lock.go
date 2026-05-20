@@ -2,7 +2,7 @@ package ports
 
 import "context"
 
-// SetupLock serializes the admin provisioning path across concurrent processes
+// SetupLockAcquirer serializes the admin provisioning path across concurrent processes
 // (e.g. multi-pod deployments that both call POST /setup/admin before any admin
 // exists). Implementations must be acquired inside an open transaction context
 // so the lock lifetime is bound to the surrounding transaction.
@@ -12,7 +12,7 @@ import "context"
 //
 // Mem-mode callers inject nil; the existing sync.Mutex in adminprovision.Provisioner
 // remains the intra-process serializer.
-type SetupLock interface {
+type SetupLockAcquirer interface {
 	// Acquire obtains the advisory lock within the current transaction. It
 	// blocks until the lock is available. The lock is released automatically
 	// when the surrounding transaction commits or rolls back.

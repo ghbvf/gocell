@@ -20,8 +20,8 @@ import (
 // ADMINPROVISION-SETUPLOCK-PAIRED-CTOR-HARD-02 (see docs/backlog.md).
 type NoopSetupLock struct{}
 
-// Compile-time assertion: NoopSetupLock implements ports.SetupLock.
-var _ ports.SetupLock = NoopSetupLock{}
+// Compile-time assertion: NoopSetupLock implements ports.SetupLockAcquirer.
+var _ ports.SetupLockAcquirer = NoopSetupLock{}
 
 // Acquire returns nil. The actual serialization happens in the ambient
 // memTxRunner.RunInTx that holds store.mu for the whole closure.

@@ -219,9 +219,9 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 // for PG). Composition roots cannot accidentally pair the wrong SetupLock
 // with a TxRunner from a different store.
 //
-// Both bare-nil and typed-nil ports.SetupLock are rejected at phase0
+// Both bare-nil and typed-nil ports.SetupLockAcquirer are rejected at phase0
 // (setupLockNil sentinel + initValidate check).
-func withSetupLock(lock ports.SetupLock) Option {
+func withSetupLock(lock ports.SetupLockAcquirer) Option {
 	return func(c *AccessCore) {
 		if validation.IsNilInterface(lock) {
 			c.setupLockNil = true
@@ -333,7 +333,7 @@ type AccessCore struct {
 	bootstrapAuth func(http.Handler) http.Handler
 
 	// setupLockNil is the sentinel flag set when WithSetupLock receives a
-	// bare-nil or typed-nil ports.SetupLock. initValidate() checks both this
+	// bare-nil or typed-nil ports.SetupLockAcquirer. initValidate() checks both this
 	// flag and setupLock itself so that explicitly passing nil cannot bypass
 	// the required-dependency check.
 	setupLockNil bool
@@ -345,7 +345,7 @@ type AccessCore struct {
 	// memTxRunner.RunInTx already holds store.mu for the whole closure.
 	// initValidate() rejects nil — the previous in-process sync.Mutex inside
 	// adminprovision.Provisioner has been deleted.
-	setupLock ports.SetupLock
+	setupLock ports.SetupLockAcquirer
 
 	// casProtocol is the CAS primitive for the ChangePassword path (S6).
 	// Required — initValidate() rejects nil. Composition root injects via

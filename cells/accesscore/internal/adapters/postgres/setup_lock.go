@@ -12,8 +12,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// Compile-time assertion: PGSetupLock implements ports.SetupLock.
-var _ ports.SetupLock = (*PGSetupLock)(nil)
+// Compile-time assertion: PGSetupLock implements ports.SetupLockAcquirer.
+var _ ports.SetupLockAcquirer = (*PGSetupLock)(nil)
 
 // PGSetupLock serializes the admin provisioning path across concurrent processes
 // via PostgreSQL advisory locks. It uses pg_advisory_xact_lock so the lock is
