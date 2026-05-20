@@ -837,7 +837,7 @@ func (m *mockDB) Query(_ context.Context, sql string, args ...any) (Rows, error)
 	return m.queryRows, nil
 }
 
-func (m *mockDB) QueryRow(_ context.Context, sql string, args ...any) Row {
+func (m *mockDB) QueryRow(_ context.Context, sql string, args ...any) RowScanner {
 	m.queryRowCalls = append(m.queryRowCalls, dbCallRecord{sql: sql, args: args})
 	if m.queryRowResult == nil {
 		return &mockRow{scanErr: assert.AnError}
@@ -966,7 +966,7 @@ func (s *sequencedMockDB) Query(_ context.Context, sql string, args ...any) (Row
 	return &mockRowSet{}, nil
 }
 
-func (s *sequencedMockDB) QueryRow(_ context.Context, sql string, args ...any) Row {
+func (s *sequencedMockDB) QueryRow(_ context.Context, sql string, args ...any) RowScanner {
 	s.queryRowCalls = append(s.queryRowCalls, dbCallRecord{sql: sql, args: args})
 	if s.idx >= len(s.rows) {
 		return &mockRow{scanErr: assert.AnError}

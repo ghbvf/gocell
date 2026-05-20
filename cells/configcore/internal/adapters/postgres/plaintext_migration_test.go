@@ -81,11 +81,11 @@ func (db *fakeDB) Query(_ context.Context, _ string, args ...any) (Rows, error) 
 	return &fakeRows{rows: pending}, nil
 }
 
-func (db *fakeDB) QueryRow(_ context.Context, _ string, _ ...any) Row {
+func (db *fakeDB) QueryRow(_ context.Context, _ string, _ ...any) RowScanner {
 	return &fakeEmptyRow{}
 }
 
-// fakeRows implements Rows.
+// fakeRows implements Rows (multi-row scanner).
 type fakeRows struct {
 	rows []migrationRow
 	pos  int
@@ -117,7 +117,7 @@ func (r *fakeRows) Scan(dest ...any) error {
 func (r *fakeRows) Close()     {}
 func (r *fakeRows) Err() error { return r.err }
 
-// fakeEmptyRow implements Row — always returns ErrNoRows.
+// fakeEmptyRow implements RowScanner — always returns no-rows error.
 type fakeEmptyRow struct{}
 
 func (r *fakeEmptyRow) Scan(_ ...any) error { return errors.New("no rows") }
@@ -169,7 +169,7 @@ func TestPlaintextMigrator_MigrateConfigEntries_Empty(t *testing.T) {
 	assert.Equal(t, 0, len(db.execCalls))
 }
 
-func TestPlaintextMigrator_MigrateConfigEntries_SingleRow(t *testing.T) {
+func TestPlaintextMigrator_MigrateConfigEntries_SingleRowScanner(t *testing.T) {
 	db := &fakeDB{
 		rows: []migrationRow{
 			{id: "row-1", key: "db.password", value: "s3cret", sensitive: true},
@@ -262,7 +262,7 @@ func (db *batchFakeDB) Query(_ context.Context, _ string, args ...any) (Rows, er
 	return &fakeRows{rows: pending}, nil
 }
 
-func (db *batchFakeDB) QueryRow(_ context.Context, _ string, _ ...any) Row {
+func (db *batchFakeDB) QueryRow(_ context.Context, _ string, _ ...any) RowScanner {
 	return &fakeEmptyRow{}
 }
 
@@ -322,7 +322,7 @@ func TestPlaintextMigrator_NonSensitiveRowsSkipped(t *testing.T) {
 	assert.Empty(t, db.execCalls)
 }
 
-func TestPlaintextMigrator_MigrateConfigVersions_SingleRow(t *testing.T) {
+func TestPlaintextMigrator_MigrateConfigVersions_SingleRowScanner(t *testing.T) {
 	db := &fakeDB{
 		rows: []migrationRow{
 			{id: "v1", key: "app.secret", value: "tok", sensitive: true},
@@ -474,7 +474,7 @@ func (db *casFakeDB) Query(_ context.Context, _ string, args ...any) (Rows, erro
 	return &fakeRows{rows: pending}, nil
 }
 
-func (db *casFakeDB) QueryRow(_ context.Context, _ string, _ ...any) Row {
+func (db *casFakeDB) QueryRow(_ context.Context, _ string, _ ...any) RowScanner {
 	return &fakeEmptyRow{}
 }
 

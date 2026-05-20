@@ -122,7 +122,7 @@ func (l *recordingSetupLock) Acquire(ctx context.Context) error {
 	return l.err
 }
 
-var _ ports.SetupLock = (*recordingSetupLock)(nil)
+var _ ports.SetupLockAcquirer = (*recordingSetupLock)(nil)
 
 // --- NewService validation ------------------------------------------------
 

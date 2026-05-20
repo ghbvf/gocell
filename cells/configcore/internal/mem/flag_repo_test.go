@@ -318,6 +318,53 @@ func TestFlagRepository_List_Empty(t *testing.T) {
 
 // TestFlagRepository_ConcurrentCRUDAndList verifies that concurrent
 // CRUD and List calls do not race and maintain semantic invariants.
+// flagConcurrentWriterN creates and updates `iterations` feature flags for writer id,
+// incrementing writeErrors on any failure. Extracted from
+// TestFlagRepository_ConcurrentCRUDAndList to reduce cognitive complexity.
+func flagConcurrentWriterN(ctx context.Context, repo *FlagRepository, id, iterations int, writeErrors *atomic.Int64) {
+	for i := range iterations {
+		key := fmt.Sprintf("flag-w%d-i%d", id, i)
+		if err := repo.Create(ctx, &domain.FeatureFlag{
+			ID:   fmt.Sprintf("id-w%d-i%d", id, i),
+			Key:  key,
+			Type: domain.FlagBoolean,
+		}); err != nil {
+			writeErrors.Add(1)
+			continue
+		}
+		// Update the flag we just created (version starts at 0 for Create).
+		if _, err := repo.Update(ctx, key, 0, true, 0, ""); err != nil {
+			writeErrors.Add(1)
+		}
+	}
+}
+
+// flagConcurrentReaderN runs `iterations` sorted-list reads against the repo,
+// counting errors and asserting sort order invariant. Extracted from
+// TestFlagRepository_ConcurrentCRUDAndList to reduce cognitive complexity.
+func flagConcurrentReaderN(t *testing.T, ctx context.Context, repo *FlagRepository, iterations int, readErrors *atomic.Int64) {
+	t.Helper()
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "key", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	for range iterations {
+		items, err := repo.List(ctx, params)
+		if err != nil {
+			readErrors.Add(1)
+			continue
+		}
+		for j := 1; j < len(items); j++ {
+			if items[j].Key < items[j-1].Key {
+				t.Errorf("flag list not sorted: %s < %s", items[j].Key, items[j-1].Key)
+			}
+		}
+	}
+}
+
 func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
@@ -333,47 +380,13 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := range iterations {
-				key := fmt.Sprintf("flag-w%d-i%d", id, i)
-				if err := repo.Create(ctx, &domain.FeatureFlag{
-					ID:   fmt.Sprintf("id-w%d-i%d", id, i),
-					Key:  key,
-					Type: domain.FlagBoolean,
-				}); err != nil {
-					writeErrors.Add(1)
-					continue
-				}
-				// Update the flag we just created (version starts at 0 for Create).
-				if _, err := repo.Update(ctx, key, 0, true, 0, ""); err != nil {
-					writeErrors.Add(1)
-				}
-			}
+			flagConcurrentWriterN(ctx, repo, id, iterations, &writeErrors)
 		}(w)
 	}
 
-	for r := range readers {
+	for range readers {
 		wg.Go(func() {
-			params := query.ListParams{
-				Limit: 10,
-				Sort: []query.SortColumn{
-					{Name: "key", Direction: query.SortASC},
-					{Name: "id", Direction: query.SortASC},
-				},
-			}
-			for range iterations {
-				items, err := repo.List(ctx, params)
-				if err != nil {
-					readErrors.Add(1)
-					continue
-				}
-				// Semantic invariant: results must be sorted.
-				for j := 1; j < len(items); j++ {
-					if items[j].Key < items[j-1].Key {
-						t.Errorf("flag list not sorted: %s < %s", items[j].Key, items[j-1].Key)
-					}
-				}
-			}
-			_ = r
+			flagConcurrentReaderN(t, ctx, repo, iterations, &readErrors)
 		})
 	}
 

@@ -125,6 +125,19 @@ func TestNewService_InvalidatorRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalidator is required")
 }
 
+// assertRoleAssigned verifies that roleID is present in the store's assignment
+// list for userID.
+func assertRoleAssigned(t *testing.T, store *mem.Store, userID, roleID string) {
+	t.Helper()
+	roles, _ := store.RoleRepository().GetByUserID(context.Background(), userID)
+	for _, r := range roles {
+		if r.ID == roleID {
+			return
+		}
+	}
+	t.Errorf("role %s should be assigned to user %s", roleID, userID)
+}
+
 func TestService_Assign(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -183,15 +196,7 @@ func TestService_Assign(t *testing.T) {
 			err := svc.Assign(context.Background(), tc.userID, tc.roleID)
 			if !tc.wantErr {
 				require.NoError(t, err)
-				// Verify assignment persisted.
-				roles, _ := store.RoleRepository().GetByUserID(context.Background(), tc.userID)
-				var found bool
-				for _, r := range roles {
-					if r.ID == tc.roleID {
-						found = true
-					}
-				}
-				assert.True(t, found, "role %s should be assigned to user %s", tc.roleID, tc.userID)
+				assertRoleAssigned(t, store, tc.userID, tc.roleID)
 				return
 			}
 			require.Error(t, err)

@@ -76,6 +76,9 @@ func NewPGUserRepo(
 	}, nil
 }
 
+// msgUserNotFound is the errcode message for user-not-found errors (8 sites).
+const msgUserNotFound = "user not found"
+
 const (
 	// S4d: authz_epoch is sourced from the domain.User (NewUser sets it to 1
 	// — the unset sentinel is 0, which session/refresh stores reject).
@@ -250,7 +253,7 @@ func (r *PGUserRepo) GetByID(ctx context.Context, id string) (*domain.User, erro
 	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 		}
@@ -273,7 +276,7 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("username=%q", username)))
 		}
@@ -301,7 +304,7 @@ func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.U
 	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 		}
@@ -328,7 +331,7 @@ func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string
 	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("username=%q", username)))
 		}
@@ -382,7 +385,7 @@ func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
 	}
@@ -407,7 +410,7 @@ func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: delete", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
@@ -430,7 +433,7 @@ func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, 
 	err := r.db.QueryRow(ctx, bumpAuthzEpochSQL, userID).Scan(&newEpoch)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
 		}
@@ -542,7 +545,7 @@ func (r *PGUserRepo) UpdateLockoutFields(ctx context.Context, user *domain.User)
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update lockout fields", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
 	}

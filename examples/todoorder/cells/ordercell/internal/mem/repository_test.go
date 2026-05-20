@@ -448,6 +448,47 @@ func TestOrderRepository_ListPaged_SubsecondPrecision(t *testing.T) {
 
 // TestOrderRepository_ConcurrentCreateAndList verifies that concurrent
 // Create and List calls do not race. Run with -race to verify.
+// orderConcurrentWriterN creates `iterations` orders for writer id.
+// Extracted from TestOrderRepository_ConcurrentCreateAndList to reduce cognitive complexity.
+func orderConcurrentWriterN(ctx context.Context, repo *OrderRepository, id, iterations int) {
+	for i := range iterations {
+		_ = repo.Create(ctx, &domain.Order{
+			ID:        fmt.Sprintf("ord-w%d-i%d", id, i),
+			Item:      "item",
+			Status:    "pending",
+			CreatedAt: time.Now(),
+		})
+	}
+}
+
+// orderConcurrentReaderN runs `iterations` list reads, counting errors and asserting
+// the no-duplicate-ID invariant. Extracted from TestOrderRepository_ConcurrentCreateAndList
+// to reduce cognitive complexity.
+func orderConcurrentReaderN(t *testing.T, ctx context.Context, repo *OrderRepository, iterations int, readErrors *atomic.Int64) {
+	t.Helper()
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	for range iterations {
+		items, err := repo.List(ctx, params)
+		if err != nil {
+			readErrors.Add(1)
+			continue
+		}
+		seen := make(map[string]bool, len(items))
+		for _, o := range items {
+			if seen[o.ID] {
+				t.Errorf("duplicate order ID in list results: %s", o.ID)
+			}
+			seen[o.ID] = true
+		}
+	}
+}
+
 func TestOrderRepository_ConcurrentCreateAndList(t *testing.T) {
 	repo := NewOrderRepository()
 	ctx := context.Background()
@@ -462,43 +503,14 @@ func TestOrderRepository_ConcurrentCreateAndList(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for i := range iterations {
-				_ = repo.Create(ctx, &domain.Order{
-					ID:        fmt.Sprintf("ord-w%d-i%d", id, i),
-					Item:      "item",
-					Status:    "pending",
-					CreatedAt: time.Now(),
-				})
-			}
+			orderConcurrentWriterN(ctx, repo, id, iterations)
 		}(w)
 	}
 
 	var readErrors atomic.Int64
-	for r := range readers {
+	for range readers {
 		wg.Go(func() {
-			params := query.ListParams{
-				Limit: 10,
-				Sort: []query.SortColumn{
-					{Name: "created_at", Direction: query.SortDESC},
-					{Name: "id", Direction: query.SortASC},
-				},
-			}
-			for range iterations {
-				items, err := repo.List(ctx, params)
-				if err != nil {
-					readErrors.Add(1)
-					continue
-				}
-				// Semantic invariant: no duplicate IDs in a page.
-				seen := make(map[string]bool, len(items))
-				for _, o := range items {
-					if seen[o.ID] {
-						t.Errorf("duplicate order ID in list results: %s", o.ID)
-					}
-					seen[o.ID] = true
-				}
-			}
-			_ = r
+			orderConcurrentReaderN(t, ctx, repo, iterations, &readErrors)
 		})
 	}
 

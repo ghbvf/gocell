@@ -18,6 +18,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
+// fmtListErr is the t.Fatalf format string for List errors (3 sites).
+const fmtListErr = "List: %v"
+
 // DeviceRepoFactory builds a fresh DeviceRepository and its matching TxRunner.
 // cleanup MUST be idempotent and safe to call even if no resources were
 // acquired. now returns the suite's clock — implementations using wall time
@@ -177,7 +180,7 @@ func runListEmpty(t *testing.T, factory DeviceRepoFactory, _ Features) {
 	}
 	got, err := repo.List(ctx, params)
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf(fmtListErr, err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected empty list, got %d", len(got))
@@ -200,7 +203,7 @@ func runListSortName(t *testing.T, factory DeviceRepoFactory, features Features)
 	}
 	got, err := repo.List(ctx, params)
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf(fmtListErr, err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("expected 3 devices, got %d", len(got))
@@ -227,7 +230,7 @@ func runListPagination(t *testing.T, factory DeviceRepoFactory, features Feature
 	}
 	got, err := repo.List(ctx, params)
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf(fmtListErr, err)
 	}
 	// Both mem and PG honor FetchLimit() semantics: return up to Limit+1
 	// rows so the service layer can compute HasMore. The conformance bar is

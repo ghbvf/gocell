@@ -27,7 +27,7 @@ import (
 type Bundle struct {
 	userRepo  ports.UserRepository
 	roleRepo  ports.RoleRepository
-	setupLock ports.SetupLock
+	setupLock ports.SetupLockAcquirer
 	txRunner  persistence.CellTxManager
 }
 
@@ -77,7 +77,7 @@ func (b Bundle) UserRepository() ports.UserRepository { return b.userRepo }
 func (b Bundle) RoleRepository() ports.RoleRepository { return b.roleRepo }
 
 // SetupLock returns the bundle-paired PG advisory lock.
-func (b Bundle) SetupLock() ports.SetupLock { return b.setupLock }
+func (b Bundle) SetupLock() ports.SetupLockAcquirer { return b.setupLock }
 
 // TxRunner returns the bundle-paired CellTxManager wrapping the same txMgr.
 func (b Bundle) TxRunner() persistence.CellTxManager { return b.txRunner }

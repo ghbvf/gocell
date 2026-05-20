@@ -48,6 +48,8 @@ type MetricsRecorder interface {
 // adapter from runtime/auth/metrics.
 type noopMetrics struct{}
 
+// IncAccountLockout is intentionally empty — noopMetrics discards all metric
+// increments. See noopMetrics godoc for when this is wired.
 func (noopMetrics) IncAccountLockout(string) {}
 
 // Option configures the Service at construction time.

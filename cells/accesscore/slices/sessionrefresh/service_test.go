@@ -155,30 +155,36 @@ func withTestInvalidator(userRepo ports.UserRepository, sessionStore session.Sto
 	return WithInvalidator(newTestInvalidator(userRepo, sessionStore, refreshStore))
 }
 
+// invalidatorServiceDeps groups the fixed dependencies for
+// mustNewServiceWithInvalidator, keeping the parameter count ≤ 7 (go:S107).
+type invalidatorServiceDeps struct {
+	sessionStore session.Store
+	roleRepo     ports.RoleRepository
+	userRepo     ports.UserRepository
+	refreshStore refresh.Store
+	issuer       *auth.JWTIssuer
+	logger       *slog.Logger
+	inv          invalidatorApplier
+}
+
 // mustNewServiceWithInvalidator constructs a Service with an explicit spy
 // invalidator (for tests that exercise the reuse-cascade path). Since the
-// invalidatorApply interface is unexported but tests are in the same package,
+// invalidatorApplier interface is unexported but tests are in the same package,
 // the spy is directly assigned to the service's invalidator field.
 func mustNewServiceWithInvalidator(
-	sessionStore session.Store,
-	roleRepo ports.RoleRepository,
-	userRepo ports.UserRepository,
-	refreshStore refresh.Store,
-	issuer *auth.JWTIssuer,
-	logger *slog.Logger,
-	inv invalidatorApply,
+	deps invalidatorServiceDeps,
 	opts ...Option,
 ) *Service {
 	// Build with a real invalidator to pass NewService nil validation, then
 	// swap in the spy so assertions capture the exact call arguments.
-	realInv := newTestInvalidator(userRepo, sessionStore, refreshStore)
+	realInv := newTestInvalidator(deps.userRepo, deps.sessionStore, deps.refreshStore)
 	allOpts := append([]Option{WithInvalidator(realInv)}, opts...)
-	svc, err := NewService(sessionStore, roleRepo, userRepo, refreshStore, issuer, logger,
+	svc, err := NewService(deps.sessionStore, deps.roleRepo, deps.userRepo, deps.refreshStore, deps.issuer, deps.logger,
 		append(allOpts, WithClock(clock.Real()))...) //archtest:allow:clock-injection:via-slice opts built dynamically for spy injection
 	if err != nil {
 		panic("MustNewServiceWithInvalidator: " + err.Error())
 	}
-	svc.invalidator = inv
+	svc.invalidator = deps.inv
 	return svc
 }
 
@@ -1670,9 +1676,10 @@ func TestRefresh_StaleEpoch_CascadeRevokesSessionOnly(t *testing.T) {
 		// cascadeRevoke's RevokeSessionDetached goes to spyRev.
 		staleStore.Store = spyRev
 
-		svc := mustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, staleStore, testIssuer, slog.Default(),
-			spyInv,
-			WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+		svc := mustNewServiceWithInvalidator(invalidatorServiceDeps{
+			sessionStore: sessionStore, roleRepo: roleRepo, userRepo: userRepo,
+			refreshStore: staleStore, issuer: testIssuer, logger: slog.Default(), inv: spyInv,
+		}, WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 		sess := newTestSession("usr-stale-epoch", "sess-stale-epoch")
 		require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -1788,9 +1795,10 @@ func TestRefresh_Reuse_TriggersInvalidatorApply(t *testing.T) {
 	reuseStore := &reuseOnRotateRefreshStore{Store: detachedSpy, subjectID: "usr-reuse", sessionID: "sess-reuse"}
 	spy := &spyInvalidator{}
 
-	svc := mustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
-		spy,
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+	svc := mustNewServiceWithInvalidator(invalidatorServiceDeps{
+		sessionStore: sessionStore, roleRepo: roleRepo, userRepo: userRepo,
+		refreshStore: reuseStore, issuer: testIssuer, logger: slog.Default(), inv: spy,
+	}, WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	sess := newTestSession("usr-reuse", "sess-reuse")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -1849,9 +1857,10 @@ func TestRefresh_Reuse_CascadeFailure_Returns401(t *testing.T) {
 			"injected cascade DB outage"),
 	}
 
-	svc := mustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
-		spy,
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+	svc := mustNewServiceWithInvalidator(invalidatorServiceDeps{
+		sessionStore: sessionStore, roleRepo: roleRepo, userRepo: userRepo,
+		refreshStore: reuseStore, issuer: testIssuer, logger: slog.Default(), inv: spy,
+	}, WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	sess := newTestSession("usr-cascade-fail", "sess-cascade-fail")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -1926,9 +1935,10 @@ func TestRefresh_PeekDetectedReuse_TriggersInvalidatorApply(t *testing.T) {
 	reuseStore := &reuseOnPeekRefreshStore{Store: innerStore, subjectID: "usr-peek-reuse", sessionID: "sess-peek-reuse"}
 	spy := &spyInvalidator{}
 
-	svc := mustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
-		spy,
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
+	svc := mustNewServiceWithInvalidator(invalidatorServiceDeps{
+		sessionStore: sessionStore, roleRepo: roleRepo, userRepo: userRepo,
+		refreshStore: reuseStore, issuer: testIssuer, logger: slog.Default(), inv: spy,
+	}, WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})))
 
 	sess := newTestSession("usr-peek-reuse", "sess-peek-reuse")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -2024,9 +2034,10 @@ func TestRefresh_Reuse_CascadeUsesDetachedCtx(t *testing.T) {
 	spy := &contextCapturingInvalidator{}
 
 	outerRunner := &outerCtxTxRunner{}
-	svc := mustNewServiceWithInvalidator(sessionStore, roleRepo, userRepo, reuseStore, testIssuer, slog.Default(),
-		spy,
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outerRunner)))
+	svc := mustNewServiceWithInvalidator(invalidatorServiceDeps{
+		sessionStore: sessionStore, roleRepo: roleRepo, userRepo: userRepo,
+		refreshStore: reuseStore, issuer: testIssuer, logger: slog.Default(), inv: spy,
+	}, WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outerRunner)))
 
 	sess := newTestSession("usr-detached", "sess-detached")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))

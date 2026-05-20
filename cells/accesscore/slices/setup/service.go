@@ -74,7 +74,7 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // CreateAdmin call. The cell-level WithSetupLock injects this option from
 // cells/accesscore composition; see accesscore.WithSetupLock godoc for the
 // PG vs memstore wiring choice.
-func WithSetupLock(lock ports.SetupLock) Option {
+func WithSetupLock(lock ports.SetupLockAcquirer) Option {
 	return func(s *Service) {
 		if validation.IsNilInterface(lock) {
 			return
@@ -94,7 +94,7 @@ type Service struct {
 	// provisioner.Ensure. PG mode uses pg_advisory_xact_lock (cross-pod);
 	// memstore mode uses accesscore.NoopSetupLock{} because memTxRunner.RunInTx
 	// already serializes goroutines via store.mu. NewService rejects nil.
-	setupLock ports.SetupLock
+	setupLock ports.SetupLockAcquirer
 }
 
 // NewService constructs a Service. provisioner is required; passing nil returns
@@ -120,7 +120,7 @@ func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, op
 	if validation.IsNilInterface(s.setupLock) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"setup: setupLock required; use WithSetupLock — PG callers wire "+
-				"accesspg.NewSetupLock(deps), memstore callers wire "+
+				"accesspg.NewBundle(pool, txm, clk).SetupLock(), memstore callers wire "+
 				"accesscore.NoopSetupLock{}")
 	}
 	return s, nil
