@@ -703,7 +703,12 @@ func formatVarSpecNames(vs *ast.ValueSpec) string {
 // =============================================================================
 
 const (
-	docNamingGuardRelPath    = "docs/architecture/naming-guard.yaml"
+	// docNamingGuardRelPath is the repo-relative path to the naming-guard config
+	// consumed by DOC-NAME-01.
+	docNamingGuardRelPath = "docs/architecture/naming-guard.yaml"
+
+	// durabilityModeHintSuffix is user-facing guidance appended to OUTGUARD-01
+	// error messages to steer authors toward the correct durabilityMode value.
 	durabilityModeHintSuffix = "(use demo for examples/tests, durable for production assemblies)"
 )
 
