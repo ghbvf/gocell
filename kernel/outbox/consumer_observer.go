@@ -63,7 +63,11 @@ type NopConsumerObserver struct{}
 // metrics collector is wired. Discarding the observation is deliberate — the
 // no-op exists so ConsumerBase can always call ObserveReject unconditionally
 // without a nil guard.
-func (NopConsumerObserver) ObserveReject(_, _, _, _ string) {}
+func (NopConsumerObserver) ObserveReject(_, _, _, _ string) {
+	// no-op: NopConsumerObserver is the default when no metrics collector is
+	// wired; discarding the observation is deliberate so ConsumerBase can call
+	// ObserveReject unconditionally without a nil guard.
+}
 
 // compile-time interface check — fail at build if ConsumerObserver shape changes.
 var _ ConsumerObserver = NopConsumerObserver{}
