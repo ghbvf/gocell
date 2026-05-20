@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // newTestConnectionWithCap constructs a Connection with a specific
@@ -313,7 +314,7 @@ func TestReconnect_DrainPool_ReleasesInUseChannels(t *testing.T) {
 	assert.Equal(t, int32(3), conn.inUseChannels.Load(), "inUseChannels must stay at 3 after pool-return releases")
 
 	// Trigger reconnect by sending a close notification on mock1.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
 		mocks[0].mu.Lock()
 		defer mocks[0].mu.Unlock()
 		return mocks[0].notifyCloseCh != nil
@@ -326,7 +327,7 @@ func TestReconnect_DrainPool_ReleasesInUseChannels(t *testing.T) {
 	notifyCh <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
 
 	// Wait for reconnect to complete (dial count reaches 2).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-reconnect-completed", func() bool {
 		dialMu.Lock()
 		defer dialMu.Unlock()
 		return dialCount >= 2
@@ -334,7 +335,7 @@ func TestReconnect_DrainPool_ReleasesInUseChannels(t *testing.T) {
 
 	// Wait for the reconnect loop to re-enter StateConnected (so drainChannelPool
 	// has been called and inUseChannels has been decremented).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-connection-healthy", func() bool {
 		return conn.Health(context.Background()) == nil
 	}, testtime.D2s, testtime.D10ms, "connection must be healthy after reconnect")
 
@@ -450,7 +451,7 @@ func TestSubscriptionRun_WaitAndClose_ReleasesInUseChannel(t *testing.T) {
 	}()
 
 	// Wait until subscriber has acquired its channel (inUseChannels == 1).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-channel-acquired", func() bool {
 		return conn.inUseChannels.Load() == 1
 	}, testtime.D2s, testtime.FastPoll, "subscriber must acquire channel before we cancel")
 

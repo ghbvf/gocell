@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // TestSubscriber_Subscribe_PropagatesPermanentError is a regression guard
@@ -74,7 +75,7 @@ func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
 	defer func() { _ = sub.Close(context.Background()) }()
 
 	// Wait for reconnect loop to register NotifyClose handler.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
 		originalMock.mu.Lock()
 		defer originalMock.mu.Unlock()
 		return originalMock.notifyCloseCh != nil

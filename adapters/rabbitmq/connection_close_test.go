@@ -21,6 +21,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // closeRespectsCtxBudgetMultiplier is the upper bound for elapsed time as a
@@ -91,7 +92,7 @@ func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
 	// Finding 1 regression guard: the underlying conn.Close() must be invoked
 	// at least once even when ctx is pre-canceled (best-effort admitted close).
 	// Give the goroutine a short grace period to complete.
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "amqp-connection-healthy", func() bool {
 		return mockConn.closeCount.Load() >= 1
 	}, testtime.D200ms, testtime.FastPoll,
 		"underlying conn.Close() must be called at least once even with pre-canceled ctx — broker must receive close frame")

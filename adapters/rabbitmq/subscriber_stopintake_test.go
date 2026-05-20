@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // stopIntakeDrainTimeoutBudget is the test-local fail-closed drain budget for
@@ -83,7 +84,7 @@ func TestStopIntake_DrainSurvivesParentCtxCancel(t *testing.T) {
 	}()
 
 	// Wait until handlers are running (stuck on <-released).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		if len(sub.runs) == 0 {
@@ -108,7 +109,7 @@ func TestStopIntake_DrainSurvivesParentCtxCancel(t *testing.T) {
 	// closed and consumeLoop has entered drainRemaining). Only then cancel the
 	// parent Subscribe ctx — this ensures drainRemaining's priority-select has
 	// already fired, and the subsequent subCancel tests the detached-ctx invariant.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-cancel-issued", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelCalled
@@ -190,7 +191,7 @@ func TestStopIntake_WaitsForInflightAck(t *testing.T) {
 	}()
 
 	// Wait until handler is actually running (inflight == 1).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		return inflight.Load() == 1
 	}, testtime.D3s, testtime.FastPoll, "handler must be running")
 
@@ -216,7 +217,7 @@ func TestStopIntake_WaitsForInflightAck(t *testing.T) {
 	close(released)
 
 	// StopIntake must now complete.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-cancel-issued", func() bool {
 		select {
 		case err := <-stopDone:
 			assert.NoError(t, err, "StopIntake must return nil after inflight handler completes")
@@ -291,7 +292,7 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 	}()
 
 	// Wait until handler is inflight.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		for r := range sub.runs {
@@ -377,7 +378,7 @@ func TestStopIntake_OuterCtxCancel_DoesNotAbortDrain(t *testing.T) {
 	}()
 
 	// Wait until handler is inflight.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		return handlerRunning.Load() == 1
 	}, testtime.D3s, testtime.FastPoll, "handler must be running before we start StopIntake")
 
@@ -391,7 +392,7 @@ func TestStopIntake_OuterCtxCancel_DoesNotAbortDrain(t *testing.T) {
 	}()
 
 	// Wait until StopIntake has issued basic.cancel, confirming Phase 1 is done.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-cancel-issued", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelCalled

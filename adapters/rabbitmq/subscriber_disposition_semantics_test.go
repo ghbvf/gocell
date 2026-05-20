@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // TestSubscriber_DispositionBrokerSemantics asserts broker-side queue
@@ -206,7 +207,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		require.NoError(t, err, "publish should succeed")
 
 		// --- Assert: handler called >= 2 times (broker redelivered) ---
-		require.Eventually(t, func() bool {
+		testwait.External(t, "amqp-reconnect-completed", func() bool {
 			return callCount.Load() >= 2
 		}, testtime.SelectAsyncSettle, testtime.SlowPoll,
 			"handler must be called at least 2 times to confirm broker redelivery")
@@ -238,7 +239,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		mainInspector, ok := mainCh.(queueInspector)
 		require.True(t, ok, "AMQPChannel must support QueueInspect in integration tests")
 
-		require.Eventually(t, func() bool {
+		testwait.External(t, "amqp-delivery-acked", func() bool {
 			q, qErr := mainInspector.QueueInspect(mainQueue)
 			return qErr == nil && q.Messages == 0
 		}, testtime.D2s, testtime.D50ms,
@@ -338,7 +339,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		require.NoError(t, err, "consume from DLQ")
 
 		var dlEntry outbox.Entry
-		require.Eventually(t, func() bool {
+		testwait.External(t, "amqp-delivery-nacked", func() bool {
 			select {
 			case msg := <-dlxMsgs:
 				decoded, decodeErr := outbox.UnmarshalEnvelope("", msg.Body)

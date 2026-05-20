@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 const (
@@ -80,7 +81,7 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -136,7 +137,7 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -198,7 +199,7 @@ func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
 	}()
 
 	// Wait for Nack to be called (Commit fails → Nack requeue=true).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -260,7 +261,7 @@ func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, handler)
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
@@ -414,7 +415,7 @@ func TestSubscriber_ConcurrentReceiptCommitSafety(t *testing.T) {
 	}()
 
 	// Wait until all 10 commits have been recorded.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		return commitCount.Load() == int64(numDeliveries)
 	}, testtime.D3s, testtime.FastPoll, "expected %d Receipt.Commit calls", numDeliveries)
 
@@ -486,7 +487,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	// Wait for the delivery to be processed.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
@@ -659,7 +660,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 	}()
 
 	// Wait for delivery to be acked (handler finished).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
@@ -716,7 +717,7 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
@@ -784,7 +785,7 @@ func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
 	}()
 
 	// Nack is still called (and fails) — verify via nackCalled within Eventually.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -853,7 +854,7 @@ func TestDispatchAck_CommitFailed_ReleasesBeforeNack(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, handler)
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -925,7 +926,7 @@ func TestDispatchAck_AckFail(t *testing.T) {
 	}()
 
 	// Ack is attempted (and fails) — verify via ackCalled.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
@@ -991,7 +992,7 @@ func TestProcessDelivery_InvalidEntry_ValidateFailure_NacksPermanent(t *testing.
 	}()
 
 	// Nack is called (and fails due to nackErr) — nackCalled is still set true.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -1050,7 +1051,7 @@ func TestDispatchDisposition_RejectNackFail_LogsError(t *testing.T) {
 	}()
 
 	// Nack is attempted (fails) — nackCalled is still true.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -1108,7 +1109,7 @@ func TestDispatchDisposition_UnknownDispositionNackFail_LogsError(t *testing.T) 
 	}()
 
 	// Nack(requeue=true) is attempted (fails) — nackCalled is still true.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -1166,7 +1167,7 @@ func TestReleaseReceipt_ReleaseFail(t *testing.T) {
 	}()
 
 	// Nack(requeue=false) is called for DispositionReject, then Release is called.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		receipt.mu.Lock()
 		defer receipt.mu.Unlock()
 		return receipt.releaseCalled
@@ -1254,7 +1255,7 @@ func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		return spy.len() > 0
 	}, testtime.D2s, testtime.FastPoll, "spy observer must be called")
 
@@ -1315,7 +1316,7 @@ func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		return spy.len() > 0
 	}, testtime.D2s, testtime.FastPoll, "spy observer must be called for reject nack failure")
 
@@ -1378,7 +1379,7 @@ func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		return spy.len() > 0
 	}, testtime.D2s, testtime.FastPoll, "spy observer must be called for requeue nack failure")
 

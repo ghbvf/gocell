@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 const (
@@ -112,7 +113,7 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pub.Publish(context.Background(), topic, payload))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-reconnect-completed", func() bool {
 		return handlerCalls.Load() >= 2
 	}, testtime.D10s, testtime.FastPoll,
 		"handler must be invoked at least twice within 10s: "+

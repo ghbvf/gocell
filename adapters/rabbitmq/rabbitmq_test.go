@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // File-local duration constants for values not in testtime.
@@ -906,7 +907,7 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 	}()
 
 	// Wait for reconnectLoop to call NotifyClose.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
 		mocks[0].mu.Lock()
 		defer mocks[0].mu.Unlock()
 		return mocks[0].notifyCloseCh != nil
@@ -920,7 +921,7 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
 
 	// reconnectLoop should reconnect. Verify dial was called again.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-reconnect-completed", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 2
@@ -968,7 +969,7 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 	}()
 
 	// Wait for reconnectLoop to register NotifyClose.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
 		mocks[0].mu.Lock()
 		defer mocks[0].mu.Unlock()
 		return mocks[0].notifyCloseCh != nil
@@ -982,14 +983,14 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
 
 	// Wait for reconnection to succeed (dial count >= 4: 1 initial + 2 failed + 1 success).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-reconnect-completed", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 4
 	}, testtime.EventuallyLong, time.Millisecond, "should have retried past 2 failures")
 
 	// After reconnection, Health should return nil.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-connection-healthy", func() bool {
 		return conn.Health(context.Background()) == nil
 	}, testtime.D2s, time.Millisecond, "connection should be healthy after reconnect")
 
@@ -1151,7 +1152,7 @@ func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t 
 	}()
 
 	// Wait until at least a few attempts have been made to prove the loop keeps trying.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-reconnect-completed", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 5
@@ -1470,7 +1471,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	}()
 
 	// Deterministic wait: poll until Ack is recorded instead of time.Sleep.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
@@ -1525,7 +1526,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -1623,7 +1624,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -1731,14 +1732,14 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	}()
 
 	// Drive the reconnect sequence from the main goroutine (safe for require).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
 		ch1.mu.Lock()
 		defer ch1.mu.Unlock()
 		return ch1.qosCalled
 	}, testtime.D2s, testtime.D10ms, "subscriber did not start consuming from ch1")
 	close(ch1.consumeDeliveries)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-reconnect-completed", func() bool {
 		ch2.mu.Lock()
 		defer ch2.mu.Unlock()
 		return ch2.qosCalled
@@ -2259,7 +2260,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	// Deterministic wait for NACK instead of fixed sleep — handler cancels
 	// ctx synchronously, so Subscribe will exit shortly after processDelivery
 	// applies the disposition.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
@@ -3796,7 +3797,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	require.NoError(t, conn.Health(context.Background()), "initial connection should be healthy")
 
 	// Wait for reconnectLoop to register NotifyClose.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
 		mock1.mu.Lock()
 		defer mock1.mu.Unlock()
 		return mock1.notifyCloseCh != nil
@@ -3810,7 +3811,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
 
 	// Wait until reconnect dial is blocked (dialCount == 2).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-reconnect-completed", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 2
@@ -3828,7 +3829,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	closeProceed()
 
 	// Health() should recover.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-connection-healthy", func() bool {
 		return conn.Health(context.Background()) == nil
 	}, testtime.D2s, time.Millisecond, "Health() should return nil after successful reconnect")
 }
@@ -4247,7 +4248,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 	assert.Equal(t, StateConnected, conn.ConnectionStatus().State, "initial state should be Connected")
 
 	// Wait for reconnectLoop to register NotifyClose.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
 		mock1.mu.Lock()
 		defer mock1.mu.Unlock()
 		return mock1.notifyCloseCh != nil
@@ -4261,7 +4262,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
 
 	// Wait until reconnect dial is blocked — state should be Disconnected.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-reconnect-completed", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 2
@@ -4274,7 +4275,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 	closeProceed()
 
 	// State should recover to Connected.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-connection-healthy", func() bool {
 		return conn.ConnectionStatus().State == StateConnected
 	}, testtime.D2s, time.Millisecond)
 }
