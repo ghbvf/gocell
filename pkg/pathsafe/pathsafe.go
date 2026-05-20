@@ -492,7 +492,7 @@ func captureOriginal(path string) (writeRecord, error) {
 	if readErr != nil {
 		return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: readlink original for ForceOverwrite capture", readErr,
-			errcode.WithInternal(fmt.Sprintf(fmtPath, path)))
+			errcode.WithInternal(fmt.Sprintf("path=%s", path)))
 	}
 	return writeRecord{
 		path:           path,
