@@ -60,23 +60,25 @@ Callers cannot accidentally pass a held lock to a downstream RPC and assume call
 
 `Lock.Value(key)` is preserved via `context.WithoutCancel(callerCtx)` stored inside the lock, so trace IDs and auth claims remain accessible without re-plumbing.
 
-## Enforcement (AI-rebust = Hard)
+## Enforcement (two-layer split — downstream Hard + upstream Medium)
 
-Two-line defense per ai-collab.md "single sanctioned holder" Hard 范本:
+Per ai-collab.md "Funnel 双向锁评级", funnel claims must be evaluated for both directions:
 
-| Defense | Mechanism | Where |
-|---------|-----------|-------|
-| **#1 type system** | `*Lock` lacks `Deadline()` / `Err()` → cannot satisfy `context.Context` | Go compiler |
-| **#2 archtest** | `DISTLOCK-LOCK-NOT-CONTEXT-01` asserts `types.Implements((*Lock)(nil), context.Context) == false` | `tools/archtest/distlock_lock_not_context_test.go` |
+| Direction | Mechanism | AI-rebust |
+|-----------|-----------|-----------|
+| **Downstream** (caller cannot pass `*Lock` where `context.Context` is required) | Go type system — `*Lock` lacks `Deadline()` / `Err()`, so calls like `db.QueryContext(lock, ...)` fail at compile time | **Hard** — violation literally not representable in source |
+| **Upstream** (implementer cannot add `Deadline()` / `Err()` methods to `*Lock` and accidentally satisfy `context.Context`) | archtest `DISTLOCK-LOCK-NOT-CONTEXT-01` static check via `typesutil.ImplementsInterface` + blind-spot reverse self-check | **Medium** — package-internal mutation is detectable only by CI archtest; no sealed marker makes the mutation impossible at compile time |
 
-Defense #1 is the primary line: any caller misuse fails at compile time. Defense #2 is a regression guard against future commits that add the two methods inadvertently.
+Downstream is the primary line (Hard, type-system). Upstream is a regression guard against future commits that mutate `*Lock`'s method set. The combined posture is **Hard downstream + Medium upstream** — the highest practically achievable for this shape (the alternative would require a sealed-interface wrapper that hurts ergonomics for marginal benefit, since the upstream attack surface is package-internal and CI-gated).
+
+A blind-spot reverse self-check (`TestDistlockLockNotContext01_BlindSpotSelfCheck`) constructs an in-memory fixture type that DOES implement context.Context and asserts the detector reports it — guarding against the failure mode "the forward check returns false trivially because the implementation regressed".
 
 ## Industry survey
 
 | Library | Caller-ctx vs held lock | Auto-release on caller cancel | Renewal context |
 |---------|------------------------|-------------------------------|-----------------|
 | **bsm/redislock** | decoupled; "refresh cadence is an application concern" | no | caller-supplied per `Refresh(ctx,...)` |
-| **go-redsync/redsync** | decoupled; `Extend` uses `context.Background()` internally | no | independent |
+| **go-redsync/redsync** | decoupled; caller-ctx scopes the acquire RPC only (`LockContext`); renewal (`Extend`/`ExtendContext`) is application-driven and accepts a per-call ctx, not a session-wide one | no | per-`Extend` caller-supplied ctx |
 | **etcd `client/v3/concurrency`** | session-scoped keepalive; `Lock(ctx)` ctx scopes acquire only | no | session ctx, not per-op |
 | **HashiCorp consul/api** | decoupled; `stopCh` scopes acquisition only | no | `RenewPeriodic` runs until `Unlock` |
 | **Apache Curator** | decoupled; ZK ephemeral nodes + heartbeat sessions | no (session-based) | session heartbeat, not per-op |
@@ -103,6 +105,8 @@ References:
 - Caller MUST `defer lock.Release()`. Forgetting it leaks the lock until process exit. Mitigation: godoc + ADR + standard `defer` idiom. Identical risk profile to bsm/redislock and redsync — accepted industry trade-off.
 - No safety net option (e.g. `WithMaxLockAge`) in this iteration. May add later if a real caller demonstrates the need; deferred to keep the minimal surface.
 - API breaking: 36 test callsites updated; no production callers existed (GH backlog explicitly noted "首个生产 distlock caller 前触发" / "before first production distlock caller").
+- **callerCtx values lifetime extension**: `Lock.Value` requires `Lock` to retain `context.WithoutCancel(callerCtx)` for the held duration. Every value reachable from callerCtx is pinned for the full lock lifetime — auto-renewals included. Mitigation: godoc warns callers to keep callerCtx values small/immutable (trace IDs, auth claims, span contexts) and to parameterize tokens / PII / large buffers explicitly. Concrete blast radius: at most one held lock per call site; values are still GC-eligible after `lock.Release()` returns.
+- **fail-stays-held DoS surface**: a buggy caller (or a malicious actor with API access) can Acquire and then drop the lock handle without Release, blocking peers for the full TTL window. Blast radius: same key only, not framework-wide. Mitigations: (a) TTL is the only ceiling — choose seconds-to-minutes scale matching critical-section worst case (godoc states this); (b) process crash falls back to Redis TTL expiry; (c) `WithMaxLockAge` deferred to v2 if a real workload demands it. This trade-off is identical to bsm/redislock, redsync, etcd `concurrency`, consul, Curator — accepted industry posture.
 
 ### Alternatives considered
 

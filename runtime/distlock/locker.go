@@ -49,8 +49,35 @@ type Locker interface {
 	//
 	// Notably absent: caller-ctx cancellation does NOT end the lock. If the
 	// caller wants the lock to end when its ctx is canceled, the caller must
-	// explicitly arrange a goroutine that does so (e.g.,
-	// go func() { <-ctx.Done(); lock.Release() }()).
+	// explicitly arrange a goroutine that does so.
+	//
+	// Idiomatic patterns for combining lock-end with caller-ctx:
+	//
+	//  // Pattern A — caller wants ctx cancel to also release the lock:
+	//  lock, err := locker.Acquire(ctx, key, ttl)
+	//  if err != nil { return err }
+	//  defer lock.Release()
+	//  go func() {
+	//      <-ctx.Done()
+	//      // best-effort; Release is idempotent.
+	//      _ = lock.Release()
+	//  }()
+	//
+	//  // Pattern B — caller wants the *first* of (ctx-cancel | lock-lost) to abort:
+	//  select {
+	//  case <-ctx.Done():
+	//      _ = lock.Release()
+	//      return ctx.Err()
+	//  case <-lock.Done():
+	//      return fmt.Errorf("lock ended: %w", lock.Cause())
+	//  }
+	//
+	// TTL is the only ceiling on a held-but-forgotten lock. Choose ttl
+	// commensurate with the critical-section worst case (typically seconds
+	// to minutes); avoid hour-scale TTLs unless the workload genuinely
+	// runs that long, since a caller that aborts without Release leaves
+	// peers blocked for the full ttl window. The fallback after process
+	// crash is Redis-side TTL expiry.
 	//
 	// On failure it returns (nil, err) where err carries ErrLockTimeout when
 	// another holder owns the key, or ctx.Err() (wrapped) if the parent was canceled.

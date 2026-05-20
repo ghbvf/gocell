@@ -38,7 +38,11 @@
 //
 //	lock, err := locker.Acquire(reqCtx, "key", 30*time.Second)
 //	if err != nil { return err }
-//	defer func() { _ = lock.Release() }()
+//	defer func() {
+//	    // best-effort: efficiency lock self-expires at TTL if Release fails;
+//	    // see distlock.Lock.Release godoc for correctness-critical guidance.
+//	    _ = lock.Release()
+//	}()
 //	// pair work with lock-end:
 //	//   select { case <-lock.Done(): abort with lock.Cause(); default: proceed }
 //	// caller-ctx cancellation does NOT release the held lock; use Release() in defer.

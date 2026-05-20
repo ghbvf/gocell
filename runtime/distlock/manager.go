@@ -276,6 +276,14 @@ func (m *Manager) runOnce(
 			// add a drain-on-false guard here.
 			timer.Stop()
 		}
+		// Notify every in-flight lock of the forced shutdown so its Done()
+		// closes and Cause() reports a non-nil error. Without this, callers
+		// blocked on lock.Done() during shutdown would never wake. Use
+		// context.Canceled to match the Lock.Cause godoc contract.
+		// locks is owned exclusively by this goroutine; no lock required.
+		for _, st := range locks {
+			st.lock.markCause(context.Canceled)
+		}
 		return true
 	}
 	return false
@@ -388,7 +396,8 @@ func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*hea
 			slog.Error("distlock: renewal ownership lost",
 				"key", state.key,
 				"op", "Renew",
-				"ttl", state.ttl)
+				"ttl", state.ttl,
+				"attempts", 1)
 			state.lock.markCause(ErrLockLost)
 			delete(locks, item.id)
 			m.mu.Lock()

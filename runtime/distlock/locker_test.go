@@ -438,6 +438,44 @@ func TestLocker_TC5_ParentCancelDoesNotReleaseLock(t *testing.T) {
 		default:
 		}
 	})
+
+	t.Run("TC5c_DeadlineDoesNotPropagateToLock", func(t *testing.T) {
+		// Deadline propagation was removed when Acquire stopped returning
+		// context.Context. *Lock has no Deadline() method by design (compile-
+		// time defense against caller misuse); this case proves the runtime
+		// behavior matches: parent deadline does NOT affect lock liveness.
+		fc := clockmock.New(time.Time{})
+		fd := locktest.NewFakeDriver()
+		l := newTestLocker(fc, fd)
+
+		// Use a very short parent deadline; wait past it; verify lock unaffected.
+		parentCtx, cancel := context.WithTimeout(context.Background(), testtime.D10ms)
+		defer cancel()
+
+		lock, err := l.Acquire(parentCtx, "key5c", testtime.D10s)
+		if err != nil {
+			t.Fatalf("TC-5c Acquire: %v", err)
+		}
+		defer func() {
+			if err := lock.Release(); err != nil {
+				t.Logf("release: %v", err)
+			}
+		}()
+
+		<-mgr(l).Started()
+		// Wait until parent ctx is definitively past its deadline.
+		<-parentCtx.Done()
+
+		// Lock must be alive: Done not closed, Cause nil.
+		select {
+		case <-lock.Done():
+			t.Fatalf("TC-5c: lock.Done() should NOT close on parent deadline; got Cause=%v", lock.Cause())
+		default:
+		}
+		if cause := lock.Cause(); cause != nil {
+			t.Errorf("TC-5c: lock.Cause() should be nil after parent deadline elapses; got %v", cause)
+		}
+	})
 }
 
 // TC-6: Double release — idempotent, Driver.Release called exactly once.
@@ -508,12 +546,15 @@ func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := l.Acquire(canceledCtx, "key8", testtime.D10s)
+	lock, err := l.Acquire(canceledCtx, "key8", testtime.D10s)
 	if err == nil {
 		t.Fatal("TC-8: expected error for pre-canceled ctx")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("TC-8: expected wrapped context.Canceled, got %v", err)
+	}
+	if lock != nil {
+		t.Errorf("TC-8: lock should be nil on error, got %T", lock)
 	}
 	if fd.Calls("SetNX") != 0 {
 		t.Errorf("TC-8: SetNX should not be called for pre-canceled ctx, got %d calls", fd.Calls("SetNX"))

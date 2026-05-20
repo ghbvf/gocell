@@ -48,6 +48,16 @@ import (
 // underlying context.WithoutCancel(callerCtx) preserves trace IDs and auth
 // claims while shielding the lock from caller-ctx cancellation/deadline.
 //
+// Callers should avoid stashing large objects, raw secrets, or
+// request-scoped resources whose lifetime should not extend past the
+// request as values on callerCtx before calling Acquire: every value
+// reachable from callerCtx remains pinned through Lock.valuesCtx for the
+// full held-lock duration (including any auto-renewal cycles) and is not
+// eligible for GC until lock.Release() returns or the lock is lost.
+// Trace IDs / auth claims / span contexts (small immutable objects) are
+// the intended use; tokens and PII should be parameterized explicitly
+// instead.
+//
 // ref: GH #20 ; ADR docs/architecture/202605200000-adr-distlock-lock-as-resource.md
 type Lock struct {
 	// done is closed by markCause exactly once when the lock ends.
