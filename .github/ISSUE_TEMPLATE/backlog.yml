@@ -1,0 +1,59 @@
+name: Backlog item
+description: 新增 backlog 条目 — 落入 Project v2 "GoCell Backlog"
+title: "[<ID>] <简短标题>"
+labels: ["backlog"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        建后请到 Project v2 "GoCell Backlog" 设置 custom fields：
+        **Capability** / **Priority** / **Complexity** / **Flag** / **Type**，
+        以及 `Flag=cond` 时必填的 **Trigger**。
+        Schema 详见 [`docs/backlog.md`](../blob/develop/docs/backlog.md)。
+
+  - type: textarea
+    id: status-quo
+    attributes:
+      label: 现状
+      description: 当前代码状态 / 已落地 / 已尝试方案
+      placeholder: "<现状描述>"
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix-direction
+    attributes:
+      label: 修复方向
+      description: 设计思路 / 替代方案 / 范围
+      placeholder: "<修复方向>"
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: 主要涉及文件 (≤3)
+      placeholder: |
+        - path/to/file1.go
+        - path/to/file2.go
+    validations:
+      required: false
+
+  - type: textarea
+    id: trigger
+    attributes:
+      label: Trigger
+      description: 仅 Project Flag=cond 时必填 — 触发条件文本
+      placeholder: "触发条件"
+    validations:
+      required: false
+
+  - type: input
+    id: source
+    attributes:
+      label: Source
+      description: 来源 (PR# / review path / issue#)
+      placeholder: "PR #NNN / docs/reviews/..."
+    validations:
+      required: false
