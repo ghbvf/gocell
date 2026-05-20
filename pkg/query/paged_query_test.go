@@ -293,6 +293,20 @@ func TestExecutePagedQuery_NormalizesLimit(t *testing.T) {
 	assert.Len(t, result.Items, DefaultPageSize)
 }
 
+// staleCursorConfig builds a PagedQueryConfig[testItem] with a garbage cursor
+// for stale-cursor mode tests. Shared by Demo and Prod mode tests (S4144).
+func staleCursorConfig(codec *CursorCodec, items []testItem, mode RunMode) PagedQueryConfig[testItem] {
+	return PagedQueryConfig[testItem]{
+		Codec:      codec,
+		PageParams: PageParams{Limit: 10, Cursor: "garbage"},
+		Sort:       pagedTestSort,
+		QueryCtx:   QueryContext("endpoint", "test"),
+		Fetch:      makeFetcher(items),
+		Extract:    testExtract,
+		RunMode:    mode,
+	}
+}
+
 func TestExecutePagedQuery_RunModeDemo_StaleCursor_ReturnsFirstPage(t *testing.T) {
 	codec := newTestCodec(t)
 	items := []testItem{
@@ -300,11 +314,7 @@ func TestExecutePagedQuery_RunModeDemo_StaleCursor_ReturnsFirstPage(t *testing.T
 		{Name: "banana", ID: "2"},
 	}
 
-	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, PageParams: PageParams{Limit: 10, Cursor: "garbage"}, Sort: pagedTestSort,
-		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(items), Extract: testExtract,
-		RunMode: RunModeDemo,
-	})
+	result, err := ExecutePagedQuery(context.Background(), staleCursorConfig(codec, items, RunModeDemo))
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -318,11 +328,8 @@ func TestExecutePagedQuery_RunModeDemo_StaleCursor_ReturnsFirstPage(t *testing.T
 func TestExecutePagedQuery_RunModeProd_StaleCursor_ReturnsError(t *testing.T) {
 	codec := newTestCodec(t)
 
-	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, PageParams: PageParams{Cursor: "garbage"}, Sort: pagedTestSort,
-		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
-		// RunMode unset — zero value must be RunModeProd (fail-closed).
-	})
+	// RunMode zero value must be RunModeProd (fail-closed).
+	_, err := ExecutePagedQuery(context.Background(), staleCursorConfig(codec, nil, 0))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)

@@ -477,9 +477,16 @@ func TestClientClose_AcceptsCtx(t *testing.T) {
 	assert.True(t, mock.closed)
 }
 
-func TestClientClose_PreCancelledCtxReturnsError(t *testing.T) {
+// newMockClient is a test helper that creates a mock cmdable and a Client
+// wrapping it. Shared by Close error-path tests (S4144).
+func newMockClient(t *testing.T) (*mockCmdable, *Client) {
+	t.Helper()
 	mock := newMockCmdable()
-	client := newClientFromCmdable(mock, Config{})
+	return mock, newClientFromCmdable(mock, Config{})
+}
+
+func TestClientClose_PreCancelledCtxReturnsError(t *testing.T) {
+	_, client := newMockClient(t)
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel() // already canceled
@@ -489,9 +496,8 @@ func TestClientClose_PreCancelledCtxReturnsError(t *testing.T) {
 }
 
 func TestClientClose_ContextFailure(t *testing.T) {
-	mock := newMockCmdable()
+	mock, client := newMockClient(t)
 	mock.closeErr = errMock
-	client := newClientFromCmdable(mock, Config{})
 
 	err := client.Close(context.Background())
 	require.Error(t, err)
