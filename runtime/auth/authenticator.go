@@ -157,6 +157,8 @@ func NewServiceTokenAuthenticator(ring cell.HMACKeyring, clk clock.Clock, opts .
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing,
 			"auth: NewServiceTokenAuthenticator ring must not be nil")
 	}
+	// nonceStore is filtered via validation.IsNilInterface in WithServiceTokenNonceStore;
+	// bare == nil here is sufficient because typed-nil cannot survive the option funnel.
 	if cfg.nonceStore == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"auth: NewServiceTokenAuthenticator requires a NonceStore via "+
@@ -212,9 +214,9 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 	parts := strings.SplitN(payload, ":", 4)
 	switch len(parts) {
 	case 2:
-		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgLegacy2Part)
 	case 3:
-		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "legacy 3-part service token format rejected")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgLegacy3Part)
 	}
 	if len(parts) != 4 {
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
@@ -223,17 +225,17 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 	tsStr := parts[0]
 	ts, err := strconv.ParseInt(tsStr, 10, 64)
 	if err != nil {
-		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid service token timestamp")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
 	}
 
 	now := cfg.clk.Now()
 	tokenTime := time.Unix(ts, 0)
 	if tokenTime.After(now.Add(ServiceTokenClockSkew)) {
-		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenExpired, "service token timestamp is too far in the future")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenExpired, msgFutureTimestamp)
 	}
 	age := now.Sub(tokenTime)
 	if age >= ServiceTokenMaxAge {
-		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenExpired, "service token expired")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenExpired, msgExpired)
 	}
 
 	nonce, callerCell, sigHex := parts[1], parts[2], parts[3]
@@ -248,7 +250,7 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
 	}
 	if !verifyServiceTokenMAC(ring, message, providedMAC) {
-		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid service token MAC")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidMAC)
 	}
 
 	// NonceStore.CheckAndMark is always a real replay-safe store (Noop rejected
@@ -267,11 +269,11 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 // the schema (cell.schema.json) and governance (FMT-C1) enforce.
 func validateCallerCell(callerCell string) error {
 	if callerCell == "" {
-		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "caller cell missing")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgCallerCellMissing)
 	}
 	if !metadata.MatchCellID(callerCell) {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-			"caller cell id invalid",
+			msgCallerCellInvalid,
 			errcode.WithDetails(slog.String("callerCell", callerCell)))
 	}
 	return nil
