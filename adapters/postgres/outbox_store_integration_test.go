@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	rout "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
@@ -111,7 +112,7 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 		require.NoError(t, <-errCh)
 	})
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-entry-persisted", func() bool {
 		return len(pub.Topics()) >= 2
 	}, testtime.D2s, testtime.D10ms)
 	topics := pub.Topics()
@@ -240,7 +241,7 @@ func TestPGOutboxStore_Fencing_ReclaimedRowSurvivesStaleMark(t *testing.T) {
 	// and ClaimPending returns it. The backoff with attempts=1 + baseDelay=1ms
 	// is well under 100ms.
 	var b []rout.ClaimedEntry
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-claim-acquired", func() bool {
 		var claimErr error
 		b, claimErr = store.ClaimPending(ctx, 10)
 		return claimErr == nil && len(b) == 1

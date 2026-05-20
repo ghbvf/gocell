@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
 )
 
@@ -103,7 +104,8 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 	}`)
 	require.NoError(t, bus.Publish(context.Background(), "test.envelope.topic", envelope))
 
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-envelope-unwrapped", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return got.ID != ""
@@ -160,7 +162,7 @@ func TestPublish_InvalidEnvelope_Rejected(t *testing.T) {
 	require.Equal(t, errcode.ErrEnvelopeSchema, ce.Code)
 
 	// Dead letter should also record the dropped message for diagnostics.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return bus.DeadLetterLen() > 0
 	}, testtime.EventuallyShort, testtime.FastPoll, "invalid envelope must be routed to dead letter")
 
@@ -205,7 +207,8 @@ func TestPublishSubscribe(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for processing.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return len(received) == 2
@@ -252,12 +255,14 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for all retries to complete (3 attempts with delays: 100+200+400 = 700ms).
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-redelivery-attempted", func() bool {
 		return attempts.Load() >= 3
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Message should be in dead letter.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return bus.DeadLetterLen() == 1
 	}, testtime.EventuallyShort, testtime.MediumPoll)
 
@@ -296,7 +301,8 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should go directly to dead letter on first attempt (no retries).
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return bus.DeadLetterLen() == 1
 	}, testtime.EventuallyShort, testtime.MediumPoll)
 
@@ -336,7 +342,8 @@ func TestSubscribe_PermanentErrorInRequeue_WalksRetryBudget(t *testing.T) {
 	err := bus.Publish(context.Background(), "perm.requeue", makeSimpleEnvelope(t, "perm.requeue"))
 	require.NoError(t, err)
 
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-claim-released", func() bool {
 		return bus.DeadLetterLen() == 1
 	}, busEventually10x, testtime.MediumPoll)
 
@@ -410,7 +417,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 		}(i)
 	}
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-publish-acked", func() bool {
 		return publishStarted.Load() == 1
 	}, testtime.EventuallyShort, testtime.D10ms)
 	require.NoError(t, bus.Close(context.Background()))
@@ -466,7 +473,7 @@ func TestMultipleSubscribers(t *testing.T) {
 	}()
 
 	// Wait for both broadcast subscribers to be registered before publishing.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-subscriber-ready", func() bool {
 		bus.mu.RLock()
 		defer bus.mu.RUnlock()
 		gs := bus.groupSubs["multi.topic"][""]
@@ -476,7 +483,8 @@ func TestMultipleSubscribers(t *testing.T) {
 	err := bus.Publish(context.Background(), "multi.topic", makeSimpleEnvelope(t, "multi.topic"))
 	require.NoError(t, err)
 
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return count1.Load() == 1 && count2.Load() == 1
 	}, testtime.EventuallyShort, testtime.D10ms)
 
@@ -508,7 +516,8 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 	err := bus.Publish(context.Background(), "partial.fail", makeSimpleEnvelope(t, "partial.fail"))
 	require.NoError(t, err)
 
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-redelivery-attempted", func() bool {
 		return attempts.Load() >= 3
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
@@ -607,7 +616,8 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 	err := bus.Publish(context.Background(), "receipt.ack", makeSimpleEnvelope(t, "receipt.ack"))
 	require.NoError(t, err)
 
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-publish-acked", func() bool {
 		return receipt.committed.Load()
 	}, testtime.EventuallyShort, testtime.D10ms, "receipt should be committed on Ack")
 
@@ -637,7 +647,8 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 	err := bus.Publish(context.Background(), "receipt.reject", makeSimpleEnvelope(t, "receipt.reject"))
 	require.NoError(t, err)
 
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-claim-released", func() bool {
 		return receipt.released.Load()
 	}, testtime.EventuallyShort, testtime.D10ms, "receipt should be released on Reject")
 
@@ -673,7 +684,8 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for all retries to exhaust.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-claim-released", func() bool {
 		return bus.DeadLetterLen() == 1
 	}, busEventually5x, testtime.MediumPoll)
 
@@ -721,7 +733,8 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for retries to exhaust and message to land in dead letter.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-claim-released", func() bool {
 		return bus.DeadLetterLen() == 1
 	}, busEventually5x, testtime.MediumPoll)
 
@@ -775,7 +788,8 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should exhaust retries and land in dead letter.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-claim-released", func() bool {
 		return bus.DeadLetterLen() == 1
 	}, busEventually5x, testtime.MediumPoll)
 
@@ -833,7 +847,8 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 	err := bus.Publish(context.Background(), "unknown.disp", makeSimpleEnvelope(t, "unknown.disp"))
 	require.NoError(t, err)
 
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-claim-released", func() bool {
 		return bus.DeadLetterLen() == 1
 	}, busEventually5x, testtime.MediumPoll)
 
@@ -932,7 +947,7 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 			}))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-subscriber-ready", func() bool {
 		bus.mu.RLock()
 		defer bus.mu.RUnlock()
 		gs := bus.groupSubs["session.created"]["auditcore"]
@@ -947,7 +962,7 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 	}
 
 	// Wait for all messages to be handled.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return int(sub1Count.Load()+sub2Count.Load()) >= n
 	}, busEventually2x, testtime.D10ms, "all messages should be consumed")
 
@@ -996,7 +1011,7 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 			}))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-subscriber-ready", func() bool {
 		bus.mu.RLock()
 		defer bus.mu.RUnlock()
 		gsAudit := bus.groupSubs["session.created"]["auditcore"]
@@ -1011,7 +1026,7 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 		require.NoError(t, bus.Publish(ctx, "session.created", env))
 	}
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return int(auditCount.Load()) >= n && int(configCount.Load()) >= n
 	}, busEventually2x, testtime.D10ms, "both groups should receive all messages")
 
@@ -1057,7 +1072,7 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 			}))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-subscriber-ready", func() bool {
 		bus.mu.RLock()
 		defer bus.mu.RUnlock()
 		gs := bus.groupSubs["events.v1"][""]
@@ -1070,7 +1085,7 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 		require.NoError(t, bus.Publish(ctx, "events.v1", env))
 	}
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return int(sub1Count.Load()) >= n && int(sub2Count.Load()) >= n
 	}, busEventually2x, testtime.D10ms, "both empty-group subs should get all messages")
 
@@ -1111,7 +1126,7 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 		}()
 	}
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-subscriber-ready", func() bool {
 		bus.mu.RLock()
 		defer bus.mu.RUnlock()
 		gs := bus.groupSubs["race.topic"]["race-group"]
@@ -1140,7 +1155,7 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 	pubWg.Wait()
 
 	totalExpected := numPublishers * msgsPerPublisher
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return totalReceived.Load() >= int64(totalExpected)
 	}, busEventually3x, testtime.D10ms,
 		"all messages should be consumed: got %d, want %d", totalReceived.Load(), totalExpected)
@@ -1240,7 +1255,8 @@ func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
 	require.NoError(t, err)
 
 	// The message must land in dead letter despite the Release failure.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics); sibling asserts below run unconditionally.
+	testwait.External(t, "eventbus-entry-received", func() bool {
 		return bus.DeadLetterLen() == 1
 	}, testtime.EventuallyShort, testtime.D10ms, "rejected message must reach dead letter even when Release fails")
 
@@ -1340,7 +1356,7 @@ func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
 	require.NoError(t, bus.Publish(context.Background(), "spy.commitfail", makeSimpleEnvelope(t, "spy.commitfail")))
 
 	// Wait for at least one CommitFailed notification and more than 1 attempt.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-subscriber-closed", func() bool {
 		return spy.len() > 0 && attempts.Load() > 1
 	}, busEventually2x, testtime.D10ms, "spy must record CommitFailed and handler must be retried")
 
@@ -1382,7 +1398,7 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 
 	// Wait until the spy receives a Reject/RetryExhausted notification (which
 	// only arrives after all maxRetries are exhausted).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-redelivery-attempted", func() bool {
 		last := spy.last()
 		return last.Disposition == outbox.DispositionReject &&
 			last.Result == outbox.SettlementResultRetryExhausted
@@ -1422,7 +1438,7 @@ func TestSubscribe_RetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
 	<-bus.Ready(outbox.Subscription{Topic: "spy.retryexhausted.once"})
 	require.NoError(t, bus.Publish(context.Background(), "spy.retryexhausted.once", makeSimpleEnvelope(t, "spy.retryexhausted.once")))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-redelivery-attempted", func() bool {
 		last := spy.last()
 		return last.Disposition == outbox.DispositionReject &&
 			last.Result == outbox.SettlementResultRetryExhausted
@@ -1468,7 +1484,7 @@ func TestSubscribe_CommitFailureRetryExhausted_NotifiesOncePerAttempt(t *testing
 	<-bus.Ready(outbox.Subscription{Topic: "spy.commitfail.exhausted"})
 	require.NoError(t, bus.Publish(context.Background(), "spy.commitfail.exhausted", makeSimpleEnvelope(t, "spy.commitfail.exhausted")))
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-redelivery-attempted", func() bool {
 		last := spy.last()
 		return last.Disposition == outbox.DispositionReject &&
 			last.Result == outbox.SettlementResultRetryExhausted
@@ -1766,7 +1782,7 @@ func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
 	require.NoError(t, bus.Publish(context.Background(), topic, env))
 
 	// Wait for the retry budget to exhaust and the dead-letter record to appear.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventbus-redelivery-attempted", func() bool {
 		return bus.DeadLetterLen() > 0
 	}, busEventually10x, testtime.MediumPoll, "dead letter must be populated after retries exhausted")
 

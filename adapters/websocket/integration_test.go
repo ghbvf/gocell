@@ -16,6 +16,7 @@ import (
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	authpkg "github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 
@@ -39,7 +40,7 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-conn-upgraded", func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
@@ -100,7 +101,7 @@ func TestIntegration_ConnectAndEcho(t *testing.T) {
 	conn := dialIntegrationWS(t, server.URL)
 	// cleanup via dialIntegrationWS t.Cleanup
 
-	require.Eventually(t, func() bool { return hub.ConnCount() == 1 }, testtime.D2s, testtime.D10ms)
+	testwait.External(t, "websocket-conn-upgraded", func() bool { return hub.ConnCount() == 1 }, testtime.D2s, testtime.D10ms)
 
 	// Client sends a message.
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
@@ -108,7 +109,7 @@ func TestIntegration_ConnectAndEcho(t *testing.T) {
 	require.NoError(t, conn.Write(ctx, websocket.MessageText, []byte("echo hello")))
 
 	// Handler should receive it.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-message-broadcast", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return gotMsg != ""
@@ -144,7 +145,7 @@ func TestIntegration_BroadcastMultipleClients(t *testing.T) {
 		// cleanup via dialIntegrationWS t.Cleanup
 	}
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-conn-upgraded", func() bool {
 		return hub.ConnCount() == numClients
 	}, testtime.D2s, testtime.D10ms)
 
@@ -201,7 +202,7 @@ func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-conn-upgraded", func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
 
 	// Handler configured with an exact origin (no wildcard).
 	mux := http.NewServeMux()
@@ -228,7 +229,7 @@ func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
 	require.NoError(t, err, "handshake with matching Origin must succeed")
 	t.Cleanup(func() { _ = conn.CloseNow() })
 
-	require.Eventually(t, func() bool { return hub.ConnCount() == 1 }, testtime.D2s, testtime.D10ms,
+	testwait.External(t, "websocket-conn-upgraded", func() bool { return hub.ConnCount() == 1 }, testtime.D2s, testtime.D10ms,
 		"hub must register exactly one connection after successful handshake")
 }
 
@@ -243,7 +244,7 @@ func TestUpgradeHandler_Origin_Mismatch_HandshakeRejected(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-conn-upgraded", func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
@@ -287,7 +288,7 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 		conns[i] = dialIntegrationWS(t, server.URL)
 	}
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-conn-upgraded", func() bool {
 		return hub.ConnCount() == numClients
 	}, testtime.D2s, testtime.D10ms)
 

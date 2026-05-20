@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // testExplicitRefreshInterval is a site-specific deadline for the
@@ -69,7 +70,7 @@ func TestRefreshWorker_HappyPath(t *testing.T) {
 	go func() { workerDoneCh <- a.Worker().Start(ctx) }()
 
 	// Wait until the goroutine has registered the ticker before advancing.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-jwks-refreshed", func() bool {
 		return clk.PendingTickers() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "ticker must be registered before Advance")
 
@@ -77,7 +78,7 @@ func TestRefreshWorker_HappyPath(t *testing.T) {
 	clk.Advance(a.refreshInterval() + time.Millisecond)
 
 	// Wait for the success to be recorded.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-refresh-token-rotated", func() bool {
 		return col.successCount.Load() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "expected RecordRefresh(true) after tick")
 
@@ -192,7 +193,7 @@ func TestRefreshWorker_FailOpen(t *testing.T) {
 	go func() { doneCh <- a.Worker().Start(ctx) }()
 
 	// Wait until the goroutine has registered the ticker.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-jwks-refreshed", func() bool {
 		return clk.PendingTickers() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "ticker must be registered before Advance")
 
@@ -203,7 +204,7 @@ func TestRefreshWorker_FailOpen(t *testing.T) {
 	clk.Advance(a.refreshInterval() + time.Millisecond)
 
 	// Wait for a failure to be recorded.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-refresh-token-rotated", func() bool {
 		return col.failureCount.Load() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "expected RecordRefresh(false) after IdP failure")
 
@@ -250,7 +251,7 @@ func TestRefreshWorker_FailureThenSuccess(t *testing.T) {
 	go func() { doneCh <- a.Worker().Start(ctx) }()
 
 	// Wait until the goroutine has registered the ticker.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-jwks-refreshed", func() bool {
 		return clk.PendingTickers() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "ticker must be registered before Advance")
 
@@ -258,14 +259,14 @@ func TestRefreshWorker_FailureThenSuccess(t *testing.T) {
 
 	// First tick — IdP healthy → success.
 	clk.Advance(interval + time.Millisecond)
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-refresh-token-rotated", func() bool {
 		return col.successCount.Load() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "expected success on first tick")
 
 	// Make IdP fail.
 	failFlag.Store(1)
 	clk.Advance(interval)
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-refresh-token-rotated", func() bool {
 		return col.failureCount.Load() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "expected failure on second tick")
 
@@ -274,7 +275,7 @@ func TestRefreshWorker_FailureThenSuccess(t *testing.T) {
 	// Restore IdP.
 	failFlag.Store(0)
 	clk.Advance(interval)
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-refresh-token-rotated", func() bool {
 		return col.successCount.Load() >= 2
 	}, testtime.EventuallyShort, testtime.FastPoll, "expected success on recovery tick")
 
@@ -347,13 +348,13 @@ func TestRefreshWorker_WarnLogFields(t *testing.T) {
 	go func() { doneCh <- a.Worker().Start(ctx) }()
 
 	// Wait until the goroutine has registered the ticker.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-jwks-refreshed", func() bool {
 		return clk.PendingTickers() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "ticker must be registered before Advance")
 
 	failFlag.Store(1)
 	clk.Advance(a.refreshInterval() + time.Millisecond)
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-refresh-token-rotated", func() bool {
 		return col.failureCount.Load() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll)
 
@@ -385,7 +386,7 @@ func TestRefreshWorker_Stop_DrainAfterStarted(t *testing.T) {
 	go func() { _ = a.Worker().Start(ctx) }()
 
 	// Wait until the goroutine has registered the ticker before calling Stop.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-jwks-refreshed", func() bool {
 		return clk.PendingTickers() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "ticker must be registered before Stop")
 
@@ -418,7 +419,7 @@ func TestRefreshWorker_Close_DrainAfterStarted(t *testing.T) {
 	go func() { _ = a.Worker().Start(ctx) }()
 
 	// Wait until the goroutine has registered the ticker before calling Close.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-jwks-refreshed", func() bool {
 		return clk.PendingTickers() >= 1
 	}, testtime.EventuallyShort, testtime.FastPoll, "ticker must be registered before Close")
 

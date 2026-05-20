@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
 
@@ -92,7 +93,7 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 
 	// Use Eventually to tolerate slow CI: poll until stale entries are cleaned
 	// up, with a generous total timeout (2s) to avoid flakiness.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "ratelimit-bucket-refilled", func() bool {
 		return l.Len() == 0
 	}, testtime.D2s, testtime.D25ms, "stale entries should be cleaned up")
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // relayStaleAge is the age used to seed "old enough to delete" entries.
@@ -300,10 +301,10 @@ func TestRelay_Cleanup_DeletesPublishedAndDead(t *testing.T) {
 		clock:   clock.Real(),
 	}
 
-	// Use Eventually so the test remains deterministic: the 1ms retention period
+	// Use testwait.External so the test remains deterministic: the 1ms retention period
 	// must have elapsed before cleanup can delete entries. In practice the 48h-old
 	// timestamps far predate any reasonable cutoff, so this resolves in one tick.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-batch-drained", func() bool {
 		if err := relay.cleanup(context.Background()); err != nil {
 			return false
 		}

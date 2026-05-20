@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // reauthTwoBackoffInitial is 2× the initial reauth backoff interval, used to
@@ -62,7 +63,7 @@ func TestReauthenticate_BackoffInterruptedByCtxCancel(t *testing.T) {
 	}()
 
 	// Wait for at least one Login call so we know the backoff sleep has started.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-auth-renewed", func() bool {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 1
@@ -131,7 +132,7 @@ func TestDoReauth_InfiniteRetry_UntilCtxCancel(t *testing.T) {
 
 	// Wait until buildWatcher has been called at least 3 times — proving the loop
 	// is retrying beyond the old 2-attempt limit.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-readiness-flipped", func() bool {
 		watcherCallsMu.Lock()
 		defer watcherCallsMu.Unlock()
 		return watcherCalls >= 3

@@ -16,6 +16,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
@@ -334,7 +335,7 @@ func TestRelay_Shutdown_CleanStop(t *testing.T) {
 	go func() { errCh <- relay.Start(ctx) }()
 
 	// Wait for relay to reach running state via Ready() instead of time.Sleep.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-published", func() bool {
 		ch := relay.Ready()
 		if ch == nil {
 			return false
@@ -413,7 +414,7 @@ func TestRelay_DoubleStart_Error(t *testing.T) {
 
 	go func() { _ = relay.Start(t.Context()) }()
 	// Wait for relay to reach running state.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-published", func() bool {
 		ch := relay.Ready()
 		if ch == nil {
 			return false
@@ -441,7 +442,7 @@ func TestRelay_CanRestartAfterStop(t *testing.T) {
 		go func() { errCh <- relay.Start(ctx) }()
 
 		// Wait for relay to be ready before stopping.
-		require.Eventually(t, func() bool {
+		testwait.External(t, "outbox-relay-published", func() bool {
 			ch := relay.Ready()
 			if ch == nil {
 				return false
@@ -835,7 +836,7 @@ func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
 	// so the deterministic waitStore/waitPub helpers don't apply. Budget is
 	// testtime.D1s (already conventional, not the D500ms-flake class) and
 	// state convergence here is a single int counter assignment.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-claim-acquired", func() bool {
 		mc.mu.Lock()
 		defer mc.mu.Unlock()
 		for _, c := range mc.pollCycles {
@@ -881,7 +882,7 @@ func TestRelay_PollFailureBudget_TripsAfterConsecutiveFailures(t *testing.T) {
 	defer stop()
 
 	// Wait for the poll budget checker to become non-nil (trip).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-poll"]
 		if !ok {
@@ -901,7 +902,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 	defer stop()
 
 	// Trip first.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-poll"]
 		return ok && fn(context.Background()) != nil
@@ -911,7 +912,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 	store.setClaimErr(nil)
 
 	// Checker must recover.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-published", func() bool {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-poll"]
 		return ok && fn(context.Background()) == nil
@@ -928,7 +929,7 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 	stop := startRelay(t, relay)
 	defer stop()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-reclaim"]
 		return ok && fn(context.Background()) != nil
@@ -955,7 +956,7 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 	stop := startRelay(t, relay)
 	defer stop()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-cleanup"]
 		return ok && fn(context.Background()) != nil
@@ -1009,7 +1010,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	// --- First run: trip the poll budget ---
 	stop := startRelay(t, relay)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-poll"]
 		return ok && fn(context.Background()) != nil
@@ -1018,7 +1019,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	stop() // gracefully stop; defer in Start resets readyCh for next Start
 
 	// Wait until state is relayStopped so we can restart.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-batch-drained", func() bool {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-poll"]
 		// The checker still exists; it reflects state at the time of the last run.
@@ -1058,7 +1059,7 @@ func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {
 
 	// Ready() never returns nil (B1: pre-allocated in NewRelay). Before Start()
 	// completes, the channel is open (blocks); after relayRunning, it is closed.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-published", func() bool {
 		ch := relay.Ready()
 		select {
 		case <-ch:

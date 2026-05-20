@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // mockOIDCServer returns a test server that mimics OIDC discovery endpoints.
@@ -233,7 +234,7 @@ func TestProvider_ConcurrentReadDuringSlowRefresh(t *testing.T) {
 	// Wait until the refresh is parked inside the network round-trip — this is
 	// exactly the window where the old lock-holding implementation blocked all
 	// readers.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "oidc-discovery-cached", func() bool {
 		return inflight.Load() >= 1
 	}, testtime.EventuallyLong, testtime.FastPoll, "refresh must reach the blocked discovery call")
 
