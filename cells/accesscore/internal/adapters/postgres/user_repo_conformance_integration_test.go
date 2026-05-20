@@ -22,8 +22,8 @@ func pgUserRepoFactory(t *testing.T) conformance.UserRepoFactory {
 	t.Helper()
 	return func(t *testing.T) (ports.UserRepository, persistence.TxRunner, func()) {
 		t.Helper()
-		repo, pool, cleanup := setupUserRepoPGWithPool(t)
+		repo, pool := setupUserRepoPGWithPool(t)
 		txMgr := adapterpg.NewTxManager(pool)
-		return repo, txMgr, cleanup
+		return repo, txMgr, func() {}
 	}
 }

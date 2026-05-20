@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
@@ -21,52 +20,23 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
-// setupRoleRepoPG starts a PostgreSQL testcontainer, applies all migrations,
-// and returns a PGRoleRepo + PGUserRepo + TxManager + cleanup func.
-// Both repos share the same pool so FK constraints are exercised.
-func setupRoleRepoPG(t *testing.T) (*PGRoleRepo, *PGUserRepo, *adapterpg.TxManager, func()) {
+// setupRoleRepoPG clones the package-shared pre-migrated template database
+// into a fresh per-test DB and returns a PGRoleRepo + PGUserRepo + TxManager.
+// Both repos share the same pool so FK constraints are exercised. Pool
+// + per-test DB lifecycle is owned by t.Cleanup inside sharedPG.NewPerTestPool.
+func setupRoleRepoPG(t *testing.T) (*PGRoleRepo, *PGUserRepo, *adapterpg.TxManager) {
 	t.Helper()
-	testutil.RequireDocker(t)
 
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
+	pool := sharedPG.NewPerTestPool(t)
 	txMgr := adapterpg.NewTxManager(pool)
 	roleRepo, err := NewPGRoleRepo(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 	userRepo, err := NewPGUserRepo(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
 
-	cleanup := func() {
-		if err := pool.Close(ctx); err != nil {
-			t.Logf("WARN: pool close: %v", err)
-		}
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: failed to terminate postgres container: %v", err)
-		}
-	}
-
-	return roleRepo, userRepo, txMgr, cleanup
+	return roleRepo, userRepo, txMgr
 }
 
 // newTestRole builds a minimal domain.Role.
@@ -106,8 +76,7 @@ func createTestUserInDB(t *testing.T, userRepo *PGUserRepo, suffix string) *doma
 // ---------------------------------------------------------------------------
 
 func TestPGRoleRepo_Integration(t *testing.T) {
-	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	t.Run("Create_GetByID_roundtrip_with_permissions_JSONB", func(t *testing.T) {
@@ -351,8 +320,7 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 // Last-holder protection is admin-scoped (ADR-admin-invariant §3.2 —
 // non-admin roles bypass the CTE).
 func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
-	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
@@ -439,8 +407,7 @@ func TestRemoveFromUserIfNotLast_ConcurrentRace(t *testing.T) {
 // with TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized which covers
 // the same race via the DB trigger safety net (raw DELETE FROM users path).
 func TestRemoveFromUserIfNotLast_ConcurrentRevoke_DifferentAdmins_ExactlyOneSucceeds(t *testing.T) {
-	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
@@ -512,8 +479,7 @@ func TestRemoveFromUserIfNotLast_ConcurrentRevoke_DifferentAdmins_ExactlyOneSucc
 // This test spins its own isolated testcontainer so it does not depend on the
 // shared subtest state inside TestPGRoleRepo_Integration.
 func TestLastAdminTrigger_RawDelete(t *testing.T) {
-	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	// Create the 'admin' role.
@@ -555,8 +521,7 @@ func TestLastAdminTrigger_RawDelete(t *testing.T) {
 // round-2 deferred #1 (PR476-FU-PG-USERS-TRIGGER-ISOLATED-TEST closed in
 // PR.).
 func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
-	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
@@ -589,8 +554,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
 // trigger's user_was_active_admin branch finds a peer and lets the UPDATE
 // proceed. Covers the "allow" path through the trigger.
 func TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG(t *testing.T) {
-	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
@@ -618,8 +582,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG(t
 // round-2 deferred #2 (PR476-FU-PG-COUNT-EFFECTIVE-LOCKED-PEER-TEST closed
 // in PR).
 func TestCountEffectiveAdmins_LockedAdminExcluded_PG(t *testing.T) {
-	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
@@ -663,8 +626,7 @@ func TestCountEffectiveAdmins_LockedAdminExcluded_PG(t *testing.T) {
 // TestRoleRepository_RemoveFromUserIfNotLast_LockedPeerRejected. PR #476
 // round-2 deferred #2 (closed in PR).
 func TestRemoveFromUserIfNotLast_LockedPeerDoesNotCount_PG(t *testing.T) {
-	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
@@ -706,8 +668,7 @@ func TestRemoveFromUserIfNotLast_LockedPeerDoesNotCount_PG(t *testing.T) {
 // instance so the PG SELECT EXISTS shape is exercised end-to-end (closing
 // the unit-test coverage gap on the PG implementation of the port method).
 func TestPGRoleRepo_EffectiveAdminExists_PG(t *testing.T) {
-	roleRepo, userRepo, txMgr, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, txMgr := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	t.Run("empty_returns_false", func(t *testing.T) {
@@ -756,8 +717,7 @@ func TestPGRoleRepo_EffectiveAdminExists_PG(t *testing.T) {
 // effective admin, the SQLSTATE P0001 must be translated into
 // ErrAuthLastAdminProtected (403). Pre-fix it surfaced as ErrInternal/500.
 func TestPGUserRepo_Update_LastAdminProtected_Mapping_PG(t *testing.T) {
-	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
@@ -786,8 +746,7 @@ func TestPGUserRepo_Update_LastAdminProtected_Mapping_PG(t *testing.T) {
 // ("cannot remove the last effective admin"), replacing the pre-fix
 // "delete blocked: last admin" divergent literal.
 func TestPGUserRepo_Delete_LastAdminProtected_MessageConsistency_PG(t *testing.T) {
-	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))
@@ -807,8 +766,7 @@ func TestPGUserRepo_Delete_LastAdminProtected_MessageConsistency_PG(t *testing.T
 }
 
 func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {
-	roleRepo, userRepo, _, cleanup := setupRoleRepoPG(t)
-	defer cleanup()
+	roleRepo, userRepo, _ := setupRoleRepoPG(t)
 	ctx := context.Background()
 
 	require.NoError(t, roleRepo.Create(ctx, newTestRole(auth.RoleAdmin, "Administrator")))

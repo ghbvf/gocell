@@ -10,61 +10,32 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
-// setupFlagPG spins up a PostgreSQL container, applies all migrations
-// (001-007), and returns a FlagRepository backed by a Session, TxManager,
-// and cleanup func.
-func setupFlagPG(t *testing.T) (*FlagRepository, *adapterpg.TxManager, func()) {
+// setupFlagPG clones the package-shared pre-migrated template database
+// into a fresh per-test database and returns a FlagRepository wired over
+// it. Pool + per-test DB lifecycle is owned by t.Cleanup inside
+// sharedPG.NewPerTestPool (see testmain_integration_test.go).
+func setupFlagPG(t *testing.T) (*FlagRepository, *adapterpg.TxManager) {
 	t.Helper()
-	testutil.RequireDocker(t)
 
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
+	pool := sharedPG.NewPerTestPool(t)
 	session := NewSession(pool.DB())
 	repo := NewFlagRepository(session, clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	cleanup := func() {
-		_ = pool.Close(ctx)
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: failed to terminate postgres container: %v", err)
-		}
-	}
-
-	return repo, txMgr, cleanup
+	return repo, txMgr
 }
 
 // TestFlagRepo_Restart_Persistence verifies that a flag created in one
 // FlagRepository instance is visible after the repository is recreated
 // (simulating a process restart with the same PG container).
 func TestFlagRepo_Restart_Persistence(t *testing.T) {
-	repo, txMgr, cleanup := setupFlagPG(t)
-	defer cleanup()
+	repo, txMgr := setupFlagPG(t)
 	ctx := context.Background()
 
 	now := time.Now()
@@ -102,8 +73,7 @@ func TestFlagRepo_Restart_Persistence(t *testing.T) {
 // TestFlagRepo_Toggle_Persistence verifies that Toggle increments version and
 // the updated version persists in PG (survives repository re-creation).
 func TestFlagRepo_Toggle_Persistence(t *testing.T) {
-	repo, txMgr, cleanup := setupFlagPG(t)
-	defer cleanup()
+	repo, txMgr := setupFlagPG(t)
 	ctx := context.Background()
 
 	now := time.Now()
