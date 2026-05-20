@@ -324,6 +324,39 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
 	})
 
+	t.Run("GetByIDForUpdate_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, e := repo.GetByIDForUpdate(txCtx, uuid.NewString())
+			return e
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
+	})
+
+	t.Run("GetByUsernameForUpdate_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, e := repo.GetByUsernameForUpdate(txCtx, "absent_"+uuid.NewString())
+			return e
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
+	})
+
+	t.Run("BumpAuthzEpoch_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			_, e := repo.BumpAuthzEpoch(txCtx, uuid.NewString())
+			return e
+		})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
+	})
+
 	// -----------------------------------------------------------------------
 	// PR464 P1.3: UpdatePassword CAS path (PG) — three-way classification:
 	// version match → bumps version; version mismatch → 409; user absent → 404.
