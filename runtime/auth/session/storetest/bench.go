@@ -63,8 +63,10 @@ func Bench(b *testing.B, factory BenchFactory) {
 }
 
 const (
-	benchSubject = "bench-subject"
-	benchTTL     = time.Hour
+	benchSubject    = "bench-subject"
+	benchTTL        = time.Hour
+	benchSeedIDFmt  = "sess-jti-bench-seed-%d"
+	benchSeedJTIFmt = "jti-bench-seed-%d"
 )
 
 // benchRevokeForSubject pre-loads N active sessions for a single subject and
@@ -119,9 +121,9 @@ func benchMixedConcurrent(b *testing.B, factory BenchFactory) {
 					b.Errorf("mixed Create: %v", err)
 				}
 			case 1:
-				_, _ = store.Get(ctx, fmt.Sprintf("sess-jti-bench-seed-%d", n%100))
+				_, _ = store.Get(ctx, fmt.Sprintf(benchSeedIDFmt, n%100))
 			case 2:
-				_ = store.Revoke(ctx, fmt.Sprintf("sess-jti-bench-seed-%d", n%100))
+				_ = store.Revoke(ctx, fmt.Sprintf(benchSeedIDFmt, n%100))
 			}
 		}
 	})
@@ -139,9 +141,9 @@ func seedSubjectSessions(b *testing.B, store session.Store, now time.Time, n int
 		go func(i int) {
 			defer wg.Done()
 			fix := &session.Session{
-				ID:                fmt.Sprintf("sess-jti-bench-seed-%d", i),
+				ID:                fmt.Sprintf(benchSeedIDFmt, i),
 				SubjectID:         benchSubject,
-				JTI:               fmt.Sprintf("jti-bench-seed-%d", i),
+				JTI:               fmt.Sprintf(benchSeedJTIFmt, i),
 				AuthzEpochAtIssue: 1,
 				CreatedAt:         now,
 				ExpiresAt:         now.Add(benchTTL),
