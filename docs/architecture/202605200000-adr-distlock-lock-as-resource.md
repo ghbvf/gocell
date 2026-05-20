@@ -28,7 +28,7 @@ Industry survey (recorded in this ADR §"Industry survey") showed five out of fi
 
 ## Decision
 
-`Locker.Acquire` returns a sealed `*Lock` value, intentionally NOT a `context.Context`. The caller-supplied ctx is consumed only for the acquire RPC (SetNX). Once held, the lock lifecycle is decoupled — only `Release()`, renewal failure (`ErrLockLost`), or manager shutdown ends it.
+`Locker.Acquire` returns a sealed `*Lock` value, intentionally NOT a `context.Context`. The caller-supplied ctx is consumed only for the acquire RPC (SetNX). Once held, the lock lifecycle is decoupled — only `Release()` or renewal failure (`ErrLockLost`) ends it. Forced manager shutdown is deferred to a follow-up — see §"Out of scope".
 
 ```go
 type Locker interface {
@@ -39,7 +39,7 @@ type Locker interface {
 type Lock struct { /* unexported */ }
 
 func (l *Lock) Done() <-chan struct{}    // closes on lock-end
-func (l *Lock) Cause() error              // ErrLockReleased / ErrLockLost / shutdown
+func (l *Lock) Cause() error              // ErrLockReleased / ErrLockLost
 func (l *Lock) Value(key any) any         // caller-ctx values (no cancellation)
 func (l *Lock) Release() error            // idempotent
 ```
@@ -113,6 +113,25 @@ References:
 - **v1 plan: tighten** (bind manager renewal to caller ctx). Rejected because it fights an explicit industry consensus and embeds the same category error (request-lifecycle = lock-ownership) more deeply.
 - **Provide `Lock.AsContext(parent context.Context)` escape hatch**. Rejected for v1 to keep the surface minimal and the Hard contract tight; can be added if a real use case appears.
 - **Use `context.AfterFunc` for caller-ctx watching**. Same category error as v1; rejected for same reason.
+
+## Out of scope (deferred)
+
+- **Explicit `Locker.Shutdown()` / `Close()` entry point.** The manager's
+  `runOnce` loop and `markCause` plumbing already support a third lock-end
+  signal beyond `ErrLockReleased` / `ErrLockLost` (e.g. `context.Canceled`
+  on forced shutdown), but no public method exposes that path in this
+  iteration — no production caller currently needs it, and shipping
+  unreachable dead code violates the "dead code = lie" principle. When a
+  bootstrap / lifecycle integration requires it, add `Close() error` to
+  `Locker` (or expose a separate `Shutdown` API) and re-instate the
+  shutdown markCause path under that entry point. Tests covering the
+  shutdown semantics must accompany that change. Tracked as backlog
+  `DISTLOCK-LOCKER-SHUTDOWN-01` (open when first ManagedResource integrator
+  arrives).
+- **`Lock.AsContext(parent context.Context)` escape hatch.** See
+  §"Alternatives considered".
+- **`WithMaxLockAge` safety net** for forgotten `Release()`. See
+  §"Consequences / Negative".
 
 ## Implementation notes
 

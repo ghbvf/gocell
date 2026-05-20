@@ -48,19 +48,36 @@ const lockerWaitRenewTimeout = testtime.D30s
 
 func assertSameErrorIdentity(t *testing.T, got, want error, msg string) {
 	t.Helper()
-	if sameErrorIdentity(got, want) {
+	if sameErrorIdentity(t, got, want) {
 		return
 	}
 	t.Fatalf("want exact error identity: got %T %v, want %T %v: %s", got, got, want, want, msg)
 }
 
-func sameErrorIdentity(got, want error) bool {
+// sameErrorIdentity reports whether got and want are the same error value by
+// pointer identity, not errors.Is unwrap. Used for sentinel checks where
+// markCause stores a specific package-level *errcode.Error pointer (e.g.
+// ErrLockLost) and the test wants to fail if a structurally equal but
+// independently allocated *errcode.Error sneaks in. We deliberately do NOT
+// use errors.Is because *errcode.Error has no custom Is() method and walking
+// its Unwrap chain would mask wrong-sentinel-with-same-message bugs.
+//
+// Both pointers are compared via reflect to support any error type the tests
+// throw at the helper without changing the signature. Non-comparable error
+// types are a programmer bug at the call site — fail the test rather than
+// silently returning false.
+func sameErrorIdentity(t *testing.T, got, want error) bool {
+	t.Helper()
 	if got == nil || want == nil {
 		return got == nil && want == nil
 	}
 	gv, wv := reflect.ValueOf(got), reflect.ValueOf(want)
-	if gv.Type() != wv.Type() || !gv.Comparable() {
+	if gv.Type() != wv.Type() {
 		return false
+	}
+	if !gv.Comparable() {
+		t.Fatalf("sameErrorIdentity: %T is not comparable; this helper requires "+
+			"pointer-identity-comparable error values", got)
 	}
 	return gv.Equal(wv)
 }

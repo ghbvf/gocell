@@ -19,7 +19,7 @@ type lockID = uint64
 //
 // All fields except lock are read-only after construction; lock is the
 // public-facing *Lock handle and the manager invokes lock.markCause(...)
-// to signal lock-end events (release, lost, shutdown).
+// to signal lock-end events (release, lost).
 type lockState struct {
 	id    lockID
 	key   string
@@ -107,14 +107,13 @@ type Manager struct {
 	driver Driver
 	cfg    config
 
-	// mu protects running, started, drained, stopCh, and snapshotLocks.
+	// mu protects running, started, drained, and snapshotLocks.
 	// The heap/locks/items are owned exclusively by the run() goroutine.
 	mu            sync.Mutex
 	running       bool
 	started       chan struct{}
 	drained       chan struct{}
-	stopCh        chan struct{}
-	snapshotLocks int // maintained by run() via atomic-ish updates under mu
+	snapshotLocks int // protected by mu; written by manager-goroutine handlers, read by Snapshot()
 
 	nextID atomic.Uint64
 	// pendingReleases counts how many locks have been added but whose
@@ -138,7 +137,6 @@ func newManager(driver Driver, cfg config) *Manager {
 		events:      make(chan managerEvent, 64),
 		started:     make(chan struct{}),
 		drained:     make(chan struct{}),
-		stopCh:      make(chan struct{}),
 		renewNotify: make(chan struct{}, 16),
 	}
 	return m
@@ -153,7 +151,12 @@ func (m *Manager) Started() <-chan struct{} {
 }
 
 // Drained returns a channel that is closed once the manager goroutine exits
-// after the last lock is released.
+// after the last lock has been dispatched through eventRemove. Background
+// Driver.Release I/O goroutines spawned by handleRemove may still be in
+// flight when Drained closes — Release blocks the *caller* on the I/O result
+// via the eventRemove resultCh, but the manager does not wait for those
+// goroutines before exiting. Drained therefore signals "no more renewal
+// activity will occur" rather than "all backend keys have been released".
 func (m *Manager) Drained() <-chan struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -182,7 +185,6 @@ func (m *Manager) add(state *lockState) {
 		// Fresh channels for this manager lifecycle.
 		m.started = make(chan struct{})
 		m.drained = make(chan struct{})
-		m.stopCh = make(chan struct{})
 		go m.run()
 	}
 	m.mu.Unlock()
@@ -269,22 +271,6 @@ func (m *Manager) runOnce(
 		if m.dispatchEvent(ev, locks, items, h) {
 			return true
 		}
-	case <-m.stopCh:
-		if timer != nil {
-			// Stop returns; no drain needed because we never reuse the timer object —
-			// a fresh one is created next iteration. Future refactors using Reset must
-			// add a drain-on-false guard here.
-			timer.Stop()
-		}
-		// Notify every in-flight lock of the forced shutdown so its Done()
-		// closes and Cause() reports a non-nil error. Without this, callers
-		// blocked on lock.Done() during shutdown would never wake. Use
-		// context.Canceled to match the Lock.Cause godoc contract.
-		// locks is owned exclusively by this goroutine; no lock required.
-		for _, st := range locks {
-			st.lock.markCause(context.Canceled)
-		}
-		return true
 	}
 	return false
 }

@@ -18,11 +18,14 @@ import (
 // # Lock-as-Resource design
 //
 // Acquire returns a *Lock — intentionally NOT a context.Context. Caller-ctx
-// cancellation does NOT release a held lock; only explicit Release, renewal
-// failure, or manager shutdown will end it. This matches the prevailing
-// industry convention (bsm/redislock, go-redsync, etcd client/v3/concurrency,
+// cancellation does NOT release a held lock; only explicit Release or
+// renewal failure will end it. This matches the prevailing industry
+// convention (bsm/redislock, go-redsync, etcd client/v3/concurrency,
 // HashiCorp consul, Apache Curator) and prevents the misuse pattern that GH
-// #20 exposed under the previous Lock-as-Context design.
+// #20 exposed under the previous Lock-as-Context design. (Explicit
+// Locker.Shutdown is deferred — see ADR
+// docs/architecture/202605200000-adr-distlock-lock-as-resource.md
+// §"Out of scope".)
 //
 // Caller responsibility:
 //
@@ -45,7 +48,6 @@ type Locker interface {
 	// Lock-end signals (lock.Done() closed; lock.Cause() reports):
 	//   - ErrLockReleased — Release() was called (normal end-of-critical-section)
 	//   - ErrLockLost     — renewal failed or backend reports ownership taken
-	//   - context.Canceled (or another error) — manager forced exit during shutdown drain
 	//
 	// Notably absent: caller-ctx cancellation does NOT end the lock. If the
 	// caller wants the lock to end when its ctx is canceled, the caller must
@@ -239,9 +241,12 @@ func (l *lockerImpl) Stats() Stats {
 	return Stats{ActiveLocks: l.mgr.Snapshot().Locks}
 }
 
-// Manager returns the internal Manager for test use.
-// Only exported so package-level tests (locker_test.go, manager_test.go) can
-// assert on lifecycle and heap state without coupling to internal types.
+// Manager returns the internal Manager. TEST USE ONLY — production callers
+// MUST NOT reach into the Manager; the Locker interface is the supported
+// public surface. The method is exported only because *_test.go in package
+// distlock_test (external) cannot access unexported methods via the
+// mgrGetter interface used by package-level tests to read Started() /
+// Drained() / Snapshot() / RenewNotify().
 func (l *lockerImpl) Manager() *Manager {
 	return l.mgr
 }

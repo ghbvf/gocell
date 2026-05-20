@@ -15,8 +15,11 @@ import (
 // lock is held, its lifecycle is independent of the caller ctx. This matches
 // the prevailing industry convention (bsm/redislock, go-redsync, etcd
 // client/v3/concurrency, HashiCorp consul, Apache Curator): caller-ctx
-// cancellation does NOT release a held lock; only explicit Release(),
-// renewal failure (ErrLockLost), or manager shutdown will end it.
+// cancellation does NOT release a held lock; only explicit Release() or
+// renewal failure (ErrLockLost) will end it. (Explicit Locker.Shutdown is
+// deferred to a future iteration — see ADR
+// docs/architecture/202605200000-adr-distlock-lock-as-resource.md
+// §"Out of scope".)
 //
 // Rationale: caller-ctx cancellation expresses "I no longer care about the
 // outcome of THIS request" — it does NOT express "release the resource I
@@ -108,8 +111,6 @@ func (l *Lock) Done() <-chan struct{} { return l.done }
 //   - ErrLockReleased: Release() was called by the application.
 //   - ErrLockLost:     renewal failed or backend reports ownership taken by
 //     another holder.
-//   - context.Canceled (or another non-sentinel error): manager forced exit
-//     during shutdown.
 //
 // Cause never returns context.Cause(callerCtx) — caller-ctx cancellation
 // does not end the lock under the Lock-as-Resource contract.
@@ -137,7 +138,7 @@ func (l *Lock) Release() error { return l.release() }
 
 // markCause sets the cause and closes done exactly once.
 // Package-internal: invoked by manager handlers (handleRenew on lost,
-// handleRemove on release, shutdown path).
+// handleRemove on release).
 func (l *Lock) markCause(cause error) {
 	l.causeOnce.Do(func() {
 		l.cause.Store(cause)

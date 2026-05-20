@@ -122,17 +122,20 @@ primary:   kubernetes/client-go    → tools/leaderelection/resourcelock/interfa
 secondary: go-redsync/redsync      → redis/redis.go（Driver 接口形态；NX/Eval 三原语）
            go-redsync/redsync      → redsync.go（driftFactor=0.01 时钟偏差容忍）
 
-influence: golang stdlib context   → context.WithCancelCause（Lock-as-Context API 形态；
-           Acquire 返回 (context.Context, func(), error)，锁到期时 ctx 自动取消）
+influence: golang stdlib context   → context.WithoutCancel（caller-ctx 仅作用于 acquire
+           RPC；Lock 内部保留 values 但屏蔽 cancel/deadline，对齐 OSS 五家一致约定）
 
 deviations:
   - per-lock goroutine → 单共享 manager goroutine + min-heap（续期截止时间排序）
-  - Lock interface（Lost/Key/Release(ctx)）→ (context.Context, func()) 二元组
+  - Acquire 返回 sealed *Lock（Done/Cause/Value/Release）—— intentionally NOT context.Context；
+    Lock-as-Resource，编译期阻止 db.QueryContext(lock, ...) 等误用（GH #20 / ADR
+    202605200000-adr-distlock-lock-as-resource.md）
   - 通用 Lua/Eval → 三语义原语 SetNX/Renew/Release（不暴露脚本层）
   - 注入式 Clock 接口（禁字面量 sleep/timer），测试可完全控制时钟
 
 ref PR: PR-A20（AL-02 DISTLOCK-RUNTIME-ABSTRACT-01，refactor/531）；
         镜像 PR#177 (S30) AL-01 的 adapter-only-store 拆分模式
+ref PR: PR-DISTLOCK-LOCK-AS-RESOURCE（caller ctx 与持锁解耦，Lock 不再实现 context.Context）
 ```
 
 ## Go 标准库参考（问题修复用）

@@ -19,8 +19,9 @@ type Option func(*config)
 type config struct {
 	// renewFraction controls when the manager schedules the next renewal
 	// relative to the TTL. Default 0.5 means renew at ttl/2.
-	// ref: go-redsync/redsync — redsync uses 2/3 factor; we default to 1/2
-	// for a wider safety margin.
+	// ref: go-redsync/redsync uses an adaptive (expiry/2)*(1+retries)
+	// schedule; bsm/redislock leaves cadence to the application. We default
+	// to a flat 1/2 for a wider safety margin and simpler reasoning.
 	renewFraction float64
 
 	// driftFactor sets the renewal I/O timeout safety margin. See WithDriftFactor.
@@ -36,7 +37,7 @@ type config struct {
 	// See WithMaxRenewAttempts.
 	maxRenewAttempts int
 
-	// clock is the time source. Set via New/MustNew required parameter.
+	// clock is the time source. Set via the required parameter of New.
 	clock clock.Clock
 }
 
@@ -79,7 +80,8 @@ func WithDriftFactor(f float64) Option {
 // duration rather than leaking indefinitely.
 //
 // Default: 5s (conservative; tune down for low-latency backends or up for
-// high-latency ones). Must be > 0; New() panics if the final value is ≤ 0.
+// high-latency ones). Must be > 0; New() returns a validation error if the
+// final value is ≤ 0.
 func WithReleaseTimeout(d time.Duration) Option {
 	return func(c *config) {
 		c.releaseTimeout = d
@@ -94,7 +96,8 @@ func WithReleaseTimeout(d time.Duration) Option {
 // of this setting.
 //
 // All retry attempts share the same renewTimeout window derived from the lock
-// TTL and drift factor. New() panics if the final value is < 1.
+// TTL and drift factor. New() returns a validation error if the final value
+// is < 1.
 func WithMaxRenewAttempts(n int) Option {
 	return func(c *config) {
 		c.maxRenewAttempts = n
