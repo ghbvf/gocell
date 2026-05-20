@@ -944,18 +944,25 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 	return results
 }
 
+// responseSchemaDataInfo holds the JSON Schema "data" property subset.
+type responseSchemaDataInfo struct {
+	Type string `json:"type"`
+}
+
+// responseSchemaPropertiesInfo holds the JSON Schema "properties" subset needed
+// for list-lint checks.
+type responseSchemaPropertiesInfo struct {
+	Data responseSchemaDataInfo `json:"data"`
+	// NextCursor is non-nil when the "nextCursor" property is declared in the schema.
+	NextCursor *json.RawMessage `json:"nextCursor"`
+	// HasMore is non-nil when the "hasMore" property is declared in the schema.
+	HasMore *json.RawMessage `json:"hasMore"`
+}
+
 // responseSchemaInfo holds the subset of JSON Schema fields needed for list-lint checks.
 type responseSchemaInfo struct {
-	Properties struct {
-		Data struct {
-			Type string `json:"type"`
-		} `json:"data"`
-		// NextCursor is non-nil when the "nextCursor" property is declared in the schema.
-		NextCursor *json.RawMessage `json:"nextCursor"`
-		// HasMore is non-nil when the "hasMore" property is declared in the schema.
-		HasMore *json.RawMessage `json:"hasMore"`
-	} `json:"properties"`
-	Required []string `json:"required"`
+	Properties responseSchemaPropertiesInfo `json:"properties"`
+	Required   []string                     `json:"required"`
 	// Combinator fields: non-nil when the schema uses oneOf/anyOf/allOf at the root level.
 	OneOf *json.RawMessage `json:"oneOf"`
 	AnyOf *json.RawMessage `json:"anyOf"`
