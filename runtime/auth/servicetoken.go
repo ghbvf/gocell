@@ -28,6 +28,26 @@ const (
 	// in lockstep with httputil.WriteError's 5xx mask so probes/tests assert
 	// against a single string.
 	msgInternalServerError = "internal server error"
+
+	// msgLegacy2Part and msgLegacy3Part are the canonical message literals emitted
+	// by verifyServiceTokenPayload for legacy token format rejections. They are
+	// defined as constants so classifyServiceTokenVerifyError can match against
+	// errcode.Error.Message (exact field comparison) rather than the formatted
+	// err.Error() string (which includes the "[CODE] " prefix and is fragile to
+	// message text changes).
+	msgLegacy2Part = "legacy 2-part service token format rejected"
+	msgLegacy3Part = "legacy 3-part service token format rejected"
+	// msgExpired is the canonical message for service token expiry; paired with
+	// ErrAuthTokenExpired code (already unique, but kept here for consistency).
+	msgExpired = "service token expired"
+	// msgFutureTimestamp is the canonical message for tokens with future timestamps.
+	msgFutureTimestamp = "service token timestamp is too far in the future"
+	// msgInvalidMAC is the canonical message for HMAC verification failure.
+	msgInvalidMAC = "invalid service token MAC"
+	// msgCallerCellMissing and msgCallerCellInvalid are the canonical messages
+	// emitted by validateCallerCell for missing and pattern-invalid caller cell IDs.
+	msgCallerCellMissing = "caller cell missing"
+	msgCallerCellInvalid = "caller cell id invalid"
 )
 
 // WithServiceTokenLogger sets the logger for ServiceTokenMiddleware.
@@ -114,7 +134,7 @@ type HMACKeyRing struct {
 // NewHMACKeyRing creates an HMACKeyRing. current must be at least MinHMACKeyBytes
 // (32 bytes). previous may be nil for single-secret mode; if set, it must also
 // meet the minimum length.
-func NewHMACKeyRing(current []byte, previous []byte) (*HMACKeyRing, error) {
+func NewHMACKeyRing(current, previous []byte) (*HMACKeyRing, error) {
 	if len(current) == 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing, "current HMAC secret must not be empty")
 	}
@@ -403,28 +423,41 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 // metric reason label. This mirrors the legacy per-branch labels from the
 // original handleServiceToken implementation.
 //
-// The error message from errcode includes a bracket-prefixed code, e.g.
-// "[ERR_AUTH_UNAUTHORIZED] caller cell missing", so strings.Contains is used
-// to match the classification substring regardless of leading code prefix.
+// Classification uses errors.As to extract *errcode.Error and then matches on
+// the .Code and .Message fields directly — not on the formatted err.Error()
+// string (which includes the "[CODE] " prefix). This approach is robust to
+// code-prefix format changes and locks each branch to a const-literal message
+// defined in this file, so any message change triggers a compile-time const
+// mismatch rather than a silent metric label downgrade.
 func classifyServiceTokenVerifyError(err error) string {
 	if err == nil {
 		return "ok"
 	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "legacy 2-part") || strings.Contains(msg, "legacy 3-part"):
-		return "legacy_format"
-	case strings.Contains(msg, "expired"):
-		return "expired"
-	case strings.Contains(msg, "invalid service token MAC"):
-		return "invalid_mac"
-	case strings.Contains(msg, "caller cell missing"):
-		return "missing_caller_cell"
-	case strings.Contains(msg, "caller cell id"):
-		return "invalid_caller_cell"
-	default:
-		return "invalid_format"
+	var ec *errcode.Error
+	if errors.As(err, &ec) {
+		// ErrAuthTokenExpired uniquely identifies the expiry family (future
+		// timestamp and past-MaxAge both use this code). No message disambiguation
+		// needed — all token-time failures map to "expired".
+		if ec.Code == errcode.ErrAuthTokenExpired {
+			return "expired"
+		}
+		// Remaining classification is on Message, which is a const literal defined
+		// in this file and used at the errcode.New call site. Any message change
+		// in verifyServiceTokenPayload / validateCallerCell must update these consts
+		// simultaneously, making drift a compile-time or test failure rather than
+		// a silent metric label regression.
+		switch ec.Message {
+		case msgLegacy2Part, msgLegacy3Part:
+			return "legacy_format"
+		case msgInvalidMAC:
+			return "invalid_mac"
+		case msgCallerCellMissing:
+			return "missing_caller_cell"
+		case msgCallerCellInvalid:
+			return "invalid_caller_cell"
+		}
 	}
+	return "invalid_format"
 }
 
 // verifyServiceTokenMAC checks whether the provided MAC is valid for message

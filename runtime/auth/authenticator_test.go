@@ -268,23 +268,32 @@ func TestJWTAuthenticator_Success_PrincipalShape(t *testing.T) {
 		t.Fatal("expected non-nil principal")
 	}
 
-	// Kind must be PrincipalUser.
+	assertJWTPrincipalScalars(t, p, claims)
+	assertJWTPrincipalRoles(t, p, claims)
+	assertJWTPrincipalClaimsMap(t, p, claims)
+}
+
+// assertJWTPrincipalScalars verifies scalar fields (Kind, Subject, AuthMethod,
+// PasswordResetRequired) on the Principal produced by NewJWTAuthenticator.
+func assertJWTPrincipalScalars(t *testing.T, p *Principal, claims Claims) {
+	t.Helper()
 	if p.Kind != PrincipalUser {
 		t.Errorf("expected Kind=PrincipalUser, got %v", p.Kind)
 	}
-	// Subject must match claims.Subject.
 	if p.Subject != claims.Subject {
 		t.Errorf("expected Subject=%q, got %q", claims.Subject, p.Subject)
 	}
-	// AuthMethod must be "jwt".
 	if p.AuthMethod != "jwt" {
 		t.Errorf("expected AuthMethod=%q, got %q", "jwt", p.AuthMethod)
 	}
-	// PasswordResetRequired must be forwarded.
 	if !p.PasswordResetRequired {
 		t.Error("expected PasswordResetRequired=true")
 	}
-	// Roles must be a copy of claims.Roles.
+}
+
+// assertJWTPrincipalRoles verifies that Roles is a defensive copy of claims.Roles.
+func assertJWTPrincipalRoles(t *testing.T, p *Principal, claims Claims) {
+	t.Helper()
 	if len(p.Roles) != len(claims.Roles) {
 		t.Fatalf("expected %d roles, got %d", len(claims.Roles), len(p.Roles))
 	}
@@ -293,14 +302,17 @@ func TestJWTAuthenticator_Success_PrincipalShape(t *testing.T) {
 			t.Errorf("role[%d]: expected %q, got %q", i, r, p.Roles[i])
 		}
 	}
-	// Roles must be a copy — mutating Principal.Roles must not affect original.
 	originalFirstRole := claims.Roles[0]
 	p.Roles[0] = "mutated"
 	if claims.Roles[0] != originalFirstRole {
 		t.Error("Principal.Roles must be a defensive copy; mutating it affected claims.Roles")
 	}
+}
 
-	// Claims map must have exactly 3 keys: sid, iss, token_use.
+// assertJWTPrincipalClaimsMap verifies the Claims map contains exactly the
+// expected keys (sid, iss, token_use) and that Audience is excluded.
+func assertJWTPrincipalClaimsMap(t *testing.T, p *Principal, claims Claims) {
+	t.Helper()
 	if len(p.Claims) != 3 {
 		t.Errorf("expected exactly 3 Claims map entries, got %d: %v", len(p.Claims), p.Claims)
 	}
@@ -313,7 +325,6 @@ func TestJWTAuthenticator_Success_PrincipalShape(t *testing.T) {
 	if p.Claims["token_use"] != string(claims.TokenUse) {
 		t.Errorf("expected Claims[token_use]=%q, got %q", string(claims.TokenUse), p.Claims["token_use"])
 	}
-	// Audience must NOT appear in Claims map.
 	if _, ok := p.Claims["aud"]; ok {
 		t.Error("Audience must not appear in Principal.Claims map")
 	}
@@ -946,27 +957,35 @@ func TestValidateCallerCell(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateCallerCell(tc.callerCell)
-			if !tc.wantErr {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			var ecErr *errcode.Error
-			if !errors.As(err, &ecErr) {
-				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-			}
-			if ecErr.Code != tc.wantCode {
-				t.Errorf("expected code %v, got %v", tc.wantCode, ecErr.Code)
-			}
-			if tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
-				t.Errorf("expected error message to contain %q, got %q", tc.wantMsg, err.Error())
-			}
+			assertValidateCallerCell(t, tc.callerCell, tc.wantErr, tc.wantCode, tc.wantMsg)
 		})
+	}
+}
+
+// assertValidateCallerCell is the per-case assertion helper for
+// TestValidateCallerCell. Extracted to keep the parent function's cognitive
+// complexity within the project limit (S3776).
+func assertValidateCallerCell(t *testing.T, callerCell string, wantErr bool, wantCode errcode.Code, wantMsg string) {
+	t.Helper()
+	err := validateCallerCell(callerCell)
+	if !wantErr {
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ecErr.Code != wantCode {
+		t.Errorf("expected code %v, got %v", wantCode, ecErr.Code)
+	}
+	if wantMsg != "" && !strings.Contains(err.Error(), wantMsg) {
+		t.Errorf("expected error message to contain %q, got %q", wantMsg, err.Error())
 	}
 }
 

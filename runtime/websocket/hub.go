@@ -244,7 +244,7 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 		cfg.ConcurrentCloseLimit = defaultConcurrentCloseLimit
 	}
 	if handler == nil {
-		handler = func(context.Context, string, []byte) {}
+		handler = func(context.Context, string, []byte) {} // no-op default: silently discard messages when no handler is configured
 	}
 
 	return &Hub{

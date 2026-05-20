@@ -11,6 +11,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
+// msgAuthRequired is the canonical client-visible message for unauthenticated
+// requests. Kept as a const so all callers produce identical wire text.
+const msgAuthRequired = "authentication required"
+
 // RequireSelfOrRole checks that the authenticated subject matches targetID
 // or holds one of the specified bypass roles. Returns nil on success.
 //
@@ -27,7 +31,7 @@ import (
 func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...string) error {
 	p, ok := FromContext(ctx)
 	if !ok {
-		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
 	}
 	// G1.B: Defense-in-depth. PrincipalUser must always carry a non-empty Subject;
 	// an empty Subject indicates the primary authenticator allowed a malformed token
@@ -97,7 +101,7 @@ func principalHasAnyRole(p *Principal, roles []string) bool {
 func RequireAnyRole(ctx context.Context, roles ...string) error {
 	p, ok := FromContext(ctx)
 	if !ok {
-		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
 	}
 	// G1.B: Defense-in-depth. PrincipalUser must always carry a non-empty Subject;
 	// an empty Subject indicates the primary authenticator allowed a malformed token
@@ -153,7 +157,7 @@ func RequireCallerCell(allowlist ...string) Policy {
 	return func(r *http.Request) error {
 		p, ok := FromContext(r.Context())
 		if !ok {
-			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
 		}
 		if p.Kind != PrincipalService {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "internal endpoint requires service token")

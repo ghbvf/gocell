@@ -78,7 +78,7 @@ type config struct {
 // Environment variables override YAML values. The env prefix maps to nested
 // keys by replacing underscores with dots and lowering the case.
 // For example, APP_SERVER_PORT overrides the key "app.server.port".
-func Load(yamlPath string, envPrefix string) (Config, error) {
+func Load(yamlPath, envPrefix string) (Config, error) {
 	c := &config{
 		data: make(map[string]any),
 		raw:  make(map[string]any),
@@ -182,7 +182,7 @@ func HasDrift(cfg Config) bool {
 // Reload re-reads the YAML file and overlays environment variables.
 // Thread-safe for use from watcher callbacks. On success, increments the
 // generation counter.
-func (c *config) Reload(yamlPath string, envPrefix string) error {
+func (c *config) Reload(yamlPath, envPrefix string) error {
 	newData := make(map[string]any)
 	newRaw := make(map[string]any)
 

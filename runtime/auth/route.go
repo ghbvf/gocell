@@ -11,6 +11,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
+// errfAuthMount is the canonical error-wrapping prefix for auth.Mount
+// internal operations. Using a const keeps all callers consistent (S1192).
+const errfAuthMount = "auth.Mount: %w"
+
 // Route binds a handler to a contract. Contract is the single source of
 // truth for HTTP method + fully-qualified path + observability metadata —
 // runtime-side Method/Path fields have been eliminated in round-4 (the
@@ -174,14 +178,14 @@ func wrapMountGuards(r Route) (http.Handler, error) {
 	if r.Policy != nil {
 		middleware, err := RequirePolicy(r.Policy)
 		if err != nil {
-			return nil, fmt.Errorf("auth.Mount: %w", err)
+			return nil, fmt.Errorf(errfAuthMount, err)
 		}
 		handler = middleware(handler)
 	}
 	if len(r.Contract.Clients) > 0 {
 		callerGuard, err := RequirePolicy(RequireCallerCell(r.Contract.Clients...))
 		if err != nil {
-			return nil, fmt.Errorf("auth.Mount: %w", err)
+			return nil, fmt.Errorf(errfAuthMount, err)
 		}
 		handler = callerGuard(handler)
 	}
@@ -190,7 +194,7 @@ func wrapMountGuards(r Route) (http.Handler, error) {
 	}
 	wrapped, err := wrapper.HTTPHandler(r.Contract, handler)
 	if err != nil {
-		return nil, fmt.Errorf("auth.Mount: %w", err)
+		return nil, fmt.Errorf(errfAuthMount, err)
 	}
 	return wrapped, nil
 }

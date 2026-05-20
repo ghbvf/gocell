@@ -163,6 +163,9 @@ func TestAuthMiddleware_ProtectedEndpointNoToken(t *testing.T) {
 	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
 }
 
+// TestRequireRole_HasRole verifies that RequireRole allows a request when the
+// Principal in context holds the required role. Also covers T6: RequireRole
+// resolves roles exclusively from the Principal — no Claims fallback.
 func TestRequireRole_HasRole(t *testing.T) {
 	handler := RequireRole(nil, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -797,27 +800,6 @@ func TestAuthMiddleware_NoPrincipalOnUnauth(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/public/path", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-// TestRequireRole_ReadsPrincipalFromContext verifies that RequireRole resolves
-// roles exclusively from the Principal (T6: Claims fallback removed).
-func TestRequireRole_ReadsPrincipalFromContext(t *testing.T) {
-	handler := RequireRole(nil, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	// Inject Principal only — no Claims needed after T6.
-	ctx := WithPrincipal(req.Context(), &Principal{
-		Kind:    PrincipalUser,
-		Subject: "u1",
-		Roles:   []string{"admin", "user"},
-	})
-	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

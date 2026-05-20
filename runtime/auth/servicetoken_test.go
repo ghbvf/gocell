@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -602,6 +603,35 @@ func TestServiceTokenMiddleware_NilRing_UsesSharedHelper(t *testing.T) {
 		"nil ring path must yield 500 via shared errorMiddlewareInternal helper")
 }
 
+// TestServiceTokenMiddleware_InternalError_MessageLockstep verifies that the
+// 500 response body's "message" field equals msgInternalServerError, keeping
+// the constant in lockstep with httputil.WriteError's 5xx mask. If the mask
+// or the constant ever diverge, this test fails, preventing a silent metric
+// or observability drift.
+func TestServiceTokenMiddleware_InternalError_MessageLockstep(t *testing.T) {
+	// Trigger the misconfiguration path (nil ring) which calls errorMiddlewareInternal
+	// and ultimately emits httputil.WriteError with msgInternalServerError.
+	handler := ServiceTokenMiddleware(nil, clock.Real())(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("handler must not be called for nil ring")
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok, "response body must have an 'error' object")
+	assert.Equal(t, msgInternalServerError, errObj["message"],
+		"500 response message must equal msgInternalServerError constant; "+
+			"update the constant if httputil.WriteError's 5xx mask changes")
+}
+
 // legacyTwoPartToken computes what a pre-PR#159 signer would have emitted:
 // HMAC-SHA256(secret, "METHOD PATH TIMESTAMP") → hex, prefixed with "{ts}:".
 // This is the exact token the old 2-part format would produce.
@@ -988,33 +1018,32 @@ func TestClassifyServiceTokenVerifyError(t *testing.T) {
 		},
 		{
 			name:       "legacy 2-part format",
-			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgLegacy2Part),
 			wantReason: "legacy_format",
 		},
 		{
 			name:       "legacy 3-part format",
-			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "legacy 3-part service token format rejected"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgLegacy3Part),
 			wantReason: "legacy_format",
 		},
 		{
 			name:       "expired token",
-			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenExpired, "service token expired"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenExpired, msgExpired),
 			wantReason: "expired",
 		},
 		{
 			name:       "invalid MAC",
-			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid service token MAC"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidMAC),
 			wantReason: "invalid_mac",
 		},
 		{
 			name:       "missing caller cell",
-			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "caller cell missing"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgCallerCellMissing),
 			wantReason: "missing_caller_cell",
 		},
 		{
-			name: "invalid caller cell — matches current validateCallerCell message",
-			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-				"caller cell id invalid"),
+			name:       "invalid caller cell — matches current validateCallerCell message",
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgCallerCellInvalid),
 			wantReason: "invalid_caller_cell",
 		},
 		{

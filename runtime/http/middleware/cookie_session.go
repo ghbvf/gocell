@@ -19,6 +19,10 @@ import (
 // Values exceeding this after encoding will be rejected by most browsers.
 const maxCookieSize = 4096
 
+// errfCookieSession is the canonical error-wrapping prefix for cookie_session
+// operations. Using a const keeps all callers consistent (S1192).
+const errfCookieSession = "cookie_session: %w"
+
 // CookieSessionConfig configures the BFF cookie session middleware.
 type CookieSessionConfig struct {
 	// Secret is the HMAC key for SecureCookie signing (≥32 bytes, required).
@@ -91,7 +95,7 @@ func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler,
 		MaxAge:   cfg.MaxAge,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("cookie_session: %w", err)
+		return nil, fmt.Errorf(errfCookieSession, err)
 	}
 
 	mw := func(next http.Handler) http.Handler {
@@ -141,7 +145,7 @@ func NewSessionCookieWriter(cfg CookieSessionConfig) (*SessionCookieWriter, erro
 		MaxAge:   cfg.MaxAge,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("cookie_session: %w", err)
+		return nil, fmt.Errorf(errfCookieSession, err)
 	}
 
 	return &SessionCookieWriter{sc: sc, cfg: cfg}, nil
@@ -210,7 +214,7 @@ func SetSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig, jwt string
 	if err != nil {
 		slog.Error("cookie_session: failed to create SecureCookie",
 			slog.Any("error", err))
-		return fmt.Errorf("cookie_session: %w", err)
+		return fmt.Errorf(errfCookieSession, err)
 	}
 
 	encoded, err := sc.Encode(cfg.CookieName, []byte(jwt))

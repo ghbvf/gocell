@@ -382,24 +382,30 @@ func TestDeepCloneValue(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := DeepCloneValue(tt.input)
 			assert.Equal(t, tt.input, got)
-
-			// Verify mutation isolation for mutable types.
-			switch v := got.(type) {
-			case []any:
-				if len(v) > 0 {
-					v[0] = "MUTATED"
-					if orig, ok := tt.input.([]any); ok && len(orig) > 0 {
-						assert.NotEqual(t, "MUTATED", orig[0], "mutation leaked to original")
-					}
-				}
-			case map[string]any:
-				v["__injected"] = true
-				if orig, ok := tt.input.(map[string]any); ok {
-					_, found := orig["__injected"]
-					assert.False(t, found, "mutation leaked to original")
-				}
-			}
+			assertDeepCloneMutationIsolation(t, got, tt.input)
 		})
+	}
+}
+
+// assertDeepCloneMutationIsolation verifies that mutating the clone does not
+// affect the original for mutable types (slice and map). Extracted to reduce
+// the cognitive complexity of TestDeepCloneValue (S3776).
+func assertDeepCloneMutationIsolation(t *testing.T, got, original any) {
+	t.Helper()
+	switch v := got.(type) {
+	case []any:
+		if len(v) > 0 {
+			v[0] = "MUTATED"
+			if orig, ok := original.([]any); ok && len(orig) > 0 {
+				assert.NotEqual(t, "MUTATED", orig[0], "mutation leaked to original")
+			}
+		}
+	case map[string]any:
+		v["__injected"] = true
+		if orig, ok := original.(map[string]any); ok {
+			_, found := orig["__injected"]
+			assert.False(t, found, "mutation leaked to original")
+		}
 	}
 }
 
