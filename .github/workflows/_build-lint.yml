@@ -352,10 +352,23 @@ jobs:
     # putting them anywhere else would either double-run containers (cells/
     # tests/corebundle shards re-pulling postgres image) or break the
     # `coverage-integration-<shard>.out` profile referenced by the gate.
+    # New integration test contributors: your package falls into a shard
+    # automatically by import-path prefix — no yaml edit needed:
+    #   adapters/...                          → adapters shard
+    #   cells/...                             → cells shard
+    #   cmd/... or examples/...               → corebundle shard
+    #   tests/... or kernel/... or runtime/.. → tests shard
+    # archtest CI-INTEGRATION-DISCOVERY-01 still gates that every
+    # //go:build integration file is discovered by `go list -tags=integration`.
     strategy:
       fail-fast: false
       matrix:
         include:
+          # adapters shard owns the OTel smoke / PG + Redis race / Redis
+          # cluster vet / adapters/postgres coverage gate steps; each of
+          # those steps below MUST carry `if: ${{ matrix.run_adapters_extras }}`.
+          # When adding a new adapters-only integration step, add the same
+          # condition or it will run 4× across all shards.
           - shard: adapters
             filter: '^github.com/ghbvf/gocell/adapters/'
             run_adapters_extras: true
@@ -610,7 +623,7 @@ jobs:
         with:
           name: coverage-integration-${{ matrix.shard }}
           path: coverage-integration-${{ matrix.shard }}.out
-          retention-days: 1
+          retention-days: 3
 
   e2e:
     # PR-CFG-G1: real-execution gate for tests/e2e. Runs corebundle in a
