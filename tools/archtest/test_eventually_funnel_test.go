@@ -11,23 +11,31 @@ package archtest
 //     (production + test code). Callers MUST go through testwait.External
 //     (synchronous wall-clock polling with const-literal reason) or
 //     testwait.Deterministic (channel-blocking wait — preferred).
-//   - Every reference to one of those four testify symbols MUST appear in
-//     *ast.CallExpr.Fun position only if the call itself is also forbidden
-//     (it is). The reverse blind-spot self-test asserts no indirect
-//     references reach the symbols (function-variable assignment,
-//     function-pointer pass-through, reflect.ValueOf, struct-field binding)
-//     — those four shapes would otherwise bypass the main rule's
-//     CallExpr-driven scan.
+//   - Every reference to one of those four testify symbols is rejected:
+//     direct calls are caught by the main rule (TestEventuallyFunnel);
+//     indirect references (var assignment, function-pointer pass-through,
+//     reflect.ValueOf, struct-field binding) are caught by the reverse
+//     blind-spot self-test (TestEventuallyFunnel_NoIndirectReferences).
+//     Inside the reverse self-test, Pass 1 marks direct-call Idents and
+//     Pass 2 excludes them so the two rules don't double-report the same
+//     line — direct calls are not allowed, just attributed to the main
+//     rule for diagnostic clarity.
 //
 // Together with TEST-POLLING-EXTERNAL-REASON-LITERAL-01 this closes the
 // testwait funnel as a Hard 范本: "typed marker funnel for unbounded ops"
 // per .claude/rules/gocell/ai-collab.md §"Hard 范本目录" — sibling of
-// panicregister.Approved. See pkg/testutil/testwait/testwait.go godoc and
+// panicregister.Approved. Note: per the parent 范本 entry, enforcement is
+// archtest-bound (not Go compile-time); the (callee, arg) form-uniqueness
+// is the highest tier reachable for this rule shape in Go, but a future
+// removal of require/assert.Eventually from testify would make this
+// archtest a redundant guard rather than a load-bearing lock.
+// See pkg/testutil/testwait/testwait.go godoc and
 // docs/plans/202605181600-042-archtest.md §1.1 PR3.
 
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"path/filepath"
 	"sort"
@@ -52,14 +60,22 @@ const (
 	testifyFuncEventuallyWithT = "EventuallyWithT"
 )
 
+// bannedEventuallySymbol is the (pkg path, func name) tuple identifying one
+// of the four testify symbols whose callsites and indirect references are
+// rejected by this archtest. Named (not anonymous) so it appears identically
+// in the symbol slice, the callee-resolver return type, and the indirect
+// scanner — repeating the field set inline at 6+ sites obscured the
+// equivalence relation.
+type bannedEventuallySymbol struct {
+	PkgPath string
+	Name    string
+}
+
 // bannedEventuallySymbols enumerates the four (pkg, func) pairs whose
 // callsites + references are rejected. Listed explicitly (not derived) to
 // keep the banned set obvious at the rule callsite and to make "add a new
 // banned symbol" an explicit code change.
-var bannedEventuallySymbols = []struct {
-	PkgPath string
-	Name    string
-}{
+var bannedEventuallySymbols = []bannedEventuallySymbol{
 	{testifyRequirePkgPath, testifyFuncEventually},
 	{testifyRequirePkgPath, testifyFuncEventuallyWithT},
 	{testifyAssertPkgPath, testifyFuncEventually},
@@ -77,8 +93,12 @@ type eventuallyFunnelViolation struct {
 // banned symbol). info must be the *types.Info bound to the same
 // packages.Load that produced the file. info == nil falls back to pure-AST
 // selector-name matching (used only in fixture mode).
+//
+// Signature mirrors the sibling scanFileForTestwaitExternalViolations: takes
+// *token.FileSet rather than *Pass so the function dependency is limited to
+// what it actually reads.
 func scanFileForEventuallyFunnelViolations(
-	pass *Pass,
+	fset *token.FileSet,
 	file *ast.File,
 	info *types.Info,
 	rel string,
@@ -92,11 +112,12 @@ func scanFileForEventuallyFunnelViolations(
 		}
 		violations = append(violations, eventuallyFunnelViolation{
 			File: rel,
-			Line: pass.Fset.Position(call.Pos()).Line,
+			Line: fset.Position(call.Pos()).Line,
 			Reason: fmt.Sprintf(
 				"bare %s.%s call — use testwait.External(t, reason, ...) for "+
 					"synchronous polling or testwait.Deterministic(t, ch, ...) for "+
-					"channel waits (see pkg/testutil/testwait)",
+					"channel waits (see github.com/ghbvf/gocell/pkg/testutil/testwait "+
+					"or run: go doc ./pkg/testutil/testwait)",
 				lastPathSegment(sym.PkgPath), sym.Name,
 			),
 		})
@@ -112,15 +133,8 @@ func scanFileForEventuallyFunnelViolations(
 // Sel, which handles import aliases correctly. When info is nil (fixture mode
 // without type resolution), falls back to pure-AST matching of `pkgIdent.Sel`
 // where pkgIdent.Name is "require" or "assert".
-func bannedEventuallyCallee(funExpr ast.Expr, info *types.Info) (struct {
-	PkgPath string
-	Name    string
-}, bool,
-) {
-	var zero struct {
-		PkgPath string
-		Name    string
-	}
+func bannedEventuallyCallee(funExpr ast.Expr, info *types.Info) (bannedEventuallySymbol, bool) {
+	var zero bannedEventuallySymbol
 	sel, ok := funExpr.(*ast.SelectorExpr)
 	if !ok || sel.Sel == nil {
 		return zero, false
@@ -152,15 +166,9 @@ func bannedEventuallyCallee(funExpr ast.Expr, info *types.Info) (struct {
 	}
 	switch xIdent.Name {
 	case "require":
-		return struct {
-			PkgPath string
-			Name    string
-		}{PkgPath: testifyRequirePkgPath, Name: sel.Sel.Name}, true
+		return bannedEventuallySymbol{PkgPath: testifyRequirePkgPath, Name: sel.Sel.Name}, true
 	case "assert":
-		return struct {
-			PkgPath string
-			Name    string
-		}{PkgPath: testifyAssertPkgPath, Name: sel.Sel.Name}, true
+		return bannedEventuallySymbol{PkgPath: testifyAssertPkgPath, Name: sel.Sel.Name}, true
 	}
 	return zero, false
 }
@@ -236,7 +244,7 @@ func TestEventuallyFunnel(t *testing.T) {
 			if shouldSkipForEventuallyFunnel(rel) {
 				continue
 			}
-			for _, v := range scanFileForEventuallyFunnelViolations(p, file, p.TypesInfo, rel) {
+			for _, v := range scanFileForEventuallyFunnelViolations(p.Fset, file, p.TypesInfo, rel) {
 				key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Reason)
 				if _, dup := seen[key]; dup {
 					continue
@@ -271,7 +279,7 @@ func TestEventuallyFunnel(t *testing.T) {
 		"%s: bare (require|assert).Eventually / *WithT is banned; route polling through "+
 			"pkg/testutil/testwait.External (const-literal reason) or testwait.Deterministic "+
 			"(channel wait). See docs/plans/202605181600-042-archtest.md §1.1 PR3. "+
-			"Run: go test ./tools/archtest/... -run TestEventuallyFunnel$ for local repro.",
+			"Run: go test -count=1 ./tools/archtest/... -run TestEventuallyFunnel$ for local repro.",
 		ruleTestEventuallyFunnel01)
 }
 
@@ -309,7 +317,7 @@ func TestEventuallyFunnelFixtures(t *testing.T) {
 					var out []Diagnostic
 					for _, file := range p.Files {
 						rel := p.Rel(file)
-						for _, v := range scanFileForEventuallyFunnelViolations(p, file, p.TypesInfo, rel) {
+						for _, v := range scanFileForEventuallyFunnelViolations(p.Fset, file, p.TypesInfo, rel) {
 							out = append(out, Diagnostic{Rel: v.File, Line: v.Line, Message: v.Reason})
 						}
 					}
@@ -347,52 +355,7 @@ func TestEventuallyFunnel_NoIndirectReferences(t *testing.T) {
 			if shouldSkipForEventuallyFunnel(rel) {
 				continue
 			}
-			// Pass 1: gather CallExpr.Fun positions whose Fun resolves to a
-			// banned symbol. These are the direct-call sites already caught
-			// by TestEventuallyFunnel; we exclude them here so the reverse
-			// self-test only reports new (indirect) shapes and the two
-			// rules don't double-count the same line.
-			directCallFun := make(map[*ast.Ident]struct{})
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel == nil {
-					return
-				}
-				if !isBannedEventuallyIdentUse(sel.Sel, p.TypesInfo) {
-					return
-				}
-				directCallFun[sel.Sel] = struct{}{}
-			})
-
-			// Pass 2: every Ident in types.Info.Uses pointing at a banned
-			// symbol must be in directCallFun; otherwise it's an indirect
-			// reference (var assignment, funcarg, reflect, struct field).
-			for ident, obj := range p.TypesInfo.Uses {
-				if ident == nil || obj == nil {
-					continue
-				}
-				sym, ok := bannedEventuallyIdentObj(obj)
-				if !ok {
-					continue
-				}
-				identFile := p.Fset.Position(ident.Pos()).Filename
-				absFile := p.Abs(file)
-				if identFile != absFile {
-					continue
-				}
-				if _, ok := directCallFun[ident]; ok {
-					continue
-				}
-				v := eventuallyFunnelViolation{
-					File: rel,
-					Line: p.Fset.Position(ident.Pos()).Line,
-					Reason: fmt.Sprintf(
-						"indirect reference to %s.%s (function value, pointer pass-through, "+
-							"method binding, or reflect); use testwait.External / "+
-							"testwait.Deterministic at the callsite instead",
-						lastPathSegment(sym.PkgPath), sym.Name,
-					),
-				}
+			for _, v := range scanFileForIndirectEventuallyReferences(p, file, rel) {
 				key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Reason)
 				if _, dup := seen[key]; dup {
 					continue
@@ -424,7 +387,8 @@ func TestEventuallyFunnel_NoIndirectReferences(t *testing.T) {
 	assert.Empty(t, violations,
 		"%s blind-spot reverse self-test: (require|assert).Eventually / *WithT must not be "+
 			"reachable via indirect references (function value, pointer pass-through, "+
-			"reflect, struct field); route through testwait.External / testwait.Deterministic.",
+			"reflect, struct field); route through testwait.External / testwait.Deterministic. "+
+			"Run: go test -count=1 ./tools/archtest/... -run TestEventuallyFunnel_NoIndirectReferences$ for local repro.",
 		ruleTestEventuallyFunnel01)
 }
 
@@ -468,48 +432,8 @@ func TestEventuallyFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 					var out []Diagnostic
 					for _, file := range p.Files {
 						rel := p.Rel(file)
-
-						// Pass 1: gather direct-call CallExpr.Fun Idents.
-						directCallFun := make(map[*ast.Ident]struct{})
-						EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-							sel, ok := call.Fun.(*ast.SelectorExpr)
-							if !ok || sel.Sel == nil {
-								return
-							}
-							if !isBannedEventuallyIdentUse(sel.Sel, p.TypesInfo) {
-								return
-							}
-							directCallFun[sel.Sel] = struct{}{}
-						})
-
-						// Pass 2: every Ident in Uses pointing at a banned
-						// symbol must be in directCallFun; otherwise indirect.
-						for ident, obj := range p.TypesInfo.Uses {
-							if ident == nil || obj == nil {
-								continue
-							}
-							sym, ok := bannedEventuallyIdentObj(obj)
-							if !ok {
-								continue
-							}
-							identFile := p.Fset.Position(ident.Pos()).Filename
-							absFile := p.Abs(file)
-							if identFile != absFile {
-								continue
-							}
-							if _, ok := directCallFun[ident]; ok {
-								continue
-							}
-							out = append(out, Diagnostic{
-								Rel:  rel,
-								Line: p.Fset.Position(ident.Pos()).Line,
-								Message: fmt.Sprintf(
-									"indirect reference to %s.%s (function value, pointer pass-through, "+
-										"method binding, or reflect); use testwait.External / "+
-										"testwait.Deterministic at the callsite instead",
-									lastPathSegment(sym.PkgPath), sym.Name,
-								),
-							})
+						for _, v := range scanFileForIndirectEventuallyReferences(p, file, rel) {
+							out = append(out, Diagnostic{Rel: v.File, Line: v.Line, Message: v.Reason})
 						}
 					}
 					sort.Slice(out, func(i, j int) bool {
@@ -540,15 +464,8 @@ func isBannedEventuallyIdentUse(ident *ast.Ident, info *types.Info) bool {
 
 // bannedEventuallyIdentObj reports whether obj is one of the four banned
 // testify functions; on hit returns the matched symbol identity.
-func bannedEventuallyIdentObj(obj types.Object) (struct {
-	PkgPath string
-	Name    string
-}, bool,
-) {
-	var zero struct {
-		PkgPath string
-		Name    string
-	}
+func bannedEventuallyIdentObj(obj types.Object) (bannedEventuallySymbol, bool) {
+	var zero bannedEventuallySymbol
 	if obj == nil {
 		return zero, false
 	}
@@ -562,4 +479,64 @@ func bannedEventuallyIdentObj(obj types.Object) (struct {
 		}
 	}
 	return zero, false
+}
+
+// collectDirectEventuallyCallIdents returns the set of SelectorExpr.Sel
+// Idents in file whose callee resolves to one of the four banned symbols.
+// These are the direct-call sites caught by the main rule; the reverse
+// self-test excludes them so the two rules don't double-report the same
+// line.
+func collectDirectEventuallyCallIdents(file *ast.File, info *types.Info) map[*ast.Ident]struct{} {
+	directCallFun := make(map[*ast.Ident]struct{})
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil {
+			return
+		}
+		if !isBannedEventuallyIdentUse(sel.Sel, info) {
+			return
+		}
+		directCallFun[sel.Sel] = struct{}{}
+	})
+	return directCallFun
+}
+
+// scanFileForIndirectEventuallyReferences returns all Idents in file whose
+// *types.Info.Uses entry resolves to a banned symbol AND that are not in
+// the direct-call set. Used by both the live reverse self-test and the
+// fixture-based golden test to avoid duplicating the two-pass logic.
+func scanFileForIndirectEventuallyReferences(
+	pass *Pass,
+	file *ast.File,
+	rel string,
+) []eventuallyFunnelViolation {
+	directCallFun := collectDirectEventuallyCallIdents(file, pass.TypesInfo)
+	absFile := pass.Abs(file)
+	var out []eventuallyFunnelViolation
+	for ident, obj := range pass.TypesInfo.Uses {
+		if ident == nil || obj == nil {
+			continue
+		}
+		sym, ok := bannedEventuallyIdentObj(obj)
+		if !ok {
+			continue
+		}
+		if pass.Fset.Position(ident.Pos()).Filename != absFile {
+			continue
+		}
+		if _, ok := directCallFun[ident]; ok {
+			continue
+		}
+		out = append(out, eventuallyFunnelViolation{
+			File: rel,
+			Line: pass.Fset.Position(ident.Pos()).Line,
+			Reason: fmt.Sprintf(
+				"indirect reference to %s.%s (function value, pointer pass-through, "+
+					"method binding, or reflect); use testwait.External / "+
+					"testwait.Deterministic at the callsite instead",
+				lastPathSegment(sym.PkgPath), sym.Name,
+			),
+		})
+	}
+	return out
 }

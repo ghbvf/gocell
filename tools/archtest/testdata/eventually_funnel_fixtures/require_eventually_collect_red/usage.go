@@ -5,6 +5,11 @@
 // as Eventually — the EventuallyWithT variant differs only in the condition
 // callback's CollectT parameter and is functionally equivalent for funnel
 // purposes.
+//
+// assert is imported only for the *assert.CollectT parameter type that
+// require.EventuallyWithT's callback signature requires; require.EventuallyWithT
+// is the banned callee under test, not assert.EventuallyWithT (which has its
+// own fixture under assert_eventually_collect_red).
 package require_eventually_collect_red
 
 import (
