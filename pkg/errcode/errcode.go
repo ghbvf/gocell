@@ -677,15 +677,19 @@ const (
 	// its TTL window — a replay attack or duplicate request. Maps to HTTP 401.
 	ErrAuthNonceReused Code = "ERR_AUTH_NONCE_REUSED"
 
-	// Distlock context-cause sentinels (runtime/distlock).
+	// Distlock Lock.Cause() sentinel codes (runtime/distlock).
 	//
 	// ErrDistlockLockLost signals that the manager failed to renew the lock or
-	// the backend reports ownership has been taken by another holder. Set as the
-	// context cancellation cause on the lock-derived context. Maps to HTTP 409.
+	// the backend reports ownership has been taken by another holder. Returned
+	// by Lock.Cause() after the manager calls Lock.markCause(ErrLockLost).
+	// Maps to HTTP 409 (Conflict) if it ever surfaces to a caller.
 	ErrDistlockLockLost Code = "ERR_DISTLOCK_LOCK_LOST"
-	// ErrDistlockLockReleased signals that release() was called (normal
-	// end-of-critical-section). Set as the context cancellation cause on the
-	// lock-derived context. Maps to HTTP 409.
+	// ErrDistlockLockReleased signals that Lock.Release() was called by the
+	// application (normal end-of-critical-section). Returned by Lock.Cause()
+	// after the manager calls Lock.markCause(ErrLockReleased). NOT intended to
+	// surface at HTTP boundaries; the runtime/distlock package tags it
+	// KindInternal so an accidental leak produces a fail-closed 500 rather
+	// than a misleading 409.
 	ErrDistlockLockReleased Code = "ERR_DISTLOCK_LOCK_RELEASED"
 
 	// MetricsSchema error codes (tools/metricschema).

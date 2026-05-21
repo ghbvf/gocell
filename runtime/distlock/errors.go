@@ -14,14 +14,24 @@ import (
 //
 //	var ec *errcode.Error
 //	if errors.As(err, &ec) && ec.Code == errcode.ErrDistlockLockLost { ... }
+//
+// HTTP Kind tagging is fail-closed: these sentinels are internal
+// Lock.Cause() signals and are NOT intended to reach an HTTP handler via
+// httputil.WriteError. If one accidentally does, the Kind below produces
+// the least-misleading response — never a confidently-wrong status.
 var (
 	// ErrLockLost is returned by Lock.Cause() when the manager fails to renew
 	// the lock or the backend reports ownership has been taken by another holder.
+	// KindConflict (HTTP 409) is the natural mapping if it ever surfaces to a
+	// caller: another holder owns the resource.
 	ErrLockLost = errcode.New(errcode.KindConflict, errcode.ErrDistlockLockLost, "distlock: lock lost")
 
 	// ErrLockReleased is returned by Lock.Cause() when Lock.Release() is called
-	// by the application (normal end-of-critical-section).
-	ErrLockReleased = errcode.New(errcode.KindConflict, errcode.ErrDistlockLockReleased, "distlock: lock released")
+	// by the application (normal end-of-critical-section). KindInternal (HTTP
+	// 500) is deliberate: a normal release is NOT a conflict, and if this
+	// sentinel ever reaches an HTTP handler that is a server-side programming
+	// bug — 500 surfaces it as such rather than misleading the client with 409.
+	ErrLockReleased = errcode.New(errcode.KindInternal, errcode.ErrDistlockLockReleased, "distlock: lock released")
 )
 
 // ErrLockTimeout is a package-level alias for errcode.ErrDistlockTimeout.

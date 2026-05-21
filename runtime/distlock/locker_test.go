@@ -339,6 +339,57 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 	}
 }
 
+// TC-4b: After the manager has declared a lock lost (renewal failed or held=false),
+// calling lock.Release() must return nil. handleRemove signals the resultCh with
+// nil whenever the lock is already absent from the manager's map, so the
+// already-removed idempotent path returns success rather than an error. This
+// test gives that path explicit assertion coverage (TC-3 / TC-4 only logged).
+func TestLocker_TC4b_ReleaseAfterLost(t *testing.T) {
+	fc := clockmock.New(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	ttl := testtime.D10s
+
+	lock, err := l.Acquire(context.Background(), "key4b", ttl)
+	if err != nil {
+		t.Fatalf("TC-4b Acquire: %v", err)
+	}
+
+	<-mgr(l).Started()
+	waitPendingTimers(t, fc)
+
+	// Force a lost-lock event via permanent ownership loss (no retry path).
+	fd.SetNextRenewHeld(false)
+	fc.Advance(time.Duration(float64(ttl) * 0.5))
+
+	select {
+	case <-lock.Done():
+	case <-time.After(testTimeout):
+		t.Fatal("TC-4b: lock should be Done after ownership lost")
+	}
+	assertSameErrorIdentity(t, lock.Cause(), distlock.ErrLockLost, "TC-4b cause")
+
+	// Driver.Release must NOT have been called — the lock was lost, not released.
+	if got := fd.Calls("Release"); got != 0 {
+		t.Errorf("TC-4b: Driver.Release should not fire on lost lock; got %d calls", got)
+	}
+
+	// The idempotent release path: lock.Release() after a lost lock returns nil
+	// (handleRemove sends nil on resultCh when the lock is already absent).
+	if err := lock.Release(); err != nil {
+		t.Errorf("TC-4b: lock.Release() after lock-lost should return nil, got %v", err)
+	}
+	if got := fd.Calls("Release"); got != 0 {
+		t.Errorf("TC-4b: lock.Release() after lock-lost should not call Driver.Release; got %d calls", got)
+	}
+
+	// A second Release() is also idempotent.
+	if err := lock.Release(); err != nil {
+		t.Errorf("TC-4b: second lock.Release() after lock-lost should return nil, got %v", err)
+	}
+}
+
 // TC-5: Parent ctx cancel does NOT release a held lock.
 //
 // Under the Lock-as-Resource contract (ADR
@@ -347,152 +398,164 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 // lock lifecycle is independent — only Release(), renewal failure, or
 // manager shutdown ends it.
 //
+// Sub-cases are implemented as package-level helper functions to keep this
+// umbrella test under the cognitive-complexity budget; each helper owns its
+// own setup and assertions.
+//
 // Sub-cases:
 //   - TC5a_HeldThroughCancel: parent cancel; Renew keeps firing; lock.Done not closed.
 //   - TC5b_ValuesPropagateButCancelDoesNot: values flow into lock.Value; cancel
 //     does not affect lock.
+//   - TC5c_DeadlineDoesNotPropagateToLock: parent deadline elapse does not affect
+//     lock liveness.
 func TestLocker_TC5_ParentCancelDoesNotReleaseLock(t *testing.T) {
-	t.Run("TC5a_HeldThroughCancel", func(t *testing.T) {
-		fc := clockmock.New(time.Time{})
-		fd := locktest.NewFakeDriver()
-		l := newTestLocker(fc, fd)
+	t.Run("TC5a_HeldThroughCancel", tc5aHeldThroughCancel)
+	t.Run("TC5b_ValuesPropagateButCancelDoesNot", tc5bValuesPropagateButCancelDoesNot)
+	t.Run("TC5c_DeadlineDoesNotPropagateToLock", tc5cDeadlineDoesNotPropagateToLock)
+}
 
-		ttl := testtime.D10s
+func tc5aHeldThroughCancel(t *testing.T) {
+	fc := clockmock.New(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
 
-		parentCtx, parentCancel := context.WithCancel(context.Background())
+	ttl := testtime.D10s
 
-		lock, err := l.Acquire(parentCtx, "key5a", ttl)
-		if err != nil {
-			t.Fatalf("TC-5a Acquire: %v", err)
-		}
+	parentCtx, parentCancel := context.WithCancel(context.Background())
 
-		<-mgr(l).Started()
-		waitPendingTimers(t, fc)
+	lock, err := l.Acquire(parentCtx, "key5a", ttl)
+	if err != nil {
+		t.Fatalf("TC-5a Acquire: %v", err)
+	}
 
-		renewBefore := fd.Calls("Renew")
-		releaseBefore := fd.Calls("Release")
+	<-mgr(l).Started()
+	waitPendingTimers(t, fc)
 
-		parentCancel()
+	renewBefore := fd.Calls("Renew")
+	releaseBefore := fd.Calls("Release")
 
-		// Give the manager a moment to (incorrectly) react to the cancellation.
-		// Under the new contract it must NOT react.
-		runtime.Gosched()
+	parentCancel()
 
-		// Advance the fake clock to trigger the next renewal tick. The renewal
-		// must still fire — the lock is held independently of parent ctx.
-		fc.Advance(lockerTTLHalf)
-		waitForRenewL(t, l, fd, renewBefore+1)
+	// Give the manager a moment to (incorrectly) react to the cancellation.
+	// Under the new contract it must NOT react.
+	runtime.Gosched()
 
-		if fd.Calls("Renew") < renewBefore+1 {
-			t.Errorf("TC-5a: renewal did not fire after parent cancel; before=%d after=%d",
-				renewBefore, fd.Calls("Renew"))
-		}
-		if fd.Calls("Release") != releaseBefore {
-			t.Errorf("TC-5a: Driver.Release fired on parent cancel; before=%d after=%d",
-				releaseBefore, fd.Calls("Release"))
-		}
-		select {
-		case <-lock.Done():
-			t.Fatalf("TC-5a: lock.Done() should NOT be closed by parent cancel; got Cause=%v", lock.Cause())
-		default:
-		}
-		if cause := lock.Cause(); cause != nil {
-			t.Errorf("TC-5a: lock.Cause() should be nil while held; got %v", cause)
-		}
+	// Advance the fake clock to trigger the next renewal tick. The renewal
+	// must still fire — the lock is held independently of parent ctx.
+	fc.Advance(lockerTTLHalf)
+	waitForRenewL(t, l, fd, renewBefore+1)
 
-		// Explicit Release ends the lock.
+	assertRenewedAndNotReleased(t, fd, renewBefore, releaseBefore, "TC-5a")
+	assertLockStillHeld(t, lock, "TC-5a")
+
+	// Explicit Release ends the lock.
+	if err := lock.Release(); err != nil {
+		t.Errorf("TC-5a: lock.Release() returned unexpected error: %v", err)
+	}
+	select {
+	case <-lock.Done():
+	case <-time.After(testTimeout):
+		t.Fatal("TC-5a: lock.Done() should close after explicit Release()")
+	}
+	assertSameErrorIdentity(t, lock.Cause(), distlock.ErrLockReleased, "TC-5a cause after release")
+}
+
+func tc5bValuesPropagateButCancelDoesNot(t *testing.T) {
+	fc := clockmock.New(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	type ctxKey struct{ name string }
+	key := ctxKey{"trace-id"}
+	val := "trace-xyz-789"
+
+	parentCtx, parentCancel := context.WithCancel(context.WithValue(context.Background(), key, val))
+
+	lock, err := l.Acquire(parentCtx, "key5b", testtime.D10s)
+	if err != nil {
+		t.Fatalf("TC-5b Acquire: %v", err)
+	}
+	defer func() {
 		if err := lock.Release(); err != nil {
-			t.Errorf("TC-5a: lock.Release() returned unexpected error: %v", err)
+			t.Logf("release: %v", err)
 		}
-		select {
-		case <-lock.Done():
-		case <-time.After(testTimeout):
-			t.Fatal("TC-5a: lock.Done() should close after explicit Release()")
+	}()
+
+	<-mgr(l).Started()
+
+	// Value visible before cancel.
+	if got := lock.Value(key); got != val {
+		t.Errorf("TC-5b: lock.Value(key) before cancel = %v, want %v", got, val)
+	}
+
+	parentCancel()
+
+	// Value still visible after cancel — context.WithoutCancel shields the
+	// lock from caller-ctx cancellation while preserving values.
+	if got := lock.Value(key); got != val {
+		t.Errorf("TC-5b: lock.Value(key) after cancel = %v, want %v", got, val)
+	}
+
+	assertLockStillHeld(t, lock, "TC-5b")
+}
+
+func tc5cDeadlineDoesNotPropagateToLock(t *testing.T) {
+	// Deadline propagation was removed when Acquire stopped returning
+	// context.Context. *Lock has no Deadline() method by design (compile-
+	// time defense against caller misuse); this case proves the runtime
+	// behavior matches: parent deadline does NOT affect lock liveness.
+	fc := clockmock.New(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	// Use a very short parent deadline; wait past it; verify lock unaffected.
+	parentCtx, cancel := context.WithTimeout(context.Background(), testtime.D10ms)
+	defer cancel()
+
+	lock, err := l.Acquire(parentCtx, "key5c", testtime.D10s)
+	if err != nil {
+		t.Fatalf("TC-5c Acquire: %v", err)
+	}
+	defer func() {
+		if err := lock.Release(); err != nil {
+			t.Logf("release: %v", err)
 		}
-		assertSameErrorIdentity(t, lock.Cause(), distlock.ErrLockReleased, "TC-5a cause after release")
-	})
+	}()
 
-	t.Run("TC5b_ValuesPropagateButCancelDoesNot", func(t *testing.T) {
-		fc := clockmock.New(time.Time{})
-		fd := locktest.NewFakeDriver()
-		l := newTestLocker(fc, fd)
+	<-mgr(l).Started()
+	// Wait until parent ctx is definitively past its deadline.
+	<-parentCtx.Done()
 
-		type ctxKey struct{ name string }
-		key := ctxKey{"trace-id"}
-		val := "trace-xyz-789"
+	assertLockStillHeld(t, lock, "TC-5c")
+}
 
-		parentCtx, parentCancel := context.WithCancel(context.WithValue(context.Background(), key, val))
+// assertRenewedAndNotReleased asserts that exactly one Renew was issued
+// after the snapshot point and Driver.Release was not invoked. Shared by
+// TC-5 sub-cases to keep their cognitive complexity below the gocognit budget.
+func assertRenewedAndNotReleased(t *testing.T, fd *locktest.FakeDriver, renewBefore, releaseBefore int, label string) {
+	t.Helper()
+	if fd.Calls("Renew") < renewBefore+1 {
+		t.Errorf("%s: renewal did not fire after parent cancel; before=%d after=%d",
+			label, renewBefore, fd.Calls("Renew"))
+	}
+	if fd.Calls("Release") != releaseBefore {
+		t.Errorf("%s: Driver.Release fired on parent cancel; before=%d after=%d",
+			label, releaseBefore, fd.Calls("Release"))
+	}
+}
 
-		lock, err := l.Acquire(parentCtx, "key5b", testtime.D10s)
-		if err != nil {
-			t.Fatalf("TC-5b Acquire: %v", err)
-		}
-		defer func() {
-			if err := lock.Release(); err != nil {
-				t.Logf("release: %v", err)
-			}
-		}()
-
-		<-mgr(l).Started()
-
-		// Value visible before cancel.
-		if got := lock.Value(key); got != val {
-			t.Errorf("TC-5b: lock.Value(key) before cancel = %v, want %v", got, val)
-		}
-
-		parentCancel()
-
-		// Value still visible after cancel — context.WithoutCancel shields the
-		// lock from caller-ctx cancellation while preserving values.
-		if got := lock.Value(key); got != val {
-			t.Errorf("TC-5b: lock.Value(key) after cancel = %v, want %v", got, val)
-		}
-
-		// lock.Done() is NOT closed.
-		select {
-		case <-lock.Done():
-			t.Fatalf("TC-5b: lock.Done() should NOT be closed by parent cancel; got Cause=%v", lock.Cause())
-		default:
-		}
-	})
-
-	t.Run("TC5c_DeadlineDoesNotPropagateToLock", func(t *testing.T) {
-		// Deadline propagation was removed when Acquire stopped returning
-		// context.Context. *Lock has no Deadline() method by design (compile-
-		// time defense against caller misuse); this case proves the runtime
-		// behavior matches: parent deadline does NOT affect lock liveness.
-		fc := clockmock.New(time.Time{})
-		fd := locktest.NewFakeDriver()
-		l := newTestLocker(fc, fd)
-
-		// Use a very short parent deadline; wait past it; verify lock unaffected.
-		parentCtx, cancel := context.WithTimeout(context.Background(), testtime.D10ms)
-		defer cancel()
-
-		lock, err := l.Acquire(parentCtx, "key5c", testtime.D10s)
-		if err != nil {
-			t.Fatalf("TC-5c Acquire: %v", err)
-		}
-		defer func() {
-			if err := lock.Release(); err != nil {
-				t.Logf("release: %v", err)
-			}
-		}()
-
-		<-mgr(l).Started()
-		// Wait until parent ctx is definitively past its deadline.
-		<-parentCtx.Done()
-
-		// Lock must be alive: Done not closed, Cause nil.
-		select {
-		case <-lock.Done():
-			t.Fatalf("TC-5c: lock.Done() should NOT close on parent deadline; got Cause=%v", lock.Cause())
-		default:
-		}
-		if cause := lock.Cause(); cause != nil {
-			t.Errorf("TC-5c: lock.Cause() should be nil after parent deadline elapses; got %v", cause)
-		}
-	})
+// assertLockStillHeld asserts that lock.Done() is not closed and lock.Cause()
+// is nil. Shared by TC-5 sub-cases.
+func assertLockStillHeld(t *testing.T, lock *distlock.Lock, label string) {
+	t.Helper()
+	select {
+	case <-lock.Done():
+		t.Fatalf("%s: lock.Done() should NOT be closed; got Cause=%v", label, lock.Cause())
+	default:
+	}
+	if cause := lock.Cause(); cause != nil {
+		t.Errorf("%s: lock.Cause() should be nil while held; got %v", label, cause)
+	}
 }
 
 // TC-6: Double release — idempotent, Driver.Release called exactly once.

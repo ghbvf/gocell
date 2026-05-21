@@ -60,9 +60,15 @@ type Locker interface {
 	//  if err != nil { return err }
 	//  defer lock.Release()
 	//  go func() {
-	//      <-ctx.Done()
-	//      // best-effort; Release is idempotent.
-	//      _ = lock.Release()
+	//      // Wait for whichever ends first; the second case prevents the
+	//      // goroutine from blocking on ctx forever after a normal Release
+	//      // or a renewal-failure ends the lock.
+	//      select {
+	//      case <-ctx.Done():
+	//          _ = lock.Release() // best-effort; idempotent.
+	//      case <-lock.Done():
+	//          // lock ended (Release / lost) — nothing more to do.
+	//      }
 	//  }()
 	//
 	//  // Pattern B — caller wants the *first* of (ctx-cancel | lock-lost) to abort:
@@ -180,6 +186,10 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("distlock: acquire: %w", err)
 	}
+	if key == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"distlock: key must not be empty")
+	}
 	// Redis SetNX/PEXPIRE take TTL in integer milliseconds; sub-millisecond
 	// values truncate to 0, which go-redis v9 documents as "no expiration"
 	// (string_commands.go SetNX). Enforce a 1ms minimum so a misconfigured
@@ -216,12 +226,15 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 		return releaseErr
 	}
 
-	// valuesCtx exposes caller-ctx values (trace IDs, auth claims) via
+	// valueLookup exposes caller-ctx values (trace IDs, auth claims) via
 	// Lock.Value while shielding the lock from caller-ctx cancellation and
-	// deadline. context.WithoutCancel preserves values only.
+	// deadline. context.WithoutCancel preserves values only; the closure
+	// captures the derived ctx's Value method without storing the ctx
+	// itself on Lock (keeps Lock-as-Resource boundary explicit and
+	// satisfies "no context.Context field on long-lived struct").
 	// ref: stdlib context.WithoutCancel — Go 1.21+
 	valuesCtx := context.WithoutCancel(ctx)
-	lock := newLock(valuesCtx, release)
+	lock := newLock(valuesCtx.Value, release)
 
 	state := &lockState{
 		id:    id,
@@ -247,6 +260,12 @@ func (l *lockerImpl) Stats() Stats {
 // distlock_test (external) cannot access unexported methods via the
 // mgrGetter interface used by package-level tests to read Started() /
 // Drained() / Snapshot() / RenewNotify().
+//
+// The unexported receiver lockerImpl is the primary barrier: external
+// packages can only reach this via an explicit
+// l.(interface{ Manager() *Manager }) type-assertion, which provides
+// deliberate friction and a clear grep target. No production path
+// performs that assertion.
 func (l *lockerImpl) Manager() *Manager {
 	return l.mgr
 }

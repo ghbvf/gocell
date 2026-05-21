@@ -1,7 +1,6 @@
 package distlock
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 )
@@ -48,18 +47,19 @@ import (
 // not implement context.Context), the compiler rejects such misuse outright.
 //
 // Values from the caller's ctx are still exposed via Lock.Value(key) — the
-// underlying context.WithoutCancel(callerCtx) preserves trace IDs and auth
-// claims while shielding the lock from caller-ctx cancellation/deadline.
+// underlying context.WithoutCancel(callerCtx).Value lookup preserves trace
+// IDs and auth claims while shielding the lock from caller-ctx
+// cancellation/deadline.
 //
 // Callers should avoid stashing large objects, raw secrets, or
 // request-scoped resources whose lifetime should not extend past the
 // request as values on callerCtx before calling Acquire: every value
-// reachable from callerCtx remains pinned through Lock.valuesCtx for the
-// full held-lock duration (including any auto-renewal cycles) and is not
-// eligible for GC until lock.Release() returns or the lock is lost.
-// Trace IDs / auth claims / span contexts (small immutable objects) are
-// the intended use; tokens and PII should be parameterized explicitly
-// instead.
+// reachable from callerCtx remains pinned through the captured
+// valueLookup closure for the full held-lock duration (including any
+// auto-renewal cycles) and is not eligible for GC until lock.Release()
+// returns or the lock is lost. Trace IDs / auth claims / span contexts
+// (small immutable objects) are the intended use; tokens and PII should
+// be parameterized explicitly instead.
 //
 // ref: GH #20 ; ADR docs/architecture/202605200000-adr-distlock-lock-as-resource.md
 type Lock struct {
@@ -74,10 +74,14 @@ type Lock struct {
 	// concurrent calls (release vs renewal-failure race).
 	causeOnce sync.Once
 
-	// valuesCtx exposes caller-ctx values via Lock.Value while shielding
-	// Lock from caller-ctx cancellation/deadline. Built with
-	// context.WithoutCancel(callerCtx) in Acquire.
-	valuesCtx context.Context
+	// valueLookup performs the caller-ctx Value lookup with caller-ctx
+	// cancellation/deadline shielded out. Acquire wires this as
+	// context.WithoutCancel(callerCtx).Value so only the Value channel of
+	// the caller ctx survives — never the full context. Storing the
+	// closure (rather than the context) keeps Lock from owning a
+	// context.Context field, which would otherwise blur the
+	// Lock-as-Resource boundary.
+	valueLookup func(key any) any
 
 	// release is the closure provided by Acquire. Idempotent via sync.Once
 	// embedded in the closure; second call returns the cached error.
@@ -86,11 +90,11 @@ type Lock struct {
 
 // newLock constructs a *Lock. Package-internal: only lockerImpl.Acquire and
 // tests construct Locks.
-func newLock(valuesCtx context.Context, release func() error) *Lock {
+func newLock(valueLookup func(key any) any, release func() error) *Lock {
 	return &Lock{
-		done:      make(chan struct{}),
-		valuesCtx: valuesCtx,
-		release:   release,
+		done:        make(chan struct{}),
+		valueLookup: valueLookup,
+		release:     release,
 	}
 }
 
@@ -126,7 +130,7 @@ func (l *Lock) Cause() error {
 // key. Caller-ctx cancellation and deadline do NOT propagate to Lock; only
 // values do. Use this to retrieve trace IDs / auth claims that were on the
 // caller ctx without re-plumbing them through Acquire's signature.
-func (l *Lock) Value(key any) any { return l.valuesCtx.Value(key) }
+func (l *Lock) Value(key any) any { return l.valueLookup(key) }
 
 // Release ends the lock. Idempotent: safe to call multiple times; only the
 // first call performs Driver.Release I/O and Cause() will be ErrLockReleased
