@@ -6,12 +6,13 @@
 //     (HTTP /healthz, container readiness, subprocess signal handler).
 //     Caller MUST provide a const-literal kebab-case reason documenting
 //     why polling is unavoidable. Downstream form-uniqueness is locked by
-//     archtest TEST-POLLING-EXTERNAL-REASON-LITERAL-01; upstream funnel
-//     closure (banning bare require.Eventually) is tracked by backlog
-//     TEST-EVENTUALLY-FUNNEL-01 (see docs/backlog/cap-14-tooling.md) and is
-//     the prerequisite for promoting this funnel from Soft transitional to Hard.
-//     Per ai-collab.md §"Funnel 双向锁评级", until upstream closes this funnel
-//     is classified Soft overall (Hard downstream + Soft upstream).
+//     archtest TEST-POLLING-EXTERNAL-REASON-LITERAL-01 ((callee, arg)
+//     uniqueness on testwait.External); upstream form-uniqueness is locked
+//     by sibling archtest TEST-EVENTUALLY-FUNNEL-01 (bans bare
+//     require.Eventually / assert.Eventually / *WithT across the module).
+//     Together they form a Hard funnel per ai-collab.md §"Funnel 双向锁评级"
+//     and Hard 范本 "typed marker funnel for unbounded ops" (sibling of
+//     panicregister.Approved).
 //   - Deterministic: blocks on a channel signal with timeout — no polling,
 //     no race window. The default choice; use External only as carve-out.
 //     Hard via Go type system: <-chan T signature makes "polling via
@@ -19,9 +20,6 @@
 //
 // Polling is the leading source of race-CI flakes in GoCell tests; see
 // docs/plans/202605181600-042-archtest.md §1.1 (TEST-POLLING-DETERMINISM).
-//
-// Upstream funnel closure backlog anchor: TEST-EVENTUALLY-FUNNEL-01 (registered
-// in docs/backlog/cap-14-tooling.md §14.1).
 //
 // ref: stretchr/testify pull/1657 (synchronous Eventually proposal — root of
 //

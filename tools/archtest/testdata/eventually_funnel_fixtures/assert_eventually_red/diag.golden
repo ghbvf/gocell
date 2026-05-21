@@ -1,0 +1,1 @@
+tools/archtest/testdata/eventually_funnel_fixtures/assert_eventually_red/usage.go:16: bare assert.Eventually call — use testwait.External(t, reason, ...) for synchronous polling or testwait.Deterministic(t, ch, ...) for channel waits (see pkg/testutil/testwait)
