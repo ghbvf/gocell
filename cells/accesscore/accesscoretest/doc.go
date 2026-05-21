@@ -28,4 +28,6 @@
 // This package MUST NOT be imported from production (non-_test.go) code.
 // The constraint is enforced by archtest CELLTEST-IMPORT-SCOPE-01 in
 // tools/archtest/celltest_import_scope_test.go.
+
+// INVARIANT: CELLTEST-IMPORT-SCOPE-01
 package accesscoretest

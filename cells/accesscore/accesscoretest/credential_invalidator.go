@@ -2,11 +2,11 @@ package accesscoretest
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -52,7 +52,7 @@ var _ session.Store = (*noopSessionStore)(nil)
 
 func (s *noopSessionStore) Create(_ context.Context, _ *session.Session) error { return nil }
 func (s *noopSessionStore) Get(_ context.Context, _ string) (*session.ValidateView, error) {
-	return nil, errors.New("noopSessionStore: Get not implemented")
+	return nil, errcode.New(errcode.KindInternal, errcode.ErrNotImplemented, "noopSessionStore: Get not implemented")
 }
 func (s *noopSessionStore) Revoke(_ context.Context, _ string) error { return nil }
 func (s *noopSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
@@ -66,15 +66,15 @@ type noopRefreshStore struct{}
 var _ refresh.Store = (*noopRefreshStore)(nil)
 
 func (s *noopRefreshStore) Issue(_ context.Context, _, _ string, _ int64) (string, *refresh.Token, error) {
-	return "", nil, errors.New("noopRefreshStore: Issue not implemented")
+	return "", nil, errcode.New(errcode.KindInternal, errcode.ErrNotImplemented, "noopRefreshStore: Issue not implemented")
 }
 
 func (s *noopRefreshStore) Peek(_ context.Context, _ string) (*refresh.Token, error) {
-	return nil, errors.New("noopRefreshStore: Peek not implemented")
+	return nil, errcode.New(errcode.KindInternal, errcode.ErrNotImplemented, "noopRefreshStore: Peek not implemented")
 }
 
 func (s *noopRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
-	return "", nil, errors.New("noopRefreshStore: Rotate not implemented")
+	return "", nil, errcode.New(errcode.KindInternal, errcode.ErrNotImplemented, "noopRefreshStore: Rotate not implemented")
 }
 func (s *noopRefreshStore) RevokeSession(_ context.Context, _ string) error         { return nil }
 func (s *noopRefreshStore) RevokeSessionDetached(_ context.Context, _ string) error { return nil }

@@ -2,11 +2,13 @@ package accesscoretest_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/accesscoretest"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
@@ -15,6 +17,28 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// testPasswordPlain is the canonical test password used to generate testBcryptHash.
+const testPasswordPlain = "test-password"
+
+// testBcryptHash is a bcrypt hash of testPasswordPlain, lazily generated once
+// per test binary execution. Using a real hash (not a fake literal) ensures
+// tests that exercise password verification paths work correctly.
+var (
+	testBcryptHashOnce sync.Once
+	testBcryptHash     string
+)
+
+func getTestBcryptHash() string {
+	testBcryptHashOnce.Do(func() {
+		h, err := bcrypt.GenerateFromPassword([]byte(testPasswordPlain), bcrypt.MinCost)
+		if err != nil {
+			panic("accesscoretest_test: failed to generate test bcrypt hash: " + err.Error())
+		}
+		testBcryptHash = string(h)
+	})
+	return testBcryptHash
+}
 
 // ---- FakeConfigGetter ----
 
@@ -75,7 +99,7 @@ func TestFakeConfigGetter_StubErr(t *testing.T) {
 
 func newTestUser(t *testing.T, id, username string) domain.User {
 	t.Helper()
-	u, err := domain.NewUser(username, username+"@test.com", "$2a$12$fakehash", time.Now().UTC())
+	u, err := domain.NewUser(username, username+"@test.com", getTestBcryptHash(), time.Now().UTC())
 	require.NoError(t, err)
 	u.ID = id
 	return *u
@@ -258,7 +282,7 @@ func TestNewCredentialInvalidator_DefaultWiring(t *testing.T) {
 
 func TestBuildIdentityManageService_DefaultWiring(t *testing.T) {
 	t.Parallel()
-	svc, userRepo, _, rec := accesscoretest.BuildIdentityManageService(t)
+	svc, userRepo, rec := accesscoretest.BuildIdentityManageService(t)
 	require.NotNil(t, svc)
 	require.NotNil(t, userRepo)
 	require.NotNil(t, rec)
@@ -266,7 +290,7 @@ func TestBuildIdentityManageService_DefaultWiring(t *testing.T) {
 
 func TestBuildIdentityManageService_CreateEndToEnd(t *testing.T) {
 	t.Parallel()
-	svc, userRepo, _, rec := accesscoretest.BuildIdentityManageService(t)
+	svc, userRepo, rec := accesscoretest.BuildIdentityManageService(t)
 
 	// Inject a principal so actorFromContext succeeds.
 	ctx := auth.TestContext("admin-user-id", []string{auth.RoleAdmin})
@@ -288,4 +312,100 @@ func TestBuildIdentityManageService_CreateEndToEnd(t *testing.T) {
 	// Recorder should have captured the UserCreated event.
 	entries := rec.EntriesByType(identitymanage.TopicUserCreated)
 	assert.Len(t, entries, 1)
+}
+
+func TestBuildIdentityManageService_Create_TableDriven(t *testing.T) {
+	t.Parallel()
+	adminCtx := auth.TestContext("admin-user-id", []string{auth.RoleAdmin})
+
+	cases := []struct {
+		name    string
+		input   identitymanage.CreateInput
+		wantErr bool
+	}{
+		{
+			name: "happy path",
+			input: identitymanage.CreateInput{
+				Username: "validuser",
+				Email:    "valid@test.com",
+				Password: "strong-password-123",
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing username",
+			input: identitymanage.CreateInput{
+				Username: "",
+				Email:    "valid@test.com",
+				Password: "strong-password-123",
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing password",
+			input: identitymanage.CreateInput{
+				Username: "validuser2",
+				Email:    "valid2@test.com",
+				Password: "",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc, _, _ := accesscoretest.BuildIdentityManageService(t)
+			_, err := svc.Create(adminCtx, tc.input)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestFakeRoleRepo_RemoveFromUserIfNotLast(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removes non-last assignment", func(t *testing.T) {
+		t.Parallel()
+		r := accesscoretest.NewFakeRoleRepo()
+		ctx := context.Background()
+		// Two admins: removal should succeed.
+		r.SeedAssignment("u1", auth.RoleAdmin)
+		r.SeedAssignment("u2", auth.RoleAdmin)
+
+		removed, err := r.RemoveFromUserIfNotLast(ctx, "u1", auth.RoleAdmin)
+		require.NoError(t, err)
+		assert.True(t, removed)
+		snap := r.Snapshot()
+		assert.NotContains(t, snap["u1"], auth.RoleAdmin)
+	})
+
+	t.Run("refuses last effective admin removal", func(t *testing.T) {
+		t.Parallel()
+		r := accesscoretest.NewFakeRoleRepo()
+		ctx := context.Background()
+		// Only one admin: removal must be refused.
+		r.SeedAssignment("u1", auth.RoleAdmin)
+
+		removed, err := r.RemoveFromUserIfNotLast(ctx, "u1", auth.RoleAdmin)
+		require.Error(t, err)
+		assert.False(t, removed)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+	})
+
+	t.Run("idempotent removal of absent assignment", func(t *testing.T) {
+		t.Parallel()
+		r := accesscoretest.NewFakeRoleRepo()
+		ctx := context.Background()
+
+		removed, err := r.RemoveFromUserIfNotLast(ctx, "u1", "editor")
+		require.NoError(t, err)
+		assert.False(t, removed)
+	})
 }

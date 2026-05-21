@@ -7,6 +7,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // FakeCall records a single method invocation.
@@ -40,6 +41,10 @@ func (r *FakeUserRepo) SeedUser(u domain.User) {
 }
 
 // Snapshot returns a copy of all stored users in non-deterministic order.
+//
+// WARNING: Snapshot returns the full domain.User including PasswordHash; tests
+// MUST NOT assert against PasswordHash value (use UpdatePassword call records
+// via CallsOf instead).
 func (r *FakeUserRepo) Snapshot() []domain.User {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -260,7 +265,8 @@ func cloneUser(u *domain.User) *domain.User {
 		// ReconstituteUser only fails on invalid input that callers must not
 		// produce (empty IDs, zero epoch). Panic-as-assertion here prevents
 		// silently returning a corrupt clone.
-		panic(err)
+		panic(panicregister.Approved("accesscoretest-clone-user-reconstitute",
+			errcode.Assertion("cloneUser: ReconstituteUser returned unexpected error: %s", err.Error())))
 	}
 	return cloned
 }

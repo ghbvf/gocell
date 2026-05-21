@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // BuildReceiveOption configures BuildConfigReceiveService.
@@ -36,7 +37,7 @@ func BuildConfigReceiveService(t *testing.T, opts ...BuildReceiveOption) *config
 		o(cfg)
 	}
 	svc := configreceive.NewService(
-		slog.Default(),
+		slog.New(slog.DiscardHandler),
 		configreceive.WithConfigGetter(cfg.getter),
 	)
 	return svc
@@ -47,7 +48,6 @@ type BuildIdentityManageOption func(*buildIdentityManageCfg)
 
 type buildIdentityManageCfg struct {
 	userRepo    *FakeUserRepo
-	roleRepo    *FakeRoleRepo
 	invalidator *credentialinvalidate.Invalidator
 	clock       clock.Clock
 	txMgr       persistence.CellTxManager
@@ -58,13 +58,9 @@ func WithIdentityManageUserRepo(r *FakeUserRepo) BuildIdentityManageOption {
 	return func(c *buildIdentityManageCfg) { c.userRepo = r }
 }
 
-// WithIdentityManageRoleRepo overrides the default FakeRoleRepo.
-func WithIdentityManageRoleRepo(r *FakeRoleRepo) BuildIdentityManageOption {
-	return func(c *buildIdentityManageCfg) { c.roleRepo = r }
-}
-
 // WithIdentityManageClock overrides the default clock.Real().
-// Pass a *clockmock.FakeClock from tests that need deterministic time.
+// Pass a clock.Clock implementation that returns deterministic time,
+// e.g. kernel/clock/clockmock.New(...) from your _test.go.
 func WithIdentityManageClock(clk clock.Clock) BuildIdentityManageOption {
 	return func(c *buildIdentityManageCfg) { c.clock = clk }
 }
@@ -75,19 +71,23 @@ func WithIdentityManageTxManager(tx persistence.CellTxManager) BuildIdentityMana
 }
 
 // BuildIdentityManageService constructs an identitymanage.Service for unit tests,
-// returning the service along with the default FakeUserRepo, FakeRoleRepo, and
+// returning the service along with the default FakeUserRepo and
 // outboxtest.Recorder.
 //
 // The Recorder is wired as the service's outbox.Emitter so tests can assert
 // which events were published.
+//
+// FakeRoleRepo is not included in the return tuple because identitymanage.Service
+// does not depend on RoleRepository by default. To enable last-admin protection,
+// inject a FakeRoleRepo via identitymanage.WithLastAdminProtection in a custom
+// build.
 func BuildIdentityManageService(t *testing.T, opts ...BuildIdentityManageOption) (
-	*identitymanage.Service, *FakeUserRepo, *FakeRoleRepo, *outboxtest.Recorder,
+	*identitymanage.Service, *FakeUserRepo, *outboxtest.Recorder,
 ) {
 	t.Helper()
 
 	cfg := &buildIdentityManageCfg{
 		userRepo: NewFakeUserRepo(),
-		roleRepo: NewFakeRoleRepo(),
 		clock:    clock.Real(),
 		txMgr:    cell.DemoCellTxManager(),
 	}
@@ -110,7 +110,7 @@ func BuildIdentityManageService(t *testing.T, opts ...BuildIdentityManageOption)
 	svc, err := identitymanage.NewService(
 		cfg.userRepo,
 		cfg.invalidator,
-		slog.Default(),
+		slog.New(slog.DiscardHandler),
 		identitymanage.WithTxManager(cfg.txMgr),
 		identitymanage.WithClock(cfg.clock),
 		identitymanage.WithEmitter(rec),
@@ -119,13 +119,16 @@ func BuildIdentityManageService(t *testing.T, opts ...BuildIdentityManageOption)
 	if err != nil {
 		t.Fatalf("BuildIdentityManageService: identitymanage.NewService: %v", err)
 	}
-	return svc, cfg.userRepo, cfg.roleRepo, rec
+	return svc, cfg.userRepo, rec
 }
 
 // noopTokenIssuer satisfies identitymanage.TokenIssuer for tests that do not
-// exercise ChangePassword. It returns an empty dto.TokenPair with no error.
+// exercise ChangePassword. It returns an error immediately to prevent silent
+// test passes when token issuance is unexpectedly reached; wire a real
+// TokenIssuer via BuildIdentityManageService options for ChangePassword tests.
 type noopTokenIssuer struct{}
 
 func (n *noopTokenIssuer) IssueForUser(_ context.Context, _ string) (dto.TokenPair, error) {
-	return dto.TokenPair{}, nil
+	return dto.TokenPair{}, errcode.New(errcode.KindInternal, errcode.ErrNotImplemented,
+		"noopTokenIssuer.IssueForUser not implemented — wire a real TokenIssuer for ChangePassword tests")
 }
