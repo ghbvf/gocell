@@ -209,7 +209,7 @@ func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
 
 	// Payload + headers must satisfy the published contract schema.
 	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
 	// Negative: schema rejects an incomplete payload.
 	c.MustRejectPayload(t, []byte(`{"user_id":"x"}`))
 }

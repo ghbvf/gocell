@@ -296,7 +296,7 @@ func TestCSRF_ErrorResponseIncludesRequestID(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&body)
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "req-123", errObj["request_id"])
+	assert.Equal(t, "req-123", errObj["requestId"])
 }
 
 func TestCSRF_VaryHeader(t *testing.T) {

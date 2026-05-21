@@ -11,5 +11,5 @@ schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json
 replayable: false
-idempotencyKey: event_id
+idempotencyKey: eventId
 deliverySemantics: at-least-once

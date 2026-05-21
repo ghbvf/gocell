@@ -27,7 +27,7 @@ type OrderCreatedEvent struct {
 payload, _ := json.Marshal(OrderCreatedEvent{ID: o.ID, Item: o.Item})
 ```
 
-JSON 字段命名：HTTP DTO 和事件 payload 统一 camelCase。已有 snake_case 事件（session.created）在 v1.0 后迁移。
+JSON 字段命名：HTTP DTO、事件 payload、事件 headers 统一 camelCase（含 `eventId` / `requestId` 等 envelope 字段）。`{event_id, request_id}` 在 PR #<TBD>（J-04 + J-03）已完成迁移；不再有 v1 snake_case 例外。
 
 ## DTO 作用域三档
 

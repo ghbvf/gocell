@@ -11,5 +11,5 @@ type Payload struct {
 
 // Headers — event.audit.appended.v1.headers
 type Headers struct {
-	EventID string `json:"event_id"`
+	EventId string `json:"eventId"`
 }

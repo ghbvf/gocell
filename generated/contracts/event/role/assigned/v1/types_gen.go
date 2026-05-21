@@ -13,5 +13,5 @@ type Payload struct {
 
 // Headers — event.role.assigned.v1.headers
 type Headers struct {
-	EventID string `json:"event_id"`
+	EventId string `json:"eventId"`
 }

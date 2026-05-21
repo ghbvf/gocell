@@ -4192,7 +4192,7 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 				r := true
 				c.Endpoints.Subscribers = []string{"edge-bff"}
 				c.Replayable = &r
-				c.IdempotencyKey = "event_id"
+				c.IdempotencyKey = "eventId"
 				c.DeliverySemantics = "at-least-once"
 			},
 		},

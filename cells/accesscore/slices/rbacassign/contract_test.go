@@ -126,7 +126,7 @@ func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
 
 	// Real emit must pass payload schema.
 	c.ValidatePayload(t, entry.Payload)
-	headerBytes, err := json.Marshal(map[string]string{"event_id": entry.ID})
+	headerBytes, err := json.Marshal(map[string]string{"eventId": entry.ID})
 	require.NoError(t, err)
 	c.ValidateHeaders(t, headerBytes)
 
@@ -160,7 +160,7 @@ func TestContract_EventRoleRevokedV1_Publish_PayloadValid(t *testing.T) {
 		"entry.ID %q must have %q prefix (event_id schema format)", entry.ID, outbox.EntryIDPrefix)
 
 	c.ValidatePayload(t, entry.Payload)
-	headerBytes, err := json.Marshal(map[string]string{"event_id": entry.ID})
+	headerBytes, err := json.Marshal(map[string]string{"eventId": entry.ID})
 	require.NoError(t, err)
 	c.ValidateHeaders(t, headerBytes)
 

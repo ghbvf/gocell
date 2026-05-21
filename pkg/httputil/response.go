@@ -295,7 +295,7 @@ var sentinelInternalErrorBody = []byte(
 
 // writeErrorBody serializes ecErr through Error.MarshalJSON so the wire form
 // is governed by the errcode package alone (single source of truth for the
-// details: array<{key,value}> shape and 5xx details strip). request_id is
+// details: array<{key,value}> shape and 5xx details strip). requestId is
 // merged into the inner error object before encoding because the canonical
 // error envelope places it alongside code/message/details, not in the outer
 // wrapper (see contracts/shared/errors/error-response-v1.schema.json).
@@ -331,7 +331,7 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 }
 
 // encodeErrorEnvelopeTo writes the canonical wire envelope into out, including
-// numeric-precision merge and request_id injection. Returns an error if any
+// numeric-precision merge and requestId injection. Returns an error if any
 // step fails — caller writes sentinelInternalErrorBody to the wire instead.
 //
 // Three error paths exist:
@@ -353,7 +353,7 @@ func encodeErrorEnvelopeTo(out io.Writer, ctx context.Context, ecErr *errcode.Er
 		return err
 	}
 	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
-		inner["request_id"] = reqID
+		inner["requestId"] = reqID
 	}
 	return json.NewEncoder(out).Encode(map[string]any{
 		"error": inner,

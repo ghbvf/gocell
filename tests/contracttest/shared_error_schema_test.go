@@ -52,7 +52,7 @@ func TestSharedErrorSchema_ValidSamples(t *testing.T) {
 
 	valid := []string{
 		`{"error":{"code":"ERR_AUTH_INVALID_TOKEN","message":"token expired","details":[]}}`,
-		`{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"field","value":"x"}],"request_id":"req-1"}}`,
+		`{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"field","value":"x"}],"requestId":"req-1"}}`,
 		`{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"limit","value":100},{"key":"retry","value":true}]}}`,
 		`{"error":{"code":"ERR_CONFIG_NOT_FOUND","message":"config not found","details":[{"key":"key","value":"app.name"}]}}`,
 	}

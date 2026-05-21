@@ -8,7 +8,7 @@ endpoints:
   subscribers:
     - other-cell
 replayable: false
-idempotencyKey: event_id
+idempotencyKey: eventId
 deliverySemantics: at-least-once
 schemaRefs:
   payload: payload.schema.json

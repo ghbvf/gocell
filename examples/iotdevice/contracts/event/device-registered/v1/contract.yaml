@@ -10,5 +10,5 @@ schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json
 replayable: true
-idempotencyKey: device-registered:{event_id}
+idempotencyKey: device-registered:{eventId}
 deliverySemantics: at-least-once

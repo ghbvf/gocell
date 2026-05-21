@@ -12,7 +12,7 @@ import (
 //
 // It records every Entry written to it. Tests assert against Entries to verify
 // L2 OutboxFact semantics (transactional outbox row presence, EventType, payload
-// shape, event_id).
+// shape, eventId).
 //
 // Set Err to simulate failure for negative-path tests; when Err is non-nil,
 // Write returns Err immediately and Entries is not appended (rolling-back

@@ -63,7 +63,7 @@ func TestEventOrderCreatedV1Publish(t *testing.T) {
 	}
 	entry := writer.entries[0]
 	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
 	c.MustRejectPayload(t, []byte(`{"id":"o-1"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 
