@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 const transitRenewalBackoffBudget = 3*time.Second + reauthBackoffInitial
@@ -113,9 +114,9 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 	}
 
 	// Wait for the loop to consume the renewal before canceling.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-auth-renewed", func() bool {
 		return testutil.ToFloat64(successCtr) >= 1
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms, "successCtr must reach 1 after renewal event")
 	cancel()
 
 	select {
@@ -173,9 +174,9 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 	fw.renewCh <- renewal
 
 	// Wait for all three to be consumed.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-auth-renewed", func() bool {
 		return testutil.ToFloat64(successCtr) >= 3
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms, "successCtr must reach 3 after three renewal events")
 	cancel()
 
 	select {
@@ -226,9 +227,9 @@ func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *test
 	fw.doneCh <- nil
 
 	// Wait for renewFailure to be incremented, then cancel.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-transit-key-rotated", func() bool {
 		return testutil.ToFloat64(failureCtr) >= 1
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 	cancel()
 
 	select {
@@ -279,9 +280,9 @@ func TestTokenRenewalWorker_HandleDone_NonNilError_IncrementsFailureCounter(t *t
 	fw.doneCh <- context.DeadlineExceeded
 
 	// Wait for renewFailure to be incremented, then cancel.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-transit-key-rotated", func() bool {
 		return testutil.ToFloat64(failureCtr) >= 1
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 	cancel()
 
 	select {
@@ -337,9 +338,9 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 		},
 	}
 	// Wait for the renewal to be consumed before canceling.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-auth-renewed", func() bool {
 		return len(fw.renewCh) == 0
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms, "renewCh must be drained after renewal event is sent")
 	cancel()
 
 	select {
@@ -444,11 +445,11 @@ func TestRenewalWorker_DoneChError_TriggersReauth(t *testing.T) {
 	fw.doneCh <- context.DeadlineExceeded
 
 	// Wait for at least one Login call, then cancel.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-auth-renewed", func() bool {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 1
-	}, testtime.D2s, time.Millisecond)
+	}, testtime.D2s, time.Millisecond, "fakeAuth.calls must reach 1 after DoneCh triggers re-auth")
 	cancel()
 
 	select {
@@ -507,12 +508,12 @@ func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 	fw.doneCh <- context.DeadlineExceeded
 
 	// Wait for authHealthy to drop to 0 (re-auth started).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-readiness-flipped", func() bool {
 		return testutil.ToFloat64(authHealthy) == 0
 	}, testtime.D2s, time.Millisecond, "authHealthy should drop to 0 on DoneCh")
 
 	// Wait for 2 failure logins to be recorded.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-auth-renewed", func() bool {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 2
@@ -564,11 +565,11 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 	fw.doneCh <- context.DeadlineExceeded
 
 	// Wait for first Login attempt.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-auth-renewed", func() bool {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 1
-	}, testtime.D2s, time.Millisecond)
+	}, testtime.D2s, time.Millisecond, "fakeAuth.calls must reach 1 before ctx cancel to confirm backoff started")
 
 	// Cancel now — reauthenticate must wake from the sleep and return.
 	cancel()
@@ -626,7 +627,7 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	fw.doneCh <- nil
 
 	// Wait for gauge to drop to 0.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-readiness-flipped", func() bool {
 		return testutil.ToFloat64(authHealthy) == 0
 	}, testtime.D2s, time.Millisecond, "authHealthy should drop to 0 after DoneCh")
 
@@ -677,7 +678,7 @@ func TestRenewalWorker_LoginOutcomeCounter_LabelsSet(t *testing.T) {
 	fw.doneCh <- context.DeadlineExceeded
 
 	// Wait for at least 2 timeout failures to be recorded.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "vault-auth-renewed", func() bool {
 		return testutil.ToFloat64(loginOutcome.WithLabelValues(
 			string(MethodAppRole), "failure", reasonTimeout)) >= 2
 	}, testtime.EventuallyLong, testtime.D10ms, "expected 2 timeout failures")

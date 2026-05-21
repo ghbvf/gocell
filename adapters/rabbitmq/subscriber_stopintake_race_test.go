@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // TestStopIntake_NoAddAfterWaitRace_PostCancelDeliveryArrival drives a delivery
@@ -84,7 +85,7 @@ func TestStopIntake_NoAddAfterWaitRace_PostCancelDeliveryArrival(t *testing.T) {
 	}()
 
 	// Wait until the first handler is actually running (counter == 1).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		for r := range sub.runs {
@@ -104,7 +105,7 @@ func TestStopIntake_NoAddAfterWaitRace_PostCancelDeliveryArrival(t *testing.T) {
 	// Wait until basic.cancel has been issued — this is the moment Phase 2's
 	// polling loop is active and any new delivery arriving on the channel
 	// will be picked up by drainRemaining.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-cancel-issued", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelCalled
@@ -202,7 +203,7 @@ func runPostCancelArrivalScenario(t *testing.T) {
 		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "stress.topic", CellID: "test-cell"}, handler)
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		for r := range sub.runs {
@@ -218,7 +219,7 @@ func runPostCancelArrivalScenario(t *testing.T) {
 		stopDone <- sub.StopIntake(context.Background())
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-cancel-issued", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelCalled

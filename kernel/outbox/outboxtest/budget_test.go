@@ -8,10 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // Package-level duration constants for budget_test.go.
@@ -154,7 +153,7 @@ func TestCloseWithBudget_ConcurrentSafety(t *testing.T) {
 			done.Add(1)
 		}()
 	}
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outboxtest-budget-spent", func() bool {
 		return done.Load() >= goroutines
 	}, testtime.D5s, testtime.D10ms, "all %d concurrent closeWithBudget calls must return", goroutines)
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -521,7 +522,7 @@ func runBootstrap(
 // when only /healthz was probed).
 func waitForHealthz(t *testing.T, base string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "l2-harness-server-ready", func() bool {
 		if !httpGetOK(base + "/healthz") {
 			return false
 		}

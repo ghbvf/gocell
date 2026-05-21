@@ -42,6 +42,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -536,7 +537,7 @@ func TestWalkthrough(t *testing.T) {
 		// API. The relay poll interval adds latency beyond the old in-memory
 		// path, so a longer timeout is required.
 		var entries []json.RawMessage
-		require.Eventually(t, func() bool {
+		testwait.External(t, "ssobff-audit-entry-available", func() bool {
 			data, ok := fetchAuditEntries(base+"/api/v1/audit/entries", adminToken)
 			if ok {
 				entries = data

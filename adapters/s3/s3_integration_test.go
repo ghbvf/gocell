@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -102,7 +103,7 @@ func startWorkerWithTickProof(t *testing.T, ctx context.Context, client *Client,
 
 	checkers := client.Checkers()
 	require.Contains(t, checkers, ReadyProbeName)
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-worker-tick-executed", func() bool {
 		return checkers[ReadyProbeName](ctx) == nil
 	}, timeout, testtime.SlowPoll,
 		"s3_ready should clear worker-tick-proof sentinel once worker probes healthy MinIO")
@@ -268,7 +269,7 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	stopTimeout := testtime.D5s
 	require.NoError(t, ctr.Stop(ctx, &stopTimeout), "stop container for worker test")
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		return checkers[ReadyProbeName](ctx) != nil
 	}, testtime.EventuallyExtraLong, testtime.SlowPoll,
 		"s3_ready should flip to non-nil error while container is stopped")

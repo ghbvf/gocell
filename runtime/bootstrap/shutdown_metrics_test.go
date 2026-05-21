@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	obsmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -171,7 +172,7 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error
 	errCh := make(chan error, 1)
 	go func() { errCh <- b.Run(ctx) }()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get("http://" + ln.Addr().String() + "/healthz")
 		if err != nil {
 			return false
@@ -362,7 +363,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- b.Run(ctx) }()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get("http://" + ln.Addr().String() + "/healthz")
 		if err != nil {
 			return false

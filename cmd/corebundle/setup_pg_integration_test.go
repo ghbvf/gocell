@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -178,7 +179,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	})
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-setup-completed", func() bool {
 		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -489,7 +490,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	})
 
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "corebundle-setup-completed", func() bool {
 		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
@@ -1073,7 +1074,7 @@ func TestS4b_RefreshReuse_CascadesEpochAndSession(t *testing.T) {
 		"refresh reuse must return ERR_AUTH_REFRESH_FAILED")
 
 	// 4. PG assertion: authz_epoch must be bumped by the reuse-cascade funnel.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "authz-epoch-bumped-after-refresh-reuse", func() bool {
 		var epoch int64
 		qErr := h.pool.DB().QueryRow(ctx,
 			`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epoch)
@@ -1246,7 +1247,7 @@ func TestS4b_RoleChangeConsumer_NoRedundantRevoke(t *testing.T) {
 	// in-memory eventbus to deliver the role.revoked event to the sessionlogout
 	// consumer. After consumer processing, epoch must be exactly 2 — not 3.
 	// The consumer only logs + Acks; it does NOT call the funnel again.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "authz-epoch-bumped-after-role-revoke", func() bool {
 		var epoch int64
 		qErr := h.pool.DB().QueryRow(ctx,
 			`SELECT authz_epoch FROM users WHERE id = $1`, userID).Scan(&epoch)

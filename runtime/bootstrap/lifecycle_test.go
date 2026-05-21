@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // lifecycleBlockHook is the duration the blocking hook waits (100ms), longer than its timeout.
@@ -264,7 +265,7 @@ func TestLifecycle_OnStart_NoTimeoutEnforced(t *testing.T) {
 	// Start is synchronous — OnStart completes before Start returns. The
 	// require.Eventually confirms the channel is closed without select/default
 	// flakiness risk on heavily-loaded CI schedulers.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-hook-channel-closed", func() bool {
 		select {
 		case <-startReturned:
 			return true
@@ -636,7 +637,7 @@ func TestLifecycle_OnStartCtx_IsChildOfStartCtx(t *testing.T) {
 	// Cancel parent — the OnStart ctx (workCtx, a child of parentCtx) must
 	// observe the cancellation.
 	parentCancel()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-ctx-done", func() bool {
 		select {
 		case <-capturedCtx.Done():
 			return true

@@ -25,6 +25,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 )
@@ -43,7 +44,7 @@ func newIntegrationListener(t *testing.T) net.Listener {
 // waitForIntegrationHealthy polls /healthz until it returns 200 or the timeout expires.
 func waitForIntegrationHealthy(t *testing.T, addr string) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := integrationHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false

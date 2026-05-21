@@ -56,6 +56,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -289,7 +290,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	//   - No events at all → A11 regression (relay not started)
 	//   - Events arrive but parsed == false OR all fields empty → F1 regression
 	//     (envelope not unwrapped; subscriber sees envelope shape)
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-e2e-business-payload-delivered", func() bool {
 		recvMu.Lock()
 		defer recvMu.Unlock()
 		for _, r := range recvs {
@@ -606,7 +607,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// asserts validate semantics (method + auth header). Eventually waits
 	// up to 15s for the relay→eventbus→configreceive→ConfigGetter pipeline.
 	var captured refetchCall
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-e2e-refetch-loop-completed", func() bool {
 		select {
 		case call := <-refetchCh:
 			if call.path == "/internal/v1/config/"+refetchKey {

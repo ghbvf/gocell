@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	authpkg "github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
@@ -69,7 +70,7 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	go func() { startErr <- hub.Start(context.Background()) }()
 
 	// Wait for hub to be running before creating server.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-hub-running", func() bool {
 		return hub.IsRunning()
 	}, testtime.D2s, testtime.D1ms)
 
@@ -154,7 +155,7 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -187,7 +188,7 @@ func TestHub_RegisterUnregister(t *testing.T) {
 	conn := dialWS(t, server.URL)
 	_ = conn // cleanup via dialWS t.Cleanup
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-conn-upgraded", func() bool {
 		return hub.ConnCount() == 1
 	}, testtime.D2s, testtime.D10ms)
 }
@@ -217,7 +218,7 @@ func TestHub_MessageHandler(t *testing.T) {
 	err := conn.Write(ctx, websocket.MessageText, []byte("test message"))
 	require.NoError(t, err)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-message-broadcast", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return gotMessage != ""
@@ -253,7 +254,7 @@ func TestHub_Send(t *testing.T) {
 	err := conn.Write(ctx, websocket.MessageText, []byte("hello"))
 	require.NoError(t, err)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-conn-upgraded", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return connID != ""
@@ -289,7 +290,7 @@ func TestHub_StopClosesConnections(t *testing.T) {
 
 	conn := dialWS(t, server.URL)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-conn-upgraded", func() bool {
 		return hub.ConnCount() == 1
 	}, testtime.D2s, testtime.D10ms)
 
@@ -334,7 +335,7 @@ func TestHub_FullLifecycle(t *testing.T) {
 
 	// Connect.
 	conn := dialWS(t, server.URL)
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-conn-upgraded", func() bool {
 		return hub.ConnCount() == 1
 	}, testtime.D2s, testtime.D10ms)
 
@@ -365,7 +366,7 @@ func TestHub_StopWithActiveConns_NoDeadlock(t *testing.T) {
 	for i := range conns {
 		conns[i] = dialWS(t, server.URL)
 	}
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-conn-upgraded", func() bool {
 		return hub.ConnCount() == 3
 	}, testtime.D2s, testtime.D10ms)
 
@@ -544,7 +545,7 @@ func TestUpgradeHandler_AllowedOrigin_HandshakeSucceeds(t *testing.T) {
 	require.NoError(t, err, "handshake with allowed Origin must succeed")
 	require.NotNil(t, conn)
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "websocket-conn-upgraded", func() bool {
 		return hub.ConnCount() == 1
 	}, testtime.D2s, testtime.D10ms,
 		"hub must register a client after a successful handshake")
@@ -562,7 +563,7 @@ func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-conn-upgraded", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -624,7 +625,7 @@ func TestUpgradeHandler_AbsentCredential_Returns401(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -654,7 +655,7 @@ func TestUpgradeHandler_InvalidCredential_Returns401(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -698,7 +699,7 @@ func TestUpgradeHandler_ForbiddenCredential_Returns403(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -725,7 +726,7 @@ func TestUpgradeHandler_401_ResponseIsPlainText(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -759,7 +760,7 @@ func TestUpgradeHandler_HijackerNotSupported_Returns500(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()

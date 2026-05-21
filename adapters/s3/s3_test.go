@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // Compile-time assertion: *Client implements lifecycle.ManagedResource.
@@ -425,7 +426,7 @@ func TestWorker_TickerCallsHeadBucket(t *testing.T) {
 	go func() { errCh <- w.Start(ctx) }()
 
 	// Wait up to 3 ticks for at least one HeadBucket call.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		return mock.callCount.Load() >= 1
 	}, testtime.D150ms, testtime.FastPoll)
 
@@ -459,7 +460,7 @@ func TestWorker_UpdatesStateOnError(t *testing.T) {
 	// Wait until the probe reports unhealthy.
 	checkers := c.Checkers()
 	var lastErr error
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		lastErr = checkers[ReadyProbeName](context.Background())
 		return lastErr != nil
 	}, testtime.D250ms, testtime.FastPoll)
@@ -500,7 +501,7 @@ func TestWorker_StateBecomesHealthyAfterRecovery(t *testing.T) {
 	// Wait for the state to recover (second tick → nil).
 	checkers := c.Checkers()
 	var lastErr error
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		lastErr = checkers[ReadyProbeName](context.Background())
 		return callN.Load() >= 2 && lastErr == nil
 	}, testtime.D300ms, testtime.FastPoll)
@@ -613,7 +614,7 @@ func TestClose_AfterWorkerStop_Idempotent(t *testing.T) {
 	go func() { _ = w.Start(ctx) }()
 
 	// Wait for at least one tick so the worker is definitely running.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		return mock.callCount.Load() >= 1
 	}, testtime.D200ms, testtime.FastPoll)
 
@@ -844,7 +845,7 @@ func TestWorker_Tick403_StateUnhealthyPermanent(t *testing.T) {
 
 	checkers := c.Checkers()
 	var stateErr error
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		stateErr = checkers[ReadyProbeName](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 403 tick")
@@ -881,7 +882,7 @@ func TestWorker_Tick5xx_StateUnhealthyTransient(t *testing.T) {
 
 	checkers := c.Checkers()
 	var stateErr error
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		stateErr = checkers[ReadyProbeName](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 503 tick")
@@ -925,7 +926,7 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 
 	// Phase 1: wait for state to become unhealthy with a transient error.
 	var stateErr error
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		stateErr = checkers[ReadyProbeName](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after timeout ticks")
@@ -933,7 +934,7 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 
 	// Phase 2: wait for state to recover to healthy (nil).
 	// Budget widened to D500ms to absorb CI scheduler jitter between ticks 2 and 3.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "s3-health-probe-ok", func() bool {
 		return checkers[ReadyProbeName](context.Background()) == nil
 	}, testtime.D500ms, testtime.FastPoll, "state must recover to healthy after success ticks")
 

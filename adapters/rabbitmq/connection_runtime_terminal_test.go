@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // timeoutErr is a minimal net.Error stub whose Timeout() reports true. Used
@@ -208,7 +209,7 @@ func TestReconnectWithBackoff_DefinitivePermanent_PromotesOnFirstHit(t *testing.
 			go func() { done <- conn.reconnectWithBackoff() }()
 
 			// Wait until reconnect loop has classified once — permanentErr set.
-			require.Eventually(t, func() bool {
+			testwait.External(t, "amqp-permanent-err-set", func() bool {
 				conn.mu.RLock()
 				defer conn.mu.RUnlock()
 				return conn.permanentErr != nil
@@ -235,7 +236,7 @@ func TestReconnectWithBackoff_DefinitivePermanent_PromotesOnFirstHit(t *testing.
 			// Reconnect goroutine MUST stay alive (no return from inner loop).
 			// We prove this by checking dialCount keeps growing after promotion.
 			countAtPromotion := dialCount.Load()
-			require.Eventually(t, func() bool {
+			testwait.External(t, "amqp-reconnect-completed", func() bool {
 				return dialCount.Load() > countAtPromotion
 			}, testtime.D2s, testtime.D1ms,
 				"reconnect goroutine must keep dialing after permanent classification "+
@@ -294,7 +295,7 @@ func TestReconnectWithBackoff_InferredSentinel_RequiresConfirmation(t *testing.T
 			go func() { done <- conn.reconnectWithBackoff() }()
 
 			// After confirmThreshold hits, permanentErr must be set.
-			require.Eventually(t, func() bool {
+			testwait.External(t, "amqp-permanent-err-set", func() bool {
 				conn.mu.RLock()
 				defer conn.mu.RUnlock()
 				return conn.permanentErr != nil && dialCount.Load() >= int32(runtimePermanentConfirmHits)
@@ -407,7 +408,7 @@ func TestReconnectWithBackoff_TransientError_StaysReconnecting(t *testing.T) {
 			done := make(chan bool, 1)
 			go func() { done <- conn.reconnectWithBackoff() }()
 
-			require.Eventually(t, func() bool {
+			testwait.External(t, "amqp-reconnect-completed", func() bool {
 				mu.Lock()
 				defer mu.Unlock()
 				return dialCount >= 3
@@ -490,11 +491,11 @@ func TestReconnectLoop_PermanentAndRecovery(t *testing.T) {
 	}()
 
 	// Phase 0 → 1: trigger broker-side close on the original connection.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
 		originalMock.mu.Lock()
 		defer originalMock.mu.Unlock()
 		return originalMock.notifyCloseCh != nil
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 
 	phase.Store(1)
 	originalMock.mu.Lock()
@@ -504,7 +505,7 @@ func TestReconnectLoop_PermanentAndRecovery(t *testing.T) {
 	closeNotifyCh <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
 
 	// Permanent classification must surface — Health returns ErrAdapterAMQPConnectPermanent.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-permanent-err-set", func() bool {
 		err := conn.Health(context.Background())
 		var ecErr *errcode.Error
 		return err != nil && errors.As(err, &ecErr) && ecErr.Code == ErrAdapterAMQPConnectPermanent
@@ -513,7 +514,7 @@ func TestReconnectLoop_PermanentAndRecovery(t *testing.T) {
 		runtimePermanentConfirmHits)
 
 	// Phase 2: dial succeeds → reconnect loop must promote back to healthy.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-connection-healthy", func() bool {
 		return conn.Health(context.Background()) == nil
 	}, testtime.EventuallyLong, testtime.D1ms,
 		"once dial starts succeeding, the reconnect loop must clear permanentErr and Health must return nil")
@@ -632,7 +633,7 @@ func TestReconnectWithBackoff_PermanentError_DoesNotLeakCredentials(t *testing.T
 
 	go func() { _ = conn.reconnectWithBackoff() }()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-permanent-err-set", func() bool {
 		conn.mu.RLock()
 		defer conn.mu.RUnlock()
 		return conn.permanentErr != nil

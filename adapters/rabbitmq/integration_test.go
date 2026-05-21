@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -355,7 +356,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	require.NoError(t, err, "consume from DLQ")
 
 	var dlEntry outbox.Entry
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		select {
 		case msg := <-dlxMsgs:
 			decoded, decodeErr := outbox.UnmarshalEnvelope("", msg.Body)
@@ -409,7 +410,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 	require.Equal(t, 0, exitCode, "rabbitmqctl should exit 0")
 
 	// 3. Health() should return error during reconnect.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-disconnect-detected", func() bool {
 		return conn.Health(context.Background()) != nil
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"Health() should report error after broker-forced disconnect")
@@ -420,7 +421,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 		"state should be Disconnected or Connecting during reconnect, got %s", status.State)
 
 	// 4. Health() should recover after reconnect succeeds.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-connection-healthy", func() bool {
 		return conn.Health(context.Background()) == nil
 	}, testtime.SelectAsyncSettle, testtime.SlowPoll,
 		"Health() should recover after successful reconnect")

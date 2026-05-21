@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -66,7 +67,7 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 
 	// Wait for HTTP server to become ready instead of sleeping.
 	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "bootstrap-listener-served", func() bool {
 		resp, err := testHTTPClient.Get("http://" + addr + "/healthz")
 		if err != nil {
 			return false

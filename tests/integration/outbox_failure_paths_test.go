@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 )
 
@@ -251,7 +252,7 @@ func TestIntegration_PGRelay_TransientPublishRetry(t *testing.T) {
 	stop := runRelay(t, relay)
 	defer stop()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-transient-retry-published", func() bool {
 		status, _, _ := queryEntryStatus(t, pool, id)
 		return status == "published"
 	}, testtime.EventuallyLong, testtime.MediumPoll, "entry must reach published after transient retries")
@@ -280,7 +281,7 @@ func TestIntegration_PGRelay_MaxAttemptsDeadLetter(t *testing.T) {
 	stop := runRelay(t, relay)
 	defer stop()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-dead-letter-reached", func() bool {
 		status, _, _ := queryEntryStatus(t, pool, id)
 		return status == "dead"
 	}, testtime.EventuallyLong, testtime.MediumPoll, "entry must reach dead after MaxAttempts publish failures")
@@ -353,7 +354,7 @@ func TestIntegration_PGRelay_ConcurrentRelaysNoDoublePublish(t *testing.T) {
 	stopB := runRelay(t, relayB)
 	defer stopB()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-concurrent-all-published", func() bool {
 		var n int
 		require.NoError(t,
 			pool.DB().QueryRow(context.Background(),
@@ -427,7 +428,7 @@ func TestIntegration_PGRelay_StopMidPublishReclaimTakeover(t *testing.T) {
 	stopB := runRelay(t, relayB)
 	defer stopB()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "outbox-relay-reclaim-takeover-published", func() bool {
 		status, _, _ := queryEntryStatus(t, pool, id)
 		return status == "published"
 	}, testtime.SelectAsyncSettle, testtime.SlowPoll, "relay B must reclaim and publish the orphaned entry")

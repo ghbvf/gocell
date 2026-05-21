@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // TestMain installs a goleak guard so any hook-dispatcher goroutine that
@@ -196,7 +197,7 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 	// started dispatching it, so the buffer is at steady state before we
 	// drive overflow.
 	d.emit(cell.HookEvent{CellID: "prime", Hook: cell.HookBeforeStart})
-	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
+	testwait.External(t, "hook-observer-received", func() bool { return bo.received.Load() >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "primer event should reach observer")
 
 	for range 100 {
@@ -223,7 +224,7 @@ func TestHookDispatcher_QueueFullDropLogsWarnFallback(t *testing.T) {
 	})
 
 	d.emit(cell.HookEvent{CellID: "prime", Hook: cell.HookBeforeStart})
-	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
+	testwait.External(t, "hook-observer-received", func() bool { return bo.received.Load() >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "primer event should reach observer")
 
 	for range 100 {
@@ -253,7 +254,7 @@ func TestHookDispatcher_PerSinkTimeoutCountsAndContinues(t *testing.T) {
 
 	d.emit(cell.HookEvent{CellID: "slow-sink", Hook: cell.HookBeforeStart})
 
-	require.Eventually(t, func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
+	testwait.External(t, "hook-dispatcher-drop-counted", func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
 		testtime.D200ms, testtime.FastPoll, "sink timeout must be counted")
 }
 
@@ -374,10 +375,10 @@ func TestHookDispatcher_StopWaitsForTimedOutSinkBeforeReturning(t *testing.T) {
 	})
 
 	d.emit(cell.HookEvent{CellID: "slow-drain", Hook: cell.HookBeforeStart})
-	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
+	testwait.External(t, "hook-observer-received", func() bool { return bo.received.Load() >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "event should reach observer")
 	clk.Advance(testtime.D1s)
-	require.Eventually(t, func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
+	testwait.External(t, "hook-dispatcher-drop-counted", func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "sink timeout must be counted")
 
 	stopDone := make(chan struct{})
@@ -385,7 +386,7 @@ func TestHookDispatcher_StopWaitsForTimedOutSinkBeforeReturning(t *testing.T) {
 		d.stop(context.Background(), testtime.D10s)
 		close(stopDone)
 	}()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hook-dispatcher-done-drained", func() bool {
 		select {
 		case <-d.done:
 			return true
@@ -419,10 +420,10 @@ func TestHookDispatcher_StopDoesNotHangForeverOnStuckSink(t *testing.T) {
 	t.Cleanup(bo.release)
 
 	d.emit(cell.HookEvent{CellID: "stuck-drain", Hook: cell.HookBeforeStart})
-	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
+	testwait.External(t, "hook-observer-received", func() bool { return bo.received.Load() >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "event should reach observer")
 	clk.Advance(testtime.D1s)
-	require.Eventually(t, func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
+	testwait.External(t, "hook-dispatcher-drop-counted", func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "sink timeout must be counted")
 
 	stopDone := make(chan struct{})
@@ -430,7 +431,7 @@ func TestHookDispatcher_StopDoesNotHangForeverOnStuckSink(t *testing.T) {
 		d.stop(context.Background(), testtime.D2s)
 		close(stopDone)
 	}()
-	require.Eventually(t, func() bool { return clk.PendingTimers() >= 1 },
+	testwait.External(t, "hook-handler-finalized", func() bool { return clk.PendingTimers() >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "stop should wait on the remaining drain budget")
 
 	select {
@@ -458,10 +459,10 @@ func TestHookDispatcher_StopReturnsWhenContextCanceledDuringSinkDrain(t *testing
 	t.Cleanup(bo.release)
 
 	d.emit(cell.HookEvent{CellID: "ctx-drain", Hook: cell.HookBeforeStart})
-	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
+	testwait.External(t, "hook-observer-received", func() bool { return bo.received.Load() >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "event should reach observer")
 	clk.Advance(testtime.D1s)
-	require.Eventually(t, func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
+	testwait.External(t, "hook-dispatcher-drop-counted", func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "sink timeout must be counted")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -470,7 +471,7 @@ func TestHookDispatcher_StopReturnsWhenContextCanceledDuringSinkDrain(t *testing
 		d.stop(ctx, testtime.D10s)
 		close(stopDone)
 	}()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hook-dispatcher-done-drained", func() bool {
 		select {
 		case <-d.done:
 			return true
@@ -492,7 +493,7 @@ func TestHookDispatcher_StopReturnsWhenContextCanceledDuringSinkDrain(t *testing
 	}
 
 	bo.release()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hook-dispatcher-sink-idle", func() bool {
 		select {
 		case <-d.currentSinkIdle():
 			return true
@@ -582,7 +583,7 @@ func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 	})
 
 	d.emit(cell.HookEvent{CellID: "slow", Hook: cell.HookBeforeStart})
-	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
+	testwait.External(t, "hook-observer-received", func() bool { return bo.received.Load() >= 1 },
 		testtime.EventuallyShort, testtime.FastPoll, "worker should pick up the primed event")
 
 	// Worker is blocked on the sink; flush with a 10ms budget cannot
@@ -661,7 +662,7 @@ func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
 	var calls []string
 	require.NoError(t, a.Register(newHookOrderCell("A", &calls, "")))
 	require.NoError(t, a.Start(context.Background()))
-	require.Eventually(t, func() bool { return obs.received.Load() >= 1 },
+	testwait.External(t, "hook-observer-received", func() bool { return obs.received.Load() >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "start hook event should reach observer")
 	dispatcher := a.currentDispatcher()
 	require.NotNil(t, dispatcher)
@@ -680,7 +681,7 @@ func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
 	}
 
 	obs.release()
-	require.Eventually(t, func() bool {
+	testwait.External(t, "hook-dispatcher-done-drained", func() bool {
 		select {
 		case <-dispatcher.done:
 			return true

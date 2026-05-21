@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 const (
@@ -109,7 +110,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 	// Wait until StopIntake has issued basic.cancel to the broker (F1 fix:
 	// concurrent Cancel dispatch). This confirms stopIntakeCh is closed and
 	// consumeLoop has entered drainRemaining.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-cancel-issued", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelCalled
@@ -183,7 +184,7 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 	}()
 
 	// Wait until Consume() has been called (consumerTag recorded in mockChannel).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-consume-started", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelConsumer != "" || ch.cancelCalled || ch.consumeDeliveries != nil
@@ -266,7 +267,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	}()
 
 	// Wait until the delivery is acked (handler completed).
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
@@ -411,7 +412,7 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	}()
 
 	// Wait for Subscribe to register its subscriptionRun.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		return len(sub.runs) > 0
@@ -483,7 +484,7 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 			}))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		return len(sub.runs) > 0
@@ -558,7 +559,7 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 			}))
 	}()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "subscriber-run-registered", func() bool {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		return len(sub.runs) > 0

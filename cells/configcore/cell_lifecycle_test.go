@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -46,7 +47,10 @@ func TestConfigCore_AfterStart_StartsTombstoneGC(t *testing.T) {
 	require.NoError(t, c.AfterStart(ctx))
 
 	// The GC goroutine creates a ticker asynchronously — wait for it to register.
-	assert.Eventually(t, func() bool {
+	// MIGRATION-NOTE: assert.Eventually → testwait.External (FailNow semantics);
+	// downstream require.NoError(c.BeforeStop) would test GC drain on a goroutine
+	// that never started — abort is correct.
+	testwait.External(t, "config-cell-gc-ticker-started", func() bool {
 		return fc.PendingTickers() >= 1
 	}, testGCEventuallyTimeout, testGCEventuallyTick,
 		"GC goroutine must create a ticker after AfterStart")

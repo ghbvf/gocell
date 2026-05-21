@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // routerReadyDelay is the time a delayed subscriber takes to signal ready; used
@@ -137,7 +138,7 @@ func TestRouter_Run_StartsAllSubscriptions(t *testing.T) {
 
 	// Subscribe goroutines are launched concurrently; give them a moment to
 	// register their topics (they run after Phase 3 Ready signals close).
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "eventrouter-subscription-mounted", func() bool {
 		topics := sub.Topics()
 		return len(topics) == 3
 	}, testtime.D2s, testtime.D10ms, "all 3 topics should be subscribed")
@@ -148,7 +149,7 @@ func TestRouter_Run_StartsAllSubscriptions(t *testing.T) {
 	assert.Contains(t, topics, "topic.c")
 
 	cancel()
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "eventrouter-drain-completed", func() bool {
 		select {
 		case <-done:
 			return true
@@ -245,7 +246,7 @@ func TestRouter_Run_HandlerReceivesMessages(t *testing.T) {
 	err := bus.Publish(context.Background(), "test.topic", []byte(`{"key":"value"}`))
 	require.NoError(t, err)
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "eventrouter-delivery-routed", func() bool {
 		return received.Load() >= 1
 	}, testtime.EventuallyShort, testtime.D10ms)
 
@@ -277,7 +278,7 @@ func TestRouter_Run_MultipleHandlersSameSubscriber(t *testing.T) {
 	require.NoError(t, bus.Publish(context.Background(), "topic.a", []byte(`{}`)))
 	require.NoError(t, bus.Publish(context.Background(), "topic.b", []byte(`{}`)))
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "eventrouter-delivery-routed", func() bool {
 		return countA.Load() >= 1 && countB.Load() >= 1
 	}, testtime.EventuallyShort, testtime.D10ms)
 
@@ -310,7 +311,7 @@ func TestRouter_RegistryRecorder_Integration(t *testing.T) {
 
 	require.NoError(t, bus.Publish(context.Background(), "mock.topic", []byte(`{}`)))
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "eventrouter-delivery-routed", func() bool {
 		return received.Load() >= 1
 	}, testtime.EventuallyShort, testtime.D10ms)
 
@@ -358,7 +359,7 @@ func TestRouter_HealthLifecycle(t *testing.T) {
 
 	require.NoError(t, r.Health(), "router must be healthy after startup")
 
-	assert.Eventually(t, func() bool {
+	testwait.External(t, "eventrouter-runtime-failure-unhealthy", func() bool {
 		return r.Health() != nil
 	}, testtime.D2s, testtime.D20ms, "router must become unhealthy after runtime failure")
 
@@ -760,7 +761,7 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 	go func() { done <- r.Run(ctx) }()
 
 	// Wait for all subscriptions to start.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventrouter-subscriptions-all-started", func() bool {
 		return len(sub.Calls()) >= 3
 	}, testtime.D2s, testtime.D10ms)
 
@@ -819,7 +820,7 @@ func TestRouter_OwnerCellID_DistinctFromConsumerGroup(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
 
-	require.Eventually(t, func() bool {
+	testwait.External(t, "eventrouter-subscription-call-observed", func() bool {
 		return len(sub.Calls()) >= 1
 	}, testtime.D2s, testtime.D10ms)
 

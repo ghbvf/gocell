@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // ---------------------------------------------------------------------------
@@ -130,12 +131,12 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	// Wait for all deliveries to be acked (each handler sleeps 50 ms).
 	// At this point all processDelivery goroutines have called ch.Ack AND returned.
 	// localWg.Done() has been called for each.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		return handlerCount.Load() == int64(numDeliveries)
 	}, testtime.EventuallyLong, testtime.FastPoll, "all %d handlers must have returned", numDeliveries)
 
 	// Poll until ackTimestampChannel has recorded all ack timestamps.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-ack-timestamp-recorded", func() bool {
 		atCh.mu.Lock()
 		defer atCh.mu.Unlock()
 		return len(atCh.ackCallTimes) >= numDeliveries
@@ -333,7 +334,7 @@ func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 	}()
 
 	// Wait for handler to complete.
-	require.Eventually(t, func() bool {
+	testwait.External(t, "amqp-delivery-acked", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
