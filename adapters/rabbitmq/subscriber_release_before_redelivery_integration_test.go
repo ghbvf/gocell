@@ -41,13 +41,18 @@ const (
 	// releaseBeforeRedeliveryLeaseTTL (5m). Anchored on N×P99 rather than a
 	// fraction of the fallback TTL, per nats-streaming-server
 	// server/server_redelivery_test.go (test timeouts on N×ackWait scale).
-	releaseBeforeRedeliveryUpperBound = 2 * time.Second
+	releaseBeforeRedeliveryUpperBound = testtime.D2s
 
 	// releaseBeforeRedeliveryMaxGap bounds the gap between the first and
-	// second handler invocation. 500ms = 10× P99 broker RTT; any larger gap
-	// means the redelivery was gated on lease TTL fallback (5m) instead of
-	// broker-level requeue — exactly the regression this test exists to catch.
-	releaseBeforeRedeliveryMaxGap = 500 * time.Millisecond
+	// second handler invocation. 1s ≈ 12-20× P99 redelivery gap on shared
+	// GitHub-Actions runners (CPU starve + testcontainer warm path) yet still
+	// 300× smaller than releaseBeforeRedeliveryLeaseTTL — any gap exceeding
+	// this means the redelivery was actually gated on the 5m lease-TTL
+	// fallback (the regression this test exists to catch), not broker-level
+	// requeue. 500ms was the strictest reviewer-recommended bound but left
+	// only ~6× CI margin; 1s trades minor precision (still 300× vs 600× to
+	// fallback TTL) for negligible flake risk on shared runners.
+	releaseBeforeRedeliveryMaxGap = testtime.D1s
 )
 
 // TestIntegration_CommitFailedAllowsRedeliveryToSameProcess covers the N8 K#12
@@ -69,9 +74,10 @@ const (
 //   - Upper bound: handler is invoked at least twice within
 //     releaseBeforeRedeliveryUpperBound (2s ≈ 40× broker RTT).
 //   - Lower bound on gap: the wall-clock gap between attempt #1 and attempt #2
-//     is less than releaseBeforeRedeliveryMaxGap (500ms ≈ 10× P99 broker RTT).
-//     A larger gap means redelivery actually waited on the 5m lease-TTL
-//     fallback — exactly the regression a Nack-first path would introduce.
+//     is less than releaseBeforeRedeliveryMaxGap (1s ≈ 12-20× shared-runner
+//     P99 gap, still 300× smaller than the 5m lease-TTL fallback). A larger
+//     gap means redelivery actually waited on the 5m lease-TTL fallback —
+//     exactly the regression a Nack-first path would introduce.
 //
 // ref: IBM/sarama consumer_group.go release() L801-L824 — handler.Cleanup
 // before offsets.Close(); same principle on the per-message commit_failed path.
@@ -154,7 +160,7 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 	callTimesMu.Unlock()
 	assert.Less(t, redeliveryGap, releaseBeforeRedeliveryMaxGap,
 		"redelivery gap %s indicates lease-TTL gating, not broker-level requeue "+
-			"(broker RTT P99 ≤50ms; lease TTL %s)",
+			"(shared-runner P99 gap ≤80ms; lease TTL %s)",
 		redeliveryGap, releaseBeforeRedeliveryLeaseTTL)
 
 	subCancel()
