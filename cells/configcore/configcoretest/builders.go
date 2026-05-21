@@ -11,6 +11,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 )
 
+// discardLogger is a logger that silently drops all log output. It is used as
+// the default logger in test builders so that service internals do not pollute
+// test output. Pass a real slog.Logger via the relevant option when you need to
+// inspect log output in a test.
+var discardLogger = slog.New(slog.DiscardHandler)
+
 // buildWriteConfig holds the assembled components for BuildWriteService.
 type buildWriteConfig struct {
 	repo  *FakeConfigRepository
@@ -45,9 +51,10 @@ func WithWriteClock(clk clock.Clock) BuildWriteOption {
 //
 // Default assembly:
 //   - FakeConfigRepository (in-memory map)
-//   - cell.DemoCellTxManager (pass-through, no real transaction)
+//   - cell.DemoCellTxManager (pass-through, no real transaction; testutil/demo
+//     only — not the persistence.WrapForCell composition root path)
 //   - outboxtest.NewRecorder() (captures emitted entries)
-//   - slog.Default() logger (discards in test output by default)
+//   - slog.DiscardHandler logger (silences all log output in tests)
 //   - clock.Real()
 //
 // opts override any of the defaults above.
@@ -65,7 +72,7 @@ func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Ser
 	rec := outboxtest.NewRecorder()
 	svc, err := configwrite.NewService(
 		cfg.repo,
-		slog.Default(),
+		discardLogger,
 		cfg.clock,
 		configwrite.WithEmitter(rec),
 		configwrite.WithTxManager(cell.DemoCellTxManager()),
@@ -96,8 +103,11 @@ func WithSubscribeClock(clk clock.Clock) BuildSubscribeOption {
 // BuildSubscribeService constructs a docker-free configsubscribe.Service.
 //
 // Default assembly:
-//   - clock.Real()
-//   - slog.Default() logger
+//   - clock.Real() — kernel/clock/clockmock is depguard-restricted to
+//     testutil/ and storetest/ paths; configcoretest/ is not exempt, so the
+//     default clock remains clock.Real(). Pass WithSubscribeClock to inject a
+//     deterministic clock in tests that exercise time-dependent logic.
+//   - slog.DiscardHandler logger (silences all log output in tests)
 //   - NopMetrics (no-op ConfigEventCollector / EventbusCacheCollector)
 //   - TombstoneTTL = defaultTombstoneTTL (idempotency.DefaultTTL)
 //
@@ -113,7 +123,7 @@ func BuildSubscribeService(t *testing.T, opts ...BuildSubscribeOption) *configsu
 	}
 
 	svc := configsubscribe.NewService(
-		slog.Default(),
+		discardLogger,
 		configsubscribe.WithClock(cfg.clock),
 	)
 	return svc

@@ -3,6 +3,7 @@ package configcoretest
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -28,29 +29,40 @@ type FakeCall struct {
 //
 // All methods are safe for concurrent use.
 type FakeConfigRepository struct {
-	mu      sync.Mutex
-	entries map[string]*domain.ConfigEntry
-	calls   []FakeCall
-	clk     clock.Clock
+	mu       sync.Mutex
+	entries  map[string]*domain.ConfigEntry
+	versions map[string]*domain.ConfigVersion
+	calls    []FakeCall
+	clk      clock.Clock
 }
 
 // NewFakeConfigRepository returns an empty FakeConfigRepository backed by
 // clock.Real(). Use WithWriteRepository to inject it into BuildWriteService.
 func NewFakeConfigRepository() *FakeConfigRepository {
 	return &FakeConfigRepository{
-		entries: make(map[string]*domain.ConfigEntry),
-		clk:     clock.Real(),
+		entries:  make(map[string]*domain.ConfigEntry),
+		versions: make(map[string]*domain.ConfigVersion),
+		clk:      clock.Real(),
 	}
 }
 
 // Snapshot returns a copy of all currently stored entries in key-sorted order.
+// Entries with Sensitive=true have their Value replaced with "<REDACTED>" to
+// prevent accidental exposure of secret values in test assertions and logs.
 func (r *FakeConfigRepository) Snapshot() []domain.ConfigEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]domain.ConfigEntry, 0, len(r.entries))
 	for _, e := range r.entries {
-		out = append(out, *e)
+		clone := *e
+		if clone.Sensitive {
+			clone.Value = "<REDACTED>"
+		}
+		out = append(out, clone)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Key < out[j].Key
+	})
 	return out
 }
 
@@ -68,11 +80,12 @@ func (r *FakeConfigRepository) CallsOf(method string) []FakeCall {
 	return out
 }
 
-// Reset clears all stored entries and recorded calls.
+// Reset clears all stored entries, versions, and recorded calls.
 func (r *FakeConfigRepository) Reset() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.entries = make(map[string]*domain.ConfigEntry)
+	r.versions = make(map[string]*domain.ConfigVersion)
 	r.calls = r.calls[:0]
 }
 
@@ -133,7 +146,11 @@ func (r *FakeConfigRepository) UpdateForRollback(
 ) (*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.record("UpdateForRollback", key, expectedVersion, value, sensitive)
+	recordedValue := value
+	if sensitive {
+		recordedValue = "<REDACTED>"
+	}
+	r.record("UpdateForRollback", key, expectedVersion, recordedValue, sensitive)
 	existing, ok := r.entries[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found",
@@ -171,6 +188,9 @@ func (r *FakeConfigRepository) Delete(_ context.Context, key string, expectedVer
 	return &clone, nil
 }
 
+// List returns copies of all stored entries in key-sorted order.
+// NOTE: pagination and filtering in ListParams are intentionally ignored;
+// all entries are returned in key-sorted order.
 func (r *FakeConfigRepository) List(_ context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -181,21 +201,37 @@ func (r *FakeConfigRepository) List(_ context.Context, params query.ListParams) 
 		all = append(all, &clone)
 	}
 	_ = params
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Key < all[j].Key
+	})
 	return all, nil
 }
 
+// PublishVersion stores the version snapshot keyed by "configID:version".
 func (r *FakeConfigRepository) PublishVersion(_ context.Context, version *domain.ConfigVersion) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.record("PublishVersion", version)
+	key := fmt.Sprintf("%s:%d", version.ConfigID, version.Version)
+	clone := *version
+	r.versions[key] = &clone
 	return nil
 }
 
+// GetVersion retrieves a previously published version snapshot by (configID, version).
+// Returns ErrConfigNotFound if the version was not published via PublishVersion.
 func (r *FakeConfigRepository) GetVersion(_ context.Context, configID string, version int) (*domain.ConfigVersion, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.record("GetVersion", configID, version)
-	return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "version not found")
+	key := fmt.Sprintf("%s:%d", configID, version)
+	v, ok := r.versions[key]
+	if !ok {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "version not found",
+			errcode.WithInternal(fmt.Sprintf("configID=%q version=%d", configID, version)))
+	}
+	clone := *v
+	return &clone, nil
 }
 
 // RepoReady implements cell.RepoHealthProber. In-memory stores are always ready.

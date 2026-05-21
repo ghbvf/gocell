@@ -168,6 +168,62 @@ func TestFakeConfigRepository_Reset(t *testing.T) {
 	assert.Empty(t, repo.CallsOf("Create"))
 }
 
+// TestFakeConfigRepository_PublishGetVersion verifies that PublishVersion stores
+// a version snapshot and GetVersion retrieves it by (configID, version).
+func TestFakeConfigRepository_PublishGetVersion(t *testing.T) {
+	t.Parallel()
+	repo := configcoretest.NewFakeConfigRepository()
+	ctx := context.Background()
+
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	v := &domain.ConfigVersion{
+		ID:          "ver-1",
+		ConfigID:    "cfg-1",
+		Version:     2,
+		Value:       "hello",
+		Sensitive:   false,
+		PublishedAt: &now,
+	}
+	require.NoError(t, repo.PublishVersion(ctx, v))
+
+	got, err := repo.GetVersion(ctx, "cfg-1", 2)
+	require.NoError(t, err)
+	assert.Equal(t, v.ID, got.ID)
+	assert.Equal(t, v.Value, got.Value)
+	assert.Equal(t, v.Version, got.Version)
+
+	// GetVersion returns not-found for unknown (configID, version).
+	_, err = repo.GetVersion(ctx, "cfg-1", 99)
+	require.Error(t, err)
+
+	// Calls are recorded.
+	assert.Len(t, repo.CallsOf("PublishVersion"), 1)
+	assert.Len(t, repo.CallsOf("GetVersion"), 2)
+}
+
+// TestFakeConfigRepository_Snapshot_SensitiveRedact verifies that Snapshot
+// replaces sensitive entry values with "<REDACTED>".
+func TestFakeConfigRepository_Snapshot_SensitiveRedact(t *testing.T) {
+	t.Parallel()
+	repo := configcoretest.NewFakeConfigRepository()
+	ctx := context.Background()
+
+	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
+		ID: "e1", Key: "pub", Value: "visible", Version: 1, Sensitive: false,
+	}))
+	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
+		ID: "e2", Key: "sec", Value: "topsecret", Version: 1, Sensitive: true,
+	}))
+
+	snap := repo.Snapshot()
+	require.Len(t, snap, 2)
+	// Snapshot is key-sorted: "pub" < "sec".
+	assert.Equal(t, "pub", snap[0].Key)
+	assert.Equal(t, "visible", snap[0].Value)
+	assert.Equal(t, "sec", snap[1].Key)
+	assert.Equal(t, "<REDACTED>", snap[1].Value)
+}
+
 // TestBuildWriteService_RecorderCapturesDeleteEvent verifies that Delete emits
 // an entry-deleted event captured by the Recorder.
 func TestBuildWriteService_RecorderCapturesDeleteEvent(t *testing.T) {

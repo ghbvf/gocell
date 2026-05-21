@@ -12,7 +12,9 @@
 //
 //   - FakeConfigRepository — an in-memory map-backed ports.ConfigRepository
 //   - kernel/cell.DemoCellTxManager — a pass-through TxRunner sealed as
-//     persistence.CellTxManager for injection into configwrite.WithTxManager
+//     persistence.CellTxManager for injection into configwrite.WithTxManager.
+//     Note: DemoCellTxManager is a testutil/demo-only factory and is not the
+//     persistence.WrapForCell composition root path used in production.
 //   - kernel/outbox/outboxtest.Recorder — in-memory Emitter that captures
 //     emitted entries for assertion
 //
