@@ -290,22 +290,19 @@ func collectClockRequiredCtorsFromPass(p *Pass) []clockRequiredCtor {
 	return result
 }
 
-// callsWithClock reports whether any of the call arguments in parent contains a
-// direct CallExpr whose callee's FullName matches withClockFullName.
+// callsWithClock reports whether any of the call arguments in parent contains
+// a CallExpr whose callee's FullName matches withClockFullName. Uses the
+// FindFirstInSubtree typed funnel (implicit early-stop, no caller-held flag).
 func callsWithClock(parent *ast.CallExpr, info *types.Info, withClockFullName string) bool {
-	found := false
 	for _, arg := range parent.Args {
-		EachInSubtree[ast.CallExpr](arg, func(call *ast.CallExpr) {
-			if found {
-				return
-			}
+		if _, ok := FindFirstInSubtree[ast.CallExpr](arg, func(call *ast.CallExpr) bool {
 			fn := resolvedFunc(call.Fun, info)
-			if fn != nil && fn.FullName() == withClockFullName {
-				found = true
-			}
-		})
+			return fn != nil && fn.FullName() == withClockFullName
+		}); ok {
+			return true
+		}
 	}
-	return found
+	return false
 }
 
 // resolvedFunc returns the *types.Func for a call expression's function

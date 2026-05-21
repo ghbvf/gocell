@@ -135,10 +135,8 @@ func EachInChildren[S any, N interface {
 //
 // # Subtree variant
 //
-// Recursive (subtree) find-first is intentionally NOT provided here — that
-// is an orthogonal coverage axis tracked as backlog FINDFIRSTINSUBTREE-API-01
-// (separate-trigger upgrade, 037 plan §1.1 scope boundary), not this
-// funnel's upstream hardening path.
+// See [FindFirstInSubtree] for the recursive (full-subtree) twin. Picking
+// the wrong depth is a different API name, not a runtime parameter.
 //
 // # Nil root
 //
@@ -160,6 +158,67 @@ func FindFirstChild[S any, N interface {
 		if predicate(n) {
 			match, found = n, true
 		}
+	})
+	return match, found
+}
+
+// FindFirstInSubtree walks root's entire subtree (root + every descendant,
+// preorder, identical depth semantics to [EachInSubtree]) and returns the
+// first node whose concrete type is N and for which predicate returns true,
+// together with ok = true. If no node matches, it returns the zero value and
+// ok = false.
+//
+// FindFirstInSubtree is the subtree-depth twin of [FindFirstChild]: same
+// predicate-driven find-first contract, different depth — picking depth is
+// a typed function choice (different API name, different semantics, AI-rebust
+// Hard 范本 #1 "typed function choice for walk depth", alongside EachInSubtree
+// vs EachInChildren and EachInSubtreeStopAt).
+//
+// # Implementation
+//
+// Uses [ast.Inspect] whose visitor's bool return halts descent into the
+// current subtree — the natural early-stop primitive for find-first. After
+// the first match, the visitor sets a closure flag and returns false to
+// prune descent into the matched node; the flag also short-circuits every
+// subsequent sibling visit, so the predicate is invoked exactly once after
+// a match (anchored by TestFindFirstInSubtree_StopsAfterFirstMatch and
+// TestFindFirstInSubtree_StopsBeforeDescendingMatchedSubtree).
+//
+// # Root handling
+//
+// Root IS visited (mirrors [EachInSubtree], which includes root via
+// ast.Preorder). Contrast [FindFirstChild] which EXCLUDES root by design
+// (depth=1; root is the iteration start, not a candidate). The divergence
+// is intentional — each find-first API mirrors the root semantics of its
+// matching iteration walker — and is anchored by
+// TestFindFirstInSubtree_RootSelfMatched / TestFindFirstChild_RootSelfNotMatched.
+//
+// # Nil root
+//
+// Returns (zero, false) silently (no-op).
+//
+// ref: go/ast.Inspect — Go stdlib early-stop preorder traversal.
+func FindFirstInSubtree[S any, N interface {
+	*S
+	ast.Node
+}](root ast.Node, predicate func(N) bool) (N, bool) {
+	if root == nil {
+		var zero N
+		return zero, false
+	}
+	var match N
+	var found bool
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if typed, ok := n.(N); ok {
+			if predicate(typed) {
+				match, found = typed, true
+				return false
+			}
+		}
+		return true
 	})
 	return match, found
 }

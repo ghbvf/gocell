@@ -168,23 +168,21 @@ func TestBootstrapAuditObserverFunnelDownstreamHard01(t *testing.T) {
 	// not anywhere else in the constructor body (where dead code or sibling
 	// helpers could fake compliance with the simpler "body contains call" rule).
 	//
-	// Outer EachInSubtree + done sentinel mirrors the FINDFIRSTINSUBTREE-API-01
-	// gap (no typed find-first-in-subtree helper yet). Inner FindFirstChild is
-	// the scanner-framework-approved depth-1 find-first funnel (USAGE-02):
-	// ReturnStmt's direct children are its Results []ast.Expr, so a FuncLit
-	// returned positionally appears as a depth-1 child here. This shape also
-	// closes SCANNER-FRAMEWORK-USAGE-01 Path B (no for-range over []ast.Expr
-	// with type assertion).
+	// Outer FindFirstInSubtree selects the ReturnStmt whose Results contain a
+	// FuncLit; inner FindFirstChild (depth-1) extracts that FuncLit from
+	// ReturnStmt.Results. ReturnStmt's direct children are its Results
+	// []ast.Expr, so a FuncLit returned positionally appears as a depth-1 child
+	// here. This shape also closes SCANNER-FRAMEWORK-USAGE-01 Path B (no
+	// for-range over []ast.Expr with type assertion).
 	var returnedClosureBody *ast.BlockStmt
-	EachInSubtree[ast.ReturnStmt](constructorBody, func(ret *ast.ReturnStmt) {
-		if returnedClosureBody != nil {
-			return
-		}
-		fl, ok := FindFirstChild[ast.FuncLit](ret, func(*ast.FuncLit) bool { return true })
-		if ok {
+	if ret, ok := FindFirstInSubtree[ast.ReturnStmt](constructorBody, func(ret *ast.ReturnStmt) bool {
+		_, hasFuncLit := FindFirstChild[ast.FuncLit](ret, func(*ast.FuncLit) bool { return true })
+		return hasFuncLit
+	}); ok {
+		if fl, ok2 := FindFirstChild[ast.FuncLit](ret, func(*ast.FuncLit) bool { return true }); ok2 {
 			returnedClosureBody = fl.Body
 		}
-	})
+	}
 	require.NotNil(t, returnedClosureBody,
 		"%s: %s must return a FuncLit closure as its observer; non-FuncLit return shape at %s "+
 			"would break the closure-body scope this Hard rule depends on",
@@ -201,22 +199,14 @@ func TestBootstrapAuditObserverFunnelDownstreamHard01(t *testing.T) {
 	// runtime/audit.AppendBootstrapAuthFail (both bare-ident same-package
 	// calls and external SelectorExpr qualified calls work via ResolvePackageRef).
 	// Same-named selectors from foreign packages or unrelated function-typed
-	// values will NOT match.
-	var found bool
-	EachInSubtree[ast.CallExpr](returnedClosureBody, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
+	// values will NOT match. FindFirstInSubtree internalizes the early-stop
+	// after the first unconditional match.
+	_, found := FindFirstInSubtree[ast.CallExpr](returnedClosureBody, func(call *ast.CallExpr) bool {
 		if posInsideAnyRange(call.Pos(), conditionalRanges) {
-			return // call lives in a conditional/loop/nested-FuncLit branch
+			return false // call lives in a conditional/loop/nested-FuncLit branch
 		}
 		pkgPath, name, ok := ResolvePackageRef(passRef.TypesInfo, call.Fun)
-		if !ok {
-			return
-		}
-		if pkgPath == auditPkgPath && name == appendFnName {
-			found = true
-		}
+		return ok && pkgPath == auditPkgPath && name == appendFnName
 	})
 	assert.True(t, found,
 		"%s: returned closure body of %s must invoke typed %s.%s on the "+

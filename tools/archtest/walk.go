@@ -75,3 +75,25 @@ func FindFirstChild[S any, N interface {
 }](root ast.Node, predicate func(N) bool) (N, bool) {
 	return scanner.FindFirstChild[S, N](root, predicate)
 }
+
+// FindFirstInSubtree walks root's entire subtree (preorder, recursive) and
+// returns the first node of kind N satisfying predicate. ok=false when no
+// node matches. Subtree-depth twin of [FindFirstChild]; the depth choice is
+// a typed function-name selection per ai-collab.md AI-rebust Hard 范本 #1
+// "typed function choice for walk depth".
+//
+// Compared to the manual `EachInSubtree + closure sentinel` idiom,
+// FindFirstInSubtree internalizes the early-return state: no caller-held
+// flag, wrong N is a compile error (interface{*S; ast.Node}), find-first
+// semantic encoded in the function name. Root IS included in the search
+// (mirrors [scanner.EachInSubtree] preorder semantics), contrasting
+// FindFirstChild which excludes root.
+//
+// Wrapper around [scanner.FindFirstInSubtree] — the only call path to
+// scanner for archtest authors. Pure delegation, no behavior change.
+func FindFirstInSubtree[S any, N interface {
+	*S
+	ast.Node
+}](root ast.Node, predicate func(N) bool) (N, bool) {
+	return scanner.FindFirstInSubtree[S, N](root, predicate)
+}
