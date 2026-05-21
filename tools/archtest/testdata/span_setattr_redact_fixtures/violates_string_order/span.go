@@ -17,9 +17,10 @@ type otelSpan struct {
 	inner oteltrace.Span
 }
 
-// VIOLATION: TruncateString wraps RedactString — should be RedactString wraps TruncateString form.
-// Specifically: archtest A3 requires Redact(raw) inside Truncate(..., maxLen).
-// Here the order is reversed: Truncate(raw, maxLen) inside Redact(...).
+// VIOLATION: outer call is RedactString(TruncateString(raw, cap)) — Truncate
+// runs first, so when the secret value extends past the cap the regex finds
+// only the prefix and the tail is silently dropped. Correct shape is
+// TruncateString(RedactString(raw), cap) — Redact must precede Truncate.
 func safeStringAttr(key, raw string) attribute.KeyValue {
 	return attribute.String(key, redaction.RedactString(redaction.TruncateString(raw, attrValueMaxLen)))
 }

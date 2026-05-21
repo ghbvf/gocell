@@ -56,21 +56,26 @@ ref: hashicorp/vault `audit log_raw=false` 默认；golang/go `net/url.URL.Redac
 
 **Order 是 correctness invariant**：`safeStringAttr` 内部 `RedactString` MUST 先于 `TruncateString`。如果反过来，sensitive 值落在 cap 之外时 mask anchor 被切掉，tail 会未 mask 出站。
 
-**AI-Hard 双向闭环 funnel**（archtest `SPAN-SETATTR-REDACT-01`）：
+**双向闭环 funnel**（archtest `SPAN-SETATTR-REDACT-01`）：
 
 | 方向 | 形态 | 评级 |
 |------|------|------|
-| 上游 (holder uniqueness) | `oteltrace.Span` 字段 package-private (`otelSpan.inner` lowercase) + archtest A1 锁包内任何 struct 持有该字段必须是 `otelSpan` | **Hard** |
+| 上游 (package-external) | `oteltrace.Span` 字段 package-private (`otelSpan.inner` lowercase)；包外无法构造持有者，Go 编译器即 gate | **Hard** |
+| 上游 (package-internal) | archtest A1 锁包内任何 struct 持有 `oteltrace.Span` 字段必须是 `otelSpan`；包内新增 struct 由 archtest 在 CI 捕获，但 Go 类型系统无法编译期拒绝 | **Medium** |
 | 下游 (callsite + form uniqueness) | archtest A2 锁 `attribute.String` 在 span.go 内 callsite ⊆ `{safeStringAttr.Body, safeBytesAttr.Body}`；A3/A4 锁两个 helper return 表达式 AST 严格固定 | **Hard** |
 
-形态参照 `.claude/rules/gocell/ai-collab.md` 「Hard 范本目录」: single sanctioned holder + typed marker funnel。
+上游 package-internal 升级路径：通过引入 unexported interface 封装 `oteltrace.Span` 所用方法 + 私有构造函数，使包内新 struct 在 type system 上无法绕过 funnel。升级追踪：backlog issue #851 SPAN-SETATTR-HOLDER-SEAL-01（见 `tools/archtest/span_setattr_redact_test.go` 包文档）。
+
+形态参照 `.claude/rules/gocell/ai-collab.md` 「Hard 范本目录」: single sanctioned holder + typed marker funnel；Funnel 双向锁评级：Medium 上游（package-internal）+ Hard 下游 → 已登记 backlog 升级条目。
 
 **Metric label 不在 redact 范围**：`adapters/otel/metric_provider.go` / `messaging_channel_collector.go` / `pool_resource.go` 的 `attribute.String` callsite 架构上有界：
 
-1. label value 走 `kernel/observability/metrics.MustValidateLabels` 拒 `|` / `=` 分隔符（`ErrLabelValueIllegal`），承载 `key=value` 敏感串结构上不可能。
+1. label value 在 GoCell 是 **registration-time enumerated set**（cell / route / status_code 等枚举），而非用户输入；`kernel/observability/metrics.MustValidateLabels` 再拒分隔符 `=` / `|` 作为额外防御。即便 fail-open，正确性来自 metric label 的约定 vs span attribute 用户来源的语义差异。
 2. cardinality 上限 2000（`defaultAttrCacheMaxSize`），超出走 `otel.metric.overflow=true` overflow bucket。
 3. metric label 是聚合键；统一 mask 为 `<REDACTED>` 会塌缩整个 series，破坏可观测性。
 4. 由约定承载枚举值（cell / route / status_code），非用户输入。
+
+Note: `wrapper.Span` does not currently expose `AddEvent` / `Link`; if added in the future they must route string attributes through `safeStringAttr` and extend `SPAN-SETATTR-REDACT-01` A2 callsite-coverage accordingly.
 
 ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sibling pattern）；ADR `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8.
 

@@ -1,5 +1,4 @@
-// invariants:
-//   - INVARIANT: SPAN-SETATTR-REDACT-01
+// INVARIANT: SPAN-SETATTR-REDACT-01
 //
 // SPAN-SETATTR-REDACT-01 — every string-valued span attribute in
 // adapters/otel/ is funneled through pkg/redaction.RedactString +
@@ -37,6 +36,23 @@
 // Detection is pure AST (no go/types) — scope is one file + four fixture
 // subdirectories. Import aliases for pkg/redaction and go.opentelemetry.io/otel/trace
 // are resolved from each file's ImportSpec list.
+//
+// BLIND SPOTS (AST forms outside the coverage of SPAN-SETATTR-REDACT-01):
+//
+//   - A1 only checks struct field types; an oteltrace.Span stored as a local
+//     var or returned from a function is invisible to A1.
+//   - A2 only checks attribute.String calls; attribute.StringValue /
+//     attribute.StringSlice / attribute.KeyValue{...} composite literals
+//     are not covered. Reverse self-check test
+//     TestSpanSetAttrRedacted_NoBlindspotsInProduction asserts these forms do
+//     not appear in the production adapters/otel tree.
+//   - A3/A4 require a single-return body; multi-statement bodies (tmp var +
+//     return) intentionally fail — that is a feature, not a blind spot.
+//   - Symbol matching is syntactic; a custom attribute package alias with a
+//     String symbol would shadow the real one.
+//
+// Upstream package-internal upgrade path: backlog issue #851
+// (SPAN-SETATTR-HOLDER-SEAL-01 — seal via unexported interface).
 //
 // ref: tools/archtest/span_record_error_redact_test.go (sibling INVARIANT)
 // ref: .claude/rules/gocell/observability.md "Span Attribute Redaction"
@@ -482,6 +498,51 @@ func TestSpanSetAttrRedacted(t *testing.T) {
 		all = append(all, scanSpanSetAttrDirDiags(t, root, dir)...)
 	}
 	Report(t, "SPAN-SETATTR-REDACT-01", all)
+}
+
+// TestSpanSetAttrRedacted_NoBlindspotsInProduction asserts the AST forms
+// outside SPAN-SETATTR-REDACT-01's coverage do not appear in production
+// adapters/otel code. If a future contributor introduces one, this reverse
+// check makes the blind spot visible at archtest time. Per
+// .claude/rules/gocell/ai-collab.md §"工具选定后强制盲区自检": reverse
+// self-checks are prerequisite举证 for the Hard/Medium rating.
+func TestSpanSetAttrRedacted_NoBlindspotsInProduction(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	scope := DirsScope(root, []string{"adapters/otel"}, IncludeGenerated())
+	var ds []Diagnostic
+	Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			otelAttrLocal := otelAttributeLocalName(file)
+			if otelAttrLocal == "" {
+				continue
+			}
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				// Catch StringValue / StringSlice — the non-String string-shaped constructors.
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel == nil {
+					return
+				}
+				if id, ok := sel.X.(*ast.Ident); !ok || id.Name != otelAttrLocal {
+					return
+				}
+				switch sel.Sel.Name {
+				case "StringValue", "StringSlice":
+					pos := p.Fset.Position(call.Pos())
+					msg := "attribute." + sel.Sel.Name +
+						"(...) is a blind spot of SPAN-SETATTR-REDACT-01" +
+						" — route through safeStringAttr or extend the funnel"
+					ds = append(ds, Diagnostic{
+						Rel:     filepath.ToSlash(p.Rel(file)),
+						Line:    pos.Line,
+						Message: msg,
+					})
+				}
+			})
+		}
+		return ds
+	})
+	Report(t, "SPAN-SETATTR-REDACT-01-BLINDSPOT", ds)
 }
 
 // TestSpanSetAttrRedactedFixtures verifies the AST scanner via static

@@ -105,9 +105,15 @@ func redactedBytesValue(v []byte) string {
 	return fmt.Sprintf("[redacted bytes len=%d sha256=%s]", len(v), hex.EncodeToString(sum[:])[:16])
 }
 
-// RecordError adds an error event to the span.
+// RecordError adds an error event to the span. The error text is redacted via
+// pkg/redaction.RedactError before being forwarded to the OTel SDK, providing
+// defense-in-depth at the adapter boundary. Callers in kernel/wrapper and
+// runtime/http/middleware already redact before calling RecordError; this
+// additional layer ensures any future code path reaching otelSpan.RecordError
+// directly (workers, generated handlers, test spies) does not emit unredacted
+// error text to the collector.
 func (s *otelSpan) RecordError(err error) {
-	s.inner.RecordError(err)
+	s.inner.RecordError(redaction.RedactError(err))
 }
 
 // SetStatus sets the span status. wrapper.StatusError maps to codes.Error;
