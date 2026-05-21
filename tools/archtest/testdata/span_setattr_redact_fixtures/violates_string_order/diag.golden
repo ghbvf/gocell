@@ -1,0 +1,1 @@
+tools/archtest/testdata/span_setattr_redact_fixtures/violates_string_order/span.go:24: safeStringAttr return expr must be attribute.String(key, redaction.TruncateString(redaction.RedactString(raw), attrValueMaxLen)) — Redact MUST precede Truncate (SPAN-SETATTR-REDACT-01 A3)

@@ -1,0 +1,1 @@
+tools/archtest/testdata/span_setattr_redact_fixtures/violates_rogue_holder/span.go:24: struct holds oteltrace.Span field but is not otelSpan — bypass of SetAttributes funnel (SPAN-SETATTR-REDACT-01 A1)

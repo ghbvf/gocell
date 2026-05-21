@@ -43,6 +43,37 @@ Value boundary fail-closed：每个 pattern 一直消耗到下一个空白（aut
 
 ref: hashicorp/vault `audit log_raw=false` 默认；golang/go `net/url.URL.Redacted()` 硬编替换。ADR `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8。
 
+## Span Attribute Redaction（fail-closed by default）
+
+`adapters/otel/span.go` 的 `attrToKeyValue` 把 `wrapper.Attr.Value` 转成 OTel `attribute.KeyValue` 之前，所有 string-valued 分支无条件经过 `pkg/redaction.RedactString` + `redaction.TruncateString(..., attrValueMaxLen=2048)`。**没有调用方 opt-out**——与 [Span Error Redaction](#span-error-redaction-fail-closed-by-default) 共享 `pkg/redaction` 「默认硬编 fail-closed，无调用方 opt-out wiring」哲学。
+
+| 分支 | 出口 helper | 处理 |
+|------|------------|------|
+| `case string` | `safeStringAttr(key, raw)` | `RedactString` mask `key=value` 形态敏感子串 → `TruncateString` 截到 2048 runes |
+| `case []byte` | `safeBytesAttr(key, b)` | SHA256 + length 元信息（保留 ops 调试可观察性，binary 上 `RedactString` 无意义）|
+| `default`（任意类型 fmt.Sprint）| `safeStringAttr(key, fmt.Sprint(v))` | 同 `case string` |
+| `case int / int64 / float64 / bool` | OTel SDK 原生 typed constructor | 非字符串标量，结构上无法承载 `key=value` 敏感串，原样直通 |
+
+**Order 是 correctness invariant**：`safeStringAttr` 内部 `RedactString` MUST 先于 `TruncateString`。如果反过来，sensitive 值落在 cap 之外时 mask anchor 被切掉，tail 会未 mask 出站。
+
+**AI-Hard 双向闭环 funnel**（archtest `SPAN-SETATTR-REDACT-01`）：
+
+| 方向 | 形态 | 评级 |
+|------|------|------|
+| 上游 (holder uniqueness) | `oteltrace.Span` 字段 package-private (`otelSpan.inner` lowercase) + archtest A1 锁包内任何 struct 持有该字段必须是 `otelSpan` | **Hard** |
+| 下游 (callsite + form uniqueness) | archtest A2 锁 `attribute.String` 在 span.go 内 callsite ⊆ `{safeStringAttr.Body, safeBytesAttr.Body}`；A3/A4 锁两个 helper return 表达式 AST 严格固定 | **Hard** |
+
+形态参照 `.claude/rules/gocell/ai-collab.md` 「Hard 范本目录」: single sanctioned holder + typed marker funnel。
+
+**Metric label 不在 redact 范围**：`adapters/otel/metric_provider.go` / `messaging_channel_collector.go` / `pool_resource.go` 的 `attribute.String` callsite 架构上有界：
+
+1. label value 走 `kernel/observability/metrics.MustValidateLabels` 拒 `|` / `=` 分隔符（`ErrLabelValueIllegal`），承载 `key=value` 敏感串结构上不可能。
+2. cardinality 上限 2000（`defaultAttrCacheMaxSize`），超出走 `otel.metric.overflow=true` overflow bucket。
+3. metric label 是聚合键；统一 mask 为 `<REDACTED>` 会塌缩整个 series，破坏可观测性。
+4. 由约定承载枚举值（cell / route / status_code），非用户输入。
+
+ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sibling pattern）；ADR `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8.
+
 ## Readyz Probe 命名
 
 - Adapter readiness probe 使用 stable snake_case，并以后缀 `_ready` 表示依赖可用性，例如 `rabbitmq_ready`、`vault_transit_ready`。
