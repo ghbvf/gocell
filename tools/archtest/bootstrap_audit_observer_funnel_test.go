@@ -300,19 +300,13 @@ func TestCollectClosureConditionalScopes(t *testing.T) {
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, "synthetic.go", src, parser.AllErrors)
 		require.NoError(t, err, "parse synthetic source")
-		// EachInSubtree + done-sentinel (FINDFIRSTINSUBTREE-API-01 gap, no
-		// typed find-first-in-subtree helper yet). Both walks here are over
-		// already-collected synthetic AST so there is no live-codebase scope
-		// — they use the same scanner funnel as production rules for
-		// SCANNER-FRAMEWORK-USAGE-01 consistency.
-		var body *ast.BlockStmt
-		EachInSubtree[ast.FuncLit](f, func(fl *ast.FuncLit) {
-			if body != nil {
-				return
-			}
-			body = fl.Body
-		})
-		require.NotNil(t, body, "synthetic source must contain a FuncLit")
+		// First-FuncLit lookup uses FindFirstInSubtree typed funnel (implicit
+		// early-stop, no caller-held flag). The CallExpr walk below is a
+		// full accumulating walk (collects every "target"-named call), not
+		// find-first, so it stays on EachInSubtree.
+		fl, ok := FindFirstInSubtree[ast.FuncLit](f, func(*ast.FuncLit) bool { return true })
+		require.True(t, ok, "synthetic source must contain a FuncLit")
+		body := fl.Body
 		var calls []*ast.CallExpr
 		EachInSubtree[ast.CallExpr](body, func(c *ast.CallExpr) {
 			id, ok := c.Fun.(*ast.Ident)

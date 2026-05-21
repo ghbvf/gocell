@@ -184,6 +184,12 @@ func FindFirstChild[S any, N interface {
 // a match (anchored by TestFindFirstInSubtree_StopsAfterFirstMatch and
 // TestFindFirstInSubtree_StopsBeforeDescendingMatchedSubtree).
 //
+// Unlike [ast.Walk] (whose [ast.Visitor].Visit is called with nil to signal
+// "children done"), ast.Inspect never calls its visitor with a nil node, so
+// no nil guard is needed before the typed assertion. This is why the
+// implementation is shorter than the visitor-based [EachInChildren] /
+// [EachInSubtreeStopAt] walkers.
+//
 // # Root handling
 //
 // Root IS visited (mirrors [EachInSubtree], which includes root via
@@ -196,6 +202,16 @@ func FindFirstChild[S any, N interface {
 // # Nil root
 //
 // Returns (zero, false) silently (no-op).
+//
+// # Nil predicate
+//
+// Panics on the first visited node — the predicate is invoked unconditionally
+// per candidate. Matches the contract of [FindFirstChild]; callers that need
+// "always-true find-first" should pass `func(N) bool { return true }`
+// explicitly. The implementation is fail-fast rather than nil-tolerant
+// because there is no sensible semantic interpretation of a nil predicate in
+// a find-first contract (unlike [EachInSubtreeStopAt] where nil stopAt has a
+// natural "no boundary" meaning).
 //
 // ref: go/ast.Inspect — Go stdlib early-stop preorder traversal.
 func FindFirstInSubtree[S any, N interface {

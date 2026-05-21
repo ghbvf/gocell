@@ -28,8 +28,8 @@
 // # Choosing walk depth (iteration and find-first)
 //
 // Walk depth is a compile-time choice — picking the wrong API shows at the
-// call site, not in runtime AST drift. Four APIs across two axes (depth ×
-// iteration-vs-find-first):
+// call site, not in runtime AST drift. Five APIs across two axes (depth ×
+// iteration-vs-find-first) plus one boundary-aware variant:
 //
 //   - [EachInSubtree] / [FindFirstInSubtree]: recursive over the full
 //     sub-tree (root + every descendant). For "any FuncDecl in the file" /
@@ -41,9 +41,15 @@
 //     direct elements" — KeyValueExpr of CompositeLit, CaseClause of
 //     SwitchStmt.Body, CommClause of SelectStmt.Body, top-level Decl of
 //     *ast.File.
+//   - [EachInSubtreeStopAt]: recursive with a boundary predicate that prunes
+//     descent into matching non-root nodes (typical use: skip nested
+//     *ast.FuncLit so dead-closure call positions are excluded). Third
+//     depth-semantic member of the typed-function-choice Hard 范本 (see
+//     ai-collab.md §"Hard 范本目录" #1) alongside EachInSubtree /
+//     EachInChildren.
 //
-// All four silently no-op on nil root; callers need not guard. FindFirst*
-// returns (zero, false) on nil root.
+// All silently no-op on nil root; callers need not guard. FindFirst* returns
+// (zero, false) on nil root.
 //
 // # Subpackage scan exemption
 //

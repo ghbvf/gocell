@@ -41,6 +41,21 @@ func EachInChildren[S any, N interface {
 	scanner.EachInChildren[S, N](root, fn)
 }
 
+// EachInSubtreeStopAt traverses root's subtree like [EachInSubtree], invoking
+// fn for each *N encountered, but stops descending into any non-root node for
+// which stopAt returns true. The boundary node itself is NOT visited as N
+// even if its type matches. Third depth-semantic member of the
+// typed-function-choice Hard template, alongside [EachInSubtree] /
+// [EachInChildren] (see ai-collab.md §"Hard 范本目录" #1).
+//
+// Wrapper around [scanner.EachInSubtreeStopAt].
+func EachInSubtreeStopAt[S any, N interface {
+	*S
+	ast.Node
+}](root ast.Node, stopAt func(ast.Node) bool, fn func(N)) {
+	scanner.EachInSubtreeStopAt[S, N](root, stopAt, fn)
+}
+
 // StringLitValue returns the unquoted value of a STRING-kind [*ast.BasicLit].
 // Returns ok=false for nil, non-STRING, or malformed quoted literals.
 //
@@ -87,7 +102,10 @@ func FindFirstChild[S any, N interface {
 // flag, wrong N is a compile error (interface{*S; ast.Node}), find-first
 // semantic encoded in the function name. Root IS included in the search
 // (mirrors [scanner.EachInSubtree] preorder semantics), contrasting
-// FindFirstChild which excludes root.
+// FindFirstChild which excludes root. This is the only allowed subtree-depth
+// early-return shape in archtest rules — the closure-sentinel idiom over
+// `EachInSubtree` will be banned by the SCANNER-FRAMEWORK-USAGE-02 subset
+// extension in `FINDFIRSTINSUBTREE-API-01` PR3.
 //
 // Wrapper around [scanner.FindFirstInSubtree] — the only call path to
 // scanner for archtest authors. Pure delegation, no behavior change.
