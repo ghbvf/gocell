@@ -217,7 +217,7 @@ func TestStopIntake_WaitsForInflightAck(t *testing.T) {
 	close(released)
 
 	// StopIntake must now complete.
-	testwait.External(t, "subscriber-cancel-issued", func() bool {
+	testwait.External(t, "subscriber-stopintake-completed", func() bool {
 		select {
 		case err := <-stopDone:
 			assert.NoError(t, err, "StopIntake must return nil after inflight handler completes")

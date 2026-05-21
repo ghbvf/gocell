@@ -5,6 +5,7 @@ package rabbitmq
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,8 +23,9 @@ import (
 const (
 	// releaseBeforeRedeliveryLeaseTTL is the processing-lease TTL passed to
 	// ConsumerBase. Long enough that a Nack-first path would wait the full
-	// duration before retrying — which is exactly what the test gates on
-	// (handler must be invoked at least twice within testtime.D10s).
+	// duration before retrying — which is exactly the regression this test
+	// gates against (the inter-delivery gap must be broker-RTT scale, not
+	// lease-TTL scale).
 	releaseBeforeRedeliveryLeaseTTL = 5 * time.Minute
 
 	// releaseBeforeRedeliveryDoneTTL is the idempotency-done TTL passed to
@@ -33,6 +35,19 @@ const (
 	// releaseBeforeRedeliveryNoRenewal disables the lease-renewal goroutine
 	// so the test deterministically observes one Commit attempt per delivery.
 	releaseBeforeRedeliveryNoRenewal = -1 * time.Second
+
+	// releaseBeforeRedeliveryUpperBound bounds the redelivery test wall-clock.
+	// 2s ≈ 40× expected Docker-local broker RTT (≤50ms) and 150× smaller than
+	// releaseBeforeRedeliveryLeaseTTL (5m). Anchored on N×P99 rather than a
+	// fraction of the fallback TTL, per nats-streaming-server
+	// server/server_redelivery_test.go (test timeouts on N×ackWait scale).
+	releaseBeforeRedeliveryUpperBound = 2 * time.Second
+
+	// releaseBeforeRedeliveryMaxGap bounds the gap between the first and
+	// second handler invocation. 500ms = 10× P99 broker RTT; any larger gap
+	// means the redelivery was gated on lease TTL fallback (5m) instead of
+	// broker-level requeue — exactly the regression this test exists to catch.
+	releaseBeforeRedeliveryMaxGap = 500 * time.Millisecond
 )
 
 // TestIntegration_CommitFailedAllowsRedeliveryToSameProcess covers the N8 K#12
@@ -45,12 +60,18 @@ const (
 //  4. The subscriber's commit_failed path MUST call Release before broker Nack,
 //     otherwise the second delivery (redelivery) would observe the claim still
 //     held in this process and short-circuit as ClaimBusy → DispositionRequeue,
-//     blocking redelivery until lease TTL expires (default 5m, well beyond the
-//     test's 10s budget).
+//     blocking redelivery until lease TTL expires (default 5m, well beyond any
+//     reasonable test budget).
 //
-// Asserts: handler is invoked at least twice (initial + redelivery) within
-// testtime.D10s. Under release-first this completes in <1s; under the legacy
-// Nack-first path the handler is gated on lease TTL and the test fails.
+// Asserts two bounds anchored on N×P99 broker RTT, not on the lease-TTL
+// fallback path (per nats-streaming-server redelivery-test pattern):
+//
+//   - Upper bound: handler is invoked at least twice within
+//     releaseBeforeRedeliveryUpperBound (2s ≈ 40× broker RTT).
+//   - Lower bound on gap: the wall-clock gap between attempt #1 and attempt #2
+//     is less than releaseBeforeRedeliveryMaxGap (500ms ≈ 10× P99 broker RTT).
+//     A larger gap means redelivery actually waited on the 5m lease-TTL
+//     fallback — exactly the regression a Nack-first path would introduce.
 //
 // ref: IBM/sarama consumer_group.go release() L801-L824 — handler.Cleanup
 // before offsets.Close(); same principle on the per-message commit_failed path.
@@ -79,10 +100,15 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 	}, clock.Real())
 	require.NoError(t, err)
 
-	var handlerCalls atomic.Int32
+	var (
+		callTimesMu sync.Mutex
+		callTimes   []time.Time
+	)
 	wrapped := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: group, CellID: group},
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			handlerCalls.Add(1)
+			callTimesMu.Lock()
+			callTimes = append(callTimes, time.Now())
+			callTimesMu.Unlock()
 			return outbox.Ack()
 		})
 
@@ -113,12 +139,23 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pub.Publish(context.Background(), topic, payload))
 
-	testwait.External(t, "amqp-reconnect-completed", func() bool {
-		return handlerCalls.Load() >= 2
-	}, testtime.D10s, testtime.FastPoll,
-		"handler must be invoked at least twice within 10s: "+
+	testwait.External(t, "amqp-handler-redelivery-confirmed", func() bool {
+		callTimesMu.Lock()
+		defer callTimesMu.Unlock()
+		return len(callTimes) >= 2
+	}, releaseBeforeRedeliveryUpperBound, testtime.FastPoll,
+		"handler must be invoked at least twice within %s: "+
 			"attempt #1 commit fails → release-first lets broker redelivery proceed → attempt #2 succeeds. "+
-			"Nack-first ordering would gate redelivery on lease TTL (5m).")
+			"Nack-first ordering would gate redelivery on lease TTL (5m).",
+		releaseBeforeRedeliveryUpperBound)
+
+	callTimesMu.Lock()
+	redeliveryGap := callTimes[1].Sub(callTimes[0])
+	callTimesMu.Unlock()
+	assert.Less(t, redeliveryGap, releaseBeforeRedeliveryMaxGap,
+		"redelivery gap %s indicates lease-TTL gating, not broker-level requeue "+
+			"(broker RTT P99 ≤50ms; lease TTL %s)",
+		redeliveryGap, releaseBeforeRedeliveryLeaseTTL)
 
 	subCancel()
 	_ = sub.Close(context.Background())

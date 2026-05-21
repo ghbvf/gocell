@@ -79,7 +79,7 @@ func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
 		originalMock.mu.Lock()
 		defer originalMock.mu.Unlock()
 		return originalMock.notifyCloseCh != nil
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyLong)
 	defer cancel()

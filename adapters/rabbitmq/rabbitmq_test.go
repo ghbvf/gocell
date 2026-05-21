@@ -911,7 +911,7 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 		mocks[0].mu.Lock()
 		defer mocks[0].mu.Unlock()
 		return mocks[0].notifyCloseCh != nil
-	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
+	}, testtime.D2s, testtime.D1ms, "reconnectLoop did not call NotifyClose")
 
 	// Now send on the channel that reconnectLoop is actually selecting on.
 	mocks[0].mu.Lock()
@@ -973,7 +973,7 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 		mocks[0].mu.Lock()
 		defer mocks[0].mu.Unlock()
 		return mocks[0].notifyCloseCh != nil
-	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
+	}, testtime.D2s, testtime.D1ms, "reconnectLoop did not call NotifyClose")
 
 	// Trigger disconnect.
 	mocks[0].mu.Lock()
@@ -3801,7 +3801,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 		mock1.mu.Lock()
 		defer mock1.mu.Unlock()
 		return mock1.notifyCloseCh != nil
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 
 	// Trigger disconnect.
 	mock1.mu.Lock()
@@ -4252,7 +4252,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 		mock1.mu.Lock()
 		defer mock1.mu.Unlock()
 		return mock1.notifyCloseCh != nil
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 
 	// Trigger disconnect.
 	mock1.mu.Lock()

@@ -495,7 +495,7 @@ func TestReconnectLoop_PermanentAndRecovery(t *testing.T) {
 		originalMock.mu.Lock()
 		defer originalMock.mu.Unlock()
 		return originalMock.notifyCloseCh != nil
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 
 	phase.Store(1)
 	originalMock.mu.Lock()

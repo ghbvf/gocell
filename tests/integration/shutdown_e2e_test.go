@@ -77,17 +77,19 @@ func startShutdownTestBroker(t *testing.T) (amqpURL, mgmtURL string, container *
 
 	var mgmt string
 	var attemptCount int
+	var lastErr error
 	testwait.External(t, "rabbitmq-management-http-url-mapped", func() bool {
 		var httpErr error
 		mgmt, httpErr = c.HttpURL(ctx)
 		if httpErr != nil {
+			lastErr = httpErr
 			attemptCount++
 			if attemptCount <= 3 || attemptCount%10 == 0 {
 				t.Logf("rabbitmq-management-http-url-mapped: attempt %d failed: %v", attemptCount, httpErr)
 			}
 		}
 		return httpErr == nil
-	}, testtime.SelectAsyncSettle, testtime.SlowPoll, "management http url should be mapped")
+	}, testtime.SelectAsyncSettle, testtime.SlowPoll, "management http url should be mapped (last error: %v)", &lastErr)
 
 	cleanup = func() {
 		if termErr := c.Terminate(ctx); termErr != nil {

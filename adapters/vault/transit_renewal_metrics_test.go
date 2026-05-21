@@ -116,7 +116,7 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 	// Wait for the loop to consume the renewal before canceling.
 	testwait.External(t, "vault-auth-renewed", func() bool {
 		return testutil.ToFloat64(successCtr) >= 1
-	}, time.Second, time.Millisecond, "successCtr must reach 1 after renewal event")
+	}, testtime.D2s, testtime.D1ms, "successCtr must reach 1 after renewal event")
 	cancel()
 
 	select {
@@ -176,7 +176,7 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 	// Wait for all three to be consumed.
 	testwait.External(t, "vault-auth-renewed", func() bool {
 		return testutil.ToFloat64(successCtr) >= 3
-	}, time.Second, time.Millisecond, "successCtr must reach 3 after three renewal events")
+	}, testtime.D2s, testtime.D1ms, "successCtr must reach 3 after three renewal events")
 	cancel()
 
 	select {
@@ -229,7 +229,7 @@ func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *test
 	// Wait for renewFailure to be incremented, then cancel.
 	testwait.External(t, "vault-transit-key-rotated", func() bool {
 		return testutil.ToFloat64(failureCtr) >= 1
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 	cancel()
 
 	select {
@@ -282,7 +282,7 @@ func TestTokenRenewalWorker_HandleDone_NonNilError_IncrementsFailureCounter(t *t
 	// Wait for renewFailure to be incremented, then cancel.
 	testwait.External(t, "vault-transit-key-rotated", func() bool {
 		return testutil.ToFloat64(failureCtr) >= 1
-	}, time.Second, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 	cancel()
 
 	select {
@@ -340,7 +340,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 	// Wait for the renewal to be consumed before canceling.
 	testwait.External(t, "vault-auth-renewed", func() bool {
 		return len(fw.renewCh) == 0
-	}, time.Second, time.Millisecond, "renewCh must be drained after renewal event is sent")
+	}, testtime.D2s, testtime.D1ms, "renewCh must be drained after renewal event is sent")
 	cancel()
 
 	select {

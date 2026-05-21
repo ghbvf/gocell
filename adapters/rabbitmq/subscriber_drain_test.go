@@ -184,7 +184,7 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 	}()
 
 	// Wait until Consume() has been called (consumerTag recorded in mockChannel).
-	testwait.External(t, "subscriber-cancel-issued", func() bool {
+	testwait.External(t, "subscriber-consume-started", func() bool {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelConsumer != "" || ch.cancelCalled || ch.consumeDeliveries != nil

@@ -136,7 +136,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	}, testtime.EventuallyLong, testtime.FastPoll, "all %d handlers must have returned", numDeliveries)
 
 	// Poll until ackTimestampChannel has recorded all ack timestamps.
-	testwait.External(t, "amqp-delivery-acked", func() bool {
+	testwait.External(t, "amqp-ack-timestamp-recorded", func() bool {
 		atCh.mu.Lock()
 		defer atCh.mu.Unlock()
 		return len(atCh.ackCallTimes) >= numDeliveries

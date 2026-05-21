@@ -223,7 +223,7 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 		go func() { startErr <- hub.Start(context.Background()) }()
 		testwait.External(t, "hub-state-running", func() bool {
 			return hub.state.Load() == stateRunning
-		}, testtime.EventuallyShort, testtime.D1ms)
+		}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before stopping_via_live_shutdown")
 
 		stuck := &stuckConn{id: "t4b-stuck", closeCh: make(chan struct{})}
 		require.NoError(t, hub.Register(context.Background(), stuck))
@@ -260,7 +260,7 @@ func TestHub_ManagedResource_CloseIsIdempotent(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before Close idempotency test")
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
@@ -283,7 +283,7 @@ func TestHub_ManagedResource_WorkerDrivesStartAndStop(t *testing.T) {
 	go func() { startErr <- w.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before Worker-driven Stop test")
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
@@ -342,7 +342,7 @@ func TestHub_BoundedConcurrentClose_RespectsLimit(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before bounded-concurrent-close test")
 
 	const n = 5
 	blockers := make([]*closeBlockerConn, n)
@@ -391,7 +391,7 @@ func TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before all-entries-close-attempt test")
 
 	const n = 20
 	blockers := make([]*closeBlockerConn, n)
@@ -448,7 +448,7 @@ func TestHub_BoundedConcurrentClose_ParallelDrain(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before parallel-drain test")
 
 	for i := range n {
 		fc := newFakeConn(fmt.Sprintf("delay-%d", i))
@@ -484,7 +484,7 @@ func TestHub_ExternalCancel_UsesConfiguredShutdownTimeout(t *testing.T) {
 	go func() { startErr <- hub.Start(ctx) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before external-cancel shutdown-timeout test")
 
 	const n = 5
 	blockers := make([]*closeBlockerConn, n)
@@ -536,7 +536,7 @@ func TestHub_StopAndExternalCancel_RaceCAS(t *testing.T) {
 	go func() { startErr <- hub.Start(ctx) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before Stop×cancel race test")
 
 	// Barrier: both goroutines wait until both are ready, then fire simultaneously.
 	var barrier sync.WaitGroup
@@ -606,7 +606,7 @@ func TestHub_StopUnblocksStart(t *testing.T) {
 
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before Stop-unblocks-Start test")
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
@@ -634,7 +634,7 @@ func TestHub_DoubleStop(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before double-Stop test")
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
@@ -667,7 +667,7 @@ func TestHub_StopTimeout(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before Stop-timeout test")
 
 	// Register a conn whose Close is a no-op (readLoop never exits).
 	stuck := &stuckConn{id: "stuck", closeCh: make(chan struct{})}
@@ -694,7 +694,7 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before external-context-cancel test")
 
 	// Register a conn before cancel.
 	conn := newFakeConn("pre-cancel")
@@ -783,7 +783,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before register-uses-context-values test")
 
 	conn := newFakeConn("context-values")
 	require.NoError(t, hub.Register(registerCtx, conn))
@@ -804,7 +804,7 @@ func TestHub_RegisterDuringStop(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before register-during-stop test")
 
 	// Force state to stopping to simulate mid-Stop window.
 	hub.state.Store(stateStopping)
@@ -924,7 +924,7 @@ func TestHub_RegisterStopRace(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before register-stop-race test")
 
 	const n = 100
 	var registerWg sync.WaitGroup
@@ -1182,7 +1182,7 @@ func TestHub_StopDeadlineHonored(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning before stop-deadline-honored test")
 
 	// Register a stuck conn that blocks Close.
 	stuck := &stuckConn{id: "blocker", closeCh: make(chan struct{})}
@@ -1420,7 +1420,7 @@ func startHubBackground(t *testing.T) *Hub {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
 		return hub.state.Load() == stateRunning
-	}, testtime.EventuallyShort, testtime.D1ms)
+	}, testtime.EventuallyShort, testtime.D1ms, "hub failed to reach stateRunning")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 		defer cancel()

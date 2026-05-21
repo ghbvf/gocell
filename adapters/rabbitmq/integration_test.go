@@ -410,7 +410,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 	require.Equal(t, 0, exitCode, "rabbitmqctl should exit 0")
 
 	// 3. Health() should return error during reconnect.
-	testwait.External(t, "amqp-reconnect-completed", func() bool {
+	testwait.External(t, "amqp-disconnect-detected", func() bool {
 		return conn.Health(context.Background()) != nil
 	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"Health() should report error after broker-forced disconnect")

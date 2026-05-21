@@ -70,7 +70,7 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	go func() { startErr <- hub.Start(context.Background()) }()
 
 	// Wait for hub to be running before creating server.
-	testwait.External(t, "websocket-conn-upgraded", func() bool {
+	testwait.External(t, "websocket-hub-running", func() bool {
 		return hub.IsRunning()
 	}, testtime.D2s, testtime.D1ms)
 
@@ -155,7 +155,7 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	testwait.External(t, "websocket-conn-upgraded", hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -625,7 +625,7 @@ func TestUpgradeHandler_AbsentCredential_Returns401(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	testwait.External(t, "websocket-conn-upgraded", hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -655,7 +655,7 @@ func TestUpgradeHandler_InvalidCredential_Returns401(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	testwait.External(t, "websocket-conn-upgraded", hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -699,7 +699,7 @@ func TestUpgradeHandler_ForbiddenCredential_Returns403(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	testwait.External(t, "websocket-conn-upgraded", hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -726,7 +726,7 @@ func TestUpgradeHandler_401_ResponseIsPlainText(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	testwait.External(t, "websocket-conn-upgraded", hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -760,7 +760,7 @@ func TestUpgradeHandler_HijackerNotSupported_Returns500(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	testwait.External(t, "websocket-conn-upgraded", hub.IsRunning, testtime.D2s, testtime.D1ms)
+	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
