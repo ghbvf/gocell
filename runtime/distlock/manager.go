@@ -79,7 +79,10 @@ type managerEvent struct {
 	kind     eventKind
 	state    *lockState // eventAdd: the new lock to register
 	id       lockID     // eventRemove: lock to unregister
-	resultCh chan error // eventRemove: receives the Driver.Release result (buffered cap=1; sender writes once, remove() reads once; never closed)
+	// resultCh receives the Driver.Release result on eventRemove. Buffered
+	// cap=1; the manager writes exactly once and remove() reads exactly once;
+	// the channel is never closed.
+	resultCh chan error
 }
 
 // ManagerSnapshot is a read-only view of the manager's current state.
