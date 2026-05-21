@@ -50,8 +50,8 @@ func WithClock(clk clock.Clock) BuildChainOption {
 }
 
 // defaultHMACKey is the 32-byte HMAC key used when no WithHMACKey option is
-// provided. The value is chosen to be human-readable and sufficiently long.
-var defaultHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
+// provided. The value is chosen to be human-readable and exactly 32 bytes long.
+var defaultHMACKey = []byte("test-hmac-key-32-bytes-padding!!")
 
 // BuildAuditcoreChain constructs a docker-free auditcore Cell + MemStore
 // Ledger and returns the auditappendsession subscription handler.
@@ -69,7 +69,9 @@ var defaultHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 // same MemStore used by the cell, so callers can probe Tail/Verify after
 // invoking the handler.
 //
-// t.Cleanup is registered; callers do not need to tear down anything manually.
+// No cleanup is required; MemStore is in-memory and holds no external
+// resources. Custom stores supplied via WithStore are the caller's
+// responsibility.
 func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (
 	handler outbox.EntryHandler,
 	store ledger.Store,
