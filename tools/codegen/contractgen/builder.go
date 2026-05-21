@@ -990,11 +990,36 @@ func goPackageName(s string) string {
 	return strings.ToLower(s)
 }
 
-// splitOnDelimiters splits on "-" and "_" and also handles camelCase boundaries.
+// splitOnDelimiters splits on "-", "_", and camelCase boundaries
+// (lowercase→uppercase transitions). Handles both snake_case and camelCase inputs.
+// Examples: "user_id" → ["user","id"], "eventId" → ["event","Id"],
+// "httpStatus" → ["http","Status"], "UserID" → ["User","ID"].
 func splitOnDelimiters(s string) []string {
-	// First split on explicit delimiters.
+	// Normalise explicit delimiters first.
 	s = strings.ReplaceAll(s, "-", "_")
-	return strings.Split(s, "_")
+
+	// Split on underscores first; then further split each segment on camelCase
+	// boundaries (transition from a lowercase/digit rune to an uppercase rune).
+	rawParts := strings.Split(s, "_")
+	var out []string
+	for _, part := range rawParts {
+		if part == "" {
+			continue
+		}
+		runes := []rune(part)
+		start := 0
+		for i := 1; i < len(runes); i++ {
+			if unicode.IsUpper(runes[i]) && unicode.IsLower(runes[i-1]) {
+				out = append(out, string(runes[start:i]))
+				start = i
+			}
+		}
+		out = append(out, string(runes[start:]))
+	}
+	if len(out) == 0 {
+		return []string{s}
+	}
+	return out
 }
 
 // capitalizeFirst uppercases the first rune of s.

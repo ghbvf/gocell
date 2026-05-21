@@ -5,11 +5,11 @@ package revoked
 
 // Payload — event.session.revoked.v1.payload
 type Payload struct {
-	SessionId string `json:"sessionId"`
-	UserId    string `json:"userId"`
+	SessionID string `json:"sessionId"`
+	UserID    string `json:"userId"`
 }
 
 // Headers — event.session.revoked.v1.headers
 type Headers struct {
-	EventId string `json:"eventId"`
+	EventID string `json:"eventId"`
 }

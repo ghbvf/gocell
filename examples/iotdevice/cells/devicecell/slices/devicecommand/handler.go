@@ -51,10 +51,10 @@ type ReportAdapter struct{ S *Service }
 
 // Report implements reportcontract.Service.
 func (a ReportAdapter) Report(ctx context.Context, req *reportcontract.Request) (reportcontract.ReportResponseObject, error) {
-	if err := a.S.Report(ctx, req.ID, req.CmdId); err != nil {
+	if err := a.S.Report(ctx, req.ID, req.CmdID); err != nil {
 		return nil, err
 	}
-	entry, err := a.S.GetCommand(ctx, req.CmdId)
+	entry, err := a.S.GetCommand(ctx, req.CmdID)
 	if err != nil {
 		return nil, err
 	}
@@ -70,10 +70,10 @@ func (a AckAdapter) Ack(ctx context.Context, req *ackcontract.Request) (ackcontr
 	if err != nil {
 		return nil, err
 	}
-	if err := a.S.Ack(ctx, req.ID, req.CmdId, reason); err != nil {
+	if err := a.S.Ack(ctx, req.ID, req.CmdID, reason); err != nil {
 		return nil, err
 	}
-	entry, err := a.S.GetCommand(ctx, req.CmdId)
+	entry, err := a.S.GetCommand(ctx, req.CmdID)
 	if err != nil {
 		return nil, err
 	}
@@ -87,10 +87,10 @@ type ExtendLeaseAdapter struct{ S *Service }
 func (a ExtendLeaseAdapter) ExtendLease(
 	ctx context.Context, req *extendleasecontract.Request,
 ) (extendleasecontract.ExtendLeaseResponseObject, error) {
-	if err := a.S.ExtendLease(ctx, req.ID, req.CmdId, time.Duration(req.ExtensionSeconds)*time.Second); err != nil {
+	if err := a.S.ExtendLease(ctx, req.ID, req.CmdID, time.Duration(req.ExtensionSeconds)*time.Second); err != nil {
 		return nil, err
 	}
-	entry, err := a.S.GetCommand(ctx, req.CmdId)
+	entry, err := a.S.GetCommand(ctx, req.CmdID)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func entryToFields(e command.Entry) commandEntryFields {
 func toEnqueueResponseData(e command.Entry) *enqueuecontract.ResponseData {
 	f := entryToFields(e)
 	return &enqueuecontract.ResponseData{
-		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		ID: f.ID, DeviceID: f.DeviceID, CommandType: f.CommandType,
 		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
 		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
 		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
@@ -194,7 +194,7 @@ func toEnqueueResponseData(e command.Entry) *enqueuecontract.ResponseData {
 func toDequeueResponseDataItem(e command.Entry) *dequeuecontract.ResponseDataItem {
 	f := entryToFields(e)
 	return &dequeuecontract.ResponseDataItem{
-		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		ID: f.ID, DeviceID: f.DeviceID, CommandType: f.CommandType,
 		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
 		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
 		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
@@ -204,7 +204,7 @@ func toDequeueResponseDataItem(e command.Entry) *dequeuecontract.ResponseDataIte
 func toReportResponseData(e command.Entry) *reportcontract.ResponseData {
 	f := entryToFields(e)
 	return &reportcontract.ResponseData{
-		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		ID: f.ID, DeviceID: f.DeviceID, CommandType: f.CommandType,
 		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
 		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
 		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
@@ -214,7 +214,7 @@ func toReportResponseData(e command.Entry) *reportcontract.ResponseData {
 func toAckResponseData(e command.Entry) *ackcontract.ResponseData {
 	f := entryToFields(e)
 	return &ackcontract.ResponseData{
-		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		ID: f.ID, DeviceID: f.DeviceID, CommandType: f.CommandType,
 		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
 		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
 		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
@@ -224,7 +224,7 @@ func toAckResponseData(e command.Entry) *ackcontract.ResponseData {
 func toExtendLeaseResponseData(e command.Entry) *extendleasecontract.ResponseData {
 	f := entryToFields(e)
 	return &extendleasecontract.ResponseData{
-		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		ID: f.ID, DeviceID: f.DeviceID, CommandType: f.CommandType,
 		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
 		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
 		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,

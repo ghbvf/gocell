@@ -5,11 +5,11 @@ package appended
 
 // Payload — event.audit.appended.v1.payload
 type Payload struct {
-	AuditEntryId string `json:"auditEntryId"`
+	AuditEntryID string `json:"auditEntryId"`
 	EventType    string `json:"eventType"`
 }
 
 // Headers — event.audit.appended.v1.headers
 type Headers struct {
-	EventId string `json:"eventId"`
+	EventID string `json:"eventId"`
 }

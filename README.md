@@ -453,7 +453,7 @@ direct publisher paths both marshal the same `kernel/outbox` v1 wire envelope.
 ### Outbox Observability Bridge
 
 For HTTP flows that publish through the transactional outbox, GoCell now bridges
-`request_id`, `correlation_id`, and optional `trace_id` from handler context
+`requestId`, `correlationId`, and optional `traceId` from handler context
 into `outbox.Entry.Observability` on the write path. When the event is
 consumed, `SubscriberWithMiddleware.SubscribeEntry` restores those keys into the
 consumer handler context before business code runs.
@@ -545,7 +545,10 @@ should sanitize or ignore inbound trace headers at the gateway layer. See
 
 Framework-emitted consumer logs pick up these fields when the process uses
 GoCell's context-aware slog handler. This branch does not make plain slog JSON
-handlers automatically extract `request_id`, `correlation_id`, or `trace_id`.
+handlers automatically extract `request_id`, `correlation_id`, or `trace_id`
+(slog log-key naming, intentionally snake_case per observability.md; the
+corresponding wire JSON envelope fields are camelCase: `requestId`,
+`correlationId`, `traceId`).
 Values restored from broker metadata are validated for safe characters and
 length before injection into context.
 

@@ -17,7 +17,7 @@ import (
 // Request — http.internal.devicecommands.list.v1.request
 type Request struct {
 	Cursor   string `json:"cursor,omitempty"`
-	DeviceId string `json:"deviceId,omitempty"`
+	DeviceID string `json:"deviceId,omitempty"`
 	Limit    int64  `json:"limit,omitempty"`
 	Statuses string `json:"statuses,omitempty"`
 }
@@ -32,7 +32,7 @@ type Response struct {
 // ResponseDataItem is a generated DTO for contract http.internal.devicecommands.list.v1.
 type ResponseDataItem struct {
 	ID          string `json:"id"`
-	DeviceId    string `json:"deviceId"`
+	DeviceID    string `json:"deviceId"`
 	CommandType string `json:"commandType"`
 	Payload     string `json:"payload"`
 	Status      string `json:"status"`

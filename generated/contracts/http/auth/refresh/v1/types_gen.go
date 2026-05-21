@@ -30,8 +30,8 @@ type ResponseData struct {
 	RefreshToken string `json:"refreshToken"`
 	// format: date-time
 	ExpiresAt             string `json:"expiresAt"`
-	SessionId             string `json:"sessionId"`
-	UserId                string `json:"userId"`
+	SessionID             string `json:"sessionId"`
+	UserID                string `json:"userId"`
 	PasswordResetRequired bool   `json:"passwordResetRequired"`
 }
 

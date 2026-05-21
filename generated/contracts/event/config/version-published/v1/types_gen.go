@@ -6,12 +6,12 @@ package versionpublished
 // Payload — event.config.version-published.v1.payload
 type Payload struct {
 	Key      string `json:"key"`
-	ConfigId string `json:"configId"`
+	ConfigID string `json:"configId"`
 	Version  int64  `json:"version"`
-	ActorId  string `json:"actorId"`
+	ActorID  string `json:"actorId"`
 }
 
 // Headers — event.config.version-published.v1.headers
 type Headers struct {
-	EventId string `json:"eventId"`
+	EventID string `json:"eventId"`
 }

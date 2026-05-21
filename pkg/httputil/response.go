@@ -285,10 +285,12 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	writeErrorBody(ctx, w, status, ecErr)
 }
 
-// sentinelInternalErrorBody is the JSON body emitted when the canonical
-// errcode envelope cannot itself be marshaled. Pre-encoded so the failure
-// path is allocation-free and never invokes encoding/json (which is the
-// thing that just failed). Tracks the v1 wire schema:
+// sentinelInternalErrorBody is the last-resort body emitted when the canonical
+// errcode envelope cannot itself be marshaled. Pre-encoded so the failure path
+// is allocation-free and never invokes encoding/json (which is the thing that
+// just failed). Intentionally omits requestId: if marshal failed, the
+// ctx-derived request ID is also unreliable, so omitting it is an accepted
+// trade-off, not a missing-feature bug. Tracks the v1 wire schema:
 // contracts/shared/errors/error-response-v1.schema.json.
 var sentinelInternalErrorBody = []byte(
 	`{"error":{"code":"ERR_INTERNAL","message":"internal server error","details":[]}}`)

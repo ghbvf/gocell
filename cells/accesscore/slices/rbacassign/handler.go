@@ -14,12 +14,12 @@ type AssignAdapter struct{ S *Service }
 
 // Assign implements assign.Service.
 func (a AssignAdapter) Assign(ctx context.Context, req *assign.Request) (assign.AssignResponseObject, error) {
-	if err := a.S.Assign(ctx, req.UserId, req.RoleId); err != nil {
+	if err := a.S.Assign(ctx, req.UserID, req.RoleID); err != nil {
 		return nil, err
 	}
 	return assign.Assign201JSONResponse{Data: &assign.ResponseData{
-		UserId:   req.UserId,
-		RoleId:   req.RoleId,
+		UserID:   req.UserID,
+		RoleID:   req.RoleID,
 		Assigned: true,
 	}}, nil
 }
@@ -29,12 +29,12 @@ type RevokeAdapter struct{ S *Service }
 
 // Revoke implements revoke.Service.
 func (a RevokeAdapter) Revoke(ctx context.Context, req *revoke.Request) (revoke.RevokeResponseObject, error) {
-	if err := a.S.Revoke(ctx, req.UserId, req.RoleId); err != nil {
+	if err := a.S.Revoke(ctx, req.UserID, req.RoleID); err != nil {
 		return nil, err
 	}
 	return revoke.Revoke200JSONResponse{Data: &revoke.ResponseData{
-		UserId:  req.UserId,
-		RoleId:  req.RoleId,
+		UserID:  req.UserID,
+		RoleID:  req.RoleID,
 		Revoked: true,
 	}}, nil
 }

@@ -115,7 +115,7 @@ func toPublishResponseData(v *domain.ConfigVersion) *configpublishgen.ResponseDa
 	}
 	d := &configpublishgen.ResponseData{
 		ID:        v.ID,
-		ConfigId:  v.ConfigID,
+		ConfigID:  v.ConfigID,
 		Version:   int64(v.Version),
 		Value:     value,
 		Sensitive: v.Sensitive,

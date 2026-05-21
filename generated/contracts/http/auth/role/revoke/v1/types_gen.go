@@ -16,8 +16,8 @@ import (
 
 // Request — http.auth.role.revoke.v1.request
 type Request struct {
-	UserId string `json:"userId"`
-	RoleId string `json:"roleId"`
+	UserID string `json:"userId"`
+	RoleID string `json:"roleId"`
 }
 
 // Response — http.auth.role.revoke.v1.response
@@ -27,8 +27,8 @@ type Response struct {
 
 // ResponseData is a generated DTO for contract http.auth.role.revoke.v1.
 type ResponseData struct {
-	UserId  string `json:"userId"`
-	RoleId  string `json:"roleId"`
+	UserID  string `json:"userId"`
+	RoleID  string `json:"roleId"`
 	Revoked bool   `json:"revoked"`
 }
 

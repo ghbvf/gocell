@@ -31,7 +31,7 @@ type Response struct {
 // ResponseDataItem is a generated DTO for contract http.device.command.dequeue.v1.
 type ResponseDataItem struct {
 	ID          string `json:"id"`
-	DeviceId    string `json:"deviceId"`
+	DeviceID    string `json:"deviceId"`
 	CommandType string `json:"commandType"`
 	Payload     string `json:"payload"`
 	Status      string `json:"status"`

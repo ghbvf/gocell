@@ -77,6 +77,18 @@ const canonicalEventIdempotencyKey = "eventId"
 //
 // ---------------------------------------------------------------------------
 
+// TestArchtest_ContractWireFieldCamelCase scans every contracts/**/*.schema.json
+// via EachContentFile and calls walkForCamelCase on the parsed document.
+//
+// Blind spots (AST/schema forms outside EachContentFile+walkForCamelCase scope):
+//   - JSON Schema `patternProperties` keys are NOT scanned: regex-keyed property
+//     names are not field names in the wire sense — intentional carve-out.
+//   - `definitions`, `$defs`, `allOf`/`anyOf`/`oneOf`, `if`/`then`/`else`,
+//     `items.properties` are all covered via the generic recursive branch in
+//     walkForCamelCase (the `for key, child := range v` loop that recurses into
+//     any map value not already handled as `properties`/`required`). The negative
+//     probes TestArchtest_ContractWireFieldCamelCase_NegativeProbe_* below pin
+//     each of these paths explicitly.
 func TestArchtest_ContractWireFieldCamelCase(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(root, []string{"contracts"})
@@ -185,6 +197,118 @@ func intToStr(i int) string {
 	return string(buf[pos:])
 }
 
+// TestArchtest_ContractWireFieldCamelCase_NegativeProbe_NestedDefinitions
+// asserts that a snake_case property under definitions.*.properties is caught.
+func TestArchtest_ContractWireFieldCamelCase_NegativeProbe_NestedDefinitions(t *testing.T) {
+	doc := map[string]any{
+		"definitions": map[string]any{
+			"User": map[string]any{
+				"properties": map[string]any{
+					"user_id": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+	violations := walkForCamelCase(doc, "")
+	if len(violations) == 0 {
+		t.Fatal("expected violation for snake_case property under definitions, got none")
+	}
+	found := false
+	for _, v := range violations {
+		if v.name == "user_id" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected violation name=user_id, got %+v", violations)
+	}
+}
+
+// TestArchtest_ContractWireFieldCamelCase_NegativeProbe_IfThenElse asserts that
+// snake_case properties inside if.properties and then.properties are caught.
+func TestArchtest_ContractWireFieldCamelCase_NegativeProbe_IfThenElse(t *testing.T) {
+	doc := map[string]any{
+		"if": map[string]any{
+			"properties": map[string]any{
+				"cond_a": map[string]any{"type": "boolean"},
+			},
+		},
+		"then": map[string]any{
+			"properties": map[string]any{
+				"fail_field": map[string]any{"type": "string"},
+			},
+		},
+	}
+	violations := walkForCamelCase(doc, "")
+	if len(violations) < 2 {
+		t.Fatalf("expected at least 2 violations (cond_a, fail_field), got %+v", violations)
+	}
+	names := make(map[string]bool, len(violations))
+	for _, v := range violations {
+		names[v.name] = true
+	}
+	if !names["cond_a"] || !names["fail_field"] {
+		t.Fatalf("expected violations for cond_a and fail_field, got %+v", violations)
+	}
+}
+
+// TestArchtest_ContractWireFieldCamelCase_NegativeProbe_AllOf asserts that a
+// snake_case property nested inside an allOf entry is caught.
+func TestArchtest_ContractWireFieldCamelCase_NegativeProbe_AllOf(t *testing.T) {
+	doc := map[string]any{
+		"allOf": []any{
+			map[string]any{
+				"properties": map[string]any{
+					"bad_name": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+	violations := walkForCamelCase(doc, "")
+	if len(violations) == 0 {
+		t.Fatal("expected violation for snake_case property under allOf, got none")
+	}
+	found := false
+	for _, v := range violations {
+		if v.name == "bad_name" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected violation name=bad_name, got %+v", violations)
+	}
+}
+
+// TestArchtest_ContractWireFieldCamelCase_NegativeProbe_ItemsObjectArray asserts
+// that a snake_case property inside properties.list.items.properties is caught.
+func TestArchtest_ContractWireFieldCamelCase_NegativeProbe_ItemsObjectArray(t *testing.T) {
+	doc := map[string]any{
+		"properties": map[string]any{
+			"list": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"properties": map[string]any{
+						"snake_case_field": map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	}
+	violations := walkForCamelCase(doc, "")
+	if len(violations) == 0 {
+		t.Fatal("expected violation for snake_case property under items.properties, got none")
+	}
+	found := false
+	for _, v := range violations {
+		if v.name == "snake_case_field" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected violation name=snake_case_field, got %+v", violations)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // INVARIANT: CONTRACT-PAGINATION-PARAM-LIMIT-01 (Hard)
 //
@@ -209,6 +333,19 @@ type httpContractYAML struct {
 	} `yaml:"endpoints"`
 }
 
+// TestArchtest_ContractPaginationParamLimit scans every contracts/http/**/contract.yaml
+// and checks that no queryParam key is in forbiddenPaginationParams.
+//
+// Blind spots:
+//   - Heuristic limitation: forbiddenPaginationParams is a closed-set name
+//     allowlist. If a contract author invents a new non-canonical pagination
+//     name (e.g. `pageNum2`, `offsetv2`), this archtest will not catch it.
+//     Extending the forbidden set is the explicit upgrade path when a new
+//     forbidden name is identified.
+//   - The 3 negative probes below pin:
+//     (a) a known-bad name (pageSize) is caught,
+//     (b) a contract with no queryParams block produces zero violations,
+//     (c) canonical names (limit, cursor) are accepted without violation.
 func TestArchtest_ContractPaginationParamLimit(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(root, []string{"contracts/http"},
@@ -233,6 +370,67 @@ func TestArchtest_ContractPaginationParamLimit(t *testing.T) {
 	})
 }
 
+// TestArchtest_ContractPaginationParamLimit_NegativeProbe_BadName asserts that a
+// contract with queryParams: {pageSize: ...} is caught as a violation.
+func TestArchtest_ContractPaginationParamLimit_NegativeProbe_BadName(t *testing.T) {
+	raw := []byte(`
+endpoints:
+  http:
+    queryParams:
+      pageSize:
+        type: integer
+`)
+	var doc httpContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	var violations []string
+	for name := range doc.Endpoints.HTTP.QueryParams {
+		if _, forbidden := forbiddenPaginationParams[name]; forbidden {
+			violations = append(violations, name)
+		}
+	}
+	if len(violations) == 0 {
+		t.Fatal("expected violation for queryParam pageSize, got none")
+	}
+}
+
+// TestArchtest_ContractPaginationParamLimit_NegativeProbe_NoQueryParams asserts
+// that a contract with no queryParams block produces zero violations (zero-state
+// safety: absent section must not trigger false positives).
+func TestArchtest_ContractPaginationParamLimit_NegativeProbe_NoQueryParams(t *testing.T) {
+	raw := []byte(`
+endpoints:
+  http: {}
+`)
+	var doc httpContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	for name := range doc.Endpoints.HTTP.QueryParams {
+		if _, forbidden := forbiddenPaginationParams[name]; forbidden {
+			t.Fatalf("unexpected violation for queryParam %q in contract with no queryParams", name)
+		}
+	}
+}
+
+// TestArchtest_ContractPaginationParamLimit_NegativeProbe_AllowedNames asserts
+// that canonical pagination names (limit, cursor) produce no violation.
+func TestArchtest_ContractPaginationParamLimit_NegativeProbe_AllowedNames(t *testing.T) {
+	raw := []byte(`
+endpoints:
+  http:
+    queryParams:
+      limit:
+        type: integer
+      cursor:
+        type: string
+`)
+	var doc httpContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	for name := range doc.Endpoints.HTTP.QueryParams {
+		if _, forbidden := forbiddenPaginationParams[name]; forbidden {
+			t.Fatalf("unexpected violation for canonical queryParam %q", name)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // INVARIANT: CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 (Hard)
 //
@@ -254,6 +452,18 @@ type eventContractYAML struct {
 	IdempotencyKey string `yaml:"idempotencyKey"`
 }
 
+// TestArchtest_ContractEventIdempotencyKeyEventID scans every
+// contracts/event/**/contract.yaml and asserts idempotencyKey == "eventId".
+//
+// Blind spots:
+//   - Strict equality against canonicalEventIdempotencyKey ("eventId"). Whitespace
+//     variants (e.g. " eventId"), casing variants ("EventId", "eventID"), or
+//     future legitimate alternate key names (e.g. "messageId") would fail and
+//     require an explicit ADR + update to canonicalEventIdempotencyKey.
+//   - The 3 negative probes below pin:
+//     (a) missing idempotencyKey (empty string) is caught,
+//     (b) legacy snake_case value "event_id" is caught,
+//     (c) canonical value "eventId" is accepted without violation.
 func TestArchtest_ContractEventIdempotencyKeyEventID(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(root, []string{"contracts/event"},
@@ -271,4 +481,45 @@ func TestArchtest_ContractEventIdempotencyKeyEventID(t *testing.T) {
 			cc.Rel, doc.IdempotencyKey, canonicalEventIdempotencyKey,
 		)
 	})
+}
+
+// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_EmptyValue asserts
+// that a contract YAML with no idempotencyKey field (zero-value empty string) is
+// caught as a violation.
+func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_EmptyValue(t *testing.T) {
+	raw := []byte(`
+id: event.test.v1
+kind: event
+`)
+	var doc eventContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	if doc.IdempotencyKey == canonicalEventIdempotencyKey {
+		t.Fatalf("expected empty idempotencyKey to differ from canonical %q", canonicalEventIdempotencyKey)
+	}
+}
+
+// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_OldSnakeCaseValue
+// asserts that the legacy pre-rename value "event_id" is caught as a violation.
+func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_OldSnakeCaseValue(t *testing.T) {
+	raw := []byte(`
+idempotencyKey: event_id
+`)
+	var doc eventContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	if doc.IdempotencyKey == canonicalEventIdempotencyKey {
+		t.Fatalf("expected legacy value %q to differ from canonical %q", doc.IdempotencyKey, canonicalEventIdempotencyKey)
+	}
+}
+
+// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_CorrectValue
+// asserts that the canonical value "eventId" produces no violation.
+func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_CorrectValue(t *testing.T) {
+	raw := []byte(`
+idempotencyKey: eventId
+`)
+	var doc eventContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	if doc.IdempotencyKey != canonicalEventIdempotencyKey {
+		t.Fatalf("expected canonical value %q, got %q", canonicalEventIdempotencyKey, doc.IdempotencyKey)
+	}
 }

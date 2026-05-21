@@ -27,6 +27,17 @@ func TestGoPascalCase(t *testing.T) {
 		{"item-sub-type", "ItemSubType"},
 		{"url", "URL"},
 		{"http_status", "HTTPStatus"},
+		// camelCase inputs (no underscore delimiter — must split on case boundary)
+		{"eventId", "EventID"},
+		{"userId", "UserID"},
+		{"requestId", "RequestID"},
+		{"httpStatus", "HTTPStatus"},
+		{"urlPath", "URLPath"},
+		{"name", "Name"},
+		// mixed (underscore + camelCase in same token is uncommon but safe)
+		{"event_id", "EventID"},
+		// no initialism match — keep Title-case capitalisation
+		{"iso8601", "Iso8601"},
 	}
 	for _, c := range cases {
 		got := goPascalCase(c.in)

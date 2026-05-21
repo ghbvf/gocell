@@ -5,12 +5,12 @@ package created
 
 // Payload — event.user.created.v1.payload
 type Payload struct {
-	UserId   string `json:"userId"`
+	UserID   string `json:"userId"`
 	Username string `json:"username"`
-	ActorId  string `json:"actorId"`
+	ActorID  string `json:"actorId"`
 }
 
 // Headers — event.user.created.v1.headers
 type Headers struct {
-	EventId string `json:"eventId"`
+	EventID string `json:"eventId"`
 }

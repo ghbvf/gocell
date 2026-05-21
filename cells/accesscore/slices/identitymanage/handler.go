@@ -39,8 +39,8 @@ func toTokenPairResponseData(p dto.TokenPair) *changepassgen.ResponseData {
 		AccessToken:           p.AccessToken,
 		RefreshToken:          p.RefreshToken,
 		ExpiresAt:             p.ExpiresAt.UTC().Format(time.RFC3339),
-		SessionId:             p.SessionID,
-		UserId:                p.UserID,
+		SessionID:             p.SessionID,
+		UserID:                p.UserID,
 		PasswordResetRequired: p.PasswordResetRequired,
 	}
 }

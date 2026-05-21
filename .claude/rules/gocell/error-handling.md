@@ -3,8 +3,10 @@
 ## 错误响应格式
 
 ```json
-{"error": {"code": "ERR_DEVICE_NOT_FOUND", "message": "device not found", "details": [{"key": "deviceId", "value": "abc-123"}]}}
+{"error": {"code": "ERR_DEVICE_NOT_FOUND", "message": "device not found", "details": [{"key": "deviceId", "value": "abc-123"}], "requestId": "..."}}
 ```
+
+`requestId` 由框架从 ctx 自动注入（5xx 与 4xx 均下发；schema 定义为 optional），用于运维日志关联；wire camelCase 字段对应 slog 日志键 `request_id` (snake_case)。
 
 ## 错误码分组
 
