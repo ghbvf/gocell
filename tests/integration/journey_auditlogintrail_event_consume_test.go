@@ -42,7 +42,7 @@ import (
 func TestJAuditlogintrailEventConsume(t *testing.T) {
 	t.Parallel()
 	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t)
-	entry := auditcoretest.CanonicalSessionCreatedEntry("sess-j-auditlogintrail", "usr-j-auditlogintrail")
+	entry := auditcoretest.NewSessionCreatedEntry("sess-j-auditlogintrail", "usr-j-auditlogintrail")
 	result := handler(ctx, entry)
 	require.Equalf(t, outbox.DispositionAck, result.Disposition,
 		"auditcore.auditappendsession must Ack session.created; got disposition=%v error=%v",

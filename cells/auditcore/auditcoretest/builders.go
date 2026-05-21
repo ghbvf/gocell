@@ -16,6 +16,10 @@ import (
 // defaultHMACKey is the 32-byte test HMAC key used by BuildAuditcoreChain
 // when no WithChainHMACKey option is provided. Identical to the key used in
 // the inline buildAuditcoreChain helper from PR #588.
+//
+// WARNING: test-only fixture. This key is public and must never be reused
+// in production or staging. Production deployments must supply a randomly-
+// generated key via WithChainHMACKey or the ledger composition root.
 var defaultHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
 // buildChainConfig holds the resolved options for BuildAuditcoreChain.
@@ -62,7 +66,7 @@ func WithChainLogger(l *slog.Logger) BuildChainOption {
 //   - c.Init via cell.NewRegistryRecorder(DurabilityDemo)
 //   - findSubscriptionHandler for "event.session.created.v1"
 //
-// The entry factory is separated into CanonicalSessionCreatedEntry so callers
+// The entry factory is separated into NewSessionCreatedEntry so callers
 // can drive multiple different entries through one chain (e.g., to test
 // multi-entry hash chains or idempotency rejection on duplicate EventID).
 func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (

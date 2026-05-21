@@ -19,7 +19,7 @@ func TestBuildAuditcoreChainSmoke(t *testing.T) {
 	t.Parallel()
 
 	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t)
-	entry := auditcoretest.CanonicalSessionCreatedEntry("sess-1", "usr-1")
+	entry := auditcoretest.NewSessionCreatedEntry("sess-1", "usr-1")
 
 	result := handler(ctx, entry)
 	require.Equalf(t, outbox.DispositionAck, result.Disposition,
@@ -37,12 +37,12 @@ func TestBuildAuditcoreChainSmoke(t *testing.T) {
 	require.Equal(t, int64(-1), firstInvalidSeq, "firstInvalidSeq must be -1 when chain is intact")
 }
 
-// TestCanonicalSessionCreatedEntryShape verifies that the entry payload
+// TestNewSessionCreatedEntryShape verifies that the entry payload
 // unmarshals to the expected sessionId/userId fields.
-func TestCanonicalSessionCreatedEntryShape(t *testing.T) {
+func TestNewSessionCreatedEntryShape(t *testing.T) {
 	t.Parallel()
 
-	entry := auditcoretest.CanonicalSessionCreatedEntry("sess-abc", "usr-xyz")
+	entry := auditcoretest.NewSessionCreatedEntry("sess-abc", "usr-xyz")
 
 	require.Equal(t, "event.session.created.v1", entry.EventType)
 	require.NotEmpty(t, entry.ID)
@@ -67,7 +67,7 @@ func TestBuildAuditcoreChainCustomClock(t *testing.T) {
 	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t,
 		auditcoretest.WithChainClock(fakeClock))
 
-	entry := auditcoretest.CanonicalSessionCreatedEntry("sess-clk", "usr-clk")
+	entry := auditcoretest.NewSessionCreatedEntry("sess-clk", "usr-clk")
 	result := handler(ctx, entry)
 	require.Equal(t, outbox.DispositionAck, result.Disposition,
 		"custom-clock chain must Ack; err=%v", result.Err)
@@ -87,7 +87,7 @@ func TestBuildAuditcoreChainCustomHMACKey(t *testing.T) {
 	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t,
 		auditcoretest.WithChainHMACKey(differentKey))
 
-	entry := auditcoretest.CanonicalSessionCreatedEntry("sess-hmac", "usr-hmac")
+	entry := auditcoretest.NewSessionCreatedEntry("sess-hmac", "usr-hmac")
 	result := handler(ctx, entry)
 	require.Equal(t, outbox.DispositionAck, result.Disposition,
 		"custom-hmac chain must Ack; err=%v", result.Err)
@@ -99,4 +99,36 @@ func TestBuildAuditcoreChainCustomHMACKey(t *testing.T) {
 	valid, _, err := store.Verify(ctx, 1, tail.SeqNo)
 	require.NoError(t, err)
 	require.True(t, valid, "chain must verify with its own HMAC key")
+}
+
+// TestBuildAuditcoreChainTwoEntries verifies that two distinct entries driven
+// through the same chain produce a valid two-entry hash chain: Tail.SeqNo == 2
+// and Verify(1, 2) returns valid=true with firstInvalidSeq==-1. Each entry
+// uses a distinct sessionID so the content-fingerprint idempotency key differs,
+// preventing the second append from being rejected as a duplicate.
+func TestBuildAuditcoreChainTwoEntries(t *testing.T) {
+	t.Parallel()
+
+	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t)
+
+	entry1 := auditcoretest.NewSessionCreatedEntry("sess-chain-1", "usr-chain-1")
+	result1 := handler(ctx, entry1)
+	require.Equalf(t, outbox.DispositionAck, result1.Disposition,
+		"first entry must Ack; disposition=%v err=%v", result1.Disposition, result1.Err)
+
+	entry2 := auditcoretest.NewSessionCreatedEntry("sess-chain-2", "usr-chain-2")
+	result2 := handler(ctx, entry2)
+	require.Equalf(t, outbox.DispositionAck, result2.Disposition,
+		"second entry must Ack; disposition=%v err=%v", result2.Disposition, result2.Err)
+
+	tail, err := store.Tail(ctx)
+	require.NoError(t, err, "store.Tail after two Acks")
+	require.Equal(t, int64(2), tail.SeqNo,
+		"exactly two entries must be appended after two Acks")
+
+	valid, firstInvalidSeq, err := store.Verify(ctx, 1, tail.SeqNo)
+	require.NoError(t, err, "store.Verify after two Appends")
+	require.True(t, valid, "two-entry hash chain must be valid; firstInvalidSeq=%d", firstInvalidSeq)
+	require.Equal(t, int64(-1), firstInvalidSeq,
+		"firstInvalidSeq must be -1 when the two-entry chain is intact")
 }

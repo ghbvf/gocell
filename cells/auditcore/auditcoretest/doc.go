@@ -30,8 +30,29 @@
 // # Usage
 //
 //	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t)
-//	entry := auditcoretest.CanonicalSessionCreatedEntry("sess-1", "usr-1")
+//	entry := auditcoretest.NewSessionCreatedEntry("sess-1", "usr-1")
 //	result := handler(ctx, entry)
 //	// result.Disposition == outbox.DispositionAck
 //	// store.Tail(ctx) has one entry
+//
+// # Debug Logging
+//
+// By default the logger is discarded. To redirect logs to stderr during
+// local investigation:
+//
+//	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t,
+//	    auditcoretest.WithChainLogger(slog.New(slog.NewTextHandler(os.Stderr, nil))))
+//
+// # Why t.Fatalf Instead of testify/require
+//
+// builders.go and canonical.go use t.Fatalf instead of testify/require because
+// depguard blocks testify imports in non-_test.go files under cells/. The
+// _test.go suffix is the boundary at which testify imports are allowed.
+//
+// # Future Criterion Reuse
+//
+// When the J-auditlogintrail http.audit.list.v1 criterion lands (see
+// backlog JOURNEY-AUDITLOGINTRAIL-CRITERIA-EXPANSION-01), reuse this chain
+// by driving multiple NewSessionCreatedEntry(...) calls and querying
+// store via Tail/Query/Verify.
 package auditcoretest

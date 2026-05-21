@@ -20,13 +20,15 @@ type sessionCreatedPayload struct {
 	UserID    string `json:"userId"`
 }
 
-// CanonicalSessionCreatedEntry constructs an outbox.Entry with an
+// NewSessionCreatedEntry constructs an outbox.Entry with an
 // event.session.created.v1 payload that satisfies the auditappendsession
 // actor-acceptance rules (userId present, payload is a valid JSON object).
 //
-// The entry ID is set to "evt-" + sessionID so that callers can drive multiple
-// entries through one chain by varying sessionID — each entry carries a
-// distinct ID, preventing idempotency rejection on the second call.
+// The entry ID format is "evt-{sessionID}" — each test scenario gets a unique
+// ID by varying sessionID, preventing idempotency rejection when driving
+// multiple entries through one chain. This diverges from PR #588's fixed
+// literal "evt-j-auditlogintrail" so that multi-entry chain tests remain
+// valid.
 //
 // CreatedAt is time.Now().UTC() at call time; the ledger MemStore assigns
 // its own store-level Timestamp from the injected clock, so the entry
@@ -34,7 +36,7 @@ type sessionCreatedPayload struct {
 //
 // ref: contracts/event/session/created/v1/payload.schema.json (sessionId + userId required).
 // ref: cells/accesscore/internal/dto/session_events.go SessionCreatedEvent (same field names).
-func CanonicalSessionCreatedEntry(sessionID, userID string) outbox.Entry {
+func NewSessionCreatedEntry(sessionID, userID string) outbox.Entry {
 	payload, err := json.Marshal(sessionCreatedPayload{
 		SessionID: sessionID,
 		UserID:    userID,
@@ -42,7 +44,7 @@ func CanonicalSessionCreatedEntry(sessionID, userID string) outbox.Entry {
 	if err != nil {
 		// json.Marshal on a plain struct with string fields never fails.
 		// Unreachable in practice; kept to satisfy compiler.
-		panic("auditcoretest: CanonicalSessionCreatedEntry: json.Marshal failed: " + err.Error())
+		panic("auditcoretest: NewSessionCreatedEntry: json.Marshal failed: " + err.Error())
 	}
 	return outbox.Entry{
 		ID:        "evt-" + sessionID,

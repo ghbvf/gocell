@@ -350,6 +350,8 @@ func shouldSkipForPanicRegistered(rel string) bool {
 		return true
 	case strings.Contains(rel, "/testdata/") || strings.HasPrefix(rel, "testdata/"):
 		return true
+	case strings.Contains(rel, "/auditcoretest/"):
+		return true
 	}
 	return false
 }
