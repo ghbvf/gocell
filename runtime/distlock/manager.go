@@ -76,9 +76,9 @@ const (
 
 // managerEvent carries a single instruction to the manager goroutine.
 type managerEvent struct {
-	kind     eventKind
-	state    *lockState // eventAdd: the new lock to register
-	id       lockID     // eventRemove: lock to unregister
+	kind  eventKind
+	state *lockState // eventAdd: the new lock to register
+	id    lockID     // eventRemove: lock to unregister
 	// resultCh receives the Driver.Release result on eventRemove. Buffered
 	// cap=1; the manager writes exactly once and remove() reads exactly once;
 	// the channel is never closed.
