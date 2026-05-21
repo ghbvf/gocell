@@ -119,6 +119,11 @@ func WithSubscribeLogger(l *slog.Logger) BuildSubscribeOption {
 // BuildSubscribeService constructs a configsubscribe.Service wired with default
 // settings suitable for unit tests.
 //
+// No Recorder is returned because configsubscribe is a pure event consumer: it
+// drives a local version-tracking cache but never emits outbox events of its
+// own. Use svc.Cache() to assert cache state after calling HandleEntryUpserted
+// or HandleEntryDeleted.
+//
 // Defaults:
 //   - logger: slog.New(slog.DiscardHandler)
 //   - clock: clock.Real()

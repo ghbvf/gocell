@@ -10,11 +10,26 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// FakeConfigRepository wraps cells/configcore/internal/mem.ConfigRepository
-// and adds Seed and Snapshot helpers for journey assertions.
+// SeededEntry is a configcoretest-local view of a config entry suitable for
+// public test code outside the cells/configcore subtree. It mirrors the
+// fields callers need without leaking internal/domain types.
+//
+// Version defaults to 1 when passed to Seed and Version == 0.
+type SeededEntry struct {
+	Key       string
+	Value     string
+	Sensitive bool
+	Version   int // optional; defaults to 1 on Seed when zero
+}
+
+// FakeConfigRepository wraps an in-memory ConfigRepository and adds Seed and
+// Snapshot helpers for test scenario setup and assertion.
 //
 // FakeConfigRepository implements ports.ConfigRepository via the embedded
 // *mem.ConfigRepository, so it can be passed directly to BuildWriteService.
+//
+// Spy methods (CallsOf/Reset) are deferred until a test needs them; add via
+// Seed + Snapshot if you need state assertions without a Recorder.
 type FakeConfigRepository struct {
 	*mem.ConfigRepository
 }
@@ -28,13 +43,26 @@ func NewFakeConfigRepository(clk clock.Clock) *FakeConfigRepository {
 	}
 }
 
-// Seed inserts entry into the repository directly, bypassing service-layer
-// validation. Use this to pre-populate the repository before a test scenario.
+// Seed inserts a single entry into the repository directly, bypassing
+// service-layer validation. Use this to pre-populate the repository before a
+// test scenario.
 //
-// If an entry with the same Key already exists, Seed returns an error wrapping
-// the underlying conflict from the mem store.
-func (r *FakeConfigRepository) Seed(ctx context.Context, entry *domain.ConfigEntry) error {
-	if err := r.Create(ctx, entry); err != nil {
+// If entry.Version is 0 it is treated as 1.
+//
+// Seed does NOT support upsert; calling Seed twice with the same Key returns
+// ErrConfigDuplicate. Construct a fresh repo via NewFakeConfigRepository
+// between scenarios.
+func (r *FakeConfigRepository) Seed(ctx context.Context, entry SeededEntry) error {
+	v := entry.Version
+	if v == 0 {
+		v = 1
+	}
+	if err := r.Create(ctx, &domain.ConfigEntry{
+		Key:       entry.Key,
+		Value:     entry.Value,
+		Sensitive: entry.Sensitive,
+		Version:   v,
+	}); err != nil {
 		return fmt.Errorf("configcoretest.FakeConfigRepository.Seed: %w", err)
 	}
 	return nil
@@ -43,7 +71,14 @@ func (r *FakeConfigRepository) Seed(ctx context.Context, entry *domain.ConfigEnt
 // Snapshot returns a point-in-time copy of all config entries currently stored,
 // sorted by key for deterministic ordering in assertions. It does not modify
 // the repository.
-func (r *FakeConfigRepository) Snapshot(ctx context.Context) ([]*domain.ConfigEntry, error) {
+//
+// Snapshot returns up to 500 entries (query.MaxPageSize). Tests seeding more
+// entries than this limit will receive a truncated result — the returned slice
+// will contain exactly 500 entries in that case.
+//
+// WARNING: entries with Sensitive=true contain the plaintext Value as stored in
+// the in-memory backend. Tests should not log entry.Value when Sensitive=true.
+func (r *FakeConfigRepository) Snapshot(ctx context.Context) ([]SeededEntry, error) {
 	entries, err := r.List(ctx, query.ListParams{
 		Limit: query.MaxPageSize,
 		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}},
@@ -51,5 +86,14 @@ func (r *FakeConfigRepository) Snapshot(ctx context.Context) ([]*domain.ConfigEn
 	if err != nil {
 		return nil, fmt.Errorf("configcoretest.FakeConfigRepository.Snapshot: %w", err)
 	}
-	return entries, nil
+	out := make([]SeededEntry, len(entries))
+	for i, e := range entries {
+		out[i] = SeededEntry{
+			Key:       e.Key,
+			Value:     e.Value,
+			Sensitive: e.Sensitive,
+			Version:   e.Version,
+		}
+	}
+	return out, nil
 }
