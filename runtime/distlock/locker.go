@@ -15,59 +15,90 @@ import (
 
 // Locker acquires named distributed locks.
 //
-// # Lock-as-Context design
+// # Lock-as-Resource design
 //
-// Acquire returns a derived context that is automatically canceled when the
-// lock ends. The cause distinguishes how it ended:
+// Acquire returns a *Lock — intentionally NOT a context.Context. Caller-ctx
+// cancellation does NOT release a held lock; only explicit Release or
+// renewal failure will end it. This matches the prevailing industry
+// convention (bsm/redislock, go-redsync, etcd client/v3/concurrency,
+// HashiCorp consul, Apache Curator) and prevents the misuse pattern that GH
+// #20 exposed under the previous Lock-as-Context design. (Explicit
+// Locker.Shutdown is deferred — see ADR
+// docs/architecture/202605200000-adr-distlock-lock-as-resource.md
+// §"Out of scope".)
 //
-//	context.Cause(lockCtx) == ErrLockReleased  — release() called
-//	context.Cause(lockCtx) == ErrLockLost      — renewal failed / ownership taken
-//	context.Cause(lockCtx) == context.Cause(ctx) — parent context was canceled
-//	context.Cause(lockCtx) == context.Canceled (or another error) — manager forced exit
+// Caller responsibility:
 //
-// Use context.Cause(lockCtx) (not lockCtx.Err()) to distinguish causes.
+//	lock, err := locker.Acquire(ctx, key, ttl)
+//	if err != nil { return err }
+//	defer lock.Release()
 //
-// This mirrors context.WithDeadline(parent) (Context, CancelFunc) so callers
-// pass lockCtx directly to database calls, HTTP requests, or outbox.Emit —
-// all downstream operations are canceled automatically on lock loss.
+// ctx is consumed only for the acquire RPC (SetNX). Once the lock is held,
+// caller-ctx cancellation is decoupled. Values from ctx (trace IDs, auth
+// claims) are still exposed via Lock.Value via context.WithoutCancel.
 //
-// ref: golang stdlib context.WithDeadline — API shape adopted directly
-// ref: go-redsync/redsync — per-lock goroutine model replaced by shared manager
+// ref: GH #20 ; ADR docs/architecture/202605200000-adr-distlock-lock-as-resource.md
+// ref: go-redsync/redsync — caller-ctx scoped to acquire only
+// ref: etcd client/v3/concurrency — session-scoped keepalive, decoupled from per-op ctx
 type Locker interface {
 	// Acquire blocks until the lock is granted or ctx is canceled.
 	//
-	// On success it returns:
-	//   - lockCtx: a derived context canceled when the lock ends
-	//   - release: must be called to release the lock; idempotent
-	//   - nil error
+	// On success it returns a *Lock; caller MUST eventually call lock.Release.
 	//
-	// lockCtx cancel causes:
-	//   - ErrLockReleased — release() was called (normal end-of-critical-section)
+	// Lock-end signals (lock.Done() closed; lock.Cause() reports):
+	//   - ErrLockReleased — Release() was called (normal end-of-critical-section)
 	//   - ErrLockLost     — renewal failed or backend reports ownership taken
-	//   - context.Cause(ctx) — parent context was canceled; values, deadline, and
-	//     parent cancellation propagate naturally via Go context machinery.
-	//     context.Cause(lockCtx) returns context.Cause(ctx) when the parent cancels,
-	//     including custom causes set via context.WithCancelCause.
-	//   - context.Canceled — manager forced exit during shutdown drain
 	//
-	// lockCtx is derived from ctx: caller-side context values (trace IDs, auth
-	// claims), deadline, and parent cancellation all propagate automatically.
+	// Notably absent: caller-ctx cancellation does NOT end the lock. If the
+	// caller wants the lock to end when its ctx is canceled, the caller must
+	// explicitly arrange a goroutine that does so.
 	//
-	// Do not pass lockCtx to a goroutine whose lifetime should outlive the lock.
-	// lockCtx is canceled the instant the lock ends.
+	// Idiomatic patterns for combining lock-end with caller-ctx:
 	//
-	// On failure it returns (nil, nil, err) where err carries ErrLockTimeout when
-	// another holder owns the key, or ctx.Err() if the parent was canceled.
+	//  // Pattern A — caller wants ctx cancel to also release the lock:
+	//  lock, err := locker.Acquire(ctx, key, ttl)
+	//  if err != nil { return err }
+	//  defer lock.Release()
+	//  go func() {
+	//      // Wait for whichever ends first; the second case prevents the
+	//      // goroutine from blocking on ctx forever after a normal Release
+	//      // or a renewal-failure ends the lock.
+	//      select {
+	//      case <-ctx.Done():
+	//          _ = lock.Release() // best-effort; idempotent.
+	//      case <-lock.Done():
+	//          // lock ended (Release / lost) — nothing more to do.
+	//      }
+	//  }()
+	//
+	//  // Pattern B — caller wants the *first* of (ctx-cancel | lock-lost) to abort:
+	//  select {
+	//  case <-ctx.Done():
+	//      _ = lock.Release()
+	//      return ctx.Err()
+	//  case <-lock.Done():
+	//      return fmt.Errorf("lock ended: %w", lock.Cause())
+	//  }
+	//
+	// TTL is the only ceiling on a held-but-forgotten lock. Choose ttl
+	// commensurate with the critical-section worst case (typically seconds
+	// to minutes); avoid hour-scale TTLs unless the workload genuinely
+	// runs that long, since a caller that aborts without Release leaves
+	// peers blocked for the full ttl window. The fallback after process
+	// crash is Redis-side TTL expiry.
+	//
+	// On failure it returns (nil, err) where err carries ErrLockTimeout when
+	// another holder owns the key, or ctx.Err() (wrapped) if the parent was canceled.
 	//
 	// The lock is auto-renewed by a single shared manager goroutine (not per-lock)
-	// until release() is called or renewal fails.
+	// until lock.Release() is called or renewal fails.
 	// N active locks = 1 manager goroutine + O(N) heap. Zero per-lock goroutines.
 	//
-	// release() internally uses context.Background() with WithReleaseTimeout (default
-	// 5s) as the Driver.Release deadline. It blocks until the I/O completes and
-	// returns nil on success or a wrapped error on I/O failure. release() is
-	// idempotent — a second call returns nil without contacting the backend.
-	Acquire(ctx context.Context, key string, ttl time.Duration) (lockCtx context.Context, release func() error, err error)
+	// Driver.Release uses context.Background() with WithReleaseTimeout (default
+	// 5s). lock.Release() blocks until the I/O completes and returns nil on
+	// success or a wrapped error on I/O failure. lock.Release() is idempotent —
+	// a second call returns the first call's result without contacting the backend.
+	Acquire(ctx context.Context, key string, ttl time.Duration) (*Lock, error)
 
 	// Stats reports observable state of the Locker for health checks and metrics.
 	Stats() Stats
@@ -95,8 +126,9 @@ type lockerImpl struct {
 // The returned Locker uses a single shared manager goroutine for all locks.
 // Resource shape:
 //   - 1 manager goroutine (owns the renewal heap and all Driver calls)
-//   - 0 per-lock goroutines — lockCtx is derived from ctx, so parent
-//     cancellation propagates automatically via Go context machinery.
+//   - 0 per-lock goroutines — *Lock is a signal/value handle; lock-end is
+//     delivered by the manager goroutine via Lock.markCause (closes Done()
+//     channel, sets Cause()) without spawning watchers.
 //
 // N active locks = 1 manager goroutine + O(N) heap.
 //
@@ -148,57 +180,42 @@ func invalidDistlockConfig(reason string, got any) error {
 }
 
 // Acquire implements Locker.
-func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration) (context.Context, func() error, error) {
-	// Fast path: parent already canceled.
+func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration) (*Lock, error) {
+	// Fast path: parent already canceled. Driver.SetNX would also catch this,
+	// but short-circuit gives a clearer error origin.
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("distlock: acquire: %w", err)
+	}
+	if key == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"distlock: key must not be empty")
 	}
 	// Redis SetNX/PEXPIRE take TTL in integer milliseconds; sub-millisecond
 	// values truncate to 0, which go-redis v9 documents as "no expiration"
 	// (string_commands.go SetNX). Enforce a 1ms minimum so a misconfigured
 	// caller cannot create a permanent lock that survives process death.
 	if ttl < time.Millisecond {
-		return nil, nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"distlock: ttl must be ≥ 1ms; sub-millisecond TTLs would truncate to 0 in Redis and create a permanent lock",
 			errcode.WithInternal(fmt.Sprintf("ttl=%s", ttl)))
 	}
 
 	token, err := randomToken()
 	if err != nil {
-		return nil, nil, fmt.Errorf("distlock: token generation failed: %w", err)
+		return nil, fmt.Errorf("distlock: token generation failed: %w", err)
 	}
 
 	acquired, err := l.mgr.driver.SetNX(ctx, key, token, ttl)
 	if err != nil {
 		slog.Warn("distlock: acquire I/O error", "key", key, "op", "SetNX", "error", err)
-		return nil, nil, fmt.Errorf("distlock: acquire failed: %w", err)
+		return nil, fmt.Errorf("distlock: acquire failed: %w", err)
 	}
 	if !acquired {
-		return nil, nil, errcode.New(errcode.KindConflict, ErrLockTimeout,
+		return nil, errcode.New(errcode.KindConflict, ErrLockTimeout,
 			"distlock: lock already held by another holder")
 	}
 
-	// lockCtx is derived from ctx so that parent values (trace IDs, auth claims),
-	// deadline, and parent cancellation all propagate automatically via stdlib
-	// context machinery. No per-lock watcher goroutine is needed.
-	//
-	// When the parent ctx is canceled, context.Cause(lockCtx) returns
-	// context.Cause(ctx), including custom causes set via context.WithCancelCause.
-	//
-	// The manager goroutine may also cancel lockCtx with ErrLockLost or
-	// ErrLockReleased to signal lock lifecycle events.
-	lockCtx, cancelCause := context.WithCancelCause(ctx)
-
 	id := l.mgr.nextID.Add(1)
-	state := &lockState{
-		id:     id,
-		key:    key,
-		token:  token,
-		ttl:    ttl,
-		cancel: cancelCause,
-	}
-
-	l.mgr.add(state)
 
 	var once sync.Once
 	var releaseErr error
@@ -209,7 +226,27 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 		return releaseErr
 	}
 
-	return lockCtx, release, nil
+	// valueLookup exposes caller-ctx values (trace IDs, auth claims) via
+	// Lock.Value while shielding the lock from caller-ctx cancellation and
+	// deadline. context.WithoutCancel preserves values only; the closure
+	// captures the derived ctx's Value method without storing the ctx
+	// itself on Lock (keeps Lock-as-Resource boundary explicit and
+	// satisfies "no context.Context field on long-lived struct").
+	// ref: stdlib context.WithoutCancel — Go 1.21+
+	valuesCtx := context.WithoutCancel(ctx)
+	lock := newLock(valuesCtx.Value, release)
+
+	state := &lockState{
+		id:    id,
+		key:   key,
+		token: token,
+		ttl:   ttl,
+		lock:  lock,
+	}
+
+	l.mgr.add(state)
+
+	return lock, nil
 }
 
 // Stats implements Locker.
@@ -217,9 +254,18 @@ func (l *lockerImpl) Stats() Stats {
 	return Stats{ActiveLocks: l.mgr.Snapshot().Locks}
 }
 
-// Manager returns the internal Manager for test use.
-// Only exported so package-level tests (locker_test.go, manager_test.go) can
-// assert on lifecycle and heap state without coupling to internal types.
+// Manager returns the internal Manager. TEST USE ONLY — production callers
+// MUST NOT reach into the Manager; the Locker interface is the supported
+// public surface. The method is exported only because *_test.go in package
+// distlock_test (external) cannot access unexported methods via the
+// mgrGetter interface used by package-level tests to read Started() /
+// Drained() / Snapshot() / RenewNotify().
+//
+// The unexported receiver lockerImpl is the primary barrier: external
+// packages can only reach this via an explicit
+// l.(interface{ Manager() *Manager }) type-assertion, which provides
+// deliberate friction and a clear grep target. No production path
+// performs that assertion.
 func (l *lockerImpl) Manager() *Manager {
 	return l.mgr
 }

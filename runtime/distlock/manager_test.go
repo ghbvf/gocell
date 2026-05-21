@@ -90,22 +90,22 @@ func TestManager_HeapOrder(t *testing.T) {
 	ttl1 := mgrTTL1
 	ttl2 := mgrTTL2
 
-	_, release1, err := l.Acquire(context.Background(), "heap-key1", ttl1)
+	lock1, err := l.Acquire(context.Background(), "heap-key1", ttl1)
 	if err != nil {
 		t.Fatalf("Acquire key1: %v", err)
 	}
 	defer func() {
-		if err := release1(); err != nil {
+		if err := lock1.Release(); err != nil {
 			t.Logf("release1: %v", err)
 		}
 	}()
 
-	_, release2, err := l.Acquire(context.Background(), "heap-key2", ttl2)
+	lock2, err := l.Acquire(context.Background(), "heap-key2", ttl2)
 	if err != nil {
 		t.Fatalf("Acquire key2: %v", err)
 	}
 	defer func() {
-		if err := release2(); err != nil {
+		if err := lock2.Release(); err != nil {
 			t.Logf("release2: %v", err)
 		}
 	}()
@@ -152,7 +152,7 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := mustNewLocker(fd, fc)
 
-	_, release, err := l.Acquire(context.Background(), "lifecycle-key", mgrWaitTimeout)
+	lock, err := l.Acquire(context.Background(), "lifecycle-key", mgrWaitTimeout)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 		t.Fatal("Lifecycle: manager Started channel should close after Acquire")
 	}
 
-	if err := release(); err != nil {
+	if err := lock.Release(); err != nil {
 		t.Logf("release: %v", err)
 	}
 
@@ -185,8 +185,8 @@ func TestManager_SnapshotLocks(t *testing.T) {
 		t.Errorf("SnapshotLocks: initial count should be 0")
 	}
 
-	_, r1, _ := l.Acquire(context.Background(), "snap-key1", testtime.D1min)
-	_, r2, _ := l.Acquire(context.Background(), "snap-key2", testtime.D1min)
+	lock1, _ := l.Acquire(context.Background(), "snap-key1", testtime.D1min)
+	lock2, _ := l.Acquire(context.Background(), "snap-key2", testtime.D1min)
 
 	<-mgr(l).Started()
 
@@ -199,7 +199,7 @@ func TestManager_SnapshotLocks(t *testing.T) {
 		runtime.Gosched()
 	}
 
-	if err := r1(); err != nil {
+	if err := lock1.Release(); err != nil {
 		t.Logf("r1: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestManager_SnapshotLocks(t *testing.T) {
 		runtime.Gosched()
 	}
 
-	if err := r2(); err != nil {
+	if err := lock2.Release(); err != nil {
 		t.Logf("r2: %v", err)
 	}
 

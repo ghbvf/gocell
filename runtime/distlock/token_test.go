@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
 
@@ -25,15 +26,15 @@ func TestRandomToken_LengthAndUniqueness(t *testing.T) {
 	l := mustNewLocker(fd, fc)
 
 	tokens := make(map[string]bool, n)
-	releases := make([]func() error, 0, n)
+	locks := make([]*distlock.Lock, 0, n)
 
 	for i := range n {
 		key := fmt.Sprintf("token-test-key-%d", i)
-		_, release, err := l.Acquire(context.Background(), key, time.Minute)
+		lock, err := l.Acquire(context.Background(), key, time.Minute)
 		if err != nil {
 			t.Fatalf("Acquire[%d]: %v", i, err)
 		}
-		releases = append(releases, release)
+		locks = append(locks, lock)
 
 		// Snapshot to get the token stored in the driver.
 		snap := fd.Snapshot()
@@ -55,8 +56,8 @@ func TestRandomToken_LengthAndUniqueness(t *testing.T) {
 	}
 
 	// Clean up.
-	for _, release := range releases {
-		if err := release(); err != nil {
+	for _, lock := range locks {
+		if err := lock.Release(); err != nil {
 			t.Logf("release: %v", err)
 		}
 	}
