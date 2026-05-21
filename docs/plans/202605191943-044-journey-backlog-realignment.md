@@ -111,17 +111,18 @@ cells/configcore/configcoretest/
 ├── doc.go                  # 包级 godoc：用途 + 与 production wiring 的关系 + import 范围约束
 ├── builders.go             # BuildWriteService / BuildSubscribeService
 ├── fakes.go                # FakeConfigRepository
-├── outbox_recorder.go      # OutboxRecorder（捕获 emitter.Emit 调用）
 └── builders_test.go        # testutil 自身的单元测试
 ```
+
+> OutboxRecorder 不在本包内重复实现。复用 PR0 提供的 `kernel/outbox/outboxtest.Recorder`（路径含 `*test` 段，已被 `TESTUTIL-BOUNDARY-01` 自动 cover production-import 边界）。
 
 公开 API：
 
 ```go
-// BuildWriteService 构造 docker-free 的 configwrite.Service + 关联 OutboxRecorder。
-// 默认装配：FakeConfigRepository（in-memory map） + DemoCellTxManager + OutboxRecorder 替代 NoopEmitter + DiscardHandler logger + clock.Real。
+// BuildWriteService 构造 docker-free 的 configwrite.Service + 关联 Recorder。
+// 默认装配：FakeConfigRepository（in-memory map） + DemoCellTxManager + outboxtest.NewRecorder() 替代 NoopEmitter + DiscardHandler logger + clock.Real。
 // opts 允许覆盖任一组件，但不暴露 internal/ports 类型 — 走 testutil 包自定义 BuildWriteOption 类型。
-func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Service, *OutboxRecorder)
+func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Service, *outboxtest.Recorder)
 
 // BuildSubscribeService 构造 docker-free 的 configsubscribe.Service。
 // 默认装配：clockmock.New(testAnchor) + DiscardHandler logger + NopMetrics + TombstoneTTL=defaultTombstoneTTL。
@@ -140,15 +141,6 @@ func NewFakeConfigRepository() *FakeConfigRepository
 func (r *FakeConfigRepository) Snapshot() []domain.ConfigEntry        // 当前所有 entries 拷贝
 func (r *FakeConfigRepository) CallsOf(method string) []FakeCall      // 方法调用记录（含参数）
 func (r *FakeConfigRepository) Reset()                                // 清空状态 + 调用记录
-
-// OutboxRecorder 实现 outbox.Emitter 接口，捕获所有 Emit 调用供断言。
-type OutboxRecorder struct { /* ... */ }
-func NewOutboxRecorder() *OutboxRecorder
-func (r *OutboxRecorder) Entries() []outbox.Entry                     // 按 Emit 顺序返回
-func (r *OutboxRecorder) EntriesByType(eventType string) []outbox.Entry
-func (r *OutboxRecorder) Reset()
-// 实现 outbox.Emitter
-func (r *OutboxRecorder) Emit(ctx context.Context, entry outbox.Entry) error
 ```
 
 ### 2.3 `cells/accesscore/accesscoretest/` 包设计
@@ -157,12 +149,15 @@ func (r *OutboxRecorder) Emit(ctx context.Context, entry outbox.Entry) error
 ```
 cells/accesscore/accesscoretest/
 ├── doc.go
-├── builders.go             # BuildConfigReceiveService / BuildIdentityManageService
-├── fake_config_getter.go   # FakeConfigGetter
-├── fake_user_repo.go       # FakeUserRepo
-├── fake_rbac_assign.go     # FakeRbacAssign
+├── builders.go                  # BuildConfigReceiveService / BuildIdentityManageService
+├── fake_config_getter.go        # FakeConfigGetter
+├── fake_user_repo.go            # FakeUserRepo
+├── fake_role_repo.go            # FakeRoleRepo
+├── credential_invalidator.go    # 真 *credentialinvalidate.Invalidator 构造 helper（不 Fake，详见下方说明）
 └── ...
 ```
+
+> Ports lock（PR A 实施前已勘察 lock）：accesscore `internal/ports/` 实际暴露的 interface 是 `ConfigGetter` / `UserRepository` / `RoleRepository`；**不存在** `RbacAssign` / `CredentialInvalidator` 名字。`identitymanage.NewService` 第二参数是 concrete `*credentialinvalidate.Invalidator`（非 interface），不可 Fake — testutil 构造真实例，其内部依赖（如有）才 Fake。
 
 公开 API：
 
@@ -188,9 +183,20 @@ func (r *FakeUserRepo) SeedUser(u domain.User)
 func (r *FakeUserRepo) Snapshot() []domain.User
 func (r *FakeUserRepo) CallsOf(method string) []FakeCall
 
-// BuildIdentityManageService 构造 identitymanage.Service + 关联 FakeUserRepo + FakeRbacAssign + OutboxRecorder。
-// 默认装配能让 identitymanage.Service.Create 端到端跑通（DemoCellTxManager + FakeUserRepo + FakeCredentialInvalidator + OutboxRecorder）。
-func BuildIdentityManageService(t *testing.T, opts ...BuildIdentityManageOption) (*identitymanage.Service, *FakeUserRepo, *OutboxRecorder)
+// FakeRoleRepo 实现 internal/ports.RoleRepository（identitymanage / rbacassign 依赖）。
+type FakeRoleRepo struct { /* ... */ }
+func NewFakeRoleRepo() *FakeRoleRepo
+func (r *FakeRoleRepo) SeedAssignment(userID, roleID string)
+func (r *FakeRoleRepo) Snapshot() map[string][]string                 // userID → roleIDs
+func (r *FakeRoleRepo) CallsOf(method string) []FakeCall
+
+// NewCredentialInvalidator 构造真 *credentialinvalidate.Invalidator 实例（不 Fake）。
+// 默认依赖装配：clockmock.New(testAnchor) + DiscardHandler logger + Fake 子依赖（按实际签名 PR B day 1 lock）。
+func NewCredentialInvalidator(t *testing.T, opts ...CredentialInvalidatorOption) *credentialinvalidate.Invalidator
+
+// BuildIdentityManageService 构造 identitymanage.Service + 关联 FakeUserRepo + FakeRoleRepo + Recorder。
+// 默认装配能让 identitymanage.Service.Create 端到端跑通（DemoCellTxManager + FakeUserRepo + 真 Invalidator + outboxtest.NewRecorder()）。
+func BuildIdentityManageService(t *testing.T, opts ...BuildIdentityManageOption) (*identitymanage.Service, *FakeUserRepo, *FakeRoleRepo, *outboxtest.Recorder)
 ```
 
 ### 2.4 `cells/auditcore/auditcoretest/` 包设计
@@ -210,31 +216,43 @@ func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (handler outbox
 func CanonicalSessionCreatedEntry(sessionID, userID string) outbox.Entry
 ```
 
-### 2.5 archtest `CELLTEST-IMPORT-SCOPE-01`
+### 2.5 archtest 边界守卫（TESTUTIL-BOUNDARY-01 + CELLTEST-IMPORT-SCOPE-01）
 
-新文件 `tools/archtest/celltest_import_scope_test.go`，包级 godoc 写 `// INVARIANT: CELLTEST-IMPORT-SCOPE-01`。
+`CELLTEST-IMPORT-SCOPE-01` archtest 已在 PR0（feat/647-testutil-build-tag）落地，文件为
+`tools/archtest/celltest_import_scope_test.go`。
 
-规则形态（typed-aware，使用 `archtest.RunTyped` + `internal/typeseval.ResolvePackageRef`）：
+**规则设计**：
 
-```
-扫所有 production .go 文件（!_test.go，排除 *test/ 包自身的 _test.go）的 import 声明，
-若 import path 匹配 `cells/[a-z]+/[a-z]+test` → fail。
-扫所有 _test.go 文件无约束（允许 import {X}test）。
-```
+- 扫描 module 内所有 production .go 文件（非 `_test.go` 且非 test-infra 路径）
+- 对每个 import 声明，检查是否匹配正则 `^github\.com/[^/]+/[^/]+/cells/[a-z]+/[a-z]+test$`
+- 命中即 fail，diagnostic 指向违规文件 + import 路径
 
-funnel 双向锁评级：
-- **下游 Hard**：archtest type-aware import scope 校验，production code import {X}test 不可表达（编译期不阻挡，archtest CI 阻挡）
-- **上游 Medium**：{X}test 包内可调 internal/ports 是 Go 屏障语法允许的（cell 子树内自包），没有更强约束让"production 包不可调 {X}test"在编译期阻挡。未来升级路径 = build tag 隔离（`//go:build testutil` 标 {X}test 文件，production build 不编译），登记触发型 backlog（不在本 plan 范围）
+**与 TESTUTIL-BOUNDARY-01 的互补关系**：
 
-RED fixture：`tools/archtest/internal/celltestimportscopefixture/`，包含两个 .go 文件：
-- `production_violator.go` — `import "github.com/ghbvf/gocell/cells/configcore/configcoretest"`，期望被规则识别
-- `test_legitimate_test.go` — 同 import，期望放过
+| 规则 | 覆盖形态 | 守卫路径举例 |
+|------|---------|------------|
+| TESTUTIL-BOUNDARY-01 | 含 `testutil` 段的路径 | `cells/{X}/internal/testutil/`、`pkg/testutil/` |
+| CELLTEST-IMPORT-SCOPE-01 | `cells/{X}/{X}test$` 命名形态 | `cells/configcore/configcoretest`、`cells/accesscore/accesscoretest` |
+
+TESTUTIL-BOUNDARY-01 的 `isTestInfraPath` 识别含 `testutil` 段或长度 > 4 的 `*test` 后缀段路径，
+但 `extractTestutilRoot` 严格按 `testutil` 段字面匹配，**不**识别 `*test` 后缀段 —— 因此
+`cells/{X}/{X}test/` 的 import ban 依赖本规则独立补充。
+
+**AI-rebust 评级**：
+
+- **下游 Hard**：archtest path-pattern match（正则锁 import 路径字面值，无字符串锚点，violation 形态唯一）
+- **上游 Medium**：archtest 自动发现 production 文件，路径段匹配，未达 codegen funnel Hard（生产代码无法编译期阻止 import ——需 sealed interface 才能升 Hard）
+- **整体 Medium**：满足 ai-collab.md §"立项硬门槛" ≥ Medium 要求
 
 ### 2.6 验证
 
 ```
-go test ./cells/configcore/configcoretest/... ./cells/accesscore/accesscoretest/... ./cells/auditcore/auditcoretest/...
-go test ./tools/archtest/ -run='^TestCelltestImportScope$'
+go test ./kernel/outbox/outboxtest/... -race -run='^TestRecorder'   # PR0 recorder + 并发安全
+go test ./cells/configcore/configcoretest/...                       # PR A
+go test ./cells/accesscore/accesscoretest/...                       # PR B
+go test ./cells/auditcore/auditcoretest/...                         # PR C
+go test ./tools/archtest/ -run='^TestLayerTestutil$'                # 既有规则回归覆盖新增 *test/ 包
+go test ./tools/archtest/ -run='^TestCelltestImportScope$'          # PR0 新增规则
 ```
 
 解锁的后续工作：
