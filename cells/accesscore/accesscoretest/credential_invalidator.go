@@ -6,7 +6,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -20,10 +19,15 @@ type invalidatorConfig struct {
 	refreshStore refresh.Store
 }
 
-// WithInvalidatorUsers injects a custom UserRepository into the Invalidator.
-// When not provided, a fresh fixture UserRepo() is used — which is a separate
-// store from any AccessFixture the caller may hold; prefer passing
-// fixture.UserRepo() explicitly when sharing state with other services.
+// WithInvalidatorUsers injects a UserRepository into the Invalidator. This
+// option is required: NewCredentialInvalidator fails the test immediately if
+// it is not provided.
+//
+// Usage:
+//
+//	inv := accesscoretest.NewCredentialInvalidator(t,
+//	    accesscoretest.WithInvalidatorUsers(fixture.UserRepository()),
+//	)
 func WithInvalidatorUsers(r ports.UserRepository) CredentialInvalidatorOption {
 	return func(c *invalidatorConfig) { c.users = r }
 }
@@ -39,13 +43,14 @@ func WithInvalidatorRefresh(r refresh.Store) CredentialInvalidatorOption {
 }
 
 // NewCredentialInvalidator constructs a real *credentialinvalidate.Invalidator
-// suitable for embedding in test-built services. Default deps are:
+// suitable for embedding in test-built services.
 //
-//   - users: fresh AccessFixture(clock.Real()).UserRepo() — NOTE: this is a
-//     standalone store NOT paired with any other fixture; callers wiring
-//     identitymanage should use BuildIdentityManageService or pass
-//     WithInvalidatorUsers(fixture.UserRepo()) explicitly to share state.
-//   - sessions: session.NewMemStore(sessiontest.Protocol(), clock.Real())
+// WithInvalidatorUsers is required: omitting it fails the test immediately to
+// prevent accidental use of an isolated store that is not paired with any other
+// fixture.
+//
+// Default deps:
+//   - sessions: testutil.RealSessionRepo(t)
 //   - refreshStore: testutil.RealRefreshStore(t)
 func NewCredentialInvalidator(t *testing.T, opts ...CredentialInvalidatorOption) *credentialinvalidate.Invalidator {
 	t.Helper()
@@ -55,7 +60,8 @@ func NewCredentialInvalidator(t *testing.T, opts ...CredentialInvalidatorOption)
 	}
 
 	if cfg.users == nil {
-		cfg.users = NewAccessFixture(t, clock.Real()).UserRepo()
+		t.Fatalf("NewCredentialInvalidator: WithInvalidatorUsers is required; " +
+			"pass WithInvalidatorUsers(fixture.UserRepository()) to share state with other services")
 	}
 	if cfg.sessions == nil {
 		cfg.sessions = testutil.RealSessionRepo(t)

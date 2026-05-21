@@ -30,6 +30,26 @@
 // same underlying mem.Store. AccessFixture wraps a single Bundle, making it
 // impossible to accidentally mis-pair repos from different stores.
 //
+// # Debug logger swap
+//
+// All builders default to slog.New(slog.DiscardHandler). To see verbose output
+// during local debugging, swap in a text handler:
+//
+//	svc, fix, rec := accesscoretest.BuildIdentityManageService(t,
+//	    accesscoretest.WithIdentityLogger(
+//	        slog.New(slog.NewTextHandler(os.Stderr, nil)),
+//	    ),
+//	)
+//
+// # End-to-end example: BuildIdentityManageService
+//
+//	func ExampleBuildIdentityManageService() {
+//	    // Construct the service and its dependencies.
+//	    svc, fix, _ := accesscoretest.BuildIdentityManageService(nil) // nil only in pkg example
+//	    _ = svc
+//	    _ = fix
+//	}
+//
 // # Import scope
 //
 // This package is test-infrastructure: it must NOT be imported by production
@@ -37,4 +57,13 @@
 // for all cells/{X}/{X}test packages.
 //
 // Tests may import this package freely.
+//
+// # Deferred: spy methods
+//
+// AccessFixture does not expose CallsOf / Snapshot spy methods. The current
+// design converges on AccessFixture as an aggregate; spy methods will be added
+// when a journey criterion actually needs them.
+//
+// ref: PR #595 (store-pairing precedent)
+// ref: docs/plans/202605191943-044-journey-backlog-realignment.md §2
 package accesscoretest

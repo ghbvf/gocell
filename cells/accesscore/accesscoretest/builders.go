@@ -59,6 +59,9 @@ func WithIdentityClock(clk clock.Clock) BuildIdentityManageOption {
 }
 
 // WithIdentityLogger injects a logger. Defaults to slog.New(slog.DiscardHandler).
+// To see verbose output during local debugging, swap in:
+//
+//	WithIdentityLogger(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 func WithIdentityLogger(l *slog.Logger) BuildIdentityManageOption {
 	return func(c *buildIdentityConfig) {
 		if l != nil {
@@ -71,6 +74,7 @@ func WithIdentityLogger(l *slog.Logger) BuildIdentityManageOption {
 // no-op stub is used (sufficient for Create/Lock/Unlock/Delete paths that do
 // not call ChangePassword). Tests exercising ChangePassword must inject a real
 // sessionlogin.Service.
+// See cells/accesscore/slices/sessionlogin.Service which implements TokenIssuer.
 func WithIdentityTokenIssuer(ti identitymanage.TokenIssuer) BuildIdentityManageOption {
 	return func(c *buildIdentityConfig) {
 		if ti != nil {
@@ -84,18 +88,18 @@ func WithIdentityTokenIssuer(ti identitymanage.TokenIssuer) BuildIdentityManageO
 //
 // Default wiring:
 //   - AccessFixture: fresh NewAccessFixture(t, clock.Real())
-//   - invalidator: shares the fixture's UserRepo (same store) plus fresh
+//   - invalidator: shares the fixture's UserRepository (same store) plus fresh
 //     in-memory session and refresh stores from internal/testutil
 //   - TxManager: fixture.TxRunner() (store-paired, full atomic semantics)
 //   - Emitter: outboxtest.NewRecorder()
 //   - Clock: clock.Real()
 //   - Logger: slog.New(slog.DiscardHandler)
 //   - TokenIssuer: stubTokenIssuer (returns empty TokenPair; fine for non-ChangePassword paths)
-//   - WithLastAdminProtection(fixture.RoleRepo())
+//   - WithLastAdminProtection(fixture.RoleRepository())
 //
 // The returned fixture is the same one used internally — seed via
 // fixture.SeedUser / SeedRole / SeedAssignment, then assert via
-// fixture.UserRepo() / RoleRepo().
+// fixture.UserRepository() / RoleRepository().
 func BuildIdentityManageService(
 	t *testing.T,
 	opts ...BuildIdentityManageOption,
@@ -120,23 +124,23 @@ func BuildIdentityManageService(
 		cfg.fixture = NewAccessFixture(t, cfg.clock)
 	}
 
-	// Construct the invalidator sharing the fixture's UserRepo so that
+	// Construct the invalidator sharing the fixture's UserRepository so that
 	// identitymanage and the invalidator read/write the same user store.
 	inv := NewCredentialInvalidator(t,
-		WithInvalidatorUsers(cfg.fixture.UserRepo()),
+		WithInvalidatorUsers(cfg.fixture.UserRepository()),
 	)
 
 	rec := outboxtest.NewRecorder()
 
 	svc, err := identitymanage.NewService(
-		cfg.fixture.UserRepo(),
+		cfg.fixture.UserRepository(),
 		inv,
 		cfg.logger,
 		identitymanage.WithEmitter(rec),
 		identitymanage.WithTxManager(cfg.fixture.TxRunner()),
 		identitymanage.WithClock(cfg.clock),
 		identitymanage.WithTokenIssuer(cfg.issuer),
-		identitymanage.WithLastAdminProtection(cfg.fixture.RoleRepo()),
+		identitymanage.WithLastAdminProtection(cfg.fixture.RoleRepository()),
 	)
 	if err != nil {
 		t.Fatalf("BuildIdentityManageService: %v", err)
@@ -145,17 +149,17 @@ func BuildIdentityManageService(
 	return svc, cfg.fixture, rec
 }
 
-// BuildReceiveOption configures BuildConfigReceiveService.
-type BuildReceiveOption func(*buildReceiveConfig)
+// BuildConfigReceiveOption configures BuildConfigReceiveService.
+type BuildConfigReceiveOption func(*buildReceiveConfig)
 
 type buildReceiveConfig struct {
 	configGetter *FakeConfigGetter
 	logger       *slog.Logger
 }
 
-// WithReceiveConfigGetter injects a FakeConfigGetter into the configreceive
+// WithConfigReceiveConfigGetter injects a FakeConfigGetter into the configreceive
 // service so that GetEntry calls can be observed and stubbed in tests.
-func WithReceiveConfigGetter(g *FakeConfigGetter) BuildReceiveOption {
+func WithConfigReceiveConfigGetter(g *FakeConfigGetter) BuildConfigReceiveOption {
 	return func(c *buildReceiveConfig) {
 		if g != nil {
 			c.configGetter = g
@@ -163,8 +167,9 @@ func WithReceiveConfigGetter(g *FakeConfigGetter) BuildReceiveOption {
 	}
 }
 
-// WithReceiveLogger injects a logger. Defaults to slog.New(slog.DiscardHandler).
-func WithReceiveLogger(l *slog.Logger) BuildReceiveOption {
+// WithConfigReceiveLogger injects a logger. Defaults to slog.New(slog.DiscardHandler).
+// See WithIdentityLogger for stderr-swap example.
+func WithConfigReceiveLogger(l *slog.Logger) BuildConfigReceiveOption {
 	return func(c *buildReceiveConfig) {
 		if l != nil {
 			c.logger = l
@@ -177,7 +182,7 @@ func WithReceiveLogger(l *slog.Logger) BuildReceiveOption {
 // Default wiring:
 //   - ConfigGetter: NewFakeConfigGetter(nil) — all keys return ErrConfigNotFound
 //   - Logger: slog.New(slog.DiscardHandler)
-func BuildConfigReceiveService(t *testing.T, opts ...BuildReceiveOption) *configreceive.Service {
+func BuildConfigReceiveService(t *testing.T, opts ...BuildConfigReceiveOption) *configreceive.Service {
 	t.Helper()
 
 	cfg := &buildReceiveConfig{}

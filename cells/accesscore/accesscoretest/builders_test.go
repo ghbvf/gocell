@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/accesscoretest"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -35,21 +36,21 @@ func TestNewAccessFixtureSeedAndQuery(t *testing.T) {
 	role := &domain.Role{ID: "role-viewer", Name: "Viewer"}
 	require.NoError(t, f.SeedRole(ctx, role))
 
-	// Read back via UserRepo.
-	got, err := f.UserRepo().GetByID(ctx, u.ID)
+	// Read back via UserRepository.
+	got, err := f.UserRepository().GetByID(ctx, u.ID)
 	require.NoError(t, err)
 	assert.Equal(t, u.ID, got.ID)
 	assert.Equal(t, "alice", got.Username)
 
-	// Read back via RoleRepo.
-	gotRole, err := f.RoleRepo().GetByID(ctx, role.ID)
+	// Read back via RoleRepository.
+	gotRole, err := f.RoleRepository().GetByID(ctx, role.ID)
 	require.NoError(t, err)
 	assert.Equal(t, role.ID, gotRole.ID)
 }
 
-// TestAccessFixtureStorePaired asserts that UserRepo and RoleRepo share the same
-// underlying store by verifying that a role assigned via f.SeedAssignment is
-// visible through f.RoleRepo().GetByUserID.
+// TestAccessFixtureStorePaired asserts that UserRepository and RoleRepository share
+// the same underlying store by verifying that a role assigned via f.SeedAssignment
+// is visible through f.RoleRepository().GetByUserID.
 func TestAccessFixtureStorePaired(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -63,17 +64,18 @@ func TestAccessFixtureStorePaired(t *testing.T) {
 	role := &domain.Role{ID: "role-admin", Name: "Admin"}
 	require.NoError(t, f.SeedRole(ctx, role))
 
-	// Assign via SeedAssignment (uses RoleRepo under the hood).
+	// Assign via SeedAssignment (uses RoleRepository under the hood).
 	require.NoError(t, f.SeedAssignment(ctx, u.ID, role.ID))
 
-	// Verify cross-repo visibility: the assignment must be visible via RoleRepo.
-	roles, err := f.RoleRepo().GetByUserID(ctx, u.ID)
+	// Verify cross-repo visibility: the assignment must be visible via RoleRepository.
+	roles, err := f.RoleRepository().GetByUserID(ctx, u.ID)
 	require.NoError(t, err)
-	require.Len(t, roles, 1, "assignment seeded via SeedAssignment must be visible via RoleRepo")
+	require.Len(t, roles, 1, "assignment seeded via SeedAssignment must be visible via RoleRepository")
 	assert.Equal(t, role.ID, roles[0].ID)
 }
 
-// TestFakeConfigGetterHit exercises stub hit, stub error, and unknown-key paths.
+// TestFakeConfigGetterHit exercises stub hit, stub error, unknown-key, and
+// explicit-zero-stub (Entry:nil, Err:nil) paths.
 func TestFakeConfigGetterHit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -103,6 +105,18 @@ func TestFakeConfigGetterHit(t *testing.T) {
 	fg3 := accesscoretest.NewFakeConfigGetter(nil)
 	_, err3 := fg3.GetEntry(ctx, "unknown")
 	require.Error(t, err3, "unknown key must return an error")
+
+	// Explicit zero stub: Entry:nil, Err:nil — triggers the not-found branch
+	// (key is present in the stubs map but Entry is nil).
+	fg4 := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
+		"stale": {Entry: nil, Err: nil},
+	})
+	_, err4 := fg4.GetEntry(ctx, "stale")
+	require.Error(t, err4, "explicit nil-entry stub must return ErrConfigNotFound")
+	assert.True(t,
+		errcode.IsDomainNotFound(err4, errcode.ErrConfigNotFound),
+		"nil-entry stub error must have CategoryDomain so HandleEntryUpserted Acks as stale event",
+	)
 }
 
 // TestFakeConfigGetterCallsRecorded verifies that call order is captured.
@@ -125,10 +139,13 @@ func TestFakeConfigGetterCallsRecorded(t *testing.T) {
 }
 
 // TestNewCredentialInvalidatorWithDefaults verifies that the helper returns a
-// non-nil Invalidator with no options provided.
+// non-nil Invalidator when WithInvalidatorUsers is provided.
 func TestNewCredentialInvalidatorWithDefaults(t *testing.T) {
 	t.Parallel()
-	inv := accesscoretest.NewCredentialInvalidator(t)
+	f := accesscoretest.NewAccessFixture(t, clock.Real())
+	inv := accesscoretest.NewCredentialInvalidator(t,
+		accesscoretest.WithInvalidatorUsers(f.UserRepository()),
+	)
 	require.NotNil(t, inv, "NewCredentialInvalidator must return non-nil *Invalidator")
 }
 
@@ -161,8 +178,8 @@ func TestBuildIdentityManageServiceSmoke(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, created.ID)
 
-	// Fixture state: new user must be visible via UserRepo.
-	got, err := fix.UserRepo().GetByID(ctx, created.ID)
+	// Fixture state: new user must be visible via UserRepository.
+	got, err := fix.UserRepository().GetByID(ctx, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "newuser", got.Username)
 
@@ -172,7 +189,8 @@ func TestBuildIdentityManageServiceSmoke(t *testing.T) {
 }
 
 // TestBuildConfigReceiveServiceSmoke builds the configreceive service, exercises
-// HandleEntryUpserted with a stubbed ConfigGetter, and asserts the stub was queried.
+// HandleEntryUpserted with a stubbed ConfigGetter, and asserts the correct
+// HandleResult disposition for both the hit (Ack) and stale (Ack) paths.
 func TestBuildConfigReceiveServiceSmoke(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -181,30 +199,46 @@ func TestBuildConfigReceiveServiceSmoke(t *testing.T) {
 		"jwt.ttl": {Entry: &accesscoretest.FakeConfigEntry{Key: "jwt.ttl", Value: "3600", Version: 1}},
 	})
 	svc := accesscoretest.BuildConfigReceiveService(t,
-		accesscoretest.WithReceiveConfigGetter(fg),
+		accesscoretest.WithConfigReceiveConfigGetter(fg),
 	)
 
 	// Build a minimal outbox.Entry carrying a config-upserted payload.
 	entry := makeConfigUpsertedEntry("jwt.ttl", 1)
 	result := svc.HandleEntryUpserted(ctx, entry)
-	// Ack is the expected result when stub returns an entry.
-	_ = result
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"HandleEntryUpserted must Ack on stub-found entry")
 
 	calls := fg.Calls()
 	require.Contains(t, calls, "jwt.ttl", "HandleEntryUpserted must query ConfigGetter for the upserted key")
+
+	// Stale-event path: explicit nil-entry stub triggers ErrConfigNotFound with
+	// CategoryDomain, so HandleEntryUpserted Acks instead of Requeueing.
+	fgStale := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
+		"gone.key": {Entry: nil, Err: nil},
+	})
+	svcStale := accesscoretest.BuildConfigReceiveService(t,
+		accesscoretest.WithConfigReceiveConfigGetter(fgStale),
+	)
+	staleEntry := makeConfigUpsertedEntry("gone.key", 1)
+	staleResult := svcStale.HandleEntryUpserted(ctx, staleEntry)
+	require.Equal(t, outbox.DispositionAck, staleResult.Disposition,
+		"HandleEntryUpserted must Ack on stale (ConfigNotFound) event")
 }
 
 // makeConfigUpsertedEntry builds a minimal outbox.Entry with a valid
 // event.config.entry-upserted.v1 payload for the given key and version.
 func makeConfigUpsertedEntry(key string, version int) outbox.Entry {
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"key":     key,
 		"version": version,
 		"actorId": "test-actor",
 	})
+	if err != nil {
+		panic("makeConfigUpsertedEntry: json.Marshal failed: " + err.Error())
+	}
 	return outbox.Entry{
 		ID:        "entry-" + key,
-		EventType: "event.config.entry-upserted.v1",
+		EventType: configreceive.TopicConfigEntryUpserted,
 		Payload:   payload,
 	}
 }

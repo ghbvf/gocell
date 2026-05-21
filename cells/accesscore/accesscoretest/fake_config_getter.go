@@ -23,6 +23,7 @@ type FakeConfigEntry struct {
 // When Err is non-nil, GetEntry returns the error.
 // When both are nil (stub has the key but Entry is nil), GetEntry returns
 // ErrConfigNotFound — the stub represents a key that is explicitly absent.
+// When both Entry and Err are non-nil, Err takes precedence.
 type ConfigGetterStub struct {
 	Entry *FakeConfigEntry // nil → return Err (or ErrConfigNotFound if Err also nil)
 	Err   error
@@ -69,6 +70,7 @@ func (g *FakeConfigGetter) GetEntry(_ context.Context, key string) (ports.Config
 		return ports.ConfigEntry{}, errcode.New(
 			errcode.KindNotFound, errcode.ErrConfigNotFound,
 			"fake config getter: key not found",
+			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
 	if stub.Err != nil {
@@ -78,6 +80,7 @@ func (g *FakeConfigGetter) GetEntry(_ context.Context, key string) (ports.Config
 		return ports.ConfigEntry{}, errcode.New(
 			errcode.KindNotFound, errcode.ErrConfigNotFound,
 			"fake config getter: key not found",
+			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
 	return ports.ConfigEntry{

@@ -30,11 +30,11 @@ func NewAccessFixture(t *testing.T, clk clock.Clock) *AccessFixture {
 	}
 }
 
-// UserRepo returns the bundle-paired UserRepository.
-func (f *AccessFixture) UserRepo() ports.UserRepository { return f.bundle.UserRepository() }
+// UserRepository returns the bundle-paired UserRepository.
+func (f *AccessFixture) UserRepository() ports.UserRepository { return f.bundle.UserRepository() }
 
-// RoleRepo returns the bundle-paired RoleRepository.
-func (f *AccessFixture) RoleRepo() ports.RoleRepository { return f.bundle.RoleRepository() }
+// RoleRepository returns the bundle-paired RoleRepository.
+func (f *AccessFixture) RoleRepository() ports.RoleRepository { return f.bundle.RoleRepository() }
 
 // TxRunner returns the bundle-paired store-bound CellTxManager. Use this when
 // wiring services that require a real atomic TxManager (e.g. identitymanage
