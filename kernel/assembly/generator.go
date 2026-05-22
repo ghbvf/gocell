@@ -313,7 +313,7 @@ func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.
 func (g *Generator) appendGeneratedFiles(
 	plan []pathsafe.PlannedFile,
 	spec AssemblyScaffoldSpec,
-	realRoot, asmDir, cmdDir string,
+	realRoot, _ /*asmDir*/, cmdDir string,
 ) ([]pathsafe.PlannedFile, error) {
 	synth := synthesizeAssemblyMeta(spec)
 
@@ -340,6 +340,12 @@ func (g *Generator) appendGeneratedFiles(
 		projectRoot: g.projectRoot,
 	}
 
+	// generatedDir is derived from the synthesized AssemblyMeta.File field.
+	// For scaffold (File is empty, i.e. assemblies/ context) this returns
+	// assemblies/{id}/generated/; the derivation mirrors
+	// metadata.AssemblyGeneratedDir — single source of truth.
+	generatedDir := filepath.FromSlash(metadata.AssemblyGeneratedDir(synth))
+
 	type derivedFile struct {
 		relPath string
 		gen     func(string) ([]byte, error)
@@ -347,7 +353,7 @@ func (g *Generator) appendGeneratedFiles(
 	derived := []derivedFile{
 		{filepath.Join(cmdDir, "modules_gen.go"), transient.GenerateModulesGen},
 		{filepath.Join(cmdDir, "main.go"), transient.GenerateEntrypoint},
-		{filepath.Join(asmDir, "generated", "boundary.yaml"), transient.GenerateBoundary},
+		{filepath.Join(generatedDir, "boundary.yaml"), transient.GenerateBoundary},
 	}
 
 	for _, d := range derived {

@@ -15,6 +15,27 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 )
 
+// AssemblyGeneratedDir returns the project-relative path of the generated/
+// directory for an assembly. For assemblies whose source file lives under
+// examples/ (e.g. examples/todoorder/assembly.yaml) the generated directory
+// follows the same prefix: examples/{id}/generated/. All other assemblies
+// use assemblies/{id}/generated/.
+//
+// This is the single source of truth shared by:
+//   - kernel/assembly Generator.appendGeneratedFiles (boundary.yaml write path)
+//   - cmd/gocell/app generateOneAssembly (boundary.yaml + modules_gen cmd)
+//   - cmd/gocell/app generateMetricsSchema (metrics-schema.yaml write path)
+//   - kernel/governance validateREF16 (boundary.yaml existence check)
+//
+// asm.File is the path as loaded by the parser — relative to the project
+// root, using the OS path separator. ToSlash normalises for the prefix check.
+func AssemblyGeneratedDir(asm *AssemblyMeta) string {
+	if strings.HasPrefix(filepath.ToSlash(asm.File), "examples/") {
+		return filepath.ToSlash(filepath.Join("examples", asm.ID, "generated"))
+	}
+	return filepath.ToSlash(filepath.Join("assemblies", asm.ID, "generated"))
+}
+
 // applyAssemblyDerivations fills derived AssemblyMeta fields after parsing.
 // Single source of truth for build defaults and MaxConsistencyLevel; the
 // governance Validator only asserts derivations, never recomputes them.

@@ -185,7 +185,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 		artifacts = append(artifacts, Artifact{
 			AssemblyID: id,
 			Kind:       "boundary",
-			Path:       filepath.ToSlash(filepath.Join("assemblies", id, "generated", "boundary.yaml")),
+			Path:       filepath.ToSlash(filepath.Join(metadata.AssemblyGeneratedDir(asm), "boundary.yaml")),
 			Content:    boundary,
 		})
 
@@ -218,7 +218,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 		artifacts = append(artifacts, Artifact{
 			AssemblyID: id,
 			Kind:       "metrics-schema",
-			Path:       filepath.ToSlash(filepath.Join("assemblies", id, "generated", "metrics-schema.yaml")),
+			Path:       filepath.ToSlash(filepath.Join(metadata.AssemblyGeneratedDir(asm), "metrics-schema.yaml")),
 			Content:    metricsContent,
 		})
 	}
@@ -339,22 +339,25 @@ func AssemblyEntrypointPath(assemblyID string, asm *metadata.AssemblyMeta) strin
 }
 
 // assemblyForOrphanPath best-effort-derives the AssemblyID for an orphan
-// reverse-enumeration drift entry. assemblies/<id>/generated/... paths
-// always belong to assembly <id>; entrypoint orphans (e.g. cmd/<id>/main.go
-// left behind after an entrypoint rename) cannot be tied to a current
-// manifest assembly and surface with an empty AssemblyID — the drift
-// message itself is enough to point operators at the path.
+// reverse-enumeration drift entry. assemblies/<id>/generated/... paths and
+// examples/<id>/generated/... paths always belong to assembly <id>;
+// entrypoint orphans (e.g. cmd/<id>/main.go left behind after an entrypoint
+// rename) cannot be tied to a current manifest assembly and surface with an
+// empty AssemblyID — the drift message itself is enough to point operators at
+// the path.
 func assemblyForOrphanPath(p string) string {
-	const prefix = "assemblies/"
-	if !strings.HasPrefix(p, prefix) {
-		return ""
+	for _, prefix := range []string{"assemblies/", "examples/"} {
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		rest := p[len(prefix):]
+		slash := strings.IndexByte(rest, '/')
+		if slash <= 0 {
+			continue
+		}
+		return rest[:slash]
 	}
-	rest := p[len(prefix):]
-	slash := strings.IndexByte(rest, '/')
-	if slash <= 0 {
-		return ""
-	}
-	return rest[:slash]
+	return ""
 }
 
 func validateArtifactPaths(root string, artifacts []Artifact) error {

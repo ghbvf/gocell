@@ -204,8 +204,12 @@ func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id str
 		return fmt.Errorf("generate boundary: %w", err)
 	}
 
-	// Boundary goes into assemblies/{id}/generated/.
-	boundaryPath := filepath.Join(root, "assemblies", id, "generated", "boundary.yaml")
+	// Boundary goes into the assembly's derived generated/ directory.
+	// For examples/ assemblies this is examples/{id}/generated/; for all
+	// others it is assemblies/{id}/generated/ (AssemblyGeneratedDir single
+	// source of truth, mirrors deriveAssembly entrypoint logic).
+	generatedDir := metadata.AssemblyGeneratedDir(asm)
+	boundaryPath := filepath.Join(root, filepath.FromSlash(generatedDir), "boundary.yaml")
 	return writeGeneratedFile(root, boundaryPath, boundary,
 		fmt.Sprintf("assembly %q generated dir", id))
 }
@@ -253,7 +257,12 @@ func generateMetricsSchema(ctx context.Context, args []string) error {
 		return fmt.Errorf("serialize metrics-schema: %w", err)
 	}
 
-	outPath := filepath.Join(root, "assemblies", *id, "generated", "metrics-schema.yaml")
+	// metrics-schema.yaml lives in the same generated/ directory as boundary.yaml.
+	// AssemblyGeneratedDir is the single source of truth: examples/ assemblies
+	// go to examples/{id}/generated/, others to assemblies/{id}/generated/.
+	asm := project.Assemblies[*id]
+	generatedDir := metadata.AssemblyGeneratedDir(asm)
+	outPath := filepath.Join(root, filepath.FromSlash(generatedDir), "metrics-schema.yaml")
 	return writeGeneratedFile(root, outPath, content,
 		fmt.Sprintf("assembly %q metrics-schema", *id))
 }
