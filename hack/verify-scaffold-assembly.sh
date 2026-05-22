@@ -80,6 +80,8 @@ run_smoke() {
     TIMEOUT_CMD="gtimeout"
   fi
 
+  echo "verify-scaffold-assembly: using ${TIMEOUT_CMD:-perl-fallback} for runtime smoke (ASM_ID=$ASM_ID)"
+
   if [ -n "$TIMEOUT_CMD" ]; then
     set +e
     $TIMEOUT_CMD 5 go run "./cmd/${ASM_ID}/..."
