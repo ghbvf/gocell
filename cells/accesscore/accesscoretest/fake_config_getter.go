@@ -8,25 +8,64 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// FakeConfigEntry is a value-type mirror of ports.ConfigEntry for use in test
-// stubs. It is exported separately so callers can write stub maps without
-// importing cells/accesscore/internal/ports directly.
-type FakeConfigEntry struct {
-	Key       string
-	Value     string
-	Sensitive bool
-	Version   int
+// ConfigGetterStub is the sealed value type accepted by NewFakeConfigGetter.
+// The fields are unexported; the only way to construct one is via the four
+// typed constructors below. This makes self-contradictory states like
+// "Sensitive=true with plaintext Value" unrepresentable in the type system
+// — selecting the wrong stub semantic is selecting the wrong constructor
+// name, surfaced at compile time.
+//
+// AI Hard form: "typed function choice" — one API per semantic, no flag
+// fields decoded at runtime.
+type ConfigGetterStub struct {
+	entry *fakeConfigEntry
+	err   error
 }
 
-// ConfigGetterStub describes the response for a single key lookup.
-// When Entry is non-nil and Err is nil, GetEntry returns the entry.
-// When Err is non-nil, GetEntry returns the error.
-// When both are nil (stub has the key but Entry is nil), GetEntry returns
-// ErrConfigNotFound — the stub represents a key that is explicitly absent.
-// When both Entry and Err are non-nil, Err takes precedence.
-type ConfigGetterStub struct {
-	Entry *FakeConfigEntry // nil → return Err (or ErrConfigNotFound if Err also nil)
-	Err   error
+// fakeConfigEntry mirrors ports.ConfigEntry but lives behind unexported
+// constructors so the Sensitive/Value redaction contract cannot be violated
+// from outside this package.
+type fakeConfigEntry struct {
+	key       string
+	value     string
+	sensitive bool
+	version   int
+}
+
+// PresentStub returns a stub for a non-sensitive config key whose value is
+// returned to callers via GetEntry. Use this for the common "key exists with
+// plaintext value" path.
+func PresentStub(key, value string, version int) ConfigGetterStub {
+	return ConfigGetterStub{entry: &fakeConfigEntry{
+		key: key, value: value, sensitive: false, version: version,
+	}}
+}
+
+// SensitiveStub returns a stub mirroring what configcore's internal HTTP
+// getter returns for keys flagged Sensitive=true: Value is the redacted
+// placeholder "******". This matches the production redaction contract
+// documented in cells/accesscore/internal/ports/configport.go and lets tests
+// assert the "reload triggers but plaintext never revealed" path without
+// hard-coding the redaction sentinel in every test.
+func SensitiveStub(key string, version int) ConfigGetterStub {
+	return ConfigGetterStub{entry: &fakeConfigEntry{
+		key: key, value: "******", sensitive: true, version: version,
+	}}
+}
+
+// NotFoundStub returns a stub representing a key that is explicitly absent;
+// GetEntry returns ErrConfigNotFound with CategoryDomain. Use this when
+// stubbing stale-event paths (configcore reports the key was upserted but
+// the subsequent fetch races a delete and finds nothing).
+func NotFoundStub() ConfigGetterStub {
+	return ConfigGetterStub{}
+}
+
+// ErrorStub returns a stub that surfaces the supplied error from GetEntry.
+// Use for transient or permanent error coverage; the error is returned to
+// the caller verbatim (no wrapping).
+func ErrorStub(err error) ConfigGetterStub {
+	return ConfigGetterStub{err: err}
 }
 
 // FakeConfigGetter is a stub implementation of ports.ConfigGetter for use in
@@ -37,8 +76,10 @@ type ConfigGetterStub struct {
 // Usage:
 //
 //	g := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
-//	    "jwt.ttl": {Entry: &accesscoretest.FakeConfigEntry{Key: "jwt.ttl", Value: "3600", Version: 1}},
-//	    "bad-key": {Err: someErr},
+//	    "jwt.ttl":   accesscoretest.PresentStub("jwt.ttl", "3600", 1),
+//	    "kms.key":   accesscoretest.SensitiveStub("kms.key", 4),
+//	    "stale.key": accesscoretest.NotFoundStub(),
+//	    "broken":    accesscoretest.ErrorStub(myTransientErr),
 //	})
 type FakeConfigGetter struct {
 	mu    sync.Mutex
@@ -49,45 +90,50 @@ type FakeConfigGetter struct {
 // Compile-time assertion: FakeConfigGetter must satisfy ports.ConfigGetter.
 var _ ports.ConfigGetter = (*FakeConfigGetter)(nil)
 
-// NewFakeConfigGetter constructs a FakeConfigGetter with the given stubs.
+// NewFakeConfigGetter constructs a FakeConfigGetter with a deep copy of the
+// supplied stubs map. Subsequent mutations of the caller's map (or of any
+// ConfigGetterStub value re-used as a map alias) do not affect the fake.
 // A nil or empty stubs map means all keys return ErrConfigNotFound.
 func NewFakeConfigGetter(stubs map[string]ConfigGetterStub) *FakeConfigGetter {
-	if stubs == nil {
-		stubs = map[string]ConfigGetterStub{}
+	cp := make(map[string]ConfigGetterStub, len(stubs))
+	for k, v := range stubs {
+		if v.entry != nil {
+			entryCopy := *v.entry
+			v.entry = &entryCopy
+		}
+		cp[k] = v
 	}
-	return &FakeConfigGetter{stubs: stubs}
+	return &FakeConfigGetter{stubs: cp}
 }
 
-// GetEntry implements ports.ConfigGetter. It records the call and returns the
-// stubbed response for the given key. Unknown keys return ErrConfigNotFound.
-func (g *FakeConfigGetter) GetEntry(_ context.Context, key string) (ports.ConfigEntry, error) {
+// GetEntry implements ports.ConfigGetter. It honors ctx.Err() (matching the
+// production HTTP getter's cancellation semantic), records the call, and
+// returns the stubbed response for the given key. Unknown keys and
+// NotFoundStub entries return ErrConfigNotFound with CategoryDomain.
+func (g *FakeConfigGetter) GetEntry(ctx context.Context, key string) (ports.ConfigEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.ConfigEntry{}, err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = append(g.calls, key)
 
 	stub, ok := g.stubs[key]
-	if !ok {
+	if !ok || (stub.entry == nil && stub.err == nil) {
 		return ports.ConfigEntry{}, errcode.New(
 			errcode.KindNotFound, errcode.ErrConfigNotFound,
 			"fake config getter: key not found",
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
-	if stub.Err != nil {
-		return ports.ConfigEntry{}, stub.Err
-	}
-	if stub.Entry == nil {
-		return ports.ConfigEntry{}, errcode.New(
-			errcode.KindNotFound, errcode.ErrConfigNotFound,
-			"fake config getter: key not found",
-			errcode.WithCategory(errcode.CategoryDomain),
-		)
+	if stub.err != nil {
+		return ports.ConfigEntry{}, stub.err
 	}
 	return ports.ConfigEntry{
-		Key:       stub.Entry.Key,
-		Value:     stub.Entry.Value,
-		Sensitive: stub.Entry.Sensitive,
-		Version:   stub.Entry.Version,
+		Key:       stub.entry.key,
+		Value:     stub.entry.value,
+		Sensitive: stub.entry.sensitive,
+		Version:   stub.entry.version,
 	}, nil
 }
 

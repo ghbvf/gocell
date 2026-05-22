@@ -7,9 +7,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/accesscore/accesscoretest"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -19,7 +17,8 @@ import (
 //  1. The basic service construction pattern.
 //  2. How to swap slog.DiscardHandler for os.Stderr to see verbose logs
 //     during local debugging.
-//  3. Seeding state via the returned AccessFixture.
+//  3. Seeding state via the returned AccessFixture using the value-type
+//     SeededUser / SeededRole DTOs (no internal/domain import required).
 //
 // To swap in verbose logging, uncomment the WithIdentityLogger option:
 //
@@ -38,19 +37,18 @@ func TestExampleBuildIdentityManageService(t *testing.T) {
 	svc, fix, rec := accesscoretest.BuildIdentityManageService(t)
 
 	// Seed an admin user so last-admin protection does not block Create.
-	admin, err := domain.NewUser("admin", "admin@example.com", "$2a$04$x", clock.Real().Now())
-	if err != nil {
-		t.Fatalf("domain.NewUser: %v", err)
-	}
-	admin.ID = "usr-admin"
-	if err := fix.SeedUser(ctx, admin); err != nil {
+	if err := fix.SeedUser(ctx, accesscoretest.SeededUser{
+		ID: "usr-admin", Username: "admin", Email: "admin@example.com",
+		PasswordHash: "$2a$04$x",
+	}); err != nil {
 		t.Fatalf("SeedUser: %v", err)
 	}
-	adminRole := &domain.Role{ID: "admin", Name: "Admin"}
-	if err := fix.SeedRole(ctx, adminRole); err != nil {
+	if err := fix.SeedRole(ctx, accesscoretest.SeededRole{
+		ID: "admin", Name: "Admin",
+	}); err != nil {
 		t.Fatalf("SeedRole: %v", err)
 	}
-	if err := fix.SeedAssignment(ctx, admin.ID, "admin"); err != nil {
+	if err := fix.SeedAssignment(ctx, "usr-admin", "admin"); err != nil {
 		t.Fatalf("SeedAssignment: %v", err)
 	}
 

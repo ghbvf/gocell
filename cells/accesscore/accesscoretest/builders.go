@@ -5,35 +5,49 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// stubTokenIssuer is a minimal identitymanage.TokenIssuer that returns a zero
-// TokenPair. Used by BuildIdentityManageService for paths that do not exercise
-// ChangePassword. Callers that need real token issuance should inject a real
-// sessionlogin.Service via WithIdentityTokenIssuer.
-type stubTokenIssuer struct{}
+// failingTokenIssuer is the default identitymanage.TokenIssuer wired by
+// BuildIdentityManageService. It t.Fatal's the moment IssueForUser is called,
+// which translates "test exercises ChangePassword but forgot to inject a real
+// issuer" from a silent false-green (empty TokenPair, nil error) into an
+// immediate hard failure with the exact remediation in the message.
+//
+// Non-ChangePassword paths (Create / Lock / Unlock / Delete / Suspend) never
+// call IssueForUser, so the default is harmless for them.
+//
+// ref: testing/iotest.ErrReader — same fail-loud shape for "this method
+// should never be called in this test".
+type failingTokenIssuer struct{ t *testing.T }
 
-func (stubTokenIssuer) IssueForUser(_ context.Context, _ string) (dto.TokenPair, error) {
+func (f failingTokenIssuer) IssueForUser(context.Context, string) (dto.TokenPair, error) {
+	f.t.Helper()
+	f.t.Fatal("BuildIdentityManageService: default TokenIssuer was called; " +
+		"ChangePassword paths must inject a real issuer via WithIdentityTokenIssuer " +
+		"(typically the sessionlogin.Service)")
 	return dto.TokenPair{}, nil
 }
 
-// Compile-time: stubTokenIssuer must satisfy the narrow identitymanage.TokenIssuer
+// Compile-time: failingTokenIssuer must satisfy the narrow identitymanage.TokenIssuer
 // interface.
-var _ identitymanage.TokenIssuer = stubTokenIssuer{}
+var _ identitymanage.TokenIssuer = failingTokenIssuer{}
 
 // BuildIdentityManageOption configures BuildIdentityManageService.
 type BuildIdentityManageOption func(*buildIdentityConfig)
 
 type buildIdentityConfig struct {
-	fixture *AccessFixture
-	clock   clock.Clock
-	logger  *slog.Logger
-	issuer  identitymanage.TokenIssuer
+	fixture     *AccessFixture
+	clock       clock.Clock
+	logger      *slog.Logger
+	issuer      identitymanage.TokenIssuer
+	invalidator *credentialinvalidate.Invalidator
 }
 
 // WithIdentityFixture injects a pre-constructed (and possibly pre-seeded)
@@ -70,9 +84,9 @@ func WithIdentityLogger(l *slog.Logger) BuildIdentityManageOption {
 	}
 }
 
-// WithIdentityTokenIssuer injects a custom TokenIssuer. When not provided a
-// no-op stub is used (sufficient for Create/Lock/Unlock/Delete paths that do
-// not call ChangePassword). Tests exercising ChangePassword must inject a real
+// WithIdentityTokenIssuer injects a custom TokenIssuer. When not provided the
+// default failingTokenIssuer is wired, which fails the test on IssueForUser
+// call. Tests exercising ChangePassword must inject a real
 // sessionlogin.Service.
 // See cells/accesscore/slices/sessionlogin.Service which implements TokenIssuer.
 func WithIdentityTokenIssuer(ti identitymanage.TokenIssuer) BuildIdentityManageOption {
@@ -83,23 +97,39 @@ func WithIdentityTokenIssuer(ti identitymanage.TokenIssuer) BuildIdentityManageO
 	}
 }
 
+// WithIdentityInvalidator overrides the credential invalidator. By default
+// BuildIdentityManageService constructs an invalidator wired to the fixture
+// (so user/session/refresh state stays paired). Use this escape hatch only
+// when a test needs to substitute a custom invalidator built against the
+// same fixture — passing nil keeps the default.
+func WithIdentityInvalidator(inv *credentialinvalidate.Invalidator) BuildIdentityManageOption {
+	return func(c *buildIdentityConfig) {
+		if inv != nil {
+			c.invalidator = inv
+		}
+	}
+}
+
 // BuildIdentityManageService constructs a ready-to-use *identitymanage.Service
 // along with the AccessFixture and outboxtest.Recorder it is wired to.
 //
 // Default wiring:
 //   - AccessFixture: fresh NewAccessFixture(t, clock.Real())
-//   - invalidator: shares the fixture's UserRepository (same store) plus fresh
-//     in-memory session and refresh stores from internal/testutil
+//   - invalidator: NewCredentialInvalidator(t, WithInvalidatorFixture(fixture))
+//     — shares the fixture's UserRepository + session.MemStore + refresh.Store
+//     so any sessionlogin.Service injected via WithIdentityTokenIssuer sees
+//     the same session/refresh state the invalidator revokes against
 //   - TxManager: fixture.TxRunner() (store-paired, full atomic semantics)
 //   - Emitter: outboxtest.NewRecorder()
 //   - Clock: clock.Real()
 //   - Logger: slog.New(slog.DiscardHandler)
-//   - TokenIssuer: stubTokenIssuer (returns empty TokenPair; fine for non-ChangePassword paths)
-//   - WithLastAdminProtection(fixture.RoleRepository())
+//   - TokenIssuer: failingTokenIssuer (t.Fatal on IssueForUser; replace via
+//     WithIdentityTokenIssuer for ChangePassword paths)
+//   - WithLastAdminProtection(fixture.RoleRepository) — via bundle-internal access
 //
 // The returned fixture is the same one used internally — seed via
 // fixture.SeedUser / SeedRole / SeedAssignment, then assert via
-// fixture.UserRepository() / RoleRepository().
+// fixture.GetUser / GetRole / UserRoles.
 func BuildIdentityManageService(
 	t *testing.T,
 	opts ...BuildIdentityManageOption,
@@ -118,29 +148,26 @@ func BuildIdentityManageService(
 		cfg.logger = slog.New(slog.DiscardHandler)
 	}
 	if cfg.issuer == nil {
-		cfg.issuer = stubTokenIssuer{}
+		cfg.issuer = failingTokenIssuer{t: t}
 	}
 	if cfg.fixture == nil {
 		cfg.fixture = NewAccessFixture(t, cfg.clock)
 	}
-
-	// Construct the invalidator sharing the fixture's UserRepository so that
-	// identitymanage and the invalidator read/write the same user store.
-	inv := NewCredentialInvalidator(t,
-		WithInvalidatorUsers(cfg.fixture.UserRepository()),
-	)
+	if cfg.invalidator == nil {
+		cfg.invalidator = NewCredentialInvalidator(t, WithInvalidatorFixture(cfg.fixture))
+	}
 
 	rec := outboxtest.NewRecorder()
 
 	svc, err := identitymanage.NewService(
-		cfg.fixture.UserRepository(),
-		inv,
+		cfg.fixture.bundle.UserRepository(),
+		cfg.invalidator,
 		cfg.logger,
 		identitymanage.WithEmitter(rec),
 		identitymanage.WithTxManager(cfg.fixture.TxRunner()),
 		identitymanage.WithClock(cfg.clock),
 		identitymanage.WithTokenIssuer(cfg.issuer),
-		identitymanage.WithLastAdminProtection(cfg.fixture.RoleRepository()),
+		identitymanage.WithLastAdminProtection(cfg.fixture.bundle.RoleRepository()),
 	)
 	if err != nil {
 		t.Fatalf("BuildIdentityManageService: %v", err)
@@ -155,6 +182,7 @@ type BuildConfigReceiveOption func(*buildReceiveConfig)
 type buildReceiveConfig struct {
 	configGetter *FakeConfigGetter
 	logger       *slog.Logger
+	collector    obmetrics.ConfigEventCollector
 }
 
 // WithConfigReceiveConfigGetter injects a FakeConfigGetter into the configreceive
@@ -177,11 +205,25 @@ func WithConfigReceiveLogger(l *slog.Logger) BuildConfigReceiveOption {
 	}
 }
 
+// WithConfigReceiveCollector injects a config event collector so tests can
+// observe ack / stale / permanent_error metric attribution downstream of
+// HandleEntryUpserted / HandleEntryDeleted.
+func WithConfigReceiveCollector(c obmetrics.ConfigEventCollector) BuildConfigReceiveOption {
+	return func(cfg *buildReceiveConfig) {
+		if c != nil {
+			cfg.collector = c
+		}
+	}
+}
+
 // BuildConfigReceiveService constructs a ready-to-use *configreceive.Service.
 //
 // Default wiring:
 //   - ConfigGetter: NewFakeConfigGetter(nil) — all keys return ErrConfigNotFound
 //   - Logger: slog.New(slog.DiscardHandler)
+//   - ConfigEventCollector: not set — configreceive.NewService falls back to its
+//     own noop collector. Inject via WithConfigReceiveCollector to assert
+//     metric attribution.
 func BuildConfigReceiveService(t *testing.T, opts ...BuildConfigReceiveOption) *configreceive.Service {
 	t.Helper()
 
@@ -197,8 +239,9 @@ func BuildConfigReceiveService(t *testing.T, opts ...BuildConfigReceiveOption) *
 		cfg.configGetter = NewFakeConfigGetter(nil)
 	}
 
-	return configreceive.NewService(
-		cfg.logger,
-		configreceive.WithConfigGetter(cfg.configGetter),
-	)
+	serviceOpts := []configreceive.Option{configreceive.WithConfigGetter(cfg.configGetter)}
+	if cfg.collector != nil {
+		serviceOpts = append(serviceOpts, configreceive.WithConfigEventCollector(cfg.collector))
+	}
+	return configreceive.NewService(cfg.logger, serviceOpts...)
 }

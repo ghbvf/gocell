@@ -4,73 +4,63 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
 // CredentialInvalidatorOption configures NewCredentialInvalidator.
+//
+// The only public option is WithInvalidatorFixture. Round-2 review of PR
+// #845 (worktree 650) collapsed the previous WithInvalidatorUsers /
+// WithInvalidatorSessions / WithInvalidatorRefresh trio because they let
+// callers wire independent stores into the invalidator while a real
+// sessionlogin.Service held its own state — the exact mis-pairing failure
+// mode PR #595 was supposed to prevent. The fixture is now the sole source
+// of the (UserRepository, session.Store, refresh.Store) triple; any other
+// wiring path is unexpressible in the type system.
 type CredentialInvalidatorOption func(*invalidatorConfig)
 
 type invalidatorConfig struct {
-	users        ports.UserRepository
-	sessions     session.Store
-	refreshStore refresh.Store
+	fixture *AccessFixture
 }
 
-// WithInvalidatorUsers injects a UserRepository into the Invalidator. This
-// option is required: NewCredentialInvalidator fails the test immediately if
-// it is not provided.
+// WithInvalidatorFixture is the required option for NewCredentialInvalidator.
+// Passing nil is a no-op (the option function is idempotent); the final nil
+// check happens inside NewCredentialInvalidator and fails the test.
 //
 // Usage:
 //
+//	fix := accesscoretest.NewAccessFixture(t, clock.Real())
 //	inv := accesscoretest.NewCredentialInvalidator(t,
-//	    accesscoretest.WithInvalidatorUsers(fixture.UserRepository()),
+//	    accesscoretest.WithInvalidatorFixture(fix),
 //	)
-func WithInvalidatorUsers(r ports.UserRepository) CredentialInvalidatorOption {
-	return func(c *invalidatorConfig) { c.users = r }
-}
-
-// WithInvalidatorSessions injects a custom session.Store into the Invalidator.
-func WithInvalidatorSessions(s session.Store) CredentialInvalidatorOption {
-	return func(c *invalidatorConfig) { c.sessions = s }
-}
-
-// WithInvalidatorRefresh injects a custom refresh.Store into the Invalidator.
-func WithInvalidatorRefresh(r refresh.Store) CredentialInvalidatorOption {
-	return func(c *invalidatorConfig) { c.refreshStore = r }
+func WithInvalidatorFixture(f *AccessFixture) CredentialInvalidatorOption {
+	return func(c *invalidatorConfig) {
+		if f != nil {
+			c.fixture = f
+		}
+	}
 }
 
 // NewCredentialInvalidator constructs a real *credentialinvalidate.Invalidator
-// suitable for embedding in test-built services.
-//
-// WithInvalidatorUsers is required: omitting it fails the test immediately to
-// prevent accidental use of an isolated store that is not paired with any other
-// fixture.
-//
-// Default deps:
-//   - sessions: testutil.RealSessionRepo(t)
-//   - refreshStore: testutil.RealRefreshStore(t)
+// wired to the user/session/refresh stores held by the supplied
+// AccessFixture. The fixture is required: omitting WithInvalidatorFixture
+// fails the test immediately so the invalidator can never silently run
+// against an isolated store.
 func NewCredentialInvalidator(t *testing.T, opts ...CredentialInvalidatorOption) *credentialinvalidate.Invalidator {
 	t.Helper()
 	cfg := &invalidatorConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
-
-	if cfg.users == nil {
-		t.Fatalf("NewCredentialInvalidator: WithInvalidatorUsers is required; " +
-			"pass WithInvalidatorUsers(fixture.UserRepository()) to share state with other services")
-	}
-	if cfg.sessions == nil {
-		cfg.sessions = testutil.RealSessionRepo(t)
-	}
-	if cfg.refreshStore == nil {
-		cfg.refreshStore = testutil.RealRefreshStore(t)
+	if cfg.fixture == nil {
+		t.Fatalf("NewCredentialInvalidator: WithInvalidatorFixture is required; " +
+			"pass an AccessFixture so user/session/refresh state stays paired")
 	}
 
-	inv, err := credentialinvalidate.New(cfg.users, cfg.sessions, cfg.refreshStore)
+	inv, err := credentialinvalidate.New(
+		cfg.fixture.bundle.UserRepository(),
+		cfg.fixture.sessionStore,
+		cfg.fixture.refreshStore,
+	)
 	if err != nil {
 		t.Fatalf("NewCredentialInvalidator: %v", err)
 	}

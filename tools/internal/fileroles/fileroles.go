@@ -92,6 +92,8 @@ func IsTestCode(rel string) bool {
 		return true
 	case strings.Contains(rel, "/auditcoretest/"):
 		return true
+	case strings.Contains(rel, "/accesscoretest/"):
+		return true
 	}
 	return false
 }

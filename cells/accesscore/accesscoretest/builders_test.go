@@ -6,13 +6,13 @@ package accesscoretest_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/accesscoretest"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -22,101 +22,122 @@ import (
 )
 
 // TestNewAccessFixtureSeedAndQuery seeds a user and role, then reads them back
-// via the repository accessors.
+// via the value-type Get* helpers.
 func TestNewAccessFixtureSeedAndQuery(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := accesscoretest.NewAccessFixture(t, clock.Real())
 
-	u, err := domain.NewUser("alice", "alice@example.com", "hash", clock.Real().Now())
-	require.NoError(t, err)
-	u.ID = "usr-alice"
-	require.NoError(t, f.SeedUser(ctx, u))
+	require.NoError(t, f.SeedUser(ctx, accesscoretest.SeededUser{
+		ID: "usr-alice", Username: "alice", Email: "alice@example.com",
+		PasswordHash: "hash",
+	}))
 
-	role := &domain.Role{ID: "role-viewer", Name: "Viewer"}
-	require.NoError(t, f.SeedRole(ctx, role))
+	require.NoError(t, f.SeedRole(ctx, accesscoretest.SeededRole{
+		ID: "role-viewer", Name: "Viewer",
+	}))
 
-	// Read back via UserRepository.
-	got, err := f.UserRepository().GetByID(ctx, u.ID)
+	got, err := f.GetUser(ctx, "usr-alice")
 	require.NoError(t, err)
-	assert.Equal(t, u.ID, got.ID)
+	assert.Equal(t, "usr-alice", got.ID)
 	assert.Equal(t, "alice", got.Username)
+	assert.Equal(t, accesscoretest.UserStatusActive, got.Status)
 
-	// Read back via RoleRepository.
-	gotRole, err := f.RoleRepository().GetByID(ctx, role.ID)
+	gotRole, err := f.GetRole(ctx, "role-viewer")
 	require.NoError(t, err)
-	assert.Equal(t, role.ID, gotRole.ID)
+	assert.Equal(t, "role-viewer", gotRole.ID)
 }
 
-// TestAccessFixtureStorePaired asserts that UserRepository and RoleRepository share
-// the same underlying store by verifying that a role assigned via f.SeedAssignment
-// is visible through f.RoleRepository().GetByUserID.
+// TestAccessFixtureStorePaired asserts that user / role / assignment all
+// share the same underlying store by verifying that a role assigned via
+// f.SeedAssignment is visible through f.UserRoles.
 func TestAccessFixtureStorePaired(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := accesscoretest.NewAccessFixture(t, clock.Real())
 
-	u, err := domain.NewUser("bob", "bob@example.com", "hash", clock.Real().Now())
+	require.NoError(t, f.SeedUser(ctx, accesscoretest.SeededUser{
+		ID: "usr-bob", Username: "bob", Email: "bob@example.com", PasswordHash: "hash",
+	}))
+	require.NoError(t, f.SeedRole(ctx, accesscoretest.SeededRole{
+		ID: "role-admin", Name: "Admin",
+	}))
+	require.NoError(t, f.SeedAssignment(ctx, "usr-bob", "role-admin"))
+
+	roles, err := f.UserRoles(ctx, "usr-bob")
 	require.NoError(t, err)
-	u.ID = "usr-bob"
-	require.NoError(t, f.SeedUser(ctx, u))
-
-	role := &domain.Role{ID: "role-admin", Name: "Admin"}
-	require.NoError(t, f.SeedRole(ctx, role))
-
-	// Assign via SeedAssignment (uses RoleRepository under the hood).
-	require.NoError(t, f.SeedAssignment(ctx, u.ID, role.ID))
-
-	// Verify cross-repo visibility: the assignment must be visible via RoleRepository.
-	roles, err := f.RoleRepository().GetByUserID(ctx, u.ID)
-	require.NoError(t, err)
-	require.Len(t, roles, 1, "assignment seeded via SeedAssignment must be visible via RoleRepository")
-	assert.Equal(t, role.ID, roles[0].ID)
+	require.Len(t, roles, 1,
+		"assignment seeded via SeedAssignment must be visible via UserRoles")
+	assert.Equal(t, "role-admin", roles[0].ID)
 }
 
-// TestFakeConfigGetterHit exercises stub hit, stub error, unknown-key, and
-// explicit-zero-stub (Entry:nil, Err:nil) paths.
-func TestFakeConfigGetterHit(t *testing.T) {
+// TestFakeConfigGetterTypedConstructors exercises each of the four typed
+// stub constructors (Present / Sensitive / NotFound / Error) and the
+// unknown-key path.
+func TestFakeConfigGetterTypedConstructors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// Stub hit — entry present.
-	entry := &accesscoretest.ConfigGetterStub{
-		Entry: &accesscoretest.FakeConfigEntry{Key: "foo", Value: "bar", Version: 1},
-	}
+	// PresentStub — plaintext value returned as-is.
 	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
-		"foo": *entry,
+		"foo": accesscoretest.PresentStub("foo", "bar", 1),
 	})
 	got, err := fg.GetEntry(ctx, "foo")
 	require.NoError(t, err)
 	assert.Equal(t, "foo", got.Key)
 	assert.Equal(t, "bar", got.Value)
+	assert.False(t, got.Sensitive)
+	assert.Equal(t, 1, got.Version)
 
-	// Stub with error.
+	// SensitiveStub — Value is the production redaction sentinel.
+	fgSens := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
+		"kms.key": accesscoretest.SensitiveStub("kms.key", 4),
+	})
+	gotSens, err := fgSens.GetEntry(ctx, "kms.key")
+	require.NoError(t, err)
+	assert.True(t, gotSens.Sensitive)
+	assert.Equal(t, "******", gotSens.Value,
+		"SensitiveStub must mirror configcore's redaction contract")
+
+	// ErrorStub — error surfaced verbatim.
 	customErr := errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found")
-	fg2 := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
-		"missing": {Err: customErr},
+	fgErr := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
+		"missing": accesscoretest.ErrorStub(customErr),
 	})
-	_, err2 := fg2.GetEntry(ctx, "missing")
-	require.Error(t, err2)
-	assert.ErrorIs(t, err2, customErr)
+	_, err = fgErr.GetEntry(ctx, "missing")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, customErr)
 
-	// Unknown key — returns ErrConfigNotFound by convention (documented in package).
-	fg3 := accesscoretest.NewFakeConfigGetter(nil)
-	_, err3 := fg3.GetEntry(ctx, "unknown")
-	require.Error(t, err3, "unknown key must return an error")
+	// Unknown key (no stub) — ErrConfigNotFound with CategoryDomain.
+	fgUnknown := accesscoretest.NewFakeConfigGetter(nil)
+	_, err = fgUnknown.GetEntry(ctx, "unknown")
+	require.Error(t, err)
+	assert.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigNotFound),
+		"unknown key must carry CategoryDomain so HandleEntryUpserted Acks")
 
-	// Explicit zero stub: Entry:nil, Err:nil — triggers the not-found branch
-	// (key is present in the stubs map but Entry is nil).
-	fg4 := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
-		"stale": {Entry: nil, Err: nil},
+	// NotFoundStub — same shape as unknown key.
+	fgGone := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
+		"stale": accesscoretest.NotFoundStub(),
 	})
-	_, err4 := fg4.GetEntry(ctx, "stale")
-	require.Error(t, err4, "explicit nil-entry stub must return ErrConfigNotFound")
-	assert.True(t,
-		errcode.IsDomainNotFound(err4, errcode.ErrConfigNotFound),
-		"nil-entry stub error must have CategoryDomain so HandleEntryUpserted Acks as stale event",
-	)
+	_, err = fgGone.GetEntry(ctx, "stale")
+	require.Error(t, err)
+	assert.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigNotFound),
+		"NotFoundStub must carry CategoryDomain so HandleEntryUpserted Acks")
+}
+
+// TestFakeConfigGetterCtxCancel ensures the fake honors context cancellation,
+// matching the production HTTP getter's semantics.
+func TestFakeConfigGetterCtxCancel(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
+		"foo": accesscoretest.PresentStub("foo", "v", 1),
+	})
+	_, err := fg.GetEntry(ctx, "foo")
+	require.Error(t, err, "GetEntry must propagate canceled ctx error")
+	assert.True(t, errors.Is(err, context.Canceled))
 }
 
 // TestFakeConfigGetterCallsRecorded verifies that call order is captured.
@@ -125,8 +146,8 @@ func TestFakeConfigGetterCallsRecorded(t *testing.T) {
 	ctx := context.Background()
 
 	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
-		"foo": {Entry: &accesscoretest.FakeConfigEntry{Key: "foo", Value: "v"}},
-		"bar": {Entry: &accesscoretest.FakeConfigEntry{Key: "bar", Value: "v2"}},
+		"foo": accesscoretest.PresentStub("foo", "v", 1),
+		"bar": accesscoretest.PresentStub("bar", "v2", 1),
 	})
 	_, _ = fg.GetEntry(ctx, "foo")
 	_, _ = fg.GetEntry(ctx, "bar")
@@ -138,13 +159,13 @@ func TestFakeConfigGetterCallsRecorded(t *testing.T) {
 	assert.Empty(t, fg.Calls(), "Reset must clear the call log")
 }
 
-// TestNewCredentialInvalidatorWithDefaults verifies that the helper returns a
-// non-nil Invalidator when WithInvalidatorUsers is provided.
-func TestNewCredentialInvalidatorWithDefaults(t *testing.T) {
+// TestNewCredentialInvalidatorWithFixture verifies the fixture-only collapse:
+// passing a fixture yields a usable *Invalidator.
+func TestNewCredentialInvalidatorWithFixture(t *testing.T) {
 	t.Parallel()
 	f := accesscoretest.NewAccessFixture(t, clock.Real())
 	inv := accesscoretest.NewCredentialInvalidator(t,
-		accesscoretest.WithInvalidatorUsers(f.UserRepository()),
+		accesscoretest.WithInvalidatorFixture(f),
 	)
 	require.NotNil(t, inv, "NewCredentialInvalidator must return non-nil *Invalidator")
 }
@@ -159,13 +180,14 @@ func TestBuildIdentityManageServiceSmoke(t *testing.T) {
 	svc, fix, rec := accesscoretest.BuildIdentityManageService(t)
 
 	// Seed admin user so last-admin protection does not block the Create call.
-	adminUser, err := domain.NewUser("admin", "admin@test.com", "$2a$04$dummy", clock.Real().Now())
-	require.NoError(t, err)
-	adminUser.ID = "usr-admin"
-	require.NoError(t, fix.SeedUser(ctx, adminUser))
-	adminRole := &domain.Role{ID: "admin", Name: "Admin"}
-	require.NoError(t, fix.SeedRole(ctx, adminRole))
-	require.NoError(t, fix.SeedAssignment(ctx, adminUser.ID, "admin"))
+	require.NoError(t, fix.SeedUser(ctx, accesscoretest.SeededUser{
+		ID: "usr-admin", Username: "admin", Email: "admin@test.com",
+		PasswordHash: "$2a$04$dummy",
+	}))
+	require.NoError(t, fix.SeedRole(ctx, accesscoretest.SeededRole{
+		ID: "admin", Name: "Admin",
+	}))
+	require.NoError(t, fix.SeedAssignment(ctx, "usr-admin", "admin"))
 
 	// Use admin context (actorFromContext requires a non-empty subject).
 	adminCtx := auth.TestContext("usr-admin", []string{"admin"})
@@ -178,8 +200,8 @@ func TestBuildIdentityManageServiceSmoke(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, created.ID)
 
-	// Fixture state: new user must be visible via UserRepository.
-	got, err := fix.UserRepository().GetByID(ctx, created.ID)
+	// Fixture state: new user must be visible via GetUser.
+	got, err := fix.GetUser(ctx, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "newuser", got.Username)
 
@@ -196,7 +218,7 @@ func TestBuildConfigReceiveServiceSmoke(t *testing.T) {
 	ctx := context.Background()
 
 	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
-		"jwt.ttl": {Entry: &accesscoretest.FakeConfigEntry{Key: "jwt.ttl", Value: "3600", Version: 1}},
+		"jwt.ttl": accesscoretest.PresentStub("jwt.ttl", "3600", 1),
 	})
 	svc := accesscoretest.BuildConfigReceiveService(t,
 		accesscoretest.WithConfigReceiveConfigGetter(fg),
@@ -211,10 +233,10 @@ func TestBuildConfigReceiveServiceSmoke(t *testing.T) {
 	calls := fg.Calls()
 	require.Contains(t, calls, "jwt.ttl", "HandleEntryUpserted must query ConfigGetter for the upserted key")
 
-	// Stale-event path: explicit nil-entry stub triggers ErrConfigNotFound with
+	// Stale-event path: NotFoundStub triggers ErrConfigNotFound with
 	// CategoryDomain, so HandleEntryUpserted Acks instead of Requeueing.
 	fgStale := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
-		"gone.key": {Entry: nil, Err: nil},
+		"gone.key": accesscoretest.NotFoundStub(),
 	})
 	svcStale := accesscoretest.BuildConfigReceiveService(t,
 		accesscoretest.WithConfigReceiveConfigGetter(fgStale),
