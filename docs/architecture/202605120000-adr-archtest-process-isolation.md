@@ -152,13 +152,24 @@ phase0-baseline.txt 留在 worktree 但不入 PR（一次性 artifact）。
 
 无变 ❌/⚠️ 项，amendment 与原文论点正交。
 
+### 新约束 Medium 守卫（同 PR 闭环，per ai-collab.md §"立项硬门槛 ≥ Medium"）
+
+Amendment 改默认 16→1 产生一个新隐式约束：**CI yaml `.github/workflows/_build-lint.yml::verify-archtest` job 必须 explicit 设 `SHARD_COUNT: 16`**（否则 CI 以 K=1 单进程跑全部 archtest，~20 GB peak RSS 撞 GHA 7 GB shard OOM）。
+
+按 ai-collab.md "新引入 Soft → 直接 reject，要求改 ≥ Medium"，此约束**同 PR 内** Medium 化，不允许靠注释维护或 backlog 延期：
+
+- 新增 archtest `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01`（`tools/archtest/archtest_ci_shard_count_test.go`）：解析 `_build-lint.yml` YAML，断言 `jobs.verify-archtest.steps[*].env.SHARD_COUNT == "16"`；缺失或值漂移立即 fail。
+- 形态 Medium：runtime guard via archtest，CI 跑时立即捕获。违反不可通过单边修改 yaml 静默达成——必须同 PR 修改 archtest 或 fixture，diff 可视。
+- 4 个 fixture（正/3 反）覆盖：正确形状 / 缺 env / 值漂移（K=8 反例）/ 缺 job。
+
 ### Backlog 关闭
 
-`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01`（双源真值守卫升级）→ ✅ closed by this amendment：双源 SYNC 假设通过"CI 必 explicit / 本地默认服务"消除，不再需要守卫。详见 `docs/backlog/20260520/cap-02-metadata-governance.md`。
+`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01`（双源真值守卫升级）→ ✅ closed by this amendment：双源 SYNC 假设通过"CI 必 explicit / 本地默认服务"消除；新约束由上节 Medium archtest 守卫。详见 `docs/backlog/20260520/cap-02-metadata-governance.md`。
 
 ### 跨载体同步（同 PR 闭环）
 
 - `hack/verify-archtest.sh` line 19-21 header + line 46-47 注释 + 默认值
 - `.github/workflows/_build-lint.yml` line 305 SYNC 注释改述
 - `CLAUDE.md:78`、`.claude/rules/gocell/ai-collab.md:69` K=16 描述
+- `tools/archtest/archtest_ci_shard_count_test.go` 新 Medium 守卫（ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01）
 - `docs/backlog/20260520/cap-02-metadata-governance.md` ARCHTEST-SHARDCOUNT-SYNC-GUARD-01 关闭
