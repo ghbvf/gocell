@@ -10,9 +10,14 @@ Issue #713 (`SAFEID-UPSTREAM-FUNNEL-HARD-01`) tracked the upstream funnel
 upgrade from Medium-by-necessity to Hard. The original backlog entry
 proposed an archtest caller-allowlist; that approach was rejected on
 review because charter §"Funnel 双向锁评级" rates archtest caller-allowlists
-as Medium, not Hard, and the industry precedent for sealed wire envelopes
-(etcd `wal.Record`, Watermill `message.Message`, Kratos `transport/grpc/
-codec`) is unexport-the-struct, not lint-the-callers.
+as Medium, not Hard. The industry precedent for an unexported codec
+gating wire decode is Kratos `transport/grpc/codec.go` (zero-size
+unexported codec struct with single registration); etcd `server/wal/wal.go`
+provides an adjacent "sealed handle via unexported fields + factory-only
+construction" pattern at the `WAL` handle level (distinct from etcd's
+wire-level `wal.Record`). Watermill `message.Message` is NOT a direct
+precedent — its UUID/Metadata/Payload are exported; only the ack
+lifecycle is sealed via unexported channels.
 
 **Adopted change**: rename `kernel/outbox.WireMessage` → `wireMessage`
 (lowercase, package-private). The public envelope I/O surface is unchanged
@@ -35,18 +40,25 @@ After the seal:
 | Threat | Pre-amendment | Post-amendment |
 |--------|---------------|---------------|
 | Wire-decode bypass via direct `json.Unmarshal(b, &WireMessage{})` outside `UnmarshalEnvelope` | ⚠️ Medium-by-necessity (would skip `schemaVersion` / required-field checks; SafeID still fires) | ✅ Compile-time impossible (cross-package reference to `wireMessage` is forbidden) |
-| Future re-export via `type WireMessage = wireMessage` or parallel struct | ❌ Not detected | ✅ Caught by `SAFEID-UPSTREAM-FUNNEL-HARD-01` (go/types Lookup + AST `NoReExport` reverse self-test) |
+| Future re-export under ANY exported name: alias (`type Envelope = wireMessage`), defined-type sharing underlying (`type Envelope wireMessage`), or fresh struct copy with the canonical wire-shape fields | ❌ Not detected | ✅ Caught by `SAFEID-UPSTREAM-FUNNEL-HARD-01` checks 5+6: types.Unalias-normalized identity equality (alias / materialized `*types.Alias`); underlying-struct identity equality (defined-type); SchemaVersion + ≥7/10 canonical field overlap (fresh struct). AST `NoReExport` reverse self-test additionally guards the exact-name `type WireMessage` token. |
 | In-memory `SafeID(rawUnsafe)` cast within a trusted package | ⚠️ Permitted (Go's max grade for typed strings) | ⚠️ Unchanged — `MarshalEnvelope`'s `ParseSafeID` producer-side fail-fast still rejects at marshal time |
 | Test helper that builds attack-vector wire bytes (negative testing) | ⚠️ Used `WireMessage{}` literal cast bypass | ✅ Tests build raw `[]byte` JSON templates; the seal forbids in-Go construction, aligning with the principle that wire-format faults are byte-level |
 
 Industry references (commit message `ref:` slugs):
 
-- ref: etcd-io/etcd `server/wal/wal.go` — `WAL` struct sealed via unexported
-  fields + factory-only construction (`Create` / `Open` / `OpenForRead`).
-- ref: ThreeDotsLabs/watermill `message/message.go` — `Message` sealed via
-  unexported channel fields + `NewMessage` constructor.
-- ref: go-kratos/kratos `transport/grpc/codec.go` — zero-size sealed codec
-  struct with single registration.
+- ref: go-kratos/kratos `transport/grpc/codec.go` — zero-size unexported
+  codec struct with single registration. **Primary equivalent**: the
+  unexported codec type gating decode is the same form-class as GoCell's
+  unexported `wireMessage` gating `outbox.UnmarshalEnvelope`.
+- ref: etcd-io/etcd `server/wal/wal.go` — `WAL` handle sealed via
+  unexported fields + factory-only constructors (`Create` / `Open` /
+  `OpenForRead`). **Cited at the handle level**, not at the wire-level
+  `wal.Record` which has different framing semantics.
+- Watermill `message.Message` is intentionally NOT cited as a precedent —
+  its UUID/Metadata/Payload fields are exported; only the ack channels
+  are sealed. Envelope construction is reachable cross-package; that
+  shape is a partial seal, not the Hard upstream guarantee this funnel
+  requires.
 
 The rest of this ADR retains its original decision and trust model;
 sections that originally read "Medium-by-necessity" have been rewritten
@@ -191,6 +203,11 @@ zero regression in `make verify` and `hack/verify-archtest.sh`).
 - Backlog `SAFEID-UPSTREAM-FUNNEL-HARD-01` — closed by issue #713
   amendment §0 (upstream sealed via Go visibility; archtest
   `SAFEID-UPSTREAM-FUNNEL-HARD-01` is the regression guard)
-- ref: etcd-io/etcd `server/wal/wal.go` (sealed via unexported fields)
-- ref: ThreeDotsLabs/watermill `message/message.go` (sealed channels)
-- ref: go-kratos/kratos `transport/grpc/codec.go` (sealed codec)
+- ref: go-kratos/kratos `transport/grpc/codec.go` — primary equivalent
+  (zero-size unexported codec struct, single registration)
+- ref: etcd-io/etcd `server/wal/wal.go` — sealed handle pattern
+  (unexported fields + factory-only construction; cited at `WAL` handle
+  level, distinct from wire-level `wal.Record`)
+- Watermill `message.Message` is NOT cited as a precedent — exported
+  UUID/Metadata/Payload fields make envelope construction reachable
+  cross-package; only ack channels are sealed (partial seal)

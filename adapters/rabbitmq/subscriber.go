@@ -1238,10 +1238,11 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 
 // unmarshalDelivery deserializes a broker message body into an outbox.Entry.
 //
-// Requires a valid v1 WireMessage envelope (schemaVersion:"v1", non-empty id and
+// Requires a valid v1 outbox wire envelope (schemaVersion:"v1", non-empty id and
 // eventType). Any other payload — legacy Entry JSON, raw bytes, unknown schema
 // versions — is rejected with an error so processDelivery NACKs without requeue
-// (permanent error, routes to DLX).
+// (permanent error, routes to DLX). The wire envelope struct is package-private
+// (kernel/outbox.wireMessage); decode is funneled through outbox.UnmarshalEnvelope.
 //
 // Fail-closed semantics: legacy fallback has been removed. All relay producers
 // MUST emit v1 envelopes via kernel/outbox.MarshalEnvelope.

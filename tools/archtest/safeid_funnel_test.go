@@ -32,10 +32,12 @@
 //	`outbox.WireMessage{...}` / `outbox.wireMessage{...}` /
 //	`json.Unmarshal(bytes, &outbox.WireMessage{})` is a compile-time error.
 //	The archtest is the regression guard against a future PR re-exporting
-//	the type. ref: etcd-io/etcd `wal.Record` (sealed via unexported fields);
-//	ThreeDotsLabs/watermill `message.Message` (sealed via unexported channel
-//	fields + NewMessage constructor); go-kratos/kratos `transport/grpc/codec`
-//	(zero-size sealed codec).
+//	the type. ref: go-kratos/kratos `transport/grpc/codec.go` (zero-size
+//	unexported codec struct — closest industry equivalent for an unexported
+//	codec gating wire decode); etcd-io/etcd `server/wal/wal.go` `WAL`
+//	(sealed handle factory, distinct from wire-level `wal.Record`). Watermill
+//	`message.Message` is NOT a Hard equivalent — its UUID/Metadata/Payload
+//	are exported, only ack channels are sealed.
 //
 // Scanning tool: typeseval.SharedResolver via RunTyped + go/types struct
 // field inspection (kernel/outbox package scope, no fixture). Selected per
@@ -362,20 +364,26 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 
 // TestSAFEIDUpstreamFunnelHard01 asserts the upstream-side seal of the
 // SafeID funnel: in kernel/outbox the wire envelope struct must be
-// unexported (`wireMessage`), and no exported `WireMessage` may exist
-// (struct, alias, or otherwise). Go package-level visibility then makes
+// unexported (`wireMessage`), and no re-export under ANY name may
+// expose its constructibility. Go package-level visibility then makes
 // any cross-package construction or json.Unmarshal-decode-target syntax
 // referencing the envelope a compile-time error — the upstream side of
 // the funnel is enforced by the Go type system itself; this archtest is
 // the regression guard against future re-exports.
 //
-// Three checks (all must pass):
+// Six checks (all must pass):
 //  1. `wireMessage` symbol exists in kernel/outbox package scope
 //  2. The symbol is NOT exported (`Obj().Exported() == false`)
-//  3. No `WireMessage` (exported) symbol exists in the same scope
+//  3. No exact-name `WireMessage` (exported) symbol exists in the same scope
 //  4. `wireMessage`'s field set contains the canonical envelope fields
 //     (defense in depth against a silent rename that drops SchemaVersion
 //     or other load-bearing fields)
+//  5. No exported alias of wireMessage exists under any name
+//     (`type Envelope = wireMessage` — caught by Type() identity equality)
+//  6. No exported struct with SchemaVersion + ≥7/10 canonical wireMessage
+//     fields exists under any name (`type Envelope struct{...}` — re-shape
+//     re-export under a fresh name; also flags `type Envelope wireMessage`
+//     defined-type sharing the underlying struct identity)
 func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -409,7 +417,7 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 				})
 			}
 
-			// Check 3: exported re-export does NOT exist.
+			// Check 3: exported `WireMessage` does NOT exist (exact-name regression guard).
 			if exported := scope.Lookup(wireMessageExportedOld); exported != nil {
 				diags = append(diags, Diagnostic{
 					Message: fmt.Sprintf(
@@ -421,7 +429,7 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 				})
 			}
 
-			// Check 4: canonical field set present.
+			// Check 4: canonical field set present on wireMessage itself.
 			named, ok := obj.Type().(*types.Named)
 			if !ok {
 				diags = append(diags, Diagnostic{
@@ -450,6 +458,120 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 						Message: fmt.Sprintf(
 							"SAFEID-UPSTREAM-FUNNEL-HARD-01: %s.%s missing canonical envelope field %q — silent rename or semantic regression",
 							p.Pkg.Path(), wireMessageType, fieldName),
+					})
+				}
+			}
+
+			// Check 5+6: any-name re-export guard. The exact-name check (3)
+			// catches only `type WireMessage ...`. Two stealthier re-exports
+			// remain reachable under arbitrary names:
+			//
+			//   (5) Alias re-export:    type Envelope = wireMessage
+			//   (6) Re-shape re-export: type Envelope struct{...same canonical
+			//                           fields as wireMessage...}
+			//
+			// Both reopen cross-package `outbox.Envelope{}` construction and
+			// `json.Unmarshal(b, &outbox.Envelope{})` decode-target syntax,
+			// bypassing UnmarshalEnvelope's schemaVersion + required-field
+			// checks. SAFEID-WIREMESSAGE-USAGE-01/NewWireStruct flags case (6)
+			// only when fields are `string`-typed — SafeID-typed re-exports
+			// would slip past it.
+			wireType := obj.Type() // *types.Named for wireMessage
+			wireUnderlying := wireType.Underlying()
+			canonicalSet := make(map[string]struct{}, len(wireMessageCanonicalFields))
+			for _, fn := range wireMessageCanonicalFields {
+				canonicalSet[fn] = struct{}{}
+			}
+			for _, name := range scope.Names() {
+				if name == wireMessageType {
+					continue
+				}
+				// Allowlisted siblings (Entry: in-memory representation;
+				// ObservabilityMetadata: explicitly-allowed exported wire
+				// nested struct) and existing exempt-field carve-outs.
+				if _, allowed := safeIDBlindSpotAllowlist[name]; allowed {
+					continue
+				}
+				if _, exempt := safeIDExemptFields[name]; exempt {
+					continue
+				}
+				candidate := scope.Lookup(name)
+				if candidate == nil || !candidate.Exported() {
+					continue
+				}
+
+				// Check 5: alias re-export. `type Envelope = wireMessage`
+				// makes Envelope a TypeName whose Type() may be a *types.Alias
+				// wrapper (Go 1.22+ materialized aliases) or directly identical
+				// to wireMessage's *types.Named (older toolchains / certain
+				// loader paths). types.Unalias normalizes both to the aliased
+				// non-alias type, so identity equality against wireType holds
+				// for any alias target — including alias chains.
+				resolved := types.Unalias(candidate.Type())
+				if resolved == wireType {
+					diags = append(diags, Diagnostic{
+						Message: fmt.Sprintf(
+							"SAFEID-UPSTREAM-FUNNEL-HARD-01/AliasReExport: "+
+								"%s.%s is an exported alias of %s — "+
+								"`type %s = %s` makes the unexported envelope cross-package constructible "+
+								"and json.Unmarshal-targetable, breaking the upstream Hard seal",
+							p.Pkg.Path(), name, wireMessageType,
+							name, wireMessageType),
+					})
+					continue
+				}
+
+				candNamed, ok := resolved.(*types.Named)
+				if !ok {
+					continue
+				}
+				candStrct, ok := candNamed.Underlying().(*types.Struct)
+				if !ok {
+					continue
+				}
+
+				// Check 6: re-shape re-export. Look for SchemaVersion +
+				// substantial overlap with canonical wireMessage fields.
+				// SchemaVersion is the discriminator that distinguishes wire
+				// envelopes from in-memory Entry (Entry intentionally lacks
+				// SchemaVersion since it's the post-decode representation).
+				//
+				// We also flag when underlying struct IDENTITY equals
+				// wireMessage's underlying — covers `type Envelope wireMessage`
+				// (defined-type sharing underlying struct).
+				if candNamed.Underlying() == wireUnderlying {
+					diags = append(diags, Diagnostic{
+						Message: fmt.Sprintf(
+							"SAFEID-UPSTREAM-FUNNEL-HARD-01/ReShapeReExport: "+
+								"%s.%s is an exported defined type sharing %s's underlying struct "+
+								"(`type %s %s`) — same constructibility leak as an alias",
+							p.Pkg.Path(), name, wireMessageType,
+							name, wireMessageType),
+					})
+					continue
+				}
+
+				hasSchemaVersion := false
+				canonicalMatchCount := 0
+				for i := 0; i < candStrct.NumFields(); i++ {
+					fn := candStrct.Field(i).Name()
+					if fn == "SchemaVersion" {
+						hasSchemaVersion = true
+					}
+					if _, ok := canonicalSet[fn]; ok {
+						canonicalMatchCount++
+					}
+				}
+				const reShapeMatchThreshold = 7 // out of 10 canonical fields
+				if hasSchemaVersion && canonicalMatchCount >= reShapeMatchThreshold {
+					diags = append(diags, Diagnostic{
+						Message: fmt.Sprintf(
+							"SAFEID-UPSTREAM-FUNNEL-HARD-01/ReShapeReExport: "+
+								"%s.%s is an exported struct with SchemaVersion + %d/%d canonical wireMessage fields "+
+								"— parallel wire envelope re-introduced under a different name; "+
+								"either rename to extend wireMessage or add to safeIDExemptFields / safeIDBlindSpotAllowlist with rationale",
+							p.Pkg.Path(), name,
+							canonicalMatchCount, len(wireMessageCanonicalFields)),
 					})
 				}
 			}

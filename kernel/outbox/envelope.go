@@ -37,9 +37,16 @@ var ErrUnknownEnvelopeVersion = errcode.New(errcode.KindInvalid, errcode.ErrEnve
 //     MarshalEnvelope / UnmarshalEnvelope move bytes ↔ envelope.
 //     ai-collab.md §"Hard 范本目录" JSON-wire-decode struct sealing.
 //
-// ref: etcd-io/etcd wal.Record (sealed via unexported fields);
-// ThreeDotsLabs/watermill message.Message (sealed via unexported channels);
-// go-kratos/kratos transport/grpc/codec (zero-size sealed codec).
+// ref: go-kratos/kratos transport/grpc/codec.go — zero-size unexported codec
+// struct, the closest industry equivalent (encoding/json wire decoder gated
+// by an unexported type with single registration). ref: etcd-io/etcd
+// server/wal/wal.go — WAL handle sealed via unexported fields + factory-only
+// constructors (Create / Open / OpenForRead); cited at the handle level,
+// distinct from etcd's wire-level wal.Record which has different framing
+// semantics. Watermill message.Message is NOT a precedent here — its UUID /
+// Metadata / Payload fields are exported, only the ack lifecycle is sealed
+// via unexported channels, so envelope construction is not compile-time
+// impossible cross-package.
 type wireMessage struct {
 	SchemaVersion string                `json:"schemaVersion"`
 	ID            idutil.SafeID         `json:"id"`

@@ -1532,7 +1532,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 
 // TestUnmarshalDelivery covers the discriminator paths in unmarshalDelivery
 // after P1-14 A2 (fail-closed envelope schema, legacy fallback removed):
-//  1. v1 WireMessage envelope (primary relay path) — succeeds.
+//  1. v1 outbox wire envelope (primary relay path) — succeeds.
 //  2. Legacy outbox.Entry JSON (no schemaVersion) — rejected with ErrUnknownEnvelopeVersion.
 //  3. Broken JSON — returns a wrapped parse error (not ErrUnknownEnvelopeVersion).
 //  4. Empty body — returns error.
