@@ -97,7 +97,9 @@ func TestMain(m *testing.M) {
 //   - `--test.list <pat>`  (double-dash; same as space-separated)
 //   - `--test.list=<pat>`  (double-dash equals)
 //
-// Detection at TestMain entry pre-dates flag.Parse, so we scan args directly.
+// Detection at TestMain entry pre-dates flag.Parse, so we scan args directly
+// while preserving flag.Parse's stop rules: `--` and the first non-flag
+// argument end flag parsing.
 //
 // Note: the Go toolchain (`go test -list`) translates to `-test.list <pat>`
 // (single dash, space-separated) in the binary's os.Args; the `--test.list`
@@ -114,27 +116,75 @@ func TestMain(m *testing.M) {
 // matchList is empty, so warmup must still run to keep the actual test
 // execution path within slowgate budget.
 func isListMode(args []string) bool {
-	for i, arg := range args {
-		switch {
-		case arg == "-test.list", arg == "--test.list":
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" || arg == "-" || !strings.HasPrefix(arg, "-") {
+			return false
+		}
+
+		name, value, hasValue := splitFlagArg(arg)
+		if name == "test.list" {
+			if hasValue {
+				if value != "" {
+					return true
+				}
+				continue
+			}
 			// Space-separated: value is the next arg if present and non-empty.
-			if i+1 < len(args) && args[i+1] != "" {
-				return true
+			if i+1 < len(args) {
+				i++
+				if args[i] != "" {
+					return true
+				}
 			}
-		case strings.HasPrefix(arg, "-test.list="), strings.HasPrefix(arg, "--test.list="):
-			// Equals-separated: value is the suffix after `=`.
-			val := arg
-			if strings.HasPrefix(val, "--") {
-				val = strings.TrimPrefix(val, "--test.list=")
-			} else {
-				val = strings.TrimPrefix(val, "-test.list=")
-			}
-			if val != "" {
-				return true
-			}
+			continue
+		}
+		if !hasValue && testFlagTakesValue(name) && i+1 < len(args) {
+			i++
 		}
 	}
 	return false
+}
+
+func splitFlagArg(arg string) (name string, value string, hasValue bool) {
+	if strings.HasPrefix(arg, "--") {
+		arg = strings.TrimPrefix(arg, "--")
+	} else {
+		arg = strings.TrimPrefix(arg, "-")
+	}
+	name, value, hasValue = strings.Cut(arg, "=")
+	return name, value, hasValue
+}
+
+func testFlagTakesValue(name string) bool {
+	switch name {
+	case "test.bench",
+		"test.benchtime",
+		"test.blockprofile",
+		"test.blockprofilerate",
+		"test.coverprofile",
+		"test.cpu",
+		"test.cpuprofile",
+		"test.fuzz",
+		"test.fuzzcachedir",
+		"test.gocoverdir",
+		"test.list",
+		"test.memprofile",
+		"test.memprofilerate",
+		"test.mutexprofile",
+		"test.mutexprofilefraction",
+		"test.outputdir",
+		"test.parallel",
+		"test.run",
+		"test.shuffle",
+		"test.skip",
+		"test.testlogfile",
+		"test.timeout",
+		"test.trace":
+		return true
+	default:
+		return false
+	}
 }
 
 // TestIsListMode locks isListMode semantics so future refactors can't drop
@@ -152,6 +202,8 @@ func TestIsListMode(t *testing.T) {
 	}{
 		{name: "no_test_args", args: []string{"binary"}, want: false},
 		{name: "run_only", args: []string{"binary", "-test.run", "TestFoo"}, want: false},
+		{name: "run_before_list", args: []string{"binary", "-test.run", "TestFoo", "-test.list", "^Test"}, want: true},
+		{name: "boolean_flag_before_list", args: []string{"binary", "-test.v", "-test.list", "^Test"}, want: true},
 		{name: "list_space_separated", args: []string{"binary", "-test.list", "^Test"}, want: true},
 		{name: "list_equals_separated", args: []string{"binary", "-test.list=^Test"}, want: true},
 		{name: "double_dash_space", args: []string{"binary", "--test.list", "^Test"}, want: true},
@@ -164,7 +216,11 @@ func TestIsListMode(t *testing.T) {
 		{name: "list_space_empty_value", args: []string{"binary", "-test.list", ""}, want: false},
 		{name: "list_no_value_at_eof", args: []string{"binary", "-test.list"}, want: false},
 		{name: "double_dash_equals_empty", args: []string{"binary", "--test.list="}, want: false},
+		{name: "empty_list_value_then_nonempty", args: []string{"binary", "-test.list", "", "-test.list", "^Test"}, want: true},
 		{name: "duplicate_list_flag", args: []string{"binary", "-test.list", "A", "-test.list", "B"}, want: true},
+		{name: "terminator_before_list", args: []string{"binary", "--", "-test.list", "^Test"}, want: false},
+		{name: "single_dash_before_list", args: []string{"binary", "-", "-test.list", "^Test"}, want: false},
+		{name: "non_flag_before_list", args: []string{"binary", "positional", "-test.list", "^Test"}, want: false},
 		{name: "near_match_not_list", args: []string{"binary", "-test.listfoo"}, want: false},
 		{name: "near_match_equals", args: []string{"binary", "-test.listfoo=bar"}, want: false},
 	}
