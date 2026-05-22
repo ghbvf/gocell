@@ -22,6 +22,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// errStubUnused surfaces accidental calls to fake-repo stub methods that the
+// test does not exercise — better than returning (nil, nil), which triggers
+// the nilnil linter and hides invariant drift.
+var errStubUnused = errors.New("adminprovision_test: stub method not exercised")
+
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func fixedUUID(ids ...string) adminprovision.UUIDGenerator {
@@ -388,16 +393,19 @@ func (r *duplicateUserRepo) GetByUsername(ctx context.Context, username string) 
 	u.ID = "usr-orphan"
 	return u, nil
 }
+
 func (r *duplicateUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
-	return nil, nil
+	return nil, errStubUnused
 }
+
 func (r *duplicateUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
 	return nil
 }
+
 func (r *duplicateUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
 	return nil
 }
-func (r *duplicateUserRepo) Delete(ctx context.Context, id string) error      { return nil }
+func (r *duplicateUserRepo) Delete(ctx context.Context, id string) error { return nil }
 func (r *duplicateUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }
@@ -575,16 +583,19 @@ func (r *errUserRepo) GetByID(ctx context.Context, id string) (*domain.User, err
 func (r *errUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	return nil, errors.New("not seeded")
 }
+
 func (r *errUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
-	return nil, nil
+	return nil, errStubUnused
 }
+
 func (r *errUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
 	return nil
 }
+
 func (r *errUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
 	return nil
 }
-func (r *errUserRepo) Delete(ctx context.Context, id string) error      { return r.deleteErr }
+func (r *errUserRepo) Delete(ctx context.Context, id string) error { return r.deleteErr }
 func (r *errUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }

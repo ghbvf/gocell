@@ -622,16 +622,19 @@ func (refreshUnavailableUserRepo) Create(_ context.Context, _ *domain.User) erro
 func (refreshUnavailableUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
+
 func (refreshUnavailableUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
-	return nil, nil
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
+
 func (refreshUnavailableUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
 	return nil
 }
+
 func (refreshUnavailableUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
 	return nil
 }
-func (refreshUnavailableUserRepo) Delete(_ context.Context, _ string) error       { return nil }
+func (refreshUnavailableUserRepo) Delete(_ context.Context, _ string) error { return nil }
 func (refreshUnavailableUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }

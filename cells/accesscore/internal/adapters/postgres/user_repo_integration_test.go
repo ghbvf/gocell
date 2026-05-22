@@ -190,14 +190,13 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
 	})
 
-	t.Run("Update_existing_persists_fields", func(t *testing.T) {
+	t.Run("UpdateLockState_existing_persists_status", func(t *testing.T) {
 		u := newTestUser("upd1")
 		require.NoError(t, repo.Create(ctx, u))
 
 		now := u.UpdatedAt.Add(time.Second)
-		u.SetStatus(domain.StatusSuspended, now)
-		u.SetPasswordResetRequired(true, now)
-		require.NoError(t, repo.Update(ctx, u))
+		require.NoError(t, repo.UpdateLockState(ctx, u.ID, domain.StatusSuspended, now))
+		require.NoError(t, repo.UpdatePasswordResetFlag(ctx, u.ID, true, now))
 
 		got, err := repo.GetByID(ctx, u.ID)
 		require.NoError(t, err)
@@ -207,10 +206,9 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.True(t, got.UpdatedAt.After(got.CreatedAt) || got.UpdatedAt.Equal(got.CreatedAt))
 	})
 
-	t.Run("Update_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
-		ghost := newTestUser("ghost_upd")
-		ghost.ID = uuid.NewString()
-		err := repo.Update(ctx, ghost)
+	t.Run("UpdateLockState_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
+		ghostID := uuid.NewString()
+		err := repo.UpdateLockState(ctx, ghostID, domain.StatusLocked, time.Now().UTC())
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))

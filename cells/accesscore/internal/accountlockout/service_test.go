@@ -22,6 +22,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
+// errFakeRepoUnused is returned by fake-repo stub methods that the test does
+// not exercise. A sentinel error keeps the linter happy and surfaces an
+// accidental call as a recognizable failure instead of a silent nil pair.
+var errFakeRepoUnused = errors.New("fakeUserRepo: method not exercised in this test")
+
 // fakeEmitter collects all outbox entries emitted during the test.
 type fakeEmitter struct {
 	mu      sync.Mutex
@@ -144,11 +149,11 @@ func (r *fakeUserRepo) GetByUsernameForUpdate(ctx context.Context, username stri
 	return r.GetByUsername(ctx, username)
 }
 
-func (r *fakeUserRepo) UpdateProfile(_ context.Context, userID string, name, email *string, _ time.Time) (*domain.User, error) {
-	return nil, nil
+func (r *fakeUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
+	return nil, errFakeRepoUnused
 }
 
-// mirrors authzmutate LockUser / SuspendUser / ActivateUser side effect
+// mirrors authzmutate LockUser / SuspendUser / ActivateUser side effect.
 func (r *fakeUserRepo) UpdateLockState(_ context.Context, userID string, status domain.UserStatus, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

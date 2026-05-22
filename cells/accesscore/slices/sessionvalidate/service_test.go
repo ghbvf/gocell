@@ -312,16 +312,19 @@ func (r *stubUserRepo) Create(_ context.Context, _ *domain.User) error { panic("
 func (r *stubUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
 	panic("not implemented")
 }
+
 func (r *stubUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
 	panic("not implemented")
 }
+
 func (r *stubUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
 	panic("not implemented")
 }
+
 func (r *stubUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
 	panic("not implemented")
 }
-func (r *stubUserRepo) Delete(_ context.Context, _ string) error       { panic("not implemented") }
+func (r *stubUserRepo) Delete(_ context.Context, _ string) error { panic("not implemented") }
 func (r *stubUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
 	panic("not implemented")
 }
@@ -449,16 +452,20 @@ func (r *capturingUserRepo) GetByUsername(_ context.Context, _ string) (*domain.
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "not implemented",
 		errcode.WithCategory(errcode.CategoryDomain))
 }
+
 func (r *capturingUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
-	return nil, nil
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "not implemented",
+		errcode.WithCategory(errcode.CategoryDomain))
 }
+
 func (r *capturingUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
 	return nil
 }
+
 func (r *capturingUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
 	return nil
 }
-func (r *capturingUserRepo) Delete(_ context.Context, _ string) error       { return nil }
+func (r *capturingUserRepo) Delete(_ context.Context, _ string) error { return nil }
 func (r *capturingUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }
