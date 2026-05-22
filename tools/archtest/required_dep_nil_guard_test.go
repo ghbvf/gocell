@@ -14,12 +14,11 @@ package archtest
 //   A1 [TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth]
 //      service_required_gen.go must be byte-identical to the generator output
 //      for its sibling service.go (regenerate-and-diff Hard lock). Hand-edits,
-//      drift, and stale files are all rejected at byte granularity. Production
-//      scan gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN env until Batch A/B/C/D
-//      service migrations land.
+//      drift, and stale files are all rejected at byte granularity.
 //   A2 [TestRequiredDepNilGuard_A2_CallsiteUniqueness]
 //      Every NewXxx(*Service, error) in a slice must call validateRequired()
-//      exactly once, after any options loop.
+//      exactly once, after any options loop. The constructor must have first
+//      return type *Service (not *T for any arbitrary T).
 //   A3 [TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan]
 //      service.go (non-gen files) must not call validation.IsNilInterface.
 //   A4 [TestRequiredDepNilGuard_A4_TagValueWhitelist]
@@ -95,10 +94,9 @@ var nilGuardHelperBanList = []string{
 // its sibling service.go. This is the upstream Hard lock of the funnel: any
 // hand-edit, drift, or stale file is rejected at byte granularity.
 //
-// Production scan is gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN env var
-// until Batch A/B/C/D service migrations land. Fixture sub-tests run the
-// generator with BuildTag="archtest_fixture" to match the //go:build header
-// in fixture gen files; production uses the empty BuildTag.
+// Fixture sub-tests run the generator with BuildTag="archtest_fixture" to
+// match the //go:build header in fixture gen files; production uses the empty
+// BuildTag.
 func TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth(t *testing.T) {
 	for _, fix := range []string{"green_basic", "red_stale_generator"} {
 		fix := fix
@@ -113,10 +111,6 @@ func TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth(t *testing.T) {
 	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		if os.Getenv("REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN") == "" {
-			t.Skip("production gen files land in Batch A/B/C/D migrations; " +
-				"set REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN=1 after migration to enable")
-		}
 		root := findModuleRoot(t)
 		slicePaths := discoverSlicePaths(t, root)
 		var allDiags []Diagnostic
@@ -240,12 +234,13 @@ func requiredDepSlashRel(modRoot, absPath string) string {
 
 // TestRequiredDepNilGuard_A2_CallsiteUniqueness verifies that every
 // NewXxx(*Service, error) function calls validateRequired() exactly once,
-// after any options loop.
+// after any options loop. The constructor must also have first return type
+// *Service (not *T for any arbitrary T).
 //
-// Production scan gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN.
-// Fixture sub-test verifies logic against red_missing_callsite.
+// Fixture sub-tests: green_basic (pass), red_missing_callsite (missing call),
+// red_pre_options_callsite (call placed before options loop).
 func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
-	for _, fix := range []string{"green_basic", "red_missing_callsite"} {
+	for _, fix := range []string{"green_basic", "red_missing_callsite", "red_pre_options_callsite"} {
 		fix := fix
 		t.Run("fixture_"+fix, func(t *testing.T) {
 			root := findModuleRoot(t)
@@ -268,9 +263,6 @@ func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
 	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		if os.Getenv("REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN") == "" {
-			t.Skip("production scan gated; set REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN=1 after migration")
-		}
 		diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -290,7 +282,7 @@ func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
 }
 
 // scanA2 scans one file for A2 violations: NewXxx functions returning (*Service, error)
-// that do not call validateRequired() exactly once.
+// that do not call validateRequired() exactly once, or call it before the options loop.
 func scanA2(p *Pass, file *ast.File) []Diagnostic {
 	var out []Diagnostic
 	for _, decl := range file.Decls {
@@ -301,8 +293,9 @@ func scanA2(p *Pass, file *ast.File) []Diagnostic {
 		if !isNewServiceConstructor(fn) {
 			continue
 		}
-		count := countValidateRequiredCalls(fn.Body, p.TypesInfo)
-		if count != 1 {
+		count, preOpts := countValidateRequiredCalls(fn.Body, p.TypesInfo, optsLoopEnd(fn))
+		switch {
+		case count != 1:
 			out = append(out, Diagnostic{
 				Rel:  p.Rel(file),
 				Line: p.Fset.Position(fn.Pos()).Line,
@@ -310,47 +303,117 @@ func scanA2(p *Pass, file *ast.File) []Diagnostic {
 					"REQUIRED-DEP-NIL-GUARD-01-A2: NewService does not call validateRequired() (%s)",
 					requiredDepNilGuardRule),
 			})
+		case preOpts:
+			out = append(out, Diagnostic{
+				Rel:  p.Rel(file),
+				Line: p.Fset.Position(fn.Pos()).Line,
+				Message: fmt.Sprintf(
+					"REQUIRED-DEP-NIL-GUARD-01-A2: validateRequired() must be called AFTER the options loop (currently before opts apply) (%s)",
+					requiredDepNilGuardRule),
+			})
 		}
 	}
 	return out
 }
 
+// optsLoopEnd returns the token.Pos of the end of the options range loop in fn,
+// or token.NoPos when no options loop is found. An options loop has the shape:
+//
+//	for _, o := range opts { o(s) }
+//
+// where "opts" matches the last variadic parameter of the function (if any).
+func optsLoopEnd(fn *ast.FuncDecl) token.Pos {
+	// Find the name of the variadic parameter (last param, if variadic).
+	params := fn.Type.Params
+	if params == nil || len(params.List) == 0 {
+		return token.NoPos
+	}
+	last := params.List[len(params.List)-1]
+	if _, ok := last.Type.(*ast.Ellipsis); !ok {
+		return token.NoPos
+	}
+	if len(last.Names) == 0 {
+		return token.NoPos
+	}
+	optsName := last.Names[0].Name
+
+	// Walk top-level statements looking for a range loop over the opts param.
+	for _, stmt := range fn.Body.List {
+		rs, ok := stmt.(*ast.RangeStmt)
+		if !ok {
+			continue
+		}
+		x, ok := rs.X.(*ast.Ident)
+		if !ok || x.Name != optsName {
+			continue
+		}
+		return rs.End()
+	}
+	return token.NoPos
+}
+
 // isNewServiceConstructor returns true when fn is a top-level function whose
-// name starts with "New" and whose return list ends with error.
+// name starts with "New", whose first return type is *Service, and whose last
+// return type is error. Requiring *Service as the first return type prevents
+// false positives from unrelated New* helpers (e.g. NewFoo returning *Foo) and
+// from renamed builders (e.g. Build()) that would otherwise silently bypass the
+// funnel.
 func isNewServiceConstructor(fn *ast.FuncDecl) bool {
 	if !strings.HasPrefix(fn.Name.Name, "New") {
 		return false
 	}
 	results := fn.Type.Results
-	if results == nil || len(results.List) == 0 {
+	if results == nil || len(results.List) < 2 {
 		return false
 	}
+	// First return must be *Service.
+	star, ok := results.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := star.X.(*ast.Ident)
+	if !ok || ident.Name != "Service" {
+		return false
+	}
+	// Last return must be error.
 	last := results.List[len(results.List)-1]
-	ident, ok := last.Type.(*ast.Ident)
-	return ok && ident.Name == "error"
+	errIdent, ok := last.Type.(*ast.Ident)
+	return ok && errIdent.Name == "error"
 }
 
 // countValidateRequiredCalls counts how many times validateRequired() is called
-// as a method on a receiver within body.
-func countValidateRequiredCalls(body *ast.BlockStmt, info *types.Info) int {
-	count := 0
+// as a method on a receiver within body, and reports whether any such call
+// occurs before loopEnd (token.NoPos means no loop constraint applies).
+// Returns (count, preOpts) where preOpts is true when count >= 1 and the
+// first call site appears before loopEnd.
+func countValidateRequiredCalls(body *ast.BlockStmt, info *types.Info, loopEnd token.Pos) (count int, preOpts bool) {
+	firstCallPos := token.NoPos
 	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil || sel.Sel.Name != "validateRequired" {
 			return
 		}
+		isMatch := false
 		if info != nil {
 			if fn, ok := info.Selections[sel]; ok {
-				if fn.Obj().Name() == "validateRequired" {
-					count++
-				}
-				return
+				isMatch = fn.Obj().Name() == "validateRequired"
+			} else {
+				isMatch = true // AST-only fallback
+			}
+		} else {
+			isMatch = true
+		}
+		if isMatch {
+			count++
+			if !firstCallPos.IsValid() {
+				firstCallPos = call.Pos()
 			}
 		}
-		// AST-only fallback
-		count++
 	})
-	return count
+	if loopEnd.IsValid() && firstCallPos.IsValid() && firstCallPos < loopEnd {
+		preOpts = true
+	}
+	return count, preOpts
 }
 
 // isServiceGoForScan returns true for service.go files in slice directories
@@ -370,7 +433,6 @@ func isServiceGoForScan(rel string) bool {
 // TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan verifies that no
 // hand-written service.go (non-gen file) calls validation.IsNilInterface.
 //
-// Production scan gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN.
 // Fixture sub-test verifies logic against red_handwritten_guard.
 func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
 	for _, fix := range []string{"green_basic", "red_handwritten_guard"} {
@@ -401,9 +463,6 @@ func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
 	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		if os.Getenv("REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN") == "" {
-			t.Skip("production scan gated; set REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN=1 after migration")
-		}
 		diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -434,7 +493,8 @@ func scanA3(p *Pass, file *ast.File) []Diagnostic {
 			Line: p.Fset.Position(call.Pos()).Line,
 			Message: fmt.Sprintf(
 				"REQUIRED-DEP-NIL-GUARD-01-A3: hand-written validation.IsNilInterface call in service.go "+
-					"bypasses generated funnel (%s)", requiredDepNilGuardRule),
+					"bypasses generated funnel; remove the call — required-dep nil checks are generated "+
+					"in service_required_gen.go via gocell:\"required\" tag (%s)", requiredDepNilGuardRule),
 		})
 	})
 	return out
@@ -619,9 +679,6 @@ func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
 	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		if os.Getenv("REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN") == "" {
-			t.Skip("production scan gated; set REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN=1 after Batch A/B/C/D")
-		}
 		root := findModuleRoot(t)
 		scope := ModuleScope(root)
 		diags := Run(t, scope, func(p *Pass) []Diagnostic {

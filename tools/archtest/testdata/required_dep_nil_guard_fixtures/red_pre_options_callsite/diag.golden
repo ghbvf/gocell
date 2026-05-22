@@ -1,0 +1,1 @@
+tools/archtest/testdata/required_dep_nil_guard_fixtures/red_pre_options_callsite/service.go:19: REQUIRED-DEP-NIL-GUARD-01-A2: validateRequired() must be called AFTER the options loop (currently before opts apply) (REQUIRED-DEP-NIL-GUARD-01)
