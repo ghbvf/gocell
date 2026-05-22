@@ -1,0 +1,1 @@
+tools/archtest/testdata/span_setattr_redact_fixtures/violates_string_missing_key_branch/span.go:26: safeStringAttr must start with `if redaction.IsSensitiveKey(key) { return attribute.String(key, redaction.Mask) }` — structured-key bypass guard required (SPAN-SETATTR-REDACT-01 A3a)

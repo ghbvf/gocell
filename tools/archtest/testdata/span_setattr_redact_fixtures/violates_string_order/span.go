@@ -17,11 +17,15 @@ type otelSpan struct {
 	inner oteltrace.Span
 }
 
-// VIOLATION: outer call is RedactString(TruncateString(raw, cap)) — Truncate
-// runs first, so when the secret value extends past the cap the regex finds
-// only the prefix and the tail is silently dropped. Correct shape is
-// TruncateString(RedactString(raw), cap) — Redact must precede Truncate.
+// VIOLATION (A3b): outer call is RedactString(TruncateString(raw, cap)) —
+// Truncate runs first, so when the secret value extends past the cap the
+// regex finds only the prefix and the tail is silently dropped. Correct
+// shape is TruncateString(RedactString(raw), cap) — Redact must precede
+// Truncate. A3a (key-branch) is present and compliant, so only A3b fires.
 func safeStringAttr(key, raw string) attribute.KeyValue {
+	if redaction.IsSensitiveKey(key) {
+		return attribute.String(key, redaction.Mask)
+	}
 	return attribute.String(key, redaction.RedactString(redaction.TruncateString(raw, attrValueMaxLen)))
 }
 

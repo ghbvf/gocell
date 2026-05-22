@@ -25,6 +25,9 @@ type rogueSpan struct {
 }
 
 func safeStringAttr(key, raw string) attribute.KeyValue {
+	if redaction.IsSensitiveKey(key) {
+		return attribute.String(key, redaction.Mask)
+	}
 	return attribute.String(key, redaction.TruncateString(redaction.RedactString(raw), attrValueMaxLen))
 }
 

@@ -1,10 +1,14 @@
-// Package compliant is a GREEN fixture for SPAN-SETATTR-REDACT-01: a fully
-// compliant funnel — safeStringAttr + safeBytesAttr cover all attribute.String
-// callsites, otelSpan is the sole holder of oteltrace.Span. Parsed by archtest;
-// not intended to compile.
-package compliant
+// Package violateskeychainstring is a RED fixture for SPAN-SETATTR-REDACT-01
+// A2 chain shape: attrToKeyValue's default branch uses the SDK-supported
+// `attribute.Key(name).String(value)` chain form to bypass the bare
+// `attribute.String(name, value)` callsite check. Both shapes return the
+// same attribute.KeyValue; A2 must lock both. Parsed by archtest; not
+// intended to compile.
+package violateskeychainstring
 
 import (
+	"fmt"
+
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
@@ -40,6 +44,10 @@ func attrToKeyValue(key string, v interface{}) attribute.KeyValue {
 	case []byte:
 		return safeBytesAttr(key, x)
 	default:
-		return safeStringAttr(key, "fallback")
+		// VIOLATION (A2 chain): attribute.Key(_).String(_) is the SDK
+		// chain shape; identical to attribute.String(_, _) at runtime.
+		// Bypasses safeStringAttr — caller's `key` and stringified value
+		// reach the collector unredacted.
+		return attribute.Key(key).String(fmt.Sprint(x))
 	}
 }

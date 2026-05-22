@@ -45,16 +45,21 @@ ref: hashicorp/vault `audit log_raw=false` 默认；golang/go `net/url.URL.Redac
 
 ## Span Attribute Redaction（fail-closed by default）
 
-`adapters/otel/span.go` 的 `attrToKeyValue` 把 `wrapper.Attr.Value` 转成 OTel `attribute.KeyValue` 之前，所有 string-valued 分支无条件经过 `pkg/redaction.RedactString` + `redaction.TruncateString(..., attrValueMaxLen=2048)`。**没有调用方 opt-out**——与 [Span Error Redaction](#span-error-redaction-fail-closed-by-default) 共享 `pkg/redaction` 「默认硬编 fail-closed，无调用方 opt-out wiring」哲学。
+`adapters/otel/span.go` 的 `attrToKeyValue` 把 `wrapper.Attr.Value` 转成 OTel `attribute.KeyValue` 之前，所有 string-valued 分支无条件经过 `safeStringAttr` 两层 scrubber。**没有调用方 opt-out**——与 [Span Error Redaction](#span-error-redaction-fail-closed-by-default) 共享 `pkg/redaction` 「默认硬编 fail-closed，无调用方 opt-out wiring」哲学。
+
+`safeStringAttr(key, raw)` 两层 fail-closed：
+
+1. **Key-aware**（结构化）：若 `pkg/redaction.IsSensitiveKey(key)` 命中（与 `pkg/redaction.RedactPayload` 同源 sensitive key set），value 无条件替换为 `redaction.Mask`，不再走自由文本扫描。覆盖结构化泄漏 `wrapper.Attr{Key: "password", Value: "hunter2"}`——value 是裸字符串，无 `password=` 锚点，仅靠 `RedactString` 永远不会匹配。
+2. **Free-form**（自由文本，仅非敏感 key 走）：`RedactString` mask `key=value` / `Authorization: Bearer …` 形态敏感子串 → `TruncateString` 截到 2048 runes。
 
 | 分支 | 出口 helper | 处理 |
 |------|------------|------|
-| `case string` | `safeStringAttr(key, raw)` | `RedactString` mask `key=value` 形态敏感子串 → `TruncateString` 截到 2048 runes |
+| `case string` | `safeStringAttr(key, raw)` | 两层 scrubber（见上） |
 | `case []byte` | `safeBytesAttr(key, b)` | SHA256 + length 元信息（保留 ops 调试可观察性，binary 上 `RedactString` 无意义）|
 | `default`（任意类型 fmt.Sprint）| `safeStringAttr(key, fmt.Sprint(v))` | 同 `case string` |
 | `case int / int64 / float64 / bool` | OTel SDK 原生 typed constructor | 非字符串标量，结构上无法承载 `key=value` 敏感串，原样直通 |
 
-**Order 是 correctness invariant**：`safeStringAttr` 内部 `RedactString` MUST 先于 `TruncateString`。如果反过来，sensitive 值落在 cap 之外时 mask anchor 被切掉，tail 会未 mask 出站。
+**Order 在 free-form 层是 correctness invariant**：`RedactString` MUST 先于 `TruncateString`。如果反过来，sensitive 值落在 cap 之外时 mask anchor 被切掉，tail 会未 mask 出站。key-aware 层无 ordering 顾虑（Mask 是 10 字符常量，远低于 cap）。
 
 **双向闭环 funnel**（archtest `SPAN-SETATTR-REDACT-01`）：
 
@@ -62,7 +67,7 @@ ref: hashicorp/vault `audit log_raw=false` 默认；golang/go `net/url.URL.Redac
 |------|------|------|
 | 上游 (package-external) | `oteltrace.Span` 字段 package-private (`otelSpan.inner` lowercase)；包外无法构造持有者，Go 编译器即 gate | **Hard** |
 | 上游 (package-internal) | archtest A1 锁包内任何 struct 持有 `oteltrace.Span` 字段必须是 `otelSpan`；包内新增 struct 由 archtest 在 CI 捕获，但 Go 类型系统无法编译期拒绝 | **Medium** |
-| 下游 (callsite + form uniqueness) | archtest A2 锁 `attribute.String` 在 span.go 内 callsite ⊆ `{safeStringAttr.Body, safeBytesAttr.Body}`；A3/A4 锁两个 helper return 表达式 AST 严格固定 | **Hard** |
+| 下游 (callsite + form uniqueness) | archtest A2 锁 `attribute.String` 与 `attribute.Key(_).String(_)` chain 形态在 span.go 内 callsite ⊆ `{safeStringAttr.Body, safeBytesAttr.Body}`；A3a 锁 `safeStringAttr` 的 key-branch IfStmt 形态（必须先 `IsSensitiveKey(key)` 判定再 `return Mask`）；A3b 锁 free-form return 表达式 AST；A4 锁 `safeBytesAttr` return 表达式 AST；参数身份绑定到 FuncDecl 形参列表（不只 `*ast.Ident` 任意名） | **Hard** |
 
 上游 package-internal 升级路径：通过引入 unexported interface 封装 `oteltrace.Span` 所用方法 + 私有构造函数，使包内新 struct 在 type system 上无法绕过 funnel。升级追踪：backlog issue #851 SPAN-SETATTR-HOLDER-SEAL-01（见 `tools/archtest/span_setattr_redact_test.go` 包文档）。
 

@@ -421,6 +421,66 @@ func TestMask_ConstantValue(t *testing.T) {
 	}
 }
 
+// TestIsSensitiveKey locks the single-source key matcher used by structured
+// scrubbers (OTel safeStringAttr, RedactSlogAttr). Each sensitiveKeyPattern
+// keyword + its common camelCase / underscore / separator variants must
+// match; non-sensitive names must not.
+func TestIsSensitiveKey(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		key  string
+		want bool
+	}{
+		// canonical keywords
+		{"password", true},
+		{"passwd", true},
+		{"pwd", true},
+		{"secret", true},
+		{"token", true},
+		{"access_token", true},
+		{"access-token", true},
+		{"accesstoken", true},
+		{"refresh_token", true},
+		{"id_token", true},
+		{"authorization", true},
+		{"bearer", true},
+		{"api_key", true},
+		{"api-key", true},
+		{"apikey", true},
+		{"apiKey", true}, // camelCase via optional separator + case-insensitivity
+		{"connection_string", true},
+		{"connection string", true},
+		{"connectionstring", true},
+		{"private_key", true},
+		{"signing_key", true},
+		{"dsn", true},
+		// case insensitivity
+		{"PASSWORD", true},
+		{"API_KEY", true},
+		{"Authorization", true},
+		// non-sensitive
+		{"orderID", false},
+		{"cell.id", false},
+		{"retryCount", false},
+		{"config", false},
+		{"", false},
+		{"username", false},
+		// partial match must NOT trigger (exact match only)
+		{"my_password_field", false},
+		{"password_hint", false},
+		{"x-token-prefix", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.key, func(t *testing.T) {
+			t.Parallel()
+			if got := redaction.IsSensitiveKey(tc.key); got != tc.want {
+				t.Errorf("IsSensitiveKey(%q) = %v, want %v", tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRedactAny(t *testing.T) {
 	t.Parallel()
 
@@ -514,12 +574,41 @@ func TestRedactSlogAttr(t *testing.T) {
 			want: slog.Int("retryCount", 3),
 		},
 		{
-			// The attr key is "password" but the VALUE itself is "secret123"
-			// (no key=value pattern inside the string), so RedactString does
-			// not trigger. Key is preserved verbatim; only value text is scanned.
-			name: "key_preserved_plain_value_no_pattern",
+			// Sensitive key with bare value: IsSensitiveKey(attr.Key) fires
+			// first, so the value is masked regardless of whether RedactString
+			// would have matched. Pre-fix this returned "secret123" verbatim
+			// because the value carries no `password=` anchor — the structured
+			// (key, value) leak this two-layer scrubber is designed to close.
+			name: "sensitive_key_bare_value_masked",
 			in:   slog.String("password", "secret123"),
-			want: slog.String("password", "secret123"),
+			want: slog.String("password", redaction.Mask),
+		},
+		{
+			name: "sensitive_key_case_insensitive",
+			in:   slog.String("API_KEY", "ak_live_xyz"),
+			want: slog.String("API_KEY", redaction.Mask),
+		},
+		{
+			name: "sensitive_key_dsn_url_value",
+			in:   slog.String("dsn", "postgres://u:secret@db/prod"),
+			want: slog.String("dsn", redaction.Mask),
+		},
+		{
+			name: "sensitive_key_int_value_masked_to_string",
+			in:   slog.Int("token", 42),
+			want: slog.String("token", redaction.Mask),
+		},
+		{
+			name: "sensitive_key_authorization",
+			in:   slog.String("Authorization", "Bearer abc.def"),
+			want: slog.String("Authorization", redaction.Mask),
+		},
+		{
+			// Non-sensitive key keeps prior recursive scrub behavior — string
+			// value scanned by RedactString, embedded `key=value` masked.
+			name: "non_sensitive_key_value_scan_preserved",
+			in:   slog.String("orderID", "abc-123 password=leaked"),
+			want: slog.String("orderID", "abc-123 password=<REDACTED>"),
 		},
 		{
 			// defaultPattern stops at whitespace (\S+), so "port=5432" survives.
@@ -528,10 +617,18 @@ func TestRedactSlogAttr(t *testing.T) {
 			want: slog.String("config", "host=h password=<REDACTED> port=5432"),
 		},
 		{
-			// bearer= key triggers defaultPattern; value stops at whitespace.
-			name: "group_value_recurses",
+			// Inner attr key "token" is sensitive — key-aware branch fires on
+			// recursion, value collapses to Mask regardless of contents.
+			name: "group_value_recurses_sensitive_inner_key",
 			in:   slog.Group("ctx", slog.String("token", "bearer=abc.def.ghi")),
-			want: slog.Group("ctx", slog.String("token", "bearer=<REDACTED>")),
+			want: slog.Group("ctx", slog.String("token", redaction.Mask)),
+		},
+		{
+			// Group recursion with non-sensitive inner key keeps free-form
+			// value scrubbing (bearer= → Mask, whitespace boundary).
+			name: "group_value_recurses_nonsensitive_inner_key",
+			in:   slog.Group("ctx", slog.String("auth_header", "bearer=abc.def.ghi")),
+			want: slog.Group("ctx", slog.String("auth_header", "bearer=<REDACTED>")),
 		},
 		{
 			// Bool value has no string text; passes through unchanged.
@@ -540,12 +637,14 @@ func TestRedactSlogAttr(t *testing.T) {
 			want: slog.Bool("ok", true),
 		},
 		{
-			// Nested group recursion: inner string with secret is masked.
-			name: "nested_group_recurses",
+			// Nested group recursion: innermost key "apiKey" matches sensitive
+			// pattern `api[_-]?key` (case-insensitive, optional separator) →
+			// key-aware branch fires after two levels of recursion.
+			name: "nested_group_recurses_sensitive_innermost",
 			in: slog.Group("outer",
 				slog.Group("inner", slog.String("apiKey", "api_key=topsecret"))),
 			want: slog.Group("outer",
-				slog.Group("inner", slog.String("apiKey", "api_key=<REDACTED>"))),
+				slog.Group("inner", slog.String("apiKey", redaction.Mask))),
 		},
 	}
 

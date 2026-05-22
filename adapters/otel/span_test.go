@@ -69,6 +69,47 @@ func TestSafeStringAttr_RedactsSensitiveSubstrings(t *testing.T) {
 			want:         redaction.Mask,
 			substringNot: []string{"ak_live_xxx"},
 		},
+		{
+			// Structured key-aware path: bare value with no `password=`
+			// anchor — RedactString alone would not match; IsSensitiveKey
+			// fires on the key and the value collapses to Mask.
+			name:         "sensitive key 'password' + bare value gets masked",
+			key:          "password",
+			raw:          "hunter2",
+			want:         redaction.Mask,
+			substringNot: []string{"hunter2"},
+		},
+		{
+			name: "sensitive key 'dsn' + raw url value gets masked",
+			key:  "dsn",
+			// #nosec G101 -- test fixture; this URL shape is exactly the leak
+			// surface the key-aware branch closes.
+			raw:          "postgres://u:secret@db/prod",
+			want:         redaction.Mask,
+			substringNot: []string{"secret", "postgres", "prod"},
+		},
+		{
+			name:         "sensitive key 'API_KEY' (case-insensitive) gets masked",
+			key:          "API_KEY",
+			raw:          "ak_live_xyz",
+			want:         redaction.Mask,
+			substringNot: []string{"ak_live_xyz"},
+		},
+		{
+			name:         "sensitive key 'Authorization' + bare bearer gets masked",
+			key:          "Authorization",
+			raw:          "Bearer abc.def",
+			want:         redaction.Mask,
+			substringNot: []string{"abc.def"},
+		},
+		{
+			// Negative: non-sensitive key with plain value stays passthrough.
+			name:         "non-sensitive key 'cell.id' stays passthrough",
+			key:          "cell.id",
+			raw:          "accesscore",
+			want:         "accesscore",
+			substringNot: nil,
+		},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -283,70 +324,13 @@ func TestAttrToKeyValue_BytesBranchRoutesSHA256(t *testing.T) {
 	}
 }
 
-// TestAttrToKeyValue_RedactBeforeTruncateOrder is a regression guard for the
-// helper's documented redact-then-truncate ordering. If a future edit swaps
-// the order, a sensitive substring whose mask form `<key>=<REDACTED>` is
-// shorter than the original value would still get correctly masked, but a
-// substring whose value happens to span the truncation boundary would leak
-// its tail unmasked.
-//
-// Test shape: build an input where the secret value sits past the cap. If
-// truncate runs first, the regex never matches and the (now-truncated)
-// `password=` prefix appears in the output without a mask. If redact runs
-// first (correct order), the entire `password=<REDACTED>` mask appears
-// regardless of the cap, and the truncation then trims the post-mask tail.
-func TestAttrToKeyValue_RedactBeforeTruncateOrder(t *testing.T) {
-	t.Parallel()
-	// Construct an input where the keyword "password=" starts inside the cap
-	// but its value extends just past it. The input total length is
-	// attrValueMaxLen+1, so truncation always fires.
-	//
-	// With correct order (Redact then Truncate):
-	//   1. Redact fires on the full input: "password=secret123" →
-	//      "password=<REDACTED>". The secret disappears; the mask IS written.
-	//   2. Truncate cuts to attrValueMaxLen. The mask token "<REDACTED>" may
-	//      be partially cut, but "password=<REDACT" (16 chars starting at
-	//      paddingLen) fits within the cap — the mask prefix is present.
-	//
-	// With reversed order (Truncate then Redact):
-	//   1. Truncate runs first: only the first attrValueMaxLen runes survive.
-	//      paddingLen runes of "x" + "password=secret1" (8 chars) = maxLen.
-	//      "23" and the sentinel "Z" are dropped.
-	//   2. Redact fires on the truncated string: the visible partial value
-	//      "secret1" triggers the same regex — "password=<REDACTED>" appears.
-	//      The mask prefix "password=<REDACT" is ALSO present.
-	//
-	// Because both orderings mask the visible portion, neither leaks the secret
-	// and both produce a mask. The ordering invariant (Redact MUST precede
-	// Truncate) is a correctness guarantee: it ensures the ENTIRE secret value
-	// (not just the visible prefix) is masked before any cut. This test
-	// documents and regression-guards that guarantee.
-	//
-	// The primary assertion: the raw secret "secret123" does NOT appear. That
-	// is the fail-closed correctness invariant. The secondary assertion confirms
-	// the mask token was applied (not just the secret truncated away).
-	const (
-		sentinelKeyValue = "password=secret123" // 18 chars
-	)
-	// padding fills everything before the sentinel; +1 makes total > maxLen.
-	paddingLen := attrValueMaxLen - len(sentinelKeyValue)
-	raw := strings.Repeat("x", paddingLen) + sentinelKeyValue + "Z"
-	if want := attrValueMaxLen + 1; len(raw) != want {
-		t.Fatalf("test setup: len(raw)=%d want %d", len(raw), want)
-	}
-
-	kv := attrToKeyValue(wrapper.Attr{Key: "k", Value: raw})
-	got := kv.Value.AsString()
-
-	if strings.Contains(got, "secret123") {
-		t.Errorf("redact ran AFTER truncate: secret leaked in output. got=%q", got)
-	}
-	// The mask prefix proves the redaction regex fired; plain truncation that
-	// cut only the Z (leaving the full value visible) would NOT produce it.
-	// Note: "password=<REDACTED>" may be partially truncated at the cap, so we
-	// check the prefix rather than the full token.
-	const maskAnchor = "password=<REDACT"
-	if !strings.Contains(got, maskAnchor) {
-		t.Errorf("mask anchor %q missing — redaction did not fire (or order was wrong). got=%q", maskAnchor, got)
-	}
-}
+// Ordering invariant (RedactString MUST precede TruncateString in
+// safeStringAttr's free-form branch) is enforced by archtest A3b
+// (tools/archtest/span_setattr_redact_test.go) via pure-AST form-uniqueness
+// on the return expression. Behavioral unit tests on a single input cannot
+// discriminate the two orderings — every input that hits a sensitive
+// substring either masks visibly under both orders (no leak observable) or
+// leaks tail bytes (depends on cap arithmetic). A3b's source-level form
+// lock is strictly stronger than any single-call behavioral assertion;
+// keeping a redundant unit test would document a guarantee it does not
+// provide.

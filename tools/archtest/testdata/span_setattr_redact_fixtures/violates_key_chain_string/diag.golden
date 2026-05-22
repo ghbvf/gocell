@@ -1,0 +1,1 @@
+tools/archtest/testdata/span_setattr_redact_fixtures/violates_key_chain_string/span.go:51: attribute.Key(_).<X>(...) chain shape outside safeStringAttr/safeBytesAttr — bypass of redaction funnel (SPAN-SETATTR-REDACT-01 A2)

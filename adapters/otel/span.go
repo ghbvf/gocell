@@ -80,14 +80,30 @@ func attrToKeyValue(a wrapper.Attr) attribute.KeyValue {
 }
 
 // safeStringAttr is the single sanctioned out-of-package boundary for a
-// string-valued span attribute. Ordering is correctness-critical: RedactString
-// MUST run before TruncateString. If the order were reversed, a sensitive
-// value sitting past attrValueMaxLen would have its mask anchor consumed by
-// the cut, leaving the tail unmasked when emitted to the collector.
+// string-valued span attribute. Two-layer fail-closed scrubber:
 //
+//  1. Key-aware: if key names a sensitive field (per redaction.IsSensitiveKey),
+//     the value is replaced with redaction.Mask regardless of contents. This
+//     covers the structured leak where a caller passes
+//     wrapper.Attr{Key: "password", Value: "hunter2"} — the value is a bare
+//     string with no `password=` anchor, so RedactString alone would never
+//     match it.
+//  2. Free-form: non-sensitive keys flow through RedactString (mask
+//     `key=value` / `Authorization: Bearer …` substrings) then TruncateString
+//     (cap at attrValueMaxLen runes).
+//
+// Ordering within layer 2 is correctness-critical: RedactString MUST run
+// before TruncateString. If reversed, a sensitive value sitting past
+// attrValueMaxLen would have its mask anchor consumed by the cut, leaving
+// the tail unmasked when emitted to the collector.
+//
+// ref: pkg/redaction.IsSensitiveKey (structured key matcher)
 // ref: pkg/redaction.RedactString (mask `key=value` / `key: value` sensitive substrings)
 // ref: pkg/redaction.TruncateString (UTF-8 rune-safe cap; non-positive is no-op)
 func safeStringAttr(key, raw string) attribute.KeyValue {
+	if redaction.IsSensitiveKey(key) {
+		return attribute.String(key, redaction.Mask)
+	}
 	return attribute.String(key, redaction.TruncateString(redaction.RedactString(raw), attrValueMaxLen))
 }
 
