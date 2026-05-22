@@ -339,7 +339,19 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 	}
 
 	entrypointDirs := loadAssemblyEntrypointDirs(t)
-	scope := DirsScope(root, entrypointDirs)
+	// Build a set of the exact composition-root directories so that the
+	// MatchRels predicate can restrict the scan to files directly inside
+	// each entrypoint dir — not files in nested subdirectories (e.g.
+	// examples/todoorder/cells/ordercell/ must NOT be scanned here).
+	entrypointDirSet := make(map[string]struct{}, len(entrypointDirs))
+	for _, d := range entrypointDirs {
+		entrypointDirSet[filepath.ToSlash(d)] = struct{}{}
+	}
+	scope := DirsScope(root, entrypointDirs, MatchRels(func(rel string) bool {
+		parent := filepath.ToSlash(filepath.Dir(rel))
+		_, ok := entrypointDirSet[parent]
+		return ok
+	}))
 
 	type violation struct {
 		file   string
@@ -576,27 +588,32 @@ func TestAssemblyCellModuleTypePresent(t *testing.T) {
 
 // TestAssemblyCellModuleType_ScopeCoversExamples is a reverse self-check for
 // TestAssemblyCellModuleTypePresent: after the metadata-derived scope upgrade,
-// at least one examples/ assembly must be present so the test is not
-// inadvertently blind to that path form.
+// at least one examples/ directory must appear in the computed entrypoint dir
+// set so the test is not inadvertently blind to that path form.
+//
+// Rationale for asserting on entrypointDir set (not asm.File): the probe
+// validates the same metadata→entrypointDir→scope chain that the main test
+// uses. Asserting on asm.File instead would miss the case where
+// Build.Entrypoint derivation broke (e.g. returned cmd/{id}/main.go for an
+// examples/ assembly), causing the scope set to silently omit examples/ even
+// though asm.File still has the examples/ prefix.
 func TestAssemblyCellModuleType_ScopeCoversExamples(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
-	project, err := metadata.NewParser(root).Parse()
-	require.NoError(t, err, "%s: metadata parse failed", ruleAssemblyCellModuleType04)
+	dirs := loadAssemblyEntrypointDirs(t)
 
 	hasExamples := false
-	for _, asm := range project.Assemblies {
-		if strings.HasPrefix(filepath.ToSlash(asm.File), "examples/") {
+	for _, d := range dirs {
+		if strings.HasPrefix(filepath.ToSlash(d), "examples/") {
 			hasExamples = true
 			break
 		}
 	}
 	assert.True(t, hasExamples,
-		"%s: no examples/ assembly found in ProjectMeta.Assemblies; "+
+		"%s: no examples/ entrypoint dir found in metadata-derived entrypoint set %v; "+
 			"the metadata-derived scope upgrade would be a no-op — "+
-			"add at least one examples/ assembly or revisit the discovery strategy",
-		ruleAssemblyCellModuleType04)
+			"add at least one examples/ assembly with cells or revisit the discovery strategy",
+		ruleAssemblyCellModuleType04, dirs)
 }
 
 // checkCellModuleTypePresentInDir scans all non-test *.go files in entrypointDir
