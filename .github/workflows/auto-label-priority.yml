@@ -1,0 +1,44 @@
+name: Auto Label Priority
+
+# Parses the rendered Priority section that the Backlog issue template's
+# `dropdown` field writes into the issue body, then applies the matching
+# `pri-pX` label. Required because GitHub Issue Forms cannot map dropdown
+# values to labels natively — `labels:` only supports static top-level lists.
+#
+# Failure mode is fail-open: if the body cannot be parsed (e.g. issue created
+# via `gh issue create` without the template), the step exits 0 and the
+# creator can `gh issue edit --add-label pri-pX` manually.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  apply-priority-label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: ${{ contains(github.event.issue.labels.*.name, 'backlog') }}
+    steps:
+      - name: Extract Priority and apply label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Issue Forms render dropdown sections as "### Priority\n\nP<n>".
+          # Anchor on the section header and pull the first PN line after it.
+          priority=$(printf '%s\n' "$ISSUE_BODY" \
+            | awk '/^### Priority[[:space:]]*$/{found=1; next} found && /^P[0-3][[:space:]]*$/{print; exit}' \
+            | tr -d '[:space:]')
+          if [[ -z "$priority" ]]; then
+            echo "No Priority section found in issue body — skipping (creator must add pri-pX manually)."
+            exit 0
+          fi
+          label="pri-p${priority#P}"
+          echo "Applying label $label to issue #$ISSUE_NUMBER"
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "$label"
