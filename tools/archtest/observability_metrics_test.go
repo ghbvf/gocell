@@ -200,7 +200,7 @@ func TestGaugeVecFunnel_SelfCheck(t *testing.T) {
 // must come with an explicit sentinel update — AI co-authors cannot silently
 // expand the funnel surface (per AI-rebust Hard funnel principle).
 //
-// INVARIANT: METRICS-GAUGEVEC-UPSTREAM-HARD-01
+// INVARIANT: METRICS-GAUGEVEC-UPSTREAM-HARD-01.
 func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based sentinel in -short mode")
