@@ -33,6 +33,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - See ADR `docs/architecture/202605061500-adr-typed-response-envelope.md`.
   - Roadmap: `docs/plans/202605011500-029-master-roadmap.md` 06.FU.
 
+### Changed
+
+- `gocell scaffold assembly` runnable stub now blocks on signal (SIGINT/SIGTERM)
+  instead of returning a "not implemented" error immediately. `go run ./cmd/{id}`
+  will wait for signal rather than exiting with code 1. (#867, sub-item
+  ASSEMBLY-RUN-RUNTIME-SMOKE)
+
 ### Added
 
 - `pkg/httputil.WriteErrorWithStatus(ctx, w, status, ecErr)` — pin wire status to typed envelope identity, share 4xx/5xx redaction policy with `WriteError`.
