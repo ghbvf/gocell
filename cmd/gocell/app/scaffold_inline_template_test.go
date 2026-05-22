@@ -16,7 +16,7 @@
 // type-system enforcement available. Sister archtest
 // SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01 uses the same model. Hard upgrade
 // would require codegen-from-schema for the inline templates (tracked under
-// backlog SCAFFOLD-INLINE-TEMPLATE-HARDEN — not in this PR).
+// backlog SCAFFOLD-INLINE-TEMPLATE-HARDEN — tracked under issue #869).
 package app
 
 import (
