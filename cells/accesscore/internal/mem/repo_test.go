@@ -90,15 +90,9 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 			wantInternal: `username="missing"`,
 		},
 		{
-			name: "update",
+			name: "update-lock-state",
 			call: func() error {
-				// Build via NewUser+ID injection (struct literal not allowed outside package).
-				u, _ := domain.NewUser("missing", "missing@test.local", "$2a$12$hash", time.Now())
-				if u == nil {
-					return nil
-				}
-				u.ID = "usr-missing"
-				return repo.Update(ctx, u)
+				return repo.UpdateLockState(ctx, "usr-missing", domain.StatusLocked, time.Now())
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
 			wantInternal: `id="usr-missing"`,
@@ -502,10 +496,7 @@ func TestRoleRepository_CountEffectiveAdmins_FiltersLocked(t *testing.T) {
 	seedActiveAdmin(t, store, "active-admin")
 	seedActiveAdmin(t, store, "locked-admin")
 	// Lock one admin — now only one effective admin remains.
-	u, err := store.UserRepository().GetByID(context.Background(), "locked-admin")
-	require.NoError(t, err)
-	u.SetStatus(domain.StatusLocked, time.Now())
-	require.NoError(t, store.UserRepository().Update(context.Background(), u))
+	require.NoError(t, store.UserRepository().UpdateLockState(context.Background(), "locked-admin", domain.StatusLocked, time.Now()))
 
 	count, err := store.RoleRepository().CountEffectiveAdmins(context.Background())
 	require.NoError(t, err)
@@ -525,10 +516,7 @@ func TestRoleRepository_RemoveFromUserIfNotLast_LockedPeerDoesNotCount(t *testin
 	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 	seedActiveAdmin(t, store, "active-admin")
 	seedActiveAdmin(t, store, "locked-admin")
-	u, err := store.UserRepository().GetByID(context.Background(), "locked-admin")
-	require.NoError(t, err)
-	u.SetStatus(domain.StatusLocked, time.Now())
-	require.NoError(t, store.UserRepository().Update(context.Background(), u))
+	require.NoError(t, store.UserRepository().UpdateLockState(context.Background(), "locked-admin", domain.StatusLocked, time.Now()))
 
 	changed, err := store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), "active-admin", "admin")
 	require.Error(t, err, "must refuse revoke when only peer is locked")
@@ -547,10 +535,7 @@ func TestRoleRepository_RemoveFromUserIfNotLast_LockedAdminCanBeRevoked(t *testi
 	store.RoleRepository().SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 	seedActiveAdmin(t, store, "active-admin")
 	seedActiveAdmin(t, store, "locked-admin")
-	u, err := store.UserRepository().GetByID(context.Background(), "locked-admin")
-	require.NoError(t, err)
-	u.SetStatus(domain.StatusLocked, time.Now())
-	require.NoError(t, store.UserRepository().Update(context.Background(), u))
+	require.NoError(t, store.UserRepository().UpdateLockState(context.Background(), "locked-admin", domain.StatusLocked, time.Now()))
 
 	changed, err := store.RoleRepository().RemoveFromUserIfNotLast(context.Background(), "locked-admin", "admin")
 	require.NoError(t, err)
@@ -577,11 +562,7 @@ func TestStore_SharedMutex_AtomicityAcrossRepos(t *testing.T) {
 	var revokeErr error
 	go func() {
 		defer wg.Done()
-		u, err := store.UserRepository().GetByID(context.Background(), "admin-b")
-		if err == nil {
-			u.SetStatus(domain.StatusLocked, time.Now())
-			_ = store.UserRepository().Update(context.Background(), u)
-		}
+		_ = store.UserRepository().UpdateLockState(context.Background(), "admin-b", domain.StatusLocked, time.Now())
 	}()
 	go func() {
 		defer wg.Done()

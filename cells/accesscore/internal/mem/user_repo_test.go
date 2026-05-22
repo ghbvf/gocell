@@ -41,9 +41,8 @@ func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
 	assert.True(t, got2.PasswordResetRequired(), "GetByUsername must preserve PasswordResetRequired")
 	assert.Equal(t, domain.UserSourceSetup, got2.CreationSource, "GetByUsername must preserve CreationSource")
 
-	// Update should persist changes to the flag.
-	got.SetPasswordResetRequired(false, time.Now())
-	require.NoError(t, repo.Update(ctx, got))
+	// UpdatePasswordResetFlag should persist changes to the flag.
+	require.NoError(t, repo.UpdatePasswordResetFlag(ctx, got.ID, false, time.Now()))
 
 	got3, err := repo.GetByID(ctx, "usr-test-001")
 	require.NoError(t, err)

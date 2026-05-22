@@ -118,37 +118,181 @@ func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username st
 	return r.GetByUsername(ctx, username)
 }
 
-// Update replaces the stored User. Safe to call both inside and outside a
-// RunInTx closure; see UserRepository lock contract.
-func (r *UserRepository) Update(ctx context.Context, user *domain.User) error {
+// UpdateProfile writes username / email / updated_at only. PATCH semantics:
+// nil name/email skips that column. Returns the reconstituted *domain.User.
+// Safe to call both inside and outside a RunInTx closure; see UserRepository
+// lock contract.
+func (r *UserRepository) UpdateProfile(
+	ctx context.Context,
+	userID string,
+	name, email *string,
+	now time.Time,
+) (*domain.User, error) {
 	if !r.store.txHoldsLock(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
 
-	existing, exists := r.store.usersByID[user.ID]
+	existing, exists := r.store.usersByID[userID]
+	if !exists {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
+	}
+
+	newName := existing.Username
+	if name != nil {
+		newName = *name
+	}
+	newEmail := existing.Email
+	if email != nil {
+		newEmail = *email
+	}
+
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    existing.ID,
+		Username:              newName,
+		Email:                 newEmail,
+		PasswordHash:          existing.PasswordHash,
+		PasswordVersion:       existing.PasswordVersion,
+		PasswordResetRequired: existing.PasswordResetRequired(),
+		Status:                existing.Status(),
+		Source:                existing.CreationSource,
+		AuthzEpoch:            existing.AuthzEpoch(),
+		CreatedAt:             existing.CreatedAt,
+		UpdatedAt:             now,
+		FailedLoginCount:      existing.FailedLoginCount(),
+		LastFailedAt:          copyTime(existing.LastFailedAt()),
+		LockedUntil:           copyTime(existing.AutoLockoutDeadline()),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mem: update-profile reconstitute: %w", err)
+	}
+
+	r.store.usersByID[userID] = updated
+	// Username may have changed — sync the byName index.
+	if name != nil && newName != existing.Username {
+		delete(r.store.byName, existing.Username)
+	}
+	r.store.byName[newName] = updated
+	return cloneUser(updated), nil
+}
+
+// UpdateLockState writes status + updated_at, and atomically zeros the
+// auto-lockout columns when status == StatusActive (mirrors the SQL CASE
+// logic in the PG adapter and ActivateUser.apply ResetFailedLogins call).
+// Safe to call both inside and outside a RunInTx closure; see UserRepository
+// lock contract.
+func (r *UserRepository) UpdateLockState(
+	ctx context.Context,
+	userID string,
+	status domain.UserStatus,
+	now time.Time,
+) error {
+	if !r.store.txHoldsLock(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
+
+	existing, exists := r.store.usersByID[userID]
 	if !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, user.ID)))
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
 	}
 
 	// S4.0 effective-admin invariant safety net (parallels migration 024
 	// effective_admin_invariant_on_users BEFORE UPDATE trigger). When a
 	// status transition demotes an active admin (active → non-active) and
 	// the user holds the admin role, refuse if no other effective admin
-	// remains. Kept inline so the mem path mirrors PG's atomic-with-mutation
-	// check; running it inside the same write lock as the map mutation
+	// remains. Running inside the same write lock as the map mutation
 	// matches the PG trigger's BEFORE-row semantics.
-	if existing.Status() == domain.StatusActive && user.Status() != domain.StatusActive {
-		if err := r.guardEffectiveAdminRemovalLocked(user.ID); err != nil {
+	if existing.Status() == domain.StatusActive && status != domain.StatusActive {
+		if err := r.guardEffectiveAdminRemovalLocked(userID); err != nil {
 			return err
 		}
 	}
 
-	c := cloneUser(user)
-	r.store.usersByID[user.ID] = c
-	r.store.byName[user.Username] = c
+	var failedLoginCount int
+	var lastFailedAt *time.Time
+	var lockedUntil *time.Time
+	if status == domain.StatusActive {
+		// Atomic lockout reset mirrors SQL CASE WHEN new.status='active' THEN 0/NULL/NULL.
+		failedLoginCount = 0
+		lastFailedAt = nil
+		lockedUntil = nil
+	} else {
+		failedLoginCount = existing.FailedLoginCount()
+		lastFailedAt = copyTime(existing.LastFailedAt())
+		lockedUntil = copyTime(existing.AutoLockoutDeadline())
+	}
+
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    existing.ID,
+		Username:              existing.Username,
+		Email:                 existing.Email,
+		PasswordHash:          existing.PasswordHash,
+		PasswordVersion:       existing.PasswordVersion,
+		PasswordResetRequired: existing.PasswordResetRequired(),
+		Status:                status,
+		Source:                existing.CreationSource,
+		AuthzEpoch:            existing.AuthzEpoch(),
+		CreatedAt:             existing.CreatedAt,
+		UpdatedAt:             now,
+		FailedLoginCount:      failedLoginCount,
+		LastFailedAt:          lastFailedAt,
+		LockedUntil:           lockedUntil,
+	})
+	if err != nil {
+		return fmt.Errorf("mem: update-lock-state reconstitute: %w", err)
+	}
+
+	r.store.usersByID[userID] = updated
+	return nil
+}
+
+// UpdatePasswordResetFlag writes password_reset_required + updated_at only.
+// Safe to call both inside and outside a RunInTx closure; see UserRepository
+// lock contract.
+func (r *UserRepository) UpdatePasswordResetFlag(
+	ctx context.Context,
+	userID string,
+	required bool,
+	now time.Time,
+) error {
+	if !r.store.txHoldsLock(ctx) {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+	}
+
+	existing, exists := r.store.usersByID[userID]
+	if !exists {
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
+	}
+
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:                    existing.ID,
+		Username:              existing.Username,
+		Email:                 existing.Email,
+		PasswordHash:          existing.PasswordHash,
+		PasswordVersion:       existing.PasswordVersion,
+		PasswordResetRequired: required,
+		Status:                existing.Status(),
+		Source:                existing.CreationSource,
+		AuthzEpoch:            existing.AuthzEpoch(),
+		CreatedAt:             existing.CreatedAt,
+		UpdatedAt:             now,
+		FailedLoginCount:      existing.FailedLoginCount(),
+		LastFailedAt:          copyTime(existing.LastFailedAt()),
+		LockedUntil:           copyTime(existing.AutoLockoutDeadline()),
+	})
+	if err != nil {
+		return fmt.Errorf("mem: update-password-reset-flag reconstitute: %w", err)
+	}
+
+	r.store.usersByID[userID] = updated
 	return nil
 }
 
