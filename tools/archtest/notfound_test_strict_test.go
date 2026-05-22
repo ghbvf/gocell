@@ -288,7 +288,7 @@ func scanFileForNotFoundViolations(
 				"[POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01] %s missing typed funnel: every test whose name ends in _NotFound "+
 					"must contain at least one call to errcodetest.AssertCode or "+
 					"errcodetest.AssertWireCode with a typed errcode.Err*NotFound "+
-					"expected argument (selector form, not BasicLit). See cap-14:18.",
+					"expected argument (selector form, not BasicLit).",
 				name,
 			),
 		})

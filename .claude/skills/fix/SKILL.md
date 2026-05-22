@@ -61,7 +61,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
    |------|------|---------|
    | CONFIRMED | IN_SCOPE | 在当前分支修 |
    | CONFIRMED | RELATED | 建议搭车修，标注"搭车" |
-   | CONFIRMED | OUT_OF_SCOPE | **只创建 backlog issue，不修** |
+   | CONFIRMED | OUT_OF_SCOPE | **输出 backlog issue 建议命令，等用户确认后创建（禁止自动 `gh issue create`）** |
    | RESOLVED | — | 标注已修，跳过 |
    | CANNOT_VERIFY | — | 标注待确认，跳过 |
 
@@ -70,7 +70,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
    - IN_SCOPE + Cx2 → 执行推荐方案（最小或彻底，由时机判断决定）
    - IN_SCOPE + Cx3/Cx4 → 只输出方案，标注"需人工决策"
    - RELATED + Cx1/Cx2 → 搭车修，标注"搭车"
-   - OUT_OF_SCOPE → 创建 backlog issue（gh issue create --label backlog），标注推荐的 cap-/flag-/type- labels
+   - OUT_OF_SCOPE → **不修**；输出建议的 `gh issue create` 命令（含 `pri-pX` / `cap-XX` / `flag-XX` / `type-XX` labels + body 草稿），等用户确认后由用户手工执行或回到 /fix 用 AskUserQuestion 闸门确认
 7. **修复并行**（subagent_type: `developer`）：按相同的 Cell 包聚类分发，并发数同步骤 3。每个 sub-agent 串行处理自己组内的 finding（同包内串行避免写冲突），跑阶段 4.4 的 Edit-Test Loop。Cx1 + Cx2 都并行；Cx3/Cx4 只输出方案不派发。
 8. 主 agent 汇总各 sub-agent 修复结果，跑阶段 4.5 最终测试 + 4.8 git 收尾 + issue 闭合/创建。
 
@@ -84,7 +84,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 1. `gh issue list --label backlog --search "<关键词>" --state open --json number,title,labels` → 确认是否已登记
 2. 命中 → `gh issue view <num>` 读取上下文（title / body / labels / Project v2 字段）
-3. 未命中 → 记录，修复完成后用 `gh issue create --label backlog` 补登（按 `.github/ISSUE_TEMPLATE/backlog.yml` 模板）
+3. 未命中 → 记录；修复完成后在阶段 4.8 输出 `gh issue create --label backlog --label pri-pX ...` 建议命令 + body 草稿（按 `.github/ISSUE_TEMPLATE/backlog.yml` 模板），等用户确认后再 run，**不自动 create**
 
 ### 1.1 找到问题代码
 
@@ -186,7 +186,7 @@ CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 |------|---------|--------|
 | **IN_SCOPE** | finding 涉及的文件在当前分支 diff 中，或 PR 描述明确包含该 finding ID | 在当前分支修复 |
 | **RELATED** | finding 涉及的文件不在 diff 中，但与当前分支的功能主题直接相关（如同一子系统的遗留问题） | 建议在当前分支一并修复，但标注为"搭车" |
-| **OUT_OF_SCOPE** | finding 涉及完全不同的模块/子系统 | 创建 backlog issue，不在当前分支修 |
+| **OUT_OF_SCOPE** | finding 涉及完全不同的模块/子系统 | **输出 backlog issue 建议命令**，等用户确认；不在当前分支修，不自动 `gh issue create` |
 
 **快速判定规则：**
 - 当前分支 diff 包含 finding 文件 → IN_SCOPE
@@ -220,7 +220,7 @@ CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 - **不向后兼容**：直接改签名/删字段/换实现，不留 deprecation 别名、不留兼容 shim、不留双路径
 - **优雅简洁**：用最少代码、最少抽象、最少新文件达成目标，不预设未来需求
 
-> 默认走彻底方案。Cx2 的"最小修复（方案 A）"仅在时机判断（3.2）明确"不能现在做"时启用，**必须给出升级到彻底方案的时间窗口并创建 backlog issue**（`gh issue create --label backlog`，按 `.github/ISSUE_TEMPLATE/backlog.yml` 填字段）；批量模式"搭车修"同样适用此原则。
+> 默认走彻底方案。Cx2 的"最小修复（方案 A）"仅在时机判断（3.2）明确"不能现在做"时启用，**必须给出升级到彻底方案的时间窗口并输出 backlog issue 建议命令**（`gh issue create --label backlog --label pri-pX ...`，按 `.github/ISSUE_TEMPLATE/backlog.yml` 填字段，等用户确认后创建，**不自动 create**）；批量模式"搭车修"同样适用此原则。
 
 ### 反思自检（方案落地前强制执行）
 
@@ -268,7 +268,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 |------|---------|
 | **IN_SCOPE** | 在当前分支/PR 修，进入 Q1 判断优先级 |
 | **RELATED** | 建议搭车修，但如果改动量大可 defer |
-| **OUT_OF_SCOPE** | 创建 backlog issue，**不在当前分支修**，跳过 Q1-Q3 |
+| **OUT_OF_SCOPE** | **输出建议命令，等用户确认后由用户创建**，**不在当前分支修**，跳过 Q1-Q3 |
 
 **Q1: 推荐现在做还是后面做？**（仅 IN_SCOPE / RELATED 继续）
 
@@ -295,7 +295,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 | Cx2 + IN_SCOPE + 能做                                      | — | 执行推荐方案 |
 | Cx2 + 不能做（有前置依赖）                                         | — | 记录报告，标注阻塞 |
 | Cx3/Cx4                                                  | 任何 | 只输出方案，标注"需人工决策" |
-| 任何 + OUT_OF_SCOPE                                        | — | 创建 backlog issue，不修 |
+| 任何 + OUT_OF_SCOPE                                        | — | 输出 backlog issue 建议命令（**不自动创建**），不修 |
 
 **不可自动执行**: 并发语义变更、接口签名修改、新依赖、数据流方向变更、Cx2+。
 
@@ -306,7 +306,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 **用 TaskCreate 注册每项任务**，执行时 TaskUpdate 更新状态（✔/◼/◻）。
 
 规则：
-- 所有 finding 都创建 task，OUT_OF_SCOPE 标注 `[→ 创建 issue]`
+- 所有 finding 都创建 task，OUT_OF_SCOPE 标注 `[→ 输出 issue 建议命令；等用户确认]`
 - 单条 Cx1 IN_SCOPE → 跳过清单直接修；批量或 Cx2+ → 必须创建
 - 最后两项固定：`commit + push` + `闭合/创建 GitHub issues`
 - 创建后立即执行，不等确认
@@ -375,12 +375,25 @@ go test ./kernel/...                            # 改了 kernel 时
 
 所有 `gh` 命令需 `dangerouslyDisableSandbox: true`；写入前先 `gh issue list --label backlog --search "<关键词>"` 查重，避免重复创建。
 
-| Finding 状态 | 命令 | body / comment |
-|------------|------|----------------|
-| IN_SCOPE 已修 + 对应已有 issue | `gh issue close <num> --reason completed --comment "Fixed in PR #<NNN>"` | — |
-| IN_SCOPE 已修 + 无对应 issue（未登记被修复） | `gh issue create --label backlog --title "..." --body-file <tmp>` → 立即 `gh issue close <new> --comment "..."` | body 含 `Found and fixed in PR #<NNN>` |
-| OUT_OF_SCOPE finding | `gh issue create --label backlog --title "..." --body-file <tmp>` → `gh issue edit <new> --add-label cap-XX,flag-XX,type-XX` | 按 `.github/ISSUE_TEMPLATE/backlog.yml` 填 现状/修复方向/Files/Trigger/Source |
-| /fix 中发现的新问题 | 同 OUT_OF_SCOPE 流程 | body 含 `Discovered via /fix #<original>` 关联来源 |
+**写入策略（重要）**：
+
+- `gh issue close` / `gh issue edit` 对**已存在的 issue** 可由 /fix 自动执行（闭合/补 label 是状态变更，不产生新 backlog 项）。
+- `gh issue create` **禁止 /fix 自动执行**。OUT_OF_SCOPE finding 和 /fix 派生的新问题，/fix 只**输出建议命令 + body 草稿**，由用户人工 run，或在 AskUserQuestion 闸门得到用户确认后再 run。
+- 这是为了防止 OUT_OF_SCOPE 误判 / 重复登记污染 backlog。重复防护（`gh issue list --search` 查重）只是辅助，最终把关由用户做。
+
+**Priority 决定**（CLI 创建 issue 必须显式贴 `--label pri-pX`，否则被 `auto-label-priority.yml` workflow 贴 `pri-missing` 哨兵）：
+
+- review finding 已含 `[P0]/[P1]/[P2]/[P3]` 评级 → 直接采用
+- /fix 派生的新 finding：默认 **`pri-p2`**（常规债务）
+- `pri-p0` 红线：仅 incident-driven（线上故障 / 数据完整性破坏 / 安全 CVE），`/fix` 即便建议也**不得**默认 P0；如确属红线，停下来用 AskUserQuestion 让用户确认升级
+- 评级规则真值源 `docs/backlog/20260520/RERATING-RUBRIC.md`
+
+| Finding 状态 | /fix 行为 | 命令模板（user 确认后执行） | body / comment |
+|------------|---------|---------------------------|----------------|
+| IN_SCOPE 已修 + 对应已有 issue | **自动执行** | `gh issue close <num> --reason completed --comment "Fixed in PR #<NNN>"` | — |
+| IN_SCOPE 已修 + 无对应 issue（未登记被修复） | **输出建议命令** + AskUserQuestion 确认 | `gh issue create --label backlog --label pri-pX --title "..." --body-file <tmp>` → 立即 `gh issue close <new> --comment "..."` | body 含 `Found and fixed in PR #<NNN>` |
+| OUT_OF_SCOPE finding | **输出建议命令**，不自动创建 | `gh issue create --label backlog --label pri-pX --title "..." --body-file <tmp>` → `gh issue edit <new> --add-label cap-XX,flag-XX,type-XX` | 按 `.github/ISSUE_TEMPLATE/backlog.yml` 填 现状/修复方向/Files/Trigger/Source |
+| /fix 中发现的新问题 | **输出建议命令**，不自动创建 | 同 OUT_OF_SCOPE 流程 | body 含 `Discovered via /fix #<original>` 关联来源 |
 
 完成后 **TaskUpdate → completed**（"issue 闭合/创建" 任务）。
 
@@ -394,8 +407,8 @@ go test ./kernel/...                            # 改了 kernel 时
 
 **Backlog 验证**（4.8 已执行，此处 `gh` 复核）：
 - FIXED finding 对应 issue 已 closed + comment 引用了 PR 编号（`gh issue view <num>`）
-- OUT_OF_SCOPE finding 已创建 issue 且贴齐 `cap-XX` / `flag-XX` / `type-XX` 三 label（`gh issue list --label backlog --state open --json number,title,labels --search "in:title <关键词>"`）
-- /fix 派生的新问题已创建 issue 并在 body 标注 `Discovered via /fix #<original>`
+- OUT_OF_SCOPE finding：在最终报告中**列出建议的 `gh issue create` 命令 + body 草稿**，由用户人工确认后创建（/fix 不自动 create）。建议命令必须含 `pri-pX` + `cap-XX` / `flag-XX` / `type-XX` 四 label，避免被 workflow 贴 `pri-missing` 哨兵
+- /fix 派生的新问题：同 OUT_OF_SCOPE 处理；body 草稿含 `Discovered via /fix #<original>`
 
 ---
 
@@ -406,3 +419,5 @@ go test ./kernel/...                            # 改了 kernel 时
 - 测试失败且 4 轮回退后仍无法修正
 - 修复过程中发现新问题超出原始 scope
 - Cx3/Cx4 用户追加了 `--auto` 参数（矛盾，需确认意图）
+- **任何 `gh issue create` 调用前**（OUT_OF_SCOPE finding / /fix 派生新问题 / 阶段 4.8 步骤 2 表格中标注"输出建议命令"的行）：先输出建议命令 + body 草稿，再用 AskUserQuestion 询问"是否帮你 run 此命令？"。用户拒绝 → 留命令在最终报告供用户手工 run，/fix 不自动 create
+- pri-p0 红线升级（incident-driven 或安全 CVE）

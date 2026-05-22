@@ -4907,7 +4907,7 @@ func TestOUTGUARD01_InvalidDurabilityMode_L0L1(t *testing.T) {
 
 // --- Parser examples/ walk coverage (V-A11) ---
 // Confirms that Parser.ParseFS includes cells under examples/*/cells/**/cell.yaml
-// in ProjectMeta.Cells. Backlog item V-A11.
+// in ProjectMeta.Cells.
 
 func TestProjectWalksExamples(t *testing.T) {
 	fsys := fstest.MapFS{

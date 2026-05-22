@@ -19,7 +19,7 @@ package identitymanage
 // holdsLock=true token is only injectable by store-bound TxRunner (see
 // ADR 202605171846-adr-mem-tx-lock-ownership.md). All operations are
 // race-safe. Post-run assertions verify:
-// (Backlog MEM-STORE-RWMUTEX-READ-CONCURRENCY tracks the RWMutex upgrade defer.)
+// (Future upgrade MEM-STORE-RWMUTEX-READ-CONCURRENCY: defer RWMutex hot-path.)
 //   - user.authz_epoch >= 1 (at least one credential event succeeded)
 //   - all sessions for the subject are revoked (no goroutine's revoke was dropped)
 //   - no panic occurred during concurrent execution

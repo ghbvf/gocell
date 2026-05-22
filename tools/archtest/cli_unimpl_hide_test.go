@@ -1,7 +1,7 @@
 // INVARIANT: CLI-UNIMPL-HIDE-01
 //
 // No `gocell` sub-command may be visible in help while being
-// unimplemented (B2-X-05 / cap-14 CLI-UNIMPL-HIDE-01). The four
+// unimplemented (invariant CLI-UNIMPL-HIDE-01). The four
 // help-bearing verb trees — generate / verify / scaffold / check — each
 // own a single typed registry (cmd/gocell/app/subcommand.go's
 // subcommand[H]); dispatch and help BOTH derive from that one slice, so a
