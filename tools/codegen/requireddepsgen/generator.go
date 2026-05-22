@@ -15,6 +15,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -77,6 +78,9 @@ func Generate(slicePath string) ([]byte, error) {
 
 // GenerateAll walks modRoot for all cells/*/slices/*/service.go files and
 // returns a map from slice directory path to generated file contents.
+//
+// Slices whose service.go does not declare a "Service" struct are silently
+// skipped (ErrNoServiceStruct). All other errors are fatal.
 func GenerateAll(modRoot string) (map[string][]byte, error) {
 	slicePaths, err := findSlicePaths(modRoot)
 	if err != nil {
@@ -86,6 +90,9 @@ func GenerateAll(modRoot string) (map[string][]byte, error) {
 	result := make(map[string][]byte, len(slicePaths))
 	for _, sp := range slicePaths {
 		out, err := Generate(sp)
+		if errors.Is(err, ErrNoServiceStruct) {
+			continue // service.go exists but has no Service struct — skip
+		}
 		if err != nil {
 			return nil, fmt.Errorf("requireddepsgen: generate for %s: %w", sp, err)
 		}
@@ -276,11 +283,16 @@ func findSlicePaths(modRoot string) ([]string, error) {
 			return nil, err
 		}
 		for _, dir := range matches {
-			if _, err := filepath.Glob(filepath.Join(dir, "service.go")); err != nil {
+			// Skip non-directories (e.g. service.go matched by a wildcard).
+			info, err := os.Stat(dir)
+			if err != nil || !info.IsDir() {
 				continue
 			}
-			// Check service.go actually exists.
+			// Include only directories that contain a service.go.
 			svcFile := filepath.Join(dir, "service.go")
+			if _, err := os.Stat(svcFile); err != nil {
+				continue
+			}
 			if _, ok := seen[svcFile]; ok {
 				continue
 			}

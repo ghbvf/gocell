@@ -78,6 +78,18 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		},
 		run: func(_ context.Context, a []string) error { return generateContract(a) },
 	},
+	{
+		name: "required-deps",
+		help: []string{
+			"Generate service_required_gen.go for each slice that has",
+			"gocell:\"required\" struct field tags on its Service struct.",
+			"[<slicePath>] | --all [--dry-run | --verify].",
+			"--verify reports drift without writing; --dry-run prints",
+			"would-write paths without writing.",
+			"CI: commit service_required_gen.go and run with --verify.",
+		},
+		run: func(_ context.Context, a []string) error { return generateRequiredDeps(a) },
+	},
 }
 
 // runGenerate dispatches `gocell generate <type>` through the
