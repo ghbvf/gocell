@@ -573,6 +573,9 @@ func TestService_UpdateProfile_DoesNotTouchAuthzFields(t *testing.T) {
 	prePV := pre.PasswordVersion
 	preEpoch := pre.AuthzEpoch()
 	preReset := pre.PasswordResetRequired()
+	preFailedCount := pre.FailedLoginCount()
+	preLastFailedAt := pre.LastFailedAt()
+	preLockedUntil := pre.AutoLockoutDeadline()
 
 	newEmail := "after@e.f"
 	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
@@ -589,6 +592,35 @@ func TestService_UpdateProfile_DoesNotTouchAuthzFields(t *testing.T) {
 		"profile-only PATCH must not change passwordVersion")
 	assert.Equal(t, preEpoch, updated.AuthzEpoch(),
 		"profile-only PATCH must not change authzEpoch")
+	assert.Equal(t, preFailedCount, updated.FailedLoginCount(), "profile-only PATCH must not change failed_login_count")
+	assert.Equal(t, preLastFailedAt, updated.LastFailedAt(), "profile-only PATCH must not change last_failed_at")
+	assert.Equal(t, preLockedUntil, updated.AutoLockoutDeadline(), "profile-only PATCH must not change locked_until")
+}
+
+// TestService_Update_ProfileAndStatusCombined pins the user-visible behavior of
+// a combined PATCH: when both Name and Status are set in the same request the
+// returned aggregate must carry both the new name AND the new status.
+//
+// Note: combined status+requirePasswordReset is rejected (see
+// TestService_Update_CombinedAuthzFields_Rejected), but status+profile fields
+// are valid together.
+func TestService_Update_ProfileAndStatusCombined(t *testing.T) {
+	svc := newTestService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "combined", Email: "combined@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	newName := "combined-new"
+	suspended := "suspended"
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
+		ID:     user.ID,
+		Name:   &newName,
+		Status: &suspended,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "combined-new", updated.Username, "combined PATCH must apply new name")
+	assert.Equal(t, domain.StatusSuspended, updated.Status(), "combined PATCH must apply new status")
 }
 
 // TestService_Lock_DoesNotTouchProfile verifies Lock routes to UpdateLockState
@@ -1467,6 +1499,7 @@ func TestService_Unlock_UpdateInsideTx(t *testing.T) {
 	// Wave 5 P1-1: ApplyInTx+publish co-committed in the same RunInTx → 1 tx.
 	assert.Equal(t, 1, runner.runs, "Unlock must run 1 tx: ApplyInTx+publish co-committed")
 	assert.True(t, repo.updInTx, "Unlock.UpdateLockState must run inside the authzmutate tx")
+	assert.False(t, repo.getInTx, "Unlock must not call GetByID inside tx (narrow UpdateLockState does self-lookup)")
 }
 
 // TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog asserts that an

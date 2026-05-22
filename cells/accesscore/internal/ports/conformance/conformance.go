@@ -156,8 +156,16 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 	t.Run("UpdateLockState_ActivateClearsLockout", func(t *testing.T) {
 		conformUpdateLockStateActivateClearsLockout(t, factory)
 	})
+	t.Run("UpdateLockState_NotFound", func(t *testing.T) {
+		err := conformUpdateLockStateNotFound(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
+	})
 	t.Run("UpdatePasswordResetFlag_Succeeds", func(t *testing.T) {
 		conformUpdatePasswordResetFlagSucceeds(t, factory)
+	})
+	t.Run("UpdatePasswordResetFlag_NotFound", func(t *testing.T) {
+		err := conformUpdatePasswordResetFlagNotFound(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	})
 }
 
@@ -858,6 +866,25 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	}
 
 	_ = originalName // silence linter (kept for debug context)
+
+	// Both nil: no-op. Username and email must stay at current values.
+	currentName := newName  // last set value
+	currentEmail := newEmail
+	if _, err := repo.UpdateProfile(context.Background(), u.ID, nil, nil, now); err != nil {
+		t.Fatalf("UpdateProfile_PartialPATCH: nil+nil must not error: %v", err)
+	}
+	got, err = repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdateProfile_PartialPATCH: GetByID after nil+nil: %v", err)
+	}
+	if got.Username != currentName {
+		t.Errorf("UpdateProfile_PartialPATCH: nil+nil must not change username: got %q, want %q",
+			got.Username, currentName)
+	}
+	if got.Email != currentEmail {
+		t.Errorf("UpdateProfile_PartialPATCH: nil+nil must not change email: got %q, want %q",
+			got.Email, currentEmail)
+	}
 }
 
 // conformUpdateProfileNotFound verifies missing userID returns ErrAuthUserNotFound.
@@ -1043,11 +1070,38 @@ func conformUpdatePasswordResetFlagSucceeds(t *testing.T, factory UserRepoFactor
 	if got.PasswordResetRequired() {
 		t.Error("UpdatePasswordResetFlag_Succeeds: password_reset_required must be false")
 	}
+}
 
-	// Not-found path returns ErrAuthUserNotFound.
-	err = repo.UpdatePasswordResetFlag(context.Background(), uuid.NewString(), true, now2)
+// conformUpdateLockStateNotFound (B1): UpdateLockState on a non-existent userID
+// must return ErrAuthUserNotFound. Returns the repo error so the caller asserts
+// via the typed funnel at the test site (required by
+// POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01: archtest does not
+// follow cross-function helpers).
+func conformUpdateLockStateNotFound(t *testing.T, factory UserRepoFactory) error {
+	t.Helper()
+	repo, _, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	err := repo.UpdateLockState(context.Background(), uuid.NewString(), domain.StatusLocked, time.Now().UTC())
 	if err == nil {
-		t.Fatal("UpdatePasswordResetFlag_Succeeds: must return error for non-existent user")
+		t.Fatal("UpdateLockState_NotFound: must return error for non-existent user, got nil")
 	}
-	errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
+	return err
+}
+
+// conformUpdatePasswordResetFlagNotFound (B2): UpdatePasswordResetFlag on a
+// non-existent userID must return ErrAuthUserNotFound. Returns the repo error
+// so the caller asserts via the typed funnel at the test site (required by
+// POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01: archtest does not
+// follow cross-function helpers).
+func conformUpdatePasswordResetFlagNotFound(t *testing.T, factory UserRepoFactory) error {
+	t.Helper()
+	repo, _, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	err := repo.UpdatePasswordResetFlag(context.Background(), uuid.NewString(), true, time.Now().UTC())
+	if err == nil {
+		t.Fatal("UpdatePasswordResetFlag_NotFound: must return error for non-existent user, got nil")
+	}
+	return err
 }

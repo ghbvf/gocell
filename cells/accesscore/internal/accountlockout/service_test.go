@@ -188,7 +188,7 @@ func (r *fakeUserRepo) UpdateLockState(_ context.Context, userID string, status 
 }
 
 func (r *fakeUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
-	return nil
+	return errFakeRepoUnused
 }
 
 func (r *fakeUserRepo) Delete(_ context.Context, id string) error {
