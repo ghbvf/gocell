@@ -29,7 +29,7 @@ type EvaluateResult struct {
 // Service implements feature flag business logic.
 type Service struct {
 	repo    ports.FlagRepository
-	codec   *query.CursorCodec
+	codec   *query.CursorCodec `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"featureflag: cursor codec is required"` //nolint:lll // R2-approved: gocell tag overrides are machine-readable and must stay on one line
 	logger  *slog.Logger
 	runMode query.RunMode
 }
@@ -42,16 +42,16 @@ type Service struct {
 // Passing nil is a caller programming error; NewService returns errcode.ErrCellMissingCodec
 // so the cell Init() can propagate a structured error instead of a runtime panic.
 func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
-	if codec == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"featureflag: cursor codec is required")
-	}
-	return &Service{
+	s := &Service{
 		repo:    repo,
 		codec:   codec,
 		logger:  logger,
 		runMode: runMode,
-	}, nil
+	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // GetByKey retrieves a feature flag by key.

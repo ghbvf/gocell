@@ -130,8 +130,12 @@ func BuildSubscribeService(t *testing.T, opts ...BuildSubscribeOption) *configsu
 		o(cfg)
 	}
 
-	return configsubscribe.NewService(
+	svc, err := configsubscribe.NewService(
 		cfg.logger,
 		configsubscribe.WithClock(cfg.clk),
 	)
+	if err != nil {
+		t.Fatalf("BuildSubscribeService: %v", err)
+	}
+	return svc
 }
