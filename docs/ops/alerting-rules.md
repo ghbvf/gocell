@@ -489,7 +489,9 @@ retry-backoff 不同失败域），本 Gauge 不会随之增长。每次 Relay r
       (defaults to runtime/outbox.DefaultRelayReclaimInterval = 30s),
       not per scrape — treat the value as "eligible depth at last reclaim tick".
       For tighter sampling, decrease ReclaimInterval. Retry backlog is not
-      reflected here; diagnose via outbox_consumer_rejected_total.
+      reflected here; diagnose via outbox_relayed_total{outcome="dead"|"lost"}
+      (relay-side outcome counter) — outbox_consumer_rejected_total is the
+      subscriber-side DLX counter, a different failure domain.
 ```
 
 ### 调试指标（无告警，仅 dashboard）

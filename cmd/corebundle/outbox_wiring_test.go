@@ -89,7 +89,9 @@ func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
 		"postgres mode must return a non-nil PoolResource (PG pool)")
 	assert.Len(t, result.BootstrapOpts, 1,
 		"postgres mode must return exactly one bootstrap.Option (WithRelay) — "+
-			"no extra WithManagedResource; double-register triggers phase0 ErrBootstrapDoubleManaged")
+			"no extra WithManagedResource: *Relay is not a ManagedResource at the "+
+			"type level (compile-time mismatch); second WithRelay call would panic "+
+			"via panicregister.Approved + errcode.Assertion (B class)")
 }
 
 // TestBuildConfigCoreOpts_UnknownMode_Error asserts that an unrecognized

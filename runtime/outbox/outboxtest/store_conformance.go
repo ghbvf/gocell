@@ -836,8 +836,8 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	}
 
 	// At this point: e1, e2 have next_retry_at <= now; e3 has next_retry_at = now+1h.
-	// CountPending target: 2 (e1 + e2).
-	// CountPending current (RED): 3 (counts all statusPending without predicate).
+	// CountPending expected: 2 (e1 + e2). Both backends now apply the
+	// next_retry_at predicate (see GREEN note on the test godoc above).
 	got, err := store.CountPending(ctx)
 	if err != nil {
 		t.Fatalf("CountPending: %v", err)
