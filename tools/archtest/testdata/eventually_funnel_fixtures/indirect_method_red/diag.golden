@@ -1,0 +1,2 @@
+tools/archtest/testdata/eventually_funnel_fixtures/indirect_method_red/usage.go:26: indirect reference to require.Eventually (function value, pointer pass-through, method binding, or reflect); use testwait.External / testwait.Deterministic at the callsite instead
+tools/archtest/testdata/eventually_funnel_fixtures/indirect_method_red/usage.go:31: indirect reference to assert.EventuallyWithT (function value, pointer pass-through, method binding, or reflect); use testwait.External / testwait.Deterministic at the callsite instead

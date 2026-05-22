@@ -1,0 +1,1 @@
+tools/archtest/testdata/eventually_funnel_fixtures/indirect_struct_field_red/usage.go:21: indirect reference to require.Eventually (function value, pointer pass-through, method binding, or reflect); use testwait.External / testwait.Deterministic at the callsite instead

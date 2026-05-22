@@ -13,14 +13,13 @@ package archtest
 //     (function-variable assignment, function-pointer pass to other helpers,
 //     reflect.ValueOf, etc.) are rejected by the blind-spot reverse self-test.
 //
-// Upstream funnel closure — banning bare require.Eventually / assert.Eventually
-// in test code — is deferred to a follow-up PR per
-// docs/plans/202605181600-042-archtest.md §1.1 (TEST-EVENTUALLY-FUNNEL-01).
-// Until then this rule is "Hard downstream + Soft upstream" transitional;
-// AI-rebust §"Funnel 双向锁评级" explicitly permits this with backlog
-// registration, anchored at plan §1.1.
-// Upstream funnel closure backlog anchor: TEST-EVENTUALLY-FUNNEL-01 (registered
-// in docs/plans/202605181600-042-archtest.md §1.1 PR3).
+// Upstream funnel closure is locked by sibling archtest
+// TEST-EVENTUALLY-FUNNEL-01 (test_eventually_funnel_test.go): bans bare
+// require.Eventually / assert.Eventually / *WithT module-wide so reaching
+// testwait.External is the only Go-source path to synchronous polling.
+// Together with this downstream rule they form a Hard funnel
+// (ai-collab.md §"Funnel 双向锁评级") and Hard 范本 "typed marker funnel
+// for unbounded ops" (sibling of panicregister.Approved).
 
 import (
 	"fmt"
@@ -211,8 +210,8 @@ func shouldSkipForTestwaitExternal(rel string) bool {
 //
 // Tool: archtest.RunTyped + *types.Info callee resolution + go/ast literal
 // shape check. This is the typed-marker funnel downstream lock; the upstream
-// lock (ban bare require.Eventually / assert.Eventually) is a separate rule
-// landing in PR3 per docs/plans/202605181600-042-archtest.md §1.1.
+// lock (ban bare require.Eventually / assert.Eventually) lives in sibling
+// archtest TEST-EVENTUALLY-FUNNEL-01 (test_eventually_funnel_test.go).
 //
 // Blind spots of the chosen tool (per AI-rebust §"工具选定后强制盲区自检"):
 //

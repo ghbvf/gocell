@@ -9,7 +9,8 @@
 //	time.Sleep(x) //archtest:allow:test-sleep <reason>
 //
 // where <reason> is non-empty and explains why the wait cannot be expressed
-// as `require.Eventually` (or analogous polling). This forces a paper trail
+// as `testwait.External` / `testwait.Deterministic` (or analogous polling).
+// This forces a paper trail
 // for every wall-clock dependency in the test suite — new lazy "sleep N then
 // assert" sites cannot land without a reviewer reading and challenging the
 // reason, and grep across the repository produces a complete inventory of
@@ -97,7 +98,9 @@ func scanTestSleepDisciplineDiags(fset *token.FileSet, file *ast.File, rel strin
 			Line: fset.Position(call.Pos()).Line,
 			Message: fmt.Sprintf(
 				"time.Sleep without %s <reason>. "+
-					"Prefer require.Eventually for state-polling waits. "+
+					"Prefer testwait.External(t, reason, ...) for synchronous polling "+
+					"or testwait.Deterministic(t, ch, ...) for channel waits "+
+					"(see pkg/testutil/testwait). "+
 					"ref: docs/plans/202605011500-029-master-roadmap.md G6",
 				sleepAllowMarker),
 		})

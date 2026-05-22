@@ -3,15 +3,30 @@ package archtest
 import "testing"
 
 // FixtureBuildTag is the build-tag literal that gates archtest fixture
-// sub-packages (internal/passfunnelfixture, internal/basesliceredfixture,
-// internal/rawparamfixture, internal/auditledgerfixture,
-// internal/inspectorredfixture, internal/wrapfixture/*, internal/
-// authroutemutexfixture, internal/refreshinvariantsfixture, internal/
-// sessionprotocolfixture, internal/transientmarkerfixture,
-// internal/yamlquotefixture). Business archtest code that needs to identify
-// this build tag at the Go-code level (e.g., panic_invariants_test.go
-// skipping the fixture tag group inside a module-wide RunTyped scan) MUST
-// reference this const rather than the bare "archtest_fixture" literal —
+// sub-packages. Two placement conventions coexist:
+//
+//   - internal/<name>/ — fixture exposed as a Go sub-package importable by
+//     name; used when the fixture needs to be referenced from other
+//     archtest code (e.g. internal/passfunnelfixture, internal/
+//     basesliceredfixture, internal/rawparamfixture, internal/
+//     auditledgerfixture, internal/inspectorredfixture, internal/
+//     wrapfixture/*, internal/authroutemutexfixture, internal/
+//     refreshinvariantsfixture, internal/sessionprotocolfixture,
+//     internal/transientmarkerfixture, internal/yamlquotefixture).
+//   - testdata/<rule_fixtures>/<case>/ — pattern-based fixture loaded by
+//     path; used for rules with a golden file per case (e.g.
+//     testdata/testwait_external_fixtures/, testdata/eventually_funnel_fixtures/).
+//
+// Both conventions are protected by the archtest_fixture build tag and
+// the same façade-bypass guard. Pick internal/ when the fixture is named
+// helper code consumed by other archtest packages; pick testdata/ when
+// the fixture is one of many "red / green" pattern cases with a golden
+// diag file.
+//
+// Business archtest code that needs to identify this build tag at the
+// Go-code level (e.g., panic_invariants_test.go skipping the fixture
+// tag group inside a module-wide RunTyped scan) MUST reference this
+// const rather than the bare "archtest_fixture" literal —
 // PASS-FUNNEL-FIXTURE-TAG-01 archtest enforces that requirement by
 // rejecting BasicLit STRING "archtest_fixture" in business *_test.go files.
 //
