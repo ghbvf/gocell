@@ -11,7 +11,7 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 - 涉及功能或行为变更时，同步更新对应文档
 - 被 `.gitignore` 忽略的文件禁止 `git add -f`
 - Review 和重构时不考虑向后兼容——当前只有 gocell 自身，没有外部调用方
-- 新 backlog 条目走 `gh issue create --label backlog` + template Priority dropdown 自动贴 `pri-pX` label；Status/Estimate 仍在 Project v2 设；不写 markdown 表；schema 见 `docs/backlog.md`
+- 新 backlog 条目：Web UI 走 template + Priority dropdown 自动贴 `pri-pX`；CLI 用 `gh issue create --label backlog --label pri-pX [--label cap-XX --label flag-XX --label type-XX]` 显式贴（不触发 dropdown，漏贴 `pri-pX` 会被 workflow 贴 `pri-missing` 哨兵）；Status/Estimate 在 Project v2 设；schema 见 `docs/backlog.md`
 
 ## 核心架构约束
 

@@ -64,6 +64,18 @@ jobs:
             echo "Computed label '${label}' fails sanity check — aborting." >&2
             exit 1
           fi
-          echo "Applying label $label to issue #$ISSUE_NUMBER"
+          echo "Applying label $label to issue #$ISSUE_NUMBER (converging priority dimension)"
+          # Remove any other pri-{p0..p3,missing} label so the priority
+          # dimension stays single-valued. Covers two scenarios:
+          # (a) CLI create with --label pri-p1 + body Priority=P2 (mismatch);
+          # (b) issue carried pri-missing from a prior fail-open path.
+          gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels \
+              -q '.labels[].name' \
+            | grep -E '^pri-(p[0-3]|missing)$' \
+            | grep -vx "$label" \
+            | while read -r stale; do
+                echo "Removing stale priority label '$stale'"
+                gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "$stale"
+              done
           gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "$label"
           echo "Applied $label to issue #$ISSUE_NUMBER"

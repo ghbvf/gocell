@@ -16,9 +16,11 @@ Project URL：https://github.com/users/ghbvf/projects/3
 ### CLI
 
 ```bash
+# pri-pX 必填，必须显式贴：P0=pri-p0 / P1=pri-p1 / P2=pri-p2 / P3=pri-p3
+# cap-XX / flag-XX / type-XX 分别从 cap-01..cap-x-cross / flag-{hard,cond,soft,planned} / type-* 选一
 gh issue create --repo ghbvf/gocell \
   --label backlog \
-  --label pri-pX \                  # 必须显式贴：P0=pri-p0 / P1=pri-p1 / P2=pri-p2 / P3=pri-p3
+  --label pri-pX \
   --label cap-XX --label flag-XX --label type-XX \
   --title "..." --body-file body.md
 ```
