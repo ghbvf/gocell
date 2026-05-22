@@ -22,60 +22,12 @@ jobs:
     timeout-minutes: 2
     if: ${{ contains(github.event.issue.labels.*.name, 'backlog') }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - name: Extract Priority and apply label
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # Issue Forms render dropdown sections as "### Priority\n\nP<n>".
-          # Cap body at 64KB (defensive against unbounded bodies); the Priority
-          # section is always near the top so truncation is safe. Then anchor
-          # on the section header + require the first non-blank line after to
-          # be exactly P[0-3]; this rejects nested headers like
-          # "### Priority Notes" within a textarea field.
-          priority=$(printf '%s\n' "$ISSUE_BODY" \
-            | head -c 65536 \
-            | awk '
-                /^### Priority[[:space:]]*$/ { found=1; next }
-                found && /^[[:space:]]*$/ { next }
-                found { print; exit }
-              ' \
-            | tr -d '[:space:]')
-          if [[ ! "$priority" =~ ^P[0-3]$ ]]; then
-            # No dropdown render found — this is the CLI-creation path. If the
-            # creator already attached pri-p[0-3] via `--label`, respect their
-            # choice; otherwise apply the `pri-missing` sentinel so the issue
-            # is discoverable via `gh issue list --label pri-missing`.
-            echo "No Priority value found in issue body (got: '${priority}')."
-            if gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels \
-                 -q '.labels[].name' | grep -qE '^pri-p[0-3]$'; then
-              echo "Creator already attached an explicit pri-pX — no sentinel needed."
-              exit 0
-            fi
-            echo "Applying pri-missing sentinel to issue #$ISSUE_NUMBER."
-            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "pri-missing"
-            exit 0
-          fi
-          label="pri-p${priority#P}"
-          if [[ ! "$label" =~ ^pri-p[0-3]$ ]]; then
-            echo "Computed label '${label}' fails sanity check — aborting." >&2
-            exit 1
-          fi
-          echo "Applying label $label to issue #$ISSUE_NUMBER (converging priority dimension)"
-          # Remove any other pri-{p0..p3,missing} label so the priority
-          # dimension stays single-valued. Covers two scenarios:
-          # (a) CLI create with --label pri-p1 + body Priority=P2 (mismatch);
-          # (b) issue carried pri-missing from a prior fail-open path.
-          gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels \
-              -q '.labels[].name' \
-            | grep -E '^pri-(p[0-3]|missing)$' \
-            | grep -vx "$label" \
-            | while read -r stale; do
-                echo "Removing stale priority label '$stale'"
-                gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "$stale"
-              done
-          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "$label"
-          echo "Applied $label to issue #$ISSUE_NUMBER"
+        run: bash .github/scripts/auto-label-priority.sh

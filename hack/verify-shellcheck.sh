@@ -52,7 +52,7 @@ while IFS= read -r script; do
     *) echo "verify-shellcheck: git check-ignore failed for ${script} (exit ${ec})" >&2
        exit "${ec}" ;;                     # 128 = not a repo / bad pathspec
   esac
-done < <(find scripts hack tests -type f -name '*.sh' | sort)
+done < <(find scripts hack tests .github/scripts -type f -name '*.sh' 2>/dev/null | sort)
 
 if [[ ${#scripts_to_check[@]} -eq 0 ]]; then
   echo "verify-shellcheck: no scripts found under scripts/ hack/ tests/" >&2
