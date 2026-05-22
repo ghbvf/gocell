@@ -22,7 +22,7 @@ import (
 // per-field-capped at MaxMetadataIDLen, so the reachable maximum is
 // 3×256 + 55 = 823 < 1024. Per-field limits already cover the worst case
 // at write time; the aggregate cap is unreachable and intentionally not
-// enforced (see backlog OBS-TOTAL-CAP-DEAD-BRANCH-01 / PR#415 review F4).
+// enforced.
 const MaxObservabilityTotalSize = 4 * idutil.MaxMetadataIDLen
 
 // ObservabilityMetadata carries cross-async tracing context that the

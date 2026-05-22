@@ -128,12 +128,7 @@ func TestProductionLoaderFunnel01(t *testing.T) {
 // call site, which is itself easy to grep and review.
 //
 // Remaining marginal escape (documented Soft): cross-function `var pat =
-// "./..."` at file scope referenced from fd.Body via Ident. Closing it
-// requires unexporting typeseval.SharedResolver/LoadPackages and providing
-// an explicit LoadPackagesForFixtures + internal anchor accessor; tracked
-// as PRODUCTION-LOADER-API-PRIVATE-HARD-UPGRADE-01 in docs/backlog.md
-// (trigger: first sighting of the cross-function indirection pattern in
-// any archtest).
+// "./..."` at file scope referenced from fd.Body via Ident.
 func funcDeclCallsBannedRealRepoLoader(f *ast.File, fd *ast.FuncDecl) bool {
 	if !funcBodyHasAllPatternLiteral(fd.Body) {
 		return false

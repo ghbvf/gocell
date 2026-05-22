@@ -101,8 +101,8 @@ func waitInflightDrain(ctx context.Context, clk clock.Clock, runs []*subscriptio
 //     amqp091-go raises this whenever a remote close races with a local op,
 //     and it is always transient (reconnect logic owns the recovery).
 //  2. errcode.IsTransient — gocell-side single predicate for adapter signals.
-//     Replaces the prior ErrAdapterAMQPConnect/Reconnecting code whitelist
-//     (Soft → Hard upgrade in Wave-4-B): the AcquireChannel transient paths
+//     Replaces the prior ErrAdapterAMQPConnect/Reconnecting code whitelist:
+//     the AcquireChannel transient paths
 //     and Health pre-allocated reconnecting/never-connected sentinels now
 //     route through errcode.WrapInfra so this predicate sees them.
 //  3. *amqp.Error.Recover — protocol-level signal (Recover=true means broker

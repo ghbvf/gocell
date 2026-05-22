@@ -11,8 +11,7 @@
 //   - 上游 Medium（本规则）：ReconstituteUser 只能被 mem/ / adapters/postgres/ / domain/
 //     / *_test.go 调用，防止未来 slice 通过 ReconstituteUser 绕过 SetStatus funnel
 //
-// Hard 升级路径：sealed token 模式（调用方必须持有 domain 包内定义的令牌才能调用），
-// 被 backlog ARCHTEST-FUNNEL-CALLSITE-LEVEL-01 (U-8) 锁定，当前不做。
+// Hard 升级路径：sealed token 模式（调用方必须持有 domain 包内定义的令牌才能调用）。
 //
 // 盲区清单（无法被 typeseval.ResolvePackageRef 静态识别，依赖反向自检确认不在 prod AST）：
 //
@@ -117,7 +116,8 @@ func scanReconstituteViolationsPass(p *Pass, file *ast.File, rel string) []Diagn
 			Message: fmt.Sprintf(
 				"RECONSTITUTE-USER-CALLER-01: disallowed caller of domain.ReconstituteUser; "+
 					"allowed prefixes: %v",
-				reconstituteUserCallerAllowlistPrefixes),
+				reconstituteUserCallerAllowlistPrefixes,
+			),
 		})
 	})
 	return out
@@ -273,7 +273,8 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 						Line: line,
 						Message: fmt.Sprintf(
 							"method-value assignment of domain.ReconstituteUser detected — " +
-								"RECONSTITUTE-USER-CALLER-01 would miss the deferred call site"),
+								"RECONSTITUTE-USER-CALLER-01 would miss the deferred call site",
+						),
 					})
 				})
 
@@ -299,7 +300,8 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 							Message: fmt.Sprintf(
 								"reflect.MethodByName(%q) detected — "+
 									"RECONSTITUTE-USER-CALLER-01 cannot see reflect-based invocations",
-								name),
+								name,
+							),
 						})
 					}
 				})

@@ -26,19 +26,7 @@ package governance
 //	and (3) extend this matrix simultaneously — anything less leaves a phantom
 //	state in the matrix that the schema layer rejects unreachable.
 //
-// AI-rebust grade: Medium. Hard upgrade paths (backlog, not in PR-4):
-//   - JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01 — kernel/metadata layer
-//     typed BoardState/Lifecycle const + parse-time reject. Closes Hard
-//     gap A: state/lifecycle are string fields, illegal values are not
-//     expressible-as-Go-type-error.
-//   - JOURNEY-CONTRACT-EXISTENCE-CODEGEN-DERIVE-01 — codegen-derived
-//     contract↔journey mapping. Closes Hard gap B: current archtest-bound
-//     governance rule allows authoring a stray active contract; codegen
-//     funnel would make the violation unrepresentable at the source level.
-//
-// Both backlog items are touch-when-triggered: gap A on the next stray
-// illegal state/lifecycle value; gap B on the second active platform
-// contract that drifts unreferenced.
+// AI-rebust grade: Medium.
 
 import (
 	"fmt"
@@ -47,14 +35,7 @@ import (
 )
 
 // validBoardLifecycleMatrix maps board.state → set of allowed J-*.yaml
-// lifecycle values. Package-private and treated as immutable after init —
-// no production code path writes to it. The Medium funnel form-uniqueness
-// holds at the *external* boundary: callers outside kernel/governance
-// cannot reach the symbol at all. Same-package _test.go files technically
-// could mutate the map, but governance tests do not, and the
-// JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01 Hard upgrade backlog
-// (typed const + parse-time reject) is the planned path to make even
-// same-package mutation unrepresentable.
+// lifecycle values. Package-private and treated as immutable after init.
 //
 // Reverse-lookup intuition for readers: `state: "todo"` requires
 // `lifecycle: "experimental"`; `state: "done"` requires `lifecycle: "active"`;

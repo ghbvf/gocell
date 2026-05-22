@@ -20,11 +20,10 @@ var _ ports.SetupLockAcquirer = (*PGSetupLock)(nil)
 // automatically released at transaction commit or rollback — no explicit Release
 // is required or possible.
 //
-// Closes backlog ADMINPROVISION-DIST-LOCK-01: multi-pod deployments that both
-// hit POST /setup/admin before any admin exists now block on this lock inside
-// the same transaction that writes the admin user and emits the outbox event.
-// Only the first committer persists; the second reads zero-count at fast-path and
-// returns OutcomeAlreadyExists / 410 Gone.
+// Multi-pod deployments that both hit POST /setup/admin before any admin exists
+// now block on this lock inside the same transaction that writes the admin user
+// and emits the outbox event. Only the first committer persists; the second reads
+// zero-count at fast-path and returns OutcomeAlreadyExists / 410 Gone.
 //
 // The advisory lock key is derived from the well-known sentinel string
 // "accesscore.admin.setup" via hashtextextended(..., 0). This is stable across

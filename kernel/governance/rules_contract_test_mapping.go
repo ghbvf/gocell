@@ -45,12 +45,7 @@ package governance
 //   - kind != "http"             — event contracts handled by ADV-06;
 //     projection/command/query by future targeted rules
 //
-// AI-rebust grade: Medium. Hard upgrade backlog:
-//   - cap-14 CONTRACT-ENDPOINT-TEST-MAPPING-HARD-CODEGEN-01 (slice.yaml
-//     verify.contract → codegen derived from contract.yaml + cell ownership
-//     single source). Hard gap: current rule is YAML-governance-layer only;
-//     a codegen funnel would make the omission unrepresentable at the authoring
-//     level by generating the verify.contract stub automatically.
+// AI-rebust grade: Medium.
 //
 // ref: rules_journey.go:validateJOURNEYCONTRACTEXISTENCE01 (same exemption
 // pattern, inverse direction); rules_misc_advisory.go:adv06ContractToSlice

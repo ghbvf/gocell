@@ -45,13 +45,13 @@
 //     DETAILS-SLOG-ATTR-01.
 //
 // See ADR docs/architecture/202605171200-adr-cellgen-errcode-funnel-mechanism.md
-// §D5 (canonical Ident-scan design) + §D7 (Path C-full backlog upgrade).
+// §D5 (canonical Ident-scan design).
 //
 // Declared blind spots (charter §"工具选定后强制盲区自检" — runtime
 // self-checks: TestCellgenErrcodeFunnelBlindSpotsAbsent):
 //   - Composite literal `&myErr{}` where myErr implements error in a
 //     non-errcode package: no Ident reference to a blacklist Func. Path
-//     C-full (errcode.Error field privatization) is the backlog upgrade.
+//     C-full (errcode.Error field privatization) addresses this blind spot.
 //   - Reflect dynamic construction (reflect.MakeFunc / reflect.Value.Call
 //     producing error): bypasses static AST.
 //   - Cross-package function-valued var imports (e.g., `sl.Ctor` where
@@ -161,7 +161,8 @@ func scanFileForCellgenErrcodeViolations(
 			Line: line,
 			Reason: fmt.Sprintf(
 				"cellgen: reference to blacklisted error constructor: %s.%s",
-				pkgPath, name),
+				pkgPath, name,
+			),
 		})
 	})
 

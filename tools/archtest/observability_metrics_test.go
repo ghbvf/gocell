@@ -51,12 +51,6 @@ func TestMetricLabelErrcodeClassifiersRequireAck(t *testing.T) {
 // directly and calling it. The archtest scope filter (excluding adapters/prometheus/
 // and adapters/otel/) is the only caller-allowlist mechanism today.
 //
-// Backlog upgrade path: METRICS-GAUGEVEC-UPSTREAM-HARD-01
-// (docs/backlog/cap-13-observability.md) — wrap prom.NewGaugeVec (and Counter /
-// Histogram peers) inside adapters/prometheus/internal/promwrap/ (a Go-internal
-// package). The internal mechanism prevents external imports at compile time,
-// making upstream Hard. Same approach for the OTel side.
-//
 // # Blind spots (production AST forms NOT matched; asserted absent below)
 //
 // BS-1 Functions calling NewGaugeVec via reflection (reflect.ValueOf):
@@ -94,7 +88,8 @@ func TestGaugeVecFunnel(t *testing.T) {
 	// The fixture rule does NOT exclude the fixture package itself — only the
 	// adapter allowlist exclusions apply. This is what allows the RED check to
 	// detect the violations in the fixture.
-	redDiags := RunTypedFixture(t,
+	redDiags := RunTypedFixture(
+		t,
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/metricsgaugevecfixture/..."},
 		gaugeVecFunnelRuleRaw,
@@ -129,7 +124,8 @@ func TestGaugeVecFunnel_BansFloat64Gauge(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	redDiags := RunTypedFixture(t,
+	redDiags := RunTypedFixture(
+		t,
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/metricsgaugevecfixture/..."},
 		gaugeVecFunnelRuleRaw,
@@ -318,7 +314,8 @@ func checkPromNewGaugeVec(fset *token.FileSet, call *ast.CallExpr, rel string, i
 		Message: fmt.Sprintf(
 			"METRICS-GAUGEVEC-FUNNEL-01: %s calls forbidden %s.%s; "+
 				"route through kernel/observability/metrics.Provider.GaugeVec",
-			rel, bannedPromPkg, bannedPromFunc),
+			rel, bannedPromPkg, bannedPromFunc,
+		),
 	}
 }
 
@@ -343,7 +340,8 @@ func checkOtelBannedGaugeMethod(fset *token.FileSet, call *ast.CallExpr, rel str
 		Message: fmt.Sprintf(
 			"METRICS-GAUGEVEC-FUNNEL-01: %s calls forbidden %s.Meter.%s; "+
 				"route through kernel/observability/metrics.Provider.GaugeVec",
-			rel, bannedOtelPkg, fn.Name()),
+			rel, bannedOtelPkg, fn.Name(),
+		),
 	}
 }
 
@@ -406,7 +404,8 @@ func gaugeVecBS1ReflectCheck(p *Pass) []Diagnostic {
 					Rel:  rel,
 					Line: p.Fset.Position(call.Pos()).Line,
 					Message: fmt.Sprintf(
-						"METRICS-GAUGEVEC-FUNNEL-01 BS-1: reflect.ValueOf with banned symbol name %q", s),
+						"METRICS-GAUGEVEC-FUNNEL-01 BS-1: reflect.ValueOf with banned symbol name %q", s,
+					),
 				})
 			}
 		})
@@ -470,7 +469,8 @@ func scanFuncValueIndirections(fset *token.FileSet, file *ast.File, rel string, 
 				Line: fset.Position(sel.Pos()).Line,
 				Message: fmt.Sprintf(
 					"METRICS-GAUGEVEC-FUNNEL-01 BS-3: %s.%s used as function value (not called directly); "+
-						"route through metrics.Provider.GaugeVec", bannedPromPkg, bannedPromFunc),
+						"route through metrics.Provider.GaugeVec", bannedPromPkg, bannedPromFunc,
+				),
 			})
 			return
 		}
@@ -489,7 +489,8 @@ func scanFuncValueIndirections(fset *token.FileSet, file *ast.File, rel string, 
 				Line: fset.Position(sel.Pos()).Line,
 				Message: fmt.Sprintf(
 					"METRICS-GAUGEVEC-FUNNEL-01 BS-3: %s.Meter.%s used as method value (not called directly); "+
-						"route through metrics.Provider.GaugeVec", bannedOtelPkg, fn.Name()),
+						"route through metrics.Provider.GaugeVec", bannedOtelPkg, fn.Name(),
+				),
 			})
 		}
 	})

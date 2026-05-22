@@ -53,10 +53,7 @@ var updateGolden = flag.Bool("update", false,
 // pass — fix the rule or the fixture and re-run with -update. The golden
 // diff is a first-class review artifact (same status as a fixture diff under
 // .claude/rules/gocell/contract-fanout.md). The regenerate-only discipline
-// is currently a review convention (Soft); the backlog entry
-// FIXTURE-DIAGNOSTIC-GOLDEN-MIGRATION in docs/backlog/cap-14-tooling.md §14.1
-// tracks the optional Medium→Hard meta-archtest upgrade and the scope B/C
-// migration of the remaining wantLines-style fixture tests.
+// is currently a review convention (Soft).
 func AssertGolden(t testing.TB, goldenPath string, diags []Diagnostic) {
 	t.Helper()
 	writeOrAssertGolden(t, goldenPath, diags, *updateGolden)

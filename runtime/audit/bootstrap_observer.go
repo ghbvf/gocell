@@ -38,8 +38,7 @@ const bootstrapAppendDetachedTimeout = 2 * time.Second
 //     AFTER writing 401/429 so client disconnect would otherwise cancel
 //     r.Context() and abort the ledger write mid-flight. Audit chain is
 //     fail-closed: completion guaranteed up to bootstrapAppendDetachedTimeout
-//     (2s), which is the setup-endpoint P99 floor when PG ledger is degraded
-//     (tracked as backlog BOOTSTRAP-AUDIT-OBSERVER-OPS-FOLLOWUP-01 arm b).
+//     (2s), which is the setup-endpoint P99 floor when PG ledger is degraded.
 //
 // When the audit Append fails, the observer logs a dedicated
 // "bootstrap_audit_append_failed" line so operators can correlate the lost

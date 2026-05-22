@@ -23,7 +23,7 @@
 // raw error values and have no observability surface.
 //
 // ref: ADR docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md §8
-// ref: docs/backlog1.md §2.1 SPAN-RECORD-ERROR-REDACT-ARCHTEST-01
+// ref: SPAN-RECORD-ERROR-REDACT-ARCHTEST-01
 package archtest
 
 import (

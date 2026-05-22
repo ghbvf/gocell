@@ -378,9 +378,8 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, clk
 // PasswordResetRequired is written as the "password_reset_required" claim
 // only when true; when false the claim is omitted to keep the token compact.
 //
-// This struct replaces the previous 5-parameter Issue signature (backlog T2
-// trigger: adding PasswordResetRequired would have been the 6th positional
-// argument).
+// This struct replaces the previous 5-parameter Issue signature (adding
+// PasswordResetRequired would have been the 6th positional argument).
 type IssueOptions struct {
 	Roles                 []string
 	Audience              []string

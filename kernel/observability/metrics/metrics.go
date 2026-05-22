@@ -13,8 +13,8 @@
 // The Prom-shape rationale covers label binding only. Counter.Inc / Add and
 // Histogram.Observe also deliberately omit context.Context — adapters/otel
 // emits with context.Background(). Aligning to OTel's ctx-bearing form
-// (which enables exemplar / baggage propagation) is open work tracked under
-// METRICS-CTX-FUNNEL-01 in docs/backlog/cap-13-observability.md.
+// (which enables exemplar / baggage propagation) is open work; see
+// METRICS-CTX-FUNNEL-01.
 package metrics
 
 import (

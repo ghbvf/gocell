@@ -51,8 +51,7 @@
 //
 // # Future Criterion Reuse
 //
-// When the J-auditlogintrail http.audit.list.v1 criterion lands (see
-// backlog JOURNEY-AUDITLOGINTRAIL-CRITERIA-EXPANSION-01), reuse this chain
+// When the J-auditlogintrail http.audit.list.v1 criterion lands, reuse this chain
 // by driving multiple NewSessionCreatedEntry(...) calls and querying
 // store via Tail/Query/Verify.
 package auditcoretest

@@ -262,7 +262,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 
 	// Phase 2: Close — wait for all in-flight processDelivery goroutines to
 	// finish. Must return nil (no ErrAdapterAMQPCloseTimeout) because
-	// StopIntake drained the backlog before Close() was called.
+	// StopIntake drained in-flight messages before Close() was called.
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer closeCancel()
 	closeErr := sub.Close(closeCtx)

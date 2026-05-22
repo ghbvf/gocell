@@ -23,9 +23,8 @@
 //
 // # Policy constants (hardcoded, no Policy struct — YAGNI per plan §Context)
 //
-// Per-tenant configurability is registered as backlog
-// ACCOUNT-LOCKOUT-POLICY-CONFIGURABLE-01 (P3, triggered when a real per-tenant
-// requirement appears).
+// Per-tenant configurability (ACCOUNT-LOCKOUT-POLICY-CONFIGURABLE-01) is deferred
+// until a real per-tenant requirement appears.
 package accountlockout
 
 import "time"

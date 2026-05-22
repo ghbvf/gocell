@@ -14,7 +14,7 @@ import "go/types"
 // intentional — e.g. t may itself be an interface type and a synthetic
 // pointer-to-interface check would be meaningless.
 //
-// Signature note: the backlog-described (typesInfo, expr, ifaceObj) shape
+// Signature note: the previously-proposed (typesInfo, expr, ifaceObj) shape
 // was deliberately rejected — none of the consolidated call sites hold an
 // ast.Expr at the point of check (they take a struct field, obj.Type(), or
 // a parameter type). This shape mirrors stdlib go/types.Implements(V, T).

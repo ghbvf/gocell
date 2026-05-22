@@ -283,8 +283,8 @@ func (v *Validator) adv06SliceToContract() []ValidationResult {
 //
 // durabilityMode is advisory cell.yaml metadata consumed by governance and
 // the devtools catalog; it is not threaded into the runtime BaseCell path.
-// The cell.yaml ↔ runtime DurabilityMode Init-time reconciliation was
-// deferred — see backlog BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED.
+// The cell.yaml ↔ runtime DurabilityMode Init-time reconciliation is not yet
+// enforced at runtime.
 //
 // ref: K8s apimachinery validation — required field checks
 // ref: kernel/cell/durability.go — DurabilityMode, CheckNotNoop
@@ -303,7 +303,8 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 						"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
 							"fix: set durabilityMode to demo or durable in the cell.yaml "+
 							durabilityModeHintSuffix,
-						c.ID, c.DurabilityMode),
+						c.ID, c.DurabilityMode,
+					),
 				))
 			}
 			continue
@@ -318,7 +319,8 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 						"L2+ cells must declare durabilityMode: demo or durable; "+
 						"fix: add durabilityMode: demo or durabilityMode: durable to the cell.yaml "+
 						durabilityModeHintSuffix,
-					c.ID, c.ConsistencyLevel),
+					c.ID, c.ConsistencyLevel,
+				),
 			))
 			continue
 		}
@@ -331,7 +333,8 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 					"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
 						"fix: set durabilityMode to demo or durable in the cell.yaml "+
 						durabilityModeHintSuffix,
-					c.ID, c.DurabilityMode),
+					c.ID, c.DurabilityMode,
+				),
 			))
 		}
 	}

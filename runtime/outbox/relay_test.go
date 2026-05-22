@@ -534,7 +534,7 @@ func TestRelay_StoreCleanup_DirectCall(t *testing.T) {
 
 // TestRelay_CleanupLoop_RunsImmediatelyAtStart verifies that the data-driven
 // cleanupLoop runs cleanup() on the very first iteration (before the first
-// sleep), so a relay starting against a backlog of expired rows drains them
+// sleep), so a relay starting against a queue of expired rows drains them
 // without waiting for any timer. This is the key DX win of the data-driven
 // design over the old "wake on a fixed PollInterval×10 ticker" model.
 func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {

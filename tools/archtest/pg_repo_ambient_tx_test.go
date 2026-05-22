@@ -29,7 +29,7 @@
 //
 // # AI-rebust grading (Funnel 双向锁评级)
 //
-// 下游 Hard / 上游 Medium (backlog: PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01).
+// 下游 Hard / 上游 Medium (PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01).
 //
 // 上游 Medium: intra-package compile Hard is unreachable — adapters/postgres
 // repos share the package with pgExecutor; Go package-level visibility means a
@@ -43,7 +43,6 @@
 // to archtest-enforced Medium (caller-allowlist form). Hard terminal state
 // remains: seal pgExecutor behind an exported interface + private construction
 // funnel making bypass unexpressible package-externally.
-// See backlog PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01.
 //
 // 下游 Hard via form-uniqueness (archtest-bound), NOT compile-time:
 //
@@ -364,7 +363,8 @@ func scanR1PoolFields(fset *token.FileSet, file *ast.File, rel string, info *typ
 					Message: fmt.Sprintf(
 						"R1: struct %s field %s holds *pgxpool.Pool; "+
 							"only pgExecutor may hold this field — route via newPGExecutor",
-						structName, fieldName),
+						structName, fieldName,
+					),
 				})
 			}
 		})
@@ -407,7 +407,8 @@ func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *typ
 					Message: fmt.Sprintf(
 						"R2: func %s has *pgxpool.Pool param %q but is not a New* constructor; "+
 							"only New*-prefixed constructors may accept *pgxpool.Pool (and must wrap via newPGExecutor)",
-						fn.Name.Name, paramName),
+						fn.Name.Name, paramName,
+					),
 				})
 			}
 			return
@@ -426,7 +427,8 @@ func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *typ
 					Message: fmt.Sprintf(
 						"R2: New* constructor %s has *pgxpool.Pool param %q but does not call "+
 							"newPGExecutor(%s); pool must be wrapped via newPGExecutor",
-						fn.Name.Name, paramName, paramName),
+						fn.Name.Name, paramName, paramName,
+					),
 				})
 			}
 		}
@@ -773,7 +775,8 @@ var expectedFixtureViolations = []fixtureViolation{
 func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 	t.Parallel()
 
-	diags := RunTypedFixture(t,
+	diags := RunTypedFixture(
+		t,
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/pgrepoambienttxfixture/..."},
 		pgRepoAmbientTxRule,
@@ -897,7 +900,8 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 								"%s:%d: struct %s has embedded field that transitively "+
 									"holds *pgxpool.Pool (BS-1 blind spot — extend R1 "+
 									"if this pattern is needed)",
-								rel, p.Fset.Position(field.Type.Pos()).Line, ts.Name.Name))
+								rel, p.Fset.Position(field.Type.Pos()).Line, ts.Name.Name,
+							))
 						}
 					}
 				})

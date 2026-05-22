@@ -15,7 +15,7 @@ package archtest
 // catches "wrong call site" (the existing P1 patches handle the "missing
 // call site" hole at the identitymanage entry). Promoting to Hard requires
 // privatizing domain.User authz fields + sealed Mutation funnel; tracked
-// as S4e in backlog AUTHZ-MUTATION-FUNNEL-UPGRADE-01.
+// via domain.User authz field privatization and a sealed Mutation funnel.
 //
 // AI-rebust grade: Hard (closed-caller-set enforced via ResolveMethodCall;
 // form uniqueness = "call resolves to this exact *types.Func identity" — no gray zone).
@@ -243,7 +243,8 @@ func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 
 	// RED fixture verification: the scanner must detect ≥ 1 violation in the
 	// rbacassign_direct_revoke_for_subject_red fixture package.
-	verifyRedFixtureDetectedPass(t,
+	verifyRedFixtureDetectedPass(
+		t,
 		"./tools/archtest/testdata/credential_invalidate_fixtures/rbacassign_direct_revoke_for_subject_red",
 		sessionStorePkg, sessionRevokeMethod,
 		"CREDENTIAL-INVALIDATE-FUNNEL-01 RED fixture",
@@ -295,7 +296,8 @@ func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 			"from cells/accesscore/internal/credentialinvalidate/ or repository implementations. "+
 			"Route callers through credentialinvalidate.Invalidator.Apply instead.")
 
-	verifyRedFixtureDetectedPass(t,
+	verifyRedFixtureDetectedPass(
+		t,
 		// Internal-import workaround: ports.UserRepository lives under
 		// cells/accesscore/internal/, so the fixture must sit inside that tree
 		// to satisfy Go's internal-import rules. `testdata/` keeps it out of
@@ -353,7 +355,8 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 			"from cells/accesscore/internal/credentialinvalidate/ or store implementations. "+
 			"Route callers through credentialinvalidate.Invalidator.Apply instead.")
 
-	verifyRedFixtureDetectedPass(t,
+	verifyRedFixtureDetectedPass(
+		t,
 		"./tools/archtest/testdata/credential_invalidate_fixtures/identitymanage_direct_revoke_refresh_red",
 		refreshStorePkg, refreshRevokeMethod,
 		"REFRESH-REVOKE-USER-FUNNEL-01 RED fixture",
@@ -376,8 +379,7 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // the allowlist invoking Apply directly) but NOT "missing caller" (a new
 // user-authz mutator forgetting to call Apply at all). The latter is what
 // P1-#1 in PR #490 review was — fixed in this PR by the identitymanage
-// service.go change. Hard upgrade lives in S4e (sealed authzmutate funnel +
-// domain.User field privatization) tracked as AUTHZ-MUTATION-FUNNEL-UPGRADE-01.
+// service.go change.
 //
 // RED fixture: tools/archtest/testdata/credential_invalidate_fixtures/
 // sessionlogin_direct_apply_red — the sessionlogin slice is NOT on the
@@ -427,7 +429,8 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 			"reviewer's radar instead of relying on string convention. "+
 			"See ADR docs/architecture/202605101400-adr-credential-session-protocol.md §A10.")
 
-	verifyRedFixtureDetectedPass(t,
+	verifyRedFixtureDetectedPass(
+		t,
 		"./cells/accesscore/internal/credentialinvalidate/testdata/sessionlogin_direct_apply_red",
 		invalidatorPkg, invalidatorMethod,
 		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 RED fixture",
@@ -477,7 +480,8 @@ func TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment(t *testing.T) 
 							line := p.Fset.Position(assign.Pos()).Line
 							violations = append(violations, fmt.Sprintf(
 								"%s:%d: %s function-value assignment blind spot detected (%s)",
-								rel, line, sel.Sel.Name, rule))
+								rel, line, sel.Sel.Name, rule,
+							))
 						}
 					})
 				})
@@ -540,7 +544,8 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 						line := p.Fset.Position(call.Pos()).Line
 						violations = append(violations, fmt.Sprintf(
 							"%s:%d: reflect.MethodByName(%q) blind spot detected — archtest would miss this",
-							rel, line, name))
+							rel, line, name,
+						))
 					}
 				})
 			}
@@ -590,7 +595,8 @@ func scanFunnelViolationsPass(
 		line := p.Fset.Position(call.Pos()).Line
 		out = append(out, fmt.Sprintf(
 			"%s:%d: %s: direct call to %s.%s bypasses credentialinvalidate funnel",
-			rel, line, ruleID, filepath.Base(targetPkg), targetMethod))
+			rel, line, ruleID, filepath.Base(targetPkg), targetMethod,
+		))
 	})
 	return out
 }

@@ -70,8 +70,7 @@ var stageTempParent = ""
 // case. Direct construction of pathsafe.PlannedFile{ForceOverwrite:true} in
 // the derived-append path is statically forbidden by archtest
 // SCAFFOLD-DERIVED-FORCEOVERWRITE-01, which keeps this gate unbypassable
-// (Medium downstream; upstream Hard tracked by backlog
-// PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01).
+// (Medium downstream).
 func planDerivedArtifact(realRoot, relSlashPath string, content []byte) (pathsafe.PlannedFile, error) {
 	absReal, err := pathsafe.ContainPath(realRoot, filepath.FromSlash(relSlashPath))
 	if err != nil {

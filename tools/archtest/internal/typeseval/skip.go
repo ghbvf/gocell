@@ -34,7 +34,7 @@ import "strings"
 //     only), so authors of new archtest rules cannot accidentally bypass
 //     the funnel.
 //
-// Closes PR445-FU finding F4. Backlog ID
+// Closes PR445-FU finding F4. Invariant ID
 // GENERATED-SKIP-CROSS-RULE-INVARIANT-01.
 func IsGeneratedRelPath(rel string) bool {
 	return strings.HasPrefix(rel, "generated/")

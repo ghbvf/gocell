@@ -39,7 +39,7 @@ import (
 // sealedMarkerFiles 列出所有需扫的 sealed marker 实施文件。
 // **维护约定**：新增 sealed marker 包（如 PR-A23 引入的 kernel/outbox CellEmitter）
 // 必须同步追加到此列表，否则 archtest 静默跳过新文件。
-// Hard 升级路径见 backlog SEALED-MARKER-FILE-LIST-AUTODISCOVER-01。
+// 自动发现可实现 Hard 升级（当前为 Medium）。
 var sealedMarkerFiles = []struct {
 	rel    string // path relative to module root
 	prefix string // unexported type name prefix to scan

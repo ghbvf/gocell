@@ -16,7 +16,7 @@ package archtest
 //
 // Hard property comes from form uniqueness: picking any other shape (no
 // funnel call, wrong callee, BasicLit expected, non-NotFound code) fails
-// archtest in CI. See cap-14:18 (PR238-FU4 / PR#553 Hard upgrade) and
+// archtest in CI. See
 // .claude/rules/gocell/ai-collab.md §"Hard 范本" / "typed function call
 // as Hard funnel for unbounded operations" — template is panicregister.Approved
 // + PANIC-REGISTERED-01 (panic_invariants_test.go).
@@ -288,7 +288,7 @@ func scanFileForNotFoundViolations(
 				"[POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01] %s missing typed funnel: every test whose name ends in _NotFound "+
 					"must contain at least one call to errcodetest.AssertCode or "+
 					"errcodetest.AssertWireCode with a typed errcode.Err*NotFound "+
-					"expected argument (selector form, not BasicLit). See cap-14:18.",
+					"expected argument (selector form, not BasicLit).",
 				name,
 			),
 		})
@@ -507,7 +507,7 @@ func TestNotFoundTestStrict(t *testing.T) {
 	assert.Empty(t, violations,
 		"%s: every _NotFound test must call errcodetest.AssertCode or "+
 			"errcodetest.AssertWireCode with a typed errcode.Err*NotFound expected. "+
-			"See pkg/errcode/errcodetest and docs/backlog/cap-14-tooling.md.",
+			"See pkg/errcode/errcodetest.",
 		ruleNotFoundTestStrict)
 }
 

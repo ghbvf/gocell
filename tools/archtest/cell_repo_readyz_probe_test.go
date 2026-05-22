@@ -41,8 +41,7 @@
 //     (archtest-bound). Harness behavioral correctness is Hard: scenario 2
 //     (DROP TABLE → non-nil) cannot be satisfied by a no-op implementation; the
 //     concrete store must execute a real query. Per charter: "允许 Medium 上游 +
-//     Hard 下游过渡形态"; Hard-ization tracked by backlog
-//     REPO-READYZ-UPSTREAM-FUNNEL-HARD-01 (cap-13).
+//     Hard 下游过渡形态".
 //   - P1 = Medium backstop: ensures every RepoHealthProber implementation is
 //     wired into celltest.RunRepoReadinessConformance so the differentiated
 //     failure-domain property is exercised.
@@ -238,7 +237,8 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 						"  celltest.RunRepoReadinessConformance(t, \"x_ready\", impl, brokenOrNil)\n"+
 						"where impl is the healthy store and broken is the PG store after DROP TABLE "+
 						"(use nil for mem/in-memory stores that always return ready).",
-					impl),
+					impl,
+				),
 			})
 		}
 	}
@@ -393,7 +393,8 @@ func scanRepoReadyzN2(fset *token.FileSet, file *ast.File, rel string, info *typ
 					`reg.Health(<const-string>, fn) direct call at %s:%d forbidden for repo probes; `+
 						"use cell.RegisterRepoReadiness(reg, name, p) "+
 						"(CELL-REPO-READYZ-PROBE-01/N2; import path: github.com/ghbvf/gocell/kernel/cell)",
-					rel, line),
+					rel, line,
+				),
 			})
 		}
 	})
@@ -754,7 +755,8 @@ func TestCellRepoReadyzProbe_ReverseBlindSpot_NoLocalHealthWrapper(t *testing.T)
 								"local function %q calls reg.Health(constString) — "+
 									"use cell.RegisterRepoReadiness (blind spot B2, "+
 									"CELL-REPO-READYZ-PROBE-01/N2)",
-								fn.Name.Name),
+								fn.Name.Name,
+							),
 						})
 					})
 				})

@@ -20,7 +20,7 @@
 // is no parser-level shape that bypasses SafeID.UnmarshalJSON when the
 // field is typed SafeID.
 //
-// Upstream Medium-by-necessity (see backlog SAFEID-UPSTREAM-FUNNEL-HARD-01):
+// Upstream Medium-by-necessity:
 //
 //	(a) Current downstream Hard already covers the "field type" path:
 //	    json.Unmarshal cannot decode an unsafe value into a SafeID-typed
@@ -41,7 +41,7 @@
 //
 //	Upstream Medium is the appropriate rating under ai-collab.md
 //	§"Funnel 双向锁评级" — archtest caller-allowlist would be needed for
-//	upstream Hard. See backlog SAFEID-UPSTREAM-FUNNEL-HARD-01.
+//	upstream Hard (archtest caller-allowlist would be needed).
 //
 // Scanning tool: typeseval.SharedResolver via RunTyped + go/types struct
 // field inspection (kernel/outbox package scope, no fixture). Selected per
@@ -197,7 +197,8 @@ func checkSafeIDFields(pkg *types.Package) []Diagnostic {
 					"SAFEID-WIREMESSAGE-USAGE-01: %s.%s.%s has type %s; "+
 						"must be idutil.SafeID or registered in safeIDExemptFields with rationale "+
 						"(deny-by-default — new fields default to SafeID required to keep CWE-117 funnel intact)",
-					pkg.Path(), typeName, f.Name(), f.Type().String()),
+					pkg.Path(), typeName, f.Name(), f.Type().String(),
+				),
 			})
 		}
 	}
@@ -305,7 +306,8 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 						Message: fmt.Sprintf(
 							"SAFEID-WIREMESSAGE-USAGE-01/BlindSpot: %s.%s looks like a parallel wire envelope "+
 								"(string-typed fields %s) — change the fields to idutil.SafeID or register the struct in safeIDBlindSpotAllowlist",
-							p.Pkg.Path(), name, strings.Join(suspectFields, ", ")),
+							p.Pkg.Path(), name, strings.Join(suspectFields, ", "),
+						),
 					})
 				}
 			}

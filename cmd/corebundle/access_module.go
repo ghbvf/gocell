@@ -55,7 +55,6 @@ const defaultRefreshGCRetention = 24 * time.Hour
 // codec, and the bootstrap Basic Auth protection for the setup/admin endpoint.
 //
 // ref: uber-go/fx fx.Module("accesscore", ...) — self-contained module.
-// backlog: S29 CORE-BUNDLE-APP-BUILDER-01
 type AccessCoreModule struct{}
 
 // ID returns the stable identifier used in error messages.
@@ -181,8 +180,8 @@ func (m AccessCoreModule) Provide(
 	// defaults for credential endpoints: tight enough to defeat brute-force
 	// enumeration, loose enough not to block legitimate operator retries.
 	// Multi-pod deployments share the in-memory bucket per replica; a future
-	// distributed limiter (Redis-backed) is logged as backlog
-	// BOOTSTRAP-RATELIMIT-DISTRIBUTED-01.
+	// distributed limiter (Redis-backed) would reduce this to cross-replica
+	// enforcement (BOOTSTRAP-RATELIMIT-DISTRIBUTED-01).
 	rlLimiter := ratelimit.New(ratelimit.Config{
 		Rate:  bootstrapRateLimitPerSec, // 5 req/min ≈ 0.0833/sec
 		Burst: bootstrapRateLimitBurst,
@@ -283,7 +282,8 @@ func resolveAccessStorageOpts(
 	if err != nil {
 		return nil, nil, fmt.Errorf("accesscore: refreshmem.New: %w", err)
 	}
-	base = append(base,
+	base = append(
+		base,
 		accesscore.WithMemBundle(accessmem.NewBundle(shared.Clock)),
 		accesscore.WithRefreshStore(refreshMemStore),
 	)

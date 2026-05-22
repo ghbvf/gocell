@@ -3,8 +3,7 @@
 // All configcore mutating-write contracts that S6 added CAS to MUST declare an
 // `expectedVersion: integer, minimum: 1, required` field plus a 409 response
 // referencing the shared error envelope. The field is hand-crafted into 6
-// separate schema files (no $ref shared mixin yet — see backlog
-// CONTRACT-SHARED-MIXIN-FUNNEL-01 for the Hard upgrade path). This archtest
+// separate schema files (no $ref shared mixin yet). This archtest
 // cross-validates the 6 contracts so a future edit that drops the field
 // (or violates type/min/required) is caught in CI.
 //
@@ -23,8 +22,7 @@
 //
 // ref: docs/plans/202605082145-034-pg-corecell-b-route-plan.md §4 S6 (archtest
 //
-//	cross-validate, AI-Medium); backlog CONTRACT-SHARED-MIXIN-FUNNEL-01
-//	tracks the Hard upgrade to a shared schema mixin via JSON Schema $ref.
+//	cross-validate, AI-Medium).
 package archtest
 
 import (

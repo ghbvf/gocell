@@ -529,7 +529,7 @@ func (c *reclaimRecordingCollector) snapshot() []int64 {
 
 // TestRelay_ReclaimStale_DrainsBacklogWithinSingleTick verifies B2-A-06: when
 // the store reports `count == batchSize` (i.e. there is more residual), the
-// reclaim helper loops until a sweep returns `< batchSize`, draining a backlog
+// reclaim helper loops until a sweep returns `< batchSize`, draining a queue
 // of N×batchSize rows inside one tick instead of N ReclaimInterval ticks.
 func TestRelay_ReclaimStale_DrainsBacklogWithinSingleTick(t *testing.T) {
 	// Plan: 1000 (full), 1000 (full), 500 (residual) — should make 3 calls

@@ -22,8 +22,7 @@ import (
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
-// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literal is migrated to
-// permission-based authz when that backlog item lands.
+// role-name literal will be migrated to permission-based authz when that work lands.
 func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
 	p, ok := auth.FromContext(ctx)
@@ -58,7 +57,8 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		actorID = subject
 	}
 	if actorID != subject {
-		slog.Info("audit: admin querying other user",
+		slog.Info(
+			"audit: admin querying other user",
 			slog.String("admin", subject),
 			slog.String("target_actor", actorID),
 		)

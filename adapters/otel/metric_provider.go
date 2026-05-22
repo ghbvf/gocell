@@ -272,11 +272,10 @@ type otelCounter struct {
 // deliberately omits context (kernel modules emit from hot paths where
 // passing ctx everywhere would be noise). OTel tolerates Background.
 //
-// See METRICS-CTX-FUNNEL-01 in docs/backlog/cap-13-observability.md — the
-// ctx-bearing alignment to OTel exemplar/baggage semantics is an open
-// cross-layer refactor (kernel metrics interface + adapters/{prometheus,otel}
-// + all emission sites). Background() here is bounded by the kernel interface
-// shape, not by this adapter; the funnel ID points readers to the open work.
+// See METRICS-CTX-FUNNEL-01 — the ctx-bearing alignment to OTel
+// exemplar/baggage semantics is an open cross-layer refactor (kernel metrics
+// interface + adapters/{prometheus,otel} + all emission sites).
+// Background() here is bounded by the kernel interface shape, not by this adapter.
 func (c *otelCounter) Inc() { c.inner.Add(context.Background(), 1, c.attrs) }
 
 func (c *otelCounter) Add(delta float64) {
@@ -370,9 +369,9 @@ type otelGauge struct {
 
 // Set records the gauge as absolute value v (Float64Gauge.Record semantics).
 //
-// See METRICS-CTX-FUNNEL-01 in docs/backlog/cap-13-observability.md for the
-// open work to propagate context through the kernel metrics interface; until
-// then context.Background() is the correct placeholder here (mirrors Counter).
+// See METRICS-CTX-FUNNEL-01 for the open work to propagate context through
+// the kernel metrics interface; until then context.Background() is the
+// correct placeholder here (mirrors Counter).
 func (g *otelGauge) Set(v float64) {
 	g.mu.Lock()
 	g.last = v

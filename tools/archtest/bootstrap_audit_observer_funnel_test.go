@@ -46,8 +46,7 @@
 // (`return func(...){ helperThatAppends(...) }` where helperThatAppends lives
 // in a same-package FuncDecl) — require SSA-based reachability analysis
 // (golang.org/x/tools/go/ssa BasicBlock walk, cf. honnef.co/go/tools `SA9003`
-// empty-branch family). The upgrade is tracked as backlog
-// BOOTSTRAP-AUDIT-OBSERVER-DOWNSTREAM-SSA-REACHABILITY-HARD-UPGRADE-01.
+// empty-branch family). The upgrade requires SSA-based reachability analysis.
 //
 // ref: golang.org/x/tools/go/ast/inspector.Nodes — `proceed=false` push
 // semantic at FuncLit / IfStmt.Body is the standard-library equivalent of
@@ -71,14 +70,12 @@
 // Hard (sealing auth.BootstrapAuthFailObserver into a marker that only
 // runtime/audit can construct, which forces runtime/auth → runtime/audit,
 // breaking the documented non-dependency). Promotion to Hard is tracked as
-// backlog BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01 (arm a: sealed
-// marker, cap-14). This archtest defines the Medium ceiling reachable
+// This archtest defines the Medium ceiling reachable
 // without that refactor.
 //
 // Scope carve-out (must match the F2 plan decision):
 //   - examples/ssobff/app.go intentionally still wires the legacy
-//     slog-only observer; backlog SSOBFF-BOOTSTRAP-AUDIT-CHAIN-WIRING-01
-//     will move it through this same funnel and widen the scope below.
+//     slog-only observer; it will be moved through this funnel and widen the scope below.
 //   - cmd/corebundle/*_test.go invocations are mocks for rate-limit /
 //     bootstrap-credential paths and do not represent production wiring;
 //     RunTypedProduction(opts.Tests=false) keeps them out of the Pass set.
@@ -397,7 +394,7 @@ func exprStringForLog(c *ast.CallExpr) string {
 // assignment with the same identifier as a legitimate funnel-built observer
 // could in principle smuggle a slog-only impl past this check. Hardening
 // requires sealing auth.BootstrapAuthFailObserver (see
-// BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01 arm a backlog entry); the
+// BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01 refactor); the
 // archtest defines the Medium ceiling reachable without that refactor.
 func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	t.Parallel()

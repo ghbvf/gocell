@@ -16,12 +16,7 @@ import (
 // jAccountlockoutThreshold mirrors cells/accesscore/internal/accountlockout.Threshold.
 // The test cannot import the internal/ package, so we pin the literal here.
 // This is a known soft seam — drift between the two surfaces is NOT detected
-// at build/CI time. Tracked under backlog
-// ACCOUNTLOCKOUT-THRESHOLD-DRIFT-DETECT-01 (`docs/backlog/cap-14-tooling.md`)
-// to add either (a) an archtest comparing the literal here against the
-// accountlockout.Threshold AST value, or (b) HTTP exposure of the policy so
-// tests can read the live value via the wire. Do not silently change one
-// surface without the other.
+// at build/CI time. Do not silently change one surface without the other.
 const eventUserLockedV1 = "event.user.locked.v1"
 
 const jAccountlockoutThreshold = 5
@@ -67,8 +62,7 @@ const jAccountlockoutThreshold = 5
 //
 // The TTL-elapsed lazy-unlock criterion (`user.unlocked` event publish on
 // TTL expiry, not on admin unlock) remains in J-accountlockout's manual-mode
-// pool because LockoutTTL=15min and the l2 harness uses clock.Real(). Tracked
-// under backlog JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION-01-LAZYUNLOCK; do not
+// pool because LockoutTTL=15min and the l2 harness uses clock.Real(). Do not
 // silently revert this to mode: auto without a clock-advance seam.
 //
 // ref: PR #585 review P1#1 / P1#3 / P2#4 / P2#12 / P2-F1.
