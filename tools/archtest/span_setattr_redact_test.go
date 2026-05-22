@@ -66,9 +66,6 @@
 //   - Symbol matching is syntactic; a custom attribute package alias with a
 //     String symbol would shadow the real one.
 //
-// Upstream package-internal upgrade path: backlog issue #851
-// (SPAN-SETATTR-HOLDER-SEAL-01 — seal via unexported interface).
-//
 // ref: tools/archtest/span_record_error_redact_test.go (sibling INVARIANT)
 // ref: .claude/rules/gocell/observability.md "Span Attribute Redaction"
 // ref: .claude/rules/gocell/ai-collab.md §"Hard 范本目录"

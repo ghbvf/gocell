@@ -16,13 +16,7 @@
 //   - Deterministic: blocks on a channel signal with timeout — no polling,
 //     no race window. The default choice; use External only as carve-out.
 //     Hard via Go type system: <-chan T signature makes "polling via
-//     Deterministic" unrepresentable. Upstream funnel closure for
-//     hand-rolled closure+done sentinel polling (the AST-pattern that
-//     bypasses Deterministic) is a touchpoint guard tracked by backlog
-//     TEST-CLOSURE-DONE-SENTINEL-FUNNEL-01 — triggered if a concrete
-//     bypass instance lands; deferred from PR3 because no callsite count
-//     exists yet and the pattern is hard to disambiguate from legitimate
-//     <-ctx.Done() waits.
+//     Deterministic" unrepresentable.
 //
 // Polling is the leading source of race-CI flakes in GoCell tests; see
 // docs/plans/202605181600-042-archtest.md §1.1 (TEST-POLLING-DETERMINISM).
