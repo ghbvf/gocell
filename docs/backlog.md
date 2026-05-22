@@ -27,7 +27,8 @@ CLI: `gh issue create --label backlog` — template 接管 body（现状 / 修�
 - **Type**（8，单选）：`type-feat` / `type-bug` / `type-refactor` / `type-arch-opt` / `type-doc` / `type-test` / `type-debt` / `type-fu`
 - **Priority**（4，单选）：`pri-p0` / `pri-p1` / `pri-p2` / `pri-p3`
   - 创建时由 issue template Priority dropdown 触发 [`.github/workflows/auto-label-priority.yml`](../.github/workflows/auto-label-priority.yml) 自动贴
-  - P0 红线见 [`backlog/20260520/RERATING-RUBRIC.md`](backlog/20260520/RERATING-RUBRIC.md) §"P0 红线"，仅 incident-driven
+  - 评级规则真值源：[`backlog/20260520/RERATING-RUBRIC.md`](backlog/20260520/RERATING-RUBRIC.md)（含 P0 红线，仅 incident-driven）
+  - 如需批量修复存量 label 漂移或一次性 backfill：[`hack/backfill-priority-labels.sh`](../hack/backfill-priority-labels.sh)（需 `project` + `repo` scope，幂等）
 - **工具 labels**：
   | Label | 用途 |
   |---|---|
@@ -46,7 +47,7 @@ CLI: `gh issue create --label backlog` — template 接管 body（现状 / 修�
 | Estimate | single-select | `Cx1` / `Cx2` / `Cx3` / `Cx4` |
 | Iteration | iteration | 可选，sprint 用，初期不开 |
 
-> Priority 原为 Project field，2026-05-22 单源降级为 `pri-pX` label —— 详见 §"云沙箱查询"。
+> Priority 原为 Project field，2026-05-22 单源降级为 `pri-pX` label（PR #861，详见 §"云沙箱查询" + §"一次性迁移 / 维护"）。
 
 ## 常用查询
 
@@ -74,6 +75,32 @@ gh issue list --repo ghbvf/gocell --state closed \
 | Iteration | — | ✓ |
 
 Token scope：日常查询 `repo` 足够；rerating 时如需在 Project UI 批改 Status/Estimate 才需要本地 `project` scope。Priority 自迁移后由 `pri-pX` label 单源承载，Rerating 流程改用 `gh issue edit --add-label --remove-label`（见 §"Rerating"）。
+
+## 一次性迁移 / 维护
+
+仓库首次启用本 schema（或 label 集合漂移恢复）按此顺序执行：
+
+```bash
+# 1. 创建 4 个 pri-pX label（已存在时用 --force 幂等）
+gh label create pri-p0 --repo ghbvf/gocell --color d73a4a --description "Priority P0 — incident-driven 红线" --force
+gh label create pri-p1 --repo ghbvf/gocell --color fbca04 --description "Priority P1" --force
+gh label create pri-p2 --repo ghbvf/gocell --color fef2c0 --description "Priority P2" --force
+gh label create pri-p3 --repo ghbvf/gocell --color c5def5 --description "Priority P3" --force
+
+# 2. dry-run 全量 backfill（默认不写）
+bash hack/backfill-priority-labels.sh --dry-run
+
+# 3. 单条试跑确认幂等
+bash hack/backfill-priority-labels.sh --apply --issue <一个低风险样本>
+
+# 4. 全量执行（含 open + closed）
+bash hack/backfill-priority-labels.sh --apply
+
+# 5. 离线回归测试（验证脚本本身的 jq + 分类逻辑）
+bash hack/backfill-priority-labels.sh --self-test
+```
+
+脚本 idempotent：已有目标 label 的 issue 直接 skip；可反复运行用于 label drift 恢复。
 
 ## Bundle / sub-issue
 
