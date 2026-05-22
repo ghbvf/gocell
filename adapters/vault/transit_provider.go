@@ -17,6 +17,7 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/prometheus/client_golang/prometheus"
 
+	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
@@ -1331,7 +1332,7 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context, result AuthRe
 	})
 	authHealthy.Set(1)
 
-	loginOutcome := prometheus.NewCounterVec(prometheus.CounterOpts{
+	loginOutcome := promadapter.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "auth_login_total",
@@ -1343,13 +1344,13 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context, result AuthRe
 		authMethod: p.authMethod,
 		logger:     p.logger,
 		clock:      p.clock,
-		renewSuccess: prometheus.NewCounter(prometheus.CounterOpts{
+		renewSuccess: promadapter.NewCounter(prometheus.CounterOpts{
 			Namespace: "gocell",
 			Subsystem: "vault",
 			Name:      "token_renew_success_total",
 			Help:      "Number of successful Vault token renewals.",
 		}),
-		renewFailure: prometheus.NewCounter(prometheus.CounterOpts{
+		renewFailure: promadapter.NewCounter(prometheus.CounterOpts{
 			Namespace: "gocell",
 			Subsystem: "vault",
 			Name:      "token_renew_failure_total",
