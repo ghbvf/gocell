@@ -35,14 +35,6 @@ github.com/ghbvf/gocell/tools/archtest	TestClockInjectionProdCallsite
 github.com/ghbvf/gocell/tools/archtest	TestErrcodeMessageConstLiteral
 # type-graph-load: exported error-new scan over module
 github.com/ghbvf/gocell/tools/archtest	TestExportedErrorNew
-# subprocess-overhead: ARCHTEST-VERIFY-COVERAGE-01 spawns 1 verify-archtest.sh
-# DRY_RUN + K=4 LIST_SHARD_TESTS subprocesses, each running `go test -list`
-# over tools/archtest. ~5×subprocess go-test-list ≈ 25-30s on GHA. Not a
-# cache-miss bottleneck (subprocess cache is independent of TestMain warmup),
-# so PR #584 in-process warmup does not help. Cleanup path (K=4 → K=2 or
-# bash-script-side dispatch consolidation) tracked by
-# ARCHTEST-VERIFY-COVERAGE-DISPATCH-OPTIMIZE-01 in cap-14-tooling.md.
-github.com/ghbvf/gocell/tools/archtest	TestArchtestVerifyCoverage01
 # type-graph-load: PANIC-REGISTERED-01 scan over module — iterates 7 build-tag
 # sets (typeseval.KnownNonDefaultTags), each driving its own packages.Load
 github.com/ghbvf/gocell/tools/archtest	TestPanicRegistered
@@ -270,14 +262,12 @@ github.com/ghbvf/gocell/tools/archtest	TestEventuallyFunnel
 # class (cumulative trigger evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
 github.com/ghbvf/gocell/tools/archtest	TestEventuallyFunnel_NoIndirectReferences
 
-# type-graph-load: CELL-ID-PATTERN-SINGLE-SOURCE main rule scans every
-# regexp.MustCompile / regexp.Compile call module-wide for banned cell-id
-# family literals (the sibling-allowlisted TestCellIDPatternSingleSourceLiterals
-# entry above covers the literal-only variant; this rule is the type-aware
-# callsite scan). Single RunTypedProduction with Tests:true + FlatNonDefaultTags
-# over ./... — same whole-module SharedResolver profile as the entries above.
-# Surfaced at 23.67s on PR #845 verify-archtest shard 13 after this PR's
-# new 8-file accesscoretest/ package + obmetrics import shifted the
-# 16-shard modulo distribution off the cached resolver — same modulo-shift
-# SLOW-flake class (cumulative trigger evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
-github.com/ghbvf/gocell/tools/archtest	TestCellIDPatternSingleSource
+# type-graph-load: CREDENTIAL-INVALIDATE-FUNNEL-01 Apply upstream caller
+# scan — RunTyped Tests:false over subpath ./cells/accesscore/... +
+# ./cmd/..., which is NOT covered by TestMain warmup (warmup only seeds
+# the "./..." cacheKey, per ADR 202605190000 改造 1 design). Each invocation
+# pays full subpath packages.Load cost. Borderline pre-existing test; surfaced
+# at 20.54s on PR #870 verify-archtest shard 11 while validating list-mode
+# hardening. Same SLOW-flake class as the entries above (cumulative trigger
+# evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01

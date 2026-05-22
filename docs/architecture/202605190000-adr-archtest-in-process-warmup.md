@@ -110,11 +110,11 @@ follow-up 由 backlog `ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01` 跟踪。
 
 PR #584 CI 首次运行 shard 12 触发 slowgate fail：`TestArchtestVerifyCoverage01` 跑 27.14s 跨 20s budget。根因诊断：该 test 跑 1 次 `verify-archtest.sh DRY_RUN` + K=4 次 `LIST_SHARD_TESTS` 子进程，每次子进程独立 `go test -list ./tools/archtest` ≈ 5-6s on GHA → 累积 ~27s。
 
-**与本 PR 的关系**：该 test 的子进程开销与本 PR 的 in-process TestMain 预热**正交**——子进程 cache 独立，TestMain 预热无法摊销子进程 `go test -list`。modulo 重排把 TestArchtestVerifyCoverage01 推进 shard 12 暴露了这条 pre-existing 子进程开销。
+**与本 PR 的关系**：在 PR #584 当时，该 test 的子进程开销与本 PR 的 in-process TestMain 预热**正交**——子进程 cache 独立，TestMain 预热无法摊销子进程 `go test -list`。modulo 重排把 TestArchtestVerifyCoverage01 推进 shard 12 暴露了这条 pre-existing 子进程开销。
 
-**应急处理**：同 PR 把 `TestArchtestVerifyCoverage01` 加进 `tools/slowgate/allowlist.txt`，并加注释明确"subprocess-overhead，不在 TestMain 预热范围"。这条 allowlist 是**结构性必要**而非 cache-miss workaround，不被 `ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01` cleanup wave 覆盖。
+**PR #870 调整（2026-05-22）**：PR #870 在 `TestMain` 入口检测 `-test.list`，list-mode 直接跳过 warmup 后再交给 `m.Run()` 枚举测试名。这样 `TestArchtestVerifyCoverage01` 的 1 次 DRY_RUN + K=4 LIST_SHARD_TESTS 子进程不再各自持有 warmup RSS/耗时；本地 `go test -count=1 -run '^TestArchtestVerifyCoverage01$' ./tools/archtest` 回落到 4.3s 量级。因此 PR #870 删除 `tools/slowgate/allowlist.txt` 中的 `TestArchtestVerifyCoverage01` 应急条目。
 
-**根本修复路径** 由新 backlog `ARCHTEST-VERIFY-COVERAGE-DISPATCH-OPTIMIZE-01` 跟踪：K=4 → K=2 / bash 脚本侧合并 DRY_RUN + LIST_SHARD_TESTS / 用 `go list -test` 一次性拿全集。
+**剩余优化路径**：若未来 `TestArchtestVerifyCoverage01` wall 再次接近 slowgate budget，再新开触发型优化（K=4 → K=2 / bash 脚本侧合并 DRY_RUN + LIST_SHARD_TESTS / 用 `go list -test` 一次性拿全集）。当前不保留 allowlist 兜底。
 
 ## AI-rebust 评级
 
