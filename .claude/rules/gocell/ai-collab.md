@@ -66,7 +66,7 @@
 - 同主题规则 ≥ 3 → `{theme}_invariants_test.go` 主题文件；已有单文件升到第 3 条时重命名
 - 每个 `*_test.go` 在文件头 CommentGroup 写 `// INVARIANT: <ID>`；多规则文件用 `//   - INVARIANT: <ID>` 列表续行
 
-archtest CI 入口是 `hack/verify-archtest.sh`（process-isolated shards；`make verify` 自动发现）。CI 显式 `SHARD_COUNT=16`（GHA 7 GB RSS 约束）；本地默认 `SHARD_COUNT=1`（单进程共享 cache、最低 CPU）。两值差异编码 "CI vs 本地上下文"，无 SYNC 守卫。`ARCHTEST-VERIFY-COVERAGE-01` 守卫 script discovery 与 *_test.go AST 集合一致，防止 shard 漏 test。
+archtest CI 入口是 `.github/workflows/archtest-nightly.yml`（schedule + workflow_dispatch，16-shard matrix），失败自动开 P0 issue；PR / push CI 不再跑 archtest。本地 PR-time 反馈通过 `hack/githooks/pre-push`（`SHARD_COUNT=4` 并行 fan-out via `hack/verify-archtest.sh`）。`hack/verify-archtest.sh` 三种 execution mode 由 env shape 派生：`SHARD_TARGET` 设 → 单 shard（CI matrix）；`SHARD_COUNT=1` → 单进程流式（local default）；`SHARD_COUNT>1` 无 `SHARD_TARGET` → 并行 fan-out。CI 显式 `SHARD_COUNT=16`（GHA 7 GB RSS 约束）由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（step-scoped match-all）。`ARCHTEST-VERIFY-COVERAGE-01` 守卫 script discovery 与 *_test.go AST 集合一致，防止 shard 漏 test。
 
 ## Review checklist
 

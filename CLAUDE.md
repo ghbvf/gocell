@@ -75,7 +75,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 主要实施者是 AI。新增/修改约束 enforcement 机制（archtest / governance rule / codegen funnel / type marker / godoc 强约定）按 AI-rebust 三档（Hard / Medium / Soft）评级；Soft 严禁立项。载体决策原则、archtest 文件命名、review checklist 详见 `.claude/rules/gocell/ai-collab.md`。
 
-archtest CI 入口是 `hack/verify-archtest.sh`（process-isolated shards）；CI 显式 `SHARD_COUNT=16`（GHA 7 GB RSS 约束），本地默认 `SHARD_COUNT=1`（单进程、共享 `*types.Info` cache、最低 CPU）。`go test ./tools/archtest/...` 行为不变。详见 ADR `docs/architecture/202605120000-adr-archtest-process-isolation.md`。
+archtest CI 入口是 `.github/workflows/archtest-nightly.yml`（schedule cron + workflow_dispatch，16-shard matrix），失败自动开 P0 issue；PR / push CI 不跑 archtest。本地 PR-time 反馈是 `hack/githooks/pre-push`（`SHARD_COUNT=4` 并行 fan-out，~3 min on 18-core workstation）。`hack/verify-archtest.sh` 三种执行模式：`SHARD_TARGET=N` → 单 shard（CI matrix）；`SHARD_COUNT=1` → 单进程流式（local default）；`SHARD_COUNT>1` 无 `SHARD_TARGET` → 并行 fan-out。`go test ./tools/archtest/...` 行为不变。详见 ADR `docs/architecture/202605120000-adr-archtest-process-isolation.md` §Amendment 2026-05-23-pr-time-to-nightly。
 
 ## 参考框架
 

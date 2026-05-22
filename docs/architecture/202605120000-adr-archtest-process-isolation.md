@@ -158,13 +158,16 @@ phase0-baseline.txt 留在 worktree 但不入 PR（一次性 artifact）。
 
 ### 新约束 Medium 守卫（同 PR 闭环，per ai-collab.md §"立项硬门槛 ≥ Medium"）
 
-Amendment 改默认 16→1 产生一个新隐式约束：**CI yaml `.github/workflows/_build-lint.yml::verify-archtest` job 必须 explicit 设 `SHARD_COUNT: 16`**（否则 CI 以 K=1 单进程跑全部 archtest，~20 GB peak RSS 撞 GHA 7 GB shard OOM）。
+Amendment 改默认 16→1 产生一个新隐式约束：**CI yaml `verify-archtest` job 必须 explicit 在 invocation step 自身 env 中设 `SHARD_COUNT: 16`**（否则 CI 以 K=1 单进程跑全部 archtest，~20 GB peak RSS 撞 GHA 7 GB shard OOM）。
+
+> 落地载体迁移：本节 amendment 落地时 yaml 路径是 `.github/workflows/_build-lint.yml::verify-archtest`。后续 §Amendment 2026-05-23-pr-time-to-nightly 把 matrix 迁到 `.github/workflows/archtest-nightly.yml`，archtest 守卫的 yaml 解析路径同 PR 更新；约束语义不变。
 
 按 ai-collab.md "新引入 Soft → 直接 reject，要求改 ≥ Medium"，此约束**同 PR 内** Medium 化，不允许靠注释维护或 backlog 延期：
 
-- 新增 archtest `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01`（`tools/archtest/archtest_ci_shard_count_test.go`）：解析 `_build-lint.yml` YAML，断言 `jobs.verify-archtest.steps[*].env.SHARD_COUNT == "16"`；缺失或值漂移立即 fail。
+- 新增 archtest `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01`（`tools/archtest/archtest_ci_shard_count_test.go`）：解析 nightly workflow YAML，**step-scoped match-all** 形态——遍历 `jobs.verify-archtest.steps[*]`，对每个 `run` 含 `hack/verify-archtest.sh` 的 step 断言其**自身** `env.SHARD_COUNT == "16"`；缺失、值漂移、无 invocation step 立即 fail。
+- Step-scoped 必要性：GHA step env 是 step-scoped——sibling 步骤（如 Build slowgate 步骤）的 env 不传递给 verify-archtest.sh 执行进程；"any step has env=16" 形态会被 sibling shadow 误绿（开发者把 `SHARD_COUNT=16` 错写在 setup step，真实 invocation step 仍漏 env → CI 跑 K=1 → OOM）。
 - 形态 Medium：runtime guard via archtest，CI 跑时立即捕获。违反不可通过单边修改 yaml 静默达成——必须同 PR 修改 archtest 或 fixture，diff 可视。
-- 4 个 fixture（正/3 反）覆盖：正确形状 / 缺 env / 值漂移（K=8 反例）/ 缺 job。
+- 6 个 fixture（1 正/5 反）覆盖：正确形状 / 缺 env / 值漂移（K=8 反例）/ 缺 job / sibling step env shadow / no invocation step。
 
 ### Backlog 关闭
 
@@ -177,3 +180,67 @@ Amendment 改默认 16→1 产生一个新隐式约束：**CI yaml `.github/work
 - `CLAUDE.md:78`、`.claude/rules/gocell/ai-collab.md:69` K=16 描述
 - `tools/archtest/archtest_ci_shard_count_test.go` 新 Medium 守卫（ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01）
 - `docs/backlog/20260520/cap-02-metadata-governance.md` ARCHTEST-SHARDCOUNT-SYNC-GUARD-01 关闭
+
+## Amendment 2026-05-23-pr-time-to-nightly: archtest CI matrix moved to nightly + local parallel fan-out
+
+### 根因
+
+PR-time 16-shard matrix（PR / push 上 `_build-lint.yml::verify-archtest`）累积出三类 brittleness，已在最近 6-8 周反复修：
+
+1. **modulo-shift SLOW**——新 test 函数加入 → discovery 顺序 modulo 重排 → 某个 type-heavy test 被推到不同 shard → 跨 20s slowgate budget。每加一个 test 就可能复发，无根本解。
+2. **tagGroup 范本 OOM**——`for tagGroup := range KnownNonDefaultTags() { RunTyped(...) }` 范本被复抄到多处，每次 `RunTyped` 加载全模块 RSS 累积超 GHA 7 GB 上限 SIGTERM（PR #870 + TAGGROUP-LOOP-FORBIDS-RUNTYPED-01 archtest 已防再发）。
+3. **GHA runner 平台不稳**——PR #878 最终 merge 时 verify-archtest shard 5 `runner has received a shutdown signal`（spot instance preempt），非 archtest 逻辑失败。16-shard matrix 把单 runner 故障风险放大 16×。
+
+三类合计：archtest 在 PR-time 阻塞流红灯的有效信号噪音比下降。开发者修复路径变为"等 nightly 重跑"或人工 rerun matrix，反馈周期反而延长。
+
+同时 PR #878 把脚本默认 `SHARD_COUNT` 改为 1（本地友好），但实测发现 K=1 单进程跑 605 Test* wall ~5 min；K=N 串行 for-loop 更慢（每 shard 独立 packages.Load 无 cross-shard cache 共享）。本地缺乏快速 archtest 反馈手段。
+
+### 决策
+
+1. **删除 PR-time matrix**——`.github/workflows/_build-lint.yml::verify-archtest` job 整段删除（含 16 个 matrix entries）。`governance.yml::make verify` 的 `VERIFY_SKIP: archtest` env 保留，注释更新为指向新 nightly yaml。
+
+2. **新建 nightly schedule**——`.github/workflows/archtest-nightly.yml`：`cron: '0 18 * * *'`（UTC ≈ 北京 02:00）+ `workflow_dispatch`；16-shard matrix 结构 1:1 复用旧 PR-time job；新增 `alert-on-failure` job 在 `if: failure()` 时用 hosted runner 内置 `gh` CLI 调 `gh issue create` 开 P0 issue（labels: `nightly-failure` / `pri-p0` / `cap-02-metadata-governance`）。
+
+3. **本地 pre-push 跑全量 archtest**——`hack/verify-archtest.sh` 新增"Execution modes"语义：
+   - `SHARD_TARGET` 设 → 单 shard 单 process（CI matrix 路径不变）
+   - `SHARD_TARGET` 未设 + `SHARD_COUNT=1` → 单 shard 流式输出（local default，PR #878 落地）
+   - `SHARD_TARGET` 未设 + `SHARD_COUNT>1` → **并行 fan-out**（background `&` + wait barrier + 每 shard 临时文件收集 stdout，wait 后按 shard 序输出）
+   - 旧 K=N 串行 for-loop 模式删除——实测它总比 K=1 慢（每 shard 重新 packages.Load 无 cache 共享）且无 caller 用它。
+
+4. **pre-push 调用 K=4**——`hack/githooks/pre-push` 中替换原 `TEST-TIME-LITERAL-01` 单条采样为 `env SHARD_COUNT=4 bash hack/verify-archtest.sh`。
+
+### Workstation 标定（K 值选择实证）
+
+18-core / 128 GB Apple Silicon / macOS / ~605 Test*：
+
+| K | real wall | max shard | peak RSS | 评估 |
+|---|----------|-----------|----------|------|
+| K=1 单进程 | ~5min（用户实测）| 单进程 | ~20 GB | cache 共享但无并发 |
+| K=2 并行 | 248s（4min 8s）| 246s（302 tests）| 51 GB | 每 shard 太大 |
+| **K=4 并行** | **187s（3min 7s）**| **185s（152 tests）** | **43 GB** | **sweet spot**|
+| K=8 并行 | ~196s（3min 16s）| 196s（76 tests）| ~67 GB | 每 shard go test 内 `-p` 取不到足够 core，反而慢 |
+
+K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` 充分用 CPU；K=2 单 shard tests 太多内部串行多；K=8 over-subscribe core 拖慢。
+
+### 威胁矩阵重评（per `.claude/rules/gocell/ai-collab.md` §"ADR amendment 落地必查"）
+
+| 原 ADR 论点 | 在 amendment 下状态 | 补偿措施 |
+|------------|------------------|---------|
+| §D1 CI matrix 16-shard | ✅ K=16 不变，载体 `_build-lint.yml` → `archtest-nightly.yml` | ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 守卫 yaml 路径同 PR 迁移 |
+| §D3 ARCHTEST-VERIFY-COVERAGE-01 元守卫 | ✅ 不变，运行时间从 PR-time → nightly | discovery drift 触发条件单一（改脚本），PR diff 显著 |
+| §D4 governance.yml VERIFY_SKIP | ✅ env 保留不变 | 注释更新指向新 nightly yaml |
+| §D5 slowgate | ⚠️ 仍跑但延迟暴露 | brittleness 转 nightly 兜底 + 自动开 issue |
+| § "PR-time fast-feedback gate" | ❌ 失效 | pre-push 本地 K=4 并行替代（实测 ~3 min wall） |
+| § "single authoritative owner" | ✅ owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`（同名 job，不同 yaml）| 注释 + ADR 文本同 PR 重写 |
+
+§D4 / §D6 段原文同 PR 重写以与现状一致（per ai-collab.md §"ADR amendment 落地必查" 禁止"原文保留作历史脉络"）。
+
+### 跨载体同步（同 PR 闭环）
+
+- `.github/workflows/archtest-nightly.yml` 新建（16-shard schedule + alert-on-failure）
+- `.github/workflows/_build-lint.yml` 删 verify-archtest job + tools shard 注释指向 nightly
+- `.github/workflows/governance.yml` VERIFY_SKIP 注释指向 nightly
+- `hack/verify-archtest.sh` "Execution modes" 文档 + 并行 fan-out 分支
+- `hack/githooks/pre-push` 用 K=4 并行 + 注释重写（deviation 4 / Tier 4）
+- `tools/archtest/archtest_ci_shard_count_test.go` yaml 路径迁移到 `archtest-nightly.yml`
+- `CLAUDE.md:78`、`.claude/rules/gocell/ai-collab.md:69` archtest 入口描述更新
