@@ -868,7 +868,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	_ = originalName // silence linter (kept for debug context)
 
 	// Both nil: no-op. Username and email must stay at current values.
-	currentName := newName  // last set value
+	currentName := newName // last set value
 	currentEmail := newEmail
 	if _, err := repo.UpdateProfile(context.Background(), u.ID, nil, nil, now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: nil+nil must not error: %v", err)

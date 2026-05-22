@@ -78,7 +78,8 @@ func TestUserRepoMethodSetFrozen_BlindSpotReverseSelfTest(t *testing.T) {
 	if sibling == nil {
 		// RoleRepository not found — either the interface was renamed or removed.
 		// The blind-spot assertion cannot be made; skip rather than false-pass.
-		t.Skip("USERREPO-METHOD-SET-FROZEN-01 blind-spot self-test: RoleRepository not found in cells/accesscore/internal/ports; skipping reverse self-test")
+		t.Skip("USERREPO-METHOD-SET-FROZEN-01 blind-spot self-test: " +
+			"RoleRepository not found in cells/accesscore/internal/ports; skipping reverse self-test")
 		return
 	}
 
