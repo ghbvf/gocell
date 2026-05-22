@@ -6,11 +6,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+// verifyArchtestScriptMarker is the substring that identifies a step actually
+// invoking the verify-archtest script. GitHub Actions step env (`steps[*].env`)
+// only applies during that specific step's process. The validator MUST bind
+// the SHARD_COUNT=16 assertion to the SAME step that runs this script — a
+// dummy/setup step with SHARD_COUNT=16 in env cannot satisfy the contract
+// because its env never reaches the actual `bash hack/verify-archtest.sh`
+// execution. ref: GitHub Docs jobs.<job_id>.steps[*].env.
+const verifyArchtestScriptMarker = "hack/verify-archtest.sh"
 
 // TestVerifyArchtestCIExplicitShardCount asserts that the verify-archtest
 // CI job in .github/workflows/_build-lint.yml sets SHARD_COUNT=16 explicitly
@@ -98,6 +108,50 @@ func TestVerifyArchtestCIExplicitShardCountAcceptsCorrectShape(t *testing.T) {
 	require.NoError(t, validateVerifyArchtestExplicitShardCount(body))
 }
 
+// TestVerifyArchtestCIExplicitShardCountRejectsSiblingStepEnvShadow covers the
+// PR-878 reviewer F1 gap: a dummy/setup step carries `SHARD_COUNT: 16` env
+// (e.g. accidental copy-paste from a former invocation step), but the real
+// `bash hack/verify-archtest.sh` step has no SHARD_COUNT env. GitHub Actions
+// step env is step-scoped — sibling env does NOT propagate, so the real step
+// would silently fall back to script default K=1 and OOM on GHA. The
+// validator MUST reject this shape; pre-F1-fix code falsely accepted it.
+func TestVerifyArchtestCIExplicitShardCountRejectsSiblingStepEnvShadow(t *testing.T) {
+	body := []byte(`jobs:
+  verify-archtest:
+    steps:
+      - name: Build slowgate
+        env:
+          SHARD_COUNT: 16
+        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
+      - name: Verify archtest shard ${{ matrix.shard }}
+        env:
+          SHARD_TARGET: ${{ matrix.shard }}
+        run: bash hack/verify-archtest.sh
+`)
+	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+}
+
+// TestVerifyArchtestCIExplicitShardCountRejectsNoInvocationStep covers the
+// case where the verify-archtest job exists but no step actually invokes
+// `hack/verify-archtest.sh` — e.g. someone renamed the step or split the
+// script out without updating the gate. matrix gate is sole CI archtest
+// entry (ADR §D6); silent removal must fail loudly.
+func TestVerifyArchtestCIExplicitShardCountRejectsNoInvocationStep(t *testing.T) {
+	body := []byte(`jobs:
+  verify-archtest:
+    steps:
+      - name: Build slowgate
+        env:
+          SHARD_COUNT: 16
+        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
+      - name: Echo only
+        env:
+          SHARD_COUNT: 16
+        run: echo "no script invocation"
+`)
+	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
+}
+
 // archtestWorkflowConfig parses only the subset of _build-lint.yml needed
 // for the verify-archtest SHARD_COUNT assertion. Decoupled from
 // ci_pinning_test.go's workflowStep type so adding env doesn't risk
@@ -113,15 +167,22 @@ type archtestWorkflowJob struct {
 type archtestWorkflowStep struct {
 	Name string            `yaml:"name"`
 	Env  map[string]string `yaml:"env"`
+	Run  string            `yaml:"run"`
 }
 
 // validateVerifyArchtestExplicitShardCount enforces ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01:
-// jobs.verify-archtest must contain a step whose env has SHARD_COUNT exactly "16".
+// every step in jobs.verify-archtest that invokes `hack/verify-archtest.sh` must
+// set `SHARD_COUNT=16` in **its own** `env:` block.
 //
-// The validator scans all steps in the job rather than locking to a specific
-// step name — the canonical step is "Verify archtest shard ${{ matrix.shard }}"
-// but the matrix interpolation makes string equality brittle. Any step under
-// verify-archtest with `env: SHARD_COUNT: 16` satisfies the contract.
+// Why bound to the running step, not any step: GitHub Actions step env applies
+// only during that step's process. A dummy/setup step with `SHARD_COUNT: 16`
+// in env never reaches the verify-archtest.sh execution context — relying on
+// "any step has env" would let the real run step silently fall back to the
+// script default (K=1 → 20 GB peak RSS → GHA OOM).
+//
+// Match-all semantics (not first-match): if multiple steps invoke the script,
+// every one must satisfy the contract (defense-in-depth against future yaml
+// refactors that split invocation across steps).
 func validateVerifyArchtestExplicitShardCount(body []byte) error {
 	var cfg archtestWorkflowConfig
 	dec := yaml.NewDecoder(bytes.NewReader(body))
@@ -132,19 +193,30 @@ func validateVerifyArchtestExplicitShardCount(body []byte) error {
 	if !ok {
 		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest missing from _build-lint.yml")
 	}
+	invocations := 0
 	for _, step := range job.Steps {
-		v, has := step.Env["SHARD_COUNT"]
-		if !has {
+		if !strings.Contains(step.Run, verifyArchtestScriptMarker) {
 			continue
 		}
-		if v != "16" {
-			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q has SHARD_COUNT=%q; "+
-				"CI must set SHARD_COUNT=16 (GHA 7 GB shard RSS budget; see ADR 202605120000 §Amendment 2026-05-23)",
-				step.Name, v)
+		invocations++
+		v, has := step.Env["SHARD_COUNT"]
+		if !has {
+			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q runs %s but its env "+
+				"is missing SHARD_COUNT; CI must explicit set SHARD_COUNT=16 on the same step "+
+				"(script default is 1 local-friendly; GHA step env is step-scoped — sibling step env does NOT apply). "+
+				"See ADR 202605120000 §Amendment 2026-05-23.",
+				step.Name, verifyArchtestScriptMarker)
 		}
-		return nil
+		if v != "16" {
+			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q runs %s with SHARD_COUNT=%q; "+
+				"CI must set SHARD_COUNT=16 (GHA 7 GB shard RSS budget; see ADR 202605120000 §Amendment 2026-05-23)",
+				step.Name, verifyArchtestScriptMarker, v)
+		}
 	}
-	return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest steps[*].env.SHARD_COUNT missing; " +
-		"hack/verify-archtest.sh default is 1 (local-friendly) — CI must explicit set SHARD_COUNT=16 " +
-		"(GHA 7 GB shard RSS budget; see ADR 202605120000 §Amendment 2026-05-23)")
+	if invocations == 0 {
+		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest has no step running %s; "+
+			"matrix gate is the sole CI archtest entry, removal is a regression (see ADR 202605120000 §D6)",
+			verifyArchtestScriptMarker)
+	}
+	return nil
 }

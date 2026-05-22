@@ -30,11 +30,11 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 ## Decisions
 
-### D1. CI 入口改为 process-isolated 16-shard 矩阵
+### D1. CI 入口改为 process-isolated 16-shard 矩阵（CI 显式 K=16 / 本地默认 K=1）
 
-`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo 16 分片，每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。SHARD_TARGET 单 shard 模式给 GHA matrix 用；无 SHARD_TARGET 时串行跑全部 16 shard（`make verify` 路径）。
+`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo `SHARD_COUNT` 分片（**CI: 16 explicit；本地默认: 1**，见 §Amendment 2026-05-23），每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。SHARD_TARGET 单 shard 模式给 GHA matrix 用；无 SHARD_TARGET 时串行跑 `SHARD_COUNT` 个 shard（本地 `make verify` 路径默认 K=1 单 shard）。
 
-`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job：`matrix.shard: [0..15]`，每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。
+`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job：`matrix.shard: [0..15]` + 显式 `env: SHARD_COUNT: 16`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。CI explicit `SHARD_COUNT=16` 由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment）。
 
 ### D2. tools shard 不再 enumerate archtest，pkgs 运行时计算
 
@@ -46,9 +46,13 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 `tools/archtest/archtest_verify_coverage_test.go::TestArchtestVerifyCoverage01`（INVARIANT `ARCHTEST-VERIFY-COVERAGE-01`）：shell-out `DRY_RUN=1 bash hack/verify-archtest.sh` → 与 `scanner.EachInSubtree[ast.FuncDecl]` AST 扫到的 top-level Test* 函数集合做对称 diff，非空则 fail。守的风险：维护者改脚本加 `grep -v TestFoo` debug 过滤忘删 → CI silent unenforce（local `go test ./tools/archtest/...` 仍捕获，但 PR Check 漏过）。AI-rebust **Medium**（runtime cross-check 双重源）。
 
-### D4. `make verify` 不再 skip archtest
+### D4. `make verify` 委托 archtest 给 matrix gate（D6 single-owner 落地形态）
 
-`.github/workflows/governance.yml` 删 `VERIFY_SKIP: archtest` env、timeout-minutes 5 → 15。重写后 verify-archtest.sh serial 16-shard 各独立 process，governance.yml 跑完只多 5-8 min wall，无 OOM。统一 `make verify` 入口覆盖 develop push + PR；PR Check 的 matrix-parallel `verify-archtest` job 提供 fast-feedback 通道。
+`.github/workflows/governance.yml::make verify` 保留 `env: VERIFY_SKIP: archtest` 显式委托给 `_build-lint.yml::verify-archtest` matrix gate，避免 push/PR 上双跑 archtest（详见 §D6 single-owner 原则）。timeout-minutes 维持 15 容纳其它 verify-*.sh 子脚本耗时。
+
+本地 `make verify`（无 `VERIFY_SKIP` env）仍包含 `verify-archtest.sh`，按 `SHARD_COUNT` 默认 K=1 单进程跑（见 §D1 + §Amendment 2026-05-23）；PR Check 的 matrix-parallel `verify-archtest` job (SHARD_COUNT=16 explicit) 是 CI 上唯一权威 archtest gate。
+
+> **历史**：本节原文为 "governance.yml 删 VERIFY_SKIP env" + "verify-archtest.sh serial 16-shard"。§D6 加入时反转此决策（恢复 VERIFY_SKIP 避免双跑）；§Amendment 2026-05-23 进一步把脚本默认 K 改为 1。本节文本同 PR 重写以与现状一致（per ai-collab.md §"ADR amendment 落地必查"）。
 
 ### D5. slowgate 重接
 
