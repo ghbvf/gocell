@@ -27,7 +27,7 @@ const (
 	subscriberD40ms          = testtime.D40ms
 )
 
-// makeDeliveryBodyWithID constructs a WireMessage-envelope body where the
+// makeDeliveryBodyWithID constructs a v1 outbox wire envelope body where the
 // entry ID is replaced by the given id string. Used to test the entry.ID guard.
 func makeDeliveryBodyWithID(t *testing.T, id string) []byte {
 	t.Helper()
@@ -154,6 +154,76 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	assert.False(t, nackRequeue, "too-long entry.ID must Nack without requeue")
 	assert.Equal(t, uint64(8), nackTag)
 	assert.False(t, handlerCalled, "handler must not be called for too-long entry.ID")
+}
+
+// TestProcessDelivery_UnsafeCharsInEntryID_RejectsToDLX verifies ADR
+// 202605190900-adr-safeid-wire-boundary-funnel.md §0 threat-matrix row 4:
+// raw wire bytes containing an ID value with unsafe characters (e.g. \n log
+// injection) are rejected at the wire boundary by SafeID.UnmarshalJSON, and
+// the subscriber routes the delivery to DLX (Nack without requeue).
+//
+// This test uses a raw []byte JSON template — it CANNOT use makeDeliveryBody
+// because that helper calls outbox.MarshalEnvelope, which runs producer-side
+// ParseSafeID and rejects the unsafe value before bytes are produced. The
+// attack vector only exists at the wire level, not the in-Go construction
+// level; raw bytes are the only way to construct the negative test.
+func TestProcessDelivery_UnsafeCharsInEntryID_RejectsToDLX(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
+		Clock:       clock.Real(),
+	})
+
+	handlerCalled := false
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.Ack()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Build a raw wire envelope with an unsafe ID value containing \n
+	// (log-injection attack vector). %q JSON-encodes the newline as \n
+	// literal inside the JSON string, which is what a hostile producer
+	// would emit on the wire. SafeID.UnmarshalJSON rejects it → unmarshalDelivery
+	// fails → processDelivery calls nackPermanent (Nack requeue=false → DLX).
+	body := []byte(fmt.Sprintf(
+		`{"schemaVersion":"v1","id":%q,"eventType":"e.test","payload":{"x":1},"createdAt":"2026-01-01T00:00:00Z"}`,
+		"id-with-newline\nlevel=error",
+	))
+
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 60, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
+	}()
+
+	testwait.External(t, "amqp-delivery-nacked", func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.nackCalled
+	}, testtime.D2s, testtime.FastPoll, "Nack was not called for unsafe-char entry.ID")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	ch.mu.Lock()
+	nackRequeue := ch.nackRequeue
+	nackTag := ch.nackTag
+	ch.mu.Unlock()
+
+	assert.False(t, nackRequeue, "unsafe-char entry.ID must Nack without requeue (DLX route)")
+	assert.Equal(t, uint64(60), nackTag)
+	assert.False(t, handlerCalled, "handler must not be called for unsafe-char entry.ID")
 }
 
 // ---------------------------------------------------------------------------

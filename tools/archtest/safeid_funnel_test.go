@@ -43,37 +43,41 @@
 // type to package + name; resolve scope.Lookup to detect unexported/exported
 // re-export).
 //
-// Tool blind spots (forms RunTyped + go/types cannot see):
+// Already-closed by Go type system (not archtest scope):
 //
 //  1. Reflection-driven field tag rewrites or unsafe pointer aliasing
 //     that masquerades string as SafeID at runtime: out of scope; this
 //     archtest verifies the source-level field type declaration. Reflection
 //     against unexported field internals is not a supported wire path.
+//     Go's reflect package cannot write to unexported struct fields from
+//     outside the package — blocked at the language level, not by this archtest.
 //
-//  2. Type aliases (`type Foo = idutil.SafeID`): alias resolution flattens
+//  2. Generic helper `func decodeAny[T any](bytes []byte) T` that bypasses
+//     the unexported type via type parameter: Go's visibility rules apply
+//     to type arguments across packages — `outbox.wireMessage` cannot be
+//     written as a type argument from outside the package, so this path
+//     is compile-time blocked without any archtest involvement.
+//
+// Tool blind spots (forms RunTyped + go/types cannot see):
+//
+//  1. Type aliases (`type Foo = idutil.SafeID`): alias resolution flattens
 //     to the same TypeName via types.Named.Obj(), so the underlying check
 //     succeeds. Documented for completeness.
 //
-//  3. New struct introduced in kernel/outbox that re-implements the
+//  2. New struct introduced in kernel/outbox that re-implements the
 //     envelope wire shape under a different name (e.g. WireMessageV2):
 //     captured by SAFEID-WIREMESSAGE-USAGE-01/NewWireStruct below
 //     (scans for `Unmarshaler` methods on string-typed fields with
 //     id/event/topic/aggregate names).
 //
-//  4. Re-export of `WireMessage` via type alias or parallel definition
+//  3. Re-export of `WireMessage` via type alias or parallel definition
 //     (`type WireMessage = wireMessage` / `type WireMessage struct {...}`):
 //     captured by SAFEID-UPSTREAM-FUNNEL-HARD-01 via go/types Lookup
 //     ("WireMessage" must NOT exist), and by the
 //     SAFEID-UPSTREAM-FUNNEL-HARD-01/NoReExport reverse self-test that
 //     AST-scans for the literal `type WireMessage` declaration.
 //
-//  5. Generic helper `func decodeAny[T any](bytes []byte) T` that bypasses
-//     the unexported type via type parameter: Go's visibility rules apply
-//     to type arguments across packages — `outbox.wireMessage` cannot be
-//     written as a type argument from outside the package, so this path
-//     is compile-time blocked.
-//
-//  6. Package-internal new decode path (e.g., `_helpers_test.go` adding
+//  4. Package-internal new decode path (e.g., `_helpers_test.go` adding
 //     `json.Unmarshal` on `wireMessage`): not in INVARIANT scope — the
 //     downstream SafeID field-type Hard still routes every field decode
 //     through `SafeID.UnmarshalJSON`, and package-internal code is the
@@ -220,10 +224,10 @@ func checkSafeIDFields(pkg *types.Package) []Diagnostic {
 
 		for i := 0; i < strct.NumFields(); i++ {
 			f := strct.Field(i)
-			// wireMessage is unexported, but ITS fields are exported
-			// (json.Unmarshal requires exported fields to decode into).
-			// Walk all struct fields regardless of f.Exported() on the
-			// outer type; only skip fields that are themselves unexported.
+			// wireMessage is unexported (Hard upstream seal), but json.Unmarshal can
+			// only populate EXPORTED fields — so the SafeID funnel invariant applies
+			// only to exported fields. Skip unexported fields: they cannot carry wire
+			// data so can't bypass SafeID.UnmarshalJSON.
 			if !f.Exported() {
 				continue
 			}

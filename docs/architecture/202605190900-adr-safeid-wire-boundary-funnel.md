@@ -95,7 +95,7 @@ Adopt the **string-typed concept funnel** (charter §"Hard 范本" 第 3 条).
 
 ## Two-layer trust model
 
-- **WireMessage** (wire boundary): all ID-shaped fields are `SafeID`.
+- **wireMessage** (wire boundary, package-private after §0 amendment): all ID-shaped fields are `SafeID`.
   This is the CWE-117 closure layer.
 - **Entry** (in-memory): keeps `string`. Entry is constructed by trusted
   paths (`MustNewEntryID` is `IsSafeID` by construction;
