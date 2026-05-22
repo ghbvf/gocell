@@ -17,8 +17,13 @@
 #
 # Env vars:
 #   SHARD_COUNT       Number of shards to partition Test* functions across.
-#                     Default 16 (Phase 0 measured max peak RSS 4.22 GB /
-#                     shard on macOS for K=16; safe under Linux 7 GB GHA).
+#                     Default 1 (local-friendly: single process, ~300 Test*
+#                     share *types.Info cache, lowest CPU). CI explicitly
+#                     sets SHARD_COUNT=16 in .github/workflows/_build-lint.yml
+#                     verify-archtest job — required by GHA 2-core 7 GB
+#                     shard runner RSS budget (Phase 0 measured max peak RSS
+#                     4.22 GB / shard on macOS for K=16; safe under Linux
+#                     7 GB GHA). See ADR 202605120000.
 #   SHARD_TARGET      If set, run only that shard index [0, SHARD_COUNT).
 #                     Used by CI matrix. If empty, all shards run serially
 #                     in this process invocation.
@@ -43,8 +48,11 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 readonly ARCHTEST_PKG="./tools/archtest"
-# SYNC: SHARD_COUNT must match .github/workflows/_build-lint.yml archtest job env
-readonly SHARD_COUNT="${SHARD_COUNT:-16}"
+# Default 1 (local). CI sets SHARD_COUNT=16 explicitly in
+# .github/workflows/_build-lint.yml::verify-archtest (GHA 7 GB RSS budget).
+# These two values intentionally differ — they encode "local vs CI context"
+# rather than a single global truth, so no SYNC guard is required.
+readonly SHARD_COUNT="${SHARD_COUNT:-1}"
 readonly TIMEOUT="${TIMEOUT:-5m}"
 readonly SLOWGATE_BIN="${SLOWGATE_BIN:-}"
 readonly SLOWGATE_THRESHOLD="${SLOWGATE_THRESHOLD:-20s}"
