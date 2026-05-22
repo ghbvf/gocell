@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	khealthz "github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 // TestRunAggregatorConformance runs the shared contract harness against the
 // default in-memory aggregator.
 func TestRunAggregatorConformance(t *testing.T) {
-	RunAggregatorConformance(t, func() khealthz.Aggregator {
+	healthztest.RunAggregatorConformance(t, func() khealthz.Aggregator {
 		return NewAggregator(WithClock(clock.Real()))
 	})
 }

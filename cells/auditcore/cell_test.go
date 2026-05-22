@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
 )
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
@@ -92,7 +93,7 @@ func newTestRecorder() *cell.RegistryRecorder {
 
 // newTestRecorderWithAgg returns a RegistryRecorder and the aggregator that
 // captures registered probes, for tests that assert probe registration.
-func newTestRecorderWithAgg() (*cell.RegistryRecorder, *testAggregator) {
+func newTestRecorderWithAgg() (*cell.RegistryRecorder, *healthztest.FakeAggregator) {
 	agg := newTestAgg()
 	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg), agg
 }
@@ -551,8 +552,8 @@ func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), recorder))
 
 	const emitterKey = "outbox-failopen-rate.auditcore"
-	require.Contains(t, agg.probes, emitterKey, "DirectEmitter health probe must be registered")
-	assert.NoError(t, agg.probes[emitterKey].Check(context.Background()), "fresh emitter should be healthy")
+	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter health probe must be registered")
+	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // deadlineProbeStore is a ledger.Store whose Verify asserts that the caller
@@ -627,9 +628,9 @@ func TestAuditCore_HealthCheckers_AuditLedgerReady(t *testing.T) {
 	recorder, agg := newTestRecorderWithAgg()
 	require.NoError(t, c.Init(context.Background(), recorder))
 
-	require.Contains(t, agg.probes, ProbeRepoReady,
+	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"repo probe must be registered via RegisterRepoReady")
-	require.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
+	require.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore repo probe must return nil (always ready)")
 }
 
@@ -651,9 +652,9 @@ func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), recorder))
 	// WriterEmitter does not add emitter probes; only repo probe is present.
-	assert.NotContains(t, agg.probes, "outbox-failopen-rate.auditcore",
+	assert.False(t, agg.HasProbe("outbox-failopen-rate.auditcore"),
 		"WriterEmitter must not add outbox-failopen-rate probe")
-	assert.Contains(t, agg.probes, ProbeRepoReady,
+	assert.True(t, agg.HasProbe(ProbeRepoReady),
 		"repo probe must always be registered via RegisterRepoReady")
 }
 

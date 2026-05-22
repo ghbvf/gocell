@@ -306,9 +306,9 @@ Readiness Probe.
 
 ## Probe contract
 
-Every checker registered through `health.Handler.RegisterChecker` is
+Every probe registered through `healthz.Aggregator.Register` is
 wrapped internally with a race-pattern guard (`wrapCtxSafe`). The outer
-Checker is structurally guaranteed to return when the aggregate readyz
+probe is structurally guaranteed to return when the aggregate readyz
 deadline fires, regardless of whether the inner probe cooperates with
 ctx.Done. This means:
 

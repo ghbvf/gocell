@@ -1,24 +1,22 @@
-package healthz
+// Package healthztest provides shared test helpers for [kernel/healthz.Aggregator]
+// implementations. It is a test-only package (not imported in production paths)
+// and lives in a subpackage to avoid pulling the "testing" import into the
+// production runtime/observability/healthz surface.
+package healthztest
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
 	khealthz "github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 )
-
-// conformanceDeadlineFast is the per-probe deadline used in the
-// probe_exceeding_deadline_returns_down conformance sub-test. A short value
-// keeps the test fast; 20ms is sufficient for in-process goroutine scheduling.
-const conformanceDeadlineFast = 20 * time.Millisecond
 
 // RunAggregatorConformance validates that the given factory produces
 // [kernel/healthz.Aggregator] implementations satisfying the full kernel
@@ -27,10 +25,16 @@ const conformanceDeadlineFast = 20 * time.Millisecond
 //
 // The factory is called once per sub-test case. Each sub-test is independent.
 //
+// The "probe_exceeding_deadline_returns_down" sub-test is intentionally omitted
+// from the generic harness because the [kernel/healthz.Aggregator] interface does
+// not expose deadline configuration. Implementations that support configurable
+// deadlines must test that behavior in their own implementation-specific tests
+// (e.g., runtime/observability/healthz.TestEvaluate_DeadlineExceededProbe).
+//
 // Usage:
 //
 //	func TestMyAggregatorConformance(t *testing.T) {
-//	    healthz.RunAggregatorConformance(t, func() khealthz.Aggregator {
+//	    healthztest.RunAggregatorConformance(t, func() khealthz.Aggregator {
 //	        return MyNewAggregator()
 //	    })
 //	}
@@ -38,7 +42,7 @@ const conformanceDeadlineFast = 20 * time.Millisecond
 // splitting each into a top-level function fragments the contract narrative
 // and breaks single-source-of-truth invariant: one function = full contract.
 //
-//nolint:gocognit,cyclop,funlen // conformance harness inlines 12 t.Run subtests by design;
+//nolint:gocognit,cyclop,funlen // conformance harness inlines 11 t.Run subtests by design;
 func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) {
 	t.Helper()
 
@@ -198,23 +202,6 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		}
 	})
 
-	t.Run("probe_exceeding_deadline_returns_down", func(t *testing.T) {
-		// Use a very short deadline to avoid slow tests.
-		agg := NewAggregator(WithClock(clock.Real()), WithDeadline(conformanceDeadlineFast))
-		p := khealthz.NewProbe("alpha_ready", func(ctx context.Context) error {
-			// Block until ctx is done (honors cancellation).
-			<-ctx.Done()
-			return ctx.Err()
-		})
-		if err := agg.Register(p); err != nil {
-			t.Fatalf("Register: %v", err)
-		}
-		snap := agg.Evaluate(context.Background())
-		if snap.Overall != khealthz.StatusDown {
-			t.Errorf("Overall = %s, want Down (timeout)", snap.Overall)
-		}
-	})
-
 	t.Run("concurrent_register_evaluate_no_race", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("skipping concurrency test in -short mode")
@@ -272,4 +259,102 @@ func probeNameForWorker(n int) string {
 	s[7] = digits[(n/10)%10]
 	s[6] = digits[(n/100)%10]
 	return string(s)
+}
+
+// NewFakeAggregator returns a [*FakeAggregator] that implements
+// [kernel/healthz.Aggregator]. It stores registered probes by name and
+// runs them on Evaluate. This shared helper eliminates the 5 duplicate
+// testAggregator definitions across cells/ and example cells.
+//
+// Use in tests that need a real aggregator but do not require the full
+// runtime/observability/healthz implementation (e.g. cell unit tests that
+// verify a probe is registered with the correct name).
+//
+// The returned concrete type exposes [FakeAggregator.Probe] for tests that
+// need to inspect individual probe check functions by name.
+func NewFakeAggregator() *FakeAggregator {
+	return &FakeAggregator{probes: make(map[string]khealthz.Probe)}
+}
+
+// FakeAggregator is a lightweight [kernel/healthz.Aggregator] stub for tests.
+// It is exported so test files in cells/ can access the Probe method without
+// requiring a type assertion.
+type FakeAggregator struct {
+	mu     sync.RWMutex
+	probes map[string]khealthz.Probe
+}
+
+// Register implements [kernel/healthz.Aggregator].
+func (a *FakeAggregator) Register(p khealthz.Probe) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, dup := a.probes[p.Name()]; dup {
+		return fmt.Errorf("%w: probe %q", khealthz.ErrDuplicateProbe, p.Name())
+	}
+	a.probes[p.Name()] = p
+	return nil
+}
+
+// Deregister implements [kernel/healthz.Aggregator].
+func (a *FakeAggregator) Deregister(name string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.probes, name)
+}
+
+// Evaluate implements [kernel/healthz.Aggregator]. It runs all registered
+// probe Check functions and folds results.
+func (a *FakeAggregator) Evaluate(ctx context.Context) khealthz.Snapshot {
+	a.mu.RLock()
+	probes := make([]khealthz.Probe, 0, len(a.probes))
+	for _, p := range a.probes {
+		probes = append(probes, p)
+	}
+	a.mu.RUnlock()
+
+	results := make([]khealthz.ProbeResult, 0, len(probes))
+	overall := khealthz.StatusUp
+	for _, p := range probes {
+		var pr khealthz.ProbeResult
+		pr.Name = p.Name()
+		pr.Err = p.Check(ctx)
+		switch {
+		case pr.Err == nil:
+			pr.Status = khealthz.StatusUp
+		case errors.Is(pr.Err, cell.ErrDegraded):
+			pr.Status = khealthz.StatusDegraded
+		default:
+			pr.Status = khealthz.StatusDown
+		}
+		overall = khealthz.WorseStatus(overall, pr.Status)
+		results = append(results, pr)
+	}
+	return khealthz.Snapshot{Overall: overall, Probes: results}
+}
+
+// Probe returns the registered probe for the given name, or nil if not found.
+// This is useful in tests that need to call the probe's Check function directly.
+func (a *FakeAggregator) Probe(name string) khealthz.Probe {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.probes[name]
+}
+
+// HasProbe reports whether a probe with the given name is registered.
+func (a *FakeAggregator) HasProbe(name string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	_, ok := a.probes[name]
+	return ok
+}
+
+// ProbeNames returns the names of all registered probes. Order is not guaranteed.
+func (a *FakeAggregator) ProbeNames() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	names := make([]string, 0, len(a.probes))
+	for k := range a.probes {
+		names = append(names, k)
+	}
+	return names
 }

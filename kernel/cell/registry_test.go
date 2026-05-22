@@ -102,13 +102,13 @@ func TestRegistry_Healthz_RegisterProbe_StoresInAggregator(t *testing.T) {
 	agg := newFakeAggregator()
 	rec := NewRegistryRecorder(nil, DurabilityDurable, agg)
 
-	probe := healthz.NewProbe("session_store_ready", func(_ context.Context) error { return nil })
+	probe := healthz.NewProbe("foo_ready", func(_ context.Context) error { return nil })
 	err := rec.Healthz().Register(probe)
 	require.NoError(t, err)
 
-	stored, ok := agg.probes["session_store_ready"]
+	stored, ok := agg.probes["foo_ready"]
 	require.True(t, ok, "probe must be stored in aggregator")
-	assert.Equal(t, "session_store_ready", stored.Name())
+	assert.Equal(t, "foo_ready", stored.Name())
 }
 
 // ---------------------------------------------------------------------------

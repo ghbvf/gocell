@@ -882,7 +882,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 		// WithHealthChecker is the composition-root path that drainProbes wires
 		// into bootstrap's aggregator.
-		WithHealthChecker("session_store_ready", func(_ context.Context) error { return nil }),
+		WithHealthChecker("accesscore_repo_ready", func(_ context.Context) error { return nil }),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -909,8 +909,8 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "200 verbose response must contain dependencies map")
-	sessionStore, ok := deps["session_store_ready"].(map[string]any)
-	require.True(t, ok, "session-store entry must be a map")
+	sessionStore, ok := deps["accesscore_repo_ready"].(map[string]any)
+	require.True(t, ok, "accesscore-repo entry must be a map")
 	assert.Equal(t, "healthy", sessionStore["status"],
 		"WithHealthChecker-registered probe should appear in /readyz verbose")
 
@@ -943,8 +943,8 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 		WithShutdownTimeout(testtime.D2s),
 		// Two WithHealthChecker calls with the same name trigger duplicate detection
 		// in drainProbes when it calls s.registerHealthChecker. Intentional duplication.
-		WithHealthChecker("session_store_ready", func(_ context.Context) error { return nil }),
-		newDupHealthCheckerOption("session_store_ready"),
+		WithHealthChecker("accesscore_repo_ready", func(_ context.Context) error { return nil }),
+		newDupHealthCheckerOption("accesscore_repo_ready"),
 	)
 
 	ctx := t.Context()
@@ -952,7 +952,7 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 	err = b.Run(ctx)
 	require.Error(t, err, "duplicate probe names via WithHealthChecker should fail")
 	assert.Contains(t, err.Error(), "duplicate health checker")
-	assert.Contains(t, err.Error(), "session_store_ready")
+	assert.Contains(t, err.Error(), "accesscore_repo_ready")
 }
 
 // newDupHealthCheckerOption returns a second WithHealthChecker Option for

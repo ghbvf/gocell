@@ -117,6 +117,13 @@ type Registry interface {
 	// This method replaces the former Health(name, fn) accumulator pattern;
 	// the aggregator itself enforces first-wins duplicate semantics and
 	// provides concurrent-safe registration.
+	//
+	// WARNING: cells/ code must NOT call reg.Healthz().Register(...) directly.
+	// All probe registration must go through the cellgen-generated typed helpers
+	// (RegisterRepoReady, RegisterEmitterProbes) in cells/<cell>/healthz_gen.go.
+	// Direct Register calls from hand-written cell code are blocked by archtest
+	// HEALTHZ-TYPED-REGISTER-01. This restriction does not apply to
+	// runtime/bootstrap or runtime/observability/healthz/healthztest.
 	Healthz() healthz.Aggregator
 
 	// Lifecycle appends a lifecycle hook. Name must be non-empty; passing an

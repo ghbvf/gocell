@@ -268,6 +268,16 @@ var ErrDegraded = errcode.New(errcode.KindUnavailable, errcode.ErrOutboxDegraded
 // ref: cells/accesscore/cell_providers.go:22-38 — kebab-case checker name convention
 var _ healthz.ProbeSet = (*DirectEmitter)(nil)
 
+// Probes returns the fail-open rate probe for this emitter.
+//
+// NOTE: The probe name "outbox-failopen-rate.<cellID>" intentionally uses a
+// hyphen and a dot separator rather than pure snake_case.  This is a known
+// soft violation of the READYZ-PROBE-NAMING-01 naming convention.  It is
+// excluded from the READYZ-PROBE-NAMING-01 archtest scan because the probe is
+// registered from kernel/outbox (not cells/ or adapters/).  Renaming to
+// "outbox_failopen_rate_<cellID>" is tracked as backlog
+// OUTBOX-PROBE-NAMING-SNAKE-CASE-01 (cap-13 §13.3 S7-PG-OBSERVABILITY-ALIGN-BUNDLE
+// sub-item KERNEL-OUTBOX-PROBE-NAME-RENAME-01).
 func (e *DirectEmitter) Probes() []healthz.Probe {
 	return []healthz.Probe{
 		healthz.NewProbe("outbox-failopen-rate."+e.cellID, e.checkFailOpenRate),

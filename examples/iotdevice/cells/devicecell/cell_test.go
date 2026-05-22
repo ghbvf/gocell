@@ -437,8 +437,8 @@ func TestDeviceCell_Probes_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), rec))
 
 	const emitterKey = "outbox-failopen-rate.devicecell"
-	require.Contains(t, agg.probes, emitterKey, "DirectEmitter probe must be registered")
-	assert.NoError(t, agg.probes[emitterKey].Check(context.Background()), "fresh emitter should be healthy")
+	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter probe must be registered")
+	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // TestDeviceCell_LifecycleHookRegistered verifies that Init registers the

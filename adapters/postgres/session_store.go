@@ -270,13 +270,13 @@ func (s *PGSessionStore) RepoReady(ctx context.Context) error {
 //
 // Pool-level connection liveness is surfaced by the *Pool ManagedResource that
 // the composition root registers separately (postgres_ready probe). The
-// cell-level differentiated repository probe (session_store_ready) is
+// cell-level differentiated repository probe (accesscore_repo_ready) is
 // PGSessionStore's responsibility via RepoReady — it detects schema/migration
 // drift and table-level permission loss that a pool ping cannot.
 
 // Checkers returns nil: pool-level connection liveness is *Pool's concern.
 // Cell-level differentiated readiness is exposed through RepoReady, which is
-// registered as "session_store_ready" via the cellgen-emitted typed helper in the
+// registered as "accesscore_repo_ready" via the cellgen-emitted typed helper in the
 // accesscore cell init path.
 func (s *PGSessionStore) Checkers() map[string]func(context.Context) error {
 	return nil

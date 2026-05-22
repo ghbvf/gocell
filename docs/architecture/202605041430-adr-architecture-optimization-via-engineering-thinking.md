@@ -260,13 +260,13 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 - **不创建 `generated/observed/*.yaml`**——持久化是宿主的事
 
 **实施状态（2026-05-23 落地）**：
-- 实施 PR: #&lt;TBD — main agent will fill in via `gh pr` after this batch&gt;
+- 实施 PR: #886
 - 接口包: `kernel/healthz/` — `Probe` / `Aggregator` / `Snapshot` / `RepoProber` / `ProbeSet` 已就位
 - 默认实现: `runtime/observability/healthz/` — in-memory aggregator + conformance harness
 - HTTP transport: `runtime/http/health/Handler` 重构为读 Aggregator.Evaluate 的 thin layer
 - Bootstrap: `bootstrap.WithHealthAggregator(agg)` option + phase5 drain（取代旧 3 个 register*HealthCheckers 函数）
 - Codegen: `tools/codegen/cellgen` 出 `cells/<cell>/healthz_gen.go`（typed RegisterRepoReady + RegisterEmitterProbes）
-- 4 cells (accesscore/auditcore/configcore/mdmgateway) 迁移完成；adapters (postgres/redis/rabbitmq/s3) 实现 Probe 接口
+- 3 cells (accesscore/auditcore/configcore) 迁移完成；examples/iotdevice/devicecell 迁移完成；adapters (postgres/redis/rabbitmq/s3) 实现 Probe 接口
 - archtest: `HEALTHZ-WRITE-01` + `HEALTHZ-TYPED-REGISTER-01` 双向锁 funnel
 
 **显式延期项（不在本 PR）**：
@@ -283,7 +283,7 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 | 文件 | 角色 |
 |---|---|
 | `runtime/observability/healthz/aggregator.go` | 默认实现，Register 在内部 aggregator 实现中调用 |
-| `runtime/observability/healthz/conformance.go` | 合规测试 harness，合法调用 Register |
+| `runtime/observability/healthz/healthztest/conformance.go` | 合规测试 harness（healthztest subpackage），合法调用 Register |
 | `runtime/bootstrap/phases_lifecycle.go` | drainProbes — framework probe drain |
 | `runtime/bootstrap/phases_events.go` | registerHealthChecker — event router probe |
 | `runtime/bootstrap/bootstrap_phases.go` | registerHealthChecker helper |

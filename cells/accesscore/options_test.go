@@ -157,9 +157,9 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), rec))
 	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
-	require.Contains(t, agg.probes, ProbeRepoReady,
+	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"session.Store satisfies RepoProber; repo probe must be registered")
-	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
+	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
 }
 
@@ -184,9 +184,9 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), rec))
 	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
-	require.Contains(t, agg.probes, ProbeRepoReady,
+	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"session.Store satisfies RepoProber; repo probe must be registered")
-	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
+	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
 }
 
@@ -298,13 +298,13 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), rec))
 
 	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
-	require.Contains(t, agg.probes, ProbeRepoReady,
+	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"session.Store satisfies RepoProber; repo probe must be registered")
-	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
+	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
 	const emitterKey = "outbox-failopen-rate.accesscore"
-	require.Contains(t, agg.probes, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, agg.probes[emitterKey].Check(context.Background()), "fresh emitter should be healthy")
+	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // TestHealthCheckers_WithNoopEmitter verifies that when the emitter does not
@@ -335,11 +335,11 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), rec))
 	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
-	require.Contains(t, agg.probes, ProbeRepoReady,
+	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"session.Store satisfies RepoProber; repo probe must be registered")
-	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
+	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
-	for k := range agg.probes {
+	for _, k := range agg.ProbeNames() {
 		assert.NotContains(t, k, "outbox-failopen-rate",
 			"WriterEmitter must not produce outbox probe: key=%s", k)
 	}

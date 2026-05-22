@@ -11,13 +11,13 @@ func TestNewProbe_NameAndCheck(t *testing.T) {
 
 	called := false
 	wantErr := errors.New("boom")
-	p := NewProbe("session_store_ready", func(ctx context.Context) error {
+	p := NewProbe("foo_ready", func(ctx context.Context) error {
 		called = true
 		return wantErr
 	})
 
-	if got := p.Name(); got != "session_store_ready" {
-		t.Errorf("Name() = %q, want %q", got, "session_store_ready")
+	if got := p.Name(); got != "foo_ready" {
+		t.Errorf("Name() = %q, want %q", got, "foo_ready")
 	}
 	if err := p.Check(context.Background()); !errors.Is(err, wantErr) {
 		t.Errorf("Check() error = %v, want %v", err, wantErr)

@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -49,7 +50,7 @@ func newTestRecorder() *cell.RegistryRecorder {
 
 // newTestRecorderWithAgg returns a RegistryRecorder and the aggregator for
 // tests that need to assert probe registration.
-func newTestRecorderWithAgg() (*cell.RegistryRecorder, *testAggregator) {
+func newTestRecorderWithAgg() (*cell.RegistryRecorder, *healthztest.FakeAggregator) {
 	agg := newTestAgg()
 	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg), agg
 }
@@ -678,8 +679,8 @@ func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), recorder))
 
 	const emitterKey = "outbox-failopen-rate.configcore"
-	require.Contains(t, agg.probes, emitterKey, "DirectEmitter health probe must be registered")
-	assert.NoError(t, agg.probes[emitterKey].Check(context.Background()), "fresh emitter should be healthy")
+	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter health probe must be registered")
+	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // TestConfigCore_HealthCheckers_ConfigRepoReady verifies that after Init the
@@ -691,9 +692,9 @@ func TestConfigCore_HealthCheckers_ConfigRepoReady(t *testing.T) {
 	recorder, agg := newTestRecorderWithAgg()
 	require.NoError(t, c.Init(context.Background(), recorder))
 
-	require.Contains(t, agg.probes, ProbeRepoReady,
+	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"RegisterRepoReady must register repo probe in the aggregator")
-	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
+	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"mem-backed repo probe must return nil (MemStore always-ready convention)")
 }
 
@@ -710,9 +711,9 @@ func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	agg := newTestAgg()
 	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), recorder))
-	assert.NotContains(t, agg.probes, "outbox-failopen-rate.configcore",
+	assert.False(t, agg.HasProbe("outbox-failopen-rate.configcore"),
 		"WriterEmitter must not register outbox-failopen-rate probe")
-	assert.Contains(t, agg.probes, ProbeRepoReady,
+	assert.True(t, agg.HasProbe(ProbeRepoReady),
 		"repo probe must always be registered via RegisterRepoReady")
 }
 

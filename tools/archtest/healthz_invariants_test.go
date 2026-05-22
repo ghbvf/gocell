@@ -1,4 +1,7 @@
 // INVARIANT: HEALTHZ-WRITE-01
+//   - INVARIANT: HEALTHZ-TYPED-REGISTER-01
+//
+// HEALTHZ-WRITE-01
 //
 //   - A1 (downstream Hard): production code in runtime/ + adapters/ + cells/
 //     must not register /healthz or /readyz HTTP handlers directly — must go
@@ -11,6 +14,9 @@
 //     to a closed set of caller pkg+file pairs (caller-identity allowlist):
 //
 //   - runtime/observability/healthz/aggregator.go (self-test fixture)
+//
+//   - runtime/observability/healthz/healthztest/conformance.go
+//     (conformance harness — legitimately calls Register for test scenarios)
 //
 //   - runtime/bootstrap/phases_lifecycle.go (drainProbes)
 //
@@ -32,14 +38,14 @@
 //     Adding a holder elsewhere fails CI. Upgrade path: seal Aggregator via an
 //     unexported marker method aggregatorOK() so external packages can't satisfy
 //     the interface — would make A3 Hard at compile time. Tracked as backlog
-//     HEALTHZ-HOLDER-SEAL-01 (see ADR amendment in
+//     HEALTHZ-HOLDER-SEAL-01 (cap-13 §13.1, PR #886; ADR amendment in
 //     docs/architecture/202605041430-adr-architecture-optimization-via-engineering-thinking.md).
 //
 //   - A4 reverse self-test fixture (testdata/healthz_violate/): synthetic
 //     violations of A1/A2/A3 each detected by the rule logic against a
 //     RunTypedDir-loaded subpackage.
 //
-// INVARIANT: HEALTHZ-TYPED-REGISTER-01
+// HEALTHZ-TYPED-REGISTER-01
 //
 //	cells/ packages may NOT call Registry.Healthz() outside cellgen-generated
 //	healthz_gen.go files. Detection:
@@ -68,7 +74,7 @@
 // ref: kernel/healthz.Aggregator — probe registry interface
 // ref: cells/<cell>/healthz_gen.go — cellgen typed helpers
 // ref: .claude/rules/gocell/observability.md — Cell 级别 Repo Readiness Probe
-// ref: HEALTHZ-HOLDER-SEAL-01 — backlog upgrade to Hard for A3
+// ref: HEALTHZ-HOLDER-SEAL-01 — backlog cap-13 §13.1, upgrade A3 to Hard
 package archtest
 
 import (
@@ -107,11 +113,13 @@ var healthzBannedPaths = map[string]bool{
 //
 // The allowlist is split into exact path matches and basename matches.
 var healthzRegisterExactPaths = map[string]bool{
-	"runtime/observability/healthz/aggregator.go":  true,
-	"runtime/observability/healthz/conformance.go": true, // conformance harness: legitimately calls Register for test scenarios
-	"runtime/bootstrap/phases_lifecycle.go":        true,
-	"runtime/bootstrap/phases_events.go":           true,
-	"runtime/bootstrap/bootstrap_phases.go":        true,
+	"runtime/observability/healthz/aggregator.go": true,
+	// healthztest subpackage: conformance harness legitimately calls Register for test scenarios;
+	// exact path covers non-_test.go file; _test.go suffix already covered by the test-file exemption.
+	"runtime/observability/healthz/healthztest/conformance.go": true,
+	"runtime/bootstrap/phases_lifecycle.go":                    true,
+	"runtime/bootstrap/phases_events.go":                       true,
+	"runtime/bootstrap/bootstrap_phases.go":                    true,
 }
 
 // A3 allowlist: (pkg path, type name) pairs allowed to hold a healthz.Aggregator field.

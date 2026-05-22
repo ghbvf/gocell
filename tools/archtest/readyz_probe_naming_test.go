@@ -7,7 +7,7 @@ package archtest
 // Rule: health probe names registered via reg.Health(name, fn) in cells/ and
 // adapters/ production files must use snake_case only — no hyphens. Names that
 // are dependency-availability probes must end with the _ready suffix (e.g.
-// rabbitmq_ready, postgres_ready, session_store_ready). This makes probe names
+// rabbitmq_ready, postgres_ready, accesscore_repo_ready). This makes probe names
 // stable operability contracts visible in /readyz verbose output.
 //
 // Enforcement scope: cells/ and adapters/ production Go files (.go, not _test.go).
@@ -78,7 +78,7 @@ func TestReadyzProbeNaming(t *testing.T) {
 	}
 	assert.Empty(t, violations,
 		"all reg.Health probe names in cells/ and adapters/ must be snake_case (no hyphens); "+
-			"dependency probes must end with _ready (e.g. session_store_ready, rabbitmq_ready)")
+			"dependency probes must end with _ready (e.g. accesscore_repo_ready, rabbitmq_ready)")
 }
 
 // probeNameHit records a probe name and its source line.
@@ -128,7 +128,7 @@ func findHyphenatedHealthProbeNames(path string) ([]probeNameHit, error) {
 
 // TestReadyzProbeNaming_Fixture_CatchesHyphenatedName verifies that
 // findHyphenatedHealthProbeNames correctly detects "session-store" as a
-// violation and passes "session_store_ready".
+// violation and passes "accesscore_repo_ready".
 func TestReadyzProbeNaming_Fixture_CatchesHyphenatedName(t *testing.T) {
 	t.Parallel()
 
@@ -143,8 +143,8 @@ type reg interface {
 }
 
 func register(r reg) {
-	r.Health("session-store", nil)       // violation: hyphen
-	r.Health("session_store_ready", nil) // ok: snake_case + _ready suffix
+	r.Health("session-store", nil)          // violation: hyphen
+	r.Health("accesscore_repo_ready", nil)  // ok: snake_case + _ready suffix
 }
 `
 	require.NoError(t, os.WriteFile(path, []byte(src), 0o644))

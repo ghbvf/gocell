@@ -85,7 +85,7 @@ func (a *aggregator) Register(p healthz.Probe) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, exists := a.probes[name]; exists {
-		return healthz.ErrDuplicateProbe
+		return fmt.Errorf("%w: probe %q", healthz.ErrDuplicateProbe, name)
 	}
 	a.probes[name] = wrapProbeCtxSafe(p, a.clk)
 	return nil
@@ -186,7 +186,7 @@ func (a *aggregator) runOneProbe(ctx context.Context, p healthz.Probe) (pr healt
 				slog.Any("panic", redaction.RedactAny(r)),
 			)
 			pr.Status = healthz.StatusDown
-			pr.Err = fmt.Errorf("panic: %v", r)
+			pr.Err = fmt.Errorf("panic: %v", redaction.RedactAny(r))
 		}
 	}()
 
@@ -266,7 +266,7 @@ func (w *ctxSafeProbe) Check(ctx context.Context) error {
 				slog.String("probe", w.inner.Name()),
 				slog.Any("panic", redaction.RedactAny(o.panicV)),
 			)
-			return fmt.Errorf("panic: %v", o.panicV)
+			return fmt.Errorf("panic: %v", redaction.RedactAny(o.panicV))
 		}
 		return o.err
 	}
