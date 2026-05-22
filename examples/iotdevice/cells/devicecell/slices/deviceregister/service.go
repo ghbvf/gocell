@@ -38,7 +38,7 @@ func toDeviceRegisteredEvent(d *domain.Device) deviceRegisteredEvent {
 
 // Service handles device registration business logic.
 type Service struct {
-	repo    domain.DeviceRepository
+	repo    domain.DeviceRepository `gocell:"required"`
 	emitter outbox.Emitter
 	logger  *slog.Logger
 	clock   clock.Clock
@@ -66,8 +66,9 @@ func WithClock(clk clock.Clock) Option {
 	}
 }
 
-// NewService creates a device-register Service.
-func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Option) *Service {
+// NewService creates a device-register Service. Returns an error if any required
+// dependency is nil (repo).
+func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
 		repo:    repo,
 		emitter: outbox.NewNoopEmitter(),
@@ -77,7 +78,10 @@ func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Optio
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // Register implements registercontract.Service: decodes the generated request,

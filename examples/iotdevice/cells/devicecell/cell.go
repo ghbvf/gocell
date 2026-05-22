@@ -270,11 +270,14 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 // initSlices constructs all 4 device slices and the command sweeper.
 func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	// device-register slice
-	registerSvc := deviceregister.NewService(
+	registerSvc, err := deviceregister.NewService(
 		c.deviceRepo, c.logger,
 		deviceregister.WithEmitter(c.emitter),
 		deviceregister.WithClock(c.clk),
 	)
+	if err != nil {
+		return fmt.Errorf("device-register: %w", err)
+	}
 	c.registerHandler = registercontract.NewHandler(registerSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(deviceregister.SliceMetadata()))
 
@@ -331,7 +334,10 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandinternal.SliceMetadata()))
 
 	// device-status slice
-	statusSvc := devicestatus.NewService(c.deviceRepo, c.logger)
+	statusSvc, err := devicestatus.NewService(c.deviceRepo, c.logger)
+	if err != nil {
+		return fmt.Errorf("device-status: %w", err)
+	}
 	// status: admin and operator may read any device's status; a device may only
 	// read its own status (path {id} must match the token subject).
 	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))

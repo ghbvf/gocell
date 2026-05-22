@@ -65,9 +65,9 @@ type commandQueueStore interface {
 // enforcing type-level trust-boundary segregation. See
 // HTTP-CONTRACT-VISIBILITY-TYPE-SEGREGATION-01 archtest.
 type Service struct {
-	queue      commandQueueStore
-	deviceRepo domain.DeviceRepository
-	codec      *query.CursorCodec
+	queue      commandQueueStore       `gocell:"required"`
+	deviceRepo domain.DeviceRepository `gocell:"required"`
+	codec      *query.CursorCodec      `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"device-command: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger     *slog.Logger
 	runMode    query.RunMode
 	clock      clock.Clock
@@ -109,10 +109,6 @@ func NewService(
 	codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode,
 	opts ...Option,
 ) (*Service, error) {
-	if codec == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"device-command: cursor codec is required")
-	}
 	s := &Service{
 		queue:      q,
 		deviceRepo: deviceRepo,
@@ -123,6 +119,9 @@ func NewService(
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

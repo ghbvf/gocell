@@ -47,25 +47,43 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 - **零值 HandleResult{} 的 Disposition 是 invalid**（不等于 Ack），会被安全降级为 Requeue
 - `PermanentError` 是错误分类标签（用于 logging/metric 区分），**不触发 Disposition 升级**；handler 必须 explicit 返回 `DispositionReject` 才会路由到 DLX。返回 `Requeue + PermanentError` 会按 Requeue 走完 retry budget，最终经预算耗尽路径转 Reject（详见 ADR `docs/architecture/202605031900-adr-handler-vocabulary-collapse.md`）
 
-### Service 构造模式（fail-fast on nil TxRunner）
+### Service 构造模式（REQUIRED-DEP-NIL-GUARD-01 funnel）
 
-Outbox-bound service 构造函数统一签名 `func NewXxx(...) (*XxxService, error)`，
-body 顶层包含：
+所有 service struct 的 required 依赖字段通过 `gocell:"required"` tag 标注，
+由 `gocell generate required-deps` 从 tag 生成 `service_required_gen.go::validateRequired()`。
+`NewService` 在 options loop 之后调用一次：
 
 ```go
-if s.txRunner == nil {
-    return nil, errcode.New(errcode.ErrValidationFailed,
-        "xxx: TxRunner required; use WithTxManager")
+type Service struct {
+    repo     domain.XxxRepository   `gocell:"required"`
+    txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"xxx: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+    emitter  outbox.Emitter            // optional — no tag
+}
+
+func NewService(..., opts ...Option) (*Service, error) {
+    s := &Service{...}
+    for _, o := range opts {
+        o(s)
+    }
+    if err := s.validateRequired(); err != nil {
+        return nil, err
+    }
+    return s, nil
 }
 ```
 
-12 个 service 全部遵循（accesscore: sessionlogin/sessionlogout/setup/rbacassign/identitymanage；
-auditcore: auditappend/auditverify；configcore: flagwrite/configpublish/configwrite；
-examples: ordercreate）。`OUTBOX-SERVICE-01` archtest 静态守卫该模式：禁止 method 内 nil
-fallback；构造期 fail-fast 是唯一允许的 nil-branch。
+`REQUIRED-DEP-NIL-GUARD-01` archtest 三件套（A1 golden lock / A2 callsite
+uniqueness / A3 IsNilInterface ban）+ A4 tag whitelist + B1-B5 盲区反向自检
+静态守卫该模式。22 个 service 全部遵循（accesscore 7 / auditcore 2 / configcore 5
+/ examples 6）。
 
 `WithTxManager` 选项的入参 nil 静默忽略（保持 option 函数幂等），最终 nil 校验由
-`NewService` 完成。
+`validateRequired()` 完成。
+
+`OUTBOX-SERVICE-01` archtest 保留 SERVICE-02..05 子规则覆盖 outbox 侧约束
+（publish / import / DirectEmitter / WithOutboxWriter）。
+REQUIRED-DEP-NIL-GUARD-01.B2 superseded SERVICE-01-txRunner-method-branch
+sub-condition；txRunner nil guard 现在由 `gocell:"required"` tag 统一生成。
 
 ### Cell 订阅注册（Registry builder 模式）
 

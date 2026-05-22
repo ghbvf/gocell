@@ -76,14 +76,15 @@ func WithClock(clk clock.Clock) Option {
 // Cell wiring injects either durable or demo defaults, but the service always
 // runs through the same Emitter + TxRunner code path.
 type Service struct {
-	repo     domain.OrderRepository
-	txRunner persistence.CellTxManager
+	repo     domain.OrderRepository    `gocell:"required"`
+	txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"ordercreate: TxRunner required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter  outbox.Emitter
 	logger   *slog.Logger
 	clock    clock.Clock
 }
 
-// NewService creates an order-create Service. Returns an error if txRunner is nil.
+// NewService creates an order-create Service. Returns an error if any required
+// dependency is nil (repo, txRunner).
 // Callers (ordercell.Init) guarantee txRunner is non-nil via resolveOutboxDeps.
 func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
@@ -95,8 +96,8 @@ func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "ordercreate: TxRunner required")
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

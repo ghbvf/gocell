@@ -69,6 +69,19 @@
   - AI co-authors adding a new synchronous instrument type: (1) add wrapper to `internal/*wrap`, (2) extend `TestMetricsFunnel_SymbolSentinel` expected list, (3) prefix predicate auto-covers prom side / add to `bannedOtelMethods` on OTel side, (4) add RED fixture call — all in the same PR. AI co-authors adding a new outer-ring caller: (1) extend `adapterPromCallerAllowlist`, (2) document why the new caller cannot route through `metrics.Provider` — same PR.
   - See `tools/archtest/observability_metrics_test.go` + `adapters/prometheus/internal/promwrap/promwrap.go` + `adapters/otel/internal/otelwrap/otelwrap.go` package godoc.
 
+- **codegen funnel for service struct required deps** — Service struct field
+  `gocell:"required"` tag → `gocell generate required-deps` emits
+  `service_required_gen.go::validateRequired()` → NewService calls it after
+  options loop. Double-locked: A1 (upstream Hard) regenerate-and-diff at byte
+  granularity prevents hand-edit/drift/stale; A2 (downstream Hard) requires
+  every NewXxx(*Service, error) call validateRequired() exactly once
+  post-options; A3 (downstream Hard) bans hand-written
+  validation.IsNilInterface in service.go; A4 locks tag value whitelist;
+  B1-B5 reverse self-tests close reflect/MethodValue/external-helper bypass
+  forms. Per §"Funnel 双向锁评级" both sides Hard → closed Hard funnel.
+  See `tools/archtest/required_dep_nil_guard_test.go` godoc + ADR
+  `docs/architecture/202605231400-002-required-dep-nil-guard-codegen-funnel.md`.
+
 ## archtest 文件命名
 
 - 单条独立规则 → `{rule}_test.go`

@@ -12,16 +12,20 @@ import (
 
 // Service handles device status query business logic.
 type Service struct {
-	repo   domain.DeviceRepository
+	repo   domain.DeviceRepository `gocell:"required"`
 	logger *slog.Logger
 }
 
-// NewService creates a device-status Service.
-func NewService(repo domain.DeviceRepository, logger *slog.Logger) *Service {
-	return &Service{
+// NewService creates a device-status Service. Returns an error if repo is nil.
+func NewService(repo domain.DeviceRepository, logger *slog.Logger) (*Service, error) {
+	s := &Service{
 		repo:   repo,
 		logger: logger,
 	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // Status implements statuscontract.Service: retrieves a device by ID and wraps

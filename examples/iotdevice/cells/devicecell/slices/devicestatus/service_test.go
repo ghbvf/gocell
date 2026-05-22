@@ -12,9 +12,14 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 )
 
-func newTestService() (*Service, *mem.DeviceRepository) {
+func newTestService(t testing.TB) (*Service, *mem.DeviceRepository) {
+	t.Helper()
 	repo := mem.NewDeviceRepository()
-	return NewService(repo, slog.Default()), repo
+	svc, err := NewService(repo, slog.Default())
+	if err != nil {
+		t.Fatalf("newTestService: %v", err)
+	}
+	return svc, repo
 }
 
 func seedDevice(repo *mem.DeviceRepository, id, name, status string) {
@@ -54,7 +59,7 @@ func TestService_GetStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo := newTestService(t)
 			tc.setup(repo)
 
 			dev, err := svc.GetStatus(context.Background(), tc.id)

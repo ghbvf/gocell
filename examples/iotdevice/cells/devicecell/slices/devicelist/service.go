@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -23,8 +22,8 @@ var defaultSort = []query.SortColumn{
 // Service lists devices with cursor pagination.
 // Implements generated listcontract.Service.
 type Service struct {
-	deviceRepo domain.DeviceRepository
-	codec      *query.CursorCodec
+	deviceRepo domain.DeviceRepository `gocell:"required"`
+	codec      *query.CursorCodec      `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"device-list: cursor codec is required"`
 	logger     *slog.Logger
 	runMode    query.RunMode
 }
@@ -35,11 +34,11 @@ func NewService(
 	deviceRepo domain.DeviceRepository, codec *query.CursorCodec,
 	logger *slog.Logger, runMode query.RunMode,
 ) (*Service, error) {
-	if codec == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"device-list: cursor codec is required")
+	s := &Service{deviceRepo: deviceRepo, codec: codec, logger: logger, runMode: runMode}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
-	return &Service{deviceRepo: deviceRepo, codec: codec, logger: logger, runMode: runMode}, nil
+	return s, nil
 }
 
 // List implements listcontract.Service and returns a paginated page of devices.
