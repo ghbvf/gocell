@@ -218,3 +218,43 @@ github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral_NoIndirectRefer
 # SLOW-flake class as the entries above (cumulative trigger evidence for
 # ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
 github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral
+
+# type-graph-load: TEST-EVENTUALLY-FUNNEL-01 main rule scans every banned
+# testify (require|assert).Eventually* callsite module-wide. Walks both
+# *types.Info.Uses (qualified-ident / *Assertions method-selector callsites)
+# and the dual blind-spot probe through CallExpr.Fun resolution; combines
+# with PRODUCTION-FLAT-TAGS scan for cgo / non-default-tag files. Whole-
+# module SharedResolver with Tests:true; same modulo-shift SLOW-flake class
+# as TestExternalReasonLiteral above (sibling DOWNSTREAM rule; this is the
+# UPSTREAM half of the testwait Hard funnel landed by PR #847). Surfaced
+# at 33.76s on PR #845 verify-archtest shard 3; the same shard was already
+# failing on develop d4cf5d37 before this PR, so this entry retires a
+# pre-existing develop-side gap rather than introduces a new SLOW.
+github.com/ghbvf/gocell/tools/archtest	TestEventuallyFunnel
+
+# type-graph-load: TEST-EVENTUALLY-FUNNEL-01 blind-spot reverse self-test
+# walks all *types.Info.Uses + *types.Info.Selections entries module-wide
+# to assert no testify Eventually* symbol appears outside CallExpr.Fun
+# position (closes 5 indirect-reference shapes — function-variable,
+# function-pointer pass, struct-field binding, method-value / method-
+# expression, reflect). Two RunTyped passes (default + ProductionFlatTags)
+# over ./... with Tests:true. Same whole-module SharedResolver profile as
+# TestEventuallyFunnel above (sibling pair, mirrors TestExternalReasonLiteral
+# vs TestExternalReasonLiteral_NoIndirectReferences). Surfaced at 21.86s
+# on PR #845 verify-archtest shard 5 after this PR's new 8-file
+# accesscoretest/ package + obmetrics import shifted the 16-shard modulo
+# distribution off the cached resolver — same modulo-shift SLOW-flake
+# class (cumulative trigger evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestEventuallyFunnel_NoIndirectReferences
+
+# type-graph-load: CELL-ID-PATTERN-SINGLE-SOURCE main rule scans every
+# regexp.MustCompile / regexp.Compile call module-wide for banned cell-id
+# family literals (the sibling-allowlisted TestCellIDPatternSingleSourceLiterals
+# entry above covers the literal-only variant; this rule is the type-aware
+# callsite scan). Single RunTypedProduction with Tests:true + FlatNonDefaultTags
+# over ./... — same whole-module SharedResolver profile as the entries above.
+# Surfaced at 23.67s on PR #845 verify-archtest shard 13 after this PR's
+# new 8-file accesscoretest/ package + obmetrics import shifted the
+# 16-shard modulo distribution off the cached resolver — same modulo-shift
+# SLOW-flake class (cumulative trigger evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestCellIDPatternSingleSource
