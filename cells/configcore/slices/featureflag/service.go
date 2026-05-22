@@ -29,7 +29,7 @@ type EvaluateResult struct {
 // Service implements feature flag business logic.
 type Service struct {
 	repo    ports.FlagRepository
-	codec   *query.CursorCodec `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"featureflag: cursor codec is required"` //nolint:lll // R2-approved: gocell tag overrides are machine-readable and must stay on one line
+	codec   *query.CursorCodec `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"featureflag: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger  *slog.Logger
 	runMode query.RunMode
 }
