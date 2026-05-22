@@ -20,6 +20,19 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// Internal API paths for rbacassign endpoints. Shared by assignRole /
+// revokeRole and the failure-injection variants in
+// rbacassign_atomicity_failureproof_e2e_test.go. Lives here (helpers_test.go)
+// so the helpers' compile dependency does not point at a test file that may
+// be deleted/renamed when an atomicity test pattern shifts. The
+// SVCTOKEN-CALLER-CELL-REQUIRED-01 archtest only constrains the callerCell
+// argument of GenerateServiceToken (must be a string literal), not the path
+// argument — so promoting the path to a const is safe.
+const (
+	internalPathRolesAssign = "/internal/v1/access/roles/assign"
+	internalPathRolesRevoke = "/internal/v1/access/roles/revoke"
+)
+
 // loginResult holds the parsed login/refresh response fields.
 type loginResult struct {
 	AccessToken  string

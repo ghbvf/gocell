@@ -34,15 +34,6 @@ const (
 	eventRoleAssignedV1 = "event.role.assigned.v1"
 )
 
-// Internal API path constants used by postRoleEndpoint. Extracted here so the
-// construction point is a single string operation; assignRole/revokeRole in
-// helpers_test.go retain their literal strings because the SVCTOKEN-CALLER-CELL-REQUIRED-01
-// archtest only constrains the callerCell argument, not the path argument.
-const (
-	internalPathRolesAssign = "/internal/v1/access/roles/assign"
-	internalPathRolesRevoke = "/internal/v1/access/roles/revoke"
-)
-
 // victimPassword is the test fixture password used in both atomicity tests.
 // Test fixture; ephemeral integration env.
 const victimPassword = "VictimPass!99"
@@ -116,8 +107,10 @@ func postRoleEndpoint(t *testing.T, h *l2Harness, action, userID, roleID string)
 	switch action {
 	case "assign":
 		path = internalPathRolesAssign
-	default:
+	case "revoke":
 		path = internalPathRolesRevoke
+	default:
+		t.Fatalf("postRoleEndpoint: unknown action %q (expected \"assign\" or \"revoke\")", action)
 	}
 	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, path, "", time.Now())
 	req, _ := http.NewRequest(http.MethodPost, h.internalBase+path, bytes.NewReader(body))
