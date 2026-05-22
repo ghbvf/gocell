@@ -52,16 +52,19 @@ func validateScaffoldID(value, field string) error {
 	if strings.ContainsAny(value, "\n\r\x00\t") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))
+			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
 	}
 	return nil
 }
 
-// validateScaffoldText rejects newline / carriage-return / NUL in free-text
-// inputs (goal, team, role) so user values cannot inject extra YAML fields
-// or break scalar quoting in the inline templates.
+// validateScaffoldText rejects newline / carriage-return / NUL / tab in
+// free-text inputs (goal, team, role) so user values cannot inject extra
+// YAML fields or break scalar quoting in the inline templates. Tab is
+// included for consistency with validateScaffoldID (#8 hardening): YAML 1.2
+// §5.1 allows tab in plain scalars so yamlsafe.Quote would not add quotes,
+// letting a tab pass through to the generated YAML.
 func validateScaffoldText(value, field string) error {
-	if strings.ContainsAny(value, "\n\r\x00") {
+	if strings.ContainsAny(value, "\n\r\x00\t") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
 			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))

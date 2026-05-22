@@ -55,10 +55,13 @@ func TestMatchCellID(t *testing.T) {
 }
 
 // TestIsValidMetadataText covers the bool predicate for free-text metadata
-// fields (owner.team, owner.role, etc.) — rejects only the control characters
+// fields (owner.team, owner.role, etc.) — rejects the control characters
 // that would break inline YAML scalar emission or fabricate adjacent fields:
-// \n (LF), \r (CR), \x00 (NUL). All other characters are accepted; full YAML
-// safety is delegated to pkg/yamlsafe.Quote at the rendering boundary.
+// \n (LF), \r (CR), \x00 (NUL), \t (tab). All other characters are accepted;
+// full YAML safety is delegated to pkg/yamlsafe.Quote at the rendering
+// boundary. Tab is included because YAML 1.2 §5.1 allows tab in plain
+// scalars so yamlsafe.Quote would not add quotes, letting the tab reach the
+// generated YAML (validateScaffoldID / validateScaffoldText #8 parity).
 //
 // Mirrors the K8s apimachinery IsDNS1123Label predicate style: a single
 // bool helper exported from kernel/metadata as the syntactic constraint
@@ -89,6 +92,11 @@ func TestIsValidMetadataText(t *testing.T) {
 		{"trailing_lf_rejected", "alice\n", false},
 		{"leading_lf_rejected", "\nalice", false},
 		{"only_lf_rejected", "\n", false},
+		// Tab rejected — YAML 1.2 §5.1 allows tab in plain scalars, so
+		// yamlsafe.Quote would not quote it; must be blocked at this layer.
+		{"tab_rejected", "alice\tbob", false},
+		{"only_tab_rejected", "\t", false},
+		{"leading_tab_rejected", "\talice", false},
 	}
 
 	for _, tc := range cases {
