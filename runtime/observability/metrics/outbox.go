@@ -82,11 +82,12 @@ func (c *OutboxRejectCollector) ObserveReject(cellID, topic, _ /* consumerGroup 
 //     ClaimPending eligibility predicate (Store.CountPending). Set on each
 //     Relay reclaim tick.
 //
-// Sampling cadence is bound to Relay.ReclaimInterval (default minutes), not
-// Prometheus scrape interval. SREs should treat this Gauge as "eligible
-// depth at last reclaim tick", not real-time. A growing retry backlog will
-// not inflate this value — sustained retry backlog must be diagnosed via
-// outbox_consumer_rejected_total or the reclaim-budget readyz probe.
+// Sampling cadence is bound to Relay.ReclaimInterval (defaults to
+// [runtime/outbox.DefaultRelayReclaimInterval] = 30s), not Prometheus scrape
+// interval. SREs should treat this Gauge as "eligible depth at last reclaim
+// tick", not real-time. A growing retry backlog will not inflate this value —
+// sustained retry backlog must be diagnosed via outbox_consumer_rejected_total
+// or the reclaim-budget readyz probe.
 //
 // PR #593 review fix-up (P2#5) aligned the help text and dashboards with
 // the eligibility semantics introduced when Store.CountPending narrowed

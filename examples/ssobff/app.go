@@ -264,7 +264,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// P1.5 fix (PR-CFG-L2-DIVERGENCE review): durable mode requires an outbox
 	// relay; without it events stay in outbox_entries pending and subscribers
 	// never receive them. Mirrors cmd/corebundle/bundle_configcore_storage.go
-	// PG path (lines 109-118 + WithManagedResource).
+	// PG path (lines 109-118 + WithRelay).
 	// outbox_entries table health is covered by the pool-level postgres_ready probe —
 	// acceptable for this demo example; production bundles use per-cell repo probes.
 	pgOutboxStore := adapterpg.NewOutboxStore(pool.DB(), clock.Real())
@@ -290,7 +290,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		bootstrap.WithConsumerBase(cb),
 		bootstrap.WithManagedResource(pool),
 		// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
-		bootstrap.WithManagedResource(relayWorker),
+		bootstrap.WithRelay(relayWorker),
 		listenerOption(cell.PrimaryListener, cfg.primary, []cell.ListenerAuth{primaryAuth}),
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
 		listenerOption(cell.HealthListener, cfg.health, []cell.ListenerAuth{cell.AuthNone{}}),

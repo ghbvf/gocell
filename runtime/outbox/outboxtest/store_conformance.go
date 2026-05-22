@@ -40,7 +40,12 @@ const (
 	msgExpect1Claimed      = "expected 1 claimed, got %d"
 	idEntryRace            = "e-race"
 	errSome                = "some error"
-	idCPExclE3             = "cp-excl-e3" // used in conformCountPendingExcludesFutureRetry
+	// Entry IDs for conformCountPendingExcludesFutureRetry. All three are
+	// declared as constants so future edits adding a third occurrence cannot
+	// silently trip Sonar S1192 again.
+	idCPExclE1 = "cp-excl-e1"
+	idCPExclE2 = "cp-excl-e2"
+	idCPExclE3 = "cp-excl-e3"
 )
 
 // StoreFactory constructs a fresh Store (typically with pre-seeded rows)
@@ -794,8 +799,8 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	// e3 must be seeded as pending with a future nextRetryAt.
 	// The easiest way: seed as plain pending then call MarkRetry to set the delay.
 	seed := []outbox.ClaimedEntry{
-		newEntry("cp-excl-e1", 0),
-		newEntry("cp-excl-e2", 0),
+		newEntry(idCPExclE1, 0),
+		newEntry(idCPExclE2, 0),
 		newEntry(idCPExclE3, 1), // attempts=1 to have a plausible retry scenario
 	}
 	store := factory(t, seed)
@@ -836,7 +841,7 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	}
 	if got != 2 {
 		t.Errorf("CountPending must exclude rows with future next_retry_at: got %d, want 2"+
-			" (row cp-excl-e3 has next_retry_at=%v, must not count)", got, futureRetry)
+			" (row %s has next_retry_at=%v, must not count)", got, idCPExclE3, futureRetry)
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -21,10 +20,14 @@ import (
 )
 
 // Compile-time interface checks.
+//
+// *Relay intentionally does NOT implement kernel/lifecycle.ManagedResource: see
+// docs/architecture/202605201400-adr-relay-managedresource-isolation.md and
+// runtime/bootstrap/relay_adapter.go. WithManagedResource(relay) is now a
+// compile-time type-mismatch (Hard).
 var (
-	_ kout.Relay                      = (*Relay)(nil)
-	_ worker.Worker                   = (*Relay)(nil)
-	_ kernellifecycle.ManagedResource = (*Relay)(nil)
+	_ kout.Relay    = (*Relay)(nil)
+	_ worker.Worker = (*Relay)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -77,7 +80,7 @@ type pollStats struct {
 
 // PendingDepthObserver receives the current pending-entry count once per
 // reclaim cycle. The production implementation is
-// *runtime/observability/metrics.OutboxConsumerCollector; tests may use a
+// [runtime/observability/metrics.OutboxPendingDepthCollector]; tests may use a
 // simple func adapter. A nil observer is silently ignored (no-op).
 //
 // Intentionally defined here (not imported from runtime/observability/metrics)
@@ -817,7 +820,9 @@ func (r *Relay) cappedDelay(d time.Duration) time.Duration {
 // budgets are excluded from the map so callers can safely iterate all entries
 // and register them unconditionally.
 //
-// Implements kernellifecycle.ManagedResource.Checkers.
+// Consumed by runtime/bootstrap.relayAdapter to satisfy ManagedResource on
+// behalf of *Relay (see ADR
+// docs/architecture/202605201400-adr-relay-managedresource-isolation.md).
 //
 // ref: controller-runtime/pkg/healthz AddReadyzCheck — named-checker aggregation.
 func (r *Relay) Checkers() map[string]func(context.Context) error {
@@ -835,22 +840,15 @@ func (r *Relay) Checkers() map[string]func(context.Context) error {
 }
 
 // Worker returns the Relay itself as the background worker.
-// Relay implements kernel/worker.Worker (Start/Stop), so bootstrap can manage
-// its goroutine lifecycle via the ManagedResource contract.
+// Relay implements kernel/worker.Worker (Start/Stop), so the bootstrap relay
+// adapter can manage its goroutine lifecycle.
 //
-// Implements kernellifecycle.ManagedResource.Worker.
+// Consumed by runtime/bootstrap.relayAdapter to satisfy ManagedResource on
+// behalf of *Relay.
 //
 // ref: uber-go/fx internal/lifecycle/lifecycle.go — resource self-reports hook.
 func (r *Relay) Worker() kworker.Worker {
 	return r
-}
-
-// Close gracefully stops the relay, bounded by ctx.
-// Delegates to Stop so bootstrap can call Close in LIFO shutdown order.
-//
-// Implements kernellifecycle.ManagedResource.Close.
-func (r *Relay) Close(ctx context.Context) error {
-	return r.Stop(ctx)
 }
 
 // Ready returns the channel that is closed when Start() has transitioned the

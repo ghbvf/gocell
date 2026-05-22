@@ -16,10 +16,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // phase0ValidateOptions checks all option preconditions before any side effects.
@@ -71,48 +69,6 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	// Advisory check (non-blocking): warn when the declared K8s grace period
 	// is smaller than the bootstrap shutdown budget plus a 10s safety margin.
 	b.warnTerminationGracePeriodInsufficient()
-	return nil
-}
-
-// preflightDoubleManagedRelay fails fast when the same relay object has been
-// registered via both WithRelay (which auto-appends to managedResources) and
-// a separate WithManagedResource(relay) call. Double-registration would
-// cause Close() to be invoked twice during shutdown, and—because the same
-// Relay pointer would expose the same readyz checker names twice—would also
-// surface as a misleading "duplicate checker key" inside
-// expandManagedResources. Bootstrap.Run calls this BEFORE
-// expandManagedResources so the actionable ERR_BOOTSTRAP_DOUBLE_MANAGED
-// diagnostic always wins.
-//
-// Detection is a typed pointer assert against *runtimeoutbox.Relay. Interface
-// equality (mr == ManagedResource(b.relay)) is intentionally avoided — it
-// panics at runtime when the slice contains a non-comparable ManagedResource
-// implementation (struct values with slice / map / func fields). Pointer
-// type-assert is nil-safe and panic-free for every ManagedResource type.
-//
-// Upstream Hard upgrade tracked at BOOTSTRAP-RELAY-DOUBLE-MANAGED-UPSTREAM-HARD-01
-// (docs/backlog/202605191800-pr589-review-fixup-backlog.md): hide Relay
-// behind a sealed wrapper so WithManagedResource(*Relay) is unexpressible
-// at the package boundary. Until then this runtime guard is the upstream
-// Medium under the §Funnel 双向锁评级 contract.
-//
-// WithRelay already handles lifecycle; callers must NOT additionally call
-// WithManagedResource(relay).
-func (b *Bootstrap) preflightDoubleManagedRelay() error {
-	if b.relay == nil {
-		return nil
-	}
-	var count int
-	for _, mr := range b.managedResources {
-		if rel, ok := mr.(*runtimeoutbox.Relay); ok && rel == b.relay {
-			count++
-		}
-	}
-	if count > 1 {
-		return errcode.New(errcode.KindInvalid, errcode.ErrBootstrapDoubleManaged,
-			"bootstrap: relay registered via both WithRelay and WithManagedResource; "+
-				"WithRelay already handles lifecycle — remove the WithManagedResource(relay) call")
-	}
 	return nil
 }
 

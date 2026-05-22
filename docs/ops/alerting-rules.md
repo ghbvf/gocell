@@ -482,7 +482,8 @@ consumer 消费速率落后，或 broker 连接断开。
       Cell {{ $labels.cell }} outbox eligible pending depth > 1000 for 5m
       (excludes rows still in retry backoff).
       Consumer may be falling behind or broker connection dropped.
-      Note: this Gauge is updated once per Relay ReclaimInterval (default minutes),
+      Note: this Gauge is updated once per Relay ReclaimInterval
+      (defaults to runtime/outbox.DefaultRelayReclaimInterval = 30s),
       not per scrape — treat the value as "eligible depth at last reclaim tick".
       For tighter sampling, decrease ReclaimInterval. Retry backlog is not
       reflected here; diagnose via outbox_consumer_rejected_total.

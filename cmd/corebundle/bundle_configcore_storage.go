@@ -55,7 +55,9 @@ type ConfigCoreModuleResult struct {
 	// CellOptions are the configcore.Option values to pass to NewConfigCore.
 	CellOptions []configcore.Option
 	// BootstrapOpts are bootstrap.Option values — in postgres mode carries
-	// WithManagedResource(relay) so the relay worker is independently managed.
+	// WithRelay(relay) so the relay is wired for outbox publishing AND
+	// lifecycle-managed in a single sanctioned registration (see
+	// docs/architecture/202605201400-adr-relay-managedresource-isolation.md).
 	BootstrapOpts []bootstrap.Option
 }
 

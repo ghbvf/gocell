@@ -111,10 +111,34 @@ func exposesHealthCheckerMethod(s *typeMethodSet, qualified string) bool {
 	return s.has(qualified, "Checkers") || s.has(qualified, "HealthCheckers")
 }
 
+// healthAggSanctionedAdapterCarveOuts lists exported types in runtime/ or
+// adapters/ that intentionally do NOT implement ManagedResource directly even
+// though they expose Checkers() — their Checkers/Worker primitives are
+// consumed by a single sanctioned adapter that owns the Close obligation.
+//
+// Each entry MUST cite the ADR that closes the carve-out semantically. The
+// downstream Hard guard for *runtime/outbox.Relay is archtest
+// RELAY-NOT-MANAGEDRESOURCE-01 (relay_isolation_test.go) — that test fails the
+// moment *Relay re-satisfies ManagedResource, so this allowlist cannot widen
+// in the wrong direction without an immediate second archtest failure.
+var healthAggSanctionedAdapterCarveOuts = map[string]string{
+	// *Relay's Checkers/Worker are consumed exclusively by the
+	// package-private runtime/bootstrap.relayAdapter (single sanctioned
+	// holder) which owns Close → relay.Stop. Re-adding Close to *Relay
+	// would regress the type isolation guarded by
+	// RELAY-NOT-MANAGEDRESOURCE-01.
+	"github.com/ghbvf/gocell/runtime/outbox.Relay": "docs/architecture/202605201400-adr-relay-managedresource-isolation.md",
+}
+
 // TestHealthCheckersImpliesManagedResource (HEALTH-AGG-01) asserts that every
 // exported type in runtime/ or adapters/ that exposes Checkers() or
 // HealthCheckers() also implements the full ManagedResource contract
 // (Checkers + Worker + Close), counting promoted methods from embedded fields.
+//
+// Exceptions are limited to the sanctioned-adapter carve-out map
+// (healthAggSanctionedAdapterCarveOuts) where the Close obligation is owned
+// by a package-private adapter and the corresponding downstream Hard guard
+// pins the type isolation.
 func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 	s := newTypeMethodSet()
 	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."},
@@ -129,6 +153,9 @@ func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 			continue
 		}
 		if isManagedResource(s, qualified) {
+			continue
+		}
+		if _, exempt := healthAggSanctionedAdapterCarveOuts[qualified]; exempt {
 			continue
 		}
 		var missing []string
@@ -148,6 +175,31 @@ func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 
 	assert.Empty(t, violations,
 		"HEALTH-AGG-01 violation: types exposing health checker methods must implement kernellifecycle.ManagedResource")
+}
+
+// TestHealthCheckersImpliesManagedResource_CarveOutsCheckersOnly asserts the
+// integrity of the sanctioned-adapter carve-out: every entry must still
+// expose Checkers() (otherwise the carve-out is dead) and must still NOT
+// satisfy the full ManagedResource contract (otherwise the carve-out is
+// vacuous / can be deleted). This guards against silent drift in either
+// direction without forcing the main HEALTH-AGG-01 assertion to re-scan.
+func TestHealthCheckersImpliesManagedResource_CarveOutsCheckersOnly(t *testing.T) {
+	s := newTypeMethodSet()
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."},
+		func(p *Pass) []Diagnostic {
+			accumulateMethodSet(p, s)
+			return nil
+		})
+
+	for qualified, adr := range healthAggSanctionedAdapterCarveOuts {
+		assert.Truef(t, exposesHealthCheckerMethod(s, qualified),
+			"HEALTH-AGG-01 carve-out %q (ADR %s) no longer exposes Checkers — delete the carve-out entry",
+			qualified, adr)
+		assert.Falsef(t, isManagedResource(s, qualified),
+			"HEALTH-AGG-01 carve-out %q (ADR %s) now fully implements ManagedResource — delete the carve-out entry; "+
+				"the type can rejoin the standard rule",
+			qualified, adr)
+	}
 }
 
 // TestHealthAggregation_FixtureRegression exercises the fixture set under

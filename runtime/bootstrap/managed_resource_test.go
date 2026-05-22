@@ -395,9 +395,12 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Relay-as-ManagedResource tests (TM2/TM3/TM4)
+// Relay-via-WithRelay tests (TM2/TM3/TM4)
 // Migrated from bootstrap_test.go TestWithRelayHealth_* equivalents.
-// These tests use WithManagedResource(relay) instead of the deleted WithRelayHealth.
+// These tests use WithRelay(relay) — *Relay no longer satisfies ManagedResource
+// at the type level (see relay_adapter.go + ADR
+// docs/architecture/202605201400-adr-relay-managedresource-isolation.md), so
+// WithManagedResource(relay) is now a compile-time type-mismatch.
 // ---------------------------------------------------------------------------
 
 // newManagedResourceTestRelay creates a Relay with all three failure budgets enabled,
@@ -462,7 +465,7 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
-		WithManagedResource(relay),
+		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -532,7 +535,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
-		WithManagedResource(relay),
+		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -630,7 +633,7 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
-		WithManagedResource(relay),
+		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
