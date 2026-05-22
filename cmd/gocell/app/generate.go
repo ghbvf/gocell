@@ -178,11 +178,14 @@ func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id str
 		return fmt.Errorf("generate entrypoint: %w", err)
 	}
 	// ref: go-zero goctl — generated file paths driven by configuration
+	// asm.Build.Entrypoint is guaranteed non-empty by deriveAssembly; if it
+	// is somehow empty here the parser has a bug — fail loudly rather than
+	// silently routing to cmd/{id}/ which would be wrong for examples/ assemblies.
 	asm := project.Assemblies[id]
-	entrypointRel := asm.Build.Entrypoint
-	if entrypointRel == "" {
-		entrypointRel = filepath.Join("cmd", id, "main.go")
+	if asm.Build.Entrypoint == "" {
+		return fmt.Errorf("assembly %q: asm.Build.Entrypoint not derived; parser bug", id)
 	}
+	entrypointRel := asm.Build.Entrypoint
 	entrypointPath := filepath.Join(root, entrypointRel)
 	if err := writeGeneratedFile(root, entrypointPath, entrypoint,
 		fmt.Sprintf("assembly %q build.entrypoint %q", id, entrypointRel)); err != nil {

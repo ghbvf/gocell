@@ -81,10 +81,13 @@ func processOneAssemblyModulesGen(
 		return fmt.Errorf("regenerate modules_gen %s: %w", asmID, err)
 	}
 
-	entrypointRel := asm.Build.Entrypoint
-	if entrypointRel == "" {
-		entrypointRel = filepath.Join("cmd", asmID, "main.go")
+	// asm.Build.Entrypoint is guaranteed non-empty by deriveAssembly; if it
+	// is empty the parser has a bug — fail loudly rather than silently routing
+	// to cmd/{id}/ which is wrong for examples/ assemblies.
+	if asm.Build.Entrypoint == "" {
+		return fmt.Errorf("assembly %q: asm.Build.Entrypoint not derived; parser bug", asmID)
 	}
+	entrypointRel := asm.Build.Entrypoint
 	outPath := filepath.Join(root, filepath.Dir(entrypointRel), "modules_gen.go")
 	relPath := filepath.Join(filepath.Dir(entrypointRel), "modules_gen.go")
 

@@ -330,12 +330,15 @@ func expectedContractgenArtifacts(root string, project *metadata.ProjectMeta) ([
 }
 
 // AssemblyEntrypointPath returns the metadata-derived generated entrypoint path
-// for an assembly.
+// for an assembly. asm must be non-nil with a non-empty Build.Entrypoint
+// (guaranteed by deriveAssembly post-parse). Passing nil or a zero Entrypoint
+// is a programmer error; the function returns an empty string so callers fail
+// loudly on the resulting invalid path rather than silently routing to cmd/{id}/.
 func AssemblyEntrypointPath(assemblyID string, asm *metadata.AssemblyMeta) string {
-	if asm != nil && asm.Build.Entrypoint != "" {
-		return filepath.ToSlash(asm.Build.Entrypoint)
+	if asm == nil || asm.Build.Entrypoint == "" {
+		return ""
 	}
-	return filepath.ToSlash(filepath.Join("cmd", assemblyID, "main.go"))
+	return filepath.ToSlash(asm.Build.Entrypoint)
 }
 
 // assemblyForOrphanPath best-effort-derives the AssemblyID for an orphan
