@@ -3,6 +3,7 @@ package prometheus
 import (
 	prom "github.com/prometheus/client_golang/prometheus"
 
+	"github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -76,13 +77,13 @@ func NewHookObserver(cfg HookObserverConfig) (*HookObserver, error) {
 	}
 	cfg.defaults()
 
-	hookTotal := prom.NewCounterVec(prom.CounterOpts{
+	hookTotal := promwrap.NewCounterVec(prom.CounterOpts{
 		Namespace: cfg.Namespace,
 		Name:      "cell_hook_total",
 		Help:      "Total number of cell lifecycle hook invocations, partitioned by outcome.",
 	}, []string{"cell_id", "hook", "outcome"})
 
-	hookDuration := prom.NewHistogramVec(prom.HistogramOpts{
+	hookDuration := promwrap.NewHistogramVec(prom.HistogramOpts{
 		Namespace: cfg.Namespace,
 		Name:      "cell_hook_duration_seconds",
 		Help:      "Duration of cell lifecycle hook invocations in seconds.",
