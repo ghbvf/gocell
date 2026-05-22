@@ -1,13 +1,15 @@
 ---
 name: ship
 description: "全流程实施：探索→计划→worktree→TDD→实施→PR→review→/fix Cx1/Cx2→人工确认。L1(跳过探索,1 reviewer)/L2(单agent探索,1 reviewer)/L3(默认,三agent探索,按diff行数1/2/3/6 reviewer自动)"
-argument-hint: "[--level=L1|L2|L3] <backlog-id 或任务描述>"
+argument-hint: "[--level=L1|L2|L3] <#issue-num | 任务描述>"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
 # GoCell Ship — 全流程实施
 
 默认 L3（三 agent 探索 + 详细计划 + 与用户确认 + 按 diff 行数自动 1/2/3/6 reviewer，见阶段 7）。
+
+参数为 `#NN` 或裸数字时，先 `gh issue view <N> --json title,body,labels`（`dangerouslyDisableSandbox: true`）拉取作为任务上下文；后续阶段以 issue title/body 替代自由文本任务描述，阶段 6 PR body 追加 `Closes #<N>`。非 OPEN issue 用 AskUserQuestion 让用户裁定是否继续。
 
 ## 等级
 
