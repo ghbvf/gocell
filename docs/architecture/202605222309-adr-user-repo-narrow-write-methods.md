@@ -43,7 +43,7 @@ Generic `Update(*User)` is the "string anchor" equivalent at the method-signatur
 | # | Decision | Landing |
 |---|----------|---------|
 | 1 | `UpdateProfile(ctx, userID, name, email *string, now)` — PATCH semantics in the signature | `*string` parameter + SQL `COALESCE($n, col)` / mem pointer-nil branch; returns `*domain.User` from the persisted row |
-| 2 | `UpdateLockState(ctx, userID, status, now)` — no `resetLockout bool` parameter | "StatusActive auto-zeros lockout" bound to SQL `CASE WHEN $2 = 'active'` / mem `ResetFailedLogins` inside the same statement |
+| 2 | `UpdateLockState(ctx, userID, status, now)` — no `resetLockout bool` parameter | "StatusActive auto-zeros lockout" bound to SQL `CASE WHEN $2 = 'active'` / mem `ResetFailedLogins` inside the same statement. Does not return `*User`; the `authzmutate.Mutator.ApplyInTx` epoch-bump is a separate SQL statement (`BumpAuthzEpoch`) issued only when `m.Invalidates() == true`. Callers that need the post-write aggregate call `GetByID` explicitly after the mutation. |
 | 3 | Archtest `USERREPO-METHOD-SET-FROZEN-01` ships in the same PR | `tools/archtest/userrepo_method_set_frozen_test.go` — locks the 12-method set |
 | 4 | `UpdateProfile` returns `(*domain.User, error)` | Single round-trip: PG `RETURNING *` reconstitutes the aggregate; mem writes in-place then calls `ReconstituteUser`. Caller uses the returned aggregate for downstream publish / audit, eliminating shadow-mutation drift |
 | 5 | `loadInterfaceType` helper in `cell_iface_isp_invariants_test.go` accepts a `dirRel` parameter | Parameterized so `USERREPO-METHOD-SET-FROZEN-01` can reuse the same AST scanning helper for a different package path |
@@ -51,6 +51,8 @@ Generic `Update(*User)` is the "string anchor" equivalent at the method-signatur
 ### Mutation form: apply(u, now) → persist(ctx, repo, userID, now)
 
 Each domain mutation directly calls its narrow port method. `ApplyInTx` is compressed from 4 steps to 2 steps (eliminating a `GetByIDForUpdate` round-trip) because the narrow port method returns the post-write aggregate.
+
+**Round-trip count**: `authzmutate.Mutator.ApplyInTx` makes exactly 1 write round-trip (via `m.persist` → one of `UpdateLockState` / `UpdatePasswordResetFlag`) plus 0 or 1 additional round-trip when `m.Invalidates() == true` (the `inv.Apply` call bumps `authz_epoch` + revokes sessions in separate SQL). The `identitymanage.Update` caller makes 1 read (`GetByIDForUpdate`) + N mutation round-trips (1 for profile, 0-1 for authz via `ApplyInTx`) + 1 re-fetch (`GetByID`), totalling at most 4 statements in a single transaction. This is a deliberate trade-off: the re-fetch is a plain `GetByID` (not `ForUpdate`) so it reads the already-committed MVCC snapshot without acquiring a new lock.
 
 ### Final 12-method interface
 
@@ -90,6 +92,10 @@ Generated code path increases build pipeline complexity. GoCell does not use the
 ### Retain generic Update + archtest to lock touched columns
 
 Archtest detecting which columns a SQL statement writes is Soft (the test must be updated on every schema change) and fragile (string matching on SQL literals). Narrow method signatures are Hard: the type system prevents passing `password_hash` to a method that has no such parameter.
+
+### Activate-without-lockout-reset escape hatch
+
+A future caller may legitimately need to transition a user to `StatusActive` without resetting the lockout counters (e.g., administrative override that preserves the failure history for audit). This is **not expressible** at the `UpdateLockState` call site by design: the "auto-zero when active" invariant is encoded at the SQL layer (`CASE WHEN $2 = 'active' THEN 0 …`). Any caller needing this escape hatch must add a new narrow method (e.g., `UpdateStatusOnly`) paired with an ADR amendment and a corresponding archtest update to `USERREPO-METHOD-SET-FROZEN-01`. The current lock-at-schema-layer approach is the correct default because zero known callers need the escape hatch, and adding it prematurely would re-introduce the PR #585 P1#3 race as a latent footgun.
 
 ---
 

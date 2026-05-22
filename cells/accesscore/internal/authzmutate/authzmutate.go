@@ -3,6 +3,7 @@ package authzmutate
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
@@ -70,7 +71,7 @@ func (a *Mutator) ApplyInTx(ctx context.Context, txCtx context.Context, userID s
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"authzmutate.ApplyInTx: userID must not be empty")
 	}
-	_ = ctx // ctx is available for future use (e.g. tracing); txCtx carries the tx
+	slog.DebugContext(ctx, "authzmutate.ApplyInTx", "userID", userID, "mutation", fmt.Sprintf("%T", m))
 	if err := m.persist(txCtx, a.repo, userID, now); err != nil {
 		return fmt.Errorf("authzmutate.ApplyInTx: persist: %w", err)
 	}

@@ -79,6 +79,9 @@ type UserRepository interface {
 	// (KindPermissionDenied / 403) when the change would demote the sole
 	// effective admin.
 	//
+	// Returns only error (not the updated aggregate); callers that need the
+	// post-write User state should call GetByID after the mutation.
+	//
 	// Errors:
 	//   - ErrAuthUserNotFound (KindNotFound / 404) — userID does not exist
 	//   - ErrAuthLastAdminProtected (KindPermissionDenied / 403) — last admin
@@ -94,6 +97,9 @@ type UserRepository interface {
 	//
 	// Does NOT touch: username / email / password_hash / password_version /
 	// status / authz_epoch / failed_login_count / last_failed_at / locked_until.
+	//
+	// Returns only error (not the updated aggregate); callers that need the
+	// post-write User state should call GetByID after the mutation.
 	//
 	// Errors:
 	//   - ErrAuthUserNotFound (KindNotFound / 404) — userID does not exist

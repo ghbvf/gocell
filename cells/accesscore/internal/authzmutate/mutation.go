@@ -83,6 +83,10 @@ type Mutation interface {
 	// persist writes the mutation directly to the repository via the
 	// appropriate narrow port method. Called exclusively from
 	// Mutator.ApplyInTx inside a RunInTx closure.
+	//
+	// Precondition: Mutator.ApplyInTx validates m != nil before calling persist;
+	// implementations may assume the receiver is a concrete sealed Mutation
+	// variant and need not nil-check the repo (also validated by ApplyInTx).
 	persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error
 
 	// mutationOK seals the interface to this package.
