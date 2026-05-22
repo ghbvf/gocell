@@ -39,17 +39,28 @@
 //
 // # Usage
 //
-//	svc, rec := configcoretest.BuildWriteService(t)
+//	svc, repo, rec := configcoretest.BuildWriteService(t)
 //	entry, err := svc.Create(ctx, configwrite.CreateInput{Key: "k", Value: "v"})
 //	require.NoError(t, err)
 //	require.Len(t, rec.Entries(), 1)
+//	snap, _ := repo.Snapshot(ctx) // direct repo handle for state assertions
+//
+// # Clock single-source contract
+//
+// BuildWriteService always constructs the repository internally using the
+// configured clock (WithWriteClock, defaults to clock.Real()). There is no
+// option to inject a pre-built repository: the service and repository must
+// share one clock so that Create-stamped CreatedAt/UpdatedAt and
+// Update-stamped UpdatedAt come from the same time source.
 //
 // # Debug logging
 //
 // By default builders discard all logs. To surface slog output during
 // debugging, inject a real handler:
 //
-//	svc, rec := configcoretest.BuildWriteService(t,
+//	svc, repo, rec := configcoretest.BuildWriteService(t,
 //	    configcoretest.WithWriteLogger(slog.New(slog.NewTextHandler(os.Stderr, nil))),
 //	)
+//	_ = repo
+//	_ = rec
 package configcoretest

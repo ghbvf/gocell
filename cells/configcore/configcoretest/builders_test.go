@@ -24,10 +24,17 @@ import (
 // time.Time is a value type and cannot be declared const.
 var testFixedTime = time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
 
+// testClockAdvance is the duration the mock clock is advanced between Create
+// and Update in TestBuildWriteServiceClockSingleSource — any non-zero value
+// works; 2h is a humanly obvious gap that cannot be confused with default
+// timestamps. Extracted per archtest TEST-TIME-LITERAL-01.
+const testClockAdvance = 2 * time.Hour
+
 func TestBuildWriteServiceSmoke(t *testing.T) {
 	t.Run("build with defaults and create an entry", func(t *testing.T) {
-		svc, rec := BuildWriteService(t)
+		svc, repo, rec := BuildWriteService(t)
 		require.NotNil(t, svc)
+		require.NotNil(t, repo)
 		require.NotNil(t, rec)
 
 		ctx := auth.TestContext("test-admin", []string{"admin"})
@@ -42,6 +49,12 @@ func TestBuildWriteServiceSmoke(t *testing.T) {
 		entries := rec.Entries()
 		require.Len(t, entries, 1)
 		assert.Equal(t, domain.TopicConfigEntryUpserted, entries[0].EventType)
+
+		// returned repo handle observes the same state.
+		snap, err := repo.Snapshot(context.Background())
+		require.NoError(t, err)
+		require.Len(t, snap, 1)
+		assert.Equal(t, "smoke-key", snap[0].Key)
 	})
 }
 
@@ -126,7 +139,7 @@ func TestNewFakeConfigRepositoryRoundtrip(t *testing.T) {
 func TestBuildWriteServiceWithCustomClock(t *testing.T) {
 	t.Run("custom clock propagates to created entry timestamps", func(t *testing.T) {
 		clk := clockmock.New(testFixedTime)
-		svc, rec := BuildWriteService(t, WithWriteClock(clk))
+		svc, _, rec := BuildWriteService(t, WithWriteClock(clk))
 		require.NotNil(t, svc)
 
 		ctx := auth.TestContext("test-admin", []string{"admin"})
@@ -143,23 +156,40 @@ func TestBuildWriteServiceWithCustomClock(t *testing.T) {
 	})
 }
 
-func TestBuildWriteServiceWithCustomRepo(t *testing.T) {
-	t.Run("injected fake repo is used by service", func(t *testing.T) {
-		repo := NewFakeConfigRepository(clock.Real())
-		svc, _ := BuildWriteService(t, WithWriteRepository(repo))
+// TestBuildWriteServiceClockSingleSource is the regression guard for the
+// service↔repo clock-fork bug: Create stamps CreatedAt/UpdatedAt via the
+// service's clock, while Update stamps UpdatedAt via the repository's clock
+// (mem.ConfigRepository.Update writes existing.UpdatedAt = r.clock.Now()).
+//
+// If anyone reintroduces a builder option that lets the caller inject a
+// pre-built repository alongside WithWriteClock, the two clocks will diverge
+// silently. This test pins down the contract: a single clock fed to
+// BuildWriteService is the only time source for both Create- and Update-stamped
+// timestamps, so advancing it between the two calls produces matching reads.
+func TestBuildWriteServiceClockSingleSource(t *testing.T) {
+	clk := clockmock.New(testFixedTime)
+	svc, _, _ := BuildWriteService(t, WithWriteClock(clk))
 
-		ctx := auth.TestContext("test-admin", []string{"admin"})
-		_, err := svc.Create(ctx, configwrite.CreateInput{
-			Key:   "repo-key",
-			Value: "repo-value",
-		})
-		require.NoError(t, err)
-
-		snapshot, err := repo.Snapshot(context.Background())
-		require.NoError(t, err)
-		require.Len(t, snapshot, 1)
-		assert.Equal(t, "repo-key", snapshot[0].Key)
+	ctx := auth.TestContext("test-admin", []string{"admin"})
+	created, err := svc.Create(ctx, configwrite.CreateInput{
+		Key:   "clock-source-key",
+		Value: "v1",
 	})
+	require.NoError(t, err)
+	require.Equal(t, testFixedTime, created.CreatedAt)
+	require.Equal(t, testFixedTime, created.UpdatedAt)
+
+	advanced := testFixedTime.Add(testClockAdvance)
+	clk.Set(advanced)
+
+	updated, err := svc.Update(ctx, configwrite.UpdateInput{
+		Key:             "clock-source-key",
+		Value:           "v2",
+		ExpectedVersion: created.Version,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, testFixedTime, updated.CreatedAt, "CreatedAt must remain at t0")
+	assert.Equal(t, advanced, updated.UpdatedAt, "Update must observe the same advanced clock as the service")
 }
 
 // TestFakeConfigRepositoryRepoReadiness satisfies CELL-REPO-READYZ-PROBE-01/P1:

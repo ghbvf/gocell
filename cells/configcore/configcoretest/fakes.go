@@ -26,7 +26,9 @@ type SeededEntry struct {
 // Snapshot helpers for test scenario setup and assertion.
 //
 // FakeConfigRepository implements ports.ConfigRepository via the embedded
-// *mem.ConfigRepository, so it can be passed directly to BuildWriteService.
+// *mem.ConfigRepository. Tests obtain a wired instance from BuildWriteService
+// (which returns the repo as its second value); direct construction via
+// NewFakeConfigRepository is for repo-only tests that do not need a service.
 //
 // Spy methods (CallsOf/Reset) are deferred until a test needs them; add via
 // Seed + Snapshot if you need state assertions without a Recorder.

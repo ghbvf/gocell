@@ -15,23 +15,13 @@ import (
 type BuildWriteOption func(*buildWriteConfig)
 
 type buildWriteConfig struct {
-	repo   *FakeConfigRepository
 	clk    clock.Clock
 	logger *slog.Logger
 }
 
-// WithWriteRepository injects a custom FakeConfigRepository.
-// Use this when a test needs direct access to the repository for seeding or
-// assertions after service operations.
-func WithWriteRepository(r *FakeConfigRepository) BuildWriteOption {
-	return func(c *buildWriteConfig) {
-		if r != nil {
-			c.repo = r
-		}
-	}
-}
-
-// WithWriteClock injects a custom clock into both the repository and the service.
+// WithWriteClock injects a custom clock. The same clock instance is wired into
+// both the FakeConfigRepository and the configwrite.Service, so Create-stamped
+// CreatedAt/UpdatedAt and Update-stamped UpdatedAt come from a single source.
 // Use clockmock.New(t) for time-sensitive assertions.
 func WithWriteClock(clk clock.Clock) BuildWriteOption {
 	return func(c *buildWriteConfig) {
@@ -50,17 +40,22 @@ func WithWriteLogger(l *slog.Logger) BuildWriteOption {
 	}
 }
 
-// BuildWriteService constructs a configwrite.Service wired with an in-memory
-// repository and an outboxtest.Recorder as the event emitter. The Recorder is
-// returned alongside the service for post-operation assertions.
+// BuildWriteService constructs a configwrite.Service wired with a fresh
+// in-memory repository and an outboxtest.Recorder as the event emitter. Both
+// the repository and the Recorder are returned so the test can Seed/Snapshot
+// state and assert on captured outbox entries.
+//
+// The repository is always constructed internally with the configured clock —
+// callers cannot inject a pre-built repository, which removes the clock-fork
+// foot-gun where the repo's clock (Update path) would diverge from the
+// service's clock (Create path).
 //
 // Defaults:
-//   - repo: NewFakeConfigRepository(clock.Real())
 //   - tx: cell.DemoCellTxManager()
 //   - emitter: outboxtest.NewRecorder()
 //   - logger: slog.New(slog.DiscardHandler)
 //   - clock: clock.Real()
-func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Service, *outboxtest.Recorder) {
+func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Service, *FakeConfigRepository, *outboxtest.Recorder) {
 	t.Helper()
 
 	cfg := &buildWriteConfig{
@@ -70,14 +65,11 @@ func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Ser
 	for _, o := range opts {
 		o(cfg)
 	}
-	// Build repo after options so clock override takes effect.
-	if cfg.repo == nil {
-		cfg.repo = NewFakeConfigRepository(cfg.clk)
-	}
+	repo := NewFakeConfigRepository(cfg.clk)
 
 	rec := outboxtest.NewRecorder()
 	svc, err := configwrite.NewService(
-		cfg.repo,
+		repo,
 		cfg.logger,
 		cfg.clk,
 		configwrite.WithTxManager(cell.DemoCellTxManager()),
@@ -86,7 +78,7 @@ func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Ser
 	if err != nil {
 		t.Fatalf("configcoretest.BuildWriteService: %v", err)
 	}
-	return svc, rec
+	return svc, repo, rec
 }
 
 // BuildSubscribeOption configures BuildSubscribeService.
