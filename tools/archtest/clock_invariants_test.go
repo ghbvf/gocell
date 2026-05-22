@@ -653,6 +653,7 @@ var allowedRealCallerPaths = []string{
 	// don't repeat it. They are imported only by *_test.go files; the
 	// CLOCK-INJECTION-TEST-CALLSITE-01 archtest enforces that boundary.
 	"cells/accesscore/internal/testutil/", // SessionRepoForTest / RealSessionRepo
+	"cells/configcore/configcoretest/",    // BuildWriteService / BuildSubscribeService default clock
 }
 
 // INVARIANT: KERNEL-CLOCK-LEAF-FALLBACK-01
