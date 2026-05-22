@@ -1,9 +1,10 @@
-# ADR: Archtest CI 入口 process-isolated sharding（K=16）
+# ADR: Archtest CI 入口 process-isolated sharding（CI K=16 / 本地默认 K=1）
 
-> Status: Accepted
+> Status: Accepted (Amended 2026-05-23)
 > Date: 2026-05-12
 > Implementation: fix/307-archtest-verify-process-isolation
 > Source plan: docs/plans/202605110830-305-archtest-verify-process-isolation.md
+> Amendment: 见末尾 §Amendment（2026-05-23, branch 573-archtest-default-shard）
 
 ## Context
 
@@ -29,11 +30,11 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 ## Decisions
 
-### D1. CI 入口改为 process-isolated 16-shard 矩阵
+### D1. CI 入口改为 process-isolated 16-shard 矩阵（CI 显式 K=16 / 本地默认 K=1）
 
-`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo 16 分片，每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。SHARD_TARGET 单 shard 模式给 GHA matrix 用；无 SHARD_TARGET 时串行跑全部 16 shard（`make verify` 路径）。
+`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo `SHARD_COUNT` 分片（**CI: 16 explicit；本地默认: 1**，见 §Amendment 2026-05-23），每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。SHARD_TARGET 单 shard 模式给 GHA matrix 用；无 SHARD_TARGET 时串行跑 `SHARD_COUNT` 个 shard（本地 `make verify` 路径默认 K=1 单 shard）。
 
-`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job：`matrix.shard: [0..15]`，每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。
+`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job：`matrix.shard: [0..15]` + 显式 `env: SHARD_COUNT: 16`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。CI explicit `SHARD_COUNT=16` 由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment）。
 
 ### D2. tools shard 不再 enumerate archtest，pkgs 运行时计算
 
@@ -45,9 +46,13 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 `tools/archtest/archtest_verify_coverage_test.go::TestArchtestVerifyCoverage01`（INVARIANT `ARCHTEST-VERIFY-COVERAGE-01`）：shell-out `DRY_RUN=1 bash hack/verify-archtest.sh` → 与 `scanner.EachInSubtree[ast.FuncDecl]` AST 扫到的 top-level Test* 函数集合做对称 diff，非空则 fail。守的风险：维护者改脚本加 `grep -v TestFoo` debug 过滤忘删 → CI silent unenforce（local `go test ./tools/archtest/...` 仍捕获，但 PR Check 漏过）。AI-rebust **Medium**（runtime cross-check 双重源）。
 
-### D4. `make verify` 不再 skip archtest
+### D4. `make verify` 委托 archtest 给 matrix gate（D6 single-owner 落地形态）
 
-`.github/workflows/governance.yml` 删 `VERIFY_SKIP: archtest` env、timeout-minutes 5 → 15。重写后 verify-archtest.sh serial 16-shard 各独立 process，governance.yml 跑完只多 5-8 min wall，无 OOM。统一 `make verify` 入口覆盖 develop push + PR；PR Check 的 matrix-parallel `verify-archtest` job 提供 fast-feedback 通道。
+`.github/workflows/governance.yml::make verify` 保留 `env: VERIFY_SKIP: archtest` 显式委托给 `_build-lint.yml::verify-archtest` matrix gate，避免 push/PR 上双跑 archtest（详见 §D6 single-owner 原则）。timeout-minutes 维持 15 容纳其它 verify-*.sh 子脚本耗时。
+
+本地 `make verify`（无 `VERIFY_SKIP` env）仍包含 `verify-archtest.sh`，按 `SHARD_COUNT` 默认 K=1 单进程跑（见 §D1 + §Amendment 2026-05-23）；PR Check 的 matrix-parallel `verify-archtest` job (SHARD_COUNT=16 explicit) 是 CI 上唯一权威 archtest gate。
+
+> **历史**：本节原文为 "governance.yml 删 VERIFY_SKIP env" + "verify-archtest.sh serial 16-shard"。§D6 加入时反转此决策（恢复 VERIFY_SKIP 避免双跑）；§Amendment 2026-05-23 进一步把脚本默认 K 改为 1。本节文本同 PR 重写以与现状一致（per ai-collab.md §"ADR amendment 落地必查"）。
 
 ### D5. slowgate 重接
 
@@ -76,7 +81,7 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 测试用 K=4（任意小 K，算法正确性与具体 K 无关，K=4 跑得快）。**事实源单源**：脚本里 `shard_assignment()` 是唯一 modulo 算法实现，`run_shard()` 与 `LIST_SHARD_TESTS` 路径都调用它；Go 测试不**复制**算法，只**调用**脚本验证算法性质。负 TDD：用 `awk 'NR % (n+1) == s'`（cover-break）替换 → partition 断言报告 ~50 测试未分配，恢复后立即绿。
 
-刻意不验证：script 默认 `SHARD_COUNT=16` 与 `_build-lint.yml::matrix.shard: [0..15]` 一致性——那是 deployment value 漂移，是另一类问题，不在算法正确性范围内。
+刻意不验证：CI yaml `_build-lint.yml::matrix.shard: [0..15]` 与同文件 `env: SHARD_COUNT: 16` 的内部一致性——那是 deployment value 漂移，是另一类问题，不在算法正确性范围内。（2026-05-23 amendment：script 默认值已改 `SHARD_COUNT=1`（本地友好），CI yaml 维持 explicit `SHARD_COUNT=16`，两值差异是 by-design，编码"本地 vs CI 上下文"；不再是"应一致"目标，`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01` 同 PR 关闭，详见末尾 §Amendment。）
 
 ## K8s 范式对照
 
@@ -117,3 +122,58 @@ structural rollback（恢复 single-process）：
 | Discovery 函数数 | 296 | 296（一致） |
 
 phase0-baseline.txt 留在 worktree 但不入 PR（一次性 artifact）。
+
+> 注：上表 K=16 是 CI 路径指标。本地 K=1 路径 wall-time 基线参考：Phase 0 改造前无 TestMain 预热实测 70.23s 全跑（23.94 GB peak RSS）；ADR 202605190000 TestMain 预热落地后 `*types.Info` cache 在 K=1 单进程内跨 test function 复用，预计 wall-time 改善，待本地重测更新数值。
+
+## Amendment 2026-05-23: 默认值 SHARD_COUNT 16→1（本地友好）
+
+### 根因
+
+原 ADR D1 落地时 `hack/verify-archtest.sh:47` 默认值 `SHARD_COUNT=16` 与 `.github/workflows/_build-lint.yml::verify-archtest` 的 `env: SHARD_COUNT: 16` 双源真值（仅靠 `# SYNC:` 注释维护），登记 backlog `ARCHTEST-SHARDCOUNT-SYNC-GUARD-01`。
+
+进一步观察：CI 已 explicit 设 `SHARD_COUNT=16`，所以默认值在 CI 路径**根本不被读取**。脚本默认值实际只服务"无显式 caller"场景——即本地开发者一键调用。原默认值 16 是把 CI 的 RSS 约束（GHA 2-core 7 GB）反向耦合到本地默认行为，导致 18-core / 128 GB 本地机器跑 `make verify` / 裸跑脚本时 CPU 满载（K=16 process-isolated 重复 `packages.Load` ~16×，本地无 RSS 约束）。
+
+### 决策
+
+`hack/verify-archtest.sh:47` 默认 `${SHARD_COUNT:-16}` → `${SHARD_COUNT:-1}`。
+
+- CI 路径完全不变：`_build-lint.yml::verify-archtest` 已 explicit `SHARD_COUNT: 16`（GHA 7 GB RSS 约束，K=8 Linux RSS 留余量不足，见 Phase 0 表）。amendment 显式注明 CI 必设。
+- 本地路径：`bash hack/verify-archtest.sh` 默认单进程跑（K=1），~300 个 Test* 共享 `typeseval.SharedResolver` 内的 `*types.Info` cache，CPU 工作 ~1× 而非 ~16×。`make verify` 透传链路同步生效。
+- 双源 SYNC 消除：CI yaml 与脚本默认值不再要求相等，是 by-design 差异（"CI 上下文"显式表达 vs "本地上下文"默认服务）；`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01` backlog 同 PR 关闭。
+
+### 威胁矩阵重评（per `.claude/rules/gocell/ai-collab.md` §"ADR amendment 落地必查"）
+
+逐行核对原 ADR 论点在 amendment 后的有效性：
+
+| 原论点 | 在 amendment 下是否仍成立 | 补偿措施 |
+|--------|-----------------------|---------|
+| Phase 0 表「K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度」 | ✅ CI 仍 K=16，论点不变 | 无 |
+| §D1「整体重写：discovery + modulo 分片」 | ✅ 算法不变 | 无 |
+| §D7 partition exactly-once（K=4 任意小 K 验算法） | ✅ test 显式 set SHARD_COUNT=4，不依赖默认值 | 无 |
+| §K8s 范式对照「process-isolated 多 job 拆分」 | ✅ CI 路径不变 | 无 |
+| §Rollback「structural rollback 恢复 single-process」 | ✅ rollback 步骤不变；amendment 仅改 default | 无 |
+| §实测数据表（K=16） | ✅ CI 指标，全部成立 | 表行已隐含为 CI 指标；amendment 显式 |
+
+无变 ❌/⚠️ 项，amendment 与原文论点正交。
+
+### 新约束 Medium 守卫（同 PR 闭环，per ai-collab.md §"立项硬门槛 ≥ Medium"）
+
+Amendment 改默认 16→1 产生一个新隐式约束：**CI yaml `.github/workflows/_build-lint.yml::verify-archtest` job 必须 explicit 设 `SHARD_COUNT: 16`**（否则 CI 以 K=1 单进程跑全部 archtest，~20 GB peak RSS 撞 GHA 7 GB shard OOM）。
+
+按 ai-collab.md "新引入 Soft → 直接 reject，要求改 ≥ Medium"，此约束**同 PR 内** Medium 化，不允许靠注释维护或 backlog 延期：
+
+- 新增 archtest `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01`（`tools/archtest/archtest_ci_shard_count_test.go`）：解析 `_build-lint.yml` YAML，断言 `jobs.verify-archtest.steps[*].env.SHARD_COUNT == "16"`；缺失或值漂移立即 fail。
+- 形态 Medium：runtime guard via archtest，CI 跑时立即捕获。违反不可通过单边修改 yaml 静默达成——必须同 PR 修改 archtest 或 fixture，diff 可视。
+- 4 个 fixture（正/3 反）覆盖：正确形状 / 缺 env / 值漂移（K=8 反例）/ 缺 job。
+
+### Backlog 关闭
+
+`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01`（双源真值守卫升级）→ ✅ closed by this amendment：双源 SYNC 假设通过"CI 必 explicit / 本地默认服务"消除；新约束由上节 Medium archtest 守卫。详见 `docs/backlog/20260520/cap-02-metadata-governance.md`。
+
+### 跨载体同步（同 PR 闭环）
+
+- `hack/verify-archtest.sh` line 19-21 header + line 46-47 注释 + 默认值
+- `.github/workflows/_build-lint.yml` line 305 SYNC 注释改述
+- `CLAUDE.md:78`、`.claude/rules/gocell/ai-collab.md:69` K=16 描述
+- `tools/archtest/archtest_ci_shard_count_test.go` 新 Medium 守卫（ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01）
+- `docs/backlog/20260520/cap-02-metadata-governance.md` ARCHTEST-SHARDCOUNT-SYNC-GUARD-01 关闭

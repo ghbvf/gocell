@@ -302,7 +302,10 @@ jobs:
 
       - name: Verify archtest shard ${{ matrix.shard }}
         env:
-          # SYNC: must match hack/verify-archtest.sh default SHARD_COUNT
+          # CI must set SHARD_COUNT=16 explicitly (GHA 2-core 7 GB shard
+          # RSS budget, see ADR 202605120000). hack/verify-archtest.sh
+          # default is 1 (local-friendly) and intentionally differs — the
+          # two values encode local vs CI context, no SYNC guard needed.
           SHARD_COUNT: 16
           SHARD_TARGET: ${{ matrix.shard }}
           TIMEOUT: 5m
