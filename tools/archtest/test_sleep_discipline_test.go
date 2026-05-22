@@ -97,7 +97,9 @@ func scanTestSleepDisciplineDiags(fset *token.FileSet, file *ast.File, rel strin
 			Line: fset.Position(call.Pos()).Line,
 			Message: fmt.Sprintf(
 				"time.Sleep without %s <reason>. "+
-					"Prefer require.Eventually for state-polling waits. "+
+					"Prefer testwait.External(t, reason, ...) for synchronous polling "+
+					"or testwait.Deterministic(t, ch, ...) for channel waits "+
+					"(see pkg/testutil/testwait). "+
 					"ref: docs/plans/202605011500-029-master-roadmap.md G6",
 				sleepAllowMarker),
 		})

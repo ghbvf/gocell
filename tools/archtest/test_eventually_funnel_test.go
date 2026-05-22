@@ -6,20 +6,33 @@ package archtest
 // pkg/testutil/testwait.External, paired with the Hard downstream
 // TEST-POLLING-EXTERNAL-REASON-LITERAL-01:
 //
-//   - Bare callsites of (require|assert).Eventually and
-//     (require|assert).EventuallyWithT are rejected anywhere in the module
-//     (production + test code). Callers MUST go through testwait.External
-//     (synchronous wall-clock polling with const-literal reason) or
-//     testwait.Deterministic (channel-blocking wait — preferred).
-//   - Every reference to one of those four testify symbols is rejected:
-//     direct calls are caught by the main rule (TestEventuallyFunnel);
-//     indirect references (var assignment, function-pointer pass-through,
-//     reflect.ValueOf, struct-field binding) are caught by the reverse
-//     blind-spot self-test (TestEventuallyFunnel_NoIndirectReferences).
-//     Inside the reverse self-test, Pass 1 marks direct-call Idents and
-//     Pass 2 excludes them so the two rules don't double-report the same
-//     line — direct calls are not allowed, just attributed to the main
-//     rule for diagnostic clarity.
+//   - Banned surface: every testify func/method whose Pkg().Path() ∈
+//     {require, assert} AND whose Name() starts with "Eventually". As of
+//     testify v1.11.1 this expands to 8 package-level funcs and 8
+//     *Assertions methods (Eventually / EventuallyWithT / Eventuallyf /
+//     EventuallyWithTf in each package, both as top-level funcs and as
+//     *Assertions methods). Prefix matching auto-covers any future
+//     EventuallyXyz variant; baseline drift is locked by
+//     TestEventuallyFunnel_SymbolSentinel.
+//   - Banned call shapes: qualified-ident form (`require.Eventually(...)`)
+//     and method-selector form (`require.New(t).Eventually(...)`) are both
+//     direct calls and rejected by the main rule. The callee resolver
+//     consults both *types.Info.Uses (qualified) and *types.Info.Selections
+//     (method) via resolveSelectorCalleeFunc.
+//   - Banned reference shapes: indirect references (var assignment,
+//     function-pointer pass-through, reflect.ValueOf, struct-field binding,
+//     method value `require.New(t).Eventually`, method expression
+//     `(*require.Assertions).EventuallyWithT`) are caught by the reverse
+//     blind-spot self-test (TestEventuallyFunnel_NoIndirectReferences),
+//     which walks both info.Uses and info.Selections. Inside the reverse
+//     self-test, direct-call Sel idents (collected by
+//     collectDirectEventuallyCallIdents) are excluded so the two rules
+//     don't double-report the same line — direct calls are not allowed,
+//     just attributed to the main rule for diagnostic clarity.
+//
+// Callers MUST go through testwait.External (synchronous wall-clock
+// polling with const-literal reason) or testwait.Deterministic
+// (channel-blocking wait — preferred).
 //
 // Together with TEST-POLLING-EXTERNAL-REASON-LITERAL-01 this closes the
 // testwait funnel as a Hard 范本: "typed marker funnel for unbounded ops"
@@ -47,39 +60,48 @@ import (
 
 const ruleTestEventuallyFunnel01 = "TEST-EVENTUALLY-FUNNEL-01"
 
-// Banned testify symbol identities. Resolution is via *types.Info.Uses →
-// *types.Func, so import aliases (e.g. `import req "…/require"; req.Eventually(...)`)
-// are handled correctly. Pure-AST fallback (fixture mode without type info)
-// matches package-ident "require" / "assert" — fixture files always use the
-// canonical names.
+// Banned testify symbol identities. Resolution is via *types.Info.Uses
+// (qualified-ident: `require.Eventually(...)`) OR *types.Info.Selections
+// (method-selector: `require.New(t).Eventually(...)`), both producing a
+// *types.Func whose Pkg().Path() ∈ bannedEventuallyPkgPaths and whose
+// Name() satisfies isBannedEventuallyFuncName. Import aliases (e.g.
+// `import req "…/require"; req.Eventually(...)`) are handled correctly by
+// both resolvers. Pure-AST fallback (fixture mode without type info)
+// matches package-ident "require" / "assert" — fixture files always use
+// the canonical names.
+//
+// The banned func-name set is identified by the `Eventually` prefix rather
+// than an enumerated allowlist: testify v1.11.1 ships exactly four such
+// names (`Eventually`, `EventuallyWithT`, `Eventuallyf`, `EventuallyWithTf`),
+// all polling/wait variants of the same semantics. Prefix matching closes
+// the "AI co-author adds a new const to the enumeration" bypass (an
+// ai-collab §"input-struct field exclusion" anti-pattern) and auto-covers
+// any future `EventuallyXyz` testify upstream may add. Drift in the
+// testify surface that would invalidate this assumption is caught by
+// TestEventuallyFunnel_SymbolSentinel.
 const (
 	testifyRequirePkgPath = "github.com/stretchr/testify/require"
 	testifyAssertPkgPath  = "github.com/stretchr/testify/assert"
 
-	testifyFuncEventually      = "Eventually"
-	testifyFuncEventuallyWithT = "EventuallyWithT"
+	testifyFuncEventuallyPrefix = "Eventually"
 )
 
-// bannedEventuallySymbol is the (pkg path, func name) tuple identifying one
-// of the four testify symbols whose callsites and indirect references are
-// rejected by this archtest. Named (not anonymous) so it appears identically
-// in the symbol slice, the callee-resolver return type, and the indirect
-// scanner — repeating the field set inline at 6+ sites obscured the
-// equivalence relation.
+// bannedEventuallyPkgPaths is the closed set of testify package paths whose
+// `Eventually*` functions / methods are banned. Closed by enumeration:
+// require + assert are the only two packages testify exposes Eventually
+// variants from.
+var bannedEventuallyPkgPaths = map[string]struct{}{
+	testifyRequirePkgPath: {},
+	testifyAssertPkgPath:  {},
+}
+
+// bannedEventuallySymbol is the (pkg path, func name) tuple identifying a
+// matched banned symbol. Named (not anonymous) so it appears identically
+// in the matcher return type and the indirect scanner — repeating the
+// field set inline at 6+ sites obscured the equivalence relation.
 type bannedEventuallySymbol struct {
 	PkgPath string
 	Name    string
-}
-
-// bannedEventuallySymbols enumerates the four (pkg, func) pairs whose
-// callsites + references are rejected. Listed explicitly (not derived) to
-// keep the banned set obvious at the rule callsite and to make "add a new
-// banned symbol" an explicit code change.
-var bannedEventuallySymbols = []bannedEventuallySymbol{
-	{testifyRequirePkgPath, testifyFuncEventually},
-	{testifyRequirePkgPath, testifyFuncEventuallyWithT},
-	{testifyAssertPkgPath, testifyFuncEventually},
-	{testifyAssertPkgPath, testifyFuncEventuallyWithT},
 }
 
 type eventuallyFunnelViolation struct {
@@ -126,13 +148,19 @@ func scanFileForEventuallyFunnelViolations(
 	return violations
 }
 
-// bannedEventuallyCallee reports whether funExpr is one of the four banned
-// testify callees. Returns the matched symbol identity on hit.
+// bannedEventuallyCallee reports whether funExpr is a call to one of the
+// banned testify Eventually symbols (qualified-ident OR method-selector on
+// `*Assertions`). Returns the matched symbol identity on hit.
 //
-// When info is non-nil, resolution is via *types.Info.Uses on the SelectorExpr's
-// Sel, which handles import aliases correctly. When info is nil (fixture mode
-// without type resolution), falls back to pure-AST matching of `pkgIdent.Sel`
-// where pkgIdent.Name is "require" or "assert".
+// When info is non-nil, resolution is via resolveSelectorCalleeFunc, which checks
+// *types.Info.Uses (qualified ident: `require.Eventually(...)`) then
+// *types.Info.Selections (method selector: `require.New(t).Eventually(...)`).
+// Both paths surface the underlying *types.Func, so import aliases and
+// method-selector forms are handled uniformly.
+//
+// When info is nil (fixture mode without type resolution), falls back to
+// pure-AST matching of `pkgIdent.Sel` where pkgIdent.Name is "require" or
+// "assert" — fixture files always import testify under its canonical name.
 func bannedEventuallyCallee(funExpr ast.Expr, info *types.Info) (bannedEventuallySymbol, bool) {
 	var zero bannedEventuallySymbol
 	sel, ok := funExpr.(*ast.SelectorExpr)
@@ -143,23 +171,14 @@ func bannedEventuallyCallee(funExpr ast.Expr, info *types.Info) (bannedEventuall
 		return zero, false
 	}
 	if info != nil {
-		obj := info.Uses[sel.Sel]
-		if obj == nil {
+		fn := resolveSelectorCalleeFunc(sel, info)
+		if fn == nil {
 			return zero, false
 		}
-		fn, ok := obj.(*types.Func)
-		if !ok || fn.Pkg() == nil {
-			return zero, false
-		}
-		for _, sym := range bannedEventuallySymbols {
-			if fn.Pkg().Path() == sym.PkgPath && fn.Name() == sym.Name {
-				return sym, true
-			}
-		}
-		return zero, false
+		return bannedEventuallyFuncObj(fn)
 	}
-	// Pure-AST fallback (fixture mode): match `<pkg>.Eventually` /
-	// `<pkg>.EventuallyWithT` where pkg ident is "require" or "assert".
+	// Pure-AST fallback (fixture mode): match `<pkg>.<Eventually*>` where
+	// pkg ident is "require" or "assert".
 	xIdent, ok := sel.X.(*ast.Ident)
 	if !ok {
 		return zero, false
@@ -173,8 +192,27 @@ func bannedEventuallyCallee(funExpr ast.Expr, info *types.Info) (bannedEventuall
 	return zero, false
 }
 
+// resolveSelectorCalleeFunc returns the *types.Func denoted by sel, consulting both
+// *types.Info.Uses (qualified-ident: pkg.Func) and *types.Info.Selections
+// (method-selector: receiver.Method). Exactly one is populated for any
+// given selector in well-typed source; nil result means sel is not a
+// function/method reference.
+func resolveSelectorCalleeFunc(sel *ast.SelectorExpr, info *types.Info) *types.Func {
+	if obj := info.Uses[sel.Sel]; obj != nil {
+		if fn, _ := obj.(*types.Func); fn != nil {
+			return fn
+		}
+	}
+	if selObj := info.Selections[sel]; selObj != nil {
+		if fn, _ := selObj.Obj().(*types.Func); fn != nil {
+			return fn
+		}
+	}
+	return nil
+}
+
 func isBannedEventuallyFuncName(name string) bool {
-	return name == testifyFuncEventually || name == testifyFuncEventuallyWithT
+	return strings.HasPrefix(name, testifyFuncEventuallyPrefix)
 }
 
 // shouldSkipForEventuallyFunnel returns true for paths excluded from the
@@ -209,10 +247,10 @@ func shouldSkipForEventuallyFunnel(rel string) bool {
 // require/assert Eventually variants are test-only APIs whose callers live
 // in *_test.go.
 //
-// Tool: archtest.RunTyped + *types.Info callee resolution + go/ast
-// SelectorExpr matching. This is the typed-marker funnel upstream lock; the
-// downstream lock (testwait.External callee+arg form-uniqueness) is
-// TEST-POLLING-EXTERNAL-REASON-LITERAL-01.
+// Tool: archtest.RunTyped + resolveSelectorCalleeFunc (info.Uses ∪ info.Selections)
+// + go/ast SelectorExpr matching. This is the typed-marker funnel upstream
+// lock; the downstream lock (testwait.External callee+arg form-uniqueness)
+// is TEST-POLLING-EXTERNAL-REASON-LITERAL-01.
 //
 // Blind spots of the chosen tool (per AI-rebust §"工具选定后强制盲区自检"):
 //
@@ -220,15 +258,19 @@ func shouldSkipForEventuallyFunnel(rel string) bool {
 //   - Function-pointer pass-through: helper(require.Eventually).
 //   - Reflect call: reflect.ValueOf(require.Eventually).Call(...).
 //   - Struct-field binding: wrapper{F: require.Eventually}.
+//   - Method value/expression of *Assertions: var f = require.New(t).Eventually
+//     or var f = (*require.Assertions).EventuallyWithT (MethodVal /
+//     MethodExpr selections, not CallExpr.Fun).
 //
-// All four shapes silently bypass the CallExpr.Fun-driven main scan.
+// All five shapes silently bypass the CallExpr.Fun-driven main scan.
 // TestEventuallyFunnel_NoIndirectReferences below is the reverse self-test:
-// it scans every Ident that *types.Info.Uses resolves to one of the four
-// banned symbols and asserts the Ident appears in *ast.CallExpr.Fun position
-// — and even then, since direct call IS the violation, the union of the
-// main rule + reverse self-test forms the (callee) form-uniqueness Hard
-// lock: outside testwait.External / testwait.Deterministic no syntactic
-// shape can reach require.Eventually / assert.Eventually / *WithT.
+// it walks both *types.Info.Uses and *types.Info.Selections for every
+// reference to a banned symbol and asserts none appear outside
+// *ast.CallExpr.Fun position — and even then, since direct call IS the
+// violation, the union of the main rule + reverse self-test forms the
+// (callee) form-uniqueness Hard lock: outside testwait.External /
+// testwait.Deterministic no syntactic shape can reach the testify
+// (require|assert).Eventually* surface.
 func TestEventuallyFunnel(t *testing.T) {
 	t.Parallel()
 
@@ -299,6 +341,10 @@ func TestEventuallyFunnelFixtures(t *testing.T) {
 		"require_eventually_collect_red",
 		"assert_eventually_red",
 		"assert_eventually_collect_red",
+		// RED cases — *f formatted variants (prefix predicate coverage).
+		"qualified_f_variants_red",
+		// RED cases — *Assertions method-selector calls (Selections path).
+		"assertions_method_call_red",
 	}
 
 	root := findModuleRoot(t)
@@ -334,12 +380,16 @@ func TestEventuallyFunnelFixtures(t *testing.T) {
 // TestEventuallyFunnel_NoIndirectReferences is the blind-spot reverse
 // self-test required by AI-rebust §"工具选定后强制盲区自检".
 //
-// It scans every *ast.Ident in production + test code whose
-// *types.Info.Uses entry resolves to one of the four banned symbols, then
-// rejects ALL such references (since direct call is itself banned, indirect
-// references are also banned). Any non-CallExpr.Fun reference would prove
-// the symbol is "reachable" from code outside testwait — the rule's intent
-// is that the symbol set is unreachable except through the testwait funnel.
+// It walks every reference to a banned symbol via both *types.Info.Uses
+// (qualified-ident references like `var f = require.Eventually`) and
+// *types.Info.Selections (method-selector references like
+// `var f = require.New(t).Eventually` or
+// `(*require.Assertions).EventuallyWithT`), then rejects ALL such references
+// (since direct call is itself banned, indirect references are also
+// banned). Any non-CallExpr.Fun reference would prove the symbol is
+// "reachable" from code outside testwait — the rule's intent is that the
+// surface (require|assert).Eventually* is unreachable except through the
+// testwait funnel.
 func TestEventuallyFunnel_NoIndirectReferences(t *testing.T) {
 	t.Parallel()
 
@@ -405,6 +455,11 @@ func TestEventuallyFunnel_NoIndirectReferences(t *testing.T) {
 //   - indirect_funcarg_red:      helper(require.Eventually)
 //   - indirect_reflect_red:      reflect.ValueOf(require.Eventually)
 //   - indirect_struct_field_red: wrapper{F: require.Eventually}
+//   - indirect_var_f_red:        var f = require.Eventuallyf
+//     (covers prefix predicate on Uses path)
+//   - indirect_method_red:       var f = require.New(t).Eventually +
+//     var f = (*assert.Assertions).EventuallyWithT
+//     (covers MethodVal + MethodExpr on Selections path)
 func TestEventuallyFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 	t.Parallel()
 
@@ -415,6 +470,8 @@ func TestEventuallyFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 		"indirect_funcarg_red",
 		"indirect_reflect_red",
 		"indirect_struct_field_red",
+		"indirect_var_f_red",
+		"indirect_method_red",
 	}
 
 	for _, dir := range fixtures {
@@ -452,40 +509,131 @@ func TestEventuallyFunnel_NoIndirectReferences_Fixtures(t *testing.T) {
 	}
 }
 
-// isBannedEventuallyIdentUse reports whether ident's *types.Info.Uses entry
-// resolves to one of the four banned symbols.
-func isBannedEventuallyIdentUse(ident *ast.Ident, info *types.Info) bool {
-	if ident == nil || info == nil {
-		return false
+// TestEventuallyFunnel_SymbolSentinel locks the testify Eventually surface
+// against rename/removal drift. The prefix predicate
+// (isBannedEventuallyFuncName) auto-covers any future EventuallyXyz testify
+// upstream may add, so additions don't fail this test — but a rename like
+// `Eventually` → `WaitUntil` would silently disable the entire archtest in
+// production code (callers would migrate to the new name without tripping a
+// ban). This sentinel walks the loaded testify require/assert package
+// scopes via *types.Package.Imports() and asserts the v1.11.1 baseline of
+// 4 package-level Eventually* funcs is still present per package — any
+// drop fails the test and points the reviewer at this comment to update
+// the baseline alongside any prefix predicate adjustment.
+//
+// Methods on *Assertions (require.Assertions.Eventually, etc.) are NOT
+// walked here; they are anchored at compile time by the assertions_method_call_red
+// fixture, which fails to load if testify renames a method forwarder.
+//
+// Tool: RunTyped + *types.Package.Imports() + Scope().Lookup. No new
+// archtest entry point; reuses the existing module-wide typed load.
+func TestEventuallyFunnel_SymbolSentinel(t *testing.T) {
+	t.Parallel()
+
+	observed := make(map[bannedEventuallySymbol]struct{})
+	logged := make(map[bannedEventuallySymbol]struct{})
+
+	scan := func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+		for _, imp := range p.Pkg.Imports() {
+			if _, ok := bannedEventuallyPkgPaths[imp.Path()]; !ok {
+				continue
+			}
+			scope := imp.Scope()
+			for _, name := range scope.Names() {
+				fn, ok := scope.Lookup(name).(*types.Func)
+				if !ok {
+					continue
+				}
+				if !isBannedEventuallyFuncName(fn.Name()) {
+					continue
+				}
+				sym := bannedEventuallySymbol{PkgPath: imp.Path(), Name: fn.Name()}
+				observed[sym] = struct{}{}
+			}
+		}
+		return nil
 	}
-	_, ok := bannedEventuallyIdentObj(info.Uses[ident])
-	return ok
+
+	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
+
+	// v1.11.1 baseline. The four names per package are testify's complete
+	// Eventually* surface as of this writing; if testify removes/renames any,
+	// the archtest stops catching those callsites in production code. Adding
+	// a new EventuallyXyz is auto-covered by the prefix predicate and only
+	// logged here (not failed).
+	baselineNames := []string{
+		testifyFuncEventuallyPrefix,            // "Eventually"
+		testifyFuncEventuallyPrefix + "WithT",  // "EventuallyWithT"
+		testifyFuncEventuallyPrefix + "f",      // "Eventuallyf"
+		testifyFuncEventuallyPrefix + "WithTf", // "EventuallyWithTf"
+	}
+	for _, pkgPath := range []string{testifyRequirePkgPath, testifyAssertPkgPath} {
+		for _, name := range baselineNames {
+			sym := bannedEventuallySymbol{PkgPath: pkgPath, Name: name}
+			_, ok := observed[sym]
+			assert.True(t, ok,
+				"%s sentinel: baseline testify symbol %s.%s not found in loaded surface — "+
+					"upstream rename/removal? Update baselineNames in TestEventuallyFunnel_SymbolSentinel "+
+					"AND verify isBannedEventuallyFuncName still covers the replacement name.",
+				ruleTestEventuallyFunnel01, pkgPath, name)
+			logged[sym] = struct{}{}
+		}
+	}
+
+	// Log (don't fail) any observed Eventually* symbol not in the baseline —
+	// alerts reviewer that testify added a new variant and prefix predicate
+	// is silently extending coverage.
+	for sym := range observed {
+		if _, known := logged[sym]; known {
+			continue
+		}
+		t.Logf("%s sentinel: testify surface added %s.%s — prefix predicate covers it; "+
+			"consider adding to baselineNames once stable.",
+			ruleTestEventuallyFunnel01, sym.PkgPath, sym.Name)
+	}
 }
 
-// bannedEventuallyIdentObj reports whether obj is one of the four banned
-// testify functions; on hit returns the matched symbol identity.
+// bannedEventuallyIdentObj reports whether obj is a banned testify
+// Eventually function/method; on hit returns the matched symbol identity.
 func bannedEventuallyIdentObj(obj types.Object) (bannedEventuallySymbol, bool) {
 	var zero bannedEventuallySymbol
 	if obj == nil {
 		return zero, false
 	}
 	fn, ok := obj.(*types.Func)
-	if !ok || fn.Pkg() == nil {
+	if !ok {
 		return zero, false
 	}
-	for _, sym := range bannedEventuallySymbols {
-		if fn.Pkg().Path() == sym.PkgPath && fn.Name() == sym.Name {
-			return sym, true
-		}
+	return bannedEventuallyFuncObj(fn)
+}
+
+// bannedEventuallyFuncObj is the single membership check: fn belongs to
+// testify require/assert AND its name starts with `Eventually`. Used by
+// both the callee resolver (direct calls) and the ident-object check
+// (indirect references) to keep "what counts as banned" single-sourced.
+func bannedEventuallyFuncObj(fn *types.Func) (bannedEventuallySymbol, bool) {
+	var zero bannedEventuallySymbol
+	if fn.Pkg() == nil {
+		return zero, false
 	}
-	return zero, false
+	pkgPath := fn.Pkg().Path()
+	if _, ok := bannedEventuallyPkgPaths[pkgPath]; !ok {
+		return zero, false
+	}
+	if !isBannedEventuallyFuncName(fn.Name()) {
+		return zero, false
+	}
+	return bannedEventuallySymbol{PkgPath: pkgPath, Name: fn.Name()}, true
 }
 
 // collectDirectEventuallyCallIdents returns the set of SelectorExpr.Sel
-// Idents in file whose callee resolves to one of the four banned symbols.
-// These are the direct-call sites caught by the main rule; the reverse
-// self-test excludes them so the two rules don't double-report the same
-// line.
+// Idents in file whose callee resolves to a banned symbol (via either
+// qualified-ident Uses or method-selector Selections). These are the
+// direct-call sites caught by the main rule; the reverse self-test
+// excludes them so the two rules don't double-report the same line.
 func collectDirectEventuallyCallIdents(file *ast.File, info *types.Info) map[*ast.Ident]struct{} {
 	directCallFun := make(map[*ast.Ident]struct{})
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
@@ -493,7 +641,11 @@ func collectDirectEventuallyCallIdents(file *ast.File, info *types.Info) map[*as
 		if !ok || sel.Sel == nil {
 			return
 		}
-		if !isBannedEventuallyIdentUse(sel.Sel, info) {
+		fn := resolveSelectorCalleeFunc(sel, info)
+		if fn == nil {
+			return
+		}
+		if _, ok := bannedEventuallyFuncObj(fn); !ok {
 			return
 		}
 		directCallFun[sel.Sel] = struct{}{}
@@ -501,10 +653,18 @@ func collectDirectEventuallyCallIdents(file *ast.File, info *types.Info) map[*as
 	return directCallFun
 }
 
-// scanFileForIndirectEventuallyReferences returns all Idents in file whose
-// *types.Info.Uses entry resolves to a banned symbol AND that are not in
-// the direct-call set. Used by both the live reverse self-test and the
-// fixture-based golden test to avoid duplicating the two-pass logic.
+// scanFileForIndirectEventuallyReferences returns all Idents in file that
+// reference a banned symbol AND are not in the direct-call set. Walks two
+// maps for full coverage:
+//
+//   - pass.TypesInfo.Uses for qualified-ident references
+//     (e.g. `var f = require.Eventuallyf`).
+//   - pass.TypesInfo.Selections for method-selector references
+//     (e.g. `var f = require.New(t).Eventually` MethodVal or
+//     `(*require.Assertions).EventuallyWithT` MethodExpr).
+//
+// Deduplication is by ident pointer: a single Sel never appears in both
+// maps for a well-typed selector, but the dedup is cheap insurance.
 func scanFileForIndirectEventuallyReferences(
 	pass *Pass,
 	file *ast.File,
@@ -512,21 +672,23 @@ func scanFileForIndirectEventuallyReferences(
 ) []eventuallyFunnelViolation {
 	directCallFun := collectDirectEventuallyCallIdents(file, pass.TypesInfo)
 	absFile := pass.Abs(file)
+	seenIdent := make(map[*ast.Ident]struct{})
 	var out []eventuallyFunnelViolation
-	for ident, obj := range pass.TypesInfo.Uses {
-		if ident == nil || obj == nil {
-			continue
-		}
-		sym, ok := bannedEventuallyIdentObj(obj)
-		if !ok {
-			continue
+
+	emit := func(ident *ast.Ident, sym bannedEventuallySymbol) {
+		if ident == nil {
+			return
 		}
 		if pass.Fset.Position(ident.Pos()).Filename != absFile {
-			continue
+			return
 		}
 		if _, ok := directCallFun[ident]; ok {
-			continue
+			return
 		}
+		if _, ok := seenIdent[ident]; ok {
+			return
+		}
+		seenIdent[ident] = struct{}{}
 		out = append(out, eventuallyFunnelViolation{
 			File: rel,
 			Line: pass.Fset.Position(ident.Pos()).Line,
@@ -538,5 +700,42 @@ func scanFileForIndirectEventuallyReferences(
 			),
 		})
 	}
+
+	// Pass 1: qualified-ident references (info.Uses).
+	for ident, obj := range pass.TypesInfo.Uses {
+		if ident == nil || obj == nil {
+			continue
+		}
+		sym, ok := bannedEventuallyIdentObj(obj)
+		if !ok {
+			continue
+		}
+		emit(ident, sym)
+	}
+
+	// Pass 2: method-selector references (info.Selections). Covers MethodVal
+	// (receiver.Method as a function value) and MethodExpr
+	// ((*Receiver).Method as a function value). FieldVal selections are
+	// skipped — Eventually is never a struct field in testify.
+	for sel, selObj := range pass.TypesInfo.Selections {
+		if sel == nil || sel.Sel == nil || selObj == nil {
+			continue
+		}
+		switch selObj.Kind() {
+		case types.MethodVal, types.MethodExpr:
+		default:
+			continue
+		}
+		fn, ok := selObj.Obj().(*types.Func)
+		if !ok {
+			continue
+		}
+		sym, ok := bannedEventuallyFuncObj(fn)
+		if !ok {
+			continue
+		}
+		emit(sel.Sel, sym)
+	}
+
 	return out
 }
