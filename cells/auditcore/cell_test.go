@@ -85,8 +85,16 @@ func newTestCell(t testing.TB) *AuditCore {
 }
 
 // newTestRecorder returns a RegistryRecorder for demo mode with an empty config.
+// Use newTestRecorderWithAgg when probe assertions are needed.
 func newTestRecorder() *cell.RegistryRecorder {
-	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())
+}
+
+// newTestRecorderWithAgg returns a RegistryRecorder and the aggregator that
+// captures registered probes, for tests that assert probe registration.
+func newTestRecorderWithAgg() (*cell.RegistryRecorder, *testAggregator) {
+	agg := newTestAgg()
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg), agg
 }
 
 func TestAuditCore_Lifecycle(t *testing.T) {
@@ -142,7 +150,7 @@ func TestAuditCore_MissingLedgerProtocol(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
-	err := c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err, "should fail without LedgerProtocol")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -161,7 +169,7 @@ func TestAuditCore_NilLedgerProtocol_SentinelRejected(t *testing.T) {
 		WithTxManager(cell.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err, "nil LedgerProtocol must be rejected")
 }
 
@@ -176,7 +184,7 @@ func TestAuditCore_MissingLedgerStore(t *testing.T) {
 		WithTxManager(cell.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err, "should fail without LedgerStore")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -196,7 +204,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		// txRunner intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err)
 	var ecErrTxPair1 *errcode.Error
 	require.True(t, errors.As(err, &ecErrTxPair1))
@@ -214,7 +222,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 		WithTxManager(cell.DemoCellTxManager()),
 		// outboxWriter intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err)
 	var ecErrTxPair2 *errcode.Error
 	require.True(t, errors.As(err, &ecErrTxPair2))
@@ -229,7 +237,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err)
 	var ecErrSink *errcode.Error
 	require.True(t, errors.As(err, &ecErrSink))
@@ -246,7 +254,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(cell.DemoCellTxManager()),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -265,7 +273,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg()))
 	require.NoError(t, err, "demo mode with publisher should succeed")
 }
 
@@ -279,7 +287,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(cell.DemoCellTxManager()),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg()))
 	require.NoError(t, err)
 }
 
@@ -296,7 +304,7 @@ func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithLedgerStore(store),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg())))
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
 	assert.Nil(t, c.pendingOutboxWriter)
@@ -314,7 +322,7 @@ func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err)
 	var ecErrMutex *errcode.Error
 	require.True(t, errors.As(err, &ecErrMutex))
@@ -337,7 +345,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(cell.DemoCellTxManager()),
 	)
-	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErrDurable *errcode.Error
 	require.True(t, errors.As(err, &ecErrDurable))
@@ -451,7 +459,7 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),         // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -503,7 +511,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 				WithCursorCodec(mustNewCodec(t, productionKey)),
 				WithMetricsProvider(metrics.NopProvider{}),
 			)
-			recorder := cell.NewRegistryRecorder(map[string]any{}, tc.mode)
+			recorder := cell.NewRegistryRecorder(map[string]any{}, tc.mode, newTestAgg())
 			require.NoError(t, c.Init(context.Background(), recorder))
 			snap := recorder.Snapshot()
 
@@ -535,17 +543,16 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 }
 
 // TestAuditCore_HealthCheckers_WithDirectEmitter verifies that after Init with
-// a DirectEmitter-backed publisher, the registry snapshot contains the
-// outbox-failopen-rate checker scoped to "auditcore".
+// a DirectEmitter-backed publisher, the outbox-failopen-rate probe scoped to
+// "auditcore" is registered.
 func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell(t)
-	recorder := newTestRecorder()
+	recorder, agg := newTestRecorderWithAgg()
 	require.NoError(t, c.Init(context.Background(), recorder))
 
-	snap := recorder.Snapshot()
 	const emitterKey = "outbox-failopen-rate.auditcore"
-	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	require.Contains(t, agg.probes, emitterKey, "DirectEmitter health probe must be registered")
+	assert.NoError(t, agg.probes[emitterKey].Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // deadlineProbeStore is a ledger.Store whose Verify asserts that the caller
@@ -611,26 +618,26 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 }
 
 // TestAuditCore_HealthCheckers_AuditLedgerReady verifies that Init registers
-// the "audit_ledger_ready" probe via cell.RegisterRepoReadiness typed funnel
-// (ledger.Store implements cell.RepoHealthProber). The probe is always present
+// the repo readiness probe via RegisterRepoReady typed funnel
+// (ledger.Store implements healthz.RepoProber). The probe is always present
 // regardless of the emitter type — MemStore always returns nil.
+// ProbeRepoReady = "auditcore_repo_ready" (cellgen-generated constant).
 func TestAuditCore_HealthCheckers_AuditLedgerReady(t *testing.T) {
 	c := newTestCell(t)
-	recorder := newTestRecorder()
+	recorder, agg := newTestRecorderWithAgg()
 	require.NoError(t, c.Init(context.Background(), recorder))
 
-	snap := recorder.Snapshot()
-	const probeKey = "audit_ledger_ready"
-	require.Contains(t, snap.HealthCheckers, probeKey,
-		"audit_ledger_ready probe must be registered via cell.RegisterRepoReadiness")
-	require.NoError(t, snap.HealthCheckers[probeKey](context.Background()),
-		"MemStore audit_ledger_ready must return nil (always ready)")
+	require.Contains(t, agg.probes, ProbeRepoReady,
+		"repo probe must be registered via RegisterRepoReady")
+	require.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
+		"MemStore repo probe must return nil (always ready)")
 }
 
 // TestAuditCore_HealthCheckers_NilEmitter verifies that when the emitter does
-// not implement the health-checker interface, no emitter health checkers are
-// registered — but audit_ledger_ready is always present (ledger.Store satisfies
-// cell.RepoHealthProber regardless of emitter type).
+// not implement healthz.ProbeSet, no emitter probes are registered —
+// but the repo probe is always present (ledger.Store satisfies
+// healthz.RepoProber regardless of emitter type).
+// ProbeRepoReady = "auditcore_repo_ready" (cellgen-generated constant).
 func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
@@ -638,16 +645,16 @@ func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 		WithClock(clock.Real()),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no HealthCheckers method
+		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no ProbeSet method
 	)
-	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	agg := newTestAgg()
+	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), recorder))
-	snap := recorder.Snapshot()
-	// WriterEmitter does not add emitter probes; only audit_ledger_ready is present.
-	assert.NotContains(t, snap.HealthCheckers, "outbox-failopen-rate.auditcore",
-		"WriterEmitter must not add outbox-failopen-rate checker")
-	assert.Contains(t, snap.HealthCheckers, "audit_ledger_ready",
-		"audit_ledger_ready must always be registered via cell.RegisterRepoReadiness")
+	// WriterEmitter does not add emitter probes; only repo probe is present.
+	assert.NotContains(t, agg.probes, "outbox-failopen-rate.auditcore",
+		"WriterEmitter must not add outbox-failopen-rate probe")
+	assert.Contains(t, agg.probes, ProbeRepoReady,
+		"repo probe must always be registered via RegisterRepoReady")
 }
 
 func mustNewRouter(t *testing.T) *router.Router {

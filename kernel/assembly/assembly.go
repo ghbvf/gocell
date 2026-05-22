@@ -22,10 +22,24 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
+
+// noopAggregator is a placeholder healthz.Aggregator used by assembly until
+// B5 wires the real aggregator through Config and startInternal. It accepts
+// probe registrations but discards them — cells that call reg.Healthz()
+// during Init will get a silent noop until the bootstrap drain (B7) connects
+// the real aggregator.
+type noopAggregator struct{}
+
+func (noopAggregator) Register(_ healthz.Probe) error { return nil }
+func (noopAggregator) Deregister(_ string)            {}
+func (noopAggregator) Evaluate(_ context.Context) healthz.Snapshot {
+	return healthz.Snapshot{Overall: healthz.StatusUp, Probes: []healthz.ProbeResult{}}
+}
 
 // assemblyState represents the lifecycle state of a CoreAssembly.
 // ref: uber-go/fx lifecycle.go — stopped/starting/started/stopping
@@ -448,7 +462,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	// ref: PR-V1-030-K01 (review G1-01).
 	localSnaps := make(map[string]cell.RegistrySnapshot, len(a.cells))
 	for _, c := range a.cells {
-		recorder := cell.NewRegistryRecorder(cloneConfigMap(cfgMap), a.cfg.DurabilityMode)
+		recorder := cell.NewRegistryRecorder(cloneConfigMap(cfgMap), a.cfg.DurabilityMode, noopAggregator{})
 		if err := c.Init(ctx, recorder); err != nil {
 			// a.snapshots is untouched until the post-loop publish below, so
 			// the failure path only needs to roll the state back. localSnaps

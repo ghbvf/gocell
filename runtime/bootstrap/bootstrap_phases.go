@@ -24,6 +24,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -96,14 +97,15 @@ func newPhaseState() (context.Context, *phaseState) {
 	}
 }
 
-// registerHealthChecker adds a named readiness checker to hh, returning an
-// error on duplicate names (instead of panicking like hh.RegisterChecker).
-func (s *phaseState) registerHealthChecker(name string, fn func(context.Context) error) error {
+// registerHealthChecker wraps fn as a healthz.Probe and registers it on agg.
+// Returns an error on duplicate names (ErrDuplicateProbe from the aggregator)
+// or when the name was already seen in this bootstrap session.
+func (s *phaseState) registerHealthChecker(name string, fn func(context.Context) error, agg healthz.Aggregator) error {
 	if _, exists := s.registeredCheckers[name]; exists {
 		return fmt.Errorf("bootstrap: duplicate health checker %q", name)
 	}
-	if err := s.hh.RegisterChecker(name, fn); err != nil {
-		return err
+	if err := agg.Register(healthz.NewProbe(name, fn)); err != nil {
+		return fmt.Errorf("bootstrap: register probe %q: %w", name, err)
 	}
 	s.registeredCheckers[name] = struct{}{}
 	return nil

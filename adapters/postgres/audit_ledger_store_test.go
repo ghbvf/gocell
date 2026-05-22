@@ -475,11 +475,11 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestAuditLedgerStore_RepoReadiness_Conformance (cell.RepoHealthProber)
+// TestAuditLedgerStore_RepoReadiness_Conformance (healthz.RepoProber)
 // ---------------------------------------------------------------------------
 
 // TestAuditLedgerStore_RepoReadiness_Conformance runs the single-source
-// RepoHealthProber conformance harness against LedgerStore. It verifies that:
+// RepoProber conformance harness against LedgerStore. It verifies that:
 //   - healthy: RepoReady returns nil when the audit_entries table is present.
 //   - broken: RepoReady returns a non-nil error when audit_entries is dropped,
 //     exercising a failure domain that a pool-level ping cannot detect.

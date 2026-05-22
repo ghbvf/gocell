@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -202,9 +203,7 @@ func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registry) error 
 	}
 
 	// Route groups removed: cell_gen.go owns Init and renders them.
-	c.registerHealthAndLifecycle(reg)
-
-	return nil
+	return c.registerHealthAndLifecycle(reg)
 }
 
 // initDeps validates and resolves publisher, emitter, and cursor codec.
@@ -349,19 +348,21 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 }
 
 // registerHealthAndLifecycle registers health probes and the sweeper lifecycle hook.
-func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registry) {
-	if hc, ok := c.emitter.(cell.HealthProber); ok {
-		for k, v := range hc.Probes() {
-			reg.Health(k, v)
+func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registry) error {
+	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
+		if err := RegisterEmitterProbes(reg, hc); err != nil {
+			return err
 		}
 	}
 	// Cell-level repo readiness probes (observability.md §"Cell 级别 Repo Readiness Probe").
-	// These probe the actual tables, not just the pool connection.
-	if prober, ok := c.deviceRepo.(cell.RepoHealthProber); ok {
-		cell.RegisterRepoReadiness(reg, "device_repo_ready", prober)
-	}
-	if prober, ok := c.commandQueue.(cell.RepoHealthProber); ok {
-		cell.RegisterRepoReadiness(reg, "command_queue_ready", prober)
+	// M1 cellgen emits exactly one RegisterRepoReady helper per cell (the cell's
+	// primary repo). Auxiliary repo probes (e.g. command_queue_ready) await M2
+	// cellgen multi-probe support — not in scope for HEALTHZ-INTERFACE-PACKAGE-01.
+	if prober, ok := c.deviceRepo.(healthz.RepoProber); ok {
+		if err := RegisterRepoReady(reg, prober); err != nil {
+			return err
+		}
 	}
 	reg.Lifecycle(c.commandSweeper.Hook())
+	return nil
 }

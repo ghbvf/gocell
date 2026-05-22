@@ -17,12 +17,34 @@ import (
 	"time"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
+
+// WithHealthAggregator injects a custom healthz.Aggregator into the bootstrap.
+// The aggregator is used by the health.Handler (/readyz) and by drainProbes
+// to register framework-level probes.
+//
+// Both bare-nil and typed-nil interface values are rejected at phase0 with
+// errcode ERR_VALIDATION_FAILED. When WithHealthAggregator is not called,
+// bootstrap constructs a default obshealthz.NewAggregator(WithClock(b.clock))
+// in phase0 — the option exists for hosts that want to substitute (e.g.
+// tests with a fake aggregator).
+//
+// ref: runtime-api.md strong-dependency wiring option pattern.
+func WithHealthAggregator(agg healthz.Aggregator) Option {
+	return func(b *Bootstrap) {
+		if validation.IsNilInterface(agg) {
+			b.healthAggregatorNil = true
+			return
+		}
+		b.healthAggregator = agg
+	}
+}
 
 // WithRouterOptions passes options to the router builder.
 func WithRouterOptions(opts ...router.Option) Option {

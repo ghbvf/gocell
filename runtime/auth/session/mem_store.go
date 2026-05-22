@@ -167,9 +167,9 @@ func (m *MemStore) RevokeForSubject(_ context.Context, subjectID string, event C
 	return nil
 }
 
-// RepoReady implements cell.RepoHealthProber. In-memory store is always ready
+// RepoReady implements healthz.RepoProber. In-memory store is always ready
 // — there is no external relation or schema that can go missing. Returns nil
-// unconditionally (MemStore convention per kernel/cell.RepoHealthProber godoc).
+// unconditionally (MemStore convention per kernel/healthz.RepoProber godoc).
 func (m *MemStore) RepoReady(_ context.Context) error {
 	return nil
 }

@@ -251,13 +251,54 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 **为什么必须**：38 处 Health 重复违反 DRY/SRP；编程框架不能假设拥有持久层，必须把持久化责任移交宿主。
 
 **怎么做**：
-- 新建 `kernel/healthz` 接口包：`Aggregator` / `Probe` / `Snapshot` 类型
+- 新建 `kernel/healthz` 接口包：`Aggregator` / `Probe` / `Snapshot` / `RepoProber` / `ProbeSet` 类型
 - 状态 schema 由 codegen 从 cell.yaml 生成 Go 类型（编译期）
-- 默认实现：`runtime/observability/healthz/inmemory`
-- 可选 adapter：`adapters/postgres/healthz` / `adapters/otel/healthz`（宿主选用或自己实现）
-- archtest `HEALTHZ-WRITE-01`：禁运行时组件绕开 Aggregator 自定义 Health
-- 38 处 Health 全部改为读 / 写 Aggregator
+- 默认实现：`runtime/observability/healthz/` — 内存 Aggregator + `RunAggregatorConformance` harness
+- 可选 adapter：`adapters/postgres/healthz` / `adapters/otel/healthz`（宿主选用或自己实现，见延期项）
+- archtest `HEALTHZ-WRITE-01`（A1/A2/A3）+ `HEALTHZ-TYPED-REGISTER-01`：双向锁 funnel
+- Cell-level probes 全部改为通过 cellgen 出的 typed helper 注册
 - **不创建 `generated/observed/*.yaml`**——持久化是宿主的事
+
+**实施状态（2026-05-23 落地）**：
+- 实施 PR: #&lt;TBD — main agent will fill in via `gh pr` after this batch&gt;
+- 接口包: `kernel/healthz/` — `Probe` / `Aggregator` / `Snapshot` / `RepoProber` / `ProbeSet` 已就位
+- 默认实现: `runtime/observability/healthz/` — in-memory aggregator + conformance harness
+- HTTP transport: `runtime/http/health/Handler` 重构为读 Aggregator.Evaluate 的 thin layer
+- Bootstrap: `bootstrap.WithHealthAggregator(agg)` option + phase5 drain（取代旧 3 个 register*HealthCheckers 函数）
+- Codegen: `tools/codegen/cellgen` 出 `cells/<cell>/healthz_gen.go`（typed RegisterRepoReady + RegisterEmitterProbes）
+- 4 cells (accesscore/auditcore/configcore/mdmgateway) 迁移完成；adapters (postgres/redis/rabbitmq/s3) 实现 Probe 接口
+- archtest: `HEALTHZ-WRITE-01` + `HEALTHZ-TYPED-REGISTER-01` 双向锁 funnel
+
+**显式延期项（不在本 PR）**：
+
+| 项 | 延期理由 |
+|---|---|
+| `adapters/postgres/healthz` 持久化 adapter | 属宿主职责；无宿主请求 → 不预先实现以避免推测性设计 |
+| `adapters/otel/healthz` 指标 adapter | 同上；OTel 信号语义未在 M1 范围 |
+| `cell.yaml` `health.probes:` declarative block | 与 M2-LIFECYCLE 的 `lifecycle:` 字段共占 yaml schema，等 M2 一并改避免双次迁移 |
+| A3 holder allowlist 升 Hard | 同 PR 登记 backlog `HEALTHZ-HOLDER-SEAL-01`，via Aggregator interface sealing |
+
+**funnel allowlist 表**（HEALTHZ-WRITE-01/A2 caller-identity）：
+
+| 文件 | 角色 |
+|---|---|
+| `runtime/observability/healthz/aggregator.go` | 默认实现，Register 在内部 aggregator 实现中调用 |
+| `runtime/observability/healthz/conformance.go` | 合规测试 harness，合法调用 Register |
+| `runtime/bootstrap/phases_lifecycle.go` | drainProbes — framework probe drain |
+| `runtime/bootstrap/phases_events.go` | registerHealthChecker — event router probe |
+| `runtime/bootstrap/bootstrap_phases.go` | registerHealthChecker helper |
+| `cells/<cell>/healthz_gen.go` | cellgen 出的 typed helper（RegisterRepoReady / RegisterEmitterProbes） |
+| `*_test.go` (in healthz/healthtest packages) | 单元测试 |
+
+**K8s 校准表 P-A1/P-A2/P-A3 行重评**（per ADR amendment 落地必查）：
+
+| 原则 | K8s 实例 | GoCell 等价异形（更新后） | 时间维度 |
+|---|---|---|---|
+| P-A1 | spec/status subresource | codegen 出 Go 类型 + `kernel/healthz.Aggregator` 运行时接口 | 编译期 + 运行时 |
+| P-A2 | apiserver 强制 status 由 controller 写 | `kernel/healthz.Aggregator` 接口（boot-time 注入）+ cellgen 派生 typed helper | 运行时接口 + 编译期 funnel |
+| P-A3 | conditions 层级 | 内存 Aggregator 树（`runtime/observability/healthz`）+ adapter 输出（延期） | 运行时 |
+
+P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel"——cellgen 在编译期将 `RepoProber` 注入 typed helper，进一步前移约束（对齐 P-E1"能在编译期完成的事不推运行时"）。该格升级不引入矛盾，P-A2 行无 ✅→⚠️ 退化。
 
 ### M2-LIFECYCLE：相位字段（满足 P-A1）
 
@@ -344,9 +385,9 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 
 | 原则 | K8s 实例（运行时为主） | GoCell 等价异形 | 时间维度 |
 |---|---|---|---|
-| P-A1 | spec/status subresource | codegen 出 Go 类型 + 运行时接口 | 编译期 + 运行时 |
-| P-A2 | apiserver 强制 status 由 controller 写 | `kernel/healthz.Aggregator` 接口 + adapter 注入 | 运行时接口 |
-| P-A3 | conditions 层级 | 内存 Aggregator 树 + adapter 输出 | 运行时 |
+| P-A1 | spec/status subresource | codegen 出 Go 类型 + `kernel/healthz.Aggregator` 运行时接口 | 编译期 + 运行时 |
+| P-A2 | apiserver 强制 status 由 controller 写 | `kernel/healthz.Aggregator` 接口（boot-time 注入）+ cellgen 派生 typed helper（编译期 funnel） | 运行时接口 + 编译期 |
+| P-A3 | conditions 层级 | 内存 Aggregator 树（`runtime/observability/healthz`）+ adapter 输出（延期） | 运行时 |
 | P-B1 | OwnerReference + finalizer | archtest 双向 + codegen 引用图 | 编译期 + CI 期 |
 | P-B2 | OPA Gatekeeper（运行时 admission）| CI 期规则引擎 + 规则即 YAML | CI 期 |
 | P-B3 | API GVK 唯一性（运行时）| 类型 owner 唯一（编译期）| 编译期 |
@@ -407,8 +448,8 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 | 原则 | 系统工程 | 软件工程 | 第一性原理 | 时间维度 | K8s 实例 | GoCell 里程碑 |
 |---|---|---|---|---|---|---|
 | P-A1 | 可观测性 | 封装 | 状态是数据 | 编译期 + 运行时 | spec/status | M1 + M2 |
-| P-A2 | 配置管理 | DRY/SRP | 单源公理 | 运行时接口 | apiserver 强制 | M1 |
-| P-A3 | 聚合 | 组合 | — | 运行时 | conditions 层级 | M1 |
+| P-A2 | 配置管理 | DRY/SRP | 单源公理 | 运行时接口 + 编译期 funnel | apiserver 强制 | M1 ✅ |
+| P-A3 | 聚合 | 组合 | — | 运行时 | conditions 层级 | M1 ✅ |
 | P-B1 | traceability | 契约即代码 | 充要条件 | 编译期 + CI 期 | OwnerReference | M4 |
 | P-B2 | CI = 配置 | DRY | 形式化 | CI 期 | OPA / VAP | M3 |
 | P-B3 | 配置管理 | SRP | 单源公理 | 编译期 | GVK 唯一 | M0 |

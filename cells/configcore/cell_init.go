@@ -18,8 +18,8 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/featureflag"
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
-
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -84,17 +84,16 @@ func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error 
 	// Route groups and subscriptions removed: cell_gen.go owns Init and renders them.
 
 	// Register health probes (emitter fail-open rate checker).
-	if hc, ok := c.emitter.(cell.HealthProber); ok {
-		for k, v := range hc.Probes() {
-			reg.Health(k, v)
+	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
+		if err := RegisterEmitterProbes(reg, hc); err != nil {
+			return err
 		}
 	}
 
-	// Register the differentiated config repo readiness probe.
-	// c.configRepo satisfies cell.RepoHealthProber via ports.ConfigRepository.RepoReady.
-	cell.RegisterRepoReadiness(reg, "config_repo_ready", c.configRepo)
-
-	return nil
+	// Register the differentiated config repo readiness probe via the
+	// cellgen-generated typed funnel.
+	// c.configRepo satisfies healthz.RepoProber via ports.ConfigRepository.RepoReady.
+	return RegisterRepoReady(reg, c.configRepo)
 }
 
 // initAllSlices constructs all 7 configcore slices.

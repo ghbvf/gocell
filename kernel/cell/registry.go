@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -108,11 +109,15 @@ type Registry interface {
 		opts ...SubscriptionOption,
 	) error
 
-	// Health registers a named readiness probe. If name is already registered,
-	// the duplicate is logged at slog.LevelError and silently dropped
-	// (first-wins semantics). Probe functions must be safe for concurrent
-	// invocation — they are called on every /readyz request.
-	Health(name string, check func(context.Context) error)
+	// Healthz returns the healthz.Aggregator that was injected at construction
+	// time. Cells register probes by calling reg.Healthz().Register(probe).
+	// The aggregator is owned by the bootstrap layer, which constructs it
+	// before calling Cell.Init and drains it after all cells have initialized.
+	//
+	// This method replaces the former Health(name, fn) accumulator pattern;
+	// the aggregator itself enforces first-wins duplicate semantics and
+	// provides concurrent-safe registration.
+	Healthz() healthz.Aggregator
 
 	// Lifecycle appends a lifecycle hook. Name must be non-empty; passing an
 	// empty Name panics (programming error). Hooks run in declaration order
@@ -268,12 +273,6 @@ func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
 	}
 }
 
-// HealthProber is implemented by components that expose a probe set for
-// cells to register via reg.Health(...) (notably outbox.DirectEmitter).
-type HealthProber interface {
-	Probes() map[string]func(context.Context) error
-}
-
 // SubscriptionValidator validates a Subscription at registration time.
 //
 // ref: opentelemetry-collector otelcol/config.go Validate() — declarative validation at config load time.
@@ -350,12 +349,13 @@ type ConfigReloadRequest struct {
 // ---------------------------------------------------------------------------
 
 // RegistrySnapshot is the immutable result of a Cell's Init registration pass.
-// Bootstrap reads these fields to wire routes, subscriptions, health probes,
-// lifecycle hooks, and config-reload callbacks.
+// Bootstrap reads these fields to wire routes, subscriptions, lifecycle hooks,
+// and config-reload callbacks. Health probes are no longer stored in the
+// snapshot: they are registered directly on the healthz.Aggregator that was
+// injected into the RegistryRecorder at construction time.
 type RegistrySnapshot struct {
 	RouteGroups     []RouteGroup
 	Subscriptions   []SubscriptionRequest
-	HealthCheckers  map[string]func(context.Context) error
 	LifecycleHooks  []LifecycleHook
 	ConfigReloaders []ConfigReloadRequest
 }
@@ -372,11 +372,11 @@ type RegistryRecorder struct {
 	cfg  map[string]any
 	mode DurabilityMode
 	log  *slog.Logger
+	agg  healthz.Aggregator
 
 	// accumulators
 	routeGroups     []RouteGroup
 	subscriptions   []SubscriptionRequest
-	healthCheckers  map[string]func(context.Context) error
 	lifecycleHooks  []LifecycleHook
 	configReloaders []ConfigReloadRequest
 
@@ -387,19 +387,30 @@ type RegistryRecorder struct {
 var _ Registry = (*RegistryRecorder)(nil)
 
 // NewRegistryRecorder constructs a RegistryRecorder with the given config
-// snapshot and durability mode. Uses the default slog logger.
-func NewRegistryRecorder(cfg map[string]any, mode DurabilityMode) *RegistryRecorder {
-	return NewRegistryRecorderWithLogger(cfg, mode, slog.Default())
+// snapshot, durability mode, and healthz Aggregator. The aggregator is
+// owned by the bootstrap layer and passed down so that probes registered
+// via reg.Healthz().Register(...) are accumulated in the same aggregator
+// that the HTTP health handler reads from.
+//
+// agg must not be nil; passing nil panics (programmer error).
+func NewRegistryRecorder(cfg map[string]any, mode DurabilityMode, agg healthz.Aggregator) *RegistryRecorder {
+	return NewRegistryRecorderWithLogger(cfg, mode, agg, slog.Default())
 }
 
 // NewRegistryRecorderWithLogger constructs a RegistryRecorder with a custom
 // logger. Provided for testing so log output can be captured.
-func NewRegistryRecorderWithLogger(cfg map[string]any, mode DurabilityMode, log *slog.Logger) *RegistryRecorder {
+//
+// agg must not be nil; passing nil panics (programmer error).
+func NewRegistryRecorderWithLogger(cfg map[string]any, mode DurabilityMode, agg healthz.Aggregator, log *slog.Logger) *RegistryRecorder {
+	if agg == nil {
+		panic(panicregister.Approved("registry-nil-aggregator",
+			errcode.Assertion("NewRegistryRecorder: healthz.Aggregator must not be nil")))
+	}
 	return &RegistryRecorder{
-		cfg:            cfg,
-		mode:           mode,
-		log:            log,
-		healthCheckers: make(map[string]func(context.Context) error),
+		cfg:  cfg,
+		mode: mode,
+		log:  log,
+		agg:  agg,
 	}
 }
 
@@ -463,24 +474,10 @@ func (r *RegistryRecorder) Subscribe(
 	return nil
 }
 
-// Health registers a named readiness probe. Duplicate names are logged at
-// Error level and the second registration is silently dropped (first-wins).
-func (r *RegistryRecorder) Health(name string, check func(context.Context) error) {
-	r.mustNotBeFinalized("Health")
-	MustHaveNonEmptyHealthName(name)
-	if _, exists := r.healthCheckers[name]; exists {
-		r.log.Error("registry Health: duplicate checker name — second registration dropped",
-			slog.String("checker_name", name))
-		return
-	}
-	r.healthCheckers[name] = check
-}
-
-// MustHaveNonEmptyHealthName panics when name is empty (programming error).
-func MustHaveNonEmptyHealthName(name string) {
-	if name == "" {
-		panic(panicregister.Approved("registry-health-name", errcode.Assertion("registry Health: name must not be empty")))
-	}
+// Healthz returns the healthz.Aggregator injected at construction time.
+// Cells register probes by calling reg.Healthz().Register(probe) during Init.
+func (r *RegistryRecorder) Healthz() healthz.Aggregator {
+	return r.agg
 }
 
 // Lifecycle appends a lifecycle hook. Panics when Name is empty (programming error).
@@ -531,6 +528,10 @@ func MustHaveNonNilConfigReloadFn(fn func(context.Context, ConfigChangeEvent) er
 
 // Snapshot finalizes the recorder and returns an immutable RegistrySnapshot.
 // After Snapshot is called, any further registration method panics.
+//
+// Health probes are NOT included in the snapshot: they are registered
+// directly on the healthz.Aggregator (accessible via Healthz()) and are
+// already live in the aggregator by the time Snapshot is called.
 func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 	r.finalized = true
 
@@ -541,11 +542,6 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 	subs := make([]SubscriptionRequest, len(r.subscriptions))
 	copy(subs, r.subscriptions)
 
-	checkers := make(map[string]func(context.Context) error, len(r.healthCheckers))
-	for k, v := range r.healthCheckers {
-		checkers[k] = v
-	}
-
 	hooks := make([]LifecycleHook, len(r.lifecycleHooks))
 	copy(hooks, r.lifecycleHooks)
 
@@ -555,7 +551,6 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 	return RegistrySnapshot{
 		RouteGroups:     rgs,
 		Subscriptions:   subs,
-		HealthCheckers:  checkers,
 		LifecycleHooks:  hooks,
 		ConfigReloaders: reloaders,
 	}

@@ -83,7 +83,7 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	if cfg.verboseDisabled {
 		hhOpts = append(hhOpts, health.WithVerboseDisabled())
 	}
-	hh := health.New(s.asm, b.clock, hhOpts...)
+	hh := health.New(s.asm, b.healthAggregator, b.clock, hhOpts...)
 	if b.adapterInfo != nil {
 		hh.SetAdapterInfo(b.adapterInfo)
 	}
@@ -97,7 +97,7 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	}
 	s.hh = hh
 	s.healthRouteGroupOpts = b.healthRouteGroupOpts
-	return b.registerAllHealthCheckers(s)
+	return b.drainProbes(s)
 }
 
 // phase5BuildPerListenerRouters creates one Router per declared listener config.

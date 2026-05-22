@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	khealthz "github.com/ghbvf/gocell/kernel/healthz"
 )
 
 // TestNewRedactedErrorMsg_NilReturnsEmpty verifies the nil-input sentinel path.
@@ -87,11 +88,12 @@ func TestSlogDependencyEntry_AccessorsViaRealHandler(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error {
 		return errors.New("connection refused password=secret")
-	}))
+	})))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -148,11 +150,12 @@ func TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error {
 		return errors.New("connection refused")
-	}))
+	})))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)

@@ -16,16 +16,31 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
 )
 
 // phase0ValidateOptions checks all option preconditions before any side effects.
 // Returns immediately on the first violation so the error message is unambiguous.
+//
+// splitting into sub-validators is the obvious refactor but would scatter
+// the "first violation wins" ordering across multiple call sites.
+//
+//nolint:cyclop // sequential precondition gate covering ~16 distinct options;
 func (b *Bootstrap) phase0ValidateOptions() error {
 	// Surface shutdown metrics registration errors before any component starts.
 	if b.shutdownMetricsErr != nil {
 		return fmt.Errorf("bootstrap: shutdown metrics registration failed: %w", b.shutdownMetricsErr)
+	}
+	if b.healthAggregatorNil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"bootstrap: WithHealthAggregator: both bare-nil and typed-nil interface values are rejected at phase0")
+	}
+	// Construct a default aggregator when WithHealthAggregator was not called.
+	if b.healthAggregator == nil {
+		b.healthAggregator = obshealthz.NewAggregator(obshealthz.WithClock(b.clock))
 	}
 	if err := b.validateHealthCheckers(); err != nil {
 		return err

@@ -198,7 +198,7 @@ func (r *ConfigRepository) PublishVersion(_ context.Context, version *domain.Con
 	return nil
 }
 
-// RepoReady implements cell.RepoHealthProber.
+// RepoReady implements healthz.RepoProber.
 // In-memory store is always ready (MemStore convention).
 func (r *ConfigRepository) RepoReady(_ context.Context) error {
 	return nil

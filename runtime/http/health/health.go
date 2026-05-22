@@ -2,17 +2,19 @@
 // endpoints. /readyz returns aggregate readiness by default and only exposes
 // detailed cell and dependency breakdown in verbose mode.
 //
-// PR-A35 made two structural guarantees:
-//   - RegisterChecker wraps every checker with wrapCtxSafe so that the outer
-//     Checker always returns as soon as ctx is canceled, regardless of whether
+// PR-A35 made two structural guarantees — now fulfilled by the injected
+// [kernel/healthz.Aggregator] (runtime/observability/healthz.NewAggregator):
+//   - Each probe is wrapped with a ctx-safe racing wrapper so the outer call
+//     returns as soon as the aggregate deadline fires, regardless of whether
 //     the inner function cooperates. This removes the "uncooperative probe
-//     leaks a goroutine past ReadyzHandler's return" trade-off that previously
-//     sat at the aggregator level — the aggregator itself is now insulated
-//     from inner-fn behavior.
+//     leaks a goroutine past ReadyzHandler's return" trade-off.
 //   - /readyz requests are deduplicated via singleflight so that a burst of
 //     concurrent probes shares one probe execution. This replaces the prior
-//     plan of a fixed "max concurrent probes" semaphore (which required
-//     picking a magic number) with a purely structural guard.
+//     plan of a fixed "max concurrent probes" semaphore.
+//
+// Handler is pure HTTP transport: probe storage and execution are delegated
+// to the injected Aggregator. Cell-level health (assembly.Health()) is
+// separate from aggregator probes and is not routed through the Aggregator.
 //
 // ref: k8s.io/apiserver/pkg/server/healthz — readyz deadline + named probes.
 // ref: uber-go/fx internal/lifecycle/lifecycle.go — ctx-aware lifecycle hooks.
@@ -36,19 +38,13 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/logutil"
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/http/health/probequery"
-)
-
-const (
-	// defaultHealthDeadline is the default readiness probe execution deadline.
-	// Matches the Kubernetes readiness probe convention (5 s).
-	defaultHealthDeadline = 5 * time.Second
 )
 
 // singleflight keys for the two response shapes. Verbose and non-verbose
@@ -66,63 +62,15 @@ const (
 	readyzReasonGracefulShutdown = "graceful_shutdown"
 )
 
-// Checker is a named readiness probe. Returning a non-nil error marks the
-// check as unhealthy. The context carries the deadline set on the Handler
-// (default 5 s, matching Kubernetes readiness probe convention).
-//
-// RegisterChecker wraps supplied functions with wrapCtxSafe, so the effective
-// Checker stored inside Handler honors ctx.Done regardless of the inner
-// implementation's cooperativeness. See wrapCtxSafe for the full contract.
-//
-// probe error 不上 wire（仅入 server slog），但 fail-closed 的 redaction 仅对
-// 结构化 key=value 形式生效（password / token / DSN 等 key 已注册）；见
-// ProbeResult.Err godoc 的示例格式。未使用结构化格式的裸 secret 仍可能泄漏到
-// slog 后端，应在 probe 实现中主动规避。
-//
-// ref: k8s.io/apiserver/pkg/server/healthz — HealthChecker interface with ctx.
-type Checker = func(context.Context) error
-
-// ProbeResult captures the outcome of a single readiness probe execution.
-type ProbeResult struct {
-	Status   string        // "healthy" | "degraded" | "unhealthy" | "timeout"
-	Duration time.Duration // wall-clock time spent inside the probe
-	// Err carries the probe error text. It is NEVER serialized to the wire
-	// (verbose 503 body is frozen to {status, duration_ms} per ADR
-	// 202605171200 §3); it reaches operators only via channel d
-	// (slog "readyz unhealthy" record) after passing through the
-	// newRedactedErrorMsg funnel. Probe implementations may include any
-	// diagnostic text — pkg/redaction.RedactString masks structured
-	// secrets (password=…, token=…, DSN) before the value crosses into
-	// slog backends, but unstructured secret material should still be
-	// avoided defensively.
-	//
-	// 示例：
-	//   fmt.Errorf("dial: %w", err)                         // 安全（无 secret 字段）
-	//   fmt.Errorf("dsn=postgres://u:p@host/db ping fail")  // 安全（dsn= key 触发 pkg/redaction）
-	//   fmt.Errorf("connect to %s", dsn)                    // ⚠ 不安全（无 key 锚，regex 不识别；裸 secret 进 slog）
-	//   panic(fmt.Sprintf("api-key=%s expired", key))       // 安全（api-key= key 触发）
-	//
-	// 见 ADR docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md §3 threat matrix。
-	Err error // non-nil when Status != "healthy"
-}
-
 // Option configures a Handler.
 type Option func(*Handler)
 
-// WithDeadline sets a per-probe deadline for /readyz. All registered checkers
-// must complete within this duration; checkers that exceed it are reported as
-// status="timeout" and contribute to an unhealthy aggregate.
-//
-// Default is 5 s (Kubernetes readiness probe convention).
-//
-// ref: k8s.io/apiserver/pkg/server/healthz — server-side readyz timeout independent
-// of the kubelet HTTP connection deadline.
-func WithDeadline(d time.Duration) Option {
-	return func(h *Handler) {
-		if d > 0 {
-			h.deadline = d
-		}
-	}
+// WithDeadline is retained for API continuity but is a no-op on Handler
+// since probe execution deadlines are now owned by the injected Aggregator.
+// Configure probe deadlines via runtime/observability/healthz.WithDeadline at
+// Aggregator construction time.
+func WithDeadline(_ time.Duration) Option {
+	return func(_ *Handler) {}
 }
 
 // WithVerboseDisabled declares that this Handler must never serve verbose
@@ -143,15 +91,12 @@ func WithVerboseDisabled() Option {
 // "unconfigured = unrestricted" fallback.
 const VerboseAuthHeader = "X-Readyz-Token"
 
-// Handler exposes /healthz and /readyz endpoints.
+// Handler exposes /healthz and /readyz endpoints. It is pure HTTP transport:
+// probe storage and execution are delegated to the injected Aggregator.
+// Cell-level health aggregation via assembly.Health() is separate.
 type Handler struct {
 	assembly *assembly.CoreAssembly
-
-	// deadline is the per-probe timeout for /readyz. Default 5 s mirrors
-	// Kubernetes readiness probe convention and is independent of the kubelet
-	// HTTP connection deadline so that kubelet connection drops do not cancel
-	// in-flight probes.
-	deadline time.Duration
+	agg      healthz.Aggregator // injected aggregator; owns probe storage + execution
 
 	// sf deduplicates concurrent /readyz executions so that a burst of
 	// probes (e.g. kubelet + load balancer + manual curl) shares one probe
@@ -160,7 +105,6 @@ type Handler struct {
 	sf singleflight.Group
 
 	mu              sync.RWMutex
-	checkers        map[string]Checker
 	adapterInfo     map[string]string // static adapter metadata for verbose output
 	verboseToken    string            // required match for the X-Readyz-Token header; empty means verbose is denied
 	verboseDisabled bool              // if true, /readyz?verbose is answered with the plain aggregate body
@@ -168,43 +112,26 @@ type Handler struct {
 	clock           clock.Clock
 }
 
-// New creates a Handler backed by the given CoreAssembly. The clock is
-// required: New panics on nil so misconfiguration fails fast at the
-// composition root. Production wiring threads bootstrap.b.clock here;
-// tests pass clockmock.New(...) for deterministic deadline checks.
+// New creates a Handler backed by the given CoreAssembly and Aggregator.
+// The clock is required and panics fast via clock.MustHaveClock.
+// asm and agg non-nil-ness is guaranteed by the bootstrap phase0 contract
+// (WithHealthAggregator typed-nil guard + WithAssembly required) and by
+// test fakes in the unit path; bare-nil ones produce a nil-deref on first
+// access, which the standard panic-recovery middleware translates to 500.
 //
-// The default probe deadline is 5 s (Kubernetes readiness probe convention).
-func New(asm *assembly.CoreAssembly, clk clock.Clock, opts ...Option) *Handler {
+// Production wiring threads bootstrap.b.clock here;
+// tests pass clockmock.New(...) for deterministic deadline checks.
+func New(asm *assembly.CoreAssembly, agg healthz.Aggregator, clk clock.Clock, opts ...Option) *Handler {
 	clock.MustHaveClock(clk, "health.New")
 	h := &Handler{
 		assembly: asm,
-		checkers: make(map[string]Checker),
-		deadline: defaultHealthDeadline,
+		agg:      agg,
 		clock:    clk,
 	}
 	for _, o := range opts {
 		o(h)
 	}
 	return h
-}
-
-// RegisterChecker adds a named readiness checker. It returns an error when a
-// checker with the same name is already registered or when fn is nil.
-//
-// The supplied function is wrapped with wrapCtxSafe before being stored, so
-// the effective Checker honors ctx.Done regardless of the inner
-// implementation's cooperativeness. See wrapCtxSafe for the full contract.
-func (h *Handler) RegisterChecker(name string, fn Checker) error {
-	if fn == nil {
-		return fmt.Errorf("health: nil checker for %q", name)
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, exists := h.checkers[name]; exists {
-		return fmt.Errorf("health: duplicate checker name %q", name)
-	}
-	h.checkers[name] = wrapCtxSafe(fn, h.clock)
-	return nil
 }
 
 // SetVerboseToken sets a bearer token that must be provided via the
@@ -280,10 +207,10 @@ type readyzResult struct {
 }
 
 // ReadyzHandler returns an http.HandlerFunc for the /readyz readiness endpoint.
-// It runs all registered readiness checkers in parallel, each bounded by
-// h.deadline. The probe context is derived from context.Background() (not
-// r.Context()) so that kubelet/LB connection drops do not cancel in-flight
-// probes.
+// It runs all registered readiness probes (via the injected Aggregator) in
+// parallel, each bounded by the Aggregator's configured deadline. The probe
+// context is derived from context.Background() (not r.Context()) so that
+// kubelet/LB connection drops do not cancel in-flight probes.
 //
 // By default it returns only aggregate readiness status. Detailed cell and
 // dependency breakdown is returned only when the request enables verbose mode
@@ -315,10 +242,10 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		if verbose {
 			key = sfKeyVerbose
 		}
-		// computeReadyzSafe wraps aggregateCellHealth/runProbesParallel with
+		// computeReadyzSafe wraps aggregateCellHealth/agg.Evaluate with
 		// a recover fence so a panic in any helper does not propagate to
 		// every sharer blocked on singleflight.Do (per-probe panics are
-		// already caught by runOneProbe — this layer covers the rarer
+		// already caught by the Aggregator — this layer covers the rarer
 		// "assembly helper panic" class).
 		shared, _, _ := h.sf.Do(key, func() (any, error) {
 			return h.computeReadyzSafe(verbose), nil
@@ -340,7 +267,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 // does not propagate out of singleflight.Do — which would otherwise surface
 // the panic to every concurrent sharer. On recover we fail closed with a
 // plain unhealthy result (no cells / dependencies) and log the event.
-// Per-probe panics are caught separately inside runOneProbe.
+// Per-probe panics are caught separately inside the Aggregator.
 func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -358,23 +285,22 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 // result on each invocation. Callers must go through computeReadyzSafe so
 // that panics do not escape the singleflight boundary.
 //
-// adapter info is captured under Handler.mu alongside the checkers map so
-// the result is fully self-contained — writeTo can serialize it without
-// touching Handler state.
+// adapter info is captured under Handler.mu so the result is fully
+// self-contained — writeTo can serialize it without touching Handler state.
 func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	cellOverall, cells := h.aggregateCellHealth(verbose)
 
 	h.mu.RLock()
-	checkersCopy := make(map[string]Checker, len(h.checkers))
-	maps.Copy(checkersCopy, h.checkers)
 	var adapters map[string]string
 	if verbose {
 		adapters = cloneAdapterInfo(h.adapterInfo)
 	}
 	h.mu.RUnlock()
 
-	results := h.runProbesParallel(checkersCopy)
-	agg := h.aggregateProbeResults(results, verbose)
+	// Evaluate uses context.Background() internally so kubelet disconnects
+	// do not cancel in-flight probes (PR-A35 / Aggregator contract).
+	snap := h.agg.Evaluate(context.Background())
+	agg := h.aggregateProbeResults(snap.Probes, verbose)
 	worst := rankStatus(cellOverall)
 	if r := rankStatus(agg.Overall); r > worst {
 		worst = r
@@ -437,8 +363,8 @@ type probeAggregate struct {
 	SlogDiag map[string]SlogDependencyEntry
 }
 
-// aggregateProbeResults converts ProbeResult map into a probeAggregate per
-// ADR 202605171200 four-channel model:
+// aggregateProbeResults converts a kernel healthz.Snapshot.Probes slice into a
+// probeAggregate per ADR 202605171200 four-channel model:
 //
 //   - Wire: map[name]verboseDependencyEntry — public payload, frozen to
 //     {Status, DurationMs}; no error text by construction.
@@ -449,11 +375,17 @@ type probeAggregate struct {
 // Both views are nil when verbose is false. Overall is the worst-case status
 // across all probe results: healthy(0) < degraded(1) < unhealthy(2).
 //
+// Wire-string mapping from kernel Status enum:
+//   - StatusUp       → "healthy"
+//   - StatusDegraded → "degraded"
+//   - StatusDown     → "timeout"   if errors.Is(Err, context.DeadlineExceeded)
+//   - StatusDown     → "unhealthy" otherwise
+//
 // ref: k8s.io/apiserver/pkg/server/healthz healthz.go:274-275 — wire vs klog
 // double-buffer separation; GoCell uses redaction in place of K8s "reason
 // withheld" but preserves the same wire-no-text invariant.
 func (h *Handler) aggregateProbeResults(
-	results map[string]ProbeResult, verbose bool,
+	results []healthz.ProbeResult, verbose bool,
 ) probeAggregate {
 	var wire map[string]verboseDependencyEntry
 	var slogDiag map[string]SlogDependencyEntry
@@ -462,18 +394,19 @@ func (h *Handler) aggregateProbeResults(
 		slogDiag = make(map[string]SlogDependencyEntry, len(results))
 	}
 	worst := 0 // healthy
-	for name, pr := range results {
-		if r := rankStatus(pr.Status); r > worst {
+	for _, pr := range results {
+		wireStatus := kernelStatusToWire(pr.Status, pr.Err)
+		if r := rankStatus(wireStatus); r > worst {
 			worst = r
 		}
 		if verbose {
-			wire[name] = verboseDependencyEntry{
-				Status:     pr.Status,
-				DurationMs: pr.Duration.Milliseconds(),
+			wire[pr.Name] = verboseDependencyEntry{
+				Status:     wireStatus,
+				DurationMs: pr.Latency.Milliseconds(),
 			}
-			slogDiag[name] = SlogDependencyEntry{
-				status:     pr.Status,
-				durationMs: pr.Duration.Milliseconds(),
+			slogDiag[pr.Name] = SlogDependencyEntry{
+				status:     wireStatus,
+				durationMs: pr.Latency.Milliseconds(),
 				errorMsg:   newRedactedErrorMsg(pr.Err),
 			}
 		}
@@ -482,6 +415,31 @@ func (h *Handler) aggregateProbeResults(
 		Overall:  statusFromRank(worst),
 		Wire:     wire,
 		SlogDiag: slogDiag,
+	}
+}
+
+// kernelStatusToWire maps a kernel healthz.Status enum value to the wire
+// string used in HTTP responses and slog channel d:
+//   - StatusUp       → "healthy"
+//   - StatusDegraded → "degraded"
+//   - StatusDown     → "timeout"   if errors.Is(err, context.DeadlineExceeded)
+//   - StatusDown     → "unhealthy" otherwise
+//
+// The "timeout" distinction preserves the existing wire contract: dashboards
+// can distinguish "probe overran deadline" from "probe returned a domain error"
+// without the HTTP transport needing to know about kernel-layer deadline
+// semantics beyond the errors.Is check.
+func kernelStatusToWire(s healthz.Status, err error) string {
+	switch s {
+	case healthz.StatusUp:
+		return "healthy"
+	case healthz.StatusDegraded:
+		return "degraded"
+	default: // StatusDown
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "timeout"
+		}
+		return "unhealthy"
 	}
 }
 
@@ -584,10 +542,7 @@ func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog
 // details is the empty array.
 //
 // ctx 是 request 上下文（非 probe ctx），用于 wire `requestId` 透传到 errcode 响应
-// envelope（httputil.WriteError → ctxkeys.RequestIDFrom；slog 日志键仍是 `request_id`）。与 probe 用的
-// context.WithTimeout(context.Background(), h.deadline)（runProbesParallel 内
-// derive）是不同生命周期 — 后者保证 kubelet 断开不取消 in-flight probe，前者
-// 用于把请求级关联 ID 带到错误响应。
+// envelope（httputil.WriteError → ctxkeys.RequestIDFrom；slog 日志键仍是 `request_id`）。
 func writeReadyz503(ctx context.Context, w http.ResponseWriter, status, reason string) {
 	httputil.WriteError(ctx, w, errcode.New(
 		errcode.KindUnavailable,
@@ -611,92 +566,6 @@ func (r readyzResult) verboseFields() map[string]any {
 		body["adapters"] = r.adapters
 	}
 	return body
-}
-
-// runProbesParallel executes all checkers in parallel bounded by h.deadline.
-// Because RegisterChecker wraps every fn with wrapCtxSafe, each goroutine
-// returns promptly when the aggregate deadline fires — the pre-PR-A35
-// "goroutine leak past handler return" trade-off no longer applies at this
-// layer.
-//
-// The probe ctx is derived from context.Background() so that request-level
-// cancellation (kubelet disconnect) does not cancel probes.
-//
-// ref: k8s.io/apiserver/pkg/server/healthz — background-ctx readyz deadline.
-func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]ProbeResult {
-	results := make(map[string]ProbeResult, len(checkers))
-	if len(checkers) == 0 {
-		return results
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), h.deadline)
-	defer cancel()
-
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	wg.Add(len(checkers))
-	for name, fn := range checkers {
-		go func() {
-			defer wg.Done()
-			pr := runOneProbe(ctx, fn, h.deadline, h.clock)
-			mu.Lock()
-			results[name] = pr
-			mu.Unlock()
-		}()
-	}
-	wg.Wait()
-	return results
-}
-
-// runOneProbe executes a single Checker inside a recover fence and returns a
-// ProbeResult. A panicking probe is caught and reported as unhealthy. The
-// deadline value is included verbatim in the timeout error string so verbose
-// 503 consumers see the exact budget without having to consult runtime
-// configuration.
-//
-// Timeout vs unhealthy classification matches DeadlineExceeded explicitly
-// rather than "any non-nil ctx.Err()". The probe ctx is derived from
-// context.WithTimeout(Background, deadline), so the only ctx.Err() value
-// that can arise here is DeadlineExceeded — but the explicit match guards
-// against a future ctx-parent change silently routing Canceled into the
-// timeout bucket. context.Canceled wrapped by client libraries (pgx /
-// go-redis on failed I/O) is a genuine unhealthy signal, not a timeout.
-func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration, clk clock.Clock) (pr ProbeResult) {
-	start := clk.Now()
-	defer func() {
-		pr.Duration = clk.Since(start)
-		if r := recover(); r != nil {
-			// Mirror wrap.go:probePanicError — emit slog.Warn immediately so
-			// non-verbose k8s readiness probes also surface the panic event
-			// (verbose-only channel d slog is conditional on ?verbose=true).
-			// Without this, an infrastructure-level panic inside runOneProbe
-			// — distinct from probe-fn panics caught by wrapCtxSafe — would
-			// produce a silent 503 with no diagnostic trace on non-verbose
-			// probes. Redaction applies (panicV may contain probe-derived
-			// secrets in pathological cases).
-			slog.Warn("health: runOneProbe panicked",
-				slog.Any("panic", redaction.RedactAny(r)),
-			)
-			pr.Status = "unhealthy"
-			pr.Err = fmt.Errorf("panic: %v", r)
-		}
-	}()
-
-	err := fn(ctx)
-	switch {
-	case err == nil:
-		pr.Status = "healthy"
-	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
-		pr.Status = "timeout"
-		pr.Err = fmt.Errorf("probe did not return within deadline %s (ctx: %w)", deadline, err)
-	case errors.Is(err, cell.ErrDegraded):
-		pr.Status = "degraded"
-		pr.Err = err
-	default:
-		pr.Status = "unhealthy"
-		pr.Err = err
-	}
-	return pr
 }
 
 // verboseDecision determines whether the request renders the verbose body.

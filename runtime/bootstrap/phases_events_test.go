@@ -29,14 +29,22 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
+	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
+
+// newEventsTestAggregator returns a fresh in-memory healthz.Aggregator for use in
+// event-phase tests that call health.New directly (bypassing bootstrap phase5).
+func newEventsTestAggregator() healthz.Aggregator {
+	return obshealthz.NewAggregator(obshealthz.WithClock(clock.Real()))
+}
 
 // stubEventCell is a minimal cell that registers a single contract-first
 // subscription via reg.Subscribe(...). Used by the phase6 wiring tests below.
@@ -96,13 +104,14 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 		WithConsumerBase(newTestConsumerBase(t)),
 		WithConsumerMiddleware(spyMW),
 	)
+	b.healthAggregator = newEventsTestAggregator() // phase0 normally sets this; test bypasses phase0.
 
 	runCtx, s := newPhaseState()
 	defer s.runCancel()
 	s.asm = asm
 	s.cellSnapshots = asm.Snapshots()
 	s.sub = bus
-	s.hh = health.New(asm, clock.Real()) // phase5 normally populates this; test bypasses phase5.
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real()) // phase5 normally populates this; test bypasses phase5.
 
 	require.NoError(t, b.phase6StartEventRouter(runCtx, s),
 		"phase6 must start cleanly with one stub subscription")
@@ -156,13 +165,14 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 		WithConsumerBase(newTestConsumerBase(t)),
 		WithEventRouterReadyTimeout(testtime.D80ms),
 	)
+	b.healthAggregator = newEventsTestAggregator() // phase0 normally sets this; test bypasses phase0.
 
 	runCtx, s := newPhaseState()
 	defer s.runCancel()
 	s.asm = asm
 	s.cellSnapshots = asm.Snapshots()
 	s.sub = neverReadySubscriber{}
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
 
 	start := time.Now()
 	err := b.phase6StartEventRouter(runCtx, s)
@@ -209,7 +219,7 @@ func TestPhase6_DrainCellSubscriptions_DriftedCellID_ReturnsError(t *testing.T) 
 	defer s.runCancel()
 	s.asm = asm
 	s.sub = bus
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
 
 	// Inject a drifted snapshot: cell "stub" registers a subscription whose
 	// CellID claims "wrong-owner" — mismatched from the snapshot key "stub".
@@ -261,7 +271,7 @@ func TestPhase6_SubscriptionsWithSubscriberButNoConsumerBase_FailsFast(t *testin
 	s.asm = asm
 	s.cellSnapshots = asm.Snapshots()
 	s.sub = bus
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
 
 	err := b.phase6StartEventRouter(runCtx, s)
 	require.Error(t, err)
@@ -306,7 +316,7 @@ func TestPhase6_SubscriptionsWithZeroValueConsumerBase_FailsFast(t *testing.T) {
 	s.asm = asm
 	s.cellSnapshots = asm.Snapshots()
 	s.sub = bus
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
 
 	err := b.phase6StartEventRouter(runCtx, s)
 	require.Error(t, err)
@@ -334,13 +344,14 @@ func TestPhase6_SubscriptionsWithConsumerBase_Succeeds(t *testing.T) {
 		WithSubscriber(bus),
 		WithConsumerBase(newTestConsumerBase(t)),
 	)
+	b.healthAggregator = newEventsTestAggregator() // phase0 normally sets this; test bypasses phase0.
 
 	runCtx, s := newPhaseState()
 	defer s.runCancel()
 	s.asm = asm
 	s.cellSnapshots = asm.Snapshots()
 	s.sub = bus
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
 
 	require.NoError(t, b.phase6StartEventRouter(runCtx, s))
 	for _, v := range slices.Backward(s.teardowns) {

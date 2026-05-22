@@ -155,6 +155,20 @@ func generateOneCell(
 	if err := renderAndWrite(root, "cell.tmpl", spec, cellGenPath(root, cell), opts, res, "cellgen generate: render "+cell.ID); err != nil {
 		return err
 	}
+
+	healthzSpec := &HealthzGenSpec{
+		Package:    cell.Dir,
+		CellID:     cell.ID,
+		SourceFile: cell.File,
+	}
+	if err := renderAndWrite(
+		root, "healthz_gen.tmpl", healthzSpec,
+		healthzGenPath(root, cell), opts, res,
+		"cellgen generate: render healthz "+cell.ID,
+	); err != nil {
+		return err
+	}
+
 	for _, sid := range slicesForCellSorted(project, cell.ID) {
 		sliceSpec, err := BuildSliceSpec(project, cell.ID, sid, bundle)
 		if err != nil {
@@ -196,7 +210,7 @@ type CellArtifact struct {
 // because the cell template's imports are inferred from per-slice subscribes;
 // extracting per-slice render into a helper duplicates the import accumulator.
 //
-//nolint:gocognit,funlen // render+slices in one pass; splitting duplicates import accumulator (see comment above)
+//nolint:gocognit,funlen,cyclop // render+slices in one pass; splitting duplicates import accumulator (see comment above)
 func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID string) ([]CellArtifact, error) {
 	if project == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -251,6 +265,30 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		return nil, err
 	}
 	out = append(out, CellArtifact{Kind: "cell-gen", RelPath: cellRel, Content: cellContent})
+
+	healthzSpec := &HealthzGenSpec{
+		Package:    cell.Dir,
+		CellID:     cell.ID,
+		SourceFile: cell.File,
+	}
+	healthzAbs := healthzGenPath(root, cell)
+	healthzContent, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "healthz_gen.tmpl",
+		Templates:    templates,
+		Data:         healthzSpec,
+		Filename:     healthzAbs,
+	})
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"cellgen render artifacts: healthz render failed",
+			err,
+			errcode.WithDetails(slog.String("cellID", cellID)))
+	}
+	healthzRel, err := relFromRoot(root, healthzAbs)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, CellArtifact{Kind: "healthz-gen", RelPath: healthzRel, Content: healthzContent})
 
 	for _, sid := range slicesForCellSorted(project, cellID) {
 		sliceSpec, err := BuildSliceSpec(project, cellID, sid, bundle)
@@ -358,6 +396,13 @@ func slicesForCellSorted(p *metadata.ProjectMeta, cellID string) []string {
 func cellGenPath(root string, cell *metadata.CellMeta) string {
 	dir := filepath.Dir(cell.File)
 	return filepath.Join(root, dir, "cell_gen.go")
+}
+
+// healthzGenPath converts a CellMeta.File ("examples/X/cells/Y/cell.yaml") to
+// the absolute healthz_gen.go path under root.
+func healthzGenPath(root string, cell *metadata.CellMeta) string {
+	dir := filepath.Dir(cell.File)
+	return filepath.Join(root, dir, "healthz_gen.go")
 }
 
 // sliceGenPath converts a SliceMeta.File to the absolute slice_gen.go path.

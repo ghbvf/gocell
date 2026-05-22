@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/worker"
@@ -24,7 +24,7 @@ import (
 var (
 	_ session.Store             = (*PGSessionStore)(nil)
 	_ lifecycle.ManagedResource = (*PGSessionStore)(nil)
-	_ cell.RepoHealthProber     = (*PGSessionStore)(nil)
+	_ healthz.RepoProber        = (*PGSessionStore)(nil)
 )
 
 // Session SQL statements.
@@ -247,7 +247,7 @@ func (s *PGSessionStore) Revoke(ctx context.Context, id string) error {
 // GRANT) that a pool-level ping cannot detect.
 const repoReadySQL = `SELECT 1 FROM sessions WHERE false`
 
-// RepoReady implements cell.RepoHealthProber. It issues a cheap non-transactional
+// RepoReady implements healthz.RepoProber. It issues a cheap non-transactional
 // representative query against the sessions table so that schema/migration
 // drift and table-level permission loss are surfaced as a differentiated failure
 // domain distinct from the pool-level postgres_ready probe registered by *Pool.
@@ -276,7 +276,7 @@ func (s *PGSessionStore) RepoReady(ctx context.Context) error {
 
 // Checkers returns nil: pool-level connection liveness is *Pool's concern.
 // Cell-level differentiated readiness is exposed through RepoReady, which is
-// registered as "session_store_ready" via cell.RegisterRepoReadiness in the
+// registered as "session_store_ready" via the cellgen-emitted typed helper in the
 // accesscore cell init path.
 func (s *PGSessionStore) Checkers() map[string]func(context.Context) error {
 	return nil

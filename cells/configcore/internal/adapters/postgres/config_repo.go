@@ -806,7 +806,7 @@ const configEntriesProbeSQL = `SELECT 1 FROM config_entries WHERE false`
 // config_entries for the RepoReady probe.
 const featureFlagsProbeSQL = `SELECT 1 FROM feature_flags WHERE false`
 
-// RepoReady implements cell.RepoHealthProber. It issues two cheap
+// RepoReady implements healthz.RepoProber. It issues two cheap
 // non-transactional representative Exec probes — SELECT 1 FROM config_entries
 // WHERE false and SELECT 1 FROM feature_flags WHERE false — so that missing
 // tables, dropped columns, or revoked table-level permissions are detected

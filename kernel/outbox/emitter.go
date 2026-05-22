@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -246,9 +247,10 @@ var _ Emitter = (*DirectEmitter)(nil)
 // ref: kernel/cell/health.go — cell-layer alias to this sentinel.
 var ErrDegraded = errcode.New(errcode.KindUnavailable, errcode.ErrOutboxDegraded, "degraded")
 
-// Probes returns a probe map for cells to register via reg.Health(...). The
-// probe name is scoped by cellID to avoid collisions when multiple cells own a
-// DirectEmitter (each /readyz checker name MUST be globally unique).
+// Probes returns a []healthz.Probe slice for cells to register via
+// RegisterEmitterProbes (cellgen-generated). The probe name is scoped by cellID
+// to avoid collisions when multiple cells own a DirectEmitter (each /readyz
+// checker name MUST be globally unique).
 //
 // The probe returns ErrDegraded when the fail-open drop ratio exceeds the
 // threshold configured via WithFailOpenRateThreshold (default 5%). The /readyz
@@ -264,9 +266,11 @@ var ErrDegraded = errcode.New(errcode.KindUnavailable, errcode.ErrOutboxDegraded
 //
 // ref: kernel/outbox/emitter.go ErrDegraded
 // ref: cells/accesscore/cell_providers.go:22-38 — kebab-case checker name convention
-func (e *DirectEmitter) Probes() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		"outbox-failopen-rate." + e.cellID: e.checkFailOpenRate,
+var _ healthz.ProbeSet = (*DirectEmitter)(nil)
+
+func (e *DirectEmitter) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe("outbox-failopen-rate."+e.cellID, e.checkFailOpenRate),
 	}
 }
 

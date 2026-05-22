@@ -44,7 +44,14 @@ func newTestCell() *ConfigCore {
 
 // newTestRecorder returns a RegistryRecorder for demo mode with an empty config.
 func newTestRecorder() *cell.RegistryRecorder {
-	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())
+}
+
+// newTestRecorderWithAgg returns a RegistryRecorder and the aggregator for
+// tests that need to assert probe registration.
+func newTestRecorderWithAgg() (*cell.RegistryRecorder, *testAggregator) {
+	agg := newTestAgg()
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg), agg
 }
 
 func TestConfigCore_Lifecycle(t *testing.T) {
@@ -89,7 +96,7 @@ func TestConfigCore_Startup(t *testing.T) {
 func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	checkHalfConfigured := func(t *testing.T, c *ConfigCore) {
 		t.Helper()
-		err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+		err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 		require.Error(t, err)
 		var ecErrHalf *errcode.Error
 		require.True(t, errors.As(err, &ecErrHalf))
@@ -126,7 +133,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithCASProtocol(mustNewCASProtocol(t, "version")),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -136,7 +143,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 
 func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	c := NewConfigCore(WithClock(clock.Real()), WithInMemoryDefaults())
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err)
 	var ecErrSink *errcode.Error
 	require.True(t, errors.As(err, &ecErrSink))
@@ -150,7 +157,7 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.NoError(t, err)
 }
 
@@ -161,7 +168,7 @@ func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.NoError(t, err)
 }
 
@@ -174,7 +181,7 @@ func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())))
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
 	assert.Nil(t, c.pendingOutboxWriter)
@@ -189,7 +196,7 @@ func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T)
 		WithEmitter(outbox.NewNoopEmitter()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err)
 	var ecErrMutex *errcode.Error
 	require.True(t, errors.As(err, &ecErrMutex))
@@ -209,7 +216,7 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 	)
-	err = c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	err = c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErrDurable *errcode.Error
 	require.True(t, errors.As(err, &ecErrDurable))
@@ -558,7 +565,7 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 		WithCASProtocol(mustNewCASProtocol(t, "version")),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -614,7 +621,7 @@ func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 	// Writer is accumulated into pendingOutboxWriter pre-Init.
 	assert.NotNil(t, c.pendingOutboxWriter, "WithOutboxDeps must populate pendingOutboxWriter")
 	// Init must succeed with explicitly injected repos.
-	require.NoError(t, c.Init(t.Context(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable)))
+	require.NoError(t, c.Init(t.Context(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable, newTestAgg())))
 	assert.NotNil(t, c.configRepo, "configRepo must be non-nil after Init")
 	assert.NotNil(t, c.flagRepo, "flagRepo must be non-nil after Init")
 }
@@ -663,54 +670,50 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 }
 
 // TestConfigCore_HealthCheckers_WithDirectEmitter verifies that after Init
-// with a DirectEmitter-backed publisher, the registry snapshot contains the
-// outbox-failopen-rate checker scoped to "configcore".
+// with a DirectEmitter-backed publisher, the outbox-failopen-rate probe
+// scoped to "configcore" is registered.
 func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	recorder := newTestRecorder()
+	recorder, agg := newTestRecorderWithAgg()
 	require.NoError(t, c.Init(context.Background(), recorder))
 
-	snap := recorder.Snapshot()
 	const emitterKey = "outbox-failopen-rate.configcore"
-	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	require.Contains(t, agg.probes, emitterKey, "DirectEmitter health probe must be registered")
+	assert.NoError(t, agg.probes[emitterKey].Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // TestConfigCore_HealthCheckers_ConfigRepoReady verifies that after Init the
-// registry snapshot contains the differentiated config repo readiness probe
-// registered via cell.RegisterRepoReadiness and that the mem-backed probe
-// returns nil (always-ready MemStore convention).
+// repo readiness probe is registered via RegisterRepoReady and the mem-backed
+// probe returns nil (always-ready MemStore convention).
+// ProbeRepoReady = "configcore_repo_ready" (cellgen-generated constant).
 func TestConfigCore_HealthCheckers_ConfigRepoReady(t *testing.T) {
 	c := newTestCell()
-	recorder := newTestRecorder()
+	recorder, agg := newTestRecorderWithAgg()
 	require.NoError(t, c.Init(context.Background(), recorder))
 
-	snap := recorder.Snapshot()
-	const probeKey = "config_repo_ready"
-	require.Contains(t, snap.HealthCheckers, probeKey,
-		"RegisterRepoReadiness must register config_repo_ready in the registry snapshot")
-	assert.NoError(t, snap.HealthCheckers[probeKey](context.Background()),
-		"mem-backed config_repo_ready must return nil (MemStore always-ready convention)")
+	require.Contains(t, agg.probes, ProbeRepoReady,
+		"RegisterRepoReady must register repo probe in the aggregator")
+	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
+		"mem-backed repo probe must return nil (MemStore always-ready convention)")
 }
 
 // TestConfigCore_HealthCheckers_NilEmitter verifies that when the emitter does
-// not implement the health-checker interface, no emitter-scoped health checkers
-// are registered. The config_repo_ready probe is always present (it is
-// unconditionally registered via cell.RegisterRepoReadiness); only the
-// outbox-failopen-rate probe is absent when the emitter has no HealthCheckers.
+// not implement healthz.ProbeSet, no emitter probes are registered.
+// The repo probe is always present (unconditionally via RegisterRepoReady).
+// ProbeRepoReady = "configcore_repo_ready" (cellgen-generated constant).
 func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	c := NewConfigCore(
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
-		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no HealthCheckers method
+		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no ProbeSet method
 	)
-	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	agg := newTestAgg()
+	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), recorder))
-	snap := recorder.Snapshot()
-	assert.NotContains(t, snap.HealthCheckers, "outbox-failopen-rate.configcore",
+	assert.NotContains(t, agg.probes, "outbox-failopen-rate.configcore",
 		"WriterEmitter must not register outbox-failopen-rate probe")
-	assert.Contains(t, snap.HealthCheckers, "config_repo_ready",
-		"config_repo_ready must always be registered via RegisterRepoReadiness")
+	assert.Contains(t, agg.probes, ProbeRepoReady,
+		"repo probe must always be registered via RegisterRepoReady")
 }
 
 // ---------------------------------------------------------------------------
@@ -731,7 +734,7 @@ func TestConfigCore_WithCASProtocol_TypedNil_RejectedAtInit(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithCASProtocol(typedNil),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err, "typed-nil *cas.Protocol must be rejected at phase0 sentinel")
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -746,7 +749,7 @@ func TestConfigCore_WithCASProtocol_TypedNil_RejectedAtInit(t *testing.T) {
 func TestConfigCore_DurableMode_MissingCASProtocol_FailsFast(t *testing.T) {
 	c := NewConfigCore(WithClock(clock.Real()))
 	// DurabilityDurable + no WithCASProtocol must fail at phase0 CAS check.
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))

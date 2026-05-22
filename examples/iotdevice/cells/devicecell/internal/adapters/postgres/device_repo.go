@@ -297,7 +297,7 @@ func scanDeviceFromRows(rows pgx.Rows) (*domain.Device, error) {
 
 // RepoReady verifies that the devices table is reachable by executing a
 // lightweight probe query. It is registered as the "device_repo_ready" probe
-// via cell.RegisterRepoReadiness in the cell Init path.
+// via reg.Healthz().Register in the cell Init path.
 func (r *PGDeviceRepository) RepoReady(ctx context.Context) error {
 	var dummy int
 	err := r.db.QueryRow(ctx, `SELECT 1 FROM devices LIMIT 1`).Scan(&dummy)

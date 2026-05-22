@@ -476,11 +476,12 @@ func TestDirectEmitter_Probes_DegradedOnHighDropRatio(t *testing.T) {
 		require.NoError(t, e.Emit(ctx, entry)) // fail-open does not return err
 	}
 
-	checkers := e.Probes()
-	require.Contains(t, checkers, "outbox-failopen-rate.testcell")
+	probes := e.Probes()
+	require.Len(t, probes, 1)
+	require.Equal(t, "outbox-failopen-rate.testcell", probes[0].Name())
 
 	// 10 drops / 10 total = 100% > 5% default threshold → Tripped
-	checkErr := checkers["outbox-failopen-rate.testcell"](ctx)
+	checkErr := probes[0].Check(ctx)
 	require.Error(t, checkErr)
 	assert.ErrorIs(t, checkErr, ErrDegraded)
 }
@@ -498,11 +499,12 @@ func TestDirectEmitter_Probes_HealthyOnLowDropRatio(t *testing.T) {
 		require.NoError(t, e.Emit(ctx, entry))
 	}
 
-	checkers := e.Probes()
-	require.Contains(t, checkers, "outbox-failopen-rate.testcell")
+	probes := e.Probes()
+	require.Len(t, probes, 1)
+	require.Equal(t, "outbox-failopen-rate.testcell", probes[0].Name())
 
 	// 0 drops / 10 total = 0% < 5% threshold → not tripped
-	checkErr := checkers["outbox-failopen-rate.testcell"](ctx)
+	checkErr := probes[0].Check(ctx)
 	assert.NoError(t, checkErr)
 }
 
@@ -536,7 +538,9 @@ func TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables(t *testing.T) {
 	}
 
 	// threshold 0 → Tripped always false
-	checkErr := e.Probes()["outbox-failopen-rate.testcell"](ctx)
+	probes := e.Probes()
+	require.Len(t, probes, 1)
+	checkErr := probes[0].Check(ctx)
 	assert.NoError(t, checkErr)
 }
 

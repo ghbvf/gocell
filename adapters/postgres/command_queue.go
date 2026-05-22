@@ -416,8 +416,8 @@ func (q *PGCommandQueue) Cancel(ctx context.Context, commandID string, now time.
 }
 
 // RepoReady verifies that the commands table is reachable by executing a
-// lightweight probe query. Registered as "command_queue_ready" via
-// cell.RegisterRepoReadiness in the devicecell Init path.
+// lightweight probe query. Registered as "command_queue_ready" via the
+// cellgen-emitted typed helper in the devicecell Init path.
 func (q *PGCommandQueue) RepoReady(ctx context.Context) error {
 	var dummy int
 	err := q.db.QueryRow(ctx, `SELECT 1 FROM commands LIMIT 1`).Scan(&dummy)

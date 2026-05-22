@@ -46,7 +46,7 @@ func TestCellInit_Signature_AcceptsRegistry(t *testing.T) {
 
 func TestCellInit_BaseCell_AcceptsRegistry(t *testing.T) {
 	b := MustNewBaseCell(&metadata.CellMeta{ID: "test-cell"})
-	rec := NewRegistryRecorder(map[string]any{"k": "v"}, DurabilityDurable)
+	rec := NewRegistryRecorder(map[string]any{"k": "v"}, DurabilityDurable, newFakeAggregator())
 
 	err := b.Init(context.Background(), rec)
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestCellInit_ErrorPropagates(t *testing.T) {
 		initErr:  sentinel,
 	}
 
-	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
 	err := cell.Init(context.Background(), rec)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, sentinel), "error should be the sentinel error")

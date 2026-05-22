@@ -54,7 +54,7 @@ func newTestCursorCodec(t *testing.T) *query.CursorCodec {
 }
 
 func newTestRec() *cell.RegistryRecorder {
-	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())
 }
 
 func TestDeviceCell_Lifecycle(t *testing.T) {
@@ -379,7 +379,7 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithClock(clock.Real()),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -398,7 +398,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg())))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-fail"}`))
@@ -416,7 +416,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 		WithClock(clock.Real()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg())))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-demo"}`))
@@ -428,24 +428,24 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 }
 
 // TestDeviceCell_Probes_WithDirectEmitter verifies that after Init
-// with a DirectEmitter-backed publisher, the snapshot contains the
-// outbox-failopen-rate checker scoped to "devicecell".
+// with a DirectEmitter-backed publisher, the outbox-failopen-rate probe
+// scoped to "devicecell" is registered.
 func TestDeviceCell_Probes_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	agg := newTestAgg()
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), rec))
-	snap := rec.Snapshot()
 
 	const emitterKey = "outbox-failopen-rate.devicecell"
-	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter probe must be aggregated")
-	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	require.Contains(t, agg.probes, emitterKey, "DirectEmitter probe must be registered")
+	assert.NoError(t, agg.probes[emitterKey].Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // TestDeviceCell_LifecycleHookRegistered verifies that Init registers the
 // command sweeper lifecycle hook via reg.Lifecycle.
 func TestDeviceCell_LifecycleHookRegistered(t *testing.T) {
 	c := newTestCell()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
 

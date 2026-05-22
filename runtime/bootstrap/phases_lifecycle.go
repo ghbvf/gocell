@@ -1,23 +1,23 @@
 package bootstrap
 
-// phases_lifecycle.go — cell lifecycle hook discovery and health checker registration
-// (phase3b + health-checker helpers called from phase5).
+// phases_lifecycle.go — cell lifecycle hook discovery and health probe wiring
+// (phase3b + drainProbes called from phase5).
 //
 // Covers:
 //   - phase3b: LifecycleHooks drain from RegistrySnapshot
-//   - registerAllHealthCheckers / registerCellHealthCheckers / registerOneCellHealthCheckers
-//   - registerConfigDriftChecker
+//   - drainProbes: registers framework-level probes onto b.healthAggregator
 //
 // ref: uber-go/fx lifecycle.go — lifecycle hook registration ordering and
 // duplicate-Name detection at Append time (kernel/lifecycle mirrors this contract).
-// ref: kernel/cell.Registry.Health — cells register probes via reg.Health during Init;
-// bootstrap drains HealthCheckers from RegistrySnapshot in this phase.
+// ref: kernel/healthz.Aggregator — cells register probes via reg.Healthz() during
+// Init (written directly to the shared aggregator); bootstrap registers framework-level
+// probes (config_watcher, config_drift) here.
 
 import (
 	"context"
 	"fmt"
-	"sort"
 
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/runtime/config"
 )
 
@@ -61,77 +61,58 @@ func (b *Bootstrap) phase3bDrainLifecycleHooks(s *phaseState) error {
 	return nil
 }
 
-// registerAllHealthCheckers registers option-supplied, cell-discovered, watcher,
-// and drift health checkers. Returns error on duplicate names or nil checkers.
-func (b *Bootstrap) registerAllHealthCheckers(s *phaseState) error {
+// drainProbes registers framework-level probes onto b.healthAggregator.
+//
+// Cell-level repo probes are registered by cells during Init through the
+// cellgen-generated <cellpkg>.RegisterRepoReady helper, which calls
+// reg.Healthz().Register internally. Bootstrap doesn't need to "drain" a
+// snapshot field anymore — the aggregator is shared between Registry and
+// Handler at construction time, so probes registered on one side are
+// visible to the other.
+//
+// This function registers framework-owned probes that aren't cell-owned:
+//  1. option-supplied checkers (from WithHealthChecker) — adapter pool probes
+//     such as postgres_ready, redis_ready, rabbitmq_ready, vault_transit_ready
+//  2. config_watcher probe (when a config watcher is active)
+//  3. config_drift probe (when the config supports generation tracking)
+func (b *Bootstrap) drainProbes(s *phaseState) error {
+	// Register option-supplied checkers (adapter pool probes, etc.).
 	for _, hc := range b.healthCheckers {
-		if err := s.registerHealthChecker(hc.name, hc.fn); err != nil {
+		if err := s.registerHealthChecker(hc.name, hc.fn, b.healthAggregator); err != nil {
 			return err
 		}
 	}
-	if err := b.registerCellHealthCheckers(s); err != nil {
-		return err
-	}
+	// Register config_watcher probe when a watcher is active.
 	if s.cfgWatcher != nil {
 		cfgHealth := s.cfgWatcher.Health // func() error — wrap to ctx-aware signature
 		if err := s.registerHealthChecker(configWatcherCheckerName, func(_ context.Context) error {
 			return cfgHealth()
-		}); err != nil {
+		}, b.healthAggregator); err != nil {
 			return err
 		}
 	}
-	return b.registerConfigDriftChecker(s)
+	return b.registerConfigDriftProbe(s)
 }
 
-// registerCellHealthCheckers drains HealthCheckers from each cell's RegistrySnapshot.
-// Checkers are registered in sorted order (by name) for deterministic readyz output.
-func (b *Bootstrap) registerCellHealthCheckers(s *phaseState) error {
-	for _, id := range s.asm.CellIDs() {
-		snap, ok := s.cellSnapshots[id]
-		if !ok {
-			continue
-		}
-		if err := b.registerOneCellHealthCheckers(s, id, snap.HealthCheckers); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// registerOneCellHealthCheckers registers all health checkers from a single
-// cell's snapshot map, in sorted order.
-func (b *Bootstrap) registerOneCellHealthCheckers(s *phaseState, id string, cellCheckers map[string]func(context.Context) error) error {
-	names := make([]string, 0, len(cellCheckers))
-	for k := range cellCheckers {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		fn := cellCheckers[name]
-		if fn == nil {
-			return fmt.Errorf("bootstrap: cell %q returned nil health checker for %q", id, name)
-		}
-		if err := s.registerHealthChecker(name, fn); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// registerConfigDriftChecker registers the config-drift health probe when the
+// registerConfigDriftProbe registers the config_drift health probe when the
 // config supports generation tracking.
-func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {
+func (b *Bootstrap) registerConfigDriftProbe(s *phaseState) error {
 	cfg := s.cfg
 	g, gOK := cfg.(config.Generationer)
 	og, ogOK := cfg.(config.ObservedGenerationer)
 	if !gOK || !ogOK {
 		return nil
 	}
-	return s.registerHealthChecker(configDriftCheckerName, func(_ context.Context) error {
+	probe := healthz.NewProbe(configDriftCheckerName, func(_ context.Context) error {
 		if config.HasDrift(cfg) {
 			return fmt.Errorf("config drift: generation %d, observed %d",
 				g.Generation(), og.ObservedGeneration())
 		}
 		return nil
 	})
+	if err := b.healthAggregator.Register(probe); err != nil {
+		return fmt.Errorf("bootstrap: register probe %q: %w", configDriftCheckerName, err)
+	}
+	s.registeredCheckers[configDriftCheckerName] = struct{}{}
+	return nil
 }

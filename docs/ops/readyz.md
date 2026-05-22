@@ -270,20 +270,21 @@ fallback.
 ## Cell-level repo readiness probes
 
 In addition to the adapter-level `postgres_ready` probe (a bare pool Ping), each
-platform Cell registers a cell-level repo readiness probe via
-`cell.RegisterRepoReadiness`. These probes represent a **distinct failure domain**:
+platform Cell registers a cell-level repo readiness probe via the cellgen-generated
+`<cellpkg>.RegisterRepoReady(reg, prober)` helper (emitted into `healthz_gen.go`).
+These probes represent a **distinct failure domain**:
 they execute a representative query against the Cell's own relation(s), surfacing
 schema/migration drift, missing tables, and table-level permission loss that a
 connection Ping cannot detect.
 
 | Probe name | Owning Cell | Probed relation(s) | Backend |
 |---|---|---|---|
-| `config_repo_ready` | configcore | `config_entries`, `feature_flags` | PG only; mem stores always return nil (ready) |
-| `session_store_ready` | accesscore | `sessions` | PG only; mem stores always return nil (ready) |
-| `audit_ledger_ready` | auditcore | `audit_entries` (via `Tail`) | PG only; mem stores always return nil (ready) |
+| `configcore_repo_ready` | configcore | `config_entries`, `feature_flags` | PG only; mem stores always return nil (ready) |
+| `accesscore_repo_ready` | accesscore | `sessions` | PG only; mem stores always return nil (ready) |
+| `auditcore_repo_ready` | auditcore | `audit_entries` (via `Tail`) | PG only; mem stores always return nil (ready) |
 
 These probes are **not synonymous** with `postgres_ready`. A green `postgres_ready`
-and a failing `session_store_ready` means the PG connection is alive but the
+and a failing `accesscore_repo_ready` means the PG connection is alive but the
 `sessions` table is inaccessible — a different remediation path (migration replay,
 permission grant) than a connection failure. Operators must monitor both probe
 families independently.
@@ -292,10 +293,10 @@ Cell-level repo probe names appear in the verbose breakdown under `dependencies`
 
 ```json
 "dependencies": {
-  "postgres_ready":      { "status": "healthy", "duration_ms": 3 },
-  "config_repo_ready":   { "status": "healthy", "duration_ms": 2 },
-  "session_store_ready": { "status": "healthy", "duration_ms": 1 },
-  "audit_ledger_ready":  { "status": "healthy", "duration_ms": 2 }
+  "postgres_ready":       { "status": "healthy", "duration_ms": 3 },
+  "configcore_repo_ready": { "status": "healthy", "duration_ms": 2 },
+  "accesscore_repo_ready": { "status": "healthy", "duration_ms": 1 },
+  "auditcore_repo_ready":  { "status": "healthy", "duration_ms": 2 }
 }
 ```
 

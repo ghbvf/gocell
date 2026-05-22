@@ -14,10 +14,9 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/http/health"
 )
 
-// CheckCtxRespected verifies that a raw health.Checker cooperates with
+// CheckCtxRespected verifies that a raw probe Check function cooperates with
 // ctx cancellation. Probe authors can drop this into their unit tests to
 // detect the class of bugs that PR-A35's wrapCtxSafe papers over at
 // runtime: an inner fn that ignores ctx leaves a goroutine behind on every
@@ -40,7 +39,7 @@ import (
 // wrapping fn in a probe that responds to an alternate signal. The helper
 // intentionally does not spawn a secondary cancel goroutine because it
 // cannot force fn to return.
-func CheckCtxRespected(t testing.TB, fn health.Checker, budget time.Duration) {
+func CheckCtxRespected(t testing.TB, fn func(context.Context) error, budget time.Duration) {
 	t.Helper()
 	if fn == nil {
 		t.Errorf("CheckCtxRespected: nil checker")

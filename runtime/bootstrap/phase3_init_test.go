@@ -24,11 +24,19 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
 )
+
+// newTestAggregator returns a fresh in-memory healthz.Aggregator suitable for
+// tests that need to call health.New directly (bypassing bootstrap phase5).
+func newTestAggregator() healthz.Aggregator {
+	return obshealthz.NewAggregator(obshealthz.WithClock(clock.Real()))
+}
 
 // ---------------------------------------------------------------------------
 // Fixture cells
@@ -49,8 +57,10 @@ func (c *snapshotCheckCell) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	reg.Health("probe."+c.ID(), func(_ context.Context) error { return nil })
-	return nil
+	// Register a probe via reg.Healthz() — the new typed registration path.
+	// The probe is written directly to the aggregator injected at construction
+	// time; it no longer appears in RegistrySnapshot.HealthCheckers.
+	return reg.Healthz().Register(healthz.NewProbe("probe."+c.ID(), func(_ context.Context) error { return nil }))
 }
 
 // initFailCell fails during Init with a configurable error.
@@ -170,7 +180,11 @@ func buildStartedAsm(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 
 // TestPhase3_AssemblyInitsAllCellsWithRegistry_PopulatesSnapshots verifies that
 // after phase3InitAssembly completes, s.cellSnapshots contains one entry per
-// registered cell, and each snapshot reflects what the cell registered in Init.
+// registered cell. Health probes are no longer stored in RegistrySnapshot;
+// cells register them directly on the injected healthz.Aggregator via
+// reg.Healthz().Register(...). Assembly uses a noopAggregator internally
+// (kernel is not modified in B7), so probe registration is verified separately
+// in integration/bootstrap-level tests.
 func TestPhase3_AssemblyInitsAllCellsWithRegistry_PopulatesSnapshots(t *testing.T) {
 	c1 := newSnapshotCheckCell("c1")
 	c2 := newSnapshotCheckCell("c2")
@@ -179,15 +193,11 @@ func TestPhase3_AssemblyInitsAllCellsWithRegistry_PopulatesSnapshots(t *testing.
 	snaps := asm.Snapshots()
 	require.Len(t, snaps, 2)
 
-	snap1, ok := snaps["c1"]
-	require.True(t, ok)
-	assert.Contains(t, snap1.HealthCheckers, "probe.c1",
-		"c1 snapshot must contain the probe registered in Init")
+	_, ok := snaps["c1"]
+	require.True(t, ok, "c1 snapshot must be present after Init")
 
-	snap2, ok := snaps["c2"]
-	require.True(t, ok)
-	assert.Contains(t, snap2.HealthCheckers, "probe.c2",
-		"c2 snapshot must contain the probe registered in Init")
+	_, ok = snaps["c2"]
+	require.True(t, ok, "c2 snapshot must be present after Init")
 }
 
 // TestPhase3_InitErrorAbortsBeforeStart verifies that when a cell's Init fails,
@@ -249,7 +259,7 @@ func TestPhase5_RouteGroupsDrainedFromSnapshots(t *testing.T) {
 	defer s.runCancel()
 
 	// Build a minimal hh so phase5CollectRouteGroups can succeed.
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, newTestAggregator(), clock.Real())
 
 	// routers is empty here — we just want to verify groups are collected.
 	routers := map[cell.ListenerRef]*router.Router{}
@@ -294,7 +304,7 @@ func TestBootstrap_NoSubscriptionsAndNoSubscriber_Succeeds(t *testing.T) {
 	defer s.runCancel()
 	s.asm = asm
 	s.cellSnapshots = asm.Snapshots()
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, newTestAggregator(), clock.Real())
 	// sub is nil — no subscriber configured.
 
 	err := b.phase6StartEventRouter(runCtx, s)
@@ -312,7 +322,7 @@ func TestBootstrap_HasSubscriptionsButNoSubscriber_FailsFast(t *testing.T) {
 	defer s.runCancel()
 	s.asm = asm
 	s.cellSnapshots = asm.Snapshots()
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, newTestAggregator(), clock.Real())
 	// sub is nil intentionally.
 
 	err := b.phase6StartEventRouter(runCtx, s)

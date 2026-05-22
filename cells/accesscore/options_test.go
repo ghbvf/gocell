@@ -60,7 +60,7 @@ func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
 		withTestBootstrapAuth(),
 		// withTestSetupLock() omitted on purpose.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err, "missing WithSetupLock must produce a phase0 error")
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -101,7 +101,7 @@ func TestWithSetupLock_NilOption_RejectedAtInit(t *testing.T) {
 				withTestBootstrapAuth(),
 				withSetupLock(tc.lock),
 			)
-			err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+			err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 			require.Error(t, err)
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec))
@@ -130,14 +130,14 @@ func TestWithInMemoryDefaults(t *testing.T) {
 	assert.NotNil(t, c.roleRepo)
 	// Verify sessionStore is wired before Init (explicit injection, no clock deferral).
 	assert.NotNil(t, c.sessionStore)
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())))
 	assert.NotNil(t, c.sessionStore)
 }
 
 func TestHealthCheckers_InMemory(t *testing.T) {
-	// session.Store now satisfies cell.RepoHealthProber via RepoReady. The
-	// session_store_ready probe is registered for ALL store implementations
-	// (including MemStore) through the typed RegisterRepoReadiness funnel.
+	// session.Store now satisfies healthz.RepoProber via RepoReady. The
+	// repo probe is registered for ALL store implementations (including MemStore)
+	// through the cellgen-generated RegisterRepoReady funnel.
 	// MemStore.RepoReady returns nil — in-memory always ready.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
@@ -153,19 +153,19 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	agg := newTestAgg()
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), rec))
-	snap := rec.Snapshot()
-	// session_store_ready is registered via cell.RegisterRepoReadiness (typed funnel).
-	require.Contains(t, snap.HealthCheckers, "session_store_ready",
-		"session.Store satisfies RepoHealthProber; session_store_ready must be registered")
-	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()),
+	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
+	require.Contains(t, agg.probes, ProbeRepoReady,
+		"session.Store satisfies RepoProber; repo probe must be registered")
+	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
 }
 
 func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
-	// session.Store satisfies cell.RepoHealthProber via RepoReady. The probe is
-	// registered unconditionally (including MemStore) through RegisterRepoReadiness.
+	// session.Store satisfies healthz.RepoProber via RepoReady. The probe is
+	// registered unconditionally (including MemStore) through RegisterRepoReady.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
@@ -180,20 +180,20 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	agg := newTestAgg()
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), rec))
-	snap := rec.Snapshot()
-	// session_store_ready is now registered via the typed funnel for all Store impls.
-	require.Contains(t, snap.HealthCheckers, "session_store_ready",
-		"session.Store satisfies RepoHealthProber; session_store_ready must be registered")
-	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()),
+	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
+	require.Contains(t, agg.probes, ProbeRepoReady,
+		"session.Store satisfies RepoProber; repo probe must be registered")
+	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
 }
 
 func TestRegisterSubscriptions(t *testing.T) {
 	c := newTestCell(t)
 	ctx := context.Background()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
@@ -229,7 +229,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErrOutbox *errcode.Error
 	require.True(t, errors.As(err, &ecErrOutbox))
@@ -251,7 +251,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable, newTestAgg()))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -268,15 +268,15 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
 }
 
 // TestHealthCheckers_WithDirectEmitter verifies that after Init with a
-// DirectEmitter-backed publisher, HealthCheckers returns both the
-// session_store_ready checker and the outbox-failopen-rate checker.
+// DirectEmitter-backed publisher, both the repo probe and the
+// outbox-failopen-rate probe are registered.
 func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
@@ -293,26 +293,26 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	agg := newTestAgg()
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), rec))
 
-	snap := rec.Snapshot()
-	// session_store_ready is registered via the typed funnel for all Store impls.
-	require.Contains(t, snap.HealthCheckers, "session_store_ready",
-		"session.Store satisfies RepoHealthProber; session_store_ready must be registered")
-	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()),
+	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
+	require.Contains(t, agg.probes, ProbeRepoReady,
+		"session.Store satisfies RepoProber; repo probe must be registered")
+	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
 	const emitterKey = "outbox-failopen-rate.accesscore"
-	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	require.Contains(t, agg.probes, emitterKey, "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, agg.probes[emitterKey].Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // TestHealthCheckers_WithNoopEmitter verifies that when the emitter does not
-// implement emitterHealthChecker (WriterEmitter via NoopWriter path),
-// only cell-owned checkers appear.
+// implement healthz.ProbeSet (WriterEmitter via NoopWriter path),
+// only the repo probe appears — no emitter probes.
 func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
-	// WriterEmitter (NoopWriter path) does not implement emitterHealthChecker,
-	// so no outbox-failopen-rate checker is produced.
+	// WriterEmitter (NoopWriter path) does not implement healthz.ProbeSet,
+	// so no outbox-failopen-rate probe is registered.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
@@ -331,17 +331,17 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		withTestBootstrapAuth(),
 		withTestSetupLock(),
 	)
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	agg := newTestAgg()
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
 	require.NoError(t, c.Init(context.Background(), rec))
-	snap := rec.Snapshot()
-	// session_store_ready is registered via the typed funnel for all Store impls.
-	require.Contains(t, snap.HealthCheckers, "session_store_ready",
-		"session.Store satisfies RepoHealthProber; session_store_ready must be registered")
-	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()),
+	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
+	require.Contains(t, agg.probes, ProbeRepoReady,
+		"session.Store satisfies RepoProber; repo probe must be registered")
+	assert.NoError(t, agg.probes[ProbeRepoReady].Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
-	for k := range snap.HealthCheckers {
+	for k := range agg.probes {
 		assert.NotContains(t, k, "outbox-failopen-rate",
-			"nil emitter must not produce outbox checker: key=%s", k)
+			"WriterEmitter must not produce outbox probe: key=%s", k)
 	}
 }
 
@@ -368,7 +368,7 @@ func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 		withTestSetupLock(),
 		// withTestCASProtocol() omitted on purpose.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err, "missing WithCASProtocol must produce a phase0 error")
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -395,7 +395,7 @@ func TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
 		withTestSetupLock(),
 		WithCASProtocol(nil), // bare-nil intentionally
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))

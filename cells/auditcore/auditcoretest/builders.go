@@ -8,11 +8,20 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
+
+// noopAgg is a test-use healthz.Aggregator that silently discards probes.
+// Used in BuildAuditcoreChain so Init callers don't need a real Aggregator.
+type noopAgg struct{}
+
+func (noopAgg) Register(_ healthz.Probe) error              { return nil }
+func (noopAgg) Deregister(_ string)                         {}
+func (noopAgg) Evaluate(_ context.Context) healthz.Snapshot { return healthz.Snapshot{} }
 
 // buildChainConfig holds the resolved options for BuildAuditcoreChain.
 type buildChainConfig struct {
@@ -89,7 +98,7 @@ func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (
 	)
 
 	ctx = context.Background()
-	recorder := cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)
+	recorder := cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, noopAgg{})
 	if err := c.Init(ctx, recorder); err != nil {
 		t.Fatalf("auditcoretest: auditcore.Init: %v", err)
 	}
