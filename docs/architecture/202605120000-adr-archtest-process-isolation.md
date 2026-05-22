@@ -77,9 +77,7 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 测试用 K=4（任意小 K，算法正确性与具体 K 无关，K=4 跑得快）。**事实源单源**：脚本里 `shard_assignment()` 是唯一 modulo 算法实现，`run_shard()` 与 `LIST_SHARD_TESTS` 路径都调用它；Go 测试不**复制**算法，只**调用**脚本验证算法性质。负 TDD：用 `awk 'NR % (n+1) == s'`（cover-break）替换 → partition 断言报告 ~50 测试未分配，恢复后立即绿。
 
-刻意不验证：CI yaml `_build-lint.yml::matrix.shard: [0..15]` 与同文件 `env: SHARD_COUNT: 16` 的内部一致性——那是 deployment value 漂移，是另一类问题，不在算法正确性范围内。
-
-> Amendment 2026-05-23: 本段原文为「script 默认 `SHARD_COUNT=16` 与 `_build-lint.yml::matrix.shard: [0..15]` 一致性」。Amendment 后 script 默认改 `SHARD_COUNT=1`（本地友好），CI yaml 维持 explicit `SHARD_COUNT=16`，两值差异是 by-design（编码"本地 vs CI 上下文"），不再是"应一致"目标。改写后聚焦 CI yaml 内部 matrix.shard 与 SHARD_COUNT env 的 deployment 一致性问题。
+刻意不验证：CI yaml `_build-lint.yml::matrix.shard: [0..15]` 与同文件 `env: SHARD_COUNT: 16` 的内部一致性——那是 deployment value 漂移，是另一类问题，不在算法正确性范围内。（2026-05-23 amendment：script 默认值已改 `SHARD_COUNT=1`（本地友好），CI yaml 维持 explicit `SHARD_COUNT=16`，两值差异是 by-design，编码"本地 vs CI 上下文"；不再是"应一致"目标，`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01` 同 PR 关闭，详见末尾 §Amendment。）
 
 ## K8s 范式对照
 
@@ -120,6 +118,8 @@ structural rollback（恢复 single-process）：
 | Discovery 函数数 | 296 | 296（一致） |
 
 phase0-baseline.txt 留在 worktree 但不入 PR（一次性 artifact）。
+
+> 注：上表 K=16 是 CI 路径指标。本地 K=1 路径 wall-time 基线参考：Phase 0 改造前无 TestMain 预热实测 70.23s 全跑（23.94 GB peak RSS）；ADR 202605190000 TestMain 预热落地后 `*types.Info` cache 在 K=1 单进程内跨 test function 复用，预计 wall-time 改善，待本地重测更新数值。
 
 ## Amendment 2026-05-23: 默认值 SHARD_COUNT 16→1（本地友好）
 
