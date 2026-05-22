@@ -13,7 +13,7 @@ func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
 	// Metadata-only schema: key + version + actorId; no value field.
 	c.ValidatePayload(t, []byte(`{"key":"app.name","version":2,"actorId":"adm-1"}`))
 	c.ValidatePayload(t, []byte(`{"key":"app.name","version":1,"actorId":"adm-1"}`))
-	c.ValidateHeaders(t, []byte(`{"event_id":"evt-sub-1"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"evt-sub-1"}`))
 
 	// Missing required fields
 	c.MustRejectPayload(t, []byte(`{"version":2,"actorId":"adm-1"}`))
@@ -43,7 +43,7 @@ func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
 	// Valid: key + version + actorId (metadata-only + tombstone protection).
 	c.ValidatePayload(t, []byte(`{"key":"app.name","version":1,"actorId":"adm-1"}`))
 	c.ValidatePayload(t, []byte(`{"key":"app.name","version":42,"actorId":"adm-1"}`))
-	c.ValidateHeaders(t, []byte(`{"event_id":"evt-del-1"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"evt-del-1"}`))
 
 	// Missing required fields.
 	c.MustRejectPayload(t, []byte(`{}`))

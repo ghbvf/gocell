@@ -107,7 +107,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 				errcode.WithDetails(slog.String("field", "cmdId"), slog.String("reason", "invalid"))))
 			return
 		}
-		req.CmdId = v
+		req.CmdID = v
 	}
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, httputil.DefaultDecodeJSONLimit+1))
 	if err != nil {

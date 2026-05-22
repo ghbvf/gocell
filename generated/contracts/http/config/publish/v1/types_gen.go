@@ -27,7 +27,7 @@ type Response struct {
 // ResponseData is a generated DTO for contract http.config.publish.v1.
 type ResponseData struct {
 	ID        string `json:"id"`
-	ConfigId  string `json:"configId"`
+	ConfigID  string `json:"configId"`
 	Version   int64  `json:"version"`
 	Value     string `json:"value"`
 	Sensitive bool   `json:"sensitive"`

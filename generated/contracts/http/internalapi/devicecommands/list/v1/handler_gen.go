@@ -66,14 +66,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req.Cursor = page.Cursor
 	req.Limit = int64(page.Limit)
 
-	req.DeviceId = r.URL.Query().Get("deviceId")
-	if req.DeviceId != "" && len(req.DeviceId) < 0 {
+	req.DeviceID = r.URL.Query().Get("deviceId")
+	if req.DeviceID != "" && len(req.DeviceID) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
 			errcode.WithDetails(slog.String("field", "deviceId"), slog.String("reason", "invalid"))))
 		return
 	}
-	if len(req.DeviceId) > 256 {
+	if len(req.DeviceID) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
 			errcode.WithDetails(slog.String("field", "deviceId"), slog.String("reason", "invalid"))))

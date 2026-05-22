@@ -8,10 +8,10 @@ type Payload struct {
 	Key           string `json:"key"`
 	TargetVersion int64  `json:"targetVersion"`
 	NewVersion    int64  `json:"newVersion"`
-	ActorId       string `json:"actorId"`
+	ActorID       string `json:"actorId"`
 }
 
 // Headers — event.config.rollback.v1.headers
 type Headers struct {
-	EventID string `json:"event_id"`
+	EventID string `json:"eventId"`
 }

@@ -16,7 +16,7 @@ import (
 
 // Request — http.audit.list.v1.request
 type Request struct {
-	ActorId   string `json:"actorId,omitempty"`
+	ActorID   string `json:"actorId,omitempty"`
 	Cursor    string `json:"cursor,omitempty"`
 	EventType string `json:"eventType,omitempty"`
 	// format: date-time
@@ -36,9 +36,9 @@ type Response struct {
 // ResponseDataItem is a generated DTO for contract http.audit.list.v1.
 type ResponseDataItem struct {
 	ID        string `json:"id"`
-	EventId   string `json:"eventId"`
+	EventID   string `json:"eventId"`
 	EventType string `json:"eventType"`
-	ActorId   string `json:"actorId"`
+	ActorID   string `json:"actorId"`
 	// format: date-time
 	Timestamp string `json:"timestamp"`
 	Payload   any    `json:"payload,omitempty"`

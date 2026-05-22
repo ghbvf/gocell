@@ -34,8 +34,8 @@ func toLoginResponseData(p dto.TokenPair) *logingen.ResponseData {
 		AccessToken:           p.AccessToken,
 		RefreshToken:          p.RefreshToken,
 		ExpiresAt:             p.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
-		SessionId:             p.SessionID,
-		UserId:                p.UserID,
+		SessionID:             p.SessionID,
+		UserID:                p.UserID,
 		PasswordResetRequired: p.PasswordResetRequired,
 	}
 }

@@ -223,14 +223,14 @@ func TestValidatePayload_Invalid(t *testing.T) {
 
 func TestValidateHeaders_Valid(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
-	c.ValidateHeaders(t, []byte(`{"event_id":"evt-123"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"evt-123"}`))
 }
 
 func TestValidateHeaders_Invalid(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
 
 	mockT := &mockTB{}
-	c.ValidateHeaders(mockT, []byte(`{}`)) // missing required "event_id"
+	c.ValidateHeaders(mockT, []byte(`{}`)) // missing required "eventId"
 	if !mockT.failed {
 		t.Error("expected validation to fail for missing required field, but it passed")
 	}
@@ -291,12 +291,12 @@ func TestValidatePayload_ExtraFieldPermitted(t *testing.T) {
 func TestValidateHeaders_ExtraFieldPermitted(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
 	// headers schema has no additionalProperties:false → extra field must PASS
-	c.ValidateHeaders(t, []byte(`{"event_id":"evt-1","futureField":"x"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"evt-1","futureField":"x"}`))
 }
 
 func TestMustRejectHeaders(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
-	c.MustRejectHeaders(t, []byte(`{}`)) // missing required "event_id"
+	c.MustRejectHeaders(t, []byte(`{}`)) // missing required "eventId"
 }
 
 func TestValidateRequest_NoSchema(t *testing.T) {

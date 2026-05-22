@@ -29,7 +29,7 @@ type Response struct {
 // ResponseData is a generated DTO for contract http.device.command.enqueue.v1.
 type ResponseData struct {
 	ID          string `json:"id"`
-	DeviceId    string `json:"deviceId"`
+	DeviceID    string `json:"deviceId"`
 	CommandType string `json:"commandType"`
 	Payload     string `json:"payload"`
 	Status      string `json:"status"`

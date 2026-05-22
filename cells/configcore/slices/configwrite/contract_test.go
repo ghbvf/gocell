@@ -155,7 +155,7 @@ func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
 	entry := writer.Entries[0]
 	assert.Equal(t, domain.TopicConfigEntryUpserted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
 	// Metadata-only: missing version must be rejected; value field must be rejected.
 	c.MustRejectPayload(t, []byte(`{"key":"app.name"}`))
 	c.MustRejectPayload(t, []byte(`{"version":1}`))
@@ -183,7 +183,7 @@ func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
 	entry := writer.Entries[0]
 	assert.Equal(t, domain.TopicConfigEntryUpserted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
 }
 
 func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
@@ -202,7 +202,7 @@ func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
 	entry := writer.Entries[0]
 	assert.Equal(t, domain.TopicConfigEntryDeleted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
 
 	// Negative cases: missing required fields or invalid version.
 	c.MustRejectPayload(t, []byte(`{}`))

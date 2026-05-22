@@ -90,7 +90,7 @@ func normalizeErrorEnvelope(t *testing.T, raw []byte) []byte {
 	require.Len(t, doc, 1, "envelope must contain exactly one top-level key; got %v", keysOf(doc))
 	errVal, ok := doc["error"].(map[string]any)
 	require.True(t, ok, `envelope must contain an "error" object`)
-	allowed := map[string]struct{}{"code": {}, "message": {}, "details": {}, "request_id": {}}
+	allowed := map[string]struct{}{"code": {}, "message": {}, "details": {}, "requestId": {}}
 	for k := range errVal {
 		_, allowedKey := allowed[k]
 		require.True(t, allowedKey, "error object contains disallowed field %q", k)
@@ -101,7 +101,7 @@ func normalizeErrorEnvelope(t *testing.T, raw []byte) []byte {
 		assert.Empty(t, details,
 			"login uniform-401 must not leak per-case details (account-enumeration defense)")
 	}
-	delete(errVal, "request_id")
+	delete(errVal, "requestId")
 	normalized, err := json.Marshal(doc)
 	require.NoError(t, err)
 	return normalized

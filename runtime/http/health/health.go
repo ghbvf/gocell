@@ -583,8 +583,8 @@ func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog
 // for server-side logs only — the wire body is a 5xx-stripped errcode where
 // details is the empty array.
 //
-// ctx 是 request 上下文（非 probe ctx），用于 request_id 透传到 errcode 响应
-// envelope（httputil.WriteError → ctxkeys.RequestIDFrom）。与 probe 用的
+// ctx 是 request 上下文（非 probe ctx），用于 wire `requestId` 透传到 errcode 响应
+// envelope（httputil.WriteError → ctxkeys.RequestIDFrom；slog 日志键仍是 `request_id`）。与 probe 用的
 // context.WithTimeout(context.Background(), h.deadline)（runProbesParallel 内
 // derive）是不同生命周期 — 后者保证 kubelet 断开不取消 in-flight probe，前者
 // 用于把请求级关联 ID 带到错误响应。
@@ -749,10 +749,11 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 }
 
 // sendVerboseDenied writes the 401 response for a rejected verbose request.
-// Uses httputil.WritePublic so the response carries request_id (when
+// Uses httputil.WritePublic so the response carries wire `requestId` (when
 // set by middleware) in the canonical envelope shape shared with business
 // 4xx responses. Machine-side monitoring can therefore correlate denied
-// verbose probes with other request-level signals via the same field.
+// verbose probes with other request-level signals via the same field. The
+// matching slog log key remains `request_id` (snake_case).
 func (h *Handler) sendVerboseDenied(w http.ResponseWriter, r *http.Request) {
 	httputil.WritePublic(
 		r.Context(),

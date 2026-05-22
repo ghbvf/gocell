@@ -53,7 +53,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 	subject := p.Subject
 
-	actorID := req.ActorId
+	actorID := req.ActorID
 	if actorID == "" {
 		actorID = subject
 	}
@@ -130,9 +130,9 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	return &auditlist.ResponseDataItem{
 		ID:        e.ID,
-		EventId:   e.EventID,
+		EventID:   e.EventID,
 		EventType: e.EventType,
-		ActorId:   e.ActorID,
+		ActorID:   e.ActorID,
 		Timestamp: e.Timestamp.Format(time.RFC3339),
 		Payload:   json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}

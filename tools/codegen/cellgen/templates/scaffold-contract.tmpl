@@ -36,7 +36,7 @@ schemaRefs:
   payload: payload.schema.json
   headers: headers.schema.json
 replayable: true
-idempotencyKey: event_id
+idempotencyKey: eventId
 deliverySemantics: at-least-once
 {{end}}
 
@@ -75,9 +75,9 @@ deliverySemantics: at-least-once
   "title": "{{.CellID}}.example.payload",
   "type": "object",
   "additionalProperties": false,
-  "required": ["event_id", "message"],
+  "required": ["eventId", "message"],
   "properties": {
-    "event_id": {
+    "eventId": {
       "type": "string",
       "format": "uuid",
       "description": "Idempotency key"
@@ -95,9 +95,9 @@ deliverySemantics: at-least-once
   "title": "{{.CellID}}.example.headers",
   "type": "object",
   "additionalProperties": false,
-  "required": ["event_id"],
+  "required": ["eventId"],
   "properties": {
-    "event_id": {
+    "eventId": {
       "type": "string",
       "format": "uuid",
       "description": "Idempotency key"

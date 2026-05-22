@@ -128,6 +128,6 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
 
 ## 事件负载
 
-- 每个事件包含 `event_id`（UUID），用于幂等键构造
+- 每个事件包含 `eventId`（UUID）作为 envelope wire 字段，用于幂等键构造（DB 列名仍是 `event_id` per CLAUDE.md DB 字段 snake_case）
 - 负载变更向后兼容（新字段 optional，或版本化如 `device.enrolled.v2`）
 - 不兼容变更：先部署 consumer 再部署 producer

@@ -133,7 +133,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 	require.Len(t, writer.entries, 1, "Logout must emit one outbox entry")
 	entry := writer.entries[0]
 	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
 	c.MustRejectPayload(t, []byte(`{"sessionId":"s"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }

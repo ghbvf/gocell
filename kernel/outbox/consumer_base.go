@@ -17,6 +17,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/observability"
 )
 
+// logKeyEventID is the slog structured-field key (snake_case per observability.md).
+// The wire JSON header field declared in event headers.schema.json is "eventId" (camelCase).
+
 // Structured log field keys used across ConsumerBase and transport subscribers.
 const (
 	logKeyEventID       = "event_id"

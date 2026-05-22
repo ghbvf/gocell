@@ -76,7 +76,7 @@ func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
 	assert.Equal(t, string(errcode.ErrValidationFailed), errObj["code"])
 	assert.Equal(t, "invalid cursor", errObj["message"])
 	assert.Equal(t, []any{map[string]any{"key": "reason", "value": "signature"}}, errObj["details"])
-	assert.Equal(t, "req-4xx", errObj["request_id"])
+	assert.Equal(t, "req-4xx", errObj["requestId"])
 
 	warnRec := findRecord(handler, slog.LevelWarn)
 	require.NotNil(t, warnRec)
@@ -159,7 +159,7 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 	assert.Equal(t, string(errcode.ErrInternal), errObj["code"])
 	assert.Equal(t, "internal server error", errObj["message"])
 	assert.Equal(t, []any{}, errObj["details"])
-	assert.Equal(t, "req-5xx", errObj["request_id"])
+	assert.Equal(t, "req-5xx", errObj["requestId"])
 
 	errRec := findRecord(handler, slog.LevelError)
 	require.NotNil(t, errRec)
@@ -199,7 +199,7 @@ func TestWriteErrorWithStatus_4xxKeepsBodyAndLogsAtWarn(t *testing.T) {
 	errObj := decodeErrorBody(t, rec)
 	assert.Equal(t, string(errcode.ErrSessionNotFound), errObj["code"])
 	assert.Equal(t, "session not found", errObj["message"])
-	assert.Equal(t, "req-typed-404", errObj["request_id"])
+	assert.Equal(t, "req-typed-404", errObj["requestId"])
 	// 4xx Details kept on the wire.
 	require.NotEmpty(t, errObj["details"])
 
@@ -232,7 +232,7 @@ func TestWriteErrorWithStatus_500MasksBodyWithStatusDerivedPublicCode(t *testing
 	assert.Equal(t, string(errcode.ErrInternal), errObj["code"], "wire code is the public sentinel for 500")
 	assert.Equal(t, "internal server error", errObj["message"])
 	assert.Equal(t, []any{}, errObj["details"], "5xx strips Details from wire")
-	assert.Equal(t, "req-typed-500", errObj["request_id"])
+	assert.Equal(t, "req-typed-500", errObj["requestId"])
 
 	errRec := findRecord(handler, slog.LevelError)
 	require.NotNil(t, errRec)

@@ -7,10 +7,10 @@ package entrydeleted
 type Payload struct {
 	Key     string `json:"key"`
 	Version int64  `json:"version"`
-	ActorId string `json:"actorId"`
+	ActorID string `json:"actorId"`
 }
 
 // Headers — event.config.entry-deleted.v1.headers
 type Headers struct {
-	EventID string `json:"event_id"`
+	EventID string `json:"eventId"`
 }

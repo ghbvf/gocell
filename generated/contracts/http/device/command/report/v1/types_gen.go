@@ -17,7 +17,7 @@ import (
 // Request — http.device.command.report.v1.request
 type Request struct {
 	ID    string `json:"id"`
-	CmdId string `json:"cmdId"`
+	CmdID string `json:"cmdId"`
 }
 
 // Response — http.device.command.report.v1.response
@@ -28,7 +28,7 @@ type Response struct {
 // ResponseData is a generated DTO for contract http.device.command.report.v1.
 type ResponseData struct {
 	ID          string `json:"id"`
-	DeviceId    string `json:"deviceId"`
+	DeviceID    string `json:"deviceId"`
 	CommandType string `json:"commandType"`
 	Payload     string `json:"payload"`
 	Status      string `json:"status"`

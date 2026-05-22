@@ -28,7 +28,7 @@ func (a InternalListAdapter) List(ctx context.Context, req *listcontract.Request
 		Limit:  int(req.Limit),
 	}
 	result, err := a.S.ScanActive(ctx, command.ScanFilter{
-		DeviceID: req.DeviceId,
+		DeviceID: req.DeviceID,
 		Statuses: statuses,
 	}, pageReq)
 	if err != nil {
@@ -71,7 +71,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 func toListResponseDataItem(e command.Entry) *listcontract.ResponseDataItem {
 	f := listcontract.ResponseDataItem{
 		ID:          e.ID,
-		DeviceId:    e.DeviceID,
+		DeviceID:    e.DeviceID,
 		CommandType: e.CommandType,
 		Payload:     string(e.Payload),
 		Status:      e.Status.String(),

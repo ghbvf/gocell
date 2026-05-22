@@ -94,7 +94,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 				errcode.WithDetails(slog.String("field", "cmdId"), slog.String("reason", "invalid"))))
 			return
 		}
-		req.CmdId = v
+		req.CmdID = v
 	}
 	resp, err := h.svc.Report(r.Context(), req)
 	if err != nil {

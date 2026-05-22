@@ -10,5 +10,5 @@ schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json
 replayable: true
-idempotencyKey: order-created:{event_id}
+idempotencyKey: eventId
 deliverySemantics: at-least-once

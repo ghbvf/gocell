@@ -120,13 +120,13 @@ func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
 	require.Len(t, ow.Entries, 1, "Assign must emit exactly one outbox entry")
 	entry := ow.Entries[0]
 	assert.Equal(t, dto.TopicRoleAssigned, entry.EventType)
-	assert.NotEmpty(t, entry.ID, "emitter must derive a non-empty event_id")
+	assert.NotEmpty(t, entry.ID, "emitter must derive a non-empty eventId")
 	assert.True(t, strings.HasPrefix(entry.ID, outbox.EntryIDPrefix),
-		"entry.ID %q must have %q prefix (event_id schema format)", entry.ID, outbox.EntryIDPrefix)
+		"entry.ID %q must have %q prefix (eventId schema format)", entry.ID, outbox.EntryIDPrefix)
 
 	// Real emit must pass payload schema.
 	c.ValidatePayload(t, entry.Payload)
-	headerBytes, err := json.Marshal(map[string]string{"event_id": entry.ID})
+	headerBytes, err := json.Marshal(map[string]string{"eventId": entry.ID})
 	require.NoError(t, err)
 	c.ValidateHeaders(t, headerBytes)
 
@@ -155,12 +155,12 @@ func TestContract_EventRoleRevokedV1_Publish_PayloadValid(t *testing.T) {
 	require.Len(t, ow.Entries, 1, "Revoke must emit exactly one outbox entry")
 	entry := ow.Entries[0]
 	assert.Equal(t, dto.TopicRoleRevoked, entry.EventType)
-	assert.NotEmpty(t, entry.ID, "emitter must derive a non-empty event_id")
+	assert.NotEmpty(t, entry.ID, "emitter must derive a non-empty eventId")
 	assert.True(t, strings.HasPrefix(entry.ID, outbox.EntryIDPrefix),
-		"entry.ID %q must have %q prefix (event_id schema format)", entry.ID, outbox.EntryIDPrefix)
+		"entry.ID %q must have %q prefix (eventId schema format)", entry.ID, outbox.EntryIDPrefix)
 
 	c.ValidatePayload(t, entry.Payload)
-	headerBytes, err := json.Marshal(map[string]string{"event_id": entry.ID})
+	headerBytes, err := json.Marshal(map[string]string{"eventId": entry.ID})
 	require.NoError(t, err)
 	c.ValidateHeaders(t, headerBytes)
 

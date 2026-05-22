@@ -88,7 +88,7 @@ paths:
 
 - 新端点加 JWT 中间件或在 `auth.Route{Public: true}` 白名单中显式声明
 - `/internal/v1/` 必须声明调用方、鉴权方式、网络隔离边界
-- 列表接口强制分页，`pageSize` 上限 500
+- 列表接口强制分页，`limit` 上限 500
 - 生产配置使用真实 adapter（非 localhost 回退/noop publisher）
 
 ## API 规范

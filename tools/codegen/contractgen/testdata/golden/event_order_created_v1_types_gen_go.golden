@@ -14,5 +14,5 @@ type Payload struct {
 
 // Headers — event.order-created.v1.headers
 type Headers struct {
-	EventID string `json:"event_id"`
+	EventID string `json:"eventId"`
 }

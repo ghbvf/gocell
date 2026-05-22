@@ -5,11 +5,11 @@ package unlocked
 
 // Payload — event.user.unlocked.v1.payload
 type Payload struct {
-	UserId  string `json:"userId"`
-	ActorId string `json:"actorId"`
+	UserID  string `json:"userId"`
+	ActorID string `json:"actorId"`
 }
 
 // Headers — event.user.unlocked.v1.headers
 type Headers struct {
-	EventID string `json:"event_id"`
+	EventID string `json:"eventId"`
 }

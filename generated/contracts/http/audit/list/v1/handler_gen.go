@@ -72,14 +72,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req.Cursor = page.Cursor
 	req.Limit = int64(page.Limit)
 
-	req.ActorId = r.URL.Query().Get("actorId")
-	if req.ActorId != "" && len(req.ActorId) < 0 {
+	req.ActorID = r.URL.Query().Get("actorId")
+	if req.ActorID != "" && len(req.ActorID) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
 			errcode.WithDetails(slog.String("field", "actorId"), slog.String("reason", "invalid"))))
 		return
 	}
-	if len(req.ActorId) > 256 {
+	if len(req.ActorID) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
 			errcode.WithDetails(slog.String("field", "actorId"), slog.String("reason", "invalid"))))

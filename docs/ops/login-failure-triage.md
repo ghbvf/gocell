@@ -59,6 +59,9 @@ kubectl logs deployment/accesscore --since=5m \
 Top-level slog fields on the 4xx record: `time`, `level` (`WARN`), `msg`
 (`"error (4xx)"` by default), `code`, `status`, optionally `internal`,
 `request_id`, `trace_id`, `span_id` (see `pkg/httputil.log4xx` + `AppendCorrelationAttrs`).
+Note: the slog field is `request_id` (snake_case); the corresponding wire HTTP
+response body field is `requestId` (camelCase) — they identify the same request,
+so operators bridging from HTTP body to slog logs need this mapping.
 The wire-side `user_agent` is in the ingress / access log, not this slog
 record — join via `request_id`.
 
