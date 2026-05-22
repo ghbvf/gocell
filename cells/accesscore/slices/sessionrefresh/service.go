@@ -85,17 +85,17 @@ func WithInvalidator(inv *credentialinvalidate.Invalidator) Option {
 
 // Service implements token refresh logic.
 type Service struct {
-	sessionStore session.Store
-	userRepo     ports.UserRepository
-	roleRepo     ports.RoleRepository
-	refreshStore refresh.Store
-	txRunner     persistence.CellTxManager
+	sessionStore session.Store             `gocell:"required"`
+	userRepo     ports.UserRepository      `gocell:"required"`
+	roleRepo     ports.RoleRepository      `gocell:"required"`
+	refreshStore refresh.Store             `gocell:"required"`
+	txRunner     persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"sessionrefresh: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	// invalidator is the credential-revocation funnel. Required — NewService
 	// fails fast when nil. On refresh-token reuse detection, Apply is called
 	// inside the outer transaction to atomically bump authz_epoch, revoke all
 	// sessions, and revoke all refresh chains for the subject.
-	invalidator invalidatorApplier
-	issuer      *auth.JWTIssuer
+	invalidator invalidatorApplier `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"sessionrefresh: Invalidator required; use WithInvalidator"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	issuer      *auth.JWTIssuer    `gocell:"required"`
 	logger      *slog.Logger
 	clock       clock.Clock
 }
@@ -119,21 +119,6 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
-	if validation.IsNilInterface(sessionStore) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: sessionStore must not be nil")
-	}
-	if validation.IsNilInterface(roleRepo) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: roleRepo must not be nil")
-	}
-	if validation.IsNilInterface(userRepo) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: userRepo must not be nil")
-	}
-	if validation.IsNilInterface(refreshStore) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: refreshStore must not be nil")
-	}
-	if issuer == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: issuer must not be nil")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -148,13 +133,8 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"sessionrefresh: TxRunner required; use WithTxManager")
-	}
-	if validation.IsNilInterface(s.invalidator) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"sessionrefresh: Invalidator required; use WithInvalidator")
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	clock.MustHaveClock(s.clock, "sessionrefresh.NewService: clock required — use WithClock(c.clk)")
 	return s, nil

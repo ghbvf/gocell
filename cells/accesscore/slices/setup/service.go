@@ -74,9 +74,12 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // CreateAdmin call. The cell-level WithSetupLock injects this option from
 // cells/accesscore composition; see accesscore.WithSetupLock godoc for the
 // PG vs memstore wiring choice.
+//
+// Bare-nil inputs are silently ignored (builder-option semantics); final
+// nil validation (including typed-nil) is handled by validateRequired().
 func WithSetupLock(lock ports.SetupLockAcquirer) Option {
 	return func(s *Service) {
-		if validation.IsNilInterface(lock) {
+		if lock == nil {
 			return
 		}
 		s.setupLock = lock
@@ -85,27 +88,21 @@ func WithSetupLock(lock ports.SetupLockAcquirer) Option {
 
 // Service implements the setup slice's business logic.
 type Service struct {
-	provisioner *adminprovision.Provisioner
-	txRunner    persistence.CellTxManager
+	provisioner *adminprovision.Provisioner `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"setup: provisioner is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	logger      *slog.Logger                `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"setup: logger is required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner    persistence.CellTxManager   `gocell:"required" gocellErr:"setup: TxRunner required; use WithTxManager"`
 	emitter     outbox.Emitter
-	logger      *slog.Logger
 	// setupLock is the REQUIRED serialization primitive for the admin-provisioning
 	// path. CreateAdmin acquires it inside RunInTx before calling
 	// provisioner.Ensure. PG mode uses pg_advisory_xact_lock (cross-pod);
 	// memstore mode uses accesscore.NoopSetupLock{} because memTxRunner.RunInTx
 	// already serializes goroutines via store.mu. NewService rejects nil.
-	setupLock ports.SetupLockAcquirer
+	setupLock ports.SetupLockAcquirer `gocell:"required" gocellErr:"setup: setupLock required; use WithSetupLock — PG callers wire accesspg.NewBundle(pool, txm, clk).SetupLock(), memstore callers wire accesscore.NoopSetupLock{}"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 }
 
 // NewService constructs a Service. provisioner is required; passing nil returns
 // an error so mis-wired assemblies fail at startup.
 func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, opts ...Option) (*Service, error) {
-	if provisioner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "setup: provisioner is required")
-	}
-	if logger == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "setup: logger is required")
-	}
 	s := &Service{
 		provisioner: provisioner,
 		emitter:     outbox.NewNoopEmitter(),
@@ -114,14 +111,8 @@ func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, op
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "setup: TxRunner required; use WithTxManager")
-	}
-	if validation.IsNilInterface(s.setupLock) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"setup: setupLock required; use WithSetupLock — PG callers wire "+
-				"accesspg.NewBundle(pool, txm, clk).SetupLock(), memstore callers wire "+
-				"accesscore.NoopSetupLock{}")
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

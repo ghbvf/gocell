@@ -21,8 +21,8 @@ var roleSort = []query.SortColumn{
 
 // Service implements RBAC query operations.
 type Service struct {
-	roleRepo ports.RoleRepository
-	codec    *query.CursorCodec
+	roleRepo ports.RoleRepository `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"rbac-check: roleRepo is required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	codec    *query.CursorCodec   `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"rbac-check: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger   *slog.Logger
 	runMode  query.RunMode
 }
@@ -30,16 +30,14 @@ type Service struct {
 // NewService creates an rbac-check Service. roleRepo and codec are required;
 // logger defaults to slog.Default() when nil.
 func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
-	if validation.IsNilInterface(roleRepo) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbac-check: roleRepo is required")
-	}
-	if codec == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec, "rbac-check: cursor codec is required")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{roleRepo: roleRepo, codec: codec, logger: logger, runMode: runMode}, nil
+	s := &Service{roleRepo: roleRepo, codec: codec, logger: logger, runMode: runMode}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // HasRole checks if a user has the specified role.

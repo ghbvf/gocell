@@ -22,7 +22,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -36,7 +35,7 @@ var configSort = []query.SortColumn{
 // internal read slices.
 type Service struct {
 	repo      ports.ConfigRepository
-	codec     *query.CursorCodec
+	codec     *query.CursorCodec `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"configreader: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger    *slog.Logger
 	runMode   query.RunMode
 	sliceName string
@@ -60,17 +59,20 @@ func NewService(
 	sliceName string,
 	runMode query.RunMode,
 ) (*Service, error) {
-	if codec == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"configreader: cursor codec is required")
+	if logger == nil {
+		logger = slog.Default()
 	}
-	return &Service{
+	s := &Service{
 		repo:      repo,
 		codec:     codec,
 		logger:    logger,
 		runMode:   runMode,
 		sliceName: sliceName,
-	}, nil
+	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // GetByKey retrieves a config entry by key.

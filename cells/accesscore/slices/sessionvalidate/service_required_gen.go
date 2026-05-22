@@ -2,9 +2,22 @@
 
 package sessionvalidate
 
+import (
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
+)
+
 // validateRequired verifies every required dependency on the Service struct
 // is present and non-typed-nil. Generated from gocell:"required" struct field
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
+	if validation.IsNilInterface(s.verifier) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session-validate: IntentTokenVerifier required")
+	}
+	if validation.IsNilInterface(s.userRepo) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"session-validate: UserRepository required")
+	}
 	return nil
 }

@@ -10,7 +10,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -30,14 +29,14 @@ var _ auth.IntentTokenVerifier = (*Service)(nil)
 
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
-	verifier     auth.IntentTokenVerifier
+	verifier     auth.IntentTokenVerifier `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"session-validate: IntentTokenVerifier required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	sessionStore session.Store
-	userRepo     ports.UserRepository
+	userRepo     ports.UserRepository `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"session-validate: UserRepository required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger       *slog.Logger
 }
 
 // NewService creates a session-validate Service. Returns an error when any
-// required dependency is nil (including typed-nil via validation.IsNilInterface).
+// required dependency is nil (including typed-nil interfaces).
 //
 // sessionStore may be nil: when nil, session revocation and epoch checks are
 // skipped (demo / integration-test mode). If non-nil, it is used to verify
@@ -48,15 +47,14 @@ func NewService(
 	userRepo ports.UserRepository,
 	logger *slog.Logger,
 ) (*Service, error) {
-	if validation.IsNilInterface(verifier) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"session-validate: IntentTokenVerifier required")
+	if logger == nil {
+		logger = slog.Default()
 	}
-	if validation.IsNilInterface(userRepo) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"session-validate: UserRepository required")
+	s := &Service{verifier: verifier, sessionStore: sessionStore, userRepo: userRepo, logger: logger}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
-	return &Service{verifier: verifier, sessionStore: sessionStore, userRepo: userRepo, logger: logger}, nil
+	return s, nil
 }
 
 // VerifyIntent validates an access token. This service is intentionally

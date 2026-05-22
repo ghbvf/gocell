@@ -2,9 +2,42 @@
 
 package sessionrefresh
 
+import (
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
+)
+
 // validateRequired verifies every required dependency on the Service struct
 // is present and non-typed-nil. Generated from gocell:"required" struct field
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
+	if validation.IsNilInterface(s.sessionStore) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"sessionrefresh.NewService: sessionStore required")
+	}
+	if validation.IsNilInterface(s.userRepo) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"sessionrefresh.NewService: userRepo required")
+	}
+	if validation.IsNilInterface(s.roleRepo) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"sessionrefresh.NewService: roleRepo required")
+	}
+	if validation.IsNilInterface(s.refreshStore) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"sessionrefresh.NewService: refreshStore required")
+	}
+	if validation.IsNilInterface(s.txRunner) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sessionrefresh: TxRunner required; use WithTxManager")
+	}
+	if validation.IsNilInterface(s.invalidator) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sessionrefresh: Invalidator required; use WithInvalidator")
+	}
+	if s.issuer == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"sessionrefresh.NewService: issuer required")
+	}
 	return nil
 }

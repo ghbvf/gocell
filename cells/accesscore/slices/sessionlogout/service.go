@@ -41,9 +41,9 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 
 // Service implements session revocation.
 type Service struct {
-	sessionStore session.Store
-	refreshStore refresh.Store
-	txRunner     persistence.CellTxManager
+	sessionStore session.Store             `gocell:"required"`
+	refreshStore refresh.Store             `gocell:"required"`
+	txRunner     persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"sessionlogout: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter      outbox.Emitter
 	logger       *slog.Logger
 }
@@ -57,12 +57,6 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
-	if validation.IsNilInterface(sessionStore) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogout.NewService: sessionStore must not be nil")
-	}
-	if validation.IsNilInterface(refreshStore) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogout.NewService: refreshStore must not be nil")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -75,8 +69,8 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "sessionlogout: TxRunner required; use WithTxManager")
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
