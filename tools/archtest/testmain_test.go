@@ -5,6 +5,7 @@ package archtest
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,14 @@ import (
 // 首次 SharedResolver 必失败；提前暴露避免 ~300 个测试函数逐一输出失败
 // 再超时的诊断噪音。
 //
+// list-mode 早退：`go test -list <regex>` 只枚举测试名不执行任何 Test*，
+// 因此 warmup 没必要也不应付。TestArchtestVerifyCoverage01 内部用
+// `go test -list` K=4 个子进程 enumerate shard 分配；每个子进程的 TestMain
+// 若执行 2-key warmup，会持有 ~2GB 全模块 *types.Info RSS，4 个子进程
+// 同时驻留 → 父 shard 已 2GB + 子进程 8GB = OOM。`-test.list` 检测在
+// flag.Parse 之前必须扫 os.Args（Go testing.M.Run 内部才 parse flag），
+// 接受 `-test.list <pattern>` 与 `-test.list=<pattern>` 两种形态。
+//
 // 无 escape hatch：按"不引入双路径"原则。本地单测 (e.g.
 // `go test ./tools/archtest/ -run TestFoo`) 仍付完整 warm 成本——这是
 // 开发者本地 wash，CI 16-shard parallel 总 wall = max(shard wall) 由
@@ -45,9 +54,13 @@ import (
 // 时检测到直接调用 typeseval 内部符号。
 //
 // ref: ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md
-// §65 (重写) + Amendment 2026-05-22 (2-cacheKey 扩展，4-key 回退)
+// §65 (重写) + Amendment 2026-05-22 (2-cacheKey 扩展，4-key 回退，list-mode 早退)
 // ref: golangci-lint pkg/goanalysis/runner.go union load mode
 func TestMain(m *testing.M) {
+	if isListMode(os.Args) {
+		// -list mode: skip warmup; m.Run() with -test.list only enumerates names
+		os.Exit(m.Run())
+	}
 	root, err := lookupModuleRoot()
 	if err != nil {
 		slog.Error("archtest TestMain: lookupModuleRoot", "err", err,
@@ -66,4 +79,51 @@ func TestMain(m *testing.M) {
 	}
 	slog.Info("archtest TestMain: warm-up complete")
 	os.Exit(m.Run())
+}
+
+// isListMode reports whether os.Args contains `-test.list` (with optional
+// double-dash and value joined by `=` or space). Detection at TestMain entry
+// pre-dates flag.Parse, so we scan args directly. Both `-test.list <pat>` and
+// `-test.list=<pat>` (and double-dash variants) are accepted.
+func isListMode(args []string) bool {
+	for _, arg := range args {
+		switch {
+		case arg == "-test.list", arg == "--test.list":
+			return true
+		case strings.HasPrefix(arg, "-test.list="), strings.HasPrefix(arg, "--test.list="):
+			return true
+		}
+	}
+	return false
+}
+
+// TestIsListMode locks isListMode semantics so future refactors can't drop
+// -test.list detection silently, which would re-enable warmup in subprocess
+// `go test -list` and re-trigger the GHA shard OOM described in ADR
+// 202605190000 Amendment 2026-05-22 §"B 轴 RSS 反面教材".
+func TestIsListMode(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "no_test_args", args: []string{"binary"}, want: false},
+		{name: "run_only", args: []string{"binary", "-test.run", "TestFoo"}, want: false},
+		{name: "list_space_separated", args: []string{"binary", "-test.list", "^Test"}, want: true},
+		{name: "list_equals_separated", args: []string{"binary", "-test.list=^Test"}, want: true},
+		{name: "double_dash_space", args: []string{"binary", "--test.list", "^Test"}, want: true},
+		{name: "double_dash_equals", args: []string{"binary", "--test.list=^Test"}, want: true},
+		{name: "list_with_run_after", args: []string{"binary", "-test.list", "^Test", "-test.run", "TestFoo"}, want: true},
+		{name: "near_match_not_list", args: []string{"binary", "-test.listfoo"}, want: false},
+		{name: "near_match_equals", args: []string{"binary", "-test.listfoo=bar"}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isListMode(tc.args); got != tc.want {
+				t.Fatalf("isListMode(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
 }

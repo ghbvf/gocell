@@ -139,21 +139,23 @@ PR #584 CI 首次运行 shard 12 触发 slowgate fail：`TestArchtestVerifyCover
 
 §65 同步重写：原"剥离 tests 维度 拒绝"针对的是**合并 cacheKey**（共用 *types.Info），不针对**预热多个独立 cacheKey**——后者每次 packages.Load 各自缓存，对 *types.Info 兼容性无要求。Amendment 是扩展决策面，不是反转 §65。
 
-### B 轴 RSS 反面教材：4→2 keys CI 强制回退
+### B 轴 RSS 反面教材：4→2 keys CI 强制回退 + 子进程 list-mode 早退
 
 **Amendment 初版尝试 4 个 cacheKey**（含 `(true, nil)` + `(true, ProductionFlatTags())`），CI 实证在 GHA shard 13 触发 SIGTERM (exit 143)：4× 全模块 *types.Info 同时驻留 SharedResolver cache 累积 RSS 超 7GB 单 shard 限制。这是本 ADR §"威胁矩阵 B 轴 RSS 峰值"早已警告的形态（"N×全模块 (N=7) cumulative"），初版决策表未把 B 轴重评适用于自身扩展。
 
-| GHA shard 13 trigger | 详情 |
-|---------------------|------|
-| run | 26283197516/job/77364238798 |
-| commit | 00896b784（Amendment 初版 4-key）|
-| 信号 | exit 143 / "runner has received a shutdown signal" |
-| 时长 | 70s 到 SIGTERM |
-| Wall 之前 | TestMain warmup load 阶段 |
+| 触发 | 详情 |
+|------|------|
+| Trigger 1（4-key 直接 OOM）| run 26283197516/job/77364238798 commit 00896b784: exit 143 在 70s warmup load 阶段 |
+| Trigger 2（2-key + 子进程级联 OOM）| run 26286109833/job/77374043963 commit e2221a0aa: TestArchtestVerifyCoverage01 失败，"subprocess go test -list signal: killed"，K=4 个 `go test -list` 子进程各自跑 TestMain warmup 持有 2GB RSS，与父 shard 2GB 累积超 7GB |
 
-**强制回退到 2 keys**：保留 ADR §"B 轴 RSS 峰值"已验证的 "2×全模块 + GC 间隔回收" 安全形态。`(true, nil)` 6 site + `(true, ProductionFlatTags())` 2 site 撤出预热范围，按 ADR §66 "按 trigger 单独改造而非预留逃生口" 留待将来单独触发。
+**两轮修复**：
+1. **4 → 2 keys 回退**：保留 ADR §"B 轴 RSS 峰值"已验证的 "2×全模块" 安全形态。`(true, nil)` 6 site + `(true, ProductionFlatTags())` 2 site 撤出预热范围，按 ADR §66 留待 trigger。
+2. **子进程 list-mode 早退**：TestMain 入口检测 `-test.list` 直接 `os.Exit(m.Run())`，跳过 warmup。`go test -list` 只枚举测试名不执行 Test*，没必要也不应付 warmup 成本/RSS。`TestArchtestVerifyCoverage01` 内部 K=4 子进程现在每个 <1s 完成，父 shard 总 wall 从 154.86s（OOM）降到 6.488s（本地实测，比 PR #572 落地前的 31.290s 还快）。
 
-教训（写进威胁矩阵下方供 future amendment 借鉴）：cacheKey warmup 在 SharedResolver 模型下 = 持续持有 *types.Info，不可与 ADR §"B 轴" "两次 Load + GC 间隔回收" 等价混淆——后者是单测内顺序 Load 允许 GC 释放中间体，warmup cache 不释放。任何 amendment 扩 N 个 cacheKey 必须 (N × ~1GB 全模块 RSS) < GHA shard 限制；目前安全上界 N ≤ 2。
+教训（写进威胁矩阵下方供 future amendment 借鉴）：
+- **cacheKey warmup 在 SharedResolver 模型下 = 持续持有 *types.Info**，不可与 ADR §"B 轴" "两次 Load + GC 间隔回收" 等价混淆——后者是单测内顺序 Load 允许 GC 释放中间体，warmup cache 不释放。
+- **TestMain warmup 对 `go test` 所有调用形态生效**，包括 `-list` 子进程；任何会被父进程作为 subprocess 触发的 mode（list / coverage / vet ...）必须显式判定跳过 warmup，避免 RSS 级联放大。
+- 任何 amendment 扩 N 个 cacheKey 必须 (N × ~1GB 全模块 RSS) × (1 + 并发子进程数) < GHA shard 限制；目前安全上界 N ≤ 2 + list-mode 子进程早退。
 
 ### 触发证据
 
@@ -189,14 +191,15 @@ ProductionFlatTags 路径的 2 个 test（TestExternalReasonLiteral / TestExtern
 
 ⚠️ 标记的格子均显式列出补偿措施或接受理由；无格子从 ✅ 变成 ❌（包括新出现的 B 轴 RSS 行：N ≤ 2 安全上界已显式约束）。
 
-### 安全上界：cacheKey 数 N ≤ 2
+### 安全上界：cacheKey 数 N ≤ 2 + 子进程必须 list-mode 早退
 
-后续 amendment 扩 cacheKey 集合**必须**先验证 (N × ~1GB 全模块 RSS) < GHA shard 限制（当前 7GB / 2-CPU）。CI 实证：
+后续 amendment 扩 cacheKey 集合**必须**先验证 (N × ~1GB 全模块 RSS) × (1 + 并发子进程数) < GHA shard 限制（当前 7GB / 2-CPU）。CI 实证：
 - N=1（本 ADR 原决策）：安全
-- N=2（本 Amendment）：安全（CI 验证待 PR #865 第二轮）
-- N=4（Amendment 初版）：OOM SIGTERM shard 13
+- N=2（本 Amendment）+ list-mode 早退：安全（CI 验证待 PR #865 第三轮）
+- N=2（本 Amendment）无 list-mode 早退：父 shard pass 但 TestArchtestVerifyCoverage01 子进程 OOM 失败
+- N=4（Amendment 初版）：父 shard warmup 阶段直接 OOM SIGTERM
 
-扩 N 的前提条件：GHA runner 升级（如升 4-CPU 14GB）或 SharedResolver 内存优化（packages.Load NeedTypesInfo 模式调整）。无前提扩 N 必复发 OOM，由 future amendment 同样必须列入威胁矩阵重评。
+扩 N 或并发模式的前提条件：GHA runner 升级（如升 4-CPU 14GB）、SharedResolver 内存优化（packages.Load NeedTypesInfo 模式调整）、或为子进程显式判定跳过 warmup（除 list-mode 外还有 coverage / vet 等场景需评估）。无前提扩 N 必复发 OOM，由 future amendment 同样必须列入威胁矩阵重评。
 
 ### §66 重评（CI/dev 性能分流场景）
 
