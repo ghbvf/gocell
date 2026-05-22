@@ -59,10 +59,15 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
 			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, user.Username)))
 	}
+	if _, exists := r.store.byEmail[user.Email]; exists {
+		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "email already exists",
+			errcode.WithInternal(fmt.Sprintf("email=%q", user.Email)))
+	}
 
 	c := cloneUser(user)
 	r.store.usersByID[user.ID] = c
 	r.store.byName[user.Username] = c
+	r.store.byEmail[user.Email] = c
 	return nil
 }
 
@@ -149,6 +154,22 @@ func (r *UserRepository) UpdateProfile(
 		newEmail = *email
 	}
 
+	// Uniqueness check mirrors PG (users.username UNIQUE / users.email UNIQUE).
+	// Self-match (collider.ID == userID) is allowed so a same-value PATCH is
+	// a legal no-op rather than spurious 409.
+	if newName != existing.Username {
+		if collider, hit := r.store.byName[newName]; hit && collider.ID != userID {
+			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
+				errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, newName)))
+		}
+	}
+	if newEmail != existing.Email {
+		if collider, hit := r.store.byEmail[newEmail]; hit && collider.ID != userID {
+			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "email already exists",
+				errcode.WithInternal(fmt.Sprintf("email=%q", newEmail)))
+		}
+	}
+
 	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:                    existing.ID,
 		Username:              newName,
@@ -170,11 +191,14 @@ func (r *UserRepository) UpdateProfile(
 	}
 
 	r.store.usersByID[userID] = updated
-	// Username may have changed — sync the byName index.
-	if name != nil && newName != existing.Username {
+	if newName != existing.Username {
 		delete(r.store.byName, existing.Username)
 	}
 	r.store.byName[newName] = updated
+	if newEmail != existing.Email {
+		delete(r.store.byEmail, existing.Email)
+	}
+	r.store.byEmail[newEmail] = updated
 	return cloneUser(updated), nil
 }
 
@@ -249,6 +273,7 @@ func (r *UserRepository) UpdateLockState(
 
 	r.store.usersByID[userID] = updated
 	r.store.byName[updated.Username] = updated
+	r.store.byEmail[updated.Email] = updated
 	return nil
 }
 
@@ -295,6 +320,7 @@ func (r *UserRepository) UpdatePasswordResetFlag(
 
 	r.store.usersByID[userID] = updated
 	r.store.byName[updated.Username] = updated
+	r.store.byEmail[updated.Email] = updated
 	return nil
 }
 
@@ -426,6 +452,7 @@ func (r *UserRepository) UpdatePassword(
 	}
 	r.store.usersByID[userID] = updated
 	r.store.byName[updated.Username] = updated
+	r.store.byEmail[updated.Email] = updated
 	return updated.PasswordVersion, nil
 }
 
@@ -469,6 +496,7 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int
 	}
 	r.store.usersByID[userID] = updated
 	r.store.byName[updated.Username] = updated
+	r.store.byEmail[updated.Email] = updated
 	return newEpoch, nil
 }
 
@@ -500,6 +528,7 @@ func (r *UserRepository) UpdateLockoutFields(ctx context.Context, user *domain.U
 	c := cloneUser(user)
 	r.store.usersByID[user.ID] = c
 	r.store.byName[user.Username] = c
+	r.store.byEmail[user.Email] = c
 	return nil
 }
 
@@ -529,6 +558,7 @@ func (r *UserRepository) Delete(ctx context.Context, id string) error {
 	}
 
 	delete(r.store.byName, u.Username)
+	delete(r.store.byEmail, u.Email)
 	delete(r.store.usersByID, id)
 	// Cascade: drop the user's role assignments — mirrors the PG
 	// `role_assignments.user_id REFERENCES users(id) ON DELETE CASCADE` FK in

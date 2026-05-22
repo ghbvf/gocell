@@ -144,6 +144,7 @@ type Store struct {
 	mu        sync.Mutex
 	usersByID map[string]*domain.User
 	byName    map[string]*domain.User
+	byEmail   map[string]*domain.User // mirrors PG users.email UNIQUE constraint
 	userRoles map[string]map[string]struct{} // userID -> set of roleIDs
 	roles     map[string]*domain.Role
 	clock     clock.Clock
@@ -166,6 +167,7 @@ func NewStore(clk clock.Clock) *Store {
 	return &Store{
 		usersByID: make(map[string]*domain.User),
 		byName:    make(map[string]*domain.User),
+		byEmail:   make(map[string]*domain.User),
 		userRoles: make(map[string]map[string]struct{}),
 		roles:     make(map[string]*domain.Role),
 		clock:     clk,

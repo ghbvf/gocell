@@ -150,6 +150,17 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 		err := conformUpdateProfileNotFound(t, factory)
 		errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	})
+	t.Run("UpdateProfile_DuplicateUsername", func(t *testing.T) {
+		err := conformUpdateProfileDuplicateUsername(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthUserDuplicate)
+	})
+	t.Run("UpdateProfile_DuplicateEmail", func(t *testing.T) {
+		err := conformUpdateProfileDuplicateEmail(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthUserDuplicate)
+	})
+	t.Run("UpdateProfile_SameValuesNoOp", func(t *testing.T) {
+		conformUpdateProfileSameValuesNoOp(t, factory)
+	})
 	t.Run("UpdateLockState_Succeeds", func(t *testing.T) {
 		conformUpdateLockStateSucceeds(t, factory)
 	})
@@ -902,6 +913,69 @@ func conformUpdateProfileNotFound(t *testing.T, factory UserRepoFactory) error {
 		t.Fatal("UpdateProfile_NotFound: must return error for non-existent user, got nil")
 	}
 	return err
+}
+
+// conformUpdateProfileDuplicateUsername verifies the port contract: renaming
+// user A to user B's username must surface ErrAuthUserDuplicate. PG enforces
+// via UNIQUE(username); mem mirrors via byName lookup. Pins mem/PG parity.
+func conformUpdateProfileDuplicateUsername(t *testing.T, factory UserRepoFactory) error {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	a := seedActive(t, txRunner, repo, uuid.NewString(), "dup_a_"+uuid.NewString())
+	b := seedActive(t, txRunner, repo, uuid.NewString(), "dup_b_"+uuid.NewString())
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	_, err := repo.UpdateProfile(context.Background(), a.ID, &b.Username, nil, now)
+	if err == nil {
+		t.Fatal("UpdateProfile_DuplicateUsername: rename to existing username must error, got nil")
+	}
+	return err
+}
+
+// conformUpdateProfileDuplicateEmail verifies the port contract for the email
+// uniqueness mirror.
+func conformUpdateProfileDuplicateEmail(t *testing.T, factory UserRepoFactory) error {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	a := seedActive(t, txRunner, repo, uuid.NewString(), "dupe_a_"+uuid.NewString())
+	b := seedActive(t, txRunner, repo, uuid.NewString(), "dupe_b_"+uuid.NewString())
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	_, err := repo.UpdateProfile(context.Background(), a.ID, nil, &b.Email, now)
+	if err == nil {
+		t.Fatal("UpdateProfile_DuplicateEmail: change to existing email must error, got nil")
+	}
+	return err
+}
+
+// conformUpdateProfileSameValuesNoOp verifies the self-match edge case:
+// PATCH with the user's current username + email must succeed (not 409). The
+// uniqueness check's collider ID must equal the target userID to skip the
+// duplicate error — closes the "I am my own collider" branch.
+func conformUpdateProfileSameValuesNoOp(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "same_"+uuid.NewString())
+	originalName := u.Username
+	originalEmail := u.Email
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	updated, err := repo.UpdateProfile(context.Background(), u.ID, &originalName, &originalEmail, now)
+	if err != nil {
+		t.Fatalf("UpdateProfile_SameValuesNoOp: same-values PATCH must succeed: %v", err)
+	}
+	if updated.Username != originalName {
+		t.Errorf("UpdateProfile_SameValuesNoOp: username unchanged: got %q, want %q", updated.Username, originalName)
+	}
+	if updated.Email != originalEmail {
+		t.Errorf("UpdateProfile_SameValuesNoOp: email unchanged: got %q, want %q", updated.Email, originalEmail)
+	}
 }
 
 // conformUpdateLockStateSucceeds verifies UpdateLockState persists status +
