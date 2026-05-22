@@ -8,8 +8,14 @@
 //
 // Exposed surface:
 //
-//   - NewMetricProvider — registers instruments on a *prom.Registry
-//   - NewHookObserver   — direct cell lifecycle observer (sync per-event)
+//   - NewMetricProvider      — registers instruments on a *prom.Registry
+//   - NewHookObserver        — direct cell lifecycle observer (sync per-event)
+//   - RegisterOrReuseCounter — idempotent register-or-reuse helper for bare counters
+//   - NewCounter             — public passthrough wrapper for adapters outside the
+//     prometheus subtree (e.g. adapters/vault) blocked by Go internal/ closure
+//   - NewCounterVec          — public passthrough wrapper (same rationale as NewCounter)
+//   - NewGauge               — public passthrough wrapper (same rationale as NewCounter)
+//   - NewGaugeFunc           — public passthrough wrapper (same rationale as NewCounter)
 //
 // ref: github.com/prometheus/client_golang — Registry, CounterVec, HistogramVec.
 // Adopted: isolated Registry per provider, promhttp exposition owned by caller.

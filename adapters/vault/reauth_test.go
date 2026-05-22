@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
+	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -174,7 +175,7 @@ func TestDoReauth_SucceedsAfterNFailures(t *testing.T) {
 		failErr:      watcherErr,
 	}
 
-	authHealthy := prometheus.NewGauge(prometheus.GaugeOpts{
+	authHealthy := promadapter.NewGauge(prometheus.GaugeOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "token_auth_healthy_doauth_nth_test",

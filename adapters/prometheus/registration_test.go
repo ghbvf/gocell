@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -77,13 +78,10 @@ func TestNewGaugeFunc_Smoke(t *testing.T) {
 	})
 	require.NotNil(t, gf)
 
-	reg := prom.NewRegistry()
-	require.NoError(t, reg.Register(gf))
-
-	ch := make(chan *prom.Desc, 1)
-	gf.Describe(ch)
-	require.NotNil(t, <-ch)
-	_ = called
+	// ToFloat64 triggers a full Gather+Write cycle which invokes the callback.
+	got := testutil.ToFloat64(gf)
+	assert.True(t, called, "GaugeFunc callback must have been invoked by ToFloat64")
+	assert.Equal(t, 7.0, got, "GaugeFunc must return the value from the callback")
 }
 
 func TestRegisterOrReuseCounter_NonCounterCollision(t *testing.T) {

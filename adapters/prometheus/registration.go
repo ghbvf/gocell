@@ -11,8 +11,10 @@ import (
 
 // RegisterOrReuseCounter registers a new counter on the given Registerer with
 // the given opts. If the counter is already registered (AlreadyRegisteredError),
-// it reuses the existing collector. Any other registration error is returned
-// as-is.
+// it reuses the existing collector. Non-AlreadyRegisteredError failures are
+// returned unwrapped. If the registered collector is not a prom.Counter, an
+// error is returned wrapping the original AlreadyRegisteredError with the prefix
+// "existing collector is not a Counter:".
 //
 // This is the only sanctioned entry point for creating a bare prom.Counter
 // outside the metrics.Provider abstraction — adapter-internal idempotent
@@ -40,6 +42,9 @@ func RegisterOrReuseCounter(reg prom.Registerer, opts prom.CounterOpts) (prom.Co
 // adapters/prometheus/internal/promwrap directly due to Go internal/ closure
 // must use this function instead of calling prom.NewCounter directly.
 //
+// Does NOT register the collector with any Registerer; callers must Register
+// it themselves to expose it in /metrics.
+//
 // Callers that also need to register the counter should use RegisterOrReuseCounter.
 func NewCounter(opts prom.CounterOpts) prom.Counter {
 	return promwrap.NewCounter(opts)
@@ -50,6 +55,9 @@ func NewCounter(opts prom.CounterOpts) prom.Counter {
 // prometheus subtree (e.g. adapters/vault) that cannot import
 // adapters/prometheus/internal/promwrap directly due to Go internal/ closure
 // must use this function instead of calling prom.NewCounterVec directly.
+//
+// Does NOT register the collector with any Registerer; callers must Register
+// it themselves to expose it in /metrics.
 func NewCounterVec(opts prom.CounterOpts, labelNames []string) *prom.CounterVec {
 	return promwrap.NewCounterVec(opts, labelNames)
 }
@@ -59,6 +67,9 @@ func NewCounterVec(opts prom.CounterOpts, labelNames []string) *prom.CounterVec 
 // subtree (e.g. adapters/vault) that cannot import
 // adapters/prometheus/internal/promwrap directly due to Go internal/ closure
 // must use this function instead of calling prom.NewGauge directly.
+//
+// Does NOT register the collector with any Registerer; callers must Register
+// it themselves to expose it in /metrics.
 func NewGauge(opts prom.GaugeOpts) prom.Gauge {
 	return promwrap.NewGauge(opts)
 }
@@ -68,6 +79,9 @@ func NewGauge(opts prom.GaugeOpts) prom.Gauge {
 // outside the prometheus subtree (e.g. adapters/vault) that cannot import
 // adapters/prometheus/internal/promwrap directly due to Go internal/ closure
 // must use this function instead of calling prom.NewGaugeFunc directly.
+//
+// Does NOT register the collector with any Registerer; callers must Register
+// it themselves to expose it in /metrics.
 func NewGaugeFunc(opts prom.GaugeOpts, function func() float64) prom.GaugeFunc {
 	return promwrap.NewGaugeFunc(opts, function)
 }

@@ -173,9 +173,9 @@ func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, err
 // HistogramVec registers and returns a HistogramVec bound to the provider's
 // registry. Empty Buckets uses Prometheus default (DefBuckets). If the same
 // metric name has already been registered, the existing collector is returned
-// (same AlreadyRegisteredError pattern as CounterVec).
-//
-
+// (same AlreadyRegisteredError pattern as CounterVec). See CounterVec godoc
+// for the shared-shape rationale; dupl does not flag HistogramVec because its
+// Buckets field differentiates it from the Counter/Gauge shapes.
 func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	hv := promwrap.NewHistogramVec(prom.HistogramOpts{
 		Namespace: p.cfg.Namespace,

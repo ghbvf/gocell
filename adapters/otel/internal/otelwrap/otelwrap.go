@@ -8,6 +8,12 @@
 //   - downstream Hard: archtest METRICS-GAUGEVEC-FUNNEL-01 enforces method
 //     form-uniqueness on otelmetric.Meter.Float64* via *types.Info resolution.
 //
+// Observable / async meter variants (Int64ObservableUpDownCounter,
+// Float64ObservableGauge, etc.) are intentionally outside this funnel — they
+// use a callback registration pattern (meter.RegisterCallback) that is
+// incompatible with synchronous single-call wrapping; their callsites in
+// adapters/otel/*.go are legitimate implementation sites.
+//
 // ref: opentelemetry-go sdk/metric internal/aggregate (internal/ funneling idiom)
 package otelwrap
 

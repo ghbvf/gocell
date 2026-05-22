@@ -109,7 +109,7 @@ func TestGaugeVecFunnel(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	// RED check: fixture must produce exactly 9 violations.
+	// RED check: fixture must produce exactly 16 violations.
 	// The fixture rule does NOT exclude the fixture package itself — only the
 	// adapter allowlist exclusions apply. This is what allows the RED check to
 	// detect the violations in the fixture.
@@ -267,8 +267,8 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 					"AND verify the ban predicate in gaugeVecFunnelRule still covers the replacement.",
 				c.importPath, name)
 		}
-		// Log (don't fail) any observed exports not in the expected list —
-		// alerts reviewer that the wrap package added a new function.
+		// Fail on any observed exports not in the expected list — new exports must
+		// be explicitly acknowledged by updating this sentinel test.
 		for name := range set {
 			found := false
 			for _, e := range c.expected {
@@ -278,8 +278,9 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Logf("METRICS-GAUGEVEC-UPSTREAM-HARD-01 sentinel: %s has new export %s — "+
-					"add to expected list in TestMetricsFunnel_SymbolSentinel AND verify ban predicate covers it.",
+				t.Errorf("METRICS-GAUGEVEC-UPSTREAM-HARD-01 sentinel: %s has new export %s not in expected list — "+
+					"add it to the expected slice in this test or remove it from the wrap package "+
+					"(AI co-authors cannot silently expand the funnel surface)",
 					c.importPath, name)
 			}
 		}
