@@ -97,8 +97,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -469,42 +467,39 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 // main test, but provides defense-in-depth at the AST level so a future
 // PR adding the literal token `type WireMessage` is caught even if the
 // go/types loader misbehaves under build tags.
+//
+// Uses [Run] + [DirsScope] per ai-collab.md §"载体决策原则" — pure AST
+// pattern, no type information required (looking for a literal `type
+// WireMessage` token, not its resolved type). [DirsScope] applies the
+// default file skip set (vendor / testdata / generated / worktrees /
+// _test.go) so production *.go files are the only thing scanned.
 func TestSAFEIDUpstreamFunnelHard01_BlindSpot_NoReExport(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
+
+	root := findModuleRoot(t)
+	scope := DirsScope(root, []string{"kernel/outbox"})
 
 	var diags []Diagnostic
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/outbox/..."},
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
-				return nil
-			}
-			for _, file := range p.Files {
-				// Skip generated files (typeseval / scanner respect generated).
-				// Only scan production *.go (RunTyped with Tests=false already
-				// excludes *_test.go, but defense in depth).
-				rel := p.Rel(file)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
+	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+				if ts.Name == nil || ts.Name.Name != wireMessageExportedOld {
+					return
 				}
-				scanner.EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-					if ts.Name == nil || ts.Name.Name != wireMessageExportedOld {
-						return
-					}
-					pos := p.Fset.Position(ts.Pos())
-					diags = append(diags, Diagnostic{
-						Message: fmt.Sprintf(
-							"SAFEID-UPSTREAM-FUNNEL-HARD-01/NoReExport: %s:%d declares `type %s ...` — the exported envelope must not be re-introduced; "+
-								"all envelope I/O must go through outbox.MarshalEnvelope / outbox.UnmarshalEnvelope with the unexported wireMessage",
-							rel, pos.Line, wireMessageExportedOld),
-					})
+				pos := p.Fset.Position(ts.Pos())
+				diags = append(diags, Diagnostic{
+					Message: fmt.Sprintf(
+						"SAFEID-UPSTREAM-FUNNEL-HARD-01/NoReExport: %s:%d declares `type %s ...` — "+
+							"the exported envelope must not be re-introduced; "+
+							"all envelope I/O must go through outbox.MarshalEnvelope / "+
+							"outbox.UnmarshalEnvelope with the unexported wireMessage",
+						rel, pos.Line, wireMessageExportedOld),
 				})
-			}
-			return nil
-		})
+			})
+		}
+		return nil
+	})
 
 	Report(t, "SAFEID-UPSTREAM-FUNNEL-HARD-01/BlindSpot/NoReExport", diags)
 }
