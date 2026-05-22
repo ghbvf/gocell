@@ -24,7 +24,7 @@ const requiredDepsGenFileName = "service_required_gen.go"
 //	--dry-run    : print planned output to stdout instead of writing
 func generateRequiredDeps(args []string) error {
 	fs := flag.NewFlagSet("generate required-deps", flag.ContinueOnError)
-	all := fs.Bool("all", true, "generate for every slice with service.go")
+	all := fs.Bool("all", false, "generate for every slice with service.go")
 	dryRun := fs.Bool("dry-run", false, "print would-write file paths without writing")
 	verify := fs.Bool("verify", false, "diff against disk, exit non-zero on drift, no write")
 	if err := fs.Parse(args); err != nil {
