@@ -93,6 +93,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -409,8 +411,10 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 			if exported := scope.Lookup(wireMessageExportedOld); exported != nil {
 				diags = append(diags, Diagnostic{
 					Message: fmt.Sprintf(
-						"SAFEID-UPSTREAM-FUNNEL-HARD-01: %s.%s (exported) exists — re-exporting the envelope as struct or alias breaks the Go-visibility upstream Hard seal; "+
-							"keep envelope I/O sealed behind outbox.MarshalEnvelope / outbox.UnmarshalEnvelope",
+						"SAFEID-UPSTREAM-FUNNEL-HARD-01: %s.%s (exported) exists — "+
+							"re-exporting the envelope as struct or alias breaks the Go-visibility "+
+							"upstream Hard seal; keep envelope I/O sealed behind outbox.MarshalEnvelope / "+
+							"outbox.UnmarshalEnvelope",
 						p.Pkg.Path(), wireMessageExportedOld),
 				})
 			}
@@ -482,13 +486,9 @@ func TestSAFEIDUpstreamFunnelHard01_BlindSpot_NoReExport(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				ast.Inspect(file, func(n ast.Node) bool {
-					ts, ok := n.(*ast.TypeSpec)
-					if !ok {
-						return true
-					}
+				scanner.EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
 					if ts.Name == nil || ts.Name.Name != wireMessageExportedOld {
-						return true
+						return
 					}
 					pos := p.Fset.Position(ts.Pos())
 					diags = append(diags, Diagnostic{
@@ -497,7 +497,6 @@ func TestSAFEIDUpstreamFunnelHard01_BlindSpot_NoReExport(t *testing.T) {
 								"all envelope I/O must go through outbox.MarshalEnvelope / outbox.UnmarshalEnvelope with the unexported wireMessage",
 							rel, pos.Line, wireMessageExportedOld),
 					})
-					return true
 				})
 			}
 			return nil
