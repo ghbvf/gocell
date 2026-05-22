@@ -47,6 +47,7 @@ package archtest
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -142,6 +143,12 @@ func runA1Check(t *testing.T, modRoot, sliceDir, buildTag string) []Diagnostic {
 
 	want, err := requireddepsgen.GenerateWithOpts(sliceDir, requireddepsgen.Opts{BuildTag: buildTag})
 	if err != nil {
+		// ErrNoServiceStruct is not a violation: type-alias service.go files and
+		// pure-delegate packages legitimately have no Service struct declaration.
+		// They neither need nor should have a service_required_gen.go.
+		if errors.Is(err, requireddepsgen.ErrNoServiceStruct) {
+			return nil
+		}
 		rel := requiredDepSlashRel(modRoot, svcFile)
 		return []Diagnostic{{
 			Rel:     rel,

@@ -33,7 +33,10 @@ func newContractHandler() http.Handler {
 		ID: "dev-1", Name: "sensor-01", Status: "online",
 		LastSeen: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	svc := NewService(repo, slog.Default())
+	svc, err := NewService(repo, slog.Default())
+	if err != nil {
+		panic(err)
+	}
 	handler := statuscontract.NewHandler(svc, auth.SelfOr("id", "admin"))
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/devices/{id}/status", handler)

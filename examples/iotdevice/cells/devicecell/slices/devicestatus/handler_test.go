@@ -18,9 +18,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-func setupStatusHandler() (*statuscontract.Handler, *mem.DeviceRepository) {
+func setupStatusHandler(t testing.TB) (*statuscontract.Handler, *mem.DeviceRepository) {
+	t.Helper()
 	repo := mem.NewDeviceRepository()
-	svc := NewService(repo, slog.Default())
+	svc, err := NewService(repo, slog.Default())
+	if err != nil {
+		t.Fatalf("setupStatusHandler: %v", err)
+	}
 	return statuscontract.NewHandler(svc, auth.SelfOr("id", "admin")), repo
 }
 
@@ -67,7 +71,7 @@ func TestHandleGetStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, repo := setupStatusHandler()
+			h, repo := setupStatusHandler(t)
 			tc.setup(repo)
 
 			w := httptest.NewRecorder()
@@ -89,7 +93,8 @@ func TestService_Status_LastSeenRFC3339(t *testing.T) {
 	_ = repo.Create(context.Background(), &domain.Device{
 		ID: "dev-ts", Name: "ts-test", Status: "online", LastSeen: now,
 	})
-	svc := NewService(repo, slog.Default())
+	svc, err := NewService(repo, slog.Default())
+	require.NoError(t, err)
 	h := statuscontract.NewHandler(svc, auth.SelfOr("id", "admin"))
 
 	w := httptest.NewRecorder()

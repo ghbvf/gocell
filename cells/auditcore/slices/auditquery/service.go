@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -31,8 +30,8 @@ var auditSort = []query.SortColumn{
 
 // Service implements audit query business logic using ledger.Store.
 type Service struct {
-	store   ledger.Store
-	codec   *query.CursorCodec
+	store   ledger.Store       `gocell:"required"`
+	codec   *query.CursorCodec `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"auditquery: cursor codec is required"`
 	logger  *slog.Logger
 	runMode query.RunMode
 }
@@ -41,13 +40,13 @@ type Service struct {
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
 //
-// codec must be non-nil — pagination cannot be served without a cursor codec.
+// Both store and codec must be non-nil; codec is required for pagination.
 func NewService(store ledger.Store, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
-	if codec == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"auditquery: cursor codec is required")
+	s := &Service{store: store, codec: codec, logger: logger, runMode: runMode}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
-	return &Service{store: store, codec: codec, logger: logger, runMode: runMode}, nil
+	return s, nil
 }
 
 // Query returns a paginated page of audit entries matching the given filters.

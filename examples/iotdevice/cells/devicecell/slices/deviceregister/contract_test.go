@@ -54,7 +54,10 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 	if err != nil {
 		panic(err)
 	}
-	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	svc, err2 := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	if err2 != nil {
+		panic(err2)
+	}
 	handler := registercontract.NewHandler(svc) // Public endpoint: NewHandler takes no policy (auth.Route{Public:true})
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/devices", handler)
