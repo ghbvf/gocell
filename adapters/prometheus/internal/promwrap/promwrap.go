@@ -30,3 +30,11 @@ func NewGaugeVec(opts prom.GaugeOpts, labelNames []string) *prom.GaugeVec {
 func NewHistogramVec(opts prom.HistogramOpts, labelNames []string) *prom.HistogramVec {
 	return prom.NewHistogramVec(opts, labelNames)
 }
+
+// NewGauge is the sole sanctioned constructor for a bare Prometheus Gauge.
+func NewGauge(opts prom.GaugeOpts) prom.Gauge { return prom.NewGauge(opts) }
+
+// NewGaugeFunc is the sole sanctioned constructor for a callback-style Gauge.
+func NewGaugeFunc(opts prom.GaugeOpts, function func() float64) prom.GaugeFunc {
+	return prom.NewGaugeFunc(opts, function)
+}

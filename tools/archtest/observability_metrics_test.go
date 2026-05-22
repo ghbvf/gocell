@@ -82,20 +82,27 @@ func TestMetricLabelErrcodeClassifiersRequireAck(t *testing.T) {
 //
 // # RED fixture
 //
-// tools/archtest/internal/metricsgaugevecfixture/fixture.go provides nine
+// tools/archtest/internal/metricsgaugevecfixture/fixture.go provides sixteen
 // intentional violations:
 //
 //   - BadPromGaugeVec (prom.NewGaugeVec)
 //   - BadPromCounter (prom.NewCounter)
 //   - BadPromCounterVec (prom.NewCounterVec)
 //   - BadPromHistogramVec (prom.NewHistogramVec)
+//   - BadPromGauge (prom.NewGauge) — B2 follow-up prefix predicate
+//   - BadPromGaugeFunc (prom.NewGaugeFunc) — B2 follow-up prefix predicate
+//   - BadPromHistogram (prom.NewHistogram) — defensive ban
+//   - BadPromSummary (prom.NewSummary) — defensive ban
+//   - BadPromSummaryVec (prom.NewSummaryVec) — defensive ban
+//   - BadPromCounterFunc (prom.NewCounterFunc) — defensive ban
+//   - BadPromUntypedFunc (prom.NewUntypedFunc) — defensive ban
 //   - BadOtelUpDownCounter (meter.Float64UpDownCounter)
 //   - BadOtelFloat64Gauge (meter.Float64Gauge)
 //   - BadOtelFloat64Counter (meter.Float64Counter)
 //   - BadOtelFloat64Histogram (meter.Float64Histogram)
 //   - BadOtelInt64Counter (meter.Int64Counter)
 //
-// The RED check asserts exactly 9 diagnostics; the GREEN check asserts 0
+// The RED check asserts exactly 16 diagnostics; the GREEN check asserts 0
 // production diagnostics.
 func TestGaugeVecFunnel(t *testing.T) {
 	if testing.Short() {
@@ -115,9 +122,11 @@ func TestGaugeVecFunnel(t *testing.T) {
 	for _, d := range redDiags {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
-	require.Len(t, redDiags, 9,
-		"RED fixture must trigger METRICS-GAUGEVEC-FUNNEL-01 for all nine bad calls "+
+	require.Len(t, redDiags, 16,
+		"RED fixture must trigger METRICS-GAUGEVEC-FUNNEL-01 for all sixteen bad calls "+
 			"(BadPromGaugeVec + BadPromCounter + BadPromCounterVec + BadPromHistogramVec + "+
+			"BadPromGauge + BadPromGaugeFunc + BadPromHistogram + BadPromSummary + "+
+			"BadPromSummaryVec + BadPromCounterFunc + BadPromUntypedFunc + "+
 			"BadOtelUpDownCounter + BadOtelFloat64Gauge + BadOtelFloat64Counter + "+
 			"BadOtelFloat64Histogram + BadOtelInt64Counter); got %d diagnostics",
 		len(redDiags))
@@ -191,7 +200,7 @@ func TestGaugeVecFunnel_SelfCheck(t *testing.T) {
 // must come with an explicit sentinel update — AI co-authors cannot silently
 // expand the funnel surface (per AI-rebust Hard funnel principle).
 //
-// INVARIANT: METRICS-GAUGEVEC-UPSTREAM-HARD-01.
+// INVARIANT: METRICS-GAUGEVEC-UPSTREAM-HARD-01
 func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based sentinel in -short mode")
@@ -204,7 +213,7 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 	cases := []wrapSpec{
 		{
 			importPath: "github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap",
-			expected:   []string{"NewCounter", "NewCounterVec", "NewGaugeVec", "NewHistogramVec"},
+			expected:   []string{"NewCounter", "NewCounterVec", "NewGauge", "NewGaugeFunc", "NewGaugeVec", "NewHistogramVec"},
 		},
 		{
 			importPath: "github.com/ghbvf/gocell/adapters/otel/internal/otelwrap",
@@ -281,33 +290,42 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 // constructors are banned outside adapters/prometheus/internal/promwrap/.
 const bannedPromPkg = "github.com/prometheus/client_golang/prometheus"
 
-// bannedPromFuncs is the set of prometheus package-level constructor names
-// banned by METRICS-GAUGEVEC-FUNNEL-01 in production code outside
-// adapters/prometheus/internal/promwrap/. The set is deliberately scoped to
-// the constructors that ARE wrapped in promwrap — banning only what the funnel
-// covers avoids false-positive on legitimate prom.NewGauge / NewGaugeFunc usage
-// in adapter packages that cannot import internal/promwrap (e.g. adapters/vault
-// for NewGauge + NewGaugeFunc which have callback-based semantics not suited to
-// the synchronous wrap pattern).
+// isBannedPromFunc reports whether name is a prometheus package-level
+// constructor banned by METRICS-GAUGEVEC-FUNNEL-01. The predicate matches
+// ^New(Counter|Gauge|Histogram|Summary|Untyped)(Vec|Func)?$ — covering the full
+// synchronous instrument construction surface:
 //
-// Constructors covered by promwrap and therefore banned:
-//   - NewCounter    → promwrap.NewCounter
-//   - NewCounterVec → promwrap.NewCounterVec
-//   - NewGaugeVec   → promwrap.NewGaugeVec
-//   - NewHistogramVec → promwrap.NewHistogramVec
+//   - NewCounter, NewCounterVec, NewCounterFunc
+//   - NewGauge, NewGaugeVec, NewGaugeFunc
+//   - NewHistogram, NewHistogramVec
+//   - NewSummary, NewSummaryVec
+//   - NewUntypedFunc
 //
-// NOT banned (no promwrap equivalent):
-//   - NewGauge, NewGaugeFunc — callback/scalar gauges used in adapters/vault
-//   - NewHistogram — bare scalar histogram (no current production use)
-//   - NewSummary, NewSummaryVec — no current production use
-//   - NewUntypedFunc, NewCounterFunc — no current production use
+// All variants are banned; production code must route through
+// adapters/prometheus/internal/promwrap (via the public
+// adapters/prometheus.New* wrappers for packages outside the subtree).
 //
 // Drift in the promwrap export set is caught by TestMetricsFunnel_SymbolSentinel.
-var bannedPromFuncs = map[string]struct{}{
-	"NewCounter":      {},
-	"NewCounterVec":   {},
-	"NewGaugeVec":     {}, // original ban (pre-B2)
-	"NewHistogramVec": {},
+func isBannedPromFunc(name string) bool {
+	// Must start with "New".
+	if !strings.HasPrefix(name, "New") {
+		return false
+	}
+	// Match the instrument type root after "New".
+	rest := name[len("New"):]
+	var root string
+	for _, r := range []string{"Counter", "Gauge", "Histogram", "Summary", "Untyped"} {
+		if strings.HasPrefix(rest, r) {
+			root = r
+			break
+		}
+	}
+	if root == "" {
+		return false
+	}
+	// After the root, only "", "Vec", or "Func" are allowed.
+	suffix := rest[len(root):]
+	return suffix == "" || suffix == "Vec" || suffix == "Func"
 }
 
 // bannedOtelPkg is the import path of the OTel metric package whose Meter methods
@@ -444,7 +462,7 @@ func scanGaugeVecCallsInFile(
 }
 
 // checkPromBannedConstructor returns a Diagnostic when call resolves to any
-// banned prometheus constructor in bannedPromFuncs, or nil if it does not.
+// banned prometheus constructor matched by isBannedPromFunc, or nil if not.
 func checkPromBannedConstructor(fset *token.FileSet, call *ast.CallExpr, rel string, info *types.Info) *Diagnostic {
 	pkgPath, name, ok := resolveCalleePackageRef(call.Fun, info)
 	if !ok {
@@ -453,7 +471,7 @@ func checkPromBannedConstructor(fset *token.FileSet, call *ast.CallExpr, rel str
 	if pkgPath != bannedPromPkg {
 		return nil
 	}
-	if _, banned := bannedPromFuncs[name]; !banned {
+	if !isBannedPromFunc(name) {
 		return nil
 	}
 	line := fset.Position(call.Pos()).Line
@@ -532,15 +550,17 @@ func gaugeVecBS1ReflectCheck(p *Pass) []Diagnostic {
 				return
 			}
 			// Check if any string arg contains a banned symbol name (prom funcs or
-			// any of the OTel ban-set method names).
+			// any of the OTel ban-set method names). For prom, use the prefix
+			// predicate (isBannedPromFunc) on each whitespace-delimited token in
+			// the string; for OTel, check the banned method map.
 			for _, arg := range call.Args {
 				s, ok := EvaluateConstString(p.TypesInfo, arg)
 				if !ok {
 					continue
 				}
 				match := false
-				for funcName := range bannedPromFuncs {
-					if strings.Contains(s, funcName) {
+				for _, tok := range strings.Fields(s) {
+					if isBannedPromFunc(tok) {
 						match = true
 						break
 					}
@@ -616,18 +636,16 @@ func scanFuncValueIndirections(fset *token.FileSet, file *ast.File, rel string, 
 
 		// Check 1: Prom function-value indirection (prom.New* used as value).
 		pkgPath, name, ok := ResolvePackageRef(info, sel)
-		if ok && pkgPath == bannedPromPkg {
-			if _, banned := bannedPromFuncs[name]; banned {
-				diags = append(diags, Diagnostic{
-					Rel:  rel,
-					Line: fset.Position(sel.Pos()).Line,
-					Message: fmt.Sprintf(
-						"METRICS-GAUGEVEC-FUNNEL-01 BS-3: %s.%s used as function value (not called directly); "+
-							"route through adapters/prometheus/internal/promwrap", bannedPromPkg, name,
-					),
-				})
-				return
-			}
+		if ok && pkgPath == bannedPromPkg && isBannedPromFunc(name) {
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: fset.Position(sel.Pos()).Line,
+				Message: fmt.Sprintf(
+					"METRICS-GAUGEVEC-FUNNEL-01 BS-3: %s.%s used as function value (not called directly); "+
+						"route through adapters/prometheus/internal/promwrap", bannedPromPkg, name,
+				),
+			})
+			return
 		}
 
 		// Check 2: OTel method-value capture (any banned Meter method used as value).

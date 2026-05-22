@@ -1221,7 +1221,7 @@ func (p *TransitKeyProvider) RenewalMetrics() []prometheus.Collector {
 // handling.
 func (p *TransitKeyProvider) CacheVersionMetrics() []prometheus.Collector {
 	return []prometheus.Collector{
-		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		promadapter.NewGaugeFunc(prometheus.GaugeOpts{
 			Namespace: "gocell",
 			Subsystem: "vault",
 			Name:      "cached_key_version",
@@ -1324,7 +1324,7 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context, result AuthRe
 			"vault-transit: NewLifetimeWatcher returned nil without error")
 	}
 
-	authHealthy := prometheus.NewGauge(prometheus.GaugeOpts{
+	authHealthy := promadapter.NewGauge(prometheus.GaugeOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "token_auth_healthy",

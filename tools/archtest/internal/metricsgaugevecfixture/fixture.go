@@ -33,10 +33,26 @@
 // (defensive ban; no production callsite yet, but the method is part of the
 // full synchronous meter surface covered by the funnel).
 //
+// BadPromGauge: a direct prom.NewGauge call — must be flagged after the ban
+// predicate is extended to prefix shape covering all prom.New* constructors.
+//
+// BadPromGaugeFunc: a direct prom.NewGaugeFunc call — must be flagged.
+//
+// BadPromHistogram: a direct prom.NewHistogram call — defensive ban; verifies
+// the prefix predicate covers single-Histogram variants.
+//
+// BadPromSummary: a direct prom.NewSummary call — defensive ban.
+//
+// BadPromSummaryVec: a direct prom.NewSummaryVec call — defensive ban.
+//
+// BadPromCounterFunc: a direct prom.NewCounterFunc call — defensive ban.
+//
+// BadPromUntypedFunc: a direct prom.NewUntypedFunc call — defensive ban.
+//
 // GREEN controls: any call that does NOT hit the banned symbols must produce
 // zero diagnostics (none present in this fixture by design).
 //
-// Total expected diagnostics: 9 (three prom + six otel).
+// Total expected diagnostics: 16 (ten prom + six otel).
 package metricsgaugevecfixture
 
 import (
@@ -109,4 +125,44 @@ func BadOtelFloat64Histogram(meter otelmetric.Meter) (otelmetric.Float64Histogra
 // must route through adapters/otel/internal/otelwrap instead.
 func BadOtelInt64Counter(meter otelmetric.Meter) (otelmetric.Int64Counter, error) {
 	return meter.Int64Counter("bad_int64_counter")
+}
+
+// BadPromGauge is a direct prom.NewGauge call — must be flagged by
+// METRICS-GAUGEVEC-FUNNEL-01 after the ban predicate is extended to prefix
+// shape covering all prom.New* constructors.
+func BadPromGauge() prom.Gauge {
+	return prom.NewGauge(prom.GaugeOpts{Name: "bad_gauge_bare", Help: "fixture"})
+}
+
+// BadPromGaugeFunc is a direct prom.NewGaugeFunc call — must be flagged by
+// METRICS-GAUGEVEC-FUNNEL-01.
+func BadPromGaugeFunc() prom.GaugeFunc {
+	return prom.NewGaugeFunc(prom.GaugeOpts{Name: "bad_gauge_func", Help: "fixture"}, func() float64 { return 0 })
+}
+
+// BadPromHistogram is a direct prom.NewHistogram call — defensive ban;
+// verifies the prefix predicate covers single-Histogram variants.
+func BadPromHistogram() prom.Histogram {
+	return prom.NewHistogram(prom.HistogramOpts{Name: "bad_histogram_bare", Help: "fixture"})
+}
+
+// BadPromSummary is a direct prom.NewSummary call — defensive ban;
+// no current production callsite.
+func BadPromSummary() prom.Summary {
+	return prom.NewSummary(prom.SummaryOpts{Name: "bad_summary_bare", Help: "fixture"})
+}
+
+// BadPromSummaryVec is a direct prom.NewSummaryVec call — defensive ban.
+func BadPromSummaryVec() prom.Collector {
+	return prom.NewSummaryVec(prom.SummaryOpts{Name: "bad_summary_vec", Help: "fixture"}, []string{"label"})
+}
+
+// BadPromCounterFunc is a direct prom.NewCounterFunc call — defensive ban.
+func BadPromCounterFunc() prom.CounterFunc {
+	return prom.NewCounterFunc(prom.CounterOpts{Name: "bad_counter_func", Help: "fixture"}, func() float64 { return 0 })
+}
+
+// BadPromUntypedFunc is a direct prom.NewUntypedFunc call — defensive ban.
+func BadPromUntypedFunc() prom.UntypedFunc {
+	return prom.NewUntypedFunc(prom.UntypedOpts{Name: "bad_untyped_func", Help: "fixture"}, func() float64 { return 0 })
 }

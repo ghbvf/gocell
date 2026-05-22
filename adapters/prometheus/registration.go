@@ -53,3 +53,21 @@ func NewCounter(opts prom.CounterOpts) prom.Counter {
 func NewCounterVec(opts prom.CounterOpts, labelNames []string) *prom.CounterVec {
 	return promwrap.NewCounterVec(opts, labelNames)
 }
+
+// NewGauge is the public adapter-level entry point for creating a bare
+// prom.Gauge without registering it. Adapter packages outside the prometheus
+// subtree (e.g. adapters/vault) that cannot import
+// adapters/prometheus/internal/promwrap directly due to Go internal/ closure
+// must use this function instead of calling prom.NewGauge directly.
+func NewGauge(opts prom.GaugeOpts) prom.Gauge {
+	return promwrap.NewGauge(opts)
+}
+
+// NewGaugeFunc is the public adapter-level entry point for creating a
+// callback-style prom.GaugeFunc without registering it. Adapter packages
+// outside the prometheus subtree (e.g. adapters/vault) that cannot import
+// adapters/prometheus/internal/promwrap directly due to Go internal/ closure
+// must use this function instead of calling prom.NewGaugeFunc directly.
+func NewGaugeFunc(opts prom.GaugeOpts, function func() float64) prom.GaugeFunc {
+	return promwrap.NewGaugeFunc(opts, function)
+}

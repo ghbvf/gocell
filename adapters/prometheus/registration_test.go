@@ -51,6 +51,41 @@ func TestRegisterOrReuseCounter_ReuseExisting(t *testing.T) {
 	second.Inc()
 }
 
+func TestNewCounter_Smoke(t *testing.T) {
+	c := promadapter.NewCounter(prom.CounterOpts{Name: "pub_smoke_counter", Help: "smoke"})
+	require.NotNil(t, c)
+	c.Inc()
+}
+
+func TestNewCounterVec_Smoke(t *testing.T) {
+	cv := promadapter.NewCounterVec(prom.CounterOpts{Name: "pub_smoke_counter_vec", Help: "smoke"}, []string{"label"})
+	require.NotNil(t, cv)
+	cv.WithLabelValues("x").Inc()
+}
+
+func TestNewGauge_Smoke(t *testing.T) {
+	g := promadapter.NewGauge(prom.GaugeOpts{Name: "pub_smoke_gauge", Help: "smoke"})
+	require.NotNil(t, g)
+	g.Set(1.0)
+}
+
+func TestNewGaugeFunc_Smoke(t *testing.T) {
+	called := false
+	gf := promadapter.NewGaugeFunc(prom.GaugeOpts{Name: "pub_smoke_gauge_func", Help: "smoke"}, func() float64 {
+		called = true
+		return 7.0
+	})
+	require.NotNil(t, gf)
+
+	reg := prom.NewRegistry()
+	require.NoError(t, reg.Register(gf))
+
+	ch := make(chan *prom.Desc, 1)
+	gf.Describe(ch)
+	require.NotNil(t, <-ch)
+	_ = called
+}
+
 func TestRegisterOrReuseCounter_NonCounterCollision(t *testing.T) {
 	reg := prom.NewRegistry()
 	// Use the exact same fqName + help so Prometheus surfaces AlreadyRegisteredError

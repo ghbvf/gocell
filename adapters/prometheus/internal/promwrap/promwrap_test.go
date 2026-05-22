@@ -61,6 +61,27 @@ func TestNewHistogramVec(t *testing.T) {
 	hv.WithLabelValues("val").Observe(1.5)
 }
 
+func TestNewGauge(t *testing.T) {
+	g := promwrap.NewGauge(prom.GaugeOpts{Name: "smoke_gauge", Help: "smoke"})
+	require.NotNil(t, g)
+	g.Set(3.14)
+	g.Inc()
+	g.Dec()
+}
+
+func TestNewGaugeFunc(t *testing.T) {
+	val := 42.0
+	gf := promwrap.NewGaugeFunc(prom.GaugeOpts{Name: "smoke_gauge_func", Help: "smoke"}, func() float64 { return val })
+	require.NotNil(t, gf)
+
+	reg := prom.NewRegistry()
+	require.NoError(t, reg.Register(gf))
+
+	ch := make(chan *prom.Desc, 1)
+	gf.Describe(ch)
+	require.NotNil(t, <-ch)
+}
+
 // Table-driven smoke: all four constructors return non-nil and Describe does not panic.
 func TestAllConstructorsDescribe(t *testing.T) {
 	tests := []struct {
