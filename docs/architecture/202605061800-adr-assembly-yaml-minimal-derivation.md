@@ -152,7 +152,7 @@ error-handling.md 中 panic taxonomy 的初始化误配置分类）。
 ## archtest 守卫
 
 - **ASSEMBLY-MODULES-GEN-01**：`cmd/*/modules_gen.go` 必须包含 `DO NOT EDIT` marker、`generatedCellModules` 函数声明、`package main` 声明。确保生成文件不被手工改写为非标准形态。
-- **ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02**：`cmd/*/run.go` AST 级别禁止以 cell ID 字符串字面量为 `case` 的 switch 语句。确保手工 cell→Module 映射 switch 不复出现。
+- **ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02**：每个 assembly composition root（`cmd/{id}/` 或 `examples/{id}/`，由 `asm.Build.Entrypoint` 元数据派生）的直接子 `.go` 文件（不递归子目录）AST 级别禁止以 cell ID 字符串字面量为 `case` 的 switch 语句。确保手工 cell→Module 映射 switch 不复出现；扫描范围同时限于 entrypoint dir 直接子文件，避免误报 `examples/{id}/cells/` 下的业务代码。
 - **ASSEMBLY-MAXCONSISTENCY-DERIVED-03**：`AssemblyMeta.MaxConsistencyLevel` 字段的 yaml struct tag 必须为 `"-"`。确保该字段不可被 YAML 文件写入，派生只读语义不被绕过。
 - **TestSchemaConstantsMatchSchemaLiterals**（`kernel/metadata/schemas/`）：JSON schema pattern/enum 字面量必须与 `contract_constraints.go` const 字节级一致。
 - **TestAssemblySpecCoversAssemblyMeta**（`runtime/devtools/catalog/`）：`metadata.AssemblyMeta` 所有 yaml 字段必须映射到 `catalog.AssemblySpec` 或在 `catalogExcludedAssemblyFields` 中显式排除（含 reason）。
