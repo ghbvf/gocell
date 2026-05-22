@@ -55,7 +55,9 @@ type ConfigCoreModuleResult struct {
 	// CellOptions are the configcore.Option values to pass to NewConfigCore.
 	CellOptions []configcore.Option
 	// BootstrapOpts are bootstrap.Option values — in postgres mode carries
-	// WithManagedResource(relay) so the relay worker is independently managed.
+	// WithRelay(relay) so the relay is wired for outbox publishing AND
+	// lifecycle-managed in a single sanctioned registration (see
+	// docs/architecture/202605201400-adr-relay-managedresource-isolation.md).
 	BootstrapOpts []bootstrap.Option
 }
 
@@ -140,8 +142,13 @@ func buildConfigCorePostgresOpts(ctx context.Context, cfg ConfigCoreModuleConfig
 		configcore.WithTxManager(persistence.WrapForCell(txMgr)),
 	}
 	// WithRelay registers the relay for BOTH outbox wiring AND lifecycle
-	// (Start/Close). Do NOT add WithManagedResource(relayWorker) — that
-	// would double-register and trigger phase0 ErrBootstrapDoubleManaged.
+	// (Start/Close). Do NOT add WithManagedResource(relayWorker) — *Relay
+	// does not implement kernel/lifecycle.ManagedResource, so the call is a
+	// compile-time type-mismatch (ADR 202605201400 +
+	// RELAY-NOT-MANAGEDRESOURCE-01 / RELAY-SOLE-HOLDER-01 archtests).
+	// Calling WithRelay a second time panics via the panic-taxonomy funnel
+	// (panicregister.Approved + errcode.Assertion, B class) — see
+	// runtime/bootstrap/options_events.go::WithRelay.
 	return ConfigCoreModuleResult{
 		PoolResource:  pgRes,
 		PGPool:        pool,

@@ -482,7 +482,7 @@ func runBootstrap(
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
-		bootstrap.WithManagedResource(relayWorker),
+		bootstrap.WithRelay(relayWorker),
 		// Invariant: ShutdownTimeout ≥ httpClient.Timeout. The last in-flight
 		// request must be allowed to finish (or its own timeout fire) before
 		// bootstrap forces a close, otherwise we get spurious EOF mid-request

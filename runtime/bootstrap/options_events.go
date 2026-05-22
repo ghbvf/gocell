@@ -15,6 +15,8 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -115,10 +117,19 @@ func WithSubscriptionValidator(v ...cell.SubscriptionValidator) Option {
 }
 
 // WithRelay registers the relay BOTH for outbox wiring AND for lifecycle
-// (Start/Close). Calling WithRelay is the ONLY step required to integrate a
-// relay — do NOT separately call WithManagedResource(relay). That would
-// double-register Close and is detected by phase0 fail-fast
-// (ErrBootstrapDoubleManaged — code: "ERR_BOOTSTRAP_DOUBLE_MANAGED").
+// (Start/Stop driven through the package-private relayAdapter). Calling
+// WithRelay is the ONLY supported path to integrate a relay; passing it to
+// WithManagedResource is a compile-time type-mismatch — *runtimeoutbox.Relay
+// does not implement kernel/lifecycle.ManagedResource. See ADR
+// docs/architecture/202605201400-adr-relay-managedresource-isolation.md and
+// archtest RELAY-NOT-MANAGEDRESOURCE-01.
+//
+// Calling WithRelay more than once is a programmer error and panics through
+// the panic-taxonomy funnel (panicregister.Approved + errcode.Assertion, B
+// class): the second call would silently overwrite b.relay while leaving the
+// earlier relay registered in managedResources, hiding a double-managed
+// resource that the previous runtime guard could not catch once the active
+// b.relay pointer moved.
 //
 // Nil inputs are silently ignored (cumulative builder noop pattern,
 // runtime-api.md §Option 范式分层): the relay remains unset, and
@@ -129,7 +140,7 @@ func WithSubscriptionValidator(v ...cell.SubscriptionValidator) Option {
 //	relay := runtimeoutbox.NewRelay(store, pub, cfg)
 //	relay.WithPendingDepthObserver(pendingDepthCollector)
 //	bootstrap.New(
-//	    bootstrap.WithRelay(relay), // handles lifecycle; no WithManagedResource needed
+//	    bootstrap.WithRelay(relay), // sole sanctioned entry; no WithManagedResource needed
 //	    ...
 //	)
 func WithRelay(r *runtimeoutbox.Relay) Option {
@@ -137,7 +148,11 @@ func WithRelay(r *runtimeoutbox.Relay) Option {
 		if r == nil {
 			return
 		}
+		if b.relay != nil {
+			panic(panicregister.Approved("bootstrap-relay-rebind",
+				errcode.Assertion("bootstrap: WithRelay called more than once; only one relay may be registered per Bootstrap")))
+		}
 		b.relay = r
-		b.managedResources = append(b.managedResources, r) // auto-lifecycle
+		b.managedResources = append(b.managedResources, newRelayAdapter(r)) // auto-lifecycle via sole sanctioned holder
 	}
 }

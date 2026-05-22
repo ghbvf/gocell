@@ -226,7 +226,7 @@ func buildFooCoreOpts(
 			foocore.WithTxManager(runner),
 			foocore.WithOutboxWriter(writer),
 		}
-		relayOpts := []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)}
+		relayOpts := []bootstrap.Option{bootstrap.WithRelay(relayWorker)}
 		return pool, relayOpts, opts, nil
 
 	case "memory":
@@ -266,11 +266,17 @@ func buildFooCoreOpts(
    逆序 Close 已开启的连接，防止启动失败时泄漏。
 
 后台 worker 型资源（例如 outbox relay）通过独立
-`bootstrap.WithManagedResource(relayWorker)` 返回，但不塞进 Pool。
-这样 relay 自己的 `Checkers()` 会进入 `/readyz?verbose`，`Worker()/Close()`
-也保持独立；同时 Pool 直接实现 `lifecycle.ManagedResource`，其 `Worker()` 为 nil，
-只表达 pool 的健康检查和关闭职责。注册顺序必须是 pool 在前、relay opts 在后，bootstrap 的
-LIFO shutdown 才会先停 relay、再关 pool。
+`bootstrap.WithRelay(relayWorker)` 返回，但不塞进 Pool。`WithRelay` 是
+relay 的 **唯一** 注册入口：相关的 `Checkers()/Worker()/Close()` 由
+package-private `relayAdapter` 包装到 ManagedResource 流水线
+（详见 ADR `docs/architecture/202605201400-adr-relay-managedresource-isolation.md`
++ archtest `RELAY-NOT-MANAGEDRESOURCE-01` / `RELAY-SOLE-HOLDER-01`）——
+`*Relay` 自身不实现 ManagedResource，直接传给 `WithManagedResource` 是编译期
+type-mismatch，二次调用 `WithRelay` 会通过 panic-taxonomy funnel 触发
+`panicregister.Approved + errcode.Assertion(B 类)` panic。Pool 直接实现
+`lifecycle.ManagedResource`（其 `Worker()` 为 nil，只表达 pool 健康检查和关闭职责），
+所以 pool 走 `WithManagedResource`，relay 走 `WithRelay`。注册顺序必须是 pool 在前、
+relay opts 在后，bootstrap 的 LIFO shutdown 才会先停 relay、再关 pool。
 
 ```
 BuildApp 内部逻辑（简化）:

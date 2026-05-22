@@ -186,8 +186,10 @@ func buildConfigCoreResult(
 		return nil, nil, nil, fmt.Errorf("configcore: register key provider metrics: %w", err)
 	}
 
-	// Relay opts: in postgres mode, relayOpts contains WithManagedResource(relay)
-	// so the relay worker is independently managed by bootstrap (Worker/Close/Checkers).
+	// Relay opts: in postgres mode, BootstrapOpts carries WithRelay(relay) which
+	// is the sole sanctioned path that hands the relay to bootstrap's managed-
+	// resource pipeline (Worker/Close/Checkers via the package-private adapter
+	// in runtime/bootstrap/relay_adapter.go).
 	opts = append(opts, modResult.BootstrapOpts...)
 
 	// A19: when the KeyProvider opts into lifecycle.ManagedResource (today:

@@ -23,9 +23,12 @@ const (
 	// defaultRelayMaxRetryDelay caps the exponential backoff to prevent
 	// unbounded retry intervals.
 	defaultRelayMaxRetryDelay = 5 * time.Minute
-	// defaultRelayReclaimInterval is how often the relay reclaims stale claimed
-	// entries.
-	defaultRelayReclaimInterval = 30 * time.Second
+	// DefaultRelayReclaimInterval is how often the relay reclaims stale claimed
+	// entries (and, when a PendingDepthObserver is wired, samples the pending
+	// depth metric). Documents the cadence anchor that
+	// runtime/observability/metrics godoc, docs/ops/alerting-rules.md, and
+	// related cmd/corebundle tests reference by name.
+	DefaultRelayReclaimInterval = 30 * time.Second
 	// defaultRelayDeadRetentionPeriod is how long dead-lettered entries are kept.
 	defaultRelayDeadRetentionPeriod = 30 * 24 * time.Hour
 	// defaultRelayReclaimBatchSize caps a single ReclaimStale UPDATE so a
@@ -114,7 +117,7 @@ func DefaultRelayConfig() RelayConfig {
 		BaseRetryDelay:       defaultRelayBaseRetryDelay,
 		ClaimTTL:             defaultRelayClaimTTL,
 		MaxRetryDelay:        defaultRelayMaxRetryDelay,
-		ReclaimInterval:      defaultRelayReclaimInterval,
+		ReclaimInterval:      DefaultRelayReclaimInterval,
 		ReclaimBatchSize:     defaultRelayReclaimBatchSize,
 		DeadRetentionPeriod:  defaultRelayDeadRetentionPeriod, // 30 days
 		PollFailureBudget:    5,

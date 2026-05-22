@@ -200,7 +200,8 @@ func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
 	// runtime/observability/metrics/{outbox,event}_test.go (spy-collector
 	// pattern) and by archtest METRICS-GAUGEVEC-FUNNEL-01 (production
 	// callsite enforcement). Asserting them here would be a flaky test
-	// dependent on broker timing and Relay cadence.
+	// dependent on broker timing and Relay.ReclaimInterval (defaults to
+	// runtime/outbox.DefaultRelayReclaimInterval = 30s).
 	type metricSpec struct {
 		name       string
 		promType   string // "gauge", "counter", or "histogram"

@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -25,9 +24,6 @@ import (
 // RelayConfig.WithDefaults "zero means missing" guard, ensuring the cleanup loop
 // deletes entries on its very first pass.
 const relayMinRetention = 1 * time.Nanosecond
-
-// Compile-time assertion: Relay must implement ManagedResource.
-var _ kernellifecycle.ManagedResource = (*outbox.Relay)(nil)
 
 // ---------------------------------------------------------------------------
 // fakePublisher
@@ -211,10 +207,13 @@ func waitPub(t *testing.T, pub *fakePublisher, want int) {
 // Tests
 // ---------------------------------------------------------------------------
 
-// TestRelay_ImplementsManagedResource verifies that Relay fully implements the
-// kernellifecycle.ManagedResource interface at both compile-time (via the var
-// assertion above) and runtime (non-nil returns, no panics).
-func TestRelay_ImplementsManagedResource(t *testing.T) {
+// TestRelay_ProvidesLifecyclePrimitives verifies the lifecycle primitives
+// (Checkers / Worker / Stop) the bootstrap relay adapter consumes to satisfy
+// ManagedResource on behalf of *Relay. *Relay itself intentionally does NOT
+// implement ManagedResource — see
+// docs/architecture/202605201400-adr-relay-managedresource-isolation.md and
+// runtime/bootstrap/relay_adapter.go.
+func TestRelay_ProvidesLifecyclePrimitives(t *testing.T) {
 	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), budgetCfg())
 
 	// Checkers must return a non-nil map (empty is valid when budgets disabled,
@@ -225,8 +224,8 @@ func TestRelay_ImplementsManagedResource(t *testing.T) {
 	// Worker must return the relay itself (non-nil).
 	require.NotNil(t, relay.Worker())
 
-	// Close on a never-started relay must be a no-op (no error).
-	require.NoError(t, relay.Close(context.Background()))
+	// Stop on a never-started relay must be a no-op (no error).
+	require.NoError(t, relay.Stop(context.Background()))
 }
 
 func TestRelay_HappyPath_ClaimPublishMarkPublished(t *testing.T) {

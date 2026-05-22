@@ -463,10 +463,13 @@ consumer 消费速率落后，或 broker 连接断开。
 
 注意：`outbox_pending_depth` Gauge 仅统计 `status=pending` 且
 `next_retry_at IS NULL OR <= now()` 的可领取行——重试 backoff 中的 entry 不计入。
-持续的重试堆积需通过 `outbox_consumer_rejected_total` 或 reclaim-budget readyz
-探针诊断，本 Gauge 不会随之增长。每次 Relay reclaim tick 更新一次（默认间隔为
-分钟级，而非 Prometheus scrape 间隔），应使用较长的 `for:` 窗口避免 scrape
-窗口内的假阳性。
+持续的重试堆积需通过 relay 侧 outcome 指标
+`outbox_relayed_total{outcome="dead"|"lost"}` 或 reclaim-budget readyz 探针
+诊断（`outbox_consumer_rejected_total` 是 subscriber 侧 DLX 计数，与 relay
+retry-backoff 不同失败域），本 Gauge 不会随之增长。每次 Relay reclaim tick
+更新一次（默认间隔为 `runtime/outbox.DefaultRelayReclaimInterval = 30s`，
+而非 Prometheus scrape 间隔），应使用较长的 `for:` 窗口避免 scrape 窗口内的
+假阳性。
 
 注: 此告警仅在 storage_backend=postgres 部署生效；memory 模式无 Relay，指标不产生 sample。
 
@@ -482,10 +485,13 @@ consumer 消费速率落后，或 broker 连接断开。
       Cell {{ $labels.cell }} outbox eligible pending depth > 1000 for 5m
       (excludes rows still in retry backoff).
       Consumer may be falling behind or broker connection dropped.
-      Note: this Gauge is updated once per Relay ReclaimInterval (default minutes),
+      Note: this Gauge is updated once per Relay ReclaimInterval
+      (defaults to runtime/outbox.DefaultRelayReclaimInterval = 30s),
       not per scrape — treat the value as "eligible depth at last reclaim tick".
       For tighter sampling, decrease ReclaimInterval. Retry backlog is not
-      reflected here; diagnose via outbox_consumer_rejected_total.
+      reflected here; diagnose via outbox_relayed_total{outcome="dead"|"lost"}
+      (relay-side outcome counter) — outbox_consumer_rejected_total is the
+      subscriber-side DLX counter, a different failure domain.
 ```
 
 ### 调试指标（无告警，仅 dashboard）

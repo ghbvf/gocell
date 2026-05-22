@@ -40,7 +40,12 @@ const (
 	msgExpect1Claimed      = "expected 1 claimed, got %d"
 	idEntryRace            = "e-race"
 	errSome                = "some error"
-	idCPExclE3             = "cp-excl-e3" // used in conformCountPendingExcludesFutureRetry
+	// Entry IDs for conformCountPendingExcludesFutureRetry. All three are
+	// declared as constants so future edits adding a third occurrence cannot
+	// silently trip Sonar S1192 again.
+	idCPExclE1 = "cp-excl-e1"
+	idCPExclE2 = "cp-excl-e2"
+	idCPExclE3 = "cp-excl-e3"
 )
 
 // StoreFactory constructs a fresh Store (typically with pre-seeded rows)
@@ -775,9 +780,12 @@ func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
 // next_retry_at <= now()). A row with next_retry_at in the future must NOT be
 // counted, matching ClaimPending semantics.
 //
-// RED: FakeStore.CountPending counts ALL statusPending rows without the
-// next_retry_at predicate; PGOutboxStore countPendingQuery also lacks it.
-// Wave 2 fixes both; until then this test is RED.
+// GREEN: both backends now apply the next_retry_at predicate —
+// FakeStore.CountPending (runtime/outbox/outboxtest/fake_store.go) skips rows
+// with nextRetryAt > now(); PGOutboxStore.CountPending uses
+// countPendingQuery `... WHERE status = $1 AND (next_retry_at IS NULL OR
+// next_retry_at <= now())` (adapters/postgres/outbox_store.go). This
+// conformance scenario exercises both backends.
 func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
@@ -794,8 +802,8 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	// e3 must be seeded as pending with a future nextRetryAt.
 	// The easiest way: seed as plain pending then call MarkRetry to set the delay.
 	seed := []outbox.ClaimedEntry{
-		newEntry("cp-excl-e1", 0),
-		newEntry("cp-excl-e2", 0),
+		newEntry(idCPExclE1, 0),
+		newEntry(idCPExclE2, 0),
 		newEntry(idCPExclE3, 1), // attempts=1 to have a plausible retry scenario
 	}
 	store := factory(t, seed)
@@ -828,15 +836,15 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	}
 
 	// At this point: e1, e2 have next_retry_at <= now; e3 has next_retry_at = now+1h.
-	// CountPending target: 2 (e1 + e2).
-	// CountPending current (RED): 3 (counts all statusPending without predicate).
+	// CountPending expected: 2 (e1 + e2). Both backends now apply the
+	// next_retry_at predicate (see GREEN note on the test godoc above).
 	got, err := store.CountPending(ctx)
 	if err != nil {
 		t.Fatalf("CountPending: %v", err)
 	}
 	if got != 2 {
 		t.Errorf("CountPending must exclude rows with future next_retry_at: got %d, want 2"+
-			" (row cp-excl-e3 has next_retry_at=%v, must not count)", got, futureRetry)
+			" (row %s has next_retry_at=%v, must not count)", got, idCPExclE3, futureRetry)
 	}
 }
 

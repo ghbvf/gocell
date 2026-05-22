@@ -81,16 +81,26 @@ const (
 type NopEventCollector struct{}
 
 // IncSubscriptionActive is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) IncSubscriptionActive(string) {}
+func (NopEventCollector) IncSubscriptionActive(string) {
+	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
+}
 
 // DecSubscriptionActive is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) DecSubscriptionActive(string) {}
+func (NopEventCollector) DecSubscriptionActive(string) {
+	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
+}
 
 // RecordSetupError is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) RecordSetupError(string, string, string) {}
+func (NopEventCollector) RecordSetupError(string, string, string) {
+	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
+}
 
 // ObserveReadyWait is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) ObserveReadyWait(string, time.Duration) {}
+func (NopEventCollector) ObserveReadyWait(string, time.Duration) {
+	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
+}
 
 // RecordRuntimeError is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) RecordRuntimeError(string, string, RuntimeErrorReason) {}
+func (NopEventCollector) RecordRuntimeError(string, string, RuntimeErrorReason) {
+	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
+}
