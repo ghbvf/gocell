@@ -49,17 +49,22 @@
 //     (the LHS shape guard rejects non-literal indices). Blind spot: a matcher
 //     could use a variable-index parts comparison and evade the check.
 //     Reverse self-test: TestParserMatcherSymmetry_BlindSpot_VariableIndex asserts
-//     that variable-index comparisons do NOT appear in production matchers.
+//     that variable-index comparisons do NOT appear in production matchers or
+//     their direct callees in parser.go.
 //
-//  2. Switch statements with `parts[0]` as the switch expression. GoCell matchers
+//  2. Switch statements with `parts[N]` as the switch tag. GoCell matchers
 //     currently use if/else chains (BinaryExpr). A future switch refactor would
 //     evade this check. Reverse self-test: TestParserMatcherSymmetry_BlindSpot_SwitchStmt
-//     asserts that no match*YAML function (or its direct callees) uses a SwitchStmt.
+//     asserts that no match*YAML function (or its direct callees) uses a
+//     SwitchStmt whose tag is `parts[<intlit>]`.
 //
 //  3. Helpers more than one call-level deep from the matcher wrapper. The archtest
 //     only walks direct callees (depth 1). This is sufficient for the current code
 //     structure (all helpers are called directly) and acceptable given the depth
 //     constraint is an explicit design decision.
+//
+// Blind-spot probes share scope with main check (matcher + direct callees) via
+// the matcherAndCalleeBodies helper.
 package archtest
 
 import (
@@ -80,6 +85,40 @@ var matcherRootSegment = map[string]string{
 }
 
 var matchYAMLFuncRE = regexp.MustCompile(`^match.+YAML$`)
+
+// matcherAndCalleeBodies returns the function body block-statements that should
+// be inspected for blind-spot probes — the matcher itself plus its direct
+// callees within the same file. This mirrors the scope used by the main check
+// (matcher body + collectCalleeNames + callee body expansion), ensuring that
+// blind-spot probes cover exactly the same AST surface as the primary invariant
+// check.
+//
+// The caller walks each returned *ast.BlockStmt independently using
+// EachInSubtree[ast.X](body, ...).
+func matcherAndCalleeBodies(file *ast.File, matcher *ast.FuncDecl) []*ast.BlockStmt {
+	// Build a local map of function name → FuncDecl for all functions in the file.
+	fileFuncs := make(map[string]*ast.FuncDecl)
+	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Name != nil {
+			fileFuncs[fn.Name.Name] = fn
+		}
+	})
+
+	bodies := []*ast.BlockStmt{matcher.Body}
+
+	// Walk the matcher body for direct CallExpr calls (one level deep).
+	EachInSubtree[ast.CallExpr](matcher.Body, func(ce *ast.CallExpr) {
+		id, ok := ce.Fun.(*ast.Ident)
+		if !ok {
+			return
+		}
+		if callee, found := fileFuncs[id.Name]; found && callee.Body != nil {
+			bodies = append(bodies, callee.Body)
+		}
+	})
+
+	return bodies
+}
 
 // TestParserMatcherExamplesSymmetry01 asserts that every match*YAML function in
 // kernel/metadata/parser.go includes both "examples" AND its kind root segment
@@ -250,11 +289,21 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 
 // TestParserMatcherSymmetry_BlindSpot_VariableIndex is the reverse self-test
 // asserting that no match*YAML function body (or its direct callees in parser.go)
-// uses a variable-index parts comparison (parts[i] where i is not an integer literal).
+// uses a variable-index parts comparison (parts[i] where i is not an integer literal)
+// in a position that could evade the main check's parts[0] root-segment extraction.
 // Such a form would be outside EvaluateConstString's scope and would evade the main test.
 //
+// Scope: matcher body + direct callees in parser.go (matches main check scope via
+// matcherAndCalleeBodies helper).
+//
+// Exemption: `parts[len(parts)-k]` (index is a BinaryExpr whose LHS is a CallExpr)
+// is the canonical "last element" pattern — it is categorically not an index-0 access
+// and therefore cannot evade the root-segment check. Such indices are intentionally
+// excluded from this probe.
+//
 // INVARIANT: PARSER-MATCHER-EXAMPLES-SYMMETRY-01 (blind-spot reverse probe)
-// Reverse probe: asserts variable-index parts comparisons absent in production matchers.
+// Reverse probe: asserts variable-index parts comparisons absent in production matchers
+// and their direct callees, except for len(parts)-based tail-element accesses.
 func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 	t.Parallel()
 
@@ -272,26 +321,39 @@ func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 				if fn.Name == nil || !matchYAMLFuncRE.MatchString(fn.Name.Name) {
 					return
 				}
-				EachInSubtree[ast.BinaryExpr](fn.Body, func(be *ast.BinaryExpr) {
-					if be.Op != token.EQL {
-						return
-					}
-					idx, ok := be.X.(*ast.IndexExpr)
-					if !ok {
-						return
-					}
-					ident, ok := idx.X.(*ast.Ident)
-					if !ok || ident.Name != "parts" {
-						return
-					}
-					if _, ok := idx.Index.(*ast.BasicLit); !ok {
+				for _, body := range matcherAndCalleeBodies(f, fn) {
+					EachInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) {
+						if be.Op != token.EQL {
+							return
+						}
+						idx, ok := be.X.(*ast.IndexExpr)
+						if !ok {
+							return
+						}
+						ident, ok := idx.X.(*ast.Ident)
+						if !ok || ident.Name != "parts" {
+							return
+						}
+						if _, ok := idx.Index.(*ast.BasicLit); ok {
+							// Literal index: within the main check's scope, not a blind spot.
+							return
+						}
+						// Exempt `parts[len(parts)-k]`: index is a BinaryExpr whose LHS is
+						// a CallExpr (the len(...) call). This is the canonical last-element
+						// pattern — not an index-0 access, so it cannot evade the root-segment
+						// check. Any other non-literal index is flagged.
+						if binIdx, ok := idx.Index.(*ast.BinaryExpr); ok {
+							if _, lhsIsCall := binIdx.X.(*ast.CallExpr); lhsIsCall {
+								return
+							}
+						}
 						pos := p.Fset.Position(be.Pos())
 						t.Errorf("INVARIANT PARSER-MATCHER-EXAMPLES-SYMMETRY-01 (blind-spot): "+
-							"matcher %s uses variable-index parts comparison at %s; "+
+							"matcher %s (or its callee) uses variable-index parts comparison at %s; "+
 							"EvaluateConstString cannot resolve this — update the main test if intentional",
 							fn.Name.Name, pos)
-					}
-				})
+					})
+				}
 			})
 		}
 		return nil
@@ -299,11 +361,22 @@ func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 }
 
 // TestParserMatcherSymmetry_BlindSpot_SwitchStmt is the reverse self-test
-// asserting that no match*YAML function body uses a SwitchStmt (which would
-// evade the BinaryExpr walk in the main test).
+// asserting that no match*YAML function body (or its direct callees in parser.go)
+// uses a SwitchStmt whose tag is `parts[N]` (where N is an integer literal).
+// That specific form would evade the BinaryExpr walk in the main test because the
+// parts-index comparison appears as a switch tag rather than as an == BinaryExpr.
+//
+// Scope: matcher body + direct callees in parser.go (matches main check scope via
+// matcherAndCalleeBodies helper).
+//
+// Probe is precisely scoped to `switch parts[<intlit>] { ... }` — a switch tag
+// that is an IndexExpr of the identifier "parts" with an integer-literal index.
+// Unrelated switch forms (e.g. type switches, switches on other expressions) are
+// intentionally NOT flagged; they do not evade the BinaryExpr walk.
 //
 // INVARIANT: PARSER-MATCHER-EXAMPLES-SYMMETRY-01 (blind-spot reverse probe)
-// Reverse probe: asserts SwitchStmt absent in production match*YAML function bodies.
+// Reverse probe: asserts switch parts[N] form absent in production match*YAML
+// function bodies and their direct callees.
 func TestParserMatcherSymmetry_BlindSpot_SwitchStmt(t *testing.T) {
 	t.Parallel()
 
@@ -321,13 +394,34 @@ func TestParserMatcherSymmetry_BlindSpot_SwitchStmt(t *testing.T) {
 				if fn.Name == nil || !matchYAMLFuncRE.MatchString(fn.Name.Name) {
 					return
 				}
-				EachInSubtree[ast.SwitchStmt](fn.Body, func(sw *ast.SwitchStmt) {
-					pos := p.Fset.Position(sw.Pos())
-					t.Errorf("INVARIANT PARSER-MATCHER-EXAMPLES-SYMMETRY-01 (blind-spot): "+
-						"matcher %s uses a SwitchStmt at %s; the BinaryExpr walk in the main test "+
-						"does not cover switch cases — update the archtest if a switch refactor is intentional",
-						fn.Name.Name, pos)
-				})
+				for _, body := range matcherAndCalleeBodies(f, fn) {
+					EachInSubtree[ast.SwitchStmt](body, func(sw *ast.SwitchStmt) {
+						// Only flag `switch parts[<intlit>]` — the form that would
+						// evade EvaluateConstString by placing the parts index
+						// comparison in a switch tag rather than a BinaryExpr.
+						if sw.Tag == nil {
+							return
+						}
+						idx, ok := sw.Tag.(*ast.IndexExpr)
+						if !ok {
+							return
+						}
+						ident, ok := idx.X.(*ast.Ident)
+						if !ok || ident.Name != "parts" {
+							return
+						}
+						idxLit, ok := idx.Index.(*ast.BasicLit)
+						if !ok || idxLit.Kind != token.INT {
+							return
+						}
+						pos := p.Fset.Position(sw.Pos())
+						t.Errorf("INVARIANT PARSER-MATCHER-EXAMPLES-SYMMETRY-01 (blind-spot): "+
+							"matcher %s (or its callee) uses switch parts[%s] at %s; the BinaryExpr "+
+							"walk in the main test does not cover switch cases — update the archtest "+
+							"if a switch refactor is intentional",
+							fn.Name.Name, idxLit.Value, pos)
+					})
+				}
 			})
 		}
 		return nil
