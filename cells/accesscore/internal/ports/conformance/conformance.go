@@ -135,6 +135,30 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 		// must be inline at the test site (archtest does not follow helpers).
 		errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	})
+	// USERREPO-METHOD-SET-FROZEN-01 narrow-write surface (issue #828):
+	// generic Update(*User) is removed. Each narrow method touches a disjoint
+	// column set; the conformance sub-tests below pin column isolation in mem
+	// + PG so a regression that re-introduces field bleed surfaces here, not
+	// in production.
+	t.Run("UpdateProfile_Succeeds", func(t *testing.T) {
+		conformUpdateProfileSucceeds(t, factory)
+	})
+	t.Run("UpdateProfile_PartialPATCH", func(t *testing.T) {
+		conformUpdateProfilePartialPATCH(t, factory)
+	})
+	t.Run("UpdateProfile_NotFound", func(t *testing.T) {
+		err := conformUpdateProfileNotFound(t, factory)
+		errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
+	})
+	t.Run("UpdateLockState_Succeeds", func(t *testing.T) {
+		conformUpdateLockStateSucceeds(t, factory)
+	})
+	t.Run("UpdateLockState_ActivateClearsLockout", func(t *testing.T) {
+		conformUpdateLockStateActivateClearsLockout(t, factory)
+	})
+	t.Run("UpdatePasswordResetFlag_Succeeds", func(t *testing.T) {
+		conformUpdatePasswordResetFlagSucceeds(t, factory)
+	})
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -723,4 +747,307 @@ func conformGetByIDForUpdateLockContention(t *testing.T, factory UserRepoFactory
 	if contenderErr != nil {
 		t.Errorf("GetByIDForUpdate_LockContention: contender RunInTx err = %v, want nil", contenderErr)
 	}
+}
+
+// ─── Narrow write methods (issue #828) ────────────────────────────────────────
+
+// conformUpdateProfileSucceeds verifies UpdateProfile writes username + email +
+// updated_at and returns the reconstituted aggregate, without touching status /
+// password / lockout / epoch columns.
+func conformUpdateProfileSucceeds(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "prof_"+uuid.NewString())
+	initialStatus := u.Status()
+	initialEpoch := u.AuthzEpoch()
+	initialPwdHash := u.PasswordHash
+	initialPwdVer := u.PasswordVersion
+
+	newName := "renamed_" + uuid.NewString()
+	newEmail := newName + "@example.com"
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	updated, err := repo.UpdateProfile(context.Background(), u.ID, &newName, &newEmail, now)
+	if err != nil {
+		t.Fatalf("UpdateProfile_Succeeds: UpdateProfile: %v", err)
+	}
+	if updated == nil {
+		t.Fatal("UpdateProfile_Succeeds: returned user is nil")
+	}
+	if updated.Username != newName {
+		t.Errorf("UpdateProfile_Succeeds: returned username: got %q, want %q", updated.Username, newName)
+	}
+	if updated.Email != newEmail {
+		t.Errorf("UpdateProfile_Succeeds: returned email: got %q, want %q", updated.Email, newEmail)
+	}
+
+	// Re-read and verify the same columns persisted and untouched columns held.
+	got, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdateProfile_Succeeds: GetByID: %v", err)
+	}
+	if got.Username != newName {
+		t.Errorf("UpdateProfile_Succeeds: persisted username: got %q, want %q", got.Username, newName)
+	}
+	if got.Email != newEmail {
+		t.Errorf("UpdateProfile_Succeeds: persisted email: got %q, want %q", got.Email, newEmail)
+	}
+	if got.Status() != initialStatus {
+		t.Errorf("UpdateProfile_Succeeds: status must not change: got %v, want %v", got.Status(), initialStatus)
+	}
+	if got.AuthzEpoch() != initialEpoch {
+		t.Errorf("UpdateProfile_Succeeds: authz_epoch must not change: got %d, want %d", got.AuthzEpoch(), initialEpoch)
+	}
+	if got.PasswordHash != initialPwdHash {
+		t.Errorf("UpdateProfile_Succeeds: password_hash must not change")
+	}
+	if got.PasswordVersion != initialPwdVer {
+		t.Errorf("UpdateProfile_Succeeds: password_version must not change")
+	}
+	if got.PasswordResetRequired() {
+		t.Error("UpdateProfile_Succeeds: password_reset_required must remain false")
+	}
+}
+
+// conformUpdateProfilePartialPATCH verifies nil-pointer arguments leave the
+// corresponding column untouched (COALESCE semantics).
+func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "ppatch_"+uuid.NewString())
+	originalName := u.Username
+	originalEmail := u.Email
+
+	// Update name only; email pointer is nil.
+	newName := "only_name_changed_" + uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := repo.UpdateProfile(context.Background(), u.ID, &newName, nil, now); err != nil {
+		t.Fatalf("UpdateProfile_PartialPATCH: name-only: %v", err)
+	}
+	got, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdateProfile_PartialPATCH: GetByID after name-only: %v", err)
+	}
+	if got.Username != newName {
+		t.Errorf("UpdateProfile_PartialPATCH: name should change: got %q, want %q", got.Username, newName)
+	}
+	if got.Email != originalEmail {
+		t.Errorf("UpdateProfile_PartialPATCH: email should NOT change with nil email pointer: got %q, want %q",
+			got.Email, originalEmail)
+	}
+
+	// Update email only; name pointer is nil.
+	newEmail := "only_email_" + uuid.NewString() + "@example.com"
+	if _, err := repo.UpdateProfile(context.Background(), u.ID, nil, &newEmail, now); err != nil {
+		t.Fatalf("UpdateProfile_PartialPATCH: email-only: %v", err)
+	}
+	got, err = repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdateProfile_PartialPATCH: GetByID after email-only: %v", err)
+	}
+	if got.Email != newEmail {
+		t.Errorf("UpdateProfile_PartialPATCH: email should change: got %q, want %q", got.Email, newEmail)
+	}
+	if got.Username != newName {
+		t.Errorf("UpdateProfile_PartialPATCH: name should NOT change with nil name pointer: got %q, want %q",
+			got.Username, newName)
+	}
+
+	_ = originalName // silence linter (kept for debug context)
+}
+
+// conformUpdateProfileNotFound verifies missing userID returns ErrAuthUserNotFound.
+func conformUpdateProfileNotFound(t *testing.T, factory UserRepoFactory) error {
+	t.Helper()
+	repo, _, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	phantom := uuid.NewString()
+	ghostName := "ghost_" + phantom
+	ghostEmail := ghostName + "@example.com"
+	_, err := repo.UpdateProfile(context.Background(), phantom, &ghostName, &ghostEmail,
+		time.Now().UTC().Truncate(time.Millisecond))
+	if err == nil {
+		t.Fatal("UpdateProfile_NotFound: must return error for non-existent user, got nil")
+	}
+	return err
+}
+
+// conformUpdateLockStateSucceeds verifies UpdateLockState persists status +
+// updated_at while leaving username / email / password / epoch untouched.
+// Status==Locked path: lockout columns are NOT auto-zeroed.
+func conformUpdateLockStateSucceeds(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "lock_"+uuid.NewString())
+	initialName := u.Username
+	initialEmail := u.Email
+	initialPwdHash := u.PasswordHash
+	initialEpoch := u.AuthzEpoch()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := repo.UpdateLockState(context.Background(), u.ID, domain.StatusLocked, now); err != nil {
+		t.Fatalf("UpdateLockState_Succeeds: UpdateLockState: %v", err)
+	}
+
+	got, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdateLockState_Succeeds: GetByID: %v", err)
+	}
+	if got.Status() != domain.StatusLocked {
+		t.Errorf("UpdateLockState_Succeeds: status: got %v, want Locked", got.Status())
+	}
+	if got.Username != initialName {
+		t.Errorf("UpdateLockState_Succeeds: username must not change: got %q, want %q", got.Username, initialName)
+	}
+	if got.Email != initialEmail {
+		t.Errorf("UpdateLockState_Succeeds: email must not change: got %q, want %q", got.Email, initialEmail)
+	}
+	if got.PasswordHash != initialPwdHash {
+		t.Errorf("UpdateLockState_Succeeds: password_hash must not change")
+	}
+	if got.AuthzEpoch() != initialEpoch {
+		t.Errorf("UpdateLockState_Succeeds: authz_epoch must not change: got %d, want %d", got.AuthzEpoch(), initialEpoch)
+	}
+}
+
+// conformUpdateLockStateActivateClearsLockout verifies the column-level
+// invariant: UpdateLockState(status=Active) atomically zeros
+// failed_login_count / last_failed_at / locked_until in the same statement,
+// closing the PR #585 P1#3 admin-unlock re-lock race at the schema layer.
+func conformUpdateLockStateActivateClearsLockout(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "act_"+uuid.NewString())
+
+	// Seed lockout state via UpdateLockoutFields (the auto-lockout path).
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	failedAt := now.Add(lockoutFixtureFailedGap)
+	lockedUntil := now.Add(lockoutFixtureLockedUntil)
+	withLockout, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:               u.ID,
+		Username:         u.Username,
+		Email:            u.Email,
+		PasswordHash:     u.PasswordHash,
+		PasswordVersion:  u.PasswordVersion,
+		Status:           domain.StatusLocked,
+		Source:           u.CreationSource,
+		AuthzEpoch:       u.AuthzEpoch(),
+		CreatedAt:        u.CreatedAt,
+		UpdatedAt:        now,
+		FailedLoginCount: 5,
+		LastFailedAt:     &failedAt,
+		LockedUntil:      &lockedUntil,
+	})
+	if err != nil {
+		t.Fatalf("UpdateLockState_ActivateClearsLockout: ReconstituteUser: %v", err)
+	}
+	if err := repo.UpdateLockoutFields(context.Background(), withLockout); err != nil {
+		t.Fatalf("UpdateLockState_ActivateClearsLockout: seed UpdateLockoutFields: %v", err)
+	}
+
+	// Move the user to StatusLocked (no auto-zero on Lock).
+	if err := repo.UpdateLockState(context.Background(), u.ID, domain.StatusLocked, now); err != nil {
+		t.Fatalf("UpdateLockState_ActivateClearsLockout: UpdateLockState(Locked): %v", err)
+	}
+	mid, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdateLockState_ActivateClearsLockout: GetByID after Lock: %v", err)
+	}
+	if mid.FailedLoginCount() != 5 {
+		t.Errorf("UpdateLockState_ActivateClearsLockout: failed_login_count must persist on Lock: got %d, want 5",
+			mid.FailedLoginCount())
+	}
+
+	// Now Activate — column-level invariant zeros the three lockout columns.
+	now2 := now.Add(time.Second)
+	if err := repo.UpdateLockState(context.Background(), u.ID, domain.StatusActive, now2); err != nil {
+		t.Fatalf("UpdateLockState_ActivateClearsLockout: UpdateLockState(Active): %v", err)
+	}
+	got, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdateLockState_ActivateClearsLockout: GetByID after Activate: %v", err)
+	}
+	if got.Status() != domain.StatusActive {
+		t.Errorf("UpdateLockState_ActivateClearsLockout: status: got %v, want Active", got.Status())
+	}
+	if got.FailedLoginCount() != 0 {
+		t.Errorf("UpdateLockState_ActivateClearsLockout: failed_login_count must be 0 after Activate: got %d",
+			got.FailedLoginCount())
+	}
+	if got.LastFailedAt() != nil {
+		t.Errorf("UpdateLockState_ActivateClearsLockout: last_failed_at must be nil after Activate: got %v",
+			got.LastFailedAt())
+	}
+	if got.AutoLockoutDeadline() != nil {
+		t.Errorf("UpdateLockState_ActivateClearsLockout: locked_until must be nil after Activate: got %v",
+			got.AutoLockoutDeadline())
+	}
+}
+
+// conformUpdatePasswordResetFlagSucceeds verifies the flag is persisted without
+// touching password_hash / password_version / status / lockout / epoch.
+func conformUpdatePasswordResetFlagSucceeds(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "prf_"+uuid.NewString())
+	initialPwdHash := u.PasswordHash
+	initialPwdVer := u.PasswordVersion
+	initialStatus := u.Status()
+	initialEpoch := u.AuthzEpoch()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := repo.UpdatePasswordResetFlag(context.Background(), u.ID, true, now); err != nil {
+		t.Fatalf("UpdatePasswordResetFlag_Succeeds: set true: %v", err)
+	}
+	got, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdatePasswordResetFlag_Succeeds: GetByID after true: %v", err)
+	}
+	if !got.PasswordResetRequired() {
+		t.Error("UpdatePasswordResetFlag_Succeeds: password_reset_required must be true")
+	}
+	if got.PasswordHash != initialPwdHash {
+		t.Error("UpdatePasswordResetFlag_Succeeds: password_hash must not change")
+	}
+	if got.PasswordVersion != initialPwdVer {
+		t.Error("UpdatePasswordResetFlag_Succeeds: password_version must not change")
+	}
+	if got.Status() != initialStatus {
+		t.Errorf("UpdatePasswordResetFlag_Succeeds: status must not change: got %v, want %v", got.Status(), initialStatus)
+	}
+	if got.AuthzEpoch() != initialEpoch {
+		t.Errorf("UpdatePasswordResetFlag_Succeeds: authz_epoch must not change: got %d, want %d",
+			got.AuthzEpoch(), initialEpoch)
+	}
+
+	// Toggle off — same isolation.
+	now2 := now.Add(time.Second)
+	if err := repo.UpdatePasswordResetFlag(context.Background(), u.ID, false, now2); err != nil {
+		t.Fatalf("UpdatePasswordResetFlag_Succeeds: set false: %v", err)
+	}
+	got, err = repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("UpdatePasswordResetFlag_Succeeds: GetByID after false: %v", err)
+	}
+	if got.PasswordResetRequired() {
+		t.Error("UpdatePasswordResetFlag_Succeeds: password_reset_required must be false")
+	}
+
+	// Not-found path returns ErrAuthUserNotFound.
+	err = repo.UpdatePasswordResetFlag(context.Background(), uuid.NewString(), true, now2)
+	if err == nil {
+		t.Fatal("UpdatePasswordResetFlag_Succeeds: must return error for non-existent user")
+	}
+	errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 }
