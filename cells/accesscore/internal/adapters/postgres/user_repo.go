@@ -128,26 +128,42 @@ FROM users
 WHERE username = $1
 FOR UPDATE`
 
-	// updateUserSQL intentionally does NOT include authz_epoch in the SET list.
-	// Bumping the epoch is a separate, distinct operation per ADR-credential D2
-	// (S4 wires the per-event bump path). Calling Update() after a credential
-	// state change (role revoke, password reset, lock, delete) does NOT bump
-	// authz_epoch. Use UpdateAuthzEpoch for that purpose.
-	//
-	// PR #585 review P1#3: the lockout-bookkeeping columns
-	// (failed_login_count, last_failed_at, locked_until) ARE included so that
-	// authzmutate.ActivateUser — whose apply() calls domain.User.ResetFailedLogins()
-	// — persists the zeroing via the standard Update path. Without these columns
-	// the in-memory zeroing never reached PG, and admin unlock / TryLazyUnlock
-	// silently left the stored counter at its pre-unlock value.
-	updateUserSQL = `
+	deleteUserSQL = `DELETE FROM users WHERE id = $1`
+
+	// updateProfileSQL applies PATCH semantics: nil $2/$3 leave username/email
+	// unchanged via COALESCE. RETURNING * avoids a second round-trip and gives
+	// the caller the reconstituted aggregate as the new system-of-record value.
+	updateProfileSQL = `
 UPDATE users
-SET username = $2, email = $3, password_hash = $4, password_reset_required = $5,
-    status = $6, creation_source = $7, updated_at = $8,
-    failed_login_count = $9, last_failed_at = $10, locked_until = $11
+SET username   = COALESCE($2, username),
+    email      = COALESCE($3, email),
+    updated_at = $4
+WHERE id = $1
+RETURNING id, username, email, password_hash, password_version, password_reset_required,
+          status, creation_source, authz_epoch, created_at, updated_at,
+          failed_login_count, last_failed_at, locked_until`
+
+	// updateLockStateSQL: $2 = 'active' clears the three auto-lockout columns
+	// in the same statement. The CASE compares the bound status string against
+	// the PG enum text value 'active', which is correct because pgx v5 binds
+	// domain.UserStatus (type string) as text and the enum implicit-casts to text
+	// in the CASE expression. This closes the PR #585 P1#3 race at the schema
+	// layer: "activate without lockout reset" is not expressible at the call site.
+	updateLockStateSQL = `
+UPDATE users
+SET status             = $2,
+    updated_at         = $3,
+    failed_login_count = CASE WHEN $2 = 'active' THEN 0    ELSE failed_login_count END,
+    last_failed_at     = CASE WHEN $2 = 'active' THEN NULL ELSE last_failed_at     END,
+    locked_until       = CASE WHEN $2 = 'active' THEN NULL ELSE locked_until       END
 WHERE id = $1`
 
-	deleteUserSQL = `DELETE FROM users WHERE id = $1`
+	// updatePasswordResetFlagSQL writes only password_reset_required + updated_at.
+	updatePasswordResetFlagSQL = `
+UPDATE users
+SET password_reset_required = $2,
+    updated_at              = $3
+WHERE id = $1`
 
 	// maxFailedLoginCount caps the in-domain failed_login_count value before
 	// it crosses the PG int32 wire boundary (column type is INTEGER in
@@ -344,50 +360,80 @@ func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string
 	return u, nil
 }
 
-// Update overwrites the mutable fields of an existing user. Returns
-// ErrAuthUserNotFound when no row matched. Returns ErrAuthUserDuplicate (409)
-// when the updated username or email collides with an existing row. Returns
-// ErrAuthLastAdminProtected (403) when the migration-024 trigger on `users`
-// rejects the UPDATE because the row is the sole effective admin and the
-// status would demote (active → suspended/locked) — same errcode as the
-// application-layer guard so client handlers match a single business
-// invariant regardless of which layer caught the violation.
-func (r *PGUserRepo) Update(ctx context.Context, user *domain.User) error {
-	count32, err := validateFailedLoginCount(user.ID, user.FailedLoginCount())
+// UpdateProfile writes username / email / updated_at. Nil name or email leaves
+// that column unchanged (SQL COALESCE). Returns the post-write *domain.User
+// reconstituted from the RETURNING * row; caller MUST use it as the new
+// system-of-record aggregate.
+func (r *PGUserRepo) UpdateProfile(
+	ctx context.Context,
+	userID string,
+	name, email *string,
+	now time.Time,
+) (*domain.User, error) {
+	row := r.db.QueryRow(ctx, updateProfileSQL, userID, name, email, now)
+	u, err := scanUser(row)
 	if err != nil {
-		return err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+				errcode.WithCategory(errcode.CategoryDomain),
+				errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+		}
+		if pgquery.IsUniqueViolation(err) {
+			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
+				"username or email already exists",
+				errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, err
+		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update profile", err)
 	}
-	tag, err := r.db.Exec(ctx, updateUserSQL,
-		user.ID,
-		user.Username,
-		user.Email,
-		user.PasswordHash,
-		user.PasswordResetRequired(),
-		string(user.Status()),
-		string(user.CreationSource),
-		user.UpdatedAt,
-		count32,
-		user.LastFailedAt(),
-		user.AutoLockoutDeadline(),
-	)
+	return u, nil
+}
+
+// UpdateLockState writes status + updated_at, atomically resetting the three
+// auto-lockout columns when status == StatusActive (SQL CASE clause). Returns
+// ErrAuthLastAdminProtected when the migration-024 trigger blocks the change.
+func (r *PGUserRepo) UpdateLockState(
+	ctx context.Context,
+	userID string,
+	status domain.UserStatus,
+	now time.Time,
+) error {
+	tag, err := r.db.Exec(ctx, updateLockStateSQL, userID, string(status), now)
 	if err != nil {
 		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
-				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", user.ID, string(user.Status()))))
+				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", userID, string(status))))
 		}
-		if pgquery.IsUniqueViolation(err) {
-			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
-				"username or email already exists",
-				errcode.WithInternal(fmt.Sprintf("id=%s username=%q email=%q", user.ID, user.Username, user.Email)))
-		}
-		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update lock state", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
+			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+	}
+	return nil
+}
+
+// UpdatePasswordResetFlag writes password_reset_required + updated_at only.
+func (r *PGUserRepo) UpdatePasswordResetFlag(
+	ctx context.Context,
+	userID string,
+	required bool,
+	now time.Time,
+) error {
+	tag, err := r.db.Exec(ctx, updatePasswordResetFlagSQL, userID, required, now)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update password reset flag", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
 	}
 	return nil
 }

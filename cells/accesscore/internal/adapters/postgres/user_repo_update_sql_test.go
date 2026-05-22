@@ -1,43 +1,40 @@
 package postgres
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-// TestUpdateUserSQL_IncludesLockoutColumns is the PR #585 review P1#3 RED:
-// authzmutate.Mutator.ApplyInTx → repo.Update is the production write path
-// for the ActivateUser mutation, which calls domain.User.ResetFailedLogins()
-// in its apply() (mutation.go:138). Without these columns in the UPDATE,
-// the in-memory zeroing never reaches PG: an admin Unlock and the
-// TryLazyUnlock lazy-unlock path both leave the stored counter and
-// locked_until at their pre-unlock values, so the next failed login can
-// re-trigger an immediate auto-lock or otherwise read stale state.
-//
-// Test seam: assert the constant SQL string literal lists each of the three
-// columns mutated by ResetFailedLogins. Mirrors the existing pattern
-// elsewhere where SQL invariants are asserted at the source level (e.g.
-// FK lookups in schema_guard.go). A full PG behavioral test lives in
-// tests/integration/l2atomicity/journey_accountlockout_e2e_test.go.
-func TestUpdateUserSQL_IncludesLockoutColumns(t *testing.T) {
+// TestUpdateLockStateSQL_ResetsLockoutColumnsOnActive verifies the CASE-based
+// atomic reset: activating a user must zero failed_login_count / last_failed_at
+// / locked_until in the same statement, closing the PR #585 P1#3 race that the
+// old generic Update path exhibited (authzmutate.ActivateUser called
+// domain.User.ResetFailedLogins in memory; the UPDATE then had to include those
+// columns explicitly, which was fragile). The new SQL uses a CASE on the bound
+// status value so "activate without lockout reset" is not expressible at the
+// call site.
+func TestUpdateLockStateSQL_ResetsLockoutColumnsOnActive(t *testing.T) {
 	cases := []string{"failed_login_count", "last_failed_at", "locked_until"}
 	for _, col := range cases {
 		t.Run(col, func(t *testing.T) {
-			assert.Contains(t, updateUserSQL, col,
-				"updateUserSQL must SET %s so that authzmutate.ActivateUser → "+
-					"repo.Update persists the ResetFailedLogins() zeroing "+
-					"(PR #585 review P1#3)", col)
+			assert.Contains(t, updateLockStateSQL, col,
+				"updateLockStateSQL must CASE-reset %s when status='active' "+
+					"(PR #585 review P1#3 — atomic lockout-reset invariant)", col)
 		})
 	}
+	assert.Contains(t, updateLockStateSQL, "CASE WHEN $2 = 'active'",
+		"updateLockStateSQL must use CASE WHEN $2 = 'active' for conditional reset")
+}
 
-	// Sanity: the placeholders count must match the columns. The SET clause
-	// has 8 mutable columns + WHERE id=$1, so we expect $1..$8 minimum.
-	// This is a smoke check; the integration test exercises the live path.
-	assert.True(t, strings.Contains(updateUserSQL, "$8") ||
-		strings.Contains(updateUserSQL, "$9") ||
-		strings.Contains(updateUserSQL, "$10") ||
-		strings.Contains(updateUserSQL, "$11"),
-		"updateUserSQL must have positional params covering the new lockout columns")
+// TestUpdateProfileSQL_ReturnsStar verifies that the RETURNING clause is
+// present so UpdateProfile can reconstitute the post-write aggregate in one
+// round-trip without a follow-up SELECT.
+func TestUpdateProfileSQL_ReturnsStar(t *testing.T) {
+	assert.Contains(t, updateProfileSQL, "RETURNING",
+		"updateProfileSQL must include a RETURNING clause for single-round-trip reconstitution")
+	assert.Contains(t, updateProfileSQL, "COALESCE($2, username)",
+		"updateProfileSQL must use COALESCE for PATCH semantics on username")
+	assert.Contains(t, updateProfileSQL, "COALESCE($3, email)",
+		"updateProfileSQL must use COALESCE for PATCH semantics on email")
 }
