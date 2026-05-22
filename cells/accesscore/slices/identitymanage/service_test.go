@@ -508,6 +508,115 @@ func TestService_Update_PatchSemantics(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Narrow write-method field-isolation tests (issue #828)
+//
+// These pin the use-case-specific column sets at the service layer; the
+// conformance suite covers the same invariants at the repo layer. Together
+// they double-lock that splitting Update(*User) into narrow methods kept the
+// per-call column boundary intact.
+// ---------------------------------------------------------------------------
+
+// TestService_UpdateProfile_DoesNotTouchAuthzFields verifies that an
+// email-only PATCH through Update routes to UpdateProfile and does NOT alter
+// status / passwordResetRequired / passwordHash.
+func TestService_UpdateProfile_DoesNotTouchAuthzFields(t *testing.T) {
+	svc := newTestService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "profiso", Email: "before@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	// Move user to Suspended via admin PATCH so we have a non-default
+	// status to assert is preserved by a subsequent profile-only PATCH.
+	suspended := "suspended"
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &suspended})
+	require.NoError(t, err)
+
+	// Snapshot password-derived fields after a stable read.
+	pre, err := svc.GetByID(adminCtxForService(), user.ID)
+	require.NoError(t, err)
+	preHash := pre.PasswordHash
+	prePV := pre.PasswordVersion
+	preEpoch := pre.AuthzEpoch()
+	preReset := pre.PasswordResetRequired()
+
+	newEmail := "after@e.f"
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
+	require.NoError(t, err)
+
+	assert.Equal(t, "after@e.f", updated.Email)
+	assert.Equal(t, domain.StatusSuspended, updated.Status(),
+		"profile-only PATCH must not change status")
+	assert.Equal(t, preReset, updated.PasswordResetRequired(),
+		"profile-only PATCH must not change passwordResetRequired")
+	assert.Equal(t, preHash, updated.PasswordHash,
+		"profile-only PATCH must not change passwordHash")
+	assert.Equal(t, prePV, updated.PasswordVersion,
+		"profile-only PATCH must not change passwordVersion")
+	assert.Equal(t, preEpoch, updated.AuthzEpoch(),
+		"profile-only PATCH must not change authzEpoch")
+}
+
+// TestService_Lock_DoesNotTouchProfile verifies Lock routes to UpdateLockState
+// without disturbing username / email / password fields.
+func TestService_Lock_DoesNotTouchProfile(t *testing.T) {
+	svc := newTestService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "lockiso", Email: "lockiso@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	pre, err := svc.GetByID(adminCtxForService(), user.ID)
+	require.NoError(t, err)
+	preName := pre.Username
+	preEmail := pre.Email
+	preHash := pre.PasswordHash
+	prePV := pre.PasswordVersion
+
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
+
+	post, err := svc.GetByID(adminCtxForService(), user.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusLocked, post.Status(), "Lock must persist status=Locked")
+	assert.Equal(t, preName, post.Username, "Lock must not change username")
+	assert.Equal(t, preEmail, post.Email, "Lock must not change email")
+	assert.Equal(t, preHash, post.PasswordHash, "Lock must not change passwordHash")
+	assert.Equal(t, prePV, post.PasswordVersion, "Lock must not change passwordVersion")
+}
+
+// TestService_Update_RequirePasswordReset_DoesNotTouchProfile verifies that
+// PATCH with requirePasswordReset=true routes to UpdatePasswordResetFlag (via
+// authzmutate) and does NOT alter username / email / passwordHash.
+func TestService_Update_RequirePasswordReset_DoesNotTouchProfile(t *testing.T) {
+	svc := newTestService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "resetiso", Email: "resetiso@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	pre, err := svc.GetByID(adminCtxForService(), user.ID)
+	require.NoError(t, err)
+	preName := pre.Username
+	preEmail := pre.Email
+	preHash := pre.PasswordHash
+	prePV := pre.PasswordVersion
+	require.False(t, pre.PasswordResetRequired())
+
+	requireReset := true
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
+		ID: user.ID, RequirePasswordReset: &requireReset,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, updated.PasswordResetRequired(),
+		"PATCH requirePasswordReset=true must set the flag")
+	assert.Equal(t, preName, updated.Username, "requirePasswordReset PATCH must not change username")
+	assert.Equal(t, preEmail, updated.Email, "requirePasswordReset PATCH must not change email")
+	assert.Equal(t, preHash, updated.PasswordHash, "requirePasswordReset PATCH must not change passwordHash")
+	assert.Equal(t, prePV, updated.PasswordVersion, "requirePasswordReset PATCH must not change passwordVersion")
+}
+
+// ---------------------------------------------------------------------------
 // ChangePassword tests
 // ---------------------------------------------------------------------------
 
@@ -705,8 +814,10 @@ func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Cont
 		return fn(ctx)
 	}
 	if err := fn(ctx); err != nil {
-		// Restore the snapshot — equivalent to PG ROLLBACK on the user row.
-		_ = s.repo.Update(ctx, pre)
+		// Restore the password snapshot — equivalent to PG ROLLBACK on the user row.
+		// UpdatePassword uses CAS on version; after fn ran UpdatePassword, the version
+		// advanced to pre.PasswordVersion+1, so the restore call uses that as expectedPV.
+		_, _ = s.repo.UpdatePassword(ctx, pre.ID, pre.PasswordHash, pre.PasswordResetRequired(), pre.PasswordVersion+1)
 		return err
 	}
 	return nil
@@ -1197,13 +1308,23 @@ func (r *observingUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*d
 	return r.UserRepository.GetByIDForUpdate(ctx, id)
 }
 
-func (r *observingUserRepo) Update(ctx context.Context, user *domain.User) error {
+func (r *observingUserRepo) UpdateLockState(ctx context.Context, userID string, status domain.UserStatus, now time.Time) error {
 	r.updInTx = r.runner.inTx
-	return r.UserRepository.Update(ctx, user)
+	return r.UserRepository.UpdateLockState(ctx, userID, status, now)
 }
 
-// failingUpdateRepo wraps a real repo but always fails Update — used to
-// drive the Unlock-error-propagation test. GetByID is forwarded so the
+func (r *observingUserRepo) UpdateProfile(ctx context.Context, userID string, name, email *string, now time.Time) (*domain.User, error) {
+	r.updInTx = r.runner.inTx
+	return r.UserRepository.UpdateProfile(ctx, userID, name, email, now)
+}
+
+func (r *observingUserRepo) UpdatePasswordResetFlag(ctx context.Context, userID string, required bool, now time.Time) error {
+	r.updInTx = r.runner.inTx
+	return r.UserRepository.UpdatePasswordResetFlag(ctx, userID, required, now)
+}
+
+// failingUpdateRepo wraps a real repo but always fails UpdateLockState — used
+// to drive the Unlock-error-propagation test. GetByID is forwarded so the
 // service's read step succeeds.
 type failingUpdateRepo struct {
 	ports.UserRepository
@@ -1211,7 +1332,7 @@ type failingUpdateRepo struct {
 	updates   int
 }
 
-func (r *failingUpdateRepo) Update(_ context.Context, _ *domain.User) error {
+func (r *failingUpdateRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
 	r.updates++
 	return r.updateErr
 }
@@ -1294,10 +1415,12 @@ func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
 	assert.Equal(t, 0, runner.runs, "invalid status must be rejected before opening a tx")
 }
 
-// TestService_Unlock_GetByIDAndUpdateInsideTx asserts Unlock runs the
-// read-modify-write chain atomically — Wave 5 P1-1: ApplyInTx+publish
+// TestService_Unlock_UpdateInsideTx asserts Unlock's write (UpdateLockState)
+// executes inside the RunInTx closure — Wave 5 P1-1: ApplyInTx+publish
 // co-commit in a single RunInTx (1 tx total, L2 OutboxFact guarantee).
-func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
+// Note: Unlock no longer calls GetByID inside the tx; the narrow UpdateLockState
+// port method performs a direct targeted write — there is no preliminary read.
+func TestService_Unlock_UpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "unlock-atomic", Email: "u@a.t", Password: "hash",
@@ -1309,8 +1432,7 @@ func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
 	// Wave 5 P1-1: ApplyInTx+publish co-committed in the same RunInTx → 1 tx.
 	assert.Equal(t, 1, runner.runs, "Unlock must run 1 tx: ApplyInTx+publish co-committed")
-	assert.True(t, repo.getInTx, "Unlock.GetByID must be observed inside RunInTx (no TOCTOU window)")
-	assert.True(t, repo.updInTx, "Unlock.Update must run inside the same tx")
+	assert.True(t, repo.updInTx, "Unlock.UpdateLockState must run inside the authzmutate tx")
 }
 
 // TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog asserts that an

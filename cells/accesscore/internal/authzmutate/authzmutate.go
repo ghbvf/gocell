@@ -51,11 +51,12 @@ func New(
 // event publish all co-commit in the same transaction (L2 OutboxFact).
 //
 // Steps:
-//  1. GetByIDForUpdate(txCtx) — acquires a row lock on the user within the
-//     caller's transaction.
-//  2. m.apply(u, now) — mutates the in-memory domain aggregate.
-//  3. repo.Update(txCtx, u) — persists the mutated aggregate.
-//  4. If m.Invalidates(), inv.Apply(txCtx, userID, m.Event()) — bumps
+//  1. m.persist(txCtx, repo, userID, now) — writes the mutation directly via
+//     the appropriate narrow port method (UpdateLockState / UpdatePasswordResetFlag).
+//     RowsAffected==0 → ErrAuthUserNotFound (KindNotFound) from the port; this
+//     replaces the prior GetByIDForUpdate round-trip with the same observable
+//     error surface.
+//  2. If m.Invalidates(), inv.Apply(txCtx, userID, m.Event()) — bumps
 //     authz_epoch + revokes sessions + revokes refresh chains.
 //
 // Preconditions: m must not be nil; userID must not be empty; txCtx must be
@@ -70,13 +71,8 @@ func (a *Mutator) ApplyInTx(ctx context.Context, txCtx context.Context, userID s
 			"authzmutate.ApplyInTx: userID must not be empty")
 	}
 	_ = ctx // ctx is available for future use (e.g. tracing); txCtx carries the tx
-	u, err := a.repo.GetByIDForUpdate(txCtx, userID)
-	if err != nil {
-		return fmt.Errorf("authzmutate.ApplyInTx: get user for update: %w", err)
-	}
-	m.apply(u, now)
-	if err := a.repo.Update(txCtx, u); err != nil {
-		return fmt.Errorf("authzmutate.ApplyInTx: update user: %w", err)
+	if err := m.persist(txCtx, a.repo, userID, now); err != nil {
+		return fmt.Errorf("authzmutate.ApplyInTx: persist: %w", err)
 	}
 	if m.Invalidates() {
 		if err := a.inv.Apply(txCtx, userID, m.Event()); err != nil {

@@ -387,63 +387,23 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 }
 
 // applyUserUpdate runs the body of Update. It handles non-authz field changes
-// (name, email) in a plain RunInTx and delegates credential-weakening status
-// changes and reset-flag mutations to authzmutate.Apply.
+// (name, email) via the narrow UpdateProfile port method and delegates
+// credential-weakening status changes and reset-flag mutations to authzmutate.Apply.
 //
-// Design: status and requirePasswordReset changes go through authzmutate.Apply
-// which opens its own RunInTx (nested via the same tx manager). Non-authz
-// fields (name, email) are applied first in a separate tx, then authzmutate
-// is called if needed. This keeps each operation atomic while avoiding mixing
-// non-credential and credential writes in the same closure.
+// Design: all changes (UpdateProfile + credential mutation + event publish) run
+// in a single RunInTx closure so that domain mutation and event publish co-commit
+// atomically (L2 OutboxFact). Profile writes (username/email) and authz writes
+// (status/passwordResetRequired) are separated by port method, not by transaction.
 //
-// applyNonAuthzFields excludes status and passwordResetRequired — those fields
-// are routed exclusively through authzmutate.Apply (via resolveCredentialMutation).
-// Only name, email, and updatedAt are written in the first tx.
+// F2 fix: resolveCredentialMutation is invoked inside the tx using the user row
+// already fetched by GetByID within the same transaction, eliminating the
+// pre-tx GetByID that the old RequirePasswordReset idempotency check used.
+// A concurrent BumpAuthzEpoch between a pre-check read and the credential-
+// mutation tx would have caused a spurious "no-op", skipping the epoch bump
+// and leaving live sessions unrevoked. The single-tx design closes that window.
 //
-// TOCTOU trade-off (KNOWN, ACCEPTED): non-authz fields (name, email) are
-// written in tx1 and the credential mutation (status, passwordResetRequired)
-// is applied in tx2 via authzmutator.Apply. A concurrent write between tx1
-// and tx2 could observe a brief intermediate state where name/email have
-// changed but status/epoch have not yet been updated. This split is intentional:
-//
-//   - Non-authz writes are informational; the user remains fully operational
-//     in the intermediate window (status is unchanged until tx2 commits).
-//   - The security net for the status/epoch window is
-//     sessionvalidate.enforceSessionState's CanAuthenticate check (P1.3b
-//     defense-in-depth, added this PR): any request from a non-active user
-//     is fail-closed at the validate layer regardless of epoch.
-//   - Collapsing both writes into a single tx would require authzmutate.Apply
-//     to accept an existing tx context, coupling it to the outer tx and
-//     significantly raising complexity. The trade-off is accepted.
-//
-// For correctness the approach is: apply non-authz field changes first (or
-// together with name/email), then apply the credential-changing mutation.
-// The outer tx handles name/email + event publish; authzmutate handles the
-// credential trifecta.
-//
-// F2 fix: resolveCredentialMutation is invoked inside tx1 using the user row
-// already fetched by GetByID within the same transaction. Note that tx1's
-// GetByID is a plain read (not GetByIDForUpdate / SELECT FOR UPDATE) — the
-// write-lock gap inside tx1 is the same accepted trade-off described in the
-// "TOCTOU trade-off (KNOWN, ACCEPTED)" paragraph above. authzmutate's
-// independent tx cannot be folded into tx1 without coupling cross-aggregate
-// transaction scopes (see ADR §A10 co-tx atomicity rationale).
-//
-// What F2 specifically closed: a separate pre-tx GetByID that the old
-// RequirePasswordReset idempotency check ran outside any transaction.
-// A concurrent BumpAuthzEpoch between that pre-check read and the start of
-// the credential-mutation tx could cause a spurious "no-op" return, skipping
-// the needed epoch bump and leaving live sessions unrevoked. Resolving the
-// mutation from tx1's already-fetched user row eliminates that window
-// without adding an extra DB round-trip.
-//
-// The remaining tx1-internal write-lock gap is defended at validate time by
-// sessionvalidate.enforceSessionState's row-epoch mismatch check + the
-// P1.3b CanAuthenticate gate — see runtime/auth/session/store.go (row epoch
-// != user epoch → 401) and cells/accesscore/slices/sessionvalidate.
-//
-// hasCombinedAuthzFields produces a deterministic 400 and is still evaluated
-// before tx1 — it is a pure-input check that requires no DB read.
+// hasCombinedAuthzFields produces a deterministic 400 and is evaluated before
+// the tx — it is a pure-input check that requires no DB read.
 func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor string) (*domain.User, error) {
 	// hasCombinedAuthzFields is a pure input check — 400 before any DB access.
 	if hasCombinedAuthzFields(input) {
@@ -467,9 +427,10 @@ func (s *Service) applyUserUpdate(ctx context.Context, input UpdateInput, actor 
 }
 
 // applyUserUpdateTx executes the update body inside an already-open transaction.
-// It fetches the user row, guards status demotion, applies non-authz fields,
-// optionally applies the credential mutation via authzmutator.ApplyInTx, and
-// publishes the UserUpdated event — all in the caller-provided txCtx.
+// It fetches the user row, guards status demotion, writes non-authz profile
+// fields via UpdateProfile (when name or email is present), optionally applies
+// the credential mutation via authzmutator.ApplyInTx, and publishes the
+// UserUpdated event — all in the caller-provided txCtx.
 //
 // Extracted from applyUserUpdate to keep each function's cognitive complexity ≤ 15.
 func (s *Service) applyUserUpdateTx(
@@ -484,13 +445,20 @@ func (s *Service) applyUserUpdateTx(
 		return nil, err
 	}
 	// Resolve the credential mutation inside the tx using the already-fetched
-	// locked row, avoiding a separate pre-tx GetByID (F2).
+	// row, avoiding a separate pre-tx GetByID (F2).
 	credMut := resolveCredentialMutationFromUser(u, input)
-	applyNonAuthzFields(u, input, now)
-	if err := s.repo.Update(txCtx, u); err != nil {
-		return nil, fmt.Errorf("identity-manage: update: %w", err)
+
+	// Write profile fields via narrow port method (username / email only).
+	// Guard: skip UpdateProfile entirely when neither field is in the PATCH —
+	// status-only and requirePasswordReset-only PATCHes must not touch these
+	// columns.
+	if input.Name != nil || input.Email != nil {
+		updated, uerr := s.repo.UpdateProfile(txCtx, input.ID, input.Name, input.Email, now)
+		if uerr != nil {
+			return nil, fmt.Errorf("identity-manage: update profile: %w", uerr)
+		}
+		u = updated
 	}
-	user := u
 
 	// Apply credential mutation via funnel inside the same tx — L2 OutboxFact:
 	// domain mutation, credential invalidation, and event publish co-commit.
@@ -499,16 +467,16 @@ func (s *Service) applyUserUpdateTx(
 			return nil, fmt.Errorf("identity-manage: update credential mutation: %w", err)
 		}
 		// Re-read updated aggregate from txCtx to capture epoch/status changes.
-		updated, err := s.repo.GetByID(txCtx, input.ID)
+		refetched, err := s.repo.GetByID(txCtx, input.ID)
 		if err != nil {
 			return nil, fmt.Errorf("identity-manage: update re-fetch after mutation: %w", err)
 		}
-		user = updated
+		u = refetched
 	}
-	if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor}); err != nil {
+	if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: input.ID, ActorID: actor}); err != nil {
 		return nil, err
 	}
-	return user, nil
+	return u, nil
 }
 
 // pendingCredMutation carries the result of resolveCredentialMutation.
@@ -571,19 +539,6 @@ func resolveCredentialMutationFromUser(u *domain.User, input UpdateInput) pendin
 		return pendingCredMutation{m: authzmutate.ClearPasswordReset{}, ok: true}
 	}
 	return pendingCredMutation{} // no credential fields changed
-}
-
-// applyNonAuthzFields applies non-credential field changes (name, email) to u.
-// Status and requirePasswordReset are handled by authzmutate.Apply and are NOT
-// set here — they go through the funnel.
-func applyNonAuthzFields(u *domain.User, input UpdateInput, now time.Time) {
-	if input.Name != nil {
-		u.Username = *input.Name
-	}
-	if input.Email != nil {
-		u.Email = *input.Email
-	}
-	u.UpdatedAt = now
 }
 
 // guardUpdateStatusDemotion enforces the effective-admin invariant when an
