@@ -10,6 +10,7 @@ package metadata
 import (
 	"log/slog"
 	"path/filepath"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 )
@@ -36,7 +37,15 @@ func applyAssemblyDerivations(pm *ProjectMeta) {
 
 func deriveAssembly(pm *ProjectMeta, asm *AssemblyMeta) {
 	if asm.Build.Entrypoint == "" {
-		asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("cmd", asm.ID, "main.go"))
+		// Assemblies under examples/ derive their entrypoint as
+		// examples/{id}/main.go to match the "identity by location" principle
+		// (helm/helm pkg/chartutil/create.go, kustomize-sigs pkg/types/kustomization.go).
+		// All other assemblies default to cmd/{id}/main.go.
+		if strings.HasPrefix(filepath.ToSlash(asm.File), "examples/") {
+			asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("examples", asm.ID, "main.go"))
+		} else {
+			asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("cmd", asm.ID, "main.go"))
+		}
 		slog.Debug("metadata: assembly entrypoint derived",
 			slog.String("assembly", asm.ID),
 			slog.String("entrypoint", asm.Build.Entrypoint),
