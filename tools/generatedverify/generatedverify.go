@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
+	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -256,6 +257,16 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 	}
 	artifacts = append(artifacts, contractgenArtifacts...)
 
+	// REQUIRED-DEP-NIL-GUARD-01: service_required_gen.go per slice — generator
+	// walks cells/**/slices/**/service.go + examples/**/service.go and emits
+	// a per-slice validateRequired() method. Skip semantics match
+	// requireddepsgen.GenerateAll (no Service struct → no artifact).
+	requiredDepsArtifacts, err := expectedRequiredDepsArtifacts(root)
+	if err != nil {
+		return nil, fmt.Errorf("expected requireddepsgen artifacts: %w", err)
+	}
+	artifacts = append(artifacts, requiredDepsArtifacts...)
+
 	if err := validateArtifactPaths(root, artifacts); err != nil {
 		return nil, err
 	}
@@ -293,6 +304,36 @@ func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Art
 			})
 		}
 	}
+	return artifacts, nil
+}
+
+// expectedRequiredDepsArtifacts derives the manifest entries for the
+// REQUIRED-DEP-NIL-GUARD-01 service_required_gen.go files. For each slice
+// under cells/**/slices/** + examples/**/cells/**/slices/** (and *.internal)
+// whose service.go declares a Service struct, the generator emits a
+// per-slice validateRequired() method. Slices without a Service struct (e.g.
+// type-alias service.go) are silently skipped — matching the
+// requireddepsgen.GenerateAll skip semantics.
+func expectedRequiredDepsArtifacts(root string) ([]Artifact, error) {
+	results, err := requireddepsgen.GenerateAll(root)
+	if err != nil {
+		return nil, err
+	}
+
+	artifacts := make([]Artifact, 0, len(results))
+	for slicePath, content := range results {
+		rel, err := filepath.Rel(root, slicePath)
+		if err != nil {
+			return nil, fmt.Errorf("relpath %q: %w", slicePath, err)
+		}
+		artifacts = append(artifacts, Artifact{
+			AssemblyID: "",
+			Kind:       "required-deps-gen",
+			Path:       filepath.ToSlash(filepath.Join(rel, "service_required_gen.go")),
+			Content:    content,
+		})
+	}
+	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 	return artifacts, nil
 }
 
