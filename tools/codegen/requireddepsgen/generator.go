@@ -289,6 +289,7 @@ func findSlicePaths(modRoot string) ([]string, error) {
 	patterns := []string{
 		filepath.Join(modRoot, "cells", "*", "slices", "*"),
 		filepath.Join(modRoot, "cells", "*", "slices", "*", "*"),
+		filepath.Join(modRoot, "cells", "*", "internal", "*"),
 		filepath.Join(modRoot, "examples", "*", "cells", "*", "slices", "*"),
 		filepath.Join(modRoot, "examples", "*", "cells", "*", "internal", "*"),
 	}
