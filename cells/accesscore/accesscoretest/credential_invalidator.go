@@ -6,6 +6,30 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 )
 
+// CredentialInvalidator is the public opaque handle returned by
+// NewCredentialInvalidator. It wraps the unexported
+// *cells/accesscore/internal/credentialinvalidate.Invalidator so external
+// _test packages can hold and pass the value without importing the
+// internal/ package — which Go's internal-package rule forbids.
+//
+// The struct intentionally has no exported fields and no exported methods:
+// it is a sealed handle, not an API surface. The single legal touchpoint of
+// the underlying internal type lives in this package (where the internal
+// import is permitted), keeping the testutil → internal coupling
+// unidirectional and unbypassable from outside cells/accesscore/.
+//
+// Hard funnel form (sibling of Hard 范本 §"single sanctioned holder"):
+//   - upstream  Hard — Go's internal-package rule makes *credentialinvalidate.Invalidator
+//     unnameable in any package not rooted at cells/accesscore/. External
+//     callers therefore cannot bypass this wrapper by declaring the raw type.
+//   - downstream Hard — unwrap field is unexported (.inv), so no external
+//     code can read or rewrap it; the only consumers are NewCredentialInvalidator
+//     (constructor) and BuildIdentityManageService (which threads the
+//     fixture-paired invalidator into identitymanage.NewService).
+type CredentialInvalidator struct {
+	inv *credentialinvalidate.Invalidator
+}
+
 // CredentialInvalidatorOption configures NewCredentialInvalidator.
 //
 // The only public option is WithInvalidatorFixture. Round-2 review of PR
@@ -40,12 +64,17 @@ func WithInvalidatorFixture(f *AccessFixture) CredentialInvalidatorOption {
 	}
 }
 
-// NewCredentialInvalidator constructs a real *credentialinvalidate.Invalidator
-// wired to the user/session/refresh stores held by the supplied
-// AccessFixture. The fixture is required: omitting WithInvalidatorFixture
-// fails the test immediately so the invalidator can never silently run
-// against an isolated store.
-func NewCredentialInvalidator(t *testing.T, opts ...CredentialInvalidatorOption) *credentialinvalidate.Invalidator {
+// NewCredentialInvalidator constructs an opaque *CredentialInvalidator wired
+// to the user/session/refresh stores held by the supplied AccessFixture. The
+// fixture is required: omitting WithInvalidatorFixture fails the test
+// immediately so the invalidator can never silently run against an isolated
+// store.
+//
+// The returned *CredentialInvalidator is the only handle external test
+// packages may hold. Pass it to WithIdentityInvalidator when building
+// services; the internal unwrap to *credentialinvalidate.Invalidator happens
+// inside this package.
+func NewCredentialInvalidator(t *testing.T, opts ...CredentialInvalidatorOption) *CredentialInvalidator {
 	t.Helper()
 	cfg := &invalidatorConfig{}
 	for _, o := range opts {
@@ -64,5 +93,5 @@ func NewCredentialInvalidator(t *testing.T, opts ...CredentialInvalidatorOption)
 	if err != nil {
 		t.Fatalf("NewCredentialInvalidator: %v", err)
 	}
-	return inv
+	return &CredentialInvalidator{inv: inv}
 }

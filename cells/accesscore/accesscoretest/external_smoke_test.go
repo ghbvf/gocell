@@ -1,17 +1,20 @@
 // This file deliberately uses a foreign _test package and imports only
-// public packages. It exists as a compile-time gate: if any future change
-// to cells/accesscore/accesscoretest re-exports a cells/accesscore/internal/*
-// type in its public API, callers like this test would need to import the
-// internal package to construct or read those values — but Go's internal
-// barrier forbids that import, so this file would stop compiling.
+// public packages. It is the compile-time gate against internal-type
+// re-export from cells/accesscore/accesscoretest: every exported symbol
+// whose declared type could plausibly reference cells/accesscore/internal/*
+// is named in a typed assertion (`var _ Type = expr`). If any future change
+// to a signature in this package switches a parameter or return type to a
+// cells/accesscore/internal/* type, this file requires the corresponding
+// internal import to type-check — which Go's internal-package rule rejects,
+// turning the regression into an immediate `go build` failure.
 //
 // Hard funnel form:
 //   - upstream: Go internal-package barrier (cells/accesscore/internal/* can
 //     only be imported by code rooted at cells/accesscore/) — violation
 //     unexpressible at the import path level.
-//   - downstream: this file's continued compilation under "go test ./..." —
-//     any drift back to internal types in the public API is caught at the
-//     first `go build`.
+//   - downstream: typed `var _ Type = expr` declarations below pin the
+//     public surface; any drift back to internal types breaks compilation
+//     of this _test file at the next `go test ./...`.
 //
 // Intentionally narrow: this test does not exercise behavior; the behavior
 // is covered by builders_test.go in the in-package _test. The single check
@@ -89,9 +92,20 @@ func TestExternalImportSurface_NoInternalTypes(t *testing.T) {
 	if inv == nil {
 		t.Fatal("NewCredentialInvalidator returned nil")
 	}
+	// Compile-time pin: NewCredentialInvalidator returns the public opaque
+	// *CredentialInvalidator, and WithIdentityInvalidator accepts it. Any
+	// future regression to *cells/accesscore/internal/credentialinvalidate.Invalidator
+	// (or any other internal type) breaks these declarations first.
+	// staticcheck QF1011 wants the RHS-inferable type dropped, but the
+	// *typed* form IS the gate — suppress for both lines.
+	//nolint:staticcheck // QF1011: typed gate against internal-type leak
+	var _ *accesscoretest.CredentialInvalidator = inv
+	//nolint:staticcheck // QF1011: typed gate against internal-type leak
+	var _ accesscoretest.BuildIdentityManageOption = accesscoretest.WithIdentityInvalidator(inv)
 
 	svc, _, rec := accesscoretest.BuildIdentityManageService(t,
 		accesscoretest.WithIdentityFixture(fix),
+		accesscoretest.WithIdentityInvalidator(inv),
 	)
 	if svc == nil || rec == nil {
 		t.Fatal("BuildIdentityManageService returned nil components")

@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
@@ -47,7 +46,7 @@ type buildIdentityConfig struct {
 	clock       clock.Clock
 	logger      *slog.Logger
 	issuer      identitymanage.TokenIssuer
-	invalidator *credentialinvalidate.Invalidator
+	invalidator *CredentialInvalidator
 }
 
 // WithIdentityFixture injects a pre-constructed (and possibly pre-seeded)
@@ -102,7 +101,12 @@ func WithIdentityTokenIssuer(ti identitymanage.TokenIssuer) BuildIdentityManageO
 // (so user/session/refresh state stays paired). Use this escape hatch only
 // when a test needs to substitute a custom invalidator built against the
 // same fixture — passing nil keeps the default.
-func WithIdentityInvalidator(inv *credentialinvalidate.Invalidator) BuildIdentityManageOption {
+//
+// The parameter is the public opaque *CredentialInvalidator returned by
+// NewCredentialInvalidator; the unwrap to internal/credentialinvalidate
+// happens once inside BuildIdentityManageService, keeping the internal
+// type unreachable from external test packages.
+func WithIdentityInvalidator(inv *CredentialInvalidator) BuildIdentityManageOption {
 	return func(c *buildIdentityConfig) {
 		if inv != nil {
 			c.invalidator = inv
@@ -159,9 +163,15 @@ func BuildIdentityManageService(
 
 	rec := outboxtest.NewRecorder()
 
+	// Unwrap the opaque CredentialInvalidator handle exactly once, here
+	// inside the testutil package — the single sanctioned touchpoint of
+	// the internal/credentialinvalidate type per the wrapper's Hard funnel
+	// (see credential_invalidator.go godoc).
+	rawInv := cfg.invalidator.inv
+
 	svc, err := identitymanage.NewService(
 		cfg.fixture.bundle.UserRepository(),
-		cfg.invalidator,
+		rawInv,
 		cfg.logger,
 		identitymanage.WithEmitter(rec),
 		identitymanage.WithTxManager(cfg.fixture.TxRunner()),

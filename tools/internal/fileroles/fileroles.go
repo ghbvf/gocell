@@ -44,6 +44,20 @@ func Rel(modRoot, abs string) (string, bool) {
 	return rel, true
 }
 
+// testHelperSubpaths lists recognized test-helper package path segments. A
+// path containing any of these is classified as test code. Order is not
+// significant — the predicate is OR over the slice.
+var testHelperSubpaths = []string{
+	"/locktest/",
+	"/outboxtest/",
+	"/storetest/",
+	"/healthtest/",
+	"/contracttest/",
+	"/commandtest/",
+	"/auditcoretest/",
+	"/accesscoretest/",
+}
+
 // IsTestCode reports whether the given module-relative path is test code
 // for the purposes of TEST-TIME-LITERAL-01.
 //
@@ -57,8 +71,8 @@ func Rel(modRoot, abs string) (string, bool) {
 // Inclusions (return true unless caught by an exclusion above):
 //   - *_test.go
 //   - **/conformance.go
-//   - any file under one of the recognized test-helper packages:
-//     locktest, outboxtest, storetest, healthtest, contracttest, commandtest
+//   - any file under one of the recognized test-helper packages
+//     (see testHelperSubpaths)
 func IsTestCode(rel string) bool {
 	if rel == "" {
 		return false
@@ -73,27 +87,13 @@ func IsTestCode(rel string) bool {
 	case strings.HasPrefix(rel, "testdata/"), strings.Contains(rel, "/testdata/"):
 		return false
 	}
-	switch {
-	case strings.HasSuffix(rel, "_test.go"):
+	if strings.HasSuffix(rel, "_test.go") || strings.HasSuffix(rel, "/conformance.go") {
 		return true
-	case strings.HasSuffix(rel, "/conformance.go"):
-		return true
-	case strings.Contains(rel, "/locktest/"):
-		return true
-	case strings.Contains(rel, "/outboxtest/"):
-		return true
-	case strings.Contains(rel, "/storetest/"):
-		return true
-	case strings.Contains(rel, "/healthtest/"):
-		return true
-	case strings.Contains(rel, "/contracttest/"):
-		return true
-	case strings.Contains(rel, "/commandtest/"):
-		return true
-	case strings.Contains(rel, "/auditcoretest/"):
-		return true
-	case strings.Contains(rel, "/accesscoretest/"):
-		return true
+	}
+	for _, seg := range testHelperSubpaths {
+		if strings.Contains(rel, seg) {
+			return true
+		}
 	}
 	return false
 }

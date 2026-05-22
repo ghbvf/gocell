@@ -20,7 +20,10 @@
 //   - UserStatus + UserStatusActive / Suspended / Locked
 //   - AccessFixture.SeedUser / SeedRole / SeedAssignment
 //   - AccessFixture.GetUser / GetRole / UserRoles / TxRunner
-//   - NewCredentialInvalidator + WithInvalidatorFixture (fixture-only collapse)
+//   - CredentialInvalidator (opaque wrapper) + NewCredentialInvalidator +
+//     WithInvalidatorFixture (fixture-only collapse); the wrapper hides
+//     *internal/credentialinvalidate.Invalidator from public signatures so
+//     no external caller can name the internal type
 //   - BuildIdentityManageService + With* options
 //   - BuildConfigReceiveService + With* options
 //   - FakeConfigGetter + four typed stub constructors:
