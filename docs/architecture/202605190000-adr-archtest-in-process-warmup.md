@@ -62,7 +62,8 @@ Accepted (2026-05-19)
 - **单次 union Load** (改造 2 simpler)：拒绝。`go/build/build.go::matchTag` `-tags=A,B,C` 下 `BuildTags = {A,B,C}`，`//go:build !pg` 在 union 含 `pg` 时静默排除。GoCell 当前 3 处反向 directive (`!catalog_gen` / `!unix && !windows` / `!windows`) 均不引用 KnownNonDefaultTags tag，**单次 union Load 当前不漏覆盖**；但未来若有人加 `//go:build !integration` 类文件会漏，无报错。两次 Load 是默认安全网。
 - **SharedResolverFullModule + SharedResolverPatterns 拆 typed**：拒绝。`LoadProductionPackages` 已是 `"./..."` 形态 typed wrapper，等价目标已达成。
 - **剥离 cacheKey patterns 维度**：拒绝。83.5% subpath patterns 必须保留 patterns 维度。
-- **剥离 tests 维度**：拒绝。`Tests:true/false` packages.Load 返回的 *types.Info 不兼容。
+- **剥离 tests 维度（合并 cacheKey）**：拒绝。`Tests:true/false` packages.Load 返回的 *types.Info 不兼容。
+- **预热多个独立 tests:* cacheKey**：采纳（详见 Amendment 2026-05-22）。每个 cacheKey 独立 packages.Load，对 *types.Info 兼容性无要求；扩展是单调增加预热集合，而非合并维度。
 - **保留 GOCELL_ARCHTEST_NO_WARMUP escape hatch**：拒绝。违反"不引入双路径"；按 trigger 单独改造而非预留逃生口。
 - **B 轴拆 backlog 单独 PR**：拒绝。与 A 轴同 root cause；分拆 = 治标；fresh Claude 仍会复抄范本。
 - **磁盘 cache 持久化 SharedResolver**（对标 staticcheck runner）：拒绝。archtest 进程极短生命周期（每 shard 单次 `go test`），磁盘 cache I/O 反而拖累。
@@ -120,6 +121,82 @@ PR #584 CI 首次运行 shard 12 触发 slowgate fail：`TestArchtestVerifyCover
 
 - 改造 3 `TAGGROUP-LOOP-FORBIDS-RUNTYPED-01` = typed-function-call funnel **Hard**（对齐 ai-collab.md §"Hard 范本" 第 2 条 panic 范本同构 + staticcheck SA4000 同构）
 - 改造 1 (TestMain) / 改造 2 (两次 Load) = perf refactor，不在 ai-collab.md §适用范围
+
+## Amendment 2026-05-22 (issue #860 / fix/855-archtest-tests-true-warmup)
+
+> 触发：PR #850 fixup 三次 CI verify-archtest 失败，三个不同 Tests:true 路径 test 跨 20s slowgate budget；allowlist 持续膨胀（PR #850 fixup 新增 3 条全是 Tests:true）。命中 ADR §80 复合触发条件 + cap-14 backlog `ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01` archive 版触发线。
+
+### 决策变更
+
+`tools/archtest/warm.go::warmProductionPackages` 从 1 个 cacheKey 预热扩展到 4 个：
+
+| # | cacheKey | 覆盖调用点 | 引入 |
+|---|----------|-----------|------|
+| 1 | `(false, nil, "./...")` | LAYER-* + 多数业务 Test* | 本 ADR 原决策 |
+| 2 | `(true, nil, "./...")` | 6 个（TestContractLoadByIDLiteral / TestImplementsFunnel / TestOutboxInvariants / TestExternalReasonLiteral nil 半 等） | Amendment 2026-05-22 |
+| 3 | `(true, FlatNonDefaultTags(), "./...")` | 10 个（**TestNotFoundTestStrict** / **TestCellIDPatternSingleSource** / TestUserRepoConformanceEnrollment / TestClockInvariants / TestCellRepoReadyzProbe 等） | Amendment 2026-05-22 |
+| 4 | `(true, ProductionFlatTags(), "./...")` | 2 个（**TestExternalReasonLiteral** / **TestExternalReasonLiteral_NoIndirectReferences** ProductionFlatTags 半） | Amendment 2026-05-22 |
+
+§65 同步重写：原"剥离 tests 维度 拒绝"针对的是**合并 cacheKey**（共用 *types.Info），不针对**预热多个独立 cacheKey**——后者每次 packages.Load 各自缓存，对 *types.Info 兼容性无要求。Amendment 是扩展决策面，不是反转 §65。
+
+### 触发证据
+
+PR #850 fixup CI verify-archtest 失败：
+
+| Commit | Shard | 失败 test | wall | cacheKey |
+|--------|-------|-----------|------|----------|
+| 7054bfbad | 3 | TestNotFoundTestStrict | 24.69s | (true, FlatNonDefaultTags, "./...") |
+| 7054bfbad | 3 | TestExternalReasonLiteral 系列 | 37.88s | (true, *, "./...") 双 Load |
+| 0b3d24b53 | 13 | TestCellIDPatternSingleSource | 28.62s | (true, FlatNonDefaultTags, "./...") |
+
+> issue #860 正文笔误："TestEventuallyFunnel" 在仓库不存在；`TEST-EVENTUALLY-FUNNEL-01` 是 `docs/plans/202605181600-042-archtest.md §1.1 PR3` 跟踪的未来 testwait.External upstream funnel 闭环，与本 PR 无依赖。
+
+ProductionFlatTags 路径的 2 个 test（TestExternalReasonLiteral / TestExternalReasonLiteral_NoIndirectReferences）历史上 23.23-23.53s 已被收编进 `tools/slowgate/allowlist.txt`——allowlist 是 anti-pattern（ai-collab.md §"Soft → Hard 改造方向"），本 Amendment 一次性关闭所有 3 个 Tests:true `./...` cacheKey 的 cold path 而非留尾。
+
+### 威胁矩阵 delta（逐行重评，按 ai-collab.md §"ADR amendment 落地必查"）
+
+| 维度 | Before（本 ADR 落地后） | After Amendment 2026-05-22 | 状态变化 |
+|------|----------------------|---------------------------|----------|
+| shard startup wall | +15-25s 固定 | +45-75s 固定 | ⚠️ 3 倍（接受） |
+| Test* 首次 SharedResolver wall (Tests:false ./... ) | <100ms cache hit | <100ms cache hit | ✅ 维持 |
+| Test* 首次 SharedResolver wall (Tests:true ./... 全集) | 10-30s cache miss | <100ms cache hit | ✅ A 轴扩展 |
+| 轻 shard 净亏 | wash 或微亏 (+15-25s vs 0) | 净亏放大 (+45-75s vs 0) | ⚠️ 接受（CI 总 wall 由 max(shard) 决定，轻 shard 拖慢不影响总 wall） |
+| 重 shard / borderline shard 净赚 | 净赚 (-10-20s) | 更大净赚（多个 Tests:true site cache hit） | ✅ |
+| 反向 build directive 监控 | 新增隐含约束（review 两次 Load） | 维持 | ✅ |
+| `(true, *, "./tools/archtest/...")` subpath | 不在预热范围 | 维持不在预热范围 | ✅ 未达 §80 复合触发条件；scanner_framework_usage + eval_predicate_centralization 5 site 当前未触发 SLOW |
+| `warm.go` 直调 typeseval | ADR §80 接受 carve-out | 维持接受（直调 helper 数 1 → 1，导出符号 FlatNonDefaultTags + ProductionFlatTags 是 resolve.go 既有 API，不新增 typeseval 直引） | ✅ |
+| `(true, ProductionFlatTags)` allowlist entry | 2 entry（TestExternalReasonLiteral × 2） | 0 entry（follow-up 缩减） | ✅ 关 anti-pattern 尾巴 |
+| `(true, FlatNonDefaultTags)` allowlist entry | 多条 | 候选缩减扩大（TestNotFoundTestStrict / TestCellIDPatternSingleSource / TestUserRepoConformanceEnrollment） | ✅ cleanup 候选扩 |
+| §66 GOCELL_ARCHTEST_NO_WARMUP escape hatch | 拒绝 | 维持拒绝 | ✅ §66 重评见下 |
+| Total CI wall (16 shard) | 重 shard 主导 ≈ 25-35s | 重 shard ≈ 50-60s（startup 主导）；max(shard wall) 由 startup 主导 | ⚠️ 接受：所有 shard cache hit 后测试本身 wall <5s，总 wall 由 startup 倍增决定，但 startup 固定 ≤ 75s 优于 borderline 跨 budget 重跑 |
+
+⚠️ 标记的格子均显式列出补偿措施或接受理由；无格子从 ✅ 变成 ❌。
+
+### §66 重评（CI/dev 性能分流场景）
+
+issue #860 提出"原拒绝理由'违反不引入双路径'是开发体验语境，此处是 CI/dev 性能分流场景"，要求重评是否引入 `GOCELL_ARCHTEST_WARMUP_TESTS_TRUE=0` env var。
+
+**维持拒绝**：
+- CI 16-shard 总 wall = max(shard wall)；warmup 启动开销在所有 shard 上是 floor，重 shard 受益。env var 关闭 warm 不会让 CI 总 wall 缩短（仍由重 shard 中的多个 Tests:true cache miss 主导）。
+- 本地单测 wash（`go test ./tools/archtest/ -run TestFoo` 仍付 45-75s warm）由 testmain_test.go godoc 明示，开发循环加速推荐 `-run` 多个 test 一次跑完摊销。
+- env var 是 silent CI/dev 路径分叉：CI 漏设 → 性能回归不告警；dev 误设 → 调试时遗漏 trigger，反过来掩盖问题。
+
+### §103 follow-up 节奏不变
+
+本 PR **不同步缩减 `tools/slowgate/allowlist.txt`**——与本 ADR §103 同因（GHA 实测无本地代表性，需 CI 2-3 次连续运行后判断每条 test 是否稳定 < 20s），由 backlog `ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01` 跟踪。本 Amendment 扩 cleanup 候选清单包含：
+
+- TestNotFoundTestStrict
+- TestCellIDPatternSingleSource
+- TestUserRepoConformanceEnrollment
+- TestExternalReasonLiteral
+- TestExternalReasonLiteral_NoIndirectReferences
+
+合并后连续 2-3 次 develop CI run 实测 wall 写入 follow-up backlog；若 max(shard wall) 反而上升触发 §"回退路径"。
+
+### AI-rebust 评级（Amendment 部分）
+
+- warm.go 4-key 扩展 = perf refactor，不在 ai-collab.md §适用范围
+- 本 PR 不新增 archtest / governance rule / codegen funnel / type marker
 
 ## 参考
 
