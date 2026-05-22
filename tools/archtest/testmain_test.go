@@ -60,7 +60,10 @@ import (
 // ref: golangci-lint pkg/goanalysis/runner.go union load mode
 func TestMain(m *testing.M) {
 	if isListMode(os.Args) {
-		// -list mode: skip warmup; m.Run() with -test.list only enumerates names
+		// -list mode: skip warmup; m.Run() with -test.list only enumerates names.
+		// Do NOT add slog output in this branch: list-mode stdout is consumed by
+		// `grep '^Test'` in verify-archtest.sh; any non-test-name line breaks the
+		// discovery filter and can collapse shard distribution.
 		os.Exit(m.Run())
 	}
 	root, err := lookupModuleRoot()
@@ -87,6 +90,12 @@ func TestMain(m *testing.M) {
 // double-dash and value joined by `=` or space). Detection at TestMain entry
 // pre-dates flag.Parse, so we scan args directly. Both `-test.list <pat>` and
 // `-test.list=<pat>` (and double-dash variants) are accepted.
+//
+// Note: the Go toolchain (`go test -list`) translates to `-test.list <pat>`
+// (single dash, space-separated) in the binary's os.Args; the `--test.list`
+// double-dash variants are included as defensive coverage for direct
+// test-binary invocation scenarios where the user follows the Go flag pkg
+// convention of accepting both prefixes.
 func isListMode(args []string) bool {
 	for _, arg := range args {
 		switch {
@@ -119,6 +128,8 @@ func TestIsListMode(t *testing.T) {
 		{name: "double_dash_space", args: []string{"binary", "--test.list", "^Test"}, want: true},
 		{name: "double_dash_equals", args: []string{"binary", "--test.list=^Test"}, want: true},
 		{name: "list_with_run_after", args: []string{"binary", "-test.list", "^Test", "-test.run", "TestFoo"}, want: true},
+		{name: "list_equals_empty_value", args: []string{"binary", "-test.list="}, want: true},
+		{name: "duplicate_list_flag", args: []string{"binary", "-test.list", "A", "-test.list", "B"}, want: true},
 		{name: "near_match_not_list", args: []string{"binary", "-test.listfoo"}, want: false},
 		{name: "near_match_equals", args: []string{"binary", "-test.listfoo=bar"}, want: false},
 	}
