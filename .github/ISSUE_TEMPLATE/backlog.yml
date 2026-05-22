@@ -6,13 +6,27 @@ body:
   - type: markdown
     attributes:
       value: |
-        建后请追加 labels（除 `backlog` 自动贴外）：
+        建后请追加 labels（除 `backlog` 与下方 Priority 自动贴外）：
         - **cap-XX**（1 个）：cap-01..cap-14 或 cap-x-cross
         - **flag-XX**（1 个）：flag-hard / flag-cond / flag-soft / flag-planned
         - **type-XX**（1 个）：type-feat / type-bug / type-refactor / type-arch-opt / type-doc / type-test / type-debt / type-fu
 
-        Project v2 字段（Priority / Estimate）建后在 Project UI table view 设。
+        Priority 由下方 dropdown + `.github/workflows/auto-label-priority.yml` 自动贴 `pri-pX` label。
+        Project v2 字段（Status / Estimate）建后在 Project UI table view 设。
         Schema 详见 [`docs/backlog.md`](../blob/develop/docs/backlog.md)。
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: 选一档；workflow 会贴对应 `pri-pX` label。P0 红线见 `docs/backlog/20260520/RERATING-RUBRIC.md` §"P0 红线"，仅 incident-driven。
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: true
 
   - type: textarea
     id: status-quo
