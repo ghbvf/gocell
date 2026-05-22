@@ -178,32 +178,42 @@ func loadInterfaceType(t *testing.T, root, dirRel, name string) *ast.InterfaceTy
 		t.Fatalf("loadInterfaceType: no .go files found in %s", dirRel)
 	}
 	for _, path := range files {
-		fset := token.NewFileSet()
-		f, perr := parser.ParseFile(fset, path, nil, 0)
-		if perr != nil {
-			t.Fatalf("parse %s: %v", filepath.Base(path), perr)
-		}
-		var found *ast.InterfaceType
-		var bail bool
-		scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-			if found != nil || bail || ts.Name.Name != name {
-				return
-			}
-			iface, ok := ts.Type.(*ast.InterfaceType)
-			if !ok {
-				bail = true
-				return
-			}
-			found = iface
-		})
-		if found != nil {
-			return found
+		iface, bail := findInterfaceInFile(t, path, name)
+		if iface != nil {
+			return iface
 		}
 		if bail {
 			return nil
 		}
 	}
 	return nil
+}
+
+// findInterfaceInFile parses path and looks for a top-level type declaration
+// named `name`. Three outcomes:
+//   - iface != nil:    found a matching interface
+//   - bail == true:    found a type decl with that name but it is NOT an
+//     interface; further files cannot redefine the same top-level name in
+//     Go, so caller stops scanning
+//   - both zero values: not in this file, caller tries the next
+func findInterfaceInFile(t *testing.T, path, name string) (iface *ast.InterfaceType, bail bool) {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filepath.Base(path), err)
+	}
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if iface != nil || bail || ts.Name.Name != name {
+			return
+		}
+		if i, ok := ts.Type.(*ast.InterfaceType); ok {
+			iface = i
+			return
+		}
+		bail = true
+	})
+	return
 }
 
 // embeddedTypeNames returns the names of types embedded in an interface
