@@ -282,8 +282,7 @@ func TestHandleRefresh_UserNotActive_Returns403(t *testing.T) {
 	require.NoError(t, err)
 	u.ID = "usr-suspended"
 	require.NoError(t, userRepo.Create(context.Background(), u))
-	u.SetStatus(domain.StatusSuspended, time.Now())
-	require.NoError(t, userRepo.Update(context.Background(), u))
+	require.NoError(t, userRepo.UpdateLockState(context.Background(), u.ID, domain.StatusSuspended, time.Now()))
 
 	sess := newTestSession(u.ID, "sess-suspended")
 	require.NoError(t, sessionStore.Create(context.Background(), sess))

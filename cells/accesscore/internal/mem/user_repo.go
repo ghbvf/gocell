@@ -248,6 +248,7 @@ func (r *UserRepository) UpdateLockState(
 	}
 
 	r.store.usersByID[userID] = updated
+	r.store.byName[updated.Username] = updated
 	return nil
 }
 
@@ -293,6 +294,7 @@ func (r *UserRepository) UpdatePasswordResetFlag(
 	}
 
 	r.store.usersByID[userID] = updated
+	r.store.byName[updated.Username] = updated
 	return nil
 }
 
