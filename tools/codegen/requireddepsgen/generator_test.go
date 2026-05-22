@@ -22,6 +22,43 @@ func writeFixture(t *testing.T, src string) string {
 	return dir
 }
 
+func TestGenerate_WithOpts_BuildTagHeaderEmitted(t *testing.T) {
+	src := `package mypkg
+
+type Repo interface{ Get() }
+
+type Service struct {
+	repo Repo ` + "`gocell:\"required\"`" + `
+}
+`
+	dir := writeFixture(t, src)
+	out, err := requireddepsgen.GenerateWithOpts(dir, requireddepsgen.Opts{BuildTag: "archtest_fixture"})
+	if err != nil {
+		t.Fatalf("GenerateWithOpts: %v", err)
+	}
+	if !bytes.HasPrefix(out, []byte("//go:build archtest_fixture\n\n")) {
+		t.Errorf("output must start with build tag header; got:\n%s", out)
+	}
+	// Empty BuildTag must NOT emit the header.
+	plain, err := requireddepsgen.GenerateWithOpts(dir, requireddepsgen.Opts{})
+	if err != nil {
+		t.Fatalf("GenerateWithOpts plain: %v", err)
+	}
+	if bytes.Contains(plain, []byte("//go:build")) {
+		t.Errorf("plain output must not contain build tag; got:\n%s", plain)
+	}
+	// Generate() and GenerateWithOpts({}) must produce identical output.
+	via := bytes.NewBuffer(nil)
+	via2, err := requireddepsgen.Generate(dir)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	via.Write(via2)
+	if !bytes.Equal(via.Bytes(), plain) {
+		t.Errorf("Generate() differs from GenerateWithOpts({}); production parity broken")
+	}
+}
+
 func TestGenerate_AllInterfaceFields_BasicFunnel(t *testing.T) {
 	src := `package mypkg
 

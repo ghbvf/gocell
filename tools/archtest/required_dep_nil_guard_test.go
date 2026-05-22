@@ -12,9 +12,11 @@ package archtest
 //
 // Rules:
 //   A1 [TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth]
-//      service_required_gen.go required-field count must match service.go.
-//      Production scan gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN env until
-//      Batch A/B/C/D service migrations land.
+//      service_required_gen.go must be byte-identical to the generator output
+//      for its sibling service.go (regenerate-and-diff Hard lock). Hand-edits,
+//      drift, and stale files are all rejected at byte granularity. Production
+//      scan gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN env until Batch A/B/C/D
+//      service migrations land.
 //   A2 [TestRequiredDepNilGuard_A2_CallsiteUniqueness]
 //      Every NewXxx(*Service, error) in a slice must call validateRequired()
 //      exactly once, after any options loop.
@@ -28,8 +30,11 @@ package archtest
 //   B1 [TestRequiredDepNilGuard_BlindSpot_B1_NoReflectNilCheck]
 //      reflect.ValueOf(s.X).IsNil() on a required field bypasses A3.
 //   B2 [TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare]
-//      s.X == nil / s.X != nil on a required field bypasses A3.
-//      Exception: NewXxx body (OUTBOX-SERVICE-01 carve-out) and *_gen.go files.
+//      Any FuncDecl body compares `<recv>.X` to nil where X is a
+//      gocell:"required"-tagged field on this file's Service struct.
+//      Generated *_gen.go files allowlisted. Optional / feature-gate fields
+//      (e.g. sessionStore in sessionvalidate per its godoc) are not in scope
+//      since they carry no `gocell:"required"` tag.
 //   B3 [TestRequiredDepNilGuard_BlindSpot_B3_NoIndirectIsNilInterfaceRef]
 //      Function-value / pointer / method-value references to IsNilInterface
 //      bypass the callsite-form check in A3.
@@ -44,7 +49,6 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
@@ -57,7 +61,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
 )
+
+// fixtureBuildTag is emitted into fixture service_required_gen.go files so
+// they compile only under //go:build archtest_fixture. A1 fixture comparison
+// runs the generator with this tag; production A1 uses the empty tag.
+const fixtureBuildTag = "archtest_fixture"
 
 // requiredDepNilGuardRule is the rule ID for diagnostic messages.
 const requiredDepNilGuardRule = "REQUIRED-DEP-NIL-GUARD-01"
@@ -79,25 +89,29 @@ var nilGuardHelperBanList = []string{
 
 // --- A1: Generator Ground Truth ---
 
-// TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth verifies that
-// service_required_gen.go is consistent with service.go required field count.
+// TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth verifies that every
+// service_required_gen.go file is byte-identical to the generator output for
+// its sibling service.go. This is the upstream Hard lock of the funnel: any
+// hand-edit, drift, or stale file is rejected at byte granularity.
 //
 // Production scan is gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN env var
-// until Batch A/B/C/D service migrations land. The fixture sub-test is always
-// active and verifies the A1 detection logic against red_stale_generator.
+// until Batch A/B/C/D service migrations land. Fixture sub-tests run the
+// generator with BuildTag="archtest_fixture" to match the //go:build header
+// in fixture gen files; production uses the empty BuildTag.
 func TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth(t *testing.T) {
-	t.Run("fixture_red_stale_generator", func(t *testing.T) {
-		root := findModuleRoot(t)
-		fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
-			"required_dep_nil_guard_fixtures", "red_stale_generator")
-		diags := runA1Check(t, root, fixtureDir)
-		goldenPath := filepath.Join(fixtureDir, "diag.golden")
-		AssertGolden(t, goldenPath, diags)
-	})
+	for _, fix := range []string{"green_basic", "red_stale_generator"} {
+		fix := fix
+		t.Run("fixture_"+fix, func(t *testing.T) {
+			root := findModuleRoot(t)
+			fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
+				"required_dep_nil_guard_fixtures", fix)
+			diags := runA1Check(t, root, fixtureDir, fixtureBuildTag)
+			goldenPath := filepath.Join(fixtureDir, "diag.golden")
+			AssertGolden(t, goldenPath, diags)
+		})
+	}
 
 	t.Run("production_scan", func(t *testing.T) {
-		// TODO: enable after Batch A/B/C/D service migrations land
-		// (all cells/*/slices/*/service_required_gen.go committed).
 		if os.Getenv("REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN") == "" {
 			t.Skip("production gen files land in Batch A/B/C/D migrations; " +
 				"set REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN=1 after migration to enable")
@@ -106,99 +120,79 @@ func TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth(t *testing.T) {
 		slicePaths := discoverSlicePaths(t, root)
 		var allDiags []Diagnostic
 		for _, sp := range slicePaths {
-			allDiags = append(allDiags, runA1Check(t, root, sp)...)
+			allDiags = append(allDiags, runA1Check(t, root, sp, "")...)
 		}
 		Report(t, requiredDepNilGuardRule+"-A1", allDiags)
 	})
 }
 
-// runA1Check runs the A1 staleness check for a single slice directory.
-// It counts required fields in service.go and guards in service_required_gen.go.
-func runA1Check(t *testing.T, modRoot, sliceDir string) []Diagnostic {
+// runA1Check regenerates the gen file in-memory and diffs against the committed
+// file byte-for-byte. buildTag is passed through to the generator and must
+// match the build tag header used by the target gen file (empty for production,
+// "archtest_fixture" for fixtures).
+func runA1Check(t *testing.T, modRoot, sliceDir, buildTag string) []Diagnostic {
 	t.Helper()
 	svcFile := filepath.Join(sliceDir, "service.go")
 	genFile := filepath.Join(sliceDir, "service_required_gen.go")
 
-	fset := token.NewFileSet()
-	svcAST, err := parser.ParseFile(fset, svcFile, nil, 0)
-	if err != nil {
-		return nil // not a service.go slice
-	}
-	requiredCount := countRequiredFields(svcAST)
-	if requiredCount == 0 {
-		return nil // no required fields, gen file irrelevant
+	// Skip slices without a service.go (defensive; production discovery already filters).
+	if _, err := os.Stat(svcFile); err != nil {
+		return nil
 	}
 
-	genContent, err := os.ReadFile(genFile) //nolint:gosec // path is test-derived
+	want, err := requireddepsgen.GenerateWithOpts(sliceDir, requireddepsgen.Opts{BuildTag: buildTag})
 	if err != nil {
 		rel := requiredDepSlashRel(modRoot, svcFile)
 		return []Diagnostic{{
 			Rel:     rel,
 			Line:    1,
-			Message: fmt.Sprintf("REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go missing; run gocell generate required-deps (%s)", requiredDepNilGuardRule),
+			Message: fmt.Sprintf("REQUIRED-DEP-NIL-GUARD-01-A1: generator failed: %v (%s)", err, requiredDepNilGuardRule),
 		}}
 	}
 
-	// Compare required field count in service.go vs IsNilInterface/nil check count in gen file.
-	genCount := countGenGuards(genContent)
-	if genCount != requiredCount {
+	// Generator returns nil when the Service struct has no required fields
+	// and the file should not exist; treat that as "no expected output".
+	noRequired := len(want) == 0
+
+	got, err := os.ReadFile(genFile) //nolint:gosec // path is test-derived
+	switch {
+	case noRequired && err != nil:
+		// Expected: no required fields, no gen file. PASS.
+		return nil
+	case noRequired && err == nil:
+		rel := requiredDepSlashRel(modRoot, genFile)
+		return []Diagnostic{{
+			Rel:  rel,
+			Line: 1,
+			Message: fmt.Sprintf(
+				"REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go exists but service.go has "+
+					"no required fields; delete the gen file (%s)",
+				requiredDepNilGuardRule),
+		}}
+	case err != nil:
 		rel := requiredDepSlashRel(modRoot, svcFile)
 		return []Diagnostic{{
 			Rel:  rel,
 			Line: 1,
 			Message: fmt.Sprintf(
-				"REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go is stale; "+
-					"required field count mismatch: service.go has %d required field(s) but gen guards %d (%s)",
-				requiredCount, genCount, requiredDepNilGuardRule),
+				"REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go missing; "+
+					"run gocell generate required-deps --all (%s)",
+				requiredDepNilGuardRule),
+		}}
+	}
+
+	if !bytes.Equal(want, got) {
+		rel := requiredDepSlashRel(modRoot, genFile)
+		return []Diagnostic{{
+			Rel:  rel,
+			Line: 1,
+			Message: fmt.Sprintf(
+				"REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go drift from generator output; "+
+					"hand-edits forbidden, run gocell generate required-deps --all (%s)",
+				requiredDepNilGuardRule),
 		}}
 	}
 	return nil
-}
-
-// countRequiredFields counts struct fields tagged gocell:"required" in the AST file.
-func countRequiredFields(file *ast.File) int {
-	count := 0
-	for _, decl := range file.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range genDecl.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "Service" {
-				continue
-			}
-			st, ok := ts.Type.(*ast.StructType)
-			if !ok {
-				continue
-			}
-			for _, f := range st.Fields.List {
-				if f.Tag == nil {
-					continue
-				}
-				raw := strings.Trim(f.Tag.Value, "`")
-				if reflect.StructTag(raw).Get("gocell") == "required" {
-					count += len(f.Names)
-					if len(f.Names) == 0 {
-						count++ // embedded field
-					}
-				}
-			}
-		}
-	}
-	return count
-}
-
-// countGenGuards counts the number of per-field guard blocks in the generated
-// file content. The generator emits exactly one guard per required field:
-//   - interface-typed fields: `if validation.IsNilInterface(s.X) {`
-//   - pointer-typed fields:   `if s.X == nil {`
-//
-// We count both patterns separately and sum them.
-func countGenGuards(content []byte) int {
-	isNilCount := bytes.Count(content, []byte("validation.IsNilInterface(s."))
-	ptrCount := bytes.Count(content, []byte("\n\tif s.")) // pointer fields: "if s.X == nil"
-	return isNilCount + ptrCount
 }
 
 // discoverSlicePaths returns all cells/*/slices/*/ directories with a service.go.
@@ -565,8 +559,8 @@ func scanB1ReflectNilCheck(p *Pass, file *ast.File) []Diagnostic {
 			return
 		}
 		out = append(out, Diagnostic{
-			Rel:  p.Rel(file),
-			Line: p.Fset.Position(call.Pos()).Line,
+			Rel:     p.Rel(file),
+			Line:    p.Fset.Position(call.Pos()).Line,
 			Message: "B1: reflect.ValueOf(s.X).IsNil() in service.go bypasses generated validateRequired() funnel",
 		})
 	})
@@ -576,73 +570,186 @@ func scanB1ReflectNilCheck(p *Pass, file *ast.File) []Diagnostic {
 // --- B2: No direct nil compare on required fields ---
 
 // TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare is the reverse
-// self-test for B2: asserts that no hand-written service.go (non-gen file)
-// contains a validateRequired() method body with raw `s.X == nil` comparisons.
-// The generated validateRequired() always uses validation.IsNilInterface for
-// interface-typed fields; a hand-written replacement using == nil would
-// miss typed-nil values. This check scans only within validateRequired bodies
-// in non-gen service files to avoid false positives from unrelated nil checks.
+// self-test for B2: asserts that no FuncDecl body in a hand-written service.go
+// contains `<recv>.X == nil` or `<recv>.X != nil` where X is a Service struct
+// field tagged gocell:"required". The generated validateRequired() centralizes
+// all required-dep nil checks; method-level guards on those fields bypass A3's
+// IsNilInterface ban (an AI could substitute raw == nil to evade A3).
+//
+// Carve-outs:
+//   - generated files (*_gen.go) — sanctioned guard locations
+//   - non-required fields (e.g., logger, sessionStore) — legitimate optional
+//     fallback / feature-gate semantics; these are not in the required-tag set
+//
+// Production scan gated by REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN until Batch
+// A/B/C/D land (pre-migration NewXxx bodies still contain hand-written
+// `if s.txRunner == nil { ... }` blocks that the migration removes).
 func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
-	root := findModuleRoot(t)
-	scope := ModuleScope(root)
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
-		var out []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			// Only check non-gen service files.
-			if !isHandWrittenServiceFile(rel) {
-				continue
-			}
-			out = append(out, scanB2ValidateRequiredBody(p, file)...)
+	for _, fix := range []string{"green_basic", "red_handwritten_guard"} {
+		fix := fix
+		t.Run("fixture_"+fix, func(t *testing.T) {
+			root := findModuleRoot(t)
+			fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
+				"required_dep_nil_guard_fixtures", fix)
+			pattern := "./tools/archtest/testdata/required_dep_nil_guard_fixtures/" + fix
+			_ = fixtureDir
+			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+				var out []Diagnostic
+				for _, file := range p.Files {
+					rel := p.Rel(file)
+					if !isB2InScopeFile(rel) {
+						continue
+					}
+					out = append(out, scanB2RequiredFieldNilCompare(p, file)...)
+				}
+				return out
+			})
+			// Fixture asserts: green_basic must produce zero diagnostics;
+			// red_handwritten_guard has handwritten IsNilInterface (A3 case),
+			// which is a different blind spot, so B2 stays empty for it too.
+			assert.Empty(t, diags, "B2 fixture %s: unexpected diagnostics: %v", fix, diags)
+		})
+	}
+
+	t.Run("production_scan", func(t *testing.T) {
+		if os.Getenv("REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN") == "" {
+			t.Skip("production scan gated; set REQUIRED_DEP_FUNNEL_PRODUCTION_SCAN=1 after Batch A/B/C/D")
 		}
-		return out
+		root := findModuleRoot(t)
+		scope := ModuleScope(root)
+		diags := Run(t, scope, func(p *Pass) []Diagnostic {
+			var out []Diagnostic
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				if !isB2InScopeFile(rel) {
+					continue
+				}
+				out = append(out, scanB2RequiredFieldNilCompare(p, file)...)
+			}
+			return out
+		})
+		assert.Empty(t, diags,
+			"B2 blind-spot: method body compares a gocell:\"required\" field to nil; "+
+				"these checks belong in generated validateRequired(), not hand-written method bodies")
 	})
-	assert.Empty(t, diags,
-		"B2 blind-spot: hand-written validateRequired() in service.go uses s.X == nil; "+
-			"use validation.IsNilInterface to handle typed-nil interface values")
 }
 
-// scanB2ValidateRequiredBody checks if any hand-written validateRequired method
-// uses raw == nil instead of validation.IsNilInterface.
-func scanB2ValidateRequiredBody(p *Pass, file *ast.File) []Diagnostic {
+// isB2InScopeFile reports whether rel is a hand-written service.go in a slice/internal
+// directory (B2 is scoped narrower than A3 because it only asserts on a per-file
+// required-field set derived from that file's Service struct).
+func isB2InScopeFile(rel string) bool {
+	return isHandWrittenServiceFile(rel)
+}
+
+// scanB2RequiredFieldNilCompare walks all FuncDecl bodies in file, finds
+// BinaryExpr of the form `<expr>.<field> == nil` (or !=), and reports those
+// where <field> is a gocell:"required"-tagged field on the file's Service struct.
+//
+// The required-field set is built from the Service struct in this file only;
+// cross-file Service definitions are not considered.
+func scanB2RequiredFieldNilCompare(p *Pass, file *ast.File) []Diagnostic {
+	requiredFields := requiredFieldNames(file)
+	if len(requiredFields) == 0 {
+		return nil
+	}
 	var out []Diagnostic
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil || fn.Name.Name != "validateRequired" {
+		if !ok || fn.Body == nil {
 			continue
 		}
-		// Found a validateRequired method — check for raw nil comparisons.
 		EachInSubtree[ast.BinaryExpr](fn.Body, func(be *ast.BinaryExpr) {
-			if be.Op.String() != "==" && be.Op.String() != "!=" {
+			op := be.Op.String()
+			if op != "==" && op != "!=" {
 				return
 			}
-			if !hasNilOperand(be) || !hasSelectorOperand(be) {
+			field := selectorFieldComparedToNil(be)
+			if field == "" {
+				return
+			}
+			if !requiredFields[field] {
 				return
 			}
 			out = append(out, Diagnostic{
 				Rel:  p.Rel(file),
 				Line: p.Fset.Position(be.Pos()).Line,
-				Message: "B2: validateRequired() uses raw s.X == nil; use validation.IsNilInterface for interface fields",
+				Message: fmt.Sprintf(
+					"B2: comparison `%s` on required field bypasses generated validateRequired() funnel "+
+						"(field is tagged gocell:\"required\"; move guard into the generated method)",
+					formatNilCompare(be)),
 			})
 		})
 	}
 	return out
 }
 
-// hasNilOperand returns true if either side of the binary expression is nil.
-func hasNilOperand(be *ast.BinaryExpr) bool {
-	isNilIdent := func(e ast.Expr) bool {
-		ident, ok := e.(*ast.Ident)
-		return ok && ident.Name == "nil"
+// requiredFieldNames extracts the set of field names tagged gocell:"required"
+// from the file's Service struct (returns empty when no Service struct exists).
+func requiredFieldNames(file *ast.File) map[string]bool {
+	out := make(map[string]bool)
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != "Service" {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			for _, f := range st.Fields.List {
+				if f.Tag == nil {
+					continue
+				}
+				raw := strings.Trim(f.Tag.Value, "`")
+				if reflect.StructTag(raw).Get("gocell") != "required" {
+					continue
+				}
+				for _, name := range f.Names {
+					out[name.Name] = true
+				}
+			}
+		}
 	}
-	return isNilIdent(be.X) || isNilIdent(be.Y)
+	return out
 }
 
-// hasSelectorOperand returns true if either side is a selector expression (s.field).
-func hasSelectorOperand(be *ast.BinaryExpr) bool {
-	_, lOK := be.X.(*ast.SelectorExpr)
-	_, rOK := be.Y.(*ast.SelectorExpr)
-	return lOK || rOK
+// selectorFieldComparedToNil returns the selector's field name when be has the
+// shape `<expr>.<field> == nil` or `nil == <expr>.<field>` (likewise for !=);
+// otherwise returns "".
+func selectorFieldComparedToNil(be *ast.BinaryExpr) string {
+	isNilIdent := func(e ast.Expr) bool {
+		id, ok := e.(*ast.Ident)
+		return ok && id.Name == "nil"
+	}
+	selField := func(e ast.Expr) string {
+		sel, ok := e.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil {
+			return ""
+		}
+		return sel.Sel.Name
+	}
+	switch {
+	case isNilIdent(be.Y):
+		return selField(be.X)
+	case isNilIdent(be.X):
+		return selField(be.Y)
+	default:
+		return ""
+	}
+}
+
+// formatNilCompare returns a short readable rendering of `s.X == nil`.
+func formatNilCompare(be *ast.BinaryExpr) string {
+	field := selectorFieldComparedToNil(be)
+	if field == "" {
+		return "<unknown>"
+	}
+	return "<recv>." + field + " " + be.Op.String() + " nil"
 }
 
 // --- B3: No indirect IsNilInterface reference ---
@@ -718,8 +825,8 @@ func scanB3IndirectRef(p *Pass, file *ast.File, rel string, seen map[string]stru
 		}
 		seen[key] = struct{}{}
 		out = append(out, Diagnostic{
-			Rel:  rel,
-			Line: p.Fset.Position(ident.Pos()).Line,
+			Rel:     rel,
+			Line:    p.Fset.Position(ident.Pos()).Line,
 			Message: "B3: indirect reference to validation.IsNilInterface; only direct call is permitted",
 		})
 	}
@@ -858,8 +965,8 @@ func scanB5MethodValueLeak(p *Pass, file *ast.File, rel string, seen map[string]
 		}
 		seen[key] = struct{}{}
 		out = append(out, Diagnostic{
-			Rel:  rel,
-			Line: p.Fset.Position(sel.Sel.Pos()).Line,
+			Rel:     rel,
+			Line:    p.Fset.Position(sel.Sel.Pos()).Line,
 			Message: "B5: validateRequired used as method value (not direct call); bypasses A2 count check",
 		})
 	})
