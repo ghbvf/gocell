@@ -86,23 +86,52 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// isListMode reports whether os.Args contains `-test.list` (with optional
-// double-dash and value joined by `=` or space). Detection at TestMain entry
-// pre-dates flag.Parse, so we scan args directly. Both `-test.list <pat>` and
-// `-test.list=<pat>` (and double-dash variants) are accepted.
+// isListMode reports whether os.Args contains `-test.list` with a non-empty
+// pattern value. Detection mirrors Go testing.M.Run semantics
+// (src/testing/testing.go: `if *matchList != "" { listTests(...) }`) — empty
+// value means tests still execute and warmup is required.
+//
+// Accepted forms (all four mapped to "non-empty value" rule):
+//   - `-test.list <pat>`   (space-separated; value = args[i+1])
+//   - `-test.list=<pat>`   (equals-separated; value = suffix)
+//   - `--test.list <pat>`  (double-dash; same as space-separated)
+//   - `--test.list=<pat>`  (double-dash equals)
+//
+// Detection at TestMain entry pre-dates flag.Parse, so we scan args directly.
 //
 // Note: the Go toolchain (`go test -list`) translates to `-test.list <pat>`
 // (single dash, space-separated) in the binary's os.Args; the `--test.list`
 // double-dash variants are included as defensive coverage for direct
 // test-binary invocation scenarios where the user follows the Go flag pkg
 // convention of accepting both prefixes.
+//
+// Empty-value cases (return false, warmup runs):
+//   - `-test.list=`          (equals with empty suffix — malformed but seen)
+//   - `-test.list ""`        (space with literal empty arg)
+//   - `-test.list` (at EOF)  (no value at all)
+//
+// These cases match Go testing's behavior of NOT entering list mode when
+// matchList is empty, so warmup must still run to keep the actual test
+// execution path within slowgate budget.
 func isListMode(args []string) bool {
-	for _, arg := range args {
+	for i, arg := range args {
 		switch {
 		case arg == "-test.list", arg == "--test.list":
-			return true
+			// Space-separated: value is the next arg if present and non-empty.
+			if i+1 < len(args) && args[i+1] != "" {
+				return true
+			}
 		case strings.HasPrefix(arg, "-test.list="), strings.HasPrefix(arg, "--test.list="):
-			return true
+			// Equals-separated: value is the suffix after `=`.
+			val := arg
+			if strings.HasPrefix(val, "--") {
+				val = strings.TrimPrefix(val, "--test.list=")
+			} else {
+				val = strings.TrimPrefix(val, "-test.list=")
+			}
+			if val != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -128,7 +157,13 @@ func TestIsListMode(t *testing.T) {
 		{name: "double_dash_space", args: []string{"binary", "--test.list", "^Test"}, want: true},
 		{name: "double_dash_equals", args: []string{"binary", "--test.list=^Test"}, want: true},
 		{name: "list_with_run_after", args: []string{"binary", "-test.list", "^Test", "-test.run", "TestFoo"}, want: true},
-		{name: "list_equals_empty_value", args: []string{"binary", "-test.list="}, want: true},
+		// Empty-value forms: Go testing.M.Run gates listTests on *matchList != "".
+		// isListMode mirrors that — empty value means tests still execute,
+		// warmup must run.
+		{name: "list_equals_empty_value", args: []string{"binary", "-test.list="}, want: false},
+		{name: "list_space_empty_value", args: []string{"binary", "-test.list", ""}, want: false},
+		{name: "list_no_value_at_eof", args: []string{"binary", "-test.list"}, want: false},
+		{name: "double_dash_equals_empty", args: []string{"binary", "--test.list="}, want: false},
 		{name: "duplicate_list_flag", args: []string{"binary", "-test.list", "A", "-test.list", "B"}, want: true},
 		{name: "near_match_not_list", args: []string{"binary", "-test.listfoo"}, want: false},
 		{name: "near_match_equals", args: []string{"binary", "-test.listfoo=bar"}, want: false},
