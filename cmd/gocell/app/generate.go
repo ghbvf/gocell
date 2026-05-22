@@ -37,9 +37,9 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 	{
 		name: "metrics-schema",
 		help: []string{
-			"Generate assemblies/<id>/generated/metrics-schema.yaml",
-			"by walking the assembly's reachable packages with",
-			"go/types. --id=<assemblyID>",
+			"Generate <derived>/generated/metrics-schema.yaml by walking",
+			"the assembly's reachable packages with go/types.",
+			"--id=<assemblyID> | --all",
 		},
 		run: generateMetricsSchema,
 	},
@@ -217,20 +217,25 @@ func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id str
 // generateMetricsSchema implements:
 //
 //	gocell generate metrics-schema --id=<assemblyID>
+//	gocell generate metrics-schema --all
 //
 // It loads the assembly entrypoint with go/packages, walks the reachable
 // project packages with type information, serializes the result to
-// assemblies/<id>/generated/metrics-schema.yaml, and prints the output path.
+// <derived>/generated/metrics-schema.yaml, and prints the output path.
 // Run this command locally and commit the result whenever a metric name, label
 // set, bucket list, or bucket source changes.
 func generateMetricsSchema(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("generate metrics-schema", flag.ContinueOnError)
-	id := fs.String("id", "", "assembly ID (required)")
+	id := fs.String("id", "", "assembly ID (mutually exclusive with --all)")
+	all := fs.Bool("all", false, "generate for every assembly")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *id == "" {
-		return fmt.Errorf("--id is required")
+	if *id == "" && !*all {
+		return fmt.Errorf("usage: gocell generate metrics-schema --id=<assemblyID> | --all")
+	}
+	if *id != "" && *all {
+		return fmt.Errorf("--id and --all are mutually exclusive")
 	}
 
 	root, err := findRoot()
@@ -244,10 +249,21 @@ func generateMetricsSchema(ctx context.Context, args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
+	ids := assemblyIDsToGenerate(project, *id, *all)
+	for _, asmID := range ids {
+		if err := generateOneMetricsSchema(ctx, root, project, asmID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// generateOneMetricsSchema generates metrics-schema.yaml for a single assembly.
+func generateOneMetricsSchema(ctx context.Context, root string, project *metadata.ProjectMeta, id string) error {
 	// ctx is the signal-aware context plumbed from main.go through
 	// Dispatch → runGenerate; metricschema.Build walks packages with
 	// go/types and honors cancellation.
-	schema, err := metricschema.Build(ctx, root, project, *id)
+	schema, err := metricschema.Build(ctx, root, project, id)
 	if err != nil {
 		return fmt.Errorf("scan metrics: %w", err)
 	}
@@ -260,11 +276,11 @@ func generateMetricsSchema(ctx context.Context, args []string) error {
 	// metrics-schema.yaml lives in the same generated/ directory as boundary.yaml.
 	// AssemblyGeneratedDir is the single source of truth: examples/ assemblies
 	// go to examples/{id}/generated/, others to assemblies/{id}/generated/.
-	asm := project.Assemblies[*id]
+	asm := project.Assemblies[id]
 	generatedDir := metadata.AssemblyGeneratedDir(asm)
 	outPath := filepath.Join(root, filepath.FromSlash(generatedDir), "metrics-schema.yaml")
 	return writeGeneratedFile(root, outPath, content,
-		fmt.Sprintf("assembly %q metrics-schema", *id))
+		fmt.Sprintf("assembly %q metrics-schema", id))
 }
 
 // writeGeneratedFile is a thin wrapper over tools/codegen.Write that
