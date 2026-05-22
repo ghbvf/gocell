@@ -116,6 +116,70 @@ func TestApplyAssemblyDerivations_MissingCellRefSkipsMaxLevel(t *testing.T) {
 	assert.Empty(t, asm.MaxConsistencyLevel)
 }
 
+// TestApplyAssemblyDerivations_ExamplesEntrypoint verifies that assemblies
+// under examples/ derive their entrypoint and generated dir from the examples/
+// prefix — used by the generator, governance REF-16, and generate commands.
+func TestApplyAssemblyDerivations_ExamplesEntrypoint(t *testing.T) {
+	t.Parallel()
+	asm := &AssemblyMeta{
+		ID:    "todoorder",
+		File:  "examples/todoorder/assembly.yaml",
+		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
+	}
+	pm := buildAssemblyProject(map[string]string{"ordercell": "L2"}, []string{"ordercell"}, asm)
+
+	applyAssemblyDerivations(pm)
+
+	if asm.Build.Entrypoint != "examples/todoorder/main.go" {
+		t.Errorf("entrypoint: want %q, got %q", "examples/todoorder/main.go", asm.Build.Entrypoint)
+	}
+	if got := AssemblyGeneratedDir(asm); got != "examples/todoorder/generated" {
+		t.Errorf("generated dir: want %q, got %q", "examples/todoorder/generated", got)
+	}
+}
+
+// TestAssemblyGeneratedDir verifies the derivation helper used by generator,
+// governance validateREF16, and generate commands.
+func TestAssemblyGeneratedDir(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		asmID    string
+		file     string
+		wantPath string
+	}{
+		{
+			name:     "examples_prefix",
+			asmID:    "todoorder",
+			file:     "examples/todoorder/assembly.yaml",
+			wantPath: "examples/todoorder/generated",
+		},
+		{
+			name:     "assemblies_prefix",
+			asmID:    "corebundle",
+			file:     "assemblies/corebundle/assembly.yaml",
+			wantPath: "assemblies/corebundle/generated",
+		},
+		{
+			name:     "empty_file_defaults_to_assemblies",
+			asmID:    "newasm",
+			file:     "",
+			wantPath: "assemblies/newasm/generated",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			asm := &AssemblyMeta{ID: tc.asmID, File: tc.file}
+			got := AssemblyGeneratedDir(asm)
+			if got != tc.wantPath {
+				t.Errorf("AssemblyGeneratedDir(%q): want %q, got %q", tc.file, tc.wantPath, got)
+			}
+		})
+	}
+}
+
 func TestApplyAssemblyDerivations_InvalidLevelSkipsMaxLevel(t *testing.T) {
 	asm := &AssemblyMeta{
 		ID:    "badlvlbundle",

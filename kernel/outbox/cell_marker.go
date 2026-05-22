@@ -83,7 +83,8 @@ func (i internalCellWriter) Noop() bool {
 //
 // Allowed callers (enforced by archtest CELL-RAW-INFRA-WRAPPER-LOCATION-01):
 //   - cmd/* composition roots
-//   - examples/<demo>/main.go and examples/<demo>/app.go composition roots
+//   - examples/<demo>/main.go, examples/<demo>/app.go, and examples/<demo>/run.go composition roots
+//     (run.go is the hand-written half of the K#10 main+run split)
 //   - *_test.go in any layer
 //   - kernel/outbox/cell_marker.go (this file)
 func WrapPublisherForCell(p Publisher) CellPublisher {

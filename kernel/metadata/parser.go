@@ -120,10 +120,18 @@ func matchJourneyYAML(path string) bool {
 	return ok
 }
 
-// matchAssemblyYAML matches paths like assemblies/*/assembly.yaml (exactly 3 segments).
+// matchAssemblyYAML matches paths like assemblies/*/assembly.yaml (3 segments)
+// and examples/*/assembly.yaml (3 segments under examples/ root — symmetric
+// with matchCellYAML / matchSliceYAML / matchContractYAML / matchJourneyYAML).
+//
+// ref: helm/helm pkg/chartutil/create.go — identity by location (any dir with
+// Chart.yaml is a chart); kustomize-sigs pkg/types/kustomization.go — per-dir metadata.
 func matchAssemblyYAML(path string) bool {
 	parts := splitPath(path)
-	return len(parts) == 3 && parts[0] == "assemblies" && parts[2] == "assembly.yaml"
+	if len(parts) == 3 && parts[0] == "assemblies" && parts[2] == "assembly.yaml" {
+		return true
+	}
+	return len(parts) == 3 && parts[0] == "examples" && parts[2] == "assembly.yaml"
 }
 
 // splitPath splits a forward-slash-separated path into its segments.
@@ -359,7 +367,9 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	}
 	// Record filesystem truth so strict rules (FMT-16) can compare the directory
 	// segment against m.ID. matchAssemblyYAML guarantees len(parts)==3 and
-	// parts[0]=="assemblies", so parts[1] is always the assembly directory.
+	// parts[2]=="assembly.yaml". parts[0] is "assemblies" for platform assemblies
+	// or "examples" for example assemblies; parts[1] is the assembly directory
+	// in both cases.
 	parts := splitPath(path)
 	m.Dir = parts[1]
 	m.File = filepath.ToSlash(path)

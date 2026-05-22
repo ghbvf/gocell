@@ -21,24 +21,17 @@ import (
 // cells; the K#09 scaffold leaves this as a not-implemented stub so that
 // `go build ./cmd/{{.ID}}/...` succeeds while signaling that integration is
 // pending.
-func {{.HelperName}}(_ context.Context, assemblyID string, assemblyCellIDs []string) error {
+func {{.HelperName}}(ctx context.Context, assemblyID string, assemblyCellIDs []string) error {
 	modules, err := {{.HelperName}}Modules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
 	}
 	_ = modules
-	// TODO: implement composition root.
-	//
-	//   shared, err := LoadSharedDepsFromEnv(ctx)
-	//   if err != nil { return err }
-	//   cells, cellOpts, err := BuildApp(ctx, shared, modules...)
-	//   if err != nil { return err }
-	//   asm, err := buildAssembly(shared.PromStack, assemblyID, ..., cells...)
-	//   if err != nil { return fmt.Errorf("build assembly: %w", err) }
-	//   opts := defaultRuntimeOptions(shared, asm, ...)
-	//   opts = append(opts, cellOpts...)
-	//   return bootstrap.New(opts...).Run(ctx)
-	return fmt.Errorf("{{.HelperName}}: not implemented; replace stub with composition root")
+	// K#09 scaffold stub: blocks until the context is cancelled (SIGINT/SIGTERM).
+	// Replace with a real composition root (see cmd/CLAUDE.md three-layer pattern)
+	// once SharedDeps and cell wiring are ready.
+	<-ctx.Done()
+	return nil
 }
 
 // {{.HelperName}}Modules wraps generatedCellModules() (modules_gen.go) with a

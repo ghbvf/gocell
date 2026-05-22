@@ -22,12 +22,15 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 	{
 		name: "assembly",
 		help: []string{
-			"Generate the assembly entrypoint cmd/<id>/main.go,",
-			"assemblies/<id>/generated/boundary.yaml, and",
-			"cmd/<id>/modules_gen.go (the cell→Module factory).",
+			"Generate the assembly entrypoint <derived>/main.go,",
+			"<derived>/generated/boundary.yaml, and",
+			"<derived>/modules_gen.go (the cell→Module factory).",
+			"Paths derive from the assembly.yaml location:",
+			"  assemblies/<id>/assembly.yaml → cmd/<id>/, assemblies/<id>/generated/",
+			"  examples/<id>/assembly.yaml  → examples/<id>/, examples/<id>/generated/",
 			"Generated files are owned by gocell. Hand-written",
-			"helpers may live in cmd/<id>/run.go etc., but",
-			"cmd/<id>/main.go and cmd/<id>/modules_gen.go must",
+			"helpers live in <derived>/run.go etc., but",
+			"<derived>/main.go and <derived>/modules_gen.go must",
 			"carry the gocell generated header or generation",
 			"aborts to protect your edits.",
 			"--id=<assemblyID> | --all [--module=<module>]",
@@ -37,9 +40,9 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 	{
 		name: "metrics-schema",
 		help: []string{
-			"Generate assemblies/<id>/generated/metrics-schema.yaml",
-			"by walking the assembly's reachable packages with",
-			"go/types. --id=<assemblyID>",
+			"Generate <derived>/generated/metrics-schema.yaml by walking",
+			"the assembly's reachable packages with go/types.",
+			"--id=<assemblyID> | --all",
 		},
 		run: generateMetricsSchema,
 	},
@@ -175,11 +178,14 @@ func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id str
 		return fmt.Errorf("generate entrypoint: %w", err)
 	}
 	// ref: go-zero goctl — generated file paths driven by configuration
+	// asm.Build.Entrypoint is guaranteed non-empty by deriveAssembly; if it
+	// is somehow empty here the parser has a bug — fail loudly rather than
+	// silently routing to cmd/{id}/ which would be wrong for examples/ assemblies.
 	asm := project.Assemblies[id]
-	entrypointRel := asm.Build.Entrypoint
-	if entrypointRel == "" {
-		entrypointRel = filepath.Join("cmd", id, "main.go")
+	if asm.Build.Entrypoint == "" {
+		return fmt.Errorf("assembly %q: asm.Build.Entrypoint not derived; parser bug", id)
 	}
+	entrypointRel := asm.Build.Entrypoint
 	entrypointPath := filepath.Join(root, entrypointRel)
 	if err := writeGeneratedFile(root, entrypointPath, entrypoint,
 		fmt.Sprintf("assembly %q build.entrypoint %q", id, entrypointRel)); err != nil {
@@ -204,8 +210,12 @@ func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id str
 		return fmt.Errorf("generate boundary: %w", err)
 	}
 
-	// Boundary goes into assemblies/{id}/generated/.
-	boundaryPath := filepath.Join(root, "assemblies", id, "generated", "boundary.yaml")
+	// Boundary goes into the assembly's derived generated/ directory.
+	// For examples/ assemblies this is examples/{id}/generated/; for all
+	// others it is assemblies/{id}/generated/ (AssemblyGeneratedDir single
+	// source of truth, mirrors deriveAssembly entrypoint logic).
+	generatedDir := metadata.AssemblyGeneratedDir(asm)
+	boundaryPath := filepath.Join(root, filepath.FromSlash(generatedDir), "boundary.yaml")
 	return writeGeneratedFile(root, boundaryPath, boundary,
 		fmt.Sprintf("assembly %q generated dir", id))
 }
@@ -213,20 +223,25 @@ func generateOneAssembly(root string, project *metadata.ProjectMeta, mod, id str
 // generateMetricsSchema implements:
 //
 //	gocell generate metrics-schema --id=<assemblyID>
+//	gocell generate metrics-schema --all
 //
 // It loads the assembly entrypoint with go/packages, walks the reachable
 // project packages with type information, serializes the result to
-// assemblies/<id>/generated/metrics-schema.yaml, and prints the output path.
+// <derived>/generated/metrics-schema.yaml, and prints the output path.
 // Run this command locally and commit the result whenever a metric name, label
 // set, bucket list, or bucket source changes.
 func generateMetricsSchema(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("generate metrics-schema", flag.ContinueOnError)
-	id := fs.String("id", "", "assembly ID (required)")
+	id := fs.String("id", "", "assembly ID (mutually exclusive with --all)")
+	all := fs.Bool("all", false, "generate for every assembly")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *id == "" {
-		return fmt.Errorf("--id is required")
+	if *id == "" && !*all {
+		return fmt.Errorf("usage: gocell generate metrics-schema --id=<assemblyID> | --all")
+	}
+	if *id != "" && *all {
+		return fmt.Errorf("--id and --all are mutually exclusive")
 	}
 
 	root, err := findRoot()
@@ -240,10 +255,21 @@ func generateMetricsSchema(ctx context.Context, args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
+	ids := assemblyIDsToGenerate(project, *id, *all)
+	for _, asmID := range ids {
+		if err := generateOneMetricsSchema(ctx, root, project, asmID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// generateOneMetricsSchema generates metrics-schema.yaml for a single assembly.
+func generateOneMetricsSchema(ctx context.Context, root string, project *metadata.ProjectMeta, id string) error {
 	// ctx is the signal-aware context plumbed from main.go through
 	// Dispatch → runGenerate; metricschema.Build walks packages with
 	// go/types and honors cancellation.
-	schema, err := metricschema.Build(ctx, root, project, *id)
+	schema, err := metricschema.Build(ctx, root, project, id)
 	if err != nil {
 		return fmt.Errorf("scan metrics: %w", err)
 	}
@@ -253,9 +279,14 @@ func generateMetricsSchema(ctx context.Context, args []string) error {
 		return fmt.Errorf("serialize metrics-schema: %w", err)
 	}
 
-	outPath := filepath.Join(root, "assemblies", *id, "generated", "metrics-schema.yaml")
+	// metrics-schema.yaml lives in the same generated/ directory as boundary.yaml.
+	// AssemblyGeneratedDir is the single source of truth: examples/ assemblies
+	// go to examples/{id}/generated/, others to assemblies/{id}/generated/.
+	asm := project.Assemblies[id]
+	generatedDir := metadata.AssemblyGeneratedDir(asm)
+	outPath := filepath.Join(root, filepath.FromSlash(generatedDir), "metrics-schema.yaml")
 	return writeGeneratedFile(root, outPath, content,
-		fmt.Sprintf("assembly %q metrics-schema", *id))
+		fmt.Sprintf("assembly %q metrics-schema", id))
 }
 
 // writeGeneratedFile is a thin wrapper over tools/codegen.Write that
