@@ -27,16 +27,30 @@ import (
 // package cannot import internal/. Same "expected duplication" rationale as
 // eventRoleRevokedV1 in revoke_cascade_e2e_test.go: if the producer-side
 // constant changes, this test must be updated in lockstep — and will visibly
-// fail when the new event type fails to be intercepted by selectiveFailWriter.
+// fail in the inject-failure window when the new event type fails to be
+// intercepted. The negative-control path clears failType and is topic-agnostic
+// by design.
 const (
-	topicRoleAssignedV1 = "event.role.assigned.v1"
-	topicRoleRevokedV1  = "event.role.revoked.v1"
+	eventRoleAssignedV1 = "event.role.assigned.v1"
 )
+
+// Internal API path constants used by postRoleEndpoint. Extracted here so the
+// construction point is a single string operation; assignRole/revokeRole in
+// helpers_test.go retain their literal strings because the SVCTOKEN-CALLER-CELL-REQUIRED-01
+// archtest only constrains the callerCell argument, not the path argument.
+const (
+	internalPathRolesAssign = "/internal/v1/access/roles/assign"
+	internalPathRolesRevoke = "/internal/v1/access/roles/revoke"
+)
+
+// victimPassword is the test fixture password used in both atomicity tests.
+// Test fixture; ephemeral integration env.
+const victimPassword = "VictimPass!99"
 
 // simulatedOutboxErr is the sentinel returned by selectiveFailWriter when it
 // chooses to fail. The contents are observable only in slog (the framework
 // span recorder redacts before reaching the wire); we only assert that the
-// HTTP layer surfaces a 5xx envelope.
+// HTTP layer surfaces a 500 envelope.
 var simulatedOutboxErr = errors.New("simulated outbox write failure (RBACASSIGN-L2-PG-ATOMICITY-01)")
 
 // selectiveFailWriter wraps a real outbox.Writer and returns simulatedOutboxErr
@@ -47,21 +61,25 @@ var simulatedOutboxErr = errors.New("simulated outbox write failure (RBACASSIGN-
 // The inner writer is the real adapterpg.NewOutboxWriter so the pass-through
 // path exercises full PG outbox semantics; only the fail path short-circuits.
 type selectiveFailWriter struct {
-	inner    outbox.Writer
-	failType atomic.Value // string
+	inner     outbox.Writer
+	failType  atomic.Value // string
+	failCount atomic.Int64
 }
 
 func (w *selectiveFailWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	if t, _ := w.failType.Load().(string); t != "" && entry.EventType == t {
+		w.failCount.Add(1)
 		return simulatedOutboxErr
 	}
 	return w.inner.Write(ctx, entry)
 }
 
-// newSelectiveFailWriter constructs a selectiveFailWriter that delegates to a
-// fresh adapterpg.NewOutboxWriter and starts in pass-through mode.
-func newSelectiveFailWriter() *selectiveFailWriter {
-	w := &selectiveFailWriter{inner: adapterpg.NewOutboxWriter(clock.Real())}
+// newSelectiveFailWriter constructs a selectiveFailWriter that delegates to the
+// provided inner writer and starts in pass-through mode. The caller supplies
+// inner explicitly so the injected writer and the cell-wired writer are
+// provably the same instance.
+func newSelectiveFailWriter(inner outbox.Writer) *selectiveFailWriter {
+	w := &selectiveFailWriter{inner: inner}
 	w.failType.Store("")
 	return w
 }
@@ -89,10 +107,18 @@ func roleAssignmentCount(t *testing.T, h *l2Harness, userID, roleID string) int 
 //
 // Caller-cell literal "accesscore" is required by SVCTOKEN-CALLER-CELL-REQUIRED-01
 // archtest (string literal at GenerateServiceToken callsite).
+//
+// The caller owns all status-code assertions; this helper does not require any specific status.
 func postRoleEndpoint(t *testing.T, h *l2Harness, action, userID, roleID string) int {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
-	path := "/internal/v1/access/roles/" + action
+	var path string
+	switch action {
+	case "assign":
+		path = internalPathRolesAssign
+	default:
+		path = internalPathRolesRevoke
+	}
 	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost, path, "", time.Now())
 	req, _ := http.NewRequest(http.MethodPost, h.internalBase+path, bytes.NewReader(body))
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -124,30 +150,38 @@ func postRoleEndpoint(t *testing.T, h *l2Harness, action, userID, roleID string)
 // ref: adapters/postgres/audit_ledger_store_test.go:335-392
 // ref: Transactional Outbox Pattern (Microservices Patterns, Chris Richardson)
 func TestL2_RbacAssign_OutboxWriteFailure_RollsBack(t *testing.T) {
-	sw := newSelectiveFailWriter()
+	sw := newSelectiveFailWriter(adapterpg.NewOutboxWriter(clock.Real()))
 	h := newL2HarnessWithWriter(t, sw)
+	ctx := context.Background()
 
 	adminLogin := httpLogin(t, h.base, adminUsername, adminPassword)
 	const victimUsername = "l2-rbac-atomicity-assign-user"
 	victimID := httpCreateUser(t, h.base, adminLogin.AccessToken,
-		victimUsername, "rbac-atomicity-assign@l2.local", "VictimPass!99")
+		victimUsername, "rbac-atomicity-assign@l2.local", victimPassword)
 
 	require.Equal(t, 0, roleAssignmentCount(t, h, victimID, "editor"),
 		"baseline: victim must not yet hold editor role")
 
+	auditBefore := countAuditEntries(t, ctx, h, eventRoleAssignedV1)
+
 	// Trigger window: only event.role.assigned.v1 will fail at the writer.
-	sw.failType.Store(topicRoleAssignedV1)
+	sw.failType.Store(eventRoleAssignedV1)
 
 	status := postRoleEndpoint(t, h, "assign", victimID, "editor")
-	require.GreaterOrEqual(t, status, 500,
-		"role assign must surface 5xx when outbox writer fails (got %d)", status)
-	require.Less(t, status, 600,
-		"role assign must surface 5xx (not pass through 2xx) when outbox writer fails (got %d)", status)
+	require.Equal(t, http.StatusInternalServerError, status,
+		"role assign must surface 500 when outbox writer fails")
+
+	require.Equal(t, int64(1), sw.failCount.Load(),
+		"writer.Write must have been invoked exactly once before transaction rollback")
 
 	// Rollback proof: domain write did NOT persist despite RoleRepo.AssignToUser
 	// returning success — the TxManager rolled back when the writer failed.
-	assert.Equal(t, 0, roleAssignmentCount(t, h, victimID, "editor"),
+	require.Equal(t, 0, roleAssignmentCount(t, h, victimID, "editor"),
 		"role_assignments row MUST NOT persist after outbox-write failure rollback")
+
+	// Audit-silence proof: no audit entry must appear for the aborted assign.
+	require.Equal(t, auditBefore, countAuditEntries(t, ctx, h, eventRoleAssignedV1),
+		"rollback: no audit entry must appear for aborted assign")
 
 	// Negative control: with the trigger cleared, the same call path must
 	// succeed and the row must appear. Guards against the false-positive
@@ -175,12 +209,12 @@ func TestL2_RbacAssign_OutboxWriteFailure_RollsBack(t *testing.T) {
 // window is opened only for event.role.revoked.v1 immediately before the
 // revoke call.
 func TestL2_RbacRevoke_OutboxWriteFailure_RollsBack(t *testing.T) {
-	sw := newSelectiveFailWriter()
+	sw := newSelectiveFailWriter(adapterpg.NewOutboxWriter(clock.Real()))
 	h := newL2HarnessWithWriter(t, sw)
+	ctx := context.Background()
 
 	adminLogin := httpLogin(t, h.base, adminUsername, adminPassword)
 	const victimUsername = "l2-rbac-atomicity-revoke-user"
-	const victimPassword = "VictimPass!99"
 	victimID := httpCreateUser(t, h.base, adminLogin.AccessToken,
 		victimUsername, "rbac-atomicity-revoke@l2.local", victimPassword)
 
@@ -199,28 +233,35 @@ func TestL2_RbacRevoke_OutboxWriteFailure_RollsBack(t *testing.T) {
 		"setup: victim must have 2 live refresh chains before revoke attempt")
 	epochBefore := queryUserAuthzEpoch(t, h, victimID)
 
+	auditBefore := countAuditEntries(t, ctx, h, eventRoleRevokedV1)
+
 	// Trigger window: only event.role.revoked.v1 will fail at the writer.
-	sw.failType.Store(topicRoleRevokedV1)
+	sw.failType.Store(eventRoleRevokedV1)
 
 	status := postRoleEndpoint(t, h, "revoke", victimID, "editor")
-	require.GreaterOrEqual(t, status, 500,
-		"role revoke must surface 5xx when outbox writer fails (got %d)", status)
-	require.Less(t, status, 600,
-		"role revoke must surface 5xx (not pass through 2xx) when outbox writer fails (got %d)", status)
+	require.Equal(t, http.StatusInternalServerError, status,
+		"role revoke must surface 500 when outbox writer fails")
+
+	require.Equal(t, int64(1), sw.failCount.Load(),
+		"writer.Write must have been invoked exactly once before transaction rollback")
 
 	// Funnel co-rollback proof: all four mutations must be undone atomically
 	// with the outbox failure. The credentialinvalidate.Invalidator funnel
 	// (BumpAuthzEpoch + RevokeForSubject + RevokeUser) is wired into the same
 	// txCtx as the role-repo mutation; the writer failure short-circuits the
 	// closure before commit, and the TxManager rolls back every PG mutation.
-	assert.Equal(t, 1, roleAssignmentCount(t, h, victimID, "editor"),
+	require.Equal(t, 1, roleAssignmentCount(t, h, victimID, "editor"),
 		"role_assignments row MUST NOT be removed after outbox-write failure rollback")
-	assert.Equal(t, epochBefore, queryUserAuthzEpoch(t, h, victimID),
+	require.Equal(t, epochBefore, queryUserAuthzEpoch(t, h, victimID),
 		"users.authz_epoch MUST NOT advance after outbox-write failure rollback")
-	assert.Equal(t, 2, countLiveSessions(t, h, victimID),
+	require.Equal(t, 2, countLiveSessions(t, h, victimID),
 		"sessions MUST NOT be revoked after outbox-write failure rollback")
-	assert.Equal(t, 2, countLiveRefreshTokensForSubject(t, h, victimID),
+	require.Equal(t, 2, countLiveRefreshTokensForSubject(t, h, victimID),
 		"refresh chains MUST NOT be revoked after outbox-write failure rollback")
+
+	// Audit-silence proof: no audit entry must appear for the aborted revoke.
+	require.Equal(t, auditBefore, countAuditEntries(t, ctx, h, eventRoleRevokedV1),
+		"rollback: no audit entry must appear for aborted revoke")
 
 	// Negative control: with the trigger cleared, the revoke must succeed
 	// and all four state fields must flip — proving the funnel is wired

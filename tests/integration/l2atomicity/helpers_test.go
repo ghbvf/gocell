@@ -450,16 +450,16 @@ func countLiveRefreshTokensForSubject(t *testing.T, h *l2Harness, subjectID stri
 }
 
 // assignRole calls POST /internal/v1/access/roles/assign with a service token
-// signed for the "accesscore" caller cell. Inlined literal is required by the
-// SVCTOKEN-CALLER-CELL-REQUIRED-01 archtest: every GenerateServiceToken call
-// must pass a string literal in the callerCell position so the caller-cell
-// allowlist can be statically verified.
+// signed for the "accesscore" caller cell. The "accesscore" callerCell literal
+// is required by the SVCTOKEN-CALLER-CELL-REQUIRED-01 archtest: every
+// GenerateServiceToken call must pass a string literal in the callerCell
+// position so the caller-cell allowlist can be statically verified.
 func assignRole(t *testing.T, h *l2Harness, userID, roleID string) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
 	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost,
-		"/internal/v1/access/roles/assign", "", time.Now())
-	req, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/assign",
+		internalPathRolesAssign, "", time.Now())
+	req, _ := http.NewRequest(http.MethodPost, h.internalBase+internalPathRolesAssign,
 		bytes.NewReader(body))
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -478,8 +478,8 @@ func revokeRole(t *testing.T, h *l2Harness, userID, roleID string) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID})
 	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost,
-		"/internal/v1/access/roles/revoke", "", time.Now())
-	req, _ := http.NewRequest(http.MethodPost, h.internalBase+"/internal/v1/access/roles/revoke",
+		internalPathRolesRevoke, "", time.Now())
+	req, _ := http.NewRequest(http.MethodPost, h.internalBase+internalPathRolesRevoke,
 		bytes.NewReader(body))
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	req.Header.Set("Content-Type", "application/json")
