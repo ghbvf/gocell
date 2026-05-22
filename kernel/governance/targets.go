@@ -283,16 +283,16 @@ func (ts *TargetSelector) addJourneyTargets(journey *metadata.JourneyMeta, cellS
 	}
 }
 
-// matchFromAssemblyPath handles paths under assemblies/.
-// Expects: assemblies/{id}/assembly.yaml
-// Returns true if the path was consumed (matched assemblies/ prefix).
+// matchFromAssemblyPath handles paths under assemblies/ or examples/.
+// Expects: assemblies/{id}/assembly.yaml or examples/{id}/assembly.yaml
+// Returns true if the path was consumed (matched assemblies/ or examples/ prefix).
 func (ts *TargetSelector) matchFromAssemblyPath(f string, cellSet map[string]struct{}) bool {
-	if !strings.HasPrefix(f, "assemblies/") {
+	if !strings.HasPrefix(f, "assemblies/") && !strings.HasPrefix(f, "examples/") {
 		return false
 	}
 
 	parts := strings.Split(f, "/")
-	// parts[0] = "assemblies", parts[1] = assemblyID, ...
+	// parts[0] = "assemblies" or "examples", parts[1] = assemblyID, ...
 	if len(parts) < 2 {
 		return true
 	}
