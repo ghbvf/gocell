@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/auditcore/auditcoretest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -40,7 +41,8 @@ import (
 // 's in-package conformance suite.
 func TestJAuditlogintrailEventConsume(t *testing.T) {
 	t.Parallel()
-	handler, store, ctx, entry := buildAuditcoreChain(t)
+	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t)
+	entry := auditcoretest.NewSessionCreatedEntry("sess-j-auditlogintrail", "usr-j-auditlogintrail")
 	result := handler(ctx, entry)
 	require.Equalf(t, outbox.DispositionAck, result.Disposition,
 		"auditcore.auditappendsession must Ack session.created; got disposition=%v error=%v",
