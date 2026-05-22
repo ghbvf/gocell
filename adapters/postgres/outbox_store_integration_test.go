@@ -146,7 +146,7 @@ func (p *recordingPublisher) Topics() []string {
 }
 
 // TestPGOutboxStore_ReclaimStale_RespectsBatchLimit verifies B2-A-06: a
-// backlog of stale claiming rows must not produce a single multi-second
+// large set of stale claiming rows must not produce a single multi-second
 // UPDATE that holds locks blocking VACUUM and replication. ReclaimStale caps
 // at defaultReclaimBatchTest per call; relay's tick loop drains residual.
 func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
@@ -181,7 +181,7 @@ func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
 	count, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second, defaultReclaimBatchTest)
 	require.NoError(t, err)
 	assert.Equal(t, defaultReclaimBatchTest, count,
-		"first reclaim must cap at defaultReclaimBatchTest, not full backlog")
+		"first reclaim must cap at defaultReclaimBatchTest, not full row count")
 
 	// Second call drains the residual.
 	count2, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second, defaultReclaimBatchTest)

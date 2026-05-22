@@ -10,7 +10,7 @@ import "time"
 // controlPlaneSweepHelper is a third, NON-allowlisted function on the allowed
 // path. The valid marker must NOT exempt it (only the two listed names are).
 //
-//archtest:allow:clock-injection:control-plane attempting to self-exempt a third function on the allowlisted path. Hard upgrade: backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+//archtest:allow:clock-injection:control-plane attempting to self-exempt a third function on the allowlisted path.
 func controlPlaneSweepHelper(interval time.Duration) *time.Ticker {
 	return time.NewTicker(interval) // must be flagged — name not in allowlist
 }

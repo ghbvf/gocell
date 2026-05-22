@@ -2,8 +2,7 @@
 
 // Package l2atomicity is the L2 (OutboxFact) e2e harness for accesscore
 // session/refresh/revoke/validate fail-closed regression coverage. It boots
-// a full PG + outbox-relay + in-process eventbus assembly (no broker;
-// RabbitMQ-bound broker e2e is tracked as L2-ATOMICITY-HARNESS-FOLLOWUPS) and
+// a full PG + outbox-relay + in-process eventbus assembly (no broker) and
 // exercises:
 //
 //   - login → sessions row + refresh_tokens row + outbox event committed atomically

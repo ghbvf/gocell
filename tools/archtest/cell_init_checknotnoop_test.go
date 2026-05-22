@@ -15,21 +15,10 @@
 // requires L2+ cells to declare `durabilityMode`, this archtest requires the
 // implementation to wire the runtime guard.
 //
-// The archtest does NOT solve the upstream nil-writer divergence reported by
-// finding CONFIGCORE-L2-MEMORY-MODE-DIVERGENCE-01 — that body is deferred to
-// backlog BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED. This archtest
-// only protects against future L2+ cells forgetting the CheckNotNoop call.
+// This archtest protects against future L2+ cells forgetting the CheckNotNoop call.
 //
 // AI-rebust grade: Medium (type-aware AST funnel via RunTypedProduction +
-// *types.Info callee resolution; scoped to production packages). Hard
-// upgrade candidates are tracked in PR #576 body §Tradeoff Accepted plus
-// independent backlog entries:
-//   - CELL-L2-CHECKNOTNOOP-CODEGEN-HARD-UPGRADE-01 (codegen funnel)
-//   - ARCHTEST-WALKER-BOUNDARY-CONTROL-01 (framework boundary API)
-//
-// Coupled body — BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED
-// (CheckNotNoop nil-reject / drop memory mode require resolving that
-// deferred breakage surface first).
+// *types.Info callee resolution; scoped to production packages).
 //
 // # Algorithm
 //
@@ -88,11 +77,6 @@
 //     red_cross_pkg fixture pins this contract.
 //
 // ref: docs/plans/202605101548-035-configcore-residuals-fix-plan.md
-// ref: BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED (Hard upgrade
-//
-//	candidates: codegen funnel / CheckNotNoop nil-reject /
-//	drop memory mode)
-//
 // ref: kernel/cell/durability.go (CheckNotNoop, Nooper)
 // ref: AI-rebust §载体决策原则 in .claude/rules/gocell/ai-collab.md
 package archtest
@@ -528,9 +512,7 @@ func initFuncDecl(p *Pass, goStructName string) *ast.FuncDecl {
 // on a FuncLit push event. archtest's EachInSubtree[T] does not expose
 // boundary control directly, so the implementation pre-collects FuncLit
 // position ranges and filters CallExprs that fall inside any range —
-// equivalent in outcome, more indirect in mechanism. A framework-level
-// `EachInSubtreeStopAt[T,Stop]` helper that internalizes the boundary
-// API is tracked in backlog ARCHTEST-WALKER-BOUNDARY-CONTROL-01.
+// equivalent in outcome, more indirect in mechanism.
 //
 // Same-package restriction is intentional (see file-level Blind-spot
 // inventory item 4 + red_cross_pkg fixture): Init/initInternal direct call

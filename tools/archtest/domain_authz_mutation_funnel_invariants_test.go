@@ -36,8 +36,6 @@ package archtest
 //     The Medium ceiling is an accepted architectural trade-off; the file-level
 //     allowlist (not package-level) is the tightest achievable restriction:
 //     only the exact files that contain creation-time calls are allowlisted.
-//     See backlog item AUTHZ-MUTATION-FUNNEL-UPSTREAM-HARD-01 for future Hard
-//     upgrade path via domain model redesign.
 //
 // Relationship to CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (Rule b):
 //   The Hard closure of the P1.2 / P1-#1 regression class is Rule (a) above —
@@ -256,7 +254,8 @@ func TestDomainAuthzFieldPrivate_01(t *testing.T) {
 
 	// RED fixture verification.
 	root := findModuleRoot(t)
-	verifyDomainFieldRedFixtureDetected(t, root,
+	verifyDomainFieldRedFixtureDetected(
+		t, root,
 		"./tools/archtest/testdata/authz_mutation_fixtures/domain_exported_authz_field_red",
 		"DOMAIN-AUTHZ-FIELD-PRIVATE-01 RED fixture",
 	)
@@ -269,13 +268,15 @@ func scanDomainUserViolations(pkg *types.Package) []string {
 	if obj == nil {
 		return []string{fmt.Sprintf(
 			"DOMAIN-AUTHZ-FIELD-PRIVATE-01: type %s not found in package %s",
-			domainUserType, pkg.Path())}
+			domainUserType, pkg.Path(),
+		)}
 	}
 	named, ok := obj.Type().(*types.Named)
 	if !ok {
 		return []string{fmt.Sprintf(
 			"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s is not a named type in %s",
-			domainUserType, pkg.Path())}
+			domainUserType, pkg.Path(),
+		)}
 	}
 
 	var out []string
@@ -287,7 +288,8 @@ func scanDomainUserViolations(pkg *types.Package) []string {
 			if f.Exported() && authzFieldNames[f.Name()] {
 				out = append(out, fmt.Sprintf(
 					"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s.%s has exported authz field %q — must be private",
-					domainUserType, pkg.Path(), f.Name()))
+					domainUserType, pkg.Path(), f.Name(),
+				))
 			}
 		}
 	}
@@ -307,7 +309,8 @@ func scanDomainUserViolations(pkg *types.Package) []string {
 				out = append(out, fmt.Sprintf(
 					"DOMAIN-AUTHZ-FIELD-PRIVATE-01: %s.%s has unauthorized exported setter %q "+
 						"(prefix %q); only SetStatus and SetPasswordResetRequired are sanctioned",
-					domainUserType, pkg.Path(), name, prefix))
+					domainUserType, pkg.Path(), name, prefix,
+				))
 				break
 			}
 		}
@@ -389,7 +392,8 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 	// LOCATION: cells/accesscore/internal/domain/testdata/ because domain is an
 	// internal package; the fixture must live under cells/accesscore/ to satisfy
 	// Go's internal-import rule, and testdata/ keeps it out of go build ./...
-	verifySetMutatorRedFixtureDetected(t,
+	verifySetMutatorRedFixtureDetected(
+		t,
 		"./cells/accesscore/internal/domain/testdata/rbacassign_direct_setstatus_red",
 		domainSetStatusMethod,
 		"AUTHZ-MUTATION-APPLY-FUNNEL-01 Rule (a) RED fixture",
@@ -429,7 +433,8 @@ func scanSetMutatorViolationsPass(
 		out = append(out, fmt.Sprintf(
 			"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: direct call to domain.User.%s "+
 				"outside allowed funnel packages",
-			rel, line, targetMethod))
+			rel, line, targetMethod,
+		))
 	})
 	return out
 }
@@ -498,7 +503,8 @@ func TestDomainAuthzMutation_BlindSpot_MethodValueAssignment(t *testing.T) {
 						violations = append(violations, fmt.Sprintf(
 							"%s:%d: method-value assignment of %s blind spot detected — "+
 								"archtest would miss the second call site",
-							rel, line, sel.Sel.Name))
+							rel, line, sel.Sel.Name,
+						))
 					}
 				})
 			})
@@ -558,7 +564,8 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
 							"archtest cannot see reflect-based invocations of authz setters",
-						rel, line, name))
+						rel, line, name,
+					))
 				}
 			})
 		}
@@ -611,7 +618,8 @@ func TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite(t *testing.T) {
 						"%s:%d: imports \"unsafe\" — potential unsafe.Pointer write "+
 							"could bypass domain.User authz field privatization "+
 							"(blind spot for DOMAIN-AUTHZ-FIELD-PRIVATE-01)",
-						rel, line))
+						rel, line,
+					))
 				}
 			}
 		}
@@ -674,7 +682,8 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 					violations = append(violations, fmt.Sprintf(
 						"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
 							"archtest cannot see reflect-based writes to domain.User authz fields",
-						rel, line, name))
+						rel, line, name,
+					))
 				}
 			})
 		}

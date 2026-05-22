@@ -31,8 +31,7 @@ import (
 // outbox.NewWriterEmitter backed by a mem writer instead of Recorder.
 //
 // Plan 044 task 1 (PR0): Recorder is the canonical producer-side seam for
-// `semanticForm: producer-side` journey criteria. See
-// docs/plans/202605191943-044-journey-backlog-realignment.md §2.
+// `semanticForm: producer-side` journey criteria (plan 044 §2).
 //
 // ref: ThreeDotsLabs/watermill pubsub/gochannel — in-memory implementation
 // used by upstream conformance tests for producer-side assertions.

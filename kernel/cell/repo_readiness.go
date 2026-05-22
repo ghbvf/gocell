@@ -51,8 +51,7 @@ type RepoHealthProber interface {
 //   - upstream Medium: the same archtest enforces every RepoHealthProber
 //     implementation is exercised by RunRepoReadinessConformance, but this is
 //     archtest-bound, not compile-time (Go cannot require a test to exist).
-//     Transitional form per charter; Hard-ization tracked by backlog
-//     REPO-READYZ-UPSTREAM-FUNNEL-HARD-01 (cap-13).
+//     Transitional form per charter.
 //
 // Differentiated behavior itself is enforced by the real-failure-injection
 // conformance harness (RunRepoReadinessConformance), not by this funnel.

@@ -29,7 +29,6 @@ package archtest
 //     call" guard that the type system cannot express.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md B11
-// ref: backlog2 §5.3 B2-A-27 REDIS-MULTI-TENANT-KEY-COLLISION
 
 import (
 	"go/ast"

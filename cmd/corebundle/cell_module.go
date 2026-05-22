@@ -22,8 +22,6 @@ import (
 // and registers its own providers.
 // ref: Go proverbs "accept interfaces, return structs" — single concrete impl
 // means no interface; future second impl introduces the interface at that point.
-//
-// backlog: S29 CORE-BUNDLE-APP-BUILDER-01
 type CellModule interface {
 	// ID returns a stable identifier used in error messages.
 	ID() string

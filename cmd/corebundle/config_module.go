@@ -21,7 +21,6 @@ import (
 // PoolResource/cellOpts (storage-backend specific) → configcore.ConfigCore.
 //
 // ref: uber-go/fx fx.Module("configcore", ...) — self-contained module.
-// backlog: S29 CORE-BUNDLE-APP-BUILDER-01
 type ConfigCoreModule struct {
 	// KeyProviderOverride bypasses env-based KeyProvider construction when
 	// non-nil. Production code leaves this unset; tests use it to inject a

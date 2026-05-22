@@ -470,9 +470,8 @@ const (
 	// binary at startup. Operators must inject an InMemoryNonceStore (single
 	// pod) or a shared store (multi-pod) before restart.
 	//
-	// This is the closure of the P1 replay window identified in six-role
-	// review (backlog S-nonce, 2026-04-24): a captured valid service token
-	// must not be replayable within its 5-minute validity window.
+	// This is the closure of the P1 replay window: a captured valid service
+	// token must not be replayable within its 5-minute validity window.
 	ErrControlplaneNonceStoreMissing Code = "ERR_CONTROLPLANE_NONCE_STORE_MISSING"
 
 	// ErrControlplaneClaimerNotDistributed signals that a real multi-pod
@@ -794,13 +793,15 @@ func MustValidateDetailsKinds(attrs []slog.Attr) {
 			panic(panicregister.Approved("errcode-redact-attr-self", Assertion(
 				"errcode.WithDetails: attr %q has wire-unsafe kind %s; "+
 					"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
-				attr.Key, attr.Value.Kind())))
+				attr.Key, attr.Value.Kind(),
+			)))
 		}
 		if !isWireSafeAttrValue(attr) {
 			panic(panicregister.Approved("errcode-redact-message-self", Assertion(
 				"errcode.WithDetails: attr %q has non-finite float64 value; "+
 					"use a finite number or string sentinel",
-				attr.Key)))
+				attr.Key,
+			)))
 		}
 	}
 }

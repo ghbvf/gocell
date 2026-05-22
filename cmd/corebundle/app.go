@@ -35,8 +35,6 @@ import (
 //
 // ref: uber-go/fx fx.New(opts...) — single assembly entry point used by both
 // production (main) and tests (fxtest.New).
-//
-// backlog: S29 CORE-BUNDLE-APP-BUILDER-01
 func BuildApp(
 	ctx context.Context,
 	shared *SharedDeps,

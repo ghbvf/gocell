@@ -152,7 +152,8 @@ func startPostgresContainer(t *testing.T) string {
 	testutil.RequireDocker(t)
 
 	ctx := context.Background()
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+	container, err := tcpostgres.Run(
+		ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("l2test"),
 		tcpostgres.WithUsername("l2test"),
 		tcpostgres.WithPassword("l2test"),
@@ -256,8 +257,7 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 	// outbox writer) are drained from outbox_entries and published into the
 	// in-process eventbus where auditcore subscribes — exercising the
 	// producer → relay → publisher → consumer chain on the in-process
-	// transport (not the broker). The full broker path is tracked as
-	// L2-ATOMICITY-HARNESS-FOLLOWUPS in cap-14-tooling.md.
+	// transport (not the broker). The full broker path is not yet covered.
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.Clock = clock.Real()
 	pgOutboxStore := adapterpg.NewOutboxStore(pg.pool.DB(), clock.Real())
@@ -427,7 +427,8 @@ func buildCells(
 	configCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
 	require.NoError(t, err)
 
-	ac := accesscore.NewAccessCore(append(pg.storeOpts,
+	ac := accesscore.NewAccessCore(append(
+		pg.storeOpts,
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(a.jwtIssuer),

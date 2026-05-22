@@ -192,8 +192,7 @@ func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
 	//                                          end-to-end chain is asserted at
 	//                                          unit level instead — see
 	//                                          OUTBOX-PENDING-DEPTH-E2E-PROM-SCRAPE-01
-	//                                          backlog for full /metrics scrape
-	//                                          variant)
+	//                                          for full /metrics scrape variant)
 	//
 	// We only assert wire-shape (HELP / TYPE / label key) for boot-emits.
 	// event-triggered families are verified by unit tests in

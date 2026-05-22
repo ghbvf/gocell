@@ -125,7 +125,7 @@ func goldenRuleIDs() []string {
 		// JOURNEY — journey lifecycle & cross-file consistency
 		// (rules_journey.go). Inverse-direction REF-07 closure +
 		// board.state × yaml.lifecycle strong-mapping matrix. AI-rebust
-		// Medium; Hard upgrade paths logged in rules_journey.go godoc.
+		// Medium.
 		"JOURNEY-CONTRACT-EXISTENCE-01", "JOURNEY-STATUS-LIFECYCLE-01",
 
 		// OUTGUARD — outbox durability (rules_misc_advisory.go)

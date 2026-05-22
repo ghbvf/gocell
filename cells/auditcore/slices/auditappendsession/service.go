@@ -6,8 +6,7 @@
 // strategy.
 //
 // Subscribed topics: event.session.created.v1, event.session.revoked.v1.
-// Note: event.session.auth-failed.v1 (PR392-FU) is not yet connected
-// pending contract definition; backlog item PR392-FU tracks the wiring.
+// Note: event.session.auth-failed.v1 is not yet connected pending contract definition.
 package auditappendsession
 
 import "github.com/ghbvf/gocell/cells/auditcore/internal/appender"

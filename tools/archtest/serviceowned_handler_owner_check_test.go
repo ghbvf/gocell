@@ -9,9 +9,7 @@
 //
 // AI-rebust: Medium (contract-decl ↔ service-guard AST ↔ errcode.KindNotFound
 // type-resolved via archtest.ResolvePackageRef, three-factor cross-binding;
-// see blindspot inventory for the residual escape). Hard-upgrade path
-// (funnel upstream closure pending):
-// SERVICEOWNED-HANDLER-OWNER-CHECK-01-HARD-UPGRADE.
+// see blindspot inventory for the residual escape).
 //
 // Detection is type-aware: the first argument of every errcode.New call inside
 // an owner-guard IfStmt is resolved through go/types (archtest.ResolvePackageRef,
@@ -32,8 +30,7 @@
 //     recursively visits the full AST subtree including nested FuncLit bodies.
 //     Only extraction to a top-level named function (in the same file or a
 //     different file) constitutes a cross-function escape that EachInSubtree
-//     cannot reach. This is the primary residual escape and the motivation for
-//     the Hard-upgrade backlog entry (cross-function callgraph analysis → Hard).
+//     cannot reach. This is the primary residual escape.
 //
 //   - Service file location: the rule scans
 //     cells/<cellDir>/slices/<sliceDir>/service.go only. If a slice's ownership
@@ -112,7 +109,8 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 	for contractID, servingSlices := range serviceOwnedContracts {
 		for _, sl := range servingSlices {
 			rel := filepath.ToSlash(
-				filepath.Join("cells", sl.CellDir, "slices", sl.Dir, "service.go"))
+				filepath.Join("cells", sl.CellDir, "slices", sl.Dir, "service.go"),
+			)
 			absPath := filepath.Join(root, rel)
 
 			if _, statErr := os.Stat(absPath); os.IsNotExist(statErr) {
@@ -121,7 +119,8 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 					Line: 0,
 					Message: fmt.Sprintf(
 						"contract %q (auth.serviceOwned=true) serves slice %q but %s not found",
-						contractID, sl.ID, rel),
+						contractID, sl.ID, rel,
+					),
 				})
 				continue
 			}
@@ -181,7 +180,8 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 				Message: fmt.Sprintf(
 					"contract %q: %s not loaded by typeseval "+
 						"(build tag excluded?); owner-guard check skipped",
-					targets[i].contractID, targets[i].rel),
+					targets[i].contractID, targets[i].rel,
+				),
 			})
 		}
 	}
@@ -309,7 +309,8 @@ func ownerGuardCheck(typesInfo *types.Info, file *ast.File, rel, contractID stri
 				"errcode.New(errcode.KindNotFound, ...) on owner-mismatch. "+
 				"Returning any other Kind leaks resource existence (IDOR). "+
 				"Canonical form: cells/accesscore/slices/sessionlogout/service.go",
-			contractID, rel),
+			contractID, rel,
+		),
 	}}
 }
 

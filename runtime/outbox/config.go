@@ -32,9 +32,9 @@ const (
 	// defaultRelayDeadRetentionPeriod is how long dead-lettered entries are kept.
 	defaultRelayDeadRetentionPeriod = 30 * 24 * time.Hour
 	// defaultRelayReclaimBatchSize caps a single ReclaimStale UPDATE so a
-	// backlog of stale claiming rows cannot produce a multi-second statement
+	// large set of stale claiming rows cannot produce a multi-second statement
 	// that blocks VACUUM/replication. The reclaim loop tick re-runs to drain
-	// residual when the backlog exceeds the cap. 1000 sits between
+	// residual when the accumulated row count exceeds the cap. 1000 sits between
 	// ThreeDotsLabs/watermill-sql's 100 (small batch SELECT default) and
 	// riverqueue/river's 10000 (high-throughput job rescuer): outbox reclaim
 	// is a recovery sweep, not a hot path, and a 1000-row UPDATE on the
@@ -70,7 +70,7 @@ type RelayConfig struct {
 	// frequency, decoupled from cleanup interval. Default 30s.
 	ReclaimInterval time.Duration
 	// ReclaimBatchSize caps a single ReclaimStale UPDATE; the relay's reclaim
-	// loop drains residual on its own tick when the stale backlog exceeds
+	// loop drains residual on its own tick when the stale row count exceeds
 	// this cap. Default 1000 (see defaultRelayReclaimBatchSize for the
 	// industry-comparison rationale).
 	ReclaimBatchSize int

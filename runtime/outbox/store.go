@@ -56,7 +56,7 @@ type Store interface {
 	// is older than claimTTL back to pending (with attempts+1 and
 	// next_retry_at = backoff) or to dead (when attempts+1 >= maxAttempts).
 	// Returns count of rows recovered across both destinations. Callers MUST
-	// loop until count < batchSize so a backlog larger than one sweep drains
+	// loop until count < batchSize so a queue larger than one sweep drains
 	// promptly without producing a multi-second UPDATE that blocks
 	// VACUUM/replication.
 	ReclaimStale(

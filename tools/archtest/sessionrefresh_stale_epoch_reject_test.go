@@ -11,7 +11,6 @@ package archtest
 // (Sel.Name, Ident.Name, BasicLit value) — NOT typeseval type-identity
 // resolution. A helper rename breaks the test loudly (BS-1), but a
 // same-named re-implementation with different type identity would pass.
-// Upgrade path: backlog SESSIONREFRESH-STALE-EPOCH-REJECT-HARDEN-01.
 //
 // (4 independent anchors, incl. a negative-call assertion):
 //

@@ -26,11 +26,10 @@ package archtest
 //     no sealed-interface marker that would make the mutation
 //     impossible at compile time.
 //
-// Hard-upstream upgrade path (sealed-interface wrapper of *Lock so the
-// type-system rejects added Deadline()/Err() methods at compile time)
-// is tracked as backlog DISTLOCK-LOCK-NOT-CONTEXT-UPSTREAM-HARD-01
-// per ai-collab.md §"Funnel 双向锁评级". Until then the Medium+Hard
-// posture documented in ADR 202605200000-adr-distlock-lock-as-resource.md
+// Hard-upstream upgrade path: a sealed-interface wrapper of *Lock would make
+// the type-system reject added Deadline()/Err() methods at compile time.
+// Per ai-collab.md §"Funnel 双向锁评级", until then the Medium+Hard posture
+// documented in ADR 202605200000-adr-distlock-lock-as-resource.md
 // §"Enforcement" is the active line.
 //
 // Reverse self-check (TestDistlockLockNotContext01_BlindSpotSelfCheck)

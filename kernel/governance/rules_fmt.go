@@ -1471,10 +1471,6 @@ func (v *Validator) validateFMT33() []ValidationResult {
 //	               (single funnel via buildHTTPEndpointSpec — sole HTTP codegen entry)
 //	downstream:    this rule (Medium — receiver-type + RuleCode const + fix suffix archtest)
 //
-// Hard-upgrade path for this side: G-13-FU-H3-RULES-AUTOREGISTER
-// (cap-02 backlog, reflect-derived rules() removes "forgot-to-register" gap →
-// downstream upgrades to Hard).
-//
 // Orthogonal to FMT-26 (two-bypass mutex, path-agnostic) and
 // runtime/auth/route.go validateBypassCompatibility (Route struct field
 // mutex, path-agnostic) — three-layer defense, metadata-first.

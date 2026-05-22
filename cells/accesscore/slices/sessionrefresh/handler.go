@@ -25,8 +25,8 @@ func (a RefreshAdapter) Refresh(ctx context.Context, req *refreshgen.Request) (r
 		// ErrAuthUserNotActive. error-handling.md rule 4 + typed-envelope ADR
 		// 202605061500 require a declared business 4xx to return its typed
 		// struct, not framework fallback. The other declared statuses
-		// (400/401/503) stay framework-fallback — pre-existing B-FLOOR
-		// backlog territory, out of this contract-sync change's scope.
+		// (400/401/503) stay framework-fallback — pre-existing B-FLOOR cases
+		// outside this contract-sync change's scope.
 		var ecErr *errcode.Error
 		if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrAuthUserNotActive {
 			return refreshgen.Refresh403ErrorResponse{Body: *ecErr}, nil

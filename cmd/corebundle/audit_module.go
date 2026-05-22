@@ -18,7 +18,6 @@ import (
 // It reads auditcore-namespaced environment variables directly.
 //
 // ref: uber-go/fx fx.Module("auditcore", ...) — self-contained module.
-// backlog: S29 CORE-BUNDLE-APP-BUILDER-01
 type AuditCoreModule struct{}
 
 // ID returns the stable identifier used in error messages.
@@ -107,7 +106,8 @@ func (AuditCoreModule) Provide(
 		}
 		ledgerStore = pgStore
 		writer := adapterpg.NewOutboxWriter(shared.Clock)
-		auditOpts = append(auditOpts,
+		auditOpts = append(
+			auditOpts,
 			auditcore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
 			auditcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		)

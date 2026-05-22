@@ -335,7 +335,7 @@ func (s *FakeStore) MarkDead(_ context.Context, id, leaseID string, attempts int
 // older than claimTTL back to pending or to dead (when attempts+1 >= maxAttempts).
 // Returns count of rows recovered across both destinations. Eligible rows are
 // visited in claimed_at ASC order with id ASC tiebreaker, mirroring the PG
-// adapter's ORDER BY claimed_at LIMIT N semantics so a backlog larger than the
+// adapter's ORDER BY claimed_at LIMIT N semantics so a queue larger than the
 // cap is split across loop iterations deterministically.
 func (s *FakeStore) ReclaimStale(
 	_ context.Context,

@@ -64,10 +64,7 @@
 //     calls MustRejectQueryParam(t, paramName, ...) with paramName a runtime
 //     variable; PARAM-NAME-LITERAL-01 MUST flag it.
 //
-// AI Hard upgrade backlog: cap-14
-// CONTRACT-PATH-QUERY-COVERAGE-HARD-CODEGEN-01 — derive each MustReject*Param
-// stub from contract.yaml at codegen time so a missing param is an
-// unrepresentable build outcome.
+// AI-rebust grade: Medium.
 package archtest
 
 import (
@@ -310,7 +307,8 @@ func TestContractPathQueryParamNameLiteral01_RedComputedParamName(t *testing.T) 
 	t.Parallel()
 
 	fixturePattern := "./tools/archtest/contract_path_query_coverage_fixtures/red_param_name_computed/..."
-	diags := RunTypedFixture(t, FixtureOpts{Tests: true},
+	diags := RunTypedFixture(
+		t, FixtureOpts{Tests: true},
 		[]string{fixturePattern},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
@@ -508,7 +506,8 @@ func buildContractPQRequirements(t *testing.T, moduleRoot string) []contractPQPa
 func buildContractPQRequirementsFromRelDir(t *testing.T, moduleRoot, relDir string) []contractPQParamInfo {
 	t.Helper()
 	var result []contractPQParamInfo
-	scope := scanner.DirsScope(moduleRoot, []string{relDir},
+	scope := scanner.DirsScope(
+		moduleRoot, []string{relDir},
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),

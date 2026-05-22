@@ -80,8 +80,7 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 //
 // AI-rebust 评级：**C.1 Hard（类型不可表达）** — Sweeper 无任何时钟字段；
 // 控制面 fake clock 在 kernel 类型层不可表达。runtime 层控制面真实时间
-// carve-out 是 Medium（archtest 函数级白名单），Hard 升级路径点名
-// backlog ID CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01。
+// carve-out 是 Medium（archtest 函数级白名单）。
 //
 // Business-plane time (now) is passed explicitly to SweepTick and SweepOnce,
 // preserving full determinism for business logic tests without requiring any

@@ -16,7 +16,7 @@ package archtest
 //
 // Hard property comes from form uniqueness: picking any other shape (no
 // funnel call, wrong callee, BasicLit expected, non-NotFound code) fails
-// archtest in CI. See cap-14:18 (PR238-FU4 / PR#553 Hard upgrade) and
+// archtest in CI. See
 // .claude/rules/gocell/ai-collab.md §"Hard 范本" / "typed function call
 // as Hard funnel for unbounded operations" — template is panicregister.Approved
 // + PANIC-REGISTERED-01 (panic_invariants_test.go).

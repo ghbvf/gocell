@@ -143,7 +143,8 @@ func (b *Bootstrap) validateAssemblyClockAlignment() error {
 	if b.assemblyCore.Clock() != b.clock {
 		return fmt.Errorf(
 			"bootstrap: clock mismatch — the assembly's Clock and the bootstrap's Clock are different instances; " +
-				"pass the same clock.Clock instance to both bootstrap.WithClock and assembly.New(Config{Clock: ...})")
+				"pass the same clock.Clock instance to both bootstrap.WithClock and assembly.New(Config{Clock: ...})",
+		)
 	}
 	return nil
 }

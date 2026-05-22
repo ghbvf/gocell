@@ -117,7 +117,7 @@ const markDeadQuery = `UPDATE outbox_entries SET status = $1, attempts = $2,
 // lease_id is cleared on the back-to-pending branch so the next ClaimPending
 // mints a fresh lease; the dead branch keeps the value as audit trail.
 //
-// LIMIT ($8 batchSize) caps a single sweep so a backlog of stale rows cannot
+// LIMIT ($8 batchSize) caps a single sweep so a large set of stale rows cannot
 // produce a multi-second UPDATE that blocks VACUUM/replication; the relay's
 // reclaim loop drains residual by re-invoking until count < batchSize.
 //
@@ -267,7 +267,7 @@ func (s *PGOutboxStore) MarkDead(ctx context.Context, id, leaseID string, attemp
 // older than claimTTL back to pending (with attempts+1 and next_retry_at =
 // backoff) or to dead (when attempts+1 >= maxAttempts). Returns count of rows
 // recovered. The caller's reclaim loop re-runs to drain residual when the
-// backlog exceeds batchSize (`count < batchSize` signals "no more").
+// row count exceeds batchSize (`count < batchSize` signals "no more").
 func (s *PGOutboxStore) ReclaimStale(
 	ctx context.Context,
 	claimTTL time.Duration,

@@ -20,12 +20,7 @@ import (
 // narrow their filter predicates sufficiently.
 //
 // This is an application-level guard only — it does not replace real keyset
-// pagination pushed into the SQL layer. The follow-up backlog item
-// S8-AUDIT-QUERY-KEYSET-PUSH-DOWN-01 tracks the proper implementation: extend
-// ledger.Store.Query to accept a keyset cursor (mirroring
-// cells/configcore/internal/adapters/postgres/config_repo.go::List) so that
-// large result sets are streamed page-by-page from PG rather than loaded into
-// memory in full.
+// pagination pushed into the SQL layer.
 const auditQueryFetchCap = 500
 
 // auditSort defines the default sort for audit listings: newest first.
@@ -86,14 +81,13 @@ func (s *Service) Query(
 			//
 			// auditQueryFetchCap (500) is a defensive ceiling against OOM when
 			// the audit_entries table grows large and filters are not narrow enough.
-			// Real keyset pagination pushed into SQL is tracked in backlog item
-			// S8-AUDIT-QUERY-KEYSET-PUSH-DOWN-01.
 			all, err := s.store.Query(ctx, filters, ledger.QueryListParams{Limit: auditQueryFetchCap})
 			if err != nil {
 				return nil, fmt.Errorf("audit-query: query: %w", err)
 			}
 			if len(all) >= auditQueryFetchCap {
-				s.logger.Warn("audit-query: fetch cap reached; results may be incomplete — narrow filters or await S8 keyset pagination",
+				s.logger.Warn(
+					"audit-query: fetch cap reached; results may be incomplete — narrow filters",
 					slog.Int("cap", auditQueryFetchCap),
 					slog.String("eventType", filters.EventType),
 					slog.String("actorId", filters.ActorID),
