@@ -1,8 +1,0 @@
-id: ssobff
-cells:
-  - accesscore
-  - auditcore
-  - configcore
-owner:
-  team: examples
-  role: maintainer
