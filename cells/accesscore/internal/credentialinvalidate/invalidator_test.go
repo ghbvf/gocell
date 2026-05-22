@@ -45,7 +45,7 @@ func (s *stubUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User,
 	panic("stubUserRepo.GetByUsername: unexpected call")
 }
 
-func (s *stubUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
+func (s *stubUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
 	panic("stubUserRepo.UpdateProfile: unexpected call")
 }
 

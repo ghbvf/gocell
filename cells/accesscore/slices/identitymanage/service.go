@@ -321,10 +321,15 @@ func (s *Service) GetByID(ctx context.Context, id string) (*domain.User, error) 
 
 // UpdateInput holds parameters for updating a user (JSON merge patch semantics).
 // Nil pointer fields mean "do not update"; non-nil means "set to this value".
+//
+// Name and Email use *domain.NonEmpty rather than *string: the typed wrapper
+// makes empty-string PATCH unrepresentable at the type boundary (NonEmpty
+// constructor / UnmarshalJSON rejects ""), eliminating the need for runtime
+// "name must not be empty" checks in Update.
 type UpdateInput struct {
 	ID                   string
-	Name                 *string
-	Email                *string
+	Name                 *domain.NonEmpty
+	Email                *domain.NonEmpty
 	Status               *string
 	RequirePasswordReset *bool // nil=no change, true=mark, false=clear
 }
@@ -346,14 +351,8 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	); err != nil {
 		return nil, err
 	}
-	if input.Name != nil && *input.Name == "" {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
-			"name must not be empty when provided")
-	}
-	if input.Email != nil && *input.Email == "" {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
-			"email must not be empty when provided")
-	}
+	// Empty-string PATCH protection lives in the type system (*domain.NonEmpty
+	// constructor + UnmarshalJSON reject ""); no runtime check required here.
 	if input.Status != nil &&
 		*input.Status != string(domain.StatusActive) &&
 		*input.Status != string(domain.StatusSuspended) {

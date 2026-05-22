@@ -367,10 +367,22 @@ func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string
 func (r *PGUserRepo) UpdateProfile(
 	ctx context.Context,
 	userID string,
-	name, email *string,
+	name, email *domain.NonEmpty,
 	now time.Time,
 ) (*domain.User, error) {
-	row := r.db.QueryRow(ctx, updateProfileSQL, userID, name, email, now)
+	// pgx binds *string (PG TEXT) directly; *domain.NonEmpty is type-renamed
+	// string but pgx's reflect path treats it as plain text. We convert to
+	// *string for clarity and to keep the wire-binding contract explicit.
+	var namePG, emailPG *string
+	if name != nil {
+		s := string(*name)
+		namePG = &s
+	}
+	if email != nil {
+		s := string(*email)
+		emailPG = &s
+	}
+	row := r.db.QueryRow(ctx, updateProfileSQL, userID, namePG, emailPG, now)
 	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

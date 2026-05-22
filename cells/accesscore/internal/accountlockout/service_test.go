@@ -149,7 +149,7 @@ func (r *fakeUserRepo) GetByUsernameForUpdate(ctx context.Context, username stri
 	return r.GetByUsername(ctx, username)
 }
 
-func (r *fakeUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
+func (r *fakeUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
 	return nil, errFakeRepoUnused
 }
 

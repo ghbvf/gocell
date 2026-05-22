@@ -48,18 +48,24 @@ import (
 // Adding/removing methods OR changing any signature here is a contract change
 // that must be paired with an ADR amendment (ADR 202605222309).
 var expectedUserRepoMethodSignatures = map[string]string{
-	"BumpAuthzEpoch":          "(ctx context.Context, userID string) (newEpoch int64, err error)",
-	"Create":                  "(ctx context.Context, user *domain.User) error",
-	"Delete":                  "(ctx context.Context, id string) error",
-	"GetByID":                 "(ctx context.Context, id string) (*domain.User, error)",
-	"GetByIDForUpdate":        "(ctx context.Context, id string) (*domain.User, error)",
-	"GetByUsername":           "(ctx context.Context, username string) (*domain.User, error)",
-	"GetByUsernameForUpdate":  "(ctx context.Context, username string) (*domain.User, error)",
-	"UpdateLockState":         "(ctx context.Context, userID string, status domain.UserStatus, now time.Time) error",
-	"UpdateLockoutFields":     "(ctx context.Context, user *domain.User) error",
-	"UpdatePassword":          "(ctx context.Context, userID string, newHash string, resetRequired bool, expectedPasswordVersion int64) (newVersion int64, err error)",
-	"UpdatePasswordResetFlag": "(ctx context.Context, userID string, required bool, now time.Time) error",
-	"UpdateProfile":           "(ctx context.Context, userID string, name, email *string, now time.Time) (*domain.User, error)",
+	"BumpAuthzEpoch":   "(ctx context.Context, userID string) (newEpoch int64, err error)",
+	"Create":           "(ctx context.Context, user *domain.User) error",
+	"Delete":           "(ctx context.Context, id string) error",
+	"GetByID":          "(ctx context.Context, id string) (*domain.User, error)",
+	"GetByIDForUpdate": "(ctx context.Context, id string) (*domain.User, error)",
+	"GetByUsername":    "(ctx context.Context, username string) (*domain.User, error)",
+	"GetByUsernameForUpdate": "(ctx context.Context, username string)" +
+		" (*domain.User, error)",
+	"UpdateLockState": "(ctx context.Context, userID string, status domain.UserStatus," +
+		" now time.Time) error",
+	"UpdateLockoutFields": "(ctx context.Context, user *domain.User) error",
+	"UpdatePassword": "(ctx context.Context, userID string, newHash string," +
+		" resetRequired bool, expectedPasswordVersion int64)" +
+		" (newVersion int64, err error)",
+	"UpdatePasswordResetFlag": "(ctx context.Context, userID string, required bool," +
+		" now time.Time) error",
+	"UpdateProfile": "(ctx context.Context, userID string," +
+		" name, email *domain.NonEmpty, now time.Time) (*domain.User, error)",
 }
 
 // TestUserRepoMethodSetFrozen verifies USERREPO-METHOD-SET-FROZEN-01: method

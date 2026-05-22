@@ -144,7 +144,7 @@ type Store struct {
 	mu        sync.Mutex
 	usersByID map[string]*domain.User
 	byName    map[string]*domain.User
-	byEmail   map[string]*domain.User // mirrors PG users.email UNIQUE constraint
+	byEmail   map[string]*domain.User        // mirrors PG users.email UNIQUE constraint
 	userRoles map[string]map[string]struct{} // userID -> set of roleIDs
 	roles     map[string]*domain.Role
 	clock     clock.Clock

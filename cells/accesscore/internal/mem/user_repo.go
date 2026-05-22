@@ -130,7 +130,7 @@ func (r *UserRepository) GetByUsernameForUpdate(ctx context.Context, username st
 func (r *UserRepository) UpdateProfile(
 	ctx context.Context,
 	userID string,
-	name, email *string,
+	name, email *domain.NonEmpty,
 	now time.Time,
 ) (*domain.User, error) {
 	if !r.store.txHoldsLock(ctx) {
@@ -147,11 +147,11 @@ func (r *UserRepository) UpdateProfile(
 
 	newName := existing.Username
 	if name != nil {
-		newName = *name
+		newName = string(*name)
 	}
 	newEmail := existing.Email
 	if email != nil {
-		newEmail = *email
+		newEmail = string(*email)
 	}
 
 	// Uniqueness check mirrors PG (users.username UNIQUE / users.email UNIQUE).

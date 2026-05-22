@@ -340,45 +340,16 @@ func TestService_Update(t *testing.T) {
 		Username: "upd", Email: "old@e.f", Password: "hash",
 	})
 
-	newEmail := "new@e.f"
+	newEmail := domain.NonEmpty("new@e.f")
 	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 	assert.Equal(t, "new@e.f", updated.Email)
 }
 
-// TestService_Update_RejectsEmptyStringPATCH verifies that *string PATCH fields
-// that are pointer-to-empty-string are rejected at the service layer, not just
-// at the HTTP handler layer. Non-HTTP callers (CLI, test, future gRPC) bypass
-// the handler-layer strPtr normaliser, so the guard must live in the service.
-func TestService_Update_RejectsEmptyStringPATCH(t *testing.T) {
-	svc := newTestService(t)
-	user, err := svc.Create(adminCtxForService(), CreateInput{
-		Username: "empty-patch", Email: "empty@e.f", Password: "hash",
-	})
-	require.NoError(t, err)
-
-	emptyStr := ""
-
-	t.Run("empty name rejected", func(t *testing.T) {
-		_, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Name: &emptyStr})
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.KindInvalid, ec.Kind)
-		assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
-		assert.Contains(t, ec.Message, "name must not be empty")
-	})
-
-	t.Run("empty email rejected", func(t *testing.T) {
-		_, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &emptyStr})
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.KindInvalid, ec.Kind)
-		assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
-		assert.Contains(t, ec.Message, "email must not be empty")
-	})
-}
+// (TestService_Update_RejectsEmptyStringPATCH removed: empty-string PATCH is
+// now type-system unrepresentable. *domain.NonEmpty constructors (NewNonEmpty
+// / UnmarshalJSON) reject ""; coverage moved to
+// cells/accesscore/internal/domain/nonempty_test.go.)
 
 // TestService_Update_StatusRequiresAdminRole covers the S4.0 P1-A
 // field-level guard: a non-admin caller cannot mutate user.Status even
@@ -403,7 +374,7 @@ func TestService_Update_StatusRequiresAdminRole(t *testing.T) {
 
 	// Same caller updating a non-status field MUST succeed (field-level guard
 	// applies only to status).
-	newEmail := "user-self@e.f"
+	newEmail := domain.NonEmpty("user-self@e.f")
 	updated, err := svc.Update(nonAdminCtx, UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err, "non-admin self-PATCH of non-status fields must succeed")
 	assert.Equal(t, "user-self@e.f", updated.Email)
@@ -480,7 +451,7 @@ func TestService_Update_StatusUnchanged_NoCascadeRevoke(t *testing.T) {
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), seedSess))
 
-	newEmail := "nr2@e.f"
+	newEmail := domain.NonEmpty("nr2@e.f")
 	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 
@@ -523,7 +494,7 @@ func TestService_Update_PatchSemantics(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update only name, email should stay unchanged.
-	newName := "patchedName"
+	newName := domain.NonEmpty("patchedName")
 	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Name: &newName})
 	require.NoError(t, err)
 	assert.Equal(t, "patchedName", updated.Username)
@@ -577,7 +548,7 @@ func TestService_UpdateProfile_DoesNotTouchAuthzFields(t *testing.T) {
 	preLastFailedAt := pre.LastFailedAt()
 	preLockedUntil := pre.AutoLockoutDeadline()
 
-	newEmail := "after@e.f"
+	newEmail := domain.NonEmpty("after@e.f")
 	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 
@@ -611,7 +582,7 @@ func TestService_Update_ProfileAndStatusCombined(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	newName := "combined-new"
+	newName := domain.NonEmpty("combined-new")
 	suspended := "suspended"
 	updated, err := svc.Update(adminCtxForService(), UpdateInput{
 		ID:     user.ID,
@@ -1189,7 +1160,7 @@ func TestService_Update_OmittedFieldNoChange(t *testing.T) {
 	seedUserWithHash(t, repo, "upd-flag-omit", "pass", true) // starts with flag=true
 
 	// Update only email, leave RequirePasswordReset nil → no change.
-	newEmail := "new@omit.com"
+	newEmail := domain.NonEmpty("new@omit.com")
 	updated, err := svc.Update(adminCtxForService(), UpdateInput{
 		ID:    "usr-upd-flag-omit",
 		Email: &newEmail,
@@ -1379,7 +1350,10 @@ func (r *observingUserRepo) UpdateLockState(ctx context.Context, userID string, 
 	return r.UserRepository.UpdateLockState(ctx, userID, status, now)
 }
 
-func (r *observingUserRepo) UpdateProfile(ctx context.Context, userID string, name, email *string, now time.Time) (*domain.User, error) {
+func (r *observingUserRepo) UpdateProfile(
+	ctx context.Context, userID string,
+	name, email *domain.NonEmpty, now time.Time,
+) (*domain.User, error) {
 	r.updInTx = r.runner.inTx
 	return r.UserRepository.UpdateProfile(ctx, userID, name, email, now)
 }
@@ -1452,7 +1426,7 @@ func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
 	require.NoError(t, err)
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
-	newEmail := "new@p.t"
+	newEmail := domain.NonEmpty("new@p.t")
 	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 	assert.Equal(t, "new@p.t", updated.Email)
@@ -1798,7 +1772,7 @@ func TestService_Update_EmitsTypedPayload(t *testing.T) {
 	require.NoError(t, err)
 	cap.entries = nil
 
-	newEmail := "upd-new@e.t"
+	newEmail := domain.NonEmpty("upd-new@e.t")
 	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 	require.Len(t, cap.entries, 1, "Update must emit exactly one event")

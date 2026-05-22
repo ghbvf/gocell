@@ -182,6 +182,15 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+// nePtr is a test-side bridge from a known-non-empty string literal to a
+// *domain.NonEmpty. Conformance test values are seeded with valid usernames /
+// emails, so the empty check inside NewNonEmpty is redundant noise here —
+// direct cast is allowlisted for *_test.go by USERREPO-NONEMPTY-CAST-FUNNEL-01.
+func nePtr(s string) *domain.NonEmpty {
+	n := domain.NonEmpty(s)
+	return &n
+}
+
 // seedActive creates and persists an active user inside a RunInTx call.
 // It uses unique IDs so parallel sub-tests don't collide.
 func seedActive(t *testing.T, txRunner persistence.TxRunner, repo ports.UserRepository, id, username string) *domain.User {
@@ -788,7 +797,7 @@ func conformUpdateProfileSucceeds(t *testing.T, factory UserRepoFactory) {
 	newEmail := newName + "@example.com"
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	updated, err := repo.UpdateProfile(context.Background(), u.ID, &newName, &newEmail, now)
+	updated, err := repo.UpdateProfile(context.Background(), u.ID, nePtr(newName), nePtr(newEmail), now)
 	if err != nil {
 		t.Fatalf("UpdateProfile_Succeeds: UpdateProfile: %v", err)
 	}
@@ -844,7 +853,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	// Update name only; email pointer is nil.
 	newName := "only_name_changed_" + uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	if _, err := repo.UpdateProfile(context.Background(), u.ID, &newName, nil, now); err != nil {
+	if _, err := repo.UpdateProfile(context.Background(), u.ID, nePtr(newName), nil, now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: name-only: %v", err)
 	}
 	got, err := repo.GetByID(context.Background(), u.ID)
@@ -861,7 +870,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 
 	// Update email only; name pointer is nil.
 	newEmail := "only_email_" + uuid.NewString() + "@example.com"
-	if _, err := repo.UpdateProfile(context.Background(), u.ID, nil, &newEmail, now); err != nil {
+	if _, err := repo.UpdateProfile(context.Background(), u.ID, nil, nePtr(newEmail), now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: email-only: %v", err)
 	}
 	got, err = repo.GetByID(context.Background(), u.ID)
@@ -907,7 +916,7 @@ func conformUpdateProfileNotFound(t *testing.T, factory UserRepoFactory) error {
 	phantom := uuid.NewString()
 	ghostName := "ghost_" + phantom
 	ghostEmail := ghostName + "@example.com"
-	_, err := repo.UpdateProfile(context.Background(), phantom, &ghostName, &ghostEmail,
+	_, err := repo.UpdateProfile(context.Background(), phantom, nePtr(ghostName), nePtr(ghostEmail),
 		time.Now().UTC().Truncate(time.Millisecond))
 	if err == nil {
 		t.Fatal("UpdateProfile_NotFound: must return error for non-existent user, got nil")
@@ -927,7 +936,7 @@ func conformUpdateProfileDuplicateUsername(t *testing.T, factory UserRepoFactory
 	b := seedActive(t, txRunner, repo, uuid.NewString(), "dup_b_"+uuid.NewString())
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	_, err := repo.UpdateProfile(context.Background(), a.ID, &b.Username, nil, now)
+	_, err := repo.UpdateProfile(context.Background(), a.ID, nePtr(b.Username), nil, now)
 	if err == nil {
 		t.Fatal("UpdateProfile_DuplicateUsername: rename to existing username must error, got nil")
 	}
@@ -945,7 +954,7 @@ func conformUpdateProfileDuplicateEmail(t *testing.T, factory UserRepoFactory) e
 	b := seedActive(t, txRunner, repo, uuid.NewString(), "dupe_b_"+uuid.NewString())
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	_, err := repo.UpdateProfile(context.Background(), a.ID, nil, &b.Email, now)
+	_, err := repo.UpdateProfile(context.Background(), a.ID, nil, nePtr(b.Email), now)
 	if err == nil {
 		t.Fatal("UpdateProfile_DuplicateEmail: change to existing email must error, got nil")
 	}
@@ -966,7 +975,7 @@ func conformUpdateProfileSameValuesNoOp(t *testing.T, factory UserRepoFactory) {
 	originalEmail := u.Email
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	updated, err := repo.UpdateProfile(context.Background(), u.ID, &originalName, &originalEmail, now)
+	updated, err := repo.UpdateProfile(context.Background(), u.ID, nePtr(originalName), nePtr(originalEmail), now)
 	if err != nil {
 		t.Fatalf("UpdateProfile_SameValuesNoOp: same-values PATCH must succeed: %v", err)
 	}

@@ -313,7 +313,7 @@ func (r *stubUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User,
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
+func (r *stubUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
 	panic("not implemented")
 }
 
@@ -453,7 +453,7 @@ func (r *capturingUserRepo) GetByUsername(_ context.Context, _ string) (*domain.
 		errcode.WithCategory(errcode.CategoryDomain))
 }
 
-func (r *capturingUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
+func (r *capturingUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "not implemented",
 		errcode.WithCategory(errcode.CategoryDomain))
 }

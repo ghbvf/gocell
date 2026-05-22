@@ -40,10 +40,14 @@ type UserRepository interface {
 	// UpdateProfile writes username / email / updated_at only.
 	//
 	// PATCH semantics: nil name/email skips that column (SQL COALESCE / mem
-	// pointer-nil branch). Returns the post-write *domain.User reconstituted
-	// from the persisted row (PG: RETURNING *; mem: ReconstituteUser after
-	// in-place write). The returned aggregate is the new system-of-record
-	// value; caller MUST use it for downstream publish / audit.
+	// pointer-nil branch). Empty-string values are unrepresentable at the type
+	// boundary — *domain.NonEmpty constructor (NewNonEmpty / UnmarshalJSON)
+	// rejects "" so service-layer runtime checks are not required.
+	//
+	// Returns the post-write *domain.User reconstituted from the persisted
+	// row (PG: RETURNING *; mem: ReconstituteUser after in-place write). The
+	// returned aggregate is the new system-of-record value; caller MUST use
+	// it for downstream publish / audit.
 	//
 	// Does NOT touch: password_hash / password_version / password_reset_required
 	// / status / authz_epoch / failed_login_count / last_failed_at / locked_until.
@@ -56,7 +60,7 @@ type UserRepository interface {
 	UpdateProfile(
 		ctx context.Context,
 		userID string,
-		name, email *string,
+		name, email *domain.NonEmpty,
 		now time.Time,
 	) (*domain.User, error)
 

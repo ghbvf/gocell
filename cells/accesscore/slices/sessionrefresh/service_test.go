@@ -623,7 +623,7 @@ func (refreshUnavailableUserRepo) GetByUsername(_ context.Context, _ string) (*d
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
 
-func (refreshUnavailableUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
+func (refreshUnavailableUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
 

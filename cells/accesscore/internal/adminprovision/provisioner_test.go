@@ -394,7 +394,7 @@ func (r *duplicateUserRepo) GetByUsername(ctx context.Context, username string) 
 	return u, nil
 }
 
-func (r *duplicateUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
+func (r *duplicateUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
 	return nil, errStubUnused
 }
 
@@ -584,7 +584,7 @@ func (r *errUserRepo) GetByUsername(ctx context.Context, username string) (*doma
 	return nil, errors.New("not seeded")
 }
 
-func (r *errUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *string, _ time.Time) (*domain.User, error) {
+func (r *errUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
 	return nil, errStubUnused
 }
 
