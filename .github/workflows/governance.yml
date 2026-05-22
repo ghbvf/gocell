@@ -27,7 +27,7 @@ jobs:
     # workflow invoked it. The single-owner rule mirrors Kubernetes's
     # per-verify-*.sh Prow job model and Watermill's reusable-workflow
     # split (one owner per gate; aggregators delegate). PR-time local
-    # fast-feedback is provided by hack/githooks/pre-push (K=1 sweep).
+    # fast-feedback is provided by hack/githooks/pre-push (K=4 parallel fan-out (~3 min on an 18-core workstation)).
     #
     # 15 min covers cold module cache plus other ~9 verify-*.sh gates
     # running continue-on-failure (hack/make-rules/verify.sh accumulates

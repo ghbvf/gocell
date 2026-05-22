@@ -61,6 +61,9 @@ jobs:
           SHARD_TARGET: ${{ matrix.shard }}
           TIMEOUT: 5m
           SLOWGATE_BIN: ${{ runner.temp }}/slowgate
+          # 20s threshold inherited from _build-lint.yml; calibrated on macOS
+          # local Phase 0 (18-core Apple Silicon). GHA ubuntu nightly has no
+          # baseline data yet — revisit after ~30 consecutive nightly runs.
           SLOWGATE_THRESHOLD: 20s
           SLOWGATE_ALLOWLIST: tools/slowgate/allowlist.txt
         run: bash hack/verify-archtest.sh
@@ -79,6 +82,7 @@ jobs:
     if: failure()
     runs-on: ubuntu-latest
     permissions:
+      contents: none   # override top-level contents: read; this job needs no repo access
       issues: write
     steps:
       # Open a P0 issue via the hosted runner's built-in `gh` CLI rather
@@ -91,22 +95,38 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Ensure labels exist (idempotent: 422 from existing label is silenced).
+          gh label create nightly-failure --color e11d48 --description "archtest nightly broke" 2>/dev/null || true
+          gh label create pri-p0          --color e11d48 --description "Priority P0"            2>/dev/null || true
+          gh label create cap-02-metadata-governance --color 0075ca --description "Capability: metadata governance" 2>/dev/null || true
+
+          branch="${{ github.ref_name }}"
+          title="[archtest-nightly] ${branch} broken"
+
+          # Idempotency: skip if an open issue with the same title prefix already exists.
+          existing=$(gh issue list --label nightly-failure --state open \
+            --search "${title}" --json number --jq length)
+          if [ "${existing}" -gt 0 ]; then
+            echo "Nightly failure issue already open, skipping creation."
+            exit 0
+          fi
+
           today=$(date -u +%Y-%m-%d)
           body=$(cat <<EOF
-          archtest nightly failed on develop.
+          archtest nightly failed on ${branch}.
 
           Run: $RUN_URL
 
           Triage:
-          1. Open run logs, identify failing shard + invariant ID.
-          2. Determine root cause:
+          1. GHA runner shutdown (platform flake) → re-run via workflow_dispatch
+          2. Open run logs, identify failing shard + invariant ID.
+          3. Determine root cause:
              - True invariant violation → fix or revert offending commit
-             - GHA runner shutdown (platform flake) → re-run via workflow_dispatch
              - modulo-shift SLOW → adjust tools/slowgate/allowlist.txt
-          3. Rerun via Actions → archtest-nightly → Run workflow.
+          4. Rerun via Actions → archtest-nightly → Run workflow.
           EOF
           )
           gh issue create \
-            --title "[archtest-nightly] develop broken ($today)" \
+            --title "${title} (${today})" \
             --label nightly-failure --label pri-p0 --label cap-02-metadata-governance \
             --body "$body"

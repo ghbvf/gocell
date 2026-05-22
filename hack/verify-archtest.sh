@@ -19,14 +19,14 @@
 #   SHARD_COUNT       Number of shards to partition Test* functions across.
 #                     Default 1 (local-friendly: single process, ~300 Test*
 #                     share *types.Info cache, lowest CPU). CI explicitly
-#                     sets SHARD_COUNT=16 in .github/workflows/_build-lint.yml
+#                     sets SHARD_COUNT=16 in .github/workflows/archtest-nightly.yml
 #                     verify-archtest job — required by GHA 2-core 7 GB
 #                     shard runner RSS budget (Phase 0 measured max peak RSS
 #                     4.22 GB / shard on macOS for K=16; safe under Linux
 #                     7 GB GHA). See ADR 202605120000.
 #   SHARD_TARGET      If set, run only that shard index [0, SHARD_COUNT).
-#                     Used by CI matrix. If empty, all shards run serially
-#                     in this process invocation.
+#                     Used by CI matrix. If empty, see "Execution modes"
+#                     header for the SHARD_COUNT-derived behavior.
 #   TIMEOUT           Go test timeout per shard. Default 5m.
 #   SLOWGATE_BIN      Path to slowgate binary. If executable, each shard's
 #                     `go test -json` stream is piped through it. If unset/
@@ -68,7 +68,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 readonly ARCHTEST_PKG="./tools/archtest"
 # Default 1 (local). CI sets SHARD_COUNT=16 explicitly in
-# .github/workflows/_build-lint.yml::verify-archtest (GHA 7 GB RSS budget).
+# .github/workflows/archtest-nightly.yml::verify-archtest (GHA 7 GB RSS budget).
 # These two values intentionally differ — they encode "local vs CI context"
 # rather than a single global truth, so no SYNC guard is required.
 readonly SHARD_COUNT="${SHARD_COUNT:-1}"
@@ -185,6 +185,9 @@ else
   # packages.Load with no cross-shard cache) and no caller used it.
   pids=()
   logs=()
+  # Cleanup tempfiles on exit/interrupt. ${logs[@]:-} is safe under set -u
+  # when the array is still empty (Ctrl-C before any mktemp).
+  trap 'rm -f "${logs[@]:-}"' EXIT INT TERM
   for s in $(seq 0 $((SHARD_COUNT - 1))); do
     log=$(mktemp "${TMPDIR:-/tmp}/archtest-shard-XXXXXX")
     ( run_shard "$s" ) > "$log" 2>&1 &

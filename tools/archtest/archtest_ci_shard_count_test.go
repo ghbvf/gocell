@@ -37,11 +37,10 @@ const verifyArchtestScriptMarker = "hack/verify-archtest.sh"
 // must explicit SHARD_COUNT=16" cannot be bypassed without modifying this
 // archtest in the same PR. Violation is reviewer-visible diff.
 //
-// History: PR #878 introduced this guard against .github/workflows/_build-
-// lint.yml (the then-only CI gate). Per ADR 202605120000 §Amendment 2026-
-// 05-23-pr-time-to-nightly the matrix moved to archtest-nightly.yml and the
-// PR-time job was deleted; the guard now targets the nightly yaml. Local
-// PR-time fast-feedback is hack/githooks/pre-push (K=1 sweep).
+// The guard targets .github/workflows/archtest-nightly.yml — the sole
+// authoritative CI gate for the archtest matrix (ADR 202605120000
+// §Amendment 2026-05-23-pr-time-to-nightly). Local PR-time fast-feedback
+// is hack/githooks/pre-push (K=4 parallel fan-out).
 //
 // ref: ADR docs/architecture/202605120000-adr-archtest-process-isolation.md
 // §Amendment 2026-05-23 + §Amendment 2026-05-23-pr-time-to-nightly.
