@@ -97,8 +97,7 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 	// Init
 	require.NoError(t, c.Init(ctx, recorder))
 	// auditappendsession, auditappenduser, auditappendconfig, auditappendrole,
-	// auditquery = 5 slices (auditverify removed in Wave 2 Batch D).
-	// A-02 RED: current cell.go still constructs 6 slices (auditverify present).
+	// auditquery = 5 slices (auditverify removed; cell.go GREEN since Wave 2 Batch D).
 	assert.Equal(t, 5, len(c.OwnedSlices()), "should have 5 slices after auditverify removal")
 
 	// Start

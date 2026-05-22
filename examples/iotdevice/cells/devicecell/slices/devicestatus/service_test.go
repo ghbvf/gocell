@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func newTestService(t testing.TB) (*Service, *mem.DeviceRepository) {
@@ -26,6 +27,27 @@ func seedDevice(repo *mem.DeviceRepository, id, name, status string) {
 	_ = repo.Create(context.Background(), &domain.Device{
 		ID: id, Name: name, Status: status,
 	})
+}
+
+// TestNewService_NilRepo verifies that NewService returns a non-nil error when
+// required dependency repo is nil (bare nil or typed-nil).
+func TestNewService_NilRepo(t *testing.T) {
+	tests := []struct {
+		name string
+		repo domain.DeviceRepository
+	}{
+		{"bare nil", nil},
+		{"typed nil", (domain.DeviceRepository)(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(tt.repo, slog.Default())
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+		})
+	}
 }
 
 func TestService_GetStatus(t *testing.T) {

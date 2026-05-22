@@ -10,11 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
@@ -34,6 +36,27 @@ func newTestService(t testing.TB) (*Service, *mem.DeviceRepository) {
 		t.Fatalf("newTestService: %v", err)
 	}
 	return svc, repo
+}
+
+// TestNewService_NilRepo verifies that NewService returns a non-nil error when
+// required dependency repo is nil.
+func TestNewService_NilRepo(t *testing.T) {
+	tests := []struct {
+		name string
+		repo domain.DeviceRepository
+	}{
+		{"bare nil", nil},
+		{"typed nil", (domain.DeviceRepository)(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(tt.repo, slog.Default())
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+		})
+	}
 }
 
 func TestService_Register(t *testing.T) {
