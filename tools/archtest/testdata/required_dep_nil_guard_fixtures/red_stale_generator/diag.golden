@@ -1,0 +1,1 @@
+tools/archtest/testdata/required_dep_nil_guard_fixtures/red_stale_generator/service.go:1: REQUIRED-DEP-NIL-GUARD-01-A1: service_required_gen.go is stale; required field count mismatch: service.go has 2 required field(s) but gen guards 1 (REQUIRED-DEP-NIL-GUARD-01)
