@@ -28,23 +28,14 @@ func parseSrc(t *testing.T, src string) *ast.File {
 // to dig into nested AST positions (e.g. the outer CompositeLit, the func
 // body, the select stmt) without coupling to file.Decls index arithmetic.
 //
-// Built on EachInSubtree (with a sentinel early-return via a closure) rather
-// than a paired ast.Preorder loop — this is the typed-walk dogfood that the
-// rest of the test suite relies on.
+// Built on FindFirstInSubtree — the typed find-first funnel that replaces the
+// hand-rolled closure+sentinel idiom this helper formerly used. This is the
+// scanner-package dogfood that the rest of the test suite relies on.
 func firstNodeOfKind[S any, N interface {
 	*S
 	ast.Node
 }](root ast.Node) (N, bool) {
-	var found N
-	gotIt := false
-	scanner.EachInSubtree[S, N](root, func(n N) {
-		if gotIt {
-			return
-		}
-		found = n
-		gotIt = true
-	})
-	return found, gotIt
+	return scanner.FindFirstInSubtree[S, N](root, func(N) bool { return true })
 }
 
 // -----------------------------------------------------------------------
@@ -575,6 +566,218 @@ func _() {}
 	})
 	if found || got != nil {
 		t.Errorf("BlockStmt has no FuncDecl children; got (%v, %v), want (nil, false)", got, found)
+	}
+}
+
+// -----------------------------------------------------------------------
+// FindFirstInSubtree — recursive (full-subtree) find-first tests.
+//
+// Subtree-depth twin of FindFirstChild: same predicate-driven find-first
+// contract, different depth. The depth anchor test
+// TestFindFirstInSubtree_VsFindFirstChild_DepthAnchor pairs with
+// TestFindFirstChild_GrandchildNotMatched on the same nestedCompositeLitSrc
+// fixture: FindFirstChild returns (nil, false) — grandchild invisible at
+// depth=1 — while FindFirstInSubtree returns the grandchild B KeyValueExpr.
+// Same fixture, different API, opposite result — the "selecting wrong depth =
+// selecting wrong API name" Hard 范本 #1 anchor.
+//
+// Root handling diverges from FindFirstChild: FindFirstInSubtree mirrors
+// EachInSubtree by visiting root itself first (preorder includes root).
+// TestFindFirstInSubtree_RootSelfMatched anchors this contract.
+// -----------------------------------------------------------------------
+
+func TestFindFirstInSubtree_FindsDeepDescendant(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedCompositeLitSrc)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	// The inner B KeyValueExpr is a GRANDCHILD of outer (Sub composite lit
+	// intervenes). FindFirstChild can't see it; FindFirstInSubtree must.
+	kv, found := scanner.FindFirstInSubtree[ast.KeyValueExpr](outer, func(kv *ast.KeyValueExpr) bool {
+		id, ok := kv.Key.(*ast.Ident)
+		return ok && id.Name == "B"
+	})
+	if !found {
+		t.Fatal("FindFirstInSubtree: expected to find inner KeyValueExpr with key B")
+	}
+	id, ok := kv.Key.(*ast.Ident)
+	if !ok || id.Name != "B" {
+		t.Errorf("FindFirstInSubtree returned wrong node: key=%v, want Ident B", kv.Key)
+	}
+}
+
+func TestFindFirstInSubtree_VsFindFirstChild_DepthAnchor(t *testing.T) {
+	t.Parallel()
+	// Same fixture + same predicate as TestFindFirstChild_GrandchildNotMatched.
+	// FindFirstChild returns (nil, false) — depth=1 cannot see grandchild B.
+	// FindFirstInSubtree returns (kv, true) — recursive depth finds it.
+	// Different result on identical inputs anchors the depth semantic split.
+	file := parseSrc(t, nestedCompositeLitSrc)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	predB := func(kv *ast.KeyValueExpr) bool {
+		id, ok := kv.Key.(*ast.Ident)
+		return ok && id.Name == "B"
+	}
+	_, childFound := scanner.FindFirstChild[ast.KeyValueExpr](outer, predB)
+	if childFound {
+		t.Error("FindFirstChild must not see grandchild B (depth=1 contract)")
+	}
+	_, subtreeFound := scanner.FindFirstInSubtree[ast.KeyValueExpr](outer, predB)
+	if !subtreeFound {
+		t.Error("FindFirstInSubtree must find grandchild B (recursive contract)")
+	}
+}
+
+func TestFindFirstInSubtree_FindsFirstMatchingNode(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+var _ = Outer{ A: 1, B: 2, C: 3 }
+`)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	kv, found := scanner.FindFirstInSubtree[ast.KeyValueExpr](outer, func(kv *ast.KeyValueExpr) bool {
+		id, ok := kv.Key.(*ast.Ident)
+		return ok && id.Name == "B"
+	})
+	if !found {
+		t.Fatal("FindFirstInSubtree: expected match")
+	}
+	id, ok := kv.Key.(*ast.Ident)
+	if !ok || id.Name != "B" {
+		t.Errorf("FindFirstInSubtree returned wrong node: key=%v, want Ident B", kv.Key)
+	}
+}
+
+func TestFindFirstInSubtree_StopsAfterFirstMatch(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+var _ = Outer{ A: 1, B: 2, C: 3 }
+`)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	// Predicate matches every KeyValueExpr; must be invoked exactly once
+	// because find-first halts at the first match.
+	calls := 0
+	kv, found := scanner.FindFirstInSubtree[ast.KeyValueExpr](outer, func(*ast.KeyValueExpr) bool {
+		calls++
+		return true
+	})
+	if !found || kv == nil {
+		t.Fatal("FindFirstInSubtree: expected a match")
+	}
+	if calls != 1 {
+		t.Errorf("predicate call count = %d, want 1 (must stop after first match)", calls)
+	}
+	// First match in preorder is the leftmost direct child A.
+	id, ok := kv.Key.(*ast.Ident)
+	if !ok || id.Name != "A" {
+		t.Errorf("FindFirstInSubtree returned %v, want first child A", kv.Key)
+	}
+}
+
+func TestFindFirstInSubtree_NoMatchReturnsZeroFalse(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+var _ = Outer{ A: 1, B: 2 }
+`)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	kv, found := scanner.FindFirstInSubtree[ast.KeyValueExpr](outer, func(*ast.KeyValueExpr) bool {
+		return false
+	})
+	if found {
+		t.Errorf("FindFirstInSubtree: expected found=false when predicate never matches")
+	}
+	if kv != nil {
+		t.Errorf("FindFirstInSubtree: expected zero value (nil) on no match, got %v", kv)
+	}
+}
+
+func TestFindFirstInSubtree_NilRootReturnsZeroFalse(t *testing.T) {
+	t.Parallel()
+	called := false
+	kv, found := scanner.FindFirstInSubtree[ast.KeyValueExpr](nil, func(*ast.KeyValueExpr) bool {
+		called = true
+		return true
+	})
+	if called {
+		t.Error("FindFirstInSubtree with nil root must not invoke predicate")
+	}
+	if found || kv != nil {
+		t.Errorf("FindFirstInSubtree(nil) = (%v, %v), want (nil, false)", kv, found)
+	}
+}
+
+func TestFindFirstInSubtree_RootSelfMatched(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+var _ = SomeLit{}
+`)
+	cl, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: CompositeLit not found in fixture")
+	}
+	// Root is itself a CompositeLit. Contract: FindFirstInSubtree includes
+	// root (mirrors EachInSubtree). Contrast TestFindFirstChild_RootSelfNotMatched
+	// which proves FindFirstChild EXCLUDES root.
+	got, found := scanner.FindFirstInSubtree[ast.CompositeLit](cl, func(*ast.CompositeLit) bool {
+		return true
+	})
+	if !found || got != cl {
+		t.Errorf("FindFirstInSubtree must include root; got (%v, %v), want (root, true)", got, found)
+	}
+}
+
+func TestFindFirstInSubtree_PreorderFirstMatch(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+func first() {}
+func second() {}
+`)
+	// Both FuncDecls match always-true; preorder must return `first`.
+	got, found := scanner.FindFirstInSubtree[ast.FuncDecl](file, func(*ast.FuncDecl) bool {
+		return true
+	})
+	if !found || got == nil {
+		t.Fatal("FindFirstInSubtree: expected a match")
+	}
+	if got.Name.Name != "first" {
+		t.Errorf("FindFirstInSubtree preorder: got %q, want %q", got.Name.Name, "first")
+	}
+}
+
+func TestFindFirstInSubtree_StopsBeforeDescendingMatchedSubtree(t *testing.T) {
+	t.Parallel()
+	// Outer CompositeLit contains inner CompositeLit. With always-true
+	// predicate, the FIRST match in preorder is outer. After matching, the
+	// visitor must return false to prune descent into outer — i.e. inner is
+	// NOT visited. Predicate call count = 1.
+	file := parseSrc(t, nestedCompositeLitSrc)
+	outer, ok := firstNodeOfKind[ast.CompositeLit](file)
+	if !ok {
+		t.Fatal("setup: outer CompositeLit not found in fixture")
+	}
+	calls := 0
+	got, found := scanner.FindFirstInSubtree[ast.CompositeLit](outer, func(*ast.CompositeLit) bool {
+		calls++
+		return true
+	})
+	if !found || got != outer {
+		t.Fatalf("FindFirstInSubtree: expected (outer, true); got (%v, %v)", got, found)
+	}
+	if calls != 1 {
+		t.Errorf("predicate call count = %d, want 1 (inner CompositeLit must not be probed after outer match)", calls)
 	}
 }
 

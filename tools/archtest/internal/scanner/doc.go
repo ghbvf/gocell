@@ -11,31 +11,45 @@
 // Use [ImportBan] when the entire invariant is "file must not import package X".
 //
 // Use [EachFile] with [Report] for custom AST patterns: combine with
-// [EachInSubtree] or [EachInChildren] for typed node iteration so the
-// per-node-kind handler is statically constrained to the right
-// *ast.<NodeKind> type.
+// [EachInSubtree] / [EachInChildren] for typed node iteration, or
+// [FindFirstInSubtree] / [FindFirstChild] for typed find-first with implicit
+// early-stop, so the per-node-kind handler is statically constrained to the
+// right *ast.<NodeKind> type.
 //
-// Use [EachInSubtree] / [EachInChildren] inside any rule that iterates AST
-// nodes. Bare [go/ast.Inspect], [go/ast.Walk], [go/ast.Preorder], and
+// Use [EachInSubtree] / [EachInChildren] / [FindFirstInSubtree] /
+// [FindFirstChild] inside any rule that iterates AST nodes. Bare
+// [go/ast.Inspect], [go/ast.Walk], [go/ast.Preorder], and
 // [golang.org/x/tools/go/ast/inspector] APIs are forbidden in
 // tools/archtest/*_test.go (enforced by SCANNER-FRAMEWORK-USAGE-01); the
 // generic typed funnels make "wrong node kind" a compile error rather than
 // a silent runtime miss — critical for AI-rebust archtest authoring
 // (see .claude/rules/gocell/ai-collab.md AI-rebust 三档分级).
 //
-// # Choosing walk depth: EachInSubtree vs EachInChildren
+// # Choosing walk depth (iteration and find-first)
 //
 // Walk depth is a compile-time choice — picking the wrong API shows at the
-// call site, not in runtime AST drift:
+// call site, not in runtime AST drift. Five APIs across two axes (depth ×
+// iteration-vs-find-first) plus one boundary-aware variant:
 //
-//   - [EachInSubtree]: recursive over the full sub-tree (root + every
-//     descendant). For "any FuncDecl in the file" / "any IfStmt anywhere in
-//     fn.Body" style rules.
-//   - [EachInChildren]: depth-1 only. For "container's direct elements" —
-//     KeyValueExpr of CompositeLit, CaseClause of SwitchStmt.Body,
-//     CommClause of SelectStmt.Body, top-level Decl of *ast.File.
+//   - [EachInSubtree] / [FindFirstInSubtree]: recursive over the full
+//     sub-tree (root + every descendant). For "any FuncDecl in the file" /
+//     "any IfStmt anywhere in fn.Body" style rules — and the find-first
+//     sibling when the rule needs existence/first-match with implicit
+//     early-stop (closure-sentinel idiom is forbidden by
+//     SCANNER-FRAMEWORK-USAGE-02 subset extension).
+//   - [EachInChildren] / [FindFirstChild]: depth-1 only. For "container's
+//     direct elements" — KeyValueExpr of CompositeLit, CaseClause of
+//     SwitchStmt.Body, CommClause of SelectStmt.Body, top-level Decl of
+//     *ast.File.
+//   - [EachInSubtreeStopAt]: recursive with a boundary predicate that prunes
+//     descent into matching non-root nodes (typical use: skip nested
+//     *ast.FuncLit so dead-closure call positions are excluded). Third
+//     depth-semantic member of the typed-function-choice Hard 范本 (see
+//     ai-collab.md §"Hard 范本目录" #1) alongside EachInSubtree /
+//     EachInChildren.
 //
-// Both silently no-op on nil root; callers need not guard.
+// All silently no-op on nil root; callers need not guard. FindFirst* returns
+// (zero, false) on nil root.
 //
 // # Subpackage scan exemption
 //
