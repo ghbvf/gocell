@@ -77,30 +77,6 @@ func TestBuildAuditcoreChainCustomClock(t *testing.T) {
 	require.Equal(t, int64(1), tail.SeqNo)
 }
 
-// TestBuildAuditcoreChainCustomHMACKey verifies that WithChainHMACKey builds
-// without panic and the chain remains functional with a different key.
-func TestBuildAuditcoreChainCustomHMACKey(t *testing.T) {
-	t.Parallel()
-
-	differentKey := []byte("different-hmac-key-32bytes-xxxxx")
-
-	handler, store, ctx := auditcoretest.BuildAuditcoreChain(t,
-		auditcoretest.WithChainHMACKey(differentKey))
-
-	entry := auditcoretest.NewSessionCreatedEntry("sess-hmac", "usr-hmac")
-	result := handler(ctx, entry)
-	require.Equal(t, outbox.DispositionAck, result.Disposition,
-		"custom-hmac chain must Ack; err=%v", result.Err)
-
-	tail, err := store.Tail(ctx)
-	require.NoError(t, err)
-	require.Equal(t, int64(1), tail.SeqNo)
-	// Verify that the chain is consistent with its own HMAC key (not the default key).
-	valid, _, err := store.Verify(ctx, 1, tail.SeqNo)
-	require.NoError(t, err)
-	require.True(t, valid, "chain must verify with its own HMAC key")
-}
-
 // TestBuildAuditcoreChainTwoEntries verifies that two distinct entries driven
 // through the same chain produce a valid two-entry hash chain: Tail.SeqNo == 2
 // and Verify(1, 2) returns valid=true with firstInvalidSeq==-1. Each entry

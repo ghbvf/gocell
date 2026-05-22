@@ -11,22 +11,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
-
-// defaultHMACKey is the 32-byte test HMAC key used by BuildAuditcoreChain
-// when no WithChainHMACKey option is provided. Identical to the key used in
-// the inline buildAuditcoreChain helper from PR #588.
-//
-// WARNING: test-only fixture. This key is public and must never be reused
-// in production or staging. Production deployments must supply a randomly-
-// generated key via WithChainHMACKey or the ledger composition root.
-var defaultHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
 // buildChainConfig holds the resolved options for BuildAuditcoreChain.
 type buildChainConfig struct {
-	clk     clock.Clock
-	hmacKey []byte
-	logger  *slog.Logger
+	clk    clock.Clock
+	logger *slog.Logger
 }
 
 // BuildChainOption configures BuildAuditcoreChain.
@@ -36,13 +27,6 @@ type BuildChainOption func(*buildChainConfig)
 // MemStore. Defaults to clock.Real().
 func WithChainClock(c clock.Clock) BuildChainOption {
 	return func(cfg *buildChainConfig) { cfg.clk = c }
-}
-
-// WithChainHMACKey overrides the HMAC-SHA256 key used by ledger.NewProtocol.
-// The key must be at least 32 bytes (RFC 2104 §3). Defaults to the PR #588
-// 32-byte test key.
-func WithChainHMACKey(key []byte) BuildChainOption {
-	return func(cfg *buildChainConfig) { cfg.hmacKey = key }
 }
 
 // WithChainLogger overrides the logger injected into the auditcore Cell.
@@ -56,11 +40,14 @@ func WithChainLogger(l *slog.Logger) BuildChainOption {
 // in-memory ledger.Store (for Tail/Verify assertions), and a background
 // context.
 //
-// The wiring is equivalent to the inline buildAuditcoreChain helper from
-// tests/integration/journey_auditlogintrail_helpers_test.go (PR #588):
-//   - ledger.ParseNamespaceID("auditcore") → namespace
-//   - ledger.NewProtocol with HMAC key, namespace, RestartRecoveryStrictTailVerify,
-//     IdempotencyContentFingerprint
+// Protocol construction is delegated to storetest.NewTestProtocol, the
+// single allowlisted entry for ledger.NewProtocol outside cmd/* composition
+// roots (AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01). The protocol shape is:
+//   - HMAC-SHA256 key (storetest-supplied test key)
+//   - ledger.ParseNamespaceID("auditcore")
+//   - RestartRecoveryStrictTailVerify + IdempotencyContentFingerprint
+//
+// After proto, the wiring continues:
 //   - ledger.NewMemStore(proto, clock)
 //   - auditcore.NewAuditCore with all required options
 //   - c.Init via cell.NewRegistryRecorder(DurabilityDemo)
@@ -77,35 +64,14 @@ func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (
 	t.Helper()
 
 	cfg := &buildChainConfig{
-		clk:     clock.Real(),
-		hmacKey: defaultHMACKey,
-		logger:  slog.New(slog.DiscardHandler),
+		clk:    clock.Real(),
+		logger: slog.New(slog.DiscardHandler),
 	}
 	for _, o := range opts {
 		o(cfg)
 	}
 
-	ns, err := ledger.ParseNamespaceID("auditcore")
-	if err != nil {
-		t.Fatalf("auditcoretest: namespace parse: %v", err)
-	}
-
-	// Make a copy of the key before passing to NewProtocol: WithChainHMAC
-	// zeroes the caller's slice (F7 caller-key zeroization) — the copy
-	// prevents callers from observing the modification and allows re-use of
-	// a key literal across multiple BuildAuditcoreChain calls in the same test.
-	keyCopy := make([]byte, len(cfg.hmacKey))
-	copy(keyCopy, cfg.hmacKey)
-
-	proto, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(keyCopy),
-		ledger.WithNamespace(ns),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	if err != nil {
-		t.Fatalf("auditcoretest: ledger.NewProtocol: %v", err)
-	}
+	proto := storetest.NewTestProtocol(t)
 
 	memStore, err := ledger.NewMemStore(proto, cfg.clk)
 	if err != nil {
