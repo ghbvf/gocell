@@ -70,9 +70,9 @@ func AssertCode(t testing.TB, err error, expected errcode.Code) {
 
 // wireEnvelope mirrors contracts/shared/errors/error-response-v1.schema.json.
 // The outer object wraps a single "error" object holding the canonical
-// errcode.Error projection (code + message + details + optional request_id).
+// errcode.Error projection (code + message + details + optional requestId).
 // Only the fields this funnel needs to assert are decoded; unknown sibling
-// fields (request_id, etc.) round-trip transparently.
+// fields (requestId, etc.) round-trip transparently.
 type wireEnvelope struct {
 	Error struct {
 		Code    string `json:"code"`

@@ -3,6 +3,7 @@
 // File invariants:
 //   - INVARIANT: CONTRACT-WIRE-FIELD-CAMELCASE-01
 //   - INVARIANT: CONTRACT-PAGINATION-PARAM-LIMIT-01
+//   - INVARIANT: CONTRACT-PAGINATION-LIMIT-MAXIMUM-01
 //   - INVARIANT: CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01
 //
 // Lock the camelCase wire-field convention declared in CLAUDE.md §"Go 编码规范"
@@ -37,6 +38,41 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
+// contractRootBases lists every directory archtest treats as a contract truth
+// source. The platform `contracts/` root plus every `examples/<name>/contracts/`
+// directory — kernel/metadata/parser.matchContractYAML accepts both shapes,
+// so archtest must scan both or example contracts can regress to snake_case
+// without tripping the invariant.
+//
+// Hardcoded by deliberate choice: the SCANNER-FRAMEWORK-USAGE-01 archtest
+// (forbiddenWalkSymbols) bans os.ReadDir/filepath.Glob/etc. in tools/archtest/*_test.go,
+// so runtime directory enumeration is not an option. The trade-off is offset by
+// TestArchtest_ContractRoots_CoversAllExampleProjects below, which uses the
+// scanner framework — itself the archtest-approved truth source for filesystem
+// inputs — to discover every examples/<name>/contracts/* containing a contract.yaml,
+// then asserts contractRootBases covers each one. Adding a new example without
+// updating this list turns that probe red.
+var contractRootBases = []string{
+	"contracts",
+	"examples/iotdevice/contracts",
+	"examples/todoorder/contracts",
+}
+
+// contractRoots returns the relative paths archtest should scan for contract
+// truth at the given subpath ("" scans all contracts, "http" only HTTP, "event"
+// only events). The list mirrors contractRootBases, joined with subpath.
+func contractRoots(_ *testing.T, _ string, subpath string) []string {
+	out := make([]string, len(contractRootBases))
+	for i, base := range contractRootBases {
+		if subpath == "" {
+			out[i] = base
+		} else {
+			out[i] = filepath.Join(base, subpath)
+		}
+	}
+	return out
+}
+
 // camelCasePropertyRE matches a valid camelCase wire field name:
 // starts with lowercase letter, followed by alphanumeric.
 // Examples accepted: id, userId, eventId, nextCursor, isoTimestamp.
@@ -61,6 +97,22 @@ var forbiddenPaginationParams = map[string]struct{}{
 // idempotencyKey must reference. It identifies the per-event UUID carried in
 // the event headers envelope.
 const canonicalEventIdempotencyKey = "eventId"
+
+// eventIdempotencyKeyReferenceRE matches a word-bounded reference to the
+// canonical envelope field `eventId`. Both forms are legitimate:
+//
+//   - bare:     `idempotencyKey: eventId`                  (platform style)
+//   - template: `idempotencyKey: <topic>:{eventId}`        (examples style)
+//
+// Anything that fails this match (empty string, snake_case `event_id`, alt
+// casings like `eventID`/`EventId`) is rejected.
+var eventIdempotencyKeyReferenceRE = regexp.MustCompile(`\beventId\b`)
+
+// snakeCaseEventIDRE matches the legacy snake_case `event_id` token that the
+// J-04 normalization replaced. Used as a complementary fail-closed check in
+// case a future contract author re-introduces it inside a template literal
+// (e.g. `device-registered:{event_id}`).
+var snakeCaseEventIDRE = regexp.MustCompile(`\bevent_id\b`)
 
 // ---------------------------------------------------------------------------
 // INVARIANT: CONTRACT-WIRE-FIELD-CAMELCASE-01 (Hard)
@@ -91,7 +143,7 @@ const canonicalEventIdempotencyKey = "eventId"
 //     each of these paths explicitly.
 func TestArchtest_ContractWireFieldCamelCase(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"contracts"})
+	scope := scanner.DirsScope(root, contractRoots(t, root, ""))
 	scanner.EachContentFile(t, scope, []string{".schema.json"}, func(t *testing.T, cc scanner.ContentContext) {
 		var doc any
 		require.NoError(t, json.Unmarshal(cc.Bytes, &doc),
@@ -348,7 +400,7 @@ type httpContractYAML struct {
 //     (c) canonical names (limit, cursor) are accepted without violation.
 func TestArchtest_ContractPaginationParamLimit(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"contracts/http"},
+	scope := scanner.DirsScope(root, contractRoots(t, root, "http"),
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),
@@ -434,9 +486,17 @@ endpoints:
 // ---------------------------------------------------------------------------
 // INVARIANT: CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 (Hard)
 //
-// Every `contracts/event/**/contract.yaml` MUST declare
-// `idempotencyKey: eventId` (matching the wire field defined in
-// `headers.schema.json`). Empty / mismatched values fail.
+// Every `contracts/event/**/contract.yaml` (and `examples/*/contracts/event/...`)
+// MUST declare an `idempotencyKey` that references the wire envelope field
+// `eventId`. Two legitimate forms exist:
+//
+//   - bare:     `idempotencyKey: eventId`              (platform contracts)
+//   - template: `idempotencyKey: <topic>:{eventId}`    (examples contracts)
+//
+// Both forms reference the canonical envelope field; the template form lets a
+// consumer namespace the idempotency key per topic without re-deriving it in
+// code. Empty values, the legacy snake_case `event_id` token, and casing
+// variants (`EventId`/`eventID`) are rejected.
 //
 // Rationale: idempotencyKey points at the wire field used to dedupe consumed
 // events. After J-04 normalization the canonical field is `eventId` (was
@@ -453,20 +513,23 @@ type eventContractYAML struct {
 }
 
 // TestArchtest_ContractEventIdempotencyKeyEventID scans every
-// contracts/event/**/contract.yaml and asserts idempotencyKey == "eventId".
+// contracts/event/**/contract.yaml (and examples/*/contracts/event/...) and
+// asserts idempotencyKey references the canonical wire field `eventId`
+// (either bare or inside a template literal) AND does not contain the legacy
+// snake_case `event_id` token.
 //
 // Blind spots:
-//   - Strict equality against canonicalEventIdempotencyKey ("eventId"). Whitespace
-//     variants (e.g. " eventId"), casing variants ("EventId", "eventID"), or
-//     future legitimate alternate key names (e.g. "messageId") would fail and
-//     require an explicit ADR + update to canonicalEventIdempotencyKey.
-//   - The 3 negative probes below pin:
+//   - Word-boundary regex against `\beventId\b`. Casing variants (`EventId`,
+//     `eventID`), whitespace-only values, or future alternate envelope field
+//     names (e.g. `messageId`) fail and require an explicit ADR + update.
+//   - The 4 negative probes below pin:
 //     (a) missing idempotencyKey (empty string) is caught,
-//     (b) legacy snake_case value "event_id" is caught,
-//     (c) canonical value "eventId" is accepted without violation.
+//     (b) legacy snake_case token `event_id` is caught (bare and templated),
+//     (c) bare canonical value `eventId` is accepted,
+//     (d) templated canonical value `<topic>:{eventId}` is accepted.
 func TestArchtest_ContractEventIdempotencyKeyEventID(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := scanner.DirsScope(root, []string{"contracts/event"},
+	scope := scanner.DirsScope(root, contractRoots(t, root, "event"),
 		scanner.MatchRels(func(rel string) bool {
 			return filepath.Base(rel) == "contract.yaml"
 		}),
@@ -476,10 +539,21 @@ func TestArchtest_ContractEventIdempotencyKeyEventID(t *testing.T) {
 		require.NoError(t, yaml.Unmarshal(cc.Bytes, &doc),
 			"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01: %s: parse YAML", cc.Rel)
 
-		assert.Equal(t, canonicalEventIdempotencyKey, doc.IdempotencyKey,
-			"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 violation: file=%s idempotencyKey=%q must be %q",
-			cc.Rel, doc.IdempotencyKey, canonicalEventIdempotencyKey,
-		)
+		if !eventIdempotencyKeyReferenceRE.MatchString(doc.IdempotencyKey) {
+			assert.Fail(t,
+				"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 violation",
+				"file=%s idempotencyKey=%q must reference %q (bare or templated)",
+				cc.Rel, doc.IdempotencyKey, canonicalEventIdempotencyKey,
+			)
+			return
+		}
+		if snakeCaseEventIDRE.MatchString(doc.IdempotencyKey) {
+			assert.Fail(t,
+				"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 violation",
+				"file=%s idempotencyKey=%q contains legacy snake_case token `event_id`",
+				cc.Rel, doc.IdempotencyKey,
+			)
+		}
 	})
 }
 
@@ -493,33 +567,273 @@ kind: event
 `)
 	var doc eventContractYAML
 	require.NoError(t, yaml.Unmarshal(raw, &doc))
-	if doc.IdempotencyKey == canonicalEventIdempotencyKey {
-		t.Fatalf("expected empty idempotencyKey to differ from canonical %q", canonicalEventIdempotencyKey)
+	if eventIdempotencyKeyReferenceRE.MatchString(doc.IdempotencyKey) {
+		t.Fatalf("expected empty idempotencyKey to fail eventId reference, got match")
 	}
 }
 
 // TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_OldSnakeCaseValue
-// asserts that the legacy pre-rename value "event_id" is caught as a violation.
+// asserts that the legacy pre-rename value "event_id" is caught (bare or
+// inside a template literal).
 func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_OldSnakeCaseValue(t *testing.T) {
-	raw := []byte(`
-idempotencyKey: event_id
-`)
-	var doc eventContractYAML
-	require.NoError(t, yaml.Unmarshal(raw, &doc))
-	if doc.IdempotencyKey == canonicalEventIdempotencyKey {
-		t.Fatalf("expected legacy value %q to differ from canonical %q", doc.IdempotencyKey, canonicalEventIdempotencyKey)
+	for _, val := range []string{"event_id", "device-registered:{event_id}"} {
+		if !snakeCaseEventIDRE.MatchString(val) {
+			t.Fatalf("expected %q to contain legacy snake_case token, got no match", val)
+		}
 	}
 }
 
-// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_CorrectValue
-// asserts that the canonical value "eventId" produces no violation.
-func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_CorrectValue(t *testing.T) {
+// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_BareCanonical
+// asserts that the bare canonical value "eventId" produces no violation.
+func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_BareCanonical(t *testing.T) {
 	raw := []byte(`
 idempotencyKey: eventId
 `)
 	var doc eventContractYAML
 	require.NoError(t, yaml.Unmarshal(raw, &doc))
-	if doc.IdempotencyKey != canonicalEventIdempotencyKey {
-		t.Fatalf("expected canonical value %q, got %q", canonicalEventIdempotencyKey, doc.IdempotencyKey)
+	if !eventIdempotencyKeyReferenceRE.MatchString(doc.IdempotencyKey) {
+		t.Fatalf("expected bare canonical %q to match eventId reference", doc.IdempotencyKey)
+	}
+	if snakeCaseEventIDRE.MatchString(doc.IdempotencyKey) {
+		t.Fatalf("expected bare canonical %q to not contain legacy snake_case token", doc.IdempotencyKey)
+	}
+}
+
+// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_TemplateCanonical
+// asserts that the templated canonical form "<topic>:{eventId}" (used by
+// examples to namespace the idempotency key per topic) produces no violation.
+func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_TemplateCanonical(t *testing.T) {
+	raw := []byte(`
+idempotencyKey: device-registered:{eventId}
+`)
+	var doc eventContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	if !eventIdempotencyKeyReferenceRE.MatchString(doc.IdempotencyKey) {
+		t.Fatalf("expected templated form %q to match eventId reference", doc.IdempotencyKey)
+	}
+	if snakeCaseEventIDRE.MatchString(doc.IdempotencyKey) {
+		t.Fatalf("expected templated form %q to not contain legacy snake_case token", doc.IdempotencyKey)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// INVARIANT: CONTRACT-PAGINATION-LIMIT-MAXIMUM-01 (Hard)
+//
+// Every `contracts/http/**/contract.yaml` (and `examples/*/contracts/http/...`)
+// that declares a `limit` queryParam MUST set `limit.maximum`, and the value
+// MUST be <= MaxPaginationLimit (500). This pins the security ceiling
+// documented in `.claude/rules/gocell/go-standards.md` §"安全检查点" so a
+// contract author cannot silently raise the per-list page size beyond the
+// project-wide bound. Pair invariant with CONTRACT-PAGINATION-PARAM-LIMIT-01:
+// the latter forbids offset/page-style names, this one bounds the canonical
+// `limit` value.
+//
+// Failure shape: report the file + the missing-or-overshoot limit.maximum value.
+//
+// ---------------------------------------------------------------------------
+
+// MaxPaginationLimit is the per-list page ceiling. ref: .claude/rules/gocell/go-standards.md.
+const MaxPaginationLimit = 500
+
+// httpLimitContractYAML decodes only the structural slice we need: any
+// queryParam value carrying a `maximum` field. Other queryParams (cursor,
+// arbitrary filters) decode with zero-value Maximum and are ignored by the
+// archtest body, which keys exclusively on "limit".
+type httpLimitContractYAML struct {
+	Endpoints struct {
+		HTTP struct {
+			QueryParams map[string]struct {
+				Type    string `yaml:"type"`
+				Maximum *int   `yaml:"maximum"`
+			} `yaml:"queryParams"`
+		} `yaml:"http"`
+	} `yaml:"endpoints"`
+}
+
+// TestArchtest_ContractPaginationLimitMaximum scans every
+// contracts/http/**/contract.yaml (and examples/*/contracts/http/...) and
+// asserts that when queryParams.limit exists, queryParams.limit.maximum is
+// declared and <= MaxPaginationLimit.
+//
+// Blind spots:
+//   - Only "limit" is bounded; other integer queryParams (per-endpoint custom
+//     caps) are out of scope — this is intentional, the rule applies to the
+//     canonical pagination knob only.
+//   - The 3 negative probes pin: missing-maximum / over-bound / canonical-500.
+func TestArchtest_ContractPaginationLimitMaximum(t *testing.T) {
+	root := findModuleRoot(t)
+	scope := scanner.DirsScope(root, contractRoots(t, root, "http"),
+		scanner.MatchRels(func(rel string) bool {
+			return filepath.Base(rel) == "contract.yaml"
+		}),
+	)
+	scanner.EachContentFile(t, scope, []string{".yaml"}, func(t *testing.T, cc scanner.ContentContext) {
+		var doc httpLimitContractYAML
+		require.NoError(t, yaml.Unmarshal(cc.Bytes, &doc),
+			"CONTRACT-PAGINATION-LIMIT-MAXIMUM-01: %s: parse YAML", cc.Rel)
+
+		limit, ok := doc.Endpoints.HTTP.QueryParams["limit"]
+		if !ok {
+			return
+		}
+		if limit.Maximum == nil {
+			assert.Fail(t,
+				"CONTRACT-PAGINATION-LIMIT-MAXIMUM-01 violation",
+				"file=%s queryParam=limit must declare maximum<=%d", cc.Rel, MaxPaginationLimit,
+			)
+			return
+		}
+		if *limit.Maximum > MaxPaginationLimit {
+			assert.Fail(t,
+				"CONTRACT-PAGINATION-LIMIT-MAXIMUM-01 violation",
+				"file=%s queryParam=limit maximum=%d exceeds bound %d",
+				cc.Rel, *limit.Maximum, MaxPaginationLimit,
+			)
+		}
+	})
+}
+
+// TestArchtest_ContractPaginationLimitMaximum_NegativeProbe_MissingMaximum
+// asserts that a contract declaring limit without maximum is caught.
+func TestArchtest_ContractPaginationLimitMaximum_NegativeProbe_MissingMaximum(t *testing.T) {
+	raw := []byte(`
+endpoints:
+  http:
+    queryParams:
+      limit:
+        type: integer
+        minimum: 1
+`)
+	var doc httpLimitContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	limit, ok := doc.Endpoints.HTTP.QueryParams["limit"]
+	if !ok {
+		t.Fatal("fixture must contain limit queryParam")
+	}
+	if limit.Maximum != nil {
+		t.Fatalf("expected nil maximum, got %d", *limit.Maximum)
+	}
+}
+
+// TestArchtest_ContractPaginationLimitMaximum_NegativeProbe_OverBound asserts
+// that a maximum greater than MaxPaginationLimit is caught.
+func TestArchtest_ContractPaginationLimitMaximum_NegativeProbe_OverBound(t *testing.T) {
+	raw := []byte(`
+endpoints:
+  http:
+    queryParams:
+      limit:
+        type: integer
+        minimum: 1
+        maximum: 5000
+`)
+	var doc httpLimitContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	limit, ok := doc.Endpoints.HTTP.QueryParams["limit"]
+	if !ok || limit.Maximum == nil {
+		t.Fatalf("fixture parse failed: limit=%+v", limit)
+	}
+	if *limit.Maximum <= MaxPaginationLimit {
+		t.Fatalf("expected over-bound maximum, got %d (bound=%d)", *limit.Maximum, MaxPaginationLimit)
+	}
+}
+
+// TestArchtest_ContractPaginationLimitMaximum_NegativeProbe_CanonicalAllowed
+// asserts that the canonical limit/maximum=500 fixture produces no violation.
+func TestArchtest_ContractPaginationLimitMaximum_NegativeProbe_CanonicalAllowed(t *testing.T) {
+	raw := []byte(`
+endpoints:
+  http:
+    queryParams:
+      limit:
+        type: integer
+        minimum: 1
+        maximum: 500
+`)
+	var doc httpLimitContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	limit, ok := doc.Endpoints.HTTP.QueryParams["limit"]
+	if !ok || limit.Maximum == nil {
+		t.Fatalf("fixture parse failed: limit=%+v", limit)
+	}
+	if *limit.Maximum != MaxPaginationLimit {
+		t.Fatalf("expected canonical maximum %d, got %d", MaxPaginationLimit, *limit.Maximum)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Probes for the contractRootBases list — guarantee the hardcoded list covers
+// every example project currently under examples/*/contracts/. SCANNER-FRAMEWORK-USAGE-01
+// bans os.ReadDir-based directory enumeration, so the truth is discovered via
+// scanner.DirsScope over examples/, which is the archtest-approved filesystem
+// truth source. The "上游 Hard" half of the funnel: kernel/metadata/parser.matchContractYAML
+// treats examples/*/contracts as truth, and this probe ensures the archtest scope
+// covers what the parser does. Adding a new example/<name>/ project with a
+// contract.yaml turns this probe red until contractRootBases is extended.
+// ---------------------------------------------------------------------------
+
+// TestArchtest_ContractRoots_CoversAllExampleProjects discovers every
+// examples/<name>/contracts/* directory that actually contains a contract.yaml
+// (using scanner.DirsScope — no os.ReadDir) and asserts contractRootBases
+// includes "examples/<name>/contracts" for each.
+func TestArchtest_ContractRoots_CoversAllExampleProjects(t *testing.T) {
+	root := findModuleRoot(t)
+
+	scope := scanner.DirsScope(root, []string{"examples"},
+		scanner.MatchRels(func(rel string) bool {
+			return filepath.Base(rel) == "contract.yaml" &&
+				strings.Contains(filepath.ToSlash(rel), "/contracts/")
+		}),
+	)
+	scanner.EachContentFile(t, scope, []string{".yaml"}, func(t *testing.T, cc scanner.ContentContext) {
+		parts := strings.Split(filepath.ToSlash(cc.Rel), "/")
+		if len(parts) < 3 || parts[0] != "examples" || parts[2] != "contracts" {
+			return
+		}
+		exampleContractsDir := strings.Join(parts[:3], "/")
+
+		covered := false
+		for _, base := range contractRootBases {
+			if filepath.ToSlash(base) == exampleContractsDir {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("contractRootBases missing %q (discovered via scanner from contract.yaml at %s); "+
+				"new example project requires extending contractRootBases", exampleContractsDir, cc.Rel)
+		}
+	})
+}
+
+// TestArchtest_ContractRoots_SubpathHTTP asserts the subpath form returns
+// contracts/http plus examples/<name>/contracts/http for every base.
+func TestArchtest_ContractRoots_SubpathHTTP(t *testing.T) {
+	got := contractRoots(t, "", "http")
+	if len(got) != len(contractRootBases) {
+		t.Fatalf("contractRoots(\"http\") len=%d, want %d (matching contractRootBases)", len(got), len(contractRootBases))
+	}
+	if filepath.ToSlash(got[0]) != "contracts/http" {
+		t.Fatalf("contractRoots(\"http\")[0] must be %q, got %q", "contracts/http", got[0])
+	}
+	for i, p := range got {
+		want := filepath.ToSlash(filepath.Join(contractRootBases[i], "http"))
+		if filepath.ToSlash(p) != want {
+			t.Errorf("contractRoots(\"http\")[%d] = %q, want %q", i, p, want)
+		}
+	}
+}
+
+// TestArchtest_ContractRoots_EmptySubpath asserts the bare form returns
+// exactly contractRootBases (no subpath suffix).
+func TestArchtest_ContractRoots_EmptySubpath(t *testing.T) {
+	got := contractRoots(t, "", "")
+	if len(got) != len(contractRootBases) {
+		t.Fatalf("contractRoots(\"\") len=%d, want %d", len(got), len(contractRootBases))
+	}
+	for i, p := range got {
+		if filepath.ToSlash(p) != filepath.ToSlash(contractRootBases[i]) {
+			t.Errorf("contractRoots(\"\")[%d] = %q, want %q", i, p, contractRootBases[i])
+		}
 	}
 }

@@ -85,7 +85,7 @@ endpoints:
   subscribers:
     - auditcore
 replayable: true
-idempotencyKey: event_id
+idempotencyKey: eventId
 deliverySemantics: at-least-once
 `)},
 
@@ -262,7 +262,7 @@ func TestParseFS_FullProject(t *testing.T) {
 	assert.Equal(t, []string{"auditcore"}, eventC.Endpoints.Subscribers)
 	require.NotNil(t, eventC.Replayable)
 	assert.True(t, *eventC.Replayable)
-	assert.Equal(t, "event_id", eventC.IdempotencyKey)
+	assert.Equal(t, "eventId", eventC.IdempotencyKey)
 	assert.Equal(t, "at-least-once", eventC.DeliverySemantics)
 
 	// Journeys
@@ -417,7 +417,7 @@ endpoints:
   subscribers:
     - auditcore
 replayable: true
-idempotencyKey: event_id
+idempotencyKey: eventId
 deliverySemantics: at-least-once
 `)},
 	}

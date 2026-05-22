@@ -93,7 +93,7 @@
 <!-- Complete this section only for event-kind contracts. Skip for sync/query. -->
 
 - [ ] Events are replayable (consumers can reprocess without side effects)
-- [ ] Each event includes `event_id` (UUID) for idempotency key construction
+- [ ] Each event includes `eventId` (UUID, camelCase wire field) for idempotency key construction
 - [ ] `idempotencyKey` format documented: `{prefix}:{group}:{event-id}`
 - [ ] `deliverySemantics` specified: {at-least-once / at-most-once / exactly-once}
 - [ ] Dead letter queue (DLQ) configured for L2+ consumers

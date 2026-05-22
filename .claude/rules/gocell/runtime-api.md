@@ -164,7 +164,7 @@ bootstrap.WithHealthRoutes(
 )
 ```
 
-token 直接 plumb 到 `runtime/http/health.Handler.SetVerboseToken`；不匹配的 `?verbose=true` 请求拿到 `401 ErrReadyzVerboseDenied` 标准 envelope（`httputil.WritePublicError` 一致出口，含 `request_id` 透传）。该路径与 `WithListener(cell.HealthListener, ..., chain)` 的 listener auth chain 完全独立。
+token 直接 plumb 到 `runtime/http/health.Handler.SetVerboseToken`；不匹配的 `?verbose=true` 请求拿到 `401 ErrReadyzVerboseDenied` 标准 envelope（`httputil.WritePublicError` 一致出口，含 wire `requestId` 透传；对应 slog 日志键 `request_id`）。该路径与 `WithListener(cell.HealthListener, ..., chain)` 的 listener auth chain 完全独立。
 
 ### 单 listener 单 auth scheme（删除 RouteGroup.Auth, PR269 round-3)
 
