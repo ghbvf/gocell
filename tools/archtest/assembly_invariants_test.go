@@ -15,9 +15,13 @@ package archtest
 //                                      declare package main, expose generatedCellModules() []CellModule.
 //                                      Discovery: metadata.ProjectMeta.Assemblies (Medium — covers
 //                                      both assemblies/<id>/ and examples/<id>/ path forms).
-//   ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02   cmd/ source must not contain switch on known cell-ID literals
+//   ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02   assembly composition root source must not contain switch on
+//                                          known cell-ID literals. Discovery: metadata.ProjectMeta.Assemblies
+//                                          (Medium — covers both cmd/<id>/ and examples/<id>/ path forms).
 //   ASSEMBLY-MAXCONSISTENCY-DERIVED-03  AssemblyMeta.MaxConsistencyLevel must carry yaml:"-"
-//   ASSEMBLY-CELLMODULE-TYPE-04         cmd/{id}/ must declare top-level CellModule type
+//   ASSEMBLY-CELLMODULE-TYPE-04         assembly composition root must declare top-level CellModule type.
+//                                       Discovery: metadata.ProjectMeta.Assemblies (Medium — covers both
+//                                       cmd/<id>/ and examples/<id>/ path forms).
 //   ASSEMBLY-SNAPSHOTS-LOCKED-01        writes to *.snapshots in kernel/assembly/ must be inside mu.Lock()
 //   ASSEMBLYREF-METHOD-SET-01           cell.AssemblyRef interface must have exactly 3 methods
 
@@ -271,13 +275,59 @@ func hasGeneratedCellModulesFunc(af *ast.File) bool {
 	return found
 }
 
+// loadAssemblyEntrypointDirs derives the set of assembly entrypoint directories
+// from project metadata. For each assembly with at least one cell it returns
+// the module-relative slash path of the directory that contains main.go and
+// (when generated) modules_gen.go — e.g. "cmd/corebundle" or
+// "examples/todoorder".
+//
+// Discovery rating: Medium — driven by metadata.ProjectMeta.Assemblies (single
+// source of truth for assembly locations). Previously these tests used a
+// hand-maintained path-glob on "cmd/" only (Soft); upgrading to metadata-derived
+// discovery covers both assemblies/ (→ cmd/<id>/) and examples/ (→ examples/<id>/)
+// without manual list maintenance.
+//
+// ref: PR #867 F6 — same pattern applied to TestAssemblyModulesGen_HasGeneratedMarker.
+func loadAssemblyEntrypointDirs(t *testing.T) []string {
+	t.Helper()
+	root := findModuleRoot(t)
+
+	project, err := metadata.NewParser(root).Parse()
+	require.NoError(t, err, "ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02: metadata parse failed")
+
+	var dirs []string
+	for _, asm := range project.Assemblies {
+		if len(asm.Cells) == 0 {
+			continue
+		}
+		if asm.Build.Entrypoint == "" {
+			t.Errorf("ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02: assembly %q has cells but empty Build.Entrypoint; parser bug", asm.ID)
+			continue
+		}
+		dirs = append(dirs, filepath.ToSlash(filepath.Dir(asm.Build.Entrypoint)))
+	}
+	sort.Strings(dirs)
+
+	require.NotEmpty(t, dirs,
+		"ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02: no assemblies with cells found — derived set would be empty (fail-closed)")
+	return dirs
+}
+
 // INVARIANT: ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02
 //
 // TestRunGoNoCellIDSwitch enforces ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02:
-// no Go source file under cmd/ may contain a switch statement with case labels
-// that are known cell-ID string literals. The cell-ID dispatch was replaced by
+// no Go source file under any assembly composition root (cmd/<id>/ or
+// examples/<id>/) may contain a switch statement with case labels that are
+// known cell-ID string literals. The cell-ID dispatch was replaced by
 // generatedCellModules(); re-introducing the switch pattern defeats the
 // single-source-of-truth guarantee provided by modules_gen.go.
+//
+// Discovery rating: Medium — scope derived from project.Assemblies (same
+// metadata source as TestAssemblyModulesGen_HasGeneratedMarker / PR #867 F6).
+// Previously scoped to "cmd/" only (Soft); now covers examples/<id>/ as well.
+//
+// Reverse self-check: TestRunGoNoCellIDSwitch_ScopeCoversExamples asserts
+// that at least one examples/ dir is included in the scoped set.
 func TestRunGoNoCellIDSwitch(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -288,7 +338,8 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 		knownIDSet[id] = struct{}{}
 	}
 
-	scope := DirsScope(root, []string{"cmd"})
+	entrypointDirs := loadAssemblyEntrypointDirs(t)
+	scope := DirsScope(root, entrypointDirs)
 
 	type violation struct {
 		file   string
@@ -331,6 +382,29 @@ func TestRunGoNoCellIDSwitch(t *testing.T) {
 			"run `gocell generate assembly --id=<id>`",
 			ruleAssemblySwitchForbidden02, v.file, v.line, v.cellID)
 	}
+}
+
+// TestRunGoNoCellIDSwitch_ScopeCoversExamples is a reverse self-check for
+// TestRunGoNoCellIDSwitch: after the metadata-derived scope upgrade, at least
+// one examples/ directory must be present in the scanned set so the test is
+// not inadvertently blind to that path form.
+func TestRunGoNoCellIDSwitch_ScopeCoversExamples(t *testing.T) {
+	t.Parallel()
+
+	dirs := loadAssemblyEntrypointDirs(t)
+
+	hasExamples := false
+	for _, d := range dirs {
+		if strings.HasPrefix(d, "examples/") {
+			hasExamples = true
+			break
+		}
+	}
+	assert.True(t, hasExamples,
+		"%s: no examples/ directory found in metadata-derived entrypoint dirs %v; "+
+			"the metadata-derived scope upgrade would be a no-op — "+
+			"add at least one examples/ assembly with cells or revisit the discovery strategy",
+		ruleAssemblySwitchForbidden02, dirs)
 }
 
 // INVARIANT: ASSEMBLY-MAXCONSISTENCY-DERIVED-03
@@ -435,17 +509,25 @@ func findStructDecl(af *ast.File, name string) *ast.StructType {
 // INVARIANT: ASSEMBLY-CELLMODULE-TYPE-04
 //
 // TestAssemblyCellModuleTypePresent enforces ASSEMBLY-CELLMODULE-TYPE-04:
-// whenever cmd/{id}/modules_gen.go exists, the same cmd/{id}/ package must
-// declare a top-level type named "CellModule" (interface or struct, both are
-// valid). Without it, modules_gen.go cannot compile because it references
-// CellModule in its return type, but the resulting compiler error
+// whenever an assembly entrypoint directory contains modules_gen.go, the same
+// package must declare a top-level type named "CellModule" (interface or struct,
+// both are valid). Without it, modules_gen.go cannot compile because it
+// references CellModule in its return type, but the resulting compiler error
 // ("undefined: CellModule") gives no actionable guidance. This rule provides
 // a fail-fast message that points users to the correct scaffold command.
+//
+// Discovery rating: Medium — scope derived from project.Assemblies (same
+// metadata source as TestAssemblyModulesGen_HasGeneratedMarker / PR #867 F6).
+// Previously scoped to "cmd/" only (Soft); now covers examples/<id>/ as well
+// by deriving each entrypoint dir from asm.Build.Entrypoint.
 //
 // rationale: K#10 introduced the cmd-package-local type contract
 // (modules_gen.go references CellModule type). Guarding it here prevents
 // silent breakage and follows the three-piece constraint closure rule:
 // static guard + documentation contract + regression test.
+//
+// Reverse self-check: TestAssemblyCellModuleType_ScopeCoversExamples asserts
+// that at least one examples/ dir is included in the checked set.
 //
 // ref: user feedback memory feedback_constraint_self_close — implicit
 // constraints must ship with three-piece closure in the same PR (static
@@ -453,44 +535,84 @@ func findStructDecl(af *ast.File, name string) *ast.StructType {
 func TestAssemblyCellModuleTypePresent(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"cmd"},
-		MatchRels(func(rel string) bool {
-			rel = filepath.ToSlash(rel)
-			return filepath.Base(rel) == "modules_gen.go" && strings.Count(rel, "/") == depth2SlashCount
-		}),
-	)
+
+	project, err := metadata.NewParser(root).Parse()
+	require.NoError(t, err, "%s: metadata parse failed", ruleAssemblyCellModuleType04)
+
+	ids := make([]string, 0, len(project.Assemblies))
+	for id, asm := range project.Assemblies {
+		if len(asm.Cells) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
 
 	hits := 0
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			hits++
-			cmdDir := filepath.Dir(p.Fset.Position(file.Pos()).Filename)
-			cmdRel := filepath.ToSlash(filepath.Dir(p.Rel(file)))
-			t.Run(cmdRel, func(t *testing.T) {
-				t.Parallel()
-				checkCellModuleTypePresentInDir(t, root, cmdDir)
-			})
+	for _, id := range ids {
+		asm := project.Assemblies[id]
+		if asm.Build.Entrypoint == "" {
+			t.Errorf("%s: assembly %q has cells but empty Build.Entrypoint; parser bug", ruleAssemblyCellModuleType04, id)
+			continue
 		}
-		return nil
-	})
+		entrypointDir := filepath.Dir(asm.Build.Entrypoint)
+		absDir := filepath.Join(root, filepath.FromSlash(entrypointDir))
+		modGenPath := filepath.Join(absDir, "modules_gen.go")
+		if _, statErr := os.Stat(modGenPath); os.IsNotExist(statErr) {
+			// modules_gen.go not yet generated; nothing to enforce
+			continue
+		}
+		hits++
+		id, entrypointDir, absDir := id, entrypointDir, absDir // capture for subtest
+		t.Run(filepath.ToSlash(entrypointDir), func(t *testing.T) {
+			t.Parallel()
+			_ = id // for context in error messages
+			checkCellModuleTypePresentInDir(t, root, absDir)
+		})
+	}
 	if hits == 0 {
-		t.Logf("%s: no cmd/*/modules_gen.go files found — nothing to enforce", ruleAssemblyCellModuleType04)
+		t.Logf("%s: no assembly entrypoint dirs with modules_gen.go found — nothing to enforce", ruleAssemblyCellModuleType04)
 	}
 }
 
-// checkCellModuleTypePresentInDir scans all non-test *.go files in cmdDir for
-// a top-level type declaration named "CellModule". It reports an
-// ASSEMBLY-CELLMODULE-TYPE-04 violation when no such declaration is found.
-// cmdDir is an absolute path; cmdDirRel is its module-relative slash form.
-func checkCellModuleTypePresentInDir(t *testing.T, root, cmdDir string) {
-	t.Helper()
-	cmdDirRel, err := filepath.Rel(root, cmdDir)
-	require.NoError(t, err, "%s: rel %s", ruleAssemblyCellModuleType04, cmdDir)
-	cmdDirRel = filepath.ToSlash(cmdDirRel)
+// TestAssemblyCellModuleType_ScopeCoversExamples is a reverse self-check for
+// TestAssemblyCellModuleTypePresent: after the metadata-derived scope upgrade,
+// at least one examples/ assembly must be present so the test is not
+// inadvertently blind to that path form.
+func TestAssemblyCellModuleType_ScopeCoversExamples(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
 
-	scope := DirsScope(root, []string{cmdDirRel},
+	project, err := metadata.NewParser(root).Parse()
+	require.NoError(t, err, "%s: metadata parse failed", ruleAssemblyCellModuleType04)
+
+	hasExamples := false
+	for _, asm := range project.Assemblies {
+		if strings.HasPrefix(filepath.ToSlash(asm.File), "examples/") {
+			hasExamples = true
+			break
+		}
+	}
+	assert.True(t, hasExamples,
+		"%s: no examples/ assembly found in ProjectMeta.Assemblies; "+
+			"the metadata-derived scope upgrade would be a no-op — "+
+			"add at least one examples/ assembly or revisit the discovery strategy",
+		ruleAssemblyCellModuleType04)
+}
+
+// checkCellModuleTypePresentInDir scans all non-test *.go files in entrypointDir
+// for a top-level type declaration named "CellModule". It reports an
+// ASSEMBLY-CELLMODULE-TYPE-04 violation when no such declaration is found.
+// entrypointDir is an absolute path to the assembly composition root (e.g.
+// /root/cmd/corebundle or /root/examples/todoorder).
+func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
+	t.Helper()
+	dirRel, err := filepath.Rel(root, entrypointDir)
+	require.NoError(t, err, "%s: rel %s", ruleAssemblyCellModuleType04, entrypointDir)
+	dirRel = filepath.ToSlash(dirRel)
+
+	scope := DirsScope(root, []string{dirRel},
 		MatchRels(func(rel string) bool {
-			return filepath.ToSlash(filepath.Dir(rel)) == cmdDirRel
+			return filepath.ToSlash(filepath.Dir(rel)) == dirRel
 		}),
 	)
 
@@ -511,11 +633,11 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, cmdDir string) {
 	}
 
 	t.Errorf(
-		"%s: cmd/%s/modules_gen.go references CellModule but cmd/%s/ has no "+
+		"%s: %s/modules_gen.go references CellModule but %s/ has no "+
 			"top-level CellModule type declaration. "+
 			"Define `type CellModule interface { ID() string; ... }` (or compatible) "+
 			"in the same package.",
-		ruleAssemblyCellModuleType04, filepath.Base(cmdDirRel), filepath.Base(cmdDirRel),
+		ruleAssemblyCellModuleType04, dirRel, dirRel,
 	)
 }
 
