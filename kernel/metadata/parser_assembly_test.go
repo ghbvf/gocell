@@ -120,6 +120,7 @@ owner:
 	asm := pm.Assemblies["myexample"]
 	require.NotNil(t, asm, "examples/myexample/assembly.yaml must be discovered and parsed")
 	assert.Equal(t, "examples/myexample/assembly.yaml", asm.File)
+	assert.Equal(t, "myexample", asm.Dir, "Dir must be the assembly directory name (parts[1]), not the root segment")
 }
 
 // TestDeriveAssembly_ExamplesEntrypoint verifies that an assembly whose File

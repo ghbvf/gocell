@@ -262,7 +262,7 @@ type AssemblyMeta struct {
 	Owner               OwnerMeta `yaml:"owner"`
 	Build               BuildMeta `yaml:"build,omitempty"`
 	MaxConsistencyLevel string    `yaml:"-"` // derived; yaml occurrence rejected by KnownFields
-	Dir                 string    `yaml:"-"` // directory segment under assemblies/, set by parser
+	Dir                 string    `yaml:"-"` // assembly directory name (parts[1]); set by parser from path, not YAML
 	File                string    `yaml:"-"` // parsed assembly.yaml path relative to project root
 }
 

@@ -373,7 +373,8 @@ func (g *Generator) appendGeneratedFiles(
 // GenerateModulesGen / GenerateEntrypoint / GenerateBoundary can produce K#10
 // derived files before the assembly exists on disk.
 //
-// In-memory only; reverted by PlanAssemblyScaffold after Generate* completes.
+// In-memory only; consumed by appendGeneratedFiles via a shadow ProjectMeta.
+// The caller (PlanAssemblyScaffold) never mutates g.project.
 // Field-set completeness is enforced by ASSEMBLY-META-SYNTHESIS-FIELD-GUARD
 // (synthesize_field_guard_test.go) — adding a field to metadata.AssemblyMeta
 // without populating it here (or exempting it with a documented reason)
