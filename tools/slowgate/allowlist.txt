@@ -218,3 +218,29 @@ github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral_NoIndirectRefer
 # SLOW-flake class as the entries above (cumulative trigger evidence for
 # ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
 github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral
+
+# type-graph-load: TEST-EVENTUALLY-FUNNEL-01 upstream rule (PR #847) scans
+# every callsite of `(require|assert).Eventually*` module-wide. Two
+# RunTyped passes (default tags + ProductionFlatTags) over ./... with
+# Tests:true — same whole-module SharedResolver + Tests:true profile as
+# the sibling TestExternalReasonLiteral entries above. Pre-existing
+# borderline (PR #847 introduced it; ran on cached resolver in develop CI).
+# Surfaced on PR #850 fixup commit verify-archtest shard 3 (37.88s > 20s)
+# after this PR's 3 new fixture packages + 8th fixture sub-test shifted
+# the 16-shard modulo distribution off the cached SharedResolver — same
+# modulo-shift SLOW-flake class as the entries above (cumulative trigger
+# evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestEventuallyFunnel
+
+# type-graph-load: POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01
+# (PR #530) scans every fake-PG ErrNotFound mixup module-wide via the
+# Pass-Driver funnel. Single RunTyped over ./... with Tests:true; same
+# whole-module SharedResolver + Tests:true profile as the sibling
+# TestEventuallyFunnel / TestExternalReasonLiteral entries above.
+# Pre-existing borderline (PR #530 introduced it). Surfaced on PR #850
+# fixup commit verify-archtest shard 3 (24.69s > 20s) after this PR's
+# 3 new fixture packages shifted the 16-shard modulo distribution off
+# the cached SharedResolver — same modulo-shift SLOW-flake class as the
+# entries above (cumulative trigger evidence for
+# ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestNotFoundTestStrict
