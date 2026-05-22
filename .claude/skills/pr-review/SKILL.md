@@ -1,0 +1,127 @@
+---
+name: pr-review
+description: "对指定 PR 跑一次自动分级六维度 review。按 diff 净增删行数自动分配 1/2/3/6 reviewer agent 并行；主 agent 做根因聚类 + Cx 分级 + 修复分流建议，不自动 fix。"
+argument-hint: "<PR 编号>"
+allowed-tools: [Read, Glob, Grep, Bash, Agent]
+disable-model-invocation: true
+---
+
+# GoCell PR Review — 自动分级六维度审查
+
+按 PR diff 净增删行数自动分配 1/2/3/6 个 `reviewer` agent 并行做六维度审查，主 agent 做根因聚类与修复分流建议。**只 review，不自动 fix**。
+
+---
+
+## 阶段 1：输入解析
+
+参数必须是 PR 编号（纯数字或 `#NNN`）。
+
+- 缺参 → 输出 `错误：缺少 PR 编号；用法：/pr-review <PR 编号>`，不执行后续
+- 非法格式 → 输出 `错误：参数 "<原值>" 不是合法 PR 编号`，不执行后续
+
+---
+
+## 阶段 2：取 diff 行数
+
+```bash
+gh pr view <N> --json additions,deletions --jq '.additions + .deletions'
+```
+
+`gh` 命令须 `dangerouslyDisableSandbox: true`。取不到 PR → 报错退出。
+
+---
+
+## 阶段 2.5：定位或自动创建 review worktree
+
+```bash
+BRANCH=$(gh pr view <N> --json headRefName --jq .headRefName)
+WORKTREE=$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '/^worktree /{w=$2} $0=="branch "b{print w; exit}')
+```
+
+**情况 A：找到既有 worktree** → 直接用 `$WORKTREE`，不动其状态。
+
+**情况 B：无既有 worktree** → 自动创建 review-only worktree：
+
+```bash
+git fetch origin <BRANCH>
+git worktree add --detach worktrees/review-pr<N> origin/<BRANCH>   # 已存在则改用 git -C ... reset --hard origin/<BRANCH> 刷新
+WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
+```
+
+创建失败 → 报错退出，不静默回退。情况 B 在阶段 5 末尾追加：`🧹 清理：git worktree remove worktrees/review-pr<N>`。
+
+---
+
+## 阶段 3：分级表
+
+区间左闭右开，边界归更高档：
+
+| diff 行数 | reviewer 数 | 维度切分 |
+|-----------|------------|---------|
+| `diff < 200` | 1 | 单 agent 跑全六维度 |
+| `200 ≤ diff < 600` | 2 | A：架构合规 + 测试 + 产品；B：安全 + 运维可观测 + DX |
+| `600 ≤ diff < 1500` | 3 | A：架构合规 + 测试；B：安全 + 产品；C：运维可观测 + DX |
+| `diff ≥ 1500` | 6 | 六维度各 1 agent |
+
+---
+
+## 阶段 4：并行派发 reviewer agent
+
+单消息内多 `Agent` tool call 并行启动 `subagent_type: reviewer`（即使 1 个也走 Agent 派发）。
+
+每个 sub-agent prompt 必须自包含：
+
+- PR 编号 + 取 diff 命令 `gh pr diff <N>` / `gh pr view <N> --json title,body,files,headRefOid`（**`gh` 须 `dangerouslyDisableSandbox: true`**）
+- 工作目录 `$WORKTREE` 绝对路径，所有 Read/Grep 路径前缀 `$WORKTREE/`
+- 分配的维度子集（阶段 3 表格）
+- 必读：CLAUDE.md + `.claude/rules/gocell/*.md`
+- Finding 格式、Cx 分级、输出契约 → 沿用 `.claude/agents/reviewer.md`
+
+---
+
+## 阶段 5：主 agent 分析与汇总
+
+收到所有 sub-agent raw Finding 后，主 agent **必须自己读关键文件、做根因分析**，不允许原样转发。
+
+### 5.1 去重 / 冲突裁决
+
+- 同 `文件:行号` + 同描述 → 重复，保留更详细一条
+- 同 `文件:行号` 不同 P 级 → 保留更高 P 级，Read 代码裁定是否降级
+- 同 `文件:行号` 不同 Cx → 按 5.2 整簇重评，不简单取大
+- 冲突结论（P0 vs LGTM）→ Read 代码亲自裁决
+
+### 5.2 根因归类（不允许跳过）
+
+按**共同根因**聚类（不按文件 / 不按维度）。例：`errcode 未走 funnel` → 架构 + 安全 + DX 三维度同时被命中。
+
+`Grep` 验证系统性：≥ 3 处 = 架构缺陷，1-2 处 = 局部 bug。
+
+每簇标注：涉及维度 / Finding 数（按 P 级拆分）/ 系统性（Grep 数）/ 整簇 Cx（按整簇改动量重评）。
+
+### 5.3 输出 5 块（顺序固定）
+
+**输出语言**：中文。
+
+1. **根因簇视图**（主输出）— 每簇：根因一句 / 维度 / Finding 数 / 系统性 / 整簇 Cx / 子 Finding ID / 修复顺序建议
+2. **Finding 详表** — 列：`# | 维度 | P | Cx | 文件:行号 | 摘要 | 所属簇`，按 P0→P2、同级 Cx1→Cx4 排序
+3. **复杂度汇总** — 按根因簇 + 按 Finding 两套：`Cx1: N / Cx2: N / Cx3: N / Cx4: N`
+4. **修复分流** — Cx1/Cx2 簇 → `/fix`；Cx3/Cx4 簇 → "需人工决策" + 三级方案种子（最小/彻底/重构）
+5. **总体结论** — `通过 / 需修复 / 需讨论` + 一句话理由
+
+输出前自检：① 每个根因簇都 Read 过代表文件？② 根因到了根本层（不停在症状）？③ 系统性判定有 Grep 证据？— 任一不通过 → 补做。
+
+---
+
+## 约束
+
+- 不调用 `/fix`，不写代码，不评 CI
+- `gh` 命令 `dangerouslyDisableSandbox: true`
+
+---
+
+## 验证清单
+
+1. 缺参 / 非法参数 → 立即输出错误，不执行后续
+2. 分级派发：按 diff 行数派 1/2/3/6 个 reviewer agent（覆盖四档）
+3. 无 worktree 自动创建 `worktrees/review-pr<N>`；既有 worktree 复用，不重建
+4. 主 agent 输出含 Read/Grep 证据 + 根因簇视图先于 Finding 详表；维度名内部一致
