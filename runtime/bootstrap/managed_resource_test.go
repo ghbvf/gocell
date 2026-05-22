@@ -396,11 +396,12 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Relay-via-WithRelay tests (TM2/TM3/TM4)
-// Migrated from bootstrap_test.go TestWithRelayHealth_* equivalents.
-// These tests use WithRelay(relay) — *Relay no longer satisfies ManagedResource
+// These tests use WithRelay(relay) — *Relay does not satisfy ManagedResource
 // at the type level (see relay_adapter.go + ADR
 // docs/architecture/202605201400-adr-relay-managedresource-isolation.md), so
-// WithManagedResource(relay) is now a compile-time type-mismatch.
+// WithManagedResource(relay) is a compile-time type-mismatch and the relay
+// reaches the lifecycle pipeline only through the package-private
+// relayAdapter (RELAY-NOT-MANAGEDRESOURCE-01 / RELAY-SOLE-HOLDER-01 archtests).
 // ---------------------------------------------------------------------------
 
 // newManagedResourceTestRelay creates a Relay with all three failure budgets enabled,
@@ -448,10 +449,12 @@ func (s *managedResourceFailingStore) ClaimPending(ctx context.Context, batchSiz
 	return s.FakeStore.ClaimPending(ctx, batchSize)
 }
 
-// TM2: TestRelay_AsManagedResource_RegistersCheckers verifies that a Relay registered
-// via WithManagedResource contributes its three health checkers to /readyz?verbose.
-// Migrated from TestWithRelayHealth_RegistersCheckers.
-func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
+// TM2: TestWithRelay_RegistersCheckers verifies that a Relay registered via
+// WithRelay contributes its three health checkers to /readyz?verbose. The
+// relay enters the ManagedResource pipeline through the package-private
+// relayAdapter (sole sanctioned holder; ADR 202605201400 +
+// RELAY-NOT-MANAGEDRESOURCE-01 / RELAY-SOLE-HOLDER-01 archtests).
+func TestWithRelay_RegistersCheckers(t *testing.T) {
 	ln := newLocalListener(t)
 
 	asm := assembly.New(assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
@@ -500,10 +503,10 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 	}
 }
 
-// TM3: TestRelay_AsManagedResource_TrippedBudget_Returns503 verifies the P1-15 core contract:
+// TM3: TestWithRelay_TrippedBudget_Returns503 verifies the P1-15 core contract:
 // poll budget trip → /readyz returns 503; store recovery → /readyz returns 200.
-// Migrated from TestWithRelayHealth_TrippedBudget_Returns503.
-func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
+// The relay is registered via WithRelay → relayAdapter.
+func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 	ln := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "test-relay-mr-trip", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
@@ -600,10 +603,10 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	}, testtime.EventuallyDefault, testtime.D20ms, "/readyz must return 200 after store recovers")
 }
 
-// TM4: TestRelay_AsManagedResource_DisabledBudget_SkipsChecker verifies that a relay with
-// poll budget disabled (threshold=0) does not register the outbox-relay-poll checker.
-// Migrated from TestWithRelayHealth_DisabledBudget_SkipsChecker.
-func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
+// TM4: TestWithRelay_DisabledBudget_SkipsChecker verifies that a relay with
+// poll budget disabled (threshold=0) does not register the outbox-relay-poll
+// checker. The relay is registered via WithRelay → relayAdapter.
+func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 	ln := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "test-relay-mr-disabled", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))

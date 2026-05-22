@@ -780,9 +780,12 @@ func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
 // next_retry_at <= now()). A row with next_retry_at in the future must NOT be
 // counted, matching ClaimPending semantics.
 //
-// RED: FakeStore.CountPending counts ALL statusPending rows without the
-// next_retry_at predicate; PGOutboxStore countPendingQuery also lacks it.
-// Wave 2 fixes both; until then this test is RED.
+// GREEN: both backends now apply the next_retry_at predicate —
+// FakeStore.CountPending (runtime/outbox/outboxtest/fake_store.go) skips rows
+// with nextRetryAt > now(); PGOutboxStore.CountPending uses
+// countPendingQuery `... WHERE status = $1 AND (next_retry_at IS NULL OR
+// next_retry_at <= now())` (adapters/postgres/outbox_store.go). This
+// conformance scenario exercises both backends.
 func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
