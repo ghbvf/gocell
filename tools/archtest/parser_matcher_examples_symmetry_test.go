@@ -16,17 +16,28 @@
 // that inlines its logic. The archtest walks one level of callee so both
 // patterns are covered uniformly.
 //
-// AI-rebust evaluation: Medium. Mechanism = typed AST + EvaluateConstString
-// (resolves untyped const, cross-package Ident, const string concat). Not a
-// string anchor; the archtest is robust to whitespace/identifier-rename
-// refactors of the matchers but breaks if a future matcher omits examples/
-// support, regardless of whether the omission is via const literal, named
-// const, or expression evaluating to a string.
+// AI-rebust evaluation: Medium. Two layers:
+//
+//  1. Primary symmetry check (downstream): typed AST + EvaluateConstString
+//     (resolves untyped const, cross-package Ident, const string concat). Not
+//     a string anchor; robust to whitespace/identifier-rename refactors but
+//     fails immediately if a matcher omits examples/ support.
+//
+//  2. Upstream coverage check: after the main test loop,
+//     TestParserMatcherExamplesSymmetry01 iterates all FuncDecls in parser.go
+//     matching ^match.+YAML$ and asserts each name appears as a key in
+//     matcherRootSegment. This closes the gap where a newly added match*YAML
+//     function could silently bypass the primary check by simply being absent
+//     from the hand-maintained map. Mechanism = typed FuncDecl discovery via
+//     regex cross-check against the map; Medium because it is an archtest
+//     (not compile-time) but the discovery is type-aware rather than a string
+//     anchor.
 //
 // Cannot be Hard: the matchers must be Go funcs (parser uses path string +
 // boolean return); a codegen funnel for matchers would be possible but is a
 // disproportionate cost for 5 callsites. Hard upgrade tracked under backlog
-// `PARSER-MATCHER-SYMMETRY-HARDEN` (codegen-based matcher table).
+// `PARSER-MATCHER-SYMMETRY-HARDEN` (codegen-based matcher table; tracked
+// under issue #868).
 //
 // Blind-spot self-check (as required by ai-collab.md §"工具选定后强制盲区自检"):
 //
@@ -207,6 +218,34 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 				funcName, "examples")
 		}
 	}
+
+	// Upstream coverage check: every match*YAML function discovered in parser.go
+	// must appear as a key in matcherRootSegment. This closes the gap where a
+	// newly added matcher silently bypasses the symmetry check by being absent
+	// from the map. Failure message directs the author to add the expected root
+	// segment to the test.
+	_ = RunTyped(t, TypedOpts{}, []string{"./kernel/metadata/..."}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != metadataPkg {
+			return nil
+		}
+		for _, f := range p.Files {
+			if p.Rel(f) != "kernel/metadata/parser.go" {
+				continue
+			}
+			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+				if fn.Name == nil || !matchYAMLFuncRE.MatchString(fn.Name.Name) {
+					return
+				}
+				if _, ok := matcherRootSegment[fn.Name.Name]; !ok {
+					t.Errorf("INVARIANT PARSER-MATCHER-EXAMPLES-SYMMETRY-01 violated: "+
+						"matcher %s found in parser.go but not in matcherRootSegment — "+
+						"add expected root segment to the test",
+						fn.Name.Name)
+				}
+			})
+		}
+		return nil
+	})
 }
 
 // TestParserMatcherSymmetry_BlindSpot_VariableIndex is the reverse self-test
