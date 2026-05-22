@@ -115,25 +115,33 @@ func TestSafeStringAttr_RedactsSensitiveSubstrings(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			kv := safeStringAttr(tc.key, tc.raw)
-			if string(kv.Key) != tc.key {
-				t.Fatalf("key = %q, want %q", string(kv.Key), tc.key)
-			}
-			if kv.Value.Type() != attribute.STRING {
-				t.Fatalf("attr type = %v, want STRING", kv.Value.Type())
-			}
-			got := kv.Value.AsString()
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("safeStringAttr(%q, %q) = %q, missing want substring %q",
-					tc.key, tc.raw, got, tc.want)
-			}
-			for _, leak := range tc.substringNot {
-				if strings.Contains(got, leak) {
-					t.Errorf("safeStringAttr(%q, %q) = %q, MUST NOT contain leaked value %q",
-						tc.key, tc.raw, got, leak)
-				}
-			}
+			assertSafeStringAttrRedacts(t, tc.key, tc.raw, tc.want, tc.substringNot)
 		})
+	}
+}
+
+// assertSafeStringAttrRedacts runs the per-row assertions for
+// TestSafeStringAttr_RedactsSensitiveSubstrings: key preserved, STRING type
+// emitted, want substring present, substringNot entries absent. Extracted to
+// keep the parent test's cognitive complexity within the 15-point cap.
+func assertSafeStringAttrRedacts(t *testing.T, key, raw, want string, substringNot []string) {
+	t.Helper()
+	kv := safeStringAttr(key, raw)
+	if string(kv.Key) != key {
+		t.Fatalf("key = %q, want %q", string(kv.Key), key)
+	}
+	if kv.Value.Type() != attribute.STRING {
+		t.Fatalf("attr type = %v, want STRING", kv.Value.Type())
+	}
+	got := kv.Value.AsString()
+	if !strings.Contains(got, want) {
+		t.Errorf("safeStringAttr(%q, %q) = %q, missing want substring %q", key, raw, got, want)
+	}
+	for _, leak := range substringNot {
+		if strings.Contains(got, leak) {
+			t.Errorf("safeStringAttr(%q, %q) = %q, MUST NOT contain leaked value %q",
+				key, raw, got, leak)
+		}
 	}
 }
 
@@ -277,35 +285,53 @@ func TestAttrToKeyValue_DispatchesAllBranches(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			kv := attrToKeyValue(tc.attr)
-			if kv.Value.Type() != tc.wantType {
-				t.Fatalf("type = %v, want %v", kv.Value.Type(), tc.wantType)
-			}
-			switch want := tc.wantValue.(type) {
-			case string:
-				got := kv.Value.AsString()
-				if !strings.Contains(got, want) {
-					t.Errorf("string value = %q, expected to contain %q", got, want)
-				}
-				for _, leak := range tc.notWant {
-					if strings.Contains(got, leak) {
-						t.Errorf("default branch leaked raw value: %q contains %q", got, leak)
-					}
-				}
-			case int64:
-				if kv.Value.AsInt64() != want {
-					t.Errorf("int64 value = %d, want %d", kv.Value.AsInt64(), want)
-				}
-			case float64:
-				if kv.Value.AsFloat64() != want {
-					t.Errorf("float64 value = %v, want %v", kv.Value.AsFloat64(), want)
-				}
-			case bool:
-				if kv.Value.AsBool() != want {
-					t.Errorf("bool value = %v, want %v", kv.Value.AsBool(), want)
-				}
-			}
+			assertAttrToKeyValueDispatch(t, tc.attr, tc.wantType, tc.wantValue, tc.notWant)
 		})
+	}
+}
+
+// assertAttrToKeyValueDispatch runs the per-row dispatch + value-shape
+// assertions for TestAttrToKeyValue_DispatchesAllBranches. Extracted to
+// keep the parent test's cognitive complexity within the 15-point cap;
+// the per-kind value comparator is split further into assertAttrValueEquals.
+func assertAttrToKeyValueDispatch(t *testing.T, attr wrapper.Attr, wantType attribute.Type, wantValue any, notWant []string) {
+	t.Helper()
+	kv := attrToKeyValue(attr)
+	if kv.Value.Type() != wantType {
+		t.Fatalf("type = %v, want %v", kv.Value.Type(), wantType)
+	}
+	assertAttrValueEquals(t, kv.Value, wantValue, notWant)
+}
+
+// assertAttrValueEquals compares an OTel attribute.Value against an expected
+// typed shape. The string branch additionally checks that none of `notWant`
+// substrings appears in the emitted value (used by the default-branch test
+// row to assert redaction fired on the fmt.Sprint output).
+func assertAttrValueEquals(t *testing.T, got attribute.Value, want any, notWant []string) {
+	t.Helper()
+	switch w := want.(type) {
+	case string:
+		s := got.AsString()
+		if !strings.Contains(s, w) {
+			t.Errorf("string value = %q, expected to contain %q", s, w)
+		}
+		for _, leak := range notWant {
+			if strings.Contains(s, leak) {
+				t.Errorf("default branch leaked raw value: %q contains %q", s, leak)
+			}
+		}
+	case int64:
+		if got.AsInt64() != w {
+			t.Errorf("int64 value = %d, want %d", got.AsInt64(), w)
+		}
+	case float64:
+		if got.AsFloat64() != w {
+			t.Errorf("float64 value = %v, want %v", got.AsFloat64(), w)
+		}
+	case bool:
+		if got.AsBool() != w {
+			t.Errorf("bool value = %v, want %v", got.AsBool(), w)
+		}
 	}
 }
 
