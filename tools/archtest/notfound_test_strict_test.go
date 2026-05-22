@@ -507,7 +507,7 @@ func TestNotFoundTestStrict(t *testing.T) {
 	assert.Empty(t, violations,
 		"%s: every _NotFound test must call errcodetest.AssertCode or "+
 			"errcodetest.AssertWireCode with a typed errcode.Err*NotFound expected. "+
-			"See pkg/errcode/errcodetest and docs/backlog/cap-14-tooling.md.",
+			"See pkg/errcode/errcodetest.",
 		ruleNotFoundTestStrict)
 }
 

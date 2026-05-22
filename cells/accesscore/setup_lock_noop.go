@@ -15,9 +15,9 @@ import (
 //
 // PG composition roots MUST use accesspg.NewBundle(pool, txm, clk).SetupLock() instead. Wiring
 // NoopSetupLock in PG mode is an upstream-Soft misconfiguration — the type
-// system here cannot distinguish "right shape per mode". The Hard upgrade
-// (TxRunner+SetupLock paired adapter factory) is tracked by backlog entry
-// ADMINPROVISION-SETUPLOCK-PAIRED-CTOR-HARD-02 (see docs/backlog.md).
+// system here cannot distinguish "right shape per mode". Hard upgrade path:
+// ADMINPROVISION-SETUPLOCK-PAIRED-CTOR-HARD-02 (TxRunner+SetupLock paired
+// adapter factory).
 type NoopSetupLock struct{}
 
 // Compile-time assertion: NoopSetupLock implements ports.SetupLockAcquirer.

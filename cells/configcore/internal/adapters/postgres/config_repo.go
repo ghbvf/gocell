@@ -705,7 +705,7 @@ func (r *ConfigRepository) applySensitiveListSentinel(
 // browsing. A dedicated `(key ASC, id ASC)` composite index can be added in a
 // future migration if sort-heavy list traffic warrants it; it is intentionally
 // not shipped in migration 010 to keep this PR's migration scope minimal
-// (010 only adds the cipher columns — see docs/backlog.md).
+// (010 only adds the cipher columns).
 //
 // Sensitive entries: List does NOT decrypt values. Instead, the Value field is
 // set to "***" (sentinel) and KeyID / Stale are preserved from the cipher columns.

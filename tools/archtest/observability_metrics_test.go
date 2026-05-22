@@ -51,11 +51,10 @@ func TestMetricLabelErrcodeClassifiersRequireAck(t *testing.T) {
 // directly and calling it. The archtest scope filter (excluding adapters/prometheus/
 // and adapters/otel/) is the only caller-allowlist mechanism today.
 //
-// Backlog upgrade path: METRICS-GAUGEVEC-UPSTREAM-HARD-01
-// (docs/backlog/cap-13-observability.md) — wrap prom.NewGaugeVec (and Counter /
-// Histogram peers) inside adapters/prometheus/internal/promwrap/ (a Go-internal
-// package). The internal mechanism prevents external imports at compile time,
-// making upstream Hard. Same approach for the OTel side.
+// Backlog upgrade path: METRICS-GAUGEVEC-UPSTREAM-HARD-01 — wrap prom.NewGaugeVec
+// (and Counter / Histogram peers) inside adapters/prometheus/internal/promwrap/
+// (a Go-internal package). The internal mechanism prevents external imports at
+// compile time, making upstream Hard. Same approach for the OTel side.
 //
 // # Blind spots (production AST forms NOT matched; asserted absent below)
 //

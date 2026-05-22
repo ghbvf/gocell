@@ -88,10 +88,10 @@
 //     red_cross_pkg fixture pins this contract.
 //
 // ref: docs/plans/202605101548-035-configcore-residuals-fix-plan.md
-// ref: docs/backlog/cap-14-tooling.md BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED
+// ref: BASECELL-DURABILITYMODE-RUNTIME-ALIGNMENT-DEFERRED (Hard upgrade
 //
-//	(Hard upgrade candidates: codegen funnel / CheckNotNoop nil-reject /
-//	drop memory mode — coupled to that deferred body)
+//	candidates: codegen funnel / CheckNotNoop nil-reject /
+//	drop memory mode)
 //
 // ref: kernel/cell/durability.go (CheckNotNoop, Nooper)
 // ref: AI-rebust §载体决策原则 in .claude/rules/gocell/ai-collab.md

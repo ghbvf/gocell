@@ -60,11 +60,10 @@ import (
 // when either (a) cmd/corebundle is extracted to a library package and a
 // shared tests/testutil/corebundle/ harness becomes importable, or (b)
 // tests/integration/l2atomicity/ adds a J-useronboarding testcontainers
-// e2e sub-suite. See docs/backlog/cap-14-tooling.md JOURNEY-USERONBOARDING-
-// AUTO-EXPANSION-01 for the upgrade path and triggers; the journey YAML
-// inline-comments each manual criterion with that backlog ID so a future AI
-// co-author does not silently revert mode: manual → mode: auto without
-// providing one of the two harness options first.
+// e2e sub-suite. The journey YAML inline-comments each manual criterion with
+// JOURNEY-USERONBOARDING-AUTO-EXPANSION-01 so a future AI co-author does
+// not silently revert mode: manual → mode: auto without providing one of
+// the two harness options first.
 func TestJUseronboardingLoginVerify(t *testing.T) {
 	t.Parallel()
 

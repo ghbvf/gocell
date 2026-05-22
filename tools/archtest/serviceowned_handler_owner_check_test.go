@@ -9,11 +9,9 @@
 //
 // AI-rebust: Medium (contract-decl ↔ service-guard AST ↔ errcode.KindNotFound
 // type-resolved via archtest.ResolvePackageRef, three-factor cross-binding;
-// see blindspot inventory for the residual escape). Hard-upgrade tracked in
-// docs/backlog/cap-14-tooling.md §14.1 entry
-// SERVICEOWNED-HANDLER-OWNER-CHECK-01-HARD-UPGRADE — reviewers follow that
-// entry for the funnel-collapse upgrade path (AI-collab charter mandates the
-// Medium funnel name its upgrade backlog in-comment).
+// see blindspot inventory for the residual escape). Hard-upgrade path
+// (funnel upstream closure pending):
+// SERVICEOWNED-HANDLER-OWNER-CHECK-01-HARD-UPGRADE.
 //
 // Detection is type-aware: the first argument of every errcode.New call inside
 // an owner-guard IfStmt is resolved through go/types (archtest.ResolvePackageRef,

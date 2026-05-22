@@ -278,9 +278,8 @@ func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry)
 // check, not "violation is unexpressible"). Removing the `AND version=$N`
 // predicate is a normal Go code change that compiles cleanly; the CI red is
 // what catches the regression. A Hard upgrade path (query funnel /
-// type-level CAS marker / codegen-derived predicate) is registered in
-// `docs/backlog/cap-14-tooling.md` `CONFIG-ROLLBACK-CAS-HARD-UPGRADE-01`
-// for the trigger conditions described there.
+// type-level CAS marker / codegen-derived predicate):
+// CONFIG-ROLLBACK-CAS-HARD-UPGRADE-01.
 //
 // Mirrors the audit-ledger PG concurrency proof
 // `TestAuditLedgerStore_AdvisoryLockSerializesAppend`.

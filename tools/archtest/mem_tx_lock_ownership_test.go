@@ -59,8 +59,8 @@ package archtest
 //     asserting the accessor FuncDecl is non-empty and contains at least one
 //     "holdsLock" SelectorExpr, preventing vacuous-pass when the function is
 //     renamed or its body is emptied. Rating: Medium (string-anchor, two-part
-//     match, companion-index guard). Hard upgrade path: backlog
-//     MEM-TX-R2B-RECEIVER-HARD-UPGRADE (docs/backlog/cap-14-tooling.md).
+//     match, companion-index guard). Hard upgrade path:
+//     MEM-TX-R2B-RECEIVER-HARD-UPGRADE (funnel upstream closure pending).
 
 import (
 	"fmt"
@@ -269,8 +269,8 @@ func TestMemTxLockOwnership01_FindsExactlyTheTwoSites(t *testing.T) {
 //
 // Medium rating transition note: receiver identification uses string anchors
 // (receiverTypeName == "Store"), per ai-collab.md §"Funnel 双向锁评级" this
-// is an allowed Medium upstream over transition. Hard upgrade is tracked in
-// backlog MEM-TX-R2B-RECEIVER-HARD-UPGRADE (docs/backlog/cap-14-tooling.md).
+// is an allowed Medium upstream over transition. Hard upgrade path:
+// MEM-TX-R2B-RECEIVER-HARD-UPGRADE (funnel upstream closure pending).
 func TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{memPkgRel})

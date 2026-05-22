@@ -18,7 +18,7 @@
 //	      contract to runtime concerns and re-create the very layer
 //	      entanglement that motivated the descent.
 //
-// Refs: docs/backlog.md M0-FOUNDATION
+// Refs: M0-FOUNDATION (kernel poolstats isolation)
 package archtest
 
 import (

@@ -36,6 +36,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 解析规则：
 1. 如果包含 `文件路径:行号` → 直接定位到代码
 2. 如果包含 GitHub backlog issue 编号（如 `#720` 或裸数字 `720`）→ `gh issue view <num>` 解析条目（取 title / body / labels）
+   - issue 不存在（404）→ 报错 `指定 issue #<num> 不存在` 并停止
+   - issue 存在但缺 `backlog` label → 警告后继续，将其视为外部上下文（非 backlog 工作流）
 3. 如果指向 review 文档（.md 文件含多条 findings）→ 进入**批量模式**
 4. 如果是自然语言 → 用 Grep/Glob 在代码库中定位相关代码
 ### 批量模式（多方审查报告）

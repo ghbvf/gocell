@@ -1521,7 +1521,7 @@ func TestCorebundleMainLineLimit(t *testing.T) {
 	lines := countLines(data)
 	assert.LessOrEqualf(t, lines, maxLines,
 		"cmd/corebundle/main.go has %d lines, exceeds V-A8 ceiling of %d; "+
-			"re-evaluate V-A8-DEFERRED triggers in docs/backlog.md and "+
+			"re-evaluate V-A8-DEFERRED triggers and "+
 			"docs/plans/202604252100-026-post-v1.0-cleanup-plan.md before raising the limit",
 		lines, maxLines)
 }

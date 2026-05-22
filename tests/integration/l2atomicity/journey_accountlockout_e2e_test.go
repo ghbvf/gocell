@@ -16,9 +16,8 @@ import (
 // jAccountlockoutThreshold mirrors cells/accesscore/internal/accountlockout.Threshold.
 // The test cannot import the internal/ package, so we pin the literal here.
 // This is a known soft seam — drift between the two surfaces is NOT detected
-// at build/CI time. Tracked under backlog
-// ACCOUNTLOCKOUT-THRESHOLD-DRIFT-DETECT-01 (`docs/backlog/cap-14-tooling.md`)
-// to add either (a) an archtest comparing the literal here against the
+// at build/CI time. ACCOUNTLOCKOUT-THRESHOLD-DRIFT-DETECT-01 tracks adding
+// either (a) an archtest comparing the literal here against the
 // accountlockout.Threshold AST value, or (b) HTTP exposure of the policy so
 // tests can read the live value via the wire. Do not silently change one
 // surface without the other.
