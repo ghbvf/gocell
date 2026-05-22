@@ -255,7 +255,9 @@ type PassCriterion struct {
 	CheckRef string `yaml:"checkRef,omitempty"`
 }
 
-// AssemblyMeta maps to assemblies/{id}/assembly.yaml.
+// AssemblyMeta maps to assemblies/{id}/assembly.yaml (platform assemblies)
+// or examples/{id}/assembly.yaml (example assemblies).
+// See parser.matchAssemblyYAML for the recognised path forms.
 type AssemblyMeta struct {
 	ID                  string    `yaml:"id"`
 	Cells               []string  `yaml:"cells"`
