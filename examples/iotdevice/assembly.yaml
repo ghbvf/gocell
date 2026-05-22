@@ -1,0 +1,6 @@
+id: iotdevice
+cells:
+  - devicecell
+owner:
+  team: examples
+  role: maintainer
