@@ -152,10 +152,21 @@ echo "Fetching backlog issue labels..."
 gh issue list --repo "${REPO}" --label backlog --state all --limit 1000 \
   --json number,labels > "${tmpdir}/labels.json"
 
-declare -A current_labels
-while IFS=$'\t' read -r number labels_csv; do
-  current_labels["${number}"]="${labels_csv}"
-done < <(jq -r '.[] | [.number, ([.labels[].name] | join(","))] | @tsv' "${tmpdir}/labels.json")
+# Flat TSV keyed by issue number — keeps the script bash 3 compatible (macOS
+# default /bin/bash has no associative arrays). awk lookup at O(N) per call
+# is acceptable for ~1000-row label tables.
+jq -r '.[] | [.number, ([.labels[].name] | join(","))] | @tsv' "${tmpdir}/labels.json" \
+  > "${tmpdir}/labels.tsv"
+
+# lookup_labels <issue_number>
+# Echoes labels CSV (possibly empty) on success; returns non-zero if the
+# issue is absent from labels.tsv (i.e., not in the backlog-labeled set).
+lookup_labels() {
+  awk -F'\t' -v n="$1" '
+    $1 == n { print $2; found = 1; exit }
+    END    { exit !found }
+  ' "${tmpdir}/labels.tsv"
+}
 
 # Counters. Invariant: considered == skipped + would_add + added +
 # unset_priority + bad_value + not_backlog. `filtered` is items dropped by
@@ -176,8 +187,9 @@ while IFS=$'\t' read -r number priority state; do
   fi
   considered=$((considered+1))
 
-  existing="${current_labels[${number}]+${current_labels[${number}]}}"
-  if [[ -z "${current_labels[${number}]+x}" ]]; then
+  if existing="$(lookup_labels "${number}")"; then
+    : # found in labels.tsv
+  else
     echo "[skip] #${number} not in backlog-labeled set (priority='${priority}')"
     not_backlog=$((not_backlog+1))
     continue
