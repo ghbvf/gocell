@@ -2,6 +2,7 @@
 //   - INVARIANT: OBS-01
 //   - INVARIANT: METRICS-GAUGEVEC-FUNNEL-01
 //   - INVARIANT: METRICS-GAUGEVEC-UPSTREAM-HARD-01
+//   - INVARIANT: METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01
 
 package archtest
 
@@ -82,7 +83,7 @@ func TestMetricLabelErrcodeClassifiersRequireAck(t *testing.T) {
 //
 // # RED fixture
 //
-// tools/archtest/internal/metricsgaugevecfixture/fixture.go provides sixteen
+// tools/archtest/internal/metricsgaugevecfixture/fixture.go provides nineteen
 // intentional violations:
 //
 //   - BadPromGaugeVec (prom.NewGaugeVec)
@@ -101,8 +102,11 @@ func TestMetricLabelErrcodeClassifiersRequireAck(t *testing.T) {
 //   - BadOtelFloat64Counter (meter.Float64Counter)
 //   - BadOtelFloat64Histogram (meter.Float64Histogram)
 //   - BadOtelInt64Counter (meter.Int64Counter)
+//   - BadOtelInt64UpDownCounter (meter.Int64UpDownCounter) — defensive ban
+//   - BadOtelInt64Gauge (meter.Int64Gauge) — defensive ban
+//   - BadOtelInt64Histogram (meter.Int64Histogram) — defensive ban
 //
-// The RED check asserts exactly 16 diagnostics; the GREEN check asserts 0
+// The RED check asserts exactly 19 diagnostics; the GREEN check asserts 0
 // production diagnostics.
 func TestGaugeVecFunnel(t *testing.T) {
 	if testing.Short() {
@@ -122,13 +126,14 @@ func TestGaugeVecFunnel(t *testing.T) {
 	for _, d := range redDiags {
 		t.Logf("RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
-	require.Len(t, redDiags, 16,
-		"RED fixture must trigger METRICS-GAUGEVEC-FUNNEL-01 for all sixteen bad calls "+
+	require.Len(t, redDiags, 19,
+		"RED fixture must trigger METRICS-GAUGEVEC-FUNNEL-01 for all nineteen bad calls "+
 			"(BadPromGaugeVec + BadPromCounter + BadPromCounterVec + BadPromHistogramVec + "+
 			"BadPromGauge + BadPromGaugeFunc + BadPromHistogram + BadPromSummary + "+
 			"BadPromSummaryVec + BadPromCounterFunc + BadPromUntypedFunc + "+
 			"BadOtelUpDownCounter + BadOtelFloat64Gauge + BadOtelFloat64Counter + "+
-			"BadOtelFloat64Histogram + BadOtelInt64Counter); got %d diagnostics",
+			"BadOtelFloat64Histogram + BadOtelInt64Counter + "+
+			"BadOtelInt64UpDownCounter + BadOtelInt64Gauge + BadOtelInt64Histogram); got %d diagnostics",
 		len(redDiags))
 
 	// GREEN check: production code must produce zero violations.
@@ -196,11 +201,16 @@ func TestGaugeVecFunnel_SelfCheck(t *testing.T) {
 }
 
 // TestMetricsFunnel_SymbolSentinel pins the exported function set of the two
-// wrap packages. Any new export, removal, or rename in promwrap / otelwrap
-// must come with an explicit sentinel update — AI co-authors cannot silently
-// expand the funnel surface (per AI-rebust Hard funnel principle).
+// wrap packages and the outer-ring funnel surface of adapters/prometheus.
+// Any new export, removal, or rename in promwrap / otelwrap must come with
+// an explicit sentinel update — AI co-authors cannot silently expand the
+// funnel surface (per AI-rebust Hard funnel principle).
 //
-// INVARIANT: METRICS-GAUGEVEC-UPSTREAM-HARD-01.
+// INVARIANT: METRICS-GAUGEVEC-UPSTREAM-HARD-01
+//
+// Also enforces METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 outer-ring surface:
+// any new New*/Register* export in adapters/prometheus must be explicitly
+// acknowledged in adapterPromAllowedNewRegisterExports in the same PR.
 func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based sentinel in -short mode")
@@ -285,6 +295,187 @@ func TestMetricsFunnel_SymbolSentinel(t *testing.T) {
 			}
 		}
 	}
+
+	// Outer ring sentinel: adapters/prometheus must not gain unexpected New*/Register*
+	// prefix exports. Factory exports (NewMetricProvider, NewHookObserver) are
+	// intentionally excluded — we only lock the five funnel-shape symbols.
+	// Any new New*/Register* export not in adapterPromAllowedNewRegisterExports
+	// must be explicitly acknowledged in the same PR.
+	outerRingObserved := make(map[string]struct{})
+	outerScan := func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+		for _, imp := range p.Pkg.Imports() {
+			if imp.Path() != adapterPromPkg {
+				continue
+			}
+			scope := imp.Scope()
+			for _, name := range scope.Names() {
+				obj := scope.Lookup(name)
+				if _, isFunc := obj.(*types.Func); !isFunc {
+					continue
+				}
+				if !obj.Exported() {
+					continue
+				}
+				if strings.HasPrefix(name, "New") || strings.HasPrefix(name, "Register") {
+					outerRingObserved[name] = struct{}{}
+				}
+			}
+		}
+		return nil
+	}
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./..."}, outerScan)
+
+	for name := range outerRingObserved {
+		if _, ok := adapterPromAllowedNewRegisterExports[name]; !ok {
+			t.Errorf("METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 sentinel: %s has unexpected "+
+				"New*/Register* export %s not in adapterPromAllowedNewRegisterExports — "+
+				"add it to the allowlist map (and extend adapterPromCallerAllowlist) in the "+
+				"same PR, or remove it from adapters/prometheus",
+				adapterPromPkg, name)
+		}
+	}
+	// Also assert all expected symbols are still present.
+	for name := range adapterPromAllowedNewRegisterExports {
+		if _, ok := outerRingObserved[name]; !ok {
+			t.Errorf("METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 sentinel: expected export %s.%s "+
+				"not found — function removed or renamed? Update adapterPromAllowedNewRegisterExports "+
+				"AND adapterPromCallerAllowlist in the same PR",
+				adapterPromPkg, name)
+		}
+	}
+}
+
+// adapterPromPkg is the import path of the public adapter passthrough package
+// whose New*/Register* constructors are locked by
+// METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01.
+const adapterPromPkg = "github.com/ghbvf/gocell/adapters/prometheus"
+
+// adapterPromCallerAllowlist maps each public funnel symbol to its allowed
+// caller files (relative to module root). Any callee match + caller-rel not
+// in the allowlist produces a diagnostic.
+//
+// Adding a new caller must be done in the same PR as the allowlist update,
+// preventing AI co-authors from silently expanding the funnel surface.
+//
+// Adding a new public symbol to adapters/prometheus is locked by
+// TestMetricsFunnel_SymbolSentinel (extended to cover this package).
+var adapterPromCallerAllowlist = map[string]map[string]struct{}{
+	"RegisterOrReuseCounter": {"cmd/corebundle/config_module.go": {}},
+	"NewCounter":             {"adapters/vault/transit_provider.go": {}},
+	"NewCounterVec":          {"adapters/vault/transit_provider.go": {}},
+	"NewGauge":               {"adapters/vault/transit_provider.go": {}},
+	"NewGaugeFunc":           {"adapters/vault/transit_provider.go": {}},
+}
+
+// adapterPromAllowedNewRegisterExports is the complete set of New*/Register*
+// prefix exports expected in adapters/prometheus. Used by
+// TestMetricsFunnel_SymbolSentinel to detect unexpected new funnel-shape
+// symbols. Any new New*/Register* export must be added here explicitly.
+//
+// Two categories:
+//   - Funnel symbols (also in adapterPromCallerAllowlist): the five passthrough
+//     wrappers for adapter-external callers blocked by Go internal/ closure.
+//   - Factory exports (NewMetricProvider, NewHookObserver): structural factory
+//     constructors, NOT instrument construction funnels; they do not need
+//     caller allowlist entries because they are not instrument wrapping paths.
+var adapterPromAllowedNewRegisterExports = map[string]struct{}{
+	// Funnel passthrough wrappers — also locked by adapterPromCallerAllowlist.
+	"RegisterOrReuseCounter": {},
+	"NewCounter":             {},
+	"NewCounterVec":          {},
+	"NewGauge":               {},
+	"NewGaugeFunc":           {},
+	// Factory exports — structural constructors, not instrument funnels.
+	"NewMetricProvider": {},
+	"NewHookObserver":   {},
+}
+
+// TestAdapterPromCallerAllowlist enforces METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01.
+//
+// The five public funnel functions in adapters/prometheus exist for adapter-
+// external callers (adapters/vault, cmd/corebundle) that cannot reach the
+// internal/promwrap subtree due to Go internal/ closure. Any new caller must
+// extend adapterPromCallerAllowlist in the same PR — preventing silent funnel
+// expansion.
+//
+// # Funnel grade: Medium upstream + Hard downstream
+//
+// Downstream (Hard): callee resolved via *types.Info to the five symbols;
+// form-uniqueness via callee-name set lookup.
+//
+// Upstream (Medium): caller is checked by file path against a hand-maintained
+// allowlist. Go has no friend-package mechanism and functions cannot be
+// sealed, so this is the highest tier reachable for function-level funnels
+// in the Go type system (parallels panicregister.Approved archtest-bound
+// ceiling). Long-term Hard upgrade path tracked in issue #885 — vault &
+// cmd/corebundle migrate to kernel/observability/metrics.Provider so the
+// outer ring (and these five functions) disappear entirely.
+//
+// # Blind spots & reverse self-checks
+//
+//   - BS-A1 reflect.ValueOf(adapterPromPkg.NewXxx): covered by self-check
+//     scanning all production files for reflect-by-name references to the
+//     five symbols.
+//   - BS-A2 function-value capture (var fn = promadapter.NewCounter; fn(...)):
+//     covered by walking *types.Info.Uses for the five symbol references in
+//     non-call expression positions.
+func TestAdapterPromCallerAllowlist(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	diags := RunTypedProduction(t, TypedOpts{}, adapterPromCallerAllowlistRule)
+	for _, d := range diags {
+		t.Errorf("METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 %s:%d: %s", d.Rel, d.Line, d.Message)
+	}
+}
+
+// adapterPromCallerAllowlistRule is the rule function for
+// METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01. It checks that every callsite of
+// the five public adapters/prometheus funnel symbols is in the caller allowlist.
+func adapterPromCallerAllowlistRule(p *Pass) []Diagnostic {
+	if p.TypesInfo == nil || p.Fset == nil {
+		return nil
+	}
+	// Exclude the adapters/prometheus package itself (impl + own tests).
+	if p.Pkg != nil && p.Pkg.Path() == adapterPromPkg {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if strings.HasPrefix(rel, "adapters/prometheus/") {
+			continue
+		}
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			pkgPath, name, ok := resolveCalleePackageRef(call.Fun, p.TypesInfo)
+			if !ok || pkgPath != adapterPromPkg {
+				return
+			}
+			allowed, inAllowlist := adapterPromCallerAllowlist[name]
+			if !inAllowlist {
+				return
+			}
+			if _, ok := allowed[rel]; ok {
+				return
+			}
+			line := p.Fset.Position(call.Pos()).Line
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01: %s calls %s.%s but is not "+
+						"in adapterPromCallerAllowlist for that symbol. Either route through "+
+						"kernel/observability/metrics.Provider OR add this file to the "+
+						"allowlist in the same PR (and explain why the new caller is justified)",
+					rel, adapterPromPkg, name,
+				),
+			})
+		})
+	}
+	return diags
 }
 
 // bannedPromPkg is the import path of the prometheus package whose New*
@@ -411,13 +602,25 @@ func gaugeVecFunnelRule(p *Pass) []Diagnostic {
 	return diags
 }
 
+// promwrapPkg and otelwrapPkg are the exact import paths for the two internal
+// wrap packages that are permitted to call the banned constructors directly.
+// Exact equality is used instead of strings.Contains to prevent sibling
+// packages with similar names (e.g. adapters/prometheus/internal/promwrap_bypass)
+// from being accidentally allowed.
+const (
+	promwrapPkg = "github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap"
+	otelwrapPkg = "github.com/ghbvf/gocell/adapters/otel/internal/otelwrap"
+)
+
 // isGaugeVecWrapPkg returns true for the exact internal wrap packages that are
 // permitted to call the banned constructors directly. Narrowed from the former
 // adapter-directory allowlist to the internal/ subpackages only; Go's internal/
 // closure provides compile-time enforcement of the package boundary.
+//
+// Uses exact import-path equality (not strings.Contains) to prevent sibling
+// packages from being accidentally allowed.
 func isGaugeVecWrapPkg(pkgPath string) bool {
-	return strings.Contains(pkgPath, "adapters/prometheus/internal/promwrap") ||
-		strings.Contains(pkgPath, "adapters/otel/internal/otelwrap")
+	return pkgPath == promwrapPkg || pkgPath == otelwrapPkg
 }
 
 // isGaugeVecWrapRel returns true for files within the exact internal wrap
@@ -481,7 +684,11 @@ func checkPromBannedConstructor(fset *token.FileSet, call *ast.CallExpr, rel str
 		Line: line,
 		Message: fmt.Sprintf(
 			"METRICS-GAUGEVEC-FUNNEL-01: %s calls forbidden %s.%s; "+
-				"route through adapters/prometheus/internal/promwrap",
+				"route through kernel/observability/metrics.Provider for labeled metrics, "+
+				"OR (adapter-external bare/Func variants only) use adapters/prometheus."+
+				"{NewCounter,NewCounterVec,NewGauge,NewGaugeFunc} — Go internal/ closure "+
+				"blocks direct adapters/prometheus/internal/promwrap imports outside the "+
+				"prometheus adapter subtree",
 			rel, bannedPromPkg, name,
 		),
 	}
@@ -506,7 +713,8 @@ func checkOtelBannedGaugeMethod(fset *token.FileSet, call *ast.CallExpr, rel str
 		Line: line,
 		Message: fmt.Sprintf(
 			"METRICS-GAUGEVEC-FUNNEL-01: %s calls forbidden %s.Meter.%s; "+
-				"route through adapters/otel/internal/otelwrap",
+				"route through kernel/observability/metrics.Provider (preferred) or "+
+				"adapters/otel/internal/otelwrap (OTel adapter subtree only)",
 			rel, bannedOtelPkg, fn.Name(),
 		),
 	}

@@ -46,10 +46,16 @@ func TestRegisterOrReuseCounter_ReuseExisting(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, second)
 
-	// Both counters must point to the same underlying collector — increment one,
-	// verify through the registry.
+	// Increment via first. If reuse branch erroneously returned a fresh unregistered
+	// counter, testutil.ToFloat64(second) would gather 0 (not 2) because second
+	// wouldn't be the registry-known collector.
 	first.Inc()
-	second.Inc()
+	first.Inc()
+
+	got := testutil.ToFloat64(second)
+	require.Equal(t, 2.0, got,
+		"reuse branch must return the same registry-registered collector as first; "+
+			"got %v from registry, expected 2", got)
 }
 
 func TestNewCounter_Smoke(t *testing.T) {

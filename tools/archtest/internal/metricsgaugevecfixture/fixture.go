@@ -33,6 +33,15 @@
 // (defensive ban; no production callsite yet, but the method is part of the
 // full synchronous meter surface covered by the funnel).
 //
+// BadOtelInt64UpDownCounter: a direct meter.Int64UpDownCounter call — must
+// be flagged (defensive ban coverage for Int64 prefix).
+//
+// BadOtelInt64Gauge: a direct meter.Int64Gauge call — must be flagged
+// (defensive ban).
+//
+// BadOtelInt64Histogram: a direct meter.Int64Histogram call — must be
+// flagged (defensive ban).
+//
 // BadPromGauge: a direct prom.NewGauge call — must be flagged after the ban
 // predicate is extended to prefix shape covering all prom.New* constructors.
 //
@@ -52,7 +61,7 @@
 // GREEN controls: any call that does NOT hit the banned symbols must produce
 // zero diagnostics (none present in this fixture by design).
 //
-// Total expected diagnostics: 16 (ten prom + six otel).
+// Total expected diagnostics: 19 (eleven prom + eight otel).
 package metricsgaugevecfixture
 
 import (
@@ -165,4 +174,20 @@ func BadPromCounterFunc() prom.CounterFunc {
 // BadPromUntypedFunc is a direct prom.NewUntypedFunc call — defensive ban.
 func BadPromUntypedFunc() prom.UntypedFunc {
 	return prom.NewUntypedFunc(prom.UntypedOpts{Name: "bad_untyped_func", Help: "fixture"}, func() float64 { return 0 })
+}
+
+// BadOtelInt64UpDownCounter is a direct meter.Int64UpDownCounter call —
+// must be flagged. Defensive ban coverage for Int64 prefix.
+func BadOtelInt64UpDownCounter(meter otelmetric.Meter) (otelmetric.Int64UpDownCounter, error) {
+	return meter.Int64UpDownCounter("bad_int64_updown")
+}
+
+// BadOtelInt64Gauge is a direct meter.Int64Gauge call — defensive ban.
+func BadOtelInt64Gauge(meter otelmetric.Meter) (otelmetric.Int64Gauge, error) {
+	return meter.Int64Gauge("bad_int64_gauge")
+}
+
+// BadOtelInt64Histogram is a direct meter.Int64Histogram call — defensive ban.
+func BadOtelInt64Histogram(meter otelmetric.Meter) (otelmetric.Int64Histogram, error) {
+	return meter.Int64Histogram("bad_int64_histogram")
 }
