@@ -1,5 +1,21 @@
 package prometheus
 
+// File-level: Public adapter-level passthrough constructors. They exist only
+// for the bare/single-instrument and callback-style (Func) constructors that
+// adapter-external callers (e.g. adapters/vault) need but cannot reach
+// directly because internal/promwrap is Go-internal.
+//
+// Vec constructors (CounterVec, GaugeVec, HistogramVec) intentionally do NOT
+// have peers here — they are exposed via MetricProvider.{CounterVec,GaugeVec,
+// HistogramVec} which routes through internal/promwrap, registers with the
+// adapter's Prometheus Registry, and applies the kernel metrics.Provider
+// validation contract (MustValidateLabels, attrCache cardinality protection).
+// External callers needing labeled metrics should depend on the kernel
+// metrics.Provider abstraction; only bare/Func variants justify a direct
+// adapter passthrough. (NewCounterVec lives here as the lone exception for
+// adapters/vault's renewal-attempt counter, which uses prom.Registerer
+// directly without the kernel Provider's idempotent-register-or-reuse path.)
+
 import (
 	"errors"
 	"fmt"
