@@ -7,8 +7,10 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 # 问题诊断与修复
 
-接收一个问题描述（可以是 bug 报告、backlog 条目 ID、文件:行号、自然语言描述、
+接收一个问题描述（可以是 bug 报告、GitHub backlog issue 编号、文件:行号、自然语言描述、
 **或一份多方审查报告**），执行完整的诊断→根因→修复流程。
+
+> **gh 命令约定**：本 skill 所有 `gh` 命令均需 `dangerouslyDisableSandbox: true`；查询/创建 issue 前先 `gh auth status` 确认凭证；批量模式下 issue 操作必须**单调**——重复运行不得重复创建 issue（先 search 再 create）。Backlog 系统真值源见 `docs/backlog.md`（GitHub Issues + Project v2）。
 
 ---
 
@@ -20,7 +22,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 # 单一问题
 /fix session refresh 有并发问题
 /fix cells/accesscore/slices/sessionrefresh/service.go:81
-/fix P3-TD-10
+/fix #720
 
 # 多方审查报告（批量输入）
 /fix docs/reviews/202604061401-pr39-six-role/findings.md
@@ -28,12 +30,12 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 # 示例
 /fix "eventbus Close 和 Subscribe 有竞态"
-/fix P3-TD-10
+/fix 720
 ```
 
 解析规则：
 1. 如果包含 `文件路径:行号` → 直接定位到代码
-2. 如果包含 backlog ID（如 `P3-TD-10`、`R1B1-01`）→ 从 `docs/backlog.md` 解析条目
+2. 如果包含 GitHub backlog issue 编号（如 `#720` 或裸数字 `720`）→ `gh issue view <num>` 解析条目（取 title / body / labels）
 3. 如果指向 review 文档（.md 文件含多条 findings）→ 进入**批量模式**
 4. 如果是自然语言 → 用 Grep/Glob 在代码库中定位相关代码
 ### 批量模式（多方审查报告）
@@ -57,7 +59,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
    |------|------|---------|
    | CONFIRMED | IN_SCOPE | 在当前分支修 |
    | CONFIRMED | RELATED | 建议搭车修，标注"搭车" |
-   | CONFIRMED | OUT_OF_SCOPE | **只记录到 backlog，不修** |
+   | CONFIRMED | OUT_OF_SCOPE | **只创建 backlog issue，不修** |
    | RESOLVED | — | 标注已修，跳过 |
    | CANNOT_VERIFY | — | 标注待确认，跳过 |
 
@@ -66,9 +68,9 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
    - IN_SCOPE + Cx2 → 执行推荐方案（最小或彻底，由时机判断决定）
    - IN_SCOPE + Cx3/Cx4 → 只输出方案，标注"需人工决策"
    - RELATED + Cx1/Cx2 → 搭车修，标注"搭车"
-   - OUT_OF_SCOPE → 登记 backlog，标注推荐归入的 batch
+   - OUT_OF_SCOPE → 创建 backlog issue（gh issue create --label backlog），标注推荐的 cap-/flag-/type- labels
 7. **修复并行**（subagent_type: `developer`）：按相同的 Cell 包聚类分发，并发数同步骤 3。每个 sub-agent 串行处理自己组内的 finding（同包内串行避免写冲突），跑阶段 4.4 的 Edit-Test Loop。Cx1 + Cx2 都并行；Cx3/Cx4 只输出方案不派发。
-8. 主 agent 汇总各 sub-agent 修复结果，跑阶段 4.5 最终测试 + 4.8 git 收尾 + backlog 更新。
+8. 主 agent 汇总各 sub-agent 修复结果，跑阶段 4.5 最终测试 + 4.8 git 收尾 + issue 闭合/创建。
 
 ---
 
@@ -76,11 +78,11 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 ### 1.0 Backlog 关联检查
 
-修复开始前，先在 `docs/backlog.md` 中查找是否已有对应条目：
+修复开始前，先用 `gh` 查找是否已有对应 backlog issue：
 
-1. Grep 问题关键词 / backlog ID → 确认是否已登记
-2. 已登记 → 读取条目，获取上下文（预估、依赖、状态）
-3. 未登记 → 记录，修复完成后补登
+1. `gh issue list --label backlog --search "<关键词>" --state open --json number,title,labels` → 确认是否已登记
+2. 命中 → `gh issue view <num>` 读取上下文（title / body / labels / Project v2 字段）
+3. 未命中 → 记录，修复完成后用 `gh issue create --label backlog` 补登（按 `.github/ISSUE_TEMPLATE/backlog.yml` 模板）
 
 ### 1.1 找到问题代码
 
@@ -182,7 +184,7 @@ CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 |------|---------|--------|
 | **IN_SCOPE** | finding 涉及的文件在当前分支 diff 中，或 PR 描述明确包含该 finding ID | 在当前分支修复 |
 | **RELATED** | finding 涉及的文件不在 diff 中，但与当前分支的功能主题直接相关（如同一子系统的遗留问题） | 建议在当前分支一并修复，但标注为"搭车" |
-| **OUT_OF_SCOPE** | finding 涉及完全不同的模块/子系统 | 记录到 backlog，不在当前分支修 |
+| **OUT_OF_SCOPE** | finding 涉及完全不同的模块/子系统 | 创建 backlog issue，不在当前分支修 |
 
 **快速判定规则：**
 - 当前分支 diff 包含 finding 文件 → IN_SCOPE
@@ -216,7 +218,7 @@ CONFIRMED 后、修复前，先构造一个能**复现问题**的测试用例：
 - **不向后兼容**：直接改签名/删字段/换实现，不留 deprecation 别名、不留兼容 shim、不留双路径
 - **优雅简洁**：用最少代码、最少抽象、最少新文件达成目标，不预设未来需求
 
-> 默认走彻底方案。Cx2 的"最小修复（方案 A）"仅在时机判断（3.2）明确"不能现在做"时启用，**必须给出升级到彻底方案的时间窗口并登记 backlog**；批量模式"搭车修"同样适用此原则。
+> 默认走彻底方案。Cx2 的"最小修复（方案 A）"仅在时机判断（3.2）明确"不能现在做"时启用，**必须给出升级到彻底方案的时间窗口并创建 backlog issue**（`gh issue create --label backlog`，按 `.github/ISSUE_TEMPLATE/backlog.yml` 填字段）；批量模式"搭车修"同样适用此原则。
 
 ### 反思自检（方案落地前强制执行）
 
@@ -264,7 +266,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 |------|---------|
 | **IN_SCOPE** | 在当前分支/PR 修，进入 Q1 判断优先级 |
 | **RELATED** | 建议搭车修，但如果改动量大可 defer |
-| **OUT_OF_SCOPE** | 记录到 backlog，**不在当前分支修**，跳过 Q1-Q3 |
+| **OUT_OF_SCOPE** | 创建 backlog issue，**不在当前分支修**，跳过 Q1-Q3 |
 
 **Q1: 推荐现在做还是后面做？**（仅 IN_SCOPE / RELATED 继续）
 
@@ -275,7 +277,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 | **下迭代做** | 设计级问题 / 改动量 200+ 行 / 需要先完成其他前置工作 |
 | **记录不做** | 理论风险但实际不触发 / 修复代价远大于收益 |
 
-**Q2: 能不能现在做？** 检查：backlog 依赖、活跃分支冲突、kernel 接口消费方。
+**Q2: 能不能现在做？** 检查：已有 issue 依赖、活跃分支冲突、kernel 接口消费方。
 
 **Q3: 最小修复的有效期？** 给出彻底方案的建议时间窗口。
 
@@ -291,7 +293,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 | Cx2 + IN_SCOPE + 能做                                      | — | 执行推荐方案 |
 | Cx2 + 不能做（有前置依赖）                                         | — | 记录报告，标注阻塞 |
 | Cx3/Cx4                                                  | 任何 | 只输出方案，标注"需人工决策" |
-| 任何 + OUT_OF_SCOPE                                        | — | 记录 backlog，不修 |
+| 任何 + OUT_OF_SCOPE                                        | — | 创建 backlog issue，不修 |
 
 **不可自动执行**: 并发语义变更、接口签名修改、新依赖、数据流方向变更、Cx2+。
 
@@ -302,9 +304,9 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 **用 TaskCreate 注册每项任务**，执行时 TaskUpdate 更新状态（✔/◼/◻）。
 
 规则：
-- 所有 finding 都创建 task，OUT_OF_SCOPE 标注 `[→ backlog]`
+- 所有 finding 都创建 task，OUT_OF_SCOPE 标注 `[→ 创建 issue]`
 - 单条 Cx1 IN_SCOPE → 跳过清单直接修；批量或 Cx2+ → 必须创建
-- 最后两项固定：`commit + push` + `更新主仓库 backlog（不提交）`
+- 最后两项固定：`commit + push` + `闭合/创建 GitHub issues`
 - 创建后立即执行，不等确认
 
 ---
@@ -361,20 +363,24 @@ go test ./kernel/...                            # 改了 kernel 时
 
 ### 4.8 Git 收尾（测试通过后自动执行）
 
-分两步：先提交分支代码，再更新主仓库 backlog。
+分两步：先提交分支代码，再操作 GitHub issues。issue 写入不产生 git diff，无需"不 commit"概念。
 
 **步骤 1: 提交当前分支代码**
-1. `git add` 修复涉及的代码文件（不含 backlog）
+1. `git add` 修复涉及的代码文件
 2. 按 4.1 的关联模式执行 commit → push → PR
 
-**步骤 2: 更新主仓库 backlog（不提交）**
-1. 编辑主仓库 `docs/backlog.md`：
-   - IN_SCOPE 已修的 finding → 标 `✅`，追加 PR 编号
-   - OUT_OF_SCOPE finding → 新增条目到对应 Batch，标注来源
-   - 发现的新问题 → 新增条目，标注 `(discovered via /fix <原问题>)`
-   - 未登记的问题被修复 → 补登 + 标 `✅`
-3. **不 commit、不 push** — backlog 更新留在主仓库工作区，由用户统一提交
-4. **TaskUpdate → completed**（"backlog 更新" 任务）
+**步骤 2: 更新 GitHub backlog issues**
+
+所有 `gh` 命令需 `dangerouslyDisableSandbox: true`；写入前先 `gh issue list --label backlog --search "<关键词>"` 查重，避免重复创建。
+
+| Finding 状态 | 命令 | body / comment |
+|------------|------|----------------|
+| IN_SCOPE 已修 + 对应已有 issue | `gh issue close <num> --reason completed --comment "Fixed in PR #<NNN>"` | — |
+| IN_SCOPE 已修 + 无对应 issue（未登记被修复） | `gh issue create --label backlog --title "..." --body-file <tmp>` → 立即 `gh issue close <new> --comment "..."` | body 含 `Found and fixed in PR #<NNN>` |
+| OUT_OF_SCOPE finding | `gh issue create --label backlog --title "..." --body-file <tmp>` → `gh issue edit <new> --add-label cap-XX,flag-XX,type-XX` | 按 `.github/ISSUE_TEMPLATE/backlog.yml` 填 现状/修复方向/Files/Trigger/Source |
+| /fix 中发现的新问题 | 同 OUT_OF_SCOPE 流程 | body 含 `Discovered via /fix #<original>` 关联来源 |
+
+完成后 **TaskUpdate → completed**（"issue 闭合/创建" 任务）。
 
 ---
 
@@ -384,10 +390,10 @@ go test ./kernel/...                            # 改了 kernel 时
 - 修复报告（已修）
 - 批量验证（审查报告）
 
-**Backlog 验证**（4.8 已执行，此处 grep 确认）：
-- FIXED finding 在 backlog 标了 `✅` + PR 编号
-- OUT_OF_SCOPE finding 已登记到对应 Batch
-- 新发现的问题已追加
+**Backlog 验证**（4.8 已执行，此处 `gh` 复核）：
+- FIXED finding 对应 issue 已 closed + comment 引用了 PR 编号（`gh issue view <num>`）
+- OUT_OF_SCOPE finding 已创建 issue 且贴齐 `cap-XX` / `flag-XX` / `type-XX` 三 label（`gh issue list --label backlog --state open --json number,title,labels --search "in:title <关键词>"`）
+- /fix 派生的新问题已创建 issue 并在 body 标注 `Discovered via /fix #<original>`
 
 ---
 

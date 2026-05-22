@@ -68,7 +68,7 @@ CLAUDE.md "Cell 之间只通过 contract 通信"——**contract = `payload.sche
 - 来源：`gocell generate event-payload` 从 `payload.schema.json` 派生（CLAUDE.md `generated/` 禁止手工编辑）
 - consumer 改 import 生成产物，语义等价 protobuf `*.pb.go`——双方对齐到 schema，不对齐到对方类型
 
-当前 `gocell` CLI 的 `scaffold` / `generate` 不含 schema → Go 能力，见 backlog 触发项 T6。
+当前 `gocell` CLI 的 `scaffold` / `generate` 不含 schema → Go 能力。
 
 ## Init() fail-fast
 
@@ -209,9 +209,7 @@ auth:
 
 owner 信息（如 `sess.SubjectID`）只在 domain state（service 通过 DB 查询得到），handler 层结构上不可达。强行上移 handler 会引入双重 DB 读（Get-for-auth + Get-for-business = TOCTOU 窗口）并产生 403 泄漏（向攻击者确认资源存在）。正确形态：service 层比对 `sess.SubjectID != subjectID` 时返回 `errcode.KindNotFound`，与"资源不存在"合并为同一错误（= IDOR-safe 404 collapse，防跨用户枚举）。
 
-archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` type-aware 守该形态：扫描 serving slice 的 **service.go**，若**不包含**满足条件的 owner-guard IfStmt（条件为非 nil 的 `!=` 比较（如 `sess.SubjectID != callerUserID`），body 返回 `errcode.New(errcode.KindNotFound, ...)`），则 fail。删除 service 层 guard、guard 使用错误的 errcode Kind（如 `KindPermissionDenied`）均会触发 fail。注意：该 archtest 扫 service.go 而非 handler.go；handler 层本身不含 owner-guard 代码。
-
-**升级路径**（触发型，见 `docs/backlog/cap-14-tooling.md` `SERVICEOWNED-HANDLER-OWNER-CHECK-01-HARD-UPGRADE`）：当前 Medium（跨函数 helper 封装形态存在理论逃逸空间）；serviceOwned endpoint ≥ 3 且形态收敛后，升级为 `auth.OwnerGuard[T]` typed funnel（Hard）。
+archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` type-aware 守该形态：扫描 serving slice 的 **service.go**，若**不包含**满足条件的 owner-guard IfStmt（条件为非 nil 的 `!=` 比较（如 `sess.SubjectID != callerUserID`），body 返回 `errcode.New(errcode.KindNotFound, ...)`），则 fail。删除 service 层 guard、guard 使用错误的 errcode Kind（如 `KindPermissionDenied`）均会触发 fail。注意：该 archtest 扫 service.go 而非 handler.go；handler 层本身不含 owner-guard 代码。当前评级 Medium（跨函数 helper 封装形态存在理论逃逸空间）。
 
 ## ADV-05 治理规则：active event 必须有 subscriber
 
