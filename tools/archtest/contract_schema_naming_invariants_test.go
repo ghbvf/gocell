@@ -95,24 +95,12 @@ var forbiddenPaginationParams = map[string]struct{}{
 
 // canonicalEventIdempotencyKey is the wire field name every event contract's
 // idempotencyKey must reference. It identifies the per-event UUID carried in
-// the event headers envelope.
+// the event headers envelope. Strict equality is enforced — templated forms
+// like `<topic>:{eventId}` are rejected to keep a single canonical style
+// across platform and example contracts. Per-topic namespacing happens at
+// runtime via `{ConsumerGroup}:{entry.ID}` in ConsumerBase, not via the
+// contract.yaml idempotencyKey string (which is a pure metadata reference).
 const canonicalEventIdempotencyKey = "eventId"
-
-// eventIdempotencyKeyReferenceRE matches a word-bounded reference to the
-// canonical envelope field `eventId`. Both forms are legitimate:
-//
-//   - bare:     `idempotencyKey: eventId`                  (platform style)
-//   - template: `idempotencyKey: <topic>:{eventId}`        (examples style)
-//
-// Anything that fails this match (empty string, snake_case `event_id`, alt
-// casings like `eventID`/`EventId`) is rejected.
-var eventIdempotencyKeyReferenceRE = regexp.MustCompile(`\beventId\b`)
-
-// snakeCaseEventIDRE matches the legacy snake_case `event_id` token that the
-// J-04 normalization replaced. Used as a complementary fail-closed check in
-// case a future contract author re-introduces it inside a template literal
-// (e.g. `device-registered:{event_id}`).
-var snakeCaseEventIDRE = regexp.MustCompile(`\bevent_id\b`)
 
 // ---------------------------------------------------------------------------
 // INVARIANT: CONTRACT-WIRE-FIELD-CAMELCASE-01 (Hard)
@@ -487,16 +475,13 @@ endpoints:
 // INVARIANT: CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 (Hard)
 //
 // Every `contracts/event/**/contract.yaml` (and `examples/*/contracts/event/...`)
-// MUST declare an `idempotencyKey` that references the wire envelope field
-// `eventId`. Two legitimate forms exist:
-//
-//   - bare:     `idempotencyKey: eventId`              (platform contracts)
-//   - template: `idempotencyKey: <topic>:{eventId}`    (examples contracts)
-//
-// Both forms reference the canonical envelope field; the template form lets a
-// consumer namespace the idempotency key per topic without re-deriving it in
-// code. Empty values, the legacy snake_case `event_id` token, and casing
-// variants (`EventId`/`eventID`) are rejected.
+// MUST declare `idempotencyKey: eventId` (matching the wire field defined in
+// `headers.schema.json`). Strict equality — empty values, the legacy
+// snake_case `event_id`, casing variants (`EventId`/`eventID`), and templated
+// forms like `<topic>:{eventId}` are all rejected. Per-topic namespacing
+// happens at runtime in ConsumerBase via `{ConsumerGroup}:{entry.ID}`, not
+// at the contract.yaml metadata layer; keeping the YAML to a single canonical
+// reference avoids two equivalent dialects.
 //
 // Rationale: idempotencyKey points at the wire field used to dedupe consumed
 // events. After J-04 normalization the canonical field is `eventId` (was
@@ -514,19 +499,18 @@ type eventContractYAML struct {
 
 // TestArchtest_ContractEventIdempotencyKeyEventID scans every
 // contracts/event/**/contract.yaml (and examples/*/contracts/event/...) and
-// asserts idempotencyKey references the canonical wire field `eventId`
-// (either bare or inside a template literal) AND does not contain the legacy
-// snake_case `event_id` token.
+// asserts idempotencyKey == "eventId".
 //
 // Blind spots:
-//   - Word-boundary regex against `\beventId\b`. Casing variants (`EventId`,
-//     `eventID`), whitespace-only values, or future alternate envelope field
-//     names (e.g. `messageId`) fail and require an explicit ADR + update.
-//   - The 4 negative probes below pin:
+//   - Strict equality against canonicalEventIdempotencyKey ("eventId"). Whitespace
+//     variants (e.g. " eventId"), casing variants ("EventId", "eventID"), templated
+//     forms like "<topic>:{eventId}", or future legitimate alternate key names
+//     (e.g. "messageId") would fail and require an explicit ADR + update to
+//     canonicalEventIdempotencyKey.
+//   - The 3 negative probes below pin:
 //     (a) missing idempotencyKey (empty string) is caught,
-//     (b) legacy snake_case token `event_id` is caught (bare and templated),
-//     (c) bare canonical value `eventId` is accepted,
-//     (d) templated canonical value `<topic>:{eventId}` is accepted.
+//     (b) legacy snake_case value "event_id" is caught,
+//     (c) canonical value "eventId" is accepted without violation.
 func TestArchtest_ContractEventIdempotencyKeyEventID(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(root, contractRoots(t, root, "event"),
@@ -539,21 +523,10 @@ func TestArchtest_ContractEventIdempotencyKeyEventID(t *testing.T) {
 		require.NoError(t, yaml.Unmarshal(cc.Bytes, &doc),
 			"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01: %s: parse YAML", cc.Rel)
 
-		if !eventIdempotencyKeyReferenceRE.MatchString(doc.IdempotencyKey) {
-			assert.Fail(t,
-				"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 violation",
-				"file=%s idempotencyKey=%q must reference %q (bare or templated)",
-				cc.Rel, doc.IdempotencyKey, canonicalEventIdempotencyKey,
-			)
-			return
-		}
-		if snakeCaseEventIDRE.MatchString(doc.IdempotencyKey) {
-			assert.Fail(t,
-				"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 violation",
-				"file=%s idempotencyKey=%q contains legacy snake_case token `event_id`",
-				cc.Rel, doc.IdempotencyKey,
-			)
-		}
+		assert.Equal(t, canonicalEventIdempotencyKey, doc.IdempotencyKey,
+			"CONTRACT-EVENT-IDEMPOTENCY-KEY-EVENTID-01 violation: file=%s idempotencyKey=%q must be %q",
+			cc.Rel, doc.IdempotencyKey, canonicalEventIdempotencyKey,
+		)
 	})
 }
 
@@ -567,52 +540,48 @@ kind: event
 `)
 	var doc eventContractYAML
 	require.NoError(t, yaml.Unmarshal(raw, &doc))
-	if eventIdempotencyKeyReferenceRE.MatchString(doc.IdempotencyKey) {
-		t.Fatalf("expected empty idempotencyKey to fail eventId reference, got match")
+	if doc.IdempotencyKey == canonicalEventIdempotencyKey {
+		t.Fatalf("expected empty idempotencyKey to differ from canonical %q", canonicalEventIdempotencyKey)
 	}
 }
 
 // TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_OldSnakeCaseValue
-// asserts that the legacy pre-rename value "event_id" is caught (bare or
-// inside a template literal).
+// asserts that the legacy pre-rename value "event_id" is caught as a violation.
 func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_OldSnakeCaseValue(t *testing.T) {
-	for _, val := range []string{"event_id", "device-registered:{event_id}"} {
-		if !snakeCaseEventIDRE.MatchString(val) {
-			t.Fatalf("expected %q to contain legacy snake_case token, got no match", val)
-		}
-	}
-}
-
-// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_BareCanonical
-// asserts that the bare canonical value "eventId" produces no violation.
-func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_BareCanonical(t *testing.T) {
 	raw := []byte(`
-idempotencyKey: eventId
+idempotencyKey: event_id
 `)
 	var doc eventContractYAML
 	require.NoError(t, yaml.Unmarshal(raw, &doc))
-	if !eventIdempotencyKeyReferenceRE.MatchString(doc.IdempotencyKey) {
-		t.Fatalf("expected bare canonical %q to match eventId reference", doc.IdempotencyKey)
-	}
-	if snakeCaseEventIDRE.MatchString(doc.IdempotencyKey) {
-		t.Fatalf("expected bare canonical %q to not contain legacy snake_case token", doc.IdempotencyKey)
+	if doc.IdempotencyKey == canonicalEventIdempotencyKey {
+		t.Fatalf("expected legacy value %q to differ from canonical %q", doc.IdempotencyKey, canonicalEventIdempotencyKey)
 	}
 }
 
-// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_TemplateCanonical
-// asserts that the templated canonical form "<topic>:{eventId}" (used by
-// examples to namespace the idempotency key per topic) produces no violation.
-func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_TemplateCanonical(t *testing.T) {
+// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_TemplatedFormRejected
+// asserts that templated forms like "<topic>:{eventId}" are rejected — strict
+// equality keeps one canonical style across platform + examples contracts.
+func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_TemplatedFormRejected(t *testing.T) {
 	raw := []byte(`
 idempotencyKey: device-registered:{eventId}
 `)
 	var doc eventContractYAML
 	require.NoError(t, yaml.Unmarshal(raw, &doc))
-	if !eventIdempotencyKeyReferenceRE.MatchString(doc.IdempotencyKey) {
-		t.Fatalf("expected templated form %q to match eventId reference", doc.IdempotencyKey)
+	if doc.IdempotencyKey == canonicalEventIdempotencyKey {
+		t.Fatalf("expected templated form %q to differ from canonical %q", doc.IdempotencyKey, canonicalEventIdempotencyKey)
 	}
-	if snakeCaseEventIDRE.MatchString(doc.IdempotencyKey) {
-		t.Fatalf("expected templated form %q to not contain legacy snake_case token", doc.IdempotencyKey)
+}
+
+// TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_CorrectValue
+// asserts that the canonical value "eventId" produces no violation.
+func TestArchtest_ContractEventIdempotencyKeyEventID_NegativeProbe_CorrectValue(t *testing.T) {
+	raw := []byte(`
+idempotencyKey: eventId
+`)
+	var doc eventContractYAML
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	if doc.IdempotencyKey != canonicalEventIdempotencyKey {
+		t.Fatalf("expected canonical value %q, got %q", canonicalEventIdempotencyKey, doc.IdempotencyKey)
 	}
 }
 
