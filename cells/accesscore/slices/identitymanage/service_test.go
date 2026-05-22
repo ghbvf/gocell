@@ -346,6 +346,40 @@ func TestService_Update(t *testing.T) {
 	assert.Equal(t, "new@e.f", updated.Email)
 }
 
+// TestService_Update_RejectsEmptyStringPATCH verifies that *string PATCH fields
+// that are pointer-to-empty-string are rejected at the service layer, not just
+// at the HTTP handler layer. Non-HTTP callers (CLI, test, future gRPC) bypass
+// the handler-layer strPtr normaliser, so the guard must live in the service.
+func TestService_Update_RejectsEmptyStringPATCH(t *testing.T) {
+	svc := newTestService(t)
+	user, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "empty-patch", Email: "empty@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	emptyStr := ""
+
+	t.Run("empty name rejected", func(t *testing.T) {
+		_, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Name: &emptyStr})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.KindInvalid, ec.Kind)
+		assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+		assert.Contains(t, ec.Message, "name must not be empty")
+	})
+
+	t.Run("empty email rejected", func(t *testing.T) {
+		_, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &emptyStr})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.KindInvalid, ec.Kind)
+		assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+		assert.Contains(t, ec.Message, "email must not be empty")
+	})
+}
+
 // TestService_Update_StatusRequiresAdminRole covers the S4.0 P1-A
 // field-level guard: a non-admin caller cannot mutate user.Status even
 // though the PATCH route policy is selfOrAdminPolicy. Pre-S4.0 a

@@ -346,6 +346,14 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	); err != nil {
 		return nil, err
 	}
+	if input.Name != nil && *input.Name == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
+			"name must not be empty when provided")
+	}
+	if input.Email != nil && *input.Email == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
+			"email must not be empty when provided")
+	}
 	if input.Status != nil &&
 		*input.Status != string(domain.StatusActive) &&
 		*input.Status != string(domain.StatusSuspended) {
@@ -437,7 +445,7 @@ func (s *Service) applyUserUpdateTx(
 	ctx context.Context, txCtx context.Context,
 	input UpdateInput, actor string, now time.Time,
 ) (*domain.User, error) {
-	u, err := s.repo.GetByID(txCtx, input.ID)
+	u, err := s.repo.GetByIDForUpdate(txCtx, input.ID)
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: update: %w", err)
 	}
@@ -466,7 +474,9 @@ func (s *Service) applyUserUpdateTx(
 		if err := s.authzmutator.ApplyInTx(ctx, txCtx, input.ID, credMut.m, now); err != nil {
 			return nil, fmt.Errorf("identity-manage: update credential mutation: %w", err)
 		}
-		// Re-read updated aggregate from txCtx to capture epoch/status changes.
+		// Post-mutation re-fetch is plain GetByID (not ForUpdate): the same-tx MVCC snapshot
+		// already sees the just-committed writes; FOR UPDATE row-lock semantics apply only to
+		// cross-tx concurrency.
 		refetched, err := s.repo.GetByID(txCtx, input.ID)
 		if err != nil {
 			return nil, fmt.Errorf("identity-manage: update re-fetch after mutation: %w", err)
