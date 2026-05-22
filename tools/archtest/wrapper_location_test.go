@@ -5,7 +5,8 @@
 // outbox.WrapPublisherForCell / outbox.WrapWriterForCell are the sole
 // authorized paths for handing raw infra types into a cell's With* Option.
 // They MUST be called only from composition roots (cmd/* +
-// examples/<demo>/main.go + examples/<demo>/app.go) or *_test.go. Any other
+// examples/<demo>/main.go + examples/<demo>/app.go + examples/<demo>/run.go)
+// or *_test.go. Any other
 // caller — most importantly a cell package — risks recreating the bypass
 // that the sealed marker (kernel/persistence.CellTxManager,
 // kernel/outbox.CellPublisher / CellWriter) eliminated.
@@ -56,7 +57,10 @@ type wrapperViolation struct {
 // Allowed:
 //   - Any *_test.go (tests construct fakes / drive integration scenarios)
 //   - Any file under cmd/ (composition root)
-//   - examples/<demo>/main.go and examples/<demo>/app.go (composition root)
+//   - examples/<demo>/main.go, examples/<demo>/app.go, and
+//     examples/<demo>/run.go (composition root; run.go is the K#10-aligned
+//     hand-written runtime half when the example declares assembly.yaml and
+//     delegates main.go to the codegen entrypoint)
 //   - kernel/persistence/cell_marker.go and kernel/outbox/cell_marker.go
 //     (the wrapper definitions themselves)
 //   - kernel/cell/demo_tx_runner.go (DemoCellTxManager factory; the only
@@ -86,7 +90,8 @@ func isWrapperCallerAllowed(rel string) bool {
 		return true
 	}
 	parts := strings.Split(rel, "/")
-	if len(parts) == 3 && parts[0] == "examples" && (parts[2] == "main.go" || parts[2] == "app.go") {
+	if len(parts) == 3 && parts[0] == "examples" &&
+		(parts[2] == "main.go" || parts[2] == "app.go" || parts[2] == "run.go") {
 		return true
 	}
 	return false
@@ -161,7 +166,7 @@ func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
 // message — drift between code and message becomes structurally
 // impossible.
 func allowlistDescription() string {
-	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | *_test.go | " +
+	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
 		"kernel/{persistence,outbox}/cell_marker.go | kernel/cell/demo_tx_runner.go | " +
 		"cells/accesscore/{mem,postgres}/bundle.go"
 }

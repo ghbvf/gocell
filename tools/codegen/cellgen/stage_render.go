@@ -70,8 +70,7 @@ var stageTempParent = ""
 // case. Direct construction of pathsafe.PlannedFile{ForceOverwrite:true} in
 // the derived-append path is statically forbidden by archtest
 // SCAFFOLD-DERIVED-FORCEOVERWRITE-01, which keeps this gate unbypassable
-// (Medium downstream; upstream Hard tracked by backlog
-// PATHSAFE-FORCEOVERWRITE-TYPED-CTOR-01).
+// (Medium downstream).
 func planDerivedArtifact(realRoot, relSlashPath string, content []byte) (pathsafe.PlannedFile, error) {
 	absReal, err := pathsafe.ContainPath(realRoot, filepath.FromSlash(relSlashPath))
 	if err != nil {
@@ -85,7 +84,7 @@ func planDerivedArtifact(realRoot, relSlashPath string, content []byte) (pathsaf
 		if !governance.IsGoCellGenerated(existing) {
 			return pathsafe.PlannedFile{}, errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"scaffold stage: refusing to overwrite non-generated file "+
-					"(remove the file or move hand-written code to a sibling location, then re-run scaffold)",
+					"(remove the file or move hand-written code to a sibling file (e.g., run.go or app.go in the same package), then re-run scaffold)",
 				errcode.WithDetails(slog.String("artifactPath", relSlashPath)))
 		}
 	case os.IsNotExist(readErr):

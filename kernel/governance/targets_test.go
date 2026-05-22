@@ -562,3 +562,46 @@ func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 	assert.Equal(t, []string{"http.order.create.v1", "http.order.list.v1"}, journeyResult.Contracts)
 	assert.Equal(t, []string{"J-ordercreate"}, journeyResult.Journeys)
 }
+
+// TestSelectFromFiles_ExampleAssemblyPath verifies that matchFromAssemblyPath
+// accepts examples/{id}/assembly.yaml paths (not just assemblies/).
+// Regression test for F1: examples/ prefix was silently ignored.
+func TestSelectFromFiles_ExampleAssemblyPath(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"ordercell": {
+				ID:               "ordercell",
+				ConsistencyLevel: "L2",
+			},
+			"auditcell": {
+				ID:               "auditcell",
+				ConsistencyLevel: "L2",
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"ordercell/ordercreate": {
+				ID:            "ordercreate",
+				BelongsToCell: "ordercell",
+			},
+			"auditcell/auditwrite": {
+				ID:            "auditwrite",
+				BelongsToCell: "auditcell",
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"todoorder": {
+				ID:    "todoorder",
+				Cells: []string{"ordercell", "auditcell"},
+				File:  "examples/todoorder/assembly.yaml",
+			},
+		},
+	}
+	ts := NewTargetSelector(project)
+
+	// examples/todoorder/assembly.yaml must add both cells to the result.
+	result := ts.SelectFromFiles([]string{"examples/todoorder/assembly.yaml"})
+	assert.Equal(t, []string{"auditcell/auditwrite", "ordercell/ordercreate"}, result.Slices)
+	assert.Equal(t, []string{"auditcell", "ordercell"}, result.Cells)
+}

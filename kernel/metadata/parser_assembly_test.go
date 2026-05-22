@@ -94,6 +94,62 @@ maxConsistencyLevel: L1
 	require.Error(t, err)
 }
 
+// TestParseAssembly_ExamplesPathDiscovered verifies that an assembly.yaml
+// located under examples/<id>/assembly.yaml is discovered and parsed by the
+// parser — matching the symmetry that matchCellYAML / matchSliceYAML /
+// matchContractYAML / matchJourneyYAML already have for the examples/ root.
+//
+// This test is the RED gate for the EXAMPLES-ASSEMBLY-MINIMAL-CLEANUP sub-item:
+// before the matchAssemblyYAML extension it returns pm.Assemblies["myexample"] == nil.
+func TestParseAssembly_ExamplesPathDiscovered(t *testing.T) {
+	fsys := fstest.MapFS{
+		"examples/myexample/assembly.yaml": &fstest.MapFile{Data: []byte(`id: myexample
+cells:
+  - foo
+owner:
+  team: t
+  role: r
+`)},
+		// No cells/foo/cell.yaml — derive will not find the cell, leaving
+		// MaxConsistencyLevel empty, which is fine for this parser-only test.
+	}
+
+	pm, err := NewParser("").ParseFS(fsys)
+	require.NoError(t, err)
+
+	asm := pm.Assemblies["myexample"]
+	require.NotNil(t, asm, "examples/myexample/assembly.yaml must be discovered and parsed")
+	assert.Equal(t, "examples/myexample/assembly.yaml", asm.File)
+	assert.Equal(t, "myexample", asm.Dir, "Dir must be the assembly directory name (parts[1]), not the root segment")
+}
+
+// TestDeriveAssembly_ExamplesEntrypoint verifies that an assembly whose File
+// starts with "examples/" gets its Build.Entrypoint derived as
+// "examples/{id}/main.go" rather than the default "cmd/{id}/main.go".
+//
+// ref: helm/helm pkg/chartutil/create.go — identity by location
+// ref: kustomize-sigs pkg/types/kustomization.go — per-directory metadata
+func TestDeriveAssembly_ExamplesEntrypoint(t *testing.T) {
+	fsys := fstest.MapFS{
+		"examples/myexample/assembly.yaml": &fstest.MapFile{Data: []byte(`id: myexample
+cells:
+  - foo
+owner:
+  team: t
+  role: r
+`)},
+	}
+
+	pm, err := NewParser("").ParseFS(fsys)
+	require.NoError(t, err)
+
+	asm := pm.Assemblies["myexample"]
+	require.NotNil(t, asm)
+	assert.Equal(t, "examples/myexample/main.go", asm.Build.Entrypoint,
+		"examples/ assembly entrypoint must derive to examples/{id}/main.go, not cmd/{id}/main.go")
+	assert.Equal(t, "myexample", asm.Build.Binary)
+}
+
 // TestParseAssembly_DeployTemplateExplicit verifies that an explicitly set
 // deployTemplate is not overwritten by derive.
 func TestParseAssembly_DeployTemplateExplicit(t *testing.T) {

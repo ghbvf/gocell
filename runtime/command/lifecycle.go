@@ -49,15 +49,13 @@ const startProbeTimeout = 50 * time.Millisecond
 // reintroduces the startup-deadlock regression fixed in C.1: a frozen fake clock
 // with no Advance calls blocks Start() permanently.
 //
-// AI-rebust grade: Medium (comment-guard carve-out). Hard upgrade path:
-// backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// AI-rebust grade: Medium (comment-guard carve-out).
 //
-// Do NOT add new functions with this marker to bypass the Hard upgrade.
-// New time.* calls here require updating the backlog item and explicit review.
+// Do NOT add new functions with this marker without explicit review.
 //
 // ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
 //
-//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1 (CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
+//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1
 func controlPlaneTicker(interval time.Duration) *time.Ticker {
 	return time.NewTicker(interval)
 }
@@ -68,15 +66,13 @@ func controlPlaneTicker(interval time.Duration) *time.Ticker {
 // Carve-out rationale: the 50 ms startup probe must use real time. A fake clock
 // probe that is never advanced would deadlock Start() (same root cause as C.1).
 //
-// AI-rebust grade: Medium (comment-guard carve-out). Hard upgrade path:
-// backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// AI-rebust grade: Medium (comment-guard carve-out).
 //
-// Do NOT add new functions with this marker to bypass the Hard upgrade.
-// New time.* calls here require updating the backlog item and explicit review.
+// Do NOT add new functions with this marker without explicit review.
 //
 // ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
 //
-//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1 (CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
+//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1
 func controlPlaneProbeTimer(d time.Duration) *time.Timer {
 	return time.NewTimer(d)
 }
@@ -111,8 +107,7 @@ var _ SweepTicker = (*kcommand.Sweeper)(nil)
 // are funneled through controlPlaneTicker / controlPlaneProbeTimer
 // (function-level marker //archtest:allow:clock-injection:control-plane,
 // anchored by PROD-CLOCK-INJECTION-01) — control-plane scheduling is never
-// driven by an injected clock. Backlog:
-// CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// driven by an injected clock.
 //
 // C.2 Owner ctx: OnStart receives the long-lived owner ctx (controller-runtime
 // Runnable.Start semantics). The worker derives its runCtx from ownerCtx so
@@ -173,7 +168,7 @@ type SweeperLifecycle struct {
 // control-plane scheduling clock: the ticker / startup probe remain on real
 // wall-clock via controlPlaneTicker / controlPlaneProbeTimer (function-level
 // //archtest:allow:clock-injection:control-plane marker, anchored by
-// PROD-CLOCK-INJECTION-01). Backlog: CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// PROD-CLOCK-INJECTION-01).
 // Validated non-nil at construction via clock.MustHaveClock (composition root
 // passes the cell clock, e.g. clock.Real() in production / a fake in tests).
 //
@@ -207,8 +202,7 @@ func (l *SweeperLifecycle) Hook() cell.LifecycleHook {
 //
 // All stdlib time.* calls are funneled through controlPlaneTicker /
 // controlPlaneProbeTimer (function-level marker
-// //archtest:allow:clock-injection:control-plane). Backlog:
-// CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// //archtest:allow:clock-injection:control-plane).
 func (l *SweeperLifecycle) Start(ownerCtx context.Context) error {
 	if l == nil || validation.IsNilInterface(l.Sweeper) {
 		return fmt.Errorf("runtime/command: sweeper lifecycle requires non-nil Sweeper")

@@ -30,13 +30,10 @@
 //     archtest-bound form-uniqueness + fail-on-deviation IS the Hard
 //     ceiling (not Medium) — this follows the PANIC-REGISTERED-01
 //     precedent the charter blesses as a "typed function call as Hard
-//     funnel for unbounded operations" 范本, which is why no backlog
-//     Hard-upgrade item is registered. This is exactly the Hard 范本 the
-//     charter blesses for this rule shape; because the info.Uses sweep
+//     funnel for unbounded operations" 范本. Because the info.Uses sweep
 //     below covers EVERY reference form (call / dot-import / alias /
 //     func-value), there is no bypass shape left as a gray zone.
-//     Conclusion: closed Hard funnel — no backlog upgrade item is
-//     registered (R2-P2 PR-b closes the cap-02 row in the same PR).
+//     Conclusion: closed Hard funnel.
 //
 // Blind spot inventory (each item has a reverse self-check fixture or an
 // honest scope declaration — charter §"工具选定后强制盲区自检"):

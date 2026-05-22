@@ -93,7 +93,7 @@ func Write(opts WriteOptions) (WriteResult, error) {
 		if !governance.IsGoCellGenerated(existing) {
 			return res, fmt.Errorf("codegen write: refusing to overwrite non-generated file %s "+
 				"(generated files must start with the gocell header; remove the file or move "+
-				"hand-written code to a sibling location and re-run generation)", opts.Path)
+				"hand-written code to a sibling file (e.g., run.go or app.go in the same package) and re-run generation)", opts.Path)
 		}
 		if bytes.Equal(existing, opts.Content) {
 			res.Action = ActionUnchanged

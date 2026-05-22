@@ -10,7 +10,7 @@
 //   - drift between rule code literals and the rulecodes.go single source;
 //   - error rules that emit diagnostics without an actionable "; fix:" clause.
 //
-// ref: docs/backlog/cap-02-metadata-governance.md G-13
+// ref: G-13 (governance rule registration archtest)
 //
 // Performance note: each Test* function calls loadGovernancePackage (single
 // RunTyped over ./kernel/governance) or RunTyped over targeted fixture

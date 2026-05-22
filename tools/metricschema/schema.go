@@ -133,10 +133,13 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 	if asm == nil {
 		return nil, fmt.Errorf("assembly %q not found", assemblyID)
 	}
-	entrypoint := asm.Build.Entrypoint
-	if entrypoint == "" {
-		entrypoint = filepath.Join("cmd", assemblyID, "main.go")
+	// asm.Build.Entrypoint is guaranteed non-empty by deriveAssembly post-parse;
+	// if it is empty the parser has a bug — fail loudly rather than silently
+	// routing to cmd/{id}/ which is wrong for examples/ assemblies.
+	if asm.Build.Entrypoint == "" {
+		return nil, fmt.Errorf("assembly %q: asm.Build.Entrypoint not derived; parser bug", assemblyID)
 	}
+	entrypoint := asm.Build.Entrypoint
 	pattern := "./" + filepath.ToSlash(filepath.Dir(entrypoint))
 	pkgs, err := loadReachablePackages(ctx, projectRoot, pattern)
 	if err != nil {

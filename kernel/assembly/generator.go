@@ -106,6 +106,7 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 // modulesContext is the template context for modules_gen.go.tpl.
 type modulesContext struct {
 	AssemblyID string
+	SourcePath string   // path to the assembly.yaml that drove generation (asm.File)
 	Modules    []string // CellModule struct names, in cells.yaml order
 }
 
@@ -237,6 +238,7 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 
 	ctx := modulesContext{
 		AssemblyID: assemblyID,
+		SourcePath: asm.File,
 		Modules:    modules,
 	}
 	return g.executeTemplate("modules_gen.go.tpl", ctx)
@@ -251,19 +253,15 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 // CLI) feeds the returned plan into pathsafe.WritePlannedFiles, which is the
 // single funnel for both dry-run and live writes (SCAFFOLD-WRITE-FUNNEL-01).
 //
-// Generator is not safe for concurrent use.
-//
-// PlanAssemblyScaffold may be called sequentially on the same Generator
-// instance; each call leaves g.project.Assemblies in its original state
-// (defer revert in appendGeneratedFiles).
+// PlanAssemblyScaffold is safe for concurrent calls on the same Generator:
+// each call operates on a shadow ProjectMeta and never mutates g.project.
 //
 // The Generator must have been constructed with a non-empty projectRoot.
 // Each cell in spec.Cells must exist in g.project.Cells.
 //
-// K#10 derived files are produced by in-memory injection of a synthesized
-// metadata.AssemblyMeta into g.project.Assemblies[spec.ID.String()] before calling
-// GenerateModulesGen / GenerateEntrypoint / GenerateBoundary; injection is
-// reverted before return so the Generator stays idempotent across calls.
+// K#10 derived files are produced by constructing a transient Generator that
+// holds a shallow-copied ProjectMeta with a synthesized AssemblyMeta injected
+// into its Assemblies map. The original g.project.Assemblies is never touched.
 //
 // Returns the plan or an error; the plan is empty on error.
 func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.PlannedFile, error) {
@@ -307,35 +305,57 @@ func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.
 	return g.appendGeneratedFiles(plan, spec, realRoot, asmDir, cmdDir)
 }
 
-// appendGeneratedFiles injects a synthesized AssemblyMeta, calls the three
-// Generate* methods, appends their output to plan, and reverts the injection
-// before returning. Kept separate from PlanAssemblyScaffold to stay under the
-// cognitive-complexity limit.
+// appendGeneratedFiles builds a transient Generator with a shadow ProjectMeta
+// that holds the synthesized AssemblyMeta, calls the three Generate* methods,
+// and appends their output to plan. The original g.project.Assemblies is never
+// touched, making this function safe for concurrent callers.
+//
+// ref: kubernetes-sigs/kubebuilder pkg/machinery/scaffold.go — per-call file
+// model with no shared mutable state across renders.
 func (g *Generator) appendGeneratedFiles(
 	plan []pathsafe.PlannedFile,
 	spec AssemblyScaffoldSpec,
-	realRoot, asmDir, cmdDir string,
+	realRoot, _ /*asmDir*/, cmdDir string,
 ) ([]pathsafe.PlannedFile, error) {
-	// In-memory inject synthesized AssemblyMeta so Generate* see the new assembly.
 	synth := synthesizeAssemblyMeta(spec)
-	prior, hadPrior := g.project.Assemblies[spec.ID.String()]
-	g.project.Assemblies[spec.ID.String()] = synth
-	defer func() {
-		if hadPrior {
-			g.project.Assemblies[spec.ID.String()] = prior
-		} else {
-			delete(g.project.Assemblies, spec.ID.String())
-		}
-	}()
+
+	// Build a shadow ProjectMeta: clone only the Assemblies map (the only field
+	// written here), share all other fields by pointer — they are read-only at
+	// this layer (cells, contracts, slices, journeys, actors, statusBoard).
+	shadowAssemblies := make(map[string]*metadata.AssemblyMeta, len(g.project.Assemblies)+1)
+	for k, v := range g.project.Assemblies {
+		shadowAssemblies[k] = v
+	}
+	shadowAssemblies[spec.ID.String()] = synth
+
+	shadowProject := *g.project // shallow copy of ProjectMeta value
+	shadowProject.Assemblies = shadowAssemblies
+
+	// Transient Generator: same module/projectRoot/cells/contracts as g, but
+	// with the shadow project. Generate* methods read g.project through the
+	// receiver; the transient is discarded after this call.
+	transient := &Generator{
+		project:     &shadowProject,
+		cells:       g.cells,
+		contracts:   g.contracts,
+		module:      g.module,
+		projectRoot: g.projectRoot,
+	}
+
+	// generatedDir is derived from the synthesized AssemblyMeta.File field.
+	// For scaffold (File is empty, i.e. assemblies/ context) this returns
+	// assemblies/{id}/generated/; the derivation mirrors
+	// metadata.AssemblyGeneratedDir — single source of truth.
+	generatedDir := filepath.FromSlash(metadata.AssemblyGeneratedDir(synth))
 
 	type derivedFile struct {
 		relPath string
 		gen     func(string) ([]byte, error)
 	}
 	derived := []derivedFile{
-		{filepath.Join(cmdDir, "modules_gen.go"), g.GenerateModulesGen},
-		{filepath.Join(cmdDir, "main.go"), g.GenerateEntrypoint},
-		{filepath.Join(asmDir, "generated", "boundary.yaml"), g.GenerateBoundary},
+		{filepath.Join(cmdDir, "modules_gen.go"), transient.GenerateModulesGen},
+		{filepath.Join(cmdDir, "main.go"), transient.GenerateEntrypoint},
+		{filepath.Join(generatedDir, "boundary.yaml"), transient.GenerateBoundary},
 	}
 
 	for _, d := range derived {
@@ -361,7 +381,8 @@ func (g *Generator) appendGeneratedFiles(
 // GenerateModulesGen / GenerateEntrypoint / GenerateBoundary can produce K#10
 // derived files before the assembly exists on disk.
 //
-// In-memory only; reverted by PlanAssemblyScaffold after Generate* completes.
+// In-memory only; consumed by appendGeneratedFiles via a shadow ProjectMeta.
+// The caller (PlanAssemblyScaffold) never mutates g.project.
 // Field-set completeness is enforced by ASSEMBLY-META-SYNTHESIS-FIELD-GUARD
 // (synthesize_field_guard_test.go) — adding a field to metadata.AssemblyMeta
 // without populating it here (or exempting it with a documented reason)

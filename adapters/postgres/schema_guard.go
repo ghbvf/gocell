@@ -339,8 +339,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "sessions", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
 	// refresh_tokens (007_refresh_tokens.sql + 027_add_refresh_tokens_authz_epoch_at_issue.sql)
 	// Only the S4d-introduced column is registered here; the rest of the
-	// refresh_tokens schema predates schema_guard's requiredColumns coverage
-	// (treated as governance follow-up backlog item, not in S4d scope).
+	// refresh_tokens schema predates schema_guard's requiredColumns coverage.
 	{Table: "refresh_tokens", Column: "authz_epoch_at_issue", Type: "bigint", NotNull: true},
 	// roles (019_roles.sql)
 	{Table: "roles", Column: "id", Type: "text", NotNull: true},
@@ -546,7 +545,8 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 		err := pool.inner.QueryRow(ctx, q, ec.Table, ec.Column).Scan(&gotType, &gotNotNull)
 		if err != nil {
 			// No row means column is missing.
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: required column missing",
 				errcode.WithDetails(
 					slog.String("dimension", "column"),
@@ -557,7 +557,8 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 			)
 		}
 		if gotType != ec.Type {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: column type mismatch",
 				errcode.WithDetails(
 					slog.String("dimension", "column_type"),
@@ -568,7 +569,8 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 			)
 		}
 		if gotNotNull != ec.NotNull {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: column nullability mismatch",
 				errcode.WithDetails(
 					slog.String("dimension", "column_nullability"),
@@ -590,7 +592,8 @@ func verifyForbiddenColumns(ctx context.Context, pool *Pool) error {
 			return err
 		}
 		if ok {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: forbidden legacy column present (partial migration)",
 				errcode.WithDetails(
 					slog.String("dimension", "forbidden_column"),
@@ -648,7 +651,8 @@ func verifyPrimaryKeys(ctx context.Context, pool *Pool) error {
 				"schema_guard: iterate primary key columns", rows.Err())
 		}
 		if len(got) == 0 {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: primary key missing",
 				errcode.WithDetails(
 					slog.String("dimension", "primary_key"),
@@ -657,7 +661,8 @@ func verifyPrimaryKeys(ctx context.Context, pool *Pool) error {
 			)
 		}
 		if !slices.Equal(got, pk.Columns) {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: primary key column mismatch",
 				errcode.WithDetails(
 					slog.String("dimension", "primary_key"),
@@ -691,7 +696,8 @@ func verifyIndexes(ctx context.Context, pool *Pool) error {
 		var gotUnique bool
 		err := pool.inner.QueryRow(ctx, q, idx.Table, idx.Name).Scan(&gotUnique)
 		if err != nil {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: expected index missing",
 				errcode.WithDetails(
 					slog.String("dimension", "index"),
@@ -702,7 +708,8 @@ func verifyIndexes(ctx context.Context, pool *Pool) error {
 			)
 		}
 		if gotUnique != idx.Unique {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: index uniqueness mismatch",
 				errcode.WithDetails(
 					slog.String("dimension", "index_unique"),
@@ -760,7 +767,8 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 	var gotRefTable, gotOnDelete string
 	err := pool.inner.QueryRow(ctx, fkQ, fk.Table, fk.Constraint).Scan(&oid, &gotRefTable, &gotOnDelete)
 	if err != nil {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+		return errcode.New(
+			errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: expected foreign key missing",
 			errcode.WithDetails(
 				slog.String("dimension", "foreign_key"),
@@ -771,7 +779,8 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 		)
 	}
 	if gotRefTable != fk.RefTable {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+		return errcode.New(
+			errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: foreign key references wrong table",
 			errcode.WithDetails(
 				slog.String("dimension", "foreign_key"),
@@ -782,7 +791,8 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 		)
 	}
 	if gotOnDelete != fk.OnDelete {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+		return errcode.New(
+			errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: foreign key on-delete action mismatch",
 			errcode.WithDetails(
 				slog.String("dimension", "foreign_key"),
@@ -818,7 +828,8 @@ func verifyFKRefColumns(ctx context.Context, pool *Pool, fk expectedFK, refColsQ
 			"schema_guard: iterate FK ref columns", rows.Err())
 	}
 	if !stringSliceEqualUnordered(gotRefCols, fk.RefColumns) {
-		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+		return errcode.New(
+			errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: foreign key ref columns mismatch",
 			errcode.WithDetails(
 				slog.String("dimension", "foreign_key"),
@@ -857,7 +868,8 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 		var gotFn string
 		err := pool.inner.QueryRow(ctx, q, tr.Table, tr.Name).Scan(&gotEnabled, &gotFn)
 		if err != nil {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: expected trigger missing",
 				errcode.WithDetails(
 					slog.String("dimension", "trigger"),
@@ -869,7 +881,8 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 		}
 		isEnabled := gotEnabled == "O"
 		if isEnabled != tr.Enabled {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: trigger enabled state mismatch",
 				errcode.WithDetails(
 					slog.String("dimension", "trigger_enabled"),
@@ -880,7 +893,8 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 			)
 		}
 		if gotFn != tr.Function {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: trigger function mismatch",
 				errcode.WithDetails(
 					slog.String("dimension", "trigger_function"),
@@ -916,7 +930,8 @@ func verifyFunctions(ctx context.Context, pool *Pool) error {
 				"schema_guard: query function existence", err)
 		}
 		if !exists {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: expected function missing",
 				errcode.WithDetails(
 					slog.String("dimension", "function"),
@@ -953,7 +968,8 @@ func verifyChecks(ctx context.Context, pool *Pool) error {
 				"schema_guard: query check constraint", err)
 		}
 		if !exists {
-			return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: expected check constraint missing",
 				errcode.WithDetails(
 					slog.String("dimension", "check"),
@@ -1011,7 +1027,7 @@ func stringSliceEqualUnordered(a, b []string) bool {
 // VerifyNoInvalidIndexes is the fail-fast counterpart of DetectInvalidIndexes
 // for the cmd/corebundle startup path. It returns ErrAdapterPGInvalidIndex
 // when any pg_index row has indisvalid=false, replacing the prior
-// warn-continue defense (B2-X-03 backlog). Operators must DROP the invalid
+// warn-continue defense (B2-X-03). Operators must DROP the invalid
 // index manually before the binary will start.
 //
 // Use DetectInvalidIndexes when you need the index list for diagnostics

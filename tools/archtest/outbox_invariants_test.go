@@ -118,7 +118,8 @@ func TestOutboxLeaseIDCAS01(t *testing.T) {
 // relay_writeback.go) cannot escape this gate by file rename.
 func TestOutboxMarkReturnsBool01(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"runtime/outbox"},
+	scope := DirsScope(
+		root, []string{"runtime/outbox"},
 		MatchRels(func(rel string) bool {
 			return strings.HasPrefix(filepath.Base(rel), "relay") &&
 				filepath.ToSlash(filepath.Dir(rel)) == "runtime/outbox"
@@ -285,7 +286,7 @@ func requireMatch(t *testing.T, name string, consts map[string]string, re *regex
 //	                          inside Entry.Validate (so the cap actually fires)
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md B6 PR-V1-PG-OUTBOX-RELAY-HARDEN
-// ref: backlog2.md B2-A-07 (repurposed: metadata cap shipped, payload cap was the
+// ref: B2-A-07 (repurposed: metadata cap shipped, payload cap was the
 //
 //	true unguarded vector).
 func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
@@ -317,7 +318,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	if !declared {
 		t.Errorf(
 			"OUTBOX-PAYLOAD-SIZE-01-A: kernel/outbox/outbox.go must declare const %s "+
-				"(payload byte cap; see roadmap B6, backlog2 B2-A-07 repurposed scope).",
+				"(payload byte cap; see roadmap B6, B2-A-07 repurposed scope).",
 			constName,
 		)
 	}
@@ -466,7 +467,7 @@ func TestOutboxHandleResultNoReceiptField(t *testing.T) {
 //	a "lost" outcome is reportable end-to-end.
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md B6 PR-V1-PG-OUTBOX-RELAY-HARDEN
-// ref: backlog2.md B2-A-05 PG-RELAY-FAIL-WRITE-UNHANDLED-ROWS
+// ref: B2-A-05 PG-RELAY-FAIL-WRITE-UNHANDLED-ROWS
 func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	t.Parallel()
 
@@ -566,7 +567,7 @@ func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 	if !hasLost {
 		t.Errorf(
 			"OUTBOX-RELAY-LOST-METRIC-01-B: PollCycleResult must declare a Lost int field " +
-				"(roadmap B6, backlog2 B2-A-05). It travels alongside Published/Retried/" +
+				"(roadmap B6, B2-A-05). It travels alongside Published/Retried/" +
 				"Dead/Skipped so providerRelayCollector.RecordPollCycle can fire " +
 				"`outbox_relayed_total{outcome=\"lost\"}`.",
 		)
@@ -1204,11 +1205,13 @@ func outboxPolicyViolationMessage(policy outboxFailurePolicyStatus, topic string
 	if policy == outboxPolicyUnknown {
 		return fmt.Sprintf(
 			"outbox.Entry for topic %q uses non-constant FailurePolicy;"+
-				" security/audit events must statically remain FailClosed", topic)
+				" security/audit events must statically remain FailClosed", topic,
+		)
 	}
 	return fmt.Sprintf(
 		"outbox.Entry for topic %q opts into FailurePolicyFailOpen;"+
-			" security/audit events must remain FailClosed (leave FailurePolicy unset)", topic)
+			" security/audit events must remain FailClosed (leave FailurePolicy unset)", topic,
+	)
 }
 
 func outboxUnknownRouteViolationMessage(policy outboxFailurePolicyStatus) string {
@@ -1773,7 +1776,7 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 //     must occur inside closeWithBudget. Any other caller produces a violation.
 //   - Up-stream: doc.go + helpers.go godoc state the convention; no compile-time
 //     gate prevents adding a bare sub.Close(ctx) in a new _test.go file.
-//     Hard up-stream upgrade tracked as backlog ARCHTEST-FUNNEL-CALLSITE-LEVEL-01.
+//     Hard up-stream upgrade requires compile-time gate.
 //
 // Blind spots (AST forms outside ResolveMethodCall's documented scope):
 //
@@ -1889,7 +1892,8 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 		t.Errorf(
 			"OUTBOXTEST-CLOSE-VIA-BUDGET-01: %s:%d: direct Subscriber.Close call outside %s — "+
 				"route through closeWithBudget to enforce timeout and goroutine-leak detection",
-			v.rel, v.line, sanctionedHolder)
+			v.rel, v.line, sanctionedHolder,
+		)
 	}
 }
 

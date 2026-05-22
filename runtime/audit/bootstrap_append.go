@@ -34,8 +34,8 @@ import (
 // prevented by archtest-level testing rather than import-level coupling.
 //
 // The typed string funnel upgrade (`type BootstrapAuthFailReason string`
-// + sealed constructor) is tracked as backlog
-// BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01 (arm b: reason typed).
+// + sealed constructor) is tracked as BOOTSTRAP-AUDIT-OBSERVER-RUNTIME-AUTH-WINDOW-01
+// (arm b: reason typed).
 const (
 	ReasonMissingHeader    = "missing_header"
 	ReasonWrongCredentials = "wrong_credentials"

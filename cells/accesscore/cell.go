@@ -340,7 +340,7 @@ type AccessCore struct {
 
 	// setupLock is the REQUIRED serialization primitive for the admin-provisioning
 	// path. PG composition roots wire accesspg.NewBundle(pool, txm, clk).SetupLock()
-	// (pg_advisory_xact_lock — Closes backlog ADMINPROVISION-DIST-LOCK-01);
+	// (pg_advisory_xact_lock);
 	// memstore composition roots wire accesscore.NoopSetupLock{} because
 	// memTxRunner.RunInTx already holds store.mu for the whole closure.
 	// initValidate() rejects nil — the previous in-process sync.Mutex inside

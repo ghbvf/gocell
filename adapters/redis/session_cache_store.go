@@ -34,18 +34,14 @@ import (
 //     GOCELL_SESSION_CACHE_TTL, max 30s enforced at wiring). The in-transaction
 //     cache.Delete pattern was removed in the third-round review because it
 //     raced with concurrent re-population from the still-uncommitted PG row,
-//     potentially extending the stale window to 2×TTL. See backlog
-//     AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01 for the kernel AfterCommit
-//     primitive upgrade path required to reach 0-staleness.
+//     potentially extending the stale window to 2×TTL.
 //     Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
 //   - RevokeForSubject: delegated to inner with NO cache operation. The only
 //     caller is credentialinvalidate.Apply (archtest
 //     CREDENTIAL-INVALIDATE-FUNNEL-01) which co-tx bumps users.authz_epoch.
 //     Any stale cached ValidateView is rejected by sessionvalidate's epoch
 //     invariant (user.AuthzEpoch != view.AuthzEpochAtIssue → fail-closed
-//     401). user.AuthzEpoch is intentionally NOT cached — see backlog
-//     AUTH-CACHE-SUBJECT-REVERSE-INDEX-01 for the upgrade path required
-//     before that invariant relaxes.
+//     401). user.AuthzEpoch is intentionally NOT cached.
 //     Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
 //   - RepoReady: delegated to inner. Redis liveness is independently surfaced
 //     by adapters/redis Client.Checkers (probe redis_ready).
@@ -94,9 +90,9 @@ import (
 // empty) or configure an extremely short TTL (e.g. 5s). The stale-cache window
 // after a single-session Revoke is bounded by one full cache TTL (lazyPopulate
 // can refresh the entry just before Revoke commits — see §Threat model) — with
-// a 5s TTL the maximum exposure is 5s. See backlog
-// AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01 for the sub-TTL invalidation upgrade
-// path (kernel AfterCommit primitive) that would reduce this window to near-zero
+// a 5s TTL the maximum exposure is 5s. AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01
+// describes the sub-TTL invalidation upgrade path (kernel AfterCommit primitive)
+// that would reduce this window to near-zero
 // without the 2×TTL race described in the Stale-cache revoke window threat above.
 //
 // ref: alexedwards/scs redisstore/redisstore.go@master (PEXPIREAT object-level
@@ -300,9 +296,6 @@ func (s *CachingSessionStore) lazyPopulate(ctx context.Context, key string, view
 // rejected in the third-round review because it races with concurrent
 // re-population from the still-uncommitted PG row, potentially extending
 // the stale window to 2×TTL.
-// See backlog AUTH-CACHE-AFTER-COMMIT-INVALIDATION-01 for the kernel
-// AfterCommit primitive upgrade path required to reach 0-staleness.
-//
 // Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: this
 // method body MUST be exactly one ReturnStmt delegating to inner with the
 // same name.
@@ -314,9 +307,7 @@ func (s *CachingSessionStore) Revoke(ctx context.Context, id string) error {
 // design — the cached ValidateView's AuthzEpochAtIssue is compared by
 // sessionvalidate.go against the live user.AuthzEpoch (bumped co-tx by
 // credentialinvalidate.Apply); mismatch → 401 fail-closed regardless of
-// cache state. user.AuthzEpoch is intentionally NOT cached — see backlog
-// AUTH-CACHE-SUBJECT-REVERSE-INDEX-01 for the upgrade path required before
-// that invariant relaxes.
+// cache state. user.AuthzEpoch is intentionally NOT cached.
 //
 // Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: this
 // method body MUST be exactly one ReturnStmt delegating to inner with the

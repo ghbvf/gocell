@@ -10,8 +10,8 @@ package archtest
 //   - active docs/godoc must not show old listener APIs, Delegated examples, or
 //     the legacy single-mux route registration surface.
 //
-// Historical provenance remains allowed in docs/backlog.md, docs/plans/**,
-// docs/reviews/**, docs/archive/**, docs/backlog/archive/**, and CHANGELOG.md.
+// Historical provenance remains allowed in docs/plans/**,
+// docs/reviews/**, docs/archive/**, and CHANGELOG.md.
 
 import (
 	"fmt"
@@ -141,17 +141,13 @@ func TestListenerDXA52Guard(t *testing.T) {
 }
 
 func listenerDXDocExcluded(rel string) bool {
-	if rel == "CHANGELOG.md" || rel == "docs/backlog.md" {
+	if rel == "CHANGELOG.md" {
 		return true
 	}
 	for _, prefix := range []string{
 		"docs/plans/",
 		"docs/reviews/",
 		"docs/archive/",
-		// docs/backlog/archive/** — historical snapshot of pre-framework
-		// backlog files (5 sources @ 18a06ab7); listener API references
-		// retained verbatim for traceability.
-		"docs/backlog/archive/",
 	} {
 		if strings.HasPrefix(rel, prefix) {
 			return true
@@ -237,7 +233,8 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 	var result []string
 	found := false
 
-	scope := DirsScope(root, []string{filepath.Dir(rel)},
+	scope := DirsScope(
+		root, []string{filepath.Dir(rel)},
 		MatchRels(func(r string) bool { return r == rel }),
 	)
 	Run(t, scope, func(p *Pass) []Diagnostic {
@@ -290,7 +287,8 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 	var result []string
 	found := false
 
-	scope := DirsScope(root, []string{filepath.Dir(rel)},
+	scope := DirsScope(
+		root, []string{filepath.Dir(rel)},
 		MatchRels(func(r string) bool { return r == rel }),
 	)
 	Run(t, scope, func(p *Pass) []Diagnostic {

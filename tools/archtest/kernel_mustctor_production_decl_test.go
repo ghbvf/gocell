@@ -57,7 +57,7 @@
 //
 // ref: ADR `docs/architecture/202605171800-adr-kernel-mustctor-removal.md`
 // ref: `.claude/rules/gocell/ai-collab.md` §"AI-rebust 三档分级"
-// ref: backlog `docs/backlog.md:38` B2-K-02
+// ref: B2-K-02 (kernel Must-ctor removal)
 package archtest
 
 import (

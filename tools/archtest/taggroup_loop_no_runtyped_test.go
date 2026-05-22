@@ -65,7 +65,7 @@ import (
 // identity through *types.Info — staticcheck SA4000 style (direct AST +
 // types.Info form-matching, no value-flow chasing). The forms below are
 // outside that resolver's declared range; each is either CLOSED with a RED
-// fixture or an ACCEPTED blind spot with rationale + backlog upgrade entry.
+// fixture or an ACCEPTED blind spot with rationale.
 //
 //   BS-1 Façade vs internal callee (CLOSED): fixtures exercise both
 //      archtest.KnownNonDefaultTags (façade re-export in resolve.go) and
@@ -107,8 +107,7 @@ import (
 //      archtest suite, so any blanket "no local helper reaches RunTyped"
 //      assertion would false-positive (the same accepted trade-off
 //      staticcheck SA4000 documents for fn()==fn() side-effect blindness).
-//      Upgrade path (one-level call-graph) tracked by backlog
-//      TAGGROUP-LOOP-HELPER-WRAP-UPGRADE-01 (cap-14-tooling.md); trigger =
+//      Upgrade path: one-level call-graph analysis; trigger =
 //      first real event of a helper-wrapped tagGroup loop reaching CI.
 //
 // Reverse fixture-precision self-check (Test_TaggroupLoopFixturePrecisionGate)
@@ -139,8 +138,8 @@ const (
 // cover this rule's own scan; it pays one cold packages.Load. That is
 // accepted (a single test, scope is bounded to one package). If it lands
 // borderline on the 20s slowgate post-merge, that is expected behavior, not
-// a regression — it is tracked under the slowgate cleanup backlog
-// ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01 (subprocess/cache-miss triage).
+// a regression — it is tracked under the slowgate cleanup
+// (ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01, subprocess/cache-miss triage).
 func TestTagGroupLoopForbidsRunTyped(t *testing.T) {
 	t.Parallel()
 
@@ -245,7 +244,8 @@ func scanFileForTaggroupViolations(p *Pass, file *ast.File, rel string) []Diagno
 					"or two-load nil+ProductionFlatTags pattern "+
 					"(see ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md;"+
 					" ProductionFlatTags defined in tools/archtest/resolve.go)",
-				taggroupLoopKnownTagsName, taggroupLoopRunTypedName),
+				taggroupLoopKnownTagsName, taggroupLoopRunTypedName,
+			),
 		})
 	})
 	return out

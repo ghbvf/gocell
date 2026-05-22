@@ -99,5 +99,4 @@
 //
 // ref: PR #595 (store-pairing precedent)
 // ref: PR #845 round-2 review (session/refresh pairing + internal-leak closure)
-// ref: docs/plans/202605191943-044-journey-backlog-realignment.md §2
 package accesscoretest

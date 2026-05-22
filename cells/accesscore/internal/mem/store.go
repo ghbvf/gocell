@@ -58,10 +58,9 @@
 // ownership object, never a bool. See ADR
 // docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
 //
-// Backlog MEM-STORE-RWMUTEX-READ-CONCURRENCY (docs/backlog/cap-14-tooling.md):
-// store.mu could become sync.RWMutex so outside-tx read methods take RLock
-// (cf. client-go ThreadSafeStore). Deferred — orthogonal to the flake root
-// fix and independently verifiable; recorded, not silently carried over.
+// MEM-STORE-RWMUTEX-READ-CONCURRENCY: store.mu could become sync.RWMutex so
+// outside-tx read methods take RLock (cf. client-go ThreadSafeStore).
+// Deferred — orthogonal to the flake root fix and independently verifiable.
 //
 // ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) follow the
 // same rule: inside memTxRunner.RunInTx they read under the held store.mu

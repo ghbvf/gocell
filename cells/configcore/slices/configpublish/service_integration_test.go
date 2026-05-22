@@ -57,7 +57,8 @@ func setupPublishBundle(t *testing.T) publishServiceBundle {
 // reproducibility, matching the pattern in config_repo_integration_test.go.
 func setupPublishBundleEncrypted(t *testing.T) publishServiceBundle {
 	kp, err := crypto.NewLocalAESKeyProviderFromKeys(
-		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "")
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "",
+	)
 	require.NoError(t, err)
 	return setupPublishBundleWithTransformer(t, crypto.NewValueTransformer(kp))
 }
@@ -75,7 +76,8 @@ func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTra
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(
+		repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
@@ -119,7 +121,8 @@ func seedConfigEntryWithSensitivity(t *testing.T, b publishServiceBundle, key, v
 func countOutboxRowsByEventType(t *testing.T, pool *pgxpool.Pool, eventType string) int {
 	t.Helper()
 	var count int
-	err := pool.QueryRow(context.Background(),
+	err := pool.QueryRow(
+		context.Background(),
 		`SELECT COUNT(*) FROM outbox_entries WHERE event_type = $1`,
 		eventType,
 	).Scan(&count)
@@ -229,7 +232,8 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 		failOn:   2,
 		err:      errors.New("outbox broker down"),
 	}
-	svcFail, err := NewService(bundle.repo, slog.Default(), clock.Real(),
+	svcFail, err := NewService(
+		bundle.repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(persistence.WrapForCell(bundle.txMgr)),
 	)
@@ -277,10 +281,7 @@ func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry)
 // (testcontainers + concurrent goroutines + CI assertion — runtime invariant
 // check, not "violation is unexpressible"). Removing the `AND version=$N`
 // predicate is a normal Go code change that compiles cleanly; the CI red is
-// what catches the regression. A Hard upgrade path (query funnel /
-// type-level CAS marker / codegen-derived predicate) is registered in
-// `docs/backlog/cap-14-tooling.md` `CONFIG-ROLLBACK-CAS-HARD-UPGRADE-01`
-// for the trigger conditions described there.
+// what catches the regression.
 //
 // Mirrors the audit-ledger PG concurrency proof
 // `TestAuditLedgerStore_AdvisoryLockSerializesAppend`.

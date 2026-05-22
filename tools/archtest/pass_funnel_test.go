@@ -93,9 +93,8 @@ const (
 //     differs from business archtest authors who scan rule violations; it is
 //     the framework's own integration test, structurally equivalent to
 //     pass_test.go's buildTypedPass input side.
-//     Backlog item ARCHTEST-LAYER10-PASS-MIGRATION-01 tracks a future
-//     migration of (b)+(c) to the Pass model when a typed-field accessor
-//     is available.
+//     Future upgrade ARCHTEST-LAYER10-PASS-MIGRATION-01: migrate (b)+(c)
+//     to the Pass model when a typed-field accessor is available.
 //
 // These exemptions survive stage-4 cleanup. They are checked by both
 // the production PASS-FUNNEL detectors (skip these files entirely) AND
@@ -243,10 +242,9 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 // business archtest *_test.go callers, so the typeseval call set still flows
 // through the PASS-FUNNEL contract from the user-facing surface.
 //
-// Backlog: PASS-FUNNEL-NONTESTGO-EXEMPT-UPGRADE-01 (in cap-14-tooling.md)
-// tracks the path to Hard — extending the scope filter to scan non-test .go
-// files with a warm.go allowlist, or sealing warm.go behind a stronger
-// typed boundary.
+// Future upgrade PASS-FUNNEL-NONTESTGO-EXEMPT-UPGRADE-01: extend the
+// scope filter to scan non-test .go files with a warm.go allowlist, or
+// seal warm.go behind a stronger typed boundary.
 func diagsLoadPackages(tgt passFunnelTarget) []scanner.Diagnostic {
 	return scanForForbiddenCallees(
 		tgt,

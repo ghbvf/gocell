@@ -63,8 +63,8 @@ validate:
 	go run ./cmd/gocell validate
 
 generate:
-	for d in assemblies/*/; do go run ./cmd/gocell generate assembly --id="$$(basename "$$d")"; done
-	for d in assemblies/*/; do go run ./cmd/gocell generate metrics-schema --id="$$(basename "$$d")"; done
+	go run ./cmd/gocell generate assembly --all
+	go run ./cmd/gocell generate metrics-schema --all
 	go run ./cmd/gocell generate cell --all
 	go run ./cmd/gocell generate contract --all
 	go generate ./cmd/corebundle/

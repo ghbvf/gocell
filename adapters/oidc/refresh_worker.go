@@ -34,14 +34,12 @@
 //     close(a.workerDone) via defer; a second Start on the same Adapter will
 //     panic because closing an already-closed channel is undefined. WorkerGroup
 //     is responsible for single-Start enforcement; this adapter does not add a
-//     guard (see backlog CLOCK-INJECTION-STRUCT-FIELD-CTOR-01 for context).
+//     guard.
 //
 // (e) clock enforcement — oidc.Adapter uses a struct-field Clock rather than a
 //     WithClock option, so CLOCK-INJECTION-TEST-CALLSITE-01 archtest (which
 //     covers WithClock-option constructors) does not cover oidc.New. Enforcement
-//     is instead the runtime clock.MustHaveClock panic in New(). See backlog
-//     entry CLOCK-INJECTION-STRUCT-FIELD-CTOR-01 for the pre-existing archtest
-//     coverage gap.
+//     is instead the runtime clock.MustHaveClock panic in New().
 
 package oidc
 
@@ -124,7 +122,8 @@ func (a *Adapter) runRefreshLoop(ctx context.Context) {
 			if err != nil {
 				n := a.consecutiveFailures.Add(1)
 				a.refreshCollector.RecordRefresh(false)
-				slog.Warn("oidc: jwks refresh failed",
+				slog.Warn(
+					"oidc: jwks refresh failed",
 					slog.String("issuer", a.config.IssuerURL),
 					slog.Any("error", err),
 					slog.Int64("consecutive_failures", n),
@@ -133,7 +132,8 @@ func (a *Adapter) runRefreshLoop(ctx context.Context) {
 				prev := a.consecutiveFailures.Swap(0)
 				a.refreshCollector.RecordRefresh(true)
 				if prev > 0 {
-					slog.Info("oidc: jwks refresh recovered",
+					slog.Info(
+						"oidc: jwks refresh recovered",
 						slog.String("issuer", a.config.IssuerURL),
 						slog.Int64("consecutive_failures_reset_from", prev),
 					)

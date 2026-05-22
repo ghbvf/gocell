@@ -42,8 +42,7 @@
 //     ResolvePackageRef resolves through info.Uses; the import alias does not
 //     hide the call.
 //   - Reflection-based construction (`reflect.New(BaseSlice).Interface()`):
-//     out of scope; not detected. Treated as theoretical; backlog item exists
-//     if it becomes a real attack surface.
+//     out of scope; not detected. Treated as theoretical attack surface.
 //   - metadata.SliceMeta literal: `*_gen.go` files are exempt (codegen output).
 //     Non-gen production code must call slicePkg.SliceMetadata().
 //
@@ -232,7 +231,8 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedFixture(t,
+	diags := RunTypedFixture(
+		t,
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
 		func(p *Pass) []Diagnostic {
@@ -287,7 +287,8 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
 	cellPkgPath := modPath + "/kernel/cell"
 	metaPkgPath := modPath + "/kernel/metadata"
 
-	diags := RunTypedFixture(t,
+	diags := RunTypedFixture(
+		t,
 		FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/basesliceredfixture/..."},
 		func(p *Pass) []Diagnostic {

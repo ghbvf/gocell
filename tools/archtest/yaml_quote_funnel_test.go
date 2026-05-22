@@ -22,7 +22,7 @@
 // must have Quote arg or already-typed Scalar). 上游 Medium — Pass.Pkg 路径
 // 过滤跳过 pkg/yamlsafe 内部即认为是合规上游；任何包外类型化 Scalar 字段
 // 都需经过 Quote 才能赋值（构造点被下游 archtest 守住）。041 plan §3 明确
-// 不登记 backlog，本 PR 内三件套闭环（typed funnel + archtest 下游 Hard +
+// 本 PR 内三件套闭环（typed funnel + archtest 下游 Hard +
 // 反向自检）。
 //
 // Blind spot inventory (covered by reverse self-test):
@@ -174,7 +174,8 @@ func scanYAMLQuoteFunnel(p *Pass, file *ast.File, rel string) []Diagnostic {
 			Line: pos.Line,
 			Message: fmt.Sprintf(
 				"yamlsafe.Scalar(...) argument must be yamlsafe.Quote(...) " +
-					"or a value of declared yamlsafe.Scalar type"),
+					"or a value of declared yamlsafe.Scalar type",
+			),
 		})
 	})
 	return diags

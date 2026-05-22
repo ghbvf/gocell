@@ -69,9 +69,6 @@ const clockViaSliceAllowMarker = "//archtest:allow:clock-injection:via-slice"
 // AI-rebust grade: Medium (archtest-enforced: allowlist map + marker, not a
 // bare comment a business PR can add anywhere; not compile-time). Before P1-3
 // this was effectively Soft (any marked FuncDecl in any prod file self-exempt).
-// Hard upgrade path: backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01
-// tracks replacing this with a typed funnel (sealed clock-source type) once
-// the control-plane clock abstraction is established.
 //
 // Blind spots (function-level comment guard, AST-based detection):
 //   - A FuncDecl without a doc comment group will never match — the marker
@@ -99,8 +96,7 @@ const clockControlPlaneAllowMarker = "//archtest:allow:clock-injection:control-p
 // self-checks.
 //
 // Adding an entry is a deliberate, reviewable archtest change (not a comment a
-// business PR can sneak in). Hard upgrade path (typed real-only clock funnel):
-// backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// business PR can sneak in).
 var controlPlaneClockCarveOut = map[string]map[string]bool{
 	"runtime/command/lifecycle.go": {
 		"controlPlaneTicker":     true,
@@ -380,7 +376,8 @@ func scanClockCallsiteAST(
 					"%s called without WithClock — "+
 						"must pass WithClock(clk) to satisfy the clock injection requirement. "+
 						"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
-					callee.FullName()),
+					callee.FullName(),
+				),
 			})
 		}
 	})
@@ -1142,7 +1139,7 @@ var forbiddenTimeFns = map[string]string{
 // file (incl. a third marked function) or to closures/FuncLits within the
 // exempt FuncDecl body. Allowlisted carve-out functions:
 //   - runtime/command/lifecycle.go: controlPlaneTicker, controlPlaneProbeTimer
-//     (control-plane scheduling; backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
+//     (control-plane scheduling)
 //
 // Registry: the carve-out ADR (docs/architecture/202605121800-adr-archtest-carveout-narrow.md)
 // is scoped to ERRCODE-KIND-LITERAL-01 and does not govern clock carve-outs.
@@ -1211,8 +1208,7 @@ func isAllowedRealClockPath(rel string) bool {
 // required), that reference is exempt. The carve-out is function-level only —
 // other functions in the same file without the marker are still checked.
 //
-// AI-rebust grade: Medium (comment guard). Hard upgrade path: backlog
-// CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+// AI-rebust grade: Medium (comment guard).
 //
 // Blind spots (documented per ai-collab.md §"工具选定后强制盲区自检"):
 //  1. Marker in a non-doc inline comment (e.g. // inside the function body):
@@ -1258,7 +1254,8 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 			Line: line,
 			Message: fmt.Sprintf(
 				"time.%s — must use injected %s instead",
-				name, forbiddenTimeFns[name]),
+				name, forbiddenTimeFns[name],
+			),
 		})
 	}
 

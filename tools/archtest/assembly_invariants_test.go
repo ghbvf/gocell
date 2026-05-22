@@ -11,8 +11,10 @@ package archtest
 // assembly_invariants_test.go — consolidated AST guards for assembly-related invariants.
 //
 // Invariants covered:
-//   ASSEMBLY-MODULES-GEN-01            cmd/*/modules_gen.go must carry DO NOT EDIT marker,
-//                                      declare package main, expose generatedCellModules() []CellModule
+//   ASSEMBLY-MODULES-GEN-01            <derived>/modules_gen.go must carry DO NOT EDIT marker,
+//                                      declare package main, expose generatedCellModules() []CellModule.
+//                                      Discovery: metadata.ProjectMeta.Assemblies (Medium — covers
+//                                      both assemblies/<id>/ and examples/<id>/ path forms).
 //   ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02   cmd/ source must not contain switch on known cell-ID literals
 //   ASSEMBLY-MAXCONSISTENCY-DERIVED-03  AssemblyMeta.MaxConsistencyLevel must carry yaml:"-"
 //   ASSEMBLY-CELLMODULE-TYPE-04         cmd/{id}/ must declare top-level CellModule type
@@ -34,6 +36,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // ---- ASSEMBLY-MODULES-GEN-01 / ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02 /
@@ -105,38 +109,94 @@ func loadKnownCellIDs(t *testing.T) []string {
 // INVARIANT: ASSEMBLY-MODULES-GEN-01
 //
 // TestAssemblyModulesGen_HasGeneratedMarker enforces ASSEMBLY-MODULES-GEN-01:
-// every cmd/*/modules_gen.go file must carry the canonical DO NOT EDIT marker
-// as the first line, declare `package main`, and expose a top-level
-// `func generatedCellModules() []CellModule` function.
+// every <derived>/modules_gen.go file (for assemblies that declare cells) must
+// carry the canonical DO NOT EDIT marker as the first line, declare
+// `package main`, and expose a top-level `func generatedCellModules() []CellModule`
+// function.
 //
-// If no modules_gen.go files exist the test passes (the rule only fires when
-// the file is present; new cmd packages without codegen are not penalized).
+// Discovery rating: Medium — driven by metadata.ProjectMeta.Assemblies (single
+// source of truth for assembly locations). Previously path-glob on cmd/ only;
+// upgraded to cover both assemblies/ (→ cmd/<id>/) and examples/ (→ examples/<id>/)
+// by deriving the modules_gen.go location from asm.Build.Entrypoint.
+//
+// Blind-spot inventory (tools used: metadata.NewParser + filepath.Dir):
+//   - Assemblies with SkipGenerate or zero cells: no modules_gen.go is expected;
+//     the test skips them via len(asm.Cells)==0 check.
+//   - modules_gen.go files NOT referenced by any assembly: orphaned files under
+//     cmd/ or examples/ that exist on disk but no assembly points to them are not
+//     checked. Such orphans are caught by generatedverify reverse-enumeration.
+//
+// Reverse self-check: TestAssemblyModulesGen_ScopeCoversExamples below verifies
+// that at least one examples/ assembly is included in the checked set.
 func TestAssemblyModulesGen_HasGeneratedMarker(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"cmd"},
-		MatchRels(func(rel string) bool {
-			rel = filepath.ToSlash(rel)
-			return filepath.Base(rel) == "modules_gen.go" && strings.Count(rel, "/") == depth2SlashCount
-		}),
-	)
+
+	project, err := metadata.NewParser(root).Parse()
+	require.NoError(t, err, "%s: metadata parse failed", ruleAssemblyModulesGen01)
+
+	// Collect assembly IDs that have cells (only those produce modules_gen.go).
+	ids := make([]string, 0, len(project.Assemblies))
+	for id, asm := range project.Assemblies {
+		if len(asm.Cells) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
 
 	hits := 0
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			hits++
-			path := p.Fset.Position(file.Pos()).Filename
-			rel := p.Rel(file)
-			t.Run(rel, func(t *testing.T) {
-				t.Parallel()
-				checkModulesGenFile(t, path, rel)
-			})
+	for _, id := range ids {
+		asm := project.Assemblies[id]
+		if asm.Build.Entrypoint == "" {
+			t.Errorf("%s: assembly %q has cells but empty Build.Entrypoint; parser bug", ruleAssemblyModulesGen01, id)
+			continue
 		}
-		return nil
-	})
-	if hits == 0 {
-		t.Logf("%s: no cmd/*/modules_gen.go files found — nothing to enforce", ruleAssemblyModulesGen01)
+		cmdDir := filepath.Dir(asm.Build.Entrypoint)
+		rel := filepath.ToSlash(filepath.Join(cmdDir, "modules_gen.go"))
+		absPath := filepath.Join(root, filepath.FromSlash(rel))
+
+		if _, statErr := os.Stat(absPath); os.IsNotExist(statErr) {
+			t.Errorf("%s: assembly %q expected modules_gen.go at %s but file not found; run `gocell generate assembly`",
+				ruleAssemblyModulesGen01, id, rel)
+			continue
+		}
+
+		hits++
+		id, rel, absPath := id, rel, absPath // capture for subtest
+		t.Run(rel, func(t *testing.T) {
+			t.Parallel()
+			_ = id // used for context in checkModulesGenFile error messages
+			checkModulesGenFile(t, absPath, rel)
+		})
 	}
+	if hits == 0 {
+		t.Logf("%s: no assemblies with cells found — nothing to enforce", ruleAssemblyModulesGen01)
+	}
+}
+
+// TestAssemblyModulesGen_ScopeCoversExamples is a reverse self-check for
+// TestAssemblyModulesGen_HasGeneratedMarker: at least one examples/ assembly
+// must be present in the project so the test is not inadvertently blind to that
+// path form.
+func TestAssemblyModulesGen_ScopeCoversExamples(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+
+	project, err := metadata.NewParser(root).Parse()
+	require.NoError(t, err, "%s: metadata parse failed", ruleAssemblyModulesGen01)
+
+	hasExamples := false
+	for _, asm := range project.Assemblies {
+		if strings.HasPrefix(filepath.ToSlash(asm.File), "examples/") {
+			hasExamples = true
+			break
+		}
+	}
+	assert.True(t, hasExamples,
+		"%s: no examples/ assembly found in ProjectMeta.Assemblies; "+
+			"the metadata-derived scope upgrade would be a no-op — "+
+			"add at least one examples/ assembly or revisit the discovery strategy",
+		ruleAssemblyModulesGen01)
 }
 
 // checkModulesGenFile verifies the three ASSEMBLY-MODULES-GEN-01 invariants

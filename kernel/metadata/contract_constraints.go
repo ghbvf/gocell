@@ -65,11 +65,16 @@ func MatchCellID(s string) bool { return scaffoldid.Match(s) }
 func MatchGoStructName(s string) bool { return goStructNameRe.MatchString(s) }
 
 // IsValidMetadataText reports whether value is free of the control characters
-// (\n, \r, \x00) that would break inline YAML scalar emission or fabricate
+// (\n, \r, \x00, \t) that would break inline YAML scalar emission or fabricate
 // adjacent YAML fields when interpolated into scaffold templates. All other
 // characters — colons, dashes, unicode, punctuation — are accepted at this
 // layer; full YAML scalar safety (quoting / escaping) is the responsibility
 // of pkg/yamlsafe.Quote at the rendering boundary.
+//
+// Tab (\t) is included because YAML 1.2 §5.1 allows tab in plain scalars, so
+// yamlsafe.Quote would not add quotes around a tab-containing value, letting
+// the tab pass through to the generated YAML unchanged. This matches the
+// validateScaffoldID / validateScaffoldText tab-hardening (#8).
 //
 // Predicate convention: Match* for pattern-bound checks (regex compliance);
 // Is* for semantic free-text checks. Both return bool so callers wrap with
@@ -86,7 +91,7 @@ func MatchGoStructName(s string) bool { return goStructNameRe.MatchString(s) }
 // ref: kubernetes/apimachinery pkg/util/validation/validation.go — same
 // exported-helper-only convention (pattern unexported, helper exported).
 func IsValidMetadataText(value string) bool {
-	return !strings.ContainsAny(value, "\n\r\x00")
+	return !strings.ContainsAny(value, "\n\r\x00\t")
 }
 
 // IsKnownDeployTemplate reports whether s is one of DeployTemplateEnum.

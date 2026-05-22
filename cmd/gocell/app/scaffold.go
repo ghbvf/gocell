@@ -32,6 +32,10 @@ const ErrScaffoldInvalidOpts errcode.Code = "ERR_SCAFFOLD_INVALID_OPTS"
 // control-char branch is a strict superset of validateScaffoldText so all
 // ID call sites get newline rejection automatically.
 //
+// Tab (\t) is rejected as defense-in-depth: YAML 1.2 §5.1 permits tab in
+// plain scalars so yamlsafe.Quote would not add quotes, letting the tab pass
+// through to generated YAML. (VALIDATE-SCAFFOLD-ID-TAB-CHAR-01)
+//
 // Mirrors cellgen.validateScaffoldSpec for parity across all scaffold CLI
 // paths after kernel/scaffold removal in K#09.
 func validateScaffoldID(value, field string) error {
@@ -45,19 +49,22 @@ func validateScaffoldID(value, field string) error {
 			"scaffold field contains path traversal or separator",
 			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
 	}
-	if strings.ContainsAny(value, "\n\r\x00") {
+	if strings.ContainsAny(value, "\n\r\x00\t") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))
+			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
 	}
 	return nil
 }
 
-// validateScaffoldText rejects newline / carriage-return / NUL in free-text
-// inputs (goal, team, role) so user values cannot inject extra YAML fields
-// or break scalar quoting in the inline templates.
+// validateScaffoldText rejects newline / carriage-return / NUL / tab in
+// free-text inputs (goal, team, role) so user values cannot inject extra
+// YAML fields or break scalar quoting in the inline templates. Tab is
+// included for consistency with validateScaffoldID (#8 hardening): YAML 1.2
+// §5.1 allows tab in plain scalars so yamlsafe.Quote would not add quotes,
+// letting a tab pass through to the generated YAML.
 func validateScaffoldText(value, field string) error {
-	if strings.ContainsAny(value, "\n\r\x00") {
+	if strings.ContainsAny(value, "\n\r\x00\t") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
 			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))

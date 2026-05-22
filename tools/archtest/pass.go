@@ -295,8 +295,7 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 //     in the Pass but skipped per-file. It is not enforced to route through
 //     RunTypedProduction. The Hard "upstream" property (violation unrepresentable
 //     at the call site) is not achievable without sealing the RunTyped API,
-//     which would break fixture-module and partial-scan rules. Tracked as
-//     backlog item PASS-PRODUCTION-UPSTREAM-HARD-01.
+//     which would break fixture-module and partial-scan rules.
 //
 // Failure modes (module-root not found, go.mod unreadable, load error)
 // fail-loud via t.Fatalf. For the full set including generated/, use

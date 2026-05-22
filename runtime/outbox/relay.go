@@ -70,7 +70,7 @@ type pollStats struct {
 	// lost counts failure writebacks that lost their lease mid-flight
 	// (Mark{Retry,Dead} returned updated=false). The new lease owner — the
 	// reclaimer or a peer — reports the canonical outcome, so this writeback
-	// must NOT be counted as retried/dead. ref: backlog2 B2-A-05.
+	// must NOT be counted as retried/dead. ref: B2-A-05.
 	lost int
 }
 
@@ -684,13 +684,13 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 // Each ReclaimStale call caps at cfg.ReclaimBatchSize so the underlying
 // UPDATE never produces a multi-second statement that blocks VACUUM /
 // replication. We loop until a sweep returns < batchSize, draining a
-// large backlog promptly inside the same tick rather than waiting up to
+// large accumulated set promptly inside the same tick rather than waiting up to
 // ReclaimInterval per cap-sized chunk. Loop also breaks on ctx cancel.
 //
 // reclaimMaxIterations bounds the loop so a producer that keeps pushing
 // stale claiming rows faster than we can drain them cannot starve the
-// reclaim goroutine inside one tick. Hitting the cap is a backlog
-// indicator, not a correctness issue — the next reclaim tick will pick
+// reclaim goroutine inside one tick. Hitting the cap indicates accumulated
+// stale rows, not a correctness issue — the next reclaim tick will pick
 // up where this one left off.
 //
 // ref: riverqueue/river internal/maintenance/job_rescuer.go (batch loop break)
@@ -732,7 +732,7 @@ func (r *Relay) reclaimStale(ctx context.Context) error {
 
 // reclaimMaxIterations is the per-tick safety cap for the reclaim drain
 // loop. With the default batch=1000, each tick can recover up to 16,000
-// rows; deeper backlogs spill into the next ReclaimInterval tick. The
+// rows; deeper queues spill into the next ReclaimInterval tick. The
 // constant is small enough that pathological behavior (Store bug
 // returning count==batch forever) cannot block a relay shutdown by
 // more than a handful of ReclaimStale round-trips.

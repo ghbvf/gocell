@@ -255,14 +255,16 @@ type PassCriterion struct {
 	CheckRef string `yaml:"checkRef,omitempty"`
 }
 
-// AssemblyMeta maps to assemblies/{id}/assembly.yaml.
+// AssemblyMeta maps to assemblies/{id}/assembly.yaml (platform assemblies)
+// or examples/{id}/assembly.yaml (example assemblies).
+// See parser.matchAssemblyYAML for the recognized path forms.
 type AssemblyMeta struct {
 	ID                  string    `yaml:"id"`
 	Cells               []string  `yaml:"cells"`
 	Owner               OwnerMeta `yaml:"owner"`
 	Build               BuildMeta `yaml:"build,omitempty"`
 	MaxConsistencyLevel string    `yaml:"-"` // derived; yaml occurrence rejected by KnownFields
-	Dir                 string    `yaml:"-"` // directory segment under assemblies/, set by parser
+	Dir                 string    `yaml:"-"` // assembly directory name (parts[1]); set by parser from path, not YAML
 	File                string    `yaml:"-"` // parsed assembly.yaml path relative to project root
 }
 

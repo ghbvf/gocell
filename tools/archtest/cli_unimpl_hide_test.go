@@ -1,7 +1,7 @@
 // INVARIANT: CLI-UNIMPL-HIDE-01
 //
 // No `gocell` sub-command may be visible in help while being
-// unimplemented (B2-X-05 / cap-14 CLI-UNIMPL-HIDE-01). The four
+// unimplemented (invariant CLI-UNIMPL-HIDE-01). The four
 // help-bearing verb trees — generate / verify / scaffold / check — each
 // own a single typed registry (cmd/gocell/app/subcommand.go's
 // subcommand[H]); dispatch and help BOTH derive from that one slice, so a
@@ -44,8 +44,8 @@
 //     listing the seven top-level commands; it is NOT a subcommand
 //     registry, so the four-tree funnel does not cover it. Compensated by
 //     assertPrintUsageNoStaleToken (no "indexes" / "not implemented"
-//     token) and tracked for single-sourcing by backlog
-//     CLI-TOPLEVEL-HELP-REGISTRY-01. Top-level commands map ↔ PrintUsage
+//     token) and tracked for single-sourcing as CLI-TOPLEVEL-HELP-REGISTRY-01.
+//     Top-level commands map ↔ PrintUsage
 //     drift is the explicit follow-up, not silent carryover.
 //  2. helpEntry built with a named field (`helpEntry{name: …}`) vs
 //     positional (`helpEntry{…}`) — both handled (KeyValueExpr key and
@@ -301,9 +301,7 @@ func containsMsg(diags []Diagnostic, sub string) bool {
 // compensation (ledger §1): dispatch.go's free-form PrintUsage is not a
 // registry, so the four-tree funnel does not bind it. This guards the one
 // concrete drift that mattered — a stale "indexes" / "not implemented"
-// token surviving in the top-level usage prose — until the top-level
-// commands map ↔ PrintUsage single-sourcing follow-up
-// (backlog CLI-TOPLEVEL-HELP-REGISTRY-01) lands.
+// token surviving in the top-level usage prose.
 func TestCLIUnimplHide01_PrintUsageNoStaleToken(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)

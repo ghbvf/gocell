@@ -59,7 +59,7 @@ import (
 //	  package, e.g. `f := os.Open(dir); f.ReadDir(-1)` resolves to
 //	  (*os.File).ReadDir; `var fsys fs.ReadDirFS; fsys.ReadDir(".")` resolves
 //	  to (fs.ReadDirFS).ReadDir. Type-aware via go/types Info — closes
-//	  PR430-FU-USAGE-01-TYPE-AWARE backlog (PackageAliases-based AST scan
+//	  PR430-FU-USAGE-01-TYPE-AWARE (PackageAliases-based AST scan
 //	  missed these forms).
 //
 //	Path B — `for _, X := range Y { X.(*ast.W) }` when Y's static type is
@@ -229,8 +229,7 @@ var forbiddenWalkSymbols = map[string][]string{
 // needs to ban embed.FS.ReadDir, add `"embed": {"ReadDir"}` here and a
 // fixture case.
 //
-// Closes backlog PR430-FU-USAGE-01-TYPE-AWARE — the prior PackageAliases-
-// based AST scan could not see these because it had no type info.
+// The prior PackageAliases-based AST scan could not see these because it had no type info.
 var forbiddenMethodSymbols = map[string][]string{
 	"os":                                  {"ReadDir"},
 	"io/fs":                               {"ReadDir", "WalkDir", "Glob"},
@@ -1310,8 +1309,8 @@ func _(file *ast.File, other []ast.Decl) {
 //	  for this rule shape (structurally identical to PANIC-REGISTERED-01's
 //	  honest caveat in .claude/rules/gocell/ai-collab.md: "the enforcement
 //	  is archtest-bound, not compile-time ... the highest grade reachable in
-//	  Go for this rule shape"). No upstream-Hard backlog opened (none
-//	  reachable). FINDFIRSTINSUBTREE-API-01 is an orthogonal coverage axis
+//	  Go for this rule shape"). No upstream-Hard path reachable.
+//	  FINDFIRSTINSUBTREE-API-01 is an orthogonal coverage axis
 //	  (subtree find-first), not this funnel's hardening path — do not
 //	  conflate.
 //	Fixture-live anti-drift (Hard, 040 Stage 1.8): both

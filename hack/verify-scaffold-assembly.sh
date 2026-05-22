@@ -66,6 +66,47 @@ run_smoke() {
   # Auto-generate ran inside `scaffold assembly`; verify the result builds.
   go build -o /dev/null "./cmd/${ASM_ID}/..."
 
+  # SCAFFOLD-RUN-RUNTIME-SMOKE: runnable stub must block on ctx.Done() until
+  # SIGTERM/SIGINT rather than returning immediately with an error. A blocking
+  # stub lets `go run ./cmd/{id}` start cleanly and wait for a signal.
+  # Pure-POSIX background-kill loop — no external deps (timeout/gtimeout/perl).
+  # timeout exits 124 when it kills the child; any other exit code means the
+  # stub returned early (0 = already exited cleanly, 1 = error, etc.).
+  echo "verify-scaffold-assembly: smoke gate ASM_ID=$ASM_ID"
+
+  set +e
+  go run "./cmd/${ASM_ID}/..." &
+  GO_PID=$!
+  SLEPT=0
+  RC=""
+  while [ "$SLEPT" -lt 5 ]; do
+    if ! kill -0 "$GO_PID" 2>/dev/null; then
+      # Process already exited — capture its exit code.
+      wait "$GO_PID"
+      RC=$?
+      break
+    fi
+    sleep 1
+    SLEPT=$((SLEPT + 1))
+  done
+  if [ -z "$RC" ]; then
+    # Still running after 5 s — treat as success (124-equivalent).
+    kill -TERM "$GO_PID" 2>/dev/null
+    sleep 1
+    kill -KILL "$GO_PID" 2>/dev/null
+    wait "$GO_PID" 2>/dev/null
+    RC=124
+  fi
+  set -e
+
+  if [ "$RC" -ne 124 ]; then
+    echo "FAIL: verify-scaffold-assembly — expected timeout-killed (exit 124), got exit code $RC" >&2
+    echo "The runnable stub must block on ctx.Done() rather than returning immediately." >&2
+    echo "See SCAFFOLD-RUN-RUNTIME-SMOKE and kernel/assembly/gentpl/scaffold-run-go.tpl" >&2
+    exit 1
+  fi
+  echo "OK: runnable stub blocks correctly (timeout-killed, RC=124)"
+
   # K#10 funnel sanity: assembly.yaml must NOT carry deployTemplate when
   # --deploy=k8s (default). Grep returns 1 (no match) on success.
   if grep -q "deployTemplate" "assemblies/${ASM_ID}/assembly.yaml"; then

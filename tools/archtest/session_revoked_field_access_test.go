@@ -25,7 +25,7 @@ package archtest
 // "user-not-found / userRepo unavailable / inactive user" 同一个 errcode
 // envelope。SESSION-REVOKED-FIELD-ACCESS-01 锁字段访问点，wire-uniformity 由
 // per-slice service_test.go 通过结构化字段断言 + revoked + repoErr / revoked
-// + inactive 组合用例守护（trigger backlog: WIRE-UNIFORM-RESPONSE-ARCHTEST-01）。
+// + inactive 组合用例守护（WIRE-UNIFORM-RESPONSE-ARCHTEST-01）。
 //
 // Scanning tools:
 //   - *types.Info.Selections lookup over EachInSubtree[ast.SelectorExpr]

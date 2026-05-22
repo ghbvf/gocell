@@ -310,7 +310,8 @@ func (v *Validator) validateREF16() []ValidationResult {
 	}
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
-		boundaryPath := filepath.Join(v.root, "assemblies", a.ID, "generated", "boundary.yaml")
+		generatedDir := metadata.AssemblyGeneratedDir(a)
+		boundaryPath := filepath.Join(v.root, filepath.FromSlash(generatedDir), "boundary.yaml")
 		if !IsWithinRoot(v.root, boundaryPath) {
 			results = append(results, v.newResult(
 				codeREF16, SeverityError, IssueInvalid,
@@ -327,9 +328,9 @@ func (v *Validator) validateREF16() []ValidationResult {
 				assemblyFile(a),
 				"id",
 				fmt.Sprintf(
-					"assembly %q has no generated boundary.yaml at assemblies/%s/generated/boundary.yaml;"+
+					"assembly %q has no generated boundary.yaml at %s/boundary.yaml;"+
 						" run 'gocell generate' to create it",
-					a.ID, a.ID,
+					a.ID, generatedDir,
 				),
 			))
 		}

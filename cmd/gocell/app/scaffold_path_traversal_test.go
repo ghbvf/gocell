@@ -84,6 +84,19 @@ func TestRunScaffold_ControlCharInjection(t *testing.T) {
 		{"cell_id_newline", []string{"cell", "--team=t", "--role=r", "--id=evil\nextra: pwned"}},
 		{"cell_team_newline", []string{"cell", "--id=ok", "--role=r", "--team=evil\nextra: pwned"}},
 		{"cell_role_newline", []string{"cell", "--id=ok", "--team=t", "--role=evil\nextra: pwned"}},
+		// VALIDATE-SCAFFOLD-ID-TAB-CHAR-01: tab must be rejected by validateScaffoldID
+		// (defense-in-depth; YAML 1.2 §5.1 allows tab in plain scalars so yamlsafe.Quote
+		// would not add quotes, letting the tab pass through to the generated YAML).
+		{"contract_id_tab", []string{"contract", "--kind=http", "--owner=examplecell", "--id=evil\tfield: injected"}},
+		{"contract_kind_tab", []string{"contract", "--id=http.foo.v1", "--owner=examplecell", "--kind=http\tX"}},
+		{"journey_id_tab", []string{"journey", "--goal=g", "--team=t", "--cells=examplecell", "--id=evil\tfield: injected"}},
+		// VALIDATE-SCAFFOLD-TEXT-TAB-CHAR-01: tab must also be rejected by
+		// validateScaffoldText (free-text fields). Same YAML 1.2 §5.1 rationale
+		// as the ID path; consistent with validateScaffoldID #8 hardening.
+		{"journey_goal_tab", []string{"journey", "--id=mj", "--team=t", "--cells=examplecell", "--goal=evil\tfield: injected"}},
+		{"journey_team_tab", []string{"journey", "--id=mj", "--goal=g", "--cells=examplecell", "--team=evil\tfield: injected"}},
+		{"assembly_team_tab", []string{"assembly", "--id=as", "--cells=examplecell", "--role=r", "--team=evil\tfield: injected"}},
+		{"assembly_role_tab", []string{"assembly", "--id=as", "--cells=examplecell", "--team=t", "--role=evil\tfield: injected"}},
 	}
 
 	for _, tc := range cases {

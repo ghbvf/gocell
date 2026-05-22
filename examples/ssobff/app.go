@@ -63,9 +63,8 @@ const ssobffDatabaseURLEnv = "DATABASE_URL"
 // ssobffBootstrapAuthFailLogger returns the onAuthFail observer wired into the
 // demo bootstrap middleware.
 //
-// Tracked: SSOBFF-BOOTSTRAP-AUDIT-CHAIN-WIRING-01 — migrate to
-// runtime/audit.NewBootstrapAuthFailObserver when the backlog item ships.
-// This is the legacy slog-only shape kept until then.
+// This is the legacy slog-only shape; migrate to runtime/audit.NewBootstrapAuthFailObserver
+// when the audit chain wiring is complete.
 func ssobffBootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailObserver {
 	return func(ctx context.Context, reason string) {
 		logger.ErrorContext(ctx, "bootstrap_auth_failed",
@@ -78,8 +77,7 @@ func ssobffBootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailOb
 //
 // Single-pod demo only: the idempotency claimer is in-memory
 // (idempotency.NewInMemClaimer). Multi-pod deployments require a Redis-backed
-// claimer to guarantee at-most-once event processing across replicas. See
-// backlog item SSOBFF-REDIS-CLAIMER-UPGRADE for the upgrade path.
+// claimer to guarantee at-most-once event processing across replicas.
 type SSOBFFApp struct {
 	bootstrap          *bootstrap.Bootstrap
 	primaryListenAddr  string
@@ -387,7 +385,8 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (accesscore): %w", err)
 	}
-	ac := accesscore.NewAccessCore(append(accessStorageOpts,
+	ac := accesscore.NewAccessCore(append(
+		accessStorageOpts,
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithBootstrapAuth(p.bootstrapMW),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(p.eb), outbox.WrapWriterForCell(p.pgOutboxWriter)),
@@ -413,7 +412,8 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (configcore): %w", err)
 	}
-	cc := configcore.NewConfigCore(append(configStorageOpts,
+	cc := configcore.NewConfigCore(append(
+		configStorageOpts,
 		configcore.WithClock(clock.Real()),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(p.eb), outbox.WrapWriterForCell(p.pgOutboxWriter)),
 		configcore.WithTxManager(persistence.WrapForCell(p.txMgr)),

@@ -30,8 +30,8 @@ package app
 // NOT-yet-funneled surface of the same drift class — a new unimplemented
 // top-level command could appear in PrintUsage prose without an archtest
 // catching it. That gap is an explicitly registered, non-silent
-// follow-up: backlog cap-14 CLI-TOPLEVEL-HELP-REGISTRY-01 (single-source
-// the top-level command list the same way). Until then
+// follow-up (CLI-TOPLEVEL-HELP-REGISTRY-01: single-source the top-level
+// command list the same way). Until then
 // tools/archtest/cli_unimpl_hide_test.go's
 // TestCLIUnimplHide01_PrintUsageNoStaleToken is the Medium compensating
 // guard (no stale "indexes"/"not implemented" token in PrintUsage).

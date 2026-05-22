@@ -129,7 +129,7 @@ flowchart LR
   slice["cells/*/slices/*/slice.yaml"] --> parser
   contract["contracts/**/contract.yaml"] --> parser
   journey["journeys/J-*.yaml"] --> parser
-  assembly["assemblies/*/assembly.yaml"] --> parser
+  assembly["assemblies/*/assembly.yaml<br>examples/*/assembly.yaml"] --> parser
   actor["actors.yaml"] --> parser
 
   parser --> pm["ProjectMeta"]

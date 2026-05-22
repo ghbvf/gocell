@@ -12,7 +12,7 @@
 // a RunInTx + ports.SetupLockAcquirer pair:
 //
 //   - PG mode: accesspg.NewBundle(pool, txm, clk).SetupLock() uses pg_advisory_xact_lock for cross-pod
-//     mutual exclusion (Closes backlog ADMINPROVISION-DIST-LOCK-01).
+//     mutual exclusion.
 //   - Memstore mode: accesscore.NoopSetupLock — memTxRunner.RunInTx holds
 //     store.mu for the whole closure, already serializing goroutines.
 //

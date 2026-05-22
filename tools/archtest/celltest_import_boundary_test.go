@@ -48,10 +48,8 @@
 //  2. kernel/ own files including _test.go (CELLTEST-B) — layering rule;
 //  3. examples/ non-_test.go (CELLTEST-C) — mirrors keystest boundary.
 //
-// A follow-up backlog item CELLTEST-B2-CELLS-EXAMPLES-TESTFILES documents the
-// path to extending CELLTEST-B to cover cells/_test.go and examples/_test.go
-// if future policy changes (e.g., if examples grow a separate composition root
-// that must not use test helpers).
+// CELLTEST-B currently covers kernel/ own files; cells/_test.go and
+// examples/_test.go are out of scope for this rule.
 //
 // # AI-rebust grade: Medium — import-path string matching via go/parser.
 //
@@ -79,7 +77,7 @@
 // ref: ADR `docs/architecture/202605171800-adr-kernel-mustctor-removal.md`
 // ref: AUTH-KEYSTEST-IMPORT-BOUNDARY-01 in tools/archtest/auth_keystest_boundary_test.go
 // ref: AUTH-AUTHTEST-BOUNDARY-01 in tools/archtest/auth_authtest_boundary_test.go
-// backlog: CELLTEST-B2-CELLS-EXAMPLES-TESTFILES — extend CELLTEST-B to cells/_test.go +
+// CELLTEST-B2-CELLS-EXAMPLES-TESTFILES: extend CELLTEST-B to cells/_test.go +
 //
 //	examples/_test.go if test-helper import policy tightens in the future.
 package archtest

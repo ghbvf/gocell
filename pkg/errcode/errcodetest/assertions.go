@@ -46,7 +46,7 @@ import (
 //   - err == nil — the test expected a NotFound error but received nil
 //   - err does not chain to *errcode.Error via errors.As — the test path
 //     is returning a bare/sentinel error, which is the exact mutation-test
-//     hazard this funnel exists to forbid (see ADR cap-14:18 motivation)
+//     hazard this funnel exists to forbid
 //
 // On a Code mismatch the funnel calls t.Errorf (non-fatal) so subsequent
 // assertions in the same test still run.

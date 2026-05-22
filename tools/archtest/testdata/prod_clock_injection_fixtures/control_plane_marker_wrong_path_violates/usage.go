@@ -10,7 +10,7 @@ import "time"
 
 // controlPlaneTicker has the right name + marker but the wrong path.
 //
-//archtest:allow:clock-injection:control-plane control-plane scheduling ticker must use real time. Hard upgrade: backlog CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01.
+//archtest:allow:clock-injection:control-plane control-plane scheduling ticker must use real time.
 func controlPlaneTicker(interval time.Duration) *time.Ticker {
 	return time.NewTicker(interval) // must be flagged — rel not allowlisted
 }
