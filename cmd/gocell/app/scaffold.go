@@ -32,6 +32,10 @@ const ErrScaffoldInvalidOpts errcode.Code = "ERR_SCAFFOLD_INVALID_OPTS"
 // control-char branch is a strict superset of validateScaffoldText so all
 // ID call sites get newline rejection automatically.
 //
+// Tab (\t) is rejected as defense-in-depth: YAML 1.2 §5.1 permits tab in
+// plain scalars so yamlsafe.Quote would not add quotes, letting the tab pass
+// through to generated YAML. (VALIDATE-SCAFFOLD-ID-TAB-CHAR-01)
+//
 // Mirrors cellgen.validateScaffoldSpec for parity across all scaffold CLI
 // paths after kernel/scaffold removal in K#09.
 func validateScaffoldID(value, field string) error {
@@ -45,7 +49,7 @@ func validateScaffoldID(value, field string) error {
 			"scaffold field contains path traversal or separator",
 			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
 	}
-	if strings.ContainsAny(value, "\n\r\x00") {
+	if strings.ContainsAny(value, "\n\r\x00\t") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
 			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))
