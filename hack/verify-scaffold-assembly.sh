@@ -69,41 +69,35 @@ run_smoke() {
   # SCAFFOLD-RUN-RUNTIME-SMOKE: runnable stub must block on ctx.Done() until
   # SIGTERM/SIGINT rather than returning immediately with an error. A blocking
   # stub lets `go run ./cmd/{id}` start cleanly and wait for a signal.
-  # We use `timeout` (Linux/CI) with fallback to `gtimeout` (macOS + brew
-  # coreutils) or a plain Perl sleep-kill loop. timeout exits 124 when it
-  # kills the child; any other exit code means the stub returned early
-  # (0 = already exited cleanly, 1 = error, etc.).
-  TIMEOUT_CMD=""
-  if command -v timeout >/dev/null 2>&1; then
-    TIMEOUT_CMD="timeout"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    TIMEOUT_CMD="gtimeout"
-  fi
+  # Pure-POSIX background-kill loop — no external deps (timeout/gtimeout/perl).
+  # timeout exits 124 when it kills the child; any other exit code means the
+  # stub returned early (0 = already exited cleanly, 1 = error, etc.).
+  echo "verify-scaffold-assembly: smoke gate ASM_ID=$ASM_ID"
 
-  echo "verify-scaffold-assembly: using ${TIMEOUT_CMD:-perl-fallback} for runtime smoke (ASM_ID=$ASM_ID)"
-
-  if [ -n "$TIMEOUT_CMD" ]; then
-    set +e
-    $TIMEOUT_CMD 5 go run "./cmd/${ASM_ID}/..."
-    RC=$?
-    set -e
-  else
-    # Portable Perl fallback: run the child, kill it after 5 seconds, exit 124.
-    # Note: shell expands ASM_ID before passing the string to Perl.
-    set +e
-    perl -e '
-      my $pkg = shift;
-      my $pid = fork();
-      if ($pid == 0) { exec("go", "run", $pkg) or exit(127); }
-      local $SIG{ALRM} = sub { kill(15, $pid); sleep 1; kill(9, $pid); exit(124); };
-      alarm(5);
-      waitpid($pid, 0);
-      my $exit = ($? >> 8);
-      exit($exit);
-    ' -- "./cmd/${ASM_ID}/..."
-    RC=$?
-    set -e
+  set +e
+  go run "./cmd/${ASM_ID}/..." &
+  GO_PID=$!
+  SLEPT=0
+  RC=""
+  while [ "$SLEPT" -lt 5 ]; do
+    if ! kill -0 "$GO_PID" 2>/dev/null; then
+      # Process already exited — capture its exit code.
+      wait "$GO_PID"
+      RC=$?
+      break
+    fi
+    sleep 1
+    SLEPT=$((SLEPT + 1))
+  done
+  if [ -z "$RC" ]; then
+    # Still running after 5 s — treat as success (124-equivalent).
+    kill -TERM "$GO_PID" 2>/dev/null
+    sleep 1
+    kill -KILL "$GO_PID" 2>/dev/null
+    wait "$GO_PID" 2>/dev/null
+    RC=124
   fi
+  set -e
 
   if [ "$RC" -ne 124 ]; then
     echo "FAIL: verify-scaffold-assembly — expected timeout-killed (exit 124), got exit code $RC" >&2
@@ -111,7 +105,7 @@ run_smoke() {
     echo "See SCAFFOLD-RUN-RUNTIME-SMOKE and kernel/assembly/gentpl/scaffold-run-go.tpl" >&2
     exit 1
   fi
-  echo "OK: runnable stub blocks correctly (timeout-killed with exit 124)"
+  echo "OK: runnable stub blocks correctly (timeout-killed, RC=124)"
 
   # K#10 funnel sanity: assembly.yaml must NOT carry deployTemplate when
   # --deploy=k8s (default). Grep returns 1 (no match) on success.
