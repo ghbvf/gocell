@@ -1,0 +1,1 @@
+tools/archtest/testdata/span_setattr_redact_fixtures/violates_default_attribute_string/span.go:46: attribute.String(...) callsite outside safeStringAttr/safeBytesAttr — bypass of redaction funnel (SPAN-SETATTR-REDACT-01 A2)

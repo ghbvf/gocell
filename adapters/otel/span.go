@@ -10,7 +10,15 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
+
+// INVARIANT: SPAN-SETATTR-REDACT-01 — every string-valued span attribute
+// in this adapter is funneled through safeStringAttr or safeBytesAttr, so
+// caller-supplied values (cell IDs, HTTP routes, contract metadata, error
+// text from middleware-injected resolvers) cannot reach an OTLP collector
+// without redaction + length cap. archtest tools/archtest/span_setattr_redact_test.go
+// locks the funnel (holder uniqueness + callsite uniqueness + helper form).
 
 // Compile-time checks: otelSpan implements wrapper.Span and
 // wrapper.SpanRenamer.
@@ -18,6 +26,15 @@ var (
 	_ wrapper.Span        = (*otelSpan)(nil)
 	_ wrapper.SpanRenamer = (*otelSpan)(nil)
 )
+
+// attrValueMaxLen caps the rune length of a single span-attribute string
+// value after redaction. The OTel SDK's AttributeValueLengthLimit defaults
+// to -1 (unlimited); a fail-closed adapter sets an explicit positive cap so
+// that one outsized attribute cannot inflate wire size or DOS the collector.
+// 2048 runes balances Jaeger/Tempo UI display caps with retaining enough
+// context for typical error / route / contract metadata. Always applied
+// AFTER RedactString — see safeStringAttr godoc.
+const attrValueMaxLen = 2048
 
 // otelSpan wraps an OTel trace.Span to implement the kernel/wrapper.Span
 // interface.
@@ -46,7 +63,7 @@ func (s *otelSpan) SetAttributes(attrs ...wrapper.Attr) {
 func attrToKeyValue(a wrapper.Attr) attribute.KeyValue {
 	switch v := a.Value.(type) {
 	case string:
-		return attribute.String(a.Key, v)
+		return safeStringAttr(a.Key, v)
 	case int:
 		return attribute.Int(a.Key, v)
 	case int64:
@@ -56,10 +73,47 @@ func attrToKeyValue(a wrapper.Attr) attribute.KeyValue {
 	case bool:
 		return attribute.Bool(a.Key, v)
 	case []byte:
-		return attribute.String(a.Key, redactedBytesValue(v))
+		return safeBytesAttr(a.Key, v)
 	default:
-		return attribute.String(a.Key, fmt.Sprint(v))
+		return safeStringAttr(a.Key, fmt.Sprint(v))
 	}
+}
+
+// safeStringAttr is the single sanctioned out-of-package boundary for a
+// string-valued span attribute. Two-layer fail-closed scrubber:
+//
+//  1. Key-aware: if key names a sensitive field (per redaction.IsSensitiveKey),
+//     the value is replaced with redaction.Mask regardless of contents. This
+//     covers the structured leak where a caller passes
+//     wrapper.Attr{Key: "password", Value: "hunter2"} — the value is a bare
+//     string with no `password=` anchor, so RedactString alone would never
+//     match it.
+//  2. Free-form: non-sensitive keys flow through RedactString (mask
+//     `key=value` / `Authorization: Bearer …` substrings) then TruncateString
+//     (cap at attrValueMaxLen runes).
+//
+// Ordering within layer 2 is correctness-critical: RedactString MUST run
+// before TruncateString. If reversed, a sensitive value sitting past
+// attrValueMaxLen would have its mask anchor consumed by the cut, leaving
+// the tail unmasked when emitted to the collector.
+//
+// ref: pkg/redaction.IsSensitiveKey (structured key matcher)
+// ref: pkg/redaction.RedactString (mask `key=value` / `key: value` sensitive substrings)
+// ref: pkg/redaction.TruncateString (UTF-8 rune-safe cap; non-positive is no-op)
+func safeStringAttr(key, raw string) attribute.KeyValue {
+	if redaction.IsSensitiveKey(key) {
+		return attribute.String(key, redaction.Mask)
+	}
+	return attribute.String(key, redaction.TruncateString(redaction.RedactString(raw), attrValueMaxLen))
+}
+
+// safeBytesAttr is the single sanctioned boundary for a []byte span
+// attribute. Binary payloads cannot be meaningfully masked by the
+// `key=value` regex in pkg/redaction; instead, we replace the value with a
+// SHA256 hash + length, which preserves operator debugging (correlate by
+// hash, compare lengths) without exposing the bytes themselves.
+func safeBytesAttr(key string, b []byte) attribute.KeyValue {
+	return attribute.String(key, redactedBytesValue(b))
 }
 
 func redactedBytesValue(v []byte) string {
@@ -67,9 +121,15 @@ func redactedBytesValue(v []byte) string {
 	return fmt.Sprintf("[redacted bytes len=%d sha256=%s]", len(v), hex.EncodeToString(sum[:])[:16])
 }
 
-// RecordError adds an error event to the span.
+// RecordError adds an error event to the span. The error text is redacted via
+// pkg/redaction.RedactError before being forwarded to the OTel SDK, providing
+// defense-in-depth at the adapter boundary. Callers in kernel/wrapper and
+// runtime/http/middleware already redact before calling RecordError; this
+// additional layer ensures any future code path reaching otelSpan.RecordError
+// directly (workers, generated handlers, test spies) does not emit unredacted
+// error text to the collector.
 func (s *otelSpan) RecordError(err error) {
-	s.inner.RecordError(err)
+	s.inner.RecordError(redaction.RedactError(err))
 }
 
 // SetStatus sets the span status. wrapper.StatusError maps to codes.Error;

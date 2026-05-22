@@ -1,0 +1,1 @@
+tools/archtest/testdata/span_setattr_redact_fixtures/violates_bytes_form/span.go:36: safeBytesAttr return expr must be attribute.String(key, redactedBytesValue(b)) (SPAN-SETATTR-REDACT-01 A4)

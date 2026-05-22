@@ -127,6 +127,16 @@ github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_BumpAuthzE
 # pre-existing flake (~15.3s), surfaced on PR #504 verify-archtest CI.
 github.com/ghbvf/gocell/tools/archtest	TestCellIDPatternSingleSourceLiterals
 
+# type-graph-load: cell-id-pattern single-source struct-field scan — sibling
+# of TestCellIDPatternSingleSourceLiterals above, same whole-repo typeseval
+# load over cells/ + runtime/ + adapters/. Pre-existing borderline flake.
+# Surfaced on PR #850 fixup commit verify-archtest shard 13 (28.62s > 20s)
+# after this PR's 3 new fixture packages shifted the 16-shard modulo
+# distribution off the cached SharedResolver — same modulo-shift SLOW-flake
+# class as the entries above (cumulative trigger evidence for
+# ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestCellIDPatternSingleSource
+
 # type-graph-load: user-repo conformance enrollment scan — type-aware
 # types.Implements walk over the whole module to enumerate ports.UserRepository
 # implementers plus per-test conformance.RunUserRepoConformance callee
@@ -218,6 +228,19 @@ github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral_NoIndirectRefer
 # SLOW-flake class as the entries above (cumulative trigger evidence for
 # ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
 github.com/ghbvf/gocell/tools/archtest	TestExternalReasonLiteral
+
+# type-graph-load: POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01
+# (PR #530) scans every fake-PG ErrNotFound mixup module-wide via the
+# Pass-Driver funnel. Single RunTyped over ./... with Tests:true; same
+# whole-module SharedResolver + Tests:true profile as the sibling
+# TestEventuallyFunnel / TestExternalReasonLiteral entries above.
+# Pre-existing borderline (PR #530 introduced it). Surfaced on PR #850
+# fixup commit verify-archtest shard 3 (24.69s > 20s) after this PR's
+# 3 new fixture packages shifted the 16-shard modulo distribution off
+# the cached SharedResolver — same modulo-shift SLOW-flake class as the
+# entries above (cumulative trigger evidence for
+# ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+github.com/ghbvf/gocell/tools/archtest	TestNotFoundTestStrict
 
 # type-graph-load: TEST-EVENTUALLY-FUNNEL-01 main rule scans every banned
 # testify (require|assert).Eventually* callsite module-wide. Walks both

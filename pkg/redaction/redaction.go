@@ -81,6 +81,26 @@ var quotedJSONPattern = regexp.MustCompile(
 	`(?i)("(?:` + sensitiveKeyPattern + `)"\s*:\s*)"(?:\\.|[^"\\])*"`,
 )
 
+// sensitiveKeyExactPattern matches a bare key name (no surrounding text) that
+// names a sensitive field per sensitiveKeyPattern. Single source for any
+// "is this key sensitive" check on structured (key, value) pairs where the
+// value is bare and free-form regex (defaultPattern / quotedJSONPattern)
+// cannot fire — OTel span attributes, errcode.Details slog.Attr, future
+// structured scrubbers. Compiled once at package init.
+var sensitiveKeyExactPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern + `)$`)
+
+// IsSensitiveKey reports whether key (case-insensitive) names a sensitive
+// field per the package's single-source sensitiveKeyPattern. Used by
+// structured-attribute scrubbers where the value is bare and the free-form
+// `key=value` regex never fires (e.g., wrapper.Attr{Key: "password",
+// Value: "hunter2"} — the value field carries no `password=` anchor token
+// so RedactString returns it unchanged).
+//
+// ref: adapters/otel/span.go safeStringAttr; pkg/redaction.RedactSlogAttr.
+func IsSensitiveKey(key string) bool {
+	return sensitiveKeyExactPattern.MatchString(key)
+}
+
 // allPatterns runs in order. ORDER IS A CORRECTNESS CONSTRAINT, not a
 // performance optimization: `authorizationPattern` must consume the full
 // `Authorization: Bearer <token>` line before `defaultPattern` runs,
@@ -209,20 +229,24 @@ func RedactPanic(v any) string {
 	}
 }
 
-// RedactSlogAttr returns a copy of attr whose value is redacted via RedactAny.
-// Key is preserved verbatim; only the value runs through the regex masker.
+// RedactSlogAttr returns a copy of attr whose value is redacted. Two-layer
+// scrubber:
+//
+//  1. Key-aware: if attr.Key names a sensitive field (per IsSensitiveKey),
+//     the value is replaced with Mask regardless of slog.Value kind. This
+//     covers the structured leak where a caller writes
+//     errcode.WithDetails(slog.String("password", userInput)) — the value
+//     is a bare string, so the free-form regex in RedactString never
+//     matches, and prior to this branch the password was forwarded to slog
+//     verbatim.
+//  2. Value-aware (non-sensitive key): walk the underlying slog.Value and
+//     scrub string contents — String runs through RedactString; Group
+//     recurses; other kinds pass through (regex only matches text shapes).
 //
 // Generated handlers and pkg/httputil log paths use this to scrub user-supplied
 // errcode.Error.Details before they reach slog. It complements RedactError
-// (which masks string error text) — Details are slog.Attr structures, not
-// strings, so they need the slog.Attr-shaped helper.
-//
-// The implementation walks the underlying slog.Value:
-//
-//   - String values run through RedactString
-//   - Group values recurse over their attrs
-//   - All other kinds (int, bool, time, etc.) pass through unchanged because
-//     the regex only matches `key=value` text shapes
+// (which masks string error text); Details are slog.Attr structures, so they
+// need the slog.Attr-shaped helper.
 //
 // # Known limitations
 //
@@ -233,6 +257,9 @@ func RedactPanic(v any) string {
 // 需在此函数补 ValueResolve 并扩展锁定测试（pkg/redaction/redaction_test.go
 // TestRedactSlogAttr_PassthroughKinds）。
 func RedactSlogAttr(attr slog.Attr) slog.Attr {
+	if IsSensitiveKey(attr.Key) {
+		return slog.Attr{Key: attr.Key, Value: slog.StringValue(Mask)}
+	}
 	return slog.Attr{Key: attr.Key, Value: redactSlogValue(attr.Value)}
 }
 
@@ -251,10 +278,6 @@ func redactSlogValue(v slog.Value) slog.Value {
 		return v
 	}
 }
-
-// redactPayloadKeyPattern matches JSON object keys that contain sensitive
-// field names. Compiled once at package init (F9 package-level var).
-var redactPayloadKeyPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern + `)$`)
 
 // jsonMaskString is the JSON-encoded fail-closed mask value. It is a valid JSON
 // string token (`"<REDACTED>"`), safe to embed as json.RawMessage in a response
@@ -308,7 +331,7 @@ func RedactPayload(payload []byte) []byte {
 }
 
 // redactValue recursively traverses a JSON-decoded value and replaces the value
-// of any map key matching redactPayloadKeyPattern with Mask. Arrays are
+// of any map key matching sensitiveKeyExactPattern with Mask. Arrays are
 // traversed element-by-element. Scalar values (string, number, bool, nil) are
 // returned unchanged — they carry no key structure that could indicate sensitive
 // data.
@@ -316,7 +339,7 @@ func redactValue(v any) any {
 	switch val := v.(type) {
 	case map[string]any:
 		for k := range val {
-			if redactPayloadKeyPattern.MatchString(k) {
+			if sensitiveKeyExactPattern.MatchString(k) {
 				val[k] = Mask
 			} else {
 				val[k] = redactValue(val[k])

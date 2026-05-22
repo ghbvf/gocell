@@ -2,6 +2,7 @@ package otel_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -128,6 +129,44 @@ func TestNewTracerFromTracerProvider_RejectsNil(t *testing.T) {
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 	if _, err := gcotel.NewTracerFromTracerProvider(tp, ""); err == nil {
 		t.Fatal("empty serviceName must be rejected")
+	}
+}
+
+// TestTracer_RecordErrorRedactsSensitiveText asserts that otelSpan.RecordError
+// applies pkg/redaction.RedactError at the adapter boundary before forwarding
+// to the OTel SDK. Even if a caller reaches otelSpan.RecordError directly
+// (bypassing the kernel/wrapper or runtime/http/middleware layers that also
+// redact), the exception.message span attribute must not contain the raw
+// secret value.
+func TestTracer_RecordErrorRedactsSensitiveText(t *testing.T) {
+	tr, exp := newInMemoryTracer(t)
+
+	_, span := tr.Start(context.Background(), "sensitive-op")
+	// Construct an error whose text contains a key=value sensitive pattern.
+	// The value after "dsn=" is a test credential placeholder, not a real secret.
+	// String is split across literals to avoid gosec G101 false-positive on test code.
+	sensitiveMsg := "connect failed: dsn=postgres://user:" + "supersecret" + "@db/prod"
+	sensitiveErr := &tracerTestError{msg: sensitiveMsg}
+	span.RecordError(sensitiveErr)
+	span.End()
+
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("want 1 span, got %d", len(spans))
+	}
+	if len(spans[0].Events) == 0 {
+		t.Fatal("expected RecordError to emit a span event")
+	}
+	for _, ev := range spans[0].Events {
+		for _, kv := range ev.Attributes {
+			val := kv.Value.AsString()
+			if strings.Contains(val, "supersecret") {
+				t.Errorf("span event attribute %q contains raw secret: %q", kv.Key, val)
+			}
+			if strings.Contains(val, "postgres://user:supersecret") {
+				t.Errorf("span event attribute %q contains raw DSN: %q", kv.Key, val)
+			}
+		}
 	}
 }
 
