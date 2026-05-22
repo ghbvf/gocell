@@ -45,7 +45,18 @@ jobs:
               ' \
             | tr -d '[:space:]')
           if [[ ! "$priority" =~ ^P[0-3]$ ]]; then
-            echo "No Priority value found in issue body (got: '${priority}') — skipping (creator must add pri-pX manually)."
+            # No dropdown render found — this is the CLI-creation path. If the
+            # creator already attached pri-p[0-3] via `--label`, respect their
+            # choice; otherwise apply the `pri-missing` sentinel so the issue
+            # is discoverable via `gh issue list --label pri-missing`.
+            echo "No Priority value found in issue body (got: '${priority}')."
+            if gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels \
+                 -q '.labels[].name' | grep -qE '^pri-p[0-3]$'; then
+              echo "Creator already attached an explicit pri-pX — no sentinel needed."
+              exit 0
+            fi
+            echo "Applying pri-missing sentinel to issue #$ISSUE_NUMBER."
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "pri-missing"
             exit 0
           fi
           label="pri-p${priority#P}"

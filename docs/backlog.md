@@ -7,10 +7,27 @@ Project URL：https://github.com/users/ghbvf/projects/3
 
 ## 入口
 
-Web UI: `New Issue` → 选 `Backlog item` template。
-CLI: `gh issue create --label backlog` — template 接管 body（现状 / 修复方向 / Files / Trigger / Source），见 [`.github/ISSUE_TEMPLATE/backlog.yml`](../.github/ISSUE_TEMPLATE/backlog.yml)。
+两条互斥路径，**Priority 处理方式不同**——`gh issue create` 不会触发 Issue Forms dropdown UI，必须手工显式贴 label。
 
-建后追加 3 个 label：1 个 `cap-XX`、1 个 `flag-XX`、1 个 `type-XX`（Priority 由 template dropdown 自动贴 `pri-pX`，见下）。
+### Web UI（推荐）
+
+`New Issue` → 选 `Backlog item` template → 填表（含必选 Priority dropdown）→ 提交。`.github/workflows/auto-label-priority.yml` 解析 body 中 `### Priority` section，自动贴 `pri-pX` label。
+
+### CLI
+
+```bash
+gh issue create --repo ghbvf/gocell \
+  --label backlog \
+  --label pri-pX \                  # 必须显式贴：P0=pri-p0 / P1=pri-p1 / P2=pri-p2 / P3=pri-p3
+  --label cap-XX --label flag-XX --label type-XX \
+  --title "..." --body-file body.md
+```
+
+CLI 路径**不解析** [`.github/ISSUE_TEMPLATE/backlog.yml`](../.github/ISSUE_TEMPLATE/backlog.yml) 的 dropdown；workflow 仍会在 `issues.opened` 触发，但 body 中找不到 `### Priority` section，会贴 `pri-missing` 哨兵 label（除非创建者已显式贴 `pri-pX`，那种情况 workflow 跳过 sentinel）。
+
+### 创建后
+
+无论哪条路径，建后需追加 3 个 label：1 个 `cap-XX`、1 个 `flag-XX`、1 个 `type-XX`（CLI 路径如上一并贴；Web UI 路径建后用 `gh issue edit <N> --add-label cap-XX` 等手工补）。
 
 ## Label 体系
 
@@ -26,9 +43,10 @@ CLI: `gh issue create --label backlog` — template 接管 body（现状 / 修�
   | `flag-planned` | 已纳入 plan |
 - **Type**（8，单选）：`type-feat` / `type-bug` / `type-refactor` / `type-arch-opt` / `type-doc` / `type-test` / `type-debt` / `type-fu`
 - **Priority**（4，单选）：`pri-p0` / `pri-p1` / `pri-p2` / `pri-p3`
-  - 创建时由 issue template Priority dropdown 触发 [`.github/workflows/auto-label-priority.yml`](../.github/workflows/auto-label-priority.yml) 自动贴
+  - Web UI 创建：issue template Priority dropdown 触发 [`.github/workflows/auto-label-priority.yml`](../.github/workflows/auto-label-priority.yml) 自动贴
+  - CLI 创建：必须显式 `--label pri-pX`（见 §"入口"）；workflow 检测不到 dropdown 时贴 `pri-missing` 哨兵
   - 评级规则真值源：[`backlog/20260520/RERATING-RUBRIC.md`](backlog/20260520/RERATING-RUBRIC.md)（含 P0 红线，仅 incident-driven）
-  - 如需批量修复存量 label 漂移或一次性 backfill：[`hack/backfill-priority-labels.sh`](../hack/backfill-priority-labels.sh)（需 `project` + `repo` scope，幂等）
+  - `pri-missing`（哨兵）：workflow 找不到 dropdown 时贴；用 `gh issue list --label pri-missing` 查待补 priority 的 issue，处理方式：`gh issue edit <N> --add-label pri-pX --remove-label pri-missing`
 - **工具 labels**：
   | Label | 用途 |
   |---|---|
@@ -47,7 +65,7 @@ CLI: `gh issue create --label backlog` — template 接管 body（现状 / 修�
 | Estimate | single-select | `Cx1` / `Cx2` / `Cx3` / `Cx4` |
 | Iteration | iteration | 可选，sprint 用，初期不开 |
 
-> Priority 原为 Project field，2026-05-22 单源降级为 `pri-pX` label（PR #861，详见 §"云沙箱查询" + §"一次性迁移 / 维护"）。
+> Priority 原为 Project field，2026-05-22 单源降级为 `pri-pX` label（PR #861，详见 §"云沙箱查询"）。
 
 ## 常用查询
 
@@ -75,32 +93,6 @@ gh issue list --repo ghbvf/gocell --state closed \
 | Iteration | — | ✓ |
 
 Token scope：日常查询 `repo` 足够；rerating 时如需在 Project UI 批改 Status/Estimate 才需要本地 `project` scope。Priority 自迁移后由 `pri-pX` label 单源承载，Rerating 流程改用 `gh issue edit --add-label --remove-label`（见 §"Rerating"）。
-
-## 一次性迁移 / 维护
-
-仓库首次启用本 schema（或 label 集合漂移恢复）按此顺序执行：
-
-```bash
-# 1. 创建 4 个 pri-pX label（已存在时用 --force 幂等）
-gh label create pri-p0 --repo ghbvf/gocell --color d73a4a --description "Priority P0 — incident-driven 红线" --force
-gh label create pri-p1 --repo ghbvf/gocell --color fbca04 --description "Priority P1" --force
-gh label create pri-p2 --repo ghbvf/gocell --color fef2c0 --description "Priority P2" --force
-gh label create pri-p3 --repo ghbvf/gocell --color c5def5 --description "Priority P3" --force
-
-# 2. dry-run 全量 backfill（默认不写）
-bash hack/backfill-priority-labels.sh --dry-run
-
-# 3. 单条试跑确认幂等
-bash hack/backfill-priority-labels.sh --apply --issue <一个低风险样本>
-
-# 4. 全量执行（含 open + closed）
-bash hack/backfill-priority-labels.sh --apply
-
-# 5. 离线回归测试（验证脚本本身的 jq + 分类逻辑）
-bash hack/backfill-priority-labels.sh --self-test
-```
-
-脚本 idempotent：已有目标 label 的 issue 直接 skip；可反复运行用于 label drift 恢复。
 
 ## Bundle / sub-issue
 
