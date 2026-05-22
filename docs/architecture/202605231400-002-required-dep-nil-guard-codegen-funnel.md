@@ -126,17 +126,30 @@ rule shape in Go.
 
 ## Migration
 
-22 `service.go` files migrated in the same PR:
+25 `service_required_gen.go` files generated in the same PR (one per slice/internal
+package with a `Service` struct carrying at least one `gocell:"required"` tag):
 
-- **accesscore**: sessionlogin / sessionlogout / setup / rbacassign / identitymanage
-  / sessionvalidate / sessionrefresh — 7 services
-- **auditcore**: auditappend / auditverify — 2 services
-- **configcore**: flagwrite / configpublish / configwrite / configsubscribe /
-  configreceive — 5 services (configsubscribe + configreceive changed signature
-  from `*Service` to `(*Service, error)`)
-- **examples**: ordercreate / orderquery / devicelist / deviceregister /
-  devicestatus / devicecmd — 6 services (deviceregister + devicestatus changed
-  signature from `*Service` to `(*Service, error)`)
+- **accesscore** (11):
+  - `slices/sessionlogin` / `slices/sessionlogout` / `slices/setup` /
+    `slices/rbacassign` / `slices/identitymanage` / `slices/sessionvalidate` /
+    `slices/sessionrefresh` / `slices/rbaccheck` / `slices/authorizationdecide` /
+    `slices/configreceive` / `internal/accountlockout`
+- **auditcore** (2):
+  - `internal/appender` / `slices/auditquery`
+- **configcore** (7):
+  - `slices/flagwrite` / `slices/configpublish` / `slices/configwrite` /
+    `slices/configsubscribe` / `slices/featureflag` / `internal/configreader`
+  - Note: `slices/configsubscribe` and `slices/configreceive` + `slices/configsubscribe`
+    had signature changes from `*Service` to `(*Service, error)`
+- **examples** (5):
+  - `examples/todoorder/cells/ordercell/slices/ordercreate` /
+    `examples/todoorder/cells/ordercell/slices/orderquery` /
+    `examples/iotdevice/cells/devicecell/slices/devicelist` /
+    `examples/iotdevice/cells/devicecell/slices/deviceregister` /
+    `examples/iotdevice/cells/devicecell/slices/devicestatus` /
+    `examples/iotdevice/cells/devicecell/internal/devicecmd`
+    — 6 services (deviceregister + devicestatus changed signature from `*Service`
+    to `(*Service, error)`)
 
 `clock` fields retain `clock.MustHaveClock` panic guard (programmer-error class
 B) and are excluded from the funnel. `OUTBOX-SERVICE-01` archtest SERVICE-02..05
@@ -145,10 +158,12 @@ continue to operate alongside the new funnel.
 
 ## Backlog Cross-Ref
 
-- **P2**: accesscore cell-level `validateRequiredDeps` manual check → upgrade to
-  funnel once all cell-level wiring is confirmed stable.
-- **P3**: evaluate merging `clock.MustHaveClock` into the funnel (currently
-  programmer-error / panic semantics make it a separate concern).
+- **P2** (#882): accesscore cell-level `validateRequiredDeps` manual check →
+  upgrade to funnel once all cell-level wiring is confirmed stable.
+  `[CELL-VALIDATE-REQUIRED-DEPS-01]`
+- **P3** (#883): evaluate merging `clock.MustHaveClock` into the funnel
+  (currently programmer-error / panic semantics make it a separate concern).
+  `[CLOCK-MUSTHAVECLOCK-FUNNEL-EVAL]`
 
 ## Refs
 
