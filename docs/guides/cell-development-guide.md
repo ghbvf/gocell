@@ -452,9 +452,9 @@ See `docs/guides/integration-testing.md` for full details and environment variab
 
 `modules_gen.go` 内的 factory 类型名按 `{cell.GoStructName}Module` 派生（例：cell.GoStructName=`AccessCore` → `AccessCoreModule{}` 字面量）。`<cell>_module.go` 必须按此命名定义 struct。
 
-archtest **ASSEMBLY-CELLMODULE-TYPE-04** 静态守卫 `cmd/{id}/modules_gen.go` 存在时 `cmd/{id}/` 必含 `CellModule` 类型声明。
+archtest **ASSEMBLY-CELLMODULE-TYPE-04** 静态守卫每个 assembly 的 entrypoint 目录（`cmd/{id}/` 或 `examples/{id}/`，由 `asm.Build.Entrypoint` 元数据派生）含 `modules_gen.go` 时必含 `CellModule` 类型声明。
 archtest **ASSEMBLY-MODULES-GEN-01** 守 generated marker。
-archtest **ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02** 守 run.go 不退化到手工 switch。
+archtest **ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02** 守 assembly composition root（`cmd/{id}/` 或 `examples/{id}/`）的直接子文件不退化到手工 cell-ID switch；扫描范围限于 entrypoint 目录下的 `.go` 文件，不递归进子目录（如 `examples/{id}/cells/`）。
 
 ### 派生字段（K#10 ASSEMBLY-YAML-MINIMAL）
 
@@ -462,7 +462,7 @@ assembly.yaml 必填仅 `id` + `cells` + `owner`，其余从 cell 元数据派�
 
 | 字段 | 派生规则 | 显式声明覆盖 |
 |------|---------|-----------|
-| `build.entrypoint` | `cmd/{id}/main.go` | ✓ |
+| `build.entrypoint` | `cmd/{id}/main.go`（`assemblies/{id}/` assembly）或 `examples/{id}/main.go`（`examples/{id}/` assembly）— 见 `kernel/metadata/assembly_derive.go::deriveAssembly` | ✓ |
 | `build.binary` | assembly id 本身 | ✓ |
 | `build.deployTemplate` | 默认 `k8s`（schema enum: k8s/compose/binary） | ✓ |
 | `maxConsistencyLevel` | `max(cells[].consistencyLevel)` | ✗ 派生只读，yaml 出现该 key 即拒（KnownFields + schema additionalProperties:false 双层守） |
