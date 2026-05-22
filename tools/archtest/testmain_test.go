@@ -187,13 +187,17 @@ func testFlagTakesValue(name string) bool {
 	}
 }
 
-// TestIsListMode locks isListMode semantics so future refactors can't drop
-// -test.list detection silently. Closed PR #865 commit c84a6535b proved that
-// dropping subprocess `go test -list` warmup is required to keep
-// TestArchtestVerifyCoverage01 within GHA shard RSS budget, even under the
-// current 1-key TestMain warmup (and as a defense-in-depth bar against future
-// warmup expansion regressions).
-func TestIsListMode(t *testing.T) {
+// Test_ZZZIsListMode locks isListMode semantics so future refactors can't drop
+// -test.list detection silently. The ZZZ suffix is intentional: verify-archtest
+// shards top-level tests by sorted name and modulo, and adding a new test in the
+// middle reshuffles type-graph-heavy tests across shards. Keeping this pure unit
+// test at the tail avoids RSS churn for existing shards.
+//
+// Closed PR #865 commit c84a6535b proved that dropping subprocess `go test
+// -list` warmup is required to keep TestArchtestVerifyCoverage01 within GHA
+// shard RSS budget, even under the current 1-key TestMain warmup (and as a
+// defense-in-depth bar against future warmup expansion regressions).
+func Test_ZZZIsListMode(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string

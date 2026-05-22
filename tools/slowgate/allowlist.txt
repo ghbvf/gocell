@@ -266,9 +266,8 @@ github.com/ghbvf/gocell/tools/archtest	TestEventuallyFunnel_NoIndirectReferences
 # scan — RunTyped Tests:false over subpath ./cells/accesscore/... +
 # ./cmd/..., which is NOT covered by TestMain warmup (warmup only seeds
 # the "./..." cacheKey, per ADR 202605190000 改造 1 design). Each invocation
-# pays full subpath packages.Load cost. Borderline pre-existing test;
-# surfaced at 20.54s on PR #870 verify-archtest shard 11 after this PR's
-# new TestIsListMode shifted the 16-shard modulo distribution (588 → 589
-# tests). Same modulo-shift SLOW-flake class as the entries above
-# (cumulative trigger evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
+# pays full subpath packages.Load cost. Borderline pre-existing test; surfaced
+# at 20.54s on PR #870 verify-archtest shard 11 while validating list-mode
+# hardening. Same SLOW-flake class as the entries above (cumulative trigger
+# evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
 github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01
