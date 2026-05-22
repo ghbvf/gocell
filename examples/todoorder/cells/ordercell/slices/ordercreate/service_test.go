@@ -225,9 +225,13 @@ func TestNewService_NilDep(t *testing.T) {
 		wantMsg  string
 	}{
 		{
-			name:     "nil repo",
-			repo:     nil,
-			opts:     []Option{WithEmitter(mustEmitter(t, outbox.NoopWriter{})), WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real())},
+			name: "nil repo",
+			repo: nil,
+			opts: []Option{
+				WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+				WithClock(clock.Real()),
+			},
 			wantCode: errcode.ErrCellInvalidConfig,
 			wantMsg:  "repo required",
 		},

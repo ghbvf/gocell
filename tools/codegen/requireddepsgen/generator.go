@@ -19,7 +19,7 @@
 //
 // # Sub-Tags (all optional)
 //
-// Sub-tags customise the generated error for a specific field.
+// Sub-tags customize the generated error for a specific field.
 // They have no effect on fields without gocell:"required".
 //
 //	gocellKind   errcode.Kind constant name (default: KindInternal)
@@ -32,14 +32,13 @@
 //	              (default: "{pkg}.NewService: {field} required")
 //	              e.g. gocellErr:"slicepkg: TxRunner required; use WithTxManager"
 //
-// Example with gocellErr sub-tag (typical case — uses default KindInternal/ErrCellInvalidConfig):
+// Typical case (default KindInternal/ErrCellInvalidConfig with custom message):
 //
-//	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"mypkg: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+//	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"mypkg: TxRunner required; use WithTxManager"`
 //
-// Example overriding all three sub-tags (rare — only when a different HTTP
-// status code is intentional for this specific field):
+// Overriding all three sub-tags (rare — different HTTP status intentional):
 //
-//	codec *query.CursorCodec `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"mypkg: cursor codec required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+//	codec *query.CursorCodec `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"mypkg: cursor codec required"`
 package requireddepsgen
 
 import (
@@ -223,7 +222,7 @@ func parseStructFields(pkgName string, st *ast.StructType) ([]fieldGuard, error)
 		for _, ident := range field.Names {
 			g, err := buildGuard(pkgName, ident.Name, field.Type, tag)
 			if err != nil {
-				return nil, fmt.Errorf("%w: %s", ErrUnknownTagValue, err)
+				return nil, errors.Join(ErrUnknownTagValue, err)
 			}
 			guards = append(guards, g)
 		}
