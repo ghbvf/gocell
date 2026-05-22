@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
+	"github.com/ghbvf/gocell/adapters/otel/internal/otelwrap"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -81,7 +82,7 @@ func NewMetricProvider(meter otelmetric.Meter) (*MetricProvider, error) {
 // monotonic and support fractional increments (Add(delta)); the float
 // choice matches metrics.Counter.Add(float64).
 func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
-	c, err := p.meter.Float64Counter(opts.Name, otelmetric.WithDescription(opts.Help))
+	c, err := otelwrap.Float64Counter(p.meter, opts.Name, otelmetric.WithDescription(opts.Help))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create counter failed", err,
@@ -112,7 +113,7 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 //
 // ref: opentelemetry-go metric.Meter.Float64Gauge (v1.33+)
 func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
-	c, err := p.meter.Float64Gauge(opts.Name, otelmetric.WithDescription(opts.Help))
+	c, err := otelwrap.Float64Gauge(p.meter, opts.Name, otelmetric.WithDescription(opts.Help))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create gauge failed", err,
@@ -143,7 +144,7 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 	if len(opts.Buckets) > 0 {
 		hOpts = append(hOpts, otelmetric.WithExplicitBucketBoundaries(opts.Buckets...))
 	}
-	h, err := p.meter.Float64Histogram(opts.Name, hOpts...)
+	h, err := otelwrap.Float64Histogram(p.meter, opts.Name, hOpts...)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create histogram failed", err,
