@@ -15,8 +15,8 @@ allowed-tools: [Read, Glob, Grep, Bash, Agent]
 
 参数必须是 PR 编号：纯数字（`838`）或带井号（`#838`）。
 
-- 缺参 → 立即报错退出，提示用法 `/pr-review <PR 编号>`
-- 非法格式（含字母、空格、其他符号）→ 立即报错退出
+- 缺参 → 立即输出 `错误：缺少 PR 编号；用法：/pr-review <PR 编号>`，不执行后续阶段
+- 非法格式（含字母、空格、其他符号）→ 立即输出 `错误：参数 "<原值>" 不是合法 PR 编号`，不执行后续阶段
 - **不进入交互**确认，保持调用简单
 
 ---
@@ -35,36 +35,48 @@ gh pr view <N> --json additions,deletions --jq '.additions + .deletions'
 
 ---
 
-## 阶段 2.5：定位本地 worktree（决定 Read/Grep 上下文）
+## 阶段 2.5：定位或自动创建 review worktree
 
-reviewer agent 需要在某个工作目录下做 Read/Grep。先尝试找到该 PR 分支对应的本地 worktree：
+reviewer agent 需要在某个 worktree 内做 Read/Grep（拿到 PR 改动后的全文件 + 追溯调用链）。流程：
 
 ```bash
 BRANCH=$(gh pr view <N> --json headRefName --jq .headRefName)
 WORKTREE=$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '/^worktree /{w=$2} $0=="branch "b{print w; exit}')
 ```
 
-### 情况 A：找到 worktree（`$WORKTREE` 非空）
+### 情况 A：找到既有 worktree（`$WORKTREE` 非空）
 
-- 把 `$WORKTREE` 绝对路径传给每个 sub-agent prompt
-- sub-agent 在该 worktree 内 Read/Grep（所有路径前缀 `$WORKTREE/`）
-- 上下文最完整：能 Read PR 改动后的全文件、Grep 仓库整体状态、追溯调用链
-- 主 agent 阶段 5 汇总时 Read/Grep 也走同一 worktree
+- 直接使用 `$WORKTREE` 绝对路径
+- **不动用户的 worktree 状态**（可能有 work in progress），假定当前 HEAD 即 PR head
+- 若需要校准到最新 PR head，提示用户手动 `git -C $WORKTREE pull --ff-only origin <BRANCH>`，不自动执行
 
-### 情况 B：没有 worktree
+### 情况 B：无既有 worktree → 自动创建 review-only worktree
 
-**不要** `gh pr checkout`（污染当前分支）。两种回退：
+```bash
+git fetch origin <BRANCH>                                          # dangerouslyDisableSandbox: true
+git worktree add --detach worktrees/review-pr<N> origin/<BRANCH>   # detached，不创建本地分支
+WORKTREE="$(git rev-parse --show-toplevel)/worktrees/review-pr<N>"
+```
 
-1. **快速路径（默认，无需用户介入）**：sub-agent 工作目录回退到主仓库根，但必须明确告知：
-   - 主要审查依据 = `gh pr diff <N>` 的 patch 内容
-   - `Read` 主仓库文件 = develop 状态（**不含** PR 改动），仅供查"PR 改动周边的已有代码"
-   - `Grep` 反映 develop，不反映 PR 后状态
-   - **超出 patch 范围的判断（如"PR 改动后某函数其他调用方"）必须标 `[需确认]`，不强判 P0**
-2. **完整路径（用户可选）**：当 PR 大或需要深度审查时，提示用户：
-   ```bash
-   git fetch origin && git worktree add worktrees/<NNN>-pr<N> -b pr-<N> origin/<PR-branch>
-   ```
-   建好 worktree 后重跑 `/pr-review <N>` 自动进入情况 A。
+- 用 `--detach` 避免创建本地分支（review 只读不写）
+- 路径命名 `worktrees/review-pr<N>` 显式标记为 review 用途，与编号 worktree（`<NNN>-<name>`）的命名空间分离，不冲突
+- **复用已存在的 review worktree**：若 `worktrees/review-pr<N>` 已存在，先刷新到最新：
+  ```bash
+  git -C worktrees/review-pr<N> fetch origin <BRANCH>
+  git -C worktrees/review-pr<N> reset --hard origin/<BRANCH>       # 安全：detached + review-only
+  ```
+- **创建失败**（网络 / 权限 / origin 无该分支）→ 报错退出，提示具体失败原因，不静默回退
+
+### 输出末尾追加清理提示（仅情况 B）
+
+在阶段 5 总结输出末尾追加：
+
+```
+🧹 本次自动创建了 review worktree：worktrees/review-pr<N>
+   清理命令：git worktree remove worktrees/review-pr<N>
+```
+
+情况 A 不提示清理（不动用户既有 worktree）。
 
 ---
 
@@ -77,7 +89,7 @@ WORKTREE=$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '/^work
 | `diff < 200` | 1 | 单 agent 跑全六维度 |
 | `200 ≤ diff < 600` | 2 | A：架构合规 + 测试 + 产品；B：安全 + 运维可观测 + DX |
 | `600 ≤ diff < 1500` | 3 | A：架构合规 + 测试；B：安全 + 产品；C：运维可观测 + DX |
-| `diff ≥ 1500` | 6 | 六维度各 1 agent（架构合规 / 安全 / 测试 / 运维 / DX / 产品） |
+| `diff ≥ 1500` | 6 | 六维度各 1 agent（架构合规 / 安全 / 测试 / 运维可观测 / DX / 产品） |
 
 ---
 
@@ -87,14 +99,12 @@ WORKTREE=$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '/^work
 
 每个 sub-agent prompt **必须自包含**：
 
-- PR 编号 + 取 diff 命令：
+- PR 编号 + 取 diff 命令（**全部 `gh` 命令须 `dangerouslyDisableSandbox: true`**）：
   ```bash
   gh pr diff <N>                                  # 完整 patch
   gh pr view <N> --json title,body,files,headRefOid  # 元数据
   ```
-- **工作目录上下文**（来自阶段 2.5）：
-  - 情况 A：`$WORKTREE` 绝对路径 + 提示"所有 Read/Grep 路径前缀 `$WORKTREE/`"
-  - 情况 B：主仓库根路径 + 提示"只能基于 patch 审查，Read/Grep 仅反映 develop；超出 patch 范围的判断标 `[需确认]`"
+- **工作目录上下文**（来自阶段 2.5，恒有 worktree）：`$WORKTREE` 绝对路径 + 明确提示"所有 Read/Grep 路径前缀 `$WORKTREE/`"
 - 分配的维度子集（来自阶段 3 表格）
 - 必读：CLAUDE.md + `.claude/rules/gocell/*.md` 关键约束（路径相对工作目录）
 - Finding 格式（沿用 `.claude/agents/reviewer.md`）：
@@ -115,7 +125,9 @@ WORKTREE=$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '/^work
 ### 5.1 去重 / 冲突裁决
 
 - 同 `文件:行号` + 同问题描述视为重复，保留证据/建议更详细的一条
-- 不同 reviewer 对同一处给出**冲突结论** → 主 agent `Read` 该处代码亲自裁决
+- 同 `文件:行号` 不同 P 级 → **保留更高 P 级**（更保守），主 agent `Read` 代码裁定是否降级
+- 同 `文件:行号` 不同 Cx → **重新评估整簇 Cx**（基于阶段 5.2 根因聚类后的整簇改动量），不简单取大
+- 不同 reviewer 对同一处给出**冲突结论**（一个标 P0 一个标 LGTM）→ 主 agent `Read` 该处代码亲自裁决
 
 ### 5.2 根因归类（不允许跳过）
 
@@ -188,7 +200,22 @@ WORKTREE=$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '/^work
 
 ## 约束
 
-- 不调用 `/fix`，不写代码，不评 CI（沿用 ship Stage 7："禁止自动循环等待 CI 结束"）
+- 不调用 `/fix`，不写代码，不评 CI（禁止自动循环等待 CI 结束）
 - `gh` 命令用 `dangerouslyDisableSandbox: true`
 - 单 reviewer 路径（`diff < 200`）也走 Agent 派发，保持汇总逻辑单源
 - 主 agent **不允许**把 sub-agent Finding 原样转发——根因聚类、系统性判定、整簇 Cx 重评由主 agent 用 `Read`/`Grep` 亲自完成
+
+---
+
+## 验证清单（acceptance criteria）
+
+每次实质修改本 SKILL 后，按下列清单走一遍：
+
+1. **缺参 / 非法参数**：`/pr-review`、`/pr-review abc` → 立即输出错误并不执行后续阶段
+2. **小 PR（diff < 200）**：`/pr-review <小 PR 号>` → 派 1 个 reviewer agent，输出含根因簇视图
+3. **中 PR（600 ≤ diff < 1500）**：`/pr-review <中 PR 号>` → 派 3 个 reviewer agent 并行，主 agent 输出根因簇按主题聚类而非按维度
+4. **大 PR（diff ≥ 1500）**：派 6 个 reviewer agent 并行，六维度各一
+5. **无 worktree 自动创建**：执行前 `git worktree list` 不含 PR 分支 → 执行后 `worktrees/review-pr<N>` 存在
+6. **既有 worktree 复用**：执行前 PR 分支已有 worktree → 直接使用，不创建 `review-pr<N>`
+7. **主 agent 真做根因分析**：输出含 `Read`/`Grep` 证据；根因簇视图先于 Finding 详表
+8. **维度名内部一致**：本 SKILL 内分级表、阶段 4 派发 prompt、阶段 5 输出模板使用同一组六维度名称
