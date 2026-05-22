@@ -238,6 +238,12 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 // from a non-test .go file to keep testmain_test.go free of typeseval imports
 // (which would trip the rule).
 //
+// Exposure has grown from 1 call to 4 (per cacheKey) under ADR
+// 202605190000 Amendment 2026-05-22 (4-cacheKey warmup). All 4 calls live
+// in the same warmProductionPackages function body inside warm.go; the
+// structural property of "no business *_test.go caller can reach warm.go"
+// still holds. Backlog scope updated accordingly.
+//
 // The blind spot is bounded by the structural property that non-test .go files
 // in package archtest are framework-internal code — they cannot be reached by
 // business archtest *_test.go callers, so the typeseval call set still flows

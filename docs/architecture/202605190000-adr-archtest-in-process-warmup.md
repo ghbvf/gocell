@@ -29,9 +29,11 @@ Accepted (2026-05-19)
 
 ### 改造 1 — TestMain in-process warm-up（A 轴）
 
-`tools/archtest/testmain_test.go` 加 `TestMain(m *testing.M)`，所有 Test* 跑前调用 `typeseval.LoadProductionPackages(root, modPath, false, nil)` 预热最高频 cacheKey。失败 fail-fast `os.Exit(1)`。
+`tools/archtest/testmain_test.go` 加 `TestMain(m *testing.M)`，所有 Test* 跑前调用 `warmProductionPackages(root, modPath)` 预热 4 个 cacheKey（详见下方 Amendment 2026-05-22 的决策表）。失败 fail-fast `os.Exit(1)`。
 
-只预热 1 个 cacheKey：探索阶段实测显示 `(false, nil, "./...")` = LoadProductionPackages 主路径覆盖最广（LAYER-* + 多数业务 Test*）；subpath patterns 各自只被 1-3 个 Test 使用，预热成本 > 收益。其他高频 cacheKey 如 `SharedResolver(root, true, nil, "./tools/archtest/...")` 会撞 PASS-FUNNEL-LOADPACKAGES-01（archtest *_test.go 禁直调 SharedResolver），testmain_test.go 不是 funnel 实现无 exempt 资格。
+预热覆盖面限定在 `"./..."` patterns 维度；subpath patterns 各自只被 1-3 个 Test 使用，预热成本 > 收益。`SharedResolver(root, *, *, "./tools/archtest/...")` 5 个 site 未达 ADR §80 复合触发条件，按 ADR §66 「按 trigger 单独改造而非预留逃生口」留待将来触发后扩。
+
+`warm.go` 直调 `typeseval.LoadProductionPackages` 是包内 unexported helper，PASS-FUNNEL-LOADPACKAGES-01 仅扫 `_test.go` 不触发；威胁矩阵已显式 carve-out（详见下方表格 `warm.go` 直调 typeseval 行）。
 
 ### 改造 2 — tagGroup 循环范本拆除（B 轴：两次 Load + 共享 seen dedup）
 
@@ -73,7 +75,7 @@ Accepted (2026-05-19)
 
 | 维度 | Before | After | 变化 |
 |------|--------|-------|------|
-| shard startup wall | 0 | +15-25s 固定 | TestMain 预热 1 个 cacheKey |
+| shard startup wall | 0 | +45-75s 固定（4 个 cacheKey，详见 Amendment 2026-05-22） | TestMain 预热 |
 | Test* 首次 SharedResolver wall | 10-30s cache miss | <100ms cache hit | A 轴解 |
 | B 轴 RSS 峰值 | N×全模块 (N=7) cumulative | 2×全模块 + GC 间隔回收 | B 轴解 |
 | 反向 build directive 监控 | 不感知 | 未来加 `//go:build !X` (X ∈ KnownNonDefaultTags) 需 review 两次 Load 设计完整性 | 新增隐含约束 |
@@ -81,15 +83,15 @@ Accepted (2026-05-19)
 | `warm.go` 直调 typeseval | 不存在 | 不受 PASS-FUNNEL-LOADPACKAGES-01 保护（该规则仅扫 `_test.go`） | 已接受：warm.go 是 archtest 包内 unexported helper，仅 TestMain 调用，无外部 _test.go 滥用风险；future-proof 升级路径见 backlog `PASS-FUNNEL-NONTESTGO-EXEMPT-UPGRADE-01` |
 | TAGGROUP-LOOP scope gap | 不存在 | `tools/archtest/internal/<subpkg>/*_test.go` (e.g. internal/scanner/, internal/typeseval/) 不被 TAGGROUP-LOOP-FORBIDS-RUNTYPED-01 扫描 | 已接受：internal 子包测试内部符号，不调 archtest.RunTyped；若未来某 internal _test.go 加直调 RunTyped 形态需扩 scope |
 | CI log path exposure | 不存在 | TestMain fail-fast 时 slog.Error 输出含完整 modRoot/cwd 路径，会出现在 GHA artifact 中 | 已接受：路径非凭据，且 testmain 是 perf/bootstrap 路径，无 PII；如未来仓库公开化需重评 |
-| Total CI wall (16 shard) | 受 borderline test 跨 budget 影响 + B 轴 OOM SIGTERM 重跑 | 预期：单 shard wall ≤ 5s (warm) + 0-3 个 borderline ≤ 10s (warm 后)；16 shard parallel wall ~30-40s + 启动开销 | warmup 在轻 shard (e.g. shard 0 = 33 tests / 4.78s) 上付 +15-25s 启动成本是 wash 或微亏；在重 shard / borderline shard 上净赚；实测需 CI 矩阵观察 2-3 次 |
+| Total CI wall (16 shard) | 受 borderline test 跨 budget 影响 + B 轴 OOM SIGTERM 重跑 | 预期：所有 Test* cache hit < 100ms；16 shard parallel wall = max(shard wall) ≈ startup 45-75s + 测试 5-10s | warmup 在轻 shard (e.g. shard 0 = 33 tests / 4.78s) 上付固定启动成本是 wash 或净亏；在重 shard / borderline shard 上净赚；实测需 CI 矩阵观察 2-3 次 |
 
 ### 16 shard 总 wall 详细分析
 
 CI 矩阵 16 shard parallel，总 wall = max(各 shard wall) + GHA queue overhead。
-- **重 shard / borderline shard**（含 TestUserRepoConformanceEnrollment / TestCellRepoReadyzProbe 等）：原来 20-22s borderline + 其他 Test* 各自首次 cache miss 5-15s = 总 wall ~35-50s。预热后所有 Test* cache hit < 100ms，重 shard wall 降到 ~startup 15-25s + 测试 5-10s = ~25-35s。
-- **轻 shard**（e.g. shard 0 = 33 tests / 4.78s 实测）：原来 ~5s。预热后 startup +15-25s 拖到 ~20-30s，是净亏。但因 16 shard parallel 总 wall 取 max，轻 shard 拖慢不影响总 wall（仍由重 shard 决定）。
+- **重 shard / borderline shard**（含 TestUserRepoConformanceEnrollment / TestCellRepoReadyzProbe / TestNotFoundTestStrict / TestCellIDPatternSingleSource / TestExternalReasonLiteral 等）：原来 20-22s borderline + 其他 Test* 各自首次 cache miss 5-15s = 总 wall ~35-50s。预热后所有 Test* cache hit < 100ms，重 shard wall 降到 ~startup 45-75s + 测试 5-10s = ~50-85s。
+- **轻 shard**（e.g. shard 0 = 33 tests / 4.78s 实测）：原来 ~5s。预热后 startup +45-75s 拖到 ~50-80s，是净亏。但因 16 shard parallel 总 wall 取 max，轻 shard 拖慢不影响总 wall（仍由重 shard 决定）。
 
-净结论：CI 总 wall 预期下降（重 shard 主导），轻 shard 单独跑（如开发者本地 `go test ./tools/archtest/ -run MyTest`）会增加 wall — 由 testmain_test.go godoc 提示，开发者可接受。
+净结论：CI 总 wall 由 max(shard) 主导，warmup 是所有 shard 的 floor cost；4-key warmup 后 floor 抬到 45-75s，但 Tests:true cold path 全集关闭使重 shard 不再跨 budget。轻 shard 单独跑（如开发者本地 `go test ./tools/archtest/ -run MyTest`）会付完整 warmup wall — 由 testmain_test.go godoc 提示，开发者可接受。
 
 实测 baseline 由 PR 合并后 CI 矩阵连续 2-3 次运行采集，记录到 PR `#584` thread 或 follow-up backlog `ARCHTEST-SLOWGATE-ALLOWLIST-CLEANUP-01` 内。
 

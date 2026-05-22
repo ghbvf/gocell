@@ -7,12 +7,13 @@ import (
 )
 
 // warmProductionPackages pre-loads the four SharedResolver cacheKey entries
-// covering all "./..." archtest scan shapes:
+// covering all "./..." archtest scan shapes. Each row is the cacheKey tuple
+// (tests, tags, patterns):
 //
-//  1. (tests=false, tags=nil)                  — production-only scans
-//  2. (tests=true,  tags=nil)                  — Tests:true production-default
-//  3. (tests=true,  tags=FlatNonDefaultTags()) — Tests:true cross-tag union
-//  4. (tests=true,  tags=ProductionFlatTags()) — Tests:true production-cross-tag
+//  1. (false, nil,                  "./...") — production-only scans
+//  2. (true,  nil,                  "./...") — Tests:true production-default
+//  3. (true,  FlatNonDefaultTags(), "./...") — Tests:true cross-tag union
+//  4. (true,  ProductionFlatTags(), "./...") — Tests:true production-cross-tag
 //
 // SharedResolver caches per cacheKey = (modRoot, tests, tags, patterns); each
 // of the four entries is a fully independent packages.Load result and there
