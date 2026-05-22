@@ -1,1 +1,1 @@
-tools/archtest/testdata/required_dep_nil_guard_fixtures/red_handwritten_guard/service.go:25: REQUIRED-DEP-NIL-GUARD-01-A3: hand-written validation.IsNilInterface call in service.go bypasses generated funnel (REQUIRED-DEP-NIL-GUARD-01)
+tools/archtest/testdata/required_dep_nil_guard_fixtures/red_handwritten_guard/service.go:25: REQUIRED-DEP-NIL-GUARD-01-A3: hand-written validation.IsNilInterface call in service.go bypasses generated funnel; remove the call — required-dep nil checks are generated in service_required_gen.go via gocell:"required" tag (REQUIRED-DEP-NIL-GUARD-01)

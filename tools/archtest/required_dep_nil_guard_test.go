@@ -652,29 +652,34 @@ func scanB1ReflectNilCheck(p *Pass, file *ast.File) []Diagnostic {
 // A/B/C/D land (pre-migration NewXxx bodies still contain hand-written
 // `if s.txRunner == nil { ... }` blocks that the migration removes).
 func TestRequiredDepNilGuard_BlindSpot_B2_NoDirectNilCompare(t *testing.T) {
-	for _, fix := range []string{"green_basic", "red_handwritten_guard"} {
+	// green_basic — no nil compare; red_handwritten_guard — IsNilInterface (A3 case,
+	// not a raw == nil compare, so B2 stays empty); red_direct_nil_compare — raw
+	// s.repo == nil in DoWork body, which A3 cannot catch: B2 must fire.
+	// b2.golden is separate from diag.golden (which records A3 diagnostics) to
+	// avoid two test functions asserting different content against the same file.
+	for _, fix := range []string{"green_basic", "red_handwritten_guard", "red_direct_nil_compare"} {
 		fix := fix
 		t.Run("fixture_"+fix, func(t *testing.T) {
 			root := findModuleRoot(t)
 			fixtureDir := filepath.Join(root, "tools", "archtest", "testdata",
 				"required_dep_nil_guard_fixtures", fix)
 			pattern := "./tools/archtest/testdata/required_dep_nil_guard_fixtures/" + fix
-			_ = fixtureDir
 			diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
 				var out []Diagnostic
 				for _, file := range p.Files {
 					rel := p.Rel(file)
-					if !isB2InScopeFile(rel) {
+					// Fixture test: skip generated files only (no path-prefix filter).
+					// isB2InScopeFile enforces /slices/ or /internal/ for production
+					// scope; fixtures live in testdata/ which lacks those segments.
+					if strings.HasSuffix(rel, "_gen.go") {
 						continue
 					}
 					out = append(out, scanB2RequiredFieldNilCompare(p, file)...)
 				}
 				return out
 			})
-			// Fixture asserts: green_basic must produce zero diagnostics;
-			// red_handwritten_guard has handwritten IsNilInterface (A3 case),
-			// which is a different blind spot, so B2 stays empty for it too.
-			assert.Empty(t, diags, "B2 fixture %s: unexpected diagnostics: %v", fix, diags)
+			goldenPath := filepath.Join(fixtureDir, "b2.golden")
+			AssertGolden(t, goldenPath, diags)
 		})
 	}
 
