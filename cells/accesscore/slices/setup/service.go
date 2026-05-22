@@ -88,8 +88,8 @@ func WithSetupLock(lock ports.SetupLockAcquirer) Option {
 
 // Service implements the setup slice's business logic.
 type Service struct {
-	provisioner *adminprovision.Provisioner `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"setup: provisioner is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	logger      *slog.Logger                `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"setup: logger is required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	provisioner *adminprovision.Provisioner `gocell:"required" gocellErr:"setup: provisioner is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	logger      *slog.Logger                `gocell:"required" gocellErr:"setup: logger is required"`
 	txRunner    persistence.CellTxManager   `gocell:"required" gocellErr:"setup: TxRunner required; use WithTxManager"`
 	emitter     outbox.Emitter
 	// setupLock is the REQUIRED serialization primitive for the admin-provisioning

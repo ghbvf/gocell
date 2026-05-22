@@ -63,7 +63,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 	assert.Contains(t, err.Error(), "TxRunner required")
 }
 

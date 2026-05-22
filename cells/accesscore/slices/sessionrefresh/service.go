@@ -89,12 +89,12 @@ type Service struct {
 	userRepo     ports.UserRepository      `gocell:"required"`
 	roleRepo     ports.RoleRepository      `gocell:"required"`
 	refreshStore refresh.Store             `gocell:"required"`
-	txRunner     persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"sessionrefresh: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner     persistence.CellTxManager `gocell:"required" gocellErr:"sessionrefresh: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	// invalidator is the credential-revocation funnel. Required — NewService
 	// fails fast when nil. On refresh-token reuse detection, Apply is called
 	// inside the outer transaction to atomically bump authz_epoch, revoke all
 	// sessions, and revoke all refresh chains for the subject.
-	invalidator invalidatorApplier `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"sessionrefresh: Invalidator required; use WithInvalidator"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	invalidator invalidatorApplier `gocell:"required" gocellErr:"sessionrefresh: Invalidator required; use WithInvalidator"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	issuer      *auth.JWTIssuer    `gocell:"required"`
 	logger      *slog.Logger
 	clock       clock.Clock

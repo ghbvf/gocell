@@ -16,7 +16,7 @@ func (s *Service) validateRequired() error {
 			"configpublish.NewService: repo required")
 	}
 	if validation.IsNilInterface(s.txRunner) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"configpublish: TxRunner required; use WithTxManager")
 	}
 	return nil

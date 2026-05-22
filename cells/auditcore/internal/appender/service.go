@@ -54,7 +54,7 @@ type Service struct {
 	spec     Spec
 	store    ledger.Store
 	protocol *ledger.Protocol
-	txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"auditappender: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"auditappender: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter  outbox.Emitter
 	logger   *slog.Logger
 	clk      clock.Clock

@@ -137,7 +137,7 @@ type Service struct {
 	sessionStore    session.Store             `gocell:"required"`
 	roleRepo        ports.RoleRepository      `gocell:"required"`
 	refreshStore    refresh.Store             `gocell:"required"`
-	txRunner        persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"sessionlogin: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner        persistence.CellTxManager `gocell:"required" gocellErr:"sessionlogin: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter         outbox.Emitter
 	issuer          *auth.JWTIssuer `gocell:"required"`
 	logger          *slog.Logger
@@ -149,7 +149,7 @@ type Service struct {
 	// through authzmutate. Required (fail-fast in NewService) — sessionlogin
 	// MUST NOT import authzmutate directly (depguard upstream Hard funnel
 	// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01).
-	lockout *accountlockout.Service `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"sessionlogin: AccountLockout required; use WithAccountLockout (sessionlogin must route lock decisions through accountlockout, not authzmutate)"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	lockout *accountlockout.Service `gocell:"required" gocellErr:"sessionlogin: AccountLockout required; use WithAccountLockout (sessionlogin must route lock decisions through accountlockout, not authzmutate)"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 }
 
 // WithAccountLockout injects the auto-lockout mediator. Required for sessionlogin;

@@ -28,11 +28,11 @@ func (s *Service) validateRequired() error {
 			"sessionrefresh.NewService: refreshStore required")
 	}
 	if validation.IsNilInterface(s.txRunner) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"sessionrefresh: TxRunner required; use WithTxManager")
 	}
 	if validation.IsNilInterface(s.invalidator) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"sessionrefresh: Invalidator required; use WithInvalidator")
 	}
 	if s.issuer == nil {

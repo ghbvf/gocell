@@ -20,7 +20,7 @@ func (s *Service) validateRequired() error {
 			"sessionlogout.NewService: refreshStore required")
 	}
 	if validation.IsNilInterface(s.txRunner) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"sessionlogout: TxRunner required; use WithTxManager")
 	}
 	return nil

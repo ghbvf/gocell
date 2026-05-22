@@ -24,10 +24,10 @@ import (
 // Construction: all dependencies are required (fail-fast on nil — matches the
 // OUTBOX-SERVICE-01 convention for outbox-bound services).
 type Service struct {
-	userRepo     ports.UserRepository `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"accountlockout.NewService: UserRepository required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	authzmutator *authzmutate.Mutator `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"accountlockout.NewService: authzmutate.Mutator required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter      outbox.Emitter       `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"accountlockout.NewService: outbox.Emitter required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	clk          clock.Clock          `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"accountlockout.NewService: clock.Clock required"`         //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	userRepo     ports.UserRepository `gocell:"required" gocellErr:"accountlockout.NewService: UserRepository required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	authzmutator *authzmutate.Mutator `gocell:"required" gocellErr:"accountlockout.NewService: authzmutate.Mutator required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	emitter      outbox.Emitter       `gocell:"required" gocellErr:"accountlockout.NewService: outbox.Emitter required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clk          clock.Clock          `gocell:"required" gocellErr:"accountlockout.NewService: clock.Clock required"`         //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger       *slog.Logger
 	metrics      MetricsRecorder
 }

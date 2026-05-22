@@ -43,7 +43,7 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 type Service struct {
 	sessionStore session.Store             `gocell:"required"`
 	refreshStore refresh.Store             `gocell:"required"`
-	txRunner     persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"sessionlogout: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner     persistence.CellTxManager `gocell:"required" gocellErr:"sessionlogout: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter      outbox.Emitter
 	logger       *slog.Logger
 }

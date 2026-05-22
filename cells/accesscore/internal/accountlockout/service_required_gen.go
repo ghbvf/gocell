@@ -12,19 +12,19 @@ import (
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
 	if validation.IsNilInterface(s.userRepo) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accountlockout.NewService: UserRepository required")
 	}
 	if s.authzmutator == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accountlockout.NewService: authzmutate.Mutator required")
 	}
 	if validation.IsNilInterface(s.emitter) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accountlockout.NewService: outbox.Emitter required")
 	}
 	if validation.IsNilInterface(s.clk) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accountlockout.NewService: clock.Clock required")
 	}
 	return nil

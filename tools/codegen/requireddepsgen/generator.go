@@ -5,6 +5,41 @@
 //
 //	out, err := requireddepsgen.Generate("/path/to/slice")
 //	// out contains the formatted Go source for service_required_gen.go
+//
+// # Primary Tag
+//
+// Mark a Service struct field as required:
+//
+//	type Service struct {
+//	    repo domain.Repository `gocell:"required"`
+//	}
+//
+// The generator emits a validateRequired() method that checks each tagged
+// field and returns an errcode.Error on the first nil dependency found.
+//
+// # Sub-Tags (all optional)
+//
+// Sub-tags customise the generated error for a specific field.
+// They have no effect on fields without gocell:"required".
+//
+//	gocellKind   errcode.Kind constant name (default: KindInternal)
+//	              e.g. gocellKind:"KindInvalid"
+//
+//	gocellCode   errcode error code constant (default: ErrCellInvalidConfig)
+//	              e.g. gocellCode:"ErrValidationFailed"
+//
+//	gocellErr    error message string literal
+//	              (default: "{pkg}.NewService: {field} required")
+//	              e.g. gocellErr:"slicepkg: TxRunner required; use WithTxManager"
+//
+// Example with gocellErr sub-tag (typical case — uses default KindInternal/ErrCellInvalidConfig):
+//
+//	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"mypkg: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+//
+// Example overriding all three sub-tags (rare — only when a different HTTP
+// status code is intentional for this specific field):
+//
+//	codec *query.CursorCodec `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingCodec" gocellErr:"mypkg: cursor codec required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 package requireddepsgen
 
 import (
@@ -18,6 +53,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -28,13 +65,21 @@ var (
 	ErrNoServiceStruct = errors.New("requireddepsgen: no Service struct in service.go")
 
 	// ErrUnknownTagValue is returned when a struct field has a gocell tag
-	// whose value is not "" or "required".
+	// whose value is not "" or "required", or when gocellKind/gocellCode tags
+	// contain values that do not match the errcode identifier whitelist.
 	ErrUnknownTagValue = errors.New("requireddepsgen: unknown gocell tag value (allowed: \"\", \"required\")")
 
 	// ErrBadTagSyntax is returned when a struct field tag is malformed and
 	// cannot be parsed by reflect.StructTag.
 	ErrBadTagSyntax = errors.New("requireddepsgen: malformed struct tag")
 )
+
+// errcodeIdentRE matches valid errcode identifier overrides for gocellKind and
+// gocellCode tags. Values must be qualified identifiers of the form
+// errcode.Kind<Name> or errcode.Err<Name> to prevent code injection via struct
+// tags. Any other value — including those containing semicolons, parentheses,
+// slashes, or other Go syntax characters — is rejected with ErrUnknownTagValue.
+var errcodeIdentRE = regexp.MustCompile(`^errcode\.(Kind|Err)[A-Z][A-Za-z0-9]*$`)
 
 const (
 	modulePrefix     = "github.com/ghbvf/gocell"
@@ -176,7 +221,10 @@ func parseStructFields(pkgName string, st *ast.StructType) ([]fieldGuard, error)
 		// For multi-name fields (rare, but handle gracefully), generate one
 		// guard per name.
 		for _, ident := range field.Names {
-			g := buildGuard(pkgName, ident.Name, field.Type, tag)
+			g, err := buildGuard(pkgName, ident.Name, field.Type, tag)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %s", ErrUnknownTagValue, err)
+			}
 			guards = append(guards, g)
 		}
 	}
@@ -184,11 +232,20 @@ func parseStructFields(pkgName string, st *ast.StructType) ([]fieldGuard, error)
 }
 
 // buildGuard constructs the fieldGuard for a single named field.
-func buildGuard(pkgName, fieldName string, fieldType ast.Expr, tag reflect.StructTag) fieldGuard {
+// Returns an error when gocellKind or gocellCode values do not match the
+// errcode identifier whitelist (errcode.Kind* or errcode.Err*), preventing
+// code injection via maliciously crafted struct tags.
+func buildGuard(pkgName, fieldName string, fieldType ast.Expr, tag reflect.StructTag) (fieldGuard, error) {
 	isPtr := isPointerType(fieldType)
 
-	kind := resolveTagOrDefault(tag.Get("gocellKind"), defaultKind, "errcode.")
-	code := resolveTagOrDefault(tag.Get("gocellCode"), defaultCode, "errcode.")
+	kind, err := resolveTagOrDefault(tag.Get("gocellKind"), defaultKind, "errcode.")
+	if err != nil {
+		return fieldGuard{}, fmt.Errorf("field %s gocellKind: %w", fieldName, err)
+	}
+	code, err := resolveTagOrDefault(tag.Get("gocellCode"), defaultCode, "errcode.")
+	if err != nil {
+		return fieldGuard{}, fmt.Errorf("field %s gocellCode: %w", fieldName, err)
+	}
 	msg := tag.Get("gocellErr")
 	if msg == "" {
 		msg = pkgName + ".NewService: " + fieldName + " required"
@@ -200,7 +257,7 @@ func buildGuard(pkgName, fieldName string, fieldType ast.Expr, tag reflect.Struc
 		kindExpr:  kind,
 		codeExpr:  code,
 		errMsg:    msg,
-	}
+	}, nil
 }
 
 // isPointerType reports whether the AST type expression is a pointer (*T).
@@ -211,15 +268,22 @@ func isPointerType(expr ast.Expr) bool {
 }
 
 // resolveTagOrDefault qualifies a bare identifier with prefix if not already
-// qualified, falling back to def when val is empty.
-func resolveTagOrDefault(val, def, prefix string) string {
+// qualified, falling back to def when val is empty. Returns ErrUnknownTagValue
+// when the resulting qualified identifier does not match errcodeIdentRE,
+// preventing code injection via maliciously crafted gocellKind/gocellCode tags.
+func resolveTagOrDefault(val, def, prefix string) (string, error) {
 	if val == "" {
-		return def
+		return def, nil
 	}
-	if strings.HasPrefix(val, prefix) {
-		return val
+	qualified := val
+	if !strings.HasPrefix(val, prefix) {
+		qualified = prefix + val
 	}
-	return prefix + val
+	if !errcodeIdentRE.MatchString(qualified) {
+		return "", fmt.Errorf("%w: %q is not a valid errcode identifier (must match errcode.(Kind|Err)[A-Z][A-Za-z0-9]*)",
+			ErrUnknownTagValue, qualified)
+	}
+	return qualified, nil
 }
 
 // renderOutput builds the Go source for the generated file.
@@ -273,6 +337,9 @@ func (s *Service) validateRequired() error {
 }
 
 // writeGuard writes a single nil-check guard to buf.
+// strconv.Quote is used for the error message string to correctly handle any
+// special characters (e.g. backslashes, embedded quotes) without producing
+// malformed Go source.
 func writeGuard(buf *bytes.Buffer, g fieldGuard) {
 	if g.isPointer {
 		fmt.Fprintf(buf, "\tif s.%s == nil {\n", g.name)
@@ -280,7 +347,7 @@ func writeGuard(buf *bytes.Buffer, g fieldGuard) {
 		fmt.Fprintf(buf, "\tif validation.IsNilInterface(s.%s) {\n", g.name)
 	}
 	fmt.Fprintf(buf, "\t\treturn errcode.New(%s, %s,\n", g.kindExpr, g.codeExpr)
-	fmt.Fprintf(buf, "\t\t\t\"%s\")\n", g.errMsg)
+	fmt.Fprintf(buf, "\t\t\t%s)\n", strconv.Quote(g.errMsg))
 	buf.WriteString("\t}\n")
 }
 

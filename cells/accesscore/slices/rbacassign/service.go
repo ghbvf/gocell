@@ -52,9 +52,9 @@ func actorFromContext(ctx context.Context) string {
 //
 // ref: Watermill SQL outbox + sessionlogin/service.go persistSession pattern.
 type Service struct {
-	roleRepo    ports.RoleRepository              `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"rbacassign: roleRepo is required"`                 //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	invalidator *credentialinvalidate.Invalidator `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"rbacassign: invalidator is required"`              //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	txRunner    persistence.CellTxManager         `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"rbacassign: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	roleRepo    ports.RoleRepository              `gocell:"required" gocellErr:"rbacassign: roleRepo is required"`                 //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	invalidator *credentialinvalidate.Invalidator `gocell:"required" gocellErr:"rbacassign: invalidator is required"`              //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner    persistence.CellTxManager         `gocell:"required" gocellErr:"rbacassign: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter     outbox.Emitter
 	logger      *slog.Logger
 }

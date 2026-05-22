@@ -28,7 +28,7 @@ func (s *Service) validateRequired() error {
 			"sessionlogin.NewService: refreshStore required")
 	}
 	if validation.IsNilInterface(s.txRunner) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"sessionlogin: TxRunner required; use WithTxManager")
 	}
 	if s.issuer == nil {
@@ -36,7 +36,7 @@ func (s *Service) validateRequired() error {
 			"sessionlogin.NewService: issuer required")
 	}
 	if s.lockout == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"sessionlogin: AccountLockout required; use WithAccountLockout (sessionlogin must route lock decisions through accountlockout, not authzmutate)")
 	}
 	return nil

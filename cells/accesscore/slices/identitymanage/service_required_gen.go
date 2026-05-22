@@ -20,7 +20,7 @@ func (s *Service) validateRequired() error {
 			"identitymanage.NewService: invalidator required")
 	}
 	if validation.IsNilInterface(s.txRunner) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"identitymanage: TxRunner required; use WithTxManager")
 	}
 	if validation.IsNilInterface(s.tokenIssuer) {

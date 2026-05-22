@@ -12,15 +12,15 @@ import (
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
 	if validation.IsNilInterface(s.roleRepo) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"rbacassign: roleRepo is required")
 	}
 	if s.invalidator == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"rbacassign: invalidator is required")
 	}
 	if validation.IsNilInterface(s.txRunner) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"rbacassign: TxRunner required; use WithTxManager")
 	}
 	return nil

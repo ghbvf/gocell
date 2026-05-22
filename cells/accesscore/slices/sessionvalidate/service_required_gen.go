@@ -12,11 +12,11 @@ import (
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
 	if validation.IsNilInterface(s.verifier) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"session-validate: IntentTokenVerifier required")
 	}
 	if validation.IsNilInterface(s.userRepo) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"session-validate: UserRepository required")
 	}
 	return nil

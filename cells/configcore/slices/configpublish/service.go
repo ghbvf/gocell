@@ -51,7 +51,7 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // Service implements config publish/rollback business logic.
 type Service struct {
 	repo     ports.ConfigRepository    `gocell:"required"`
-	txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"configpublish: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: gocell tag overrides are machine-readable and must stay on one line
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"configpublish: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter  outbox.Emitter
 	logger   *slog.Logger
 	clock    clock.Clock

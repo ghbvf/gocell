@@ -12,7 +12,7 @@ import (
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
 	if validation.IsNilInterface(s.roleRepo) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"rbac-check: roleRepo is required")
 	}
 	if s.codec == nil {

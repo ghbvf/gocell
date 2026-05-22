@@ -37,7 +37,7 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // Service implements flag write business logic (L1 LocalTx).
 type Service struct {
 	repo     ports.FlagRepository      `gocell:"required"`
-	txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"flagwrite: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: gocell tag overrides are machine-readable and must stay on one line
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"flagwrite: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger   *slog.Logger
 	clock    clock.Clock
 }

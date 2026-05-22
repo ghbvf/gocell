@@ -319,3 +319,87 @@ type Handler struct {
 		t.Errorf("expected ErrNoServiceStruct; got %v", err)
 	}
 }
+
+// TestGenerate_InjectionAttempt_ReturnsError verifies that malicious gocellKind
+// or gocellCode tag values that do not match the errcode identifier whitelist
+// are rejected with ErrUnknownTagValue rather than being emitted into the
+// generated source.
+//
+// Note: gocellKind/gocellCode values that contain Go syntax injection payloads
+// (e.g. ";", "//", parentheses) would normally be embedded inside struct tag
+// double-quote delimiters, which constrains the value space. The whitelist
+// regex `^errcode\.(Kind|Err)[A-Z][A-Za-z0-9]*$` rejects anything containing
+// these characters at the identifier level, since such characters are never
+// valid in a Go exported identifier name.
+func TestGenerate_InjectionAttempt_ReturnsError(t *testing.T) {
+	// Each case uses a rawTag string that is embedded directly into the struct
+	// field definition. The rawTag must be syntactically valid Go struct tag
+	// syntax (backtick-delimited, key:"value" pairs) so that parseStructFields
+	// can read the tag value; the rejection happens inside resolveTagOrDefault
+	// when the value does not match errcodeIdentRE.
+	cases := []struct {
+		name   string
+		rawTag string
+	}{
+		{
+			// "KindInternalBad" does not end on a word boundary matching [A-Za-z0-9]
+			// — wait, it does. Use a value with non-identifier chars that survive
+			// struct tag parsing: spaces are valid in tag values.
+			name:   "space in gocellKind value is not a valid identifier",
+			rawTag: `gocell:"required" gocellKind:"KindInternal injected"`,
+		},
+		{
+			name:   "dot in gocellCode value beyond allowed pattern",
+			rawTag: `gocell:"required" gocellCode:"ErrCellInvalidConfig.Extra"`,
+		},
+		{
+			name:   "arbitrary non-errcode string in gocellKind",
+			rawTag: `gocell:"required" gocellKind:"NotAnErrcode"`,
+		},
+		{
+			name:   "bare lowercase identifier not matching whitelist",
+			rawTag: `gocell:"required" gocellKind:"kindInternal"`,
+		},
+		{
+			name:   "underscore in identifier not in allowed char class",
+			rawTag: `gocell:"required" gocellCode:"Err_Invalid"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "package mypkg\n\ntype Repo interface{ Get() }\n\ntype Service struct {\n" +
+				"\trepo Repo `" + tc.rawTag + "`\n}\n"
+			dir := writeFixture(t, src)
+			_, err := requireddepsgen.Generate(dir)
+			if err == nil {
+				t.Fatalf("expected error for injection attempt tag=%q, got nil", tc.rawTag)
+			}
+			if !errors.Is(err, requireddepsgen.ErrUnknownTagValue) {
+				t.Errorf("expected ErrUnknownTagValue; got %v", err)
+			}
+		})
+	}
+}
+
+// TestGenerate_ErrMsgWithSpecialChars_ProducesValidSource verifies that
+// gocellErr values containing characters that would break naive string
+// concatenation (e.g. backslash, embedded double-quote) are safely quoted
+// via strconv.Quote and produce syntactically valid Go source.
+func TestGenerate_ErrMsgWithSpecialChars_ProducesValidSource(t *testing.T) {
+	// The gocellErr value contains a double-quote character — naive interpolation
+	// via `fmt.Fprintf(... "%s" ...)` would break the generated Go syntax.
+	src := "package mypkg\n\ntype Repo interface{ Get() }\n\ntype Service struct {\n" +
+		"\trepo Repo `gocell:\"required\" gocellErr:\"dep \\\"Repo\\\" required\"`\n}\n"
+	dir := writeFixture(t, src)
+	out, err := requireddepsgen.Generate(dir)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// format.Source already validates Go syntax, so reaching here means the
+	// output compiled. Additionally verify the message appears quoted.
+	got := string(out)
+	if !strings.Contains(got, `dep \"Repo\" required`) && !strings.Contains(got, `dep "Repo" required`) {
+		t.Errorf("expected escaped error message in output; got:\n%s", got)
+	}
+}

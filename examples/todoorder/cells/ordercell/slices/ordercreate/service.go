@@ -77,7 +77,7 @@ func WithClock(clk clock.Clock) Option {
 // runs through the same Emitter + TxRunner code path.
 type Service struct {
 	repo     domain.OrderRepository    `gocell:"required"`
-	txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"ordercreate: TxRunner required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"ordercreate: TxRunner required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter  outbox.Emitter
 	logger   *slog.Logger
 	clock    clock.Clock

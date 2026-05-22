@@ -12,11 +12,11 @@ import (
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
 	if s.provisioner == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"setup: provisioner is required")
 	}
 	if s.logger == nil {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"setup: logger is required")
 	}
 	if validation.IsNilInterface(s.txRunner) {

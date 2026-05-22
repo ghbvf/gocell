@@ -10,8 +10,31 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// TestNewService_NilRoleRepo verifies that NewService rejects a nil roleRepo
+// with a non-nil errcode.Error of KindInternal (wiring failure → 5xx).
+func TestNewService_NilRoleRepo(t *testing.T) {
+	tests := []struct {
+		name     string
+		roleRepo ports.RoleRepository
+	}{
+		{"bare nil", nil},
+		{"typed nil", (ports.RoleRepository)(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(tt.roleRepo, slog.Default())
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+		})
+	}
+}
 
 func newTestService() (*Service, *mem.RoleRepository) {
 	repo := mem.NewStore(clock.Real()).RoleRepository()

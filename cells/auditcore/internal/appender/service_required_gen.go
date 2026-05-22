@@ -12,7 +12,7 @@ import (
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
 	if validation.IsNilInterface(s.txRunner) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"auditappender: TxRunner required; use WithTxManager")
 	}
 	return nil

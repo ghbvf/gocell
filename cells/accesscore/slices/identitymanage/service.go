@@ -143,7 +143,7 @@ type Service struct {
 	repo                         ports.UserRepository              `gocell:"required"`
 	invalidator                  *credentialinvalidate.Invalidator `gocell:"required"`
 	authzmutator                 *authzmutate.Mutator
-	txRunner                     persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"identitymanage: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner                     persistence.CellTxManager `gocell:"required" gocellErr:"identitymanage: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter                      outbox.Emitter
 	logger                       *slog.Logger
 	tokenIssuer                  TokenIssuer `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingTokenIssuer" gocellErr:"identity-manage: tokenIssuer is required; wire via WithTokenIssuer"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
