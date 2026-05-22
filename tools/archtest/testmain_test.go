@@ -5,6 +5,7 @@ package archtest
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -22,9 +23,31 @@ import (
 // 会撞 PASS-FUNNEL-LOADPACKAGES-01（archtest *_test.go 禁直调
 // SharedResolver），testmain_test.go 不是 funnel 实现无 exempt 资格。
 //
+// 扩 N 个 cacheKey 受 GHA 7GB shard 限制阻塞：closed PR #865 实证
+// Tests:true + FlatNonDefaultTags cacheKey 单独就有 (false, nil) 的 2-3
+// 倍 RSS，N=2 在 packages.Load 期间 peak 6-9GB 撞 OOM SIGTERM。详见
+// issue #860 评论历史与 ADR 202605190000 §"Trigger evidence (closed PR #865)"
+// (尚未落地，issue 维持 flag-cond)。
+//
 // fail-fast os.Exit(1)：packages.Load 在 TestMain 失败 = 后续所有 Test*
 // 首次 SharedResolver 必失败；提前暴露避免 ~300 个测试函数逐一输出失败
 // 再超时的诊断噪音。
+//
+// list-mode 早退：`go test -list <regex>` 只枚举测试名不执行任何 Test*，
+// 因此 warmup 没必要也不应付。TestArchtestVerifyCoverage01 内部用
+// `go test -list` K=4 个子进程 enumerate shard 分配；若子进程也跑 warmup，
+// 子进程持有 1× 全模块 *types.Info RSS 与父 shard 已有 RSS 累积，K=4 路
+// 同时驻留会撞 GHA 7GB shard 限制 → subprocess "signal: killed"。
+// `-test.list` 检测在 flag.Parse 之前必须扫 os.Args（testing.M.Run 内部
+// 才 parse flag），接受 `-test.list <pattern>` 与 `-test.list=<pattern>`
+// 双形态及 `--test.list` 双 dash 变体。
+//
+// 该早退即使在当前 1-key warmup 下也是必要的（子进程的 1× 全模块 RSS +
+// 父 shard 已有 RSS + GHA 其他开销，K=4 子进程合并仍可能逼近 7GB），且作
+// 为未来扩 N warmup 的 defense in depth — closed PR #865 commit c84a6535b
+// 实证：未做 list-mode 早退时，2-key warmup + K=4 子进程会 OOM；做了早退
+// 后子进程不持有 warmup RSS，2-key 父 shard 仍 OOM（说明 list-mode 早退
+// 与 warmup 扩 N 是两个独立维度的修复，本 PR 仅落地前者）。
 //
 // 无 escape hatch：按"不引入双路径"原则。若实测某 shard 退化按 trigger
 // 单独改造，不预留逃生口。
@@ -36,6 +59,10 @@ import (
 // ref: ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md
 // ref: golangci-lint pkg/goanalysis/runner.go union load mode
 func TestMain(m *testing.M) {
+	if isListMode(os.Args) {
+		// -list mode: skip warmup; m.Run() with -test.list only enumerates names
+		os.Exit(m.Run())
+	}
 	root, err := lookupModuleRoot()
 	if err != nil {
 		slog.Error("archtest TestMain: lookupModuleRoot", "err", err,
@@ -54,4 +81,53 @@ func TestMain(m *testing.M) {
 	}
 	slog.Info("archtest TestMain: warm-up complete")
 	os.Exit(m.Run())
+}
+
+// isListMode reports whether os.Args contains `-test.list` (with optional
+// double-dash and value joined by `=` or space). Detection at TestMain entry
+// pre-dates flag.Parse, so we scan args directly. Both `-test.list <pat>` and
+// `-test.list=<pat>` (and double-dash variants) are accepted.
+func isListMode(args []string) bool {
+	for _, arg := range args {
+		switch {
+		case arg == "-test.list", arg == "--test.list":
+			return true
+		case strings.HasPrefix(arg, "-test.list="), strings.HasPrefix(arg, "--test.list="):
+			return true
+		}
+	}
+	return false
+}
+
+// TestIsListMode locks isListMode semantics so future refactors can't drop
+// -test.list detection silently. Closed PR #865 commit c84a6535b proved that
+// dropping subprocess `go test -list` warmup is required to keep
+// TestArchtestVerifyCoverage01 within GHA shard RSS budget, even under the
+// current 1-key TestMain warmup (and as a defense-in-depth bar against future
+// warmup expansion regressions).
+func TestIsListMode(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "no_test_args", args: []string{"binary"}, want: false},
+		{name: "run_only", args: []string{"binary", "-test.run", "TestFoo"}, want: false},
+		{name: "list_space_separated", args: []string{"binary", "-test.list", "^Test"}, want: true},
+		{name: "list_equals_separated", args: []string{"binary", "-test.list=^Test"}, want: true},
+		{name: "double_dash_space", args: []string{"binary", "--test.list", "^Test"}, want: true},
+		{name: "double_dash_equals", args: []string{"binary", "--test.list=^Test"}, want: true},
+		{name: "list_with_run_after", args: []string{"binary", "-test.list", "^Test", "-test.run", "TestFoo"}, want: true},
+		{name: "near_match_not_list", args: []string{"binary", "-test.listfoo"}, want: false},
+		{name: "near_match_equals", args: []string{"binary", "-test.listfoo=bar"}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isListMode(tc.args); got != tc.want {
+				t.Fatalf("isListMode(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
 }
