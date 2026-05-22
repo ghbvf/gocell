@@ -106,6 +106,7 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 // modulesContext is the template context for modules_gen.go.tpl.
 type modulesContext struct {
 	AssemblyID string
+	SourcePath string   // path to the assembly.yaml that drove generation (asm.File)
 	Modules    []string // CellModule struct names, in cells.yaml order
 }
 
@@ -237,6 +238,7 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 
 	ctx := modulesContext{
 		AssemblyID: assemblyID,
+		SourcePath: asm.File,
 		Modules:    modules,
 	}
 	return g.executeTemplate("modules_gen.go.tpl", ctx)
