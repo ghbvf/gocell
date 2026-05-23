@@ -48,9 +48,10 @@
 //     arg pass, or CallExpr.Fun alike), not just call targets.
 //   - Dot-import `import . ".../bcrypt"; GenerateFromPassword(...)` (or the same
 //     for credential): the symbol becomes a bare *ast.Ident the SelectorExpr
-//     scan misses. Closed by the reverse self-tests
-//     TestBCRYPT_COST_FUNNEL_01_NoDotImportBlindSpot (also globally banned by
-//     revive dot-imports).
+//     scan misses. The authoritative guard is the reverse self-test
+//     TestBCRYPT_COST_FUNNEL_01_NoDotImportBlindSpot, which asserts no file
+//     dot-imports either module (revive's dot-imports lint is a supplementary,
+//     not relied-upon, layer).
 //   - Reflection-based construction: out of scope, treated as theoretical.
 package archtest
 
@@ -81,6 +82,15 @@ const (
 // newTestHasherCallerAllowlist holds the module-relative locations permitted to
 // call credential.NewTestHasher (A2). *_test.go is handled separately by suffix;
 // this slice adds non-_test.go test-support packages (importable only by tests).
+//
+// accesscoretest is the sanctioned bridge letting external test packages (e.g.
+// tests/integration harnesses, which cannot import the internal credential
+// package under Go's internal rule) obtain a low-cost hasher via
+// accesscoretest.MinCostPasswordHasher(). That accesscoretest is imported ONLY
+// by tests is a convention, not a compiler-enforced barrier — this is the
+// upstream-Medium edge of the funnel (A1/A2 downstream are Hard). The
+// Hard-ization path is a generic "test-support packages imported only by
+// *_test.go" guard.
 var newTestHasherCallerAllowlist = []string{
 	"cells/accesscore/accesscoretest/", // test-support builders, imported only by *_test.go
 }
@@ -218,6 +228,26 @@ func TestBCRYPT_COST_FUNNEL_01_A1_RedFixture(t *testing.T) {
 		return
 	}
 	t.Logf("A1 RED fixture hit at fixture.go:%d", line)
+}
+
+// TestBCRYPT_COST_FUNNEL_01_A2_RedFixture asserts the A2 detector fires on a
+// known-positive: internal/bcryptcostredfixture/a2_testhasher_ref.go calls
+// credential.NewTestHasher from a (would-be) non-test file. The fixture carries
+// //go:build ignore — it cannot compile (internal-package import) but
+// parser.ParseFile reads it regardless, so the detector is exercised without a
+// broken detector silently passing the real A2 scan.
+func TestBCRYPT_COST_FUNNEL_01_A2_RedFixture(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	fixturePath := filepath.Join(root, "tools", "archtest", "internal", "bcryptcostredfixture", "a2_testhasher_ref.go")
+	line, ok, err := firstQualifiedSelectorLine(fixturePath, credentialModulePath, "credential", "NewTestHasher")
+	require.NoError(t, err, "parse A2 RED fixture")
+	if !ok {
+		t.Error("BCRYPT-COST-FUNNEL-01 A2 RED fixture: detector found no credential.NewTestHasher in " +
+			"a2_testhasher_ref.go; firstQualifiedSelectorLine may be broken")
+		return
+	}
+	t.Logf("A2 RED fixture hit at a2_testhasher_ref.go:%d", line)
 }
 
 // TestBCRYPT_COST_FUNNEL_01_NoDotImportBlindSpot closes the dot-import blind

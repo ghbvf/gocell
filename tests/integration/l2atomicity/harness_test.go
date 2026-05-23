@@ -132,8 +132,8 @@ type l2Harness struct {
 // Used for configcore and auditcore which hold no PG state in this harness; accesscore uses the real adapterpg.TxManager.
 type noopTxRunner struct{}
 
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
+func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 
 var _ persistence.TxRunner = noopTxRunner{}

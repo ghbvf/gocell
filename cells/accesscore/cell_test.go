@@ -861,8 +861,9 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	reg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, reg))
 
-	// Seed a user.
-	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
+	// Seed a user (fixture hash at MinCost — seeded directly into the repo,
+	// bypassing the cell hasher; cost is irrelevant to the login flow under test).
+	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.MinCost)
 	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-e2e"
@@ -948,8 +949,9 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	reg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, reg))
 
-	// Seed a user.
-	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
+	// Seed a user (fixture hash at MinCost — seeded directly into the repo,
+	// bypassing the cell hasher; cost is irrelevant to the login flow under test).
+	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.MinCost)
 	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-refresh"

@@ -112,10 +112,12 @@ type Service struct {
 	// memstore mode uses accesscore.NoopSetupLock{} because memTxRunner.RunInTx
 	// already serializes goroutines via store.mu. NewService rejects nil.
 	setupLock ports.SetupLockAcquirer `gocell:"required" gocellErr:"setup: setupLock required; use WithSetupLock — PG callers wire accesspg.NewBundle(pool, txm, clk).SetupLock(), memstore callers wire accesscore.NoopSetupLock{}"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	// hasher is the password hasher. Optional: defaults to
-	// credential.NewProductionHasher() (cost 12) like logger/emitter default,
-	// so production is correct without explicit wiring. Tests override via
-	// WithPasswordHasher(credential.NewTestHasher(bcrypt.MinCost)) for speed.
+	// hasher is the password hasher. Optional, but its default is a SAFE
+	// full-strength default — credential.NewProductionHasher() (cost 12) — not a
+	// degraded one like emitter's noop; production is correct without explicit
+	// wiring. Tests override via WithPasswordHasher(credential.NewTestHasher(
+	// bcrypt.MinCost)) for speed. A bare/typed-nil override is ignored, so the
+	// default can never be downgraded to nil.
 	hasher credential.Hasher
 }
 

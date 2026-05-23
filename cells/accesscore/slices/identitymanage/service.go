@@ -167,10 +167,11 @@ type Service struct {
 	lastAdminProtectionRequested bool
 	lastAdminRoleRepo            ports.RoleRepository
 	lastAdminGuard               *domain.LastAdminGuard
-	// hasher is the password hasher. Optional: defaults to
-	// credential.NewProductionHasher() (cost 12) like logger/emitter default, so
-	// production is correct without explicit wiring. Tests override via
-	// WithPasswordHasher(credential.NewTestHasher(bcrypt.MinCost)) for speed.
+	// hasher is the password hasher. Optional, but its default is a SAFE
+	// full-strength default — credential.NewProductionHasher() (cost 12) — not a
+	// degraded one like emitter's noop; production is correct without explicit
+	// wiring. Tests override via WithPasswordHasher(credential.NewTestHasher(
+	// bcrypt.MinCost)) for speed. A bare/typed-nil override is ignored.
 	hasher credential.Hasher
 }
 

@@ -74,7 +74,7 @@ var pgTestcontainerFunnelAllowlist = []string{
 	"tests/testutil/pgclone/", // the sanctioned holder
 	// Backlog #890: migrate these to pgclone. Each has a distinct container need:
 	"cmd/corebundle/",                         // full-app e2e + outbox wiring harness
-	"tests/integration/",                      // full-chain L2 atomicity / outbox harness
+	"tests/integration/",                      // backlog #890: only outbox_fullchain_test.go now — l2atomicity migrated to pgclone (#598)
 	"examples/iotdevice/",                     // example with its own PG migration set
 	"cells/accesscore/slices/identitymanage/", // single-service PG adapter test
 }
