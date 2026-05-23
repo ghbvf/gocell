@@ -32,7 +32,7 @@
 
 | Archtest INVARIANT ID | 文件 | 类型 | 拦截手段 | 评级 | 评级理由 |
 |-----------------------|------|------|---------|------|----------|
-| AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01 | `tools/archtest/audit_ledger_composition_root_test.go` | archtest type-aware AST scan | scanner.EachFile + EachNode[ast.CallExpr]，匹配 SelectorExpr.pkg.Name == "ledger" + forbidden name | **Medium** | 配对 typed Protocol（type-system Hard 防线：`*ledger.Protocol` 在 cells/runtime/adapters 必须 inject）。Soft 残面：依赖 import 包名而非 path identity（K-01）。godoc 已注明 AI-robust 等级 + 不能 Hard 的理由（不能从 cells 移除 import）。符合 AI-collab 章程「≥ Medium 立项硬门槛」。 |
+| AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01 | `tools/archtest/audit_ledger_composition_root_test.go` | archtest type-aware AST scan | scanner.EachFile + EachNode[ast.CallExpr]，匹配 SelectorExpr.pkg.Name == "ledger" + forbidden name | **Medium** | 配对 typed Protocol（type-system Hard 防线：`*ledger.Protocol` 在 cells/runtime/adapters 必须 inject）。Soft 残面：依赖 import 包名而非 path identity（K-01）。godoc 已注明 AI-robust 等级 + 不能 Hard 的理由（不能从 cells 移除 import）。符合 AI-robust 章程「≥ Medium 立项硬门槛」。 |
 | AUDITCORE-APPENDER-SINGLE-SOURCE-01 | `tools/archtest/auditcore_appender_single_source_test.go` | archtest type-aware AST scan | EachNode[ast.TypeSpec] + ast.FuncDecl，检查 type alias 形态 + 禁止 method/`NewService`/`With*`/任意 top-level func | **Medium** | 配对 type-system Hard 防线：`type Service = appender.Service` 在 Go 编译期禁止 method on alias-to-non-local-type（语言级 Hard），sealed `Spec`/`ActorMode` + `MustNewSpec` whitelist 也是 Hard。archtest 仅作「slice 包不被弃用 alias 形态」的 Medium 兜底。godoc 已记录 Hard/Medium 关系。 |
 
 ## 检验路径与命令

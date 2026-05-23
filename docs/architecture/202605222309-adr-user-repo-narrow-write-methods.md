@@ -19,7 +19,7 @@
 - `authz_epoch` (invalidation epoch)
 - `updated_at`
 
-Callers depended on godoc convention ("Do NOT call this for password changes") to avoid field bleed. From an AI-collab viewpoint this is **Soft** enforcement: a future maintainer can inadvertently pass a `*domain.User` with a modified `password_hash` via the `Update` path and silently rotate credentials without triggering any credential-invalidation event.
+Callers depended on godoc convention ("Do NOT call this for password changes") to avoid field bleed. From an AI-robust viewpoint this is **Soft** enforcement: a future maintainer can inadvertently pass a `*domain.User` with a modified `password_hash` via the `Update` path and silently rotate credentials without triggering any credential-invalidation event.
 
 ### Prior narrow method introductions
 

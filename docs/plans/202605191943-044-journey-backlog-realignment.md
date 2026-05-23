@@ -338,7 +338,7 @@ func validateJOURNEYBusinessSemantic01(snapshot *MetadataSnapshot) []Diagnostic 
 - `case_insensitive` — text = "USER 登录" → 0 diagnostic（大小写不敏感）
 - `boundary` — text = "useragent 字段解析"（user 是子串但非 word）→ 1 diagnostic（word boundary 拒）
 
-### 3.5 AI-Rebust 评级
+### 3.5 AI-robust 评级
 
 - 下游 Hard：governance rule type-aware（不是字符串锚点，是 word list 解析 + 边界匹配）
 - 上游 Medium：白名单维护是文档约束，archtest 守不到"新业务词必须加入白名单"。升级路径 = NLP 语义抽取（远期，需 LLM-in-CI 基建）

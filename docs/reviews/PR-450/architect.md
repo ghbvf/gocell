@@ -84,7 +84,7 @@
 - 在 `kernel/cell` 定义 `type HealthProbeMap = map[string]func(context.Context) error` 类型 alias 并导出 `HealthProber` 接口的类型断言 helper；adapters 通过 import kernel/cell（这条边在分层规则里允许：`adapters/` 实现 `kernel/` 接口）正式 implement 而非 duck-type
 - 或者把 probe 注册责任完全留在 cell 一侧：cell 不做 `if hp, ok := c.ledgerStore.(cell.HealthProber)` 探测，而是 cell 内手写 `reg.Health("audit_ledger_ready", func(ctx) { return ledgerStore.Tail(ctx) })` — 没有 duck-typing 协议外溢
 
-**影响**: 中。当前能跑，但抹掉了类型系统的安全网，违反「分层依赖应在编译期表达，不靠协议字符串约定」（AI-collab.md Hard vs Soft 评级）。
+**影响**: 中。当前能跑，但抹掉了类型系统的安全网，违反「分层依赖应在编译期表达，不靠协议字符串约定」（AI-robust.md Hard vs Soft 评级）。
 
 ---
 
