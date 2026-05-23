@@ -257,9 +257,11 @@ import (
     "syscall"
 
     mycell "github.com/ghbvf/gocell/cells/mycell"
+    "github.com/ghbvf/gocell/kernel/auth"
     "github.com/ghbvf/gocell/kernel/assembly"
     "github.com/ghbvf/gocell/kernel/cell"
     "github.com/ghbvf/gocell/kernel/clock"
+    "github.com/ghbvf/gocell/kernel/outbox"
     "github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -268,16 +270,20 @@ func main() {
     defer cancel()
 
     clk := clock.Real()
-    asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: cell.DurabilityDemo, Clock: clk})
+    asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo, Clock: clk})
     asm.Register(mycell.New())
 
     app := bootstrap.New(
         bootstrap.WithAssembly(asm),
         bootstrap.WithClock(clk),
+        // QUICKSTART ONLY — auth.AuthNone disables JWT entirely on the public
+        // listener. Production wires `auth.NewAuthJWTFromAssembly(asm)` here
+        // (PrimaryListener) and `auth.NewAuthServiceToken(store, ring)` on
+        // InternalListener; see docs/guides/cell-development-guide.md.
         bootstrap.WithListener(cell.PrimaryListener, ":8080",
             []auth.ListenerAuth{auth.AuthNone{}}),
-        bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
-            []auth.ListenerAuth{auth.AuthNone{}}),
+        bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091",
+            []auth.ListenerAuth{auth.AuthNone{}}), // loopback-isolated
     )
     app.Run(ctx)
 }
@@ -337,21 +343,21 @@ GoCell assemblies must declare a `DurabilityMode` explicitly (zero value is reje
 
 | Mode | Value | Noop Allowed | Use Case |
 |------|-------|-------------|----------|
-| `DurabilityDemo` | 1 | Yes — `NoopWriter`, `cell.DemoTxRunner`, `DiscardPublisher` accepted; missing Tx/outbox dependencies are completed with explicit no-op defaults | Development, unit tests, examples |
+| `DurabilityDemo` | 1 | Yes — `NoopWriter`, `outbox.DemoTxRunner`, `DiscardPublisher` accepted; missing Tx/outbox dependencies are completed with explicit no-op defaults | Development, unit tests, examples |
 | `DurabilityDurable` | 2 | No — `CheckNotNoop` rejects at `Init()` and L2 Cells require a real outbox writer + Tx runner | Production storage topologies |
 
 ```go
 // Production
-asm := assembly.New(assembly.Config{ID: "prod", DurabilityMode: cell.DurabilityDurable})
+asm := assembly.New(assembly.Config{ID: "prod", DurabilityMode: outbox.DurabilityDurable})
 
 // Development / tests
-asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: cell.DurabilityDemo})
+asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: outbox.DurabilityDemo})
 ```
 
 `cmd/corebundle` maps PostgreSQL storage topology to `DurabilityDurable`;
 development and memory storage topologies use `DurabilityDemo` so examples can
 run without a database or broker. Demo mode is explicit: Cells inject
-`cell.DemoTxRunner` / `NoopEmitter` when dependencies are absent, or a direct
+`outbox.DemoTxRunner` / `NoopEmitter` when dependencies are absent, or a direct
 `outbox.Emitter` when a publisher is supplied without a durable writer. Durable
 mode never silently falls back to those no-op dependencies.
 
@@ -522,10 +528,12 @@ tracer, shutdown, err := otel.NewTracer(ctx, otel.TracerConfig{ServiceName: "my-
 if err != nil { /* handle */ }
 defer shutdown(context.Background())
 
+jwtAuth, err := auth.NewAuthJWTFromAssembly(asm)
+if err != nil { /* handle */ }
 app := bootstrap.New(
     bootstrap.WithAssembly(asm),
     bootstrap.WithListener(cell.PrimaryListener, ":8080",
-        []auth.ListenerAuth{auth.AuthNone{}}),
+        []auth.ListenerAuth{jwtAuth}),
     bootstrap.WithTracer(tracer), // tracer is a kernel/wrapper.Tracer
 )
 

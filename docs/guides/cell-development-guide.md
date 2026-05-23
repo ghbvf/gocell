@@ -239,7 +239,7 @@ EventRouter 在所有 cell 注册完成后按四阶段生命周期启动：
 ### 6. 注册到 Assembly
 
 ```go
-asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: cell.DurabilityDemo})
+asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo})
 asm.Register(mycell.NewMyCell(...))
 ```
 
@@ -362,7 +362,7 @@ func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Opti
 func TestMyCell_Lifecycle(t *testing.T) {
     c := NewMyCell(WithInMemoryDefaults(), WithClock(clock.Real()))
     ctx := context.Background()
-    rec := cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)
+    rec := cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)
 
     require.NoError(t, c.Init(ctx, rec))
     snap := rec.Snapshot()
@@ -417,7 +417,7 @@ func TestIntegration_MyCellSmoke(t *testing.T) {
         WithPostgresRepo(repo),
         WithClock(clock.Real()),
     )
-    rec := cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)
+    rec := cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)
 
     require.NoError(t, c.Init(ctx, rec))
     require.NoError(t, c.Start(ctx))
