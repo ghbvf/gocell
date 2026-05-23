@@ -33,14 +33,9 @@ const defaultReclaimBatchTest = 1000
 // This test requires a running PostgreSQL container (Docker).
 // Build tag: //go:build integration — excluded from `go test -short` runs.
 func TestPGOutboxStore_ConformanceSuite(t *testing.T) {
-	// setupPostgres is defined in integration_test.go (same package, integration build tag).
-	pool, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
+	pool := migratedPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_store_conformance")
-	require.NoError(t, err, "NewMigrator should succeed")
-	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
 	factory := func(t *testing.T, seed []rout.ClaimedEntry) rout.Store {
 		t.Helper()
@@ -58,13 +53,9 @@ func TestPGOutboxStore_ConformanceSuite(t *testing.T) {
 }
 
 func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
+	pool := migratedPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_store_order")
-	require.NoError(t, err, "NewMigrator should succeed")
-	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
 	base := time.Now().UTC()
 	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
@@ -150,13 +141,9 @@ func (p *recordingPublisher) Topics() []string {
 // UPDATE that holds locks blocking VACUUM and replication. ReclaimStale caps
 // at defaultReclaimBatchTest per call; relay's tick loop drains residual.
 func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
+	pool := migratedPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_reclaim_limit")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
 	const seedCount = defaultReclaimBatchTest + 500 // 1500 stale claiming rows
 
@@ -199,13 +186,9 @@ func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
 // fencing CAS end-to-end: worker A claims, reclaim fires, worker A's stale
 // MarkPublished must miss while worker B's lease is preserved. (B2-A-01)
 func TestPGOutboxStore_Fencing_ReclaimedRowSurvivesStaleMark(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
+	pool := migratedPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_fencing")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
 	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
 		ID:            "evt-fencing-race",
@@ -320,13 +303,9 @@ func TestPGOutboxStore_Reclaim_DoesNotRegressTerminalRow(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			pool, cleanup := setupPostgres(t)
-			t.Cleanup(cleanup)
+			pool := migratedPool(t)
 
 			ctx := context.Background()
-			migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_reclaim_noregress_"+tc.name)
-			require.NoError(t, err)
-			require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
 			insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
 				ID:            "evt-reclaim-noregress",
@@ -383,13 +362,9 @@ func TestPGOutboxStore_Reclaim_DoesNotRegressTerminalRow(t *testing.T) {
 // from a terminal state. Complements the deterministic subtests above by
 // stressing the timing window directly.
 func TestPGOutboxStore_Reclaim_RaceWithMarkPublished(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
+	pool := migratedPool(t)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_reclaim_race")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
 	store := NewOutboxStore(pool.DB(), clock.Real())
 

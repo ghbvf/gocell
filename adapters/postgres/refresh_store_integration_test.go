@@ -6,11 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -40,21 +38,15 @@ const (
 //     Peek (memstore did not), halving the effective GraceMaxReuses for the
 //     real sessionrefresh.Refresh() call shape (Peek + Rotate per request).
 func TestPGRefreshStore_ContractSuite(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
-	ctx := context.Background()
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	// Each factory call gets its own PG schema so parallel subtests are fully
-	// isolated. GC (T13) only sees rows it inserted — no shared-table pollution.
+	// Each factory call gets its own per-test DB (migratedPool) so parallel
+	// subtests are fully isolated. GC (T13) only sees rows it inserted — no
+	// shared-table pollution.
 	factory := func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
 		t.Helper()
 
-		p := isolatedSchemaPool(t, ctx, base)
-		migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations")
-		require.NoError(t, err)
-		require.NoError(t, migrator.Up(ctx))
+		p := migratedPool(t)
 
 		clock := storetest.NewFakeClock(baseTime)
 		txm := NewTxManager(p)
@@ -67,33 +59,6 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 	storetest.RunIdleExpireContractSuite(t, factory)
 }
 
-// isolatedSchemaPool creates a fresh PG schema and returns a Pool whose
-// search_path is scoped to that schema. t.Cleanup drops the schema and closes
-// the pool after the subtest finishes.
-func isolatedSchemaPool(t *testing.T, ctx context.Context, base *Pool) *Pool {
-	t.Helper()
-
-	schema := fmt.Sprintf("ts%016x", rand.Int63())
-	_, err := base.DB().Exec(ctx, "CREATE SCHEMA "+schema)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, _ = base.DB().Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
-	})
-
-	cfg := base.DB().Config()
-	if cfg.ConnConfig.RuntimeParams == nil {
-		cfg.ConnConfig.RuntimeParams = make(map[string]string)
-	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = schema
-
-	inner, err := pgxpool.NewWithConfig(ctx, cfg)
-	require.NoError(t, err)
-
-	p := &Pool{inner: inner, config: base.config}
-	t.Cleanup(func() { _ = p.Close(context.Background()) })
-	return p
-}
-
 // ---------------------------------------------------------------------------
 // TestMigration012_StructuralAssertions
 // ---------------------------------------------------------------------------
@@ -102,8 +67,7 @@ func isolatedSchemaPool(t *testing.T, ctx context.Context, base *Pool) *Pool {
 // set of the refresh_tokens table after migration 012 rebuilds it for the
 // append-only selector/verifier model.
 func TestMigration012_StructuralAssertions(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -204,14 +168,8 @@ func TestMigration012_StructuralAssertions(t *testing.T) {
 // TestPGRefreshStore_DMLState asserts the append-only row state after each
 // mutating operation: Issue, Rotate, and RevokeSession.
 func TestPGRefreshStore_DMLState(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_dml_state")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	policy := refresh.Policy{
@@ -309,14 +267,8 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 // same invariant on every backend); this PG-named test exists so a grep for
 // "Peek" + "Grace" in adapters/postgres/ finds an explicit regression gate.
 func TestPGRefreshStore_PeekPlusRotate_RespectsGraceBudget(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_peek_grace")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
@@ -355,14 +307,8 @@ func TestPGRefreshStore_PeekPlusRotate_RespectsGraceBudget(t *testing.T) {
 }
 
 func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_reuse_ambient")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
@@ -394,14 +340,8 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 }
 
 func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_reuse_lock")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm2 := NewTxManager(p)
@@ -450,14 +390,8 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 // clock beyond Policy.MaxIdle, and asserts that Rotate returns ErrRejected.
 // RED in Wave 1 (migration 016 not applied yet; idle_expires_at column absent).
 func TestPGRefreshStore_T19_IdleExpireBlocksRotate(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_t19")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
@@ -488,14 +422,8 @@ func TestPGRefreshStore_T19_IdleExpireBlocksRotate(t *testing.T) {
 // the original parent token one more time triggers cascade revoke (ErrRejected).
 // RED in Wave 1.
 func TestPGRefreshStore_T20_GraceCounterCapTriggersReuse(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_t20")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
@@ -541,14 +469,8 @@ func TestPGRefreshStore_T20_GraceCounterCapTriggersReuse(t *testing.T) {
 // This is a behavioral contract test — the specific slog output is
 // implementation-detail; we assert the wire-error sentinel only.
 func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_t21")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
@@ -602,20 +524,14 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 // invalid indexes are a schema fault, so runtime/http/health.runOneProbe must
 // classify the probe as unhealthy and /readyz must fail closed with HTTP 503.
 func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_t22")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	// Create a table and then manually mark an index as invalid via pg_index.
 	// We cannot use CREATE INDEX CONCURRENTLY (not in transaction), so we
 	// insert a fake invalid index entry by creating a real index and then
 	// flipping its indisvalid flag.
-	_, err = p.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS _t22_probe (id serial primary key, val text)`)
+	_, err := p.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS _t22_probe (id serial primary key, val text)`)
 	require.NoError(t, err)
 	_, err = p.DB().Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_t22_probe_val ON _t22_probe (val)`)
 	require.NoError(t, err)
@@ -656,14 +572,8 @@ func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 // hold its own internal transaction that commits independently of the caller.
 // RED in Wave 1 (store still has internal pool.Begin/Commit).
 func TestPGRefreshStore_T23_AmbientTxRollback(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_t23")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
@@ -700,14 +610,8 @@ func TestPGRefreshStore_T23_AmbientTxRollback(t *testing.T) {
 }
 
 func TestPGRefreshStore_RevokeSessionDetachedSurvivesAmbientRollback(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_detached_revoke")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
@@ -757,19 +661,19 @@ func TestPGRefreshStore_RevokeSessionDetachedSurvivesAmbientRollback(t *testing.
 // pgxpool (boxing the behavior into a mock) or timing-sensitive orchestration.
 // The maintained coverage is intentionally narrower and executable:
 //
-//   1. pkg/ctxutil/detach_test.go asserts that WithDetachedTimeout's returned
-//      ctx is unaffected by parent cancel and carries an independent deadline.
-//   2. cells/accesscore/slices/sessionrefresh/service_test.go::
-//      TestService_CascadeRevoke_UsesDetachedStoreMethod asserts that the
-//      service-level cascade path routes to RevokeSessionDetached rather than
-//      the ambient business revoke.
-//   3. refresh_store.go handleRotatedRow and RevokeSessionDetached use
-//      ctxutil.WithDetachedTimeout for the cascade pool.Exec — verified by code
-//      inspection and the helper test (#1) which proves the wrapped ctx behaves
-//      as required.
-//   4. TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback (above) verifies
-//      the orthogonal property that cascade SQL bypasses the ambient tx — i.e.
-//      survives caller-driven outer rollback.
+//  1. pkg/ctxutil/detach_test.go asserts that WithDetachedTimeout's returned
+//     ctx is unaffected by parent cancel and carries an independent deadline.
+//  2. cells/accesscore/slices/sessionrefresh/service_test.go::
+//     TestService_CascadeRevoke_UsesDetachedStoreMethod asserts that the
+//     service-level cascade path routes to RevokeSessionDetached rather than
+//     the ambient business revoke.
+//  3. refresh_store.go handleRotatedRow and RevokeSessionDetached use
+//     ctxutil.WithDetachedTimeout for the cascade pool.Exec — verified by code
+//     inspection and the helper test (#1) which proves the wrapped ctx behaves
+//     as required.
+//  4. TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback (above) verifies
+//     the orthogonal property that cascade SQL bypasses the ambient tx — i.e.
+//     survives caller-driven outer rollback.
 //
 // Together these cover the chosen boundary: once execution reaches the store's
 // detached revoke path, the final revoke write is detached from caller cancel

@@ -21,24 +21,23 @@ import (
 // suite drives the InMemQueue implementation in kernel/command/commandtest;
 // both must pass identically.
 //
-// One PG testcontainer is shared across all sub-tests; each sub-test factory
-// call TRUNCATEs `commands` and re-seeds the device FK targets to give a
-// pristine schema view without paying the ~1.5s container-start cost per
-// sub-test (33 sub-tests × ~1.5s = 50s + Docker daemon contention → flaky on
-// constrained CI runners).
+// One shared per-test DB (migratedPool) is reused across all sub-tests; each
+// sub-test factory call TRUNCATEs `commands` and re-seeds the device FK
+// targets to give a pristine schema view without paying per-sub-test DB
+// creation overhead (33 sub-tests × DB cost → flaky on constrained CI runners).
 //
 // ref: docs/plans/202605082145-034-pg-corecell-b-route-plan.md §B2.B
 func TestPGCommandQueue_Conformance(t *testing.T) {
 	testutil.RequireDocker(t)
-	pool, txMgr, terminate := setupSharedCommandQueuePG(t)
-	t.Cleanup(terminate)
+	pool := migratedPool(t)
+	txMgr := NewTxManager(pool)
 
 	factory := func(t *testing.T) (command.Queue, command.ActiveScanner, commandtest.TxRunner, func() time.Time, func()) {
 		t.Helper()
 		resetCommandQueueSchema(t, pool)
 		q, err := NewCommandQueue(pool.DB(), txMgr, clock.Real())
 		require.NoError(t, err)
-		return q, q, txMgr, time.Now, func() {} // shared container — no per-sub-test teardown
+		return q, q, txMgr, time.Now, func() {} // shared pool — no per-sub-test teardown
 	}
 
 	commandtest.RunQueueConformance(t, factory, commandtest.Features{
@@ -47,21 +46,6 @@ func TestPGCommandQueue_Conformance(t *testing.T) {
 		RequiresAmbientTx:    false,
 		SupportsLeaseRenewal: true,
 	})
-}
-
-// setupSharedCommandQueuePG spins ONE testcontainer + migrates schema +
-// creates a TxManager that the whole conformance suite reuses. terminate
-// closes the pool and stops the container in t.Cleanup.
-func setupSharedCommandQueuePG(t *testing.T) (*Pool, *TxManager, func()) {
-	t.Helper()
-	pool, basicCleanup := setupPostgres(t)
-
-	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
-	return pool, NewTxManager(pool), basicCleanup
 }
 
 // resetCommandQueueSchema truncates the commands table and re-seeds the
@@ -88,32 +72,21 @@ func resetCommandQueueSchema(t *testing.T, pool *Pool) {
 //   - healthy: a fully migrated queue returns nil from RepoReady.
 //   - broken: a queue whose commands table has been dropped returns non-nil.
 //
-// Each instance uses an isolated schema pool so the DROP TABLE for the broken
-// scenario does not affect the healthy pool's commands table.
+// Each instance uses an isolated per-test DB (migratedPool) so the DROP TABLE
+// for the broken scenario does not affect the healthy pool's commands table.
 func TestPGCommandQueue_RepoReadinessConformance(t *testing.T) {
 	testutil.RequireDocker(t)
-	base, baseTeardown := setupPostgres(t)
-	t.Cleanup(baseTeardown)
-
 	ctx := context.Background()
 
-	// healthy: isolated schema with full migrations — commands table intact.
-	healthyPool := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = healthyPool.Close(context.Background()) })
-	healthyMigrator, err := NewMigrator(healthyPool, testMigrationsFS(t), "schema_migrations_readyz_cq_healthy")
-	require.NoError(t, err)
-	require.NoError(t, healthyMigrator.Up(ctx))
+	// healthy: per-test DB with full migrations — commands table intact.
+	healthyPool := migratedPool(t)
 	healthyTxm := NewTxManager(healthyPool)
 	healthy, err := NewCommandQueue(healthyPool.DB(), healthyTxm, clock.Real())
 	require.NoError(t, err)
 
-	// broken: isolated schema with migrations applied, then commands table dropped
+	// broken: per-test DB with migrations applied, then commands table dropped
 	// to simulate schema drift / missing migration.
-	brokenPool := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = brokenPool.Close(context.Background()) })
-	brokenMigrator, err := NewMigrator(brokenPool, testMigrationsFS(t), "schema_migrations_readyz_cq_broken")
-	require.NoError(t, err)
-	require.NoError(t, brokenMigrator.Up(ctx))
+	brokenPool := migratedPool(t)
 	_, dropErr := brokenPool.DB().Exec(ctx, "DROP TABLE IF EXISTS commands CASCADE")
 	require.NoError(t, dropErr, "drop commands table for broken scenario")
 	brokenTxm := NewTxManager(brokenPool)
