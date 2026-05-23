@@ -1166,8 +1166,9 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 // scanned root is *not* the module root (e.g. user_file_overlap fixture root,
 // or a per-test scanRoot). For those sites we pass the fixture dir as
 // DirsScope's modRoot and use []string{"."} as dirs. This is intentional:
-//   - selfProtectRel filtering ("tools/archtest/internal/scanner") is harmless
-//     here because fixture trees never contain the scanner package
+//   - archtestInternalRel filtering ("tools/archtest/internal") is harmless
+//     here because rel paths are computed relative to the fixture root, so the
+//     prefix never matches (the filter only bites repo-rooted scopes)
 //   - error-message rel paths are computed relative to the fixture root,
 //     which is the correct frame of reference for fixture diagnostics
 // New rules scanning module-rooted subtrees should still pass findModuleRoot(t)

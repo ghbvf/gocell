@@ -4,9 +4,11 @@
 // It deliberately starts a per-test container via tcpostgres.Run OUTSIDE the
 // pgclone funnel so the funnel detector has a known-positive to fire on.
 //
-// Built only under the archtest_fixture tag. The funnel scan reaches it via
-// parser.ParseFile (which ignores build constraints); the production scan
-// skips tools/archtest/internal/ so this fixture is never itself reported.
+// Built only under the archtest_fixture tag. The funnel's RED self-check reaches
+// it by direct path (TestPG_TESTCONTAINER_FUNNEL_01_RedFixture, via
+// parser.ParseFile which ignores build constraints); repo-rooted production
+// scans never report it because the scanner excludes all of
+// tools/archtest/internal/ (see archtestInternalRel in internal/scanner/scope.go).
 package pgcontainerredfixture
 
 import (
