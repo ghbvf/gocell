@@ -16,7 +16,11 @@
 
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}"
+
+# shellcheck source=hack/lib/gocell-bin.sh
+source "${ROOT}/hack/lib/gocell-bin.sh"
 
 MODE="sandbox"
 for arg in "$@"; do
@@ -48,7 +52,7 @@ run_smoke() {
   trap cleanup_smoke_artifacts RETURN
 
   # Need a cell first so --cells references are valid.
-  go run ./cmd/gocell scaffold cell \
+  gocell::cli scaffold cell \
     --id="${CELL_ID}" \
     --type=core \
     --level=L1 \
@@ -56,7 +60,7 @@ run_smoke() {
     --role=cell-owner \
     --skip-generate
 
-  go run ./cmd/gocell scaffold assembly \
+  gocell::cli scaffold assembly \
     --id="${ASM_ID}" \
     --cells="${CELL_ID}" \
     --team=scaffoldsmoke \
