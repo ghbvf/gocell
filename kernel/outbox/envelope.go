@@ -35,7 +35,7 @@ var ErrUnknownEnvelopeVersion = errcode.New(errcode.KindInvalid, errcode.ErrEnve
 //     with Go visibility, packages outside kernel/outbox cannot construct,
 //     reference, or json.Unmarshal-target the envelope — only the public
 //     MarshalEnvelope / UnmarshalEnvelope move bytes ↔ envelope.
-//     ai-robust.md §"Hard 范本目录" sealed construction 范本（JSON-wire-decode form）.
+//     ai-robust.md §"Hard 范本目录" sealed construction 范本.
 //
 // ref: go-kratos/kratos transport/grpc/codec.go — zero-size unexported codec
 // struct, the closest industry equivalent (encoding/json wire decoder gated

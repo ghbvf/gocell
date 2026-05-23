@@ -23,8 +23,8 @@
 //	decode an unsafe value into a SafeID field — there is no parser-level
 //	shape that bypasses SafeID.UnmarshalJSON when the field is typed SafeID.
 //
-//	Upstream Hard (SAFEID-UPSTREAM-FUNNEL-HARD-01) — sealed construction,
-//	JSON-wire-decode form (charter §"Hard 范本目录"). Form uniqueness:
+//	Upstream Hard (SAFEID-UPSTREAM-FUNNEL-HARD-01) — sealed construction
+//	(charter §"Hard 范本目录"). Form uniqueness:
 //	  (a) kernel/outbox declares `wireMessage` (lowercase, unexported), AND
 //	  (b) kernel/outbox does NOT declare an exported `WireMessage` (struct,
 //	      alias, or named type).
