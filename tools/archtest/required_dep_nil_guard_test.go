@@ -16,11 +16,18 @@ package archtest
 //      for its sibling service.go (regenerate-and-diff Hard lock). Hand-edits,
 //      drift, and stale files are all rejected at byte granularity.
 //   A2 [TestRequiredDepNilGuard_A2_CallsiteUniqueness]
-//      Every NewXxx(*Service, error) in a slice must call validateRequired()
-//      exactly once, after any options loop. The constructor must have first
-//      return type *Service (not *T for any arbitrary T).
+//      In a file whose Service struct has a gocell:"required" field, every
+//      New*-returning-*Service constructor must (a) return error as its last
+//      result, and (b) call validateRequired() exactly once, after the options
+//      loop, consuming the error in the canonical form
+//      `if err := s.validateRequired(); err != nil { return ..., err }`.
+//      A discarded result, a bare expression statement, or a bare-*Service
+//      signature that cannot propagate the error is flagged (cf. fx/dig: a
+//      construction error must abort construction, not merely be observed).
 //   A3 [TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan]
-//      service.go (non-gen files) must not call validation.IsNilInterface.
+//      service.go (non-gen files) must not call validation.IsNilInterface on a
+//      gocell:"required" field. Calls on optional-dep option params (builder-
+//      noop typed-nil pattern, e.g. WithMetrics) are allowed (scoping mirrors B2).
 //   A4 [TestRequiredDepNilGuard_A4_TagValueWhitelist]
 //      gocell struct tag values must be in {"", "required"}.
 //
@@ -37,12 +44,13 @@ package archtest
 //   B3 [TestRequiredDepNilGuard_BlindSpot_B3_NoIndirectIsNilInterfaceRef]
 //      Function-value / pointer / method-value references to IsNilInterface
 //      bypass the callsite-form check in A3.
-//   B4 [TestRequiredDepNilGuard_BlindSpot_B4_NoExternalNilGuardHelper]
-//      Service calling a helper named MustNotBeNil/RequireNonNil/AssertNonNil
-//      bypasses A3.
 //   B5 [TestRequiredDepNilGuard_BlindSpot_B5_NoValidateRequiredMethodValueLeak]
 //      validateRequired used as a method value (s.validateRequired) outside
 //      direct call position bypasses A2 counting.
+//
+// (There is no external-nil-guard-helper rule: A2 forces validateRequired() to
+// run at construction regardless, so an external wrapper cannot bypass the
+// funnel — it would only be a redundant parallel check, not a defeat.)
 
 import (
 	"bytes"
@@ -77,15 +85,6 @@ const validationPkgPath = "github.com/ghbvf/gocell/pkg/validation"
 
 // isNilInterfaceFunc is the name of the banned helper function.
 const isNilInterfaceFunc = "IsNilInterface"
-
-// nilGuardHelperBanList is the list of external helper names banned in
-// service.go (B4 blind-spot: bypassing A3 via a wrapper function).
-var nilGuardHelperBanList = []string{
-	"MustNotBeNil",
-	"RequireNonNil",
-	"AssertNonNil",
-	"CheckNotNil",
-}
 
 // --- A1: Generator Ground Truth ---
 
@@ -196,29 +195,16 @@ func runA1Check(t *testing.T, modRoot, sliceDir, buildTag string) []Diagnostic {
 	return nil
 }
 
-// discoverSlicePaths returns all cells/*/slices/*/ directories with a service.go.
+// discoverSlicePaths returns every slice directory with a service.go that the
+// generator would emit a gen file for. It delegates to the generator's
+// FindSlicePaths so A1's regen-diff covers the exact same set — including
+// internal/* packages and nested slices/*/* that a narrower glob would miss
+// (a gap that previously let those gen files escape the Hard byte check).
 func discoverSlicePaths(t *testing.T, modRoot string) []string {
 	t.Helper()
-	patterns := []string{
-		filepath.Join(modRoot, "cells", "*", "slices", "*"),
-		filepath.Join(modRoot, "examples", "*", "cells", "*", "slices", "*"),
-	}
-	var result []string
-	seen := make(map[string]struct{})
-	for _, pat := range patterns {
-		matches, err := filepath.Glob(pat)
-		require.NoError(t, err, "glob %s", pat)
-		for _, dir := range matches {
-			if _, err := os.Stat(filepath.Join(dir, "service.go")); err != nil {
-				continue
-			}
-			if _, ok := seen[dir]; !ok {
-				seen[dir] = struct{}{}
-				result = append(result, dir)
-			}
-		}
-	}
-	return result
+	paths, err := requireddepsgen.FindSlicePaths(modRoot)
+	require.NoError(t, err, "FindSlicePaths")
+	return paths
 }
 
 // requiredDepSlashRel returns the module-relative slash path for absPath.
@@ -240,7 +226,13 @@ func requiredDepSlashRel(modRoot, absPath string) string {
 // Fixture sub-tests: green_basic (pass), red_missing_callsite (missing call),
 // red_pre_options_callsite (call placed before options loop).
 func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
-	for _, fix := range []string{"green_basic", "red_missing_callsite", "red_pre_options_callsite"} {
+	for _, fix := range []string{
+		"green_basic",
+		"red_missing_callsite",
+		"red_pre_options_callsite",
+		"red_unconsumed_callsite",
+		"red_bare_service_return",
+	} {
 		fix := fix
 		t.Run("fixture_"+fix, func(t *testing.T) {
 			root := findModuleRoot(t)
@@ -281,39 +273,68 @@ func TestRequiredDepNilGuard_A2_CallsiteUniqueness(t *testing.T) {
 	})
 }
 
-// scanA2 scans one file for A2 violations: NewXxx functions returning (*Service, error)
-// that do not call validateRequired() exactly once, or call it before the options loop.
+// scanA2 scans one file for A2 violations. When the file declares a Service
+// struct carrying at least one gocell:"required" field, every New* constructor
+// returning *Service MUST: (1) return error as its last result, and (2) call
+// validateRequired() exactly once, after the options loop, consuming the error
+// in the canonical form `if err := s.validateRequired(); err != nil { return
+// ..., err }`. Counting the call alone is insufficient — a discarded result
+// (`_ = s.validateRequired()`), a bare expression statement, or a bare-*Service
+// signature that cannot propagate the error would each let a required dep escape
+// the funnel. This mirrors fx/dig: a construction-time error must abort
+// construction, not merely be observed.
+//
+// Files whose Service struct has no required field are skipped: validateRequired
+// is then a no-op (A1 guarantees no gen file in that case) and there is nothing
+// to enforce.
 func scanA2(p *Pass, file *ast.File) []Diagnostic {
+	if !serviceStructHasRequiredField(file) {
+		return nil
+	}
 	var out []Diagnostic
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Recv != nil || fn.Body == nil {
 			continue
 		}
-		if !isNewServiceConstructor(fn) {
+		if !constructorReturnsStarService(fn) {
 			continue
 		}
-		count, preOpts := countValidateRequiredCalls(fn.Body, p.TypesInfo, optsLoopEnd(fn))
-		switch {
-		case count != 1:
-			out = append(out, Diagnostic{
-				Rel:  p.Rel(file),
-				Line: p.Fset.Position(fn.Pos()).Line,
-				Message: fmt.Sprintf(
-					"REQUIRED-DEP-NIL-GUARD-01-A2: NewService does not call validateRequired() (%s)",
-					requiredDepNilGuardRule),
-			})
-		case preOpts:
-			out = append(out, Diagnostic{
-				Rel:  p.Rel(file),
-				Line: p.Fset.Position(fn.Pos()).Line,
-				Message: fmt.Sprintf(
-					"REQUIRED-DEP-NIL-GUARD-01-A2: validateRequired() must be called AFTER the options loop (currently before opts apply) (%s)",
-					requiredDepNilGuardRule),
-			})
-		}
+		out = append(out, checkA2Constructor(p, file, fn)...)
 	}
 	return out
+}
+
+// checkA2Constructor returns the A2 diagnostic(s) for a single New*-returning-
+// *Service constructor in a required-bearing Service file. At most one is
+// returned (the first failing condition).
+func checkA2Constructor(p *Pass, file *ast.File, fn *ast.FuncDecl) []Diagnostic {
+	mk := func(msg string) []Diagnostic {
+		return []Diagnostic{{
+			Rel:     p.Rel(file),
+			Line:    p.Fset.Position(fn.Pos()).Line,
+			Message: fmt.Sprintf("REQUIRED-DEP-NIL-GUARD-01-A2: %s (%s)", msg, requiredDepNilGuardRule),
+		}}
+	}
+
+	if !lastResultIsError(fn.Type.Results) {
+		return mk("NewService returns *Service but the Service struct has gocell:\"required\" " +
+			"fields; it must return error to propagate validateRequired()")
+	}
+
+	count, preOpts := countValidateRequiredCalls(fn.Body, p.TypesInfo, optsLoopEnd(fn))
+	switch {
+	case count == 0:
+		return mk("NewService does not call validateRequired()")
+	case count > 1:
+		return mk("validateRequired() must be called exactly once")
+	case preOpts:
+		return mk("validateRequired() must be called AFTER the options loop (currently before opts apply)")
+	case !validateRequiredErrorConsumed(fn.Body):
+		return mk("validateRequired() result must be checked and returned " +
+			"(if err := s.validateRequired(); err != nil { return ..., err })")
+	}
+	return nil
 }
 
 // optsLoopEnd returns the token.Pos of the end of the options range loop in fn,
@@ -352,33 +373,105 @@ func optsLoopEnd(fn *ast.FuncDecl) token.Pos {
 	return token.NoPos
 }
 
-// isNewServiceConstructor returns true when fn is a top-level function whose
-// name starts with "New", whose first return type is *Service, and whose last
-// return type is error. Requiring *Service as the first return type prevents
-// false positives from unrelated New* helpers (e.g. NewFoo returning *Foo) and
-// from renamed builders (e.g. Build()) that would otherwise silently bypass the
-// funnel.
-func isNewServiceConstructor(fn *ast.FuncDecl) bool {
+// constructorReturnsStarService returns true when fn is a top-level New*
+// function whose FIRST return type is *Service. Unlike a stricter
+// (*Service, error) gate, it deliberately matches bare-*Service constructors
+// too, so a required-bearing Service whose NewService omits the error return —
+// and therefore cannot propagate validateRequired — is still scanned (and
+// flagged) rather than silently skipped.
+func constructorReturnsStarService(fn *ast.FuncDecl) bool {
 	if !strings.HasPrefix(fn.Name.Name, "New") {
 		return false
 	}
 	results := fn.Type.Results
-	if results == nil || len(results.List) < 2 {
+	if results == nil || len(results.List) == 0 {
 		return false
 	}
-	// First return must be *Service.
 	star, ok := results.List[0].Type.(*ast.StarExpr)
 	if !ok {
 		return false
 	}
 	ident, ok := star.X.(*ast.Ident)
-	if !ok || ident.Name != "Service" {
+	return ok && ident.Name == "Service"
+}
+
+// lastResultIsError reports whether the function's last result type is error.
+func lastResultIsError(results *ast.FieldList) bool {
+	if results == nil || len(results.List) == 0 {
 		return false
 	}
-	// Last return must be error.
 	last := results.List[len(results.List)-1]
-	errIdent, ok := last.Type.(*ast.Ident)
-	return ok && errIdent.Name == "error"
+	ident, ok := last.Type.(*ast.Ident)
+	return ok && ident.Name == "error"
+}
+
+// serviceStructHasRequiredField reports whether the file declares a
+// `type Service struct` with at least one gocell:"required" field. Single
+// source: delegates to requiredFieldNames so A2/A3/B2 agree on the field set.
+func serviceStructHasRequiredField(file *ast.File) bool {
+	return len(requiredFieldNames(file)) > 0
+}
+
+// validateRequiredErrorConsumed reports whether body contains the canonical
+// guard `if err := s.validateRequired(); err != nil { return ..., err }`: the
+// call's error result is bound to a named variable, compared != nil, and that
+// variable is referenced inside the if-body (propagated via return, optionally
+// wrapped). A discarded result (`_ = s.validateRequired()`) or a bare expression
+// statement does not satisfy this.
+func validateRequiredErrorConsumed(body *ast.BlockStmt) bool {
+	found := false
+	EachInSubtree[ast.IfStmt](body, func(ifs *ast.IfStmt) {
+		assign, ok := ifs.Init.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return
+		}
+		errIdent, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok || errIdent.Name == "_" {
+			return
+		}
+		if !isValidateRequiredCallExpr(assign.Rhs[0]) {
+			return
+		}
+		bin, ok := ifs.Cond.(*ast.BinaryExpr)
+		if !ok || bin.Op != token.NEQ {
+			return
+		}
+		if !identHasName(bin.X, errIdent.Name) || !identHasName(bin.Y, "nil") {
+			return
+		}
+		if ifs.Body != nil && blockReferencesIdent(ifs.Body, errIdent.Name) {
+			found = true
+		}
+	})
+	return found
+}
+
+// isValidateRequiredCallExpr reports whether expr is a call to a method named
+// validateRequired (e.g. s.validateRequired()).
+func isValidateRequiredCallExpr(expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel != nil && sel.Sel.Name == "validateRequired"
+}
+
+// identHasName reports whether expr is an *ast.Ident with the given name.
+func identHasName(expr ast.Expr, name string) bool {
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.Name == name
+}
+
+// blockReferencesIdent reports whether any *ast.Ident named name appears in block.
+func blockReferencesIdent(block *ast.BlockStmt, name string) bool {
+	found := false
+	EachInSubtree[ast.Ident](block, func(id *ast.Ident) {
+		if id.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 // countValidateRequiredCalls counts how many times validateRequired() is called
@@ -431,11 +524,14 @@ func isServiceGoForScan(rel string) bool {
 // --- A3: Hand-written IsNilInterface Ban ---
 
 // TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan verifies that no
-// hand-written service.go (non-gen file) calls validation.IsNilInterface.
+// hand-written service.go (non-gen file) calls validation.IsNilInterface to
+// guard a REQUIRED field — that check belongs to the generated method. Calls on
+// optional-dep option parameters (the builder-noop typed-nil pattern, e.g.
+// WithMetrics) are not the funnel's domain and are allowed.
 //
 // Fixture sub-test verifies logic against red_handwritten_guard.
 func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
-	for _, fix := range []string{"green_basic", "red_handwritten_guard"} {
+	for _, fix := range []string{"green_basic", "green_optional_isnil", "red_handwritten_guard"} {
 		fix := fix
 		t.Run("fixture_"+fix, func(t *testing.T) {
 			root := findModuleRoot(t)
@@ -481,11 +577,24 @@ func TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan(t *testing.T) {
 	})
 }
 
-// scanA3 scans one file for A3 violations: calls to validation.IsNilInterface.
+// scanA3 scans one file for A3 violations: hand-written validation.IsNilInterface
+// calls that guard a REQUIRED field. The argument must be a selector on a
+// gocell:"required" field of this file's Service struct — that is the funnel's
+// domain and must live in the generated method. IsNilInterface on an
+// optional-dep option parameter (the builder-noop typed-nil pattern per
+// runtime-api.md "Option 范式分层", e.g. WithMetrics) or on an untagged optional
+// field is NOT a funnel bypass and is left alone. Scoping mirrors B2.
 func scanA3(p *Pass, file *ast.File) []Diagnostic {
+	requiredFields := requiredFieldNames(file)
+	if len(requiredFields) == 0 {
+		return nil
+	}
 	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isIsNilInterfaceCallee(call.Fun, p.TypesInfo) {
+			return
+		}
+		if !callArgIsRequiredField(call, requiredFields) {
 			return
 		}
 		out = append(out, Diagnostic{
@@ -498,6 +607,19 @@ func scanA3(p *Pass, file *ast.File) []Diagnostic {
 		})
 	})
 	return out
+}
+
+// callArgIsRequiredField reports whether the call's first argument is a selector
+// `<expr>.<field>` whose field is a gocell:"required" field of the Service struct.
+func callArgIsRequiredField(call *ast.CallExpr, requiredFields map[string]bool) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	sel, ok := call.Args[0].(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil {
+		return false
+	}
+	return requiredFields[sel.Sel.Name]
 }
 
 // isIsNilInterfaceCallee reports whether funExpr refers to validation.IsNilInterface.
@@ -564,6 +686,19 @@ func scanA4(p *Pass, file *ast.File) []Diagnostic {
 				continue
 			}
 			raw := strings.Trim(field.Tag.Value, "`")
+			// Fail closed on malformed tags: reflect.StructTag.Get reports them
+			// as absent, which would let a typo'd tag silently drop a required-dep
+			// guard. Shares the generator's single malformed-tag definition.
+			if !requireddepsgen.TagSyntaxValid(raw) {
+				out = append(out, Diagnostic{
+					Rel:  p.Rel(file),
+					Line: p.Fset.Position(field.Pos()).Line,
+					Message: fmt.Sprintf(
+						"REQUIRED-DEP-NIL-GUARD-01-A4: malformed struct tag %q (reflect.StructTag.Get would silently drop it) (%s)",
+						raw, requiredDepNilGuardRule),
+				})
+				continue
+			}
 			val := reflect.StructTag(raw).Get("gocell")
 			if val == "" || val == "required" {
 				continue
@@ -912,62 +1047,6 @@ func isIsNilInterfaceIdentObj(obj types.Object) bool {
 		return false
 	}
 	return fn.Pkg().Path() == validationPkgPath && fn.Name() == isNilInterfaceFunc
-}
-
-// --- B4: No external nil guard helper funnel ---
-
-// TestRequiredDepNilGuard_BlindSpot_B4_NoExternalNilGuardHelper verifies that
-// service.go files do not call common nil-guard helper wrappers that could
-// bypass A3. Ban list: MustNotBeNil, RequireNonNil, AssertNonNil, CheckNotNil.
-func TestRequiredDepNilGuard_BlindSpot_B4_NoExternalNilGuardHelper(t *testing.T) {
-	root := findModuleRoot(t)
-	scope := ModuleScope(root)
-	diags := Run(t, scope, func(p *Pass) []Diagnostic {
-		var out []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if !isHandWrittenServiceFile(rel) {
-				continue
-			}
-			out = append(out, scanB4NilGuardHelper(p, file)...)
-		}
-		return out
-	})
-	assert.Empty(t, diags,
-		"B4: service.go calls a banned nil-guard helper (MustNotBeNil/RequireNonNil/AssertNonNil/CheckNotNil); "+
-			"use generated validateRequired() instead")
-}
-
-// scanB4NilGuardHelper detects calls to banned nil-guard helper functions.
-func scanB4NilGuardHelper(p *Pass, file *ast.File) []Diagnostic {
-	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		name := calleeSimpleName(call)
-		for _, banned := range nilGuardHelperBanList {
-			if name == banned {
-				out = append(out, Diagnostic{
-					Rel:  p.Rel(file),
-					Line: p.Fset.Position(call.Pos()).Line,
-					Message: fmt.Sprintf(
-						"B4: banned nil-guard helper %q in service.go bypasses generated validateRequired() funnel",
-						name),
-				})
-				return
-			}
-		}
-	})
-	return out
-}
-
-// calleeSimpleName returns the simple function/method name from a call expression.
-func calleeSimpleName(call *ast.CallExpr) string {
-	switch fn := call.Fun.(type) {
-	case *ast.Ident:
-		return fn.Name
-	case *ast.SelectorExpr:
-		return fn.Sel.Name
-	}
-	return ""
 }
 
 // --- B5: No validateRequired method value leak ---

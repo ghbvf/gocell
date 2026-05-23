@@ -1,0 +1,1 @@
+tools/archtest/testdata/required_dep_nil_guard_fixtures/red_bare_service_return/service.go:20: REQUIRED-DEP-NIL-GUARD-01-A2: NewService returns *Service but the Service struct has gocell:"required" fields; it must return error to propagate validateRequired() (REQUIRED-DEP-NIL-GUARD-01)

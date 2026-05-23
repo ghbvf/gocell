@@ -1,0 +1,1 @@
+tools/archtest/testdata/required_dep_nil_guard_fixtures/red_unconsumed_callsite/service.go:22: REQUIRED-DEP-NIL-GUARD-01-A2: validateRequired() result must be checked and returned (if err := s.validateRequired(); err != nil { return ..., err }) (REQUIRED-DEP-NIL-GUARD-01)
