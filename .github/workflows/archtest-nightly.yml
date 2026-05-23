@@ -22,7 +22,6 @@ on:
 
 permissions:
   contents: read
-  issues: write   # alert-on-failure opens issues on failure
 
 jobs:
   verify-archtest:
@@ -76,57 +75,3 @@ jobs:
           path: ${{ runner.temp }}/archtest-shard-${{ matrix.shard }}.json
           retention-days: 3
           if-no-files-found: ignore
-
-  alert-on-failure:
-    needs: verify-archtest
-    if: failure()
-    runs-on: ubuntu-latest
-    permissions:
-      contents: none   # override top-level contents: read; this job needs no repo access
-      issues: write
-    steps:
-      # Open a P0 issue via the hosted runner's built-in `gh` CLI rather
-      # than actions/github-script: avoids introducing a new pinned-SHA
-      # external action (no existing pin in this repo) and keeps the alert
-      # path readable as plain shell. GH_TOKEN consumes the job's
-      # GITHUB_TOKEN, scoped by the `permissions: issues: write` block.
-      - name: Open failure issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          # Ensure labels exist (idempotent: 422 from existing label is silenced).
-          gh label create nightly-failure --color e11d48 --description "archtest nightly broke" 2>/dev/null || true
-          gh label create pri-p0          --color e11d48 --description "Priority P0"            2>/dev/null || true
-          gh label create cap-02-metadata-governance --color 0075ca --description "Capability: metadata governance" 2>/dev/null || true
-
-          branch="${{ github.ref_name }}"
-          title="[archtest-nightly] ${branch} broken"
-
-          # Idempotency: skip if an open issue with the same title prefix already exists.
-          existing=$(gh issue list --label nightly-failure --state open \
-            --search "${title}" --json number --jq length)
-          if [ "${existing}" -gt 0 ]; then
-            echo "Nightly failure issue already open, skipping creation."
-            exit 0
-          fi
-
-          today=$(date -u +%Y-%m-%d)
-          body=$(cat <<EOF
-          archtest nightly failed on ${branch}.
-
-          Run: $RUN_URL
-
-          Triage:
-          1. GHA runner shutdown (platform flake) → re-run via workflow_dispatch
-          2. Open run logs, identify failing shard + invariant ID.
-          3. Determine root cause:
-             - True invariant violation → fix or revert offending commit
-             - modulo-shift SLOW → adjust tools/slowgate/allowlist.txt
-          4. Rerun via Actions → archtest-nightly → Run workflow.
-          EOF
-          )
-          gh issue create \
-            --title "${title} (${today})" \
-            --label nightly-failure --label pri-p0 --label cap-02-metadata-governance \
-            --body "$body"

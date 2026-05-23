@@ -58,19 +58,22 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 `hack/verify-archtest.sh` 内 shard 路径：若 `$SLOWGATE_BIN` executable，`go test ... -json -run '...'` tee 到 `$RUNNER_TEMP/archtest-shard-N.json` 再管道入 slowgate（与 `_build-lint.yml` 旧 tools shard 同范式）；否则 plain `go test`（local dev）。matrix job 内 `go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate` 后注入 env；`if: failure()` artifact 上传保留 json event stream 供失败诊断。
 
-### D6. Single-owner 原则：matrix is the sole archtest gate on CI
+### D6. Single-owner 原则：nightly schedule is the sole archtest gate on CI
 
-`_build-lint.yml::verify-archtest` matrix（16 shard）是 push / pull_request 上的 **唯一权威 archtest gate**。`governance.yml::make verify` 通过 `env: VERIFY_SKIP: archtest` 显式委托，**不再双跑**。
+`.github/workflows/archtest-nightly.yml::verify-archtest` matrix（16 shard，cron + `workflow_dispatch`）是 archtest 在 CI 上的 **唯一权威 gate**。push / pull_request 不再跑 archtest（PR-time matrix 已删，详见 §Amendment 2026-05-23-pr-time-to-nightly）。`governance.yml::make verify` 通过 `env: VERIFY_SKIP: archtest` 显式委托给 nightly，**不再双跑**。
 
 理由（K8s + Watermill 范式对照）：
 - K8s 每个 verify-*.sh 是独立 Prow job（一 owner / 一 gate）；aggregator `hack/make-rules/verify.sh` 是开发者本地一键入口，不是 CI 上的二次 gate
 - Watermill 用单个 reusable workflow 作为 PR/master 共同实现，调用方只做薄包装；语义差异通过显式 input 表达，不靠 caller-injected env 改 script 行为
-- 若 governance 在 PR 上也跑 archtest：(a) CI 资源 ×2；(b) 同 script 在两个 caller 下行为分叉（matrix 注入 SLOWGATE_BIN 有 budget 门，governance 无）—— 同名 gate 双契约破坏 reproducibility
+- 若 governance 在 push / PR 上也跑 archtest：(a) CI 资源 ×2；(b) 同 script 在两个 caller 下行为分叉（matrix 注入 SLOWGATE_BIN 有 budget 门，governance 无）—— 同名 gate 双契约破坏 reproducibility
 
-本地路径不变：
-- `make verify` 不带 `VERIFY_SKIP` env，仍调 `hack/verify-archtest.sh`，作为开发者一键全跑
+本地路径：
+- 开发者本地 `make verify`（无 `VERIFY_SKIP` env）仍调 `hack/verify-archtest.sh`，作为一键全跑
+- `hack/githooks/pre-push` 在 `go_changed || archtest_governance_changed` 命中时并行 fan-out（默认 K=4，`SHARD_COUNT` env 可覆盖）作为 PR-time 快速反馈
 - 脚本因 `SLOWGATE_BIN` 缺失走 plain go test 路径——by-design 单本地路径（slowgate budget gate 是 CI 关注点，本地 dev 关注正确性）
-- 故 script 仍有「`SLOWGATE_BIN` 在则 pipe；不在则 plain」的内部分支，但 CI 只有一个 caller（matrix）注入 `SLOWGATE_BIN`，没有 caller-divergent 契约
+- 故 script 仍有「`SLOWGATE_BIN` 在则 pipe；不在则 plain」的内部分支，但 CI 只有一个 caller（nightly matrix）注入 `SLOWGATE_BIN`，没有 caller-divergent 契约
+
+> 历史：本节原文为 "`_build-lint.yml::verify-archtest` matrix 是 push / pull_request 上的唯一权威 archtest gate"。§Amendment 2026-05-23-pr-time-to-nightly 把 owner 平移至 `archtest-nightly.yml`；本节文本同 PR 重写（per ai-collab.md §"ADR amendment 落地必查"，禁止"原文保留作历史脉络"）。
 
 ### D7. 元规则覆盖 dispatch 路径，不仅 discovery
 
@@ -199,7 +202,7 @@ PR-time 16-shard matrix（PR / push 上 `_build-lint.yml::verify-archtest`）累
 
 1. **删除 PR-time matrix**——`.github/workflows/_build-lint.yml::verify-archtest` job 整段删除（含 16 个 matrix entries）。`governance.yml::make verify` 的 `VERIFY_SKIP: archtest` env 保留，注释更新为指向新 nightly yaml。
 
-2. **新建 nightly schedule**——`.github/workflows/archtest-nightly.yml`：`cron: '0 18 * * *'`（UTC ≈ 北京 02:00）+ `workflow_dispatch`；16-shard matrix 结构 1:1 复用旧 PR-time job；新增 `alert-on-failure` job 在 `if: failure()` 时用 hosted runner 内置 `gh` CLI 调 `gh issue create` 开 P0 issue（labels: `nightly-failure` / `pri-p0` / `cap-02-metadata-governance`）。
+2. **新建 nightly schedule**——`.github/workflows/archtest-nightly.yml`：`cron: '0 18 * * *'`（UTC ≈ 北京 02:00）+ `workflow_dispatch`；16-shard matrix 结构 1:1 复用旧 PR-time job。失败兜底走 GHA 平台自带反馈通道（workflow run 失败默认邮件通知 watchers、Actions UI 红 ✗、`workflow_dispatch` 手动 rerun），**不**自动开 issue——见下方 §"alert-on-failure 撤回"。
 
 3. **本地 pre-push 跑全量 archtest**——`hack/verify-archtest.sh` 新增"Execution modes"语义：
    - `SHARD_TARGET` 设 → 单 shard 单 process（CI matrix 路径不变）
@@ -229,7 +232,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 | §D1 CI matrix 16-shard | ✅ K=16 不变，载体 `_build-lint.yml` → `archtest-nightly.yml` | ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 守卫 yaml 路径同 PR 迁移 |
 | §D3 ARCHTEST-VERIFY-COVERAGE-01 元守卫 | ✅ 不变，运行时间从 PR-time → nightly | discovery drift 触发条件单一（改脚本），PR diff 显著 |
 | §D4 governance.yml VERIFY_SKIP | ✅ env 保留不变 | 注释更新指向新 nightly yaml |
-| §D5 slowgate | ⚠️ 仍跑但延迟暴露 | brittleness 转 nightly 兜底 + 自动开 issue |
+| §D5 slowgate | ⚠️ 仍跑但延迟暴露 | brittleness 转 nightly 兜底；失败靠 GHA 平台邮件 + Actions UI + `workflow_dispatch` rerun |
 | § "PR-time fast-feedback gate" | ❌ 失效 | pre-push 本地 K=4 并行替代（实测 ~3 min wall） |
 | § "single authoritative owner" | ✅ owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`（同名 job，不同 yaml）| 注释 + ADR 文本同 PR 重写 |
 
@@ -237,10 +240,26 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 
 ### 跨载体同步（同 PR 闭环）
 
-- `.github/workflows/archtest-nightly.yml` 新建（16-shard schedule + alert-on-failure）
+- `.github/workflows/archtest-nightly.yml` 新建（16-shard schedule + `workflow_dispatch`；alert-on-failure 自动开 issue 子方案见 §"alert-on-failure 撤回"）
 - `.github/workflows/_build-lint.yml` 删 verify-archtest job + tools shard 注释指向 nightly
 - `.github/workflows/governance.yml` VERIFY_SKIP 注释指向 nightly
 - `hack/verify-archtest.sh` "Execution modes" 文档 + 并行 fan-out 分支
-- `hack/githooks/pre-push` 用 K=4 并行 + 注释重写（deviation 4 / Tier 4）
+- `hack/githooks/pre-push` 用 `${SHARD_COUNT:-4}` 并行 + `go_changed || archtest_governance_changed` 触发 + 注释重写（deviation 4 / Tier 4）
 - `tools/archtest/archtest_ci_shard_count_test.go` yaml 路径迁移到 `archtest-nightly.yml`
-- `CLAUDE.md:78`、`.claude/rules/gocell/ai-collab.md:69` archtest 入口描述更新
+- `CLAUDE.md`、`.claude/rules/gocell/ai-collab.md` archtest 入口描述更新
+
+### alert-on-failure 撤回（PR #887 review round）
+
+初版决策 2 同时包含一个 `alert-on-failure` job：`if: failure()` 时调 `gh issue create` 自动开 P0 issue（labels `nightly-failure` / `pri-p0` / `cap-02-metadata-governance`，同标题 idempotency skip-if-exists）。PR #887 review 找到三处缺陷：
+
+1. **`issues: write` 顶层泄漏**——workflow 顶层 `permissions: issues: write` 被 verify-archtest 16 个 matrix job 继承，权限面不必要扩大
+2. **shell injection 面**——`branch="${{ github.ref_name }}"` 把 GHA expression 直接嵌进 shell，`workflow_dispatch` 触发的分支名可承载 shell 元字符
+3. **alert job 无 repo context**——既无 checkout 也无 `GH_REPO` env，`gh issue list / create / label create` 在非 git 工作目录会失败，整条"补偿路径"本身失效
+
+激进自审三层（per ai-collab.md §"激进自审三层覆盖"）：
+
+- **L1 代码补丁**：F1+F2+F3 是给同一脆弱组件打三个补丁，治标不治本
+- **L2 PR 整体决策组合**：自动开 issue 兜底是冗余运维债——GHA workflow run 失败默认邮件通知 watchers、Actions UI 红 ✗ 显示、`workflow_dispatch` 手动 rerun 已构成三条反馈通道；issue 语义是"工作项跟踪"，与 alert 通道语义错配；同标题 idempotency 导致同一 issue 长期开着反而失去信号
+- **L3 概念模型**：GitHub Issues 不是 alert backbone；真正的 alert 应走 Slack / PagerDuty webhook（语义正确的 alert 通道）
+
+裁决：同 PR 内撤回 alert-on-failure job 整段 + 顶层 `issues: write` 权限。nightly 失败靠 GHA 平台自带反馈。未来若真需要 alert backbone，使用 webhook 形式，不回到 GitHub Issues。

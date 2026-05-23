@@ -33,29 +33,41 @@
 #     build). The other three commands do mirror real CI steps
 #     (_build-lint.yml: go build ./... / go vet ./... / go vet -tags=e2e
 #     ./tests/e2e/...).
-#   - `SHARD_COUNT=4 bash hack/verify-archtest.sh` (full archtest sweep,
-#     parallel fan-out across 4 process-isolated shards) runs here as the
-#     sole PR-time gate after ADR 202605120000 §Amendment 2026-05-23-pr-
-#     time-to-nightly moved the 16-shard CI matrix to archtest-nightly.yml.
-#     The script's "Execution modes" header makes SHARD_COUNT>1 (without
-#     SHARD_TARGET) the parallel-fan-out trigger. Workstation calibration
-#     (18-core / 128 GB Apple Silicon, macOS, ~605 Test*): K=2 wall 248s
-#     / RSS 51 GB; K=4 wall 187s / RSS 43 GB; K=8 wall ~196s / RSS ~67 GB.
-#     K=4 is the sweet spot — each shard gets ~4.5 cores for `go test`'s
+#   - `env SHARD_COUNT="${SHARD_COUNT:-4}" bash hack/verify-archtest.sh`
+#     (full archtest sweep, parallel fan-out across 4 process-isolated
+#     shards by default; callers may override e.g. `SHARD_COUNT=2 git
+#     push` on low-memory machines) runs here as the sole PR-time gate
+#     after ADR 202605120000 §Amendment 2026-05-23-pr-time-to-nightly
+#     moved the 16-shard CI matrix to archtest-nightly.yml. The script's
+#     "Execution modes" header makes SHARD_COUNT>1 (without SHARD_TARGET)
+#     the parallel-fan-out trigger. Workstation calibration (18-core /
+#     128 GB Apple Silicon, macOS, ~605 Test*): K=2 wall 248s / RSS
+#     51 GB; K=4 wall 187s / RSS 43 GB; K=8 wall ~196s / RSS ~67 GB. K=4
+#     is the sweet spot — each shard gets ~4.5 cores for `go test`'s
 #     internal t.Parallel; K=1 single-process is ~5min wall (cache shared
-#     but no concurrency); K=N serial for-loop was dropped (it was always
-#     slower than K=1: each shard re-runs packages.Load with no cross-
-#     shard cache). Gated on go_changed (any .go file in push), not
-#     test_code_changed: archtest guards production code patterns
-#     (errcode.New / panic registration / etc.), so a non-test Go change
-#     can violate an invariant just as easily as a test change. Cost: ~3
-#     min warm on the calibrated workstation. This breaches the sub-10s
-#     budget by 18×, but is accepted: the archtest matrix is no longer
-#     running on every PR CI, so push-time is the canonical fast-feedback
-#     path. A non-go push (docs only) pays 0; a Go push pays
-#     ~max(build/vet/lint/archtest) = archtest's wall-time. nightly
-#     catches anything that slips through `--no-verify` and opens a P0
-#     issue within 24h.
+#     but no concurrency); K=N serial for-loop was dropped (it was
+#     always slower than K=1: each shard re-runs packages.Load with no
+#     cross-shard cache). Gated on `go_changed || archtest_governance_
+#     changed`, not test_code_changed: archtest guards production code
+#     patterns (errcode.New / panic registration / etc.), so a non-test
+#     Go change can violate an invariant just as easily as a test
+#     change; AND any push that touches archtest's own governance
+#     surface (`.github/workflows/archtest-nightly.yml`, `hack/verify-
+#     archtest.sh`, this hook) must re-run the sweep because PR / push
+#     CI no longer runs archtest and a broken governance file surfaces
+#     only on the next scheduled nightly (≤24h later). Cost: ~3 min warm
+#     on the calibrated workstation. This breaches the sub-10s budget by
+#     18×, but is accepted: the archtest matrix is no longer running on
+#     every PR CI, so push-time is the canonical fast-feedback path. A
+#     non-go / non-governance push (docs only) pays 0; a Go or
+#     governance push pays ~max(build/vet/lint/archtest) = archtest's
+#     wall-time. nightly catches anything that slips through `--no-
+#     verify`; nightly failures surface via the workflow's default
+#     email-to-watchers and the Actions UI red ✗ (no auto-issue tier —
+#     `gh issue create` was tried in PR #887 first round and dropped on
+#     review for being a fragile `issues: write` surface; if a real
+#     alert channel is wanted later it should be Slack / PagerDuty
+#     webhook, not GitHub Issues).
 #   - golangci-lint runs CI-faithfully —
 #     `golangci-lint run --new-from-merge-base=origin/develop` with the
 #     version pinned by hack/lib/golangci-lint.sh (the project's single
@@ -181,6 +193,7 @@ if [[ ${force_all} -eq 1 ]]; then
     go_files="$(git ls-files '*.go')"
     go_changed=1
     codegen_changed=1
+    archtest_governance_changed=1
 else
     go_files="$(printf '%s\n' "${changed}" | grep -E '\.go$' || true)"
     [[ -n "${go_files}" ]] && go_changed=1 || go_changed=0
@@ -199,6 +212,17 @@ else
     # when there is legitimately no match) and test emptiness.
     codegen_hits="$(printf '%s\n' "${changed}" | grep -E '(\.schema\.json|/(cell|slice|assembly|contract)\.yaml|\.tmpl|tools/codegen/.*\.go|tools/generatedverify/.*\.go|cmd/gocell/.*\.go)$' || true)"
     [[ -n "${codegen_hits}" ]] && codegen_changed=1 || codegen_changed=0
+    # Archtest governance surface: the nightly workflow yaml that owns the
+    # CI gate, the shared shell driver, and this hook itself. A push that
+    # touches only these files has go_changed=0 (no .go diff) yet still
+    # needs the local archtest sweep — PR / push CI no longer runs
+    # archtest after ADR 202605120000 §Amendment 2026-05-23-pr-time-to-
+    # nightly, and a broken nightly yaml / shell driver / hook surfaces
+    # only on the next scheduled run (≤24h later). Use the same anti-
+    # SIGPIPE pattern as codegen_hits above (capture full, test emptiness;
+    # never `grep -q`).
+    archtest_gov_hits="$(printf '%s\n' "${changed}" | grep -E '(\.github/workflows/archtest-nightly\.yml$|hack/verify-archtest\.sh$|hack/githooks/pre-push$)' || true)"
+    [[ -n "${archtest_gov_hits}" ]] && archtest_governance_changed=1 || archtest_governance_changed=0
 fi
 
 start=$(date +%s)
@@ -332,27 +356,34 @@ if [[ ${go_changed} -eq 1 ]]; then
     run_bg "go vet -tags=e2e ./tests/e2e/..."      go vet -tags=e2e ./tests/e2e/...
 
     run_bg "golangci-lint (CI-faithful; run: make fmt / fix lint)" lint_gate
+fi
 
-    # Full archtest sweep, K=4 parallel. Without SHARD_TARGET set,
-    # verify-archtest.sh fans out concurrent shards when SHARD_COUNT>1
-    # (see its "Execution modes" header). K=1 single-process is ~5min on
-    # this codebase (~605 Test*); a K=N serial for-loop is even slower
-    # (each shard re-runs packages.Load with no shared *types.Info
-    # cache). Workstation calibration (18-core / 128 GB Apple Silicon,
-    # macOS): K=2 wall 248s / RSS 51 GB; K=4 wall 187s / RSS 43 GB;
-    # K=8 wall ~196s / RSS ~67 GB. K=4 is the sweet spot — 4 process-
-    # isolated shards each get ~4.5 cores for `go test`'s internal
-    # t.Parallel; K=2 over-loads per shard, K=8 starves go test of
-    # cores. CI 16-shard matrix lives in
-    # .github/workflows/archtest-nightly.yml (ADR 202605120000 §
-    # Amendment 2026-05-23-pr-time-to-nightly). Runs on every Go push —
-    # archtest guards production code patterns so the gate is tied to
-    # go_changed, not test_code_changed. See header deviation 4.
-    # Low-memory machines (< 64 GB): use SHARD_COUNT=2 to cap peak RSS at
-    # ~51 GB at the cost of ~4 min wall (vs K=4 ~3 min / 43 GB). Example:
-    #   SHARD_COUNT=2 git push
-    run_bg "archtest sweep (bash hack/verify-archtest.sh, K=4 parallel)" \
-        env SHARD_COUNT=4 bash hack/verify-archtest.sh
+# Full archtest sweep, default K=4 parallel. Gated on go_changed OR
+# archtest_governance_changed: archtest guards production Go patterns
+# (errcode.New / panic registration / etc.), so any .go push must run it;
+# AND the gate covers archtest's own governance surface (nightly yaml /
+# verify-archtest.sh / this hook) so a yaml-or-script-only push doesn't
+# bypass the local sweep — PR / push CI no longer runs archtest after ADR
+# 202605120000 §Amendment 2026-05-23-pr-time-to-nightly, and a broken
+# governance file surfaces only on the next scheduled nightly (≤24h
+# later). Without SHARD_TARGET set, verify-archtest.sh fans out
+# concurrent shards when SHARD_COUNT>1 (see its "Execution modes"
+# header). K=1 single-process is ~5min on this codebase (~605 Test*); a
+# K=N serial for-loop is even slower (each shard re-runs packages.Load
+# with no shared *types.Info cache). Workstation calibration (18-core /
+# 128 GB Apple Silicon, macOS): K=2 wall 248s / RSS 51 GB; K=4 wall 187s
+# / RSS 43 GB; K=8 wall ~196s / RSS ~67 GB. K=4 is the sweet spot — 4
+# process-isolated shards each get ~4.5 cores for `go test`'s internal
+# t.Parallel; K=2 over-loads per shard, K=8 starves go test of cores. CI
+# 16-shard matrix lives in .github/workflows/archtest-nightly.yml (ADR
+# 202605120000 §Amendment 2026-05-23-pr-time-to-nightly). See header
+# deviation 4. Low-memory machines (< 64 GB): use SHARD_COUNT=2 to cap
+# peak RSS at ~51 GB at the cost of ~4 min wall (vs K=4 ~3 min / 43 GB).
+# The `${SHARD_COUNT:-4}` shape honours caller-supplied K (example:
+# `SHARD_COUNT=2 git push`) while keeping K=4 as the calibrated default.
+if [[ ${go_changed} -eq 1 || ${archtest_governance_changed} -eq 1 ]]; then
+    run_bg "archtest sweep (bash hack/verify-archtest.sh)" \
+        env SHARD_COUNT="${SHARD_COUNT:-4}" bash hack/verify-archtest.sh
 fi
 
 if [[ ${codegen_changed} -eq 1 ]]; then

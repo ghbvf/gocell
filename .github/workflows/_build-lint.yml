@@ -220,10 +220,19 @@ jobs:
       # ban) are owned by the dedicated Governance Strict workflow
       # (.github/workflows/governance.yml → `make verify`). Running them
       # here would duplicate work and create two paths to update whenever a
-      # gate is added. archtest layer/cell-internal guards are covered by
-      # the dedicated tools shard (./tools/...) which runs in parallel with
-      # this kernel shard, and are additionally re-run inside `make verify`
-      # (cheap, < 30s).
+      # gate is added. archtest layer/cell-internal guards are NOT covered
+      # by this workflow at all on push / pull_request: per ADR
+      # 202605120000 §D6 + §Amendment 2026-05-23-pr-time-to-nightly, the
+      # sole CI archtest gate is .github/workflows/archtest-nightly.yml
+      # (schedule cron + workflow_dispatch, 16-shard matrix). The tools
+      # shard above runs only tools/archtest/internal/{scanner,typeseval,
+      # rawparamfixture,wrapfixture} sub-package unit tests (lightweight,
+      # do not accumulate *types.Info graph); the top-level archtest package
+      # is excluded by the sentinel _dynamic_archtest_excluded (see the
+      # build-test matrix tools entry). governance.yml's `make verify`
+      # likewise sets VERIFY_SKIP=archtest to delegate to the nightly job
+      # — push / PR archtest is covered locally by hack/githooks/pre-push,
+      # not here.
 
       # Compile-verify e2e package even when integration-test job is skipped.
       # The e2e build tag gates runtime behaviour; this step ensures type/import
