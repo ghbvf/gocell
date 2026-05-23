@@ -113,7 +113,7 @@ func TestGaugeVecFunnel(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	// RED check: fixture must produce exactly 16 violations.
+	// RED check: fixture must produce exactly 19 violations.
 	// The fixture rule does NOT exclude the fixture package itself — only the
 	// adapter allowlist exclusions apply. This is what allows the RED check to
 	// detect the violations in the fixture.
