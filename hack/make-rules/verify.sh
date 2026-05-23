@@ -25,10 +25,12 @@ if [[ ${#scripts[@]} -eq 0 ]]; then
 fi
 
 # VERIFY_SKIP is a comma-separated list of gate basenames (the part between
-# `verify-` and `.sh`) to skip. CI uses it to drop gates already covered by
-# the build-test matrix — running `go test -race ./tools/archtest/...` twice
-# on every PR (once in build-test (tools), once here) is pure duplicate
-# work. Local `make verify` leaves VERIFY_SKIP empty for full coverage.
+# `verify-` and `.sh`) to skip. CI uses it to delegate archtest to the nightly
+# matrix job (.github/workflows/archtest-nightly.yml) — running archtest twice
+# (once in archtest-nightly.yml, once here) is pure duplicate work and breaks
+# the single-owner principle (see ADR 202605120000 §D6 + §Amendment
+# 2026-05-23-pr-time-to-nightly). Local `make verify` leaves VERIFY_SKIP empty
+# for full coverage.
 #
 # Stored as a delimited string instead of an associative array so the script
 # stays portable to macOS bash 3.2 (no `declare -A`).

@@ -5,10 +5,14 @@
 
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}"
+
+# shellcheck source=hack/lib/gocell-bin.sh
+source "${ROOT}/hack/lib/gocell-bin.sh"
 
 set +e
-output=$(go run ./cmd/gocell scaffold slice --id=test-slice --cell=accesscore 2>&1)
+output=$(gocell::cli scaffold slice --id=test-slice --cell=accesscore 2>&1)
 exit_code=$?
 set -e
 
@@ -30,7 +34,7 @@ fi
 
 # Verify that `gocell scaffold assembly` also rejects kebab-case --id values.
 set +e
-asm_output=$(go run ./cmd/gocell scaffold assembly --id=foo-bar --cells=examplecell --team=t --role=r 2>&1)
+asm_output=$(gocell::cli scaffold assembly --id=foo-bar --cells=examplecell --team=t --role=r 2>&1)
 asm_exit_code=$?
 set -e
 

@@ -4,6 +4,10 @@
 
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}"
 
-go run ./cmd/gocell verify journey --active
+# shellcheck source=hack/lib/gocell-bin.sh
+source "${ROOT}/hack/lib/gocell-bin.sh"
+
+gocell::cli verify journey --active

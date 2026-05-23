@@ -6,6 +6,11 @@
         test-examples-smoke \
         healthcheck-verify
 
+# GOCELL_CLI: route gocell invocations through the pre-compiled binary when
+# GOCELL_BIN is set (CI path), or fall back to `go run ./cmd/gocell` otherwise
+# (local dev). This mirrors hack/lib/gocell-bin.sh::gocell::cli.
+GOCELL_CLI := $(if $(GOCELL_BIN),$(GOCELL_BIN),go run ./cmd/gocell)
+
 # ---------------------------------------------------------------------------
 # Go targets
 # ---------------------------------------------------------------------------
@@ -60,14 +65,14 @@ install-hooks:
 	@echo "core.hooksPath -> hack/githooks (pre-push active)"
 
 validate:
-	go run ./cmd/gocell validate
+	$(GOCELL_CLI) validate
 
 generate:
-	go run ./cmd/gocell generate assembly --all
-	go run ./cmd/gocell generate metrics-schema --all
-	go run ./cmd/gocell generate cell --all
-	go run ./cmd/gocell generate contract --all
-	go run ./cmd/gocell generate required-deps --all
+	$(GOCELL_CLI) generate assembly --all
+	$(GOCELL_CLI) generate metrics-schema --all
+	$(GOCELL_CLI) generate cell --all
+	$(GOCELL_CLI) generate contract --all
+	$(GOCELL_CLI) generate required-deps --all
 	go generate ./cmd/corebundle/
 
 cover:

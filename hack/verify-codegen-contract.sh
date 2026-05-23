@@ -20,8 +20,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}"
+
+# shellcheck source=hack/lib/gocell-bin.sh
+source "${ROOT}/hack/lib/gocell-bin.sh"
 
 if [[ $# -eq 0 ]]; then
-  exec go -C "${ROOT}" run ./cmd/gocell verify codegen-contract --local=false
+  gocell::cli verify codegen-contract --local=false
+  exit $?
 fi
-exec go -C "${ROOT}" run ./cmd/gocell verify codegen-contract "$@"
+gocell::cli verify codegen-contract "$@"

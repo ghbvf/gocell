@@ -235,7 +235,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 | §D3 ARCHTEST-VERIFY-COVERAGE-01 元守卫 | ✅ 不变，运行时间从 PR-time → nightly | discovery drift 触发条件单一（改脚本），PR diff 显著 |
 | §D4 governance.yml VERIFY_SKIP | ✅ env 保留不变 | 注释更新指向新 nightly yaml |
 | §D5 slowgate | ⚠️ 仍跑但延迟暴露 | brittleness 转 nightly 兜底；失败靠 GHA 平台邮件 + Actions UI + `workflow_dispatch` rerun |
-| § "PR-time fast-feedback gate" | ❌ 失效（无替代） | 开发者本地按需 `make verify` 或 `bash hack/verify-archtest.sh`；nightly ≤24h 兜底。round-1 曾用 pre-push K=4 fan-out 替代，因 ~3min wall + 43 GB RSS + 18-core 全打满破 sub-10s 预算 round-2 撤回 |
+| §D8 PR-time fast-feedback gate | ⚠️ 仅核心 4 类 invariant 保留 | 4 类 PR-time gate（`verify-prod-clock-injection.sh` / `verify-prod-duration.sh` / `verify-test-time-literal.sh` / `verify-panic-registered.sh`）继续随 `make verify` 在 PR CI 上 per-invocation 运行，覆盖 PROD-CLOCK-INJECTION-01 / PROD-DURATION-CONST-01 / TEST-TIME-LITERAL-01 + TEST-SLEEP-DISCIPLINE-01 / PANIC-REGISTERED-01 四组 invariant。其余 archtest（REQUIRED-DEP-NIL-GUARD-01 / HEALTHZ-WRITE-01 / HEALTHZ-TYPED-REGISTER-01 等）由 nightly ≤24h 兜底（详见 §D8 决策节）。round-1 曾用 pre-push K=4 fan-out 替代，因 ~3min wall + 43 GB RSS + 18-core 全打满破 sub-10s 预算 round-2 撤回 |
 | § "single authoritative owner" | ✅ owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`（同名 job，不同 yaml）| 注释 + ADR 文本同 PR 重写 |
 
 §D4 / §D6 段原文同 PR 重写以与现状一致（per ai-robust.md §"ADR amendment 落地必查" 禁止"原文保留作历史脉络"）。
@@ -249,6 +249,32 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 - `hack/githooks/pre-push` 撤回 archtest 调用与 governance trigger（详见 §"pre-push archtest 撤回"），保留 gofumpt / build / vet / golangci-lint / codegen-verify 等 sub-10s 友好 gate；deviation 4 重号为 golangci-lint，Tier 4 同步重号
 - `tools/archtest/archtest_ci_shard_count_test.go` yaml 路径迁移到 `archtest-nightly.yml`
 - `CLAUDE.md`、`.claude/rules/gocell/ai-robust.md` archtest 入口描述更新
+- **`hack/verify-archtest-invariants.sh`**（**将由 PR2 创建** — refactor/archtest-prtime-merge）：合并 4 个 PR-time archtest gate（verify-prod-clock-injection.sh / verify-prod-duration.sh / verify-test-time-literal.sh / verify-panic-registered.sh）为单次 `go test ./tools/archtest -run '^(TestProd...)'` 调用，消除 4 次重复 typed AST 加载（详见 plan ship-curious-treasure.md 方案 G）
+
+### D8. 4 类 PR-time archtest gate（恢复 §"PR-time fast-feedback gate"）
+
+`governance.yml → make verify` 路径保留以下 4 个 archtest gate，不随 `VERIFY_SKIP=archtest` 委托给 nightly（`make verify` 的 `VERIFY_SKIP` 只跳过 `hack/verify-archtest.sh`，不影响其余 verify-*.sh）：
+
+| gate 脚本 | 守护的 invariant | 保留理由 |
+|---|---|---|
+| `hack/verify-prod-clock-injection.sh` | PROD-CLOCK-INJECTION-01（prod 代码禁 `time.Now/Since/Until/NewTimer`） | prod-touching 改动高频；PR-time 24h 延迟不可接受 |
+| `hack/verify-prod-duration.sh` | PROD-DURATION-CONST-01（prod duration literal 走 const）| 同上 |
+| `hack/verify-test-time-literal.sh` | TEST-TIME-LITERAL-01 + TEST-SLEEP-DISCIPLINE-01（test 时间字面量纪律）| 同上 |
+| `hack/verify-panic-registered.sh` | PANIC-REGISTERED-01（panic 必须 `panicregister.Approved` wrap）| 安全分类，漏检 24h 后暴露高风险 |
+
+**不纳入 PR-time gate 的 archtest**（各 rule 守护的不变量单独列出，避免混淆）：
+
+| Rule ID | 守护的不变量 | 不纳入 PR-time 理由 |
+|---------|------------|------------------|
+| `REQUIRED-DEP-NIL-GUARD-01` | service struct 中 `gocell:"required"` tag 标注的依赖字段必须由 codegen 生成 `validateRequired()` 检查，禁止手写 nil guard | 来自 codegen funnel（tag → generated validateRequired()），触发频率低（需新增/修改 service struct required 依赖字段），nightly ≤24h 兜底够用 |
+| `HEALTHZ-WRITE-01` | cells/ 包内对 `reg.Healthz()` 的调用必须位于 codegen 产物 `healthz_gen.go` 内，禁止直接调用绕过 typed funnel | kernel internal funnel，触发频率低，nightly ≤24h 兜底够用 |
+| `HEALTHZ-TYPED-REGISTER-01` | cell-level repo readiness probe 必须通过 cellgen 生成的 `<cellpkg>.RegisterRepoReady(reg, prober)` 有类型 funnel 注册，禁止 duck-type 绕过 | 与 HEALTHZ-WRITE-01 同属 repo readiness probe 注册链，触发频率低，nightly ≤24h 兜底够用 |
+
+注意：`HEALTHZ-WRITE-01` 与 `HEALTHZ-TYPED-REGISTER-01` 是**两个独立 rule**，守护的是 repo readiness probe 注册链的不同层次——前者锁 `reg.Healthz()` 直接调用点，后者锁 typed funnel 必须经过 `RegisterRepoReady`；两者互补，均在 nightly gate 中运行。
+
+race coverage 由 `test-race.yml::race-unit` 单一权威 owner 持有（archtest 是纯 read-only AST 扫描，4 个 gate 不带 `-race`）。
+
+> **PR2 落地方向**：将 4 个独立 gate 合并为 `hack/verify-archtest-invariants.sh`（单次 `go test` 共享 SharedResolver typed AST 加载），节省 ~135s（详见 plan ship-curious-treasure.md 方案 G）。合并后各 gate 脚本删除；D8 本节描述保持不变（invariant 集合与保留理由不变，只是载体从 4 个脚本合并为 1 个）。
 
 ### alert-on-failure 撤回（PR #887 review round）
 
