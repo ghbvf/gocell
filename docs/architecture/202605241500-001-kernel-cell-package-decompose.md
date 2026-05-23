@@ -2,7 +2,7 @@
 
 Status: Accepted (2026-05-24)
 Issue: #615
-PR: TBD
+PR: #900
 
 ## Context
 

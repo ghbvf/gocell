@@ -252,7 +252,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - 路由级 Policy 存在时，Listener 认证链中间件在路由层之前运行（链中间件先于路由 handler）
 - `Public: true` 不能与路由级 `Policy` 同时设置（FinalizeAuth fail-fast）
 - `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义
-- JWT 单一路径（PR262 / PR-MODE-6）：`auth.NewAuthJWT(v)` 直接注入（error-first；`Must*` 已删除，ADR `202605171800`）；`auth.NewAuthJWTFromAssembly(asm)` phase4 时通过 `AuthJWTFromAssembly.Validate()` 从 `authProvider` Cell 发现 verifier。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。Verifier 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher，零样板。
+- JWT 单一路径（PR262 / PR-MODE-6）：`auth.NewAuthJWT(v)` 直接注入（error-first；`Must*` 已删除，ADR `202605171800`）；`auth.NewAuthJWTFromAssembly(asm)` 走两阶段——phase0 `runtime/bootstrap/auth_plan_validate.go::validateAuthJWTFromAssemblyPlans` 校验 assembly 实例同一性（拒结构体字面量 / nil / wrapper / 拷贝），phase4 `auth_plan_apply.go` 遍历 `assembly.CellIDs()` 找到唯一实现 `AuthProvider` 的 Cell 并通过 `AuthJWTFromAssembly.SetResolved(verifier)` 注入。运行期 `router.WithAuthMiddleware` 通过 `plan.ResolvedVerifier()` 读取，搭配 FinalizeAuth 编译的 Public/PasswordResetExempt matcher。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。
 - `/internal/v1/*` 路由（`IsInternal()` 为 true）必须挂在 InternalListener；非 internal 路径不得挂在 InternalListener（FinalizeAuth 双向 fail-fast 校验）。
 
 ### 规则

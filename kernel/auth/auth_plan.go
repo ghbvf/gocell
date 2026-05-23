@@ -99,9 +99,10 @@ var _ ListenerAuth = AuthNone{}
 // routes declared via auth.Mount are honored.
 type AuthJWT struct {
 	// Verifier is the IntentTokenVerifier used to validate JWTs. Required; nil
-	// is rejected by NewAuthJWT with a panic.
-	// Do not set this field directly after construction; use NewAuthJWT(v)
-	// which enforces the non-nil invariant.
+	// (bare or typed) is rejected by NewAuthJWT with an error (B2-K-02 dropped
+	// the MustNewAuthJWT panic variant in PR #553 — composition roots
+	// propagate the error to bootstrap). Do not set this field directly after
+	// construction; use NewAuthJWT(v) which enforces the non-nil invariant.
 	Verifier IntentTokenVerifier
 }
 
