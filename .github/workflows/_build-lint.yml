@@ -109,7 +109,7 @@ jobs:
 
       - name: golangci-lint
         if: matrix.static_checks
-        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
           # SYNC: this version literal is the second copy of the single
           # source declared in hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION.
