@@ -135,6 +135,10 @@
 //     the codegen.Render plumbing).
 //   - tools/archtest/handler_inline_limit_parse_test.go — HANDLER-NO-INLINE-
 //     LIMIT-PARSE-01, regression gate against per-param limit parsing.
+//   - tools/archtest/codegen_http_handler_funnel_test.go —
+//     CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01: HTTP codegen funnel
+//     integrity (sealed httpEndpointSpec type + sole constructor/caller +
+//     handler.tmpl http.Handler emit-uniqueness across tools/codegen/**).
 //   - kernel/governance/rules_http.go — CH-04 (handler-emitted status ⊂
 //     contract.yaml.responses[] ∪ auth.responses), CH-05 (uuid path-param
 //     parse-call presence), CH-06 (contract.yaml.responses[] ∪ successStatus

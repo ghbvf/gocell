@@ -43,6 +43,7 @@ import (
 	"go/token"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -72,13 +73,20 @@ var codegenSpecCtorCallerAllowlist = map[string]string{
 	"buildHTTPSpec": "sole funnel: assigns buildHTTPEndpointSpec result to ContractGenSpec.Endpoint",
 }
 
-// codegenHandlerEmitMarker matches the http.Handler interface-method emission
-// `func (h *Handler) ServeHTTP(<param> http.ResponseWriter, ...)` as it appears
-// in handler.tmpl. The marker is the language-mandated shape of an http.Handler
-// implementation (a ServeHTTP method taking http.ResponseWriter is required by
-// the http.Handler interface) — not an arbitrary string convention. Param name
+// codegenHandlerEmitMarker matches the two language-mandated shapes by which
+// Go source produces an http.Handler:
+//
+//   - a ServeHTTP method `func (h *Handler) ServeHTTP(<param> http.ResponseWriter, ...)`
+//     (the http.Handler interface method), and
+//   - the http.HandlerFunc(<fn>) adapter (an http.Handler without a ServeHTTP
+//     method of its own).
+//
+// Both appear in handler.tmpl today; a new generator could emit a handler via
+// EITHER form, so A2 must cover both — the ServeHTTP-only marker would miss a
+// HandlerFunc-only emitter (reviewer B-1). These are structural shapes of the
+// regulated artifact, not arbitrary string conventions. ServeHTTP's param name
 // is matched as \w+ so it is not pinned to the literal "w".
-var codegenHandlerEmitMarker = regexp.MustCompile(`ServeHTTP\(\s*\w+\s+http\.ResponseWriter`)
+var codegenHandlerEmitMarker = regexp.MustCompile(`ServeHTTP\(\s*\w+\s+http\.ResponseWriter|http\.HandlerFunc\(`)
 
 // ---------------------------------------------------------------------------
 // A1a — the type seal is in place and locked (no re-export).
@@ -138,11 +146,18 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1a_SpecTypeSealed(t *testing.T)
 // (Tests=false) so unit tests that call buildHTTPEndpointSpec directly are out
 // of scope by construction.
 //
+// Detection is by token-position containment (not enclosing-FuncDecl name), so
+// constructions / calls inside function literals, package-level var
+// initializers, or init() — not just top-level FuncDecls — are all covered
+// (reviewer B-2). Both construction forms are detected: httpEndpointSpec{}
+// composite literals AND new(httpEndpointSpec) (reviewer A-1).
+//
 // Blind spots (documented, not detected):
-//   - Method-value / variable indirection: `f := buildHTTPEndpointSpec; f()`
-//     or a package-scope construction/call outside any FuncDecl. buildHTTP-
-//     EndpointSpec is an unexported package func returning (*T, error); the
-//     only realistic form is a direct call inside a function body.
+//   - Method-value indirection: `f := buildHTTPEndpointSpec; f()` — the call
+//     site spells the variable, not the func name. buildHTTPEndpointSpec is an
+//     unexported package func returning (*T, error); a direct call is the only
+//     realistic form. Asserted absent in production by
+//     TestCodegenFunnel_A1b_NoMethodValueIndirectionInProduction.
 //   - reflect-built values: AST-invisible; irrelevant for literal codegen.
 //
 // ---------------------------------------------------------------------------
@@ -153,16 +168,7 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1b_SoleConstructorAndCaller(t *
 
 	var violations []string
 	_ = Run(t, scope, func(p *Pass) []Diagnostic {
-		var typeFound, ctorFound bool
-		for _, f := range p.Files {
-			if hasTypeSpecNamed(f, codegenSealedSpecType) {
-				typeFound = true
-			}
-			if hasFuncDeclNamed(f, codegenSpecCtorFunc) {
-				ctorFound = true
-			}
-			violations = append(violations, scanSealedSpecConstructionAndCaller(f, p.Rel(f))...)
-		}
+		ctorBody, callerBodies, typeFound, ctorFound := collectA1bRanges(p.Files)
 		if !typeFound {
 			violations = append(violations,
 				"sealed spec type "+codegenSealedSpecType+" not found in contractgen — renamed without updating this lock?")
@@ -170,6 +176,10 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1b_SoleConstructorAndCaller(t *
 		if !ctorFound {
 			violations = append(violations,
 				"constructor "+codegenSpecCtorFunc+" not found in contractgen — renamed without updating this lock?")
+			return nil // cannot range-check constructions without the constructor body
+		}
+		for _, f := range p.Files {
+			violations = append(violations, scanSealedSpecViolations(f, p.Rel(f), ctorBody, callerBodies)...)
 		}
 		return nil
 	})
@@ -181,15 +191,19 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1b_SoleConstructorAndCaller(t *
 // A2 — http.Handler emit-template uniqueness across all of tools/codegen/**.
 //
 // AI-robust: Medium (deny-by-default content scan). Text emission of an
-// http.Handler is not type-checkable, so a content scan for the
-// language-mandated ServeHTTP signature is the ceiling tool — not a Soft
-// string-anchor convention. The found-set == {handler.tmpl} assertion also
-// proves .tmpl files are walked (handler.tmpl is itself a .tmpl).
+// http.Handler is not type-checkable, so a content scan for the two
+// language-mandated handler shapes (ServeHTTP method + http.HandlerFunc
+// adapter) is the ceiling tool — not a Soft string-anchor convention. The
+// found-set == {handler.tmpl} assertion also proves .tmpl files are walked
+// (handler.tmpl is itself a .tmpl).
 //
-// Blind spots (documented): a handler emitted with a split / printf-built
-// ServeHTTP signature, an http.HandlerFunc-only handler with no ServeHTTP
-// method, a template in a non-(.tmpl|.go) extension, or re-rendering
-// handler.tmpl by os.ReadFile path (caught instead by A3).
+// Blind spots (documented): a ServeHTTP signature split / printf-built so the
+// contiguous marker text never appears; a template in a non-(.tmpl|.go)
+// extension; or re-rendering handler.tmpl by an os.ReadFile path (that form is
+// caught by A3, which bans the "handler.tmpl" literal outside contractgen).
+// A handler emitted as a raw struct implementing http.Handler without ever
+// writing the ServeHTTP-with-http.ResponseWriter signature contiguously is the
+// residual text-emission ceiling.
 // ---------------------------------------------------------------------------
 func TestCodegenBuildHTTPEndpointSpecSoleCaller_A2_HandlerEmitTemplateUniqueness(t *testing.T) {
 	t.Parallel()
@@ -334,39 +348,85 @@ func scanExportedSealedAlias(f *ast.File) []string {
 	return out
 }
 
-// scanSealedSpecConstructionAndCaller flags, in file f:
-//   - a composite literal of the sealed type outside buildHTTPEndpointSpec, and
-//   - a call to buildHTTPEndpointSpec from a function not in the allowlist.
-func scanSealedSpecConstructionAndCaller(f *ast.File, rel string) []string {
-	var out []string
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Body == nil || fd.Name == nil {
-			return
+// posRange is a half-open-inclusive token.Pos span [lo, hi] of a function body.
+type posRange struct{ lo, hi token.Pos }
+
+func (r posRange) contains(p token.Pos) bool { return r.lo <= p && p <= r.hi }
+
+func anyContains(rs []posRange, p token.Pos) bool {
+	for _, r := range rs {
+		if r.contains(p) {
+			return true
 		}
-		fn := fd.Name.Name
-		EachInSubtree[ast.CompositeLit](fd.Body, func(cl *ast.CompositeLit) {
-			if id := exprToIdent(cl.Type); id != nil && id.Name == codegenSealedSpecType &&
-				fn != codegenSpecCtorFunc {
-				out = append(out, rel+": "+fn+" constructs "+codegenSealedSpecType+
-					" outside "+codegenSpecCtorFunc+" — the sealed spec has a single sanctioned constructor")
-			}
-		})
-		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-			id := exprToIdent(call.Fun)
-			if id == nil || id.Name != codegenSpecCtorFunc {
+	}
+	return false
+}
+
+// collectA1bRanges scans every file for the sole-constructor body
+// (buildHTTPEndpointSpec) and the allowlisted-caller bodies, returning their
+// token.Pos spans plus whether the sealed type and the constructor were found.
+// Position spans (not enclosing-FuncDecl name) let scanSealedSpecViolations
+// catch constructions/calls inside function literals, var initializers, and
+// init() — anywhere the FuncDecl-name approach would miss.
+func collectA1bRanges(files []*ast.File) (ctor posRange, callers []posRange, typeFound, ctorFound bool) {
+	for _, f := range files {
+		if hasTypeSpecNamed(f, codegenSealedSpecType) {
+			typeFound = true
+		}
+		EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if fd.Recv != nil || fd.Name == nil || fd.Body == nil {
 				return
 			}
-			if fn == codegenSpecCtorFunc {
-				return // self (no recursion in production, defensive)
+			if fd.Name.Name == codegenSpecCtorFunc {
+				ctorFound = true
+				ctor = posRange{fd.Body.Pos(), fd.Body.End()}
 			}
-			if _, allow := codegenSpecCtorCallerAllowlist[fn]; allow {
-				return
+			if _, ok := codegenSpecCtorCallerAllowlist[fd.Name.Name]; ok {
+				callers = append(callers, posRange{fd.Body.Pos(), fd.Body.End()})
 			}
-			out = append(out, rel+": "+fn+" calls "+codegenSpecCtorFunc+
-				" outside the funnel — only "+allowlistKeys(codegenSpecCtorCallerAllowlist)+" may call it")
 		})
+	}
+	return ctor, callers, typeFound, ctorFound
+}
+
+// scanSealedSpecViolations flags, anywhere in f (by token position):
+//   - a httpEndpointSpec{} composite literal or new(httpEndpointSpec) outside
+//     the sole constructor body, and
+//   - a call to buildHTTPEndpointSpec outside every allowlisted caller body.
+func scanSealedSpecViolations(f *ast.File, rel string, ctor posRange, callers []posRange) []string {
+	var out []string
+	EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
+		if id := exprToIdent(cl.Type); id != nil && id.Name == codegenSealedSpecType && !ctor.contains(cl.Pos()) {
+			out = append(out, rel+": "+codegenSealedSpecType+
+				"{} constructed outside "+codegenSpecCtorFunc+" — single sanctioned constructor")
+		}
+	})
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		switch {
+		case isNewOfSealedSpec(call) && !ctor.contains(call.Pos()):
+			out = append(out, rel+": new("+codegenSealedSpecType+
+				") outside "+codegenSpecCtorFunc+" — single sanctioned constructor")
+		case isCallTo(call, codegenSpecCtorFunc) && !anyContains(callers, call.Pos()):
+			out = append(out, rel+": "+codegenSpecCtorFunc+
+				" called outside the funnel — only "+allowlistKeys(codegenSpecCtorCallerAllowlist)+" may call it")
+		}
 	})
 	return out
+}
+
+// isNewOfSealedSpec reports whether call is new(httpEndpointSpec).
+func isNewOfSealedSpec(call *ast.CallExpr) bool {
+	if id := exprToIdent(call.Fun); id == nil || id.Name != "new" || len(call.Args) != 1 {
+		return false
+	}
+	arg := exprToIdent(call.Args[0])
+	return arg != nil && arg.Name == codegenSealedSpecType
+}
+
+// isCallTo reports whether call invokes the bare package-level function name.
+func isCallTo(call *ast.CallExpr, name string) bool {
+	id := exprToIdent(call.Fun)
+	return id != nil && id.Name == name
 }
 
 // scanHandlerTmplLiteralLines returns the line numbers in f where a string
@@ -378,7 +438,7 @@ func scanHandlerTmplLiteralLines(f *ast.File, fset *token.FileSet) []string {
 			return
 		}
 		if v, ok := StringLitValue(lit); ok && v == codegenHandlerTemplate {
-			lines = append(lines, itoa(fset.Position(lit.Pos()).Line))
+			lines = append(lines, strconv.Itoa(fset.Position(lit.Pos()).Line))
 		}
 	})
 	return lines
@@ -418,16 +478,6 @@ func hasTypeSpecNamed(f *ast.File, name string) bool {
 	return found
 }
 
-func hasFuncDeclNamed(f *ast.File, name string) bool {
-	found := false
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Recv == nil && fd.Name != nil && fd.Name.Name == name {
-			found = true
-		}
-	})
-	return found
-}
-
 func allowlistKeys(m map[string]string) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -435,21 +485,6 @@ func allowlistKeys(m map[string]string) string {
 	}
 	sort.Strings(keys)
 	return strings.Join(keys, ", ")
-}
-
-// itoa avoids importing strconv solely for line numbers in diagnostics.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
 }
 
 func reportCodegenFunnel(t *testing.T, violations []string) {
@@ -519,47 +554,99 @@ func TestCodegenFunnel_A1a_DetectsExportedReExportAlias(t *testing.T) {
 	}
 }
 
+func scanA1bFixture(f *ast.File) []string {
+	ctor, callers, _, _ := collectA1bRanges([]*ast.File{f})
+	return scanSealedSpecViolations(f, "fixture.go", ctor, callers)
+}
+
 func TestCodegenFunnel_A1b_DetectsRogueConstructionAndCaller(t *testing.T) {
 	t.Parallel()
-	// RED: construction outside the constructor + a call from a non-funnel func.
+	// RED: rogue composite-literal + new() construction + a package-level var
+	// function literal calling the ctor outside the funnel (the position-based
+	// scan catches the func-literal that an enclosing-FuncDecl walk would miss).
 	f, _ := parseCodegenFixtureSrc(t, "package contractgen\n"+
 		"type httpEndpointSpec struct{}\n"+
 		"func buildHTTPEndpointSpec() *httpEndpointSpec { return &httpEndpointSpec{} }\n"+
-		"func rogue() *httpEndpointSpec { return &httpEndpointSpec{} }\n"+
-		"func notTheFunnel() { _, _ = buildHTTPEndpointSpec(), 0 }\n")
-	got := scanSealedSpecConstructionAndCaller(f, "fixture.go")
-	if !containsSubstr(got, "rogue constructs httpEndpointSpec") {
-		t.Errorf("missed rogue construction; got %v", got)
+		"func rogueLit() *httpEndpointSpec { return &httpEndpointSpec{} }\n"+
+		"func rogueNew() *httpEndpointSpec { return new(httpEndpointSpec) }\n"+
+		"var rogueVar = func() { _, _ = buildHTTPEndpointSpec(), 0 }\n")
+	got := scanA1bFixture(f)
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{
+		codegenSealedSpecType + "{} constructed outside",
+		"new(" + codegenSealedSpecType + ") outside",
+		codegenSpecCtorFunc + " called outside the funnel",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("A1b detector missed %q; got %v", want, got)
+		}
 	}
-	if !containsSubstr(got, "notTheFunnel calls buildHTTPEndpointSpec") {
-		t.Errorf("missed rogue caller; got %v", got)
-	}
-	// GREEN: construction inside the constructor + call from the allowlisted funnel.
+	// GREEN: composite literal + new() inside the ctor, ctor call inside the
+	// allowlisted funnel (incl. a nested func literal still within buildHTTPSpec).
 	g, _ := parseCodegenFixtureSrc(t, "package contractgen\n"+
 		"type httpEndpointSpec struct{}\n"+
-		"func buildHTTPEndpointSpec() *httpEndpointSpec { return &httpEndpointSpec{} }\n"+
-		"func buildHTTPSpec() { _, _ = buildHTTPEndpointSpec(), 0 }\n")
-	if got := scanSealedSpecConstructionAndCaller(g, "fixture.go"); len(got) != 0 {
-		t.Errorf("over-flagged sanctioned construction/caller: %v", got)
+		"func buildHTTPEndpointSpec() *httpEndpointSpec { _ = new(httpEndpointSpec); return &httpEndpointSpec{} }\n"+
+		"func buildHTTPSpec() { run := func() { _, _ = buildHTTPEndpointSpec(), 0 }; run() }\n")
+	if got := scanA1bFixture(g); len(got) != 0 {
+		t.Errorf("A1b over-flagged sanctioned construction/caller: %v", got)
+	}
+}
+
+// TestCodegenFunnel_A1b_NoMethodValueIndirectionInProduction asserts the one
+// documented A1b blind spot — method-value indirection `f := buildHTTPEndpointSpec`
+// — does not occur in contractgen production source, so the gap is documented
+// AND verified empty (ai-robust.md §盲区自检).
+func TestCodegenFunnel_A1b_NoMethodValueIndirectionInProduction(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	scope := DirsScope(root, []string{"tools/codegen/contractgen"})
+	var hits []string
+	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			rel := p.Rel(f)
+			// A value reference to buildHTTPEndpointSpec that is NOT the callee of
+			// a CallExpr (i.e. the func used as a value: assignment, arg, return).
+			calleeIdents := map[*ast.Ident]bool{}
+			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+				if id := exprToIdent(call.Fun); id != nil {
+					calleeIdents[id] = true
+				}
+			})
+			EachInSubtree[ast.Ident](f, func(id *ast.Ident) {
+				if id.Name == codegenSpecCtorFunc && !calleeIdents[id] {
+					hits = append(hits, rel+": value reference to "+codegenSpecCtorFunc)
+				}
+			})
+		}
+		return nil
+	})
+	// The decl of buildHTTPEndpointSpec is itself an Ident occurrence that is not
+	// a callee; tolerate exactly the declaration, flag any additional value ref.
+	if len(hits) > 1 {
+		t.Errorf("A1b blind spot exploited: method-value reference(s) to %s in production: %v",
+			codegenSpecCtorFunc, hits)
 	}
 }
 
 func TestCodegenFunnel_A2_MarkerDiscriminates(t *testing.T) {
 	t.Parallel()
-	// Positive: the canonical http.Handler emission (any param name).
+	// Positive: both http.Handler emission shapes (ServeHTTP method, any param
+	// name; and the http.HandlerFunc adapter — the B-1 HandlerFunc-only path).
 	for _, s := range []string{
 		"func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {",
 		"func (h *Handler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {",
+		"Handler: http.HandlerFunc(h.handle),",
+		"mux.Handle(p, http.HandlerFunc(generatedHandler))",
 	} {
 		if !codegenHandlerEmitMarker.MatchString(s) {
 			t.Errorf("marker missed http.Handler emission: %q", s)
 		}
 	}
-	// Negative: prose / type references that are NOT a ServeHTTP method def.
+	// Negative: prose / type references that produce no http.Handler.
 	for _, s := range []string{
 		"// Renders the http.Handler that decodes the request",
 		"bootstrapAuth func(http.Handler) http.Handler",
-		"Handler: http.HandlerFunc(h.handle),",
+		"var h http.Handler = next",
 	} {
 		if codegenHandlerEmitMarker.MatchString(s) {
 			t.Errorf("marker over-matched non-emission text: %q", s)
@@ -579,13 +666,4 @@ func TestCodegenFunnel_A3_DetectsHandlerTmplLiteral(t *testing.T) {
 	if got := scanHandlerTmplLiteralLines(g, gfset); len(got) != 0 {
 		t.Fatalf("detector over-flagged non-handler template: %v", got)
 	}
-}
-
-func containsSubstr(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if strings.Contains(h, needle) {
-			return true
-		}
-	}
-	return false
 }
