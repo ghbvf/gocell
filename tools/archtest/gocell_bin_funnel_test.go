@@ -131,7 +131,7 @@ func checkScriptFunnel(t *testing.T, scriptPath, scriptName string) []string {
 }
 
 // containsGoRunCmdGocell reports whether text contains a go run ./cmd/gocell
-// invocation. Two explicit forms are recognised:
+// invocation. Two explicit forms are recognized:
 //   - `go run ./cmd/gocell`          — direct go run
 //   - `go -C <dir> run ./cmd/gocell` — directory-scoped go run
 //
