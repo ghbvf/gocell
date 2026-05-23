@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"net"
 	"net/http"
 	"testing"
@@ -18,10 +17,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	"github.com/ghbvf/gocell/cells/accesscore/accesscoretest"
 	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
@@ -44,7 +43,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/state/cas"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // Username + email fixtures are non-credential; passwords are runtime-generated
@@ -95,12 +93,12 @@ func mustRandom32Bytes() []byte {
 // each test currently runs serially (no t.Parallel()), but reusing a single
 // client keeps connection pooling consistent if parallelism is added later.
 //
-// Timeout sized for the race-detector lane under CI load: bcrypt at
-// domain.BcryptCost=12 plus race instrumentation plus docker daemon
-// contention on a shared CI runner can stretch individual setup/admin and
-// login requests past 30s in pathological cases. 60s gives CI plenty of
-// headroom while remaining well within the 15-minute race-pg-integration
-// job budget.
+// Timeout sized for the race-detector lane under CI load: race instrumentation
+// plus docker daemon contention on a shared CI runner can stretch individual
+// setup/admin and login requests in pathological cases. The harness injects a
+// MinCost password hasher (credential.NewTestHasher), so bcrypt is no longer a
+// material contributor; 60s gives CI plenty of headroom while remaining well
+// within the race-pg-integration job budget.
 //
 // DisableKeepAlives ensures every request opens a fresh TCP connection.
 // Without it, the connection pool can carry over half-closed connections
@@ -144,43 +142,6 @@ var _ persistence.TxRunner = noopTxRunner{}
 type allowAllLimiter struct{}
 
 func (allowAllLimiter) Allow(string) bool { return true }
-
-// startPostgresContainer launches a PG testcontainer, registers termination via
-// t.Cleanup, and returns the DSN.
-func startPostgresContainer(t *testing.T) string {
-	t.Helper()
-	testutil.RequireDocker(t)
-
-	ctx := context.Background()
-	container, err := tcpostgres.Run(
-		ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("l2test"),
-		tcpostgres.WithUsername("l2test"),
-		tcpostgres.WithPassword("l2test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err, "failed to get connection string")
-
-	t.Cleanup(func() {
-		tctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
-		defer cancel()
-		if terr := container.Terminate(tctx); terr != nil {
-			t.Logf("WARN: failed to terminate postgres container: %v", terr)
-		}
-	})
-	return dsn
-}
-
-// migrationsFS returns the canonical adapter migrations FS.
-func migrationsFS(t testing.TB) fs.FS {
-	t.Helper()
-	fsys, err := adapterpg.MigrationsFS()
-	require.NoError(t, err)
-	return fsys
-}
 
 // localListener creates an ephemeral TCP listener bound to 127.0.0.1:0.
 func localListener(t *testing.T) net.Listener {
@@ -297,30 +258,17 @@ type pgStores struct {
 	storeOpts []accesscore.Option
 }
 
-// buildPGStores spins up the PG container, runs migrations, seeds the editor
-// role used by cascade tests, then constructs the accesscore PG store family.
+// buildPGStores clones a fresh per-test database from the shared, pre-migrated
+// template (migrations + "editor" role already applied — see testmain_test.go),
+// then constructs the accesscore PG store family against it.
 func buildPGStores(t *testing.T) *pgStores {
 	t.Helper()
 	ctx := context.Background()
-	dsn := startPostgresContainer(t)
+	dsn := sharedPG.CloneDSN(t)
 
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pool.Close(ctx) })
-
-	migrator, err := adapterpg.NewMigrator(pool, migrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-	require.NoError(t, adapterpg.VerifyExpectedShape(ctx, pool))
-
-	// Migration 019 creates the `roles` table but only seeds the admin role
-	// (via the adminprovision setup flow). RBAC tests assigning non-admin
-	// roles need the role row to exist or AssignToUser fails with FK
-	// violation → ErrAuthRoleNotFound. Seed an "editor" role so cascade tests
-	// have a non-admin role to assign / revoke.
-	_, err = pool.DB().Exec(ctx,
-		`INSERT INTO roles (id, name) VALUES ('editor', 'editor') ON CONFLICT (id) DO NOTHING`)
-	require.NoError(t, err, "seed editor role")
 
 	txMgr := adapterpg.NewTxManager(pool)
 
@@ -436,6 +384,8 @@ func buildCells(
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(a.bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
+		// Low-cost hasher so seedAdmin + login don't pay bcrypt cost-12 per test.
+		accesscore.WithPasswordHasher(accesscoretest.MinCostPasswordHasher()),
 	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
