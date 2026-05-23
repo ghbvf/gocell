@@ -12,7 +12,11 @@ on:
     paths-ignore:
       - 'docs/**'
       - '*.md'
-      - 'README.md'
+      # README.md intentionally omitted: it is already covered by the '*.md'
+      # glob above. Keeping it separately was redundant.
+      # Note: '.claude/rules/*.md' is intentionally NOT in this ignore list —
+      # changes to AI-robust rules (ai-robust.md, eventbus.md, etc.) should
+      # trigger governance re-validation since they may affect validate output.
 
 # Governance Strict is the K8s-style `make verify` runner — it discovers and
 # executes every hack/verify-*.sh gate in deterministic order, accumulating
@@ -60,6 +64,7 @@ jobs:
       # building once and injecting GOCELL_BIN saves ~16s per CI run.
       # hack/lib/gocell-bin.sh::gocell::cli checks GOCELL_BIN first, falls
       # back to `go run` when unset (local dev path unchanged).
+      # Same pattern also in _build-lint.yml verify-codegen job — keep in sync.
       - name: Build gocell binary
         run: go build -o "$RUNNER_TEMP/gocell" ./cmd/gocell
 

@@ -853,7 +853,7 @@ jobs:
           cache-dependency-path: go.sum
 
       # Pre-compile gocell once and share across all verify-*.sh gates via
-      # GOCELL_BIN. Saves ~5× cold `go run` links (~1.2-1.8s each).
+      # GOCELL_BIN. Saves ~7× cold `go run` links (~1.2-1.8s each).
       # hack/lib/gocell-bin.sh::gocell::cli uses GOCELL_BIN when set.
       - name: Build gocell binary
         run: go build -o "$RUNNER_TEMP/gocell" ./cmd/gocell
