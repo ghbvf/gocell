@@ -247,9 +247,32 @@ func rootsContainTestdataSegment(modRoot string, roots []string) bool {
 	return false
 }
 
-// selfProtectRel is the rel-path prefix of the scanner package itself.
-// Files under this prefix are always excluded to prevent self-scanning.
-var selfProtectRel = filepath.Join("tools", "archtest", "internal", "scanner")
+// archtestInternalRel is the module-relative prefix of archtest's own internal
+// tree: the scanner walker itself, every RED fixture (//go:build
+// archtest_fixture), every typed-load fixture, and helper packages like
+// typeseval. A repo-rooted production scan ([ModuleScope] or a repo-rooted
+// [DirsScope]) always excludes this subtree — none of it is a governance
+// target: the scanner must not scan itself, and fixtures deliberately contain
+// forbidden patterns as known-positives.
+//
+// There is intentionally NO opt-in option to include it (unlike testdata /
+// generated, which have IncludeTestdata / IncludeGenerated): policing
+// archtest's internal tree from a framework walk is inexpressible — the same
+// fail-closed posture as vendor / .git. A rule that must reach a specific
+// fixture names it explicitly, and neither path is affected here:
+//   - [DirsScope] rooted AT the fixture directory — rel paths are then
+//     fixture-root relative (e.g. "redfixture.go"), so this prefix never matches;
+//   - go/packages typed load (RunTypedFixture) — bypasses Scope entirely.
+//
+// Upstream lock: SCANNER-FRAMEWORK-USAGE-01 forbids hand-rolled ast/fs/inspector
+// walks in tools/archtest/*_test.go, forcing every archtest through this
+// framework so the exclusion cannot be sidestepped by a raw filepath.WalkDir.
+// That guard is archtest-bound (Medium); a Hard upstream is structurally
+// unreachable because stdlib filepath.WalkDir is always importable and cannot
+// be sealed — the same Medium ceiling PG-TESTCONTAINER-FUNNEL-01 documents.
+// This is that ceiling, not a Soft→Hard transition form, so no backlog upgrade
+// item is registered (per ai-robust.md §"Funnel 双向锁评级").
+var archtestInternalRel = filepath.Join("tools", "archtest", "internal")
 
 // Files returns the sorted, deduplicated list of absolute file paths in the
 // scope. It returns an error if the scope was not constructed via a constructor
@@ -316,11 +339,11 @@ func (s Scope) collectFile(f string, seen map[string]struct{}, files *[]string) 
 	if _, excluded := s.excludeRels[rel]; excluded {
 		return nil
 	}
-	// Path-segment boundary match (not bare HasPrefix) so "scanner_extra/"
-	// or other prefix-colliding siblings are not falsely excluded.
+	// Path-segment boundary match (not bare HasPrefix) so "internalx/" or other
+	// prefix-colliding siblings are not falsely excluded.
 	// ref: golangci-lint pkg/golinters/depguard — segment-boundary path match
-	if rel == selfProtectRel ||
-		strings.HasPrefix(rel, selfProtectRel+string(filepath.Separator)) {
+	if rel == archtestInternalRel ||
+		strings.HasPrefix(rel, archtestInternalRel+string(filepath.Separator)) {
 		return nil
 	}
 	if s.matchRel != nil && !s.matchRel(filepath.ToSlash(rel)) {

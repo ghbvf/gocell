@@ -79,10 +79,6 @@ var pgTestcontainerFunnelAllowlist = []string{
 	"cells/accesscore/slices/identitymanage/", // single-service PG adapter test
 }
 
-// archtestInternalPrefix is archtest's own fixture area (including this rule's
-// RED fixture). Not a governed target — skipped by the production scan.
-const archtestInternalPrefix = "tools/archtest/internal/"
-
 // TestPG_TESTCONTAINER_FUNNEL_01 fails if any file outside the allowlist calls
 // tcpostgres.Run. adapters/postgres now mints per-test DBs via pgclone, so the
 // sole sanctioned holder is tests/testutil/pgclone; this scan keeps it that way
@@ -104,9 +100,8 @@ func collectPGTestcontainerRunFindings(t *testing.T, root string) []string {
 	var findings []string
 	for _, path := range files {
 		rel := relSlash(root, path)
-		if strings.HasPrefix(rel, archtestInternalPrefix) {
-			continue // archtest fixtures are not governed targets
-		}
+		// archtest's internal tree (this rule's RED fixture included) is excluded
+		// at the scanner layer; see archtestInternalRel in internal/scanner/scope.go.
 		if pgFunnelAllowed(rel) {
 			continue
 		}
@@ -237,9 +232,6 @@ func TestPG_TESTCONTAINER_FUNNEL_01_NoDotImportBlindSpot(t *testing.T) {
 	var findings []string
 	for _, path := range files {
 		rel := relSlash(root, path)
-		if strings.HasPrefix(rel, archtestInternalPrefix) {
-			continue
-		}
 		dot, perr := fileDotImportsPostgresModule(path)
 		require.NoError(t, perr)
 		if dot {

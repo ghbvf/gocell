@@ -50,7 +50,7 @@ func LoadContentFiles(s Scope, suffixes []string) ([]ContentContext, error) {
 		relSlash := filepath.ToSlash(rel)
 		// #nosec G304 -- absPath is derived from a checked-in module subtree
 		// already filtered through scope.collectFile (path-segment escape
-		// guard + selfProtect + ExcludeRels + MatchRels). archtest reads
+		// guard + archtestInternalRel + ExcludeRels + MatchRels). archtest reads
 		// repo-resident files under module root; treating discovered paths as
 		// "user input" would force every archtest read through an arbitrary
 		// allowlist for no security gain.

@@ -185,50 +185,58 @@ func TestScope_ZeroValueIsRejected(t *testing.T) {
 	}
 }
 
-func TestScope_SelfProtectRel(t *testing.T) {
-	// Create a temp tree that looks like the scanner package location.
-	// ModuleScope must not include files under the self-protect path.
+func TestScope_ExcludesArchtestInternalTree(t *testing.T) {
+	// A repo-rooted ModuleScope walk must exclude every file under
+	// tools/archtest/internal/ — the scanner walker itself plus all RED
+	// fixtures and typed-load helpers. archtest's internal tree is never a
+	// production-governance target (see archtestInternalRel in scope.go).
 	tmp := t.TempDir()
-	scannerDir := filepath.Join(tmp, "tools", "archtest", "internal", "scanner")
-	if err := os.MkdirAll(scannerDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	internalFiles := []string{
+		filepath.Join(tmp, "tools", "archtest", "internal", "scanner", "fake.go"),
+		filepath.Join(tmp, "tools", "archtest", "internal", "somefixture", "red.go"),
+		filepath.Join(tmp, "tools", "archtest", "internal", "typeseval", "helper.go"),
 	}
-	fakeFile := filepath.Join(scannerDir, "fake.go")
-	if err := os.WriteFile(fakeFile, []byte("package scanner\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile fake.go: %v", err)
+	for _, f := range internalFiles {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", f, err)
+		}
+		if err := os.WriteFile(f, []byte("package p\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", f, err)
+		}
 	}
 
-	s := scanner.ModuleScope(tmp)
-	files, err := s.Files()
+	files, err := scanner.ModuleScope(tmp).Files()
 	if err != nil {
 		t.Fatalf("Files() error: %v", err)
 	}
 	for _, f := range files {
-		if f == fakeFile {
-			t.Errorf("self-protect should exclude %s but it was returned", fakeFile)
+		for _, excluded := range internalFiles {
+			if f == excluded {
+				t.Errorf("archtest internal tree must be excluded, but %s was returned", excluded)
+			}
 		}
 	}
 }
 
-func TestScope_SelfProtect_PathSegmentBoundary(t *testing.T) {
-	// Self-protect must match path segments, not bare string prefixes.
-	// scanner_extra/ shares the prefix tools/archtest/internal/scanner but
-	// is a sibling directory; it must NOT be excluded.
+func TestScope_ArchtestInternalExclusion_PathSegmentBoundary(t *testing.T) {
+	// The exclusion must match path segments, not bare string prefixes.
+	// internalx/ collides on the "internal" prefix but is a sibling directory
+	// (not under tools/archtest/internal/); it must NOT be excluded.
 	tmp := t.TempDir()
-	scannerDir := filepath.Join(tmp, "tools", "archtest", "internal", "scanner")
-	scannerExtraDir := filepath.Join(tmp, "tools", "archtest", "internal", "scanner_extra")
-	if err := os.MkdirAll(scannerDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll scanner: %v", err)
+	internalDir := filepath.Join(tmp, "tools", "archtest", "internal", "scanner")
+	siblingDir := filepath.Join(tmp, "tools", "archtest", "internalx")
+	if err := os.MkdirAll(internalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll internal: %v", err)
 	}
-	if err := os.MkdirAll(scannerExtraDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll scanner_extra: %v", err)
+	if err := os.MkdirAll(siblingDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll internalx: %v", err)
 	}
-	selfFile := filepath.Join(scannerDir, "self.go")
-	siblingFile := filepath.Join(scannerExtraDir, "foo.go")
+	selfFile := filepath.Join(internalDir, "self.go")
+	siblingFile := filepath.Join(siblingDir, "foo.go")
 	if err := os.WriteFile(selfFile, []byte("package scanner\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile self.go: %v", err)
 	}
-	if err := os.WriteFile(siblingFile, []byte("package scanner_extra\n"), 0o644); err != nil {
+	if err := os.WriteFile(siblingFile, []byte("package internalx\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile foo.go: %v", err)
 	}
 
@@ -246,10 +254,47 @@ func TestScope_SelfProtect_PathSegmentBoundary(t *testing.T) {
 		}
 	}
 	if seenSelf {
-		t.Errorf("self-protect should exclude %s", selfFile)
+		t.Errorf("archtest internal tree must exclude %s", selfFile)
 	}
 	if !seenSibling {
-		t.Errorf("self-protect must NOT exclude prefix-colliding sibling %s; got files=%v", siblingFile, files)
+		t.Errorf("exclusion must NOT match prefix-colliding sibling %s; got files=%v", siblingFile, files)
+	}
+}
+
+func TestScope_ExcludesArchtestInternalTree_ContentFiles(t *testing.T) {
+	// collectFile is the shared backbone of Files() (.go) and contentFiles()
+	// (YAML/SQL/MD via LoadContentFiles/EachContentFile), so the archtest-internal
+	// exclusion must apply to non-Go content files too — not just .go.
+	tmp := t.TempDir()
+	internalYAML := filepath.Join(tmp, "tools", "archtest", "internal", "somefixture", "fixture.yaml")
+	controlYAML := filepath.Join(tmp, "cells", "auth", "cell.yaml")
+	for _, f := range []string{internalYAML, controlYAML} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", f, err)
+		}
+		if err := os.WriteFile(f, []byte("id: x\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", f, err)
+		}
+	}
+
+	got, err := scanner.LoadContentFiles(scanner.ModuleScope(tmp), []string{".yaml"})
+	if err != nil {
+		t.Fatalf("LoadContentFiles error: %v", err)
+	}
+	var sawInternal, sawControl bool
+	for _, cc := range got {
+		switch cc.AbsPath {
+		case internalYAML:
+			sawInternal = true
+		case controlYAML:
+			sawControl = true
+		}
+	}
+	if sawInternal {
+		t.Errorf("archtest internal tree must be excluded from content files, but %s was returned", internalYAML)
+	}
+	if !sawControl {
+		t.Errorf("control content file %s must be returned (exclusion must be specific to internal/); got=%v", controlYAML, got)
 	}
 }
 
