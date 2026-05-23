@@ -218,7 +218,7 @@ func TestSubscriptionObservabilityNoFallback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestRegistrySubscribeCellIDPositional enforces
-// REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01: the kernel/cell.Registry.Subscribe
+// REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01: the kernel/cell.Registrar.Subscribe
 // method must declare cellID as the 4th positional string parameter (after
 // spec, handler, consumerGroup), and SubscriptionOption may only appear as
 // the final variadic parameter.
@@ -251,7 +251,7 @@ func TestRegistrySubscribeCellIDPositional(t *testing.T) {
 		foundMethod    bool
 	)
 	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-		if ts.Name == nil || ts.Name.Name != "Registry" {
+		if ts.Name == nil || ts.Name.Name != "Registrar" {
 			return
 		}
 		iface, ok := ts.Type.(*ast.InterfaceType)
@@ -278,10 +278,10 @@ func TestRegistrySubscribeCellIDPositional(t *testing.T) {
 		}
 	})
 	if !foundInterface {
-		t.Fatalf("Registry interface not found in kernel/cell/registry.go")
+		t.Fatalf("Registrar interface not found in kernel/cell/registry.go")
 	}
 	if !foundMethod {
-		t.Fatalf("Subscribe method not found on Registry interface in kernel/cell/registry.go")
+		t.Fatalf("Subscribe method not found on Registrar interface in kernel/cell/registry.go")
 	}
 }
 

@@ -30,8 +30,8 @@ func registerHealthzDirectly() {
 
 type fakeAggregator struct{}
 
-func (f *fakeAggregator) Register(p healthz.Probe) error        { return nil }
-func (f *fakeAggregator) Deregister(name string)                {}
+func (f *fakeAggregator) Register(p healthz.Probe) error              { return nil }
+func (f *fakeAggregator) Deregister(name string)                      {}
 func (f *fakeAggregator) Evaluate(_ context.Context) healthz.Snapshot { return healthz.Snapshot{} }
 
 // registerProbeDirectly demonstrates the A2 violation: calling

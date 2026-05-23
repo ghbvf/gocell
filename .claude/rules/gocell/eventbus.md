@@ -90,7 +90,7 @@ sub-condition；txRunner nil guard 现在由 `gocell:"required"` tag 统一生�
 Cell 在 `Init(ctx, reg)` 中通过 `reg.Subscribe(spec, handler, consumerGroup, cellID, opts...)` 声明订阅意图，bootstrap 把 RegistrySnapshot.Subscriptions drain 到 EventRouter，Router 管理所有 goroutine 生命周期。
 
 ```go
-func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
     if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }

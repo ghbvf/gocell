@@ -29,28 +29,30 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Registry interface — the single registration surface for a Cell.
+// Registrar interface — the single registration surface for a Cell.
 //
-// A Cell calls methods on Registry inside its Init implementation to declare
+// A Cell calls methods on Registrar inside its Init implementation to declare
 // all capabilities: routes, subscriptions, health probes, lifecycle hooks,
 // and config-reload callbacks. The concrete implementation (RegistryRecorder)
 // accumulates declarations and returns them as a RegistrySnapshot once
 // Snapshot() is called by the bootstrap layer.
 //
+// ref: go-kratos/kratos registry/registry.go@main — Registrar (verb) ≠ Registry
+//      (storage noun); registration-action interfaces take the agent-noun form.
 // ref: uber-go/fx lifecycle.go@master:L33-L116 — Lifecycle.Append builder
 // ref: kubernetes-sigs/controller-runtime pkg/manager/manager.go@main:L70-L78 — AddHealthzCheck independent method
 // ref: go-kratos/kratos transport/http/server.go@main:L143-L224 — route spec accumulation
 // ---------------------------------------------------------------------------
 
-// Registry is the single registration surface a Cell uses inside Init to
+// Registrar is the single registration surface a Cell uses inside Init to
 // declare all capabilities. Each method appends to the RegistryRecorder's
 // internal state. Calling any registration method after Snapshot() panics
 // to prevent lazy-registration bugs.
-type Registry interface {
+type Registrar interface {
 	// Config returns the per-cell config snapshot provided by the assembly.
 	Config() map[string]any
 	// DurabilityMode returns the assembly-level durability mode.
-	DurabilityMode() DurabilityMode
+	DurabilityMode() outbox.DurabilityMode
 
 	// RouteGroup declares an HTTP route group. Groups accumulate in
 	// declaration order and are mounted by bootstrap during phase5.
@@ -84,7 +86,7 @@ type Registry interface {
 	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
 	//
 	// The handler type outbox.EntryHandler is the canonical event handler in
-	// kernel/; cell.Registry consumes it directly rather than wrapping it in a
+	// kernel/; cell.Registrar consumes it directly rather than wrapping it in a
 	// cell-local alias. This mirrors the industry pattern where a registry/router
 	// depends on its event primitive's handler signature:
 	//   ref: ThreeDotsLabs/watermill message/router.go AddHandler — handler func type
@@ -254,7 +256,7 @@ type SubscriptionRequest struct {
 	// CellID is the cell that owns this subscription — observability owner,
 	// distinct from ConsumerGroup (broker partition key + idempotency
 	// namespace). The cell declares it explicitly during Init via the
-	// positional cellID parameter on Registry.Subscribe; codegen
+	// positional cellID parameter on Registrar.Subscribe; codegen
 	// (contractgen + cellgen) injects the value from cell metadata at
 	// compile time. Bootstrap's drainCellSubscriptions cross-checks that
 	// CellID equals the snapshot key (fail-fast on drift) and does NOT
@@ -300,7 +302,7 @@ type SubscriptionValidatorAdder interface {
 // ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go Hook — adopted.
 type LifecycleHook struct {
 	// Name is a diagnostic identifier used in slog fields. Must be non-empty
-	// when passed to Registry.Lifecycle.
+	// when passed to Registrar.Lifecycle.
 	Name string
 
 	// OnStart is called by bootstrap during lifecycle.Start. The ctx parameter
@@ -381,13 +383,13 @@ type RegistrySnapshot struct {
 // RegistryRecorder — the concrete accumulator
 // ---------------------------------------------------------------------------
 
-// RegistryRecorder implements Registry. It accumulates declarations during
+// RegistryRecorder implements Registrar. It accumulates declarations during
 // a Cell's Init call and returns them as a RegistrySnapshot.
 // Once Snapshot() is called the recorder is finalized; any subsequent
 // registration method panics to prevent lazy-registration bugs.
 type RegistryRecorder struct {
 	cfg  map[string]any
-	mode DurabilityMode
+	mode outbox.DurabilityMode
 	log  *slog.Logger
 
 	// accumulators
@@ -401,8 +403,8 @@ type RegistryRecorder struct {
 	finalized bool
 }
 
-// Compile-time check: RegistryRecorder satisfies Registry.
-var _ Registry = (*RegistryRecorder)(nil)
+// Compile-time check: RegistryRecorder satisfies Registrar.
+var _ Registrar = (*RegistryRecorder)(nil)
 
 // NewRegistryRecorder constructs a RegistryRecorder with the given config
 // snapshot and durability mode. The recorder is a pure write-side accumulator:
@@ -410,13 +412,13 @@ var _ Registry = (*RegistryRecorder)(nil)
 // RegistrySnapshot.Probes slice, which the bootstrap layer drains onto the
 // runtime healthz.Aggregator after Init — the recorder never holds a live
 // aggregator, mirroring how RouteGroups / Subscriptions are accumulated.
-func NewRegistryRecorder(cfg map[string]any, mode DurabilityMode) *RegistryRecorder {
+func NewRegistryRecorder(cfg map[string]any, mode outbox.DurabilityMode) *RegistryRecorder {
 	return NewRegistryRecorderWithLogger(cfg, mode, slog.Default())
 }
 
 // NewRegistryRecorderWithLogger constructs a RegistryRecorder with a custom
 // logger. Provided for testing so log output can be captured.
-func NewRegistryRecorderWithLogger(cfg map[string]any, mode DurabilityMode, log *slog.Logger) *RegistryRecorder {
+func NewRegistryRecorderWithLogger(cfg map[string]any, mode outbox.DurabilityMode, log *slog.Logger) *RegistryRecorder {
 	return &RegistryRecorder{
 		cfg:        cfg,
 		mode:       mode,
@@ -429,7 +431,7 @@ func NewRegistryRecorderWithLogger(cfg map[string]any, mode DurabilityMode, log 
 func (r *RegistryRecorder) Config() map[string]any { return r.cfg }
 
 // DurabilityMode returns the assembly-level durability mode.
-func (r *RegistryRecorder) DurabilityMode() DurabilityMode { return r.mode }
+func (r *RegistryRecorder) DurabilityMode() outbox.DurabilityMode { return r.mode }
 
 // RouteGroup appends a RouteGroup declaration.
 func (r *RegistryRecorder) RouteGroup(g RouteGroup) {

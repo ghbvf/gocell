@@ -111,7 +111,7 @@ var errorFirstEnforcedFiles = []string{
 	"kernel/wrapper/consumer.go",
 	"kernel/contractspec/spec.go",
 	"kernel/wrapper/lifecycle.go",
-	"kernel/cell/auth_plan.go",
+	"kernel/auth/auth_plan.go",
 	"kernel/outbox/entry_id.go",
 	"kernel/outbox/envelope.go",
 	"kernel/idempotency/inmem.go",

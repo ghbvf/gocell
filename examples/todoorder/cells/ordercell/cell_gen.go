@@ -32,7 +32,7 @@ var cellMeta = &metadata.CellMeta{
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
-func (c *OrderCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *OrderCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}

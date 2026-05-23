@@ -16,7 +16,7 @@ import (
 func buildAssembly(
 	ps promStack,
 	assemblyID string,
-	mode cell.DurabilityMode,
+	mode outbox.DurabilityMode,
 	clk clock.Clock,
 	cells ...cell.Cell,
 ) (*assembly.CoreAssembly, error) {
@@ -36,11 +36,11 @@ func buildAssembly(
 	return asm, nil
 }
 
-func durabilityModeForTopology(topo bootstrap.Topology) cell.DurabilityMode {
+func durabilityModeForTopology(topo bootstrap.Topology) outbox.DurabilityMode {
 	if topo.StorageBackend == "postgres" {
-		return cell.DurabilityDurable
+		return outbox.DurabilityDurable
 	}
-	return cell.DurabilityDemo
+	return outbox.DurabilityDemo
 }
 
 // buildConsumerBase constructs ConsumerBase from the topology-selected

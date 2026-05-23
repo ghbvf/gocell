@@ -7,6 +7,8 @@ import (
 	"context"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,7 +24,7 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Issue an ACCESS-intent JWT (wrong for /auth/refresh).
-	bogusAccess, err := testIssuer.Issue(auth.TokenIntentAccess, "usr-att", auth.IssueOptions{
+	bogusAccess, err := testIssuer.Issue(kauth.TokenIntentAccess, "usr-att", auth.IssueOptions{
 		Roles:     []string{"user"},
 		Audience:  []string{"gocell"},
 		SessionID: "sess-att",
@@ -52,12 +54,12 @@ func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	newAccess, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	newAccess, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
-	assert.Equal(t, auth.TokenIntentAccess, newAccess.TokenUse)
+	assert.Equal(t, kauth.TokenIntentAccess, newAccess.TokenUse)
 
 	// The new refresh token is an opaque wire token, not a JWT — it should NOT
 	// verify as an access token.
-	_, err = verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentAccess)
+	_, err = verifier.VerifyIntent(context.Background(), pair.RefreshToken, kauth.TokenIntentAccess)
 	require.Error(t, err, "opaque wire token must not verify as access JWT")
 }

@@ -95,7 +95,7 @@ var authPlanConstructorNames = []string{
 // The rule still catches new callers that add the strings outside this list.
 var authPlanStringAllowlist = []string{
 	// Canonical Describe() return values live in auth_plan.go.
-	"kernel/cell/auth_plan.go",
+	"kernel/auth/auth_plan.go",
 	// describeAuthChain — the single file allowed to assemble describe strings.
 	"runtime/bootstrap/auth_plan_describe.go",
 	// Observability labels (AuthMethod="jwt") — not dispatch.
@@ -170,7 +170,7 @@ func TestAuthPlan_NoLegacyPolicyStringLiterals(t *testing.T) {
 	}
 	assert.Empty(t, hits,
 		"AUTH-PLAN-01: string literals %v are old cell.Policy.Name discriminators; "+
-			"use typed AuthPlan (cell.NewAuthJWT / cell.AuthMTLS{} / …) instead. "+
+			"use typed AuthPlan (auth.NewAuthJWT / auth.AuthMTLS{} / …) instead. "+
 			"If a new file legitimately needs these strings (e.g. a Describe() impl), "+
 			"add it to authPlanStringAllowlist in tools/archtest/auth_plan_test.go:91.",
 		forbiddenPolicyStrings)
@@ -230,7 +230,7 @@ func TestAuthPlan_NoLegacyPolicySelectorExpressions(t *testing.T) {
 	}
 	assert.Empty(t, hits,
 		"AUTH-PLAN-02: bootstrap.Policy* factory functions have been deleted; "+
-			"use []cell.ListenerAuth{cell.NewAuthJWT(v)} / cell.NewAuthJWTFromAssembly(asm) / … instead")
+			"use []auth.ListenerAuth{auth.NewAuthJWT(v)} / auth.NewAuthJWTFromAssembly(asm) / … instead")
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +306,7 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 		}
 	}
 	assert.Empty(t, hits,
-		"AUTH-PLAN-03: cell.Policy was deleted in PR262; use []cell.ListenerAuth instead")
+		"AUTH-PLAN-03: cell.Policy was deleted in PR262; use []auth.ListenerAuth instead")
 }
 
 // ---------------------------------------------------------------------------
@@ -325,8 +325,8 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 //   - runtime/     — shared runtime (except runtime/bootstrap/ which is the
 //     composition wiring layer and is explicitly allowed)
 //
-// The scan covers both composite literals (cell.AuthJWT{}) and constructor
-// function calls (cell.NewAuthJWT(...), cell.NewAuthMTLS(), etc.).
+// The scan covers both composite literals (auth.AuthJWT{}) and constructor
+// function calls (auth.NewAuthJWT(...), cell.NewAuthMTLS(), etc.).
 func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 	root := findModuleRoot(t)
 
@@ -367,7 +367,7 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 			continue
 		}
 		scanner.EachInSubtree[ast.CompositeLit](af, func(node *ast.CompositeLit) {
-			// Composite literal: cell.AuthJWT{} / AuthJWT{...}
+			// Composite literal: auth.AuthJWT{} / AuthJWT{...}
 			typeName := ""
 			switch t := node.Type.(type) {
 			case *ast.SelectorExpr:
@@ -389,7 +389,7 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 			}
 		})
 		scanner.EachInSubtree[ast.CallExpr](af, func(node *ast.CallExpr) {
-			// Constructor calls: cell.NewAuthJWT(...) / cell.NewAuthJWTFromAssembly(...)
+			// Constructor calls: auth.NewAuthJWT(...) / auth.NewAuthJWTFromAssembly(...)
 			// etc. These are SelectorExpr call expressions where the package is "cell".
 			sel, ok := node.Fun.(*ast.SelectorExpr)
 			if !ok {

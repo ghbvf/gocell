@@ -4,6 +4,8 @@ import (
 	"crypto/rsa"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -16,7 +18,7 @@ import (
 // signingKey must be *rsa.PrivateKey (RS256). The token includes a kid header
 // derived from the public key via RFC 7638 thumbprint.
 func IssueTestToken(signingKey *rsa.PrivateKey, subject string, roles []string, ttl time.Duration, sessionID ...string) (string, error) {
-	return IssueTestTokenWithIntent(signingKey, auth.TokenIntentAccess, subject, roles, ttl, sessionID...)
+	return IssueTestTokenWithIntent(signingKey, kauth.TokenIntentAccess, subject, roles, ttl, sessionID...)
 }
 
 // IssueTestTokenWithIntent signs a JWT with an explicit TokenIntent so tests
@@ -24,7 +26,7 @@ func IssueTestToken(signingKey *rsa.PrivateKey, subject string, roles []string, 
 // The resulting token carries both the token_use payload claim and the
 // matching JOSE typ header expected by JWTVerifier.VerifyIntent.
 func IssueTestTokenWithIntent(
-	signingKey *rsa.PrivateKey, intent auth.TokenIntent,
+	signingKey *rsa.PrivateKey, intent kauth.TokenIntent,
 	subject string, roles []string, ttl time.Duration, sessionID ...string,
 ) (string, error) {
 	now := time.Now()
@@ -61,7 +63,7 @@ func IssueTestTokenWithEpoch(
 		"exp":         jwt.NewNumericDate(now.Add(ttl)),
 		"iss":         "gocell-accesscore",
 		"aud":         jwt.ClaimStrings{"gocell"},
-		"token_use":   string(auth.TokenIntentAccess),
+		"token_use":   string(kauth.TokenIntentAccess),
 		"authz_epoch": authzEpoch,
 	}
 	if sessionID != "" {
@@ -69,7 +71,7 @@ func IssueTestTokenWithEpoch(
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = auth.Thumbprint(&signingKey.PublicKey)
-	token.Header["typ"] = auth.TypHeaderForIntent(auth.TokenIntentAccess)
+	token.Header["typ"] = auth.TypHeaderForIntent(kauth.TokenIntentAccess)
 	return token.SignedString(signingKey)
 }
 

@@ -32,14 +32,14 @@ import (
 // not a transitional shim.
 //
 //nolint:unparam // ctx is a contract parameter; unused here, used by other cells
-func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error {
+func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registrar) error {
 	clock.MustHaveClock(c.clk, "configcore.initInternal")
 
 	if c.casProtocolNil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"configcore: typed-nil *cas.Protocol rejected; use cas.NewProtocol(cas.WithVersionField(\"version\")) in composition root")
 	}
-	if c.casProtocol == nil && reg.DurabilityMode() == cell.DurabilityDurable {
+	if c.casProtocol == nil && reg.DurabilityMode() == outbox.DurabilityDurable {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"configcore durable mode requires a CAS protocol; "+
 				"use WithCASProtocol(cas.NewProtocol(cas.WithVersionField(\"version\"))) in composition root")
@@ -65,13 +65,13 @@ func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error 
 	// using the original c.txRunner; only after it succeeds do we install the
 	// demoTxRunner fallback so slice constructors see a non-nil TxRunner.
 	if c.txRunner == nil {
-		c.logger.Warn("configcore: using cell.DemoCellTxManager (demo mode)",
+		c.logger.Warn("configcore: using outbox.DemoCellTxManager (demo mode)",
 			slog.String("durability_mode", durabilityMode.String()))
-		c.txRunner = cell.DemoCellTxManager()
+		c.txRunner = outbox.DemoCellTxManager()
 	}
 	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode
 	// so that assemblies that forget to wire a real TxRunner fail at Init() time.
-	if err := cell.CheckNotNoop(durabilityMode, "configcore", c.txRunner); err != nil {
+	if err := outbox.CheckNotNoop(durabilityMode, "configcore", c.txRunner); err != nil {
 		return err
 	}
 	if err := c.ensureCursorCodec(reg); err != nil {
@@ -116,7 +116,7 @@ func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
 	return c.initFlagWriteSlice()
 }
 
-// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// resolveEmitter delegates to outbox.ResolveCellEmitter (mutual exclusion +
 // WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
 // warn) and clears the pending outbox dep fields.
 //
@@ -125,9 +125,9 @@ func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
 // running with a stale subscriber view. Per-entry FailurePolicy
 // (outbox.Entry.FailurePolicy) lets individual topics opt into fail-open;
 // configwrite uses the default.
-func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
-	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-		EmitterConfig: cell.EmitterConfig{
+func (c *ConfigCore) resolveEmitter(mode outbox.DurabilityMode) error {
+	outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "configcore",
 			Mode:              mode,
 			Publisher:         c.pendingOutboxPub,
@@ -150,7 +150,7 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 	return nil
 }
 
-// deriveModes is the single translation point from kernel/cell.DurabilityMode
+// deriveModes is the single translation point from kernel/outbox.DurabilityMode
 // to run modes used by slices. Called only once at Init() time; propagated via
 // constructor parameters (do not call in handler/repository).
 //
@@ -159,19 +159,19 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 // evolve independently.
 //
 // ref: Uber fx Provide/Decorate — each decision gets its own typed injection.
-func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunMode, configpublish.PublishFailureMode) {
-	demo := durabilityMode == cell.DurabilityDemo
+func (c *ConfigCore) deriveModes(durabilityMode outbox.DurabilityMode) (query.RunMode, configpublish.PublishFailureMode) {
+	demo := durabilityMode == outbox.DurabilityDemo
 	return query.RunModeForDemo(demo), configpublish.PublishFailureModeForDemo(demo)
 }
 
 // ensureCursorCodec sets a default cursor codec in demo mode or returns an
 // error in durable mode when no codec was injected.
 // ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
-func (c *ConfigCore) ensureCursorCodec(reg cell.Registry) error {
+func (c *ConfigCore) ensureCursorCodec(reg cell.Registrar) error {
 	if c.cursorCodec != nil {
 		return nil
 	}
-	if reg.DurabilityMode() == cell.DurabilityDurable {
+	if reg.DurabilityMode() == outbox.DurabilityDurable {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"configcore durable mode requires a cursor codec; "+
 				"use WithCursorCodec(query.NewCursorCodec(secret)) — "+

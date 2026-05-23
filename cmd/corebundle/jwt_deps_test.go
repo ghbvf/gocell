@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -103,10 +105,10 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
-	tok, err := wrongIssuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{})
+	tok, err := wrongIssuer.Issue(kauth.TokenIntentAccess, "user-1", auth.IssueOptions{})
 	require.NoError(t, err)
 
-	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, err = deps.verifier.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, err,
 		"deps.verifier (wired from GOCELL_JWT_ISSUER=prod-iss) must reject token with iss=wrong-iss")
 
@@ -134,12 +136,12 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience(t *testing.T) {
 	deps, err := buildJWTDeps("", clock.Real())
 	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
 
-	tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+	tok, err := deps.issuer.Issue(kauth.TokenIntentAccess, "user-1", auth.IssueOptions{
 		Audience: []string{"wrong-service"},
 	})
 	require.NoError(t, err)
 
-	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, err = deps.verifier.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, err, "deps.verifier must reject token with aud=wrong-service")
 
 	var ecErr *errcode.Error
@@ -170,10 +172,10 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongKey(t *testing.T) {
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
-	tok, err := stranger.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{})
+	tok, err := stranger.Issue(kauth.TokenIntentAccess, "user-1", auth.IssueOptions{})
 	require.NoError(t, err)
 
-	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, err = deps.verifier.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, err, "deps.verifier must reject token signed by unknown key")
 
 	var ecErr *errcode.Error

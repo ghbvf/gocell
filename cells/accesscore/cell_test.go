@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
@@ -164,7 +166,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")
 }
@@ -184,7 +186,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
 }
@@ -204,7 +206,7 @@ func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.
 
 	var err error
 	require.NotPanics(t, func() {
-		err = c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+		err = c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "user repository")
@@ -225,7 +227,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.Error(t, err)
 	var ecErrTxPair *errcode.Error
 	require.True(t, errors.As(err, &ecErrTxPair))
@@ -252,14 +254,14 @@ func TestInit_DemoMode_TxWithoutOutbox_PublisherMode_Succeeds(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.NoError(t, err)
 }
 
 func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
 	// Both outboxWriter and txRunner present → should succeed
 	c := newTestCell(t) // newTestCell includes both
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)))
 }
 
 func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
@@ -275,7 +277,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.Error(t, err)
 	var ecErrSink *errcode.Error
 	require.True(t, errors.As(err, &ecErrSink))
@@ -299,7 +301,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.NoError(t, err)
 }
 
@@ -318,7 +320,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.NoError(t, err)
 }
 
@@ -350,7 +352,7 @@ func TestAccessCore_InitWithRefreshGCRegistersLifecycleHook(t *testing.T) {
 	c := newTestCell(t)
 	WithRefreshGC(time.Hour, time.Hour)(c)
 
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	require.NotNil(t, c.refreshGCCollector)
 
@@ -385,7 +387,7 @@ func TestAccessCore_RefreshGCHookStartPropagatesWorkerConfigError(t *testing.T) 
 }
 
 // TestInit_WithEmitter_DirectInjection exercises the F3 WithEmitter path:
-// a pre-composed outbox.Emitter skips cell.ResolveEmitter entirely.
+// a pre-composed outbox.Emitter skips outbox.ResolveEmitter entirely.
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
 func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 	emitter := outbox.NewNoopEmitter()
@@ -403,7 +405,7 @@ func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)))
 	// After Init the cell holds the injected emitter; pending raw deps stay nil.
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
@@ -427,7 +429,7 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.Error(t, err)
 	var ecErrMutex *errcode.Error
 	require.True(t, errors.As(err, &ecErrMutex))
@@ -454,7 +456,7 @@ func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable))
 	require.Error(t, err)
 	var ecErrDurable *errcode.Error
 	require.True(t, errors.As(err, &ecErrDurable))
@@ -466,7 +468,7 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	// Init
-	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
+	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)))
 	assert.Equal(t, 10, len(c.OwnedSlices()), "should have 10 slices")
 
 	// Start
@@ -490,7 +492,7 @@ func TestAccessCore_Metadata(t *testing.T) {
 func TestAccessCore_Startup(t *testing.T) {
 	c := newTestCell(t)
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
+	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)))
 	require.NoError(t, c.Start(ctx))
 	assert.True(t, c.Ready())
 	require.NoError(t, c.Stop(ctx))
@@ -499,7 +501,7 @@ func TestAccessCore_Startup(t *testing.T) {
 func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
 	c := newTestCell(t)
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
+	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)))
 
 	assert.NotNil(t, c.TokenVerifier())
 	assert.NotNil(t, c.Authorizer())
@@ -508,7 +510,7 @@ func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
 func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 	c := newDurableTestCell(t)
 	ctx := context.Background()
-	reg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable)
+	reg := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable)
 	require.NoError(t, c.Init(ctx, reg))
 
 	snap := reg.Snapshot()
@@ -533,7 +535,7 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 func TestAccessCore_RouteGroups(t *testing.T) {
 	c := newTestCell(t)
 	ctx := context.Background()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
@@ -597,7 +599,7 @@ func initCellWithRouters(t *testing.T) *cellTestRouters {
 	t.Helper()
 	c := newTestCell(t)
 	ctx := context.Background()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
@@ -858,7 +860,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		withTestBootstrapAuth(),
 	)
 	ctx := context.Background()
-	reg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	reg := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, reg))
 
 	// Seed a user.
@@ -904,7 +906,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 
 	// Verify token through session-aware verifier — should succeed.
 	verifier := c.TokenVerifier()
-	claims, err := verifier.VerifyIntent(ctx, accessToken, auth.TokenIntentAccess)
+	claims, err := verifier.VerifyIntent(ctx, accessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err, "token should be valid before revocation")
 
 	sid := claims.SessionID
@@ -916,7 +918,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	require.NoError(t, sessionRepo.Revoke(ctx, sid))
 
 	// Verify same token again — should be rejected.
-	_, err = verifier.VerifyIntent(ctx, accessToken, auth.TokenIntentAccess)
+	_, err = verifier.VerifyIntent(ctx, accessToken, kauth.TokenIntentAccess)
 	require.Error(t, err, "token should be rejected after session revocation")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN", "error should be auth invalid token")
 }
@@ -945,7 +947,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		withTestBootstrapAuth(),
 	)
 	ctx := context.Background()
-	reg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	reg := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, reg))
 
 	// Seed a user.
@@ -1005,7 +1007,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 
 	// Validate refreshed token through session-aware verifier.
 	verifier := c.TokenVerifier()
-	claims, err := verifier.VerifyIntent(ctx, refreshedToken, auth.TokenIntentAccess)
+	claims, err := verifier.VerifyIntent(ctx, refreshedToken, kauth.TokenIntentAccess)
 	require.NoError(t, err, "refreshed token should be valid")
 
 	sid := claims.SessionID
@@ -1015,7 +1017,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	require.NoError(t, sessionRepo.Revoke(ctx, sid))
 
 	// Refreshed token should now be rejected.
-	_, err = verifier.VerifyIntent(ctx, refreshedToken, auth.TokenIntentAccess)
+	_, err = verifier.VerifyIntent(ctx, refreshedToken, kauth.TokenIntentAccess)
 	require.Error(t, err, "refreshed token should be rejected after session revocation")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
 }
@@ -1077,7 +1079,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
+	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)))
 
 	// Admin role exists.
 	role, err := roleRepo.GetByID(ctx, "admin")
@@ -1129,7 +1131,7 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 		withTestBootstrapAuth(),
 	)
 	ctx := context.Background()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
@@ -1169,7 +1171,7 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 func TestAccessCore_RegisterSubscriptions(t *testing.T) {
 	c := newTestCell(t)
 	ctx := context.Background()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()

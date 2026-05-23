@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 
@@ -23,7 +25,7 @@ func TestWithListener_AppendsToListenerConfigs(t *testing.T) {
 
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	// White-box assertion (same package): verify that exactly one entry was stored
 	// and that phase0 validation accepts it (success path, no error).
@@ -48,9 +50,9 @@ func TestWithListener_MultipleListeners(t *testing.T) {
 
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithListener(cell.InternalListener, ":9090", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithListener(cell.HealthListener, ":9091", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.InternalListener, ":9090", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.HealthListener, ":9091", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	if b == nil {
 		t.Fatal("Bootstrap.New returned nil")
@@ -92,7 +94,7 @@ func TestWithListenerOptions(t *testing.T) {
 			t.Parallel()
 			b := New(
 				WithClock(clock.Real()),
-				WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}, tc.opts...),
+				WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}, tc.opts...),
 			)
 			if b == nil {
 				t.Fatal("Bootstrap.New returned nil")
@@ -114,7 +116,7 @@ func TestWithListenerNet_RealListener(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(
-			cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}},
+			cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerNet(ln),
 		),
 	)
@@ -130,7 +132,7 @@ func TestWithListenerShutdownGrace_ZeroValue(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(
-			cell.HealthListener, ":9091", []cell.ListenerAuth{cell.AuthNone{}},
+			cell.HealthListener, ":9091", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerShutdownGrace(0),
 		),
 	)
@@ -148,7 +150,7 @@ func TestWithListenerShutdownGrace_NegativeRejectsAtPhase0(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(
-			cell.PrimaryListener, ":9090", []cell.ListenerAuth{cell.AuthNone{}},
+			cell.PrimaryListener, ":9090", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerShutdownGrace(testtime.DNeg1s),
 		),
 	)
@@ -171,7 +173,7 @@ func TestWithListenerShutdownGrace_NegativeRejectsAtPhase0(t *testing.T) {
 // TestPhase0_RejectsNilAuthChain verifies that phase0ValidateOptions returns an
 // error when any listener is declared with a nil authChain — the SEC-FAIL-CLOSED
 // fail-closed invariant for listener authentication. Operators must explicitly
-// pass cell.AuthNone{} for HealthListener instead of relying on nil as a silent
+// pass auth.AuthNone{} for HealthListener instead of relying on nil as a silent
 // no-auth default.
 //
 // TDD phase-1 red-light: the current validateListenerConfig does NOT check for
@@ -187,21 +189,21 @@ func TestPhase0_RejectsNilAuthChain(t *testing.T) {
 	}{
 		{
 			name: "InternalListener nil authChain",
-			l1:   WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+			l1:   WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 			l2:   WithListener(cell.InternalListener, ":9090", nil), // nil → rejected
 		},
 		{
 			name: "HealthListener nil authChain",
-			l1:   WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+			l1:   WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 			l2:   WithListener(cell.HealthListener, ":9091", nil), // nil → rejected; use AuthNone{}
 		},
 		{
 			name: "InternalListener empty slice authChain",
-			l1:   WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+			l1:   WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 			// Empty slice == nil for the unauthenticated listener it produces;
 			// phase0 must reject so callers can't bypass the explicit AuthNone{}
 			// marker that archtest SEC-FAIL-CLOSED-02 grep-checks.
-			l2: WithListener(cell.InternalListener, ":9090", []cell.ListenerAuth{}),
+			l2: WithListener(cell.InternalListener, ":9090", []auth.ListenerAuth{}),
 		},
 	}
 
@@ -232,7 +234,7 @@ func TestPhase0_RejectsZeroListenerRef(t *testing.T) {
 
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.ListenerRef{}, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.ListenerRef{}, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 
 	err := b.phase0ValidateOptions()
@@ -244,7 +246,7 @@ func TestPhase0_RejectsZeroListenerRef(t *testing.T) {
 	}
 }
 
-// TestPhase0_AcceptsExplicitAuthNone verifies that passing cell.AuthNone{}
+// TestPhase0_AcceptsExplicitAuthNone verifies that passing auth.AuthNone{}
 // explicitly for HealthListener is accepted by phase0 (the positive case for
 // the fail-closed authChain requirement).
 func TestPhase0_AcceptsExplicitAuthNone(t *testing.T) {
@@ -253,9 +255,9 @@ func TestPhase0_AcceptsExplicitAuthNone(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ":8080",
-			[]cell.ListenerAuth{cell.AuthNone{}}),
+			[]auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, ":9091",
-			[]cell.ListenerAuth{cell.AuthNone{}}),
+			[]auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	// phase0 must accept explicit AuthNone (not nil).
 	// This test verifies the positive path and should pass in both phases.

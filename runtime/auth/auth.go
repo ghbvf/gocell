@@ -8,7 +8,7 @@ import (
 	"context"
 	"crypto/rsa"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 )
 
 // TestServiceContext creates a context carrying a service Principal with the
@@ -25,35 +25,35 @@ func TestServiceContext(callerCell string) context.Context {
 	})
 }
 
-// TokenIntent is a type alias of cell.TokenIntent so that runtime/auth and
+// TokenIntent is a type alias of kauth.TokenIntent so that runtime/auth and
 // kernel/cell share a single canonical type without conversion at package
-// boundaries. All existing code that references auth.TokenIntent continues
+// boundaries. All existing code that references kauth.TokenIntent continues
 // to compile without modification.
 //
 // ref: RFC 9068 §2.1 (typ: at+jwt), RFC 8725 §3.11 (token confusion defense)
 // ref: AWS Cognito token_use claim ("access"/"id"), Keycloak TokenUtil.java
-type TokenIntent = cell.TokenIntent
+type TokenIntent = kauth.TokenIntent
 
 const (
 	// TokenIntentAccess marks a short-lived credential for calling business
 	// endpoints. Verifier rejects any access token replayed at /auth/refresh.
-	TokenIntentAccess = cell.TokenIntentAccess
+	TokenIntentAccess = kauth.TokenIntentAccess
 )
 
-// Claims is a type alias of cell.Claims so that runtime/auth and kernel/cell
+// Claims is a type alias of kauth.Claims so that runtime/auth and kernel/cell
 // share a single canonical struct without conversion at package boundaries.
-// All existing code that references auth.Claims continues to compile.
-type Claims = cell.Claims
+// All existing code that references kauth.Claims continues to compile.
+type Claims = kauth.Claims
 
-// IntentTokenVerifier is a type alias of cell.IntentTokenVerifier so that
+// IntentTokenVerifier is a type alias of kauth.IntentTokenVerifier so that
 // runtime/auth and kernel/cell share a single canonical interface without
 // conversion at package boundaries. All existing code that references
-// auth.IntentTokenVerifier continues to compile without modification.
+// kauth.IntentTokenVerifier continues to compile without modification.
 //
 // This is the only verification interface in GoCell. Every production
 // verification path must declare the expected intent to prevent token-confusion
 // attacks (RFC 8725 §3.11).
-type IntentTokenVerifier = cell.IntentTokenVerifier
+type IntentTokenVerifier = kauth.IntentTokenVerifier
 
 // Authorizer checks whether a subject is allowed to perform an action on a resource.
 // Implementations may use RBAC, ABAC, or external policy engines.

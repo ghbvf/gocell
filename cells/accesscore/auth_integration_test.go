@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -182,7 +184,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	intReg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	intReg := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), intReg))
 
 	intSnap := intReg.Snapshot()
@@ -240,7 +242,7 @@ func TestAuthIntent_AccessTokenReachesBusinessPath(t *testing.T) {
 	validateSvc, ok := fx.Cell.TokenVerifier().(*sessionvalidate.Service)
 	require.True(t, ok, "TokenVerifier must be *sessionvalidate.Service in production wiring")
 
-	claims, err := validateSvc.VerifyIntent(context.Background(), fx.AccessToken, auth.TokenIntentAccess)
+	claims, err := validateSvc.VerifyIntent(context.Background(), fx.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err, "legitimate access token must pass session-validate")
 	assert.NotEmpty(t, claims.Subject)
 }
@@ -251,7 +253,7 @@ func TestAuthIntent_RefreshTokenBlockedAtBusinessPath(t *testing.T) {
 	validateSvc, ok := fx.Cell.TokenVerifier().(*sessionvalidate.Service)
 	require.True(t, ok)
 
-	_, err := validateSvc.VerifyIntent(context.Background(), fx.RefreshToken, auth.TokenIntentAccess)
+	_, err := validateSvc.VerifyIntent(context.Background(), fx.RefreshToken, kauth.TokenIntentAccess)
 	require.Error(t, err,
 		"refresh token must NOT be accepted by session-validate (token confusion defense)")
 }
@@ -267,7 +269,7 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	refreshSvc, err := sessionrefresh.NewService(
 		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
-		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		sessionrefresh.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		sessionrefresh.WithInvalidator(inv1),
 	)
 	require.NoError(t, err)
@@ -293,7 +295,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	refreshSvc, err := sessionrefresh.NewService(
 		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 		sessionrefresh.WithClock(clock.Real()),
-		sessionrefresh.WithTxManager(persistence.WrapForCell(cell.DemoTxRunner{})),
+		sessionrefresh.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		sessionrefresh.WithInvalidator(inv2),
 	)
 	require.NoError(t, err)
@@ -302,7 +304,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	require.NoError(t, err, "legitimate refresh token must rotate successfully")
 	assert.NotEmpty(t, newPair.AccessToken)
 	assert.NotEmpty(t, newPair.RefreshToken)
-	accessClaims, err := fx.Verifier.VerifyIntent(context.Background(), newPair.AccessToken, auth.TokenIntentAccess)
+	accessClaims, err := fx.Verifier.VerifyIntent(context.Background(), newPair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err, "rotated access token must carry intent=access")
 	assert.NotEmpty(t, accessClaims.Subject)
 }
@@ -429,7 +431,7 @@ func TestAuthIntegration_LoginAccessTokenAudienceDrift(t *testing.T) {
 				withIssuerAuds(tc.issuerAuds...),
 				withVerifierAuds(tc.verifierAuds...),
 			)
-			_, err := fx.Verifier.VerifyIntent(t.Context(), fx.AccessToken, auth.TokenIntentAccess)
+			_, err := fx.Verifier.VerifyIntent(t.Context(), fx.AccessToken, kauth.TokenIntentAccess)
 			if tc.wantErrCode == "" {
 				require.NoError(t, err, "case %s: aligned audiences must pass verifier", tc.name)
 				return

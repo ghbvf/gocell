@@ -22,6 +22,8 @@ import (
 	"sort"
 	"strings"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -242,8 +244,8 @@ func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef,
 	return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 		"bootstrap: /internal/v1/* route(s) declared without an internal guard; "+
 			"set bootstrap.WithListener(cell.InternalListener, ..., "+
-			"[]cell.ListenerAuth{<svcTokenAuth from cell.NewAuthServiceToken(store, ring)>}) "+
-			"and optionally layer cell.AuthMTLS{} with verified client TLS",
+			"[]kauth.ListenerAuth{<svcTokenAuth from kauth.NewAuthServiceToken(store, ring)>}) "+
+			"and optionally layer kauth.AuthMTLS{} with verified client TLS",
 		errcode.WithInternal(fmt.Sprintf("count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", "))))
 }
 
@@ -283,8 +285,8 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 	sort.Strings(protected)
 	return fmt.Errorf(
 		"bootstrap: listener %q has %d protected route(s) declared without an auth plan: [%s]; "+
-			"set the listener's auth chain to cell.NewAuthJWT(verifier), cell.NewAuthJWTFromAssembly(asm), "+
-			"cell.AuthMTLS{}, or cell.NewAuthServiceToken(...), or mark the route Public or use InternalListener",
+			"set the listener's auth chain to kauth.NewAuthJWT(verifier), kauth.NewAuthJWTFromAssembly(asm), "+
+			"kauth.AuthMTLS{}, or kauth.NewAuthServiceToken(...), or mark the route Public or use InternalListener",
 		ref.String(), len(protected), strings.Join(protected, ", "),
 	)
 }
@@ -389,7 +391,7 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics
 // options for the given verifier.
-func (b *Bootstrap) buildAuthRouterOptions(v auth.IntentTokenVerifier) ([]router.Option, error) {
+func (b *Bootstrap) buildAuthRouterOptions(v kauth.IntentTokenVerifier) ([]router.Option, error) {
 	opts := []router.Option{
 		router.WithAuthMiddleware(v),
 		router.WithRouterClock(b.clock),

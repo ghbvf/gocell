@@ -17,6 +17,8 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -79,7 +81,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: assemblyID, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	if err := asm.Register(oc); err != nil {
 		return fmt.Errorf("register ordercell: %w", err)
 	}
@@ -97,7 +99,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
-	jwtPlan, err := cell.NewAuthJWT(jwtVerifier)
+	jwtPlan, err := auth.NewAuthJWT(jwtVerifier)
 	if err != nil {
 		return fmt.Errorf("invalid JWT auth plan: %w", err)
 	}
@@ -106,7 +108,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ":8082",
-			[]cell.ListenerAuth{jwtPlan}),
+			[]auth.ListenerAuth{jwtPlan}),
 		bootstrap.WithListener(cell.InternalListener, ":9082", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	)

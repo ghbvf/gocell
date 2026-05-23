@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -34,7 +36,7 @@ import (
 // Production code passes in *auth.JWTIssuer directly (it satisfies this
 // interface by method set).
 type TokenIssuer interface {
-	Issue(intent auth.TokenIntent, subject string, opts auth.IssueOptions) (string, error)
+	Issue(intent kauth.TokenIntent, subject string, opts auth.IssueOptions) (string, error)
 }
 
 // Deps injects the collaborators MintAccess needs.
@@ -96,7 +98,7 @@ func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 	expiresAt := clk.Now().Add(auth.DefaultAccessTokenTTL)
 
 	jti := uuid.NewString()
-	access, err := deps.Issuer.Issue(auth.TokenIntentAccess, req.UserID, auth.IssueOptions{
+	access, err := deps.Issuer.Issue(kauth.TokenIntentAccess, req.UserID, auth.IssueOptions{
 		Roles:                 roles,
 		SessionID:             req.SessionID,
 		PasswordResetRequired: req.PasswordResetRequired,

@@ -37,7 +37,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 }
 
 // Cell.Init — PR-A14b 声明式路由组（PR-MODE-6 错误链路贯通），通过 reg.RouteGroup 注册
-func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
+func (c *AccessCore) Init(ctx context.Context, reg cell.Registrar) error {
     if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }

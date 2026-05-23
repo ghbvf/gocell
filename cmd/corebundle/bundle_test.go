@@ -7,14 +7,17 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -64,8 +67,8 @@ func TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken(t *testing.T) {
 	chain, err := buildInternalAuthChain(guard)
 	require.NoError(t, err)
 	require.Len(t, chain, 1, "guard must produce a 1-plan chain")
-	_, ok := chain[0].(cell.AuthServiceToken)
-	assert.True(t, ok, "plan must be cell.AuthServiceToken; got %T", chain[0])
+	_, ok := chain[0].(kauth.AuthServiceToken)
+	assert.True(t, ok, "plan must be kauth.AuthServiceToken; got %T", chain[0])
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +85,7 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
 	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
 
-	_, err = buildAssembly(ps, "corebundle", cell.DurabilityDemo, clock.Real(), c1, c2)
+	_, err = buildAssembly(ps, "corebundle", outbox.DurabilityDemo, clock.Real(), c1, c2)
 	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
 	assert.Contains(t, err.Error(), "dup-cell",
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")
@@ -141,7 +144,7 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	shared := buildTestSharedDeps(t)
 	shared.InternalHTTPAddr = "127.0.0.1:0"
 	shared.InternalGuard = newTestInternalGuard(t)
-	asm := assembly.New(assembly.Config{ID: "test-redis-options", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-redis-options", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
 
@@ -387,22 +390,22 @@ func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 	tests := []struct {
 		name string
 		topo bootstrap.Topology
-		want cell.DurabilityMode
+		want outbox.DurabilityMode
 	}{
 		{
 			name: "memory real remains demo",
 			topo: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "real"},
-			want: cell.DurabilityDemo,
+			want: outbox.DurabilityDemo,
 		},
 		{
 			name: "postgres real is durable",
 			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-			want: cell.DurabilityDurable,
+			want: outbox.DurabilityDurable,
 		},
 		{
 			name: "memory dev remains demo",
 			topo: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
-			want: cell.DurabilityDemo,
+			want: outbox.DurabilityDemo,
 		},
 	}
 
@@ -458,7 +461,7 @@ func buildBootstrapFromShared(
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
 		primaryLn.Addr().String(),
-		[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+		[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
@@ -487,7 +490,7 @@ func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
 	info := adapterInfoForSharedDeps(shared)
 
 	assert.Equal(t, "not-configured", info["redis"])
-	assert.Equal(t, string(auth.NonceStoreKindInMemory), info["service_token_nonce_store"])
+	assert.Equal(t, string(kauth.NonceStoreKindInMemory), info["service_token_nonce_store"])
 	assert.Equal(t, string(consumerClaimerKindInMemory), info["outbox_consumer_claimer"])
 
 	shared.RedisClient = new(adapterredis.Client)
@@ -699,7 +702,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 
 	healthOpt := bootstrap.WithListener(
 		cell.HealthListener, healthLn.Addr().String(),
-		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
+		[]kauth.ListenerAuth{kauth.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		healthOpt)
@@ -758,7 +761,7 @@ func TestBuildBootstrap_PostgresTopology_FakePoolResource(t *testing.T) {
 
 	healthOpt2 := bootstrap.WithListener(
 		cell.HealthListener, healthLn.Addr().String(),
-		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
+		[]kauth.ListenerAuth{kauth.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		healthOpt2,
@@ -797,7 +800,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 
 	healthOpt3 := bootstrap.WithListener(
 		cell.HealthListener, healthLn.Addr().String(),
-		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
+		[]kauth.ListenerAuth{kauth.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		healthOpt3)
@@ -836,7 +839,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 
 // TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly verifies the error path
 // in defaultRuntimeOptions when a non-empty PrimaryHTTPAddr is set and asm is
-// nil. cell.NewAuthJWTFromAssembly rejects nil interfaces, so the function must
+// nil. kauth.NewAuthJWTFromAssembly rejects nil interfaces, so the function must
 // return an error containing "primary listener auth".
 func TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly(t *testing.T) {
 	shared := buildTestSharedDeps(t)
@@ -854,7 +857,7 @@ func TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly(t *testing.T) {
 
 // TestBuildInternalAuthChain_NoopNonceStoreRejected verifies that
 // buildInternalAuthChain returns an error when the guard's NonceStore has
-// Kind() == NonceStoreKindNoop. cell.NewAuthServiceToken enforces replay
+// Kind() == NonceStoreKindNoop. kauth.NewAuthServiceToken enforces replay
 // protection is not silently disabled.
 func TestBuildInternalAuthChain_NoopNonceStoreRejected(t *testing.T) {
 	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)

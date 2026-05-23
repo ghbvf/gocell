@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -51,7 +53,7 @@ func newFailInitCell(id string) *failInitCell {
 	}
 }
 
-func (c *failInitCell) Init(_ context.Context, _ cell.Registry) error {
+func (c *failInitCell) Init(_ context.Context, _ cell.Registrar) error {
 	return errors.New("init boom")
 }
 
@@ -166,7 +168,7 @@ func (c *gatedStopCell) releaseStop() {
 // ---------------------------------------------------------------------------
 
 func TestAssemblyStartStopHealthy(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "test-assembly", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "test-assembly", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core", ConsistencyLevel: "L1"})
 	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c2", Type: "edge", ConsistencyLevel: "L2"})
@@ -188,7 +190,7 @@ func TestAssemblyStartStopHealthy(t *testing.T) {
 }
 
 func TestAssemblyStopReverseOrder(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "order-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "order-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	var order []string
 	c1 := newOrderCell("first", &order)
@@ -205,7 +207,7 @@ func TestAssemblyStopReverseOrder(t *testing.T) {
 }
 
 func TestAssemblyDuplicateCellID(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "dup-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "dup-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "same", Type: "core"})
 	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "same", Type: "core"})
 
@@ -219,12 +221,12 @@ func TestAssemblyDuplicateCellID(t *testing.T) {
 }
 
 func TestAssemblyID(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "id-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "id-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	assert.Equal(t, "id-test", a.ID())
 }
 
 func TestAssemblyRegisterNilCellRejected(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "nil-cell-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "nil-cell-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	err := a.Register(nil)
 	require.Error(t, err)
@@ -234,7 +236,7 @@ func TestAssemblyRegisterNilCellRejected(t *testing.T) {
 }
 
 func TestAssemblyEmptyCellID(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "empty-id-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "empty-id-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	err := a.Register(newEmptyIDCell())
 	require.Error(t, err)
@@ -249,7 +251,7 @@ func TestAssemblyFlushHookEventsWithoutDispatcher(t *testing.T) {
 }
 
 func TestAssemblyInitFailure(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "init-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "init-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: "good", Type: "core"})
 	bad := newFailInitCell("bad")
@@ -271,7 +273,7 @@ func TestAssemblyInitFailure(t *testing.T) {
 }
 
 func TestAssemblyStopWithoutStart(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "no-start", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "no-start", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c", Type: "core"})
 	require.NoError(t, a.Register(c))
 
@@ -280,7 +282,7 @@ func TestAssemblyStopWithoutStart(t *testing.T) {
 }
 
 func TestAssemblyStopOnlyFromStarted(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "guard-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "guard-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	var order []string
 	c := newOrderCell("c1", &order)
 	require.NoError(t, a.Register(c))
@@ -301,13 +303,13 @@ func TestAssemblyStopOnlyFromStarted(t *testing.T) {
 }
 
 func TestAssemblyStopEmpty(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "empty", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "empty", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, a.Stop(context.Background()))
 }
 
 func TestAssemblyStartFailureRollback(t *testing.T) {
 	// ref: uber-go/fx — Start 失败自动 rollback 已启动的 Cell
-	a := newTestAssembly(t, Config{ID: "start-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "start-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	var order []string
 	good := newOrderCell("good", &order)
@@ -334,7 +336,7 @@ func TestAssemblyStartFailureRollback(t *testing.T) {
 
 func TestAssemblyDoubleStartPrevented(t *testing.T) {
 	// ref: uber-go/fx lifecycle.go — 状态机防止重入
-	a := newTestAssembly(t, Config{ID: "double-start", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "double-start", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c", Type: "core"})
 	require.NoError(t, a.Register(c))
 	require.NoError(t, a.Start(context.Background()))
@@ -344,7 +346,7 @@ func TestAssemblyDoubleStartPrevented(t *testing.T) {
 }
 
 func TestAssemblyStartWhileStartingRejected(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "start-while-starting", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "start-while-starting", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newGatedStartCell("c")
 	t.Cleanup(c.releaseStart)
 	require.NoError(t, a.Register(c))
@@ -368,7 +370,7 @@ func TestAssemblyStartWhileStartingRejected(t *testing.T) {
 }
 
 func TestAssemblyStartWhileStoppingRejected(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "start-while-stopping", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "start-while-stopping", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newGatedStopCell("c")
 	t.Cleanup(c.releaseStop)
 	require.NoError(t, a.Register(c))
@@ -394,7 +396,7 @@ func TestAssemblyStartWhileStoppingRejected(t *testing.T) {
 }
 
 func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "reg-after-start", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "reg-after-start", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core"})
 	require.NoError(t, a.Register(c1))
 	require.NoError(t, a.Start(context.Background()))
@@ -411,7 +413,7 @@ func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
 }
 
 func TestAssemblyStopContinuesOnError(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "stop-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "stop-err", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: "good", Type: "core"})
 	bad1 := newFailStopCell("bad1")
@@ -437,7 +439,7 @@ func TestAssemblyStopContinuesOnError(t *testing.T) {
 }
 
 func TestAssemblyStartWithConfig(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "config-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "config-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core"})
 	require.NoError(t, a.Register(c))
 
@@ -450,7 +452,7 @@ func TestAssemblyStartWithConfig(t *testing.T) {
 }
 
 func TestAssemblyStartWithConfigDoubleStart(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "double-cfg", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "double-cfg", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core"})
 	require.NoError(t, a.Register(c))
 	require.NoError(t, a.StartWithConfig(context.Background(), nil))
@@ -461,7 +463,7 @@ func TestAssemblyStartWithConfigDoubleStart(t *testing.T) {
 }
 
 func TestAssemblyStartWithConfigInitFailure(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "init-fail-cfg", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "init-fail-cfg", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	bad := newFailInitCell("bad")
 	require.NoError(t, a.Register(bad))
 
@@ -470,7 +472,7 @@ func TestAssemblyStartWithConfigInitFailure(t *testing.T) {
 }
 
 func TestAssemblyStartWithConfigStartFailureRollback(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "start-fail-cfg", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "start-fail-cfg", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	var order []string
 	good := newOrderCell("good", &order)
@@ -484,7 +486,7 @@ func TestAssemblyStartWithConfigStartFailureRollback(t *testing.T) {
 }
 
 func TestAssemblyCellIDs(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "ids-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "ids-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "a", Type: "core"})))
 	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "b", Type: "core"})))
 
@@ -493,7 +495,7 @@ func TestAssemblyCellIDs(t *testing.T) {
 }
 
 func TestAssemblyHealthConcurrentWithRegister(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "concurrent-health", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "concurrent-health", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	// Pre-register some cells.
 	for i := range 5 {
@@ -521,7 +523,7 @@ func TestAssemblyHealthConcurrentWithRegister(t *testing.T) {
 }
 
 func TestAssemblyCellLookup(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "lookup-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "lookup-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "x", Type: "core"})
 	require.NoError(t, a.Register(c))
 
@@ -548,7 +550,7 @@ func TestAssemblyStart_ZeroDurabilityMode_FailsAtAssemblyLevel(t *testing.T) {
 func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
 	// Non-zero, non-valid mode (e.g., 99) rejected at assembly level.
 	// ref: Kubernetes allowlist validation, Uber fx fail-fast
-	a := newTestAssembly(t, Config{ID: "test-invalid-mode", DurabilityMode: cell.DurabilityMode(99), Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "test-invalid-mode", DurabilityMode: outbox.DurabilityMode(99), Clock: clock.Real()})
 	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "any-cell", Type: "core"})
 	require.NoError(t, a.Register(c))
 
@@ -569,7 +571,7 @@ func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
 func TestAssembly_Snapshots_NilAfterInitFailure(t *testing.T) {
 	t.Parallel()
 
-	a := newTestAssembly(t, Config{ID: "snap-init-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "snap-init-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: "good", Type: "core"})
 	bad := newFailInitCell("bad")
 
@@ -589,7 +591,7 @@ func TestAssembly_Snapshots_NilAfterInitFailure(t *testing.T) {
 func TestAssembly_Snapshots_NilAfterStartFailure(t *testing.T) {
 	t.Parallel()
 
-	a := newTestAssembly(t, Config{ID: "snap-start-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "snap-start-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: "good", Type: "core"})
 	bad := newFailStartCell("bad")
 
@@ -608,7 +610,7 @@ func TestAssembly_Snapshots_NilAfterStartFailure(t *testing.T) {
 func TestAssembly_Snapshots_NilAfterStop(t *testing.T) {
 	t.Parallel()
 
-	a := newTestAssembly(t, Config{ID: "snap-after-stop", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "snap-after-stop", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c", Type: "core"})
 
 	require.NoError(t, a.Register(c))
@@ -626,7 +628,7 @@ func TestAssembly_Snapshots_NilAfterStop(t *testing.T) {
 }
 
 func TestAssembly_Snapshots_NilWhileStartInProgress(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "snap-while-starting", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "snap-while-starting", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newGatedStartCell("c")
 	t.Cleanup(c.releaseStart)
 	require.NoError(t, a.Register(c))
@@ -646,7 +648,7 @@ func TestAssembly_Snapshots_NilWhileStartInProgress(t *testing.T) {
 }
 
 func TestAssembly_Snapshots_NilWhileStopInProgress(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "snap-while-stopping", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "snap-while-stopping", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newGatedStopCell("c")
 	t.Cleanup(c.releaseStop)
 	require.NoError(t, a.Register(c))
@@ -684,7 +686,7 @@ func TestAssembly_StartInternal_PerCellConfigIsolation(t *testing.T) {
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID: "first", Type: "core", ConsistencyLevel: "L0",
 		}),
-		onInit: func(reg cell.Registry) error {
+		onInit: func(reg cell.Registrar) error {
 			firstSeen = fmt.Sprintf("%v", reg.Config()[key])
 			// Mutate the map — should NOT affect the second cell.
 			reg.Config()[key] = "mutated-by-first"
@@ -698,13 +700,13 @@ func TestAssembly_StartInternal_PerCellConfigIsolation(t *testing.T) {
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID: "second", Type: "core", ConsistencyLevel: "L0",
 		}),
-		onInit: func(reg cell.Registry) error {
+		onInit: func(reg cell.Registrar) error {
 			secondSeen = fmt.Sprintf("%v", reg.Config()[key])
 			return nil
 		},
 	}
 
-	a := newTestAssembly(t, Config{ID: "isolation-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "isolation-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, a.Register(firstCell))
 	require.NoError(t, a.Register(secondCell))
 
@@ -718,10 +720,10 @@ func TestAssembly_StartInternal_PerCellConfigIsolation(t *testing.T) {
 // configMutatingCell is a test cell that calls onInit during Init.
 type configMutatingCell struct {
 	*cell.BaseCell
-	onInit func(cell.Registry) error
+	onInit func(cell.Registrar) error
 }
 
-func (c *configMutatingCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *configMutatingCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -813,7 +815,7 @@ func TestStartInternal_RollbackCellStopErrorsSurfaced(t *testing.T) {
 	errStopA := errors.New("sentinel-stop-a")
 	errStartB := errors.New("sentinel-start-b")
 
-	a := newTestAssembly(t, Config{ID: "rollback-stop-surfaced", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "rollback-stop-surfaced", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	cellA := newSentinelStopCell("A", errStopA)
 	cellBSentinel := newSentinelStartCell("B", errStartB)
 
@@ -853,7 +855,7 @@ func TestStartInternal_AfterStartFailRollbackIncludesFailingCell(t *testing.T) {
 	errAfterStartA := errors.New("sentinel-afterstart-a")
 	errStopA := errors.New("sentinel-stop-a-after-rollback")
 
-	a := newTestAssembly(t, Config{ID: "rollback-afterstart-stopsurf", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "rollback-afterstart-stopsurf", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	cellA := newAfterStartSentinelStopCell("A", errAfterStartA, errStopA)
 	require.NoError(t, a.Register(cellA))
 
@@ -885,7 +887,7 @@ func TestRollbackCells_ReturnsCollectedErrorsInLIFO(t *testing.T) {
 	errStop0 := errors.New("sentinel-stop-0")
 	errStop1 := errors.New("sentinel-stop-1")
 
-	a := newTestAssembly(t, Config{ID: "rollback-lifo-order", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "rollback-lifo-order", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	cell0 := newSentinelStopCell("cell0", errStop0)
 	cell1 := newSentinelStopCell("cell1", errStop1)
 	require.NoError(t, a.Register(cell0))

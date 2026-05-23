@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -34,7 +35,7 @@ func TestBaseCellLifecycle(t *testing.T) {
 	assert.Equal(t, "unhealthy", c.Health().Status)
 
 	// Init.
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 	assert.False(t, c.Ready(), "after Init, not yet started")
 	assert.Equal(t, "unhealthy", c.Health().Status)
 
@@ -124,7 +125,7 @@ func TestBaseCellReadyStates(t *testing.T) {
 	assert.False(t, c.Ready())
 
 	// Init: not ready.
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 	assert.False(t, c.Ready())
 
 	// Start: ready.
@@ -142,9 +143,9 @@ func TestBaseCellReadyStates(t *testing.T) {
 
 func TestBaseCellDoubleInit(t *testing.T) {
 	c := MustNewBaseCell(&metadata.CellMeta{ID: "dbl-init"})
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 
-	err := c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable))
+	err := c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
@@ -163,7 +164,7 @@ func TestBaseCellStartWithoutInit(t *testing.T) {
 
 func TestBaseCellDoubleStart(t *testing.T) {
 	c := MustNewBaseCell(&metadata.CellMeta{ID: "dbl-start"})
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 
 	err := c.Start(context.Background())
@@ -182,7 +183,7 @@ func TestBaseCellStopWithoutStart(t *testing.T) {
 
 func TestBaseCellInitThenStopSkipStart(t *testing.T) {
 	c := MustNewBaseCell(&metadata.CellMeta{ID: "init-stop"})
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 
 	// Stop from initialized is a no-op.
 	require.NoError(t, c.Stop(context.Background()))
@@ -192,12 +193,12 @@ func TestBaseCellRestart(t *testing.T) {
 	c := MustNewBaseCell(&metadata.CellMeta{ID: "restart"})
 
 	// Full lifecycle.
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 	require.NoError(t, c.Stop(context.Background()))
 
 	// Re-init from stopped state should succeed.
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 	assert.True(t, c.Ready())
 }
@@ -215,7 +216,7 @@ func TestBaseCellShutdownCtx(t *testing.T) {
 	assert.Nil(t, ctx.Err(), "context should not be canceled before Start")
 
 	// Start: shutdownCtx is created.
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 
 	ctx = c.ShutdownCtx()
@@ -229,7 +230,7 @@ func TestBaseCellShutdownCtx(t *testing.T) {
 
 func TestBaseCellConcurrentHealthReady(t *testing.T) {
 	c := MustNewBaseCell(&metadata.CellMeta{ID: "concurrent"})
-	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
+	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, outbox.DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 
 	// Concurrent Health and Ready calls should not race.

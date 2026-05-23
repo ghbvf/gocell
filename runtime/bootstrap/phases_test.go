@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -46,7 +48,7 @@ func errFullPhases(t *testing.T, err error) string {
 // map. The asm is started so health.Handler.aggregateCellHealth works.
 func buildPhase5State(t *testing.T) *phaseState {
 	t.Helper()
-	asm := assembly.New(assembly.Config{ID: "phase5-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "phase5-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
@@ -225,7 +227,7 @@ func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 // --- phase0ValidateOptions tests ---
 
 func TestPhase0_AcceptsValidOptions(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
+	b := New(WithClock(clock.Real()), WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
 	require.NoError(t, b.phase0ValidateOptions())
 }
 
@@ -260,20 +262,20 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 
 // TestPhase0_RejectsMutuallyExclusiveAuthOptions was removed in F3 round-3:
 // WithAuthMiddleware and the standalone PolicyJWTFromAssembly Option are gone,
-// so phase0 has nothing to reject. JWT auth flows through []cell.ListenerAuth
+// so phase0 has nothing to reject. JWT auth flows through []auth.ListenerAuth
 // authChain passed to WithListener.
 
 // Round-3 finding #10: AuthJWTFromAssembly must capture the same assembly
 // instance as WithAssembly. A mismatch would silently discover the verifier
 // in the plan's asm while the rest of Bootstrap runs against b.assemblyCore.
 func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
-	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asmA),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asmB)}),
+			[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmB)}),
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
@@ -283,12 +285,12 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 }
 
 func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "asm-match", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "asm-match", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}),
+			[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
@@ -300,7 +302,7 @@ func TestPhase0_RejectsAuthMTLSWithoutTLS(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.AuthMTLS{}}),
+			[]auth.ListenerAuth{auth.AuthMTLS{}}),
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
@@ -316,7 +318,7 @@ func TestPhase0_RejectsAuthMTLSWithLooseClientAuth(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.AuthMTLS{}},
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			WithListenerTLS(cfg)),
 	)
 	err := b.phase0ValidateOptions()
@@ -332,7 +334,7 @@ func TestPhase0_RejectsAuthMTLSWithoutClientCAs(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.AuthMTLS{}},
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			WithListenerTLS(cfg)),
 	)
 	err := b.phase0ValidateOptions()
@@ -352,9 +354,9 @@ func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
 	}
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.AuthMTLS{}},
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			WithListenerTLS(cfg)),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
@@ -364,7 +366,7 @@ func TestChainProtectsRoutes(t *testing.T) {
 	stubVerifier := &stubIntentTokenVerifier{}
 	tests := []struct {
 		name  string
-		chain []cell.ListenerAuth
+		chain []auth.ListenerAuth
 		want  bool
 	}{
 		{
@@ -374,40 +376,40 @@ func TestChainProtectsRoutes(t *testing.T) {
 		},
 		{
 			name:  "empty_chain_not_protected",
-			chain: []cell.ListenerAuth{},
+			chain: []auth.ListenerAuth{},
 			want:  false,
 		},
 		{
 			name:  "auth_none_not_protected",
-			chain: []cell.ListenerAuth{cell.AuthNone{}},
+			chain: []auth.ListenerAuth{auth.AuthNone{}},
 			want:  false,
 		},
 		{
 			name:  "auth_jwt_protected",
-			chain: []cell.ListenerAuth{celltest.MustAuthJWT(stubVerifier)},
+			chain: []auth.ListenerAuth{authtest.MustAuthJWT(stubVerifier)},
 			want:  true,
 		},
 		{
 			name:  "auth_mtls_protected",
-			chain: []cell.ListenerAuth{cell.AuthMTLS{}},
+			chain: []auth.ListenerAuth{auth.AuthMTLS{}},
 			want:  true,
 		},
 		{
 			name:  "auth_service_token_protected",
-			chain: []cell.ListenerAuth{celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			chain: []auth.ListenerAuth{authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
 			want:  true,
 		},
 		{
 			// AuthNone before a protective plan must not short-circuit to false.
 			name:  "mixed_none_then_mtls_protected",
-			chain: []cell.ListenerAuth{cell.AuthNone{}, cell.AuthMTLS{}},
+			chain: []auth.ListenerAuth{auth.AuthNone{}, auth.AuthMTLS{}},
 			want:  true,
 		},
 		{
 			// Multi-protective chain (mTLS outer + HMAC inner) is the
 			// canonical InternalListener configuration.
 			name:  "mixed_mtls_plus_service_token_protected",
-			chain: []cell.ListenerAuth{cell.AuthMTLS{}, celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			chain: []auth.ListenerAuth{auth.AuthMTLS{}, authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
 			want:  true,
 		},
 	}
@@ -541,7 +543,7 @@ func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T)
 }
 
 func TestPhase3_InitAssembly_UsesPrebuiltAssembly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "pre", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "pre", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(WithClock(clock.Real()), WithAssembly(asm))
 	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
@@ -1312,8 +1314,8 @@ func TestBootstrapTeardown_LIFOOrder(t *testing.T) {
 
 type stubIntentTokenVerifier struct{}
 
-func (s *stubIntentTokenVerifier) VerifyIntent(_ context.Context, _ string, _ cell.TokenIntent) (cell.Claims, error) {
-	return cell.Claims{}, nil
+func (s *stubIntentTokenVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
+	return auth.Claims{}, nil
 }
 
 type stubNonceStore struct{}
@@ -1322,13 +1324,13 @@ func (s *stubNonceStore) CheckAndMark(_ context.Context, _ string) error {
 	return nil
 }
 
-func (s *stubNonceStore) Kind() cell.NonceStoreKind {
-	return cell.NonceStoreKindInMemory
+func (s *stubNonceStore) Kind() auth.NonceStoreKind {
+	return auth.NonceStoreKindInMemory
 }
 
 type stubHMACKeyring struct{}
 
-// Current/Secrets must return >= cell.MinHMACKeyBytes (32 bytes) — short keys
+// Current/Secrets must return >= auth.MinHMACKeyBytes (32 bytes) — short keys
 // panic at NewAuthServiceToken construction (PR269 round-3 F5).
 func (s *stubHMACKeyring) Current() []byte {
 	return []byte("test-secret-32-bytes-padding----")
@@ -1343,7 +1345,7 @@ func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }
 // calling phase5FinalizeAllRouters a second time (after authFinalized=true) returns
 // an error that names the listener ref, making post-mortem diagnosis unambiguous.
 func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
+	b := New(WithClock(clock.Real()), WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
 	s := buildPhase5State(t)
 
 	routers := map[cell.ListenerRef]*router.Router{
@@ -1362,7 +1364,7 @@ func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing
 }
 
 func TestBootstrap_Phase5_InternalRoutesRequireGuard(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
+	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1382,7 +1384,7 @@ func TestBootstrap_Phase5_InternalRoutesRequireGuard(t *testing.T) {
 
 func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
 	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0",
-		[]cell.ListenerAuth{celltest.MustAuthJWT(&stubIntentTokenVerifier{})}))
+		[]auth.ListenerAuth{authtest.MustAuthJWT(&stubIntentTokenVerifier{})}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1400,7 +1402,7 @@ func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
 }
 
 func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthMTLS{}}))
+	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthMTLS{}}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1416,8 +1418,8 @@ func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
 }
 
 func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {
-	plan := celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{plan}))
+	plan := authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
+	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{plan}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1432,8 +1434,8 @@ func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {
 }
 
 func TestBootstrap_Phase5_InternalRoutesAcceptLayeredInternalGuards(t *testing.T) {
-	plan := celltest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthMTLS{}, plan}))
+	plan := authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
+	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthMTLS{}, plan}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1456,7 +1458,7 @@ func TestBootstrap_Phase5_InternalRoutesAcceptLayeredInternalGuards(t *testing.T
 func TestPhase0_TLSConfigEmpty_Rejected(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerTLS(&tls.Config{})), // no Certificates / GetCertificate / GetConfigForClient
 	)
 	err := b.phase0ValidateOptions()
@@ -1474,7 +1476,7 @@ func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
 	// exercised in this unit test.
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				Certificates: []tls.Certificate{{Certificate: [][]byte{{0x00}}}},
 			})),
@@ -1489,7 +1491,7 @@ func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
 func TestPhase0_TLSConfigCertificateZeroValue_Rejected(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				Certificates: []tls.Certificate{{}},
 			})),
@@ -1504,7 +1506,7 @@ func TestPhase0_TLSConfigCertificateZeroValue_Rejected(t *testing.T) {
 func TestPhase0_TLSConfigWithGetCertificate_Accepted(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 					return &tls.Certificate{}, nil

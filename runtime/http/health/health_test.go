@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	khealthz "github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
@@ -215,7 +216,7 @@ func TestLivezHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+			asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 			c := newStubCell("cell-1")
 			require.NoError(t, asm.Register(c))
 
@@ -273,7 +274,7 @@ func TestReadyzHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+			asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 			c := newStubCell("cell-1")
 			require.NoError(t, asm.Register(c))
 
@@ -315,7 +316,7 @@ func TestReadyzHandler(t *testing.T) {
 }
 
 func TestReadyzHandler_MultipleCheckers(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -346,7 +347,7 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 }
 
 func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 
@@ -369,7 +370,7 @@ func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
 }
 
 func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -394,7 +395,7 @@ func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
 }
 
 func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -430,7 +431,7 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 }
 
 func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -458,7 +459,7 @@ func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
 }
 
 func TestReadyzHandler_VerboseOutput_UsesAdapterInfoSnapshot(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-adapter-snapshot", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-adapter-snapshot", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -487,7 +488,7 @@ func TestReadyzHandler_VerboseOutput_UsesAdapterInfoSnapshot(t *testing.T) {
 }
 
 func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -508,7 +509,7 @@ func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
 }
 
 func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -580,7 +581,7 @@ func TestAggregator_NilFnProbeNewPanics(t *testing.T) {
 }
 
 func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -607,7 +608,7 @@ func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 }
 
 func TestSetShuttingDown_Idempotent(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -629,7 +630,7 @@ func TestSetShuttingDown_Idempotent(t *testing.T) {
 // additional probes after construction.
 func newStartedHandler(t *testing.T) (*Handler, khealthz.Aggregator) {
 	t.Helper()
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -734,7 +735,7 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "test-verbose-deny", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+			asm := assembly.New(assembly.Config{ID: "test-verbose-deny", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 			c := newStubCell("cell-1")
 			require.NoError(t, asm.Register(c))
 			require.NoError(t, asm.Start(context.Background()))
@@ -795,7 +796,7 @@ func assertVerboseTokenResponse(t *testing.T, rec *httptest.ResponseRecorder, wa
 }
 
 func TestEmptyAssembly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "empty", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "empty", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	agg := newAgg(clock.Real())
 	h := New(asm, agg, clock.Real())
 
@@ -837,7 +838,7 @@ const healthParallelMax = 250 * time.Millisecond
 // If CI scheduler jitter makes the second assertion flaky, fall back to semantic-only
 // by wrapping in testing.Short() (or increase tolerance) — don't remove the semantic check.
 func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-parallel", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-parallel", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -878,7 +879,7 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 // is reported as status="timeout" with an error containing "deadline exceeded",
 // and the aggregate returns 503.
 func TestReadyz_DeadlineExceeded(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-deadline", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-deadline", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -916,7 +917,7 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 // canceled when the HTTP request context is canceled (e.g. kubelet disconnect).
 // The probe ctx must derive from context.Background(), not r.Context().
 func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-indep", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-indep", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -959,7 +960,7 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 // recovered, the checker reports status=unhealthy, and the HTTP handler
 // does not crash.
 func TestReadyz_ProbePanic_Caught(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-panic", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-panic", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -1013,7 +1014,7 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 // gone (wire has no error text to truncate), and redaction-before-truncate
 // is now redaction-into-typed-newtype enforced by archtest funnel.
 func TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-redact-verbose", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-redact-verbose", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -1061,7 +1062,7 @@ func TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog(t *testing.T) 
 // panic carrying a secret-shaped string must (a) not leak to wire, and
 // (b) reach slog channel d only after passing through the redaction funnel.
 func TestReadyz_VerbosePanicSecret_RedactedInSlog(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-panic-redact", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-panic-redact", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -1119,7 +1120,7 @@ func TestReadyz_VerbosePanicSecret_RedactedInSlog(t *testing.T) {
 // recognized key prefix will NOT have them redacted in slog channel d.
 // The fix is upstream (probe authors must use key=value form), not in the funnel.
 func TestReadyz_VerboseError_UnknownKeyReachesSlogUnredacted(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-unknown-key", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-unknown-key", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -1165,7 +1166,7 @@ func TestReadyz_VerboseError_UnknownKeyReachesSlogUnredacted(t *testing.T) {
 // the inner probe ignores ctx. The inner goroutine continues running in the
 // background; the aggregator is no longer entangled with its lifetime.
 func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-uncooperative", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-uncooperative", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -1208,7 +1209,7 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 // F4 — the previous sweep lost this coverage when the earlier test was
 // flipped to WithVerboseDisabled.
 func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-uncooperative-verbose", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-uncooperative-verbose", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -1251,7 +1252,7 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 // ResponseWriter.Write call fails (e.g. because the connection was reset).
 // This covers the slog.Any("error", err) branch on line 621 of health.go.
 func TestWriteJSON_WriteError(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-write-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-write-err", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -1287,7 +1288,7 @@ func (f *failWriter) Write(_ []byte) (int, error) { return 0, fmt.Errorf("simula
 // Healthy probes have empty ErrorMsg (omitted on JSON serialization via
 // the json:",omitempty" tag); unhealthy probes carry the redacted error.
 func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-structured", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-structured", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -1324,10 +1325,10 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 // --- Three-state (healthy / degraded / unhealthy) tests (PR-A49 B4) ---
 
 // TestReadyz_DegradedReturns200WithStatusField verifies that a probe returning
-// a wrapped cell.ErrDegraded produces HTTP 200 with body status="degraded".
+// a wrapped outbox.ErrDegraded produces HTTP 200 with body status="degraded".
 // degraded must NOT trigger pod eviction (fail-open semantic).
 func TestReadyz_DegradedReturns200WithStatusField(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-degraded", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-degraded", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("configcore")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1337,7 +1338,7 @@ func TestReadyz_DegradedReturns200WithStatusField(t *testing.T) {
 	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate_configcore", func(_ context.Context) error {
-		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
+		return fmt.Errorf("drop ratio exceeded: %w", outbox.ErrDegraded)
 	})))
 
 	rec := httptest.NewRecorder()
@@ -1354,7 +1355,7 @@ func TestReadyz_DegradedReturns200WithStatusField(t *testing.T) {
 // and an unhealthy checker are registered, the aggregate result is "unhealthy"
 // and the response is HTTP 503.
 func TestReadyz_UnhealthyTrumpsDegraded(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-unhealthy-trumps", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-unhealthy-trumps", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("configcore")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1364,7 +1365,7 @@ func TestReadyz_UnhealthyTrumpsDegraded(t *testing.T) {
 	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, agg.Register(khealthz.NewProbe("degraded-probe", func(_ context.Context) error {
-		return fmt.Errorf("soft degradation: %w", cell.ErrDegraded)
+		return fmt.Errorf("soft degradation: %w", outbox.ErrDegraded)
 	})))
 	require.NoError(t, agg.Register(khealthz.NewProbe("unhealthy-probe", func(_ context.Context) error {
 		return fmt.Errorf("db unreachable")
@@ -1420,7 +1421,7 @@ func (s *stubPanickingHealthCell) Health() cell.HealthStatus {
 }
 
 func TestReadyz_ComputationPanic_UsesServiceUnavailableCode(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-health-panic", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-health-panic", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubPanickingHealthCell("panic-cell")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1445,7 +1446,7 @@ func TestReadyz_ComputationPanic_UsesServiceUnavailableCode(t *testing.T) {
 // checkers are registered, ReadyzHandler must respond HTTP 200 with body
 // status="degraded" (not "unhealthy" / 503).
 func TestReadyz_DegradedAggregatesFromCellHealth(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-cell-degraded", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-cell-degraded", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubDegradedCell("degraded-cell")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1467,12 +1468,12 @@ func TestReadyz_DegradedAggregatesFromCellHealth(t *testing.T) {
 }
 
 // TestReadyz_VerboseExposesDegradedDependency verifies that when a probe returns
-// a wrapped cell.ErrDegraded, the verbose body dependency entry has status="degraded".
+// a wrapped outbox.ErrDegraded, the verbose body dependency entry has status="degraded".
 // Per ADR 202605171200 wire shape is frozen — error text never appears on wire,
 // even for degraded probes (no behavioral difference between healthy/degraded
 // at the wire shape level; only the status string changes).
 func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-verbose-degraded", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-verbose-degraded", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
@@ -1480,7 +1481,7 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate_configcore", func(_ context.Context) error {
-		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
+		return fmt.Errorf("drop ratio exceeded: %w", outbox.ErrDegraded)
 	})))
 
 	rec := httptest.NewRecorder()
@@ -1506,7 +1507,7 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 
 // TestReadyz_VerboseDegraded_SlogCapturesRedactedError is the degraded-path
 // analog of TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog.
-// It verifies that when a probe returns a wrapped cell.ErrDegraded containing
+// It verifies that when a probe returns a wrapped outbox.ErrDegraded containing
 // a structured secret (e.g. "password=secret"), the four-channel split holds:
 //
 //   - wire body (HTTP 200): no raw secret, no <REDACTED> mask (channel d exclusive)
@@ -1516,7 +1517,7 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 // F3 regression: before this fix, logDiagnostics was not called on the
 // degraded path, so the slog channel d never received the probe ErrorMsg.
 func TestReadyz_VerboseDegraded_SlogCapturesRedactedError(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-degraded-redact", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-degraded-redact", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
@@ -1525,7 +1526,7 @@ func TestReadyz_VerboseDegraded_SlogCapturesRedactedError(t *testing.T) {
 	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, agg.Register(khealthz.NewProbe("cache", func(_ context.Context) error {
-		return fmt.Errorf("redis check: password=%s: %w", leakSentinel, cell.ErrDegraded)
+		return fmt.Errorf("redis check: password=%s: %w", leakSentinel, outbox.ErrDegraded)
 	})))
 
 	capture := withSlogCapture(t)
@@ -1614,7 +1615,7 @@ func depEntryFromGroup(group []slog.Attr, depName string) (SlogDependencyEntry, 
 // TestReadyz_HealthyAllAcrossBoard verifies the sanity check: all healthy → HTTP 200
 // with status="healthy".
 func TestReadyz_HealthyAllAcrossBoard(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-all-healthy", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-all-healthy", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1635,13 +1636,13 @@ func TestReadyz_HealthyAllAcrossBoard(t *testing.T) {
 }
 
 // TestAggregator_DegradedSentinelMappedToDegraded verifies that a probe
-// returning a wrapped cell.ErrDegraded produces StatusDegraded via the
+// returning a wrapped outbox.ErrDegraded produces StatusDegraded via the
 // Aggregator. Tests through agg.Evaluate to replace the former direct
 // runOneProbe call (which was a package-internal function removed in B4).
 func TestAggregator_DegradedSentinelMappedToDegraded(t *testing.T) {
 	agg := newAggWithDeadline(clock.Real(), testtime.D5s)
 	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate", func(_ context.Context) error {
-		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
+		return fmt.Errorf("drop ratio exceeded: %w", outbox.ErrDegraded)
 	})))
 
 	snap := agg.Evaluate(context.Background())
@@ -1649,7 +1650,7 @@ func TestAggregator_DegradedSentinelMappedToDegraded(t *testing.T) {
 	pr := snap.Probes[0]
 
 	assert.Equal(t, khealthz.StatusDegraded, pr.Status,
-		"checker returning wrapped cell.ErrDegraded must produce StatusDegraded")
+		"checker returning wrapped outbox.ErrDegraded must produce StatusDegraded")
 	require.NotNil(t, pr.Err, "degraded probe must carry non-nil Err")
 	assert.Contains(t, pr.Err.Error(), "drop ratio exceeded")
 }
@@ -1694,7 +1695,7 @@ func TestVerboseDecision_DefaultDenies(t *testing.T) {
 	t.Parallel()
 
 	// Build a minimal assembly with one started cell so /readyz returns healthy.
-	asm := assembly.New(assembly.Config{ID: "test-sec", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-sec", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("sec-cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))

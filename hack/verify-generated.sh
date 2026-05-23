@@ -11,8 +11,6 @@ cd "${ROOT}"
 
 # shellcheck source=hack/lib/util.sh
 source "${ROOT}/hack/lib/util.sh"
-# shellcheck source=hack/lib/gocell-bin.sh
-source "${ROOT}/hack/lib/gocell-bin.sh"
 
 gocell::log::status "Verifying generated artifacts"
-gocell::cli verify generated
+go run ./cmd/gocell verify generated

@@ -14,6 +14,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -28,14 +30,14 @@ import (
 // simulate missing/invalid tokens when errMsg is non-empty.
 type stubVerifier struct {
 	// principal to return on success (nil → no principal injected)
-	claims auth.Claims
+	claims kauth.Claims
 	// non-empty → VerifyIntent returns this error string → 401
 	failMsg string
 }
 
-func (v *stubVerifier) VerifyIntent(_ context.Context, token string, _ auth.TokenIntent) (auth.Claims, error) {
+func (v *stubVerifier) VerifyIntent(_ context.Context, token string, _ kauth.TokenIntent) (kauth.Claims, error) {
 	if token == "" || v.failMsg != "" {
-		return auth.Claims{}, &stubVerifyError{msg: v.failMsg}
+		return kauth.Claims{}, &stubVerifyError{msg: v.failMsg}
 	}
 	return v.claims, nil
 }
@@ -69,7 +71,7 @@ func buildAuthRouter(t *testing.T, principalRole string) *router.Router {
 		verifier = &stubVerifier{failMsg: "no valid token"}
 	} else {
 		verifier = &stubVerifier{
-			claims: auth.Claims{
+			claims: kauth.Claims{
 				Subject: "test-user",
 				Roles:   []string{principalRole},
 			},

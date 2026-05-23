@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -520,7 +520,7 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 
 // TestPGRefreshStore_T22_ReadyzReportsInvalidIndex verifies that the
 // postgres_indexes_valid_ready checker in Pool.Checkers returns a normal
-// errcode error when invalid indexes exist. It must not wrap cell.ErrDegraded:
+// errcode error when invalid indexes exist. It must not wrap outbox.ErrDegraded:
 // invalid indexes are a schema fault, so runtime/http/health.runOneProbe must
 // classify the probe as unhealthy and /readyz must fail closed with HTTP 503.
 func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
@@ -548,7 +548,7 @@ func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 
 	err = invalidIdxChecker(ctx)
 	require.Error(t, err, "invalid indexes must make postgres_indexes_valid_ready fail")
-	assert.False(t, errors.Is(err, cell.ErrDegraded),
+	assert.False(t, errors.Is(err, outbox.ErrDegraded),
 		"invalid indexes must not be treated as fail-open degraded readiness")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec, "invalid index checker must return an errcode error")

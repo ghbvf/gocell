@@ -58,7 +58,7 @@ const (
 // each wire adapterpg.NewOutboxWriter + adapterpg.NewTxManager inside an
 // if-block that checks StorageBackend == "postgres".
 //
-// Rationale: kernel/cell.ResolveEmitter requires both OutboxWriter and TxRunner
+// Rationale: kernel/outbox.ResolveEmitter requires both OutboxWriter and TxRunner
 // non-nil for DurabilityDurable cells. Without this wiring, postgres-topology
 // deployments fail at startup with ERR_CELL_MISSING_OUTBOX.
 func TestStorageBackendPGWiring01(t *testing.T) {

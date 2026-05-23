@@ -26,7 +26,7 @@ import (
 )
 
 func newTestRec() *cell.RegistryRecorder {
-	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	return cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 }
 
 // demoTxRunner is a pass-through TxRunner for demo-mode tests. Replaces the
@@ -144,7 +144,7 @@ func TestOrderCell_DefaultInit_DemoModeRequiresExplicitOutboxPair(t *testing.T) 
 
 // TestOrderCell_DemoMode_RejectsHalfConfiguredPath verifies that exactly one
 // of (outboxWriter, txRunner) being set is rejected at Init() time.
-// Both sub-cases hit cell.ResolveCellEmitter::resolveDemoEmitter pairing
+// Both sub-cases hit outbox.ResolveCellEmitter::resolveDemoEmitter pairing
 // invariant (writer XOR txRunner = error).
 func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	tests := []struct {
@@ -178,7 +178,7 @@ func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable))
 	require.Error(t, err)
 	var ecErrNoopWriter *errcode.Error
 	require.True(t, errors.As(err, &ecErrNoopWriter))
@@ -195,7 +195,7 @@ func TestOrderCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithOutboxWriter(outbox.WrapWriterForCell(&orderRecordingWriter{})),
 		WithTxManager(persistence.WrapForCell(orderLocalTxRunner{})),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)

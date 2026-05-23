@@ -85,7 +85,7 @@ func WithEmitter(e outbox.Emitter) Option {
 // CellWriter). Composition roots construct each via
 // outbox.WrapPublisherForCell / outbox.WrapWriterForCell. The framework
 // composes them into an outbox.Emitter at Init() time via
-// cell.ResolveCellEmitter.
+// outbox.ResolveCellEmitter.
 //
 // Accumulative: a nil argument leaves the previously-set value in place;
 // multiple calls combine their non-nil arguments. Does NOT clear previous
@@ -202,7 +202,7 @@ func NewAuditCore(opts ...Option) *AuditCore {
 // cell_gen.go::Init calls it after BaseCell.Init and before mounting the
 // generated route-group and subscribe blocks. This is a permanent convention,
 // not a transitional shim.
-func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
+func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registrar) error {
 	clock.MustHaveClock(c.clk, "auditcore.initInternal")
 
 	// Validate injected ledger deps (strong-dependency wiring options).
@@ -224,13 +224,13 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	// using the original c.txRunner; only after it succeeds do we install the
 	// demoTxRunner fallback so slice constructors see a non-nil TxRunner.
 	if c.txRunner == nil {
-		c.logger.Warn("auditcore: using cell.DemoCellTxManager (demo mode)",
+		c.logger.Warn("auditcore: using outbox.DemoCellTxManager (demo mode)",
 			slog.String("durability_mode", durabilityMode.String()))
-		c.txRunner = cell.DemoCellTxManager()
+		c.txRunner = outbox.DemoCellTxManager()
 	}
 	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode
 	// so that assemblies that forget to wire a real TxRunner fail at Init() time.
-	if err := cell.CheckNotNoop(durabilityMode, "auditcore", c.txRunner); err != nil {
+	if err := outbox.CheckNotNoop(durabilityMode, "auditcore", c.txRunner); err != nil {
 		return err
 	}
 
@@ -274,7 +274,7 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 //     connectivity via RegisterRepoReady typed funnel. ledger.Store
 //     always satisfies RepoProber — MemStore returns nil (always ready),
 //     PG-backed store issues a Tail query against the relation.
-func (c *AuditCore) registerHealthProbes(reg cell.Registry) error {
+func (c *AuditCore) registerHealthProbes(reg cell.Registrar) error {
 	// Register emitter health probes (fail-open rate checker).
 	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
 		if err := RegisterEmitterProbes(reg, hc); err != nil {
@@ -323,7 +323,7 @@ func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
 	return nil
 }
 
-// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// resolveEmitter delegates to outbox.ResolveCellEmitter (mutual exclusion +
 // WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
 // warn) and clears the pending outbox dep fields.
 //
@@ -332,9 +332,9 @@ func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
 // notices outages instead of silently losing events. Opt-in fail-open is
 // per-entry via outbox.Entry.FailurePolicy, and archtest
 // OUTBOX-TOPIC-FAILOPEN-01 bans it for audit.* topics.
-func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
-	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-		EmitterConfig: cell.EmitterConfig{
+func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
+	outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "auditcore",
 			Mode:              mode,
 			Publisher:         c.pendingOutboxPub,
@@ -399,9 +399,9 @@ func (c *AuditCore) initSlices() error {
 
 // initQuerySlice constructs the audit-query handler slice. Must be called after
 // initCursorCodec so that c.cursorCodec is set.
-func (c *AuditCore) initQuerySlice(mode cell.DurabilityMode) error {
+func (c *AuditCore) initQuerySlice(mode outbox.DurabilityMode) error {
 	querySvc, err := auditquery.NewService(c.ledgerStore, c.cursorCodec, c.logger,
-		query.RunModeForDemo(mode == cell.DurabilityDemo))
+		query.RunModeForDemo(mode == outbox.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("audit-query: %w", err)
 	}
@@ -413,11 +413,11 @@ func (c *AuditCore) initQuerySlice(mode cell.DurabilityMode) error {
 // initCursorCodec initializes the cursor codec with a demo key if not
 // injected. In DurabilityDurable mode the demo fallback is refused — callers
 // must inject a production codec via WithCursorCodec.
-func (c *AuditCore) initCursorCodec(mode cell.DurabilityMode) error {
+func (c *AuditCore) initCursorCodec(mode outbox.DurabilityMode) error {
 	if c.cursorCodec != nil {
 		return nil
 	}
-	if mode == cell.DurabilityDurable {
+	if mode == outbox.DurabilityDurable {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"auditcore durable mode requires a cursor codec; "+
 				"use WithCursorCodec(query.NewCursorCodec(secret)) — "+

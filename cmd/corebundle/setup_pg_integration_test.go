@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -26,8 +28,8 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -148,7 +150,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "setup-pg-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "setup-pg-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -157,7 +159,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
-			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -453,7 +455,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "session-pg-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "session-pg-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -462,7 +464,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
-			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(ln)),
 		func() bootstrap.Option {
 			chain, chainErr := buildInternalAuthChain(internalGuardForHarness)

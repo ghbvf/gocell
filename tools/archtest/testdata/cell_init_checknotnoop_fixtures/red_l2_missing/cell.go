@@ -1,12 +1,14 @@
 //go:build archtest_fixture
 
 // Package redl2missing models an L2+ cell whose Init body and same-package
-// transitive callees never invoke cell.CheckNotNoop. The
+// transitive callees never invoke outbox.CheckNotNoop. The
 // CELL-L2-INIT-CHECKNOTNOOP-CALLED-01 archtest must emit one diagnostic for
 // this package.
 package redl2missing
 
-import "context"
+import (
+	"context"
+)
 
 // RedL2Cell is the fake L2+ cell type. The archtest matches it via cell.yaml
 // goStructName == "RedL2Cell".

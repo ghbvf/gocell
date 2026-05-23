@@ -11,8 +11,8 @@
 //
 //   - CELLTEST-A: Non-_test.go files must not import kernel/cell/celltest
 //     anywhere in the module (exempt: celltest package's own source files, and
-//     any _test.go file). Production code must use cell.NewAuthJWT / cell.NewAuthJWTFromAssembly
-//     / cell.NewAuthServiceToken (error-first) directly, propagating the error
+//     any _test.go file). Production code must use auth.NewAuthJWT / auth.NewAuthJWTFromAssembly
+//     / auth.NewAuthServiceToken (error-first) directly, propagating the error
 //     to bootstrap — see ADR docs/architecture/202605171800-adr-kernel-mustctor-removal.md.
 //
 //   - CELLTEST-B: kernel/** (excluding the celltest package itself and its
@@ -31,7 +31,7 @@
 //   - CELLTEST-C: examples/** non-_test.go files must not import
 //     kernel/cell/celltest. This mirrors AUTH-KEYSTEST-D: examples are not
 //     exempt because the correct production path for constructing AuthPlan values
-//     is cell.NewAuthJWT / cell.NewAuthJWTFromAssembly (error-first), as
+//     is auth.NewAuthJWT / auth.NewAuthJWTFromAssembly (error-first), as
 //     established by cmd/corebundle. Importing celltest in an examples production
 //     file is the exact mistake this rule prevents.
 //
@@ -129,8 +129,8 @@ func TestCelltestImportBoundary(t *testing.T) {
 					rel = filepath.ToSlash(rel)
 					violations = append(violations,
 						fmt.Sprintf("CELLTEST-A: %s (non-test file) imports %s — "+
-							"production code must use cell.NewAuthJWT / cell.NewAuthJWTFromAssembly / "+
-							"cell.NewAuthServiceToken (error-first) instead", rel, imp))
+							"production code must use auth.NewAuthJWT / auth.NewAuthJWTFromAssembly / "+
+							"auth.NewAuthServiceToken (error-first) instead", rel, imp))
 				}
 			}
 		}
@@ -189,7 +189,7 @@ func TestCelltestImportBoundary(t *testing.T) {
 
 	// CELLTEST-C: examples/** non-_test.go files must not import celltest.
 	// Mirrors AUTH-KEYSTEST-D: examples/ production files must use
-	// cell.NewAuthJWT / cell.NewAuthJWTFromAssembly (error-first), not
+	// auth.NewAuthJWT / auth.NewAuthJWTFromAssembly (error-first), not
 	// the Must* panic helpers in celltest.
 	t.Run("CELLTEST-C_examples_nontest_no_celltest_import", func(t *testing.T) {
 		var violations []string

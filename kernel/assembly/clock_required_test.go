@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -48,7 +50,7 @@ func TestAssemblyNew_RejectsNilClock(t *testing.T) {
 	assertPanicsWithAssertionMessage(t, wantNilClockPanic, func() {
 		_ = assembly.New(assembly.Config{
 			ID:             "nil-clock",
-			DurabilityMode: cell.DurabilityDemo,
+			DurabilityMode: outbox.DurabilityDemo,
 			// Clock intentionally omitted — must panic.
 		})
 	})
@@ -67,7 +69,7 @@ func TestAssemblyNew_RejectsTypedNilClock(t *testing.T) {
 	assertPanicsWithAssertionMessage(t, wantTypedNilClockPanic, func() {
 		_ = assembly.New(assembly.Config{
 			ID:             "typed-nil-clock",
-			DurabilityMode: cell.DurabilityDemo,
+			DurabilityMode: outbox.DurabilityDemo,
 			Clock:          clk,
 		})
 	})
@@ -81,7 +83,7 @@ func TestAssemblyStart_SnapshotsPopulatedAfterStart(t *testing.T) {
 
 	a := assembly.New(assembly.Config{
 		ID:             "snapshots-test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 	t.Cleanup(a.Shutdown)
@@ -107,7 +109,7 @@ func TestAssemblyStart_SnapshotsCopy(t *testing.T) {
 
 	a := assembly.New(assembly.Config{
 		ID:             "snapshots-copy-test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 	t.Cleanup(a.Shutdown)

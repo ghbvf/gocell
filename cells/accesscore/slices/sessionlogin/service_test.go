@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
@@ -108,7 +110,7 @@ func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	// The access token must carry the audience from the issuer's configured default.
-	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Contains(t, accessClaims.Audience, "gocell",
 		"access token aud must be populated from issuer default audience (Registry)")
@@ -355,7 +357,7 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Access token must contain sid.
-	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	sid := accessClaims.SessionID
 	assert.NotEmpty(t, sid, "access token must contain sid claim")
@@ -392,7 +394,7 @@ func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
 	// JWT claim must also be true.
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
-	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.True(t, claims.PasswordResetRequired, "access token must carry password_reset_required=true claim")
 }
@@ -408,7 +410,7 @@ func TestLogin_NoResetWhenFlagFalse(t *testing.T) {
 
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
-	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.False(t, claims.PasswordResetRequired, "access token must not carry reset claim for normal user")
 }
@@ -791,7 +793,7 @@ func TestLogin_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "epoch-user", Password: "pass123"})
 	require.NoError(t, err)
 
-	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	// S4d: authz_epoch removed from JWT; epoch lives in session.authz_epoch_at_issue row.
 	_, epochInExtra := claims.Extra["authz_epoch"]

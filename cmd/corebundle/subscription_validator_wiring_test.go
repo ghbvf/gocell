@@ -5,12 +5,14 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -39,7 +41,7 @@ func newConfigSubscriberWithoutOwner() *configSubscriberWithoutOwner {
 // Init registers a config-event subscription without SliceID — intentionally
 // missing owner metadata — so the ConfigEventOwnerValidator injected via
 // runtimeBaseOptions rejects it at phase6.
-func (c *configSubscriberWithoutOwner) Init(ctx context.Context, reg cell.Registry) error {
+func (c *configSubscriberWithoutOwner) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -75,7 +77,7 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 	// Build an assembly that contains our misbehaving test cell.
 	asm := assembly.New(assembly.Config{
 		ID:             "test-validator-wiring",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(newConfigSubscriberWithoutOwner()))
@@ -93,11 +95,11 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 	opts = append(opts,
 		bootstrap.WithListener(
 			cell.PrimaryListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{celltest.MustAuthJWT(shared.JWTDeps.verifier)},
+			[]auth.ListenerAuth{authtest.MustAuthJWT(shared.JWTDeps.verifier)},
 		),
 		bootstrap.WithListener(
 			cell.HealthListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.AuthNone{}},
+			[]auth.ListenerAuth{auth.AuthNone{}},
 		),
 		func() bootstrap.Option {
 			chain, err := buildInternalAuthChain(shared.InternalGuard)

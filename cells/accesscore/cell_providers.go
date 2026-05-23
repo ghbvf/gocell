@@ -6,13 +6,14 @@
 package accesscore
 
 import (
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // TokenVerifier returns the session-validate service. It satisfies
-// auth.IntentTokenVerifier so it can be plugged into AuthMiddleware without
+// kauth.IntentTokenVerifier so it can be plugged into AuthMiddleware without
 // a runtime type assertion.
-func (c *AccessCore) TokenVerifier() auth.IntentTokenVerifier {
+func (c *AccessCore) TokenVerifier() kauth.IntentTokenVerifier {
 	if c.validateSvc == nil {
 		return nil
 	}

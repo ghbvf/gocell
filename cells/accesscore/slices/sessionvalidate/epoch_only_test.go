@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +34,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -78,7 +79,7 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 	// Token with active session: user.epoch=1 == session.AuthzEpochAtIssue=1 → ACCEPT.
 	tok, err := IssueTestToken(testPrivKey, userID, nil, time.Hour, sessionID)
 	require.NoError(t, err)
-	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.NoError(t, err, "before bump: user.epoch=1 matches session.epoch=1 → must accept")
 
 	// Bump epoch via the repo directly — funnel intentionally bypassed so the
@@ -91,7 +92,7 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 	// If the PG SELECT regression returns and user.AuthzEpoch reads as 0,
 	// then 0 != 1 still fails — but for the wrong reason. The pre-bump ACCEPT
 	// above proves the read path is working (otherwise 1 != 1 would have failed).
-	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, err, "post-bump: user.epoch=2 != session.epoch=1 → must reject purely on epoch mismatch")
 
 	var ec *errcode.Error
@@ -137,14 +138,14 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 	// could produce this shape; the defense-in-depth check must reject it.
 	imposterTok, err := IssueTestToken(testPrivKey, imposterID, nil, time.Hour, sessionID)
 	require.NoError(t, err)
-	_, err = svc.VerifyIntent(context.Background(), imposterTok, auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), imposterTok, kauth.TokenIntentAccess)
 	require.Error(t, err,
 		"sid pointing at a different subject's session must be rejected (Finding #5 defense-in-depth)")
 
 	// Sanity: owner's own token still passes.
 	ownerTok, err := IssueTestToken(testPrivKey, ownerID, nil, time.Hour, sessionID)
 	require.NoError(t, err)
-	_, err = svc.VerifyIntent(context.Background(), ownerTok, auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), ownerTok, kauth.TokenIntentAccess)
 	assert.NoError(t, err, "owner's token against owner's session must verify")
 }
 
@@ -153,14 +154,14 @@ func TestEnforceSessionState_SubjectMismatch_Rejects(t *testing.T) {
 // is unreachable. Used by TestVerifyIntent_VerifierInfra_Preserves503.
 type infraOnlyVerifier struct{}
 
-func (infraOnlyVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
-	return auth.Claims{}, errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+func (infraOnlyVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
+	return kauth.Claims{}, errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
 		"jwks fetch failed",
 		errcode.WithCategory(errcode.CategoryInfra))
 }
 
-// Compile-time check: infraOnlyVerifier satisfies auth.IntentTokenVerifier.
-var _ auth.IntentTokenVerifier = infraOnlyVerifier{}
+// Compile-time check: infraOnlyVerifier satisfies kauth.IntentTokenVerifier.
+var _ kauth.IntentTokenVerifier = infraOnlyVerifier{}
 
 // TestVerifyIntent_VerifierInfra_Preserves503 guards Finding #2 PR #490
 // second review: sessionvalidate.verifyJWTWithIntent previously wrapped every
@@ -172,7 +173,7 @@ func TestVerifyIntent_VerifierInfra_Preserves503(t *testing.T) {
 	svc, err := NewService(infraOnlyVerifier{}, nil /*sessionStore*/, mem.NewStore(clock.Real()).UserRepository(), slog.Default())
 	require.NoError(t, err)
 
-	_, err = svc.VerifyIntent(context.Background(), "any-token", auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), "any-token", kauth.TokenIntentAccess)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec,

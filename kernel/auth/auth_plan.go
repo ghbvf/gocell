@@ -1,4 +1,4 @@
-package cell
+package auth
 
 // auth_plan.go — sealed AuthPlan interface + typed plan structs.
 //
@@ -13,10 +13,12 @@ package cell
 //      AuthMiddleware (driven by FinalizeAuth Public/PasswordResetExempt
 //      compilation); the chain forces this to the head position via phase0.
 //
-// Dependency note: kernel/cell MUST NOT import kernel/assembly (cycle via
-// assembly.go importing cell). AuthJWTFromAssembly holds an AssemblyIdentity
-// interface instead of *assembly.CoreAssembly. Bootstrap (runtime/bootstrap)
-// accepts the concrete type and performs the assembly identity check there.
+// Dependency note: kernel/auth depends on kernel/cell only for the Cell type
+// referenced by AssemblyRef.Cell(id). It MUST NOT import kernel/assembly
+// (cycle via assembly.go importing cell). AuthJWTFromAssembly holds an
+// AssemblyRef interface instead of *assembly.CoreAssembly. Bootstrap
+// (runtime/bootstrap) accepts the concrete type and performs the assembly
+// identity check there.
 //
 // ref: kubernetes/apiserver pkg/authentication/authenticator/interfaces.go — sealed
 //      interface + segregated Token/Request/Password authenticators.
@@ -26,6 +28,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -34,7 +37,7 @@ import (
 // at least the security strength of the underlying hash; for HMAC-SHA-256 that
 // is 256 bits = 32 bytes. NewAuthServiceToken enforces this at construction
 // time; runtime/auth.ServiceTokenMiddleware enforces it again at wiring time
-// (defense in depth) so any cell.HMACKeyring implementation that returns a
+// (defense in depth) so any auth.HMACKeyring implementation that returns a
 // shorter Current() secret is rejected at both ends.
 const MinHMACKeyBytes = 32
 
@@ -107,7 +110,7 @@ type AuthJWT struct {
 // graceful refusal.
 func NewAuthJWT(v IntentTokenVerifier) (AuthJWT, error) {
 	if validation.IsNilInterface(v) {
-		return AuthJWT{}, fmt.Errorf("cell: NewAuthJWT verifier must not be nil;" +
+		return AuthJWT{}, fmt.Errorf("auth: NewAuthJWT verifier must not be nil;" +
 			" use NewAuthJWTFromAssembly(asm) to discover from an authProvider cell")
 	}
 	return AuthJWT{Verifier: v}, nil
@@ -145,7 +148,7 @@ type AssemblyRef interface {
 	// cell with that ID is registered. Callers are responsible for type-
 	// asserting the returned Cell to the role-specific interface they
 	// require (e.g. AuthProvider).
-	Cell(id string) Cell
+	Cell(id string) cell.Cell
 }
 
 // AuthJWTFromAssembly is a lazy JWT plan that resolves its verifier from an
@@ -181,7 +184,7 @@ type AuthJWTFromAssembly struct {
 // bootstrap phase0.
 func NewAuthJWTFromAssembly(asm AssemblyRef) (AuthJWTFromAssembly, error) {
 	if validation.IsNilInterface(asm) {
-		return AuthJWTFromAssembly{}, fmt.Errorf("cell: NewAuthJWTFromAssembly assembly must not be nil")
+		return AuthJWTFromAssembly{}, fmt.Errorf("auth: NewAuthJWTFromAssembly assembly must not be nil")
 	}
 	return AuthJWTFromAssembly{
 		Assembly: asm,
@@ -281,18 +284,18 @@ type AuthServiceToken struct {
 // underlying hash security strength: 256-bit / 32-byte for HMAC-SHA-256).
 func NewAuthServiceToken(store NonceStore, ring HMACKeyring) (AuthServiceToken, error) {
 	if validation.IsNilInterface(store) {
-		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken store must not be nil")
+		return AuthServiceToken{}, fmt.Errorf("auth: NewAuthServiceToken store must not be nil")
 	}
 	if validation.IsNilInterface(ring) {
-		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken ring must not be nil")
+		return AuthServiceToken{}, fmt.Errorf("auth: NewAuthServiceToken ring must not be nil")
 	}
 	if store.Kind() == NonceStoreKindNoop {
-		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken store must not be NonceStoreKindNoop;" +
+		return AuthServiceToken{}, fmt.Errorf("auth: NewAuthServiceToken store must not be NonceStoreKindNoop;" +
 			" service-token guards require replay protection")
 	}
 	if got := len(ring.Current()); got < MinHMACKeyBytes {
 		return AuthServiceToken{}, fmt.Errorf(
-			"cell: NewAuthServiceToken HMAC ring.Current() returned %d bytes, minimum is %d (NIST SP 800-107)",
+			"auth: NewAuthServiceToken HMAC ring.Current() returned %d bytes, minimum is %d (NIST SP 800-107)",
 			got, MinHMACKeyBytes)
 	}
 	return AuthServiceToken{Store: store, Ring: ring}, nil

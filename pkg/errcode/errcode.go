@@ -596,7 +596,7 @@ const (
 	// with a nil authChain. Bootstrap phase0 fail-fasts with this code so that
 	// listeners without explicit authentication intent are rejected at startup
 	// rather than silently accepting all requests. Operators must pass an
-	// explicit authChain — use []cell.ListenerAuth{cell.AuthNone{}} for
+	// explicit authChain — use []auth.ListenerAuth{auth.AuthNone{}} for
 	// listeners that genuinely require no authentication (e.g. HealthListener
 	// behind a Kubernetes probe path).
 	//

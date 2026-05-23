@@ -23,7 +23,7 @@ package archtest
 //                                       Discovery: metadata.ProjectMeta.Assemblies (Medium — covers both
 //                                       cmd/<id>/ and examples/<id>/ path forms).
 //   ASSEMBLY-SNAPSHOTS-LOCKED-01        writes to *.snapshots in kernel/assembly/ must be inside mu.Lock()
-//   ASSEMBLYREF-METHOD-SET-01           cell.AssemblyRef interface must have exactly 3 methods
+//   ASSEMBLYREF-METHOD-SET-01           auth.AssemblyRef interface must have exactly 3 methods
 
 import (
 	"bufio"
@@ -1260,7 +1260,7 @@ func asnFindAssemblyProductionGoFiles(root string) ([]string, error) {
 // INVARIANT: ASSEMBLYREF-METHOD-SET-01
 //
 // TestAssemblyRefMethodSet enforces ASSEMBLYREF-METHOD-SET-01: the
-// cell.AssemblyRef interface (kernel/cell/auth_plan.go) must declare exactly
+// auth.AssemblyRef interface (kernel/cell/auth_plan.go) must declare exactly
 // three methods:
 //   ID() string
 //   CellIDs() []string
@@ -1279,23 +1279,23 @@ func asnFindAssemblyProductionGoFiles(root string) ([]string, error) {
 
 const assemblyRefRule01 = "ASSEMBLYREF-METHOD-SET-01"
 
-// expectedAssemblyRefMethods is the canonical method set for cell.AssemblyRef.
+// expectedAssemblyRefMethods is the canonical method set for auth.AssemblyRef.
 // Each entry is "(<param-types>) <result-types>" — parameter and result
 // names are intentionally elided so that this guard locks the capability
 // (which methods exist with which types) rather than the source-level
 // spelling (which is documentation). A pure parameter rename like
-// `Cell(id string) Cell` → `Cell(cellID string) Cell` is intentionally
+// `Cell(id string) cell.Cell` → `Cell(cellID string) cell.Cell` is intentionally
 // allowed; adding/removing/retyping a method must update this map.
 var expectedAssemblyRefMethods = map[string]string{
 	"ID":      "() string",
 	"CellIDs": "() []string",
-	"Cell":    "(string) Cell",
+	"Cell":    "(string) cell.Cell",
 }
 
 func TestAssemblyRefMethodSet(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	srcPath := filepath.Join(root, "kernel", "cell", "auth_plan.go")
+	srcPath := filepath.Join(root, "kernel", "auth", "auth_plan.go")
 
 	fset := token.NewFileSet()
 	af, err := parser.ParseFile(fset, srcPath, nil, parser.SkipObjectResolution)
@@ -1315,7 +1315,7 @@ func TestAssemblyRefMethodSet(t *testing.T) {
 	}
 
 	assert.Equal(t, expectedAssemblyRefMethods, got,
-		"%s: cell.AssemblyRef method set drift detected. "+
+		"%s: auth.AssemblyRef method set drift detected. "+
 			"If this is a deliberate contract change, update expectedAssemblyRefMethods "+
 			"in the same PR; otherwise revert the interface narrowing/widening.",
 		assemblyRefRule01)

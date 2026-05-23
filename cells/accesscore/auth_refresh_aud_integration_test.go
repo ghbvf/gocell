@@ -19,11 +19,12 @@ import (
 	"strings"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func TestAuthIntegration_RefreshAccessTokenAudienceDrift(t *testing.T) {
@@ -73,7 +74,7 @@ func TestAuthIntegration_RefreshAccessTokenAudienceDrift(t *testing.T) {
 			require.NotEmpty(t, envelope.Data.AccessToken,
 				"case %s: refresh response must include accessToken", tc.name)
 
-			_, err := fx.Verifier.VerifyIntent(t.Context(), envelope.Data.AccessToken, auth.TokenIntentAccess)
+			_, err := fx.Verifier.VerifyIntent(t.Context(), envelope.Data.AccessToken, kauth.TokenIntentAccess)
 			if tc.wantErrCode == "" {
 				require.NoError(t, err,
 					"case %s: aligned audiences — verifier must accept refreshed access token", tc.name)

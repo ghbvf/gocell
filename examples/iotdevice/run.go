@@ -17,6 +17,8 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
@@ -110,7 +112,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
-	jwtPlan, err := cell.NewAuthJWT(jwtVerifier)
+	jwtPlan, err := auth.NewAuthJWT(jwtVerifier)
 	if err != nil {
 		return fmt.Errorf("invalid JWT auth plan: %w", err)
 	}
@@ -119,7 +121,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		bootstrap.WithClock(clk),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{jwtPlan}),
+		bootstrap.WithListener(cell.PrimaryListener, ":8083", []auth.ListenerAuth{jwtPlan}),
 		bootstrap.WithListener(cell.InternalListener, ":9083", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	}
@@ -154,7 +156,7 @@ type deviceCommandQueue interface {
 // deferred `pool.Close()` would be skipped when `os.Exit(1)` runs after
 // `app.Run` returns an error.
 func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.Logger) (
-	devicepg.DeviceRepository, deviceCommandQueue, cell.DurabilityMode, *adapterpg.Pool, error,
+	devicepg.DeviceRepository, deviceCommandQueue, outbox.DurabilityMode, *adapterpg.Pool, error,
 ) {
 	dsn := os.Getenv("GOCELL_IOTDEVICE_DSN")
 	if dsn == "" {
@@ -164,7 +166,7 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 		// demo wiring cannot fail. Linter conventionally treats (nil, nil) as
 		// ambiguous, but here the pool channel is a multi-return discriminant.
 		//nolint:nilnil // demo mode returns nil pool intentionally; see godoc
-		return devicemem.NewDeviceRepository(), commandtest.NewInMemQueue(), cell.DurabilityDemo, nil, nil
+		return devicemem.NewDeviceRepository(), commandtest.NewInMemQueue(), outbox.DurabilityDemo, nil, nil
 	}
 
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
@@ -220,15 +222,15 @@ func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.L
 	}
 
 	logger.Info("iotdevice: using PG persistence (durable mode)", slog.String("dsn", "set"))
-	return deviceRepo, commandQueue, cell.DurabilityDurable, pool, nil
+	return deviceRepo, commandQueue, outbox.DurabilityDurable, pool, nil
 }
 
 // buildCursorCodec builds a CursorCodec appropriate for the durability mode.
 // Durable mode requires GOCELL_IOTDEVICE_CURSOR_KEY env var (≥32 bytes) so
 // that the hard-coded demo key is never used in production.
 // Demo mode uses a well-known public key that is intentionally NOT secret.
-func buildCursorCodec(mode cell.DurabilityMode) (*query.CursorCodec, error) {
-	if mode == cell.DurabilityDurable {
+func buildCursorCodec(mode outbox.DurabilityMode) (*query.CursorCodec, error) {
+	if mode == outbox.DurabilityDurable {
 		raw := os.Getenv("GOCELL_IOTDEVICE_CURSOR_KEY")
 		if len(raw) < 32 {
 			return nil, errors.New("GOCELL_IOTDEVICE_CURSOR_KEY env var required (>=32 bytes) in durable mode")

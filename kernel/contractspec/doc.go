@@ -4,7 +4,7 @@
 //
 // ContractSpec is consumed by:
 //
-//   - kernel/cell.Registry.Subscribe (event subscription)
+//   - kernel/cell.Registrar.Subscribe (event subscription)
 //   - kernel/wrapper.WrapConsumer / WrapSubscriber / HTTPHandler (decorators)
 //   - runtime/auth.Mount (HTTP route binding)
 //   - runtime/eventrouter (subscription routing + tracing)

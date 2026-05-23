@@ -16,7 +16,7 @@ import (
 // registerRepoReadyBad demonstrates the HEALTHZ-TYPED-REGISTER-01 violation:
 // calling reg.Healthz() from cell_init.go (not healthz_gen.go).
 // This must be detected as a violation.
-func registerRepoReadyBad(reg cell.Registry) error {
+func registerRepoReadyBad(reg cell.Registrar) error {
 	// VIOLATION HEALTHZ-TYPED-REGISTER-01: reg.Healthz() called from
 	// cell_init.go, not from healthz_gen.go. Hand-written cells/ code must
 	// use RegisterRepoReady / RegisterEmitterProbes instead.

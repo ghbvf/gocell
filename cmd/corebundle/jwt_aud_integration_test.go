@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -30,22 +32,22 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("accepts_gocell_audience", func(t *testing.T) {
-		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+		tok, err := deps.issuer.Issue(kauth.TokenIntentAccess, "user-1", auth.IssueOptions{
 			Audience: []string{"gocell"},
 		})
 		require.NoError(t, err)
 
-		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+		_, err = deps.verifier.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 		require.NoError(t, err, "token with aud=gocell must be accepted by the configured verifier")
 	})
 
 	t.Run("rejects_wrong_audience", func(t *testing.T) {
-		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+		tok, err := deps.issuer.Issue(kauth.TokenIntentAccess, "user-1", auth.IssueOptions{
 			Audience: []string{"wrong-service"},
 		})
 		require.NoError(t, err)
 
-		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+		_, err = deps.verifier.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 		require.Error(t, err, "token with aud=wrong-service must be rejected")
 		assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
 			"audience mismatch must surface as ERR_AUTH_INVALID_TOKEN_INTENT")
@@ -55,12 +57,12 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 		// Issue a token with an explicit wrong audience to test rejection.
 		// (nil audience falls back to the Registry-configured default "gocell",
 		// so we must supply an explicit wrong value instead.)
-		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+		tok, err := deps.issuer.Issue(kauth.TokenIntentAccess, "user-1", auth.IssueOptions{
 			Audience: []string{"not-gocell"},
 		})
 		require.NoError(t, err)
 
-		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+		_, err = deps.verifier.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 		require.Error(t, err, "token with wrong aud must be rejected when expected audience is configured")
 		assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 	})
@@ -80,7 +82,7 @@ func TestBuildJWTDeps_VerifierAudience_MatchesIssuerDefault(t *testing.T) {
 	// (via Registry). Simulate what sessionlogin.Service.issueAccessToken does: rely on
 	// the issuer's Registry-configured default audience.
 	tok, err := deps.issuer.Issue(
-		auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+		kauth.TokenIntentAccess, "user-1", auth.IssueOptions{
 			Roles:     []string{"admin"},
 			SessionID: "sess-1",
 			// Audience left nil — issuer uses Registry-configured default automatically.
@@ -89,7 +91,7 @@ func TestBuildJWTDeps_VerifierAudience_MatchesIssuerDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	claims, err := deps.verifier.VerifyIntent(
-		context.Background(), tok, auth.TokenIntentAccess,
+		context.Background(), tok, kauth.TokenIntentAccess,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)

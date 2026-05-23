@@ -97,7 +97,7 @@ func WithLogger(l *slog.Logger) DirectEmitterOption {
 }
 
 // WithFailOpenRateThreshold sets the drop ratio threshold above which the
-// emitter's Probes checker reports cell.ErrDegraded.
+// emitter's Probes checker reports outbox.ErrDegraded.
 //
 // Default is 0.05 (5%) — the tracker is enabled by default because fail-open
 // drop monitoring is framework infrastructure responsibility, not a per-cell
@@ -239,12 +239,12 @@ var _ Emitter = (*DirectEmitter)(nil)
 // HTTP 200 + body status="degraded" rather than 503, so K8s readinessProbe
 // does not evict the pod for soft-failure signals.
 //
-// kernel/cell.ErrDegraded is an alias to this sentinel so that callers
-// referencing either symbol satisfy the same errors.Is chain.
+// Callers should reach this sentinel directly via outbox.ErrDegraded. The
+// kernel/cell alias was removed in PR #615 (G-10 kernel/cell decompose) so
+// that the cell package no longer imports kernel/outbox in production code.
 //
 // ref: envoyproxy/envoy admin /ready — DEGRADED returns 200, distinguishing
 // "soft failure, do not evict" from "hard failure, drain traffic".
-// ref: kernel/cell/health.go — cell-layer alias to this sentinel.
 var ErrDegraded = errcode.New(errcode.KindUnavailable, errcode.ErrOutboxDegraded, "degraded")
 
 // Probes returns a []healthz.Probe slice for cells to register via

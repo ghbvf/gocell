@@ -54,7 +54,7 @@ func newTestCursorCodec(t *testing.T) *query.CursorCodec {
 }
 
 func newTestRec() *cell.RegistryRecorder {
-	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	return cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 }
 
 func TestDeviceCell_Lifecycle(t *testing.T) {
@@ -379,7 +379,7 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithClock(clock.Real()),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -398,7 +398,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-fail"}`))
@@ -416,7 +416,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 		WithClock(clock.Real()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-demo"}`))
@@ -432,7 +432,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 // scoped to "devicecell" is registered.
 func TestDeviceCell_Probes_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	agg := drainProbeSnapshot(t, rec)
 
@@ -445,7 +445,7 @@ func TestDeviceCell_Probes_WithDirectEmitter(t *testing.T) {
 // command sweeper lifecycle hook via reg.Lifecycle.
 func TestDeviceCell_LifecycleHookRegistered(t *testing.T) {
 	c := newTestCell()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
 

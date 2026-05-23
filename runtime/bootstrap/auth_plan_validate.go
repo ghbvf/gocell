@@ -21,7 +21,8 @@ import (
 	"crypto/tls"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -40,7 +41,7 @@ const (
 func (b *Bootstrap) validateAuthJWTFromAssemblyPlans() error {
 	for ref, cfg := range b.listenerConfigs {
 		for i, plan := range cfg.authChain {
-			p, ok := plan.(cell.AuthJWTFromAssembly)
+			p, ok := plan.(auth.AuthJWTFromAssembly)
 			if !ok {
 				continue
 			}
@@ -55,17 +56,17 @@ func (b *Bootstrap) validateAuthJWTFromAssemblyPlans() error {
 func (b *Bootstrap) validateAuthJWTFromAssemblyPlan(
 	listener string,
 	position int,
-	p cell.AuthJWTFromAssembly,
+	p auth.AuthJWTFromAssembly,
 ) error {
 	if validation.IsNilInterface(p.Assembly) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"AuthJWTFromAssembly Assembly must not be nil; construct it with cell.NewAuthJWTFromAssembly(asm)",
+			"AuthJWTFromAssembly Assembly must not be nil; construct it with auth.NewAuthJWTFromAssembly(asm)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if !p.IsConstructed() {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"AuthJWTFromAssembly was constructed as a struct literal; "+
-				"use cell.NewAuthJWTFromAssembly(asm)",
+				"use auth.NewAuthJWTFromAssembly(asm)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if b.assemblyCore == nil {
@@ -151,7 +152,7 @@ func (b *Bootstrap) validateAuthNoneExclusive() error {
 		hasNone := false
 		hasGuard := false
 		for _, plan := range cfg.authChain {
-			if _, ok := plan.(cell.AuthNone); ok {
+			if _, ok := plan.(auth.AuthNone); ok {
 				hasNone = true
 				continue
 			}
@@ -160,7 +161,7 @@ func (b *Bootstrap) validateAuthNoneExclusive() error {
 		if hasNone && hasGuard {
 			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				"AuthNone cannot be mixed with other ListenerAuth plans; "+
-					"use []cell.ListenerAuth{cell.AuthNone{}} only for no-auth "+
+					"use []auth.ListenerAuth{auth.AuthNone{}} only for no-auth "+
 					"listeners or remove AuthNone from protected chains",
 				errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
 		}
@@ -176,7 +177,7 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 	for ref, cfg := range b.listenerConfigs {
 		seen := 0
 		for i, plan := range cfg.authChain {
-			p, ok := plan.(cell.AuthServiceToken)
+			p, ok := plan.(auth.AuthServiceToken)
 			if !ok {
 				continue
 			}
@@ -194,38 +195,38 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 	return nil
 }
 
-func validateAuthServiceTokenPlan(listener string, position int, p cell.AuthServiceToken) error {
+func validateAuthServiceTokenPlan(listener string, position int, p auth.AuthServiceToken) error {
 	if validation.IsNilInterface(p.Store) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"AuthServiceToken Store must not be nil; construct it with cell.NewAuthServiceToken(store, ring)",
+			"AuthServiceToken Store must not be nil; construct it with auth.NewAuthServiceToken(store, ring)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if validation.IsNilInterface(p.Ring) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"AuthServiceToken Ring must not be nil; construct it with cell.NewAuthServiceToken(store, ring)",
+			"AuthServiceToken Ring must not be nil; construct it with auth.NewAuthServiceToken(store, ring)",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
-	if p.Store.Kind() == cell.NonceStoreKindNoop {
+	if p.Store.Kind() == auth.NonceStoreKindNoop {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"AuthServiceToken Store must not be NonceStoreKindNoop; service-token guards require replay protection",
 			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
-	if got := len(p.Ring.Current()); got < cell.MinHMACKeyBytes {
+	if got := len(p.Ring.Current()); got < auth.MinHMACKeyBytes {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"AuthServiceToken Ring.Current() is too short",
-			errcode.WithInternal(fmt.Sprintf(internalListenerPositionMinFmt, listener, position, got, cell.MinHMACKeyBytes)))
+			errcode.WithInternal(fmt.Sprintf(internalListenerPositionMinFmt, listener, position, got, auth.MinHMACKeyBytes)))
 	}
 	return nil
 }
 
 // checkJWTSingleton validates that chain contains at most one JWT plan and it
 // is in the first position.
-func checkJWTSingleton(listenerDesc string, chain []cell.ListenerAuth) error {
+func checkJWTSingleton(listenerDesc string, chain []auth.ListenerAuth) error {
 	jwtCount := 0
 	jwtPos := -1
 	for i, p := range chain {
 		switch p.(type) {
-		case cell.AuthJWT, cell.AuthJWTFromAssembly:
+		case auth.AuthJWT, auth.AuthJWTFromAssembly:
 			jwtCount++
 			if jwtPos == -1 {
 				jwtPos = i

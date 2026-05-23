@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
@@ -605,7 +607,7 @@ func TestCoreAssembly_StopDrainsDispatcher(t *testing.T) {
 	obs := &collectObserver{}
 	a := newTestAssembly(t, Config{
 		ID:             "drain-test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookObserver:   obs,
 		Clock:          clock.Real(),
 	})
@@ -622,7 +624,7 @@ func TestCoreAssembly_RestartRebuildsHookDispatcher(t *testing.T) {
 	obs := &collectObserver{}
 	a := newTestAssembly(t, Config{
 		ID:             "restart-dispatcher-test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookObserver:   obs,
 		Clock:          clock.Real(),
 	})
@@ -653,7 +655,7 @@ func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
 	obs := newBlockingObserver()
 	a := newTestAssembly(t, Config{
 		ID:                       "ctx-drain-test",
-		DurabilityMode:           cell.DurabilityDemo,
+		DurabilityMode:           outbox.DurabilityDemo,
 		HookObserver:             obs,
 		HookObserverSinkTimeout:  testtime.D10s,
 		HookObserverDrainTimeout: testtime.D10s,

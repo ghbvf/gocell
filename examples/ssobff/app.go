@@ -9,6 +9,8 @@ import (
 	"os"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
@@ -289,9 +291,9 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		bootstrap.WithManagedResource(pool),
 		// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
 		bootstrap.WithRelay(relayWorker),
-		listenerOption(cell.PrimaryListener, cfg.primary, []cell.ListenerAuth{primaryAuth}),
+		listenerOption(cell.PrimaryListener, cfg.primary, []kauth.ListenerAuth{primaryAuth}),
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
-		listenerOption(cell.HealthListener, cfg.health, []cell.ListenerAuth{cell.AuthNone{}}),
+		listenerOption(cell.HealthListener, cfg.health, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthRouteOptions()...),
 	)
 
@@ -376,7 +378,7 @@ type ssobffBuildParams struct {
 // buildSSOBFFAssembly wires all three platform cells, registers them in a new
 // CoreAssembly, and constructs the ConsumerBase and primary listener auth.
 // Extracted from NewSSOBFFApp to reduce cognitive complexity.
-func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, cell.ListenerAuth, error) {
+func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, error) {
 	accessStorageOpts, err := buildSSOBFFAccessCoreStorageOpts(p.pool, p.txMgr, p.sessionProto)
 	if err != nil {
 		return nil, nil, nil, err
@@ -422,7 +424,7 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)...)
 
-	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: outbox.DurabilityDurable, Clock: clock.Real()})
 	if err := registerSSOBFFCells(asm, ac, auc, cc); err != nil {
 		return nil, nil, nil, err
 	}
@@ -434,7 +436,7 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: create consumer base: %w", err)
 	}
-	primaryAuth, err := cell.NewAuthJWTFromAssembly(asm)
+	primaryAuth, err := kauth.NewAuthJWTFromAssembly(asm)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: primary listener auth plan: %w", err)
 	}
@@ -550,7 +552,7 @@ func newSSOBFFJWT() (*auth.JWTIssuer, *auth.JWTVerifier, error) {
 	return jwtIssuer, jwtVerifier, nil
 }
 
-func listenerOption(ref cell.ListenerRef, binding listenerBinding, authChain []cell.ListenerAuth) bootstrap.Option {
+func listenerOption(ref cell.ListenerRef, binding listenerBinding, authChain []kauth.ListenerAuth) bootstrap.Option {
 	var opts []bootstrap.ListenerOption
 	if binding.ln != nil {
 		opts = append(opts, bootstrap.WithListenerNet(binding.ln))

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -27,9 +29,9 @@ type stubIssuer struct {
 	accessErr   error
 }
 
-func (s *stubIssuer) Issue(intent auth.TokenIntent, _ string, _ auth.IssueOptions) (string, error) {
+func (s *stubIssuer) Issue(intent kauth.TokenIntent, _ string, _ auth.IssueOptions) (string, error) {
 	switch intent {
-	case auth.TokenIntentAccess:
+	case kauth.TokenIntentAccess:
 		return s.accessToken, s.accessErr
 	default:
 		return "", errors.New("stubIssuer: unknown intent")
@@ -187,7 +189,7 @@ func TestMintAccess_PasswordResetFlagPropagates(t *testing.T) {
 	// Share the issuer's keySet with the verifier so signature validates.
 	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
-	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, auth.TokenIntentAccess)
+	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.True(t, claims.PasswordResetRequired,
 		"access token must carry password_reset_required=true when requested")
@@ -209,7 +211,7 @@ func TestMintAccess_JWT_NoAuthzEpochClaim(t *testing.T) {
 
 	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
-	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, auth.TokenIntentAccess)
+	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	// authz_epoch must not appear in Extra either (it is not written at all).
 	_, epochInExtra := claims.Extra["authz_epoch"]

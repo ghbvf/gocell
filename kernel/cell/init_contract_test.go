@@ -9,29 +9,30 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // ---------------------------------------------------------------------------
-// TestCellInit_Signature_AcceptsRegistry
+// TestCellInit_Signature_AcceptsRegistrar
 //
-// Compile-time proof that Cell.Init accepts a Registry (not Dependencies).
+// Compile-time proof that Cell.Init accepts a Registrar (not Dependencies).
 // ---------------------------------------------------------------------------
 
 // compileCellInitSignature is a compile-time check that the Cell interface
-// requires Init(ctx, Registry) — this will fail to compile if the signature
+// requires Init(ctx, Registrar) — this will fail to compile if the signature
 // still uses Dependencies.
 func compileCellInitSignature() {
 	// A function literal that satisfies the Cell.Init shape.
-	_ = func(_ context.Context, _ Registry) error {
+	_ = func(_ context.Context, _ Registrar) error {
 		return nil
 	}
 }
 
-// TestCellInit_Signature_AcceptsRegistry verifies that Cell.Init takes a
-// Registry parameter, not Dependencies.  The compile-time assertion above
+// TestCellInit_Signature_AcceptsRegistrar verifies that Cell.Init takes a
+// Registrar parameter, not Dependencies.  The compile-time assertion above
 // is the real guard; this test exists so the file contributes to coverage
 // and gives a named anchor in the test suite.
-func TestCellInit_Signature_AcceptsRegistry(t *testing.T) {
+func TestCellInit_Signature_AcceptsRegistrar(t *testing.T) {
 	// Compile-time assertion: BaseCell must satisfy Cell.
 	var _ Cell = (*BaseCell)(nil)
 
@@ -41,16 +42,16 @@ func TestCellInit_Signature_AcceptsRegistry(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestCellInit_BaseCell_AcceptsRegistry
+// TestCellInit_BaseCell_AcceptsRegistrar
 // ---------------------------------------------------------------------------
 
-func TestCellInit_BaseCell_AcceptsRegistry(t *testing.T) {
+func TestCellInit_BaseCell_AcceptsRegistrar(t *testing.T) {
 	b := MustNewBaseCell(&metadata.CellMeta{ID: "test-cell"})
-	rec := NewRegistryRecorder(map[string]any{"k": "v"}, DurabilityDurable)
+	rec := NewRegistryRecorder(map[string]any{"k": "v"}, outbox.DurabilityDurable)
 
 	err := b.Init(context.Background(), rec)
 	require.NoError(t, err)
-	assert.True(t, true, "BaseCell.Init(ctx, Registry) accepted without error")
+	assert.True(t, true, "BaseCell.Init(ctx, Registrar) accepted without error")
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ type errorInitCell struct {
 
 // Init calls the embedded BaseCell.Init (for state transition), then returns
 // the configured error.
-func (e *errorInitCell) Init(ctx context.Context, reg Registry) error {
+func (e *errorInitCell) Init(ctx context.Context, reg Registrar) error {
 	if err := e.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -86,7 +87,7 @@ func TestCellInit_ErrorPropagates(t *testing.T) {
 		initErr:  sentinel,
 	}
 
-	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
 	err := cell.Init(context.Background(), rec)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, sentinel), "error should be the sentinel error")

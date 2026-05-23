@@ -140,7 +140,7 @@ func TestGeneratedArtifactGatesAreStructured(t *testing.T) {
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
 	require.NoError(t, err)
 
-	require.NoError(t, validateGeneratedArtifactGates(root, body))
+	require.NoError(t, validateGeneratedArtifactGates(body))
 }
 
 func TestGeneratedArtifactGateRejectsProducerDefinedScope(t *testing.T) {
@@ -166,9 +166,7 @@ func TestGeneratedArtifactGateRejectsProducerDefinedScope(t *testing.T) {
           git ls-files --others --exclude-standard -- "${generated_entrypoints[@]}"
           git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml
 `)
-	// The step run block uses the old inline form (not ./hack/verify-generated.sh),
-	// so validateGeneratedArtifactGates must reject it.
-	require.Error(t, validateGeneratedArtifactGates("", body))
+	require.Error(t, validateGeneratedArtifactGates(body))
 }
 
 func TestGeneratedArtifactGateRejectsLegacyEntrypointGlob(t *testing.T) {
@@ -184,9 +182,7 @@ func TestGeneratedArtifactGateRejectsLegacyEntrypointGlob(t *testing.T) {
           git ls-files --others --exclude-standard cmd/*/main.go
           git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml
 `)
-	// The step run block uses the old inline form (not ./hack/verify-generated.sh),
-	// so validateGeneratedArtifactGates must reject it.
-	require.Error(t, validateGeneratedArtifactGates("", body))
+	require.Error(t, validateGeneratedArtifactGates(body))
 }
 
 func TestDependabotCoversCIAndGolangCILint(t *testing.T) {
@@ -530,16 +526,7 @@ func dockerDigestPinned(uses string) bool {
 	return regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(digest)
 }
 
-// validateGeneratedArtifactGates checks that the "Verify generated artifacts
-// are up-to-date" step in the verify-codegen job delegates to the wrapper
-// script hack/verify-generated.sh (double lock: workflow calls wrapper AND
-// wrapper calls gocell::cli verify generated).
-//
-// repoRoot is the repository root used to read the wrapper script and confirm
-// it contains the expected gocell::cli invocation. Pass "" or a temp directory
-// when testing with fixture bodies that use the old inline form — those will be
-// rejected before the script read is attempted.
-func validateGeneratedArtifactGates(repoRoot string, body []byte) error {
+func validateGeneratedArtifactGates(body []byte) error {
 	var cfg workflowConfig
 	dec := yaml.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&cfg); err != nil {
@@ -555,27 +542,25 @@ func validateGeneratedArtifactGates(repoRoot string, body []byte) error {
 	if !ok {
 		return fmt.Errorf("generated artifact gate missing from verify-codegen")
 	}
-	runBlock := strings.TrimSpace(assemblyStep.Run)
-	if runBlock == "" {
+	if strings.TrimSpace(assemblyStep.Run) == "" {
 		return fmt.Errorf("generated artifact gate: run block missing")
 	}
-	// Lock 1: the workflow step must delegate to the wrapper script, not inline
-	// the gocell invocation. This prevents reverting to the old inline form or
-	// introducing a new arbitrary run command.
-	const wrapperScript = "./hack/verify-generated.sh"
-	if !strings.Contains(runBlock, wrapperScript) {
-		return fmt.Errorf("generated artifact gate must call %s (wrapper script), not inline gocell invocation", wrapperScript)
+	if !strings.Contains(assemblyStep.Run, "go run ./cmd/gocell verify generated") {
+		return fmt.Errorf("generated artifact gate must call gocell verify generated")
 	}
-	// Lock 2: the wrapper script itself must call gocell::cli verify generated,
-	// ensuring the gocell CLI invocation is not silently dropped from the wrapper.
-	if repoRoot != "" {
-		scriptPath := filepath.Join(repoRoot, "hack", "verify-generated.sh")
-		scriptBytes, err := os.ReadFile(filepath.Clean(scriptPath))
-		if err != nil {
-			return fmt.Errorf("generated artifact gate: cannot read %s: %w", wrapperScript, err)
-		}
-		if !strings.Contains(string(scriptBytes), "gocell::cli verify generated") {
-			return fmt.Errorf("generated artifact gate: %s must contain 'gocell::cli verify generated'", wrapperScript)
+	for _, forbidden := range []string{
+		"Generated:",
+		"entrypoints_file",
+		"generated_entrypoints",
+		"go run ./cmd/gocell generate assembly",
+		"go run ./cmd/gocell generate metrics-schema",
+		"git diff",
+		"git ls-files",
+		"cmd/*/main.go",
+		"--boundary-only",
+	} {
+		if strings.Contains(assemblyStep.Run, forbidden) {
+			return fmt.Errorf("generated artifact gate must not contain %q", forbidden)
 		}
 	}
 	return nil

@@ -82,8 +82,8 @@ func TestCellTxManager_SatisfiesTxRunner(t *testing.T) {
 }
 
 // nooperTxRunner is a Nooper-implementing TxRunner used to verify the
-// internalCellTxManager.Noop() pass-through preserves cell.CheckNotNoop's
-// durable-rejection signal (mirrors kernel/cell.DemoTxRunner shape; we
+// internalCellTxManager.Noop() pass-through preserves outbox.CheckNotNoop's
+// durable-rejection signal (mirrors kernel/outbox.DemoTxRunner shape; we
 // redefine it locally to keep this package free of kernel/cell imports —
 // kernel/persistence does not depend on kernel/cell).
 type nooperTxRunner struct{}
@@ -101,11 +101,11 @@ func (nooperTxRunner) Noop() bool { return true }
 // for the Noop pass-through: WrapForCell(nooperTxRunner{}).(Nooper).Noop()
 // must return true. Without internalCellTxManager.Noop() the embed-of-
 // interface field would hide the inner Nooper method, breaking
-// cell.CheckNotNoop's durable mode rejection of demo runners.
+// outbox.CheckNotNoop's durable mode rejection of demo runners.
 //
-// kernel/cell.CheckNotNoop is exercised end-to-end in
+// kernel/outbox.CheckNotNoop is exercised end-to-end in
 // cells/<x>/cell_test.go::TestCheckNotNoop_DurableMode (path through
-// cell.ResolveCellEmitter). This unit-level test pins the contract at the
+// outbox.ResolveCellEmitter). This unit-level test pins the contract at the
 // kernel/persistence boundary so a refactor that removes the Noop
 // pass-through fails here, before reaching cell-level integration tests.
 //

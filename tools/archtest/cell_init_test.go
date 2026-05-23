@@ -1,10 +1,10 @@
-// INVARIANT: CELL-INIT-CONTRACTUSAGE-01: kernel/cell must not import runtime/* or adapters/*; Registry type must stay local
+// INVARIANT: CELL-INIT-CONTRACTUSAGE-01: kernel/cell must not import runtime/* or adapters/*; Registrar type must stay local
 package archtest
 
 // cell_init_test.go enforces structural invariants on the kernel/cell package:
 //
 //  1. kernel/cell must not import runtime/* or adapters/* (layer boundary).
-//  2. The Registry type must be defined in the kernel/cell package (locality).
+//  2. The Registrar type must be defined in the kernel/cell package (locality).
 //
 // These guards prevent accidental re-introduction of deleted contributor
 // interfaces or upward dependencies.
@@ -44,10 +44,13 @@ func TestKernelCell_DoesNotImportRuntime(t *testing.T) {
 		"kernel/cell must not import runtime/* or adapters/*; found: %v", violations)
 }
 
-// TestKernelCell_RegistryDefinedHere confirms that the Registry interface type
+// TestKernelCell_RegistrarDefinedHere confirms that the Registrar interface type
 // is declared in kernel/cell (not aliased from another package). This prevents
-// the interface from migrating out of the canonical layer boundary.
-func TestKernelCell_RegistryDefinedHere(t *testing.T) {
+// the interface from migrating out of the canonical layer boundary. The interface
+// was renamed from Registry to Registrar in PR #615 (G-10) to match the
+// Kratos-style noun/verb distinction (Registrar = verb interface; Registry would
+// imply a storage/lookup noun).
+func TestKernelCell_RegistrarDefinedHere(t *testing.T) {
 	t.Parallel()
 
 	var (
@@ -61,7 +64,7 @@ func TestKernelCell_RegistryDefinedHere(t *testing.T) {
 			return nil
 		}
 		scope := p.Pkg.Scope()
-		obj := scope.Lookup("Registry")
+		obj := scope.Lookup("Registrar")
 		if obj == nil {
 			return nil
 		}
@@ -83,9 +86,9 @@ func TestKernelCell_RegistryDefinedHere(t *testing.T) {
 		return nil
 	})
 
-	require.True(t, found, "Registry must be defined in kernel/cell")
-	require.True(t, isTypeName, "Registry must be a type name")
-	assert.True(t, isIface, "Registry must be an interface type")
+	require.True(t, found, "Registrar must be defined in kernel/cell")
+	require.True(t, isTypeName, "Registrar must be a type name")
+	assert.True(t, isIface, "Registrar must be an interface type")
 	assert.Equal(t, kernelCellPattern, pkgPath,
-		"Registry must be defined in %s", kernelCellPattern)
+		"Registrar must be defined in %s", kernelCellPattern)
 }

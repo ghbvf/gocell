@@ -87,7 +87,7 @@ func (AuditCoreModule) Provide(
 		auditcore.WithClock(shared.Clock),
 		auditcore.WithLedgerProtocol(protocol),
 		// Publisher set unconditionally; outboxWriter set conditionally below.
-		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
+		// outbox.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
 		// (memory mode) and WriterEmitter when both pub+writer are non-nil (durable).
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
 		auditcore.WithCursorCodec(cursorCodec),

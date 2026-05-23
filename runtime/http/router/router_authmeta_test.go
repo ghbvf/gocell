@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -30,15 +32,15 @@ var _ kcell.AuthRouteDeclarer = (*Router)(nil)
 
 // authMetaVerifier is an IntentTokenVerifier that returns configurable claims/err.
 type authMetaVerifier struct {
-	claims auth.Claims
+	claims kauth.Claims
 	err    error
 }
 
-func (v *authMetaVerifier) Verify(_ context.Context, _ string) (auth.Claims, error) {
+func (v *authMetaVerifier) Verify(_ context.Context, _ string) (kauth.Claims, error) {
 	return v.claims, v.err
 }
 
-func (v *authMetaVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
+func (v *authMetaVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
 	return v.claims, v.err
 }
 
@@ -252,7 +254,7 @@ func TestFinalizeAuth_PublicMeta_BypassesAuth(t *testing.T) {
 
 func TestFinalizeAuth_PasswordResetExempt_Meta(t *testing.T) {
 	verifier := &authMetaVerifier{
-		claims: auth.Claims{Subject: "usr-1", PasswordResetRequired: true},
+		claims: kauth.Claims{Subject: "usr-1", PasswordResetRequired: true},
 	}
 	r, err := New(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 	require.NoError(t, err)
@@ -328,7 +330,7 @@ func TestFinalizeAuth_CalledTwice_ReturnsError(t *testing.T) {
 
 func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	verifier := &authMetaVerifier{
-		claims: auth.Claims{Subject: "usr-1", PasswordResetRequired: true},
+		claims: kauth.Claims{Subject: "usr-1", PasswordResetRequired: true},
 	}
 	r, err := New(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 	require.NoError(t, err)

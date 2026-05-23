@@ -42,10 +42,10 @@ func (m RunMode) String() string {
 
 // RunModeForDemo returns RunModeDemo when demo is true, RunModeProd otherwise.
 // Convenience helper for callers that already track their demo-mode decision
-// as a boolean (e.g. translating kernel/cell.DurabilityMode at wire time).
+// as a boolean (e.g. translating kernel/outbox.DurabilityMode at wire time).
 //
 // Do not extend: this function is the ONLY permitted translation point between
-// kernel/cell.DurabilityMode (or any other "is-demo" signal) and pkg/query.RunMode.
+// kernel/outbox.DurabilityMode (or any other "is-demo" signal) and pkg/query.RunMode.
 // Call it exactly once at Cell Init() time and pass the resulting RunMode down
 // to slice services and PagedQueryConfig via constructor parameters. Do NOT call
 // it again inside individual slice methods, handlers, or repositories — that

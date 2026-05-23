@@ -1,6 +1,8 @@
 package persistence
 
-import "github.com/ghbvf/gocell/pkg/validation"
+import (
+	"github.com/ghbvf/gocell/pkg/validation"
+)
 
 // CellTxManager is the only TxRunner-shaped type that cells/<x>/cell.go
 // public With* Options may accept. The unexported sealedCellTxManager()
@@ -36,8 +38,8 @@ type internalCellTxManager struct {
 func (internalCellTxManager) sealedCellTxManager() {}
 
 // Noop transparently delegates to the wrapped TxRunner's Nooper interface
-// when present (kernel/cell.Nooper). Without this method the sealed wrapper
-// would hide cell.DemoTxRunner's noop signal from cell.CheckNotNoop, letting
+// when present (kernel/outbox.Nooper). Without this method the sealed wrapper
+// would hide outbox.DemoTxRunner's noop signal from outbox.CheckNotNoop, letting
 // durable assemblies silently accept demo runners.
 //
 // The interface is matched structurally — kernel/persistence does not import

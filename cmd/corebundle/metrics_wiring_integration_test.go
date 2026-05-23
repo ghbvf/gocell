@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -45,7 +47,7 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -143,7 +145,7 @@ func TestR2_NewMetricFamilies_RegisteredAtBoot(t *testing.T) {
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -280,7 +282,7 @@ func TestR2_MetricsTokenGuard_ListenerWiring(t *testing.T) {
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 

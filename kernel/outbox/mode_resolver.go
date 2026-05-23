@@ -1,4 +1,4 @@
-package cell
+package outbox
 
 import (
 	"fmt"
@@ -7,7 +7,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -24,15 +23,15 @@ const internalCellPlainFmt = "cell=%s"
 // MetricsProvider is required for DirectEmitter resolution paths. Pass
 // metrics.NopProvider{} explicitly in tests.
 //
-// ref: kernel/cell.CheckNotNoop — sibling durability guard.
+// ref: outbox.CheckNotNoop — sibling durability guard.
 type EmitterConfig struct {
 	CellID            string
 	Mode              DurabilityMode
-	Publisher         outbox.Publisher
-	OutboxWriter      outbox.Writer
+	Publisher         Publisher
+	OutboxWriter      Writer
 	TxRunner          persistence.TxRunner
 	Logger            *slog.Logger
-	DirectPublishMode outbox.DirectPublishFailureMode
+	DirectPublishMode DirectPublishFailureMode
 	// MetricsProvider is REQUIRED when DurabilityDemo mode resolves to a DirectEmitter.
 	MetricsProvider metrics.Provider
 	// Clock is the time source injected into DirectEmitter for CreatedAt stamping.
@@ -45,7 +44,7 @@ type EmitterConfig struct {
 // (backed by a real writer+txRunner). Cells use Durable to decide whether
 // optional slices (e.g., rbacassign) can activate L2 outbox publication.
 type EmitterOutcome struct {
-	Emitter outbox.Emitter
+	Emitter Emitter
 	Durable bool
 }
 
@@ -60,7 +59,7 @@ type EmitterOutcome struct {
 // absent-or-noop. Falls back to WriterEmitter when writer is present (paired
 // with txRunner — both together form a valid demo sink). Both absent → error.
 //
-// ref: kernel/cell.CheckNotNoop — sibling durability guard.
+// ref: outbox.CheckNotNoop — sibling durability guard.
 // ref: github.com/ThreeDotsLabs/watermill message/router.go — disabledPublisher pattern.
 func ResolveEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
 	// Durability gate: rejects noop deps in durable mode, validates mode value.
@@ -87,7 +86,7 @@ func resolveDurableEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
 			"durable mode requires real outboxWriter and txRunner",
 			errcode.WithInternal(fmt.Sprintf(internalCellPlainFmt, cfg.CellID)))
 	}
-	emitter, err := outbox.NewWriterEmitter(cfg.OutboxWriter)
+	emitter, err := NewWriterEmitter(cfg.OutboxWriter)
 	if err != nil {
 		return EmitterOutcome{}, err
 	}
@@ -123,9 +122,9 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 					"WithMetricsProvider(...))",
 				errcode.WithInternal(fmt.Sprintf(internalCellPlainFmt, cfg.CellID)))
 		}
-		emitter, err := outbox.NewDirectEmitter(
+		emitter, err := NewDirectEmitter(
 			cfg.Publisher, cfg.DirectPublishMode, cfg.MetricsProvider,
-			cfg.Clock, cfg.CellID, outbox.WithLogger(logger),
+			cfg.Clock, cfg.CellID, WithLogger(logger),
 		)
 		if err != nil {
 			return EmitterOutcome{}, err
@@ -135,7 +134,7 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 
 	// Writer path: use WriterEmitter; durable only when writer is real (non-noop).
 	if cfg.OutboxWriter != nil {
-		emitter, err := outbox.NewWriterEmitter(cfg.OutboxWriter)
+		emitter, err := NewWriterEmitter(cfg.OutboxWriter)
 		if err != nil {
 			return EmitterOutcome{}, err
 		}
@@ -163,7 +162,7 @@ type CellEmitterInputs struct {
 	// PreResolved is the emitter set directly via Cell.WithEmitter(e).
 	// When non-nil, ResolveCellEmitter skips ResolveEmitter and validates that
 	// durable mode requires a durable PreResolved (ReportDurable==true).
-	PreResolved outbox.Emitter
+	PreResolved Emitter
 	// ConsistencyLevel is the owning Cell's consistency level; used to decide
 	// whether the cellvocab.L2 non-durable Warn log fires.
 	ConsistencyLevel cellvocab.Level
@@ -184,7 +183,7 @@ type CellEmitterInputs struct {
 // Callers read outcome.Durable from the return value for any
 // composition-root decision that depends on the resolved durability mode.
 //
-// ref: kernel/cell.ResolveEmitter — the primitive this wraps.
+// ref: outbox.ResolveEmitter — the primitive this wraps.
 func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 	hasEmitter := in.PreResolved != nil
 	hasPending := in.Publisher != nil || in.OutboxWriter != nil
@@ -196,7 +195,7 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 
 	var outcome EmitterOutcome
 	if hasEmitter {
-		durable := outbox.ReportDurable(in.PreResolved)
+		durable := ReportDurable(in.PreResolved)
 		if in.Mode == DurabilityDurable && !durable {
 			return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 				"WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter",

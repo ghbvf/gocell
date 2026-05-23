@@ -59,8 +59,9 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // (assembly/cell/outbox) for their metrics provider; this is a structural
 // metrics dependency akin to wrapper→outbox and stays as-is.
 var allowedKernelEdges = map[string][]string{
-	"assembly":      {"cell", "clock", "metadata", "observability", "registry"},
-	"cell":          {"cellvocab", "clock", "contractspec", "healthz", "metadata", "observability", "outbox", "persistence"},
+	"assembly":      {"cell", "clock", "metadata", "observability", "outbox", "registry"},
+	"auth":          {"cell"},
+	"cell":          {"cellvocab", "contractspec", "healthz", "metadata", "outbox"},
 	"cellvocab":     nil,
 	"clock":         nil,
 	"command":       {"metautil"},
@@ -76,7 +77,7 @@ var allowedKernelEdges = map[string][]string{
 	"metadata":      {"cellvocab"},
 	"metautil":      nil,
 	"observability": nil,
-	"outbox":        {"clock", "healthz", "idempotency", "metautil", "observability"},
+	"outbox":        {"cellvocab", "clock", "healthz", "idempotency", "metautil", "observability", "persistence"},
 	"persistence":   nil,
 	"registry":      {"metadata"},
 	"verify":        {"metadata"},

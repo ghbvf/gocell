@@ -11,11 +11,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	khealthz "github.com/ghbvf/gocell/kernel/healthz"
 )
@@ -84,7 +85,7 @@ func TestSlogDependencyEntry_ZeroValueAccessors(t *testing.T) {
 // (package health) so it can construct via the production funnel without an
 // exported testing constructor.
 func TestSlogDependencyEntry_AccessorsViaRealHandler(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-acc", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-acc", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
@@ -146,7 +147,7 @@ func TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	asm := assembly.New(assembly.Config{ID: "test-json", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-json", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 

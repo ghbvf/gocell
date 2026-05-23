@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -25,7 +27,7 @@ const (
 )
 
 type (
-	redisNonceStoreFactory      func(*adapterredis.Client, time.Duration) (auth.NonceStore, error)
+	redisNonceStoreFactory      func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error)
 	redisConsumerClaimerFactory func(*adapterredis.Client) (idempotency.Claimer, error)
 	redisClientFactory          func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
 )
@@ -51,7 +53,7 @@ const (
 
 var (
 	newRedisClient     redisClientFactory     = adapterredis.NewClient
-	newRedisNonceStore redisNonceStoreFactory = func(client *adapterredis.Client, ttl time.Duration) (auth.NonceStore, error) {
+	newRedisNonceStore redisNonceStoreFactory = func(client *adapterredis.Client, ttl time.Duration) (kauth.NonceStore, error) {
 		return adapterredis.NewNonceStore(client, nonceStoreNamespace, ttl)
 	}
 	newRedisIdempotencyClaimer redisConsumerClaimerFactory = func(client *adapterredis.Client) (idempotency.Claimer, error) {
@@ -165,7 +167,7 @@ func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (redisClient
 	return redisClientResult{Client: client}, nil
 }
 
-func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock) (auth.NonceStore, error) {
+func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock) (kauth.NonceStore, error) {
 	if requiresDistributedReplay(topo) {
 		if client == nil {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,

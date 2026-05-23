@@ -198,7 +198,7 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 // Regression guard (#501): the mem user repo is legitimately wired with a
 // FOREIGN CellTxManager in real composition roots — cmd/corebundle PGMode
 // pairs the mem user repo with the PG outbox tx manager in one cell tx, and
-// ssobff/demo use cell.DemoTxRunner. A hard fail-fast here returned 500 on
+// ssobff/demo use outbox.DemoTxRunner. A hard fail-fast here returned 500 on
 // every such login. ForUpdate must therefore stay FUNCTIONAL outside a mem
 // tx (acquire store.mu per call), not error. Full FOR-UPDATE-until-commit
 // serialization is delivered only when driven by the Store's own TxRunner

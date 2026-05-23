@@ -6,17 +6,18 @@ import (
 	"log/slog"
 	"os"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 type sharedReplayDeps struct {
 	RedisClient         *adapterredis.Client
-	NonceStore          auth.NonceStore
+	NonceStore          kauth.NonceStore
 	ConsumerClaimer     idempotency.Claimer
 	ConsumerClaimerKind consumerClaimerKind
 }
@@ -130,7 +131,7 @@ func adapterInfoForSharedDeps(shared *SharedDeps) map[string]string {
 	if shared.RedisClient != nil {
 		redisState = "configured"
 	}
-	nonceStoreKind := string(auth.NonceStoreKindNoop)
+	nonceStoreKind := string(kauth.NonceStoreKindNoop)
 	if shared.InternalGuard != nil && shared.InternalGuard.NonceStore() != nil {
 		nonceStoreKind = string(shared.InternalGuard.NonceStore().Kind())
 	}

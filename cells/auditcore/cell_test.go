@@ -80,7 +80,7 @@ func newTestCell(t testing.TB) *AuditCore {
 		WithLedgerStore(store),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -88,7 +88,7 @@ func newTestCell(t testing.TB) *AuditCore {
 // newTestRecorder returns a RegistryRecorder for demo mode with an empty config.
 // Use drainProbeSnapshot after Init when probe assertions are needed.
 func newTestRecorder() *cell.RegistryRecorder {
-	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	return cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 }
 
 // drainProbeSnapshot mirrors the bootstrap layer: it drains the probes a cell
@@ -151,11 +151,11 @@ func TestAuditCore_MissingLedgerProtocol(t *testing.T) {
 		// No WithLedgerProtocol.
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
-	err := c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.Error(t, err, "should fail without LedgerProtocol")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -171,10 +171,10 @@ func TestAuditCore_NilLedgerProtocol_SentinelRejected(t *testing.T) {
 		WithLedgerStore(store),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.Error(t, err, "nil LedgerProtocol must be rejected")
 }
 
@@ -186,10 +186,10 @@ func TestAuditCore_MissingLedgerStore(t *testing.T) {
 		// No WithLedgerStore.
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo))
 	require.Error(t, err, "should fail without LedgerStore")
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -209,7 +209,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		// txRunner intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo))
 	require.Error(t, err)
 	var ecErrTxPair1 *errcode.Error
 	require.True(t, errors.As(err, &ecErrTxPair1))
@@ -224,10 +224,10 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 		// outboxWriter intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo))
 	require.Error(t, err)
 	var ecErrTxPair2 *errcode.Error
 	require.True(t, errors.As(err, &ecErrTxPair2))
@@ -242,7 +242,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo))
 	require.Error(t, err)
 	var ecErrSink *errcode.Error
 	require.True(t, errors.As(err, &ecErrSink))
@@ -257,9 +257,9 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -278,7 +278,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo))
 	require.NoError(t, err, "demo mode with publisher should succeed")
 }
 
@@ -290,14 +290,14 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo))
 	require.NoError(t, err)
 }
 
 // TestAuditInit_WithEmitter_DirectInjection mirrors the accesscore WithEmitter
-// test: a pre-composed emitter skips cell.ResolveEmitter and the cell accepts
+// test: a pre-composed emitter skips outbox.ResolveEmitter and the cell accepts
 // the injection in demo mode.
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
 func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
@@ -309,7 +309,7 @@ func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithLedgerStore(store),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
 	assert.Nil(t, c.pendingOutboxWriter)
@@ -327,7 +327,7 @@ func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo))
 	require.Error(t, err)
 	var ecErrMutex *errcode.Error
 	require.True(t, errors.As(err, &ecErrMutex))
@@ -348,9 +348,9 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithLedgerStore(store),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 	)
-	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
 	require.Error(t, err)
 	var ecErrDurable *errcode.Error
 	require.True(t, errors.As(err, &ecErrDurable))
@@ -464,7 +464,7 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),         // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -482,23 +482,23 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		mode       cell.DurabilityMode
+		mode       outbox.DurabilityMode
 		outbox     outbox.Writer
 		tx         persistence.TxRunner
 		wantStatus int
 	}{
 		{
 			name:       "durable refuses stale cursor",
-			mode:       cell.DurabilityDurable,
+			mode:       outbox.DurabilityDurable,
 			outbox:     &recordingWriter{},
 			tx:         durableTxRunner{},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "demo returns first page",
-			mode:       cell.DurabilityDemo,
+			mode:       outbox.DurabilityDemo,
 			outbox:     outbox.NoopWriter{},
-			tx:         cell.DemoTxRunner{},
+			tx:         outbox.DemoTxRunner{},
 			wantStatus: http.StatusOK,
 		},
 	}
@@ -609,7 +609,7 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 		WithLedgerStore(probe),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
-		WithTxManager(cell.DemoCellTxManager()),
+		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 

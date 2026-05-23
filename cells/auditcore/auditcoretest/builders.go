@@ -83,13 +83,13 @@ func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (
 		auditcore.WithLedgerProtocol(proto),
 		auditcore.WithLedgerStore(memStore),
 		auditcore.WithEmitter(outbox.NewNoopEmitter()),
-		auditcore.WithTxManager(cell.DemoCellTxManager()),
+		auditcore.WithTxManager(outbox.DemoCellTxManager()),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 		auditcore.WithLogger(cfg.logger),
 	)
 
 	ctx = context.Background()
-	recorder := cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)
+	recorder := cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)
 	if err := c.Init(ctx, recorder); err != nil {
 		t.Fatalf("auditcoretest: auditcore.Init: %v", err)
 	}

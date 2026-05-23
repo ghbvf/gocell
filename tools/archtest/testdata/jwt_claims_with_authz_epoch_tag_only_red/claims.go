@@ -4,7 +4,7 @@
 // This form would bypass the original literal-scan in prong 3: the field name
 // is "Epoch" (not "AuthzEpoch"), so prong 1's field-name check misses it; and
 // the struct tag ` + "`" + `json:"authz_epoch"` + "`" + ` is a raw string literal whose full
-// BasicLit.Value is ` + "`" + `` + "`" + `json:"authz_epoch"` + "`" + `` + "`" + ` — not the bare "authz_epoch"
+// BasicLit.Value is ` + "`" + “ + "`" + `json:"authz_epoch"` + "`" + “ + "`" + ` — not the bare "authz_epoch"
 // literal that the original prong 3 scan matched. The StructTagJSONKey helper
 // in internal/scanner/literal.go parses the tag correctly and detects this form.
 //

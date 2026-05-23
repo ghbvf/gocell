@@ -10,7 +10,7 @@ package boundarytransitive
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // BoundaryTransitiveCell is the fake L2+ cell type. The archtest matches it
@@ -29,5 +29,5 @@ func (c *BoundaryTransitiveCell) Init(ctx context.Context, reg any) error {
 // durability guard. The BFS must reach this function via same-package
 // callee resolution from Init.
 func (c *BoundaryTransitiveCell) initInternal() error {
-	return cell.CheckNotNoop(cell.DurabilityDemo, "fixture-boundary_transitive")
+	return outbox.CheckNotNoop(outbox.DurabilityDemo, "fixture-boundary_transitive")
 }

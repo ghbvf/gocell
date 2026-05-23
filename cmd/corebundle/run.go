@@ -28,7 +28,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/runtime/auth"
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -119,7 +120,7 @@ func logSinglePodNonceStoreAcknowledgement(shared *SharedDeps) {
 		return
 	}
 	ns := shared.InternalGuard.NonceStore()
-	if ns == nil || ns.Kind() != auth.NonceStoreKindInMemory {
+	if ns == nil || ns.Kind() != kauth.NonceStoreKindInMemory {
 		return
 	}
 	if !shared.Topology.RequireProductionControlPlane() ||

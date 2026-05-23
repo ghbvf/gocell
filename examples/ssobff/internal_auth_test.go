@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/ghbvf/gocell/kernel/auth"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/stretchr/testify/require"
 )
 
 const testServiceKey = "test-service-secret-at-least-32-bytes!!"
@@ -29,9 +29,9 @@ func TestInternalAuthChainContainsServiceToken(t *testing.T) {
 	require.True(t, authChainContainsServiceToken(chain))
 }
 
-func authChainContainsServiceToken(chain []cell.ListenerAuth) bool {
+func authChainContainsServiceToken(chain []auth.ListenerAuth) bool {
 	for _, plan := range chain {
-		if _, ok := plan.(cell.AuthServiceToken); ok {
+		if _, ok := plan.(auth.AuthServiceToken); ok {
 			return true
 		}
 	}

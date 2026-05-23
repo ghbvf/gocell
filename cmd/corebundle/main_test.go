@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -616,7 +618,7 @@ func captureSlogInfoLines(t *testing.T) (*bytes.Buffer, func()) {
 
 // guardWithStore builds a test internalGuard backed by the supplied NonceStore,
 // keeping the ring/middleware fields populated to mirror production wiring.
-func guardWithStore(t *testing.T, store auth.NonceStore) *internalGuard {
+func guardWithStore(t *testing.T, store kauth.NonceStore) *internalGuard {
 	t.Helper()
 	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
 	require.NoError(t, err)
@@ -651,7 +653,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t 
 	require.NotEmpty(t, out, "expected an Info log line; got empty buffer")
 	assert.Contains(t, out, "in-memory nonce store acknowledged for single-pod",
 		"Info message must announce the acknowledgement so the configuration is auditable")
-	assert.Contains(t, out, string(auth.NonceStoreKindInMemory),
+	assert.Contains(t, out, string(kauth.NonceStoreKindInMemory),
 		"log must include nonce_store_kind label so dashboards can filter by store kind")
 	assert.Contains(t, out, "GOCELL_SINGLE_POD",
 		"log note must reference the env switch operators set to enter this branch")

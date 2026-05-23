@@ -39,6 +39,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -49,8 +51,8 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -240,7 +242,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "e2e-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "e2e-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(configCell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
@@ -252,7 +254,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithClock(asm.Clock()),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
@@ -560,7 +562,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
 
-	asm := assembly.New(assembly.Config{ID: "e2e-refetch-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "e2e-refetch-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(configCell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
@@ -572,7 +574,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithClock(asm.Clock()),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),

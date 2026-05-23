@@ -7,6 +7,8 @@ import (
 	"context"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,14 +27,14 @@ func TestService_Login_IssuesDistinctIntents(t *testing.T) {
 	testVerifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	accessClaims, err := testVerifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	accessClaims, err := testVerifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err, "access token must verify as intent=access")
-	assert.Equal(t, auth.TokenIntentAccess, accessClaims.TokenUse)
+	assert.Equal(t, kauth.TokenIntentAccess, accessClaims.TokenUse)
 
 	// Refresh token is now an opaque wire token (not a JWT) — it must not verify as any JWT intent.
-	_, err = testVerifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentAccess)
+	_, err = testVerifier.VerifyIntent(context.Background(), pair.RefreshToken, kauth.TokenIntentAccess)
 	require.Error(t, err, "opaque refresh token must NOT verify as access JWT intent")
 
-	_, err = testVerifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntent("refresh"))
+	_, err = testVerifier.VerifyIntent(context.Background(), pair.AccessToken, kauth.TokenIntent("refresh"))
 	require.Error(t, err, "access token must NOT verify as refresh intent")
 }

@@ -100,7 +100,7 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithOutboxDeps 注入 sealed CellPublisher 和 CellWriter，由 composition root
 // 通过 outbox.WrapPublisherForCell / outbox.WrapWriterForCell 包装得到。
-// 框架在 Init() 时通过 cell.ResolveEmitter 将二者组合为 outbox.Emitter，
+// 框架在 Init() 时通过 outbox.ResolveEmitter 将二者组合为 outbox.Emitter，
 // 并应用 cell 的 durability-mode 策略。
 //
 // 详见 ADR 202605101900-adr-cell-raw-infra-sealed-marker §D1。
@@ -288,7 +288,7 @@ type AccessCore struct {
 	// Outbox wiring. Two mutually exclusive paths populate `emitter`:
 	//   (a) WithEmitter(e)          — `emitter` is set pre-Init.
 	//   (b) WithOutboxDeps(pub, w)  — pendingOutboxPub/Writer are set and
-	//       Init() composes an Emitter via cell.ResolveEmitter.
+	//       Init() composes an Emitter via outbox.ResolveEmitter.
 	// After Init, pendingOutboxPub/Writer are cleared; only `emitter` is live.
 	// Sealed marker types prevent any cell.go public Option from accepting
 	// raw outbox.Publisher / outbox.Writer at compile time (ADR

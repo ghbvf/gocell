@@ -10,7 +10,7 @@ package archtest
 // literal, and the struct-tag JSON key). The rule has four production-side
 // prongs plus two RED fixtures:
 //
-//  1. `kernel/cell.Claims` (declared in kernel/cell/auth_types.go) must NOT
+//  1. `kernel/auth.Claims` (declared in kernel/cell/auth_types.go) must NOT
 //     contain a field named `AuthzEpoch`. Catches regression at the source
 //     of truth.
 //
@@ -58,7 +58,7 @@ package archtest
 //   - dynamically-constructed struct tags (reflect.StructTag at runtime)
 //     are AST-invisible. Asserted absent by
 //     TestJWTClaimsNoAuthzEpoch_BlindSpot_DynamicStructTag.
-//   - cell.Claims is a type alias from runtime/auth.Claims (per godoc).
+//   - auth.Claims is a type alias from runtime/auth.Claims (per godoc).
 //     The single source of truth is kernel/cell — checking that struct is
 //     sufficient.
 
@@ -78,7 +78,7 @@ import (
 const (
 	authzEpochClaimKey             = "authz_epoch"
 	authzEpochFieldName            = "AuthzEpoch"
-	authzEpochClaimsFile           = "kernel/cell/auth_types.go"
+	authzEpochClaimsFile           = "kernel/auth/auth_types.go"
 	authzEpochClaimsType           = "Claims"
 	authzEpochStdMapVar            = "standardClaims"
 	authzEpochStdMapFile           = "runtime/auth/jwt.go"

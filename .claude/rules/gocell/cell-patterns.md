@@ -83,7 +83,7 @@ type MyCell struct {
     txMgr            persistence.CellTxManager
 }
 
-func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
     // validation.IsNilInterface is fail-safe vs bare `== nil`: sealed wrappers
     // collapse typed-nil at WrapPublisherForCell (PR 441 F1), so `== nil`
     // suffices today, but using IsNilInterface here matches the kernel/runtime

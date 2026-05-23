@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -175,7 +177,7 @@ func TestRollbackCells_DerivedCtx(t *testing.T) {
 
 			a := newTestAssembly(t, Config{
 				ID:             "rollback-ctx-" + tc.name,
-				DurabilityMode: cell.DurabilityDemo,
+				DurabilityMode: outbox.DurabilityDemo,
 				HookTimeout:    tc.hookTimeout,
 				Clock:          clock.Real(),
 			})
@@ -220,7 +222,7 @@ func TestRollbackCells_AfterStartFail_DerivedCtx(t *testing.T) {
 
 	a := newTestAssembly(t, Config{
 		ID:             "rollback-afterstart-fail",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 
@@ -268,7 +270,7 @@ func TestRollbackCells_I0BeforeStartFails(t *testing.T) {
 
 	a := newTestAssembly(t, Config{
 		ID:             "rollback-i0-beforestart",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 

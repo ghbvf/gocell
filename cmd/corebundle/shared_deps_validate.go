@@ -7,8 +7,9 @@ import (
 	"net"
 	"strings"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Validate is the startup invariant check for all cross-cutting dependencies.
@@ -144,13 +145,13 @@ func (d *SharedDeps) validateControlPlane() []error {
 	} else if ns := d.InternalGuard.NonceStore(); ns == nil {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
 			"internalGuard.nonceStore is nil; guard constructed without WithServiceTokenNonceStore"))
-	} else if kind := ns.Kind(); kind == auth.NonceStoreKindNoop {
+	} else if kind := ns.Kind(); kind == kauth.NonceStoreKindNoop {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
 			"control-plane NonceStore must be a replay-safe implementation in "+
 				"adapter mode \"real\"; NoopNonceStore detected — inject "+
 				"InMemoryNonceStore (single pod) or a shared store (multi-pod) "+
 				"via WithServiceTokenNonceStore"))
-	} else if kind == auth.NonceStoreKindInMemory && !d.Topology.SinglePodReplayProtection && d.Topology.RequireProductionControlPlane() {
+	} else if kind == kauth.NonceStoreKindInMemory && !d.Topology.SinglePodReplayProtection && d.Topology.RequireProductionControlPlane() {
 		slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
 			slog.String("nonce_store_kind", string(kind)),
 			slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments or configure a distributed NonceStore"))

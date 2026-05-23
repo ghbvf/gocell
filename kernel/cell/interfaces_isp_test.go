@@ -36,9 +36,9 @@ type lifecycleMock struct {
 	stopErr  error
 }
 
-func (m lifecycleMock) Init(_ context.Context, _ Registry) error { return m.initErr }
-func (m lifecycleMock) Start(_ context.Context) error            { return m.startErr }
-func (m lifecycleMock) Stop(_ context.Context) error             { return m.stopErr }
+func (m lifecycleMock) Init(_ context.Context, _ Registrar) error { return m.initErr }
+func (m lifecycleMock) Start(_ context.Context) error             { return m.startErr }
+func (m lifecycleMock) Stop(_ context.Context) error              { return m.stopErr }
 
 var _ CellLifecycle = (*lifecycleMock)(nil)
 

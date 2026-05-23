@@ -13,11 +13,13 @@ import (
 	"sort"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -26,40 +28,40 @@ import (
 
 // ─── Stubs ────────────────────────────────────────────────────────────────────
 
-// applyStubVerifier satisfies cell.IntentTokenVerifier / auth.IntentTokenVerifier.
+// applyStubVerifier satisfies kauth.IntentTokenVerifier / kauth.IntentTokenVerifier.
 type applyStubVerifier struct{}
 
-func (v *applyStubVerifier) VerifyIntent(_ context.Context, _ string, _ cell.TokenIntent) (cell.Claims, error) {
-	return cell.Claims{}, nil
+func (v *applyStubVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
+	return kauth.Claims{}, nil
 }
 
-// applyStubNonceStore satisfies cell.NonceStore.
+// applyStubNonceStore satisfies kauth.NonceStore.
 type applyStubNonceStore struct{}
 
 func (s *applyStubNonceStore) CheckAndMark(_ context.Context, _ string) error { return nil }
-func (s *applyStubNonceStore) Kind() cell.NonceStoreKind                      { return cell.NonceStoreKindInMemory }
+func (s *applyStubNonceStore) Kind() kauth.NonceStoreKind                     { return kauth.NonceStoreKindInMemory }
 
 type applyNoopNonceStore struct{}
 
 func (s *applyNoopNonceStore) CheckAndMark(_ context.Context, _ string) error { return nil }
-func (s *applyNoopNonceStore) Kind() cell.NonceStoreKind                      { return cell.NonceStoreKindNoop }
+func (s *applyNoopNonceStore) Kind() kauth.NonceStoreKind                     { return kauth.NonceStoreKindNoop }
 
-// applyStubHMACKeyring satisfies cell.HMACKeyring.
+// applyStubHMACKeyring satisfies kauth.HMACKeyring.
 type applyStubHMACKeyring struct{}
 
 func (k *applyStubHMACKeyring) Current() []byte   { return []byte("secret-32-bytes-padding-here----") }
 func (k *applyStubHMACKeyring) Secrets() [][]byte { return [][]byte{k.Current()} }
 
-// Compile-time guard: cell.AssemblyRef must expose Cell(id string) cell.Cell
+// Compile-time guard: kauth.AssemblyRef must expose Cell(id string) cell.Cell
 // so that runtime/bootstrap can resolve registered cells by ID without an
 // implicit type assertion to a private sub-interface. The canonical guard
 // is the AST-level ASSEMBLYREF-METHOD-SET-01 archtest
 // (tools/archtest/assemblyref_method_set_test.go); this method-expression
 // reference adds a typecheck-time tripwire that fails this test binary's
 // build immediately if Cell is removed from AssemblyRef.
-var _ func(cell.AssemblyRef, string) cell.Cell = cell.AssemblyRef.Cell
+var _ func(kauth.AssemblyRef, string) cell.Cell = kauth.AssemblyRef.Cell
 
-// applyStubAssemblyRef satisfies cell.AssemblyRef. Cell always returns nil
+// applyStubAssemblyRef satisfies kauth.AssemblyRef. Cell always returns nil
 // because the tests using this stub validate auth-chain placement and
 // singleton invariants — they do not exercise authProvider discovery, which
 // has dedicated coverage via fakeAssemblyWithCells below.
@@ -124,14 +126,14 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 	ring := &applyStubHMACKeyring{}
 	asm := &applyStubAssemblyRef{id: "test-asm"}
 
-	resolvedPlan := celltest.MustAuthJWTFromAssembly(asm)
+	resolvedPlan := authtest.MustAuthJWTFromAssembly(asm)
 	resolvedPlan.SetResolved(verifier)
 
 	ref := cell.PrimaryListener
 
 	tests := []struct {
 		name              string
-		chain             []cell.ListenerAuth
+		chain             []kauth.ListenerAuth
 		wantMWCount       int
 		wantAuthInstalled bool
 		wantDescribe      string
@@ -139,51 +141,51 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 	}{
 		{
 			name:              "AuthNone",
-			chain:             []cell.ListenerAuth{cell.AuthNone{}},
+			chain:             []kauth.ListenerAuth{kauth.AuthNone{}},
 			wantMWCount:       0,
 			wantAuthInstalled: false,
 			wantDescribe:      "none",
 		},
 		{
 			name:              "AuthJWT",
-			chain:             []cell.ListenerAuth{celltest.MustAuthJWT(verifier)},
+			chain:             []kauth.ListenerAuth{authtest.MustAuthJWT(verifier)},
 			wantMWCount:       0,
 			wantAuthInstalled: true,
 			wantDescribe:      "jwt",
 		},
 		{
 			name:              "AuthJWTFromAssembly_resolved",
-			chain:             []cell.ListenerAuth{resolvedPlan},
+			chain:             []kauth.ListenerAuth{resolvedPlan},
 			wantMWCount:       0,
 			wantAuthInstalled: true,
 			wantDescribe:      "jwt",
 		},
 		{
 			name: "AuthJWTFromAssembly_unresolved",
-			chain: []cell.ListenerAuth{
-				celltest.MustAuthJWTFromAssembly(asm), // not SetResolved
+			chain: []kauth.ListenerAuth{
+				authtest.MustAuthJWTFromAssembly(asm), // not SetResolved
 			},
 			wantErr: true,
 		},
 		{
 			name:              "AuthMTLS",
-			chain:             []cell.ListenerAuth{cell.AuthMTLS{}},
+			chain:             []kauth.ListenerAuth{kauth.AuthMTLS{}},
 			wantMWCount:       1,
 			wantAuthInstalled: false,
 			wantDescribe:      "mtls",
 		},
 		{
 			name:              "AuthServiceToken",
-			chain:             []cell.ListenerAuth{celltest.MustAuthServiceToken(store, ring)},
+			chain:             []kauth.ListenerAuth{authtest.MustAuthServiceToken(store, ring)},
 			wantMWCount:       1,
 			wantAuthInstalled: false,
 			wantDescribe:      "service-token",
 		},
 		{
 			name: "MultiPlan_MTLSAndServiceToken",
-			chain: []cell.ListenerAuth{
-				cell.AuthMTLS{},
-				celltest.MustAuthServiceToken(store, ring),
+			chain: []kauth.ListenerAuth{
+				kauth.AuthMTLS{},
+				authtest.MustAuthServiceToken(store, ring),
 			},
 			wantMWCount:       2,
 			wantAuthInstalled: false,
@@ -254,14 +256,14 @@ func TestMtlsMiddleware_PeerCertPresence(t *testing.T) {
 // ─── TestRunAuthPlanValidateHooks_DiscoverScenarios ───────────────────────────
 
 // fakeAuthProviderCell implements cell.Cell (via embedded BaseCell) and
-// cell.AuthProvider so it can be used as a fake auth-provider cell in
+// kauth.AuthProvider so it can be used as a fake auth-provider cell in
 // runAuthPlanValidateHooks tests.
 type fakeAuthProviderCell struct {
 	*cell.BaseCell
-	verifier auth.IntentTokenVerifier
+	verifier kauth.IntentTokenVerifier
 }
 
-func newFakeAuthCell(id string, v auth.IntentTokenVerifier) *fakeAuthProviderCell {
+func newFakeAuthCell(id string, v kauth.IntentTokenVerifier) *fakeAuthProviderCell {
 	base := cell.MustNewBaseCell(&metadata.CellMeta{
 		ID:               id,
 		Type:             "core",
@@ -270,12 +272,12 @@ func newFakeAuthCell(id string, v auth.IntentTokenVerifier) *fakeAuthProviderCel
 	return &fakeAuthProviderCell{BaseCell: base, verifier: v}
 }
 
-func (c *fakeAuthProviderCell) TokenVerifier() cell.IntentTokenVerifier { return c.verifier }
+func (c *fakeAuthProviderCell) TokenVerifier() kauth.IntentTokenVerifier { return c.verifier }
 
-// Ensure fakeAuthProviderCell satisfies cell.AuthProvider at compile time.
-var _ cell.AuthProvider = (*fakeAuthProviderCell)(nil)
+// Ensure fakeAuthProviderCell satisfies kauth.AuthProvider at compile time.
+var _ kauth.AuthProvider = (*fakeAuthProviderCell)(nil)
 
-// fakeAssemblyWithCells satisfies cell.AssemblyRef with an in-memory cell map,
+// fakeAssemblyWithCells satisfies kauth.AssemblyRef with an in-memory cell map,
 // providing the by-ID lookup that authProvider discovery exercises.
 type fakeAssemblyWithCells struct {
 	id    string
@@ -317,7 +319,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		asm := &fakeAssemblyWithCells{id: "no-providers", cells: map[string]cell.Cell{}}
 		b := newMinimalBootstrap()
 		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
-			authChain: []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+			authChain: []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
@@ -335,7 +337,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		b := newMinimalBootstrap()
 		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
-			authChain: []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+			authChain: []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
@@ -352,7 +354,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		b := newMinimalBootstrap()
 		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
-			authChain: []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+			authChain: []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
@@ -367,16 +369,16 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 				"cell-auth": newFakeAuthCell("cell-auth", verifier),
 			},
 		}
-		plan := celltest.MustAuthJWTFromAssembly(asm)
+		plan := authtest.MustAuthJWTFromAssembly(asm)
 		b := newMinimalBootstrap()
 		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
-			authChain: []cell.ListenerAuth{plan},
+			authChain: []kauth.ListenerAuth{plan},
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.NoError(t, err)
 		// Retrieve the plan back from the config (p.SetResolved writes via atomic).
 		cfg := b.listenerConfigs[cell.PrimaryListener]
-		resolved, ok := cfg.authChain[0].(cell.AuthJWTFromAssembly)
+		resolved, ok := cfg.authChain[0].(kauth.AuthJWTFromAssembly)
 		require.True(t, ok)
 		assert.NotNil(t, resolved.ResolvedVerifier())
 	})
@@ -409,14 +411,14 @@ func TestExplicitAuthNone(t *testing.T) {
 	verifier := &applyStubVerifier{}
 	tests := []struct {
 		name  string
-		chain []cell.ListenerAuth
+		chain []kauth.ListenerAuth
 		want  bool
 	}{
 		{"nil_chain", nil, false},
-		{"empty_chain", []cell.ListenerAuth{}, false},
-		{"auth_none_explicit", []cell.ListenerAuth{cell.AuthNone{}}, true},
-		{"jwt_plan", []cell.ListenerAuth{celltest.MustAuthJWT(verifier)}, false},
-		{"mtls_plan", []cell.ListenerAuth{cell.AuthMTLS{}}, false},
+		{"empty_chain", []kauth.ListenerAuth{}, false},
+		{"auth_none_explicit", []kauth.ListenerAuth{kauth.AuthNone{}}, true},
+		{"jwt_plan", []kauth.ListenerAuth{authtest.MustAuthJWT(verifier)}, false},
+		{"mtls_plan", []kauth.ListenerAuth{kauth.AuthMTLS{}}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

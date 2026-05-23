@@ -1,4 +1,4 @@
-package cell_test
+package outbox_test
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -24,7 +23,7 @@ type fakeWriter struct{}
 func (fakeWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
 
 // noopTxRunner is a TxRunner that runs fn without a transaction. It implements
-// cell.Nooper so ResolveEmitter can recognize it as a non-durable test stub.
+// outbox.Nooper so ResolveEmitter can recognize it as a non-durable test stub.
 type noopTxRunner struct{}
 
 func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
@@ -43,11 +42,11 @@ func (fakeTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 	return fn(context.Background())
 }
 
-// fakePublisher is a real (non-noop) outbox.Publisher for test use.
-type fakePublisher struct{}
+// mrFakePublisher is a real (non-noop) outbox.Publisher for test use.
+type mrFakePublisher struct{}
 
-func (fakePublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
-func (fakePublisher) Close(_ context.Context) error                       { return nil }
+func (mrFakePublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (mrFakePublisher) Close(_ context.Context) error                       { return nil }
 
 // TestResolveEmitter covers the 10-case table described in the PR-A5a spec.
 func TestResolveEmitter(t *testing.T) {
@@ -58,20 +57,20 @@ func TestResolveEmitter(t *testing.T) {
 	noopPub := &outbox.DiscardPublisher{}
 	realW := fakeWriter{}
 	realTx := fakeTxRunner{}
-	realPub := fakePublisher{}
+	realPub := mrFakePublisher{}
 
 	tests := []struct {
 		name        string
-		cfg         cell.EmitterConfig
+		cfg         outbox.EmitterConfig
 		wantDurable bool
 		wantErr     bool
 	}{
 		{
 			// A: durable + full real deps → WriterEmitter, durable=true
 			name: "A_durable_full",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
-				Mode:            cell.DurabilityDurable,
+				Mode:            outbox.DurabilityDurable,
 				Publisher:       realPub,
 				OutboxWriter:    realW,
 				TxRunner:        realTx,
@@ -82,9 +81,9 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// B: durable + missing writer → error (ErrCellMissingOutbox)
 			name: "B_durable_missing_writer",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
-				Mode:            cell.DurabilityDurable,
+				Mode:            outbox.DurabilityDurable,
 				Publisher:       realPub,
 				OutboxWriter:    nil,
 				TxRunner:        realTx,
@@ -95,9 +94,9 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// C: durable + noop writer → CheckNotNoop rejects
 			name: "C_durable_noop_writer",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
-				Mode:            cell.DurabilityDurable,
+				Mode:            outbox.DurabilityDurable,
 				Publisher:       realPub,
 				OutboxWriter:    noopWriter,
 				TxRunner:        realTx,
@@ -108,9 +107,9 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// D: demo + real pub, no writer → DirectEmitter(FailOpen), durable=false
 			name: "D_demo_pub_no_writer",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:            "testcell",
-				Mode:              cell.DurabilityDemo,
+				Mode:              outbox.DurabilityDemo,
 				Publisher:         realPub,
 				OutboxWriter:      nil,
 				TxRunner:          nil,
@@ -123,9 +122,9 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// E: demo + real pub + noop writer → DirectEmitter, durable=false
 			name: "E_demo_pub_noop_writer",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:            "testcell",
-				Mode:              cell.DurabilityDemo,
+				Mode:              outbox.DurabilityDemo,
 				Publisher:         realPub,
 				OutboxWriter:      noopWriter,
 				TxRunner:          noopTx,
@@ -138,9 +137,9 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// F: demo + real writer + real tx (no pub) → WriterEmitter, durable=true
 			name: "F_demo_writer_with_tx",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
-				Mode:            cell.DurabilityDemo,
+				Mode:            outbox.DurabilityDemo,
 				Publisher:       nil,
 				OutboxWriter:    realW,
 				TxRunner:        realTx,
@@ -151,9 +150,9 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// G: demo + real writer but no tx → pairing invariant error
 			name: "G_demo_writer_without_tx",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
-				Mode:            cell.DurabilityDemo,
+				Mode:            outbox.DurabilityDemo,
 				Publisher:       nil,
 				OutboxWriter:    realW,
 				TxRunner:        nil,
@@ -164,9 +163,9 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// H: demo + all nil → no sink error
 			name: "H_demo_all_nil",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
-				Mode:            cell.DurabilityDemo,
+				Mode:            outbox.DurabilityDemo,
 				Publisher:       nil,
 				OutboxWriter:    nil,
 				TxRunner:        nil,
@@ -178,9 +177,9 @@ func TestResolveEmitter(t *testing.T) {
 			// I: demo + noop pub + noop writer + noop tx
 			// noopPub is Nooper, noopWriter is Nooper → publisher branch selected → DirectEmitter, durable=false
 			name: "I_demo_all_noop",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:            "testcell",
-				Mode:              cell.DurabilityDemo,
+				Mode:              outbox.DurabilityDemo,
 				Publisher:         noopPub,
 				OutboxWriter:      noopWriter,
 				TxRunner:          noopTx,
@@ -193,9 +192,9 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// J: configcore fail-closed → DirectEmitter(FailClosed), durable=false
 			name: "J_demo_fail_closed",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:            "configcell",
-				Mode:              cell.DurabilityDemo,
+				Mode:              outbox.DurabilityDemo,
 				Publisher:         realPub,
 				OutboxWriter:      nil,
 				TxRunner:          nil,
@@ -212,9 +211,9 @@ func TestResolveEmitter(t *testing.T) {
 			// Documenting this preference here prevents regressions of the dual-sink
 			// contract.
 			name: "K_demo_pub_and_real_writer",
-			cfg: cell.EmitterConfig{
+			cfg: outbox.EmitterConfig{
 				CellID:            "testcell",
-				Mode:              cell.DurabilityDemo,
+				Mode:              outbox.DurabilityDemo,
 				Publisher:         realPub,
 				OutboxWriter:      realW,
 				TxRunner:          realTx,
@@ -233,12 +232,12 @@ func TestResolveEmitter(t *testing.T) {
 	}
 }
 
-// assertResolveEmitter calls cell.ResolveEmitter and asserts the expected
+// assertResolveEmitter calls outbox.ResolveEmitter and asserts the expected
 // outcome. Extracted from TestResolveEmitter to reduce that function's
 // cognitive complexity.
-func assertResolveEmitter(t *testing.T, cfg cell.EmitterConfig, wantErr bool, wantDurable bool) {
+func assertResolveEmitter(t *testing.T, cfg outbox.EmitterConfig, wantErr bool, wantDurable bool) {
 	t.Helper()
-	outcome, err := cell.ResolveEmitter(cfg)
+	outcome, err := outbox.ResolveEmitter(cfg)
 	if wantErr {
 		if err == nil {
 			t.Fatalf("expected error, got nil (outcome=%+v)", outcome)
@@ -274,7 +273,7 @@ func (durableEmitter) Durable() bool                                { return tru
 func TestResolveCellEmitter(t *testing.T) {
 	t.Parallel()
 
-	realPub := fakePublisher{}
+	realPub := mrFakePublisher{}
 
 	captureLogger := func() (*slog.Logger, *bytes.Buffer) {
 		var buf bytes.Buffer
@@ -284,10 +283,10 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("mutual_exclusion", func(t *testing.T) {
 		t.Parallel()
-		_, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-			EmitterConfig: cell.EmitterConfig{
+		_, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+			EmitterConfig: outbox.EmitterConfig{
 				CellID:    "testcell",
-				Mode:      cell.DurabilityDemo,
+				Mode:      outbox.DurabilityDemo,
 				Publisher: realPub,
 			},
 			PreResolved: nonDurableEmitter{},
@@ -306,10 +305,10 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("preresolved_durable_mode_requires_durable", func(t *testing.T) {
 		t.Parallel()
-		_, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-			EmitterConfig: cell.EmitterConfig{
+		_, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
-				Mode:   cell.DurabilityDurable,
+				Mode:   outbox.DurabilityDurable,
 			},
 			PreResolved: nonDurableEmitter{},
 		})
@@ -327,10 +326,10 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("preresolved_durable_ok", func(t *testing.T) {
 		t.Parallel()
-		outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-			EmitterConfig: cell.EmitterConfig{
+		outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
-				Mode:   cell.DurabilityDurable,
+				Mode:   outbox.DurabilityDurable,
 			},
 			PreResolved: durableEmitter{},
 		})
@@ -345,10 +344,10 @@ func TestResolveCellEmitter(t *testing.T) {
 	t.Run("preresolved_demo_non_durable_warn_at_L2", func(t *testing.T) {
 		t.Parallel()
 		logger, buf := captureLogger()
-		outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-			EmitterConfig: cell.EmitterConfig{
+		outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
-				Mode:   cell.DurabilityDemo,
+				Mode:   outbox.DurabilityDemo,
 				Logger: logger,
 			},
 			PreResolved:      nonDurableEmitter{},
@@ -371,10 +370,10 @@ func TestResolveCellEmitter(t *testing.T) {
 	t.Run("preresolved_demo_no_warn_below_L2", func(t *testing.T) {
 		t.Parallel()
 		logger, buf := captureLogger()
-		_, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-			EmitterConfig: cell.EmitterConfig{
+		_, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
-				Mode:   cell.DurabilityDemo,
+				Mode:   outbox.DurabilityDemo,
 				Logger: logger,
 			},
 			PreResolved:      nonDurableEmitter{},
@@ -391,10 +390,10 @@ func TestResolveCellEmitter(t *testing.T) {
 	t.Run("delegates_to_resolve_emitter_on_demo", func(t *testing.T) {
 		t.Parallel()
 		logger, buf := captureLogger()
-		outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-			EmitterConfig: cell.EmitterConfig{
+		outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+			EmitterConfig: outbox.EmitterConfig{
 				CellID:            "testcell",
-				Mode:              cell.DurabilityDemo,
+				Mode:              outbox.DurabilityDemo,
 				Publisher:         realPub,
 				DirectPublishMode: outbox.DirectPublishFailClosed,
 				Logger:            logger,
@@ -419,10 +418,10 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("error_from_resolve_emitter_propagates", func(t *testing.T) {
 		t.Parallel()
-		_, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-			EmitterConfig: cell.EmitterConfig{
+		_, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
-				Mode:   cell.DurabilityDemo,
+				Mode:   outbox.DurabilityDemo,
 			},
 			ConsistencyLevel: cellvocab.L2,
 		})
@@ -438,10 +437,10 @@ func TestResolveCellEmitter(t *testing.T) {
 // explicitly in tests instead of relying on a silent fallback).
 func TestResolveEmitter_DemoMode_NilMetricsProvider_ReturnsError(t *testing.T) {
 	t.Parallel()
-	realPub := fakePublisher{}
-	_, err := cell.ResolveEmitter(cell.EmitterConfig{
+	realPub := mrFakePublisher{}
+	_, err := outbox.ResolveEmitter(outbox.EmitterConfig{
 		CellID:            "testcell",
-		Mode:              cell.DurabilityDemo,
+		Mode:              outbox.DurabilityDemo,
 		Publisher:         realPub,
 		OutboxWriter:      nil,
 		TxRunner:          nil,

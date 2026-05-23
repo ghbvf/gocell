@@ -4,19 +4,20 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 const ssobffServiceKeyEnv = "GOCELL_SSOBFF_SERVICE_SECRET"
 
-func newInternalAuthChainFromEnv() ([]cell.ListenerAuth, error) {
+func newInternalAuthChainFromEnv() ([]kauth.ListenerAuth, error) {
 	secret := os.Getenv(ssobffServiceKeyEnv)
 	return newInternalAuthChain(secret)
 }
 
-func newInternalAuthChain(secret string) ([]cell.ListenerAuth, error) {
+func newInternalAuthChain(secret string) ([]kauth.ListenerAuth, error) {
 	if secret == "" {
 		return nil, fmt.Errorf("%s must be set for the internal listener", ssobffServiceKeyEnv)
 	}
@@ -29,9 +30,9 @@ func newInternalAuthChain(secret string) ([]cell.ListenerAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create internal listener nonce store: %w", err)
 	}
-	plan, err := cell.NewAuthServiceToken(store, ring)
+	plan, err := kauth.NewAuthServiceToken(store, ring)
 	if err != nil {
 		return nil, fmt.Errorf("build internal auth chain: %w", err)
 	}
-	return []cell.ListenerAuth{plan}, nil
+	return []kauth.ListenerAuth{plan}, nil
 }

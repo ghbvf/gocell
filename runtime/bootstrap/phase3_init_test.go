@@ -53,7 +53,7 @@ func newSnapshotCheckCell(id string) *snapshotCheckCell {
 	}
 }
 
-func (c *snapshotCheckCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *snapshotCheckCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func newInitFailCell(id string, err error) *initFailCell {
 	}
 }
 
-func (c *initFailCell) Init(_ context.Context, _ cell.Registry) error {
+func (c *initFailCell) Init(_ context.Context, _ cell.Registrar) error {
 	return c.err
 }
 
@@ -93,7 +93,7 @@ func newLifecycleRegisterCell(id, hookName string) *lifecycleRegisterCell {
 	}
 }
 
-func (c *lifecycleRegisterCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *lifecycleRegisterCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func newRouteRegisterCell(id string) *routeRegisterCell {
 	}
 }
 
-func (c *routeRegisterCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *routeRegisterCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func newSubscribeRegisterCell(id, topic string) *subscribeRegisterCell {
 	}
 }
 
-func (c *subscribeRegisterCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *subscribeRegisterCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func buildStartedAsm(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
 	asm := assembly.New(assembly.Config{
 		ID:             "test-phase3-asm",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 	for _, c := range cells {
@@ -210,7 +210,7 @@ func TestPhase3_InitErrorAbortsBeforeStart(t *testing.T) {
 
 	asm := assembly.New(assembly.Config{
 		ID:             "abort-test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(goodCell))

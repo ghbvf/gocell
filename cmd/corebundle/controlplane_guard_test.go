@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -157,7 +159,7 @@ func TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret(t *testing.T) {
 	// SharedDeps.Validate gate later rejects NonceStoreKindNoop, but a
 	// guard that was built without the in-memory default would have
 	// already bypassed the gate by returning the wrong Kind.
-	assert.Equal(t, auth.NonceStoreKindInMemory, guard.NonceStore().Kind(),
+	assert.Equal(t, kauth.NonceStoreKindInMemory, guard.NonceStore().Kind(),
 		"real mode guard must default to the in-memory nonce store "+
 			"(multi-pod deployments replace it with a shared store)")
 }

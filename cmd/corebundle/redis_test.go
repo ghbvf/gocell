@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -289,7 +291,7 @@ func TestBuildReplayDependencies_RealSinglePodUsesInMemory(t *testing.T) {
 
 	nonceStore, err := buildServiceNonceStore(topo, nil, clock.Real())
 	require.NoError(t, err)
-	assert.Equal(t, auth.NonceStoreKindInMemory, nonceStore.Kind())
+	assert.Equal(t, kauth.NonceStoreKindInMemory, nonceStore.Kind())
 	inMemoryNonceStore, ok := nonceStore.(*auth.InMemoryNonceStore)
 	require.True(t, ok)
 	assert.Equal(t, auth.ServiceTokenNonceTTL, inMemoryNonceStore.MaxAge())
@@ -318,7 +320,7 @@ func TestBuildServiceNonceStore_DistributedFactoryErrorWrapped(t *testing.T) {
 		AdapterMode:    "real",
 		StorageBackend: "postgres",
 	}
-	restoreRedisNonceStoreFactory(t, func(*adapterredis.Client, time.Duration) (auth.NonceStore, error) {
+	restoreRedisNonceStoreFactory(t, func(*adapterredis.Client, time.Duration) (kauth.NonceStore, error) {
 		return nil, errRedisTestFactory
 	})
 
@@ -378,7 +380,7 @@ func TestBuildReplayDependencies_RealMultiPodConfiguredRedisUsesDistributedStore
 	var gotNonceTTL time.Duration
 	var gotClaimerClient *adapterredis.Client
 
-	restoreRedisNonceStoreFactory(t, func(c *adapterredis.Client, ttl time.Duration) (auth.NonceStore, error) {
+	restoreRedisNonceStoreFactory(t, func(c *adapterredis.Client, ttl time.Duration) (kauth.NonceStore, error) {
 		gotNonceClient = c
 		gotNonceTTL = ttl
 		return fakeDistributedNonceStore{}, nil
@@ -392,7 +394,7 @@ func TestBuildReplayDependencies_RealMultiPodConfiguredRedisUsesDistributedStore
 	require.NoError(t, err)
 	assert.Same(t, client, gotNonceClient)
 	assert.Equal(t, auth.ServiceTokenNonceTTL, gotNonceTTL)
-	assert.Equal(t, auth.NonceStoreKindDistributed, nonceStore.Kind())
+	assert.Equal(t, kauth.NonceStoreKindDistributed, nonceStore.Kind())
 
 	claimer, kind, err := buildConsumerClaimer(topo, client, clock.Real())
 	require.NoError(t, err)
@@ -436,8 +438,8 @@ func (fakeDistributedNonceStore) CheckAndMark(context.Context, string) error {
 	return nil
 }
 
-func (fakeDistributedNonceStore) Kind() auth.NonceStoreKind {
-	return auth.NonceStoreKindDistributed
+func (fakeDistributedNonceStore) Kind() kauth.NonceStoreKind {
+	return kauth.NonceStoreKindDistributed
 }
 
 type fakeDistributedClaimer struct{}

@@ -852,21 +852,13 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      # Pre-compile gocell once and share across all verify-*.sh gates via
-      # GOCELL_BIN. Saves ~7× cold `go run` links (~1.2-1.8s each).
-      # hack/lib/gocell-bin.sh::gocell::cli uses GOCELL_BIN when set.
-      - name: Build gocell binary
-        run: go build -o "$RUNNER_TEMP/gocell" ./cmd/gocell
-
       # Generated-artifact gate (PR-CFG-M follow-up):
       # assembly.yaml is the source-of-truth for runtime cell order, generated
       # entrypoint paths, boundary contracts, and assembly-reachable metrics
       # schemas. The verifier derives the expected artifact manifest from
       # metadata instead of trusting generator stdout to define the diff scope.
       - name: Verify generated artifacts are up-to-date
-        env:
-          GOCELL_BIN: ${{ runner.temp }}/gocell
-        run: ./hack/verify-generated.sh
+        run: go run ./cmd/gocell verify generated
 
       # K#04 codegen-cell gate: cell_gen.go / slice_gen.go must be in sync
       # with cell.yaml / slice.yaml. Sandbox mode runs the generator inside
@@ -874,32 +866,20 @@ jobs:
       # for drift detection, mirroring kubernetes/kubernetes
       # hack/lib/verify-generated.sh.
       - name: Verify cell codegen (K#04)
-        env:
-          GOCELL_BIN: ${{ runner.temp }}/gocell
         run: ./hack/verify-codegen-cell.sh
 
       # K#06 codegen-contract gate: generated/contracts/**/*_gen.go must be in
       # sync with contract.yaml + JSON schemas. Sandbox mode mirrors the K#04
       # cell codegen gate pattern.
       - name: Verify contract codegen (K#06)
-        env:
-          GOCELL_BIN: ${{ runner.temp }}/gocell
         run: ./hack/verify-codegen-contract.sh
 
       - name: Verify assembly codegen (K#10)
-        env:
-          GOCELL_BIN: ${{ runner.temp }}/gocell
         run: ./hack/verify-codegen-assembly.sh
 
       - name: Verify scaffold bundle (sandbox)
-        env:
-          GOCELL_BIN: ${{ runner.temp }}/gocell
         run: ./hack/verify-scaffold-bundle.sh
       - name: Verify scaffold assembly (sandbox)
-        env:
-          GOCELL_BIN: ${{ runner.temp }}/gocell
         run: ./hack/verify-scaffold-assembly.sh
       - name: Verify scaffold rejection (kebab guard)
-        env:
-          GOCELL_BIN: ${{ runner.temp }}/gocell
         run: ./hack/verify-scaffold-reject.sh

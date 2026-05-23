@@ -7,12 +7,13 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -66,7 +67,7 @@ func TestJWTVerifierFromEnvAcceptsRS256AndRejectsDemoOrHS256Tokens(t *testing.T)
 	issuer, err := auth.NewJWTIssuer(keySet, "iotdevice-local", time.Minute, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
-	token, err := issuer.Issue(auth.TokenIntentAccess, "iot-admin", auth.IssueOptions{
+	token, err := issuer.Issue(kauth.TokenIntentAccess, "iot-admin", auth.IssueOptions{
 		Roles: []string{
 			devicecell.RoleAdmin,
 			devicecell.RoleOperator,
@@ -76,7 +77,7 @@ func TestJWTVerifierFromEnvAcceptsRS256AndRejectsDemoOrHS256Tokens(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	claims, err := verifier.VerifyIntent(context.Background(), token, auth.TokenIntentAccess)
+	claims, err := verifier.VerifyIntent(context.Background(), token, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "iot-admin", claims.Subject)
 	assert.ElementsMatch(t, []string{
@@ -85,16 +86,16 @@ func TestJWTVerifierFromEnvAcceptsRS256AndRejectsDemoOrHS256Tokens(t *testing.T)
 		devicecell.RoleDevice,
 	}, claims.Roles)
 
-	_, err = verifier.VerifyIntent(context.Background(), "iotdevice-admin-demo-token", auth.TokenIntentAccess)
+	_, err = verifier.VerifyIntent(context.Background(), "iotdevice-admin-demo-token", kauth.TokenIntentAccess)
 	require.Error(t, err)
 
-	_, err = verifier.VerifyIntent(context.Background(), signedHS256Token(t, "iotdevice-local", "gocell"), auth.TokenIntentAccess)
+	_, err = verifier.VerifyIntent(context.Background(), signedHS256Token(t, "iotdevice-local", "gocell"), kauth.TokenIntentAccess)
 	require.Error(t, err)
 }
 
-func authChainContainsServiceToken(chain []cell.ListenerAuth) bool {
+func authChainContainsServiceToken(chain []kauth.ListenerAuth) bool {
 	for _, plan := range chain {
-		if _, ok := plan.(cell.AuthServiceToken); ok {
+		if _, ok := plan.(kauth.AuthServiceToken); ok {
 			return true
 		}
 	}
@@ -127,9 +128,9 @@ func signedHS256Token(t *testing.T, issuer, audience string) string {
 		"aud":       audience,
 		"exp":       time.Now().Add(time.Hour).Unix(),
 		"iat":       time.Now().Unix(),
-		"token_use": string(auth.TokenIntentAccess),
+		"token_use": string(kauth.TokenIntentAccess),
 	})
-	token.Header["typ"] = auth.TypHeaderForIntent(auth.TokenIntentAccess)
+	token.Header["typ"] = auth.TypHeaderForIntent(kauth.TokenIntentAccess)
 	signed, err := token.SignedString([]byte("demo-secret"))
 	require.NoError(t, err)
 	return signed

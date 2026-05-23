@@ -84,7 +84,7 @@ func isWrapperCallerAllowed(rel string) bool {
 	switch rel {
 	case "kernel/persistence/cell_marker.go",
 		"kernel/outbox/cell_marker.go",
-		"kernel/cell/demo_tx_runner.go",
+		"kernel/outbox/demo_tx_runner.go",
 		"cells/accesscore/mem/bundle.go",
 		"cells/accesscore/postgres/bundle.go":
 		return true

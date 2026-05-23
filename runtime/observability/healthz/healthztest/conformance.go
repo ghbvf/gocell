@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	khealthz "github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 )
@@ -106,7 +106,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 			return errors.New("hard failure")
 		})
 		degradedProbe := khealthz.NewProbe("beta_ready", func(_ context.Context) error {
-			return cell.ErrDegraded
+			return outbox.ErrDegraded
 		})
 		if err := agg.Register(downProbe); err != nil {
 			t.Fatalf("Register down: %v", err)
@@ -124,7 +124,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		agg := factory()
 		upProbe := khealthz.NewProbe("alpha_ready", func(_ context.Context) error { return nil })
 		degradedProbe := khealthz.NewProbe("beta_ready", func(_ context.Context) error {
-			return cell.ErrDegraded
+			return outbox.ErrDegraded
 		})
 		if err := agg.Register(upProbe); err != nil {
 			t.Fatalf("Register up: %v", err)
@@ -364,7 +364,7 @@ func (a *FakeAggregator) Evaluate(ctx context.Context) khealthz.Snapshot {
 		switch {
 		case pr.Err == nil:
 			pr.Status = khealthz.StatusUp
-		case errors.Is(pr.Err, cell.ErrDegraded):
+		case errors.Is(pr.Err, outbox.ErrDegraded):
 			pr.Status = khealthz.StatusDegraded
 		default:
 			pr.Status = khealthz.StatusDown

@@ -8,7 +8,7 @@
 //	app := bootstrap.New(
 //	    bootstrap.WithAssembly(asm),
 //	    bootstrap.WithListener(cell.PrimaryListener, ":8080",
-//	        []cell.ListenerAuth{cell.AuthNone{}}),
+//	        []auth.ListenerAuth{auth.AuthNone{}}),
 //	    bootstrap.WithPublisher(pub),
 //	    bootstrap.WithSubscriber(sub),
 //	)

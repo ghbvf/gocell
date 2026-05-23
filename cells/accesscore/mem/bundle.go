@@ -15,7 +15,7 @@
 //
 // Backstory: PR #595 review found cmd/corebundle/access_test_helper_test.go
 // wired UserRepository + RoleRepository + SetupLock but forgot the
-// store-paired TxRunner — silently falling back to cell.DemoCellTxManager
+// store-paired TxRunner — silently falling back to outbox.DemoCellTxManager
 // after Provisioner.mu was deleted. The Bundle funnel collapses that
 // 4-option foot-gun into a single mandatory wire path.
 package mem
