@@ -239,7 +239,7 @@ func New() *MyCell {
 
 // initInternal is the hand-written init hook called from cell_gen.go after
 // BaseCell.Init runs. Wire dependencies (DB, clients, workers) here.
-func (c *MyCell) initInternal(ctx context.Context, reg cell.Registry) error {
+func (c *MyCell) initInternal(ctx context.Context, reg cell.Registrar) error {
     return nil
 }
 ```
@@ -275,9 +275,9 @@ func main() {
         bootstrap.WithAssembly(asm),
         bootstrap.WithClock(clk),
         bootstrap.WithListener(cell.PrimaryListener, ":8080",
-            []cell.ListenerAuth{cell.AuthNone{}}),
+            []auth.ListenerAuth{auth.AuthNone{}}),
         bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
-            []cell.ListenerAuth{cell.AuthNone{}}),
+            []auth.ListenerAuth{auth.AuthNone{}}),
     )
     app.Run(ctx)
 }
@@ -525,7 +525,7 @@ defer shutdown(context.Background())
 app := bootstrap.New(
     bootstrap.WithAssembly(asm),
     bootstrap.WithListener(cell.PrimaryListener, ":8080",
-        []cell.ListenerAuth{cell.AuthNone{}}),
+        []auth.ListenerAuth{auth.AuthNone{}}),
     bootstrap.WithTracer(tracer), // tracer is a kernel/wrapper.Tracer
 )
 

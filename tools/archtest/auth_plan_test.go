@@ -83,6 +83,30 @@ var authPlanConstructorNames = []string{
 	"AuthServiceToken",
 }
 
+// authPlanPkgIdents are the package qualifiers (import aliases) under which
+// the auth-plan types are reachable. The canonical name is `auth` (kernel/auth
+// without alias); `kauth` is the conventional alias used by files that also
+// import runtime/auth as `auth`. Adding a new alias here is the only knob — the
+// AST scanners delegate to isAuthPlanPkgIdent so introducing a third alias is
+// a single-line change. New AI co-authors that pick a different alias (e.g.
+// `kernelauth`) silently bypass LAYER-09 until the alias is added here; this
+// is the Medium-rated gap that the typed funnel below promotes to Hard.
+//
+// Future Hard upgrade: use archtest.RunTyped to resolve the callee's package
+// path against `github.com/ghbvf/gocell/kernel/auth` (alias-independent). The
+// current Medium form keeps the rule fast (parser-only) at the cost of
+// requiring this alias list to stay in sync. Backlog: see ADR
+// 202605241500-001-kernel-cell-package-decompose.md §Consequences.
+var authPlanPkgIdents = map[string]struct{}{
+	"auth":  {}, // unaliased import of kernel/auth
+	"kauth": {}, // alias used when runtime/auth is also imported as `auth`
+}
+
+func isAuthPlanPkgIdent(name string) bool {
+	_, ok := authPlanPkgIdents[name]
+	return ok
+}
+
 // ---------------------------------------------------------------------------
 // AUTH-PLAN-01: no forbidden policy string literals
 // ---------------------------------------------------------------------------
@@ -325,8 +349,12 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 //   - runtime/     — shared runtime (except runtime/bootstrap/ which is the
 //     composition wiring layer and is explicitly allowed)
 //
-// The scan covers both composite literals (auth.AuthJWT{}) and constructor
-// function calls (auth.NewAuthJWT(...), cell.NewAuthMTLS(), etc.).
+// The scan covers both composite literals (auth.AuthJWT{}, kauth.AuthMTLS{})
+// and constructor function calls (auth.NewAuthJWT(...), kauth.NewAuthServiceToken(...)). The
+// package qualifier is matched against the set of known kernel/auth aliases
+// in the codebase (`auth`, `kauth`) to stay alias-agnostic — see PR #615
+// (G-10 decompose) for why the symbol lives in kernel/auth instead of
+// kernel/cell.
 func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 	root := findModuleRoot(t)
 
@@ -367,11 +395,11 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 			continue
 		}
 		scanner.EachInSubtree[ast.CompositeLit](af, func(node *ast.CompositeLit) {
-			// Composite literal: auth.AuthJWT{} / AuthJWT{...}
+			// Composite literal: auth.AuthJWT{} / kauth.AuthNone{} / AuthJWT{...}
 			typeName := ""
 			switch t := node.Type.(type) {
 			case *ast.SelectorExpr:
-				if id, ok := t.X.(*ast.Ident); ok && id.Name == "cell" {
+				if id, ok := t.X.(*ast.Ident); ok && isAuthPlanPkgIdent(id.Name) {
 					typeName = t.Sel.Name
 				}
 			case *ast.Ident:
@@ -389,14 +417,15 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 			}
 		})
 		scanner.EachInSubtree[ast.CallExpr](af, func(node *ast.CallExpr) {
-			// Constructor calls: auth.NewAuthJWT(...) / auth.NewAuthJWTFromAssembly(...)
-			// etc. These are SelectorExpr call expressions where the package is "cell".
+			// Constructor calls: auth.NewAuthJWT(...) / kauth.NewAuthJWTFromAssembly(...)
+			// etc. The package qualifier must be one of the known kernel/auth
+			// import aliases — see isAuthPlanPkgIdent.
 			sel, ok := node.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return
 			}
 			pkg, ok := sel.X.(*ast.Ident)
-			if !ok || pkg.Name != "cell" {
+			if !ok || !isAuthPlanPkgIdent(pkg.Name) {
 				return
 			}
 			// Constructor naming convention: New<TypeName> or <TypeName>{} literal.
@@ -471,6 +500,94 @@ var _ = bootstrap.PolicyJWT(nil)
 		}
 	})
 	assert.True(t, found, "fixture scanner must detect bootstrap.PolicyJWT")
+}
+
+// TestAuthPlan_Fixtures_Rule04 ensures AUTH-PLAN-04 scanner fires on every
+// known alias for kernel/auth (bare `auth` and the `kauth` alias used when
+// runtime/auth is also imported). This is the regression probe for the
+// G-10 decompose — the old single-alias check (`pkg.Name == "cell"`) went
+// vacuously empty after the symbol move and let LAYER-09 silently fall
+// through. See PR #615.
+func TestAuthPlan_Fixtures_Rule04(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string // expected NewAuth* function name
+	}{
+		{
+			name: "bare auth alias (kernel/auth without alias)",
+			src: `package fixture
+import "example.com/kernel/auth"
+var _, _ = auth.NewAuthJWT(nil)
+`,
+			want: "NewAuthJWT",
+		},
+		{
+			name: "kauth alias (kernel/auth imported alongside runtime/auth)",
+			src: `package fixture
+import kauth "example.com/kernel/auth"
+var _, _ = kauth.NewAuthJWTFromAssembly(nil)
+`,
+			want: "NewAuthJWTFromAssembly",
+		},
+		{
+			name: "composite literal AuthNone{} via auth alias",
+			src: `package fixture
+import "example.com/kernel/auth"
+var _ = auth.AuthNone{}
+`,
+			want: "AuthNone",
+		},
+		{
+			name: "composite literal AuthMTLS{} via kauth alias",
+			src: `package fixture
+import kauth "example.com/kernel/auth"
+var _ = kauth.AuthMTLS{}
+`,
+			want: "AuthMTLS",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			af, err := parser.ParseFile(fset, "fixture.go", tc.src, parser.SkipObjectResolution)
+			require.NoError(t, err)
+
+			var found bool
+
+			scanner.EachInSubtree[ast.CallExpr](af, func(node *ast.CallExpr) {
+				sel, ok := node.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok || !isAuthPlanPkgIdent(pkg.Name) {
+					return
+				}
+				if sel.Sel.Name == tc.want {
+					found = true
+				}
+			})
+
+			scanner.EachInSubtree[ast.CompositeLit](af, func(node *ast.CompositeLit) {
+				sel, ok := node.Type.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				id, ok := sel.X.(*ast.Ident)
+				if !ok || !isAuthPlanPkgIdent(id.Name) {
+					return
+				}
+				if sel.Sel.Name == tc.want {
+					found = true
+				}
+			})
+
+			assert.True(t, found,
+				"AUTH-PLAN-04 fixture scanner must detect %s via the %q form", tc.want, tc.name)
+		})
+	}
 }
 
 // TestAuthPlan_Fixtures_Rule03 ensures AUTH-PLAN-03 scanner fires on known bad input.

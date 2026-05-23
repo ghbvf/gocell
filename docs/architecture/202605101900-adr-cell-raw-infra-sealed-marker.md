@@ -64,7 +64,7 @@ sealed marker 是字段类型与 raw→sealed 赋值层的 Hard 防线，但 typ
   - `examples/<demo>/main.go` / `examples/<demo>/app.go`（example composition root）
   - `*_test.go` 任意路径（测试构造 fake）
   - `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go`（marker 定义本身）
-  - `kernel/cell/demo_tx_runner.go`（`DemoCellTxManager()` 工厂；cells/* demo fallback 收敛到此处，cells/* 内部不持 wrap call）
+  - `kernel/outbox/demo_tx_runner.go`（`DemoCellTxManager()` 工厂；cells/* demo fallback 收敛到此处，cells/* 内部不持 wrap call）
   
   调用形态识别覆盖 `*ast.SelectorExpr`（`pkg.Func()` 形态）+ `*ast.Ident`（dot-import `Func()` 形态），`info.Uses` 解析为相同 `*types.Func` 后做 canonical name 比对。
 
@@ -139,7 +139,7 @@ cells/<x>/cell_init.go 原本 `c.txRunner = cell.DemoTxRunner{}` 在 sealed type
 A. cells/* 内部调 `persistence.WrapForCell(cell.DemoTxRunner{})`——但 cells/* 不在 wrapper-location archtest allowlist 内，违反 D2
 B. **kernel/cell** 暴露 `DemoCellTxManager() persistence.CellTxManager` 工厂（内部 wrap），cells/* 调 `cell.DemoCellTxManager()`——wrap call 收敛到 kernel/cell
 
-选 B：wrap call site 列表多 1 个文件（kernel/cell/demo_tx_runner.go），cells/* 完全不持 wrap call，archtest allowlist 简洁清晰，cells/* 与 raw infra 完全解耦。
+选 B：wrap call site 列表多 1 个文件（kernel/outbox/demo_tx_runner.go），cells/* 完全不持 wrap call，archtest allowlist 简洁清晰，cells/* 与 raw infra 完全解耦。
 
 ### D6. composition root 6 处 + 11 处测试一次性迁移到 Wrap*ForCell
 
@@ -173,7 +173,7 @@ B. **kernel/cell** 暴露 `DemoCellTxManager() persistence.CellTxManager` 工厂
 ## ref
 
 - `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go` — sealed marker 实现
-- `kernel/cell/demo_tx_runner.go` — `DemoCellTxManager()` factory
+- `kernel/outbox/demo_tx_runner.go` — `DemoCellTxManager()` factory
 - `tools/archtest/wrapper_location_test.go` — `CELL-RAW-INFRA-WRAPPER-LOCATION-01`
 - `tools/archtest/internal/wrapfixture/violation/violation.go` — negative fixture
 - `.claude/rules/gocell/ai-robust.md` §AI-robust 三档分级 / §载体决策原则 / §Soft → Hard 改造方向

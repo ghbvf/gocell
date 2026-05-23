@@ -8,7 +8,7 @@
 |------|-------|--------|------------|
 | [Uber fx](https://github.com/uber-go/fx) | 5K | MIT | Cell 生命周期、Module 注册、依赖注入 |
 | [go-zero](https://github.com/zeromicro/go-zero) | 35K | MIT | 代码生成（goctl）、限流熔断、Worker/ServiceGroup |
-| [Kratos](https://github.com/go-kratos/kratos) | 22K | MIT | 中间件链、错误模型、gRPC/HTTP 双协议、transport 抽象 |
+| [Kratos](https://github.com/go-kratos/kratos) | 22K | MIT | 中间件链、错误模型、gRPC/HTTP 双协议、transport 抽象；`registry/registry.go` Registrar(动词)/Discovery(名词) 分离 → 对标 `cell.Registrar` 命名（PR #615 G-10）；`middleware/auth/` 独立子包 → 对标 `kernel/auth/` 分包 |
 | [go-micro](https://github.com/micro/go-micro) | 23K | Apache 2.0 | Config 热更新、服务注册、Auth 模块、PubSub |
 | [Watermill](https://github.com/ThreeDotsLabs/watermill) | 6K | MIT | 事件驱动 Pub/Sub、多后端 adapter、CQRS |
 | [Kubernetes](https://github.com/kubernetes/kubernetes) | 110K | Apache 2.0 | Cell/Slice 声明模型、生命周期、校验链、编排 |

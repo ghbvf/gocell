@@ -1,4 +1,4 @@
-package outbox
+package outbox_test
 
 import (
 	"testing"
@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -18,16 +19,16 @@ func (stubNoop) Noop() bool { return true }
 type stubReal struct{}
 
 func TestDurabilityMode_String(t *testing.T) {
-	assert.Equal(t, "demo", DurabilityDemo.String())
-	assert.Equal(t, "durable", DurabilityDurable.String())
-	assert.Equal(t, "unset", DurabilityMode(0).String())
+	assert.Equal(t, "demo", outbox.DurabilityDemo.String())
+	assert.Equal(t, "durable", outbox.DurabilityDurable.String())
+	assert.Equal(t, "unset", outbox.DurabilityMode(0).String())
 }
 
 func TestCheckNotNoop_UnsetMode_RejectsAll(t *testing.T) {
 	// Zero-value DurabilityMode (unset) must be rejected regardless of deps,
 	// forcing callers to explicitly choose Demo or Durable.
 	// ref: Vault StoredKeysInvalid=0, gRPC InvalidSecurityLevel=0
-	err := CheckNotNoop(DurabilityMode(0), "test-cell", stubReal{})
+	err := outbox.CheckNotNoop(outbox.DurabilityMode(0), "test-cell", stubReal{})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -36,7 +37,7 @@ func TestCheckNotNoop_UnsetMode_RejectsAll(t *testing.T) {
 }
 
 func TestCheckNotNoop_UnsetMode_RejectsEvenWithNoDeps(t *testing.T) {
-	err := CheckNotNoop(DurabilityMode(0), "test-cell")
+	err := outbox.CheckNotNoop(outbox.DurabilityMode(0), "test-cell")
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -44,12 +45,12 @@ func TestCheckNotNoop_UnsetMode_RejectsEvenWithNoDeps(t *testing.T) {
 }
 
 func TestCheckNotNoop_DemoMode_AllowsNoop(t *testing.T) {
-	err := CheckNotNoop(DurabilityDemo, "test-cell", stubNoop{})
+	err := outbox.CheckNotNoop(outbox.DurabilityDemo, "test-cell", stubNoop{})
 	require.NoError(t, err)
 }
 
 func TestCheckNotNoop_DurableMode_RejectsNoop(t *testing.T) {
-	err := CheckNotNoop(DurabilityDurable, "test-cell", stubNoop{})
+	err := outbox.CheckNotNoop(outbox.DurabilityDurable, "test-cell", stubNoop{})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -59,30 +60,30 @@ func TestCheckNotNoop_DurableMode_RejectsNoop(t *testing.T) {
 }
 
 func TestCheckNotNoop_DurableMode_AllowsReal(t *testing.T) {
-	err := CheckNotNoop(DurabilityDurable, "test-cell", stubReal{})
+	err := outbox.CheckNotNoop(outbox.DurabilityDurable, "test-cell", stubReal{})
 	require.NoError(t, err)
 }
 
 func TestCheckNotNoop_DurableMode_AllowsNil(t *testing.T) {
-	err := CheckNotNoop(DurabilityDurable, "test-cell", nil)
+	err := outbox.CheckNotNoop(outbox.DurabilityDurable, "test-cell", nil)
 	require.NoError(t, err)
 }
 
 func TestCheckNotNoop_MultipleDeps_RejectsFirstNoop(t *testing.T) {
-	err := CheckNotNoop(DurabilityDurable, "test-cell", stubReal{}, stubNoop{})
+	err := outbox.CheckNotNoop(outbox.DurabilityDurable, "test-cell", stubReal{}, stubNoop{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stubNoop")
 }
 
 func TestCheckNotNoop_MultipleDeps_AllReal(t *testing.T) {
-	err := CheckNotNoop(DurabilityDurable, "test-cell", stubReal{}, stubReal{})
+	err := outbox.CheckNotNoop(outbox.DurabilityDurable, "test-cell", stubReal{}, stubReal{})
 	require.NoError(t, err)
 }
 
 func TestCheckNotNoop_InvalidMode_Rejects(t *testing.T) {
 	// Non-zero, non-valid mode (e.g., 99) must be rejected, not silently treated as demo.
 	// ref: Kubernetes allowlist validation, Uber fx fail-fast
-	err := CheckNotNoop(DurabilityMode(99), "test-cell", stubReal{})
+	err := outbox.CheckNotNoop(outbox.DurabilityMode(99), "test-cell", stubReal{})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -90,9 +91,9 @@ func TestCheckNotNoop_InvalidMode_Rejects(t *testing.T) {
 }
 
 func TestValidateMode(t *testing.T) {
-	assert.NoError(t, ValidateMode(DurabilityDemo))
-	assert.NoError(t, ValidateMode(DurabilityDurable))
-	assert.Error(t, ValidateMode(DurabilityMode(0)))
-	assert.Error(t, ValidateMode(DurabilityMode(99)))
-	assert.Error(t, ValidateMode(DurabilityMode(-1)))
+	assert.NoError(t, outbox.ValidateMode(outbox.DurabilityDemo))
+	assert.NoError(t, outbox.ValidateMode(outbox.DurabilityDurable))
+	assert.Error(t, outbox.ValidateMode(outbox.DurabilityMode(0)))
+	assert.Error(t, outbox.ValidateMode(outbox.DurabilityMode(99)))
+	assert.Error(t, outbox.ValidateMode(outbox.DurabilityMode(-1)))
 }

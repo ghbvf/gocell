@@ -139,7 +139,7 @@ func TestCelltestImportBoundary(t *testing.T) {
 		}
 		assert.Empty(t, violations,
 			"non-test .go files must not import kernel/cell/celltest; "+
-				"use cell.NewAuth* error-first constructors in production paths")
+				"use auth.NewAuth* (kernel/auth, error-first) constructors in production paths")
 	})
 
 	// CELLTEST-B: kernel/** must not import celltest, including _test.go files.
@@ -208,7 +208,7 @@ func TestCelltestImportBoundary(t *testing.T) {
 				if imp == celltestImport {
 					violations = append(violations,
 						fmt.Sprintf("CELLTEST-C: %s (non-test file) imports %s — "+
-							"examples production code must use cell.NewAuth* (error-first) "+
+							"examples production code must use auth.NewAuth* (kernel/auth, error-first) "+
 							"instead of celltest panic helpers", rel, imp))
 				}
 			}
@@ -218,7 +218,7 @@ func TestCelltestImportBoundary(t *testing.T) {
 		}
 		assert.Empty(t, violations,
 			"examples/ non-test files must not import kernel/cell/celltest; "+
-				"use cell.NewAuth* error-first constructors in production and demo code")
+				"use auth.NewAuth* (kernel/auth, error-first) constructors in production and demo code")
 	})
 }
 

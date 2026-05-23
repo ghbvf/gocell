@@ -91,6 +91,31 @@ were regenerated as part of this change.
 | auth lives in its own sub-package, not in the DI/registration core | Kratos / K8s apiserver / Uber fx | Kratos `middleware/auth/`; K8s `pkg/authentication/`; fx omits auth from DI entirely |
 | Mode (durable vs in-memory) decision lives in the publisher/emitter layer, not the cell-registration layer | Watermill | `pubsub/gochannel/Config.Persistent` selects in-memory vs durable backing inside the pub/sub implementation |
 
+## Why `AssemblyRef.Cell(id) cell.Cell` and not `any`
+
+`AssemblyRef.Cell(id)`'s sole production caller
+(`runtime/bootstrap/auth_plan_apply.go::resolveAuthProviderVerifier`) does
+`asm.Cell(id).(kauth.AuthProvider)` — an immediate type assertion — so any
+return type that supports `.(T)` would compile, and `any` would eliminate the
+`kernel/auth → kernel/cell` edge entirely. We rejected `any` for two reasons:
+
+1. **Type safety at the API boundary**: a future caller that forgets the type
+   assertion would silently treat the returned `any` as the empty interface,
+   compile, and crash at the first method call. Returning `cell.Cell` keeps
+   `gocell vet` / IDE call-graph / godoc useful — the caller sees what the
+   returned value's *minimum* contract is, even though business code immediately
+   narrows further.
+2. **Documentation through types**: `Cell` documents the lifecycle/identity
+   capability expected of the looked-up object; `any` documents nothing. The
+   AI-robust principle "AI co-authors should not have to read prose to know
+   the contract" pushes toward the typed return.
+
+The cost is a one-way `kernel/auth → kernel/cell` edge (the only edge auth has
+into the rest of kernel/). The `KERNEL-INTERNAL-DAG-01` archtest pins it
+explicitly in `allowedKernelEdges`, and the compile-time tripwire
+`var _ func(kauth.AssemblyRef, string) cell.Cell = kauth.AssemblyRef.Cell`
+(`runtime/bootstrap/auth_plan_apply_test.go`) catches any drift.
+
 ## Consequences
 
 **Positive**

@@ -1260,7 +1260,7 @@ func asnFindAssemblyProductionGoFiles(root string) ([]string, error) {
 // INVARIANT: ASSEMBLYREF-METHOD-SET-01
 //
 // TestAssemblyRefMethodSet enforces ASSEMBLYREF-METHOD-SET-01: the
-// auth.AssemblyRef interface (kernel/cell/auth_plan.go) must declare exactly
+// auth.AssemblyRef interface (kernel/auth/auth_plan.go) must declare exactly
 // three methods:
 //   ID() string
 //   CellIDs() []string

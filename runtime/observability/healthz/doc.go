@@ -4,7 +4,7 @@
 // # Architecture
 //
 // This package sits in runtime/observability/ — one layer above kernel/ — so
-// it can import kernel/healthz (interfaces), kernel/cell (ErrDegraded), and
+// it can import kernel/healthz (interfaces), kernel/outbox (ErrDegraded), and
 // kernel/clock (Clock / MustHaveClock) without violating the layering rules
 // (runtime/ may import kernel/; must not import cells/, adapters/).
 //
