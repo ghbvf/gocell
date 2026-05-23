@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credential"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -118,6 +119,21 @@ func WithTokenIssuer(ti TokenIssuer) Option {
 	return func(s *Service) { s.tokenIssuer = ti }
 }
 
+// WithPasswordHasher overrides the password hasher (default
+// credential.NewProductionHasher(), cost 12). Tests wire
+// credential.NewTestHasher(bcrypt.MinCost). BCRYPT-COST-FUNNEL-01 guards that
+// production never reaches the low-cost door. Bare/typed-nil inputs are
+// silently ignored (builder-option semantics) so the production default
+// survives.
+func WithPasswordHasher(h credential.Hasher) Option {
+	return func(s *Service) {
+		if validation.IsNilInterface(h) {
+			return
+		}
+		s.hasher = h
+	}
+}
+
 // WithLastAdminProtection wires the role repository used to reject operations
 // that would remove the final effective admin from the system.
 func WithLastAdminProtection(roleRepo ports.RoleRepository) Option {
@@ -151,6 +167,11 @@ type Service struct {
 	lastAdminProtectionRequested bool
 	lastAdminRoleRepo            ports.RoleRepository
 	lastAdminGuard               *domain.LastAdminGuard
+	// hasher is the password hasher. Optional: defaults to
+	// credential.NewProductionHasher() (cost 12) like logger/emitter default, so
+	// production is correct without explicit wiring. Tests override via
+	// WithPasswordHasher(credential.NewTestHasher(bcrypt.MinCost)) for speed.
+	hasher credential.Hasher
 }
 
 // NewService creates an identity-manage Service. tokenIssuer is required;
@@ -183,6 +204,7 @@ func NewService(
 		invalidator: invalidator,
 		emitter:     outbox.NewNoopEmitter(),
 		logger:      logger,
+		hasher:      credential.NewProductionHasher(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -257,12 +279,12 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, err
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), domain.BcryptCost)
+	hash, err := s.hasher.Hash([]byte(input.Password))
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: hash password: %w", err)
 	}
 
-	user, err := domain.NewUser(input.Username, input.Email, string(hash), s.clock.Now())
+	user, err := domain.NewUser(input.Username, input.Email, hash, s.clock.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -850,7 +872,7 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthOldPasswordIncorrect, "old password incorrect")
 	}
 
-	newHash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), domain.BcryptCost)
+	newHash, err := s.hasher.Hash([]byte(input.NewPassword))
 	if err != nil {
 		return "", fmt.Errorf("identity-manage: change-password hash: %w", err)
 	}
@@ -859,7 +881,7 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	// resetRequired=false: password just rotated, no reset prompt needed.
 	const resetRequired = false
 	if _, err := s.repo.UpdatePassword(
-		txCtx, user.ID, string(newHash), resetRequired, user.PasswordVersion,
+		txCtx, user.ID, newHash, resetRequired, user.PasswordVersion,
 	); err != nil {
 		return "", err // ErrVersionConflict on stale view
 	}

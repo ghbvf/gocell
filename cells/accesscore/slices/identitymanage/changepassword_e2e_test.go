@@ -196,7 +196,7 @@ func newE2EFixture() *e2eFixture {
 // the in-memory repos. Returns the userID.
 func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword string) string {
 	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), domain.BcryptCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), bcrypt.MinCost)
 	require.NoError(t, err)
 
 	user, err := domain.NewUser(username, username+"@gocell.local", string(hash), time.Now())

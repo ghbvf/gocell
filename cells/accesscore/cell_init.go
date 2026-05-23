@@ -254,6 +254,7 @@ func (c *AccessCore) initSlices() error {
 		identitymanage.WithTxManager(c.txRunner),
 		identitymanage.WithClock(c.clk),
 		identitymanage.WithLastAdminProtection(c.roleRepo),
+		identitymanage.WithPasswordHasher(c.passwordHasher),
 	}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
 	identitySvc, err := identitymanage.NewService(c.userRepo, c.invalidator, c.logger, identityOpts...)
@@ -349,6 +350,7 @@ func (c *AccessCore) initSlices() error {
 		setup.WithEmitter(c.emitter),
 		setup.WithTxManager(c.txRunner),
 		setup.WithSetupLock(c.setupLock),
+		setup.WithPasswordHasher(c.passwordHasher),
 	)
 	if err != nil {
 		return err

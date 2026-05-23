@@ -583,7 +583,7 @@ func (*fakeRepoVersionConflict) UpdatePassword(_ context.Context, _ string, _ st
 func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 	repo := &fakeRepoVersionConflict{UserRepository: mem.NewStore(clock.Real()).UserRepository()}
 	userID := testutil.TestID("usr-409")
-	oldHash, hashErr := bcrypt.GenerateFromPassword([]byte("oldpass12"), domain.BcryptCost)
+	oldHash, hashErr := bcrypt.GenerateFromPassword([]byte("oldpass12"), bcrypt.MinCost)
 	require.NoError(t, hashErr)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	u409, reconErr := domain.ReconstituteUser(domain.ReconstituteUserParams{

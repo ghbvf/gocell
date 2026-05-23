@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credential"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
@@ -130,6 +131,21 @@ func WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter) Option {
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *AccessCore) { c.logger = l }
+}
+
+// WithPasswordHasher overrides the password hasher threaded to the setup and
+// identity-manage services. Defaults to credential.NewProductionHasher() (cost
+// 12); tests and integration harnesses pass credential.NewTestHasher(
+// bcrypt.MinCost) to avoid the ~1.5s/hash cost. A bare/typed-nil hasher is
+// ignored so the production default survives. BCRYPT-COST-FUNNEL-01 rule A2
+// keeps NewTestHasher out of production code.
+func WithPasswordHasher(h credential.Hasher) Option {
+	return func(c *AccessCore) {
+		if validation.IsNilInterface(h) {
+			return
+		}
+		c.passwordHasher = h
+	}
 }
 
 // WithJWTIssuer sets the RS256 JWT issuer for token signing.
@@ -353,6 +369,13 @@ type AccessCore struct {
 	// cells never construct Protocol directly.
 	casProtocol *cas.Protocol
 
+	// passwordHasher is threaded to the setup + identitymanage services.
+	// Defaults to credential.NewProductionHasher() (cost 12) in NewAccessCore;
+	// tests/integration harnesses override via WithPasswordHasher to use
+	// credential.NewTestHasher(bcrypt.MinCost) for speed. BCRYPT-COST-FUNNEL-01
+	// guards that production never reaches the low-cost door.
+	passwordHasher credential.Hasher
+
 	// Slice handlers.
 	// +slice:route:slice=identitymanage,subPath=/users
 	identityHandler *identitymanage.Handler
@@ -392,8 +415,9 @@ type AccessCore struct {
 // NewAccessCore creates a new AccessCore Cell.
 func NewAccessCore(opts ...Option) *AccessCore {
 	c := &AccessCore{
-		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
-		logger:   slog.Default(),
+		BaseCell:       cell.MustNewBaseCell(loadCellMetadata()),
+		logger:         slog.Default(),
+		passwordHasher: credential.NewProductionHasher(),
 	}
 	for _, o := range opts {
 		o(c)
