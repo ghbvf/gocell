@@ -397,8 +397,9 @@ CI (`make verify`) and can be reproduced locally:
 | `SUPPLY-CHAIN-VULN` | `hack/verify-supply-chain-clean.sh`, `govulncheck`, `gosec`, Semgrep, CodeQL | Vulnerable dependencies + insecure code patterns |
 | `SHELL-SAFETY-01` | `hack/verify-shell-safety.sh` | All `hack/*.sh` scripts use `set -euo pipefail` |
 
-Convenience aggregator: `bash hack/verify-prod-clock-injection.sh` runs the
-three D6 clock-injection tests in one shot.
+Convenience aggregator: `bash hack/verify-archtest-invariants.sh` runs the
+clock-injection, duration-const, test-time-literal, and panic-registered
+gates in one shot (~33s, shared-resolver).
 
 ## Built-in Cells
 

@@ -7,7 +7,7 @@
 | PR-CFG-D: unconditional-skip 门禁 | 已兑现。`hack/verify-unconditional-skip.sh` 存在，`make verify` 通过 glob 自动发现执行，Governance workflow 每次 PR/push 触发 | `hack/verify-unconditional-skip.sh:10`, `governance.yml:28`, `hack/make-rules/verify.sh` glob discover |
 | PR-CFG-J: docker-compose e2e harness 真跑（非仅 build） | 已兑现。CI `e2e` job 完整 4 步：`up -d --wait` postgres+redis → migrate `--exit-code-from` → `up -d --wait` corebundle → `go test -tags=e2e -json ... | e2egate`，e2egate 零执行即 fail | `_build-lint.yml:306-338`, `tools/e2egate/cmd/e2egate/` |
 | PR-CFG-M: boundary regenerate-and-diff CI 门禁 | **实现路径偏离计划**。Plan 描述 `_build-lint.yml` 遍历 `assemblies/*/` 执行 `generate --boundary-only` + `git diff --exit-code`；实际落地为 `go run ./cmd/gocell verify generated`（调用 `generatedverify.Verify`），语义等价（drift 检测）但 `--boundary-only` flag 从未实现（`main_test.go:274-281` 显式测试该 flag **不存在**）。门禁本身有效 | `_build-lint.yml:165-167`, `cmd/gocell/app/main_test.go:274-281`, `verify.go:233-246` |
-| PR-CI-5 (verify-panic-registered) + PR-CI-6 (verify-prod-duration) 纳入 lint shard | 已兑现。两脚本均在 `hack/` 下，`make verify` 自动发现运行；`governance.yml` 每次 PR/push 触发 `make verify` | `hack/verify-panic-registered.sh`, `hack/verify-prod-duration.sh` |
+| PR-CI-5 (verify-panic-registered) + PR-CI-6 (verify-prod-duration) 纳入 lint shard | 已兑现。两脚本已合并入 `hack/verify-archtest-invariants.sh`（PR #898），`make verify` 自动发现运行；`governance.yml` 每次 PR/push 触发 `make verify` | `hack/verify-archtest-invariants.sh` |
 | integration-test `-tags=integration` 覆盖 batch2 新增包 | **部分缺口**：PR-CFG-I 新增 `runtime/auth/...` 和 `cells/accesscore/slices/sessionlogin/...` 未纳入 integration-test scope | `_build-lint.yml:255` scope 列表无这两个路径 |
 
 ## DevOps Findings

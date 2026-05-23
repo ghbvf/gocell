@@ -139,7 +139,7 @@ single whitelist is:
   structural-typing check makes them interchangeable.
 
 The gate runs in the `tools` build-test shard (already wired) and as a
-dedicated `hack/verify-prod-clock-injection.sh` entry point under the
+dedicated `hack/verify-archtest-invariants.sh` entry point under the
 `make verify` umbrella.
 
 ## Consequences
@@ -287,11 +287,9 @@ fixture sub-packages exercising every bypass shape: `after_violates`,
 asserts the exact violation lines, so any regression that shrinks the
 type-aware predicate fails the fixture suite.
 
-`hack/verify-prod-clock-injection.sh` is the operator-facing wrapper that
-runs all D6 archtests as one shot:
-`go test ./tools/archtest/ -run 'TestProdClockInjection|TestKernelClockLeafFallback|TestProdClockInjectionFixtures'`
-(extended in PR #348 Round 2 to include the leaf-fallback gate and the
-fixture regression suite). Round 2 also added two additional D6 gates
+`hack/verify-archtest-invariants.sh` is the operator-facing wrapper that
+runs all D6 archtests as one shot (merged with panic and test-time gates,
+PR #898). Round 2 also added two additional D6 gates
 (`KERNEL-CLOCK-RESET-RELATIVE-PROD-01`, `CLOCK-INJECTION-TEST-CALLSITE-01`)
 which are part of the broader `tools/archtest` suite invoked by `make verify`.
 
@@ -397,7 +395,7 @@ existing `PROD-CLOCK-INJECTION-01`) and behaviorally:
 - `tools/archtest/prod_clock_injection_test.go`,
   `tools/archtest/prod_clock_injection_fixtures_test.go`,
   `tools/archtest/testdata/prod_clock_injection_fixtures/`
-- `hack/verify-prod-clock-injection.sh`
+- `hack/verify-archtest-invariants.sh`
 - jonboulle/clockwork — Clock interface shape parity check
 - k8s.io/utils/clock — single-layer Clock vs PassiveClock decision
 - dominikh/go-tools — CallName / IsCallToAny type-aware predicate

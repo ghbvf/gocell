@@ -28,29 +28,24 @@ jobs:
   verify:
     name: make verify
     runs-on: ubuntu-latest
-    # `make verify` discovers and runs every hack/verify-*.sh gate. archtest
-    # is delegated to .github/workflows/archtest-nightly.yml (matrix of 16
-    # shards on a daily schedule + workflow_dispatch, process-isolated per
-    # ADR 202605120000 §Amendment 2026-05-23-pr-time-to-nightly) — that job
-    # is the **single authoritative owner** of archtest enforcement on CI.
-    # Running archtest here too would (a) duplicate CI cost; (b) create a
-    # divergent contract (this serial path has no SLOWGATE_BIN injection),
-    # so the same script would behave differently depending on which
-    # workflow invoked it. The single-owner rule mirrors Kubernetes's
-    # per-verify-*.sh Prow job model and Watermill's reusable-workflow
-    # split (one owner per gate; aggregators delegate). There is NO PR-time
-    # local fast-feedback for archtest: hack/githooks/pre-push deliberately
-    # omits archtest after PR #887 review round-2 (CPU/RSS budget — ~3min
-    # wall + 43 GB RSS + 18-core 100% violates the hook's sub-10s
-    # deterministic contract; see ADR §"pre-push archtest 撤回"). Developers
-    # who want PR-time archtest feedback run `make verify` (this workflow's
-    # local path without VERIFY_SKIP) or `bash hack/verify-archtest.sh`
-    # explicitly.
+    # `make verify` discovers and runs every hack/verify-*.sh gate. The 4
+    # core invariant groups (clock-injection, duration-const, test-time-literal,
+    # panic-registered) are PR-time gates via hack/verify-archtest-invariants.sh
+    # (~33s, PR #898 measured; single shared-resolver go test invocation).
+    # The complete archtest suite (628+ tests) is delegated to
+    # .github/workflows/archtest-nightly.yml (matrix of 16 shards on a daily
+    # schedule + workflow_dispatch, process-isolated per ADR 202605120000
+    # §Amendment 2026-05-23-pr-time-to-nightly) — that job is the **single
+    # authoritative owner** of full archtest enforcement on CI.
+    # hack/githooks/pre-push omits archtest after PR #887 review round-2
+    # (CPU/RSS budget — ~3min wall + 43 GB RSS + 18-core 100% violates the
+    # hook's sub-10s deterministic contract; see ADR §"pre-push archtest 撤回").
     #
-    # 15 min covers cold module cache plus other ~9 verify-*.sh gates
-    # running continue-on-failure (hack/make-rules/verify.sh accumulates
-    # failures across gates).
-    timeout-minutes: 15
+    # 15 min covers cold module cache plus all verify-*.sh gates running
+    # continue-on-failure (hack/make-rules/verify.sh accumulates failures
+    # across gates). 4 PR-time archtest gate 合并后 ~33s（PR #898 实测），仍在
+    # 15min 预算内。
+    timeout-minutes: 15 # 4 PR-time archtest gate 合并后 ~33s（PR #898 实测），仍在 15min 预算内
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
