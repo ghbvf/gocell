@@ -41,7 +41,7 @@ import (
 // enforces that 021 carries the live anchor — without the canary, deleting
 // both sides of the anchor would silently degrade the rule to a no-op.
 //
-// AI-rebust 评级：Medium — anchor is a structured directive matched by a
+// AI-robust 评级：Medium — anchor is a structured directive matched by a
 // strict regex (not free-form prose). Bypass cost is "edit two real files
 // in the same PR" (the migration plus removing the canary). Hard would
 // require a release-manifest source-of-truth that this repo does not have.

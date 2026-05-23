@@ -13,7 +13,7 @@
 // the pathsafe package, and the only intra-package field-set construction is
 // inside NewPlanSet itself.
 //
-// AI-rebust: Hard (compile-time, struct field privacy + sealed constructor
+// AI-robust: Hard (compile-time, struct field privacy + sealed constructor
 // pattern from charter §载体决策原则 type system). This archtest exists as
 // a regression guard for that structural property: it reflects PlanSet to
 // confirm `items` is unexported and that NewPlanSet exists. A future commit
@@ -26,7 +26,7 @@
 // present and unexported (field.PkgPath != ""). The companion check inspects
 // the *types.Package for the public constructor name.
 //
-// # Blind spots (declared per ai-collab §载体决策原则)
+// # Blind spots (declared per ai-robust §载体决策原则)
 //
 // reflect-based field walk misses:
 //

@@ -30,10 +30,10 @@ ADR `202605101900` §D6 论证"`CELL-RAW-DEPS-01` 整体删除"，但 OUTBOX-CEL
 - `examples/todoorder/cells/ordercell/cell.go:68` 仍有 `WithOutboxWriter(writer outbox.CellWriter)`，因 platform-only 过滤而豁免——这是 isCellFile 切口割裂带来的不一致。
 
 **建议**：
-1. 短期（本 PR 后第 1 个 follow-up window）：在 ADR `202605101900` 加 §D7"OUTBOX-CELL-01 名字守卫的去留决议"，要么显式保留并论证（防止历史 spelling 在平台 cell 复活），要么删除（sealed marker + PARAM-01 已覆盖）。当前 invisible carryover 违反 ai-collab.md "PR scope 切割必须显式登记 backlog"。
+1. 短期（本 PR 后第 1 个 follow-up window）：在 ADR `202605101900` 加 §D7"OUTBOX-CELL-01 名字守卫的去留决议"，要么显式保留并论证（防止历史 spelling 在平台 cell 复活），要么删除（sealed marker + PARAM-01 已覆盖）。当前 invisible carryover 违反 ai-robust.md "PR scope 切割必须显式登记 backlog"。
 2. 中期：评估是否把 OUTBOX-CELL-01 与 CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 合并为单一 type-aware 守卫（统一扫 platform + examples），消除 isCellFile 与 isCellPackageRootFile 两套 scope 函数的双源。
 
-**AI-rebust 评级**：当前 OUTBOX-CELL-01 实现是 Medium（AST 扫描 + 名字字符串），但语义价值已退化为 Soft（名字 convention）。
+**AI-robust 评级**：当前 OUTBOX-CELL-01 实现是 Medium（AST 扫描 + 名字字符串），但语义价值已退化为 Soft（名字 convention）。
 
 **Backlog 登记建议**：新增 `OUTBOX-CELL-01-VS-SEALED-MARKER-RECONCILE`（P3/Cx2 黄）。触发条件 = 本 PR 后第 1 个 follow-up window（不要 deferred）。
 
@@ -50,17 +50,17 @@ ADR `202605101900` §D6 论证"`CELL-RAW-DEPS-01` 整体删除"，但 OUTBOX-CEL
 
 **建议**：把 backlog 条件从 (a)"出现违规实例（即使一次）" 改为主动收敛——`isCellPackageRootFile` 直接扩展为 `cells/<x>/*.go` 排除 `internal/`/`slices/`/`_test.go`/`_gen.go`。当前 sibling 文件全部是 cell-internal helpers，无 With* Option 暴露，扩展是 zero-cost regression-prevention。
 
-**AI-rebust 评级**：当前 archtest 实现 Medium；sibling scope gap 是 Soft（路径过滤约定）。扩展后仍 Medium，但语义覆盖更完整。
+**AI-robust 评级**：当前 archtest 实现 Medium；sibling scope gap 是 Soft（路径过滤约定）。扩展后仍 Medium，但语义覆盖更完整。
 
 **Backlog 登记**：已登记 `PR441-FU-RAW-INFRA-PARAM-SIBLING-EXPAND-01`（P3/Cx2 🟠）。建议触发条件改为"本 PR 后第 2 个 release window 主动收敛"，不要等违规实例出现。
 
-### F3 [Cx1] kernel/command/Sweeper 改造范围超出 PR-A22 标题，AI-rebust 评级矛盾未在 ADR 中固化
+### F3 [Cx1] kernel/command/Sweeper 改造范围超出 PR-A22 标题，AI-robust 评级矛盾未在 ADR 中固化
 
 **位置**：`kernel/command/sweeper.go` (+125/-33)；`kernel/command/sweeper_factory_test.go` (新 57 行)；`kernel/command/sweeper_test.go` (+127/-50)。
 
 **问题**：PR 441 标题 `refactor(kernel/cell): ISP-split Cell interface + CELL-RAW-DEPS-01 archtest (PR-A22)` 与 sweeper 改造无明显关联。merge commit message 把它归入"reviewer agent F3 (Cx2)"——是二轮 review 的延伸修复，scope 蔓延但有 trace。
 
-更关键的问题：`sweeper.go:92-112` godoc 自我评级"AI-rebust: **Medium (runtime fail-closed sentinel)**"，但 PR description 只列 Hard / Medium / Soft 三档，没有为 Sweeper 这条独立列项。godoc 同时承认"`var s command.Sweeper` / `&command.Sweeper{}` zero-value construction remains expressible"——也就是说现有 Hard 部分（unexported field 阻止字段写入）+ Medium 部分（runtime `built` sentinel）的混合评级没有 ADR 固化。Hard 升级路径（opaque interface return）只在 godoc 一句话提及，没有 backlog 条目。
+更关键的问题：`sweeper.go:92-112` godoc 自我评级"AI-robust: **Medium (runtime fail-closed sentinel)**"，但 PR description 只列 Hard / Medium / Soft 三档，没有为 Sweeper 这条独立列项。godoc 同时承认"`var s command.Sweeper` / `&command.Sweeper{}` zero-value construction remains expressible"——也就是说现有 Hard 部分（unexported field 阻止字段写入）+ Medium 部分（runtime `built` sentinel）的混合评级没有 ADR 固化。Hard 升级路径（opaque interface return）只在 godoc 一句话提及，没有 backlog 条目。
 
 **证据**：
 - `sweeper.go:104-110` "Hard upgrade path (backlog): make Sweeper an opaque interface returned only by NewSweeper"——backlog 条目未登记。
@@ -70,7 +70,7 @@ ADR `202605101900` §D6 论证"`CELL-RAW-DEPS-01` 整体删除"，但 OUTBOX-CEL
 1. 新增 backlog `SWEEPER-OPAQUE-INTERFACE-HARD-UPGRADE-01`（P3/Cx2 黄）：把 `Sweeper` 改造为 unexported struct + `NewSweeper(...) Sweeper`（接口返回值），让 zero-value `command.Sweeper{}` 不可表达。触发条件 = 第二个走 zero-value 字面量的 caller 出现。
 2. ADR `202605101900` 或新独立 ADR 显式记录 Sweeper Hard/Medium 混合评级的边界，避免 godoc 自我评级 vs PR description 评级之间的 silent drift。
 
-**AI-rebust 评级**：当前 Medium（runtime fail-closed sentinel）；upgrade path Hard。
+**AI-robust 评级**：当前 Medium（runtime fail-closed sentinel）；upgrade path Hard。
 
 **Backlog 登记建议**：新增 `SWEEPER-OPAQUE-INTERFACE-HARD-UPGRADE-01`（P3/Cx2 黄，主动 ship 时机=本 PR 后第 1 个 release window）。
 
@@ -98,7 +98,7 @@ ADR `202605101900` §D3 解释为什么用 anonymous local interface（避免 `k
 1. 加 `kernel/persistence/cell_marker_test.go` 与 `kernel/outbox/cell_marker_test.go` 中的 table-driven 单测（如尚未覆盖）：构造 `Wrap*ForCell(noopImpl)` → 断言返回值的 `Noop()` 透传 inner noop signal，每个 sealed marker 一条。
 2. 加 archtest `SEALED-MARKER-NOOP-TRANSPARENCY-01`（Medium）：扫 `kernel/{persistence,outbox}/cell_marker.go` 中每个 internalCell* 类型必须有 `Noop() bool` 方法；通过 AST 检查 receiver type + method name，确保未来新增 sealed marker 同样具备透传。
 
-**AI-rebust 评级**：当前 Soft（隐式结构化契约 + godoc 解释）。目标 Medium（archtest method-set scan）。
+**AI-robust 评级**：当前 Soft（隐式结构化契约 + godoc 解释）。目标 Medium（archtest method-set scan）。
 
 **Backlog 登记建议**：新增 `SEALED-MARKER-NOOP-TRANSPARENCY-01`（P3/Cx1 黄）。
 
@@ -112,11 +112,11 @@ ADR `202605101900` §D3 解释为什么用 anonymous local interface（避免 `k
 
 **证据**：
 - `cell_iface_isp_test.go:307-319` 测试体 `got := computeMethodSetsHash(expectedSubInterfaces, expectedSubInterfaceMethods)`——hash 输入是 expected 数据，不是 source AST。
-- 文件级 godoc 自评 "AI-rebust 评级：Medium"——这条是符合实际的（不像 F1 那样自评偏乐观），但 hash guard 单独自评 "Hard (SHA-256 hash guard — silent modification impossible)" 与实际效果存在距离。
+- 文件级 godoc 自评 "AI-robust 评级：Medium"——这条是符合实际的（不像 F1 那样自评偏乐观），但 hash guard 单独自评 "Hard (SHA-256 hash guard — silent modification impossible)" 与实际效果存在距离。
 
 **建议**：把 hash 输入改为从 source 解析的真实 method set——由 `loadInterfaceType(t, root, name)` 读 AST，提取每个 sub-interface 的 method names，计算 hash，再与常量比对。这样改 source 必然 hash 漂移。改造工作量小（loadInterfaceType + directMethodNames 两个 helper 已存在），且能让"Hard"声明名实相符。
 
-**AI-rebust 评级**：当前是 expected-self-hash 形式，约等于"防自己手抖"，比 Medium 略弱。目标 Hard（source-hash）。
+**AI-robust 评级**：当前是 expected-self-hash 形式，约等于"防自己手抖"，比 Medium 略弱。目标 Hard（source-hash）。
 
 **Backlog 登记建议**：新增 `CELL-IFACE-ISP-METHODSETS-HASH-SOURCE-DRIVEN-01`（P3/Cx1 绿，触发条件=方法集变更需走 ADR 修订时主动改造）。
 

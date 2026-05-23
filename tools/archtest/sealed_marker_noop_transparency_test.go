@@ -6,7 +6,7 @@
 // signal from cell.CheckNotNoop / mode_resolver.isNooperDep, letting durable
 // assemblies silently accept demo runners/publishers/writers.
 //
-// AI-rebust 评级：Medium (AST receiver-type scan — type-aware on method
+// AI-robust 评级：Medium (AST receiver-type scan — type-aware on method
 // name + receiver identifier). Upgraded to Hard path is blocked: the
 // internalCell* types are unexported so go/types canonical cannot be used
 // without loading the package; AST scan is the appropriate tool here.

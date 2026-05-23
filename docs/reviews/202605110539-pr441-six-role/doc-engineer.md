@@ -2,7 +2,7 @@
 
 ## 总体结论
 
-文档工作量大、质量整体可接受，ADR 三篇均有 Context / Decisions / Consequences 完整结构，godoc 覆盖充分，backlog 同步认真。主要缺陷集中在四处：(1) `cell_iface_isp_test.go` 含 3 条 INVARIANT 但文件名未使用 `{theme}_invariants_test.go` 形式，违反 ai-collab.md 命名规则；(2) CHANGELOG +20 完整覆盖了 sealed marker API 变更，但缺少 Cell ISP 接口拆分（4 个新导出子接口）这一 kernel 层新 API 的条目；(3) 两个 `cell_marker.go` 文件的 godoc 引用 ADR 路径使用了尖括号占位符 `<adr-cell-raw-infra-sealed-marker>`，未替换为实际文件名；(4) CHANGELOG 提及「Sweeper 不透明接口 Hard 升级路径 tracked as backlog」但无对应 backlog 条目，是 ai-collab.md 要求的显式登记缺口。三篇 ADR 均缺少独立的 Alternatives Considered 章节，替代方案分析散落在 Decision 段落内，可接受但不符合标准 ADR 格式。
+文档工作量大、质量整体可接受，ADR 三篇均有 Context / Decisions / Consequences 完整结构，godoc 覆盖充分，backlog 同步认真。主要缺陷集中在四处：(1) `cell_iface_isp_test.go` 含 3 条 INVARIANT 但文件名未使用 `{theme}_invariants_test.go` 形式，违反 ai-robust.md 命名规则；(2) CHANGELOG +20 完整覆盖了 sealed marker API 变更，但缺少 Cell ISP 接口拆分（4 个新导出子接口）这一 kernel 层新 API 的条目；(3) 两个 `cell_marker.go` 文件的 godoc 引用 ADR 路径使用了尖括号占位符 `<adr-cell-raw-infra-sealed-marker>`，未替换为实际文件名；(4) CHANGELOG 提及「Sweeper 不透明接口 Hard 升级路径 tracked as backlog」但无对应 backlog 条目，是 ai-robust.md 要求的显式登记缺口。三篇 ADR 均缺少独立的 Alternatives Considered 章节，替代方案分析散落在 Decision 段落内，可接受但不符合标准 ADR 格式。
 
 ---
 
@@ -12,7 +12,7 @@
 
 **位置**：`tools/archtest/cell_iface_isp_test.go`
 
-**问题**：ai-collab.md 规定「同主题规则 ≥ 3 → `{theme}_invariants_test.go` 主题文件；已有单文件升到第 3 条时，重命名为 `{theme}_invariants_test.go`」。该文件在 PR #441 建立时即含 3 条 INVARIANT：
+**问题**：ai-robust.md 规定「同主题规则 ≥ 3 → `{theme}_invariants_test.go` 主题文件；已有单文件升到第 3 条时，重命名为 `{theme}_invariants_test.go`」。该文件在 PR #441 建立时即含 3 条 INVARIANT：
 
 ```
 //   - INVARIANT: CELL-IFACE-ISP-COMPOSITE-01
@@ -22,7 +22,7 @@
 
 按命名规则，应命名为 `cell_iface_isp_invariants_test.go`，当前文件名 `cell_iface_isp_test.go` 仅适用于单条独立规则。
 
-**证据**：`tools/archtest/cell_iface_isp_test.go` 文件头 CommentGroup 使用列表续行格式（`//   - INVARIANT: <ID>`），明确表示多规则；ai-collab.md §archtest 文件命名原文已引用上方。
+**证据**：`tools/archtest/cell_iface_isp_test.go` 文件头 CommentGroup 使用列表续行格式（`//   - INVARIANT: <ID>`），明确表示多规则；ai-robust.md §archtest 文件命名原文已引用上方。
 
 **建议**：将 `tools/archtest/cell_iface_isp_test.go` 重命名为 `tools/archtest/cell_iface_isp_invariants_test.go`。无逻辑变更，仅文件名修正。
 
@@ -89,7 +89,7 @@ grep "adr-cell-interface" kernel/cell/interfaces.go
 
 但 `docs/backlog.md` 中不存在描述「NewSweeper 返回不透明接口（opaque interface）以消除零值攻击面」的专项条目。现有的 `SWEEPER-OBSERVABLE-01` 条目提及了 nil-receiver guard 等剩余项，但其描述范围与「opaque-interface Hard 升级路径」不对应。
 
-按 ai-collab.md 要求：「暂不做 / 等触发条件 / archtest allowlist」必须同步登记 backlog 条目，不能 silent carryover。CHANGELOG 的 "tracked as backlog" 用语明示有登记意图，但实际条目缺失。
+按 ai-robust.md 要求：「暂不做 / 等触发条件 / archtest allowlist」必须同步登记 backlog 条目，不能 silent carryover。CHANGELOG 的 "tracked as backlog" 用语明示有登记意图，但实际条目缺失。
 
 **证据**：
 ```
@@ -192,7 +192,7 @@ PR #441 review 阶段，§D6 被修改注解（Amend）覆盖并声明「实施�
 | ADR 202605101900 §D4 删除的 `CELL-RAW-DEPS-01` archtest vs 当前 `tools/archtest/` 目录 | 一致：`cell_raw_deps_test.go` 已不存在，由 `cell_public_option_param_test.go` + `wrapper_location_test.go` 替代 ✓ |
 | ADR 202605102000 引用的 `lifecycle_rollback_test.go` | 文件实际存在于 `runtime/command/` ✓ |
 | `interfaces.go` 每个子接口 godoc 含 `Consumers:` 段（ADR §D1 Soft 引导要求） | 全覆盖 ✓ |
-| sealed marker godoc 含「AI-HARD per ai-collab.md」注解（对应 ADR §D1） | 覆盖 ✓，但 ADR 引用路径使用占位符（见 F3） |
+| sealed marker godoc 含「AI-HARD per ai-robust.md」注解（对应 ADR §D1） | 覆盖 ✓，但 ADR 引用路径使用占位符（见 F3） |
 | backlog.md `LIFECYCLE-OWNER-CTX-PROPAGATION-01` 是否登记（ADR 202605102000 §D3 要求） | 已登记 ✓ |
 | backlog.md `SLICE-ISP-DEFERRED` 是否登记（ADR 202605101800 §D4 要求） | 已登记 ✓ |
 | CHANGELOG.md「Sweeper opaque-interface Hard 升级 tracked as backlog」对应 backlog 条目 | 缺失 ✗（见 F4） |

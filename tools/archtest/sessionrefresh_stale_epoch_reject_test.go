@@ -6,7 +6,7 @@ package archtest
 //
 // INVARIANT: SESSIONREFRESH-STALE-EPOCH-REJECT-01
 //
-// AI-rebust grade: Medium.
+// AI-robust grade: Medium.
 // Justification: all four prongs use go/parser AST name/string anchors
 // (Sel.Name, Ident.Name, BasicLit value) — NOT typeseval type-identity
 // resolution. A helper rename breaks the test loudly (BS-1), but a
@@ -56,7 +56,7 @@ package archtest
 //     (stale-epoch != reuse attack; conflation emits a false security audit event
 //     and triggers a redundant user-wide cascade).
 //
-// Blind-spot disclosure (§盲区自检, mandatory per ai-collab.md):
+// Blind-spot disclosure (§盲区自检, mandatory per ai-robust.md):
 //
 //  BS-1  Helper rename: the anchor for prongs 1, 2, 3, 4 is the function NAME
 //        "rejectIfStaleEpoch". If the function is renamed, findFuncBody returns

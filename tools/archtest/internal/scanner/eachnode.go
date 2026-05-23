@@ -170,7 +170,7 @@ func FindFirstChild[S any, N interface {
 //
 // FindFirstInSubtree is the subtree-depth twin of [FindFirstChild]: same
 // predicate-driven find-first contract, different depth — picking depth is
-// a typed function choice (different API name, different semantics, AI-rebust
+// a typed function choice (different API name, different semantics, AI-robust
 // Hard 范本 #1 "typed function choice for walk depth", alongside EachInSubtree
 // vs EachInChildren and EachInSubtreeStopAt).
 //
@@ -285,7 +285,7 @@ func (v *childrenVisitor[N]) Visit(n ast.Node) ast.Visitor {
 // only if the closure is invoked, which a static AST scan cannot prove).
 //
 // Picking EachInSubtreeStopAt over EachInSubtree is the third member of the
-// typed-function-choice-for-walk-depth Hard template (ai-collab.md §"Hard
+// typed-function-choice-for-walk-depth Hard template (ai-robust.md §"Hard
 // 范本" #1, alongside EachInChildren depth=1 and EachInSubtree full-recursive):
 // boundary-aware recursion is its own depth semantic, so picking the wrong
 // walker = picking the wrong API name and fails archtest at the call site.

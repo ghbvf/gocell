@@ -187,7 +187,7 @@ ref: google/trillian log/sequencer.go — IntegrateBatch verifies tree integrity
 
 | 文件/符号 | godoc | 备注 |
 |----------|-------|------|
-| `doc.go` | 有 | 解释 why internal/appender + 4 slices 关系 + AI-rebust 4 防线 |
+| `doc.go` | 有 | 解释 why internal/appender + 4 slices 关系 + AI-robust 4 防线 |
 | `Service`（service.go） | 有 | |
 | `NewService` | 有 | 含 OUTBOX-SERVICE-01 标注 |
 | `HandleEvent` | 有 | Consumer 声明完整 |
@@ -233,7 +233,7 @@ ref: google/trillian log/sequencer.go — IntegrateBatch verifies tree integrity
 
 ### 3. `cells/auditcore/internal/appender/doc.go`
 
-AI-rebust 四防线清单（Hard/Hard/Hard/Medium）直接写在 package doc 里，让 reviewer 在看代码前就知道防线层级分布。符合 `.claude/rules/gocell/ai-collab.md` 要求。
+AI-robust 四防线清单（Hard/Hard/Hard/Medium）直接写在 package doc 里，让 reviewer 在看代码前就知道防线层级分布。符合 `.claude/rules/gocell/ai-robust.md` 要求。
 
 ### 4. `runtime/audit/ledger/storetest/suite.go:runIdempotencyDifferentTimestampSameEventID()`
 
@@ -249,7 +249,7 @@ AI-rebust 四防线清单（Hard/Hard/Hard/Medium）直接写在 package doc 里
 
 ### 5. `tools/archtest/auditcore_appender_single_source_test.go` 文件头 godoc
 
-明确说明：(1) Slice 允许携带什么；(2) 禁止什么；(3) AI-rebust 评级（Medium）；(4) Hard 防线在哪里。这种"archtest 为何存在 + 保护范围"结构是 archtest 文档的推荐格式。
+明确说明：(1) Slice 允许携带什么；(2) 禁止什么；(3) AI-robust 评级（Medium）；(4) Hard 防线在哪里。这种"archtest 为何存在 + 保护范围"结构是 archtest 文档的推荐格式。
 
 ---
 

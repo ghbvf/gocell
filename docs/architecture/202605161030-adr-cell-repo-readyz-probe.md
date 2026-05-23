@@ -76,7 +76,7 @@ func RegisterRepoReadiness(reg Registry, name string, prober RepoHealthProber)
 ```
 
 This is the **only approved form** for cell-level repo readiness registration.
-The funnel provides Hard form-uniqueness (see §AI-rebust below): any call site that is not
+The funnel provides Hard form-uniqueness (see §AI-robust below): any call site that is not
 `cell.RegisterRepoReadiness(reg, name, prober)` either fails to compile (wrong type) or
 is caught by archtest `CELL-REPO-READYZ-PROBE-01`.
 
@@ -125,9 +125,9 @@ never executes the intended query.  The typed funnel (`cell.RegisterRepoReadines
 the concrete type to explicitly implement `RepoHealthProber`, making the registration
 verifiable by the compiler and by `RunRepoReadinessConformance`.
 
-## AI-rebust Rating
+## AI-robust Rating
 
-### Funnel 双向锁评级 (per `ai-collab.md` §"Funnel 双向锁评级")
+### Funnel 双向锁评级 (per `ai-robust.md` §"Funnel 双向锁评级")
 
 | Dimension | Grade | Evidence |
 |-----------|-------|----------|
@@ -136,7 +136,7 @@ verifiable by the compiler and by `RunRepoReadinessConformance`.
 
 **Combined posture**: Hard downstream + Medium upstream.  Per charter: "允许 Medium 上游 + Hard 下游的过渡形态，但必须同步登记 backlog 显式 Hard 化任务."  Backlog item `REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` is registered to track the upgrade path (sealed interface or codegen marker forcing conformance wiring at compile time).
 
-### Full AI-rebust table
+### Full AI-robust table
 
 | Layer | Carrier | Grade | Failure mode blocked |
 |-------|---------|-------|----------------------|
@@ -149,9 +149,9 @@ The conformance harness is rated **Hard (behavioral max)** because scenario 2 (D
 
 N1/N2 scope note: these rules scan `cells/` production files only.  Registration of repo probes is a cell-init responsibility; `adapters/` and `runtime/` packages do not call `cell.Registry.Health` for repo probes and are correctly excluded from N1/N2.  P1 scans the broader `cells/ + adapters/ + runtime/` corpus for `RepoHealthProber` implementations regardless.
 
-### AI-rebust honest caveats
+### AI-robust honest caveats
 
-- Archtest `CELL-REPO-READYZ-PROBE-01` is archtest-bound, not compile-time.  An AI session editing the archtest allowlist or the probe-name pattern list in the same PR could bypass it; the reviewer must backstop the topmost meta layer (ai-collab.md §"meta-governance").
+- Archtest `CELL-REPO-READYZ-PROBE-01` is archtest-bound, not compile-time.  An AI session editing the archtest allowlist or the probe-name pattern list in the same PR could bypass it; the reviewer must backstop the topmost meta layer (ai-robust.md §"meta-governance").
 - The upstream Medium grade means a new `RepoHealthProber` implementation that adds itself to `cell.RegisterRepoReadiness` but omits `RunRepoReadinessConformance` will be caught by archtest at CI time, not at compile time.
 
 ## Consequences

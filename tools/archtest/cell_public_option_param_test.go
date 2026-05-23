@@ -14,7 +14,7 @@
 // by ADR 202605101900 Amendment 2026-05-12 (PR #481 / PR-S7); the previous
 // `isCellPackageRootFile` predicate is now `isCellSubtreeFile`.
 //
-// AI-rebust 评级：Medium (archtest type-aware via RunTypedProduction
+// AI-robust 评级：Medium (archtest type-aware via RunTypedProduction
 // + types.Unalias). The kernel sealed marker is the AI-HARD primary
 // defense — it prevents writing a cell.go field typed `persistence.TxRunner`
 // and routing assignment via WrapForCell from a non-allowlisted location.
@@ -398,7 +398,7 @@ func TestCellRawInfraPublicOptionParam01_RealRepoClean(t *testing.T) {
 // every forbidden-param case (3 raw types + 1 type-alias bypass = 4
 // violations across 4 With* funcs).
 //
-// Per ai-collab.md §"real source AST capture (AI 难造假)": fixture is a
+// Per ai-robust.md §"real source AST capture (AI 难造假)": fixture is a
 // real Go package loaded via packages.Load with the archtest_fixture
 // build tag. Bypassing this test requires modifying real source code.
 func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {

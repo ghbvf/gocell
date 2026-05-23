@@ -15,7 +15,7 @@ package archtest
 // db.QueryContext(lock, ...) fail at compile time — type-system Hard
 // against caller misuse.
 //
-// AI-rebust evaluation:
+// AI-robust evaluation:
 //   - Downstream defense (caller cannot pass *Lock where context.Context
 //     is required): Hard, enforced by Go type system. Cannot be
 //     bypassed without a code change in the caller.
@@ -28,7 +28,7 @@ package archtest
 //
 // Hard-upstream upgrade path: a sealed-interface wrapper of *Lock would make
 // the type-system reject added Deadline()/Err() methods at compile time.
-// Per ai-collab.md §"Funnel 双向锁评级", until then the Medium+Hard posture
+// Per ai-robust.md §"Funnel 双向锁评级", until then the Medium+Hard posture
 // documented in ADR 202605200000-adr-distlock-lock-as-resource.md
 // §"Enforcement" is the active line.
 //
@@ -41,7 +41,7 @@ package archtest
 //
 // ref: ADR 202605200000-adr-distlock-lock-as-resource.md
 // ref: GH #20 DISTLOCK-RENEW-CALLER-CONTEXT-01
-// ref: .claude/rules/gocell/ai-collab.md "Funnel 双向锁评级" /
+// ref: .claude/rules/gocell/ai-robust.md "Funnel 双向锁评级" /
 //      "盲区清单+反向自检测试"
 
 import (
@@ -130,7 +130,7 @@ func TestDistlockLockNotContext01(t *testing.T) {
 // typesutil.ImplementsInterface to always return false, the forward test
 // above would still pass silently — this reverse test catches that.
 //
-// ai-collab.md §"AI-rebust 三档分级" mandates a blind-spot self-check
+// ai-robust.md §"AI-robust 三档分级" mandates a blind-spot self-check
 // for Hard/Medium-rated archtest rules.
 func TestDistlockLockNotContext01_BlindSpotSelfCheck(t *testing.T) {
 	t.Parallel()

@@ -794,7 +794,7 @@ func checkPublishIfBlockViolations(ifStmt *ast.IfStmt, fset *token.FileSet, inCt
 }
 
 // TestRMQPublisherFailureHandling01_ContainerCoverage_Wave4_RED is a RED-step
-// regression test (TDD per ai-collab.md) for PR445-FU finding F3.
+// regression test (TDD per ai-robust.md) for PR445-FU finding F3.
 //
 // checkPublishStmtViolations only recurses into IfStmt / SelectStmt /
 // BlockStmt. Error returns nested inside ForStmt / RangeStmt / SwitchStmt /

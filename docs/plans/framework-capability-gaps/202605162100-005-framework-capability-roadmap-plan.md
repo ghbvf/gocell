@@ -31,10 +31,10 @@
 > - 004 论点：前者已处 marginal returns，后者直接决定 L3+ 能否落地，ROI 更高。
 > - 本计划**假设选「做广组合」**展开 W0–W10；若裁决为「做深精度」，本计划整体降级为 backlog 候选池，不排期。
 
-**DG-1：AI-rebust 立项门（CLAUDE.md §AI 协作章程硬约束）**
-W0–W10 多数项是「新增框架抽象 / 新增 enforcement 机制」，受 `.claude/rules/gocell/ai-collab.md` 约束：
+**DG-1：AI-robust 立项门（CLAUDE.md §AI-robust 治理章程硬约束）**
+W0–W10 多数项是「新增框架抽象 / 新增 enforcement 机制」，受 `.claude/rules/gocell/ai-robust.md` 约束：
 
-- 每个 Wave 立项时，其引入的 archtest / codegen funnel / type marker / sealed interface 必须给 **AI-rebust 三档评级**；**Soft 严禁立项**。
+- 每个 Wave 立项时，其引入的 archtest / codegen funnel / type marker / sealed interface 必须给 **AI-robust 三档评级**；**Soft 严禁立项**。
 - funnel 类抽象（缺口 4 Command Bus / 缺口 6 Schema Registry / 缺口 22 AuthZ↔contract 等）必须**分别**给「上游 Hard / 下游 Hard」两栏评级，仅一侧 Hard 不构成闭环。
 - 引入的隐式约束（wire envelope 字段集 / 跨 yaml↔code 关系）必须**同 PR 闭环**三件套：静态守卫 + 文档契约 + 回归测试（参见 memory `feedback_constraint_self_close`）。
 
@@ -54,7 +54,7 @@ W0–W10 全部落 `kernel/` `runtime/` `pkg/` `tools/`（框架层），**严�
 | **W2** | 1 HTTP Idempotency middleware + RecordedResponse Store | W1（缺口 5） | scope 已知 | Store 复用 Redis KeyNamespace（已有 `REDIS-KEY-NAMESPACE-01`）；中间件位序需 ADR |
 | **W3** | 4 Command Bus + codegen + outbox/idempotency 协同 | W2（缺口 1） | scope 已知 | **双向锁评级**：codegen 派生 typed Command/Handler（上游 Hard）+ dispatch 调用点（下游 Hard） |
 | **W4** | 3 In-Process Contract + assembly 拓扑感知 transport | codegen 扩展 | scope 已知 | 与现有 contractgen 单源对齐；transport bind 由 assembly.yaml 决定，不得 runtime fallback |
-| **W5** | 6 Schema Registry（codegen hash + runtime check）· 15 Version Skew | W4（codegen 线） | scope 已知 | 「约定→机制」升级，AI-rebust Hard 目标项；004 §总判断点名为系统性升级机会 |
+| **W5** | 6 Schema Registry（codegen hash + runtime check）· 15 Version Skew | W4（codegen 线） | scope 已知 | 「约定→机制」升级，AI-robust Hard 目标项；004 §总判断点名为系统性升级机会 |
 | **W6** | 2 L3 Saga/Workflow Engine | W1–W4 | **部分 scope 未知**（补偿原语 / 超时语义 / 声明 vs 编程式边界 = 设计张力，004 未收敛） | 立项前需独立 ADR 收敛设计张力；**A 类 scope-blocker 风险**，不可凭猜 |
 | **W7** | Auth→Audit middleware · 观测反查链路 · 22 AuthZ↔contract | W0/W1 | scope 已知 | 22 是 contract.yaml 加 `authz` 字段 → codegen 派生（双向锁评级） |
 | **W8** | 27 Outbound HTTP/Webhook · 26 Drain · 32 Restart-safe | W0 | scope 已知 | outbound 走 outbox kind=outbound-call，复用既有 relay/circuit |

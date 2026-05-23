@@ -8,7 +8,7 @@
 // types.Implements check (the "Nth re-inline" recurrence the R2-P2 PR-a
 // consolidation removed) is structurally rejected here.
 //
-// AI-rebust: Hard (charter §"typed function call as Hard funnel for
+// AI-robust: Hard (charter §"typed function call as Hard funnel for
 // unbounded operations" 范本, isomorphic to PANIC-REGISTERED-01's
 // type-resolution kernel). The callee/reference is resolved via
 // *types.Info.Uses[ident] → *types.Func → Pkg().Path()=="go/types" &&

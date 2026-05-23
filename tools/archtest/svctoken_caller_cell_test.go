@@ -181,7 +181,7 @@ func collectGenerateServiceTokenDiagsFromFile(
 }
 
 // TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED is a
-// RED-step regression test (TDD per ai-collab.md) for PR445-FU finding F2.
+// RED-step regression test (TDD per ai-robust.md) for PR445-FU finding F2.
 //
 // The production rule TestSVCTOKEN_CALLER_CELL_REQUIRED_01 calls
 // RunTyped with FlatNonDefaultTags() — so packages.Load uses all known

@@ -31,7 +31,7 @@
 //     to a single caller (runtime/eventrouter/contract_tracing_subscriber.go)
 //     via path-string allowlist in archtest NO-MANUAL-CONTRACTSPEC-LITERAL-01
 //     plus a drift-guard test verifying the allowlisted file still exists
-//     (caller invariant: Medium per ai-collab.md taxonomy). No other production
+//     (caller invariant: Medium per ai-robust.md taxonomy). No other production
 //     file may invoke this funnel.
 //
 // Three archtest gates enforce this invariant:

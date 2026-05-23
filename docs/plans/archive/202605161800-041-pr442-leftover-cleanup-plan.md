@@ -74,7 +74,7 @@
 **A4 — #4 PATHSAFE-PARENT-SYMLINK-TOCTOU-01（P1/Cx3）**
 - 父目录创建/进入改 handle-based fail-closed：Unix 用 `openat`/`mkdirat`（`O_NOFOLLOW|O_DIRECTORY`）逐级下降做 nofollow + containment 复核，取代「`ContainPath` 路径预检 → `os.MkdirAll`」的 check-then-use。`pkg/pathsafe/nofollow_unix.go` 扩 syscall 封装；`nofollow_windows.go` 给出降级语义（保持 `O_EXCL` 兜底 + 文档说明 Windows 不保证 parent-walk nofollow）。
 - RED：race fixture —— 预检后写入前替换父目录为 symlink，断言写入 fail-closed（非逃逸）。
-- AI-rebust：syscall 级 fail-closed = **Hard**（违反不可表达，bypass 需改 syscall 封装且 diff 可见）。
+- AI-robust：syscall 级 fail-closed = **Hard**（违反不可表达，bypass 需改 syscall 封装且 diff 可见）。
 
 **A9 — #9 PATHSAFE-COLLECT-MISSING-DIRS-EACCES-01（P3/Cx2）**
 - `collectMissingDirs` 改签名 `(missing []string, err error)`：`os.Stat` 错误分支区分 `os.IsNotExist`（继续）vs 其它（EACCES 等，直接返回 err 让 caller fail 并经 rollback）。`mkdirAllTracked` 传播该 err。
@@ -91,13 +91,13 @@
 **B1 — #2 SCAFFOLD-ASSEMBLY-YAML-SCALAR-SAFETY-01（P1/Cx2）**
 - `scaffoldAssemblyContext`（generator.go:138-143）用户输入字段 `ID/OwnerTeam/OwnerRole/DeployTemplate/Cells[]` 类型改 `pkg/yamlsafe.Scalar`（已存在 `Quote(raw) Scalar` 单漏斗，`String()` 渲染引号安全标量；与 cmd/cellgen 既有范式同源）。`buildScaffoldContext`(generator.go:386) 用 `yamlsafe.Quote(...)` 填充。`scaffold-assembly-yaml.tpl` 不变（text/template 经 `Scalar.String()` 输出已安全）。
 - RED：`OwnerTeam` 含 `: #{}"` / 换行 → 渲染产物 `yaml.Unmarshal` 回来字段值完整且无注入新键。
-- AI-rebust：typed newtype，裸 string 回退需对每个 struct 字段 diff-visible 类型变更 = **Hard**。
+- AI-robust：typed newtype，裸 string 回退需对每个 struct 字段 diff-visible 类型变更 = **Hard**。
 
 **B8 — #8 ASSEMBLY-META-SYNTHESIS-FIELD-GUARD（P2/Cx2，引入新约束 → 同 PR 闭环）**
 - `synthesizeAssemblyMeta`（generator.go:362）补齐 `Build.Binary`（删除「intentionally omitted」死注释，按 spec 推导或显式声明缺省）。
 - 新 archtest `ASSEMBLY-META-SYNTHESIS-FIELD-GUARD`：reflect 数 `metadata.AssemblyMeta` 字段集，断言与 `synthesizeAssemblyMeta` 已覆盖字段清单一致 —— 字段集变更不同步即 CI 红。
-- **新约束必须同 PR 三件套闭环**（[[feedback_constraint_self_close]]）：(1) reflect 字段计数 archtest（静态守卫）；(2) `tools/archtest/` 文件头 `// INVARIANT: ASSEMBLY-META-SYNTHESIS-FIELD-GUARD` + 盲区清单 + 反向自检测试（ai-collab.md §工具选定后强制盲区自检）；(3) 字段新增的回归测试。
-- AI-rebust：reflect 字段计数 = **Hard**（charter §三档：reflect 字段冻结属 Hard 范本）。本 PR 内把 godoc Medium 直接做到 reflect Hard，不留升级 backlog。
+- **新约束必须同 PR 三件套闭环**（[[feedback_constraint_self_close]]）：(1) reflect 字段计数 archtest（静态守卫）；(2) `tools/archtest/` 文件头 `// INVARIANT: ASSEMBLY-META-SYNTHESIS-FIELD-GUARD` + 盲区清单 + 反向自检测试（ai-robust.md §工具选定后强制盲区自检）；(3) 字段新增的回归测试。
+- AI-robust：reflect 字段计数 = **Hard**（charter §三档：reflect 字段冻结属 Hard 范本）。本 PR 内把 godoc Medium 直接做到 reflect Hard，不留升级 backlog。
 
 完工 gate：同 Lane A 全套 + `go test ./kernel/assembly/... ./tools/archtest/...`。
 
@@ -128,7 +128,7 @@
 **E10 — #10 SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01（P2/Cx3，收尾）**
 - 新 `pkg/scaffoldid`：`type ScaffoldID string` + 单源 `Parse(raw) (ScaffoldID, error)` 共享校验器（内部复用 `metadata.MatchAssemblyID`/`MatchCellID` 等既有规则，**不复制 pattern**）。
 - `cellgen.ScaffoldSpec` / `assembly.AssemblyScaffoldSpec` / `cmd/gocell/app` flag 绑定三处 ID 字段类型升级为 `scaffoldid.ScaffoldID`；**收编** B2 的 assembly-ID validator、D5 的 cellgen reject、cmd 三处 `validateAssemblyPathComponent`/同义副本为单一漏斗，消除全部副本（无副本残留，[[feedback_no_lazy_deferral]]）。
-- AI-rebust：string-typed concept funnel（charter §载体决策原则范本）：类型化 + 声明集中 + 构造点 typed —— **Hard**（裸 string 传入被类型系统拒）。同 PR 落 archtest 守声明位置 + 盲区自检。
+- AI-robust：string-typed concept funnel（charter §载体决策原则范本）：类型化 + 声明集中 + 构造点 typed —— **Hard**（裸 string 传入被类型系统拒）。同 PR 落 archtest 守声明位置 + 盲区自检。
 - RED：跨包传裸 string 编译失败；非法 ID 在单源 validator 统一 reject 的表驱动测试。
 
 完工 gate：全仓 `go test ./...` + `go test -tags=integration` CI 实际范围 + `golangci-lint run ./...` + `go test ./tools/archtest/...`。
@@ -140,7 +140,7 @@
 1. **PR 栈关系**（回灌后）：~~A（#526）、B（#527）、C（#539）、D（#544）已 merge~~。余下 **E 单 PR**，基于最新 develop 起，无栈无并行。
 2. **每 PR 独立 review/merge**，互不阻塞（用户指令：最大并行）。每 PR 描述含 contract-fanout implementation matrix（涉及 schema/interface/CI 变更的 Lane 适用）。
 3. **不登记 backlog**（用户指令）。PR #461 的 backlog 登记是独立轨，不阻塞本计划；本计划完成后这 10 条 gap 实质消失，#461 的对应行应在其自身轨道改判 done（不在本计划动作内）。
-4. **新约束同 PR 闭环**：仅 B8（reflect 字段 guard）、E10（typed funnel）引入新 enforcement，均要求同 PR 三件套（静态守卫+文档契约+回归测试）+ AI-rebust ≥ Medium（实际均 Hard），无 Soft 立项，无升级 backlog 甩单。
+4. **新约束同 PR 闭环**：仅 B8（reflect 字段 guard）、E10（typed funnel）引入新 enforcement，均要求同 PR 三件套（静态守卫+文档契约+回归测试）+ AI-robust ≥ Medium（实际均 Hard），无 Soft 立项，无升级 backlog 甩单。
 5. **质量门**：每 Lane push 前本地 `golangci-lint run ./...` 0 issues、改导出签名跑 `go build -tags=integration ./...`、按 `.github/workflows/_build-lint.yml` integration-test job 实跑（非仅 `./...`）。
 6. **激进三层自审**（[[feedback_three_layer_audit]]）：L1 各任务补丁；L2 PR 栈整体决策（A→D 栈、E 收编 #3 不留副本）；L3 概念一致性（pathsafe funnel 单源、scaffold 输入契约单源、assembly meta synthesis 与类型集冻结一致）。
 

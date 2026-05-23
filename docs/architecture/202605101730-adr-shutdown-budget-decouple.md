@@ -77,7 +77,7 @@ case drainCtx.Err() != nil || tearCtx.Err() != nil:
 
 ## 测试与验证
 
-- 新增 `TestPhase10_BudgetIsolation_LIFOTeardownGetsFreshCtx`（`runtime/bootstrap/shutdown_ordering_test.go`）— runtime invariant guard，AI-rebust **Medium**。注入 httpDrain 阻塞到 ctx.Done，断言 LIFO teardown ctx 在入口仍未 done。
+- 新增 `TestPhase10_BudgetIsolation_LIFOTeardownGetsFreshCtx`（`runtime/bootstrap/shutdown_ordering_test.go`）— runtime invariant guard，AI-robust **Medium**。注入 httpDrain 阻塞到 ctx.Done，断言 LIFO teardown ctx 在入口仍未 done。
 - 既有 `TestPhase10_HTTPDrainsBeforeLIFO_*` / `TestPhase10ShutdownStageOrder` / `TestPhase10_HTTPDrainError_AggregatedAndWrapped` 全部继续 GREEN（顺序契约不变）。
 - `TestPhase0_TerminationGracePeriodWarn` 阈值同步更新（`graceMinThreshold = 2*graceShutdownTimeout + terminationGraceSafetyMargin`，单源派生）。
 

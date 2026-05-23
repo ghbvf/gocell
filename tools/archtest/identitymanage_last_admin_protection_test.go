@@ -11,7 +11,7 @@
 // codepath, and breaking the layered protection contract in
 // `docs/architecture/202605101400-adr-admin-invariant.md`.
 //
-// AI-rebust 评级：Medium (archtest type-aware via typeseval.SharedResolver
+// AI-robust 评级：Medium (archtest type-aware via typeseval.SharedResolver
 // + file-scoped co-existence check). The file-scoped check matches the
 // realistic wiring style — composition uses `identityOpts := []Option{...}`
 // slice spread, and rule walks the calling file looking for both
@@ -22,7 +22,7 @@
 // single-caller (cells/accesscore/cell_init.go) wiring shape.
 //
 // ref: PR #476 round-2 deferred #3 (closed in PR)
-// ref: ai-collab.md §"Soft → Hard 改造方向" 名字 convention → archtest 类型化
+// ref: ai-robust.md §"Soft → Hard 改造方向" 名字 convention → archtest 类型化
 package archtest
 
 import (

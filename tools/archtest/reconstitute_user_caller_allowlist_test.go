@@ -1,6 +1,6 @@
 // INVARIANT: RECONSTITUTE-USER-CALLER-01
 //
-// AI-rebust: Medium
+// AI-robust: Medium
 //   - callee 解析: typeseval.ResolvePackageRef *types.PkgName identity → type-aware
 //   - caller 鉴定: file path prefix → string convention
 //   - 综合: Medium 天花板

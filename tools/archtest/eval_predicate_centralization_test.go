@@ -11,7 +11,7 @@ package archtest
 // drift past go-toolchain default tag additions; this funnel makes the wrong
 // shape archtest-detectable.
 //
-// Single-rule file per ai-collab.md "archtest 文件命名" branch (single rule →
+// Single-rule file per ai-robust.md "archtest 文件命名" branch (single rule →
 // {rule}_test.go). Promote to {theme}_invariants_test.go if related TYPESEVAL-*
 // invariants accumulate to ≥ 3.
 
@@ -78,7 +78,7 @@ const (
 // allowlist by structural exclusion) and PANIC-REGISTERED-01 (form
 // uniqueness at panic() callsite).
 //
-// AI-rebust rating: Hard. Per .claude/rules/gocell/ai-collab.md "Hard 范本"
+// AI-robust rating: Hard. Per .claude/rules/gocell/ai-robust.md "Hard 范本"
 // — "typed function call as Hard funnel for unbounded operations": form
 // uniqueness + archtest fail-on-deviation is the highest grade reachable in
 // Go for this rule shape. The Go type system does not prevent passing

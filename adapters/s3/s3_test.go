@@ -987,7 +987,7 @@ func assertHealthRequestShape(t *testing.T, tr *recordingTransport) {
 // production Checkers + all tests reference ReadyProbeName; without this
 // anchor a const-value rename drifts silently.
 //
-// AI-rebust rating: Soft (string convention).
+// AI-robust rating: Soft (string convention).
 //
 // ref: .claude/rules/gocell/observability.md「Readyz Probe 命名」
 func TestReadyProbeName_LiteralAnchor(t *testing.T) {

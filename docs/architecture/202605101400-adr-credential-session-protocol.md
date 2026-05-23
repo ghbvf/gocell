@@ -14,7 +14,7 @@
 
 S4b PR 落地后实际实现与 §2/§3 描述出现漂移。**S4d (PR S4d) 之后实际行为以本节 +
 §A8 / §D1 / §D2 / §D4.2 同 PR 重写后的描述为准。** 与 amendment 矛盾的原文段落
-已在 S4d 同 PR 内重写（不再保留为"历史脉络"——见 ai-collab.md §"ADR amendment
+已在 S4d 同 PR 内重写（不再保留为"历史脉络"——见 ai-robust.md §"ADR amendment
 重跑威胁矩阵"规则）。
 
 ### A1 RETRACTED — 2026-05-15（PR S4d）
@@ -375,7 +375,7 @@ INVARIANT: `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01`：
   （typed-parent-check 单点判定）。**没有 syntactic context 枚举**：
   AssignStmt RHS / ValueSpec / CallExpr arg / **ReturnStmt** / SendStmt /
   IndexExpr / CompositeLit element 等所有 Go expression 位置均自动覆盖，
-  符合 ai-collab.md §"Hard 范本：typed function call as Hard funnel" 的
+  符合 ai-robust.md §"Hard 范本：typed function call as Hard funnel" 的
   form uniqueness 要求。Wave 4 之前 Soft 形态（按 3 类 syntactic context
   枚举 + scope 限 3 slice）已废弃。`types.Implements` 调用走
   `tools/typesutil.ImplementsInterface` funnel（`TYPESUTIL-IMPLEMENTS-FUNNEL-01`
@@ -504,7 +504,7 @@ FU-1～4 全部 merged。计划 §"完成判据"（`docs/plans/archive/202605082
    `gocell validate --strict`（无 Docker 的 `make verify` 门）内**实际执行**
    该 checkRef test，故不可走 testcontainers。
 
-   **T4 ↔ FU-4 分工与 §3 威胁矩阵回评**（ai-collab.md §"ADR amendment 落地必查"
+   **T4 ↔ FU-4 分工与 §3 威胁矩阵回评**（ai-robust.md §"ADR amendment 落地必查"
    要求）：
 
    - (a) §3 威胁矩阵"账号枚举"/"revoked session 后置导致 wire 漂移"行 ✅ 的
@@ -805,7 +805,7 @@ sealed `FingerprintMode` 当前仅含 `FingerprintJTIRef` 单实现。未来 opa
 > S4e 重跑（PR #494，2026-05-15）：
 > authzmutate Hard funnel 闭合 + P2.b stale-epoch 路径修正。RC-A 重跑（2026-05-15）：
 > RoleRevoked 死代码删除 + §A10 co-tx atomicity Medium 天花板显式锁定。每行重新评估（按
-> ai-collab.md §"ADR amendment 重跑威胁矩阵" 规则）。`Row SoR` 列代替原 `AuthzEpoch`
+> ai-robust.md §"ADR amendment 重跑威胁矩阵" 规则）。`Row SoR` 列代替原 `AuthzEpoch`
 > 列以反映实际 SoR 位置；`Funnel 上游` 列新增反映 P1-#1 修复。
 
 | 威胁场景 | jti-only | Row SoR (AuthzEpochAtIssue) | Fail-closed events | Funnel 上游 (S4e/RC-A) | 同 tx |

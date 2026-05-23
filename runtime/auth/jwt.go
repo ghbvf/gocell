@@ -559,8 +559,8 @@ func collectExtraClaims(mc jwt.MapClaims) map[string]any {
 // keycloak's KeyManagementException isolation, ory/fosite Strategy interface
 // split, zitadel caos_errs.IsInternal — see ADR note in jwt.go:280 block).
 // Promoting it would create two near-identical predicates in pkg/errcode
-// (IsInfraError vs HasInfraSignal) whose differences only ai-collab.md savvy
-// AI co-authors would correctly pick — a Soft form to avoid per ai-collab.md.
+// (IsInfraError vs HasInfraSignal) whose differences only ai-robust.md savvy
+// AI co-authors would correctly pick — a Soft form to avoid per ai-robust.md.
 func hasExplicitInfraSignal(err error) bool {
 	if err == nil {
 		return false

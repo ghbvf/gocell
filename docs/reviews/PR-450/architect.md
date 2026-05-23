@@ -175,13 +175,13 @@ cmd/corebundle 也不调用 `HMACKey()`。grep 全仓只有 protocol_test.go 在
 ### A-10 [一致性级别 / P2 / Cx1] AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01 archtest 自评 Medium，但实现含字符串识别 pkg 名
 **文件**: `tools/archtest/audit_ledger_composition_root_test.go:75-78`
 
-**问题**: archtest 注释自评 Medium（AST 包路径识别），但实际实现用 `pkg.Name != "ledger"`（line 76）——即如果调用方写 `import auditledger "github.com/ghbvf/gocell/runtime/audit/ledger"; auditledger.NewProtocol(...)`，identifier name 就是 `auditledger`，不会被检测到。这是一个 by-name identifier 检查，AI-rebust 三档应当是 **Soft**（按 ai-collab.md 表，「按方法/包名识别」是 Soft）。
+**问题**: archtest 注释自评 Medium（AST 包路径识别），但实际实现用 `pkg.Name != "ledger"`（line 76）——即如果调用方写 `import auditledger "github.com/ghbvf/gocell/runtime/audit/ledger"; auditledger.NewProtocol(...)`，identifier name 就是 `auditledger`，不会被检测到。这是一个 by-name identifier 检查，AI-robust 三档应当是 **Soft**（按 ai-robust.md 表，「按方法/包名识别」是 Soft）。
 
 **建议**:
 - 升级为 type-aware：用 `go/types` 检查 selector 的解析包是否是 `github.com/ghbvf/gocell/runtime/audit/ledger`（Medium 真正落地）
-- 或者在 godoc 自评里诚实降为 Soft + backlog 升级条目（按 ai-collab.md「既有 Soft 按实际事故密度排队升级」）
+- 或者在 godoc 自评里诚实降为 Soft + backlog 升级条目（按 ai-robust.md「既有 Soft 按实际事故密度排队升级」）
 
-**影响**: 低。当前编码风格未触发 alias，AI 协作章程要求自评准确。
+**影响**: 低。当前编码风格未触发 alias，AI-robust 治理章程要求自评准确。
 
 ---
 
@@ -200,7 +200,7 @@ cmd/corebundle 也不调用 `HMACKey()`。grep 全仓只有 protocol_test.go 在
 
 1. **typed-Go-heavy 范式贯彻彻底**：sealed `RestartRecoveryMode` / `IdempotencyMode` 接口 + 单 var 实例 + 不可外部实现的 unexported marker；ADR §1.2 显式与 session 协议落地路径对齐，typed Protocol 注入 + composition root 集中构造，cells 零知识。
 
-2. **appender 单源 + Hard/Medium 双重防线设计模板级**（`cells/auditcore/internal/appender/`）：type alias to non-local Service 在语言层禁止 method 重定义（Hard） + sealed Spec/ActorMode 不可零值构造（Hard） + AUDITCORE-APPENDER-SINGLE-SOURCE-01 archtest 兜底 abandonment case（Medium）。完全符合 ai-collab.md 立项门槛 ≥ Medium，可以作为「4 个同形 slice 收敛到单源」的范式样板。
+2. **appender 单源 + Hard/Medium 双重防线设计模板级**（`cells/auditcore/internal/appender/`）：type alias to non-local Service 在语言层禁止 method 重定义（Hard） + sealed Spec/ActorMode 不可零值构造（Hard） + AUDITCORE-APPENDER-SINGLE-SOURCE-01 archtest 兜底 abandonment case（Medium）。完全符合 ai-robust.md 立项门槛 ≥ Medium，可以作为「4 个同形 slice 收敛到单源」的范式样板。
 
 3. **F-CR-2 EventID-only 指纹设计**：纠正了原 multi-field 指纹在 at-least-once redelivery 下退化为「每次重投产生不同指纹」的根因，加上 DB-level UNIQUE INDEX (migration 021) 作为 second-line guard。advisory lock 顺序 (Step 2 before Step 3) 显式注释 TOCTOU race。
 

@@ -289,4 +289,4 @@ Wave 4（10 项 watch only，不排期）：
 - [`docs/plans/archive/202605082145-034-pg-corecell-b-route-plan.md`](archive/202605082145-034-pg-corecell-b-route-plan.md)：accesscore PG 链（全部 shipped 并归档 v16，2026-05-19）
 - [`docs/plans/archive/202605121830-038-p0-p1-blocking-implementation-plan.md`](archive/202605121830-038-p0-p1-blocking-implementation-plan.md)：P0/P1 阻塞项（**已归档 2026-05-19**，剩余项转 active backlog）
 - [`docs/backlog.md`](../backlog.md) + 4 子表：本计划承担项的 backlog 来源（`develop @ ad98b8b7` 快照）
-- 合并三原则参考：038 plan §2 + ai-collab.md "Review checklist"
+- 合并三原则参考：038 plan §2 + ai-robust.md "Review checklist"

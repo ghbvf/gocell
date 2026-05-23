@@ -1760,7 +1760,7 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 // sanctioned holder that wraps Close with timeout enforcement and
 // goroutine-leak detection.
 //
-// AI-rebust: Medium
+// AI-robust: Medium
 //   - Callee check: ResolveMethodCall resolves the CallExpr.Fun SelectorExpr to a
 //     *types.Func, then confirms the receiver type's owning package is
 //     kernel/outbox (i.e. the method belongs to an outbox.Subscriber

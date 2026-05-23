@@ -8,7 +8,7 @@ import "github.com/ghbvf/gocell/pkg/validation"
 // kernel/persistence is the sole entry point via WrapForCell, which
 // composition roots must call.
 //
-// AI-rebust 评级：
+// AI-robust 评级：
 //   - 字段/赋值层：Hard（sealed marker，外部不可表达 internalCellTxManager 字面量）
 //   - 公开 With* Option 签名层：Medium（CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 archtest type-aware 守）
 //

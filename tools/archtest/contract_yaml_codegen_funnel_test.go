@@ -11,7 +11,7 @@
 // contracts deferred from K#06 PR-4). cells/ is included defensively: no
 // contract.yaml is expected there, but the scope guards against future drift.
 //
-// AI-rebust: Medium (YAML Node 结构化解析；contract.yaml 是 source of
+// AI-robust: Medium (YAML Node 结构化解析；contract.yaml 是 source of
 // truth，Medium 是 contract-yaml-level guard 的天花板).
 //
 // Scan is fail-closed: traverses the entire top-level mapping without early
@@ -105,7 +105,7 @@ func parseTopLevelYAML(b []byte) (*yaml.Node, error) {
 // there — the scope prevents future drift if someone adds one.
 //
 // INVARIANT: CONTRACT-YAML-NO-CODEGEN-TRUE-LITERAL-01
-// AI-rebust: Medium (YAML Node structured parse; cannot be Hard because
+// AI-robust: Medium (YAML Node structured parse; cannot be Hard because
 // contract.yaml is a hand-authored text file, not a Go type-system artifact).
 func TestContractYAML_NoCodegenTrueLiteral(t *testing.T) {
 	t.Parallel()

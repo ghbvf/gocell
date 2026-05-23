@@ -49,7 +49,7 @@ const startProbeTimeout = 50 * time.Millisecond
 // reintroduces the startup-deadlock regression fixed in C.1: a frozen fake clock
 // with no Advance calls blocks Start() permanently.
 //
-// AI-rebust grade: Medium (comment-guard carve-out).
+// AI-robust grade: Medium (comment-guard carve-out).
 //
 // Do NOT add new functions with this marker without explicit review.
 //
@@ -66,7 +66,7 @@ func controlPlaneTicker(interval time.Duration) *time.Ticker {
 // Carve-out rationale: the 50 ms startup probe must use real time. A fake clock
 // probe that is never advanced would deadlock Start() (same root cause as C.1).
 //
-// AI-rebust grade: Medium (comment-guard carve-out).
+// AI-robust grade: Medium (comment-guard carve-out).
 //
 // Do NOT add new functions with this marker without explicit review.
 //

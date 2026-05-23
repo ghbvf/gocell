@@ -61,7 +61,7 @@
 | L2 内核支柱 | `runtime/observability` + `pkg/redaction` | 失去自动 cell-label / trace / 脱敏 fail-closed | 关键但可替 |
 | L2 内核支柱 | `runtime/bootstrap` + `runtime/shutdown` | 退化到手写 main 串接，丢 LIFO 卸载 + readiness 翻转 | 关键但可替 |
 | **L3 内置 Cell** | accesscore / auditcore / configcore | 失去开箱即用的身份/审计/配置，但 Cell 模型仍可用 | 可重写 |
-| **L4 治理** | `tools/archtest` + `cmd/gocell validate` + codegen | 失去 AI-rebust 编译期保障，Cell 模型仍可跑 | 可缺席 |
+| **L4 治理** | `tools/archtest` + `cmd/gocell validate` + codegen | 失去 AI-robust 编译期保障，Cell 模型仍可跑 | 可缺席 |
 
 ---
 

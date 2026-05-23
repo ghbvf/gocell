@@ -80,9 +80,9 @@ This anchor closes the value-scoped rule's blind spots (non-const RHS, switch
 tag captured into a local) because *any* new `.Code` reader — in any AST form —
 appears as a new file in the set.
 
-## AI-rebust grading
+## AI-robust grading
 
-**Medium** (ai-collab.md §三档分级). Type-aware via `*types.Info` exact named-
+**Medium** (ai-robust.md §三档分级). Type-aware via `*types.Info` exact named-
 type resolution + `EvaluateConstString` owned-set membership — form-unique, no
 string anchor, no comment escape, no carve-out map. Archtest-bound, not
 compile-time: Go cannot forbid reading an exported struct field, so the ceiling
@@ -112,5 +112,5 @@ reader is ever justified.
 - `tools/archtest/sqlstate_single_source_test.go`
 - `tools/archtest/internal/sqlstatesinglesourcefixture/fixture.go`
 - `pkg/pgquery/sqlstate.go`
-- ai-collab.md §三档分级, §"工具选定后强制盲区自检"
+- ai-robust.md §三档分级, §"工具选定后强制盲区自检"
 - PR #578 post-merge review (P1 + dead-const P2 findings)

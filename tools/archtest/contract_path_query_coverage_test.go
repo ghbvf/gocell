@@ -30,7 +30,7 @@
 // SCANNER-FRAMEWORK-USAGE-01. NOT registered in
 // internal/archtestmeta.LegacyAllowlist.
 //
-// Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"):
+// Declared blind spots (ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. Contract ID discovered only via LoadByID call sites whose third argument
 //     resolves to a compile-time constant string. A call like
@@ -64,7 +64,7 @@
 //     calls MustRejectQueryParam(t, paramName, ...) with paramName a runtime
 //     variable; PARAM-NAME-LITERAL-01 MUST flag it.
 //
-// AI-rebust grade: Medium.
+// AI-robust grade: Medium.
 package archtest
 
 import (

@@ -9,7 +9,7 @@
 // field access in the body, or a delegate to a different method name — fails
 // the archtest.
 //
-// AI-rebust grade: Hard. The guard is archtest-bound (Go does not make the
+// AI-robust grade: Hard. The guard is archtest-bound (Go does not make the
 // violated form uncompilable), but form-uniqueness is total: "exactly one
 // ReturnStmt whose callee is s.inner.SameMethodName" has no gray zone.
 // Any other shape fails CI.
@@ -21,7 +21,7 @@
 // not merely that the callee resolves to session.Store — the name symmetry
 // invariant is stronger than interface resolution.
 //
-// Blind-spot self-check (ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot self-check (ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. Multi-statement body: archtest counts len(body.List) — ANY extra
 //     statement is caught regardless of its type. Self-check:

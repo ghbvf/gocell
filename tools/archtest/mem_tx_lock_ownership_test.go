@@ -36,7 +36,7 @@ package archtest
 //	inexpressible without tripping the rule.
 //
 // Blind spots of the chosen tool (pure AST CompositeLit/CallExpr/AssignStmt
-// scan) and their handling — required by .claude/rules/gocell/ai-collab.md:
+// scan) and their handling — required by .claude/rules/gocell/ai-robust.md:
 //
 //   - reflect-based field mutation (reflect.Value.SetBool on holdsLock):
 //     out of scope of an AST literal scan. Closed by
@@ -267,7 +267,7 @@ func TestMemTxLockOwnership01_FindsExactlyTheTwoSites(t *testing.T) {
 // passes trivially).
 //
 // Medium rating: receiver identification uses string anchors
-// (receiverTypeName == "Store"), per ai-collab.md §"Funnel 双向锁评级"
+// (receiverTypeName == "Store"), per ai-robust.md §"Funnel 双向锁评级"
 // this is an allowed Medium upstream.
 func TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor(t *testing.T) {
 	root := findModuleRoot(t)

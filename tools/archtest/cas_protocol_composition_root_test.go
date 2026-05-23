@@ -6,7 +6,7 @@
 // runtime/state/cas/* (the package itself). Cells, runtime/* (non-cas), and
 // adapters/* must receive an injected *cas.Protocol — not construct one.
 //
-// # AI-rebust: Medium (type-aware)
+// # AI-robust: Medium (type-aware)
 //
 // The rule resolves every CallExpr's callee through archtest.ResolvePackageRef,
 // matching by the callee's owning package import path rather than the source-level
@@ -47,7 +47,7 @@
 //     ok=false. Accepted: the repo has no such pattern; this is the same accepted
 //     blind spot as SESSION-PROTOCOL-COMPOSITION-ROOT-01 BS-2.
 //
-//   - BS-3 Reflection construction: out of scope per ai-collab.md §3.
+//   - BS-3 Reflection construction: out of scope per ai-robust.md §3.
 package archtest
 
 import (

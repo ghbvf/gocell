@@ -43,7 +43,7 @@
 // for adapter ready-probe names) are NOT in the banned set — they are
 // distinct, well-anchored sub-grammars unrelated to cell-id matching.
 //
-// AI-rebust: Medium. Detection uses *types.Info to resolve the callee to
+// AI-robust: Medium. Detection uses *types.Info to resolve the callee to
 // regexp.MustCompile (form-independent of `import r "regexp"` aliasing or
 // `re := regexp.MustCompile` indirection) and exact string-content match
 // on the first arg literal. Hard is not reachable in Go for this rule
@@ -57,7 +57,7 @@
 //
 // ref: kernel/metadata/contract_constraints.go — single source for cell-id family patterns + matchers (MatchCellID, MatchAssemblyID).
 // ref: tools/archtest/prom_cell_label_funnel_test.go — companion typeseval callee-resolution range pattern.
-// ref: .claude/rules/gocell/ai-collab.md — Medium archtest (typed-info + literal allowlist + path allowlist).
+// ref: .claude/rules/gocell/ai-robust.md — Medium archtest (typed-info + literal allowlist + path allowlist).
 package archtest
 
 import (

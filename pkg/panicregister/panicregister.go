@@ -28,7 +28,7 @@ package panicregister
 // Hard funnel rationale: this is the unique panic-approved entry point in
 // GoCell production code. Using any other shape — bare panic, different
 // callee, non-literal reason — fails archtest PANIC-REGISTERED-01. See
-// .claude/rules/gocell/ai-collab.md "Hard 范本" and charter §4 Wave 2.
+// .claude/rules/gocell/ai-robust.md "Hard 范本" and charter §4 Wave 2.
 func Approved(reason string, value any) any {
 	return value
 }

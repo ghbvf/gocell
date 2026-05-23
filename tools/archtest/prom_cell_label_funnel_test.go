@@ -9,7 +9,7 @@
 // cell_id reach Prometheus labels and create high-cardinality series
 // silently.
 //
-// AI-rebust: Hard (typed-function-call funnel + types.Info form uniqueness,
+// AI-robust: Hard (typed-function-call funnel + types.Info form uniqueness,
 // charter §4 Wave 2 same pattern as PANIC-REGISTERED-01). The funnel call
 // is resolved via *types.Info so a same-name local variable or alias cannot
 // bypass the check; the SelectorExpr's X is also type-checked to be

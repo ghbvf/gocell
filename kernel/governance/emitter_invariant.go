@@ -30,7 +30,7 @@ package governance
 // is structural in Go and cannot be selectively blocked at the method-set
 // layer. types.Identical on the named type is the correct primitive.
 //
-// AI-rebust: Hard. Threat model coverage:
+// AI-robust: Hard. Threat model coverage:
 //
 //  1. AI adds emitter shape on a new non-locator receiver inside the
 //     package → recvNamed != locator → rejected.

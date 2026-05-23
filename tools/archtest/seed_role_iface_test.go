@@ -17,7 +17,7 @@
 // instead). This archtest locks the current zero-violation state against
 // regression.
 //
-// AI-rebust grade: Hard (violation form uniqueness + RED fixture).
+// AI-robust grade: Hard (violation form uniqueness + RED fixture).
 // Picking any shape that names *mem.RoleRepository in production fails
 // archtest in CI; there is no Soft string-comment escape.
 //

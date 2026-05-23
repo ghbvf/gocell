@@ -2,7 +2,7 @@
 // revocation events: it bumps the user's authz_epoch, revokes all active
 // sessions, and revokes all refresh chains in one ambient transaction.
 //
-// AI-rebust archtest (Hard, see tools/archtest/credential_invalidate_funnel_test.go):
+// AI-robust archtest (Hard, see tools/archtest/credential_invalidate_funnel_test.go):
 //   - CREDENTIAL-INVALIDATE-FUNNEL-01:  session.Store.RevokeForSubject callers ⊆ {this pkg, store impl, storetest, *_test.go}
 //   - USER-AUTHZ-EPOCH-BUMP-FUNNEL-01:  UserRepository.BumpAuthzEpoch callers ⊆ {this pkg, repo impl, *_test.go}
 //   - REFRESH-REVOKE-USER-FUNNEL-01:    refresh.Store.RevokeUser callers ⊆ {this pkg, store impl, *_test.go}

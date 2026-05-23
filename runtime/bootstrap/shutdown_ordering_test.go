@@ -264,7 +264,7 @@ func TestPhase10ShutdownStageOrder(t *testing.T) {
 // b.shutdownTimeout for HTTP drain to elapse; D1s keeps the loop tight while
 // still leaving enough wall clock for the assertion to be meaningful.
 //
-// AI-rebust: Medium — this is a runtime invariant guard. Not a string-anchor
+// AI-robust: Medium — this is a runtime invariant guard. Not a string-anchor
 // archtest; the assertion observes ctx.Done() state, which a future single-ctx
 // regression cannot bypass without explicit budget plumbing changes that
 // would also break sibling phase10 tests.

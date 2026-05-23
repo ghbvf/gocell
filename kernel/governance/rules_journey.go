@@ -26,7 +26,7 @@ package governance
 //	and (3) extend this matrix simultaneously — anything less leaves a phantom
 //	state in the matrix that the schema layer rejects unreachable.
 //
-// AI-rebust grade: Medium.
+// AI-robust grade: Medium.
 
 import (
 	"fmt"

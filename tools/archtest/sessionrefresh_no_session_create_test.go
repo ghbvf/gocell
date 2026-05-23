@@ -15,12 +15,12 @@ package archtest
 // 域冲突（child refresh row 仍继承旧 session_id，二次 refresh 失败）。在 PR
 // #482 review 中撤回。本 archtest 保证未来 AI session 不会重新引入该模式。
 //
-// AI-rebust 评级：Medium (archtest type-aware) — type system 不强制
+// AI-robust 评级：Medium (archtest type-aware) — type system 不强制
 // session.Store.Create 在哪个 slice 不可调用，但 typeseval.ResolveMethodCall
 // 让违反在 CI 时确定可见。Hard 形态需要把 session.Store 拆成 read-only +
 // mutable 两个 sealed marker 由 composition root wrap，本 PR 范围外。
 //
-// 单条独立规则，按 ai-collab.md "{rule}_test.go" 命名。
+// 单条独立规则，按 ai-robust.md "{rule}_test.go" 命名。
 
 import (
 	"fmt"

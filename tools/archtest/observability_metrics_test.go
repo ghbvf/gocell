@@ -204,7 +204,7 @@ func TestGaugeVecFunnel_SelfCheck(t *testing.T) {
 // wrap packages and the outer-ring funnel surface of adapters/prometheus.
 // Any new export, removal, or rename in promwrap / otelwrap must come with
 // an explicit sentinel update — AI co-authors cannot silently expand the
-// funnel surface (per AI-rebust Hard funnel principle).
+// funnel surface (per AI-robust Hard funnel principle).
 //
 // INVARIANT: METRICS-GAUGEVEC-UPSTREAM-HARD-01
 //

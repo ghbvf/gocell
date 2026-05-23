@@ -27,7 +27,7 @@
 ## 2. 能力依赖链（计划主轴）
 
 ### L0a — 合规（零代码、零依赖、章程违章 → 立即）
-042 §3a：4 组 silent-carryover Soft 登记 backlog 升级 / godoc 显式 accept（ai-collab Review checklist 硬性，当前违章）。无代码域，与一切并行。
+042 §3a：4 组 silent-carryover Soft 登记 backlog 升级 / godoc 显式 accept（ai-robust Review checklist 硬性，当前违章）。无代码域，与一切并行。
 
 ### L0b — 基底进化 + Hard 范本固化（005 新抽象的前置）
 | 项 | 作用 |

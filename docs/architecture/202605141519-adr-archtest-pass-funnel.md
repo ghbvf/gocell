@@ -47,7 +47,7 @@ Rule authors write `Rule` closures and let the driver (`Run` / `RunTyped` / `Run
 
 ref: `golang.org/x/tools go/analysis/analysistest/analysistest.go` (`dir` position param → `packages.Config.Dir`)
 
-## Hard-line three-defense (AI-rebust ≥ Medium gating)
+## Hard-line three-defense (AI-robust ≥ Medium gating)
 
 | # | Defense | Grade | Cost of violation |
 |---|---------|-------|-------------------|
@@ -58,7 +58,7 @@ ref: `golang.org/x/tools go/analysis/analysistest/analysistest.go` (`dir` positi
 
 Four independent failure modes: type system, lint, archtest (symbol-level), archtest ((callee, arg) form-uniqueness). Bypassing all four requires editing four independent locations in a single PR — reviewer-detectable by construction.
 
-**`RunTypedDir` AI-rebust grade: Hard — three defenses hold unchanged.**
+**`RunTypedDir` AI-robust grade: Hard — three defenses hold unchanged.**
 
 | # | Defense | Status after RunTypedDir |
 |---|---------|--------------------------|
@@ -84,9 +84,9 @@ Three archtest framework files are **permanently** exempt — they form `passFun
 
 These files are exempt from defense #2 (depguard yaml allowlist) and are skipped by defense #3's scanner (path matching against `passFunnelPermanentExempt`).
 
-### AI-rebust honest caveats
+### AI-robust honest caveats
 
-Defense #1 is the only compile-time Hard. Defenses #2 and #3 are review-detectable Hards — the rule cannot police modifications to its own configuration / allowlist. The combined three-layer design accepts that elementary meta-governance boundary: the AI-rebust charter §"meta-governance" notes that "fault-redundant defenses in production code are over-engineering, in meta-governance are correct" — every additional meta layer has diminishing return because reviewers must always backstop the topmost layer.
+Defense #1 is the only compile-time Hard. Defenses #2 and #3 are review-detectable Hards — the rule cannot police modifications to its own configuration / allowlist. The combined three-layer design accepts that elementary meta-governance boundary: the AI-robust charter §"meta-governance" notes that "fault-redundant defenses in production code are over-engineering, in meta-governance are correct" — every additional meta layer has diminishing return because reviewers must always backstop the topmost layer.
 
 ### PR #522 amendment — threat matrix re-evaluation (2026-05-16)
 
@@ -125,7 +125,7 @@ The (callee, arg) pair disambiguates legitimate identity uses from bypass: `cont
 
 R1.1 also strengthens `TestPassFunnel_FixtureCoverage` from a single `≥1 total` assertion to per-form `≥1` independent trip-wires: `internal/passfunnelfixture/redfixture.go::fixtureTagBypassRedForms` exercises Forms A (BasicLit literal) / B (same-pkg const Ident) / C (BinaryExpr concat) / D (cross-pkg SelectorExpr `archtest.FixtureBuildTag`) via four `typeseval.SharedResolver` calls; removing any single form's line fails exactly that form's assertion. The R1 stale `_ = "archtest_fixture"` bare-literal RED line is deleted (V detector form no longer applies). The R1 detector's "BasicLit walk" / "String concatenation accept" Blind spot entries are deleted; R1.1 surfaces the new Blind spots: Tags arg as a non-const `*ast.Ident` (same-file var pattern) / cross-func var escape / reflect / fixtureTagLoaderSet enumeration maintenance — all same accept grade as the sister rules' identical Blind spots.
 
-**Threat matrix re-evaluation (per ai-collab.md §ADR amendment 落地必查):**
+**Threat matrix re-evaluation (per ai-robust.md §ADR amendment 落地必查):**
 
 | Defense | Before R1 (PR #536 first cut) | R1 first attempt (BasicLit walk) | R1.1 final ((callee, arg) form-uniqueness) | Status change |
 |---------|-------------------------------|----------------------------------|--------------------------------------------|---------------|
@@ -137,7 +137,7 @@ R1.1 also strengthens `TestPassFunnel_FixtureCoverage` from a single `≥1 total
 | Permanent exemption escape surface | 3 files (`passFunnelPermanentExempt`) | Unchanged 3 files | Unchanged 3 files | ✅ Unchanged |
 | Self-introduced bypass via own const | n/a | **FixtureBuildTag const reference passed to loader was silently legal** | Const reference in loader callee args is detected via EvaluateConstString → no self-introduced bypass | ✅ Closed |
 
-**Conclusion**: R1.1 strictly tightens the funnel beyond R1 — defense #4 graduates from outward-Hard + upstream-Hard-with-BasicLit-only-gap to outward-Hard + upstream-Hard with full const-resolvable arg coverage. No previously-clean defense row becomes ⚠️/❌. `passFunnelPermanentExempt` size does not grow. ai-collab.md §Hard 范本 entry "typed function choice with input-struct field exclusion" has its 配套要求 paragraph naming R1.1 (not R1) as the reference implementation precedent, with explicit isomorphism to charter §Hard 范本 第 2 条 panic(panicregister.Approved) — both rules form-unique on a (callee, arg) pair via *types.Info resolution.
+**Conclusion**: R1.1 strictly tightens the funnel beyond R1 — defense #4 graduates from outward-Hard + upstream-Hard-with-BasicLit-only-gap to outward-Hard + upstream-Hard with full const-resolvable arg coverage. No previously-clean defense row becomes ⚠️/❌. `passFunnelPermanentExempt` size does not grow. ai-robust.md §Hard 范本 entry "typed function choice with input-struct field exclusion" has its 配套要求 paragraph naming R1.1 (not R1) as the reference implementation precedent, with explicit isomorphism to charter §Hard 范本 第 2 条 panic(panicregister.Approved) — both rules form-unique on a (callee, arg) pair via *types.Info resolution.
 
 ## Industry precedent
 
@@ -166,9 +166,9 @@ Strategic plan: `docs/plans/archive/202605141519-040-archtest-pass-funnel-plan.m
   - `tools/archtest/internal/archtestmeta/` package deleted entirely (LegacyAllowlist was empty since PR #522)
   - `tools/archtest/fixture.go` added: `type FixtureOpts struct { Tests bool }` + `RunTypedFixture(t *testing.T, opts FixtureOpts, patterns []string, rule Rule) []Diagnostic` — Hard typed funnel for fixture loading; `FixtureOpts` has no `Tags` field, making "business supplies custom build tag" inexpressible at the type level. Parameter type `*testing.T` (not `testing.TB`): fixture loading has no spy fatal-path requirement, aligning with `RunTyped` / `RunTypedProduction`; orthogonal to `RunTypedDir` which uses `testing.TB` for standalone-fixture-module spy testing
   - `tools/archtest/pass_test.go`: 6 `RunTyped(…Tags: []string{archtestmeta.FixtureBuildTag}…)` calls replaced with `RunTypedFixture(…FixtureOpts{Tests: bool}…)`; `archtestmeta` import deleted; 3 new TDD tests added (`TestRunTypedFixture_LoadsRedfixture`, `TestRunTypedFixture_TestVariantLoad`, `TestRunTypedFixture_FixtureOptsLacksTagsField`)
-  - `tools/archtest/pass_funnel_test.go`: `TestPassFunnelGuardListSync` rewritten as two single equality assertions (`maps.Equal` + `cmp.Diff`; LegacyAllowlist cross-validation removed); `loadPassFunnelTargets` LegacyAllowlist filter line deleted; `archtestmeta.FixtureBuildTag` → `"archtest_fixture"` literal; `TestArchtestmetaPackageDeleted` static reverse-lock added; `passFunnelPermanentExempt` godoc updated with Medium AI-rebust evaluation; package-level godoc updated to reflect Stage 4 terminal state
+  - `tools/archtest/pass_funnel_test.go`: `TestPassFunnelGuardListSync` rewritten as two single equality assertions (`maps.Equal` + `cmp.Diff`; LegacyAllowlist cross-validation removed); `loadPassFunnelTargets` LegacyAllowlist filter line deleted; `archtestmeta.FixtureBuildTag` → `"archtest_fixture"` literal; `TestArchtestmetaPackageDeleted` static reverse-lock added; `passFunnelPermanentExempt` godoc updated with Medium AI-robust evaluation; package-level godoc updated to reflect Stage 4 terminal state
   - `.golangci.yml`: migration-period comment block removed from `archtest-no-direct-packages-load` section; 3 permanent self-exemptions and deny rule retained; ADR §Termination criteria cross-reference added
-  - `ai-collab.md` §载体决策原则 §3 rewritten with `archtest.*` public façade routing; anti-misuse note added (existing files importing internal helpers remain valid per ADR §163); §Hard 范本 new entry "typed function choice with input-struct field exclusion" added
+  - `ai-robust.md` §载体决策原则 §3 rewritten with `archtest.*` public façade routing; anti-misuse note added (existing files importing internal helpers remain valid per ADR §163); §Hard 范本 new entry "typed function choice with input-struct field exclusion" added
   - Minor comment updates: `resolve.go`, `adapter_error_classification_test.go`, `passfunnelfixture/redfixture.go`, `basesliceredfixture/base_slice_literal.go`, `basesliceredfixture/slice_meta_literal.go`
 
   **Review R1 closure (same PR, post-first-cut commits):** PR #536 review caught that defense #4 was outward Hard only — the upstream side (façade bypass via `RunTyped(t, TypedOpts{Tags: []string{"archtest_fixture"}}, ...)`) remained Soft. Two business call sites latently allowed by Soft upstream (`http_contract_visibility_type_segregation_01_test.go:352` + `panic_invariants_test.go:367`) were not flagged by the first-cut funnel. R1 fixes:
@@ -179,8 +179,8 @@ Strategic plan: `docs/plans/archive/202605141519-040-archtest-pass-funnel-plan.m
   - `tools/archtest/panic_invariants_test.go`: `containsTag(tagGroup, "archtest_fixture")` → `containsTag(tagGroup, FixtureBuildTag)` (typed-reference path)
   - 6 fixture-package godoc blocks (`rawparamfixture`, `auditledgerfixture`, `inspectorredfixture`, `wrapfixture/violation`, `sessionprotocolfixture`, `refreshinvariantsfixture`): example "loaded via `typeseval.SharedResolver` with tags=[]string{...}" rewritten to `archtest.RunTypedFixture(...)`
   - 2 basesliceredfixture + 1 passfunnelfixture godoc blocks: literal-reference text rewritten to reference `archtest.FixtureBuildTag` const (with //go:build-cannot-reference-const justification preserved)
-  - `ai-collab.md` §Hard 范本 entry "typed function choice with input-struct field exclusion": add **配套要求** paragraph mandating the upstream meta-archtest in the same PR
-  - This ADR: defense #4 row added to §Hard-line three-defense; §PR #536 review R1 amendment subsection added (this section) with full threat matrix re-evaluation per ai-collab.md §ADR amendment 落地必查; §Termination criteria (c) extended below
+  - `ai-robust.md` §Hard 范本 entry "typed function choice with input-struct field exclusion": add **配套要求** paragraph mandating the upstream meta-archtest in the same PR
+  - This ADR: defense #4 row added to §Hard-line three-defense; §PR #536 review R1 amendment subsection added (this section) with full threat matrix re-evaluation per ai-robust.md §ADR amendment 落地必查; §Termination criteria (c) extended below
   - CI: `go test ./tools/archtest/... -count=1` all green (151.6s); `hack/verify-archtest.sh` 16-shard process-isolated all green (TOTAL=458, +1 from baseline TOTAL=457 via ARCHTEST-VERIFY-COVERAGE-01 auto-discovery)
 
 ## Stage 1.6 — RunTypedDir fixture-module driver (2026-05-15, shipped with Stage 3 PR-6)
@@ -204,7 +204,7 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 
 **Single construction path invariant.** Both `RunTyped` and `RunTypedDir` delegate to the internal `runTypedWithRoot(t, root, opts, patterns, rule)` function. The two façade entries differ only in how `root` is obtained (`findModuleRoot(t)` vs the caller-supplied `dir`). No duplication of load logic; no new INV-1 surface.
 
-**AI-rebust grade: Hard — see §Hard-line three-defense `RunTypedDir` subsection above.**
+**AI-robust grade: Hard — see §Hard-line three-defense `RunTypedDir` subsection above.**
 
 **E-class fixture-module files using `RunTypedDir`:** `exported_error_new_fixtures_test.go`, `goose_session_locker_fixtures_test.go`, `prod_duration_fixtures_test.go`, and `test_time_literal_fixtures_test.go` — all migrated as part of PR #522 (2026-05-16) consolidated batch. Zero framework rework was required as predicted. `prod_clock_injection_fixtures_test.go` is **not** in PR #522: it was migrated by PR-6 / #500 (Stage 1.6) due to its `scanProdClockInjectionAST` coupling with `clock_invariants_test.go` — see plan §1.6 (single source of truth).
 
@@ -222,11 +222,11 @@ The migration is complete when: (**All three achieved in PR #PENDING 2026-05-17.
 
 `tools/archtest/internal/scanner` and `tools/archtest/internal/typeseval` retain their exported APIs — they are intentionally reachable from archtest test files for their non-INV-1 helpers (walk + go/types resolution). Symbol-level bans on `EachFile` / `LoadPackages` / `SharedResolver` are enforced by the PASS-FUNNEL meta-archtest (defense #3), not by lint.
 
-### §passFunnelPermanentExempt — Medium AI-rebust evaluation
+### §passFunnelPermanentExempt — Medium AI-robust evaluation
 
 (Extension of the "Permanent exemption escape surface" row at L100 above; see also `passFunnelPermanentExempt` godoc in `pass_funnel_test.go`.)
 
-The three permanent exemption files (`pass_funnel_test.go` / `pass_test.go` / `archtest_test.go`) form `passFunnelPermanentExempt`. The set is **AI-rebust Medium** (not Soft, not Hard):
+The three permanent exemption files (`pass_funnel_test.go` / `pass_test.go` / `archtest_test.go`) form `passFunnelPermanentExempt`. The set is **AI-robust Medium** (not Soft, not Hard):
 
 | Dimension | Evaluation |
 |-----------|------------|
@@ -259,7 +259,7 @@ Conclusion: `passFunnelPermanentExempt` is **Medium** — mechanical sync via do
 
 Scanner side: only `scanner.ImportBan` was unexported (re-exported as `type ImportBan = scanner.ImportBan`); it does **not** collapse into depguard — depguard cannot express its file-local `AllowRels` semantics (§ Termination criteria reasoning).
 
-**Two-defense single-path closure (AI-rebust graded, ≥ Medium gating met):**
+**Two-defense single-path closure (AI-robust graded, ≥ Medium gating met):**
 
 | # | Mechanism | Grade | Blind-spot evidence |
 |---|---|---|---|
@@ -305,7 +305,7 @@ Rejected: merging would force signature changes on all call sites shipped in PR 
 ## References
 
 - `docs/plans/archive/202605141519-040-archtest-pass-funnel-plan.md` — strategic plan with 4-stage migration and parallelism analysis.
-- `.claude/rules/gocell/ai-collab.md` — AI-rebust charter (Hard / Medium / Soft grading, vehicle decision principles, archtest naming).
+- `.claude/rules/gocell/ai-robust.md` — AI-robust charter (Hard / Medium / Soft grading, vehicle decision principles, archtest naming).
 - `tools/archtest/scanner_framework_usage_test.go` — `SCANNER-FRAMEWORK-USAGE-01` (sibling Hard meta-archtest; structural template for `pass_funnel_test.go`).
 - `go/analysis.Pass` — upstream Pass shape ([pkg.go.dev/golang.org/x/tools/go/analysis](https://pkg.go.dev/golang.org/x/tools/go/analysis)).
 - `docs/architecture/202605120000-adr-archtest-process-isolation.md` — `hack/verify-archtest.sh` 16-shard CI infrastructure; pass_funnel_test.go is discovered automatically.

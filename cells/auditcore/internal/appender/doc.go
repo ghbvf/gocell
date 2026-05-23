@@ -14,7 +14,7 @@
 // and calling appender.NewService directly; all wiring options
 // (WithEmitter, WithTxManager) live on this package.
 //
-// AI-rebust defenses:
+// AI-robust defenses:
 //
 //   - HandleEvent single-source: type alias to a non-local Service forbids
 //     methods at the language level (Hard).

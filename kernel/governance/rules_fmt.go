@@ -1427,7 +1427,7 @@ func (v *Validator) checkREF12Contract(c *metadata.ContractMeta) []ValidationRes
 // Membership guard: TestRuleReachabilityFromRegistrationRoots locks FMT-33 in
 // goldenRuleIDs — deleting the rules() registration turns CI red.
 //
-// AI-rebust: Medium (governance YAML-metadata validate layer, same tier as
+// AI-robust: Medium (governance YAML-metadata validate layer, same tier as
 // FMT-31/ADV-06). Both visibility classes route through metadata oracles
 // (IsPublicHTTPPath / IsInternalHTTPPath) — no inline string anchor.
 //
@@ -1465,7 +1465,7 @@ func (v *Validator) validateFMT33() []ValidationResult {
 // bootstrap to /api/v{N}/{cell}/setup/admin, so it is not a valid
 // alternative on /internal/v1/* paths.
 //
-// Funnel pair (ai-collab.md §Funnel 双向锁评级):
+// Funnel pair (ai-robust.md §Funnel 双向锁评级):
 //
 //	upstream Hard: tools/codegen/contractgen/builder.go::validateAuthOnInternalPath
 //	               (single funnel via buildHTTPEndpointSpec — sole HTTP codegen entry)

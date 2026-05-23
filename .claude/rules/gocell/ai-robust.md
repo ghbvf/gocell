@@ -1,6 +1,6 @@
-# AI 协作章程
+# AI-robust 治理章程
 
-> 第一性原理：GoCell 主要实施者是 AI（claude code）。工程治理目标必须从"对人友好"转为"AI-rebust"——违反不可表达 / 机制不可绕过 / 字面约定全部消除。
+> 第一性原理：GoCell 主要实施者是 AI（claude code）。工程治理目标必须从"对人友好"转为"AI-robust"——违反不可表达 / 机制不可绕过 / 字面约定全部消除。
 >
 > 本文件是约束 enforcement 的权威真值源。原则在此终结，不向 ADR / 代码 "详见"；落地实例与符号清单活在代码 godoc，规则文件不复制也不指向。
 
@@ -16,7 +16,7 @@
 
 不在范围：CI 已有 lint/test/build；日常实施任务（加 endpoint、加字段、修 bug、refactor）；review finding 中的 bug 修复类。
 
-## AI-rebust 三档分级
+## AI-robust 三档分级
 
 | 档 | 定义 | 典型载体 | AI 可绕过性 |
 |---|---|---|---|
@@ -72,7 +72,7 @@ archtest CI 入口、本地触发方式（`make verify` / `hack/verify-archtest.
 
 ## Review checklist
 
-涉及"新增/修改约束 enforcement 机制"的 finding 必须显式给 AI-rebust 评级：
+涉及"新增/修改约束 enforcement 机制"的 finding 必须显式给 AI-robust 评级：
 
 - **Hard**：保留，记录范本
 - **Medium**：保留；若有低成本升 Hard 的路径，开 follow-up

@@ -17,7 +17,7 @@ package archtest
 // privatizing domain.User authz fields + sealed Mutation funnel; tracked
 // via domain.User authz field privatization and a sealed Mutation funnel.
 //
-// AI-rebust grade: Hard (closed-caller-set enforced via ResolveMethodCall;
+// AI-robust grade: Hard (closed-caller-set enforced via ResolveMethodCall;
 // form uniqueness = "call resolves to this exact *types.Func identity" — no gray zone).
 //
 // Hard property: any direct call to session.Store.RevokeForSubject /
@@ -30,7 +30,7 @@ package archtest
 // Resolver scope: targeted package trees (not full module ./...) to keep RAM
 // bounded while still covering every non-test, non-store-impl call site.
 //
-// Blind-spot self-check (ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot self-check (ai-robust.md §"工具选定后强制盲区自检"):
 //
 // ResolveMethodCall resolves `*ast.SelectorExpr` via info.Selections. Forms
 // NOT covered by this tool:
@@ -375,7 +375,7 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // the reviewer's radar instead of relying on string convention.
 // See ADR §A10 for the canonical allowlist and co-tx atomicity rationale.
 //
-// AI-rebust grade: Medium. The rule catches "wrong caller" (cells outside
+// AI-robust grade: Medium. The rule catches "wrong caller" (cells outside
 // the allowlist invoking Apply directly) but NOT "missing caller" (a new
 // user-authz mutator forgetting to call Apply at all). The latter is what
 // P1-#1 in PR #490 review was — fixed in this PR by the identitymanage
@@ -604,7 +604,7 @@ func scanFunnelViolationsPass(
 // verifyRedFixtureDetectedPass loads the given fixture pattern via RunTyped
 // and asserts that the scanner finds ≥ 1 violation — proving the rule is
 // not permanently GREEN. This is the "反向 RED 自检" (reverse RED self-check)
-// mandated by ai-collab.md.
+// mandated by ai-robust.md.
 //
 // Fixture load failure is a hard fail: the previous silent t.Logf+return
 // masked archtest regressions — a fixture that stops type-checking would

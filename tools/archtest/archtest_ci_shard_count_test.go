@@ -33,7 +33,7 @@ const verifyArchtestScriptMarker = "hack/verify-archtest.sh"
 // If CI yaml drops the explicit value, the script falls through to K=1 and
 // the next CI run blows up.
 //
-// AI-rebust: Medium runtime guard. The constraint "CI yaml verify-archtest
+// AI-robust: Medium runtime guard. The constraint "CI yaml verify-archtest
 // must explicit SHARD_COUNT=16" cannot be bypassed without modifying this
 // archtest in the same PR. Violation is reviewer-visible diff.
 //

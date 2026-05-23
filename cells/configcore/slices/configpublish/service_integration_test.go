@@ -277,7 +277,7 @@ func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry)
 // goroutine sees rowsAffected=1 and commits, the other gets rowsAffected=0,
 // triggers `resolveUpdateConflict`, and returns ErrVersionConflict (409).
 //
-// AI-rebust classification: **Medium runtime integration regression guard**
+// AI-robust classification: **Medium runtime integration regression guard**
 // (testcontainers + concurrent goroutines + CI assertion — runtime invariant
 // check, not "violation is unexpressible"). Removing the `AND version=$N`
 // predicate is a normal Go code change that compiles cleanly; the CI red is

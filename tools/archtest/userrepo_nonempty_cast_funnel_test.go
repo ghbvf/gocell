@@ -11,10 +11,10 @@
 //     pkg 的非 _test.go 但仅被 *_test.go import，等价测试侧)
 //   - *_test.go 任意路径 (fixture)
 //
-// AI-rebust 评级：Medium 下游 (downstream Hard 形态：callee identity + path
+// AI-robust 评级：Medium 下游 (downstream Hard 形态：callee identity + path
 // allowlist 由 AST 静态匹配，绕过须改本 archtest 同 PR)；上游 Medium (Go
 // type-renamed string 的 cast 在 type system 上不可禁，只能 archtest 兜底)。
-// 按 ai-collab.md "Funnel 双向锁评级 / 允许 Medium 上游 + Hard 下游的过渡
+// 按 ai-robust.md "Funnel 双向锁评级 / 允许 Medium 上游 + Hard 下游的过渡
 // 形态" 暂留——升级路径需要把 NonEmpty 改为 unexported struct + 私有构造，
 // 代价超过本 PR 范围。
 //
@@ -25,7 +25,7 @@
 //   - Reflect path (`reflect.ValueOf(s).Convert(NonEmpty type)`)：本 archtest
 //     不覆盖；codebase 内无此用法 (grep-verified)。
 //
-// ref: ai-collab.md "string-typed concept funnel" + "Funnel 双向锁评级"
+// ref: ai-robust.md "string-typed concept funnel" + "Funnel 双向锁评级"
 // ref: cells/accesscore/internal/domain/nonempty.go
 // ref: docs/architecture/202605222309-adr-user-repo-narrow-write-methods.md §4
 package archtest

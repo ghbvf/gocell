@@ -15,7 +15,7 @@
 //     workaround.
 //   - ConsumerGroup is broker partition key + idempotency namespace.
 //
-// AI-rebust layering:
+// AI-robust layering:
 //
 //   - HARD (compile-time): Registry.Subscribe(spec, handler, consumerGroup,
 //     cellID, opts...) requires cellID as a positional parameter. Omission

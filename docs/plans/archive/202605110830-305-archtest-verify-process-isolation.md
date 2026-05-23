@@ -73,7 +73,7 @@ D 路径（process isolation）是**结构性治本**且**对齐 OSS 主流**的
 - ❌ 不重写 archtest 规则本身（70+ 函数代码不动）
 - ❌ 不优化 archtest 性能（amortization 是另一条 backlog 条目，与本项独立）
 - ❌ 不引入新依赖（不上 bazel、不上 ARC k8s 等重型方案）
-- ❌ 不改 CLAUDE.md ai-collab.md 中的 archtest 治理章程（载体决策不变）
+- ❌ 不改 CLAUDE.md ai-robust.md 中的 archtest 治理章程（载体决策不变）
 
 ### 2.3 成功验收
 
@@ -354,7 +354,7 @@ verify-archtest:
 ### Phase 6：文档与清理（1h）
 
 - [ ] 更新 `CLAUDE.md` archtest 章节：补充 `make verify-archtest` 入口
-- [ ] 更新 `.claude/rules/gocell/ai-collab.md`：archtest 文件命名规则后加一段「CI 通过 `make verify-archtest` 跑」
+- [ ] 更新 `.claude/rules/gocell/ai-robust.md`：archtest 文件命名规则后加一段「CI 通过 `make verify-archtest` 跑」
 - [ ] 写一条 ADR：`docs/architecture/202605120000-adr-archtest-process-isolation.md`，记录架构决策与 K8s 范式对照
 - [ ] backlog：
   - close `PR305-FU-ARCHTEST-VERIFY-PROCESS-ISOLATION-01`
@@ -373,7 +373,7 @@ verify-archtest:
 | `tools/archtest/tools_shard_pkg_coverage_test.go` | **新建** archtest 元规则 | ~80 行 |
 | `tools/archtest/archtest_verify_coverage_test.go` | **新建** archtest 元规则 | ~60 行 |
 | `CLAUDE.md` | 加 archtest 入口段 | ~10 行 |
-| `.claude/rules/gocell/ai-collab.md` | 加 verify-archtest 段 | ~5 行 |
+| `.claude/rules/gocell/ai-robust.md` | 加 verify-archtest 段 | ~5 行 |
 | `docs/architecture/202605120000-adr-archtest-process-isolation.md` | **新建** ADR | ~80 行 |
 | `docs/backlog.md` | close 2 条 + downgrade 1 条 | ~10 行 |
 

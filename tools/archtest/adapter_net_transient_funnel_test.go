@@ -2,7 +2,7 @@
 //   - INVARIANT: TRANSIENT-NET-HELPER-FORM-01
 //
 // Hard double-lock for the adapter "net.Error → transient" rule
-// (ai-collab.md §AI-rebust + §Funnel 双向锁 + ADR 202605161800):
+// (ai-robust.md §AI-robust + §Funnel 双向锁 + ADR 202605161800):
 //
 //   - Downstream Hard (ADAPTER-NET-TRANSIENT-FUNNEL-01): every site in
 //     production code that performs a net.Error fan-in decision must reside
@@ -37,7 +37,7 @@
 // EachInSubtree[ast.SelectorExpr] / EachInSubtree[ast.CallExpr]; alias
 // transparency via types.Unalias.
 //
-// Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"):
+// Declared blind spots (ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. Reflective type-name comparison ("net.Error" string-equality): impossible
 //     for in-package var declarations — Go type system requires `var x net.Error`
@@ -77,7 +77,7 @@
 //
 // File-naming note: this file declares 2 related rules sharing the
 // net.Error transient funnel theme (ADAPTER-NET-TRANSIENT-FUNNEL-01 +
-// TRANSIENT-NET-HELPER-FORM-01). Per ai-collab.md §archtest 文件命名,
+// TRANSIENT-NET-HELPER-FORM-01). Per ai-robust.md §archtest 文件命名,
 // the `_invariants_test.go` rename is triggered once a third related
 // rule lands. Until then this single-file form is intentional.
 package archtest

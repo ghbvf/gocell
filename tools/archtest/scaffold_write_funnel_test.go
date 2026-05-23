@@ -7,7 +7,7 @@
 //   - all-or-nothing conflict detection (no partial bundles)
 //   - atomic write with rollback (no half-written state)
 //
-// AI-rebust: Medium (type-aware via go/types Info — see PR454 round-2 F1
+// AI-robust: Medium (type-aware via go/types Info — see PR454 round-2 F1
 // for the upgrade rationale).
 //
 // # Recognition: type-aware, not name-based

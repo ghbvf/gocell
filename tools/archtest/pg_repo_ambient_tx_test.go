@@ -27,7 +27,7 @@
 //     "adapters/postgres/refresh_store.go::revokeSessionDetachedAt" — the
 //     intentional independent-commit cascade-revoke compensation path.
 //
-// # AI-rebust grading (Funnel 双向锁评级)
+// # AI-robust grading (Funnel 双向锁评级)
 //
 // 下游 Hard / 上游 Medium (PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01).
 //
@@ -36,7 +36,7 @@
 // sibling file can always reach pgExecutor.pool or add its own field — the
 // compiler cannot block it. The ceiling is archtest-bound form-uniqueness (same
 // grade and precedent as PANIC-REGISTERED-01 / panic(panicregister.Approved)
-// per ai-collab.md §Hard 范本 #2 caveat). R1+R2 guard holding+construction;
+// per ai-robust.md §Hard 范本 #2 caveat). R1+R2 guard holding+construction;
 // R3 adds callsite caller-allowlist enforcement so that the only existing
 // legitimate bypass (revokeSessionDetachedAt) is statically pinned and any NEW
 // bypass immediately fails CI. This elevates upstream enforcement from doc-only
@@ -100,7 +100,7 @@
 //
 // BS-2 Interface-typed field that carries a *pgxpool.Pool at runtime — R1 is a
 // static-type check; it cannot see runtime dynamic values. Accepted per
-// ai-collab.md §3.
+// ai-robust.md §3.
 //
 // BS-3 Function-value indirection: `var fn = newPGExecutor; fn(pool)` — R2's
 // callee resolution uses *types.Info.Uses, which resolves the Fun identifier of

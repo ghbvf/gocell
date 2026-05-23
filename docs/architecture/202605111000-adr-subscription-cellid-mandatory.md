@@ -42,7 +42,7 @@ available to the cellgen template at codegen time as `$.CellID`.
 
 ## Problem
 
-The three fallback paths produced four AI-rebust hazards:
+The three fallback paths produced four AI-robust hazards:
 
 1. **Soft semantics.** "CellID is optional with fallback" reads as a runtime
    convenience; any AI session can re-introduce a similar fallback later
@@ -57,7 +57,7 @@ The three fallback paths produced four AI-rebust hazards:
    reading dashboards.
 4. **No compile-time gate.** Adding `WithSubscriptionCellID(string)` as an
    option (the obvious "nice API") would have left omission as a runtime
-   problem, not a compile failure — Soft per `ai-collab.md` AI-rebust matrix.
+   problem, not a compile failure — Soft per `ai-robust.md` AI-robust matrix.
 
 ## Decision
 
@@ -85,8 +85,8 @@ Subscribe(spec, handler, consumerGroup, cellID string, opts ...SubscriptionOptio
 **Why positional, not option.** A `WithSubscriptionCellID(string)` option
 would let a caller omit cellID and produce a `SubscriptionRequest` with
 `CellID == ""`, deferring the failure to runtime. Positional makes omission
-a compile failure at the call site — the AI-rebust HARD pattern from
-`ai-collab.md` ("typed function choice for walk depth" precedent). Codegen
+a compile failure at the call site — the AI-robust HARD pattern from
+`ai-robust.md` ("typed function choice for walk depth" precedent). Codegen
 templates inject the value from `metadata.CellMeta.ID` at compile time, so
 business callers never have to reason about it.
 
@@ -178,7 +178,7 @@ A "nice" builder API where cells call
 `reg.Subscribe(spec, handler, "cg", WithSubscriptionCellID(c.ID()))`. Rejected
 because omission is silent — produces `CellID == ""` and defers failure to
 runtime (or to a stricter Validate which the code didn't have at the time
-of K#04). AI-rebust: Soft. Per `ai-collab.md` Soft is severely discouraged.
+of K#04). AI-robust: Soft. Per `ai-robust.md` Soft is severely discouraged.
 
 ### A2 — Newtype `type CellID string` with mandatory constructor (rejected)
 

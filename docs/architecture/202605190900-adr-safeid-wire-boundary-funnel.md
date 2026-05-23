@@ -166,7 +166,7 @@ zero regression in `make verify` and `hack/verify-archtest.sh`).
 ## Alternatives considered
 
 1. **Inline `IsSafeID` validators inside `UnmarshalEnvelope`**. Rejected
-   for AI-rebust Soft rating: any new field addition could forget to
+   for AI-robust Soft rating: any new field addition could forget to
    wire the validator. Charter §"立项硬门槛 ≥ Medium" rejects Soft.
 2. **Archtest scanning `UnmarshalEnvelope` body for `IsSafeID` calls
    per field**. Reaches Medium. Still relies on string-anchored
@@ -193,9 +193,9 @@ zero regression in `make verify` and `hack/verify-archtest.sh`).
 
 ## References
 
-- charter `.claude/rules/gocell/ai-collab.md` §"Hard 范本" 第 3 条
+- charter `.claude/rules/gocell/ai-robust.md` §"Hard 范本" 第 3 条
   string-typed concept funnel
-- charter `.claude/rules/gocell/ai-collab.md` §"Funnel 双向锁评级"
+- charter `.claude/rules/gocell/ai-robust.md` §"Funnel 双向锁评级"
 - OpenTelemetry `go.opentelemetry.io/otel/trace.TraceID.IsValid` —
   comparable typed wrapper with embedded validation
 - `k8s.io/apimachinery/pkg/util/validation` — exported length-constant

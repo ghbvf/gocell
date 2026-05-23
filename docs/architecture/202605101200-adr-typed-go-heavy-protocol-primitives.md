@@ -369,10 +369,10 @@ cell := accesscore.New(
 
 扫描范围为 `*_repo.go` 和 `*_store.go` 后缀文件（infrastructure 文件合法持有 pool，不在范围）。覆盖保护：companion coverage guard 断言两个包模式各自至少有一个此类文件，防止包名变更导致覆盖静默归零。
 
-**Funnel 双向锁评级（ai-collab.md §Funnel 双向锁评级）**：
+**Funnel 双向锁评级（ai-robust.md §Funnel 双向锁评级）**：
 
 - **下游 Hard**：R1/R2 通过 `*types.Info` form-uniqueness 拦截；违反形态无灰色地带，不经 archtest 即无法绕过 R1/R2 约束。
-- **上游 Medium**：intra-package compile Hard 不可达 — `adapters/postgres` 包内所有文件共享相同的包可见性；Go 编译器无法阻止同包 sibling file 直接访问 `pgExecutor.pool` 或新增自己的字段。上限是 archtest-bound form-uniqueness，与 `PANIC-REGISTERED-01` / `panic(panicregister.Approved)` 同级（ai-collab.md §Hard 范本 #2 caveat）。升级路径：seal `pgExecutor` 为 exported interface + 私有化构造函数，让包外绕过不可表达。详见 backlog `PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01`（`docs/backlog/cap-14-tooling.md`）。
+- **上游 Medium**：intra-package compile Hard 不可达 — `adapters/postgres` 包内所有文件共享相同的包可见性；Go 编译器无法阻止同包 sibling file 直接访问 `pgExecutor.pool` 或新增自己的字段。上限是 archtest-bound form-uniqueness，与 `PANIC-REGISTERED-01` / `panic(panicregister.Approved)` 同级（ai-robust.md §Hard 范本 #2 caveat）。升级路径：seal `pgExecutor` 为 exported interface + 私有化构造函数，让包外绕过不可表达。详见 backlog `PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01`（`docs/backlog/cap-14-tooling.md`）。
 
 **RED/GREEN fixture 权威集**：`tools/archtest/internal/pgrepoambienttxfixture/fixture.go` 是 RED/GREEN fixture 的权威单一来源；`TestPGRepoAmbientTx_RedFixtureDetected` 对其进行精确集合断言（exact-set assertion on (ruleID_prefix, fixture source line) pairs），使规则可证伪。当前 RED fixture 集与期望违规计数见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc + `expectedFixtureViolations` — 不在本 ADR 中硬编码，避免每次 fixture 演化时 ADR 与代码双源漂移。
 

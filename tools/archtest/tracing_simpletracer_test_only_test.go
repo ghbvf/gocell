@@ -55,7 +55,7 @@ import (
 //   - tools/archtest/ is excluded from collectGoFiles (self-exemption) —
 //     archtest's own probe strings do not self-trip.
 //
-// AI-rebust funnel rating (ai-collab.md §Funnel 双向锁评级):
+// AI-robust funnel rating (ai-robust.md §Funnel 双向锁评级):
 //
 //	R-A (anti-reintroduction seal): 下游 Hard (Go compiler — runtime/observability/
 //	   tracing no longer exists; any tracing.NewTracer ref is a compile error),
@@ -67,7 +67,7 @@ import (
 //	   injects is a runtime wiring choice the Go type system cannot forbid
 //	   (honest caveat, mirrors charter PANIC-REGISTERED honest-caveat).
 //
-// AI-rebust grade: Medium — and this is the *ceiling* for this rule shape.
+// AI-robust grade: Medium — and this is the *ceiling* for this rule shape.
 // Which `wrapper.Tracer` implementation the composition root injects via
 // `bootstrap.WithTracer(t)` is a runtime wiring choice; Go's type system
 // cannot forbid a valid interface implementation from being passed as an
@@ -79,7 +79,7 @@ import (
 // + R-C (reverse self-check) + R-D (dot-import reverse self-check proving
 // the R-A blind spot is closed by R-B) is the strongest Medium attainable,
 // stated honestly without "near-Hard" hedging.
-// See ai-collab.md §"AI-rebust 三档分级" + §Hard PANIC-REGISTERED honest-caveat.
+// See ai-robust.md §"AI-robust 三档分级" + §Hard PANIC-REGISTERED honest-caveat.
 func TestTracingSimpleTracerTestOnly(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath := readModulePath(t, root)

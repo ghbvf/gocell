@@ -16,7 +16,7 @@
 // that inlines its logic. The archtest walks one level of callee so both
 // patterns are covered uniformly.
 //
-// AI-rebust evaluation: Medium. Two layers:
+// AI-robust evaluation: Medium. Two layers:
 //
 //  1. Primary symmetry check (downstream): typed AST + EvaluateConstString
 //     (resolves untyped const, cross-package Ident, const string concat). Not
@@ -39,7 +39,7 @@
 // `PARSER-MATCHER-SYMMETRY-HARDEN` (codegen-based matcher table; tracked
 // under issue #868).
 //
-// Blind-spot self-check (as required by ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot self-check (as required by ai-robust.md §"工具选定后强制盲区自检"):
 //
 // EvaluateConstString evaluates BasicLit / Ident / SelectorExpr / BinaryExpr
 // via go/types constant folding. AST forms OUTSIDE its declared scope:
@@ -126,7 +126,7 @@ func matcherAndCalleeBodies(file *ast.File, matcher *ast.FuncDecl) []*ast.BlockS
 // matcher body or in the package-private helper functions called directly from it.
 //
 // INVARIANT: PARSER-MATCHER-EXAMPLES-SYMMETRY-01
-// AI-rebust: Medium (typed AST + EvaluateConstString); see file-level godoc for rationale.
+// AI-robust: Medium (typed AST + EvaluateConstString); see file-level godoc for rationale.
 func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 	t.Parallel()
 

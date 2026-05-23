@@ -13,7 +13,7 @@
 // detector emits ≥ 1 diagnostic. Removing or modifying any of the
 // reference lines below turns one of the coverage assertions red — locking
 // the rule pipeline at the live-AST level rather than the data-snapshot
-// level (per AI-rebust charter "盲区自检").
+// level (per AI-robust charter "盲区自检").
 //
 // The fixture uses VALUE references (`_ = scanner.EachFile`) instead of
 // call expressions. The PASS-FUNNEL detectors run typeseval.ResolvePackageRef

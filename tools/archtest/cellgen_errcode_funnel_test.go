@@ -31,7 +31,7 @@
 // form-uniqueness oracle in Go. Strictly dual to PANIC-REGISTERED-01
 // (which uses types.Info.Uses[] on the panic-arg CallExpr's Fun).
 //
-// AI-rebust: Hard within the registered set — (Pkg.Path, Name) blacklist
+// AI-robust: Hard within the registered set — (Pkg.Path, Name) blacklist
 // ∪ depguard-banned third-party packages. Form uniqueness via
 // types.Info.Uses[]; archtest fail-on-deviation. Per charter §"typed
 // function call as Hard funnel for unbounded operations", this is Go's
@@ -337,7 +337,7 @@ func TestCellgenErrcodeFunnelNoBuildTagFiles(t *testing.T) {
 }
 
 // TestCellgenErrcodeFunnelBlindSpotsAbsent enforces the runtime side of
-// charter §"工具选定后强制盲区自检" (`.claude/rules/gocell/ai-collab.md`)
+// charter §"工具选定后强制盲区自检" (`.claude/rules/gocell/ai-robust.md`)
 // — Hard/Medium rule shapes require that each declared blind spot has a
 // **runtime self-check** asserting the spot is empty in production AST,
 // not just a documentation claim.

@@ -5,7 +5,7 @@ package archtest
 //
 // INVARIANT: SESSIONVALIDATE-EPOCH-SOURCE-01
 //
-// AI-rebust grade: Hard for SoR identity (the comparison must reference the
+// AI-robust grade: Hard for SoR identity (the comparison must reference the
 // row provenance field AuthzEpochAtIssue, not any other token-side field).
 //
 // Companion to SESSIONVALIDATE-EPOCH-COMPARE-01 (which enforces the `!=`

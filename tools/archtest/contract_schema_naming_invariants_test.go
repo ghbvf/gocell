@@ -14,9 +14,9 @@
 // DB column names, slog log keys, and outbox in-process metadata keys are
 // outside scope (CLAUDE.md mandates snake_case there).
 //
-// AI-rebust: Hard — value-level check on parsed YAML/JSON; no string-anchor
+// AI-robust: Hard — value-level check on parsed YAML/JSON; no string-anchor
 // escape; new contract files automatically scanned via EachContentFile. See
-// .claude/rules/gocell/ai-collab.md §"载体决策原则" item 3
+// .claude/rules/gocell/ai-robust.md §"载体决策原则" item 3
 // (元数据 / YAML 派生 → archtest.EachContentFile + 解析).
 //
 // ref: J-04 (#632) CONTRACT-SCHEMA-NAMING-NORMALIZE; J-03 (#695) co-shipped.

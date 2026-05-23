@@ -61,7 +61,7 @@ The following carve-outs are explicit and tracked in `docs/backlog.md`:
 - `kernel/scaffold` removal is **not back-compat**. Any external caller (none in-tree) would break; project rule "不向后兼容" applies — no deprecation shim.
 - The 5 `kind=command` contracts now carry an explicit `codegen: false` line documenting the deferred status. When command-kind codegen is implemented, those lines become the migration switch.
 - `gocell scaffold contract` 的 inline draft skeleton 显式 emit `codegen: false`，与 5 个 deferred `kind=command` 合约对称：funnel 默认 true 适用于 ScaffoldCellBundle 产出的完整 contract（含 schemaRefs），standalone draft 写入显式 opt-out 直到 schemas 填充后再翻转。
-- archtest `SCAFFOLD-BUNDLE-MARKER-01` 与 `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01` 通过 `ScaffoldCellBundle` 产出的实际 cell.go / contract.yaml 做 AST 断言（real-source capture），AI-rebust **Medium**。Hard 防线（parser AST funnel `contractYAMLHasKey`）已在 `kernel/metadata.parseContract` 落实；archtest 是产出层冗余守。
+- archtest `SCAFFOLD-BUNDLE-MARKER-01` 与 `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01` 通过 `ScaffoldCellBundle` 产出的实际 cell.go / contract.yaml 做 AST 断言（real-source capture），AI-robust **Medium**。Hard 防线（parser AST funnel `contractYAMLHasKey`）已在 `kernel/metadata.parseContract` 落实；archtest 是产出层冗余守。
 
 ## Alternatives considered
 
@@ -82,9 +82,9 @@ Conflict errors use `errcode.ErrConflict` (HTTP 409) and put the failing path in
 
 ### AI-Hard archtest funnel
 
-`tools/archtest/scaffold_write_funnel_test.go` (`INVARIANT: SCAFFOLD-WRITE-FUNNEL-01`) statically forbids any direct `os.MkdirAll` / `os.WriteFile` / `os.Mkdir` / `os.Create` / `os.OpenFile` call inside `tools/codegen/cellgen/...`, `kernel/assembly/...`, and `cmd/gocell/app/scaffold*.go`. The only allowed implementer is `pkg/pathsafe/pathsafe.go`. Bypass requires (a) adding to the archtest's package allowlist **and** (b) re-introducing an `os.*` call — both visible in diff review. AI-rebust evaluation:
+`tools/archtest/scaffold_write_funnel_test.go` (`INVARIANT: SCAFFOLD-WRITE-FUNNEL-01`) statically forbids any direct `os.MkdirAll` / `os.WriteFile` / `os.Mkdir` / `os.Create` / `os.OpenFile` call inside `tools/codegen/cellgen/...`, `kernel/assembly/...`, and `cmd/gocell/app/scaffold*.go`. The only allowed implementer is `pkg/pathsafe/pathsafe.go`. Bypass requires (a) adding to the archtest's package allowlist **and** (b) re-introducing an `os.*` call — both visible in diff review. AI-robust evaluation:
 
-- **Hard** under ai-collab.md `载体决策原则` #2 (typed function call as the violation defense). The funnel itself is the type-system contract; the archtest is the static defense layer that prevents accidental drift through new `os` imports.
+- **Hard** under ai-robust.md `载体决策原则` #2 (typed function call as the violation defense). The funnel itself is the type-system contract; the archtest is the static defense layer that prevents accidental drift through new `os` imports.
 - Real-source AST scan via `scanner.EachFile` with concrete-package allowlist; not string-anchor or comment-exemption — meets the `Cannot be Soft` bar.
 - Residual escape: the archtest's package allowlist is a string list; adding a new scaffold subpackage requires updating that list. Documented in the archtest godoc as a known extension contract; mitigation tracked under `SCAFFOLD-WRITE-FUNNEL-HARD-UPGRADE` for future typed-Writer abstraction.
 - **Documented exemption**: `cmd/gocell/app/generate_catalog.go` 与 `cmd/gocell/app/export.go writeOut` 接收用户 `--out` 路径，输出位置不在 root containment 语义范围内，由 archtest 的 `scaffoldOnlyPred` 显式排除并在 archtest 文件级 godoc 中记录扩展约束。
@@ -143,7 +143,7 @@ The accurate statement at the time was: **scaffold skeleton writes** funnel thro
 - **T3 (Scope sealed interface)**: `contractgen.Scope` interface has unexported `contractScope()` marker method; only `ScopeAll{}`, `ScopeContracts(ids)`, `ScopeCell(id)` implement it. New caller cannot construct an unintended scope by accident — must pick one of the three explicit sentinels.
 - **T4 (typed safeYAMLScalar)**: `yamlsafe.Scalar` is a string-based newtype. Template `data` structs accept `Scalar`, not `string`; raw user input must transit `Quote` to compile. Reverting back to plain `string` requires changing every template data type — visible in diff review.
 
-### AI-rebust evaluation
+### AI-robust evaluation
 
 | Defense | Rating | Rationale |
 |---------|--------|-----------|
@@ -201,7 +201,7 @@ existing pathsafe funnel — so the archtest's allowlist remains correct.
 are both inside the pathsafe funnel; the round-6 round trip removes the
 mixed-mode use in scaffold assembly.
 
-### BUNDLE archtest AI-rebust rating (clarification)
+### BUNDLE archtest AI-robust rating (clarification)
 
 Round-2 reflection in earlier PR description claimed "Zero Medium/Soft" for
 the K#09 archtest set. This is imprecise:
@@ -215,7 +215,7 @@ the K#09 archtest set. This is imprecise:
 
 Hard upgrade for the BUNDLE pair is tracked under
 `SCAFFOLD-BUNDLE-ARCHTEST-HARDEN` (backlog). The two Medium archtests are
-acceptable per `ai-collab.md` §"立项硬门槛: ≥ Medium"; Hard is the goal but
+acceptable per `ai-robust.md` §"立项硬门槛: ≥ Medium"; Hard is the goal but
 not the current state.
 
 ### `synthesizeAssemblyMeta` field-sync risk (new Medium)

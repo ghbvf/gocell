@@ -8,7 +8,7 @@ package archtest
 //
 // INVARIANT: SESSION-REVOKED-FIELD-ACCESS-01
 //
-// Hard funnel rating (ai-collab.md §"AI-rebust 三档分级"):
+// Hard funnel rating (ai-robust.md §"AI-robust 三档分级"):
 //
 //   Upstream Hard (field-access allowlist):
 //     Every SelectorExpr that reads session.Session.RevokedAt or
@@ -30,7 +30,7 @@ package archtest
 // Scanning tools:
 //   - *types.Info.Selections lookup over EachInSubtree[ast.SelectorExpr]
 //
-// Blind-spot self-checks (ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot self-checks (ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. reflect.Value.FieldByName("RevokedAt"): bypasses SelectorExpr
 //     resolution; the field name is in a string literal. Captured by:

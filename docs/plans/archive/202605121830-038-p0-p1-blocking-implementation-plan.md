@@ -77,7 +77,7 @@
 - B2-R-06: `NewTracer` 末尾注册全局 TracerProvider + CompositeTextMapPropagator(TraceContext, Baggage)；错误路径不污染全局
 - B2-R-07: `defaultShutdownTimeout=10s` + `shutdownTracerProvider(ctx, tp, timeout)` helper（rationale: 5s 初版在 BSP shutdown race，10s 稳定，仍小于 OTel BSP ExportTimeout 30s 默认）
 - B2-R-08: 删 public `RegisterPoolMetrics`，单一出口 `NewPoolMetricsResource(meter, statters) (lifecycle.ManagedResource, error)`；compile-time Hard 守卫 + Close → registration.Unregister
-- B2-R-09: `attrCache.maxSize=2000` cap-and-overflow（非 LRU）+ `overflowOpt` sentinel，包外类型系统不可达（AI-rebust Hard）
+- B2-R-09: `attrCache.maxSize=2000` cap-and-overflow（非 LRU）+ `overflowOpt` sentinel，包外类型系统不可达（AI-robust Hard）
 
 #### PR-2 PR-PROM-HARDEN-3（合并 3 个 P1）— ✅ shipped as PR #484
 
@@ -117,20 +117,20 @@
 - K-02 (c) / JOURNEY-CONTRACT-EXISTENCE-VALIDATE-01: 新建 `kernel/governance/rules_journey.go` `validateJOURNEYCONTRACTEXISTENCE01`（反向 REF-07，active 非 examples/ 平台 contract 必须被至少 1 个 journey.contracts[] 引用）；扇出 5 个平台 journey 扩 contracts[] 覆盖 37 个原孤立 active contract（user/role mgmt → J-useronboarding；lock/unlock → J-accountlockout；audit list → J-auditlogintrail；config CRUD + flags → J-confighotreload；config rollback → J-configrollback；setup admin/status + change-password → J-ssologin）
 - STATUS-BOARD-LIFECYCLE-CONSISTENCY: `validateJOURNEYSTATUSLIFECYCLE01` `validBoardLifecycleMatrix` 三态强映射（todo→{experimental} / doing→{experimental,active} / done→{active}）+ active+doing Warning（in-transit reminder, 非阻断）；矩阵与 rules_fmt.go validJourneyLifecycles + journey.schema.json enum 单源对齐，不引入 stable phantom state
 - 顺带修 `validateADV01` 加 examples/ 豁免（对齐 CONTRACT-CONSISTENCY-EMIT-01 已有 examples-exempt 模式）；删 platform `journeys/status-board.yaml` 中 J-ordercreate orphan entry（J-ordercreate 是 example journey 不应在 platform board）
-- AI-rebust Medium（INV-1/2/3 自动守）；同 PR 显式登记两条 Hard 升级 backlog：`JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01`（P2/Cx3 🟠）+ `JOURNEY-CONTRACT-EXISTENCE-CODEGEN-DERIVE-01`（P3/Cx4 🟢）；rules_journey.go godoc 点名两个 backlog ID（参照 cap-14 PASS-PRODUCTION-UPSTREAM-HARD-01 / USAGE-02-HARD-UPGRADE-01 范式）
+- AI-robust Medium（INV-1/2/3 自动守）；同 PR 显式登记两条 Hard 升级 backlog：`JOURNEY-METADATA-STATE-LIFECYCLE-TYPED-CONST-01`（P2/Cx3 🟠）+ `JOURNEY-CONTRACT-EXISTENCE-CODEGEN-DERIVE-01`（P3/Cx4 🟢）；rules_journey.go godoc 点名两个 backlog ID（参照 cap-14 PASS-PRODUCTION-UPSTREAM-HARD-01 / USAGE-02-HARD-UPGRADE-01 范式）
 - 验证：`gocell validate` 0 errors / 1 warning（J-ssologin active+doing 提醒）；`gocell verify journey --active` 双 active journey (J-ssologin platform + J-ordercreate example) 自动 checkRef 全 PASS
 
 #### PR-5 PR-GOV-AUTH-PUBLIC-INTERNAL-FORBIDDEN（单规则 PR，V-A11 ❌ subsumed 收口）— ✅ shipped as PR #573 (2026-05-18)
 
 **包含**：仅 GOVERNANCE-AUTH-PUBLIC-INTERNAL-FORBIDDEN（FMT-34）
 **V-A11 处置**：❌ subsumed by 025 archive plan — metadata.Parser `fs.WalkDir(".")` 已自然覆盖 `examples/**`，`kernel/governance/validate_test.go:4911 TestProjectWalksExamples` 回归测试固化；archive 显式"放弃新建 rules_examples.go"，原修复前提结构性消除。cap-14 backlog drift 同 PR 收口；V-A11b 字符串扫描分支仍触发型保留
-**依据**：单规则 PR，避免凑数；FMT-34 双向锁同 PR 落地（cap-02 字面要求 + ai-collab funnel 双向锁评级）
+**依据**：单规则 PR，避免凑数；FMT-34 双向锁同 PR 落地（cap-02 字面要求 + ai-robust funnel 双向锁评级）
 **依赖**（v5 2026-05-14 复核）：
 - PR-6 (G-13) ✅ PR #487 已落：直接用 `rulecodes.go` + `validateXxx()` + `; fix:` 后缀范式
 - 040 阶段 1 ✅ PR #492 已落（2026-05-14）：archtest 自动覆盖 (INV-1/2/3)，新规则零 archtest 工作量
 **合并决策**（v3 2026-05-18 用户裁决）：**拆 V-A11 出去 + 单规则 ship**——V-A11 backlog drift 不应通过"凑兄弟规则"重新立项；FMT-34 自身完成度足够独立 PR
 **ship 摘要（PR #573，2026-05-18）**：
-- B2 `kernel/governance/rules_fmt.go::validateFMT34`（下游 Medium）：遍历 contract，path 命中 `metadata.IsInternalHTTPPath` + auth.Public/PasswordResetExempt 任一 true 即独立 emit；godoc 显式点名上游 funnel + Hard 升级 backlog `G-13-FU-H3-RULES-AUTOREGISTER`（ai-collab funnel 双向锁评级强制要求）
+- B2 `kernel/governance/rules_fmt.go::validateFMT34`（下游 Medium）：遍历 contract，path 命中 `metadata.IsInternalHTTPPath` + auth.Public/PasswordResetExempt 任一 true 即独立 emit；godoc 显式点名上游 funnel + Hard 升级 backlog `G-13-FU-H3-RULES-AUTOREGISTER`（ai-robust funnel 双向锁评级强制要求）
 - B5 `tools/codegen/contractgen/builder.go::validateAuthOnInternalPath`（上游 Hard）：buildHTTPEndpointSpec 唯一 funnel；命名对齐 `validateAuth<X>` 形态；复用 `metadata.IsInternalHTTPPath` single oracle
 - 测试矩阵：A1 governance 9 cases（4 fail + 5 pass，覆盖与 FMT-26/28 边界正交）；A2 codegen 8 cases（4 fail + 4 pass）；INV-1/2/3 反射自动覆盖新 codeFMT34
 - 仓库 0 现存违规验证：`gocell validate .` 0 errors（含 0 FMT-34 finding），1 already-existing J-ssologin lifecycle warning（与 PR-5 无关）
@@ -161,7 +161,7 @@
 - archtest: `TestAuthRouteBootstrapClientsMutex` 静态扫描整仓 `auth.Route` composite literal（含 `generated/`）
 - 矩阵测试覆盖 `{Public, PasswordResetExempt, BootstrapAuth, Policy, Contract.Clients}` 全 pairwise + singleton + 触发顺序断言
 - **review 升级**：archtest type-aware Hard 全覆盖 4 个 Contract-expression 形态（file-scope var / inline literal / func-body-local := / cross-package SelectorExpr，0 KNOWN-GAP）
-- 文件重命名 `setup_admin_bootstrap_closure_test.go → auth_bootstrap_invariants_test.go`（ai-collab.md theme-file 范式，≥3 同主题 invariant）
+- 文件重命名 `setup_admin_bootstrap_closure_test.go → auth_bootstrap_invariants_test.go`（ai-robust.md theme-file 范式，≥3 同主题 invariant）
 
 #### PR-8 PR-OIDC-MR-COMPLETENESS（A-01 含 A-07/A-08 束）— ✅ shipped as PR #485
 
@@ -188,7 +188,7 @@
 - auditcore `LedgerStore.Probes()` 特殊路径删除，统一到 funnel（PR #450 F6 部分覆盖已吸收）
 - `kernel/cell/celltest.RunRepoReadinessConformance` real-failure-injection harness（healthy→nil；PG DROP TABLE→non-nil；mem→skip）作为 differentiated probe 行为正确性的 Hard 载体
 - archtest `CELL-REPO-READYZ-PROBE-01`：funnel 形态锁 + conformance wiring Medium backstop
-- Cx2→Cx3 revision note：AI-rebust self-audit 发现需要三件套（typed funnel + conformance + archtest），不是原估的两项
+- Cx2→Cx3 revision note：AI-robust self-audit 发现需要三件套（typed funnel + conformance + archtest），不是原估的两项
 - ADR `docs/architecture/202605161030-adr-cell-repo-readyz-probe.md`
 
 ---

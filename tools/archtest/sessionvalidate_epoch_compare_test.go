@@ -5,7 +5,7 @@ package archtest
 //
 // INVARIANT: SESSIONVALIDATE-EPOCH-COMPARE-01
 //
-// AI-rebust grade: Medium (archtest type-aware AST scan).
+// AI-robust grade: Medium (archtest type-aware AST scan).
 // Why not Hard: the rule guards a single read-path callsite. "Hard" would require
 // decomposing enforceSessionState into a sealed pipeline-of-typed-predicates
 // where omitting the epoch check is a compile error — that is not justified by
@@ -25,7 +25,7 @@ package archtest
 //     on either side — enforcing that the epoch comparison is a strict inequality
 //     check and not a weaker operator like > (Finding #2 security fix).
 //
-// Blind-spot note (ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot note (ai-robust.md §"工具选定后强制盲区自检"):
 // EachInSubtree[ast.FuncDecl] + EachInSubtree[ast.SelectorExpr] covers the
 // literal `view.AuthzEpochAtIssue` selector. If the epoch check were refactored
 // into a helper function called from enforceSessionState, the body scan would

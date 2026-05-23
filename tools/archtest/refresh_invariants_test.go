@@ -77,7 +77,7 @@ var refreshGuardedMethods = map[refreshGuardedMethod]struct{}{
 //     field name. A future rename of s.sessionStore to s.sStore would not
 //     bypass the rule.
 //
-// # AI-rebust: Medium (type-aware)
+// # AI-robust: Medium (type-aware)
 //
 // T3 Wave 2 upgrade (S4c plan §T3 FU-3b 闭环): the Soft predecessor used a
 // hand-coded "s.<field>.<method>" Ident-name match with a stale guard set
@@ -135,7 +135,7 @@ var refreshGuardedMethods = map[refreshGuardedMethod]struct{}{
 //     outer tx. Listed in this godoc so future maintainers see it is a
 //     known carve-out, not an oversight.
 //   - BS-3 Reflection / dynamic dispatch on a refresh.Store value — out of
-//     scope per ai-collab.md §3 (no Go static rule reaches it).
+//     scope per ai-robust.md §3 (no Go static rule reaches it).
 //   - BS-4 RED fixture cannot exercise the (ports, UserRepository, GetByID)
 //     guard entry: cells/accesscore/internal/ports is internal-importable
 //     only within cells/accesscore/ and is not reachable from the fixture
@@ -180,9 +180,9 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 // This test fails loudly when the convention drifts so the rule's
 // authors are forced to update the anchors in lock-step.
 //
-// AI-rebust: Soft (string-anchor on production AST), but exists precisely
+// AI-robust: Soft (string-anchor on production AST), but exists precisely
 // to make BS-1 fail-loud rather than fail-silent — the章程级 minimum for
-// any blind-spot disclosure per ai-collab.md "盲区 + 反向自检测试".
+// any blind-spot disclosure per ai-robust.md "盲区 + 反向自检测试".
 func TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS(t *testing.T) {
 	diags := RunTyped(t,
 		TypedOpts{Tests: false},

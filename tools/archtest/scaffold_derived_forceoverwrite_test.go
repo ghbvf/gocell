@@ -6,7 +6,7 @@
 // planDerivedArtifact is the SOLE production caller of the typed
 // pathsafe.DerivedOverwrite constructor in the entire repository.
 //
-// AI-rebust: Hard (compile-time + archtest funnel).
+// AI-robust: Hard (compile-time + archtest funnel).
 //
 //   - **Upstream Hard (compile-time)**:
 //     pkg/pathsafe.PlannedFile.forceOverwrite is package-private and the only
@@ -36,7 +36,7 @@
 // *types.Info.Uses to the underlying *types.Func. callsDerivedOverwrite
 // implements this unified resolution.
 //
-// # Blind spots (declared per ai-collab §载体决策原则)
+// # Blind spots (declared per ai-robust §载体决策原则)
 //
 //  1. Indirect call through a function-typed variable
 //     (`f := pathsafe.DerivedOverwrite; f(...)`). TestScaffoldDerivedForceOverwrite_NoIndirectReference

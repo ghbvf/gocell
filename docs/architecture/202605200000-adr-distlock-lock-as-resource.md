@@ -2,7 +2,7 @@
 
 - Date: 2026-05-20
 - Status: Accepted
-- Refs: GH #20 (DISTLOCK-RENEW-CALLER-CONTEXT-01); CLAUDE.md `.claude/rules/gocell/ai-collab.md` Hard 范本
+- Refs: GH #20 (DISTLOCK-RENEW-CALLER-CONTEXT-01); CLAUDE.md `.claude/rules/gocell/ai-robust.md` Hard 范本
 
 ## Context
 
@@ -62,9 +62,9 @@ Callers cannot accidentally pass a held lock to a downstream RPC and assume call
 
 ## Enforcement (two-layer split — downstream Hard + upstream Medium)
 
-Per ai-collab.md "Funnel 双向锁评级", funnel claims must be evaluated for both directions:
+Per ai-robust.md "Funnel 双向锁评级", funnel claims must be evaluated for both directions:
 
-| Direction | Mechanism | AI-rebust |
+| Direction | Mechanism | AI-robust |
 |-----------|-----------|-----------|
 | **Downstream** (caller cannot pass `*Lock` where `context.Context` is required) | Go type system — `*Lock` lacks `Deadline()` / `Err()`, so calls like `db.QueryContext(lock, ...)` fail at compile time | **Hard** — violation literally not representable in source |
 | **Upstream** (implementer cannot add `Deadline()` / `Err()` methods to `*Lock` and accidentally satisfy `context.Context`) | archtest `DISTLOCK-LOCK-NOT-CONTEXT-01` static check via `typesutil.ImplementsInterface` + blind-spot reverse self-check | **Medium** — package-internal mutation is detectable only by CI archtest; no sealed marker makes the mutation impossible at compile time |

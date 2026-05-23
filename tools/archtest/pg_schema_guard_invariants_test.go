@@ -19,7 +19,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// INVARIANT: MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01 (Medium AI-rebust)
+// INVARIANT: MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01 (Medium AI-robust)
 //
 // Every migration Down section that contains a destructive DDL operation
 // (DROP TABLE, DROP COLUMN, DROP CONSTRAINT, DROP INDEX, DROP TRIGGER,
@@ -31,7 +31,7 @@ import (
 // bypassed by direct goose CLI / psql usage. Any migration that lacks the
 // guard is caught at archtest time, not at runtime.
 //
-// AI-rebust: Medium — string pattern match on SQL content caught at test time.
+// AI-robust: Medium — string pattern match on SQL content caught at test time.
 // ---------------------------------------------------------------------------
 
 // destructiveOps are the DDL tokens that classify a Down section as
@@ -146,7 +146,7 @@ func TestArchtest_MigrationDestructiveDownGUCGuard(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// INVARIANT: SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01 (Medium AI-rebust)
+// INVARIANT: SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01 (Medium AI-robust)
 //
 // Every table created by migration 017 or later must appear in the
 // expectedColumns registry in adapters/postgres/schema_guard.go. This forces
@@ -159,7 +159,7 @@ func TestArchtest_MigrationDestructiveDownGUCGuard(t *testing.T) {
 // intentionally excluded from schema_guard coverage must be listed in
 // archtestExcludedTables with a reason.
 //
-// AI-rebust: Medium — regex scan of SQL + schema_guard.go source.
+// AI-robust: Medium — regex scan of SQL + schema_guard.go source.
 // ---------------------------------------------------------------------------
 
 // archtestExcludedTables is the explicit allowlist of post-017 tables that

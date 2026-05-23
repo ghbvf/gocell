@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hack/githooks/pre-push — fast local approximation of the CI gates that AI
 # co-authors most often forget to run before pushing (fresh-instance, no
-# memory: ai-collab.md §1). It is NOT a full `make verify` — only the
+# memory: ai-robust.md §1). It is NOT a full `make verify` — only the
 # subset that is (a) deterministic offline, (b) sub-10s on a WARM cache,
 # (c) high "forgot to run" rate. Infra-bound gates (go test against
 # testcontainers) stay in CI. CI-faithful golangci-lint (deviation 4) is
@@ -80,7 +80,7 @@
 # additionally runs the codegen staleness probe in the same fan-out (no
 # extra wall time unless it is the slowest job).
 #
-# Honest scope (ai-collab grading): this is Medium AI-rebust — `git push
+# Honest scope (ai-robust grading): this is Medium AI-robust — `git push
 # --no-verify` bypasses it and a fresh clone/worktree without
 # `make install-hooks` has no protection. It is a fast feedback loop, not
 # an unbypassable funnel.

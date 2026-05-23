@@ -36,17 +36,17 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 `.github/workflows/archtest-nightly.yml` 单一 `verify-archtest` job：`matrix.shard: [0..15]` + 显式 `env: SHARD_COUNT: 16`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。CI explicit `SHARD_COUNT=16` 由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment）。
 
-> 历史：本节原文为 "无 SHARD_TARGET 时串行跑 SHARD_COUNT 个 shard" + "`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job"。§Amendment 2026-05-23-pr-time-to-nightly §决策 3 删 K=N 串行 for-loop 并新增 "Execution modes" 三档，§决策 1 把 verify-archtest job 整段从 `_build-lint.yml` 迁到 `archtest-nightly.yml`。本节同 PR 重写（per ai-collab.md §"ADR amendment 落地必查"）。
+> 历史：本节原文为 "无 SHARD_TARGET 时串行跑 SHARD_COUNT 个 shard" + "`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job"。§Amendment 2026-05-23-pr-time-to-nightly §决策 3 删 K=N 串行 for-loop 并新增 "Execution modes" 三档，§决策 1 把 verify-archtest job 整段从 `_build-lint.yml` 迁到 `archtest-nightly.yml`。本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
 
 ### D2. tools shard 不再 enumerate archtest，pkgs 运行时计算
 
 `.github/workflows/_build-lint.yml` tools shard `pkgs` 改为 sentinel `_dynamic_archtest_excluded`；Test step 用 `go list ./tools/...` + grep 排除 archtest **顶层包**（`github.com/ghbvf/gocell/tools/archtest`）。`tools/archtest/internal/{scanner,typeseval,rawparamfixture,wrapfixture}` 子包保留在 tools shard 执行——它们的测试是轻量单元测试（11+3+0+0 \_test.go），不触发 `typeseval.SharedResolver` 的 type graph 累加（296 archtest 顶层函数才是 OOM 触发源）。
 
-**AI-rebust 评级**：按 `.claude/rules/gocell/ai-collab.md` 载体定义严格分类为 **Medium**（shell runtime guard + go list subprocess + grep 过滤），不是 codegen funnel / type system / sealed interface 的 Hard。但从覆盖保证角度等效 Hard：「新 `tools/<sub>` 包被遗漏」**在 type system 不可表达**——`go list ./tools/...` 是 ground truth，新包自动入列，archtest 是唯一显式排除目标。AI 仍能通过手工改 yml 回硬编码列表绕过 runtime 计算，但这种回退要改 yml + 改注释 + 通过 diff review，可观测性足够。在本 PR 范围内接受为 **Hard-effective**，不立 archtest 元规则守卫（守卫本身也是 Soft 的字符串扫，反而开倒车）。
+**AI-robust 评级**：按 `.claude/rules/gocell/ai-robust.md` 载体定义严格分类为 **Medium**（shell runtime guard + go list subprocess + grep 过滤），不是 codegen funnel / type system / sealed interface 的 Hard。但从覆盖保证角度等效 Hard：「新 `tools/<sub>` 包被遗漏」**在 type system 不可表达**——`go list ./tools/...` 是 ground truth，新包自动入列，archtest 是唯一显式排除目标。AI 仍能通过手工改 yml 回硬编码列表绕过 runtime 计算，但这种回退要改 yml + 改注释 + 通过 diff review，可观测性足够。在本 PR 范围内接受为 **Hard-effective**，不立 archtest 元规则守卫（守卫本身也是 Soft 的字符串扫，反而开倒车）。
 
 ### D3. discovery vs AST 一致性元规则
 
-`tools/archtest/archtest_verify_coverage_test.go::TestArchtestVerifyCoverage01`（INVARIANT `ARCHTEST-VERIFY-COVERAGE-01`）：shell-out `DRY_RUN=1 bash hack/verify-archtest.sh` → 与 `scanner.EachInSubtree[ast.FuncDecl]` AST 扫到的 top-level Test* 函数集合做对称 diff，非空则 fail。守的风险：维护者改脚本加 `grep -v TestFoo` debug 过滤忘删 → CI silent unenforce（local `go test ./tools/archtest/...` 仍捕获，但 PR Check 漏过）。AI-rebust **Medium**（runtime cross-check 双重源）。
+`tools/archtest/archtest_verify_coverage_test.go::TestArchtestVerifyCoverage01`（INVARIANT `ARCHTEST-VERIFY-COVERAGE-01`）：shell-out `DRY_RUN=1 bash hack/verify-archtest.sh` → 与 `scanner.EachInSubtree[ast.FuncDecl]` AST 扫到的 top-level Test* 函数集合做对称 diff，非空则 fail。守的风险：维护者改脚本加 `grep -v TestFoo` debug 过滤忘删 → CI silent unenforce（local `go test ./tools/archtest/...` 仍捕获，但 PR Check 漏过）。AI-robust **Medium**（runtime cross-check 双重源）。
 
 ### D4. `make verify` 委托 archtest 给 nightly gate（D6 single-owner 落地形态）
 
@@ -54,7 +54,7 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 本地 `make verify`（无 `VERIFY_SKIP` env）仍包含 `verify-archtest.sh`，按 `SHARD_COUNT` 默认 K=1 单进程跑（见 §D1 + §Amendment 2026-05-23）；CI 上 `archtest-nightly.yml::verify-archtest` (schedule cron + workflow_dispatch，SHARD_COUNT=16 explicit) 是唯一权威 archtest gate。
 
-> **历史**：本节原文先后经历："governance.yml 删 VERIFY_SKIP env" + "verify-archtest.sh serial 16-shard" → §D6 加入时反转（恢复 VERIFY_SKIP 避免双跑）→ §Amendment 2026-05-23 把脚本默认 K 改为 1 → §Amendment 2026-05-23-pr-time-to-nightly 把 owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`。本节同 PR 重写（per ai-collab.md §"ADR amendment 落地必查"）。
+> **历史**：本节原文先后经历："governance.yml 删 VERIFY_SKIP env" + "verify-archtest.sh serial 16-shard" → §D6 加入时反转（恢复 VERIFY_SKIP 避免双跑）→ §Amendment 2026-05-23 把脚本默认 K 改为 1 → §Amendment 2026-05-23-pr-time-to-nightly 把 owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`。本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
 
 ### D5. slowgate 重接
 
@@ -75,7 +75,7 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 - 脚本因 `SLOWGATE_BIN` 缺失走 plain go test 路径——by-design 单本地路径（slowgate budget gate 是 CI 关注点，本地 dev 关注正确性）
 - 故 script 仍有「`SLOWGATE_BIN` 在则 pipe；不在则 plain」的内部分支，但 CI 只有一个 caller（nightly matrix）注入 `SLOWGATE_BIN`，没有 caller-divergent 契约
 
-> 历史：本节原文为 "`_build-lint.yml::verify-archtest` matrix 是 push / pull_request 上的唯一权威 archtest gate"。§Amendment 2026-05-23-pr-time-to-nightly 把 owner 平移至 `archtest-nightly.yml`；本节文本同 PR 重写（per ai-collab.md §"ADR amendment 落地必查"，禁止"原文保留作历史脉络"）。
+> 历史：本节原文为 "`_build-lint.yml::verify-archtest` matrix 是 push / pull_request 上的唯一权威 archtest gate"。§Amendment 2026-05-23-pr-time-to-nightly 把 owner 平移至 `archtest-nightly.yml`；本节文本同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"，禁止"原文保留作历史脉络"）。
 
 ### D7. 元规则覆盖 dispatch 路径，不仅 discovery
 
@@ -146,7 +146,7 @@ phase0-baseline.txt 留在 worktree 但不入 PR（一次性 artifact）。
 - 本地路径：`bash hack/verify-archtest.sh` 默认单进程跑（K=1），~300 个 Test* 共享 `typeseval.SharedResolver` 内的 `*types.Info` cache，CPU 工作 ~1× 而非 ~16×。`make verify` 透传链路同步生效。
 - 双源 SYNC 消除：CI yaml 与脚本默认值不再要求相等，是 by-design 差异（"CI 上下文"显式表达 vs "本地上下文"默认服务）；`ARCHTEST-SHARDCOUNT-SYNC-GUARD-01` backlog 同 PR 关闭。
 
-### 威胁矩阵重评（per `.claude/rules/gocell/ai-collab.md` §"ADR amendment 落地必查"）
+### 威胁矩阵重评（per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"）
 
 逐行核对原 ADR 论点在 amendment 后的有效性：
 
@@ -161,13 +161,13 @@ phase0-baseline.txt 留在 worktree 但不入 PR（一次性 artifact）。
 
 无变 ❌/⚠️ 项，amendment 与原文论点正交。
 
-### 新约束 Medium 守卫（同 PR 闭环，per ai-collab.md §"立项硬门槛 ≥ Medium"）
+### 新约束 Medium 守卫（同 PR 闭环，per ai-robust.md §"立项硬门槛 ≥ Medium"）
 
 Amendment 改默认 16→1 产生一个新隐式约束：**CI yaml `verify-archtest` job 必须 explicit 在 invocation step 自身 env 中设 `SHARD_COUNT: 16`**（否则 CI 以 K=1 单进程跑全部 archtest，~20 GB peak RSS 撞 GHA 7 GB shard OOM）。
 
 > 落地载体迁移：本节 amendment 落地时 yaml 路径是 `.github/workflows/_build-lint.yml::verify-archtest`。后续 §Amendment 2026-05-23-pr-time-to-nightly 把 matrix 迁到 `.github/workflows/archtest-nightly.yml`，archtest 守卫的 yaml 解析路径同 PR 更新；约束语义不变。
 
-按 ai-collab.md "新引入 Soft → 直接 reject，要求改 ≥ Medium"，此约束**同 PR 内** Medium 化，不允许靠注释维护或 backlog 延期：
+按 ai-robust.md "新引入 Soft → 直接 reject，要求改 ≥ Medium"，此约束**同 PR 内** Medium 化，不允许靠注释维护或 backlog 延期：
 
 - 新增 archtest `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01`（`tools/archtest/archtest_ci_shard_count_test.go`）：解析 nightly workflow YAML，**step-scoped match-all** 形态——遍历 `jobs.verify-archtest.steps[*]`，对每个 `run` 含 `hack/verify-archtest.sh` 的 step 断言其**自身** `env.SHARD_COUNT == "16"`；缺失、值漂移、无 invocation step 立即 fail。
 - Step-scoped 必要性：GHA step env 是 step-scoped——sibling 步骤（如 Build slowgate 步骤）的 env 不传递给 verify-archtest.sh 执行进程；"any step has env=16" 形态会被 sibling shadow 误绿（开发者把 `SHARD_COUNT=16` 错写在 setup step，真实 invocation step 仍漏 env → CI 跑 K=1 → OOM）。
@@ -182,7 +182,7 @@ Amendment 改默认 16→1 产生一个新隐式约束：**CI yaml `verify-archt
 
 - `hack/verify-archtest.sh` line 19-21 header + line 46-47 注释 + 默认值
 - `.github/workflows/_build-lint.yml` line 305 SYNC 注释改述
-- `CLAUDE.md:78`、`.claude/rules/gocell/ai-collab.md:69` K=16 描述
+- `CLAUDE.md:78`、`.claude/rules/gocell/ai-robust.md:69` K=16 描述
 - `tools/archtest/archtest_ci_shard_count_test.go` 新 Medium 守卫（ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01）
 - `docs/backlog/20260520/cap-02-metadata-governance.md` ARCHTEST-SHARDCOUNT-SYNC-GUARD-01 关闭
 
@@ -227,7 +227,7 @@ PR-time 16-shard matrix（PR / push 上 `_build-lint.yml::verify-archtest`）累
 
 K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` 充分用 CPU；K=2 单 shard tests 太多内部串行多；K=8 over-subscribe core 拖慢。
 
-### 威胁矩阵重评（per `.claude/rules/gocell/ai-collab.md` §"ADR amendment 落地必查"）
+### 威胁矩阵重评（per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"）
 
 | 原 ADR 论点 | 在 amendment 下状态 | 补偿措施 |
 |------------|------------------|---------|
@@ -238,7 +238,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 | § "PR-time fast-feedback gate" | ❌ 失效（无替代） | 开发者本地按需 `make verify` 或 `bash hack/verify-archtest.sh`；nightly ≤24h 兜底。round-1 曾用 pre-push K=4 fan-out 替代，因 ~3min wall + 43 GB RSS + 18-core 全打满破 sub-10s 预算 round-2 撤回 |
 | § "single authoritative owner" | ✅ owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`（同名 job，不同 yaml）| 注释 + ADR 文本同 PR 重写 |
 
-§D4 / §D6 段原文同 PR 重写以与现状一致（per ai-collab.md §"ADR amendment 落地必查" 禁止"原文保留作历史脉络"）。
+§D4 / §D6 段原文同 PR 重写以与现状一致（per ai-robust.md §"ADR amendment 落地必查" 禁止"原文保留作历史脉络"）。
 
 ### 跨载体同步（同 PR 闭环）
 
@@ -248,7 +248,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 - `hack/verify-archtest.sh` "Execution modes" 文档 + 并行 fan-out 分支
 - `hack/githooks/pre-push` 撤回 archtest 调用与 governance trigger（详见 §"pre-push archtest 撤回"），保留 gofumpt / build / vet / golangci-lint / codegen-verify 等 sub-10s 友好 gate；deviation 4 重号为 golangci-lint，Tier 4 同步重号
 - `tools/archtest/archtest_ci_shard_count_test.go` yaml 路径迁移到 `archtest-nightly.yml`
-- `CLAUDE.md`、`.claude/rules/gocell/ai-collab.md` archtest 入口描述更新
+- `CLAUDE.md`、`.claude/rules/gocell/ai-robust.md` archtest 入口描述更新
 
 ### alert-on-failure 撤回（PR #887 review round）
 
@@ -258,7 +258,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 2. **shell injection 面**——`branch="${{ github.ref_name }}"` 把 GHA expression 直接嵌进 shell，`workflow_dispatch` 触发的分支名可承载 shell 元字符
 3. **alert job 无 repo context**——既无 checkout 也无 `GH_REPO` env，`gh issue list / create / label create` 在非 git 工作目录会失败，整条"补偿路径"本身失效
 
-激进自审三层（per ai-collab.md §"激进自审三层覆盖"）：
+激进自审三层（per ai-robust.md §"激进自审三层覆盖"）：
 
 - **L1 代码补丁**：F1+F2+F3 是给同一脆弱组件打三个补丁，治标不治本
 - **L2 PR 整体决策组合**：自动开 issue 兜底是冗余运维债——GHA workflow run 失败默认邮件通知 watchers、Actions UI 红 ✗ 显示、`workflow_dispatch` 手动 rerun 已构成三条反馈通道；issue 语义是"工作项跟踪"，与 alert 通道语义错配；同标题 idempotency 导致同一 issue 长期开着反而失去信号
@@ -274,7 +274,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 - 43 GB peak RSS 在 64 GB 机器上接近内存上限，触发 swap
 - pre-push 头部注释自承"breaches the sub-10s budget by 18×, but accepted"——一个 sub-10s deterministic hook 不应承载 ~3min 的重 gate
 
-激进自审三层（per ai-collab.md §"激进自审三层覆盖"）：
+激进自审三层（per ai-robust.md §"激进自审三层覆盖"）：
 
 - **L1 代码补丁**：F4（governance trigger）+ F5（SHARD_COUNT 可配置）是对一个本身不该存在的接入打两个补丁
 - **L2 PR 整体决策组合**：pre-push hook 设计目标是 sub-10s deterministic offline gate（其头部第一段明确）；把 ~3min CPU/RSS 重 gate 隐式塞进每次 `git push` 违反这个设计契约；开发者用 `git push --no-verify` 绕过的代价反向使 pre-push 形成 anti-pattern

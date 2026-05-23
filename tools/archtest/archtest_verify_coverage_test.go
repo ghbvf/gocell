@@ -22,7 +22,7 @@ package archtest
 //     no name appears in two shards — independent of K (test uses K=4 to
 //     run fast; correctness of the algorithm is K-independent).
 //
-// AI-rebust: Medium (runtime cross-check against AST + algorithm
+// AI-robust: Medium (runtime cross-check against AST + algorithm
 // conformance test going through the same shard_assignment shell function
 // that real execution uses — single algorithm source).
 //

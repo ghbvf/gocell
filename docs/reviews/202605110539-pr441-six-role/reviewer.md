@@ -2,7 +2,7 @@
 
 ## 总体结论
 
-**需修复（少量）**。PR 核心交付质量高：ISP 拆分四子接口 + ADR 记录完整、sealed marker type system Hard 防线有效、archtest 覆盖严密（三档分级均符合 ai-collab.md 要求）、rollback ctx 解耦测试全面。但存在以下须修复问题：
+**需修复（少量）**。PR 核心交付质量高：ISP 拆分四子接口 + ADR 记录完整、sealed marker type system Hard 防线有效、archtest 覆盖严密（三档分级均符合 ai-robust.md 要求）、rollback ctx 解耦测试全面。但存在以下须修复问题：
 
 1. `kernel/cell/celltest/mux_test.go` 在 `kernel/` 层直接 import `runtime/auth`，违反分层规则
 2. `interfaces_isp_test.go` 的函数注释含误导性陈述（"both sub-cases hit pairing invariant"）但测试体完全没调用 `ResolveCellEmitter`
@@ -30,7 +30,7 @@ kernel/cell/celltest/mux_test.go:13 "github.com/ghbvf/gocell/runtime/auth"
 - 方案 B：抽取 `auth.Principal`/`PrincipalAnonymous` 等常量到 `kernel/cell/auth_types.go`（已有该文件），在 test 中不 import `runtime/auth` 而只用 kernel 内部类型。
 - 考虑在 `tools/archtest/module_order_test.go` 或 depguard 中显式守卫 `kernel/ → runtime/` 的测试文件路径。
 
-**AI-rebust 评级**：此情形属 Soft（规则在 CLAUDE.md 中以文字约定，无 depguard 对 `_test.go` 的 kernel→runtime import 的机器守卫）。应登记 backlog 升级到 Medium（depguard 或 archtest 扫 `kernel/**/*_test.go` 中的 `runtime/` import）。
+**AI-robust 评级**：此情形属 Soft（规则在 CLAUDE.md 中以文字约定，无 depguard 对 `_test.go` 的 kernel→runtime import 的机器守卫）。应登记 backlog 升级到 Medium（depguard 或 archtest 扫 `kernel/**/*_test.go` 中的 `runtime/` import）。
 
 **Backlog 登记建议**：新增条目 `KERNEL-TEST-RUNTIME-IMPORT-BAN-01`，用 `.golangci.yml` depguard 或 archtest 守卫 `kernel/**/*_test.go` 禁止直接 import `runtime/`。
 
@@ -130,7 +130,7 @@ for _, name := range expectedSubInterfaces {
 
 **Cx 分级**：Cx1（1 文件，1-2 行 `t.Logf`）。
 
-**AI-rebust 评级**：不涉及新增 enforcement 机制，此为纯 DX 优化，不适用三档评级。
+**AI-robust 评级**：不涉及新增 enforcement 机制，此为纯 DX 优化，不适用三档评级。
 
 ---
 
@@ -144,14 +144,14 @@ for _, name := range expectedSubInterfaces {
 
 ---
 
-#### F8 [P2] [Cx1] [DX] `kernel/command/sweeper.go:86-106`（AI-rebust 评级项）
+#### F8 [P2] [Cx1] [DX] `kernel/command/sweeper.go:86-106`（AI-robust 评级项）
 
-**问题**：`Sweeper` 的 `built` sentinel 模式在 godoc 中自标注为 Medium，并提到"Hard upgrade path: make Sweeper an opaque interface returned only by NewSweeper"。按 ai-collab.md，Medium 暂留须在 backlog 显式登记升级条目，且注释中有"Out of scope for the current hardening pass"字样，说明这是一个 **silent carryover**。
+**问题**：`Sweeper` 的 `built` sentinel 模式在 godoc 中自标注为 Medium，并提到"Hard upgrade path: make Sweeper an opaque interface returned only by NewSweeper"。按 ai-robust.md，Medium 暂留须在 backlog 显式登记升级条目，且注释中有"Out of scope for the current hardening pass"字样，说明这是一个 **silent carryover**。
 
 **证据**：
 ```go
 // kernel/command/sweeper.go:95-106
-// AI-rebust 评级：**Medium (runtime fail-closed sentinel)**.
+// AI-robust 评级：**Medium (runtime fail-closed sentinel)**.
 // ...
 // Hard upgrade path (backlog): make Sweeper an opaque interface returned
 // only by NewSweeper, so the zero value is unspeakable at the type level.
@@ -164,7 +164,7 @@ for _, name := range expectedSubInterfaces {
 | COMMAND-SWEEPER-OPAQUE-INTERFACE-01 | Sweeper built sentinel 升级 Hard — 现状: Medium runtime guard; 修复: 改为 opaque interface，零值不可表达 | arch-opt | P3/Cx3 | 🟢 | Sweeper 被第 2 个 cell 使用 | kernel/command/sweeper.go | sweeper.go godoc |
 ```
 
-**AI-rebust 评级**：Cx1（仅 backlog 文件新增 1 行条目）。
+**AI-robust 评级**：Cx1（仅 backlog 文件新增 1 行条目）。
 
 ---
 
@@ -233,7 +233,7 @@ for _, name := range expectedSubInterfaces {
 
 以下是本 PR 质量较高的部分，建议作为范本：
 
-1. **sealed marker 三层防线设计**：type system Hard（字段赋值不可达）+ archtest Medium（公开参数签名形态）+ wrapper location archtest Medium（调用站点约束）——完全符合 ai-collab.md 载体决策分层原则，且每层都有对应的 negative fixture 验证 scanner 检测能力。
+1. **sealed marker 三层防线设计**：type system Hard（字段赋值不可达）+ archtest Medium（公开参数签名形态）+ wrapper location archtest Medium（调用站点约束）——完全符合 ai-robust.md 载体决策分层原则，且每层都有对应的 negative fixture 验证 scanner 检测能力。
 
 2. **ADR 正文与 backlog 同步**：ADR 202605101800 §D4 的 `SLICE-ISP-DEFERRED` 在 `docs/backlog.md:327` 明确登记，触发条件清晰，无 silent carryover。
 

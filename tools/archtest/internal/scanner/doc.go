@@ -22,8 +22,8 @@
 // [golang.org/x/tools/go/ast/inspector] APIs are forbidden in
 // tools/archtest/*_test.go (enforced by SCANNER-FRAMEWORK-USAGE-01); the
 // generic typed funnels make "wrong node kind" a compile error rather than
-// a silent runtime miss — critical for AI-rebust archtest authoring
-// (see .claude/rules/gocell/ai-collab.md AI-rebust 三档分级).
+// a silent runtime miss — critical for AI-robust archtest authoring
+// (see .claude/rules/gocell/ai-robust.md AI-robust 三档分级).
 //
 // # Choosing walk depth (iteration and find-first)
 //
@@ -45,7 +45,7 @@
 //     descent into matching non-root nodes (typical use: skip nested
 //     *ast.FuncLit so dead-closure call positions are excluded). Third
 //     depth-semantic member of the typed-function-choice Hard 范本 (see
-//     ai-collab.md §"Hard 范本目录" #1) alongside EachInSubtree /
+//     ai-robust.md §"Hard 范本目录" #1) alongside EachInSubtree /
 //     EachInChildren.
 //
 // All silently no-op on nil root; callers need not guard. FindFirst* returns

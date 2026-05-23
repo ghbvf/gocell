@@ -32,7 +32,7 @@ type EffectiveAdminCounterImpl interface {
 // method makes it unimplementable outside the domain package — the only
 // path to a value is WrapEffectiveAdminCounter.
 //
-// AI-rebust 评级 Hard (sealed interface, compile-time blocking): external
+// AI-robust 评级 Hard (sealed interface, compile-time blocking): external
 // code cannot declare a type satisfying this interface (cannot implement
 // the unexported marker method); any attempt produces a compile error.
 // The single construction path is WrapEffectiveAdminCounter, which

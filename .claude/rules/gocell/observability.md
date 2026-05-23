@@ -71,7 +71,7 @@ ref: hashicorp/vault `audit log_raw=false` 默认；golang/go `net/url.URL.Redac
 
 上游 package-internal 升级路径：通过引入 unexported interface 封装 `oteltrace.Span` 所用方法 + 私有构造函数，使包内新 struct 在 type system 上无法绕过 funnel。升级追踪：backlog issue #851 SPAN-SETATTR-HOLDER-SEAL-01（见 `tools/archtest/span_setattr_redact_test.go` 包文档）。
 
-形态参照 `.claude/rules/gocell/ai-collab.md` 「Hard 范本目录」: single sanctioned holder + typed marker funnel；Funnel 双向锁评级：Medium 上游（package-internal）+ Hard 下游 → 已登记 backlog 升级条目。
+形态参照 `.claude/rules/gocell/ai-robust.md` 「Hard 范本目录」: single sanctioned holder + typed marker funnel；Funnel 双向锁评级：Medium 上游（package-internal）+ Hard 下游 → 已登记 backlog 升级条目。
 
 **Metric label 不在 redact 范围**：`adapters/otel/metric_provider.go` / `messaging_channel_collector.go` / `pool_resource.go` 的 `attribute.String` callsite 架构上有界：
 

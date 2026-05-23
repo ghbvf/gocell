@@ -6,7 +6,7 @@
 // caller-side opt-out, mirroring the sibling SPAN-RECORD-ERROR-REDACT-01
 // rule on span.RecordError.
 //
-// Five-assertion AI-Hard double-locked funnel (per .claude/rules/gocell/ai-collab.md
+// Five-assertion AI-Hard double-locked funnel (per .claude/rules/gocell/ai-robust.md
 // 范本目录 "single sanctioned holder" + "typed marker funnel"):
 //
 //	A1 (Holder uniqueness — upstream Hard): any struct in adapters/otel/ that
@@ -68,7 +68,7 @@
 //
 // ref: tools/archtest/span_record_error_redact_test.go (sibling INVARIANT)
 // ref: .claude/rules/gocell/observability.md "Span Attribute Redaction"
-// ref: .claude/rules/gocell/ai-collab.md §"Hard 范本目录"
+// ref: .claude/rules/gocell/ai-robust.md §"Hard 范本目录"
 package archtest
 
 import (
@@ -249,7 +249,7 @@ func trailingReturn(fn *ast.FuncDecl) *ast.ReturnStmt {
 // twoStringParamNames returns the first two parameter identifier names of fn,
 // expanding grouped declarations like (key, raw string) so each name counts
 // individually. Used by A3a/A3b to bind argument identifiers to formal-param
-// identities (per ai-collab.md "Hard 范本目录" — identity binding is strictly
+// identities (per ai-robust.md "Hard 范本目录" — identity binding is strictly
 // stronger than the loose `*ast.Ident` type assertion an arg-position swap
 // would otherwise satisfy).
 //
@@ -684,7 +684,7 @@ func TestSpanSetAttrRedacted(t *testing.T) {
 // outside SPAN-SETATTR-REDACT-01's coverage do not appear in production
 // adapters/otel code. If a future contributor introduces one, this reverse
 // check makes the blind spot visible at archtest time. Per
-// .claude/rules/gocell/ai-collab.md §"工具选定后强制盲区自检": reverse
+// .claude/rules/gocell/ai-robust.md §"工具选定后强制盲区自检": reverse
 // self-checks are prerequisite举证 for the Hard/Medium rating.
 func TestSpanSetAttrRedacted_NoBlindspotsInProduction(t *testing.T) {
 	t.Parallel()

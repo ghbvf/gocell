@@ -46,7 +46,7 @@
 //     fail-fast in runtime/auth/route.go validateBypassCompatibility is a
 //     depth-in-defense second layer, not a primary line of detection.
 //
-//     AI-rebust = Hard: detection runs over the full production package set
+//     AI-robust = Hard: detection runs over the full production package set
 //     with type-checked Defs/Uses, so a Contract field that resolves to a
 //     *types.Var (file-scope var, func-body `:=` local, or cross-package
 //     SelectorExpr) is compared against the same canonical key regardless of
@@ -294,7 +294,7 @@ func isHTTPHandlerSelector(expr ast.Expr) bool {
 // local := KNOWN-GAP that the prior AST-only detector relied on the runtime
 // guard to catch.
 //
-// AI-rebust: Hard. Coverage is locked at the *types.Var key — picking a
+// AI-robust: Hard. Coverage is locked at the *types.Var key — picking a
 // different AST shape (file-scope var / inline literal / `:=` local /
 // cross-package SelectorExpr) does not change the resolved key, so an AI
 // co-author cannot pick a shape that bypasses the static gate. The runtime
@@ -344,7 +344,7 @@ func TestAuthRouteBootstrapClientsMutex(t *testing.T) {
 // and Clients-without-BootstrapAuth) that must NOT trigger; the test asserts
 // the exact hit count is 4 to prevent false negatives in either direction.
 //
-// Per ai-collab.md §"Hard 范本": the fixture is a real Go package loaded via
+// Per ai-robust.md §"Hard 范本": the fixture is a real Go package loaded via
 // packages.Load with the archtest_fixture build tag. Bypassing this test
 // requires modifying real source code; the detector cannot drift back to
 // AST-only without breaking the fixture assertions.

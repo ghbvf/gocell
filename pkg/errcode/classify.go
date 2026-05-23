@@ -113,7 +113,7 @@ func IsDomainNotFound(err error, codes ...Code) bool {
 //
 // The const-literal restriction documented on New applies to message.
 //
-// Funnel double-lock (per .claude/rules/gocell/ai-collab.md "Funnel 双向锁"):
+// Funnel double-lock (per .claude/rules/gocell/ai-robust.md "Funnel 双向锁"):
 //   - upstream Hard: a transient adapter error is producible only via this
 //     function; the marker field is unexported so no package outside errcode
 //     can set it.

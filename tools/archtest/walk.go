@@ -46,7 +46,7 @@ func EachInChildren[S any, N interface {
 // which stopAt returns true. The boundary node itself is NOT visited as N
 // even if its type matches. Third depth-semantic member of the
 // typed-function-choice Hard template, alongside [EachInSubtree] /
-// [EachInChildren] (see ai-collab.md §"Hard 范本目录" #1).
+// [EachInChildren] (see ai-robust.md §"Hard 范本目录" #1).
 //
 // Wrapper around [scanner.EachInSubtreeStopAt].
 func EachInSubtreeStopAt[S any, N interface {
@@ -94,7 +94,7 @@ func FindFirstChild[S any, N interface {
 // FindFirstInSubtree walks root's entire subtree (preorder, recursive) and
 // returns the first node of kind N satisfying predicate. ok=false when no
 // node matches. Subtree-depth twin of [FindFirstChild]; the depth choice is
-// a typed function-name selection per ai-collab.md AI-rebust Hard 范本 #1
+// a typed function-name selection per ai-robust.md AI-robust Hard 范本 #1
 // "typed function choice for walk depth".
 //
 // Compared to the manual `EachInSubtree + closure sentinel` idiom,

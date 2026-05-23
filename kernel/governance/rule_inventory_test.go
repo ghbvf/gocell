@@ -124,7 +124,7 @@ func goldenRuleIDs() []string {
 
 		// JOURNEY — journey lifecycle & cross-file consistency
 		// (rules_journey.go). Inverse-direction REF-07 closure +
-		// board.state × yaml.lifecycle strong-mapping matrix. AI-rebust
+		// board.state × yaml.lifecycle strong-mapping matrix. AI-robust
 		// Medium.
 		"JOURNEY-CONTRACT-EXISTENCE-01", "JOURNEY-STATUS-LIFECYCLE-01",
 
