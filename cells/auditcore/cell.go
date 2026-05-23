@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditquery"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -260,30 +261,29 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
 		return err
 	}
 
-	c.registerHealthProbes(reg)
-	return nil
+	return c.registerHealthProbes(reg)
 }
 
 // registerHealthProbes registers all health probes from the emitter and the
 // ledger store. Extracted from initInternal to keep cognitive complexity ≤ 15.
 //
 // Two semantic categories are registered here:
-//   - Emitter fail-open-rate probe (cell.HealthProber): checks the ratio of
+//   - Emitter fail-open-rate probe (healthz.ProbeSet): checks the ratio of
 //     dropped outbox publishes. Only present when the emitter is a DirectEmitter.
-//   - Ledger store readiness probe (cell.RepoHealthProber): checks audit_entries
-//     connectivity via cell.RegisterRepoReadiness typed funnel. ledger.Store
-//     always satisfies RepoHealthProber — MemStore returns nil (always ready),
+//   - Ledger store readiness probe (healthz.RepoProber): checks audit_entries
+//     connectivity via RegisterRepoReady typed funnel. ledger.Store
+//     always satisfies RepoProber — MemStore returns nil (always ready),
 //     PG-backed store issues a Tail query against the relation.
-func (c *AuditCore) registerHealthProbes(reg cell.Registry) {
+func (c *AuditCore) registerHealthProbes(reg cell.Registry) error {
 	// Register emitter health probes (fail-open rate checker).
-	if hc, ok := c.emitter.(cell.HealthProber); ok {
-		for k, v := range hc.Probes() {
-			reg.Health(k, v)
+	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
+		if err := RegisterEmitterProbes(reg, hc); err != nil {
+			return err
 		}
 	}
-	// Register ledger store readiness probe via the typed funnel.
-	// ledger.Store satisfies cell.RepoHealthProber (RepoReady method).
-	cell.RegisterRepoReadiness(reg, "audit_ledger_ready", c.ledgerStore)
+	// Register ledger store readiness probe via the cellgen-generated typed funnel.
+	// ledger.Store satisfies healthz.RepoProber (RepoReady method).
+	return RegisterRepoReady(reg, c.ledgerStore)
 }
 
 // strictTailVerifyOnStartup implements the RestartRecoveryStrictTailVerify

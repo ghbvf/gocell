@@ -17,10 +17,22 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	khealthz "github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
 )
+
+// newAgg constructs a default Aggregator backed by the given clock.
+func newAgg(clk clock.Clock) khealthz.Aggregator {
+	return obshealthz.NewAggregator(obshealthz.WithClock(clk))
+}
+
+// newAggWithDeadline constructs an Aggregator with a custom per-probe deadline.
+func newAggWithDeadline(clk clock.Clock, d time.Duration) khealthz.Aggregator {
+	return obshealthz.NewAggregator(obshealthz.WithClock(clk), obshealthz.WithDeadline(d))
+}
 
 // captureHandler records every slog event passed to it so tests can assert
 // on the verbose breakdown that K#08 5xx redaction keeps off the wire.
@@ -212,7 +224,8 @@ func TestLivezHandler(t *testing.T) {
 				defer func() { _ = asm.Stop(context.Background()) }()
 			}
 
-			h := New(asm, clock.Real())
+			agg := newAgg(clock.Real())
+			h := New(asm, agg, clock.Real())
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 			h.LivezHandler().ServeHTTP(rec, req)
@@ -269,9 +282,10 @@ func TestReadyzHandler(t *testing.T) {
 				defer func() { _ = asm.Stop(context.Background()) }()
 			}
 
-			h := New(asm, clock.Real())
+			agg := newAgg(clock.Real())
+			h := New(asm, agg, clock.Real())
 			h.SetVerboseToken(testVerboseToken)
-			require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return tt.checkerErr }))
+			require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return tt.checkerErr })))
 
 			rec := httptest.NewRecorder()
 			req := newVerboseRequest("/readyz?verbose=true")
@@ -307,10 +321,11 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("rabbitmq", func(_ context.Context) error { return nil }))
-	require.NoError(t, h.RegisterChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }))
+	require.NoError(t, agg.Register(khealthz.NewProbe("rabbitmq", func(_ context.Context) error { return nil })))
+	require.NoError(t, agg.Register(khealthz.NewProbe("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") })))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -335,7 +350,8 @@ func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	h.LivezHandler().ServeHTTP(rec, req)
@@ -359,8 +375,9 @@ func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return nil })))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -383,9 +400,10 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return nil })))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -418,7 +436,8 @@ func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	h.SetAdapterInfo(map[string]string{
 		"mode":    "in-memory",
@@ -443,7 +462,8 @@ func TestReadyzHandler_VerboseOutput_UsesAdapterInfoSnapshot(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	info := map[string]string{
 		"mode":    "in-memory",
@@ -452,7 +472,7 @@ func TestReadyzHandler_VerboseOutput_UsesAdapterInfoSnapshot(t *testing.T) {
 	h.SetAdapterInfo(info)
 	info["storage"] = "mutated-before-read"
 
-	result := h.computeReadyz(true)
+	result := h.computeReadyz(context.Background(), true)
 	info["mode"] = "mutated"
 	h.SetAdapterInfo(map[string]string{"mode": "new-map"})
 
@@ -473,7 +493,8 @@ func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	// No SetAdapterInfo call.
 
@@ -493,8 +514,9 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return fmt.Errorf("connection refused") }))
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return fmt.Errorf("connection refused") })))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -537,24 +559,24 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	// verbose mode (K#08 5xx redaction is unconditional).
 }
 
-func TestRegisterChecker_DuplicateReturnsError(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	h := New(asm, clock.Real())
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
+// TestAggregator_DuplicateProbeReturnsError verifies that registering a probe
+// with a duplicate name returns healthz.ErrDuplicateProbe via errors.Is.
+func TestAggregator_DuplicateProbeReturnsError(t *testing.T) {
+	agg := newAgg(clock.Real())
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return nil })))
 
-	err := h.RegisterChecker("db", func(_ context.Context) error { return nil })
+	err := agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return nil }))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `duplicate checker name "db"`)
+	assert.ErrorIs(t, err, khealthz.ErrDuplicateProbe)
 }
 
-func TestRegisterChecker_NilCheckerReturnsError(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	h := New(asm, clock.Real())
-
-	err := h.RegisterChecker("db", nil)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `nil checker for "db"`)
+// TestAggregator_NilFnProbeNewPanics verifies that khealthz.NewProbe panics
+// when the check function is nil, which is a programmer error caught at
+// composition time.
+func TestAggregator_NilFnProbeNewPanics(t *testing.T) {
+	assert.Panics(t, func() {
+		khealthz.NewProbe("db", nil)
+	}, "NewProbe with nil fn must panic (programmer error)")
 }
 
 func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
@@ -562,7 +584,8 @@ func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 
 	// Before shutdown: should be healthy.
 	rec := httptest.NewRecorder()
@@ -588,7 +611,8 @@ func TestSetShuttingDown_Idempotent(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetShuttingDown()
 	h.SetShuttingDown() // second call must not panic
 
@@ -600,23 +624,27 @@ func TestSetShuttingDown_Idempotent(t *testing.T) {
 
 // --- Verbose token protection (READYZ-VERBOSE-TOKEN-01) ---
 
-func newStartedHandler(t *testing.T) *Handler {
+// newStartedHandler builds a started handler with one healthy db probe.
+// Returns both the Handler and the Aggregator so callers can register
+// additional probes after construction.
+func newStartedHandler(t *testing.T) (*Handler, khealthz.Aggregator) {
 	t.Helper()
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
-	h := New(asm, clock.Real())
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
-	return h
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return nil })))
+	return h, agg
 }
 
 // TestReadyz_VerboseToken_CorrectHeader is kept as a minimal sanity check
 // distinct from the table-driven TestReadyz_VerboseToken_StrictDeny — it
 // double-confirms the happy path uses the same VerboseAuthHeader constant.
 func TestReadyz_VerboseToken_CorrectHeader(t *testing.T) {
-	h := newStartedHandler(t)
+	h, _ := newStartedHandler(t)
 	h.SetVerboseToken("secret-token")
 
 	rec := httptest.NewRecorder()
@@ -716,8 +744,9 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 			if tt.verboseDisabled {
 				opts = append(opts, WithVerboseDisabled())
 			}
-			h := New(asm, clock.Real(), opts...)
-			require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
+			agg := newAgg(clock.Real())
+			h := New(asm, agg, clock.Real(), opts...)
+			require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return nil })))
 			if tt.tokenConfigured != "" {
 				h.SetVerboseToken(tt.tokenConfigured)
 			}
@@ -767,7 +796,8 @@ func assertVerboseTokenResponse(t *testing.T, rec *httptest.ResponseRecorder, wa
 
 func TestEmptyAssembly(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "empty", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -812,12 +842,13 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	// Use a generous deadline so these tests do not time out.
-	h := New(asm, clock.Real(), WithDeadline(testtime.D2s))
+	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
+	h := New(asm, agg, clock.Real())
 	for _, name := range []string{"probe-a", "probe-b", "probe-c"} {
-		require.NoError(t, h.RegisterChecker(name, func(_ context.Context) error {
+		require.NoError(t, agg.Register(khealthz.NewProbe(name, func(_ context.Context) error {
 			time.Sleep(testtime.D100ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 			return nil
-		}))
+		})))
 	}
 
 	start := time.Now()
@@ -851,16 +882,17 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real(), WithDeadline(testtime.MediumPoll))
+	agg := newAggWithDeadline(clock.Real(), testtime.MediumPoll)
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("slow", func(ctx context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("slow", func(ctx context.Context) error {
 		select {
 		case <-time.After(testtime.D500ms):
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	}))
+	})))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -889,14 +921,15 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	probeDone := make(chan struct{})
-	h := New(asm, clock.Real(), WithDeadline(testtime.D2s))
-	require.NoError(t, h.RegisterChecker("slow-probe", func(ctx context.Context) error {
+	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
+	h := New(asm, agg, clock.Real())
+	require.NoError(t, agg.Register(khealthz.NewProbe("slow-probe", func(ctx context.Context) error {
 		// Probe takes 100 ms but the HTTP request ctx will be canceled
 		// almost immediately — probe must NOT be affected.
 		time.Sleep(testtime.D100ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		close(probeDone)
 		return nil
-	}))
+	})))
 
 	// Use a cancellable request ctx and cancel it before the probe finishes.
 	reqCtx, reqCancel := context.WithCancel(context.Background())
@@ -930,11 +963,12 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real(), WithDeadline(testtime.D2s))
+	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("panicking", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("panicking", func(_ context.Context) error {
 		panic("something went very wrong")
-	}))
+	})))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -984,11 +1018,12 @@ func TestReadyz_VerboseError_SecretOmittedFromWire_RedactedInSlog(t *testing.T) 
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	const leakSentinel = "health-verbose-leak-sentinel-8f2b"
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("sensitive", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("sensitive", func(_ context.Context) error {
 		return fmt.Errorf("postgres probe failed: password=%s token=%s", leakSentinel, leakSentinel)
-	}))
+	})))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -1031,14 +1066,15 @@ func TestReadyz_VerbosePanicSecret_RedactedInSlog(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	const leakSentinel = "panic-leak-sentinel-c91d"
-	h := New(asm, clock.Real(), WithDeadline(testtime.D2s))
+	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("panicking", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("panicking", func(_ context.Context) error {
 		// Use api-key / password — keys present in pkg/redaction.sensitiveKeyPattern.
 		// Demonstrates that the funnel applies to panic-derived errors the same way
 		// it does to ordinary probe errors.
 		panic(fmt.Sprintf("api-key=%s password=%s", leakSentinel, leakSentinel))
-	}))
+	})))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -1091,11 +1127,12 @@ func TestReadyz_VerboseError_UnknownKeyReachesSlogUnredacted(t *testing.T) {
 	// not match "bare-token-abc.def.ghi" because the pattern requires a
 	// recognized key name followed by = or : before the value.
 	const bareToken = "bare-token-abc.def.ghi"
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("unknown-key-probe", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("unknown-key-probe", func(_ context.Context) error {
 		return fmt.Errorf("connection to host failed: %s", bareToken)
-	}))
+	})))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -1123,8 +1160,8 @@ func TestReadyz_VerboseError_UnknownKeyReachesSlogUnredacted(t *testing.T) {
 }
 
 // TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline verifies the
-// PR-A35 structural guarantee: wrapCtxSafe in RegisterChecker ensures the
-// outer Checker returns as soon as the aggregator's deadline fires, even if
+// PR-A35 structural guarantee: the ctx-safe wrapper in the Aggregator ensures
+// the outer Checker returns as soon as the aggregator's deadline fires, even if
 // the inner probe ignores ctx. The inner goroutine continues running in the
 // background; the aggregator is no longer entangled with its lifetime.
 func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
@@ -1132,18 +1169,19 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real(), WithVerboseDisabled(), WithDeadline(healthDeadlineShort))
+	agg := newAggWithDeadline(clock.Real(), healthDeadlineShort)
+	h := New(asm, agg, clock.Real(), WithVerboseDisabled())
 
 	// Uncooperative probe: blocks on a channel that only the test closes on
 	// cleanup. Without wrapCtxSafe this would hold runProbesParallel open
-	// past h.deadline; with the wrapper the outer Checker returns on
+	// past the deadline; with the wrapper the outer Checker returns on
 	// ctx.Done while the inner fn keeps running until the test ends.
 	unblock := make(chan struct{})
 	t.Cleanup(func() { close(unblock) })
-	require.NoError(t, h.RegisterChecker("stuck", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("stuck", func(_ context.Context) error {
 		<-unblock
 		return nil
-	}))
+	})))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose", nil)
@@ -1163,8 +1201,8 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 }
 
 // TestReadyz_UncooperativeChecker_VerboseReportsTimeout covers the verbose
-// branch of the uncooperative-probe contract. When wrapCtxSafe's outer
-// Checker returns ctx.Err() (DeadlineExceeded) the probe result must be
+// branch of the uncooperative-probe contract. When the ctx-safe wrapper's
+// outer Checker returns ctx.Err() (DeadlineExceeded) the probe result must be
 // tagged "timeout" in the verbose body so dashboards can distinguish
 // "probe overran" from domain-level "probe failed". Regression guard for
 // F4 — the previous sweep lost this coverage when the earlier test was
@@ -1174,15 +1212,16 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real(), WithDeadline(healthDeadlineShort))
+	agg := newAggWithDeadline(clock.Real(), healthDeadlineShort)
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 
 	unblock := make(chan struct{})
 	t.Cleanup(func() { close(unblock) })
-	require.NoError(t, h.RegisterChecker("stuck", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("stuck", func(_ context.Context) error {
 		<-unblock
 		return nil
-	}))
+	})))
 
 	capture := withSlogCapture(t)
 	rr := httptest.NewRecorder()
@@ -1216,7 +1255,8 @@ func TestWriteJSON_WriteError(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 
 	// failWriter returns an error from every Write call so json.Encoder.Encode
 	// surfaces the error into the slog.Error branch.
@@ -1251,10 +1291,11 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("ok-probe", func(_ context.Context) error { return nil }))
-	require.NoError(t, h.RegisterChecker("fail-probe", func(_ context.Context) error { return fmt.Errorf("disk full") }))
+	require.NoError(t, agg.Register(khealthz.NewProbe("ok-probe", func(_ context.Context) error { return nil })))
+	require.NoError(t, agg.Register(khealthz.NewProbe("fail-probe", func(_ context.Context) error { return fmt.Errorf("disk full") })))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -1292,11 +1333,12 @@ func TestReadyz_DegradedReturns200WithStatusField(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("outbox-failopen-rate.configcore", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate_configcore", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
-	}))
+	})))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1318,14 +1360,15 @@ func TestReadyz_UnhealthyTrumpsDegraded(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("degraded-probe", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("degraded-probe", func(_ context.Context) error {
 		return fmt.Errorf("soft degradation: %w", cell.ErrDegraded)
-	}))
-	require.NoError(t, h.RegisterChecker("unhealthy-probe", func(_ context.Context) error {
+	})))
+	require.NoError(t, agg.Register(khealthz.NewProbe("unhealthy-probe", func(_ context.Context) error {
 		return fmt.Errorf("db unreachable")
-	}))
+	})))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1383,7 +1426,8 @@ func TestReadyz_ComputationPanic_UsesServiceUnavailableCode(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -1407,7 +1451,8 @@ func TestReadyz_DegradedAggregatesFromCellHealth(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	// No probe checkers — only cell Health() contributes to the aggregate.
 
@@ -1431,11 +1476,12 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("outbox-failopen-rate.configcore", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate_configcore", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
-	}))
+	})))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1446,8 +1492,8 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	data := dataBody(t, rec)
 	deps, ok := data["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose body must contain dependencies map")
-	entry, ok := deps["outbox-failopen-rate.configcore"].(map[string]any)
-	require.True(t, ok, "outbox-failopen-rate.configcore must be present in dependencies")
+	entry, ok := deps["outbox_failopen_rate_configcore"].(map[string]any)
+	require.True(t, ok, "outbox_failopen_rate_configcore must be present in dependencies")
 	assert.Equal(t, "degraded", entry["status"],
 		"verbose dependency entry status must be 'degraded'")
 	// Wire shape per ADR 202605171200 §3: error text belongs to channel d (slog),
@@ -1475,11 +1521,12 @@ func TestReadyz_VerboseDegraded_SlogCapturesRedactedError(t *testing.T) {
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
 	const leakSentinel = "degraded-leak-sentinel-7e3a"
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("cache", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("cache", func(_ context.Context) error {
 		return fmt.Errorf("redis check: password=%s: %w", leakSentinel, cell.ErrDegraded)
-	}))
+	})))
 
 	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
@@ -1573,9 +1620,10 @@ func TestReadyz_HealthyAllAcrossBoard(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	h := New(asm, clock.Real())
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
-	require.NoError(t, h.RegisterChecker("cache", func(_ context.Context) error { return nil }))
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return nil })))
+	require.NoError(t, agg.Register(khealthz.NewProbe("cache", func(_ context.Context) error { return nil })))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -1586,20 +1634,22 @@ func TestReadyz_HealthyAllAcrossBoard(t *testing.T) {
 	assert.Equal(t, "healthy", data["status"])
 }
 
-// TestRunOneProbe_DegradedSentinelMappedToDegraded is a unit test that directly
-// calls runOneProbe with a checker returning a wrapped cell.ErrDegraded and
-// verifies ProbeResult.Status == "degraded".
-func TestRunOneProbe_DegradedSentinelMappedToDegraded(t *testing.T) {
-	checker := func(_ context.Context) error {
+// TestAggregator_DegradedSentinelMappedToDegraded verifies that a probe
+// returning a wrapped cell.ErrDegraded produces StatusDegraded via the
+// Aggregator. Tests through agg.Evaluate to replace the former direct
+// runOneProbe call (which was a package-internal function removed in B4).
+func TestAggregator_DegradedSentinelMappedToDegraded(t *testing.T) {
+	agg := newAggWithDeadline(clock.Real(), testtime.D5s)
+	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
-	defer cancel()
+	})))
 
-	pr := runOneProbe(ctx, checker, testtime.D5s, clock.Real())
+	snap := agg.Evaluate(context.Background())
+	require.Len(t, snap.Probes, 1)
+	pr := snap.Probes[0]
 
-	assert.Equal(t, "degraded", pr.Status,
-		"checker returning wrapped cell.ErrDegraded must produce ProbeResult.Status=degraded")
+	assert.Equal(t, khealthz.StatusDegraded, pr.Status,
+		"checker returning wrapped cell.ErrDegraded must produce StatusDegraded")
 	require.NotNil(t, pr.Err, "degraded probe must carry non-nil Err")
 	assert.Contains(t, pr.Err.Error(), "drop ratio exceeded")
 }
@@ -1650,7 +1700,8 @@ func TestVerboseDecision_DefaultDenies(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	// Deliberately do NOT call h.SetVerboseToken(...) and do NOT call
 	// h.SetVerboseDisabled(). This is the "default" state where operators have
 	// not configured verbose behavior at all.

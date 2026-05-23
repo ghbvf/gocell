@@ -197,7 +197,7 @@ func (b *Bootstrap) startAndRegisterEventRouter(runCtx context.Context, s *phase
 	evtHealth := evtRouter.Health // func() error — wrap to ctx-aware signature
 	if err := s.registerHealthChecker(eventRouterCheckerName, func(_ context.Context) error {
 		return evtHealth()
-	}); err != nil {
+	}, b.healthAggregator); err != nil {
 		return err
 	}
 

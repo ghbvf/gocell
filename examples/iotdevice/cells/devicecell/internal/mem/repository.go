@@ -77,7 +77,7 @@ func (r *DeviceRepository) List(_ context.Context, params query.ListParams) ([]*
 }
 
 // RepoReady always returns nil for the in-memory store (no external dependency).
-// It satisfies domain.DeviceRepository and cell.RepoHealthProber.
+// It satisfies domain.DeviceRepository and healthz.RepoProber.
 func (r *DeviceRepository) RepoReady(_ context.Context) error { return nil }
 
 func compareDeviceField(a, b *domain.Device, field string) int {

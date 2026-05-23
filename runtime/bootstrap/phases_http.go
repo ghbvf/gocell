@@ -74,16 +74,16 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	cfg := b.resolveHealthRouteGroupCfg()
 
 	var hhOpts []health.Option
-	if b.readyzDeadline > 0 {
-		hhOpts = append(hhOpts, health.WithDeadline(b.readyzDeadline))
-	}
+	// Note: the /readyz per-probe deadline (WithReadyzDeadline) is owned by the
+	// healthz.Aggregator, not the Handler — it is applied to the default
+	// aggregator at construction in phase0ValidateOptions.
 	// PR-A35 + PR-A14b round-3: WithReadyzVerboseDisabled is a
 	// HealthRouteGroupOption (no longer a bootstrap-level Option) — peek
 	// at the resolved cfg to thread the health.Option to the handler.
 	if cfg.verboseDisabled {
 		hhOpts = append(hhOpts, health.WithVerboseDisabled())
 	}
-	hh := health.New(s.asm, b.clock, hhOpts...)
+	hh := health.New(s.asm, b.healthAggregator, b.clock, hhOpts...)
 	if b.adapterInfo != nil {
 		hh.SetAdapterInfo(b.adapterInfo)
 	}
@@ -97,7 +97,7 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	}
 	s.hh = hh
 	s.healthRouteGroupOpts = b.healthRouteGroupOpts
-	return b.registerAllHealthCheckers(s)
+	return b.drainProbes(s)
 }
 
 // phase5BuildPerListenerRouters creates one Router per declared listener config.

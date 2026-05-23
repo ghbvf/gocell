@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
 )
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
@@ -85,8 +86,21 @@ func newTestCell(t testing.TB) *AuditCore {
 }
 
 // newTestRecorder returns a RegistryRecorder for demo mode with an empty config.
+// Use drainProbeSnapshot after Init when probe assertions are needed.
 func newTestRecorder() *cell.RegistryRecorder {
 	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+}
+
+// drainProbeSnapshot mirrors the bootstrap layer: it drains the probes a cell
+// accumulated during Init (RegistrySnapshot.Probes) into a FakeAggregator so
+// tests can assert probe registration via HasProbe / Probe. Call it after Init.
+func drainProbeSnapshot(t *testing.T, rec *cell.RegistryRecorder) *healthztest.FakeAggregator {
+	t.Helper()
+	agg := newTestAgg()
+	for _, p := range rec.Snapshot().Probes {
+		require.NoError(t, agg.Register(p))
+	}
+	return agg
 }
 
 func TestAuditCore_Lifecycle(t *testing.T) {
@@ -534,17 +548,17 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 }
 
 // TestAuditCore_HealthCheckers_WithDirectEmitter verifies that after Init with
-// a DirectEmitter-backed publisher, the registry snapshot contains the
-// outbox-failopen-rate checker scoped to "auditcore".
+// a DirectEmitter-backed publisher, the outbox_failopen_rate probe scoped to
+// "auditcore" is registered.
 func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell(t)
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(context.Background(), recorder))
+	agg := drainProbeSnapshot(t, recorder)
 
-	snap := recorder.Snapshot()
-	const emitterKey = "outbox-failopen-rate.auditcore"
-	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	const emitterKey = "outbox_failopen_rate_auditcore"
+	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter health probe must be registered")
+	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // deadlineProbeStore is a ledger.Store whose Verify asserts that the caller
@@ -610,26 +624,27 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 }
 
 // TestAuditCore_HealthCheckers_AuditLedgerReady verifies that Init registers
-// the "audit_ledger_ready" probe via cell.RegisterRepoReadiness typed funnel
-// (ledger.Store implements cell.RepoHealthProber). The probe is always present
+// the repo readiness probe via RegisterRepoReady typed funnel
+// (ledger.Store implements healthz.RepoProber). The probe is always present
 // regardless of the emitter type — MemStore always returns nil.
+// ProbeRepoReady = "auditcore_repo_ready" (cellgen-generated constant).
 func TestAuditCore_HealthCheckers_AuditLedgerReady(t *testing.T) {
 	c := newTestCell(t)
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(context.Background(), recorder))
+	agg := drainProbeSnapshot(t, recorder)
 
-	snap := recorder.Snapshot()
-	const probeKey = "audit_ledger_ready"
-	require.Contains(t, snap.HealthCheckers, probeKey,
-		"audit_ledger_ready probe must be registered via cell.RegisterRepoReadiness")
-	require.NoError(t, snap.HealthCheckers[probeKey](context.Background()),
-		"MemStore audit_ledger_ready must return nil (always ready)")
+	require.True(t, agg.HasProbe(ProbeRepoReady),
+		"repo probe must be registered via RegisterRepoReady")
+	require.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
+		"MemStore repo probe must return nil (always ready)")
 }
 
 // TestAuditCore_HealthCheckers_NilEmitter verifies that when the emitter does
-// not implement the health-checker interface, no emitter health checkers are
-// registered — but audit_ledger_ready is always present (ledger.Store satisfies
-// cell.RepoHealthProber regardless of emitter type).
+// not implement healthz.ProbeSet, no emitter probes are registered —
+// but the repo probe is always present (ledger.Store satisfies
+// healthz.RepoProber regardless of emitter type).
+// ProbeRepoReady = "auditcore_repo_ready" (cellgen-generated constant).
 func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
@@ -637,16 +652,16 @@ func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 		WithClock(clock.Real()),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no HealthCheckers method
+		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no ProbeSet method
 	)
-	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	recorder := newTestRecorder()
 	require.NoError(t, c.Init(context.Background(), recorder))
-	snap := recorder.Snapshot()
-	// WriterEmitter does not add emitter probes; only audit_ledger_ready is present.
-	assert.NotContains(t, snap.HealthCheckers, "outbox-failopen-rate.auditcore",
-		"WriterEmitter must not add outbox-failopen-rate checker")
-	assert.Contains(t, snap.HealthCheckers, "audit_ledger_ready",
-		"audit_ledger_ready must always be registered via cell.RegisterRepoReadiness")
+	agg := drainProbeSnapshot(t, recorder)
+	// WriterEmitter does not add emitter probes; only repo probe is present.
+	assert.False(t, agg.HasProbe("outbox_failopen_rate_auditcore"),
+		"WriterEmitter must not add outbox_failopen_rate probe")
+	assert.True(t, agg.HasProbe(ProbeRepoReady),
+		"repo probe must always be registered via RegisterRepoReady")
 }
 
 func mustNewRouter(t *testing.T) *router.Router {

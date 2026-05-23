@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
+	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/tracingtest"
 )
@@ -135,7 +136,7 @@ func TestHealthEndpoints(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	hh := health.New(asm, clock.Real())
+	hh := health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
 	r, err := NewForListener(cell.HealthListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 	r.Handle("/healthz", hh.LivezHandler())
@@ -1169,7 +1170,7 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	hh := health.New(asm, clock.Real())
+	hh := health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
 	// Primary router rejects ALL traffic via rate limiter.
 	primaryRtr := mustNew(WithRouterClock(clock.Real()), WithRateLimiter(&routerTestLimiter{allow: false}))
 	primaryRtr.Handle("/api/v1/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1205,7 +1206,7 @@ func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	hh := health.New(asm, clock.Real())
+	hh := health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
 	// Primary router rejects ALL traffic via open circuit breaker.
 	primaryRtr := mustNew(WithRouterClock(clock.Real()), WithCircuitBreaker(&routerTestBreaker{allowErr: fmt.Errorf("open")}))
 	primaryRtr.Handle("/api/v1/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1366,7 +1367,7 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	hh := health.New(asm, clock.Real())
+	hh := health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("all tokens rejected"),
 	}

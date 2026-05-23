@@ -96,13 +96,13 @@ ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sib
 
 | Cell | Probe 名 | 实现来源 |
 |------|---------|---------|
-| configcore | `config_repo_ready` | `ConfigRepository.RepoReady` — 探测 `config_entries` + `feature_flags` 表 |
-| accesscore | `session_store_ready` | `session.Store.RepoReady` — 探测 `sessions` 表 |
-| auditcore | `audit_ledger_ready` | `ledger.Store.RepoReady` — 复用 `Tail` 探测 `audit_entries` 表 |
+| configcore | `configcore_repo_ready` | `ConfigRepository.RepoReady` — 探测 `config_entries` + `feature_flags` 表 |
+| accesscore | `accesscore_repo_ready` | `session.Store.RepoReady` — 探测 `sessions` 表 |
+| auditcore | `auditcore_repo_ready` | `ledger.Store.RepoReady` — 复用 `Tail` 探测 `audit_entries` 表 |
 
 **为何不与 `postgres_ready` 合并**：pool 级 `postgres_ready`（`adapters/postgres.*Pool` 注册，bare `Ping`）只覆盖连接活性；cell-level repo probe 执行各 cell 自己关系表上的代表性查询，能捕获 schema/migration 漂移、表级权限丢失、缺失表等 pool Ping 检测不到的失败模式——失败域不同，非同义重复，不在"禁止暴露多个同义 ready probe"范围内。
 
-**注册方式约束**：cell-level repo readiness probe **必须**通过 `cell.RegisterRepoReadiness(reg, name, prober)` 有类型 funnel 注册；禁止使用 `reg.Health(...)` 直接注册 repo probe，也禁止以匿名 `interface{ Health(context.Context) error }` duck-type 形式绕过（accesscore 曾因此产生一个永远不触发的死代码 probe，已在 PR-REPO-READYZ 修复）。enforcement：archtest `CELL-REPO-READYZ-PROBE-01` 锁 funnel 形态；`kernel/cell/celltest.RunRepoReadinessConformance` 提供 real-failure-injection 合规测试（healthy → nil；PG 表删除 → non-nil；mem → skip）。
+**注册方式约束**：cell-level repo readiness probe **必须**通过 cellgen 生成的 `<cellpkg>.RegisterRepoReady(reg, prober)` 有类型 funnel 注册（`healthz_gen.go` 生成产物）；禁止直接调用 `reg.Healthz()` 注册 repo probe，也禁止以匿名 duck-type 形式绕过（accesscore 曾因此产生一个永远不触发的死代码 probe，已在 PR-REPO-READYZ 修复）。enforcement：archtest `HEALTHZ-WRITE-01`（A2 caller allowlist 锁 Register callsites）+ `HEALTHZ-TYPED-REGISTER-01`（锁 cells/ 包内 `reg.Healthz()` 调用必须在 `healthz_gen.go` 内）；`kernel/cell/celltest.RunRepoReadinessConformance` 提供 real-failure-injection 合规测试（healthy → nil；PG 表删除 → non-nil；mem → skip）。
 
 ## HTTP Metrics `cell` Label
 

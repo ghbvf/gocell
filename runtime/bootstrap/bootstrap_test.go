@@ -858,40 +858,82 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	}
 }
 
-// --- Registry.Health drain tests ---
-
-// healthContribCell registers health checkers via reg.Health in Init.
-type healthContribCell struct {
-	*cell.BaseCell
-	checkers map[string]func(context.Context) error
-}
-
-func newHealthContribCell(id string, checkers map[string]func(context.Context) error) *healthContribCell {
-	return &healthContribCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
-		checkers: checkers,
-	}
-}
-
-func (c *healthContribCell) Init(ctx context.Context, reg cell.Registry) error {
-	if err := c.BaseCell.Init(ctx, reg); err != nil {
-		return err
-	}
-	for name, fn := range c.checkers {
-		reg.Health(name, fn)
-	}
-	return nil
-}
+// --- Registry.Healthz drain tests ---
 
 func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
+	// This test covers the framework-probe path: WithHealthChecker is the
+	// composition-root entry that drainProbes wires onto bootstrap's aggregator.
+	// The cell-registered probe path (reg.Healthz().Register during Init →
+	// RegistrySnapshot.Probes → drainCellProbes) is covered by
+	// TestBootstrap_CellProbe_DrainAppearsInReadyz.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-contrib", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	hcc := newHealthContribCell("accesscore", map[string]func(context.Context) error{
-		"session_store_ready": func(_ context.Context) error { return nil },
-	})
-	require.NoError(t, asm.Register(hcc))
+	require.NoError(t, asm.Register(newTestCell("accesscore")))
+
+	b := New(
+		WithClock(clock.Real()),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+		// WithHealthChecker is the composition-root path that drainProbes wires
+		// into bootstrap's aggregator.
+		WithHealthChecker("accesscore_repo_ready", func(_ context.Context) error { return nil }),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "200 verbose response must contain dependencies map")
+	sessionStore, ok := deps["accesscore_repo_ready"].(map[string]any)
+	require.True(t, ok, "accesscore-repo entry must be a map")
+	assert.Equal(t, "healthy", sessionStore["status"],
+		"WithHealthChecker-registered probe should appear in /readyz verbose")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestBootstrap_CellProbe_DrainAppearsInReadyz proves the F1 fix end-to-end: a
+// cell that registers a probe via reg.Healthz().Register during Init has that
+// probe accumulated into RegistrySnapshot.Probes, drained onto the runtime
+// aggregator by drainCellProbes, and surfaced in /readyz verbose output. Before
+// the snapshot-drain fix the recorder discarded the probe into a noopAggregator.
+func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-cell-probe", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	// snapshotCheckCell.Init registers healthz probe "probe.<id>" via reg.Healthz().
+	require.NoError(t, asm.Register(newSnapshotCheckCell("widget")))
 
 	b := New(
 		WithClock(clock.Real()),
@@ -926,10 +968,10 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "200 verbose response must contain dependencies map")
-	sessionStore, ok := deps["session_store_ready"].(map[string]any)
-	require.True(t, ok, "session-store entry must be a map")
-	assert.Equal(t, "healthy", sessionStore["status"],
-		"Registry-registered probe should appear in /readyz verbose")
+	probe, ok := deps["probe.widget"].(map[string]any)
+	require.True(t, ok, "cell-registered probe must appear in /readyz verbose dependencies")
+	assert.Equal(t, "healthy", probe["status"],
+		"cell probe registered via reg.Healthz() must be drained to /readyz")
 
 	cancel()
 	select {
@@ -941,17 +983,15 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 }
 
 func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
+	// Duplicate detection is exercised here via WithHealthChecker — the
+	// composition-root path that drainProbes wires onto bootstrap's aggregator.
+	// Cell-probe duplicate fail-fast (drainCellProbes → aggregator.Register →
+	// ErrDuplicateProbe) shares the same aggregator first-wins contract.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-dup", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	// Two cells both return "session_store_ready" probe — should conflict.
-	require.NoError(t, asm.Register(newHealthContribCell("cell-a", map[string]func(context.Context) error{
-		"session_store_ready": func(_ context.Context) error { return nil },
-	})))
-	require.NoError(t, asm.Register(newHealthContribCell("cell-b", map[string]func(context.Context) error{
-		"session_store_ready": func(_ context.Context) error { return nil },
-	})))
+	require.NoError(t, asm.Register(newTestCell("cell-a")))
 
 	b := New(
 		WithClock(clock.Real()),
@@ -959,14 +999,27 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
+		// Two WithHealthChecker calls with the same name trigger duplicate detection
+		// in drainProbes when it calls s.registerHealthChecker. Intentional duplication.
+		WithHealthChecker("accesscore_repo_ready", func(_ context.Context) error { return nil }),
+		newDupHealthCheckerOption("accesscore_repo_ready"),
 	)
 
 	ctx := t.Context()
 
 	err = b.Run(ctx)
-	require.Error(t, err, "duplicate probe names across cells should fail")
+	require.Error(t, err, "duplicate probe names via WithHealthChecker should fail")
 	assert.Contains(t, err.Error(), "duplicate health checker")
-	assert.Contains(t, err.Error(), "session_store_ready")
+	assert.Contains(t, err.Error(), "accesscore_repo_ready")
+}
+
+// newDupHealthCheckerOption returns a second WithHealthChecker Option for
+// the given name. It exists solely so TestBootstrap_RegistryHealth_DuplicateName_FailsFast
+// can register the same checker twice without tripping gocritic's dupOption
+// lint — the literal-equal arguments are now produced by two different
+// call expressions.
+func newDupHealthCheckerOption(name string) Option {
+	return WithHealthChecker(name, func(_ context.Context) error { return nil })
 }
 
 func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {

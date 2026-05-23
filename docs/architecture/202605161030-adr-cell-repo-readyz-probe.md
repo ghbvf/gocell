@@ -1,10 +1,11 @@
 # ADR: Cell-level Repo Readiness Probe — typed funnel + real-failure conformance
 
-- Status: Accepted
+- Status: Accepted (amended 2026-05-23 by PR #886 — probe names unified to cell-prefixed form)
 - Date: 2026-05-16
 - Tracks: REPO-HEALTHCHECKER-01 (backlog cap-13 §13.1) + B2-R-02 (backlog.md line 228)
 - Builds on: PR #485 (PR-8, A-01) — `adapters/postgres.Pool` implements `lifecycle.ManagedResource` + `postgres_ready` pool probe; PR #450 (S7) — auditcore `ledger.Store` + `LedgerStore.Probes()` partial pre-coverage (F6)
 - Implemented by: PR-REPO-READYZ (branch `fix/202-repo-readyz`)
+- Amended by: PR #886 (M1-OBSERVED stage 8) — probe names changed to cell-prefixed convention (see §D4 amendment below)
 
 ## Context
 
@@ -99,9 +100,16 @@ All three cells now register their repo probe identically via `cell.RegisterRepo
 
 | Cell | Probe name | RepoReady implementation |
 |------|-----------|--------------------------|
-| configcore | `config_repo_ready` | `ConfigRepository.RepoReady` — queries `config_entries` + `feature_flags` |
-| accesscore | `session_store_ready` | `session.Store.RepoReady` — queries `sessions` |
-| auditcore | `audit_ledger_ready` | `ledger.Store.RepoReady` — reuses `Tail` to query `audit_entries` |
+| configcore | `configcore_repo_ready` | `ConfigRepository.RepoReady` — queries `config_entries` + `feature_flags` |
+| accesscore | `accesscore_repo_ready` | `session.Store.RepoReady` — queries `sessions` |
+| auditcore | `auditcore_repo_ready` | `ledger.Store.RepoReady` — reuses `Tail` to query `audit_entries` |
+
+**Amendment (PR #886, 2026-05-23)**: Probe names were updated from the original form
+(`session_store_ready`, `audit_ledger_ready`, `config_repo_ready`) to the cell-prefixed
+convention (`accesscore_repo_ready`, `auditcore_repo_ready`, `configcore_repo_ready`).
+The cell-prefixed form makes the owning cell explicit in the `/readyz?verbose` output
+and aligns with the `observability.md` §"Cell 级别 Repo Readiness Probe" naming table.
+The `READYZ-PROBE-NAMING-01` archtest was updated accordingly.
 
 The `LedgerStore.Probes()` special-case path introduced in PR #450 F6 is **deleted**.
 No backward-compat shim: GoCell has no external consumers; Review and重构 do not consider

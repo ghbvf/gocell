@@ -24,8 +24,10 @@ func TestRunVerifyGenerated_SyntheticProjectPasses(t *testing.T) {
 
 	require.NoError(t, err)
 	// fixture has cells: [placeholder] (goStructName set) so modules_gen.go +
-	// cell_gen.go are also emitted → 5 artifacts total
-	assert.Contains(t, out, "Generated artifacts verified: 5 files")
+	// cell_gen.go + healthz_gen.go are also emitted → 6 artifacts total
+	// (boundary.yaml, metrics-schema.yaml, main.go, modules_gen.go, cell_gen.go,
+	// healthz_gen.go)
+	assert.Contains(t, out, "Generated artifacts verified: 6 files")
 }
 
 func TestRunVerifyGenerated_ReportsDrift(t *testing.T) {

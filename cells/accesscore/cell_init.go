@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -406,23 +407,27 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error 
 	}
 
 	// Route groups and subscriptions removed: cell_gen.go owns Init and renders them.
-	c.registerHealthAndLifecycle(reg)
+	if err := c.registerHealthAndLifecycle(reg); err != nil {
+		return err
+	}
 
 	return nil
 }
 
 // registerHealthAndLifecycle registers health probes and lifecycle hooks into reg.
-func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) {
-	// session.Store satisfies cell.RepoHealthProber via its RepoReady method.
-	// Use the typed funnel instead of an anonymous duck-type assertion so
-	// CELL-REPO-READYZ-PROBE-01 archtest can enforce the canonical form.
-	cell.RegisterRepoReadiness(reg, "session_store_ready", c.sessionStore)
-	if hc, ok := c.emitter.(cell.HealthProber); ok {
-		for k, v := range hc.Probes() {
-			reg.Health(k, v)
+func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) error {
+	// session.Store satisfies healthz.RepoProber via its RepoReady method.
+	// RegisterRepoReady is the cellgen-generated typed funnel.
+	if err := RegisterRepoReady(reg, c.sessionStore); err != nil {
+		return err
+	}
+	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
+		if err := RegisterEmitterProbes(reg, hc); err != nil {
+			return err
 		}
 	}
 	if c.refreshGCEnabled {
 		reg.Lifecycle(c.refreshGCHook())
 	}
+	return nil
 }

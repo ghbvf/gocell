@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -45,6 +46,18 @@ func newTestCell() *ConfigCore {
 // newTestRecorder returns a RegistryRecorder for demo mode with an empty config.
 func newTestRecorder() *cell.RegistryRecorder {
 	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+}
+
+// drainProbeSnapshot mirrors the bootstrap layer: it drains the probes a cell
+// accumulated during Init (RegistrySnapshot.Probes) into a FakeAggregator so
+// tests can assert probe registration via HasProbe / Probe. Call it after Init.
+func drainProbeSnapshot(t *testing.T, rec *cell.RegistryRecorder) *healthztest.FakeAggregator {
+	t.Helper()
+	agg := newTestAgg()
+	for _, p := range rec.Snapshot().Probes {
+		require.NoError(t, agg.Register(p))
+	}
+	return agg
 }
 
 func TestConfigCore_Lifecycle(t *testing.T) {
@@ -663,54 +676,52 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 }
 
 // TestConfigCore_HealthCheckers_WithDirectEmitter verifies that after Init
-// with a DirectEmitter-backed publisher, the registry snapshot contains the
-// outbox-failopen-rate checker scoped to "configcore".
+// with a DirectEmitter-backed publisher, the outbox_failopen_rate probe
+// scoped to "configcore" is registered.
 func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(context.Background(), recorder))
+	agg := drainProbeSnapshot(t, recorder)
 
-	snap := recorder.Snapshot()
-	const emitterKey = "outbox-failopen-rate.configcore"
-	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	const emitterKey = "outbox_failopen_rate_configcore"
+	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter health probe must be registered")
+	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // TestConfigCore_HealthCheckers_ConfigRepoReady verifies that after Init the
-// registry snapshot contains the differentiated config repo readiness probe
-// registered via cell.RegisterRepoReadiness and that the mem-backed probe
-// returns nil (always-ready MemStore convention).
+// repo readiness probe is registered via RegisterRepoReady and the mem-backed
+// probe returns nil (always-ready MemStore convention).
+// ProbeRepoReady = "configcore_repo_ready" (cellgen-generated constant).
 func TestConfigCore_HealthCheckers_ConfigRepoReady(t *testing.T) {
 	c := newTestCell()
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(context.Background(), recorder))
+	agg := drainProbeSnapshot(t, recorder)
 
-	snap := recorder.Snapshot()
-	const probeKey = "config_repo_ready"
-	require.Contains(t, snap.HealthCheckers, probeKey,
-		"RegisterRepoReadiness must register config_repo_ready in the registry snapshot")
-	assert.NoError(t, snap.HealthCheckers[probeKey](context.Background()),
-		"mem-backed config_repo_ready must return nil (MemStore always-ready convention)")
+	require.True(t, agg.HasProbe(ProbeRepoReady),
+		"RegisterRepoReady must register repo probe in the aggregator")
+	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
+		"mem-backed repo probe must return nil (MemStore always-ready convention)")
 }
 
 // TestConfigCore_HealthCheckers_NilEmitter verifies that when the emitter does
-// not implement the health-checker interface, no emitter-scoped health checkers
-// are registered. The config_repo_ready probe is always present (it is
-// unconditionally registered via cell.RegisterRepoReadiness); only the
-// outbox-failopen-rate probe is absent when the emitter has no HealthCheckers.
+// not implement healthz.ProbeSet, no emitter probes are registered.
+// The repo probe is always present (unconditionally via RegisterRepoReady).
+// ProbeRepoReady = "configcore_repo_ready" (cellgen-generated constant).
 func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	c := NewConfigCore(
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
-		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no HealthCheckers method
+		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no ProbeSet method
 	)
-	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	recorder := newTestRecorder()
 	require.NoError(t, c.Init(context.Background(), recorder))
-	snap := recorder.Snapshot()
-	assert.NotContains(t, snap.HealthCheckers, "outbox-failopen-rate.configcore",
-		"WriterEmitter must not register outbox-failopen-rate probe")
-	assert.Contains(t, snap.HealthCheckers, "config_repo_ready",
-		"config_repo_ready must always be registered via RegisterRepoReadiness")
+	agg := drainProbeSnapshot(t, recorder)
+	assert.False(t, agg.HasProbe("outbox_failopen_rate_configcore"),
+		"WriterEmitter must not register outbox_failopen_rate probe")
+	assert.True(t, agg.HasProbe(ProbeRepoReady),
+		"repo probe must always be registered via RegisterRepoReady")
 }
 
 // ---------------------------------------------------------------------------

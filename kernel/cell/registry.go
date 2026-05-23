@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -108,11 +109,24 @@ type Registry interface {
 		opts ...SubscriptionOption,
 	) error
 
-	// Health registers a named readiness probe. If name is already registered,
-	// the duplicate is logged at slog.LevelError and silently dropped
-	// (first-wins semantics). Probe functions must be safe for concurrent
-	// invocation — they are called on every /readyz request.
-	Health(name string, check func(context.Context) error)
+	// Healthz returns a write-side probe sink. Cells register probes by
+	// calling reg.Healthz().Register(probe); the recorder accumulates them
+	// into RegistrySnapshot.Probes, which the bootstrap layer drains onto the
+	// runtime healthz.Aggregator after every cell has initialized — the same
+	// accumulate-then-drain split used for RouteGroups and Subscriptions. The
+	// recorder does NOT hold a live aggregator.
+	//
+	// This method replaces the former Health(name, fn) accumulator pattern;
+	// the sink enforces first-wins duplicate semantics (healthz.ErrDuplicateProbe)
+	// at registration time.
+	//
+	// WARNING: cells/ code must NOT call reg.Healthz().Register(...) directly.
+	// All probe registration must go through the cellgen-generated typed helpers
+	// (RegisterRepoReady, RegisterEmitterProbes) in cells/<cell>/healthz_gen.go.
+	// Direct Register calls from hand-written cell code are blocked by archtest
+	// HEALTHZ-TYPED-REGISTER-01. This restriction does not apply to
+	// runtime/bootstrap or runtime/observability/healthz/healthztest.
+	Healthz() healthz.Aggregator
 
 	// Lifecycle appends a lifecycle hook. Name must be non-empty; passing an
 	// empty Name panics (programming error). Hooks run in declaration order
@@ -268,12 +282,6 @@ func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
 	}
 }
 
-// HealthProber is implemented by components that expose a probe set for
-// cells to register via reg.Health(...) (notably outbox.DirectEmitter).
-type HealthProber interface {
-	Probes() map[string]func(context.Context) error
-}
-
 // SubscriptionValidator validates a Subscription at registration time.
 //
 // ref: opentelemetry-collector otelcol/config.go Validate() — declarative validation at config load time.
@@ -350,14 +358,23 @@ type ConfigReloadRequest struct {
 // ---------------------------------------------------------------------------
 
 // RegistrySnapshot is the immutable result of a Cell's Init registration pass.
-// Bootstrap reads these fields to wire routes, subscriptions, health probes,
-// lifecycle hooks, and config-reload callbacks.
+// Bootstrap reads these fields to wire routes, subscriptions, lifecycle hooks,
+// and config-reload callbacks. Health probes are no longer stored in the
+// snapshot: they are registered directly on the healthz.Aggregator that was
+// injected into the RegistryRecorder at construction time.
 type RegistrySnapshot struct {
 	RouteGroups     []RouteGroup
 	Subscriptions   []SubscriptionRequest
-	HealthCheckers  map[string]func(context.Context) error
 	LifecycleHooks  []LifecycleHook
 	ConfigReloaders []ConfigReloadRequest
+
+	// Probes are the cell-level readiness probes declared during Init via
+	// reg.Healthz().Register(...). The bootstrap layer drains them onto the
+	// runtime healthz.Aggregator after every cell has initialized — exactly
+	// the same write-side-accumulate / read-side-drain split used for
+	// RouteGroups, Subscriptions, and LifecycleHooks. The recorder does NOT
+	// hold a live aggregator; it is a pure accumulator.
+	Probes []healthz.Probe
 }
 
 // ---------------------------------------------------------------------------
@@ -376,9 +393,10 @@ type RegistryRecorder struct {
 	// accumulators
 	routeGroups     []RouteGroup
 	subscriptions   []SubscriptionRequest
-	healthCheckers  map[string]func(context.Context) error
 	lifecycleHooks  []LifecycleHook
 	configReloaders []ConfigReloadRequest
+	probes          []healthz.Probe
+	probeNames      map[string]struct{}
 
 	finalized bool
 }
@@ -387,7 +405,11 @@ type RegistryRecorder struct {
 var _ Registry = (*RegistryRecorder)(nil)
 
 // NewRegistryRecorder constructs a RegistryRecorder with the given config
-// snapshot and durability mode. Uses the default slog logger.
+// snapshot and durability mode. The recorder is a pure write-side accumulator:
+// probes registered via reg.Healthz().Register(...) are collected into the
+// RegistrySnapshot.Probes slice, which the bootstrap layer drains onto the
+// runtime healthz.Aggregator after Init — the recorder never holds a live
+// aggregator, mirroring how RouteGroups / Subscriptions are accumulated.
 func NewRegistryRecorder(cfg map[string]any, mode DurabilityMode) *RegistryRecorder {
 	return NewRegistryRecorderWithLogger(cfg, mode, slog.Default())
 }
@@ -396,10 +418,10 @@ func NewRegistryRecorder(cfg map[string]any, mode DurabilityMode) *RegistryRecor
 // logger. Provided for testing so log output can be captured.
 func NewRegistryRecorderWithLogger(cfg map[string]any, mode DurabilityMode, log *slog.Logger) *RegistryRecorder {
 	return &RegistryRecorder{
-		cfg:            cfg,
-		mode:           mode,
-		log:            log,
-		healthCheckers: make(map[string]func(context.Context) error),
+		cfg:        cfg,
+		mode:       mode,
+		log:        log,
+		probeNames: make(map[string]struct{}),
 	}
 }
 
@@ -463,24 +485,65 @@ func (r *RegistryRecorder) Subscribe(
 	return nil
 }
 
-// Health registers a named readiness probe. Duplicate names are logged at
-// Error level and the second registration is silently dropped (first-wins).
-func (r *RegistryRecorder) Health(name string, check func(context.Context) error) {
-	r.mustNotBeFinalized("Health")
-	MustHaveNonEmptyHealthName(name)
-	if _, exists := r.healthCheckers[name]; exists {
-		r.log.Error("registry Health: duplicate checker name — second registration dropped",
-			slog.String("checker_name", name))
-		return
-	}
-	r.healthCheckers[name] = check
+// Healthz returns a write-side probe sink. Cells register probes by calling
+// reg.Healthz().Register(probe) during Init; the sink accumulates them into
+// the recorder, and Snapshot() exposes them as RegistrySnapshot.Probes for the
+// bootstrap layer to drain onto the runtime aggregator. The sink's Evaluate is
+// a no-op (returns an empty StatusUp Snapshot) because the recorder is never
+// the read side — the runtime healthz.Aggregator owned by bootstrap is.
+func (r *RegistryRecorder) Healthz() healthz.Aggregator {
+	return recorderProbeSink{rec: r}
 }
 
-// MustHaveNonEmptyHealthName panics when name is empty (programming error).
-func MustHaveNonEmptyHealthName(name string) {
-	if name == "" {
-		panic(panicregister.Approved("registry-health-name", errcode.Assertion("registry Health: name must not be empty")))
+// registerProbe accumulates a probe declared via reg.Healthz().Register.
+// First-wins duplicate semantics match the runtime aggregator: a second probe
+// with the same Name() returns healthz.ErrDuplicateProbe and is not stored.
+func (r *RegistryRecorder) registerProbe(p healthz.Probe) error {
+	r.mustNotBeFinalized("Healthz().Register")
+	if p == nil {
+		return fmt.Errorf("%w: nil probe", healthz.ErrInvalidProbeName)
 	}
+	name := p.Name()
+	if name == "" {
+		return fmt.Errorf("%w: empty probe name", healthz.ErrInvalidProbeName)
+	}
+	if _, dup := r.probeNames[name]; dup {
+		return fmt.Errorf("%w: probe %q", healthz.ErrDuplicateProbe, name)
+	}
+	r.probeNames[name] = struct{}{}
+	r.probes = append(r.probes, p)
+	return nil
+}
+
+// recorderProbeSink adapts a RegistryRecorder to the healthz.Aggregator
+// interface so the cellgen-generated RegisterRepoReady / RegisterEmitterProbes
+// helpers (which call reg.Healthz().Register(...)) accumulate into the
+// recorder's snapshot rather than a live aggregator. It is write-only:
+// Deregister mutates the accumulator; Evaluate is a documented no-op.
+type recorderProbeSink struct {
+	rec *RegistryRecorder
+}
+
+func (s recorderProbeSink) Register(p healthz.Probe) error { return s.rec.registerProbe(p) }
+
+func (s recorderProbeSink) Deregister(name string) {
+	if _, ok := s.rec.probeNames[name]; !ok {
+		return
+	}
+	delete(s.rec.probeNames, name)
+	kept := s.rec.probes[:0]
+	for _, p := range s.rec.probes {
+		if p.Name() != name {
+			kept = append(kept, p)
+		}
+	}
+	s.rec.probes = kept
+}
+
+// Evaluate is a no-op: the recorder is the write side. Read-side evaluation
+// happens on the runtime healthz.Aggregator after bootstrap drains the snapshot.
+func (recorderProbeSink) Evaluate(context.Context) healthz.Snapshot {
+	return healthz.Snapshot{Overall: healthz.StatusUp, Probes: []healthz.ProbeResult{}}
 }
 
 // Lifecycle appends a lifecycle hook. Panics when Name is empty (programming error).
@@ -531,6 +594,11 @@ func MustHaveNonNilConfigReloadFn(fn func(context.Context, ConfigChangeEvent) er
 
 // Snapshot finalizes the recorder and returns an immutable RegistrySnapshot.
 // After Snapshot is called, any further registration method panics.
+//
+// Health probes ARE included in the snapshot (Probes), accumulated from
+// reg.Healthz().Register(...) calls during Init. The bootstrap layer drains
+// them onto the runtime healthz.Aggregator after all cells initialize —
+// identical to how RouteGroups / Subscriptions / LifecycleHooks are drained.
 func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 	r.finalized = true
 
@@ -541,23 +609,21 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 	subs := make([]SubscriptionRequest, len(r.subscriptions))
 	copy(subs, r.subscriptions)
 
-	checkers := make(map[string]func(context.Context) error, len(r.healthCheckers))
-	for k, v := range r.healthCheckers {
-		checkers[k] = v
-	}
-
 	hooks := make([]LifecycleHook, len(r.lifecycleHooks))
 	copy(hooks, r.lifecycleHooks)
 
 	reloaders := make([]ConfigReloadRequest, len(r.configReloaders))
 	copy(reloaders, r.configReloaders)
 
+	probes := make([]healthz.Probe, len(r.probes))
+	copy(probes, r.probes)
+
 	return RegistrySnapshot{
 		RouteGroups:     rgs,
 		Subscriptions:   subs,
-		HealthCheckers:  checkers,
 		LifecycleHooks:  hooks,
 		ConfigReloaders: reloaders,
+		Probes:          probes,
 	}
 }
 

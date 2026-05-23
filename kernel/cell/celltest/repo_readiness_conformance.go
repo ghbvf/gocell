@@ -8,12 +8,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // RunRepoReadinessConformance is the single-source contract for
-// cell.RepoHealthProber. Every RepoHealthProber implementation MUST be wired
+// healthz.RepoProber. Every RepoProber implementation MUST be wired
 // through this harness (CELL-REPO-READYZ-PROBE-01 archtest enforces the
 // auto-join). It encodes the *differentiated* property that the typed funnel
 // alone cannot: a SQL-backed RepoReady must FAIL when the cell's own
@@ -24,13 +24,13 @@ import (
 //   - broken: RepoReady(ctx) != nil. SQL-backed implementations supply this
 //     from a real PG with the cell's table(s) dropped (integration tag).
 //     In-memory implementations have no differentiated failure domain; pass
-//     a literal nil or a nil-valued RepoHealthProber to skip (recorded as a
+//     a literal nil or a nil-valued RepoProber to skip (recorded as a
 //     skipped sub-test). SQL-backed implementations MUST pass a non-nil
 //     broken prober.
 //
 // Note: broken is checked with [validation.IsNilInterface] so both untyped nil
 // and typed-nil interface values (e.g. (*Foo)(nil)) are treated as absent.
-func RunRepoReadinessConformance(t *testing.T, name string, healthy, broken cell.RepoHealthProber) {
+func RunRepoReadinessConformance(t *testing.T, name string, healthy, broken healthz.RepoProber) {
 	t.Helper()
 	if validation.IsNilInterface(healthy) {
 		t.Fatalf("RunRepoReadinessConformance: healthy must not be nil (name=%s)", name)

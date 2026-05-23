@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -51,6 +52,121 @@ func TestRegistry_Config_ReturnsConstructorValue(t *testing.T) {
 func TestRegistry_DurabilityMode_ReturnsConstructorValue(t *testing.T) {
 	rec := NewRegistryRecorder(nil, DurabilityDemo)
 	assert.Equal(t, DurabilityDemo, rec.DurabilityMode())
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Healthz_ReturnsWriteSink
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Healthz_ReturnsWriteSink verifies Healthz() returns a usable
+// write-side sink. The recorder is a pure accumulator and holds no live
+// aggregator; its sink's Evaluate is a documented no-op.
+func TestRegistry_Healthz_ReturnsWriteSink(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	sink := rec.Healthz()
+	require.NotNil(t, sink)
+
+	snap := sink.Evaluate(context.Background())
+	assert.Equal(t, healthz.StatusUp, snap.Overall)
+	assert.Empty(t, snap.Probes)
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Healthz_RegisterProbe_AccumulatesInSnapshot
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Healthz_RegisterProbe_AccumulatesInSnapshot verifies that probes
+// registered via reg.Healthz().Register(...) appear in the RegistrySnapshot for
+// the bootstrap layer to drain onto the runtime aggregator.
+func TestRegistry_Healthz_RegisterProbe_AccumulatesInSnapshot(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+
+	probe := healthz.NewProbe("foo_ready", func(_ context.Context) error { return nil })
+	require.NoError(t, rec.Healthz().Register(probe))
+
+	snap := rec.Snapshot()
+	require.Len(t, snap.Probes, 1)
+	assert.Equal(t, "foo_ready", snap.Probes[0].Name())
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Healthz_DuplicateName_RejectsSecond
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Healthz_DuplicateName_RejectsSecond verifies that registering a
+// second probe with the same name returns ErrDuplicateProbe and does not store
+// the duplicate (first-wins, same contract as the runtime aggregator).
+func TestRegistry_Healthz_DuplicateName_RejectsSecond(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+
+	p1 := healthz.NewProbe("my_probe", func(_ context.Context) error { return nil })
+	p2 := healthz.NewProbe("my_probe", func(_ context.Context) error { return errors.New("fail") })
+
+	require.NoError(t, rec.Healthz().Register(p1))
+	err := rec.Healthz().Register(p2)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, healthz.ErrDuplicateProbe))
+
+	require.Len(t, rec.Snapshot().Probes, 1)
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Healthz_Deregister_RemovesProbe
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Healthz_Deregister_RemovesProbe verifies the write-side sink's
+// Deregister drops an accumulated probe (and frees the name for re-register).
+func TestRegistry_Healthz_Deregister_RemovesProbe(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	sink := rec.Healthz()
+
+	require.NoError(t, sink.Register(healthz.NewProbe("a_ready", func(_ context.Context) error { return nil })))
+	require.NoError(t, sink.Register(healthz.NewProbe("b_ready", func(_ context.Context) error { return nil })))
+	sink.Deregister("a_ready")
+	sink.Deregister("missing_ready") // no-op on unknown name
+
+	// Name freed: re-register under the deregistered name succeeds.
+	require.NoError(t, sink.Register(healthz.NewProbe("a_ready", func(_ context.Context) error { return nil })))
+
+	names := make([]string, 0, 2)
+	for _, p := range rec.Snapshot().Probes {
+		names = append(names, p.Name())
+	}
+	assert.ElementsMatch(t, []string{"b_ready", "a_ready"}, names)
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Healthz_RegisterAfterSnapshot_Panics
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Healthz_RegisterAfterSnapshot_Panics verifies probe registration
+// after Snapshot() panics — same finalize guard as the other registration
+// methods (no lazy registration past sealing).
+func TestRegistry_Healthz_RegisterAfterSnapshot_Panics(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	_ = rec.Snapshot() // finalize
+	assert.Panics(t, func() {
+		_ = rec.Healthz().Register(healthz.NewProbe("late_ready", func(_ context.Context) error { return nil }))
+	})
+}
+
+// emptyNameProbe is a malformed Probe whose Name() is empty. It cannot be built
+// via healthz.NewProbe (which panics on an empty name), so this local type
+// exercises the recorder sink's registration-time name validation.
+type emptyNameProbe struct{}
+
+func (emptyNameProbe) Name() string                  { return "" }
+func (emptyNameProbe) Check(_ context.Context) error { return nil }
+
+// TestRegistry_Healthz_RejectsNilAndEmptyName verifies the write-side sink
+// rejects a nil probe and an empty-name probe with ErrInvalidProbeName (mirrors
+// the runtime aggregator contract) and does not accumulate the rejected probe.
+func TestRegistry_Healthz_RejectsNilAndEmptyName(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	sink := rec.Healthz()
+	assert.ErrorIs(t, sink.Register(nil), healthz.ErrInvalidProbeName)
+	assert.ErrorIs(t, sink.Register(emptyNameProbe{}), healthz.ErrInvalidProbeName)
+	assert.Empty(t, rec.Snapshot().Probes, "rejected probes must not be accumulated")
 }
 
 // ---------------------------------------------------------------------------
@@ -168,31 +284,6 @@ func TestRegistry_Subscribe_HappyPath_AppendsToSnapshot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRegistry_Health_DuplicateName_LogsDropsSecond
-// ---------------------------------------------------------------------------
-
-func TestRegistry_Health_DuplicateName_LogsDropsSecond(t *testing.T) {
-	// Redirect slog to a buffer so we can verify the error log.
-	var logBuf strings.Builder
-	handler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})
-	rec := NewRegistryRecorderWithLogger(nil, DurabilityDurable, slog.New(handler))
-
-	checker1 := func(_ context.Context) error { return nil }
-	checker2 := func(_ context.Context) error { return assert.AnError }
-
-	rec.Health("session_store_ready", checker1)
-	rec.Health("session_store_ready", checker2) // duplicate — should log error + drop
-
-	snap := rec.Snapshot()
-	require.Contains(t, snap.HealthCheckers, "session_store_ready")
-	// checker1 must be retained (the second was dropped).
-	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()))
-
-	// A slog error must have been emitted.
-	assert.Contains(t, logBuf.String(), "session_store_ready")
-}
-
-// ---------------------------------------------------------------------------
 // TestRegistry_Lifecycle_EmptyName_Panics
 // ---------------------------------------------------------------------------
 
@@ -284,18 +375,6 @@ func TestRegistry_PostSnapshot_Lifecycle_Panics(t *testing.T) {
 	_ = rec.Snapshot() // finalize
 	assert.Panics(t, func() {
 		rec.Lifecycle(LifecycleHook{Name: "x"})
-	})
-}
-
-// ---------------------------------------------------------------------------
-// TestRegistry_PostSnapshot_Health_Panics
-// ---------------------------------------------------------------------------
-
-func TestRegistry_PostSnapshot_Health_Panics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable)
-	_ = rec.Snapshot()
-	assert.Panics(t, func() {
-		rec.Health("probe", func(context.Context) error { return nil })
 	})
 }
 
@@ -398,42 +477,44 @@ func TestRegistry_OnConfigReload_NilFn_Panics(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRegistry_Health_EmptyName_Panics
-// ---------------------------------------------------------------------------
-
-func TestRegistry_Health_EmptyName_Panics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable)
-	require.Panics(t, func() {
-		rec.Health("", func(context.Context) error { return nil })
-	})
-}
-
-// ---------------------------------------------------------------------------
 // TestRegistry_Snapshot_DefensiveCopy
 // ---------------------------------------------------------------------------
 
 func TestRegistry_Snapshot_DefensiveCopy(t *testing.T) {
 	// Verify that the RegistrySnapshot is a defensive copy: mutating the
-	// snapshot's slices/maps must not affect the recorder's internal state.
+	// snapshot's slices must not affect the recorder's internal state.
 	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
-	// Register one of each type before taking the snapshot.
+	// Register one of each accumulated type before taking the snapshot.
 	rec.RouteGroup(SingleGroup(PrimaryListener, "/api/v1/x", func(RouteMux) error { return nil }))
 	err := rec.Subscribe(testRegistrySpec("snap.test"), noopHandler, "cg-snap", "ordercell")
 	require.NoError(t, err)
-	rec.Health("snap-probe", func(context.Context) error { return nil })
 
 	snap := rec.Snapshot()
 
 	// Mutate snap fields.
 	snap.RouteGroups = append(snap.RouteGroups, SingleGroup(PrimaryListener, "/extra", func(RouteMux) error { return nil }))
 	snap.Subscriptions = append(snap.Subscriptions, SubscriptionRequest{ConsumerGroup: "injected"})
-	snap.HealthCheckers["injected-probe"] = func(context.Context) error { return nil }
 
 	// The recorder's internal counters must remain at the original sizes.
 	assert.Len(t, rec.routeGroups, 1, "snap mutation must not affect recorder.routeGroups")
 	assert.Len(t, rec.subscriptions, 1, "snap mutation must not affect recorder.subscriptions")
-	assert.Len(t, rec.healthCheckers, 1, "snap mutation must not affect recorder.healthCheckers")
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_WithLogger_UsesCustomLogger
+// ---------------------------------------------------------------------------
+
+// TestRegistry_WithLogger_UsesCustomLogger verifies NewRegistryRecorderWithLogger
+// wires up the custom logger and returns a functioning recorder.
+func TestRegistry_WithLogger_UsesCustomLogger(t *testing.T) {
+	var logBuf strings.Builder
+	handler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	rec := NewRegistryRecorderWithLogger(nil, DurabilityDurable, slog.New(handler))
+
+	// Recorder must be usable after construction.
+	assert.NotNil(t, rec)
+	require.NotNil(t, rec.Healthz())
 }
 
 // Compile-time: RouteGroup.Register accepts RouteMux.

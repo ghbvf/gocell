@@ -135,7 +135,7 @@ type ValidateView struct {
 //     probe — it surfaces schema/migration drift and table-level permission
 //     loss that a connection ping cannot detect. In-memory implementations
 //     return nil (always ready, MemStore convention). Satisfies
-//     kernel/cell.RepoHealthProber; registered via cell.RegisterRepoReadiness.
+//     kernel/healthz.RepoProber; registered via cellgen RegisterRepoReady.
 type Store interface {
 	Create(ctx context.Context, s *Session) error
 	Get(ctx context.Context, id string) (*ValidateView, error)

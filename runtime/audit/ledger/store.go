@@ -57,11 +57,11 @@ type QueryListParams struct {
 // HMAC-SHA256 hash chain link, and enforces idempotency via content
 // fingerprint.
 //
-// Store also satisfies cell.RepoHealthProber: RepoReady exercises the
+// Store also satisfies healthz.RepoProber: RepoReady exercises the
 // audit_entries relation directly (differentiated check) so that schema/migration
 // drift or table-level permission loss is detected independently from the
 // pool-level postgres_ready ping. In-memory implementations return nil (always
-// ready). See kernel/cell.RepoHealthProber godoc for the full contract.
+// ready). See kernel/healthz.RepoProber godoc for the full contract.
 //
 // Method semantics (ADR-AuditLedger §4.2):
 //   - Append: persist a new entry. Computes PrevHash from Tail, computes

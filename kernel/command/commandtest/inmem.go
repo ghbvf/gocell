@@ -375,7 +375,7 @@ func (q *InMemQueue) GetCommand(_ context.Context, id string) (*command.Entry, e
 // ---------------------------------------------------------------------------
 
 // RepoReady always returns nil for the in-memory queue (no external dependency).
-// Satisfies cell.RepoHealthProber so the same queue value can be registered
+// Satisfies healthz.RepoProber so the same queue value can be registered
 // as the "command_queue_ready" readiness probe in demo/test mode.
 func (q *InMemQueue) RepoReady(_ context.Context) error { return nil }
 

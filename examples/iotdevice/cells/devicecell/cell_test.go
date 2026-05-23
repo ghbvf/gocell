@@ -428,17 +428,17 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 }
 
 // TestDeviceCell_Probes_WithDirectEmitter verifies that after Init
-// with a DirectEmitter-backed publisher, the snapshot contains the
-// outbox-failopen-rate checker scoped to "devicecell".
+// with a DirectEmitter-backed publisher, the outbox_failopen_rate probe
+// scoped to "devicecell" is registered.
 func TestDeviceCell_Probes_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
-	snap := rec.Snapshot()
+	agg := drainProbeSnapshot(t, rec)
 
-	const emitterKey = "outbox-failopen-rate.devicecell"
-	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter probe must be aggregated")
-	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	const emitterKey = "outbox_failopen_rate_devicecell"
+	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter probe must be registered")
+	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
 
 // TestDeviceCell_LifecycleHookRegistered verifies that Init registers the

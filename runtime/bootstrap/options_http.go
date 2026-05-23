@@ -17,12 +17,36 @@ import (
 	"time"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
+
+// WithHealthAggregator injects a custom healthz.Aggregator into the bootstrap.
+// The aggregator is used by the health.Handler (/readyz) and by drainProbes
+// to register framework-level probes.
+//
+// Both bare-nil and typed-nil interface values are rejected at phase0 with
+// errcode ERR_VALIDATION_FAILED. When WithHealthAggregator is not called,
+// bootstrap constructs a default obshealthz.NewAggregator in phase0 (with
+// b.clock and, if set, the WithReadyzDeadline per-probe deadline) — the option
+// exists for hosts that want to substitute (e.g. tests with a fake aggregator).
+// A custom aggregator owns its own deadline, so it cannot combine with
+// WithReadyzDeadline (that combination fails fast at phase0).
+//
+// ref: runtime-api.md strong-dependency wiring option pattern.
+func WithHealthAggregator(agg healthz.Aggregator) Option {
+	return func(b *Bootstrap) {
+		if validation.IsNilInterface(agg) {
+			b.healthAggregatorNil = true
+			return
+		}
+		b.healthAggregator = agg
+	}
+}
 
 // WithRouterOptions passes options to the router builder.
 func WithRouterOptions(opts ...router.Option) Option {
@@ -141,9 +165,15 @@ func WithHealthChecker(name string, fn func(context.Context) error) Option {
 }
 
 // WithReadyzDeadline overrides the per-probe deadline for /readyz. All
-// registered checkers must complete within this duration; checkers that exceed
-// it are reported as status="timeout". A zero or negative value uses the
-// health.Handler default (5 s, Kubernetes readiness probe convention).
+// registered probes must complete within this duration; probes that exceed it
+// are reported as status="timeout". A zero or negative value uses the default
+// aggregator's 5 s default (Kubernetes readiness probe convention).
+//
+// The deadline is owned by the healthz.Aggregator: bootstrap applies it to the
+// default aggregator it builds in phase0. It therefore CANNOT combine with
+// WithHealthAggregator (a custom aggregator owns its own deadline) — that
+// combination fails fast at phase0. Configure a custom aggregator's deadline
+// via runtime/observability/healthz.WithDeadline at construction instead.
 //
 // ref: k8s.io/apiserver/pkg/server/healthz — server-side readyz deadline
 // independent of the kubelet HTTP connection deadline.

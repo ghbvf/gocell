@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -89,6 +90,15 @@ type Bootstrap struct {
 	healthCheckers        []namedChecker
 	adapterInfo           map[string]string
 	readyzDeadline        time.Duration
+
+	// healthAggregator is the shared healthz.Aggregator that bootstrap owns.
+	// It is passed to the health.Handler (read side) and is available for
+	// drainProbes (write side). When WithHealthAggregator is not called,
+	// phase0 constructs a default obshealthz.NewAggregator.
+	// healthAggregatorNil is set when WithHealthAggregator(nil) or a typed-nil
+	// is passed; phase0 rejects it with ERR_VALIDATION_FAILED.
+	healthAggregator    healthz.Aggregator
+	healthAggregatorNil bool
 
 	// --- events: outbox pubsub + event router + workers ---
 	workers                []worker.Worker

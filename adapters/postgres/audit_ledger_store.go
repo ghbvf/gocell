@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -24,8 +24,8 @@ import (
 
 // Compile-time assertions.
 var (
-	_ ledger.Store          = (*LedgerStore)(nil)
-	_ cell.RepoHealthProber = (*LedgerStore)(nil)
+	_ ledger.Store       = (*LedgerStore)(nil)
+	_ healthz.RepoProber = (*LedgerStore)(nil)
 )
 
 // SQL statements for audit_entries operations.
@@ -321,7 +321,7 @@ func (s *LedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 // Matches the SELECT 1 FROM <t> WHERE false pattern used by PGSessionStore.
 const ledgerRepoReadySQL = `SELECT 1 FROM audit_entries WHERE false`
 
-// RepoReady implements cell.RepoHealthProber. It issues a cheap
+// RepoReady implements healthz.RepoProber. It issues a cheap
 // non-transactional representative query against the audit_entries table so
 // that schema/migration drift and table-level permission loss are surfaced as a
 // differentiated failure domain distinct from the pool-level postgres_ready

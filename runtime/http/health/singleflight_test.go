@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	khealthz "github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -46,8 +47,9 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 	// probes drain in parallel. Without this, the probe's own timer could
 	// race the barrier release and the dedup window would close early.
 	probeRelease := make(chan struct{})
-	h := New(asm, clock.Real(), WithVerboseDisabled(), WithDeadline(testtime.D2s))
-	require.NoError(t, h.RegisterChecker("slow", func(ctx context.Context) error {
+	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
+	h := New(asm, agg, clock.Real(), WithVerboseDisabled())
+	require.NoError(t, agg.Register(khealthz.NewProbe("slow", func(ctx context.Context) error {
 		callCount.Add(1)
 		select {
 		case <-ctx.Done():
@@ -55,7 +57,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 		case <-probeRelease:
 			return nil
 		}
-	}))
+	})))
 
 	const concurrency = 16
 	// readyWG signals that every goroutine has reached the barrier.
@@ -124,9 +126,10 @@ func TestReadyz_Singleflight_SeparateKeysForVerboseVsAggregate(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, clock.Real())
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error { return nil })))
 
 	plainRec := httptest.NewRecorder()
 	h.ReadyzHandler().ServeHTTP(plainRec,

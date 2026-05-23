@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -52,7 +53,7 @@ func buildPhase5State(t *testing.T) *phaseState {
 
 	_, s := newPhaseState()
 	s.asm = asm
-	s.hh = health.New(asm, clock.Real())
+	s.hh = health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
 	return s
 }
 
