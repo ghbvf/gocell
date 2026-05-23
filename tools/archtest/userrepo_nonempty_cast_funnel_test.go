@@ -107,17 +107,12 @@ func findNonEmptyCastSites(t *testing.T, path string) []string {
 		t.Fatalf("parse %s: %v", filepath.Base(path), err)
 	}
 	var hits []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
+	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isNonEmptyCast(call) {
-			return true
+			return
 		}
 		p := fset.Position(call.Pos())
 		hits = append(hits, fmt.Sprintf("%d:%d", p.Line, p.Column))
-		return true
 	})
 	return hits
 }
