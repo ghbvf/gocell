@@ -635,7 +635,7 @@ func TestBuildContractSpec_Event_TopicAndHandlerMethod(t *testing.T) {
 // --- Auth.Bootstrap closed-set extension tests (Batch 0 RED, SEC-SETUP-CLOSURE) ---
 
 // TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated verifies that
-// contract.yaml auth.bootstrap:true is correctly propagated to HTTPEndpointSpec.AuthBootstrap.
+// contract.yaml auth.bootstrap:true is correctly propagated to httpEndpointSpec.AuthBootstrap.
 // This test is RED until Batch 1 / Agent-A integrates auth.bootstrap into the real setup
 // contract and the template renders it. The field propagation through buildHTTPEndpointSpec
 // is already GREEN from the schema extension in Batch 0.

@@ -23,7 +23,7 @@ var templates = func() *template.Template {
 		// Used to embed the request schema JSON constant safely.
 		"quoteGoString": strconv.Quote,
 		// hasPathParams reports whether the endpoint has path parameters.
-		"hasPathParams": func(ep *HTTPEndpointSpec) bool {
+		"hasPathParams": func(ep *httpEndpointSpec) bool {
 			return ep != nil && len(ep.PathParams) > 0
 		},
 		// hasQueryNumeric reports whether any query param requires strconv parsing.

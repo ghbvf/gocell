@@ -18,8 +18,11 @@ type ContractGenSpec struct {
 	// DTOs holds the flattened list of Go struct definitions (nested types
 	// expanded to top-level entries). Template iterates this slice directly.
 	DTOs []DTOSpec
-	// Endpoint is non-nil when Kind == "http".
-	Endpoint *HTTPEndpointSpec
+	// Endpoint is non-nil when Kind == "http". Its type is the unexported
+	// httpEndpointSpec (sealed): no out-of-package code can construct a non-nil
+	// Endpoint, so a hand-built (FMT-34-unvalidated) HTTP spec cannot drive
+	// handler.tmpl from another package. See httpEndpointSpec's godoc.
+	Endpoint *httpEndpointSpec
 	// Event is non-nil when Kind == "event".
 	Event *EventEndpointSpec
 	// RequestSchemaJSON is the raw JSON content of the request schema file,
@@ -111,8 +114,18 @@ type DTOField struct {
 	Maximum *int64
 }
 
-// HTTPEndpointSpec holds HTTP-specific endpoint information.
-type HTTPEndpointSpec struct {
+// httpEndpointSpec holds HTTP-specific endpoint information.
+//
+// The type is unexported on purpose (sealed): its sole constructor is
+// buildHTTPEndpointSpec, which runs validateAuthOnInternalPath (the FMT-34
+// upstream guard) unconditionally. Because ContractGenSpec.Endpoint is
+// *httpEndpointSpec, no out-of-package code can build a non-nil Endpoint and
+// drive handler.tmpl with an FMT-34-unvalidated spec — the cross-package
+// bypass is not expressible. Fields stay exported because text/template reads
+// them via reflection. The intra-package "sole constructor / sole caller"
+// and the cross-generator emit-uniqueness invariants are locked by archtest
+// CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01.
+type httpEndpointSpec struct {
 	// Method is the HTTP method in upper-case, e.g. "POST".
 	Method string
 	// Path is the full URL path including chi-style placeholders, e.g. "/api/v1/orders/{id}".
@@ -186,7 +199,7 @@ type HTTPEndpointSpec struct {
 // pagination pattern. It is implemented as a method (not a field) so handler
 // templates can keep their existing `{{- if .Endpoint.IsPagination}}` form
 // while builder-side state moves to the structured *PaginationShape value.
-func (e *HTTPEndpointSpec) IsPagination() bool {
+func (e *httpEndpointSpec) IsPagination() bool {
 	return e != nil && e.Pagination != nil
 }
 

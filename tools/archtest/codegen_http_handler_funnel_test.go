@@ -95,6 +95,7 @@ var codegenHandlerEmitMarker = regexp.MustCompile(`ServeHTTP\(\s*\w+\s+http\.Res
 //     does not re-open THIS funnel; only the alias form is banned.
 //   - Reflection-built endpoint values are AST-invisible — irrelevant for a
 //     codegen package that constructs structs literally.
+//
 // ---------------------------------------------------------------------------
 func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1a_SpecTypeSealed(t *testing.T) {
 	t.Parallel()
@@ -143,6 +144,7 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1a_SpecTypeSealed(t *testing.T)
 //     EndpointSpec is an unexported package func returning (*T, error); the
 //     only realistic form is a direct call inside a function body.
 //   - reflect-built values: AST-invisible; irrelevant for literal codegen.
+//
 // ---------------------------------------------------------------------------
 func TestCodegenBuildHTTPEndpointSpecSoleCaller_A1b_SoleConstructorAndCaller(t *testing.T) {
 	t.Parallel()

@@ -993,28 +993,28 @@ func TestNeedsStrconv(t *testing.T) {
 	}{
 		{"nil spec", nil, false},
 		{"nil endpoint", &ContractGenSpec{}, false},
-		{"non-pagination string-only", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"non-pagination string-only", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			QueryParams: []ParamSpec{{Name: "name", GoType: "string"}},
 		}}, false},
-		{"non-pagination int64", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"non-pagination int64", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			QueryParams: []ParamSpec{{Name: "page", GoType: "int64"}},
 		}}, true},
-		{"pagination no extras", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"pagination no extras", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			Pagination: &PaginationShape{HasCursor: true, HasLimit: true},
 		}}, false},
-		{"pagination with int64 extra", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"pagination with int64 extra", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			Pagination: &PaginationShape{
 				HasCursor: true, HasLimit: true,
 				ExtraQueryParams: []ParamSpec{{Name: "since", GoType: "int64"}},
 			},
 		}}, true},
-		{"pagination with bool extra", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"pagination with bool extra", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			Pagination: &PaginationShape{
 				HasCursor: true, HasLimit: true,
 				ExtraQueryParams: []ParamSpec{{Name: "active", GoType: "bool"}},
 			},
 		}}, true},
-		{"pagination with string-only extras", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"pagination with string-only extras", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			Pagination: &PaginationShape{
 				HasCursor: true, HasLimit: true,
 				ExtraQueryParams: []ParamSpec{{Name: "tag", GoType: "string"}},
