@@ -12,7 +12,7 @@ import (
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
+	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 )
 
 const (
@@ -78,21 +78,21 @@ func withMetricsTokenGuard(token string, h http.Handler) http.Handler {
 // promStack groups the Prometheus hook observer and metric provider.
 type promStack struct {
 	registry       *prom.Registry
-	hookObserver   *adapterprom.HookObserver
-	metricProvider *adapterprom.MetricProvider
+	hookObserver   *promadapter.HookObserver
+	metricProvider *promadapter.MetricProvider
 }
 
 // buildPromStack creates an isolated Prometheus registry, a hook observer,
 // and a metric provider on top of it.
 func buildPromStack() (promStack, error) {
 	registry := prom.NewRegistry()
-	hookObserver, err := adapterprom.NewHookObserver(adapterprom.HookObserverConfig{
+	hookObserver, err := promadapter.NewHookObserver(promadapter.HookObserverConfig{
 		Registry: registry,
 	})
 	if err != nil {
 		return promStack{}, fmt.Errorf("register cell hook observer: %w", err)
 	}
-	metricProvider, err := adapterprom.NewMetricProvider(adapterprom.MetricProviderConfig{
+	metricProvider, err := promadapter.NewMetricProvider(promadapter.MetricProviderConfig{
 		Registry:  registry,
 		Namespace: "gocell",
 	})

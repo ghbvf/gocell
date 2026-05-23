@@ -38,6 +38,7 @@ const (
 	runtimeMetricsPkg = "github.com/ghbvf/gocell/runtime/observability/metrics"
 	adapterPromPkg    = "github.com/ghbvf/gocell/adapters/prometheus"
 	prometheusPkg     = "github.com/prometheus/client_golang/prometheus"
+	promwrapPkg       = "github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap"
 	errcodePkg        = "github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -564,7 +565,7 @@ func (sp *scanPackage) directPrometheusCallEntries(
 		}
 		return []Entry{entry}, err
 	}
-	entries, _, err := sp.prometheusWrapperEntries(call, rel)
+	entries, _, err := sp.prometheusWrapperEntries(call, rel, params)
 	return entries, err
 }
 
@@ -910,7 +911,7 @@ func (sp *scanPackage) directPrometheusEntry(call *ast.CallExpr, rel string, par
 	return sp.entryFromOpts(metricType, parsed, rel, lit.Pos()), true, nil
 }
 
-func (sp *scanPackage) prometheusWrapperEntries(call *ast.CallExpr, rel string) ([]Entry, bool, error) {
+func (sp *scanPackage) prometheusWrapperEntries(call *ast.CallExpr, rel string, params map[types.Object]bool) ([]Entry, bool, error) {
 	sinks := sp.prometheusOptSinks[calledFunc(sp.pkg.TypesInfo, call)]
 	if len(sinks) == 0 {
 		return nil, false, nil
@@ -922,26 +923,51 @@ func (sp *scanPackage) prometheusWrapperEntries(call *ast.CallExpr, rel string) 
 		}
 		lit := sp.resolveCompositeLit(call.Args[sink.ParamIndex])
 		if lit == nil {
+			if params[sp.objectForExpr(call.Args[sink.ParamIndex])] {
+				// Forwarding wrapper body: the opts arg is this function's own
+				// parameter (e.g. RegisterOrReuseCounter passing its opts param
+				// to promwrap.NewCounter, which is itself a recognized sink).
+				// The concrete metric is resolved at this wrapper's own call
+				// sites, not here — same skip as directPrometheusEntry. Without
+				// this guard the promwrap funnel's wrapper-of-wrapper chain
+				// reports the forwarded parameter as an unresolvable literal.
+				return nil, false, nil
+			}
 			return nil, false, sp.unresolved(call.Args[sink.ParamIndex], rel, "Prometheus metric helper opts must be a resolvable literal")
 		}
-		parsed, hasName, err := sp.extractPrometheusOpts(lit, rel)
+		entry, ok, err := sp.wrapperEntryFromLit(sink, call, lit, rel)
 		if err != nil {
 			return nil, false, err
 		}
-		if !hasName {
-			continue
+		if ok {
+			entries = append(entries, entry)
 		}
-		sp.seenOpts[lit] = true
-		if sink.Vec {
-			labels, err := sp.prometheusWrapperLabels(call, sink, rel)
-			if err != nil {
-				return nil, false, err
-			}
-			parsed.labels = labels
-		}
-		entries = append(entries, sp.entryFromOpts(sink.MetricType, parsed, rel, lit.Pos()))
 	}
 	return entries, true, nil
+}
+
+// wrapperEntryFromLit parses a resolved opts literal at a Prometheus wrapper
+// call site into a metric Entry. ok is false (no error) when the opts carry no
+// name — the caller skips that sink, matching the original inline `continue`.
+func (sp *scanPackage) wrapperEntryFromLit(
+	sink prometheusOptSink,
+	call *ast.CallExpr,
+	lit *ast.CompositeLit,
+	rel string,
+) (Entry, bool, error) {
+	parsed, hasName, err := sp.extractPrometheusOpts(lit, rel)
+	if err != nil || !hasName {
+		return Entry{}, false, err
+	}
+	sp.seenOpts[lit] = true
+	if sink.Vec {
+		labels, err := sp.prometheusWrapperLabels(call, sink, rel)
+		if err != nil {
+			return Entry{}, false, err
+		}
+		parsed.labels = labels
+	}
+	return sp.entryFromOpts(sink.MetricType, parsed, rel, lit.Pos()), true, nil
 }
 
 func (sp *scanPackage) prometheusWrapperLabels(call *ast.CallExpr, sink prometheusOptSink, rel string) ([]string, error) {
@@ -1332,16 +1358,51 @@ func prometheusOptsType(typ string) (string, bool) {
 	return "", false
 }
 
+// isPrometheusConstructorPkg reports whether path hosts Prometheus instrument
+// constructors the schema scanner must trace through. Two packages qualify and
+// this predicate is the single source of truth for both — every gate point
+// (directPrometheusEntry, opt-sink collection, OBS-01 identity) routes through
+// it so the recognized set cannot drift per-callsite:
+//
+//   - prometheusPkg: the raw client_golang constructors. These appear only
+//     inside promwrap itself (its bodies call prom.New*) and the analyzer's own
+//     test fixtures; production code may not call them (METRICS-GAUGEVEC-FUNNEL).
+//   - promwrapPkg: the sole sanctioned production funnel. Because every
+//     production prom.New* call now sits behind promwrap.New*, the scanner MUST
+//     treat the funnel as transparent or every funneled metric becomes an
+//     unresolvable literal (the funnel forwards its opts parameter, never a
+//     literal). Recognizing promwrap here collapses the
+//     caller→promwrap→prom chain back to the single-level wrapper shape the
+//     opt-sink resolver assumes.
+//
+// The promwrap export set is locked to prometheusConstructorName by
+// TestPrometheusConstructor_RecognizesPromwrapFunnel (codegen↔funnel drift
+// guard), sibling of archtest TestMetricsFunnel_SymbolSentinel.
+func isPrometheusConstructorPkg(path string) bool {
+	return path == prometheusPkg || path == promwrapPkg
+}
+
 func prometheusConstructor(info *types.Info, call *ast.CallExpr) (metricType string, vec bool, ok bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return "", false, false
 	}
 	fn, ok := info.Uses[sel.Sel].(*types.Func)
-	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != prometheusPkg {
+	if !ok || fn.Pkg() == nil || !isPrometheusConstructorPkg(fn.Pkg().Path()) {
 		return "", false, false
 	}
-	switch fn.Name() {
+	return prometheusConstructorName(fn.Name())
+}
+
+// prometheusConstructorName maps a Prometheus / promwrap constructor function
+// name to its metric type and vec-ness. Kept pure (name only, no call AST) so
+// the funnel drift guard can enumerate promwrap's exported functions and assert
+// each is recognized without synthesizing call expressions. The recognized set
+// is intentionally a superset of promwrap's exports: the Func/Summary names
+// cover the raw-prom path (promwrap bodies + fixtures) that promwrap does not
+// re-export.
+func prometheusConstructorName(name string) (metricType string, vec bool, ok bool) {
+	switch name {
 	case "NewCounter", "NewCounterFunc":
 		return "counter", false, true
 	case "NewCounterVec":
@@ -1636,7 +1697,7 @@ func (sp *scanPackage) metricIdentityFromCall(expr ast.Expr, rel string) (obs01M
 	switch {
 	case fn.Pkg().Path() == kernelMetricsPkg && (fn.Name() == "CounterVec" || fn.Name() == "HistogramVec" || fn.Name() == "GaugeVec"):
 		return sp.kernelMetricIdentity(call.Args[0], rel)
-	case fn.Pkg().Path() == prometheusPkg:
+	case isPrometheusConstructorPkg(fn.Pkg().Path()):
 		_, vec, ok := prometheusConstructor(sp.pkg.TypesInfo, call)
 		if !ok || !vec {
 			return obs01MetricIdentity{}, false

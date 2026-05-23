@@ -90,6 +90,46 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 	assert.Equal(t, string(want), string(got))
 }
 
+// TestPrometheusConstructor_RecognizesPromwrapFunnel is the codegen↔funnel
+// drift guard (AI-rebust Medium, archtest-bound). promwrap is the sole
+// sanctioned production Prometheus constructor funnel; the schema scanner must
+// recognize every promwrap.New* export or the metric it constructs silently
+// becomes an unresolvable literal (the very ERR_METRICS_SCHEMA_UNRESOLVED that
+// the promwrap rollout first triggered). Enumerating promwrap's exported funcs
+// and asserting prometheusConstructorName recognizes each turns "added a
+// promwrap constructor but forgot to teach codegen" into a CI failure at PR
+// time instead of a deep `gocell verify generated` 500.
+//
+// Sibling of archtest TestMetricsFunnel_SymbolSentinel, which locks the same
+// promwrap export set for the funnel-enforcement side.
+func TestPrometheusConstructor_RecognizesPromwrapFunnel(t *testing.T) {
+	root := repoRoot(t)
+	pkgs, err := loadPackages(t.Context(), root, promwrapPkg)
+	require.NoError(t, err)
+
+	var exported []string
+	for _, p := range pkgs {
+		if p.PkgPath != promwrapPkg {
+			continue
+		}
+		scope := p.Types.Scope()
+		for _, name := range scope.Names() {
+			fn, ok := scope.Lookup(name).(*types.Func)
+			if !ok || !fn.Exported() {
+				continue
+			}
+			exported = append(exported, fn.Name())
+			if _, _, recognized := prometheusConstructorName(fn.Name()); !recognized {
+				t.Errorf("promwrap.%s is an exported constructor but prometheusConstructorName "+
+					"does not recognize it; add a case so the schema scanner sees through the funnel",
+					fn.Name())
+			}
+		}
+	}
+	require.NotEmpty(t, exported,
+		"expected promwrap to export constructor functions; package path / loader regression?")
+}
+
 func TestMarshalOmitsLineNumbers(t *testing.T) {
 	schema := &Schema{
 		AssemblyID: "fixture",

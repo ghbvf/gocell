@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 
+	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
@@ -79,7 +79,7 @@ func (m ConfigCoreModule) Provide(
 	// same process (e.g. integration tests with shared registry) are handled
 	// gracefully: AlreadyRegisteredError carries the existing collector so we
 	// can reuse it instead of creating an orphaned counter.
-	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
+	staleCipherCounter, err := promadapter.RegisterOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
 	}
@@ -283,24 +283,6 @@ func unregisterCollectors(reg prom.Registerer, collectors []prom.Collector) {
 	for _, col := range collectors {
 		reg.Unregister(col)
 	}
-}
-
-// registerOrReuseCounter registers a new counter with the given opts. If the
-// counter is already registered (AlreadyRegisteredError), it reuses the
-// existing collector. Any other registration error is returned as-is.
-func registerOrReuseCounter(reg prom.Registerer, opts prom.CounterOpts) (prom.Counter, error) {
-	c := prom.NewCounter(opts)
-	if err := reg.Register(c); err != nil {
-		var are prom.AlreadyRegisteredError
-		if !errors.As(err, &are) {
-			return nil, err
-		}
-		if existing, ok2 := are.ExistingCollector.(prom.Counter); ok2 {
-			return existing, nil
-		}
-		return nil, fmt.Errorf("existing collector is not a Counter: %w", err)
-	}
-	return c, nil
 }
 
 // newConfigCoreCASProtocol builds the CAS protocol used by configcore.

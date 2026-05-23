@@ -10,6 +10,7 @@ import (
 
 	prom "github.com/prometheus/client_golang/prometheus"
 
+	"github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -72,7 +73,7 @@ func NewMetricProvider(cfg MetricProviderConfig) (*MetricProvider, error) {
 //
 //nolint:dupl // see godoc above.
 func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
-	cv := prom.NewCounterVec(prom.CounterOpts{
+	cv := promwrap.NewCounterVec(prom.CounterOpts{
 		Namespace: p.cfg.Namespace,
 		Name:      opts.Name,
 		Help:      opts.Help,
@@ -147,7 +148,7 @@ func registerOrReuse[T prom.Collector](
 //
 //nolint:dupl // see CounterVec godoc above for the shared-shape rationale.
 func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
-	gv := prom.NewGaugeVec(prom.GaugeOpts{
+	gv := promwrap.NewGaugeVec(prom.GaugeOpts{
 		Namespace: p.cfg.Namespace,
 		Name:      opts.Name,
 		Help:      opts.Help,
@@ -172,11 +173,11 @@ func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, err
 // HistogramVec registers and returns a HistogramVec bound to the provider's
 // registry. Empty Buckets uses Prometheus default (DefBuckets). If the same
 // metric name has already been registered, the existing collector is returned
-// (same AlreadyRegisteredError pattern as CounterVec).
-//
-
+// (same AlreadyRegisteredError pattern as CounterVec). See CounterVec godoc
+// for the shared-shape rationale; dupl does not flag HistogramVec because its
+// Buckets field differentiates it from the Counter/Gauge shapes.
 func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
-	hv := prom.NewHistogramVec(prom.HistogramOpts{
+	hv := promwrap.NewHistogramVec(prom.HistogramOpts{
 		Namespace: p.cfg.Namespace,
 		Name:      opts.Name,
 		Help:      opts.Help,

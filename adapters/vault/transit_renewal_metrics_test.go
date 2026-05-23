@@ -24,6 +24,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
+	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -61,13 +62,13 @@ func assertCachedKeyVersionMetric(t *testing.T, collector prometheus.Collector, 
 // use in tests. The counters are NOT registered in any registry — they are
 // standalone counters exercised via testutil.ToFloat64.
 func newRenewalCounters() (success, failure prometheus.Counter) {
-	success = prometheus.NewCounter(prometheus.CounterOpts{
+	success = promadapter.NewCounter(prometheus.CounterOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "token_renew_success_total",
 		Help:      "Number of successful Vault token renewals.",
 	})
-	failure = prometheus.NewCounter(prometheus.CounterOpts{
+	failure = promadapter.NewCounter(prometheus.CounterOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "token_renew_failure_total",
@@ -405,7 +406,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnDone(t *testing.T) {
 // newLoginOutcomeCounter creates an unregistered CounterVec with {method,result,reason}
 // labels for use in tests.
 func newLoginOutcomeCounter() *prometheus.CounterVec {
-	return prometheus.NewCounterVec(prometheus.CounterOpts{
+	return promadapter.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "auth_login_total",
@@ -472,7 +473,7 @@ func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	loginOutcome := newLoginOutcomeCounter()
 
-	authHealthy := prometheus.NewGauge(prometheus.GaugeOpts{
+	authHealthy := promadapter.NewGauge(prometheus.GaugeOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "token_auth_healthy_reauth_test",
@@ -590,7 +591,7 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	fw := newFakeTokenWatcher()
 
-	authHealthy := prometheus.NewGauge(prometheus.GaugeOpts{
+	authHealthy := promadapter.NewGauge(prometheus.GaugeOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "token_auth_healthy_gauge_test",
