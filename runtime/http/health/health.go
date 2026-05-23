@@ -238,8 +238,16 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		// every sharer blocked on singleflight.Do (per-probe panics are
 		// already caught by the Aggregator — this layer covers the rarer
 		// "assembly helper panic" class).
+		//
+		// singleflight first-wins ctx: the first request that opens the
+		// in-flight slot supplies the probe ctx; later requests joining
+		// the same key reuse that result without their own ctx values
+		// flowing into probe execution. This is acceptable for /readyz
+		// since probes treat ctx as a values-only carrier (cancellation
+		// is severed inside Aggregator.Evaluate); per-request trace
+		// correlation through to the probe slog is best-effort.
 		shared, _, _ := h.sf.Do(key, func() (any, error) {
-			return h.computeReadyzSafe(verbose), nil
+			return h.computeReadyzSafe(ctx, verbose), nil
 		})
 		result, ok := shared.(readyzResult)
 		if !ok {
@@ -259,7 +267,12 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 // the panic to every concurrent sharer. On recover we fail closed with a
 // plain unhealthy result (no cells / dependencies) and log the event.
 // Per-probe panics are caught separately inside the Aggregator.
-func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
+//
+// ctx is the request ctx of the first request to enter the singleflight
+// slot (see ReadyzHandler godoc); it is forwarded into computeReadyz so
+// the Aggregator can propagate request-scoped values (trace/slog) to probes.
+// Cancellation is severed inside Aggregator.Evaluate via context.WithoutCancel.
+func (h *Handler) computeReadyzSafe(ctx context.Context, verbose bool) (result readyzResult) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("readyz: recovered panic during readiness computation",
@@ -268,7 +281,7 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 			result = readyzResult{overall: "unhealthy", reason: readyzReasonReadinessFailed}
 		}
 	}()
-	return h.computeReadyz(verbose)
+	return h.computeReadyz(ctx, verbose)
 }
 
 // computeReadyz runs the cell health snapshot + all readiness probes and
@@ -278,7 +291,7 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 //
 // adapter info is captured under Handler.mu so the result is fully
 // self-contained — writeTo can serialize it without touching Handler state.
-func (h *Handler) computeReadyz(verbose bool) readyzResult {
+func (h *Handler) computeReadyz(ctx context.Context, verbose bool) readyzResult {
 	cellOverall, cells := h.aggregateCellHealth(verbose)
 
 	h.mu.RLock()
@@ -288,9 +301,11 @@ func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	}
 	h.mu.RUnlock()
 
-	// Evaluate uses context.Background() internally so kubelet disconnects
-	// do not cancel in-flight probes (PR-A35 / Aggregator contract).
-	snap := h.agg.Evaluate(context.Background())
+	// Evaluate is handed the request ctx so trace/slog values propagate to
+	// probes. Cancellation is severed inside Aggregator.Evaluate via
+	// context.WithoutCancel — kubelet disconnects do not cancel in-flight
+	// probes (PR-A35 / Aggregator contract).
+	snap := h.agg.Evaluate(ctx)
 	agg := h.aggregateProbeResults(snap.Probes, verbose)
 	worst := rankStatus(cellOverall)
 	if r := rankStatus(agg.Overall); r > worst {

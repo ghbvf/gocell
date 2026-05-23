@@ -11,8 +11,13 @@ import (
 //
 // Name returns a stable lower-case snake_case identifier ending in "_ready"
 // for dependency probes; framework probes use stable identifiers without the
-// "_ready" suffix. The naming convention is enforced at registration time by
-// the Aggregator implementation.
+// "_ready" suffix. Name shape (snake_case + _ready suffix) is enforced
+// **statically** by archtest READYZ-PROBE-NAMING-01 (see
+// tools/archtest/readyz_probe_naming_test.go) rather than at runtime —
+// runtime Aggregator.Register only rejects empty and duplicate names. The
+// archtest is the single source of truth for naming policy; adding a runtime
+// regex check would create a parallel governance surface and is intentionally
+// avoided.
 //
 // Check is invoked by the Aggregator with a context carrying the probe
 // deadline. Returning nil indicates healthy; a non-nil error indicates

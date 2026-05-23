@@ -77,11 +77,13 @@ func NewAggregator(opts ...Option) healthz.Aggregator {
 
 // Register adds p to the registry. Returns [healthz.ErrInvalidProbeName] (via
 // errors.Is) when p is nil or its Name() is empty, and [healthz.ErrDuplicateProbe]
-// when a probe with the same Name() is already registered — enforcing the
-// Probe-godoc contract that naming is validated at registration time. The
-// probe's Check function is wrapped with a ctx-safe racing wrapper at
-// registration time so that a canceled context always terminates the outer
-// call even when the underlying function is uncooperative.
+// when a probe with the same Name() is already registered. Name shape
+// (snake_case + _ready suffix for dependency probes) is enforced statically by
+// archtest READYZ-PROBE-NAMING-01, not at runtime — see Probe.Name godoc for
+// the single-source-of-truth rationale. The probe's Check function is wrapped
+// with a ctx-safe racing wrapper at registration time so that a canceled
+// context always terminates the outer call even when the underlying function
+// is uncooperative.
 func (a *aggregator) Register(p healthz.Probe) error {
 	if p == nil {
 		return fmt.Errorf("%w: nil probe", healthz.ErrInvalidProbeName)
@@ -111,14 +113,13 @@ func (a *aggregator) Deregister(name string) {
 //
 // Each probe runs under a context derived from the provided ctx via
 // [context.WithoutCancel] plus the configured per-probe deadline: probe
-// execution inherits request-scoped values (e.g. trace IDs) but is decoupled
-// from request-level cancellation — a kubelet disconnect (ctx cancellation)
-// must not cancel probe execution mid-flight, since the probe result should
-// reflect real dependency health, not transport noise. This matches the
-// pattern in runtime/http/health.runProbesParallel. (The HTTP transport passes
-// context.Background(); WithoutCancel of a background ctx is itself a plain
-// background ctx, so this is value-propagation-ready without changing the
-// transport path.)
+// execution inherits request-scoped values (e.g. trace IDs, slog attrs) but
+// is decoupled from request-level cancellation — a kubelet disconnect (ctx
+// cancellation) must not cancel probe execution mid-flight, since the probe
+// result should reflect real dependency health, not transport noise. The
+// HTTP transport (runtime/http/health.ReadyzHandler) hands the request ctx
+// directly; under singleflight the first request's ctx values reach the
+// probe — see ReadyzHandler godoc for the first-wins ctx contract.
 //
 // The returned Snapshot.Probes slice is sorted by Name for stable wire output.
 // Snapshot.Overall is the worst-case status across all probes per

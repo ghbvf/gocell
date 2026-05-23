@@ -113,6 +113,10 @@ var healthzBannedPaths = map[string]bool{
 //
 // The allowlist is split into exact path matches and basename matches.
 var healthzRegisterExactPaths = map[string]bool{
+	// aggregator.go: production impl that defines Register; the entry is
+	// defensive — Register is not called recursively today but the allowlist
+	// guards future internal use (e.g. registering a self-test probe at
+	// construction) from tripping A2.
 	"runtime/observability/healthz/aggregator.go": true,
 	// healthztest subpackage: conformance harness legitimately calls Register for test scenarios;
 	// exact path covers non-_test.go file; _test.go suffix already covered by the test-file exemption.

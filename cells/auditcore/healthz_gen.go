@@ -6,6 +6,7 @@ package auditcore
 import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // ProbeRepoReady is the canonical readiness probe name for the auditcore cell's
@@ -25,9 +26,11 @@ func RegisterRepoReady(reg cell.Registry, p healthz.RepoProber) error {
 // (typically outbox.DirectEmitter) on the given Registry. This is the sole
 // sanctioned entry point for emitter probes — handwritten cell code must NOT
 // call reg.Healthz() directly (locked by HEALTHZ-TYPED-REGISTER-01).
-// A nil ProbeSet is silently ignored.
+// Both bare-nil and typed-nil ProbeSet interface values are silently ignored
+// via pkg/validation.IsNilInterface (the kernel/ + runtime/ single-source
+// typed-nil helper — see .claude/rules/gocell/runtime-api.md).
 func RegisterEmitterProbes(reg cell.Registry, ps healthz.ProbeSet) error {
-	if ps == nil {
+	if validation.IsNilInterface(ps) {
 		return nil
 	}
 	for _, p := range ps.Probes() {

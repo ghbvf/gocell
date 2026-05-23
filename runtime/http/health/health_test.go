@@ -472,7 +472,7 @@ func TestReadyzHandler_VerboseOutput_UsesAdapterInfoSnapshot(t *testing.T) {
 	h.SetAdapterInfo(info)
 	info["storage"] = "mutated-before-read"
 
-	result := h.computeReadyz(true)
+	result := h.computeReadyz(context.Background(), true)
 	info["mode"] = "mutated"
 	h.SetAdapterInfo(map[string]string{"mode": "new-map"})
 
