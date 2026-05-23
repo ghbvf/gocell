@@ -365,9 +365,12 @@ const adapterPromPkg = "github.com/ghbvf/gocell/adapters/prometheus"
 var adapterPromCallerAllowlist = map[string]map[string]struct{}{
 	"RegisterOrReuseCounter": {"cmd/corebundle/config_module.go": {}},
 	"NewCounter":             {"adapters/vault/transit_provider.go": {}},
-	"NewCounterVec":          {"adapters/vault/transit_provider.go": {}},
-	"NewGauge":               {"adapters/vault/transit_provider.go": {}},
-	"NewGaugeFunc":           {"adapters/vault/transit_provider.go": {}},
+	// NewCounterVec is a labeled-metric carve-out pending removal (issue #885):
+	// vault's loginOutcome migrates to metrics.Provider.CounterVec, after which
+	// this entry and the public NewCounterVec are deleted. Do NOT add callers.
+	"NewCounterVec": {"adapters/vault/transit_provider.go": {}},
+	"NewGauge":      {"adapters/vault/transit_provider.go": {}},
+	"NewGaugeFunc":  {"adapters/vault/transit_provider.go": {}},
 }
 
 // adapterPromAllowedNewRegisterExports is the complete set of New*/Register*
@@ -765,9 +768,10 @@ func checkPromBannedConstructor(fset *token.FileSet, call *ast.CallExpr, rel str
 			"METRICS-GAUGEVEC-FUNNEL-01: %s calls forbidden %s.%s; "+
 				"route through kernel/observability/metrics.Provider for labeled metrics, "+
 				"OR (adapter-external bare/Func variants only) use adapters/prometheus."+
-				"{NewCounter,NewCounterVec,NewGauge,NewGaugeFunc} — Go internal/ closure "+
+				"{NewCounter,NewGauge,NewGaugeFunc} — Go internal/ closure "+
 				"blocks direct adapters/prometheus/internal/promwrap imports outside the "+
-				"prometheus adapter subtree",
+				"prometheus adapter subtree (NewCounterVec is a vault-only carve-out "+
+				"pending removal, not a remedy here — see issue #885)",
 			rel, bannedPromPkg, name,
 		),
 	}

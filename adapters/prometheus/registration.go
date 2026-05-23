@@ -12,9 +12,17 @@ package prometheus
 // validation contract (MustValidateLabels, attrCache cardinality protection).
 // External callers needing labeled metrics should depend on the kernel
 // metrics.Provider abstraction; only bare/Func variants justify a direct
-// adapter passthrough. (NewCounterVec lives here as the lone exception for
-// adapters/vault's renewal-attempt counter, which uses prom.Registerer
-// directly without the kernel Provider's idempotent-register-or-reuse path.)
+// adapter passthrough.
+//
+// NewCounterVec is the ONE exception, and it is debt — not a sanctioned
+// labeled-metric path. It exists solely because adapters/vault's loginOutcome
+// CounterVec predates the kernel metrics.Provider and cannot use it yet: vault
+// hands unregistered collectors to the composition root to register on a
+// dedicated registry, whereas metrics.Provider registers internally and returns
+// Provider-managed handles. This labeled escape hatch bypasses the Provider's
+// label/cardinality governance and is scheduled for removal (vault migrates
+// loginOutcome to metrics.Provider.CounterVec) — tracked by issue #885. Do NOT
+// add new callers; new labeled metrics MUST go through metrics.Provider.
 
 import (
 	"errors"
@@ -66,14 +74,16 @@ func NewCounter(opts prom.CounterOpts) prom.Counter {
 	return promwrap.NewCounter(opts)
 }
 
-// NewCounterVec is the public adapter-level entry point for creating a bare
-// prom.CounterVec without registering it. Adapter packages outside the
-// prometheus subtree (e.g. adapters/vault) that cannot import
-// adapters/prometheus/internal/promwrap directly due to Go internal/ closure
-// must use this function instead of calling prom.NewCounterVec directly.
+// NewCounterVec is a vault-only legacy carve-out, NOT a general labeled-metric
+// entry point — see the file-level doc and issue #885. It returns an
+// unregistered *prom.CounterVec for adapters/vault's loginOutcome, which still
+// uses the register-at-composition-root model and so cannot route through
+// metrics.Provider.CounterVec yet. It deliberately bypasses the Provider's
+// label/cardinality governance; new labeled metrics MUST use metrics.Provider
+// instead. Callers must Register the returned collector themselves.
 //
-// Does NOT register the collector with any Registerer; callers must Register
-// it themselves to expose it in /metrics.
+// Pending removal: vault migrates loginOutcome to metrics.Provider.CounterVec
+// (issue #885), after which this function is deleted.
 func NewCounterVec(opts prom.CounterOpts, labelNames []string) *prom.CounterVec {
 	return promwrap.NewCounterVec(opts, labelNames)
 }
