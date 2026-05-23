@@ -69,21 +69,39 @@ Introduce a codegen funnel with three components:
    Any additional post-options checks (e.g. `clock.MustHaveClock`, SessionTTL)
    follow `validateRequired()`.
 
-### Archtest three-piece suite (A1–A4 + B1–B5)
+### Archtest three-piece suite (A1–A4 + B1/B2/B3/B5)
 
 - **A1** — `TestRequiredDepNilGuard_A1_GeneratorOutputGroundTruth`: regenerates
   every `service_required_gen.go` in-process and diffs bytes. Any hand-edit,
   stale file, or missed regeneration fails CI.
-- **A2** — `TestRequiredDepNilGuard_A2_CallsiteUniqueness`: every `NewXxx`
-  returning `(*Service, error)` must call `validateRequired()` exactly once,
-  strictly after the options loop.
+- **A2** — `TestRequiredDepNilGuard_A2_CallsiteUniqueness`: in a required-bearing
+  file, every `New*`-returning-`*Service` constructor must return error AND call
+  `validateRequired()` exactly once, strictly after the options loop, consuming
+  the error in the canonical `if err := …; err != nil { return …, err }` form.
+  A discarded result or a bare-`*Service` signature is flagged.
 - **A3** — `TestRequiredDepNilGuard_A3_HandwrittenIsNilInterfaceBan`: bans
-  `validation.IsNilInterface` calls in `service.go` (production only); all such
-  calls must live in the generated file.
+  `validation.IsNilInterface` on a `gocell:"required"` field in `service.go`
+  (production only); that check must live in the generated file. Calls on an
+  optional-dep option param (builder-noop typed-nil, e.g. `WithMetrics`) are
+  allowed — scoping mirrors B2.
 - **A4** — tag value whitelist: `gocell:` tag values must be in
-  `{"required", ""}`.
-- **B1–B5** — reverse self-tests closing reflect / MethodValue / external-helper
-  bypass forms (see archtest package godoc).
+  `{"required", ""}`, AND fails closed on malformed struct tags (which
+  `reflect.StructTag.Get` would silently drop, skipping a required field). A4
+  shares the generator's `requireddepsgen.TagSyntaxValid`.
+- **B1/B2/B3/B5** — reverse self-tests closing reflect / direct-compare /
+  method-value bypass forms (see archtest package godoc).
+
+There is intentionally **no external-nil-guard-helper rule**. A2 forces
+`validateRequired()` to run at construction unconditionally, so an external
+wrapper (e.g. `MustNotBeNil(s.repo)`) cannot bypass the funnel — it would only
+be a redundant parallel check, never a defeat. A name-list rule against such
+wrappers would be Soft (trivially renamed) and would guard a non-threat, so it
+is omitted rather than carried as Soft debt.
+
+ERROR-FIRST-TYPED-NIL-01 (the predecessor inline-guard rule on a curated file
+set) defers to this funnel: a constructor that calls `validateRequired()` is
+exempt from its per-param inline-guard requirement, so the two rules compose
+(inline guard OR funnel) instead of contradicting.
 
 ## Why Hard
 
@@ -91,12 +109,12 @@ Per `ai-collab.md §"Funnel 双向锁评级"`:
 
 | Direction | Mechanism | Rating |
 |-----------|-----------|--------|
-| Upstream (prevent hand-edit of gen file) | A1 regenerate-and-diff at byte granularity — any drift in `service_required_gen.go` is caught at CI | **Hard** |
-| Upstream (prevent skipping validateRequired) | A2 callsite-uniqueness on (NewXxx, validateRequired) form — any omission or double-call caught | **Hard** |
-| Downstream (prevent bypassing via IsNilInterface) | A3 bans hand-written `validation.IsNilInterface` in `service.go` | **Hard** |
-| Downstream (reflect / MethodValue / external-helper bypass) | B1–B5 reverse self-tests assert these forms don't appear in production AST | **Hard** |
+| Upstream (prevent hand-edit of gen file) | A1 regenerate-and-diff at byte granularity over the generator's own slice set (`requireddepsgen.FindSlicePaths`, incl. internal/* + nested) — any drift in `service_required_gen.go` is caught at CI | **Hard** |
+| Upstream (prevent skipping validateRequired) | A2 requires error-return + canonical consumed callsite post-options — omission, double-call, discarded result, or bare-`*Service` signature all caught | **Hard** |
+| Downstream (prevent bypassing via IsNilInterface) | A3 bans hand-written `validation.IsNilInterface` on a required field in `service.go` | **Hard** |
+| Downstream (reflect / direct-compare / method-value bypass) | B1/B2/B3/B5 reverse self-tests assert these forms don't appear in production AST | **Hard** |
 
-Both upstream and downstream sides are Hard → closed Hard funnel.
+Both upstream (A1) and downstream (A2/A3) sides are Hard → closed Hard funnel.
 
 ## Threat Matrix
 
@@ -107,10 +125,13 @@ Both upstream and downstream sides are Hard → closed Hard funnel.
 | Write `if s.X == nil` for a required interface field in `service.go` | B2 reverse self-test asserts this form absent | Hard |
 | Use `reflect.ValueOf(s.X).IsNil()` in `service.go` | B1 reverse self-test | Hard |
 | Pass `IsNilInterface` as method value or function pointer | B3 reverse self-test | Hard |
-| Call third-party `MustNotBeNil` or similar helper | B4 ban list | Hard |
+| Call an external nil-guard wrapper (`MustNotBeNil(s.repo)` etc.) | Not a bypass: A2 forces `validateRequired()` to run anyway, so the wrapper is at most a redundant parallel check. No rule needed (a name-list would be Soft and guard a non-threat). | N/A |
 | Bind `validateRequired` as method value | B5 reverse self-test | Hard |
 | Tag value typo (`gocell:"requied"`) | A4 whitelist rejects unknown values | Hard |
+| Malformed struct tag dropping a required field (`gocell:required` w/o quotes) | A4 + generator both fail closed via `TagSyntaxValid` (was silently skipped) | Hard |
+| `gocellKind`/`gocellCode` family swap (code in kind slot or vice versa) | generator per-family regexes (`errcodeKindRE` / `errcodeCodeRE`) reject | Hard |
 | `NewService` omits call to `validateRequired()` | A2 callsite uniqueness | Hard |
+| `NewService` discards `validateRequired()` result (`_ = …`) or returns bare `*Service` | A2 canonical-consume + error-return check | Hard |
 | `NewService` calls `validateRequired()` before options loop | A2 position check (post-options) | Hard |
 | `sessionvalidate.sessionStore` unguarded (optional field by design) | by-design not tagged; its godoc declares optional | N/A |
 

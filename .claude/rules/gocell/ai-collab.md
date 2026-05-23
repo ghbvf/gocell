@@ -77,8 +77,8 @@
   every NewXxx(*Service, error) call validateRequired() exactly once
   post-options; A3 (downstream Hard) bans hand-written
   validation.IsNilInterface in service.go; A4 locks tag value whitelist;
-  B1-B5 reverse self-tests close reflect/MethodValue/external-helper bypass
-  forms. Per §"Funnel 双向锁评级" both sides Hard → closed Hard funnel.
+  B1/B2/B3/B5 reverse self-tests close reflect/direct-compare/method-value
+  bypass forms. Per §"Funnel 双向锁评级" both sides Hard → closed Hard funnel.
   See `tools/archtest/required_dep_nil_guard_test.go` godoc + ADR
   `docs/architecture/202605231400-002-required-dep-nil-guard-codegen-funnel.md`.
 

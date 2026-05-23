@@ -73,7 +73,7 @@ func NewService(..., opts ...Option) (*Service, error) {
 ```
 
 `REQUIRED-DEP-NIL-GUARD-01` archtest 三件套（A1 golden lock / A2 callsite
-uniqueness / A3 IsNilInterface ban）+ A4 tag whitelist + B1-B5 盲区反向自检
+uniqueness / A3 IsNilInterface ban）+ A4 tag whitelist + B1/B2/B3/B5 盲区反向自检
 静态守卫该模式。22 个 service 全部遵循（accesscore 7 / auditcore 2 / configcore 5
 / examples 6）。
 
