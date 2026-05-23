@@ -797,10 +797,10 @@ func _() {
 }
 `
 
-// stopAtFuncLit is the canonical boundary predicate used by the
-// notfound_test_strict archtest: stop descent at nested *ast.FuncLit so
-// calls inside dead closures do not count as funnel-call-presence in the
-// outer body.
+// stopAtFuncLit is a boundary predicate used by the EachInSubtreeStopAt
+// tests below (TestEachInSubtreeStopAt_*): stop descent at nested
+// *ast.FuncLit so calls inside dead closures do not count toward the
+// visit set in the outer body.
 func stopAtFuncLit(n ast.Node) bool {
 	_, ok := n.(*ast.FuncLit)
 	return ok
