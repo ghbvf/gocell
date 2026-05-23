@@ -230,9 +230,13 @@ jobs:
       # do not accumulate *types.Info graph); the top-level archtest package
       # is excluded by the sentinel _dynamic_archtest_excluded (see the
       # build-test matrix tools entry). governance.yml's `make verify`
-      # likewise sets VERIFY_SKIP=archtest to delegate to the nightly job
-      # — push / PR archtest is covered locally by hack/githooks/pre-push,
-      # not here.
+      # likewise sets VERIFY_SKIP=archtest to delegate to the nightly job.
+      # Push / PR archtest has no local coverage either: hack/githooks/
+      # pre-push deliberately omits archtest after PR #887 review round-2
+      # (CPU/RSS budget — ~3min wall + 43 GB RSS violates the hook's sub-
+      # 10s deterministic contract; see ADR §"pre-push archtest 撤回").
+      # Developers who want PR-time archtest feedback run `make verify`
+      # or `bash hack/verify-archtest.sh` explicitly.
 
       # Compile-verify e2e package even when integration-test job is skipped.
       # The e2e build tag gates runtime behaviour; this step ensures type/import
@@ -279,13 +283,20 @@ jobs:
           retention-days: 1
 
   # archtest 16-shard matrix moved to .github/workflows/archtest-nightly.yml
-  # (schedule-driven + workflow_dispatch). PR-time fast-feedback is now
-  # hack/githooks/pre-push (K=1 single-process full sweep on the developer's
-  # box). Rationale: PR-time gate brittleness (modulo-shift SLOW, tagGroup
-  # OOM templates, GHA runner spot preempt amplified 16×) outweighed value;
-  # nightly catches true invariant violations within 24h and opens a P0
-  # issue via the alert-on-failure job. See ADR 202605120000 §Amendment
-  # 2026-05-23-pr-time-to-nightly.
+  # (schedule-driven + workflow_dispatch). There is NO PR-time local
+  # fast-feedback replacement: hack/githooks/pre-push deliberately omits
+  # archtest after PR #887 review round-2 (CPU/RSS budget violates the
+  # hook's sub-10s deterministic contract — see ADR §"pre-push archtest
+  # 撤回"). Developers who want PR-time archtest feedback run `make verify`
+  # or `bash hack/verify-archtest.sh` explicitly. Rationale for the PR-time
+  # matrix removal: brittleness (modulo-shift SLOW, tagGroup OOM templates,
+  # GHA runner spot preempt amplified 16×) outweighed value; nightly
+  # catches true invariant violations within 24h, surfacing via GHA default
+  # email-to-watchers + Actions UI red ✗ + workflow_dispatch rerun. (An
+  # alert-on-failure job auto-opening a P0 issue was tried in PR #887
+  # round-1 and dropped in review round-2 for fragile `issues: write`
+  # surface — see ADR §"alert-on-failure 撤回".) See ADR 202605120000
+  # §Amendment 2026-05-23-pr-time-to-nightly.
 
   integration-test:
     if: ${{ inputs.run-integration }}

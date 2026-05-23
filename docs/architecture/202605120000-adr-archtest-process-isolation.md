@@ -32,9 +32,11 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 ### D1. CI 入口改为 process-isolated 16-shard 矩阵（CI 显式 K=16 / 本地默认 K=1）
 
-`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo `SHARD_COUNT` 分片（**CI: 16 explicit；本地默认: 1**，见 §Amendment 2026-05-23），每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。SHARD_TARGET 单 shard 模式给 GHA matrix 用；无 SHARD_TARGET 时串行跑 `SHARD_COUNT` 个 shard（本地 `make verify` 路径默认 K=1 单 shard）。
+`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo `SHARD_COUNT` 分片（**CI: 16 explicit；本地默认: 1**，见 §Amendment 2026-05-23），每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。三种 execution mode 由 env shape 派生（见 §Amendment 2026-05-23-pr-time-to-nightly §决策 3）：`SHARD_TARGET` 设 → 单 shard（GHA matrix）；`SHARD_COUNT=1` 无 `SHARD_TARGET` → 单进程流式（本地 `make verify` 默认）；`SHARD_COUNT>1` 无 `SHARD_TARGET` → 并行 fan-out（background `&` + wait barrier）。旧 K=N 串行 for-loop 已删（每 shard 重 packages.Load 比 K=1 慢）。
 
-`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job：`matrix.shard: [0..15]` + 显式 `env: SHARD_COUNT: 16`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。CI explicit `SHARD_COUNT=16` 由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment）。
+`.github/workflows/archtest-nightly.yml` 单一 `verify-archtest` job：`matrix.shard: [0..15]` + 显式 `env: SHARD_COUNT: 16`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。CI explicit `SHARD_COUNT=16` 由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment）。
+
+> 历史：本节原文为 "无 SHARD_TARGET 时串行跑 SHARD_COUNT 个 shard" + "`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job"。§Amendment 2026-05-23-pr-time-to-nightly §决策 3 删 K=N 串行 for-loop 并新增 "Execution modes" 三档，§决策 1 把 verify-archtest job 整段从 `_build-lint.yml` 迁到 `archtest-nightly.yml`。本节同 PR 重写（per ai-collab.md §"ADR amendment 落地必查"）。
 
 ### D2. tools shard 不再 enumerate archtest，pkgs 运行时计算
 
@@ -46,13 +48,13 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 `tools/archtest/archtest_verify_coverage_test.go::TestArchtestVerifyCoverage01`（INVARIANT `ARCHTEST-VERIFY-COVERAGE-01`）：shell-out `DRY_RUN=1 bash hack/verify-archtest.sh` → 与 `scanner.EachInSubtree[ast.FuncDecl]` AST 扫到的 top-level Test* 函数集合做对称 diff，非空则 fail。守的风险：维护者改脚本加 `grep -v TestFoo` debug 过滤忘删 → CI silent unenforce（local `go test ./tools/archtest/...` 仍捕获，但 PR Check 漏过）。AI-rebust **Medium**（runtime cross-check 双重源）。
 
-### D4. `make verify` 委托 archtest 给 matrix gate（D6 single-owner 落地形态）
+### D4. `make verify` 委托 archtest 给 nightly gate（D6 single-owner 落地形态）
 
-`.github/workflows/governance.yml::make verify` 保留 `env: VERIFY_SKIP: archtest` 显式委托给 `_build-lint.yml::verify-archtest` matrix gate，避免 push/PR 上双跑 archtest（详见 §D6 single-owner 原则）。timeout-minutes 维持 15 容纳其它 verify-*.sh 子脚本耗时。
+`.github/workflows/governance.yml::make verify` 保留 `env: VERIFY_SKIP: archtest` 显式委托给 `archtest-nightly.yml::verify-archtest` matrix gate，避免 push/PR 上重复跑 archtest（详见 §D6 single-owner 原则）。timeout-minutes 维持 15 容纳其它 verify-*.sh 子脚本耗时。
 
-本地 `make verify`（无 `VERIFY_SKIP` env）仍包含 `verify-archtest.sh`，按 `SHARD_COUNT` 默认 K=1 单进程跑（见 §D1 + §Amendment 2026-05-23）；PR Check 的 matrix-parallel `verify-archtest` job (SHARD_COUNT=16 explicit) 是 CI 上唯一权威 archtest gate。
+本地 `make verify`（无 `VERIFY_SKIP` env）仍包含 `verify-archtest.sh`，按 `SHARD_COUNT` 默认 K=1 单进程跑（见 §D1 + §Amendment 2026-05-23）；CI 上 `archtest-nightly.yml::verify-archtest` (schedule cron + workflow_dispatch，SHARD_COUNT=16 explicit) 是唯一权威 archtest gate。
 
-> **历史**：本节原文为 "governance.yml 删 VERIFY_SKIP env" + "verify-archtest.sh serial 16-shard"。§D6 加入时反转此决策（恢复 VERIFY_SKIP 避免双跑）；§Amendment 2026-05-23 进一步把脚本默认 K 改为 1。本节文本同 PR 重写以与现状一致（per ai-collab.md §"ADR amendment 落地必查"）。
+> **历史**：本节原文先后经历："governance.yml 删 VERIFY_SKIP env" + "verify-archtest.sh serial 16-shard" → §D6 加入时反转（恢复 VERIFY_SKIP 避免双跑）→ §Amendment 2026-05-23 把脚本默认 K 改为 1 → §Amendment 2026-05-23-pr-time-to-nightly 把 owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`。本节同 PR 重写（per ai-collab.md §"ADR amendment 落地必查"）。
 
 ### D5. slowgate 重接
 

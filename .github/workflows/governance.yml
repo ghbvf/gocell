@@ -26,8 +26,14 @@ jobs:
     # so the same script would behave differently depending on which
     # workflow invoked it. The single-owner rule mirrors Kubernetes's
     # per-verify-*.sh Prow job model and Watermill's reusable-workflow
-    # split (one owner per gate; aggregators delegate). PR-time local
-    # fast-feedback is provided by hack/githooks/pre-push (K=4 parallel fan-out (~3 min on an 18-core workstation)).
+    # split (one owner per gate; aggregators delegate). There is NO PR-time
+    # local fast-feedback for archtest: hack/githooks/pre-push deliberately
+    # omits archtest after PR #887 review round-2 (CPU/RSS budget — ~3min
+    # wall + 43 GB RSS + 18-core 100% violates the hook's sub-10s
+    # deterministic contract; see ADR §"pre-push archtest 撤回"). Developers
+    # who want PR-time archtest feedback run `make verify` (this workflow's
+    # local path without VERIFY_SKIP) or `bash hack/verify-archtest.sh`
+    # explicitly.
     #
     # 15 min covers cold module cache plus other ~9 verify-*.sh gates
     # running continue-on-failure (hack/make-rules/verify.sh accumulates
