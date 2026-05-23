@@ -56,7 +56,7 @@ const (
 var errInjectedRollback = errors.New("b5 test: injected rollback after refresh-store mutation")
 
 // b5Fixture wires PG TxManager + PGRefreshStore and is reused across the
-// three subtests. Each subtest gets an isolated PG schema so refresh_tokens
+// three subtests. Each subtest gets its own migratedPool so refresh_tokens
 // rows from one subtest never leak into another.
 type b5Fixture struct {
 	store    *PGRefreshStore
@@ -66,14 +66,10 @@ type b5Fixture struct {
 	policyOK refresh.Policy
 }
 
-func newB5Fixture(t *testing.T, base *Pool) *b5Fixture {
+func newB5Fixture(t *testing.T) *b5Fixture {
 	t.Helper()
-	ctx := context.Background()
 
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	clk := storetest.NewFakeClock(time.Date(2026, 5, 6, 0, 0, 0, 0, time.UTC))
 	policy := refresh.Policy{
@@ -101,9 +97,7 @@ func newB5Fixture(t *testing.T, base *Pool) *b5Fixture {
 // pre-Issue state. The wire token returned by Issue must be unpeekable
 // after the outer tx rolls back.
 func TestB5_OuterTxRollback_IssueRolledBack(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-	fx := newB5Fixture(t, base)
+	fx := newB5Fixture(t)
 	ctx := context.Background()
 
 	const sessionID = "sess-b5-issue"
@@ -139,9 +133,7 @@ func TestB5_OuterTxRollback_IssueRolledBack(t *testing.T) {
 // injected error). With the cross-store wrap in place, the entire outer tx
 // rolls back and Rotate's effect is undone.
 func TestB5_OuterTxRollback_RotateRolledBack(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-	fx := newB5Fixture(t, base)
+	fx := newB5Fixture(t)
 	ctx := context.Background()
 
 	const sessionID = "sess-b5-rotate"
@@ -186,9 +178,7 @@ func TestB5_OuterTxRollback_RotateRolledBack(t *testing.T) {
 // RevokeSessionDetached and then injects an error. Outer rollback fires.
 // Afterwards Peek on the original wire MUST reject (revoke persisted).
 func TestB5_RevokeSessionDetachedSurvivesOuterRollback(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-	fx := newB5Fixture(t, base)
+	fx := newB5Fixture(t)
 	ctx := context.Background()
 
 	const sessionID = "sess-b5-cascade"

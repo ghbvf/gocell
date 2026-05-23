@@ -17,8 +17,7 @@ import (
 // TestVerifyExpectedVersion_Integration verifies that after applying all
 // migrations, VerifyExpectedVersion returns nil (versions match).
 func TestVerifyExpectedVersion_Integration(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -37,8 +36,7 @@ func TestVerifyExpectedVersion_Integration(t *testing.T) {
 // a direct UPDATE on pg_index. This requires superuser (testcontainers PG
 // default user is superuser).
 func TestDetectInvalidIndexes_WithInjectedInvalid(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -88,8 +86,7 @@ func TestDetectInvalidIndexes_WithInjectedInvalid(t *testing.T) {
 // returns an error containing "schema version mismatch". This simulates a
 // binary rollback without a corresponding migration rollback.
 func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -131,8 +128,7 @@ func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
 // ref: riverqueue/river migration 004_pending_and_more.up.sql — DB-level
 // invariants on state machine transitions are the canonical pattern.
 func TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_check")
@@ -169,8 +165,7 @@ func TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert(t *testing.T)
 //
 // ref: docs/architecture/202605051600-adr-pg-outbox-fencing.md cutover §
 func TestOutboxMigration014_AbortsOnClaimingResidue(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_014_residue")
@@ -213,8 +208,7 @@ func TestOutboxMigration014_AbortsOnClaimingResidue(t *testing.T) {
 //     a stale pre-014 binary writing through the post-014 schema.
 //   - Attempt migration 015 → must error with check_violation on the constraint.
 func TestOutboxMigration015_RejectsExistingClaimingNullLeaseRow(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_015_existing_bad")
@@ -250,8 +244,7 @@ func TestOutboxMigration015_RejectsExistingClaimingNullLeaseRow(t *testing.T) {
 // (which covers the INSERT path) — both are required to lock the
 // invariant against the two write paths a pre-014 binary could exercise.
 func TestOutboxMigration015_RejectsUpdateIntoClaimingNullLease(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_015_update_path")
@@ -282,8 +275,7 @@ func TestOutboxMigration015_RejectsUpdateIntoClaimingNullLease(t *testing.T) {
 // schema is behind the binary (DB version < FS max), VerifyExpectedVersion
 // returns an error containing "schema version mismatch".
 func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -328,8 +320,7 @@ func attrsContainKV(attrs []slog.Attr, key, value string) bool {
 // TestVerifyExpectedShape_AllColumnsPresent verifies that after all migrations
 // are applied, VerifyExpectedShape returns nil (no shape drift).
 func TestVerifyExpectedShape_AllColumnsPresent(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -345,8 +336,7 @@ func TestVerifyExpectedShape_AllColumnsPresent(t *testing.T) {
 // required column causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with details naming the missing table and column.
 func TestVerifyExpectedShape_MissingRequiredColumn(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -377,8 +367,7 @@ func TestVerifyExpectedShape_MissingRequiredColumn(t *testing.T) {
 // forbidden legacy column causes VerifyExpectedShape to return
 // ErrAdapterPGSchemaShape with details naming the offending table and column.
 func TestVerifyExpectedShape_ForbiddenColumnPresent(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -412,8 +401,7 @@ func TestVerifyExpectedShape_ForbiddenColumnPresent(t *testing.T) {
 // TestVerifyNoInvalidIndexes_NoneInvalid verifies that after applying all
 // migrations, VerifyNoInvalidIndexes returns nil (no invalid indexes).
 func TestVerifyNoInvalidIndexes_NoneInvalid(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -428,8 +416,7 @@ func TestVerifyNoInvalidIndexes_NoneInvalid(t *testing.T) {
 // TestVerifyNoInvalidIndexes_DetectInvalid verifies that VerifyNoInvalidIndexes
 // returns ErrAdapterPGInvalidIndex when at least one index is marked invalid.
 func TestVerifyNoInvalidIndexes_DetectInvalid(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -477,8 +464,7 @@ func TestVerifyNoInvalidIndexes_DetectInvalid(t *testing.T) {
 // TestDetectInvalidIndexes_Empty verifies that after applying all migrations,
 // DetectInvalidIndexes returns an empty slice.
 func TestDetectInvalidIndexes_Empty(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -495,8 +481,7 @@ func TestDetectInvalidIndexes_Empty(t *testing.T) {
 // returns the schema-qualified name when an index is marked invalid via
 // pg_index. Requires superuser (testcontainers default postgres image).
 func TestDetectInvalidIndexes_WithInvalidIndex(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -541,8 +526,7 @@ func TestDetectInvalidIndexes_WithInvalidIndex(t *testing.T) {
 // TestInvalidIndexCheck_NoInvalidIndexes verifies that InvalidIndexCheck (the
 // /readyz probe wrapper) returns nil when no invalid indexes are present.
 func TestInvalidIndexCheck_NoInvalidIndexes(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -573,8 +557,7 @@ func extractDimensionDetail(ec *errcode.Error) string {
 // are applied (including migration 023 adding CHECK constraints), VerifyExpectedShape
 // returns nil.
 func TestVerifyExpectedShape_AllDimensionsHappy(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -590,8 +573,7 @@ func TestVerifyExpectedShape_AllDimensionsHappy(t *testing.T) {
 // foreign key constraint causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="foreign_key".
 func TestVerifyExpectedShape_DetectsMissingForeignKey(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -616,8 +598,7 @@ func TestVerifyExpectedShape_DetectsMissingForeignKey(t *testing.T) {
 // recreating a FK with a different ON DELETE action causes VerifyExpectedShape
 // to surface the on-delete mismatch (covers verifyOneForeignKey OnDelete branch).
 func TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -645,8 +626,7 @@ func TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction(t *testing.T) {
 // unique index causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="index".
 func TestVerifyExpectedShape_DetectsMissingUniqueIndex(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -671,8 +651,7 @@ func TestVerifyExpectedShape_DetectsMissingUniqueIndex(t *testing.T) {
 // trigger causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="trigger".
 func TestVerifyExpectedShape_DetectsMissingTrigger(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -700,8 +679,7 @@ func TestVerifyExpectedShape_DetectsMissingTrigger(t *testing.T) {
 // independently or a partial drop would silently disable the users-side
 // invariant safety net.
 func TestVerifyExpectedShape_DetectsMissingUsersTrigger(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -726,8 +704,7 @@ func TestVerifyExpectedShape_DetectsMissingUsersTrigger(t *testing.T) {
 // trigger causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="trigger_enabled".
 func TestVerifyExpectedShape_DetectsDisabledTrigger(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -752,8 +729,7 @@ func TestVerifyExpectedShape_DetectsDisabledTrigger(t *testing.T) {
 // column's type causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="column_type".
 func TestVerifyExpectedShape_DetectsWrongColumnType(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -779,8 +755,7 @@ func TestVerifyExpectedShape_DetectsWrongColumnType(t *testing.T) {
 // from a column causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="column_nullability".
 func TestVerifyExpectedShape_DetectsNullableColumn(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -805,8 +780,7 @@ func TestVerifyExpectedShape_DetectsNullableColumn(t *testing.T) {
 // a CHECK constraint causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="check".
 func TestVerifyExpectedShape_DetectsMissingCheckConstraint(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -831,8 +805,7 @@ func TestVerifyExpectedShape_DetectsMissingCheckConstraint(t *testing.T) {
 // primary key causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="primary_key".
 func TestVerifyExpectedShape_DetectsMissingPrimaryKey(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -861,8 +834,7 @@ func TestVerifyExpectedShape_DetectsMissingPrimaryKey(t *testing.T) {
 // PL/pgSQL function causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="function".
 func TestVerifyExpectedShape_DetectsMissingFunction(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -894,8 +866,7 @@ func TestVerifyExpectedShape_DetectsMissingFunction(t *testing.T) {
 // This is a live integration test: it injects an invalid index into a real
 // container and asserts the index is still returned.
 func TestDetectInvalidIndexes_StillReportsOrphanWithProgressFilterAdded(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 

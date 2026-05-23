@@ -4,8 +4,6 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -19,16 +17,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
-
-// migrationsTableName builds a per-test migrations tracking table name that
-// fits PostgreSQL's 63-char identifier limit and contains only [a-zA-Z0-9_]
-// (passed through validateIdentifier). t.Name() may include "/" for sub-tests
-// and grow well beyond 63 chars, so we hash it to an 8-char hex suffix.
-func migrationsTableName(t *testing.T, prefix string) string {
-	t.Helper()
-	h := sha256.Sum256([]byte(t.Name()))
-	return prefix + hex.EncodeToString(h[:4]) // 8 hex chars
-}
 
 // newTestLedgerProtocol constructs a Protocol for the "auditcore" namespace used
 // throughout these integration tests. Fails the test immediately if construction fails.
@@ -48,23 +36,17 @@ func newTestLedgerProtocol(t *testing.T, ns ledger.NamespaceID) *ledger.Protocol
 	return p
 }
 
-// newIsolatedLedgerStore creates an isolated schema, runs all migrations, and
+// newIsolatedLedgerStore creates a fresh per-test DB (migratedPool) and
 // returns a *LedgerStore plus its cleanup function. The factory is reusable
 // across all sub-tests in this file.
 func newIsolatedLedgerStore(
 	t *testing.T,
-	ctx context.Context,
-	base *Pool,
 	protocol *ledger.Protocol,
 	fc *clockmock.FakeClock,
 ) (*LedgerStore, func()) {
 	t.Helper()
 
-	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, testMigrationsFS(t), migrationsTableName(t, "schema_migrations_ledger_"))
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
+	p := migratedPool(t)
 	txm := NewTxManager(p)
 
 	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
@@ -81,21 +63,13 @@ func newIsolatedLedgerStore(
 // against a real PostgreSQL backend. All cases defined in storetest.Run must
 // pass on the PG store to confirm protocol-level contract parity with MemStore.
 func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
-	ctx := context.Background()
 	protocol := storetest.NewTestProtocol(t)
 
 	factory := storetest.Factory(func(t *testing.T) (ledger.Store, *clockmock.FakeClock, func()) {
 		t.Helper()
 		fc := clockmock.New(storetest.EpochAnchor())
 
-		p := isolatedSchemaPool(t, ctx, base)
-		migrator, err := NewMigrator(p, testMigrationsFS(t), migrationsTableName(t, "schema_migrations_suite_"))
-		require.NoError(t, err)
-		require.NoError(t, migrator.Up(ctx))
-
+		p := migratedPool(t)
 		txm := NewTxManager(p)
 		store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
 		require.NoError(t, err)
@@ -117,27 +91,19 @@ func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
 // connection pool to the same DB.
 //
 // F26: Current limitation — both pool A and pool B share the same *pgxpool.Pool
-// from setupPostgres. This simulates application restart by constructing a fresh
+// from migratedPool. This simulates application restart by constructing a fresh
 // TxManager + Store on the same DB; true cross-pool restart (separate pgxpool.New
 // calls to the same DSN) needs testcontainer-level DSN access which is not exposed
-// by the current setupPostgres helper. The Tail-consistency invariant is verified
+// by the current migratedPool helper. The Tail-consistency invariant is verified
 // by constructing a second LedgerStore on the same underlying pool.
 func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	protocol := newTestLedgerProtocol(t, ns)
 
 	// Pool A: write 5 entries.
-	pA := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = pA.Close(context.Background()) })
-
-	migratorA, err := NewMigrator(pA, testMigrationsFS(t), "schema_migrations_restart_a")
-	require.NoError(t, err)
-	require.NoError(t, migratorA.Up(ctx))
+	pA := migratedPool(t)
 
 	fcA := clockmock.New(storetest.EpochAnchor())
 	txmA := NewTxManager(pA)
@@ -155,10 +121,6 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(nFirst), tailA.SeqNo)
 	assert.Equal(t, int64(nFirst), tailA.EntryCount)
-
-	// Simulate restart: pool B is a fresh handle to the same schema.
-	// Since isolatedSchemaPool embeds the search_path in the connection config,
-	// we open a second pgxpool against the same schema by reusing pA's config.
 
 	// Simulate restart: construct storeB from the same pool (same DB state)
 	fcB := clockmock.New(storetest.EpochAnchor())
@@ -197,15 +159,12 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 // fix: without the fix, Verify would compare e[2].PrevHash against "" (the zero
 // value) and incorrectly report corruption even for a valid chain.
 func TestPGVerify_SubRange_Valid(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	protocol := newTestLedgerProtocol(t, ns)
 
-	store, storeCleanup := newIsolatedLedgerStore(t, ctx, base, protocol, clockmock.New(storetest.EpochAnchor()))
+	store, storeCleanup := newIsolatedLedgerStore(t, protocol, clockmock.New(storetest.EpochAnchor()))
 	t.Cleanup(storeCleanup)
 
 	fc := clockmock.New(storetest.EpochAnchor())
@@ -228,20 +187,12 @@ func TestPGVerify_SubRange_Valid(t *testing.T) {
 // returns valid=false at seq 3 when entry seq=3's hash is tampered via direct
 // SQL UPDATE (PG store; MemStore internal helpers are not available).
 func TestPGVerify_SubRange_Tampered(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	protocol := newTestLedgerProtocol(t, ns)
 
-	p := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = p.Close(context.Background()) })
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_subrange_tampered")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
+	p := migratedPool(t)
 	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(p)
 	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
@@ -278,20 +229,12 @@ func TestPGVerify_SubRange_Tampered(t *testing.T) {
 // that the final hash chain is intact. This proves pg_advisory_xact_lock
 // serializes Append within the namespace.
 func TestAuditLedgerStore_AdvisoryLockSerializesAppend(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	protocol := newTestLedgerProtocol(t, ns)
 
-	p := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = p.Close(context.Background()) })
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_advlock")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
+	p := migratedPool(t)
 	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(p)
 	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
@@ -344,20 +287,12 @@ func TestAuditLedgerStore_AdvisoryLockSerializesAppend(t *testing.T) {
 // the outbox writer deliberately returns an error, causing RunInTx to rollback
 // the whole transaction. We then assert audit_entries has no new rows.
 func TestAuditLedgerStore_OutboxAtomicityFailureProof(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	protocol := newTestLedgerProtocol(t, ns)
 
-	p := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = p.Close(context.Background()) })
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_atomicity")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
+	p := migratedPool(t)
 	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(p)
 	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
@@ -399,16 +334,9 @@ func TestAuditLedgerStore_OutboxAtomicityFailureProof(t *testing.T) {
 // same physical table but different namespace IDs do not pollute each other's
 // entries, and that their advisory locks are independent (different hash inputs).
 func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
 
-	p := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = p.Close(context.Background()) })
-	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_nsiso")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	p := migratedPool(t)
 
 	nsA, err := ledger.ParseNamespaceID("audit_a")
 	require.NoError(t, err)
@@ -484,27 +412,18 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 //   - broken: RepoReady returns a non-nil error when audit_entries is dropped,
 //     exercising a failure domain that a pool-level ping cannot detect.
 func TestAuditLedgerStore_RepoReadiness_Conformance(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	protocol := newTestLedgerProtocol(t, ns)
 	fc := clockmock.New(storetest.EpochAnchor())
 
-	// healthy: standard isolated schema with migrations applied.
-	healthyStore, healthyCleanup := newIsolatedLedgerStore(t, ctx, base, protocol, fc)
+	// healthy: per-test DB with migrations applied.
+	healthyStore, healthyCleanup := newIsolatedLedgerStore(t, protocol, fc)
 	t.Cleanup(healthyCleanup)
 
-	// broken: isolated schema with audit_entries table dropped after migration.
-	brokenPool := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = brokenPool.Close(context.Background()) })
-	migrator, err := NewMigrator(brokenPool, testMigrationsFS(t), migrationsTableName(t, "schema_migrations_readyz_broken_"))
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
-	// Drop audit_entries to simulate schema drift / missing migration.
+	// broken: per-test DB with audit_entries table dropped after migration.
+	brokenPool := migratedPool(t)
 	_, execErr := brokenPool.DB().Exec(ctx, `DROP TABLE IF EXISTS audit_entries CASCADE`)
 	require.NoError(t, execErr, "drop audit_entries for broken scenario")
 
@@ -532,20 +451,12 @@ var errRollbackSentinel = errors.New("intentional rollback")
 // invisible after a rollback. A committed control proves the in-tx read is not
 // an artifact and the persisted path still works.
 func TestAuditLedgerStore_ReadWithinAmbientTx(t *testing.T) {
-	base, cleanup := setupPostgres(t)
-	t.Cleanup(cleanup)
-
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	protocol := newTestLedgerProtocol(t, ns)
 
-	p := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = p.Close(context.Background()) })
-	migrator, err := NewMigrator(p, testMigrationsFS(t), migrationsTableName(t, "schema_migrations_ambient_read_"))
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
+	p := migratedPool(t)
 	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(p)
 	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)

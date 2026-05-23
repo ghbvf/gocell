@@ -17,13 +17,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 func mustAllowDestructiveDown(t testing.TB, reason string) DestructiveDownPermit {
@@ -61,39 +59,6 @@ func migrationsUpToFS(t testing.TB, maxVersion int64) fstest.MapFS {
 	return out
 }
 
-// setupPostgres starts a PostgreSQL container via testcontainers and returns a
-// connected Pool along with a cleanup function. The caller must invoke cleanup
-// (or use t.Cleanup) to terminate the container.
-func setupPostgres(t *testing.T) (*Pool, func()) {
-	t.Helper()
-	testutil.RequireDocker(t)
-
-	ctx := context.Background()
-
-	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "failed to start postgres container")
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err, "failed to get connection string")
-
-	pool, err := NewPool(ctx, Config{DSN: connStr})
-	require.NoError(t, err, "failed to create pool")
-
-	cleanup := func() {
-		_ = pool.Close(ctx)
-		if err := container.Terminate(ctx); err != nil {
-			t.Logf("WARN: failed to terminate container: %v", err)
-		}
-	}
-
-	return pool, cleanup
-}
-
 // ---------------------------------------------------------------------------
 // T19: TestIntegration_Pool
 // ---------------------------------------------------------------------------
@@ -101,13 +66,12 @@ func setupPostgres(t *testing.T) (*Pool, func()) {
 // TestIntegration_Pool verifies that Pool can connect to a real PostgreSQL
 // instance, pass the Health() probe, and shut down cleanly.
 func TestIntegration_Pool(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
 	t.Run("connect_and_health", func(t *testing.T) {
-		// Pool was already successfully created by setupPostgres.
+		// Pool was already successfully created by emptyPool.
 		// Health() should return nil on a healthy connection.
 		err := pool.Health(ctx)
 		assert.NoError(t, err, "Health() should return nil on a connected pool")
@@ -135,8 +99,7 @@ func TestIntegration_Pool(t *testing.T) {
 // TestIntegration_TxManager tests commit, rollback, and panic-recovery
 // semantics of TxManager.RunInTx against a real PostgreSQL instance.
 func TestIntegration_TxManager(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -219,8 +182,7 @@ func TestIntegration_TxManager(t *testing.T) {
 // TestIntegration_Migrator tests Up, Status, and Down against a real
 // PostgreSQL instance using the embedded migration files.
 func TestIntegration_Migrator(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -301,8 +263,7 @@ func TestIntegration_Migrator(t *testing.T) {
 }
 
 func TestMigration012Down_SQLGuardRejectsDirectProviderBypass(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 	mfs := migrationsUpToFS(t, 12)
@@ -344,15 +305,9 @@ SELECT EXISTS (
 // TestIntegration_OutboxWriter tests writing outbox entries inside and outside
 // a transaction context.
 func TestIntegration_OutboxWriter(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := migratedPool(t)
 
 	ctx := context.Background()
-
-	// Apply migrations so the outbox_entries table exists.
-	migrator, mErr := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
-	require.NoError(t, mErr, "NewMigrator should succeed")
-	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
 	txm := NewTxManager(pool)
 	writer := NewOutboxWriter(clock.Real())
@@ -445,8 +400,7 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 // idempotent (no duplicate-table error).
 // ref: pressly/goose -- +goose no transaction + CREATE INDEX CONCURRENTLY.
 func TestMigrator_Applies004_WithConcurrentlyIndexes(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -497,8 +451,7 @@ func TestMigrator_Applies004_WithConcurrentlyIndexes(t *testing.T) {
 // (F-D-3 / RL-MIG-01 evidence). Also asserts idx_outbox_pending_v2 existence
 // (introduced by migration 005).
 func TestMigration004_StructuralAssertions(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -557,8 +510,7 @@ func TestMigration004_StructuralAssertions(t *testing.T) {
 // creates idx_config_versions_config_id and that an eq-lookup on config_id
 // uses an Index Scan (not a Seq Scan).
 func TestMigration006_ConfigVersionsConfigIDIndex(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -609,8 +561,7 @@ func TestMigration006_ConfigVersionsConfigIDIndex(t *testing.T) {
 // catalog, then construct a fresh migrator with a different tracking table and
 // attempt Up() — it must refuse.
 func TestMigrator_Up_RefusesIfInvalidIndexExists(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 
 	ctx := context.Background()
 
@@ -694,8 +645,7 @@ func concurrentUpFixtureFS() fstest.MapFS {
 // INSERT can run multiple times (sentinel row count > 1) or two providers
 // can race the schema_migrations write (per-row uniqueness violation).
 func TestMigrator_ConcurrentUp_NoRaceWithSessionLocker(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 	ctx := context.Background()
 
 	const (
@@ -769,8 +719,7 @@ func sequenceFixtureFS_910() fstest.MapFS {
 // places 009 before 010 (string sort would too, but only because of the
 // zero-padded prefix). Down(1) rolls back exactly 010, leaving 009 applied.
 func TestMigrator_NineBeforeTen_OrderRegression(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 	ctx := context.Background()
 
 	const tableName = "schema_migrations_seq910"
@@ -819,10 +768,9 @@ func TestMigrator_NineBeforeTen_OrderRegression(t *testing.T) {
 // ref: pressly/goose provider_run_test.go TestProviderRun/up_and_down_by_one
 // — confirms ErrNoNextVersion is goose's canonical v=0 signal.
 func TestMigrator_Down_AtVersionZero_Idempotent(t *testing.T) {
-	// setupPostgres starts a fresh testcontainer per test, so a fixed table
+	// emptyPool gives each test its own isolated database, so a fixed table
 	// name does not collide with sibling tests that pick the same string.
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 	ctx := context.Background()
 
 	// Single noop migration — decouples regression from production schema churn.
@@ -859,8 +807,7 @@ func TestMigrator_Down_AtVersionZero_Idempotent(t *testing.T) {
 // rejected by the SQL fail-closed guard in destructive migration Down sections.
 // The guard raises EXCEPTION P0001 unless gocell.allow_destructive_down = 'true'.
 func TestMigrator_Down_RequiresGUC_DirectGooseProviderRejected(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 	ctx := context.Background()
 
 	// Apply only up to migration 019 (includes the destructive users/sessions/roles tables).
@@ -887,8 +834,7 @@ func TestMigrator_Down_RequiresGUC_DirectGooseProviderRejected(t *testing.T) {
 // GUC-blocked error, the destructiveDownSessionLocker is not wiring the GUC
 // correctly.
 func TestMigrator_Down_WithPermit_SetsGUC(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
+	pool := emptyPool(t)
 	ctx := context.Background()
 
 	// Apply migrations up to 019 so there is a destructive migration to roll back.

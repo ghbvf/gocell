@@ -133,30 +133,15 @@ func (w *pgSessionStoreWrapper) resolveSubjectName(uuidStr string) string {
 	return uuidStr
 }
 
-// resetSessionsTable truncates sessions (and users) between subtests so each
-// factory call gets a clean slate. RESTART IDENTITY resets sequences.
-func resetSessionsTable(t *testing.T, pool *Pool) {
-	t.Helper()
-	_, err := pool.DB().Exec(context.Background(),
-		"TRUNCATE sessions, users RESTART IDENTITY CASCADE")
-	require.NoError(t, err, "resetSessionsTable: truncate failed")
-}
-
 // pgFactory is the storetest.Factory for the PG session store.
 //
-// Each call returns a fresh PGSessionStore (via wrapper) wired with a
-// FakeClock anchored at storetest.EpochAnchor(). The cleanup func truncates
-// the sessions + users tables so subsequent factory calls start clean.
+// Each call returns a fresh PGSessionStore (via wrapper) backed by its own
+// per-test database (migratedPool). The cleanup func is a no-op since the
+// per-test DB is dropped automatically via tb.Cleanup in migratedPool.
 func pgFactory(t *testing.T) (session.Store, *clockmock.FakeClock, func()) {
 	t.Helper()
 
-	pool, teardown := setupPostgres(t)
-	t.Cleanup(teardown)
-
-	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
+	pool := migratedPool(t)
 
 	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(pool)
@@ -166,10 +151,7 @@ func pgFactory(t *testing.T) (session.Store, *clockmock.FakeClock, func()) {
 
 	wrapper := &pgSessionStoreWrapper{inner: store, pool: pool, t: t}
 
-	cleanup := func() {
-		resetSessionsTable(t, pool)
-	}
-	return wrapper, fc, cleanup
+	return wrapper, fc, func() {}
 }
 
 // ---------------------------------------------------------------------------
@@ -267,38 +249,25 @@ func TestNewSessionStore_NilClock_Rejected(t *testing.T) {
 //   - healthy: a fully migrated store returns nil from RepoReady.
 //   - broken: a store whose sessions table has been dropped returns non-nil.
 //
-// Each store uses an isolated schema pool so the DROP TABLE for the broken
+// Each store uses its own migratedPool so the DROP TABLE for the broken
 // scenario does not affect the healthy store's sessions table. The real
 // *PGSessionStore (not the pgSessionStoreWrapper) is passed to
 // RunRepoReadinessConformance so the archtest type-resolution still detects
 // coverage.
 func TestPGSessionStore_RepoReadinessConformance(t *testing.T) {
-	base, baseTeardown := setupPostgres(t)
-	t.Cleanup(baseTeardown)
-
 	ctx := context.Background()
 	proto := storetest.NewTestProtocol(t)
 	fc := clockmock.New(storetest.EpochAnchor())
 
-	// healthy: isolated schema with full migrations — sessions table intact.
-	healthyPool := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = healthyPool.Close(context.Background()) })
-	healthyMigrator, err := NewMigrator(healthyPool, testMigrationsFS(t), "schema_migrations_readyz_healthy")
-	require.NoError(t, err)
-	require.NoError(t, healthyMigrator.Up(ctx))
-
+	// healthy: per-test DB with full migrations — sessions table intact.
+	healthyPool := migratedPool(t)
 	healthyTxm := NewTxManager(healthyPool)
 	healthy, err := NewSessionStore(healthyPool.DB(), healthyTxm, proto, fc)
 	require.NoError(t, err)
 
-	// broken: isolated schema with migrations applied, then sessions table dropped
+	// broken: per-test DB with migrations applied, then sessions table dropped
 	// to simulate schema drift / missing migration.
-	brokenPool := isolatedSchemaPool(t, ctx, base)
-	t.Cleanup(func() { _ = brokenPool.Close(context.Background()) })
-	brokenMigrator, err := NewMigrator(brokenPool, testMigrationsFS(t), "schema_migrations_readyz_broken")
-	require.NoError(t, err)
-	require.NoError(t, brokenMigrator.Up(ctx))
-
+	brokenPool := migratedPool(t)
 	_, dropErr := brokenPool.DB().Exec(ctx, "DROP TABLE IF EXISTS sessions CASCADE")
 	require.NoError(t, dropErr, "drop sessions table for broken scenario")
 
