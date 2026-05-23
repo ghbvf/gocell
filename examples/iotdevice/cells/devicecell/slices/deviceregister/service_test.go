@@ -54,7 +54,7 @@ func TestNewService_NilRepo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(tt.repo, slog.Default())
+			_, err := NewService(tt.repo, slog.Default(), WithClock(clock.Real()))
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.ErrorAs(t, err, &ecErr)

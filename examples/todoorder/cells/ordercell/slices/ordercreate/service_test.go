@@ -245,7 +245,7 @@ func TestNewService_NilDep(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(tt.repo, slog.Default(), tt.opts...)
+			_, err := NewService(tt.repo, slog.Default(), tt.opts...) //archtest:allow:clock-injection:via-slice tt.opts table includes WithClock(clock.Real()); spread prevents direct positional arg
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.ErrorAs(t, err, &ecErr)
