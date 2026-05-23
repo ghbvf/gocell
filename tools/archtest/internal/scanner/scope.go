@@ -270,6 +270,8 @@ func rootsContainTestdataSegment(modRoot string, roots []string) bool {
 // That guard is archtest-bound (Medium); a Hard upstream is structurally
 // unreachable because stdlib filepath.WalkDir is always importable and cannot
 // be sealed — the same Medium ceiling PG-TESTCONTAINER-FUNNEL-01 documents.
+// This is that ceiling, not a Soft→Hard transition form, so no backlog upgrade
+// item is registered (per ai-robust.md §"Funnel 双向锁评级").
 var archtestInternalRel = filepath.Join("tools", "archtest", "internal")
 
 // Files returns the sorted, deduplicated list of absolute file paths in the

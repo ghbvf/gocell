@@ -261,6 +261,43 @@ func TestScope_ArchtestInternalExclusion_PathSegmentBoundary(t *testing.T) {
 	}
 }
 
+func TestScope_ExcludesArchtestInternalTree_ContentFiles(t *testing.T) {
+	// collectFile is the shared backbone of Files() (.go) and contentFiles()
+	// (YAML/SQL/MD via LoadContentFiles/EachContentFile), so the archtest-internal
+	// exclusion must apply to non-Go content files too — not just .go.
+	tmp := t.TempDir()
+	internalYAML := filepath.Join(tmp, "tools", "archtest", "internal", "somefixture", "fixture.yaml")
+	controlYAML := filepath.Join(tmp, "cells", "auth", "cell.yaml")
+	for _, f := range []string{internalYAML, controlYAML} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", f, err)
+		}
+		if err := os.WriteFile(f, []byte("id: x\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", f, err)
+		}
+	}
+
+	got, err := scanner.LoadContentFiles(scanner.ModuleScope(tmp), []string{".yaml"})
+	if err != nil {
+		t.Fatalf("LoadContentFiles error: %v", err)
+	}
+	var sawInternal, sawControl bool
+	for _, cc := range got {
+		switch cc.AbsPath {
+		case internalYAML:
+			sawInternal = true
+		case controlYAML:
+			sawControl = true
+		}
+	}
+	if sawInternal {
+		t.Errorf("archtest internal tree must be excluded from content files, but %s was returned", internalYAML)
+	}
+	if !sawControl {
+		t.Errorf("control content file %s must be returned (exclusion must be specific to internal/); got=%v", controlYAML, got)
+	}
+}
+
 func TestDirsScope_DeduplicatesOverlappingRoots(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "src", "a.go"), "package src\n")
