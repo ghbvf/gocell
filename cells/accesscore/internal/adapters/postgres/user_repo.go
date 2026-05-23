@@ -131,8 +131,9 @@ FOR UPDATE`
 	deleteUserSQL = `DELETE FROM users WHERE id = $1`
 
 	// updateProfileSQL applies PATCH semantics: nil $2/$3 leave username/email
-	// unchanged via COALESCE. RETURNING * avoids a second round-trip and gives
-	// the caller the reconstituted aggregate as the new system-of-record value.
+	// unchanged via COALESCE. RETURNING the full user column list avoids a
+	// second round-trip and gives the caller the reconstituted aggregate as the
+	// new system-of-record value.
 	updateProfileSQL = `
 UPDATE users
 SET username   = COALESCE($2, username),
@@ -362,8 +363,8 @@ func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string
 
 // UpdateProfile writes username / email / updated_at. Nil name or email leaves
 // that column unchanged (SQL COALESCE). Returns the post-write *domain.User
-// reconstituted from the RETURNING * row; caller MUST use it as the new
-// system-of-record aggregate.
+// reconstituted from the RETURNING row (explicit user column list); caller
+// MUST use it as the new system-of-record aggregate.
 func (r *PGUserRepo) UpdateProfile(
 	ctx context.Context,
 	userID string,

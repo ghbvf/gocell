@@ -45,7 +45,8 @@ type UserRepository interface {
 	// rejects "" so service-layer runtime checks are not required.
 	//
 	// Returns the post-write *domain.User reconstituted from the persisted
-	// row (PG: RETURNING *; mem: ReconstituteUser after in-place write). The
+	// row (PG: RETURNING explicit user columns; mem: ReconstituteUser after
+	// in-place write). The
 	// returned aggregate is the new system-of-record value; caller MUST use
 	// it for downstream publish / audit.
 	//
