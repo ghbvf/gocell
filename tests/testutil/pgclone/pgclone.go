@@ -120,6 +120,27 @@ func (s *Shared) EmptyDSN(tb testing.TB) string {
 
 func (s *Shared) perTestDSN(tb testing.TB, migrated bool) string {
 	tb.Helper()
+	dsn, drop := s.mint(tb, migrated)
+	tb.Cleanup(drop)
+	return dsn
+}
+
+// CloneManaged is like CloneDSN but returns a manual release func instead of
+// registering t.Cleanup(drop). For per-iteration lifecycles — e.g. a benchmark
+// that clones inside the b.N loop, where deferring every drop to b.Cleanup
+// would accumulate b.N databases until the benchmark ends. The caller MUST
+// call release exactly once (typically alongside its own pool.Close).
+func (s *Shared) CloneManaged(tb testing.TB) (dsn string, release func()) {
+	tb.Helper()
+	return s.mint(tb, true)
+}
+
+// mint boots the shared container on first call, creates a fresh per-test
+// database (cloned from the migrated template when migrated, else empty), and
+// returns its DSN plus a drop func. It does NOT register cleanup — perTestDSN
+// wires t.Cleanup(drop); CloneManaged hands the drop to the caller.
+func (s *Shared) mint(tb testing.TB, migrated bool) (dsn string, drop func()) {
+	tb.Helper()
 	// Per-call skip-or-fatal gate. RequireDocker either skips (local dev,
 	// Docker absent) or fatals (CI with GOCELL_TEST_DOCKER_REQUIRED=1). Called
 	// outside sync.Once so the gate fires for every caller even after init ran
@@ -145,13 +166,12 @@ func (s *Shared) perTestDSN(tb testing.TB, migrated bool) string {
 		tb.Fatalf("mint per-test DB %s (migrated=%v): %v", dbName, migrated, err)
 	}
 
-	tb.Cleanup(func() {
+	drop = func() {
 		if derr := dropDatabase(context.Background(), s.adminDSN, dbName); derr != nil {
 			tb.Logf("WARN: drop per-test DB %s: %v", dbName, derr)
 		}
-	})
-
-	return swapDatabaseInDSN(s.adminDSN, dbName)
+	}
+	return swapDatabaseInDSN(s.adminDSN, dbName), drop
 }
 
 // Shutdown terminates the shared container if it was booted. Safe to call even
@@ -177,6 +197,10 @@ func (s *Shared) boot(tb testing.TB) {
 
 	if err := validateTemplateDB(s.templateDB); err != nil {
 		s.initErr = err
+		return
+	}
+	if s.migrate == nil {
+		s.initErr = fmt.Errorf("pgclone: migrate func must not be nil")
 		return
 	}
 

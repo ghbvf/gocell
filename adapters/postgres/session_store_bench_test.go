@@ -14,8 +14,12 @@ import (
 
 // pgBenchFactory is the storetest.BenchFactory for the PG session store.
 //
-// Each call uses migratedPool(b) to get a fresh per-test DB (production
-// schema already present). The cleanup func truncates sessions + users.
+// storetest.Bench's benchRevokeForSubject calls the factory inside the b.N
+// loop, so each call mints a fresh per-test DB and the returned cleanup must
+// release it per-iteration. It uses sharedPG.CloneManaged (NOT migratedPool):
+// migratedPool registers a t.Cleanup(drop) that defers to benchmark end, which
+// would accumulate b.N databases + connection pools and exhaust PG. CloneManaged
+// returns a manual release that cleanup invokes each iteration.
 //
 // The pgSessionStoreWrapper (defined in session_store_integration_test.go)
 // bridges storetest's TEXT subjectIDs to the UUID FK in the sessions table.
@@ -23,13 +27,20 @@ func pgBenchFactory(b *testing.B) (session.Store, *clockmock.FakeClock, func()) 
 	b.Helper()
 	testutil.RequireDocker(b)
 
-	pool := migratedPool(b)
+	dsn, releaseDB := sharedPG.CloneManaged(b)
+	pool, err := NewPool(context.Background(), Config{DSN: dsn})
+	if err != nil {
+		releaseDB()
+		b.Fatalf("pgBenchFactory: open pool: %v", err)
+	}
 
 	fc := clockmock.New(storetest.EpochAnchor())
 	txm := NewTxManager(pool)
 	proto := storetest.NewBenchProtocol(b)
 	store, err := NewSessionStore(pool.DB(), txm, proto, fc)
 	if err != nil {
+		_ = pool.Close(context.Background())
+		releaseDB()
 		b.Fatalf("pgBenchFactory: NewSessionStore: %v", err)
 	}
 
@@ -38,8 +49,8 @@ func pgBenchFactory(b *testing.B) (session.Store, *clockmock.FakeClock, func()) 
 	wrapper := &pgSessionStoreWrapper{inner: store, pool: pool, t: b}
 
 	cleanup := func() {
-		_, _ = pool.DB().Exec(context.Background(),
-			"TRUNCATE sessions, users RESTART IDENTITY CASCADE")
+		_ = pool.Close(context.Background())
+		releaseDB()
 	}
 	return wrapper, fc, cleanup
 }

@@ -197,6 +197,22 @@ func TestShared_zeroValueIsInvalid(t *testing.T) {
 	}
 }
 
+// TestShared_boot_RejectsNilMigrate pins the fail-fast for a nil MigrateFunc:
+// boot must surface it via initErr (after name validation, before RequireDocker
+// / container start) rather than panicking when it later calls s.migrate. The
+// template name is valid so validation passes and the nil check is reached.
+func TestShared_boot_RejectsNilMigrate(t *testing.T) {
+	t.Parallel()
+	s := New("valid_template_name", nil) // nil migrate
+	s.boot(t)
+	if s.initErr == nil {
+		t.Fatal("boot() must populate initErr when migrate func is nil (not panic later)")
+	}
+	if !strings.Contains(s.initErr.Error(), "migrate func must not be nil") {
+		t.Fatalf("initErr %q must mention nil migrate", s.initErr.Error())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Docker-bound self-tests. Use a pgx-only seed migration so pgclone's own
 // tests stay free of any adapters/postgres dependency (the full adapterpg
@@ -230,7 +246,8 @@ func tableExists(ctx context.Context, t *testing.T, dsn, table string) bool {
 	t.Helper()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		t.Fatalf("connect %s: %v", dsn, err)
+		// DSN omitted from the message — it carries the (test) PG password.
+		t.Fatalf("connect to per-test DB %q: %v", table, err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	var exists bool

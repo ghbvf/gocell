@@ -31,11 +31,15 @@
 // tier this rule shape reaches for integration-tagged code.
 //
 // Blind-spot inventory (per ai-collab.md §"工具选定后强制盲区自检"):
+//   - Function-value reference `run := tcpostgres.Run; run(...)`: COVERED — the
+//     scan walks every <alias>.Run *ast.SelectorExpr (assignment RHS, arg pass,
+//     or CallExpr.Fun alike), not just call targets. RED fixture
+//     internal/pgcontainerredfixture/indirect_ref.go pins this form.
 //   - Dot-import `import . ".../modules/postgres"; Run(...)`: `Run` would be a
-//     bare *ast.Ident, not a SelectorExpr, so isPostgresModuleRun misses it.
-//     Closed by the reverse self-test TestPG_TESTCONTAINER_FUNNEL_01_NoDotImportBlindSpot
-//     which asserts no dot-import of the module exists in the repo (it is also
-//     globally banned by revive dot-imports).
+//     bare *ast.Ident, not a SelectorExpr, so the scan misses it. Closed by the
+//     reverse self-test TestPG_TESTCONTAINER_FUNNEL_01_NoDotImportBlindSpot which
+//     asserts no dot-import of the module exists in the repo (also globally
+//     banned by revive dot-imports).
 //   - Reflection-based construction: out of scope, treated as theoretical.
 //
 // Carve-outs (allowlisted, backlog #890: migrate to pgclone): cmd/corebundle,
@@ -139,12 +143,15 @@ func firstPostgresRunLine(path string) (int, bool, error) {
 		return 0, false, nil
 	}
 	var pos token.Pos
-	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+	// Scan every <alias>.Run SelectorExpr, not just CallExpr.Fun — this also
+	// catches indirect references like `run := tcpostgres.Run` (function-value
+	// assignment) and `pass(tcpostgres.Run)`, which a CallExpr-only scan misses.
+	scanner.EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if pos.IsValid() {
 			return
 		}
-		if isPostgresModuleRun(call.Fun, alias) {
-			pos = call.Pos()
+		if isPostgresModuleRun(sel, alias) {
+			pos = sel.Pos()
 		}
 	})
 	if pos.IsValid() {
@@ -197,6 +204,24 @@ func TestPG_TESTCONTAINER_FUNNEL_01_RedFixture(t *testing.T) {
 		return
 	}
 	t.Logf("RED fixture hit at fixture.go:%d", line)
+}
+
+// TestPG_TESTCONTAINER_FUNNEL_01_RedFixture_IndirectRef pins the F3 fix: the
+// SelectorExpr scan must catch the function-value form `var indirectRun =
+// tcpostgres.Run` in internal/pgcontainerredfixture/indirect_ref.go. A
+// CallExpr-only scan (the original bug) would miss it.
+func TestPG_TESTCONTAINER_FUNNEL_01_RedFixture_IndirectRef(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	fixturePath := filepath.Join(root, "tools", "archtest", "internal", "pgcontainerredfixture", "indirect_ref.go")
+	line, ok, err := firstPostgresRunLine(fixturePath)
+	require.NoError(t, err, "parse indirect-ref RED fixture")
+	if !ok {
+		t.Error("PG-TESTCONTAINER-FUNNEL-01 indirect-ref RED fixture: scan found no tcpostgres.Run " +
+			"function-value reference; the SelectorExpr scan may have regressed to CallExpr-only")
+		return
+	}
+	t.Logf("indirect-ref RED fixture hit at indirect_ref.go:%d", line)
 }
 
 // TestPG_TESTCONTAINER_FUNNEL_01_NoDotImportBlindSpot closes the dot-import

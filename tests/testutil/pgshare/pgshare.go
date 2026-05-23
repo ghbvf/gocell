@@ -19,6 +19,7 @@ package pgshare
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
@@ -51,12 +52,20 @@ func New(templateDB string) *Shared {
 // DB with active connections, so the pool MUST be closed before the first
 // clone (the goose *sql.DB opened by NewMigrator is released transitively by
 // pool.Close — the historic applyMigrationsToTemplate behaviour this preserves).
-func applyMigrations(ctx context.Context, templateDSN string) error {
+func applyMigrations(ctx context.Context, templateDSN string) (err error) {
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: templateDSN})
 	if err != nil {
 		return err
 	}
-	defer func() { _ = pool.Close(ctx) }()
+	defer func() {
+		// A close error matters here: a lingering connection on the template
+		// blocks the first CREATE DATABASE ... TEMPLATE clone. Surface it (when
+		// migration itself succeeded) so boot fails fast with a clear cause
+		// instead of the first CloneDSN failing opaquely with "source DB in use".
+		if cerr := pool.Close(ctx); cerr != nil && err == nil {
+			err = fmt.Errorf("close migration pool: %w", cerr)
+		}
+	}()
 
 	migrationsFS, err := adapterpg.MigrationsFS()
 	if err != nil {
