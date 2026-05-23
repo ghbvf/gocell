@@ -9,7 +9,6 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -27,8 +26,8 @@ var orderSort = []query.SortColumn{
 
 // Service handles order query business logic.
 type Service struct {
-	repo    domain.OrderRepository
-	codec   *query.CursorCodec
+	repo    domain.OrderRepository `gocell:"required"`
+	codec   *query.CursorCodec     `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"order-query: cursor codec is required"`
 	logger  *slog.Logger
 	runMode query.RunMode
 }
@@ -41,16 +40,16 @@ type Service struct {
 // Passing nil is a caller programming error; NewService returns errcode.ErrCellMissingCodec
 // so the cell Init() can propagate a structured error instead of a runtime panic.
 func NewService(repo domain.OrderRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
-	if codec == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"order-query: cursor codec is required")
-	}
-	return &Service{
+	s := &Service{
 		repo:    repo,
 		codec:   codec,
 		logger:  logger,
 		runMode: runMode,
-	}, nil
+	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // GetByID returns a single order by ID.

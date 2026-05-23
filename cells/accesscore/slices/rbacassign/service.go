@@ -52,9 +52,9 @@ func actorFromContext(ctx context.Context) string {
 //
 // ref: Watermill SQL outbox + sessionlogin/service.go persistSession pattern.
 type Service struct {
-	roleRepo    ports.RoleRepository
-	invalidator *credentialinvalidate.Invalidator
-	txRunner    persistence.CellTxManager
+	roleRepo    ports.RoleRepository              `gocell:"required" gocellErr:"rbacassign: roleRepo is required"`                 //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	invalidator *credentialinvalidate.Invalidator `gocell:"required" gocellErr:"rbacassign: invalidator is required"`              //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner    persistence.CellTxManager         `gocell:"required" gocellErr:"rbacassign: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter     outbox.Emitter
 	logger      *slog.Logger
 }
@@ -92,12 +92,6 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
-	if validation.IsNilInterface(roleRepo) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: roleRepo is required")
-	}
-	if validation.IsNilInterface(invalidator) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: invalidator is required")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -110,8 +104,8 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: TxRunner required; use WithTxManager")
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

@@ -214,6 +214,47 @@ func TestService_Create_RepoFailure(t *testing.T) {
 	assert.Contains(t, createErr.Error(), "persist")
 }
 
+// TestNewService_NilDep is a table-driven test verifying that NewService rejects
+// each required nil dependency (repo, txRunner) with a non-nil errcode.Error.
+func TestNewService_NilDep(t *testing.T) {
+	tests := []struct {
+		name     string
+		repo     domain.OrderRepository
+		opts     []Option
+		wantCode errcode.Code
+		wantMsg  string
+	}{
+		{
+			name: "nil repo",
+			repo: nil,
+			opts: []Option{
+				WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+				WithClock(clock.Real()),
+			},
+			wantCode: errcode.ErrCellInvalidConfig,
+			wantMsg:  "repo required",
+		},
+		{
+			name:     "nil txRunner",
+			repo:     mem.NewOrderRepository(),
+			opts:     []Option{WithEmitter(mustEmitter(t, outbox.NoopWriter{})), WithClock(clock.Real())},
+			wantCode: errcode.ErrCellInvalidConfig,
+			wantMsg:  "TxRunner required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(tt.repo, slog.Default(), tt.opts...) //archtest:allow:clock-injection:via-slice tt.opts includes WithClock
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, tt.wantCode, ecErr.Code)
+			assert.Contains(t, err.Error(), tt.wantMsg)
+		})
+	}
+}
+
 // TestService_NilTxRunner_FailsFast verifies that NewService rejects nil TxRunner.
 func TestService_NilTxRunner_FailsFast(t *testing.T) {
 	_, err := NewService(mem.NewOrderRepository(), slog.Default(),
@@ -224,6 +265,6 @@ func TestService_NilTxRunner_FailsFast(t *testing.T) {
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code)
 	assert.Contains(t, err.Error(), "TxRunner required")
 }

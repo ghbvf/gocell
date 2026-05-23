@@ -393,8 +393,8 @@ func TestNewService_NilGuards(t *testing.T) {
 			assert.Nil(t, svc)
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
-			assert.Equal(t, errcode.KindInvalid, ec.Kind)
-			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+			assert.Equal(t, errcode.KindInternal, ec.Kind)
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 		})
 	}
 }

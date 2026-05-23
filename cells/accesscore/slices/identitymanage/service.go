@@ -140,13 +140,13 @@ func WithAuthzMutator(m *authzmutate.Mutator) Option {
 
 // Service implements identity management business logic.
 type Service struct {
-	repo                         ports.UserRepository
-	invalidator                  *credentialinvalidate.Invalidator
+	repo                         ports.UserRepository              `gocell:"required"`
+	invalidator                  *credentialinvalidate.Invalidator `gocell:"required"`
 	authzmutator                 *authzmutate.Mutator
-	txRunner                     persistence.CellTxManager
+	txRunner                     persistence.CellTxManager `gocell:"required" gocellErr:"identitymanage: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter                      outbox.Emitter
 	logger                       *slog.Logger
-	tokenIssuer                  TokenIssuer
+	tokenIssuer                  TokenIssuer `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingTokenIssuer" gocellErr:"identity-manage: tokenIssuer is required; wire via WithTokenIssuer"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	clock                        clock.Clock
 	lastAdminProtectionRequested bool
 	lastAdminRoleRepo            ports.RoleRepository
@@ -175,12 +175,6 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
-	if repo == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: user repository is required")
-	}
-	if validation.IsNilInterface(invalidator) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: invalidator is required")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -193,8 +187,8 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "identitymanage: TxRunner required; use WithTxManager")
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	// Build authzmutator from injected deps if not explicitly provided via WithAuthzMutator.
 	if s.authzmutator == nil {
@@ -203,10 +197,6 @@ func NewService(
 			return nil, fmt.Errorf("identitymanage: build authzmutator: %w", mErr)
 		}
 		s.authzmutator = m
-	}
-	if s.tokenIssuer == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
-			"identity-manage: tokenIssuer is required; wire via WithTokenIssuer")
 	}
 	if s.lastAdminProtectionRequested {
 		guard, err := buildLastAdminGuard(s.lastAdminRoleRepo)
@@ -223,7 +213,7 @@ func NewService(
 // It validates the repo is non-nil, wraps it in the sealed EffectiveAdminCounter
 // marker, and constructs the guard.
 func buildLastAdminGuard(roleRepo ports.RoleRepository) (*domain.LastAdminGuard, error) {
-	if validation.IsNilInterface(roleRepo) {
+	if roleRepo == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"identity-manage: last-admin protection requires a role repository")
 	}

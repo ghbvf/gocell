@@ -8,8 +8,6 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -18,7 +16,7 @@ var _ auth.Authorizer = (*Service)(nil)
 
 // Service implements RBAC authorization decisions.
 type Service struct {
-	roleRepo ports.RoleRepository
+	roleRepo ports.RoleRepository `gocell:"required" gocellErr:"authorizationdecide: roleRepo is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger   *slog.Logger
 }
 
@@ -26,14 +24,14 @@ type Service struct {
 // roleRepo is nil (typed-nil or bare). logger defaults to slog.Default() when
 // nil to keep the no-args convenience callers expect.
 func NewService(roleRepo ports.RoleRepository, logger *slog.Logger) (*Service, error) {
-	if validation.IsNilInterface(roleRepo) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"authorizationdecide: roleRepo is required")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{roleRepo: roleRepo, logger: logger}, nil
+	s := &Service{roleRepo: roleRepo, logger: logger}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // Authorize checks whether the subject has a role granting the action on the

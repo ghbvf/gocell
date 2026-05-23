@@ -6,11 +6,11 @@
 |---|---|---|
 | **角色** | 治理 / 元数据 / 代码生成器 CLI | 运行时组装产物（部署二进制） |
 | **使用时机** | dev + CI（构建期、治理期） | 生产部署（运行时） |
-| **子命令** | validate / scaffold / generate / check / verify / graph / export | —（单一入口，启动 bootstrap） |
+| **子命令** | validate / scaffold / generate (含 required-deps 子命令) / check / verify / graph / export | —（单一入口，启动 bootstrap） |
 | **进入运行时进程** | 否 | 是 |
 | **对标定位** | 构建 / 治理工具（类似 `kubectl` / `go generate`） | Composition Root（类似 Uber fx 的 wire-up 入口） |
 
-- **`cmd/gocell`**：治理与元数据 CLI，供 dev 与 CI 调用。执行 validate（contract / cell / slice 声明合规）、scaffold（脚手架）、generate（codegen 契约派生）、check（自定义规则检查）、verify（验收规格对齐）、graph（模块包依赖图输出）、export（项目元数据 / 目录导出为 JSON/YAML）。**不进入运行时进程**，不依赖生产外部资源。
+- **`cmd/gocell`**：治理与元数据 CLI，供 dev 与 CI 调用。执行 validate（contract / cell / slice 声明合规）、scaffold（脚手架）、generate（codegen 契约派生；含 `required-deps` 子命令 — 从 Service struct `gocell:"required"` tag 生成 `service_required_gen.go`，对应 `REQUIRED-DEP-NIL-GUARD-01` funnel）、check（自定义规则检查）、verify（验收规格对齐）、graph（模块包依赖图输出）、export（项目元数据 / 目录导出为 JSON/YAML）。**不进入运行时进程**，不依赖生产外部资源。
 
 - **`cmd/corebundle`**：`assemblies/corebundle/` 的运行时组装产物。负责 bootstrap wiring：加载 SharedDeps（PG / Redis / AMQP / JWT / HMAC 等）、构造各 CellModule、配置三个 HTTP listener（Primary / Internal / Health）、启动 `bootstrap.Run`。**是实际部署运行的二进制**，也是项目唯一的 Composition Root。
 

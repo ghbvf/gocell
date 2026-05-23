@@ -1,0 +1,1 @@
+tools/archtest/testdata/required_dep_nil_guard_fixtures/red_missing_callsite/service.go:16: REQUIRED-DEP-NIL-GUARD-01-A2: NewService does not call validateRequired() (REQUIRED-DEP-NIL-GUARD-01)

@@ -86,6 +86,15 @@ func seedEntry(store *ledger.MemStore, id, eventType, actorID string, ts time.Ti
 	_ = store.Append(context.Background(), e)
 }
 
+func TestNewService_NilStore_ReturnsError(t *testing.T) {
+	svc, err := NewService(nil, testCodec(), slog.Default(), query.RunModeProd)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code)
+}
+
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	store := newTestStore(t)
 	svc, err := NewService(store, nil, slog.Default(), query.RunModeProd)

@@ -132,14 +132,14 @@ func TestNewService_NilProvisioner_Error(t *testing.T) {
 }
 
 // TestNewService_NilProvisioner_ReturnsErrcode is the F3 RED test:
-// provisioner nil check must return errcode (KindInvalid+ErrValidationFailed),
-// not a bare fmt.Errorf.
+// provisioner nil check must return errcode (KindInternal+ErrCellInvalidConfig),
+// not a bare fmt.Errorf. Wiring failure is operator error → 5xx, not client 4xx.
 func TestNewService_NilProvisioner_ReturnsErrcode(t *testing.T) {
 	_, err := setup.NewService(nil, discardLogger())
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec, "provisioner nil check must return errcode.Error")
-	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 }
 
 func TestNewService_NilLogger_Error(t *testing.T) {
@@ -150,8 +150,8 @@ func TestNewService_NilLogger_Error(t *testing.T) {
 }
 
 // TestNewService_NilLogger_ReturnsErrcode is the F3 RED test:
-// logger nil check must return errcode (KindInvalid+ErrValidationFailed),
-// not a bare fmt.Errorf.
+// logger nil check must return errcode (KindInternal+ErrCellInvalidConfig),
+// not a bare fmt.Errorf. Wiring failure is operator error → 5xx, not client 4xx.
 func TestNewService_NilLogger_ReturnsErrcode(t *testing.T) {
 	prov, err := adminprovision.NewProvisioner(mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(),
 		discardLogger(), func() string { return "x" }, clock.Real())
@@ -160,7 +160,7 @@ func TestNewService_NilLogger_ReturnsErrcode(t *testing.T) {
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec, "logger nil check must return errcode.Error")
-	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {

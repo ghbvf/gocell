@@ -133,13 +133,13 @@ func WithSessionTTL(d time.Duration) Option {
 
 // Service implements password login with JWT issuance.
 type Service struct {
-	userRepo        ports.UserRepository
-	sessionStore    session.Store
-	roleRepo        ports.RoleRepository
-	refreshStore    refresh.Store
-	txRunner        persistence.CellTxManager
+	userRepo        ports.UserRepository      `gocell:"required"`
+	sessionStore    session.Store             `gocell:"required"`
+	roleRepo        ports.RoleRepository      `gocell:"required"`
+	refreshStore    refresh.Store             `gocell:"required"`
+	txRunner        persistence.CellTxManager `gocell:"required" gocellErr:"sessionlogin: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter         outbox.Emitter
-	issuer          *auth.JWTIssuer
+	issuer          *auth.JWTIssuer `gocell:"required"`
 	logger          *slog.Logger
 	clock           clock.Clock
 	sessionTTL      time.Duration
@@ -149,7 +149,7 @@ type Service struct {
 	// through authzmutate. Required (fail-fast in NewService) — sessionlogin
 	// MUST NOT import authzmutate directly (depguard upstream Hard funnel
 	// SESSIONLOGIN-LOCKOUT-VIA-ACCOUNTLOCKOUT-01).
-	lockout *accountlockout.Service
+	lockout *accountlockout.Service `gocell:"required" gocellErr:"sessionlogin: AccountLockout required; use WithAccountLockout (sessionlogin must route lock decisions through accountlockout, not authzmutate)"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 }
 
 // WithAccountLockout injects the auto-lockout mediator. Required for sessionlogin;
@@ -175,21 +175,6 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
-	if validation.IsNilInterface(userRepo) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: userRepo must not be nil")
-	}
-	if validation.IsNilInterface(sessionStore) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: sessionStore must not be nil")
-	}
-	if validation.IsNilInterface(roleRepo) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: roleRepo must not be nil")
-	}
-	if validation.IsNilInterface(refreshStore) {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: refreshStore must not be nil")
-	}
-	if issuer == nil {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: issuer must not be nil")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -206,18 +191,13 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "sessionlogin: TxRunner required; use WithTxManager")
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	clock.MustHaveClock(s.clock, "sessionlogin.NewService: clock required — use WithClock(c.clk)")
 	if s.sessionTTL <= 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"sessionlogin: SessionTTL required; use WithSessionTTL (typically accesscore.DefaultRefreshMaxAge)")
-	}
-	if s.lockout == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"sessionlogin: AccountLockout required; use WithAccountLockout "+
-				"(sessionlogin must route lock decisions through accountlockout, not authzmutate)")
 	}
 	return s, nil
 }

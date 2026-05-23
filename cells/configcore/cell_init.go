@@ -108,7 +108,9 @@ func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
 	if err := c.initPublishSlice(); err != nil {
 		return err
 	}
-	c.initSubscribeSlice()
+	if err := c.initSubscribeSlice(); err != nil {
+		return err
+	}
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
 	}
@@ -234,15 +236,20 @@ func (c *ConfigCore) initPublishSlice() error {
 	return nil
 }
 
-func (c *ConfigCore) initSubscribeSlice() {
-	c.subscribeSvc = configsubscribe.NewService(
+func (c *ConfigCore) initSubscribeSlice() error {
+	svc, err := configsubscribe.NewService(
 		c.logger,
 		configsubscribe.WithConfigEventCollector(c.configEventCollector),
 		configsubscribe.WithClock(c.clk),
 		configsubscribe.WithTombstoneTTL(c.tombstoneTTL),
 		configsubscribe.WithEventbusCacheCollector(c.cacheCollector),
 	)
+	if err != nil {
+		return fmt.Errorf("configcore: init subscribe slice: %w", err)
+	}
+	c.subscribeSvc = svc
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(configsubscribe.SliceMetadata()))
+	return nil
 }
 
 func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {

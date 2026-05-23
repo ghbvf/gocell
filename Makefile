@@ -67,6 +67,7 @@ generate:
 	go run ./cmd/gocell generate metrics-schema --all
 	go run ./cmd/gocell generate cell --all
 	go run ./cmd/gocell generate contract --all
+	go run ./cmd/gocell generate required-deps --all
 	go generate ./cmd/corebundle/
 
 cover:

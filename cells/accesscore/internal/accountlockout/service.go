@@ -25,10 +25,10 @@ import (
 // Construction: all dependencies are required (fail-fast on nil — matches the
 // OUTBOX-SERVICE-01 convention for outbox-bound services).
 type Service struct {
-	userRepo     ports.UserRepository
-	authzmutator *authzmutate.Mutator
-	emitter      outbox.Emitter
-	clk          clock.Clock
+	userRepo     ports.UserRepository `gocell:"required" gocellErr:"accountlockout.NewService: UserRepository required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	authzmutator *authzmutate.Mutator `gocell:"required" gocellErr:"accountlockout.NewService: authzmutate.Mutator required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	emitter      outbox.Emitter       `gocell:"required" gocellErr:"accountlockout.NewService: outbox.Emitter required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clk          clock.Clock          `gocell:"required" gocellErr:"accountlockout.NewService: clock.Clock required"`         //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger       *slog.Logger
 	metrics      MetricsRecorder
 }
@@ -65,6 +65,9 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithMetrics injects the metrics recorder. Default is a no-op recorder.
+// Typed-nil inputs are not stored (builder-noop semantics): a bare `m != nil`
+// would let a typed-nil recorder overwrite the noopMetrics default and panic at
+// the first IncAccountLockout call. See runtime-api.md "Option 范式分层".
 func WithMetrics(m MetricsRecorder) Option {
 	return func(s *Service) {
 		if !validation.IsNilInterface(m) {
@@ -82,22 +85,6 @@ func NewService(
 	clk clock.Clock,
 	opts ...Option,
 ) (*Service, error) {
-	if validation.IsNilInterface(userRepo) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"accountlockout.NewService: UserRepository required")
-	}
-	if authzmutator == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"accountlockout.NewService: authzmutate.Mutator required")
-	}
-	if validation.IsNilInterface(emitter) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"accountlockout.NewService: outbox.Emitter required")
-	}
-	if validation.IsNilInterface(clk) {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"accountlockout.NewService: clock.Clock required")
-	}
 	s := &Service{
 		userRepo:     userRepo,
 		authzmutator: authzmutator,
@@ -108,6 +95,9 @@ func NewService(
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

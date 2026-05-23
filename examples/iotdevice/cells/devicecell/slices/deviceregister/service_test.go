@@ -10,11 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
@@ -26,9 +28,39 @@ func (failPublisher) Publish(_ context.Context, _ string, _ []byte) error {
 }
 func (failPublisher) Close(_ context.Context) error { return nil }
 
-func newTestService() (*Service, *mem.DeviceRepository) {
+func newTestService(t testing.TB) (*Service, *mem.DeviceRepository) {
+	t.Helper()
 	repo := mem.NewDeviceRepository()
-	return NewService(repo, slog.Default(), WithClock(clock.Real())), repo
+	svc, err := NewService(repo, slog.Default(), WithClock(clock.Real()))
+	if err != nil {
+		t.Fatalf("newTestService: %v", err)
+	}
+	return svc, repo
+}
+
+// TestNewService_NilRepo verifies that NewService returns a non-nil error when
+// required dependency repo is nil.
+func TestNewService_NilRepo(t *testing.T) {
+	tests := []struct {
+		name string
+		repo domain.DeviceRepository
+	}{
+		{"bare nil", nil},
+		// Real typed-nil: a nil *mem.DeviceRepository boxed into the interface
+		// is a non-nil interface wrapping a nil pointer. bare `== nil` would
+		// miss it; validation.IsNilInterface (used by the generated guard for
+		// interface fields) catches it.
+		{"typed nil", (*mem.DeviceRepository)(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(tt.repo, slog.Default(), WithClock(clock.Real()))
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+		})
+	}
 }
 
 func TestService_Register(t *testing.T) {
@@ -58,7 +90,7 @@ func TestService_Register(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, _ := newTestService()
+			svc, _ := newTestService(t)
 
 			resp, err := svc.Register(context.Background(), &registercontract.Request{Name: tc.deviceName})
 			if tc.wantErr {
@@ -76,7 +108,7 @@ func TestService_Register(t *testing.T) {
 }
 
 func TestService_Register_PersistsDevice(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService(t)
 	ctx := context.Background()
 
 	resp, err := svc.Register(ctx, &registercontract.Request{Name: "sensor-b"})
@@ -97,7 +129,8 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
 	)
 	require.NoError(t, err)
-	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
 	require.NoError(t, err, "publish failure should not propagate as error")
@@ -114,7 +147,8 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
 	)
 	require.NoError(t, err)
-	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
 	require.Error(t, err, "fail-closed publish failure must propagate")
@@ -132,7 +166,8 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(logger),
 	)
 	require.NoError(t, err)
-	svc := NewService(repo, logger, WithEmitter(emitter), WithClock(clock.Real()))
+	svc, err := NewService(repo, logger, WithEmitter(emitter), WithClock(clock.Real()))
+	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-log"})
 	require.NoError(t, err)
@@ -148,7 +183,7 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 func TestService_Register_DuplicateID_IsUnlikelyButHandled(t *testing.T) {
 	// Since uuid.NewString generates random IDs, duplicate is practically
 	// impossible. We verify two sequential calls succeed without collision.
-	svc, _ := newTestService()
+	svc, _ := newTestService(t)
 	ctx := context.Background()
 
 	resp1, err := svc.Register(ctx, &registercontract.Request{Name: "dev-1"})

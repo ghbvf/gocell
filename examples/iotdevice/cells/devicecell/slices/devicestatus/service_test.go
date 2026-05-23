@@ -10,17 +10,47 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func newTestService() (*Service, *mem.DeviceRepository) {
+func newTestService(t testing.TB) (*Service, *mem.DeviceRepository) {
+	t.Helper()
 	repo := mem.NewDeviceRepository()
-	return NewService(repo, slog.Default()), repo
+	svc, err := NewService(repo, slog.Default())
+	if err != nil {
+		t.Fatalf("newTestService: %v", err)
+	}
+	return svc, repo
 }
 
 func seedDevice(repo *mem.DeviceRepository, id, name, status string) {
 	_ = repo.Create(context.Background(), &domain.Device{
 		ID: id, Name: name, Status: status,
 	})
+}
+
+// TestNewService_NilRepo verifies that NewService returns a non-nil error when
+// required dependency repo is nil (bare nil or typed-nil).
+func TestNewService_NilRepo(t *testing.T) {
+	tests := []struct {
+		name string
+		repo domain.DeviceRepository
+	}{
+		{"bare nil", nil},
+		// Real typed-nil: nil *mem.DeviceRepository boxed into the interface —
+		// non-nil interface, nil underlying. validation.IsNilInterface catches
+		// it; bare `== nil` would not.
+		{"typed nil", (*mem.DeviceRepository)(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewService(tt.repo, slog.Default())
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+		})
+	}
 }
 
 func TestService_GetStatus(t *testing.T) {
@@ -54,7 +84,7 @@ func TestService_GetStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo := newTestService(t)
 			tc.setup(repo)
 
 			dev, err := svc.GetStatus(context.Background(), tc.id)

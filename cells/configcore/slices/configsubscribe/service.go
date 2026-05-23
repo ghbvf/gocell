@@ -186,7 +186,7 @@ func WithEventbusCacheCollector(c obmetrics.EventbusCacheCollector) Option {
 
 // NewService creates a config-subscribe Service.
 // WithClock must be passed — clock.MustHaveClock panics on missing injection.
-func NewService(logger *slog.Logger, opts ...Option) *Service {
+func NewService(logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
 		cache: &Cache{
 			entries:        make(map[string]cacheEntry),
@@ -201,6 +201,10 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 	}
 
 	clock.MustHaveClock(s.clk, "configsubscribe.NewService")
+
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
 
 	// Keep cache.clk in sync with the service-level clk (options may have changed it).
 	s.cache.clk = s.clk
@@ -219,7 +223,7 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 		s.cache.tombstoneTTL = defaultTombstoneTTL
 	}
 
-	return s
+	return s, nil
 }
 
 // Cache returns the local config cache for reading.

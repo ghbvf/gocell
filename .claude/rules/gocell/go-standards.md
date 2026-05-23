@@ -61,9 +61,13 @@ paths:
 - 函数认知复杂度上限 15，超过必须拆分
 - 同义字符串重复 ≥ 3 次抽常量
 - 空实现/no-op/fallback 写明业务原因（注释）
-- 构造函数出口保证所有字段非 nil——可选依赖在构造函数内 fallback（如 `outbox.DiscardPublisher{}`）
+- 构造函数出口必须经 `s.validateRequired()`（由 `gocell generate required-deps`
+  从 Service struct 字段 `gocell:"required"` tag 生成）。可选依赖（logger /
+  emitter）在构造函数内 fallback。clock 字段保留 `clock.MustHaveClock` 内核
+  panic 豁免（programmer error 语义）。由 `REQUIRED-DEP-NIL-GUARD-01` 三件套
+  archtest 静态守卫。OUTBOX-SERVICE-01 SERVICE-02..05 sub-rule 持续守 outbox
+  侧约束（publish/import/DirectEmitter/WithOutboxWriter）。
 - 加密/签名/鉴权优先复用现有安全封装
-- Outbox-bound service 构造函数必须 fail-fast on nil TxRunner，签名 `func NewXxx(...) (*Service, error)`，body 顶层 `if txRunner == nil { return nil, errcode.New(...) }`。由 `OUTBOX-SERVICE-01` archtest 静态守卫
 
 ## 命名规范
 

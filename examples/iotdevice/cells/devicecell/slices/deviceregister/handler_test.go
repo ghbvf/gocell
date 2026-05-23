@@ -18,7 +18,10 @@ import (
 
 func setupRegisterHandler() *registercontract.Handler {
 	repo := mem.NewDeviceRepository()
-	svc := NewService(repo, slog.Default(), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithClock(clock.Real()))
+	if err != nil {
+		panic(err)
+	}
 	return registercontract.NewHandler(svc) // Public endpoint: NewHandler takes no policy (auth.Route{Public:true})
 }
 

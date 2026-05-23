@@ -54,7 +54,7 @@ type Service struct {
 	spec     Spec
 	store    ledger.Store
 	protocol *ledger.Protocol
-	txRunner persistence.CellTxManager
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"auditappender: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter  outbox.Emitter
 	logger   *slog.Logger
 	clk      clock.Clock
@@ -88,10 +88,8 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"auditappender: TxRunner required; use WithTxManager",
-			errcode.WithDetails(slog.String("slice", spec.name)))
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

@@ -75,8 +75,9 @@ func newTestService(t testing.TB) *Service {
 }
 
 // TestNewService_TxRunnerRequired asserts that NewService fails fast with
-// errcode.ErrValidationFailed when WithTxManager is omitted (nil TxRunner).
-// Symmetric with the other 10 outbox-bound services per OUTBOX-SERVICE-01.
+// errcode.ErrCellInvalidConfig when WithTxManager is omitted (nil TxRunner).
+// Wiring failure is operator error → 5xx, not client 4xx.
+// Symmetric with the other outbox-bound services per REQUIRED-DEP-NIL-GUARD-01.
 func TestNewService_TxRunnerRequired(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
@@ -87,7 +88,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	assert.Nil(t, svc)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 	assert.Contains(t, err.Error(), "TxRunner required")
 }
 

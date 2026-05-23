@@ -1,0 +1,1 @@
+tools/archtest/testdata/required_dep_nil_guard_fixtures/red_direct_nil_compare/service.go:36: B2: comparison `<recv>.repo == nil` on required field bypasses generated validateRequired() funnel (field is tagged gocell:"required"; move guard into the generated method)

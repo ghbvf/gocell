@@ -45,8 +45,8 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 
 // Service implements config write business logic.
 type Service struct {
-	repo     ports.ConfigRepository
-	txRunner persistence.CellTxManager
+	repo     ports.ConfigRepository    `gocell:"required"`
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"configwrite: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter  outbox.Emitter
 	logger   *slog.Logger
 	clock    clock.Clock
@@ -67,9 +67,8 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Cloc
 	for _, o := range opts {
 		o(s)
 	}
-	if s.txRunner == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"configwrite: TxRunner required; use WithTxManager")
+	if err := s.validateRequired(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
