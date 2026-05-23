@@ -442,11 +442,11 @@ jobs:
         # silently pass. Pipe stdout+stderr through grep and fail explicitly.
         run: |
           set -euo pipefail
-          out=$(go test -tags=integration,otelcollector ./adapters/otel/... \
+          out=$(go test -tags=integration,otelcollector ./adapters/otel/ \
             -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m 2>&1)
           echo "$out"
           if echo "$out" | grep -q 'no tests to run'; then
-            echo "FAIL: -run selector matched zero tests in ./adapters/otel/...; rename/move regression?"
+            echo "FAIL: -run selector matched zero tests in ./adapters/otel/; rename/move regression?"
             exit 1
           fi
 
