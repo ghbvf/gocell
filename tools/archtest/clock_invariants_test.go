@@ -66,7 +66,7 @@ const clockViaSliceAllowMarker = "//archtest:allow:clock-injection:via-slice"
 // any other function — including a third function in the same allowlisted
 // file — is still checked.
 //
-// AI-rebust grade: Medium (archtest-enforced: allowlist map + marker, not a
+// AI-robust grade: Medium (archtest-enforced: allowlist map + marker, not a
 // bare comment a business PR can add anywhere; not compile-time). Before P1-3
 // this was effectively Soft (any marked FuncDecl in any prod file self-exempt).
 //
@@ -159,7 +159,7 @@ func clockControlPlaneAllowedFuncs(fset *token.FileSet, file *ast.File, rel stri
 // The exclusion is implemented by walking FuncLits within fd.Body and returning
 // "" whenever pos falls inside one.
 //
-// Blind spots (per ai-collab.md §"工具选定后强制盲区自检"):
+// Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. FuncLit nested inside another FuncLit inside a marked FuncDecl: also
 //     excluded (EachInSubtree[ast.FuncLit] is recursive, so all depths covered).
@@ -1208,9 +1208,9 @@ func isAllowedRealClockPath(rel string) bool {
 // required), that reference is exempt. The carve-out is function-level only —
 // other functions in the same file without the marker are still checked.
 //
-// AI-rebust grade: Medium (comment guard).
+// AI-robust grade: Medium (comment guard).
 //
-// Blind spots (documented per ai-collab.md §"工具选定后强制盲区自检"):
+// Blind spots (documented per ai-robust.md §"工具选定后强制盲区自检"):
 //  1. Marker in a non-doc inline comment (e.g. // inside the function body):
 //     NOT recognized — only doc comments (fd.Doc) are scanned.
 //     Reverse self-check: control_plane_no_marker_violates fixture asserts
@@ -1340,7 +1340,7 @@ func matchedTimeFn(info *types.Info, ident *ast.Ident) (string, bool) {
 // Without this guard, a rename of controlPlaneTicker or controlPlaneProbeTimer
 // silently orphans the allowlist entry: enforcement keeps working (unknown names
 // are never exempt), but the allowlist stops being a trustworthy record of what
-// is actually exempt, violating ai-collab.md §"ADR amendment 落地必查" Medium
+// is actually exempt, violating ai-robust.md §"ADR amendment 落地必查" Medium
 // anchor integrity.
 //
 // Detection strategy: pure go/parser AST scan (no types loading needed).

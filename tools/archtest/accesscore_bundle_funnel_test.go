@@ -10,7 +10,7 @@
 // store and TxRunner from another) inexpressible at compile time outside
 // the cell's own package.
 //
-// # AI-rebust: Hard (Go visibility)
+// # AI-robust: Hard (Go visibility)
 //
 // The Hard defense is the Go visibility rule itself:
 //   - Bundle struct fields are private — composite literals from outside the
@@ -28,7 +28,7 @@
 //   - BS-1: aliased export. `func WithUserRepository = withUserRepository`
 //     would be an exported variable, not a function. AST scan for exported
 //     ValueSpec covers this.
-//   - BS-2: reflection / unsafe. Out of scope per ai-collab.md §3.
+//   - BS-2: reflection / unsafe. Out of scope per ai-robust.md §3.
 package archtest
 
 import (

@@ -5,7 +5,7 @@ package archtest
 //
 // golden_test.go — unit coverage for the AssertGolden harness and the
 // scanner.Canonical single-source ordering it shares with Report. The blind
-// spot of these tests (declared per .claude/rules/gocell/ai-collab.md
+// spot of these tests (declared per .claude/rules/gocell/ai-robust.md
 // §"工具选定后强制盲区自检"): they exercise writeOrAssertGolden directly with
 // an explicit update bool, NOT via a real *testing.T with flag parsing, so they
 // do not prove `-update` interacts correctly with `go test` flag parsing — that

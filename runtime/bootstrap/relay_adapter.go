@@ -8,7 +8,7 @@ package bootstrap
 // only path that integrates a relay into Bootstrap's managed-resource pipeline
 // is WithRelay → newRelayAdapter, which is package-private. See ADR
 // docs/architecture/202605201400-adr-relay-managedresource-isolation.md and
-// the §"single sanctioned holder" Hard 范本 in .claude/rules/gocell/ai-collab.md.
+// the §"single sanctioned holder" Hard 范本 in .claude/rules/gocell/ai-robust.md.
 //
 // archtest RELAY-NOT-MANAGEDRESOURCE-01 (tools/archtest) locks the downstream
 // invariant; the package-private adapter constructor locks the upstream half.

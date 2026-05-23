@@ -26,7 +26,7 @@
 // (see ADR `docs/architecture/202605171800-adr-kernel-mustctor-removal.md`);
 // callers shifted to error-first `New*` constructors.
 //
-// AI-rebust grade: Medium — the carve-out registry is a (pkgPath, funcName)
+// AI-robust grade: Medium — the carve-out registry is a (pkgPath, funcName)
 // string-keyed allowlist. The Hard primary defense is the deletion of the
 // 20 production `Must*` constructors plus the physical relocation of the
 // three test-only key fns from `runtime/auth` to `runtime/auth/authtest`,
@@ -56,7 +56,7 @@
 //     panic, and would be visible in PR diff as a new top-level var.
 //
 // ref: ADR `docs/architecture/202605171800-adr-kernel-mustctor-removal.md`
-// ref: `.claude/rules/gocell/ai-collab.md` §"AI-rebust 三档分级"
+// ref: `.claude/rules/gocell/ai-robust.md` §"AI-robust 三档分级"
 // ref: B2-K-02 (kernel Must-ctor removal)
 package archtest
 

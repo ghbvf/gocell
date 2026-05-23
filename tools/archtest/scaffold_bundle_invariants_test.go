@@ -8,13 +8,13 @@
 // SCAFFOLD-BUNDLE-MARKER-01: scaffolded cell.go (real ScaffoldCellBundle
 // output) must embed the K#05 // +cell:listener: marker so the marker→cell.yaml
 // drift detection (MARKERGEN-DRIFT-VERIFY-01) extends to scaffold output.
-// AI-rebust: Medium (typed marker funnel via cellgen.ListenerMarker exported const;
+// AI-robust: Medium (typed marker funnel via cellgen.ListenerMarker exported const;
 // archtest cross-validates const definition + template reference).
 //
 // SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01: scaffolded contract.yaml produced by
 // ScaffoldCellBundle must NOT declare a top-level `codegen:` key — parser
 // defaults Codegen=true (K#09 funnel), so emitting it is redundant and
-// contradicts the funnel. AI-rebust: Medium (real-source AST capture — YAML
+// contradicts the funnel. AI-robust: Medium (real-source AST capture — YAML
 // parsed from actual scaffold output, not template string search).
 // Cannot be Hard: contract.yaml is source of truth; YAML Node structured
 // parsing is the Medium ceiling for this invariant.
@@ -22,7 +22,7 @@
 // SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01: cellgen.ListenerMarker must exist
 // as an exported const with the canonical K#05 marker literal value, and the
 // scaffold-cell template must reference it via {{.ListenerMarker}} rather than
-// hand-typing the literal. AI-rebust: Medium (typed const + typeseval
+// hand-typing the literal. AI-robust: Medium (typed const + typeseval
 // cross-validation; template literal hand-typing is statically rejected by this
 // archtest).
 package archtest
@@ -82,7 +82,7 @@ func scaffoldSmokeBundle(t *testing.T, root string) error {
 // produces a cell.go that contains the K#05 +cell:listener: marker.
 //
 // INVARIANT: SCAFFOLD-BUNDLE-MARKER-01
-// AI-rebust: Medium (real-source AST capture); see file-level godoc for rationale.
+// AI-robust: Medium (real-source AST capture); see file-level godoc for rationale.
 func TestScaffoldBundle_CellMarkerEmbedded(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -106,7 +106,7 @@ func TestScaffoldBundle_CellMarkerEmbedded(t *testing.T) {
 // both entry points.
 //
 // INVARIANT: SCAFFOLD-BUNDLE-MARKER-01
-// AI-rebust: Medium (real-source output capture); see file-level godoc for rationale.
+// AI-robust: Medium (real-source output capture); see file-level godoc for rationale.
 func TestScaffoldCell_CellMarkerEmbedded(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -130,7 +130,7 @@ func TestScaffoldCell_CellMarkerEmbedded(t *testing.T) {
 // it via {{.ListenerMarker}} rather than hand-typing the literal string.
 //
 // INVARIANT: SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01
-// AI-rebust: Medium (typed const + typeseval cross-validation).
+// AI-robust: Medium (typed const + typeseval cross-validation).
 func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 	t.Parallel()
 
@@ -204,7 +204,7 @@ func TestScaffoldBundle_ListenerMarkerTypedConst(t *testing.T) {
 // produces a contract.yaml without a top-level `codegen:` key.
 //
 // INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01
-// AI-rebust: Medium (real-source AST capture); see file-level godoc for rationale.
+// AI-robust: Medium (real-source AST capture); see file-level godoc for rationale.
 func TestScaffoldBundle_ContractYAMLOmitsCodegenKey(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

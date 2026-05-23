@@ -100,7 +100,7 @@ const configRepoQueryFailedMessage = "config repo query failed"
 
 // op label constants distinguish doUpdate caller paths in InternalMessage.
 // Single-source: doUpdate caller and tests both reference these constants —
-// AI-rebust Medium. Hardcode regression in caller would surface via op-label
+// AI-robust Medium. Hardcode regression in caller would surface via op-label
 // assertion in TestConfigRepository_Update{,ForRollback}_NotFound.
 const (
 	opUpdate            = "Update"

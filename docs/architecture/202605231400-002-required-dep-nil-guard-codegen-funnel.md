@@ -24,7 +24,7 @@ stores, issuers) unguarded. The asymmetry — one well-guarded field vs. many
 ungarded fields — produces a false sense of safety.
 
 **Soft → Hard upgrade motivation**: a string-convention approach ("remember to
-add the guard") is Soft per `ai-collab.md §"AI-rebust 三档分级"`, and AI
+add the guard") is Soft per `ai-robust.md §"AI-robust 三档分级"`, and AI
 co-authors regularly omit it. The codegen funnel lifts this invariant to Hard.
 
 ## Decision
@@ -105,7 +105,7 @@ exempt from its per-param inline-guard requirement, so the two rules compose
 
 ## Why Hard
 
-Per `ai-collab.md §"Funnel 双向锁评级"`:
+Per `ai-robust.md §"Funnel 双向锁评级"`:
 
 | Direction | Mechanism | Rating |
 |-----------|-----------|--------|
@@ -190,7 +190,7 @@ continue to operate alongside the new funnel.
 
 - gh issue #791
 - PR #490 (round-5 review finding that triggered this ADR)
-- `.claude/rules/gocell/ai-collab.md` §"AI-rebust 三档分级" / §"Hard 范本目录" /
+- `.claude/rules/gocell/ai-robust.md` §"AI-robust 三档分级" / §"Hard 范本目录" /
   §"Funnel 双向锁评级"
 - `tools/archtest/required_dep_nil_guard_test.go` (archtest godoc)
 - `tools/codegen/requireddepsgen/generator.go` (generator)

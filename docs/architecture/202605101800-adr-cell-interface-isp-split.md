@@ -123,7 +123,7 @@ grep -n "forbidden" tools/archtest/cellmeta_single_source_test.go
 - ordercell 的 `WithOutboxWriter(w outbox.Writer)` 签名在类型层面不接受 Publisher，消除了「接受 pub 参数但 panic 掉」的矛盾
 - devicecell 的 `WithDirectPublisher(p outbox.Publisher)` 签名不接受 Writer，同上
 
-CELL-RAW-DEPS-01 archtest 从字符串比对（ai-collab.md §L5，实测 Soft）升级到 canonical type path（§L4，Hard 级）。
+CELL-RAW-DEPS-01 archtest 从字符串比对（ai-robust.md §L5，实测 Soft）升级到 canonical type path（§L4，Hard 级）。
 
 ### 负向 / 风险
 - ⚠️ 测试桩需声明四子接口而非单 `Cell`——探索阶段确认无现存子接口 mock，本 PR 无此类破坏
@@ -139,7 +139,7 @@ CELL-RAW-DEPS-01 archtest 从字符串比对（ai-collab.md §L5，实测 Soft�
   - `TestCellIfaceISP03_BaseCellFourSegmentCheck` — AST 守 base.go 必须有 4 段 `var _ X = (*BaseCell)(nil)`（BASECELL-CHECK-01）
 - **Soft**（非 mandatory，仅作引导）：godoc `Consumers: <谁>` 段；本 ADR §D4 Slice 默认不拆决议（文本决策 + backlog 触发条件）
 
-满足 CLAUDE.md `.claude/rules/gocell/ai-collab.md` 「新增约束 ≥ Medium 立项硬门槛」——所有新增 mandatory 约束均 ≥ Medium。
+满足 CLAUDE.md `.claude/rules/gocell/ai-robust.md` 「新增约束 ≥ Medium 立项硬门槛」——所有新增 mandatory 约束均 ≥ Medium。
 
 ## References
 

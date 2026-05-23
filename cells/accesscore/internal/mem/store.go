@@ -91,7 +91,7 @@ type memTxKey struct{}
 // store.mu.Lock()). No code outside package mem — including test TxRunner
 // fakes — can express "in a tx context AND holding the lock"; the only
 // out-of-package entry, WithTxContext, hard-codes holdsLock=false. This is
-// the upstream half of the AI-rebust Hard funnel (MEM-TX-LOCK-OWNERSHIP-01).
+// the upstream half of the AI-robust Hard funnel (MEM-TX-LOCK-OWNERSHIP-01).
 type memTxToken struct {
 	// store identifies which *Store's mutex the holder claims to hold. A
 	// token minted for store A must not let store B's repo methods skip

@@ -26,7 +26,7 @@ import (
 // copied the pattern. Fresh-instance Claude reading the panic_invariants
 // fixture will re-copy the shape; this rule makes the re-copy fail in CI.
 //
-// Hard form-uniqueness (callee, body) — pairs with ai-collab.md §"Hard 范本"
+// Hard form-uniqueness (callee, body) — pairs with ai-robust.md §"Hard 范本"
 // 第 2 条 (panic register Approved):
 //
 //   (i) RangeStmt.X resolves via *types.Info to typeseval.KnownNonDefaultTags,
@@ -50,7 +50,7 @@ import (
 //     seen-map dedup (defensive: covers reverse build directives //go:build
 //     !X which are silently excluded from a -tags=...,X,... union load)
 //
-// AI-rebust grade: Hard (typed-function-call funnel with (callee, body)
+// AI-robust grade: Hard (typed-function-call funnel with (callee, body)
 // double-factor form-uniqueness). Same shape and termination criteria as
 // PANIC-REGISTERED-01 — there is no "looks-like-KnownNonDefaultTags but
 // isn't" gray zone because the identity check goes through *types.Info.
@@ -59,7 +59,7 @@ import (
 // tools/archtest/internal/taggrouploopfixtures/ are excluded from the live
 // scan and exercised by Test_TaggroupLoopFixturePrecisionGate below).
 //
-// Blind-spot self-checks (ai-collab.md §"工具选定后强制盲区自检").
+// Blind-spot self-checks (ai-robust.md §"工具选定后强制盲区自检").
 //
 // rangeExprCallsKnownNonDefaultTags / bodyContainsRunTyped resolve callee
 // identity through *types.Info — staticcheck SA4000 style (direct AST +

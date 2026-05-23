@@ -30,7 +30,7 @@
 //   - Any _test.go file anywhere in the module (_test.go files may import
 //     keystest for test fixture construction).
 //
-// AI-rebust grade: Medium — import-path string matching via go/parser. The
+// AI-robust grade: Medium — import-path string matching via go/parser. The
 // Hard primary defense is the physical isolation of Must* key helpers in
 // runtime/auth/keystest/: production packages that do not import the package
 // cannot access MustGenerateKeyPair. This archtest is the secondary defense

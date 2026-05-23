@@ -14,12 +14,12 @@
 // (depgraph.Node.TestOnly == true) are skipped to keep parity with
 // LAYER-05/06 production-only semantics.
 //
-// AI-rebust: Medium. Uses kernel/depgraph (typed import graph) plus a
+// AI-robust: Medium. Uses kernel/depgraph (typed import graph) plus a
 // typed Go map allowlist; no string anchors, comment exemptions, or name
 // conventions. The Go language has no Hard mechanism for "package A may
 // not import package B" (internal/ inverts direction; //go:build does not
 // constrain imports; type system cannot constrain import lists), so this
-// is the language ceiling for this problem domain — see ai-collab.md.
+// is the language ceiling for this problem domain — see ai-robust.md.
 //
 // Rule: KERNEL-INTERNAL-DAG-01
 package archtest

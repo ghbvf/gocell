@@ -27,7 +27,7 @@
 // The former monolithic internal/devicecmd.Service (which had interface assertion
 // blocks for all 6 contracts) is the canonical RED fixture that this rule catches.
 //
-// AI-rebust: Medium (type-aware via go/types.Implements, cross-package interface
+// AI-robust: Medium (type-aware via go/types.Implements, cross-package interface
 // resolution via typeseval.SharedResolver; the type system itself is the primary
 // defense — once Service stops implementing the contract interfaces the violation
 // is inexpressible at the compiler level too).

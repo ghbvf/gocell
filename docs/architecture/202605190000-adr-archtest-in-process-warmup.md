@@ -53,7 +53,7 @@ Accepted (2026-05-19)
 | `golangci-lint pkg/goanalysis/runner.go` runner 单例 + union load mode | https://github.com/golangci/golangci-lint/blob/main/pkg/goanalysis/runner.go | runner 单例 = SharedResolver；union load mode = TestMain 预热 LoadProductionPackages |
 | `staticcheck SA4000` AST + `types.Info.Uses` resolve callee form-uniqueness | https://github.com/dominikh/go-tools/blob/master/staticcheck/sa4000/sa4000.go | 改造 3 直接同构 |
 | `go/build/build.go::matchTag` `-tags=A,B,C` 语义 | https://github.com/golang/go/blob/master/src/go/build/build.go | 改造 2 两次 Load 必要性的依据（反向 directive 静默排除陷阱） |
-| ai-collab.md §"Hard 范本" 第 2 条 `PANIC-REGISTERED-01` | GoCell 自有 | 改造 3 typed-function-call funnel 同构 |
+| ai-robust.md §"Hard 范本" 第 2 条 `PANIC-REGISTERED-01` | GoCell 自有 | 改造 3 typed-function-call funnel 同构 |
 
 ## Alternatives 拒绝理由（含对标反向）
 
@@ -116,10 +116,10 @@ PR #584 CI 首次运行 shard 12 触发 slowgate fail：`TestArchtestVerifyCover
 
 **剩余优化路径**：若未来 `TestArchtestVerifyCoverage01` wall 再次接近 slowgate budget，再新开触发型优化（K=4 → K=2 / bash 脚本侧合并 DRY_RUN + LIST_SHARD_TESTS / 用 `go list -test` 一次性拿全集）。当前不保留 allowlist 兜底。
 
-## AI-rebust 评级
+## AI-robust 评级
 
-- 改造 3 `TAGGROUP-LOOP-FORBIDS-RUNTYPED-01` = typed-function-call funnel **Hard**（对齐 ai-collab.md §"Hard 范本" 第 2 条 panic 范本同构 + staticcheck SA4000 同构）
-- 改造 1 (TestMain) / 改造 2 (两次 Load) = perf refactor，不在 ai-collab.md §适用范围
+- 改造 3 `TAGGROUP-LOOP-FORBIDS-RUNTYPED-01` = typed-function-call funnel **Hard**（对齐 ai-robust.md §"Hard 范本" 第 2 条 panic 范本同构 + staticcheck SA4000 同构）
+- 改造 1 (TestMain) / 改造 2 (两次 Load) = perf refactor，不在 ai-robust.md §适用范围
 
 ## 参考
 

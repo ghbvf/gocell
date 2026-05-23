@@ -77,6 +77,6 @@ CI 集成基本到位，两个新 verify 脚本已通过 governance.yml 的 glob
 
 **位置**：`tools/archtest/scaffold_bundle_test.go`、`tools/archtest/scaffold_write_funnel_test.go`；`_build-lint.yml` tools shard
 
-两个新 archtest 文件位于 `tools/archtest/`，属于 `_build-lint.yml` tools shard（`pkgs: ./tools/...`）覆盖范围，在每次 PR 和 push 时均会运行。archtest 本身使用 `go/packages` 的类型信息，不依赖外部服务，5 分钟 shard timeout 足够。INVARIANT ID（`SCAFFOLD-BUNDLE-MARKER-01`、`SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01`、`SCAFFOLD-WRITE-FUNNEL-01`）在文件头 CommentGroup 声明，符合 ai-collab.md 命名规范。
+两个新 archtest 文件位于 `tools/archtest/`，属于 `_build-lint.yml` tools shard（`pkgs: ./tools/...`）覆盖范围，在每次 PR 和 push 时均会运行。archtest 本身使用 `go/packages` 的类型信息，不依赖外部服务，5 分钟 shard timeout 足够。INVARIANT ID（`SCAFFOLD-BUNDLE-MARKER-01`、`SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01`、`SCAFFOLD-WRITE-FUNNEL-01`）在文件头 CommentGroup 声明，符合 ai-robust.md 命名规范。
 
 无发现。

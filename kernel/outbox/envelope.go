@@ -29,13 +29,13 @@ var ErrUnknownEnvelopeVersion = errcode.New(errcode.KindInvalid, errcode.ErrEnve
 //
 //   - Downstream: SAFEID-WIREMESSAGE-USAGE-01 archtest reflectively asserts
 //     every exported field is idutil.SafeID-typed (with explicit carve-outs).
-//     ai-collab.md §"Hard 范本目录" 第 3 条 string-typed concept funnel.
+//     ai-robust.md §"Hard 范本目录" 第 3 条 string-typed concept funnel.
 //   - Upstream: SAFEID-UPSTREAM-FUNNEL-HARD-01 archtest asserts the struct
 //     is unexported and no exported WireMessage re-export exists. Combined
 //     with Go visibility, packages outside kernel/outbox cannot construct,
 //     reference, or json.Unmarshal-target the envelope — only the public
 //     MarshalEnvelope / UnmarshalEnvelope move bytes ↔ envelope.
-//     ai-collab.md §"Hard 范本目录" JSON-wire-decode struct sealing.
+//     ai-robust.md §"Hard 范本目录" JSON-wire-decode struct sealing.
 //
 // ref: go-kratos/kratos transport/grpc/codec.go — zero-size unexported codec
 // struct, the closest industry equivalent (encoding/json wire decoder gated

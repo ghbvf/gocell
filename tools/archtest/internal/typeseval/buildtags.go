@@ -34,7 +34,7 @@ func KnownNonDefaultTags() [][]string {
 		//   - TestCellRawInfraWrapperLocation01_ScannerDetectsViolation
 		// 修改本条目前请确认对应 detection-test 仍能加载 fixture 包。
 		// Excluded from `go build ./...` and `go test ./...` so fixtures never
-		// pollute real-repo scans (ai-collab.md §"real source AST capture").
+		// pollute real-repo scans (ai-robust.md §"real source AST capture").
 		{"archtest_fixture"},
 	}
 }

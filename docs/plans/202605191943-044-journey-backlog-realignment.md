@@ -238,11 +238,11 @@ TESTUTIL-BOUNDARY-01 的 `isTestInfraPath` 识别含 `testutil` 段或长度 > 4
 但 `extractTestutilRoot` 严格按 `testutil` 段字面匹配，**不**识别 `*test` 后缀段 —— 因此
 `cells/{X}/{X}test/` 的 import ban 依赖本规则独立补充。
 
-**AI-rebust 评级**：
+**AI-robust 评级**：
 
 - **下游 Hard**：archtest path-pattern match（正则锁 import 路径字面值，无字符串锚点，violation 形态唯一）
 - **上游 Medium**：archtest 自动发现 production 文件，路径段匹配，未达 codegen funnel Hard（生产代码无法编译期阻止 import ——需 sealed interface 才能升 Hard）
-- **整体 Medium**：满足 ai-collab.md §"立项硬门槛" ≥ Medium 要求
+- **整体 Medium**：满足 ai-robust.md §"立项硬门槛" ≥ Medium 要求
 
 ### 2.6 验证
 
@@ -338,7 +338,7 @@ func validateJOURNEYBusinessSemantic01(snapshot *MetadataSnapshot) []Diagnostic 
 - `case_insensitive` — text = "USER 登录" → 0 diagnostic（大小写不敏感）
 - `boundary` — text = "useragent 字段解析"（user 是子串但非 word）→ 1 diagnostic（word boundary 拒）
 
-### 3.5 AI-Rebust 评级
+### 3.5 AI-robust 评级
 
 - 下游 Hard：governance rule type-aware（不是字符串锚点，是 word list 解析 + 边界匹配）
 - 上游 Medium：白名单维护是文档约束，archtest 守不到"新业务词必须加入白名单"。升级路径 = NLP 语义抽取（远期，需 LLM-in-CI 基建）
@@ -488,7 +488,7 @@ go run ./cmd/gocell validate --strict   # 全部 active journey 现有 criterion
 测试 PASS + lint 0 + VERIFY-06 绿三连绿**不**构成达标判断 — 必须显式过这 4 步对齐才算 review 通过。
 ```
 
-### 6.2 修改 `.claude/rules/gocell/ai-collab.md`
+### 6.2 修改 `.claude/rules/gocell/ai-robust.md`
 
 在 `## Review checklist` 段末尾追加：
 
@@ -518,7 +518,7 @@ reviewer 必须自问：本 PR 立项 / 修改的 journey criterion，主谓宾�
 
 **目标**：阻止"同源根因重复登记 backlog"的软处理累积。
 
-### 7.1 修改 `.claude/rules/gocell/ai-collab.md`
+### 7.1 修改 `.claude/rules/gocell/ai-robust.md`
 
 在 `## Review checklist` 段末尾追加：
 
@@ -590,7 +590,7 @@ go run ./cmd/gocell validate --strict   # 当前 backlog 状态下应有若干 a
 [BACKLOG-SOFT-PROCESSING-CLUSTER-WARNING-01] cluster of 2+ similar 🟠/🟡 backlog entries detected:
   - JOURNEY-USERONBOARDING-AUTO-EXPANSION-01 (cap-14-tooling.md:95)
   - JOURNEY-ACCOUNTLOCKOUT-AUTO-EXPANSION-01 (cap-14-tooling.md:96)
-similarity=0.78. Consider framework escalation. See ai-collab.md §Backlog 同模板升格规则.
+similarity=0.78. Consider framework escalation. See ai-robust.md §Backlog 同模板升格规则.
 ```
 
 ---

@@ -28,7 +28,7 @@
 
 **位置**：`tools/archtest/scaffold_bundle_test.go`
 
-**问题**：ai-collab.md 规定"单条独立规则 → `{rule}_test.go`"，"同主题规则 ≥ 3 → `{theme}_invariants_test.go`"。该文件含两条 INVARIANT（`SCAFFOLD-BUNDLE-MARKER-01` 和 `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01`），属于 2 条同主题规则的中间状态：按规则不满足 ≥3 的阈值，但"单条独立规则 → 单文件"的语义也不适用（已含 2 条）。
+**问题**：ai-robust.md 规定"单条独立规则 → `{rule}_test.go`"，"同主题规则 ≥ 3 → `{theme}_invariants_test.go`"。该文件含两条 INVARIANT（`SCAFFOLD-BUNDLE-MARKER-01` 和 `SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01`），属于 2 条同主题规则的中间状态：按规则不满足 ≥3 的阈值，但"单条独立规则 → 单文件"的语义也不适用（已含 2 条）。
 
 **证据**：文件头注释：
 ```
@@ -36,7 +36,7 @@
 //   - INVARIANT: SCAFFOLD-BUNDLE-MARKER-01
 //   - INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01
 ```
-ai-collab.md 原文："已有单文件升到第 3 条时，重命名为 `{theme}_invariants_test.go`"。目前两条，命名规则无明确覆盖此场景。
+ai-robust.md 原文："已有单文件升到第 3 条时，重命名为 `{theme}_invariants_test.go`"。目前两条，命名规则无明确覆盖此场景。
 
 **建议**：在 PR 合并时保持现状是合理的（未触发 ≥3 重命名阈值）。但若后续新增第 3 条 scaffold-bundle 相关 INVARIANT（如 `SCAFFOLD-INLINE-TEMPLATE-ARCHTEST` backlog 条目落地），需立即重命名为 `scaffold_bundle_invariants_test.go`。建议在 backlog 条目 `SCAFFOLD-INLINE-TEMPLATE-ARCHTEST` 的描述中加注"落地时触发 `scaffold_bundle_test.go` → `scaffold_bundle_invariants_test.go` 重命名"。
 

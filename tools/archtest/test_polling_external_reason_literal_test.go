@@ -18,7 +18,7 @@ package archtest
 // require.Eventually / assert.Eventually / *WithT module-wide so reaching
 // testwait.External is the only Go-source path to synchronous polling.
 // Together with this downstream rule they form a Hard funnel
-// (ai-collab.md §"Funnel 双向锁评级") and Hard 范本 "typed marker funnel
+// (ai-robust.md §"Funnel 双向锁评级") and Hard 范本 "typed marker funnel
 // for unbounded ops" (sibling of panicregister.Approved).
 
 import (
@@ -213,7 +213,7 @@ func shouldSkipForTestwaitExternal(rel string) bool {
 // lock (ban bare require.Eventually / assert.Eventually) lives in sibling
 // archtest TEST-EVENTUALLY-FUNNEL-01 (test_eventually_funnel_test.go).
 //
-// Blind spots of the chosen tool (per AI-rebust §"工具选定后强制盲区自检"):
+// Blind spots of the chosen tool (per AI-robust §"工具选定后强制盲区自检"):
 //
 //   - Indirect call via function variable: var f = testwait.External; f(t, dynVar, ...).
 //     The CallExpr.Fun here is an *ast.Ident pointing at a variable, not a
@@ -339,7 +339,7 @@ func TestExternalReasonLiteralFixtures(t *testing.T) {
 }
 
 // TestExternalReasonLiteral_NoIndirectReferences is the blind-spot reverse
-// self-test required by AI-rebust §"工具选定后强制盲区自检".
+// self-test required by AI-robust §"工具选定后强制盲区自检".
 //
 // It scans every *ast.Ident in production + test code whose *types.Info.Uses
 // entry is testwait.External, then asserts the Ident appears in

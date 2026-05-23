@@ -101,7 +101,7 @@ const (
 // TestPassFunnelGuardListSync (exact-equality assertions: yaml-exempt ==
 // passFunnelPermanentExempt AND packages-import == passFunnelPermanentExempt).
 //
-// AI-rebust grade: Medium. The 3-entry set is structurally necessary (these
+// AI-robust grade: Medium. The 3-entry set is structurally necessary (these
 // files implement or directly test the funnel machinery; type system cannot
 // distinguish rule implementation from rule violator). Mechanical sync is
 // enforced via double-declaration: Go map literal here AND matching
@@ -190,7 +190,7 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 // A1, closes ADR termination-criteria §(c)). Detection is type-aware via
 // typeseval.ResolvePackageRef on all SelectorExpr / bare Ident nodes.
 //
-// # AI-rebust: Medium
+// # AI-robust: Medium
 //
 // Detection is type-aware (typeseval.ResolvePackageRef via *types.Info) and
 // covers all three import forms (qualified, alias, dot-import). Not Hard
@@ -198,7 +198,7 @@ func diagsEachFile(tgt passFunnelTarget) []scanner.Diagnostic {
 // resolve rather than string-matching, so it cannot be bypassed by renaming
 // an import alias.
 //
-// # Blind spots (per ai-collab.md Medium evidence requirement)
+// # Blind spots (per ai-robust.md Medium evidence requirement)
 //
 //   - File-scope var escape: `var loader = typeseval.LoadProductionPackages`
 //     at file scope — the assignment SelectorExpr IS detected (trips the rule),
@@ -288,7 +288,7 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 // typeseval helper symbols and scanner.ImportBan (as value refs or calls),
 // covering qualified / alias / dot-import forms via typeseval.ResolvePackageRef.
 //
-// # AI-rebust: Medium
+// # AI-robust: Medium
 //
 // Detection is type-aware (typeseval.ResolvePackageRef via *types.Info) and
 // covers all three import forms (qualified, alias, dot-import). The exempt
@@ -297,7 +297,7 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 // the detector requires *types.Info resolve rather than string-matching, so
 // it cannot be bypassed by renaming an import alias.
 //
-// # Blind spots (per ai-collab.md Medium evidence requirement)
+// # Blind spots (per ai-robust.md Medium evidence requirement)
 //
 //   - Value indirection via a local variable (`f := typeseval.ResolvePackageRef;
 //     f(...)`): the RHS SelectorExpr IS detected (trips the rule at assignment),
@@ -407,10 +407,10 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 // SelectorExpr / BinaryExpr const-concat) uniformly without per-shape code
 // branches — the helper already encodes the resolution lattice.
 //
-// # AI-rebust: archtest-bound (callee, arg) form-uniqueness Hard
+// # AI-robust: archtest-bound (callee, arg) form-uniqueness Hard
 //
 // Charter §Hard 范本 第 2 条 "typed function call as Hard funnel for
-// unbounded operations" (panic(any) range, ai-collab.md) is the template
+// unbounded operations" (panic(any) range, ai-robust.md) is the template
 // this rule isomorphs:
 //
 //   - panicregister.Approved: (callee resolves via *types.Info to
@@ -431,7 +431,7 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 // The (callee, arg) pair is what disambiguates legitimate identity
 // from bypass.
 //
-// # Funnel double-lock (per ai-collab.md §Funnel 双向锁评级)
+// # Funnel double-lock (per ai-robust.md §Funnel 双向锁评级)
 //
 //   - Downstream / outward Hard: RunTypedFixture's FixtureOpts has no
 //     Tags field; `RunTypedFixture(t, FixtureOpts{Tags: ...}, ...)` is a
@@ -590,7 +590,7 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 // dot-import forms). Exempt: passFunnelPermanentExempt (3 framework files,
 // permanent; LegacyAllowlist deleted in Stage 4).
 //
-// AI-rebust: Medium (see diagsResolveHelpers godoc for full evidence).
+// AI-robust: Medium (see diagsResolveHelpers godoc for full evidence).
 func TestPassFunnelResolve01(t *testing.T) {
 	targets := loadPassFunnelTargets(t)
 	var diags []scanner.Diagnostic
@@ -682,7 +682,7 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 // files); fixture.go is filtered out by loadPassFunnelTargets's
 // *_test.go suffix check.
 //
-// AI-rebust: archtest-bound form-uniqueness Hard (see diagsFixtureTagBypass
+// AI-robust: archtest-bound form-uniqueness Hard (see diagsFixtureTagBypass
 // godoc for full evidence and accepted blind spots).
 func TestPassFunnelFixtureTagBypass01(t *testing.T) {
 	targets := loadPassFunnelTargets(t)
@@ -807,7 +807,7 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 	return out
 }
 
-// TestPassFunnel_FixtureCoverage is the AI-rebust "盲区自检" reverse test:
+// TestPassFunnel_FixtureCoverage is the AI-robust "盲区自检" reverse test:
 // loads the build-tag-gated red fixture (internal/passfunnelfixture) and
 // asserts each of the three rule detectors emits ≥ 1 diagnostic. Removing
 // any banned form from redfixture.go turns the relevant assertion red,

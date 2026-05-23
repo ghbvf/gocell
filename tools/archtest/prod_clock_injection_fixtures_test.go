@@ -7,7 +7,7 @@
 // each forbidden time symbol), the canonical injected-Clock pass shape, or
 // the function-level control-plane marker carve-out.
 //
-// Control-plane marker self-checks (per ai-collab.md §"盲区自检"):
+// Control-plane marker self-checks (per ai-robust.md §"盲区自检"):
 //   - control_plane_marker_passes: GREEN — FuncDecls with doc-comment marker
 //     produce 0 violations.
 //   - control_plane_no_marker_violates: RED — inline body comment (not doc)
@@ -77,7 +77,7 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 		"newtimer_violates",
 
 		// Function-level control-plane marker carve-out self-checks
-		// (per ai-collab.md §"盲区自检" / PROD-CLOCK-INJECTION-01 godoc).
+		// (per ai-robust.md §"盲区自检" / PROD-CLOCK-INJECTION-01 godoc).
 		"control_plane_marker_passes",
 		"control_plane_marker_wrong_path_violates",
 		"control_plane_marker_wrong_func_violates",

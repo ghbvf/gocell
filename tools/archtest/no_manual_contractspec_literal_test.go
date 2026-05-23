@@ -30,7 +30,7 @@
 //   - kernel/contractspec/** itself    — defines ContractSpec and the typed funnels
 //   - *_test.go                        — test helpers may reference specs for assertions
 //
-// AI-rebust:
+// AI-robust:
 //   - Composite-literal ban: Hard — `contractspec.ContractSpec{…}` under
 //     cells/ + examples/ + runtime/ is unrepresentable (archtest fails CI),
 //     the typed funnels are the only surviving form.
@@ -42,7 +42,7 @@
 //     CI when the constant goes stale, covering two modes: (a) the file
 //     disappears (Stat fails) and (b) the file remains but no longer invokes
 //     contractspec.NewEventDerivation (AST scan reports zero calls). The
-//     gate remains string-anchored per ai-collab.md taxonomy. Upgrade path
+//     gate remains string-anchored per ai-robust.md taxonomy. Upgrade path
 //     to Hard would be a typed authority token only the eventrouter package
 //     can mint.
 //

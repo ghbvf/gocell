@@ -45,7 +45,7 @@ package governance
 //   - kind != "http"             — event contracts handled by ADV-06;
 //     projection/command/query by future targeted rules
 //
-// AI-rebust grade: Medium.
+// AI-robust grade: Medium.
 //
 // ref: rules_journey.go:validateJOURNEYCONTRACTEXISTENCE01 (same exemption
 // pattern, inverse direction); rules_misc_advisory.go:adv06ContractToSlice

@@ -20,7 +20,7 @@ import (
 // caller iterating pkg.Syntax cannot reach codegen output unless they
 // explicitly opt in via All() — which names the trade-off at the call site.
 //
-// AI-rebust grade: Hard for the iteration path (violation not expressible
+// AI-robust grade: Hard for the iteration path (violation not expressible
 // without renaming `Production` → `All` at every call site), Medium for
 // the load API (archtest gating with named allowlist). The combination
 // closes the file-level grep loophole described in

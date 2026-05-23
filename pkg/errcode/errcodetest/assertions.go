@@ -6,7 +6,7 @@
 //
 // Picking either funnel — but no other shape — is what makes that rule
 // "violation impossible to express" at the assertion site
-// (.claude/rules/gocell/ai-collab.md §"Hard 范本" / typed function call as
+// (.claude/rules/gocell/ai-robust.md §"Hard 范本" / typed function call as
 // Hard funnel for unbounded operations; same template as
 // pkg/panicregister.Approved + PANIC-REGISTERED-01).
 //
@@ -15,7 +15,7 @@
 // (branch 213-pg-notfound-archtest). Once PR-b is merged, the funnel is
 // downstream-Hard (calling AssertCode/AssertWireCode is type-bound) AND
 // upstream-Hard (a _NotFound test missing the funnel call fails archtest CI),
-// forming a closed-loop funnel per ai-collab.md §"Funnel 双向锁评级".
+// forming a closed-loop funnel per ai-robust.md §"Funnel 双向锁评级".
 //
 // Per pkg/ layering: the package depends only on the standard library and
 // pkg/errcode (a sibling of this package). It does not import third-party

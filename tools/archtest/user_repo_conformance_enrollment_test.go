@@ -1,6 +1,6 @@
 // INVARIANT: USERREPO-CONFORMANCE-ENROLLMENT-01
 //
-// AI-rebust: Medium
+// AI-robust: Medium
 //
 //   - 实现扫描: types.Implements(*types.Interface) — type-aware，identifies every
 //     concrete named type that satisfies ports.UserRepository (or *T).

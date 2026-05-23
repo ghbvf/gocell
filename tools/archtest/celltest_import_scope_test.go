@@ -109,7 +109,7 @@ func TestCelltestImportScope(t *testing.T) {
 
 // TestCelltestImportPath_PatternTable is a table-driven unit test for the
 // isCellTestImportPath helper. It also acts as the blind-spot self-check test
-// required by the AI-rebust chapter: each "outside declared scope" case is
+// required by the AI-robust chapter: each "outside declared scope" case is
 // explicitly listed and asserted to return false (non-matching), confirming the
 // rule does NOT attempt to cover those forms.
 func TestCelltestImportPath_PatternTable(t *testing.T) {

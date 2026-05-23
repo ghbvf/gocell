@@ -26,7 +26,7 @@
 //     from its registry and falls through to the unknown-type error,
 //     exactly like a typo.
 //
-// AI-rebust: Hard (closed-loop funnel). Upstream Hard (no switch + must
+// AI-robust: Hard (closed-loop funnel). Upstream Hard (no switch + must
 // call findSub) and downstream Hard (no literal-name helpEntry) together
 // make "visible-but-unimplemented sub-command" inexpressible in the four
 // trees. Reverse-fixture self-checks below prove each detector actually

@@ -6,7 +6,7 @@
 // 新方法、改窄方法签名（包括把 *string 改回 string）、或为接口加 embedded
 // sub-interface，本 archtest 在 CI 直接 fail。
 //
-// AI-rebust 评级：Medium（AST type-aware interface direct method set + signature
+// AI-robust 评级：Medium（AST type-aware interface direct method set + signature
 // 串精确匹配，与 CELL-IFACE-ISP-METHODSETS-01 同范式；Go type system 在
 // interface method-set + signature 锁定问题上能达到的上限）。caller-facing
 // method signature 维度是 Hard——generic Update(*User) 删除后、`*string` →

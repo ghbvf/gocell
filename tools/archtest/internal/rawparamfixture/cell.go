@@ -20,7 +20,7 @@
 // forbidden raw-infra set. The fixture lives outside those paths, so the
 // detection test bypasses the path filter and runs the file scanner
 // directly on each fixture file (mirrors the wrapper-location detection
-// fixture pattern, ai-collab.md §"real source AST capture").
+// fixture pattern, ai-robust.md §"real source AST capture").
 package rawparamfixture
 
 import (

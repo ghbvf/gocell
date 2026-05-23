@@ -505,7 +505,7 @@ linters:
           #
           # Upstream Hard funnel (lint-level, CI-blocking) per
           # docs/plans/202605121830-038-p0-p1-blocking-implementation-plan.md
-          # and CLAUDE.md ai-collab.md §3 "路径级 import ban → depguard".
+          # and CLAUDE.md ai-robust.md §3 "路径级 import ban → depguard".
           #
           # Downstream Hard (type-system, existing): domain.User authz fields
           # are private + authzmutate.Mutation is sealed + Mutator.ApplyInTx

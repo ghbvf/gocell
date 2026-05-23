@@ -22,7 +22,7 @@
 
 **建议**：尽快走 follow-up PR 把 74 行删干净，并在 `tools/archtest/scaffold_bundle_test.go` 之外加一个全仓 `contracts/` 扫描的 archtest，断言 `codegen: true` 字面不再出现（任何状态默认即 true，余下只允许 `codegen: false` 显式 opt-out）。否则下次新人 copy-paste 既有 contract 会持续繁殖冗余。
 
-**AI-rebust 评级**：升级路径 Medium（real-source YAML scan + 全仓 allowlist=空）。
+**AI-robust 评级**：升级路径 Medium（real-source YAML scan + 全仓 allowlist=空）。
 
 **Backlog 登记**：已登记 `CONTRACT-YAML-CODEGEN-DEFAULT-CLEANUP`（P2/Cx2 黄）。
 
@@ -36,7 +36,7 @@
 
 **建议**：把 backlog 触发条件改"deferred"为"K#09 ship 后即做"，落 reflect-based archtest：枚举 `AssemblyMeta` 全部字段，断言要么在 `synthesizeAssemblyMeta` 显式赋值、要么在 allowlist（含"故意置零"注释）。这就是典型的 godoc-Soft → reflect-Hard 升级。
 
-**AI-rebust 评级**：当前 Soft（注释 + grep 约定）。目标 Hard（reflect 字段计数）。按 `.claude/rules/gocell/ai-collab.md`，"既有 Soft 的补丁要优先讨论升级到 Hard/Medium"，本 PR 既然新增了这个 in-memory inject 机制，本应同包发 reflect guard。
+**AI-robust 评级**：当前 Soft（注释 + grep 约定）。目标 Hard（reflect 字段计数）。按 `.claude/rules/gocell/ai-robust.md`，"既有 Soft 的补丁要优先讨论升级到 Hard/Medium"，本 PR 既然新增了这个 in-memory inject 机制，本应同包发 reflect guard。
 
 **Backlog 登记**：`ASSEMBLY-META-SYNTHESIS-FIELD-GUARD`（P2/Cx2 绿，触发条件偏被动）；建议改为 P2/Cx2 黄（主动 ship 时机=本 PR 后第 1 个 release window）。
 
@@ -54,7 +54,7 @@
 1. 让 `synthesizeAssemblyMeta` 不污染 `g.project.Assemblies`——把三个 Generate\* 改造为接受 `AssemblyMeta` 参数注入（pure render），从根上消除 in-memory mutation；这与 backlog `SCAFFOLD-GENERATOR-PURE-BYTES`(已 ✅) 的精神一致，但派生 generator 没走到底。
 2. 退而求次：加 `g.scaffoldMu sync.Mutex` 守 `PlanAssemblyScaffold` 入口；archtest 静态扫此函数体禁止跨 goroutine 调用。
 
-**AI-rebust 评级**：当前 Soft（godoc 约定）。路径 1 是 Hard（type system + pure function）；路径 2 是 Medium。
+**AI-robust 评级**：当前 Soft（godoc 约定）。路径 1 是 Hard（type system + pure function）；路径 2 是 Medium。
 
 **Backlog 登记**：未登记。建议新增 `ASSEMBLY-GENERATOR-CONCURRENT-SAFE-01`（P3/Cx2 绿，触发条件=出现并行 scaffold 需求 / 第二个 generator 调用方）。
 
@@ -68,7 +68,7 @@
 
 **建议**：建一个 `pkg/scaffoldid`（已在 backlog 中规划路径），把 traversal char / control char 检查集中到一处常量 + 一个 `Validate(value, field string) error`。kernel 和 cmd 都 import 这个 pkg。
 
-**AI-rebust 评级**：当前 Soft（注释 + 人工同步）。目标 Hard（typed `ScaffoldID` newtype + 单一构造函数漏斗）。
+**AI-robust 评级**：当前 Soft（注释 + 人工同步）。目标 Hard（typed `ScaffoldID` newtype + 单一构造函数漏斗）。
 
 **Backlog 登记**：已登记 `SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01`（P2/Cx3 绿）。建议立即把 status 升黄，触发条件"已到 3 处"。
 
@@ -76,17 +76,17 @@
 
 **位置**：`tools/archtest/scaffold_write_funnel_test.go:7439-7453`。
 
-**问题**：`scaffoldOnlyPred` 用 `strings.HasPrefix(base, "scaffold")` / `strings.HasPrefix(base, "generate_")` 作为"什么文件该扫"的判定。这是文件名 convention，违反 `ai-collab.md` "名字 convention → sealed interface / receiver type 识别"——理论上属于 Soft 形态。例如：
+**问题**：`scaffoldOnlyPred` 用 `strings.HasPrefix(base, "scaffold")` / `strings.HasPrefix(base, "generate_")` 作为"什么文件该扫"的判定。这是文件名 convention，违反 `ai-robust.md` "名字 convention → sealed interface / receiver type 识别"——理论上属于 Soft 形态。例如：
 - `cmd/gocell/app/setup.go`（未来新增的 scaffold 入口若不以 `scaffold` 开头）→ 直接逃逸
 - `tools/codegen/cellgen/bundle.go`（重命名 `scaffold_bundle.go` 即逃逸）
 
-**证据**：archtest 文件级注释自己声明 "AI-rebust: Hard"，但实际枚举谓词靠字符串前缀，且 file-level 注释也承认 "Adding any NEW file under cmd/gocell/app/ must either: 1. Match the scaffold\*.go prefix 2. Justify exemption in this comment block before merging. The scaffoldOnlyPred predicate enforces #1; #2 is the human-review gate."——human-review gate 即 Soft。
+**证据**：archtest 文件级注释自己声明 "AI-robust: Hard"，但实际枚举谓词靠字符串前缀，且 file-level 注释也承认 "Adding any NEW file under cmd/gocell/app/ must either: 1. Match the scaffold\*.go prefix 2. Justify exemption in this comment block before merging. The scaffoldOnlyPred predicate enforces #1; #2 is the human-review gate."——human-review gate 即 Soft。
 
 **建议**：把 Hard 评级降级为 Medium 更诚实，或同步登记升级条目 `SCAFFOLD-WRITE-FUNNEL-PREDICATE-HARDEN`（与现有 `SCAFFOLD-WRITE-FUNNEL-HARD-UPGRADE` 配套）：在 `pkg/pathsafe` 暴露 typed `Writer` interface + `.golangci.yml` depguard ban 在 scaffold/codegen 包 import `os`（让"非 funnel 写"在编译期不可表达）。backlog `SCAFFOLD-WRITE-FUNNEL-HARD-UPGRADE` 已经在做这件事，但当前评级矛盾应在 archtest 注释里调一致。
 
-**AI-rebust 评级**：实际 Medium（real-source AST scan + 字符串前缀谓词）；声明 Hard 偏乐观。
+**AI-robust 评级**：实际 Medium（real-source AST scan + 字符串前缀谓词）；声明 Hard 偏乐观。
 
-**Backlog 登记**：已部分覆盖 `SCAFFOLD-WRITE-FUNNEL-HARD-UPGRADE`（P3/Cx3 绿）。建议在 archtest 文件级注释里把 "AI-rebust: Hard" 改为 "Medium（谓词字符串，Hard 路径见 backlog ...）"。
+**Backlog 登记**：已部分覆盖 `SCAFFOLD-WRITE-FUNNEL-HARD-UPGRADE`（P3/Cx3 绿）。建议在 archtest 文件级注释里把 "AI-robust: Hard" 改为 "Medium（谓词字符串，Hard 路径见 backlog ...）"。
 
 ### F6 [Cx1] `Generator` import `pkg/pathsafe` 后，kernel 类型签名暴露 pkg 类型
 
@@ -98,7 +98,7 @@
 
 **建议**：低优先级重构。如果未来 kernel 测试或第二个调用方（e.g. server-side scaffold API）出现，应把 `ContainPath` 调用上提到 cmd 层；kernel 只产 `(relPath, content)` 对。当前单调用方场景下耦合代价低，不建议立项独立 PR。
 
-**AI-rebust 评级**：不适用（架构观感问题，非 enforcement 规则）。
+**AI-robust 评级**：不适用（架构观感问题，非 enforcement 规则）。
 
 **Backlog 登记**：未登记，建议新增 `ASSEMBLY-SCAFFOLD-PLAN-RELATIVE-PATH-01`（P3/Cx2 绿，触发条件=出现第二个 PlanAssemblyScaffold 调用方 / kernel 单元测试需 stub filesystem）。
 

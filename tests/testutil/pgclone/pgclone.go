@@ -29,7 +29,7 @@
 //
 // The PG-TESTCONTAINER-FUNNEL guard (a pure-AST archtest — the callsites are
 // //go:build integration files invisible to golangci-lint/typed tooling) keeps
-// tcpostgres.Run out of every other package. Its AI-rebust rating and
+// tcpostgres.Run out of every other package. Its AI-robust rating and
 // blind-spot inventory live in tools/archtest/pg_testcontainer_funnel_test.go.
 //
 // Most callers outside adapters/postgres should use tests/testutil/pgshare,

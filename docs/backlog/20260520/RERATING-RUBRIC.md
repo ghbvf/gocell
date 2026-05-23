@@ -4,7 +4,7 @@
 >
 > 适用：2026-05-19 启动的全量 re-rating（约 250 条 OPEN，分 5 阶段执行）。
 >
-> 关联 charter：`.claude/rules/gocell/ai-collab.md`（AI-rebust 三档分级 + Funnel 双向锁评级）。本 rubric 不与 charter 冲突，仅补充 backlog item 维度的 P/Cx/Flag 重评流程。
+> 关联 charter：`.claude/rules/gocell/ai-robust.md`（AI-robust 三档分级 + Funnel 双向锁评级）。本 rubric 不与 charter 冲突，仅补充 backlog item 维度的 P/Cx/Flag 重评流程。
 
 ---
 
@@ -89,7 +89,7 @@
 |---|---|
 | Type | `arch-opt` / `refactor` / `debt` 且描述含 *统一 / 合并 / 拆分 / 抽象 / decompose / normalize / converge / unify / dedup / single source / funnel / sealed / Hard 升级* |
 | Files | 触及 `kernel/` 多包 / `tools/archtest/` typed funnel / ≥ 3 cell |
-| AI-rebust | Soft → Hard / Medium 上游升 Hard / Funnel 双向锁未闭合（charter §"Funnel 双向锁评级"）|
+| AI-robust | Soft → Hard / Medium 上游升 Hard / Funnel 双向锁未闭合（charter §"Funnel 双向锁评级"）|
 | 跨域 | 影响 ≥ 3 个 cap |
 | Charter mandated | charter 已 mandate 显式登记（如 funnel godoc 中已点名）|
 
@@ -206,7 +206,7 @@ docs(backlog): re-rate cap-04 — bump N arch/dedup items + verify N DONE candid
 
 ## 9. 引用
 
-- charter：`.claude/rules/gocell/ai-collab.md`（AI-rebust 三档 + Funnel 双向锁）
+- charter：`.claude/rules/gocell/ai-robust.md`（AI-robust 三档 + Funnel 双向锁）
 - backlog 主表：`docs/backlog.md`
 - 归档：`docs/backlog/archive/`
 - 评级日志：`docs/backlog/RERATING-LOG.md`（本批次启动后逐阶段追加）

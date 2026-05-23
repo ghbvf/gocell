@@ -177,9 +177,9 @@ policy fixture 工具。
 
 ---
 
-## AI-rebust 评级
+## AI-robust 评级
 
-按 `.claude/rules/gocell/ai-collab.md` 三档定义严格分类。
+按 `.claude/rules/gocell/ai-robust.md` 三档定义严格分类。
 
 ### 主防线 = Hard（compile-error）
 
@@ -194,14 +194,14 @@ policy fixture 工具。
 
 无 deprecation alias / 无 build tag 影分身 / 无 namespace 共存。
 
-**对照 ai-collab.md §"Hard 范本"**（typed function call as Hard funnel）：
+**对照 ai-robust.md §"Hard 范本"**（typed function call as Hard funnel）：
 
 > Hard property comes from "form uniqueness": picking any other shape fails archtest
 > immediately.
 
 本方案的 form uniqueness 来自 **symbol 不存在性**，比 archtest-bound Hard 更彻底——
 绕过需要重新 export `Must*`，是改 production 包 API 的 diff，PR review 必然捕获。
-**这比 ai-collab.md 任何范本都更强（编译期 vs CI 期）。**
+**这比 ai-robust.md 任何范本都更强（编译期 vs CI 期）。**
 
 ### 次防线 = Medium（archtest 声明侧）
 

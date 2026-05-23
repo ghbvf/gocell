@@ -6,7 +6,7 @@
 // cannot accidentally pair primitives from different stores or substitute
 // a non-store-paired TxRunner.
 //
-// AI-rebust: Hard. Go visibility makes mis-pairing inexpressible outside
+// AI-robust: Hard. Go visibility makes mis-pairing inexpressible outside
 // this package: zero-value Bundle{} has nil getters and is rejected by the
 // existing phase0 validateRequiredDeps; valid bundles can only come from
 // NewBundle. Reverse self-check: ACCESSCORE-BUNDLE-FUNNEL-01 archtest

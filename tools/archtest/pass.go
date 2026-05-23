@@ -234,7 +234,7 @@ func RunTyped(t *testing.T, opts TypedOpts, patterns []string, rule Rule) []Diag
 // main module root — so "usage.go" rather than
 // "tools/archtest/testdata/.../usage.go".
 //
-// AI-rebust: Hard — three-line Hard defense is preserved unchanged:
+// AI-robust: Hard — three-line Hard defense is preserved unchanged:
 //   - Defense #1: Pass.Pkg is still *types.Package (not *packages.Package);
 //     rule authors cannot reach .Syntax or reconstruct INV-1 cross-load bugs.
 //   - Defense #2: depguard bans archtest *_test.go from directly importing
@@ -276,7 +276,7 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 // a per-callsite `if pass.IsGenerated(f) { continue }` discipline (which an
 // author can forget — a Hard→Soft regression).
 //
-// AI-rebust: downstream Hard / upstream Medium.
+// AI-robust: downstream Hard / upstream Medium.
 //
 //   - Downstream Hard: scanning generated/ output is NOT EXPRESSIBLE through
 //     this entry — a Pass it yields never contains a generated/ file. The

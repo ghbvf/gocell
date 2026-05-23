@@ -19,7 +19,7 @@ import "go/types"
 // ast.Expr at the point of check (they take a struct field, obj.Type(), or
 // a parameter type). This shape mirrors stdlib go/types.Implements(V, T).
 //
-// AI-rebust note: the ImplementsInterface vs ImplementsInterfaceExact
+// AI-robust note: the ImplementsInterface vs ImplementsInterfaceExact
 // choice is a name-level (Medium) distinction — both share one signature,
 // so picking the wrong one is not a compile error. The fixture-level guard
 // is the discriminating test case in implements_interface_test.go. The

@@ -15,7 +15,7 @@ package archtest
 //     单语义、各自 Hard，不再在同一 Check 接口下混合（消除 apply(_ *User)
 //     underscore 形态的建模错位）。详见 ADR §A11 重写 + §A12 wire-uniformity。
 //
-// Funnel 双向锁评级 (ai-collab.md §"Funnel 双向锁评级"):
+// Funnel 双向锁评级 (ai-robust.md §"Funnel 双向锁评级"):
 //
 //   Downstream Hard (caller allowlist):
 //     credentialauthority.Assert is resolved via typeseval.ResolvePackageRef
@@ -60,7 +60,7 @@ package archtest
 //   - Upstream value-capture:  AST scan of AssignStmt + ValueSpec + CallExpr-arg
 //                              with typed Ident / Selector resolution
 //
-// Blind-spot self-checks (ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot self-checks (ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. Method-value assignment: `fn := u.CanAuthenticate; fn()`
 //     The deferred fn() CallExpr's Fun is *ast.Ident, not *ast.SelectorExpr,
@@ -789,7 +789,7 @@ func stripModuleRoot(abs string) string {
 // passed to a callee outside the allowlist and invoked via an Ident, where
 // caller identity is no longer recoverable.
 //
-// Hard rating (ai-collab.md §"Hard 范本：typed function call as Hard funnel
+// Hard rating (ai-robust.md §"Hard 范本：typed function call as Hard funnel
 // for unbounded operations"):
 //   - Form uniqueness: any SelectorExpr typed-resolved to the funnel
 //     callee that is NOT at CallExpr.Fun position is reported. No

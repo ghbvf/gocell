@@ -228,7 +228,7 @@ cells/accesscore/cell.yaml + slices/*/slice.yaml
 
 - **单源**：一份 contract.yaml 决定 handler 类型、订阅声明、verify 闭环、catalog 索引
 - **改不漏**：删字段 → openapi 校验失败；缺 subscriber → ADV-06；忘 verify.contract → VERIFY-01
-- **AI-rebust**：违反不可表达（typed struct）或运行时拒绝（archtest），不靠注释/命名 convention
+- **AI-robust**：违反不可表达（typed struct）或运行时拒绝（archtest），不靠注释/命名 convention
 
 ---
 

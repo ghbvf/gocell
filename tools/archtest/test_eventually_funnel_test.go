@@ -36,7 +36,7 @@ package archtest
 //
 // Together with TEST-POLLING-EXTERNAL-REASON-LITERAL-01 this closes the
 // testwait funnel as a Hard 范本: "typed marker funnel for unbounded ops"
-// per .claude/rules/gocell/ai-collab.md §"Hard 范本目录" — sibling of
+// per .claude/rules/gocell/ai-robust.md §"Hard 范本目录" — sibling of
 // panicregister.Approved. Note: per the parent 范本 entry, enforcement is
 // archtest-bound (not Go compile-time); the (callee, arg) form-uniqueness
 // is the highest tier reachable for this rule shape in Go, but a future
@@ -75,7 +75,7 @@ const ruleTestEventuallyFunnel01 = "TEST-EVENTUALLY-FUNNEL-01"
 // names (`Eventually`, `EventuallyWithT`, `Eventuallyf`, `EventuallyWithTf`),
 // all polling/wait variants of the same semantics. Prefix matching closes
 // the "AI co-author adds a new const to the enumeration" bypass (an
-// ai-collab §"input-struct field exclusion" anti-pattern) and auto-covers
+// ai-robust §"input-struct field exclusion" anti-pattern) and auto-covers
 // any future `EventuallyXyz` testify upstream may add. Drift in the
 // testify surface that would invalidate this assumption is caught by
 // TestEventuallyFunnel_SymbolSentinel.
@@ -252,7 +252,7 @@ func shouldSkipForEventuallyFunnel(rel string) bool {
 // lock; the downstream lock (testwait.External callee+arg form-uniqueness)
 // is TEST-POLLING-EXTERNAL-REASON-LITERAL-01.
 //
-// Blind spots of the chosen tool (per AI-rebust §"工具选定后强制盲区自检"):
+// Blind spots of the chosen tool (per AI-robust §"工具选定后强制盲区自检"):
 //
 //   - Indirect call via function variable: var f = require.Eventually; f(t, cond, ...).
 //   - Function-pointer pass-through: helper(require.Eventually).
@@ -378,7 +378,7 @@ func TestEventuallyFunnelFixtures(t *testing.T) {
 }
 
 // TestEventuallyFunnel_NoIndirectReferences is the blind-spot reverse
-// self-test required by AI-rebust §"工具选定后强制盲区自检".
+// self-test required by AI-robust §"工具选定后强制盲区自检".
 //
 // It walks every reference to a banned symbol via both *types.Info.Uses
 // (qualified-ident references like `var f = require.Eventually`) and

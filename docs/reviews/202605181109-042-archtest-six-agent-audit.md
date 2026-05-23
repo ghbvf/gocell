@@ -3,10 +3,10 @@
 > 范围：`tools/archtest/` 全量 139 个 `*_test.go`、~200 个 INVARIANT、façade 层
 > （pass/scope/walk/resolve/content/fixture/golden）+ `internal/scanner` +
 > `internal/typeseval`。方法：6 个并行子 agent 按域切分，每域统一四维分析
-> （能力清单+AI-rebust 评级 / 合并候选 / Soft 升级路径+开源对标 / 暴露面收缩），
+> （能力清单+AI-robust 评级 / 合并候选 / Soft 升级路径+开源对标 / 暴露面收缩），
 > 本文为交叉综合。纯分析，未改动任何 enforcement 代码。
 >
-> 评级口径见 `.claude/rules/gocell/ai-collab.md`（Hard / Medium / Soft；
+> 评级口径见 `.claude/rules/gocell/ai-robust.md`（Hard / Medium / Soft；
 > Soft 严禁新立项，既有 Soft 不得 silent carryover）。
 
 ## 0. 全景结论
@@ -44,7 +44,7 @@
 - `SESSIONVALIDATE-EPOCH-COMPARE-01` + `-SOURCE-01`（同一 `!=` 的算子 vs 操作数）
 - 范例（已正确合并，勿动）：`CELLMETA-SINGLE-SOURCE-01/02/03`
 
-### 2b. 同主题文件归并（违反 ai-collab "≥3 同主题 → `{theme}_invariants_test.go`"）
+### 2b. 同主题文件归并（违反 ai-robust "≥3 同主题 → `{theme}_invariants_test.go`"）
 
 | 新主题文件 | 并入 | 收益 |
 |---|---|---|
@@ -75,7 +75,7 @@
 
 ### 3a. 合规红线（P0，零代码改动）
 
-以下 Soft 缺少 ai-collab 强制的 backlog 升级条目，构成 "silent carryover" 违章，
+以下 Soft 缺少 ai-robust 强制的 backlog 升级条目，构成 "silent carryover" 违章，
 **必须先登记或显式 accept**：
 
 - `LISTENER-DX-01`、`ACCESSCORE-FACADE-A61-01`（deletion-guard，godoc 无 backlog 引用）
@@ -124,7 +124,7 @@
 ## 5. 落地顺序
 
 1. **P0 合规（零改码）**：为 §3a 四组 silent-carryover Soft 登记 backlog 升级条目，
-   或在 godoc 显式 accept（ai-collab Review checklist 硬性要求，当前违章）。
+   或在 godoc 显式 accept（ai-robust Review checklist 硬性要求，当前违章）。
 2. **P1 高 ROI funnel（可并行）**：§4 #1 ProbeName、#2 fenceToken、#3 errcode sealed
    details —— 各为"一次类型收口消灭多条 Medium/Soft"。
 3. **P2 整合（机械、低风险）**：§2a sub-rule 塌缩 + §2b theme 归并 + §2c 声明式迁移。

@@ -342,7 +342,7 @@ flag 名是字符串硬编码；与代码路径关联靠 `if` check；rollout / 
 | **W2** | HTTP Idempotency middleware + RecordedResponse Store | 中 | 缓解最高频痛点 |
 | **W3** | Command Bus + codegen + 与 outbox / idempotency 协同 | 中 | 打通 CQRS 写侧 |
 | **W4** | In-Process Contract + assembly 拓扑感知 transport bind | 中 | 解决跨 cell 调用合规缺口 |
-| **W5** | Schema Registry（codegen hash + runtime check） + Version Skew | 短 | 把约定升机制，AI-rebust 升级 |
+| **W5** | Schema Registry（codegen hash + runtime check） + Version Skew | 短 | 把约定升机制，AI-robust 升级 |
 | **W6** | L3 Saga / Workflow Engine（基于 W1–W4） | 长 | L3 consistencyLevel 名实相符 |
 | **W7** | Auth → Audit middleware + observability 反查链路 + AuthZ↔contract | 短 | 合规 + 排障基础 |
 | **W8** | Outbound HTTP / Webhook + Drain / Restart-safe | 中 | 外部边界标准化 |
@@ -411,7 +411,7 @@ flag 名是字符串硬编码；与代码路径关联靠 `if` check；rollout / 
 
 2. **修复优先序的杠杆点**在 **W0–W2**：扩 envelope + after-commit + idempotency 三件套，解锁后续多个缺口。
 
-3. **AI-rebust 视角下的系统性升级机会**：当前 archtest 重点守"形态唯一"（panic / errcode / outbox 字面量等），下一阶段应该升级到守"**关系唯一**"（wire envelope 字段集 / contract.yaml ↔ 实现 ↔ test 三方一致）。这要求 archtest 工具能跨多文件做关系验证——`tools/archtest/internal/typeseval` 已有基础，但跨 yaml ↔ code 的双向关系测试尚未普及。
+3. **AI-robust 视角下的系统性升级机会**：当前 archtest 重点守"形态唯一"（panic / errcode / outbox 字面量等），下一阶段应该升级到守"**关系唯一**"（wire envelope 字段集 / contract.yaml ↔ 实现 ↔ test 三方一致）。这要求 archtest 工具能跨多文件做关系验证——`tools/archtest/internal/typeseval` 已有基础，但跨 yaml ↔ code 的双向关系测试尚未普及。
 
 4. **真正的战略选择**：framework 接下来是"**做深现有能力的精度**"，还是"**做广能力的组合**"？两者投入截然不同。后者收益更高——前者已经处于 marginal returns，后者直接决定 L3+ 能否落地。
 

@@ -46,11 +46,11 @@ carve-out 的完整清单、各条理由和升级路径统一维护在下方 `##
 - 代码有、ADR 表无 → CI 红
 - 两侧一致 → GREEN
 
-**AI-rebust 评级：Hard（archtest fail-on-deviation，非编译期）**。
+**AI-robust 评级：Hard（archtest fail-on-deviation，非编译期）**。
 
-违反是可表达的（例如编辑代码映射但忘记更新 ADR），但任何偏离均导致 CI 变红，没有灰色地带，没有注释豁免路径。按照 `.claude/rules/gocell/ai-collab.md` §Hard 范本（PANIC-REGISTERED-01 注解）的定义，这是 Go 语言中此类规则所能达到的最高评级；诚实声明：编译期不可阻止（Go 允许直接编辑 map 字面量），enforcement 依赖 archtest。
+违反是可表达的（例如编辑代码映射但忘记更新 ADR），但任何偏离均导致 CI 变红，没有灰色地带，没有注释豁免路径。按照 `.claude/rules/gocell/ai-robust.md` §Hard 范本（PANIC-REGISTERED-01 注解）的定义，这是 Go 语言中此类规则所能达到的最高评级；诚实声明：编译期不可阻止（Go 允许直接编辑 map 字面量），enforcement 依赖 archtest。
 
-**Funnel 双向锁评级**（依照 `.claude/rules/gocell/ai-collab.md` §Funnel 双向锁评级要求）：下游 Hard — ADR 表有记录但代码映射无对应条目时 CI 立即报红（archtest 严格等价断言）；上游 Hard — 代码映射有条目但 ADR 表无对应记录时同样 CI 报红；两侧均为 archtest-Hard，构成闭环 funnel。诚实声明：两侧均非编译期阻止，这是 Go 语言中此类 ADR↔code 等价规则可达到的最高评级。
+**Funnel 双向锁评级**（依照 `.claude/rules/gocell/ai-robust.md` §Funnel 双向锁评级要求）：下游 Hard — ADR 表有记录但代码映射无对应条目时 CI 立即报红（archtest 严格等价断言）；上游 Hard — 代码映射有条目但 ADR 表无对应记录时同样 CI 报红；两侧均为 archtest-Hard，构成闭环 funnel。诚实声明：两侧均非编译期阻止，这是 Go 语言中此类 ADR↔code 等价规则可达到的最高评级。
 
 ## Carve-out registry
 
@@ -82,7 +82,7 @@ archtest `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 解析此表（`File` 与 `Functi
 弱点：ADR 与 golden 的同步仍依赖 convention 约束，reviewer 需手动对比；不如 ADR↔code 严格等价检查直接。
 
 **(b) 注释式"新增须写 ADR"约定**：在 errcode_invariants_test.go 顶部加注释要求新增 carve-out 时写 ADR。
-弱点：Soft 形态，reviewer 必须主动抓；AI 可在注释无效条件下绕过。已明确排除（按 `.claude/rules/gocell/ai-collab.md` §Soft 严禁立项原则）。
+弱点：Soft 形态，reviewer 必须主动抓；AI 可在注释无效条件下绕过。已明确排除（按 `.claude/rules/gocell/ai-robust.md` §Soft 严禁立项原则）。
 
 最终选择 Hard ADR↔code 严格等价交叉校验，由 archtest 在 CI 层机器执行。
 
@@ -90,4 +90,4 @@ archtest `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 解析此表（`File` 与 `Functi
 
 - 037 Wave 4 提前推进计划（已归档）：[`docs/plans/archive/202605121750-037-wave4-advance-plan.md`](../plans/archive/202605121750-037-wave4-advance-plan.md) §1.2 PR-A2；实现锚点 PR #503 / commit `3fd2cbaf6`
 - cap-14 backlog：[`docs/backlog/cap-14-tooling.md`](../backlog/cap-14-tooling.md) 条目 `ARCHTEST-CARVEOUT-NARROW-FUNCLEVEL` + `B2-K-08-CARVEOUT-NARROW`
-- AI 协作章程：[`.claude/rules/gocell/ai-collab.md`](../../.claude/rules/gocell/ai-collab.md) §AI-rebust 三档分级、§Hard 范本
+- AI-robust 治理章程：[`.claude/rules/gocell/ai-robust.md`](../../.claude/rules/gocell/ai-robust.md) §AI-robust 三档分级、§Hard 范本

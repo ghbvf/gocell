@@ -23,7 +23,7 @@
 - `kernel/scaffold/templates/cell.yaml.tpl:5` 裸 scalar 无引号
 - `docs/backlog.md` G-11 `SCAFFOLD-FREETEXT-YAML-INJECTION`（P1/Cx2 🟡）已记录但未修
 **建议**：新增 `validateFreeText(value, field) error` 拒绝 `\n\r":#[]{}|>`；模板改单引号包裹（`team: '{{.OwnerTeam}}'`）；补 `TestCreateJourney_YAMLInjection` 对抗测试。G-11 应升 🔴 发布阻塞。
-**AI-rebust 评级**：当前 Soft（无校验）→ Medium（whitelist + 单引号 scalar）。
+**AI-robust 评级**：当前 Soft（无校验）→ Medium（whitelist + 单引号 scalar）。
 **Backlog 登记**：G-11 升级。
 
 #### F2 [P1] [Cx1] `cellgen.ScaffoldCell` 错误未走 `pkg/errcode`

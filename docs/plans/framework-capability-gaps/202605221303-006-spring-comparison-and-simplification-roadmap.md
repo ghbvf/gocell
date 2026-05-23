@@ -18,7 +18,7 @@
 
 ## 0. 一句话结论
 
-**GoCell 能简化到 Spring Boot 60% 体感，但拿不到 Spring 全家桶哲学的精髓**——Spring 简化的本质是「运行时反射 + AOP 织入 + 约定扫描」，GoCell 的工程宪法（`.claude/rules/gocell/ai-collab.md` AI-rebust 三档）把这三样判了 Soft。GoCell 能逼近 Spring 的「业务侧代码量」，但走的是另一条路：**重 codegen + 重 archtest + 重元数据声明，换编译期可证明的契约闭环**。
+**GoCell 能简化到 Spring Boot 60% 体感，但拿不到 Spring 全家桶哲学的精髓**——Spring 简化的本质是「运行时反射 + AOP 织入 + 约定扫描」，GoCell 的工程宪法（`.claude/rules/gocell/ai-robust.md` AI-robust 三档）把这三样判了 Soft。GoCell 能逼近 Spring 的「业务侧代码量」，但走的是另一条路：**重 codegen + 重 archtest + 重元数据声明，换编译期可证明的契约闭环**。
 
 定位裁决：GoCell 的目标用户是「愿意为编译期契约保证投入 onboarding 成本的工程团队」，不是「想要 Rails/Spring 式 5 分钟上手的业务团队」。
 
@@ -43,7 +43,7 @@
 
 - **现状**：`Cell.Init(ctx, reg)` 手写 + `Option` 链 + codegen 派生 `slice_gen.go` / `cell_gen.go`。composition root（`cmd/{id}/*_module.go`）全手工 ~13k LOC。
 - **与 Spring 差距**：
-  - Spring 用反射在 runtime 自动发现 `@Autowired` 字段；GoCell 工程宪法**禁止 reflection 自动装配**（`ai-collab.md` AI-rebust 三档——reflection 装配违反不可表达性，列为 Soft）。
+  - Spring 用反射在 runtime 自动发现 `@Autowired` 字段；GoCell 工程宪法**禁止 reflection 自动装配**（`ai-robust.md` AI-robust 三档——reflection 装配违反不可表达性，列为 Soft）。
   - Spring 的 `@Component` 扫 classpath；GoCell 要求 cell.yaml + slice.yaml + assembly.yaml 三处显式声明。
 - **能补齐的部分**：codegen 可以从 cell.yaml + slice metadata 自动生成 `{cell}_module.go`（K#10 已部分尝试，手写部分仍多），把 13k LOC 压到 3-4k。这是**「compile-time DI」**——Wire / Dagger 路线，不是 Spring 路线。
 - **结论**：**不能拿到 Spring 体感，能拿到 Wire/Dagger 体感**。这是宪法约束下的最优解。
@@ -69,7 +69,7 @@ Spring 是 **"约定在前、配置稀缺"**：按类名/方法名自动扫描�
 GoCell 是 **"配置在前、约定隐形"**：contract.yaml / cell.yaml / slice.yaml / assembly.yaml 四源全显式声明，约定只活在 codegen 模板内部。
 
 **两者哲学相反，不存在"补齐"路径**。GoCell 的设计选择背后有明确理由：
-- 反 reflection（AI-rebust Hard 档要求）
+- 反 reflection（AI-robust Hard 档要求）
 - 反"按命名匹配"（隐形依赖）
 - 反"约定漂移到运行时才暴露"（archtest 把违反挡在编译期/CI）
 
@@ -131,7 +131,7 @@ GoCell 当前的能力包：
 
 ### 反模式清单（明确不做）
 
-- ❌ runtime reflection 自动装配（违反 AI-rebust Hard 档）
+- ❌ runtime reflection 自动装配（违反 AI-robust Hard 档）
 - ❌ method-level `@Transactional` / `@Cacheable` 注解织入（违反"显式优于隐式"）
 - ❌ classpath / package scan 自动发现 cell / slice / handler（违反"约定漂移到运行时"反对）
 - ❌ Spring SpEL 这种 runtime 表达式（违反"编译期可证明"）
@@ -145,8 +145,8 @@ GoCell 当前的能力包：
 - 本路线是「降低已有能力的使用成本」（减少胶水代码）
 - 二者**正交、可并行**，但当资源紧张时建议**优先本路线**（直接改善每天写代码的业务团队体验，ROI 更直接），005 W0–W10 大多数 Wave 可暂缓。
 
-**DG-1：AI-rebust 立项门**（同 005 §0 DG-1）
-P0-1 / P0-2 / P0-3 三项均引入新的 codegen funnel + slice/cell.yaml schema 字段，立项时需给 **AI-rebust 三档评级**（Hard / Medium / Soft），Soft 严禁立项。具体到本路线：
+**DG-1：AI-robust 立项门**（同 005 §0 DG-1）
+P0-1 / P0-2 / P0-3 三项均引入新的 codegen funnel + slice/cell.yaml schema 字段，立项时需给 **AI-robust 三档评级**（Hard / Medium / Soft），Soft 严禁立项。具体到本路线：
 - P0-1 `capabilities` 字段 → 上游 Hard（assembly.yaml schema 强制 enum）+ 下游 Hard（archtest 守 module.go 不得手工绕过 provider）
 - P0-2 `requires` 字段 → 同上
 - P0-3 单源派生 → 上游 Hard（contractUsages 是唯一权威源）+ 下游 Hard（archtest 守 contract.yaml subscribers 段必由 codegen 派生，不得手写）

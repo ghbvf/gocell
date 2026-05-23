@@ -21,7 +21,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     - `outbox.WrapWriterForCell(writer)`
   - Cell-internal demo fallback: use `cell.DemoCellTxManager()` (returns sealed `persistence.CellTxManager`); do NOT use `cell.DemoTxRunner{}` directly inside cells (will not compile against the new field types).
   - All 6 composition-root sites + 11 test files migrated atomically; no compatibility shim.
-  - **Defense in depth (Hard sealed fields + Medium archtest API surface)** per ai-collab.md §"违反不可表达":
+  - **Defense in depth (Hard sealed fields + Medium archtest API surface)** per ai-robust.md §"违反不可表达":
     - **Hard (type system)**: raw infra fields and raw→`CellXxx` assignments are unexpressible at compile time — sealed marker requires the unimplementable `sealedXxx()` method only the wrapper packages provide.
     - **Medium (archtest, necessary double defense)**: type system alone cannot exhaust signature forms; `func WithBad(p interface{ outbox.Publisher })` (inline interface embed) and `import . "kernel/persistence"; WrapForCell(p)` (dot-import) compile around bare `*types.Named` / `*ast.SelectorExpr` matchers. `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` walks `*types.Interface` embedded types; `CELL-RAW-INFRA-WRAPPER-LOCATION-01` resolves both `*ast.SelectorExpr` and `*ast.Ident` call forms.
   - See ADR `docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md` (amends `202605101800` §D6).

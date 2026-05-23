@@ -28,7 +28,7 @@ var sessionProtocolForbidden = map[string]struct{}{
 // runtime/* (non-session), adapters/*, and tests outside session/* must
 // receive an injected *session.Protocol — not construct one.
 //
-// # AI-rebust: Medium (type-aware)
+// # AI-robust: Medium (type-aware)
 //
 // T3 Wave 2 upgrade (docs/plans/202605082145-034-pg-corecell-b-route-plan.md
 // §S4c T3, FU-3b 闭环): the rule resolves every CallExpr's callee through
@@ -71,7 +71,7 @@ var sessionProtocolForbidden = map[string]struct{}{
 //     PASS-FUNNEL-RESOLVE-01 fixture-side blind-spot coverage already
 //     anchors this resolver behavior (typeseval call_target_test.go).
 //   - BS-3 Reflection construction (reflect.New + MethodByName): out of
-//     scope per ai-collab.md §3 (no Go static rule reaches it).
+//     scope per ai-robust.md §3 (no Go static rule reaches it).
 func TestSessionProtocol_CompositionRootOnly(t *testing.T) {
 	diags := RunTyped(t,
 		TypedOpts{Tests: false},

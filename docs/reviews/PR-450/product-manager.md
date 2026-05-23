@@ -36,7 +36,7 @@
 | 13 | storetest conformance suite（MemStore + PG 共测） | P1 | 通过 | `runtime/audit/ledger/storetest/suite.go:121-133` 共 12 case |
 | 14 | 4 个 auditappend* slice 拆分 + 单源 Service | P1 | 通过 | `cells/auditcore/internal/appender/`（service / spec / actor / doc）；4 个 slice 仅 `type Service = appender.Service` + `var Spec = MustNewSpec(...)` |
 | 15 | ActorMode sealed enum（fail-closed） | P1 | 通过 | `appender/spec.go:9-23`；ActorRequireExplicit 阻止 role 事件用 userId fallback（B2-C-05） |
-| 16 | Spec sealed + closed slice name whitelist | P1 | 通过 | `appender/spec.go:42-66`；新加 slice 必须同时改两处（whitelist + archtest），有 AI-rebust Hard 防线 |
+| 16 | Spec sealed + closed slice name whitelist | P1 | 通过 | `appender/spec.go:42-66`；新加 slice 必须同时改两处（whitelist + archtest），有 AI-robust Hard 防线 |
 | 17 | L2 OutboxFact：store.Append + emitter.Emit 同一 RunInTx | P1 | 通过 | `appender/service.go:142-147` |
 | 18 | 13 个事件 topic 订阅完整声明 | P1 | 通过 | `cell_test.go:370-388` 显式枚举 13 个 topic 与 snapshot 比对 |
 | 19 | PII 出口经 RedactPayload | P1 | 通过 | `slices/auditquery/handler.go:128-138 toListResponseDataItem` 强制走 `redaction.RedactPayload`；`handler_test.go:236-298` 双重测试 |
@@ -144,7 +144,7 @@
 
 ## 5. 开发者体验亮点
 
-1. **Sealed 三件套（RestartRecoveryMode / IdempotencyMode / ActorMode）**：unexported marker 方法 + package-level instances 让违反不可表达（AI-rebust Hard 级）。开发者拿 `WithRestartRecovery(...)` 时 IDE 自动补全只有一个合法值 `ledger.RestartRecoveryStrictTailVerify{}`，配错不可能。
+1. **Sealed 三件套（RestartRecoveryMode / IdempotencyMode / ActorMode）**：unexported marker 方法 + package-level instances 让违反不可表达（AI-robust Hard 级）。开发者拿 `WithRestartRecovery(...)` 时 IDE 自动补全只有一个合法值 `ledger.RestartRecoveryStrictTailVerify{}`，配错不可能。
 2. **错误信息自解释 + 修复路径内嵌**：
    - `"audit ledger protocol: HMAC key required (use WithChainHMAC, key >= 32 bytes)"` — 直接告诉 caller 修哪个 Option 用什么阈值
    - `"auditcore: LedgerProtocol required; use WithLedgerProtocol (composition root must construct via MustNewProtocol)"` — 告诉 caller 应该在哪一层调用

@@ -40,7 +40,7 @@
 //   - `_ = func(){ AppendBootstrapAuthFail(...) }` or `defer func(){...}()`
 //     with the inner closure never invoked (call in nested FuncLit.Body)
 //
-// AI-rebust rating (downstream): Hard up to AST-pattern reachability. The
+// AI-robust rating (downstream): Hard up to AST-pattern reachability. The
 // remaining theoretical blind spots — true CFG reachability (e.g. an
 // unconditional `return` before the call), and helper-function indirection
 // (`return func(...){ helperThatAppends(...) }` where helperThatAppends lives
@@ -279,7 +279,7 @@ func collectClosureConditionalScopes(root ast.Node) []funcLitRange {
 
 // TestCollectClosureConditionalScopes is the reverse self-check for the
 // helper that powers the third leg of BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-
-// DOWNSTREAM-HARD-01's conjunction. ai-collab.md §"工具选定后强制盲区自检"
+// DOWNSTREAM-HARD-01's conjunction. ai-robust.md §"工具选定后强制盲区自检"
 // requires every Hard/Medium rule to ship a reverse test asserting the chosen
 // walker actually catches the AST shapes the godoc claims it catches.
 //

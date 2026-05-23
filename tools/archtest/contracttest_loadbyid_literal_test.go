@@ -19,7 +19,7 @@
 // literal funnel single-source across the archtest suite.
 // NOT registered in internal/archtestmeta.LegacyAllowlist.
 //
-// Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"):
+// Declared blind spots (ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. A call to a local wrapper function that in turn calls LoadByID with a
 //     constant: func load(t, root, id) { contracttest.LoadByID(t, root, id) }.

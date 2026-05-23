@@ -22,7 +22,7 @@
 // import-path + alias + selector — the same mechanism as the sibling
 // TestTestcontainerHelpersRequireDockerBeforeRun in integration_guard_test.go.
 //
-// AI-rebust grade: Medium. The callsite identity (import path
+// AI-robust grade: Medium. The callsite identity (import path
 // "...modules/postgres" + alias-resolved `.Run` selector + file allowlist) is
 // stronger than a string anchor but is archtest-bound, not compile-time. Hard
 // is structurally unreachable for "ban a third-party symbol outside an
@@ -30,7 +30,7 @@
 // forbid importing a public package; pure-AST file-allowlist is the highest
 // tier this rule shape reaches for integration-tagged code.
 //
-// Blind-spot inventory (per ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot inventory (per ai-robust.md §"工具选定后强制盲区自检"):
 //   - Function-value reference `run := tcpostgres.Run; run(...)`: COVERED — the
 //     scan walks every <alias>.Run *ast.SelectorExpr (assignment RHS, arg pass,
 //     or CallExpr.Fun alike), not just call targets. RED fixture
@@ -46,7 +46,7 @@
 // tests/integration, examples/iotdevice, cells/accesscore/slices/identitymanage —
 // each has a distinct container need (full-app e2e harness / independent
 // migration set / full-chain). They are NOT the adapters/postgres bottleneck.
-// Per ai-collab.md §Funnel 双向锁评级, this Medium-upstream transition form is
+// Per ai-robust.md §Funnel 双向锁评级, this Medium-upstream transition form is
 // tracked for closure by backlog #890.
 package archtest
 

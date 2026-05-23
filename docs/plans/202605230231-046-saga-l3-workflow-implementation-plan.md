@@ -373,7 +373,7 @@ PR-10 ────────────────────────�
 - `kernel/governance/rules/topo_saga_l3_test.go` +250
 - `.claude/rules/gocell/saga.md` +120（新规则文件，记录所有 saga 强约束）
 
-**ref**：`ref: .claude/rules/gocell/ai-collab.md Hard 范本目录 (in-repo)`
+**ref**：`ref: .claude/rules/gocell/ai-robust.md Hard 范本目录 (in-repo)`
 
 ---
 

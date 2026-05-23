@@ -17,7 +17,7 @@
 //
 // This archtest protects against future L2+ cells forgetting the CheckNotNoop call.
 //
-// AI-rebust grade: Medium (type-aware AST funnel via RunTypedProduction +
+// AI-robust grade: Medium (type-aware AST funnel via RunTypedProduction +
 // *types.Info callee resolution; scoped to production packages).
 //
 // # Algorithm
@@ -58,7 +58,7 @@
 //
 //  2. `//go:linkname` aliasing `kernel/cell.CheckNotNoop` under another name.
 //     ACKNOWLEDGED RESIDUAL RISK — no enforcement. A string-anchor probe
-//     was rejected per ai-collab.md §Review checklist ("Soft 新引入直接
+//     was rejected per ai-robust.md §Review checklist ("Soft 新引入直接
 //     reject"); `//go:linkname` is a compiler directive that produces no
 //     go/types symbol, so a Hard or Medium probe is unreachable. Linkname
 //     directives are vanishingly rare in production Go code; this blind-
@@ -78,7 +78,7 @@
 //
 // ref: docs/plans/202605101548-035-configcore-residuals-fix-plan.md
 // ref: kernel/cell/durability.go (CheckNotNoop, Nooper)
-// ref: AI-rebust §载体决策原则 in .claude/rules/gocell/ai-collab.md
+// ref: AI-robust §载体决策原则 in .claude/rules/gocell/ai-robust.md
 package archtest
 
 import (
@@ -910,7 +910,7 @@ func argSubtreeReferencesCheckNotNoop(p *Pass, args []ast.Expr) bool {
 }
 
 // (TestNoLinknameAliasInProduction REMOVED in PR #576 round-2 review:
-// `.claude/rules/gocell/ai-collab.md` §Review checklist mandates that
+// `.claude/rules/gocell/ai-robust.md` §Review checklist mandates that
 // newly-introduced Soft enforcement be rejected outright. The probe was a
 // `strings.Contains` anchor on `//go:linkname` directives — Soft by
 // definition. The blind-spot is now documented as acknowledged residual

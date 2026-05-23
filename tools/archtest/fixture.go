@@ -49,7 +49,7 @@ const FixtureBuildTag = "archtest_fixture"
 // This is the Hard-form upgrade of typed function choice: not only the
 // function name (RunTyped vs RunTypedFixture) but the input struct field
 // set (FixtureOpts has no Tags) participates in the type-system constraint.
-// See AI-rebust §Hard 范本 in .claude/rules/gocell/ai-collab.md.
+// See AI-robust §Hard 范本 in .claude/rules/gocell/ai-robust.md.
 type FixtureOpts struct {
 	Tests bool
 }
@@ -71,7 +71,7 @@ type FixtureOpts struct {
 // spy testing — orthogonal use case. See ADR 202605141519 §Migration path
 // Stage 4.
 //
-// AI-rebust (funnel double-lock):
+// AI-robust (funnel double-lock):
 //   - Outward Hard (business callers, downstream funnel side): FixtureOpts
 //     has no Tags field; writing RunTypedFixture(t, FixtureOpts{Tags: ...},
 //     ...) is a compile error.

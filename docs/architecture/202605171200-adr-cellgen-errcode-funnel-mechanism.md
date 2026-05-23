@@ -10,7 +10,7 @@
 >   - §D5 整段重写（非 amendment）：spike (c'') 原稿 STEP 2 "callee 返回含 error" 实施期过宽 → round-1 改 CallExpr-callee 黑名单 → round-2 review 揭示命名函数类型/类型转换/类型断言/STEP 3 false positive 四类问题 → round-2 改 Ident-scan via `types.Info.Uses[]`。两轮 amendment trail 移入 §Rejected alternatives 完整 audit。Path C "cellgen funcs return *errcode.Error" 被 errcode.Error 字段 exported 卡住——backlog `CELLGEN-ERRCODE-FUNNEL-HARDEN-PATH-C-FULL` 跟踪字段私有化重构。
 > ref: docs/plans/202605162000-037r2-wave4-advance-round2.md §R2-P5;
 >      docs/backlog/cap-14-tooling.md L44 `CELLGEN-ERRCODE-FUNNEL-HARDEN`;
->      .claude/rules/gocell/ai-collab.md §"typed function call as Hard funnel for unbounded operations";
+>      .claude/rules/gocell/ai-robust.md §"typed function call as Hard funnel for unbounded operations";
 >      tools/archtest/panic_invariants_test.go（对偶范本 PANIC-REGISTERED-01；INVARIANT ID 来自旧文件名 panic_registered_test.go，文件按章程 §archtest 文件命名「同主题规则 ≥ 3 → *_invariants_test.go」重命名）
 
 ## Context
@@ -50,7 +50,7 @@ backlog `cap-14-tooling.md` L44 提出两个 Hard 升级候选：
    - **不支持** method-level caller allowlist
    - GoCell 现有 0 个 depguard rule 是 method-level 形态
 
-4. **章程 §"typed function call as Hard funnel for unbounded operations"**（`.claude/rules/gocell/ai-collab.md`）：
+4. **章程 §"typed function call as Hard funnel for unbounded operations"**（`.claude/rules/gocell/ai-robust.md`）：
    > Hard property comes from "form uniqueness": picking any other shape... fails archtest in CI... The charter §1 definition of "typed function call" Hard does not require compile-time blocking, only form uniqueness + archtest fail-on-deviation — which is the highest grade reachable in Go for this rule shape.
 
 5. **PANIC-REGISTERED-01 范本结构**（`tools/archtest/panic_invariants_test.go`）：
@@ -120,7 +120,7 @@ Ident-scan 通过 `types.Info.Uses[]` 在 AST 任意位置解析 Ident 引用对
 
 **defense in depth — depguard `cellgen-error-libs`**：archtest 黑名单 S 覆盖 stdlib 已知构造函数。第三方 error library（`github.com/pkg/errors` / `golang.org/x/xerrors` / `go.uber.org/multierr` / `github.com/hashicorp/go-multierror` / `github.com/cockroachdb/errors`）通过 `.golangci.yml` `cellgen-error-libs` depguard 规则**在 import 边界拒绝**（递归 glob `**/tools/codegen/cellgen/**` 覆盖现在 + 未来子包），无需进入 archtest 黑名单。新增第三方 lib 需同步登记两侧：archtest 黑名单 + depguard deny 项 + 反向自检 RED fixture（同 PR）。
 
-**反向自检 RED + GREEN fixture 覆盖面**（章程 §AI-rebust 三档分级 ≥ Hard 必备 + Findings 1+2 历史闭环）：
+**反向自检 RED + GREEN fixture 覆盖面**（章程 §AI-robust 三档分级 ≥ Hard 必备 + Findings 1+2 历史闭环）：
 
 | Fixture | 形态 | 检测点 |
 |---|---|---|
@@ -156,9 +156,9 @@ Hard 等级在**注册集合内** form uniqueness：
 - **`golang.org/x/sync/errgroup` 不在 depguard deny**：`errgroup.Group.Wait/Go` 传播已存在 goroutine error，不构造新值。同 stdlib operation 处理。cellgen 现未 import（grep 验证）。
 - **同包 helper 调用**：`func validateXxx(...) error` 同包返回 error — Uses 解析到 cellgen-package *types.Func；不在黑名单 → skip。同包 helper body 内若有 blacklist 引用，scanner 在 helper body 内独立命中。Wrapper 链终止于第一个非同包非 errcode 的 Ident。
 
-### D6. AI-rebust 评级 = Hard 在注册集合内（OSS 业界上限）
+### D6. AI-robust 评级 = Hard 在注册集合内（OSS 业界上限）
 
-按章程 §"typed function call as Hard funnel for unbounded operations" + OSS 业界实测调查（K8s `*StatusError` constructor boundary / Kratos `*Error` constructor boundary / go-zero pluggable handler / 社区 linter 调研：errorlint / errwrap / err113 / depguard v2 均无 method-level error funnel 支持），本案 AI-rebust 评级如下：
+按章程 §"typed function call as Hard funnel for unbounded operations" + OSS 业界实测调查（K8s `*StatusError` constructor boundary / Kratos `*Error` constructor boundary / go-zero pluggable handler / 社区 linter 调研：errorlint / errwrap / err113 / depguard v2 均无 method-level error funnel 支持），本案 AI-robust 评级如下：
 
 - **form uniqueness（注册集合内）**：cellgen 包内任何 Ident 通过 `types.Info.Uses[]` 解析到 *types.Func，若 (Pkg.Path, Name) ∈ `cellgenErrConstructorBlacklist` 即 fail，**无视语法位置**（CallExpr / var RHS / 类型转换 / 类型断言 / 切片字面量 / 结构体字段 / 函数值传递）。集合内任何引用形态命中；集合外（合法 operation 如 `os.RemoveAll` / `text/template.Execute` / 合法 interface 方法 / 同包 helper）落在 skip 分支。
 - **archtest fail-on-deviation**：任何注册集合内引用形态立即 CI 红
@@ -209,4 +209,4 @@ Hard 等级在**注册集合内** form uniqueness：
 - **新增 cellgen 包内 error escape route**（注册集合外形态）：同 PR 修改三处——`cellgenErrConstructorBlacklist` (archtest) + `.golangci.yml` `cellgen-error-libs` deny + 反向自检 RED fixture + ADR §D5 fixture table 同步登记
 - **`TestCellgenErrcodeFunnelBlindSpotsAbsent` 首次 CI 红（复合字面量 / reflect.MakeFunc 在 cellgen 出现）**：trigger §D7 Path C-full 升级评估（字段私有化）或同 PR 扩 archtest blind-spot 检测面
 - **`TestCellgenErrcodeFunnelNoBuildTagFiles` 首次 CI 红**：cellgen 引入 build-tag 文件，需同 PR 让 `TestCellgenErrcodeFunnel` fan out `KnownNonDefaultTags()`（panic_invariants 模式）并更新这两测
-- **章程 §AI-rebust 三档分级 升级路径**：若 §D7 Path C-full 落地，本 ADR 转 Superseded
+- **章程 §AI-robust 三档分级 升级路径**：若 §D7 Path C-full 落地，本 ADR 转 Superseded

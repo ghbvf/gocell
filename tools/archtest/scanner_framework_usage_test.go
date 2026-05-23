@@ -12,7 +12,7 @@ package archtest
 //     scanner.FindFirstChild[N] instead (allowlist = 0).
 //
 // Two related SCANNER-* invariants share this theme file. Per
-// .claude/rules/gocell/ai-collab.md "## archtest 文件命名", promote to
+// .claude/rules/gocell/ai-robust.md "## archtest 文件命名", promote to
 // {theme}_invariants_test.go (scanner_framework_invariants_test.go) if a
 // third related SCANNER-* invariant accumulates.
 
@@ -1299,7 +1299,7 @@ func _(file *ast.File, other []ast.Decl) {
 // equally forbid the sentinel idiom. The Ident branch is the form produced by
 // tools/archtest/*_test.go themselves (package archtest internal callers).
 //
-// AI-rebust 双向锁评级:
+// AI-robust 双向锁评级:
 //
 //	下游 Hard: FindFirstChild — wrong N (interface vs *S) is a compile error
 //	  via interface{*S; ast.Node}.
@@ -1307,7 +1307,7 @@ func _(file *ast.File, other []ast.Decl) {
 //	  Cannot sealed-interface around "a user declares a bool"; EachInChildren
 //	  must stay callable for pure iteration. Highest grade reachable in Go
 //	  for this rule shape (structurally identical to PANIC-REGISTERED-01's
-//	  honest caveat in .claude/rules/gocell/ai-collab.md: "the enforcement
+//	  honest caveat in .claude/rules/gocell/ai-robust.md: "the enforcement
 //	  is archtest-bound, not compile-time ... the highest grade reachable in
 //	  Go for this rule shape"). No upstream-Hard path reachable.
 //	  FINDFIRSTINSUBTREE-API-01 is an orthogonal coverage axis
@@ -1796,7 +1796,7 @@ func enclosingFuncBody(file *ast.File, call *ast.CallExpr) ast.Node {
 }
 
 // TestScannerFrameworkUsage02_BlindSpotReverse asserts the documented BS1/BS2/BS3
-// shapes do not exist in production archtest code. ai-collab.md requires a
+// shapes do not exist in production archtest code. ai-robust.md requires a
 // reverse self-test per declared tool blind spot; this is the 举证 material that
 // the Medium rating is honest (the blind spots are empty in practice, not merely
 // unguarded). BS3 is actively detected by closureDoneSentinelBlindSpots: a

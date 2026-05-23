@@ -7,7 +7,7 @@
 // errcode.New(errcode.KindNotFound, ...). Anchored at SERVICE layer (not
 // handler) to preserve the IDOR-safe 404-collapse design.
 //
-// AI-rebust: Medium (contract-decl ↔ service-guard AST ↔ errcode.KindNotFound
+// AI-robust: Medium (contract-decl ↔ service-guard AST ↔ errcode.KindNotFound
 // type-resolved via archtest.ResolvePackageRef, three-factor cross-binding;
 // see blindspot inventory for the residual escape).
 //

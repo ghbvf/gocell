@@ -376,7 +376,7 @@ func isL2OrHigher(level string) bool {
 // publish role + L0/L1 declaration is the only remaining drift class this
 // rule catches.
 //
-// AI-rebust evaluation: Medium. Role values are kernel/cellvocab.ContractRole
+// AI-robust evaluation: Medium. Role values are kernel/cellvocab.ContractRole
 // const enum; the rule's string comparison is const-equivalent. New slices
 // with role=publish auto-enroll.
 //

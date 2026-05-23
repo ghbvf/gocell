@@ -27,13 +27,13 @@ Medium 的过渡形态需要进一步把 *Relay 隐藏在 sealed wrapper 后，�
   接口的 API 都会接它。
 - `WithRelay` 内部 `append(managedResources, relay)` 与 `WithManagedResource`
   本质等价；runtime guard 必须在 phase0 期再验，是字面约定的
-  Soft 上游（AI-rebust 章程禁止 Soft 立项）。
+  Soft 上游（AI-robust 章程禁止 Soft 立项）。
 
 ## Decision
 
 把 `*Relay` 隔离出 `kernel/lifecycle.ManagedResource` 接口。所有
 relay-as-managed-resource 的语义统一收口到 `runtime/bootstrap` 包内的
-unexported `relayAdapter`——**single sanctioned holder**（ai-collab.md Hard
+unexported `relayAdapter`——**single sanctioned holder**（ai-robust.md Hard
 范本）。
 
 ### D1. `*Relay` 不再实现 `ManagedResource`
@@ -98,15 +98,15 @@ runtime guard 不再有意义；保留即是双源真理。
 未来任何 PR 让 *Relay 再次实现 ManagedResource（最可能：恢复
 `Close(ctx) error` 方法）都会被 archtest 红。
 
-## AI-rebust 评级
+## AI-robust 评级
 
 | 维度 | 评级 | 依据 |
 |------|------|------|
 | 下游 Hard | ✅ | `*Relay` 不实现 `ManagedResource`，`WithManagedResource(relay)` 在 Go 编译期 type-mismatch，AI 可绕过性 = 0 |
 | 上游 Hard | ✅ | `relayAdapter` + `newRelayAdapter` 双 unexported，包外不可表达替代路径；`WithRelay` 二次绑定 `panicregister.Approved` 兜底 |
-| 总评 | **Hard funnel（闭环双向锁）** | ai-collab.md §"Funnel 双向锁评级" 通过 |
+| 总评 | **Hard funnel（闭环双向锁）** | ai-robust.md §"Funnel 双向锁评级" 通过 |
 
-形态归属：**single sanctioned holder + type isolation**（ai-collab.md Hard
+形态归属：**single sanctioned holder + type isolation**（ai-robust.md Hard
 范本目录第 5 项）。
 
 ## 影响面
@@ -160,7 +160,7 @@ Dependent contracts (governance scan): none — ManagedResource interface signat
 
 - 上游 backlog: `docs/backlog/20260520/202605191800-pr589-review-fixup-backlog.md`
   §`BOOTSTRAP-RELAY-DOUBLE-MANAGED-UPSTREAM-HARD-01`
-- AI 协作章程: `.claude/rules/gocell/ai-collab.md` §"Hard 范本目录"·single
+- AI-robust 治理章程: `.claude/rules/gocell/ai-robust.md` §"Hard 范本目录"·single
   sanctioned holder + §"Funnel 双向锁评级"
 - Panic taxonomy: `.claude/rules/gocell/error-handling.md` §"Panic taxonomy
   and Approved funnel" B 类（programmer-error parameter）

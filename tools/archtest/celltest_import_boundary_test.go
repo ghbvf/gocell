@@ -51,7 +51,7 @@
 // CELLTEST-B currently covers kernel/ own files; cells/_test.go and
 // examples/_test.go are out of scope for this rule.
 //
-// # AI-rebust grade: Medium — import-path string matching via go/parser.
+// # AI-robust grade: Medium — import-path string matching via go/parser.
 //
 // The Hard primary defense is the physical isolation of Must* auth helpers in
 // kernel/cell/celltest/: production packages that do not import the package

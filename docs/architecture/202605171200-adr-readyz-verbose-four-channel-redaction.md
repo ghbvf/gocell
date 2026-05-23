@@ -245,4 +245,4 @@ panic dump、outbox last_error sanitize、auditquery payload redaction），该 
 - ADR `202605051730-adr-errcode-message-pii-safety.md` — errcode 三层 redaction
 - ADR `202604242030-adr-kernel-wrapper-contract-observability.md` §8 — span redaction fail-closed
 - `.claude/rules/gocell/observability.md` "errcode 三层 redaction" + "Readyz Verbose 四通道"
-- `.claude/rules/gocell/ai-collab.md` Hard 范本（FIELDS-FROZEN / PANIC-REGISTERED）+ Funnel 双向锁评级
+- `.claude/rules/gocell/ai-robust.md` Hard 范本（FIELDS-FROZEN / PANIC-REGISTERED）+ Funnel 双向锁评级

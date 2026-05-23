@@ -13,7 +13,7 @@
 // the "WithManagedResource(relay) bypass" closed by ADR
 // docs/architecture/202605201400-adr-relay-managedresource-isolation.md.
 //
-// AI-rebust grade: Hard (downstream). The type system itself rejects
+// AI-robust grade: Hard (downstream). The type system itself rejects
 // `WithManagedResource(*Relay)` at compile time; this archtest is the
 // regression guard against re-satisfaction. Upstream Hard is the
 // package-private `newRelayAdapter` constructor — external packages
@@ -42,10 +42,10 @@
 // `runtime/bootstrap.relayAdapter`. Any other satisfying-and-holding type
 // would constitute an alternative sanctioned-holder path, breaking the
 // §"single sanctioned holder" Hard 范本
-// (.claude/rules/gocell/ai-collab.md) even when the upstream
+// (.claude/rules/gocell/ai-robust.md) even when the upstream
 // `newRelayAdapter` constructor stays package-private.
 //
-// AI-rebust grade: Hard (downstream). The production type universe is
+// AI-robust grade: Hard (downstream). The production type universe is
 // walked via `RunTypedProduction`; for each `*types.Named` whose
 // underlying is `*types.Struct` and whose pointer method set satisfies
 // `ManagedResource`, every struct field is inspected and any
@@ -173,7 +173,7 @@ func TestRELAY_NOT_MANAGEDRESOURCE_01(t *testing.T) {
 	// Positive reverse self-check: the sanctioned adapter must satisfy the
 	// interface; otherwise the filter is vacuous. *relayAdapter is the
 	// sole sanctioned holder under the §"single sanctioned holder" Hard
-	// 范本 (.claude/rules/gocell/ai-collab.md). The pointer wrap matches the
+	// 范本 (.claude/rules/gocell/ai-robust.md). The pointer wrap matches the
 	// receiver set of the adapter's Checkers/Worker/Close methods.
 	require.True(t, typesutil.ImplementsInterface(types.NewPointer(adapterNamed), managedResourceIface),
 		"RELAY-NOT-MANAGEDRESOURCE-01 self-check: *%s.%s no longer satisfies "+
@@ -319,7 +319,7 @@ func TestRELAY_SOLE_HOLDER_01(t *testing.T) {
 			"RELAY-SOLE-HOLDER-01: %s satisfies %s.%s AND holds %s.%s — only "+
 				"%s.%s may be the sanctioned holder. Either remove the relay "+
 				"field, route through %s.%s, or update the §\"single sanctioned "+
-				"holder\" Hard 范本 in .claude/rules/gocell/ai-collab.md to admit "+
+				"holder\" Hard 范本 in .claude/rules/gocell/ai-robust.md to admit "+
 				"an additional holder (requires ADR amendment to "+
 				"docs/architecture/202605201400-adr-relay-managedresource-isolation.md).",
 			v, relayIsoLifecyclePkgPath, relayIsoMRTypeName,

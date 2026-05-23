@@ -4,7 +4,7 @@
 > Superseded-by: `202605170000-adr-control-plane-business-plane-decouple.md`（§D1 RETRACTED, §D3 RESOLVED）
 > Date: 2026-05-10
 > Updated: 2026-05-17（§D1 RETRACTED / §D3 RESOLVED / §Consequences 重写；
->   strikethrough prose physically removed per ai-collab.md single-truth-source rule）
+>   strikethrough prose physically removed per ai-robust.md single-truth-source rule）
 > Implementation: PR #441 第二轮 review F3-C（runtime/command/lifecycle_rollback_test.go 集成测试）
 
 ## Context

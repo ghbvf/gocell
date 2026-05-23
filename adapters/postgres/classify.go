@@ -123,7 +123,7 @@ func isRetryablePGError(err error) bool {
 // not perform.
 //
 // The split is the "typed function choice" Hard pattern (.claude/rules/gocell/
-// ai-collab.md §3): picking the wrong funnel name yields the wrong error code
+// ai-robust.md §3): picking the wrong funnel name yields the wrong error code
 // at the call site, with no runtime fallback. archtest
 // ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01 verifies both function bodies
 // route their transient branch through errcode.WrapInfra.

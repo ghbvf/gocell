@@ -51,7 +51,7 @@
 | ID | cap | 原 P → 新 P | 命中维度 |
 |---|---|---|---|
 | C-04 | cap-01 | P2 → P1 | 架构 + 去重 + 抽象 + 触及 ≥ 3 cell + 吸收 C-09 |
-| CONFIGREPO-OP-LABEL-TYPED-ENUM-HARD-01 | cap-09 | P3 → P2 | AI-rebust Soft → Hard 升级路径（charter mandate） |
+| CONFIGREPO-OP-LABEL-TYPED-ENUM-HARD-01 | cap-09 | P3 → P2 | AI-robust Soft → Hard 升级路径（charter mandate） |
 
 ### P 降级（3）
 

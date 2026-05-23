@@ -22,7 +22,7 @@
 ### Phase 0 实施
 **Phase 0.1：backlog 状态收尾** ✅ done (2026-05-12, in-place backlog 直接标记)
 - ✅ `docs/backlog.md` 三条 PR430-FU 标 ✅ closed by PR #440：`PR430-FU-SCANNER-INTERNAL-CONSOLIDATE-01` / `PR430-FU-MIGRATION-DRIFT-CURRENT-FIXES-01` / `PR430-FU-SCANNER-SYMLINK-FAIL-CLOSED-01`
-- ✅ `PR430-FU-MIGRATION-EQUIVALENCE-FIXTURES` 标 ❌ WONTFIX（reason: charter §3 撤回，fixture 框架 AI 可造假，违反 AI-rebust 立项硬门槛 ≥ Medium）
+- ✅ `PR430-FU-MIGRATION-EQUIVALENCE-FIXTURES` 标 ❌ WONTFIX（reason: charter §3 撤回，fixture 框架 AI 可造假，违反 AI-robust 立项硬门槛 ≥ Medium）
 - ✅ Wave 3 已 ship 条目同步：
   - `PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01`（`docs/backlog/cap-02-metadata-governance.md`）已 ✅ closed by PR-TS1（无需改动）
   - `ARCHTEST-TYPEAWARE-HARDENING-BUNDLE` 8 子条：`TYPESEVAL-BUILDTAGS-*` 3 条 ✅ closed by PR #472；`GENERATED-SKIP-CROSS-RULE-INVARIANT-01` ✅ closed by PR #567；`INTERNAL-CONTRACT-CLIENTS-SOURCE-GUARD-01` ✅ closed by PR-IC1；`PR445-FU-TYPEAWARE-CALL-MATCHER-IDENT-01` helper ✅ closed by PR-TS2（caller 迁移仍 OPEN 转 Phase 3.2 PR-SH1）；bundle 主条目状态从 🟠 改 🟢 partial（trigger 列写明剩余去向）
@@ -49,7 +49,7 @@
 **对应 ADR / 章程更新**：
 - `docs/architecture/202604270030-architectural-panic-whitelist.md` 改写 §4 Approved reason catalog（取代函数名 whitelist 表）+ §5 No prefix-based exemption
 - `.claude/rules/gocell/error-handling.md` "Panic taxonomy and Approved funnel" 章节
-- `.claude/rules/gocell/ai-collab.md` "Hard 范本" 新增 "typed function call as Hard funnel for unbounded operations" 条目
+- `.claude/rules/gocell/ai-robust.md` "Hard 范本" 新增 "typed function call as Hard funnel for unbounded operations" 条目
 - charter §4 Wave 2 panic-single-source 行已标 shipped
 
 ---
@@ -68,8 +68,8 @@
 - **不含**：`ImplementsInterface` helper、ARCHTEST-TYPEAWARE-HARDENING bundle 其他子条迁移
 - **工时**：实际 ~6h dev
 - **依赖**：无
-- **关闭 backlog**：`PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01` ✅（charter §3 "AI-rebust 评级" table 中 PR431-FU 行的 mandate 覆盖架构师 2026-05-10 "不升级" 决议）
-- **AI-rebust 升级**：Soft（名字约定）→ Medium-偏-Hard（三重 type 谓词）。真 Hard 需 sealed interface emitter，超 PR 范围
+- **关闭 backlog**：`PR431-FU-BFS-EMITTER-RECEIVER-TYPE-IDENT-01` ✅（charter §3 "AI-robust 评级" table 中 PR431-FU 行的 mandate 覆盖架构师 2026-05-10 "不升级" 决议）
+- **AI-robust 升级**：Soft（名字约定）→ Medium-偏-Hard（三重 type 谓词）。真 Hard 需 sealed interface emitter，超 PR 范围
 
 ### Phase 2.2：typeseval `ResolvePackageRef` + `ResolveMethodCall` helpers + dogfood（PR-TS2）✅ done
 - **范围**：
@@ -150,7 +150,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 - **证据**：PR #475 `feat(archtest): TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01 Hard funnel (Phase 3.5 PR-EP1)`
 - **范围**：1 子条独立（PR #472 follow-up，trigger 已满足）
   - `TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01`（`docs/backlog/cap-02-metadata-governance.md`）：新增 `tools/archtest/eval_predicate_centralization_test.go`，AST walk `tools/archtest/` 包下所有 `constraint.Expr.Eval(...)` callsite，断言 predicate argument ∈ {`typeseval.BuildContextPredicate(...)`, 全 false sentinel `func(_ string) bool { return false }`}；其他形式 fail-closed
-  - **AI-rebust 升级**：near-Hard → Hard（违反不可表达，未来手写含过期 tag map 的 predicate 在 archtest 时报错）
+  - **AI-robust 升级**：near-Hard → Hard（违反不可表达，未来手写含过期 tag map 的 predicate 在 archtest 时报错）
 - **工时**：3-5h dev / 1h review
 - **依赖**：Phase 3.1 PR-BT1 merge ✅
 
@@ -164,7 +164,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 - **范围**：1 子条（C9 已 moot，同 PR 关闭）
   - `ARCHTEST-CONTRACTSPEC-LITERAL-RUNTIME`（`docs/backlog/cap-14-tooling.md`，P1/Cx1）：`NO-MANUAL-CONTRACTSPEC-LITERAL-01` 扫描根从 `cells/` + `examples/` 扩到 `runtime/`，**并通过 typed funnel 升级为 Hard** —— 新增 `kernel/contractspec.NewFrameworkHTTP` + `NewEventDerivation` 两个 typed builder，5 处 runtime/ 字面量全量迁移；composite literal 在 cells/ + examples/ + runtime/ 0 escape hatch，违反不可表达
   - ~~`PR245-F6 OUTBOX-ARCHTEST-SCAN-SCOPE-EXPAND-01`~~ — **MOOT**: target `tools/archtest/outbox_cell_test.go::isCellFile` 已在 PR-560 删除（ADR 202605101900 §D7）；替代规则 `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` 已实现请求的 scope。backlog line 336 同 PR 标 ✅
-- **AI-rebust**：Soft（runtime/ "framework infra" 部落知识）→ **Hard**（typed funnel 是唯一合法构造路径，archtest 形态唯一性，对齐章程 `typed function call as Hard funnel` 范本）
+- **AI-robust**：Soft（runtime/ "framework infra" 部落知识）→ **Hard**（typed funnel 是唯一合法构造路径，archtest 形态唯一性，对齐章程 `typed function call as Hard funnel` 范本）
 - **工时**：5-8h dev / 1-2h review（Hard 升级 + dead code 清理）
 - **依赖**：无
 
@@ -181,7 +181,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
 ### Phase 3.9：PR450 治理升级束（PR-S7）✅ done
 - **证据**：PR-S7 (refactor/572-pr-s7-archtest-bundle)
 - **范围**：5 子条 bundle（cap-14 line 403，已是 bundle）
-  - ✅ `K-01` + `A-10`：`audit_ledger_composition_root_test.go` 升级为 type-aware `typeseval.LoadProductionPackages` + `ResolvePackageRef`，canonical import path 识别（alias-immune）。新增 `tools/archtest/internal/auditledgerfixture/aliased.go` build-tag fixture + `TestAuditLedgerProtocol_ScannerCatchesAliasBypass` 锁定检测能力。**AI-rebust 升级**：Soft（`pkg.Name` 字符串）→ Medium-true（canonical import path identity）；Hard 不可达——cells 必须 import ledger 消费 typed `*Protocol`，文件 godoc 诚实标注
+  - ✅ `K-01` + `A-10`：`audit_ledger_composition_root_test.go` 升级为 type-aware `typeseval.LoadProductionPackages` + `ResolvePackageRef`，canonical import path 识别（alias-immune）。新增 `tools/archtest/internal/auditledgerfixture/aliased.go` build-tag fixture + `TestAuditLedgerProtocol_ScannerCatchesAliasBypass` 锁定检测能力。**AI-robust 升级**：Soft（`pkg.Name` 字符串）→ Medium-true（canonical import path identity）；Hard 不可达——cells 必须 import ledger 消费 typed `*Protocol`，文件 godoc 诚实标注
   - ✅ `K-04`：prefix allowlist 改为枚举 `{runtime/audit/ledger, runtime/audit/ledger/storetest}`（同 PR 落入）
   - ✅ `K-05`：新增 `tools/archtest/migration_pair_deploy_test.go`（`MIGRATION-PAIR-DEPLOY-01`），扫 `-- pair-deploy: <stem>` 单向 directive + 校验被引用 migration 存在；canary hard-assert 021↔020 pair 防止 anchor 静默删除导致规则退化。`migrations/021_audit_entries_event_id_unique.sql` 已落入 anchor。**用户决策**：单向 anchor（拒绝双向 reciprocity——pair-deploy 是文档型 + filename-exists 静态校验，与 release manifest 解耦）
   - ✅ `F-12/K-02`：**范围扩大到 cell 子树全部 11 处 `WithTxManager`**（按"不留小尾巴"反馈，超出原 backlog 仅 auditcore appender 的窄 scope；最后一处 `examples/todoorder/ordercreate` 由 archtest scope 扩展时自动扫出，进一步验证 scope 扩展的防御能力）。11 处形参与 `txRunner` 字段类型 `persistence.TxRunner` → `persistence.CellTxManager`：auditcore (appender) + configcore (configpublish/configwrite/flagwrite) + accesscore (identitymanage/rbacassign/sessionlogin/sessionlogout/sessionrefresh/setup) + examples/todoorder (ordercreate)；测试调用点 ~85 处 `WithTxManager(x)` → `WithTxManager(persistence.WrapForCell(x))`。**同时 `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` archtest scope 从 cell-package root 扩到 cell 整棵子树**（`isCellPackageRootFile` → `isCellSubtreeFile`，封死未来 AI 在 slice/internal 退化 sealing 的窗口）；ADR `docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md` Amendment 2026-05-12 记录边界扩展决策。outbox 维度 grep 验证 cell 子树 0 处 raw `outbox.Publisher`/`Writer`，scope 扩展自动覆盖该维度。**注**：原 backlog 中提到的 `auditverify.WithTxManager` 已在 Wave 2 Batch D 删除，scope 项不存在
@@ -214,7 +214,7 @@ plan 初稿 §2.2 写 `ImplementsInterface` 但 dogfood 写 call-matcher（"裸 
   - 手写字段枚举（如 `{{ .MetadataLiteral.ID }}`）在 template 执行期**没有数据源可访问** → 编译/渲染期 fail
   - AI 想绕过必须**显式修改 `CellGenSpec` Go API**（重新暴露 `MetadataLiteral` 字段或加 helper）—— 高显式度变更，必触发 review，无法静默漂移
 
-- **AI-rebust 升级**：PR-MD1 的 Medium-偏-Hard（reflect renderer + K#04 重生 diff）→ **Absolute Hard**（type-system funnel API，违反不可表达 + archtest 形态唯一性）
+- **AI-robust 升级**：PR-MD1 的 Medium-偏-Hard（reflect renderer + K#04 重生 diff）→ **Absolute Hard**（type-system funnel API，违反不可表达 + archtest 形态唯一性）
 
 - **工时**：1.5-2h dev / ~0.5h review
 - **依赖**：Phase 3.8 PR-MD1 ship ✅
@@ -303,5 +303,5 @@ Wave 4 触发型                        触发后 按 Template-Wave4-3PR
 - 章程（原则视角）：`docs/plans/202605101300-ai-first-governance-charter.md`
 - PR #445 复盘（scope 失控元教训）：本对话 §"PR #445 为什么遗留这么多问题" 5 层根因分析
 - backlog（条目索引）：`docs/backlog.md`（line 47/48/82/317/404-410/418/419/461 为本计划涉及条目）
-- AI 协作章程：`.claude/rules/gocell/ai-collab.md`
+- AI-robust 治理章程：`.claude/rules/gocell/ai-robust.md`
 - 5-PR 主线 roadmap：`docs/plans/202605070431-pr403-funnel-fix-roadmap.md`

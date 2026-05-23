@@ -57,7 +57,7 @@ const allowedTypeAlias = "type Service = appender.Service"
 // entirely (e.g. reintroduces `type Service struct {...}` in a slice
 // package). Loud failure beats silent drift.
 //
-// AI-rebust: Medium (AST symbol-shape match against an explicit allowlist).
+// AI-robust: Medium (AST symbol-shape match against an explicit allowlist).
 // Hard counterpart lives in spec.go (sealed Spec, sealed ActorMode) and in
 // the type alias itself.
 func TestAuditcoreAppenderSliceFacadesAreThin(t *testing.T) {

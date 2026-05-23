@@ -6,7 +6,7 @@
 // single quoting funnel and reintroduce YAML injection via colons / braces /
 // leading whitespace / metacharacters.
 //
-// AI-rebust: Hard (charter §1 string-typed concept funnel template). The
+// AI-robust: Hard (charter §1 string-typed concept funnel template). The
 // conversion callee is resolved via *types.Info.Uses[ident] so a same-name
 // local TypeName cannot bypass the check. Three bypass families are now
 // all covered with no disclosed form-uniqueness blind spot remaining:

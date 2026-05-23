@@ -81,7 +81,7 @@ func newIntegrationConfig(endpoint, user, pass string) Config {
 // The helper also owns worker lifecycle (independent ctx + Stop/Close
 // cleanup) to keep ctx shape consistent across worker call sites.
 //
-// AI-rebust rating: Medium (typed function call funnel, 4 call sites must
+// AI-robust rating: Medium (typed function call funnel, 4 call sites must
 // route through this helper). No archtest guard while call sites stay ≤ 4.
 func startWorkerWithTickProof(t *testing.T, ctx context.Context, client *Client, timeout time.Duration) {
 	t.Helper()

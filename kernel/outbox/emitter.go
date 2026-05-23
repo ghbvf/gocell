@@ -33,7 +33,7 @@ const (
 
 // WarnDirectPublishFailOpen is the slog.Warn message emitted when a
 // DirectEmitter in DirectPublishFailOpen mode swallows a publisher failure.
-// Tests assert on this constant to lock the observable signal — AI-rebust
+// Tests assert on this constant to lock the observable signal — AI-robust
 // Medium (single-source literal, typed reference). Counter equivalent:
 // outbox_emit_failopen_dropped_total (registered in NewDirectEmitter).
 const WarnDirectPublishFailOpen = "outbox: direct publish failed (fail-open) — event dropped"

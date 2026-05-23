@@ -10,7 +10,7 @@
 //   - INVARIANT: SAFEID-WIREMESSAGE-USAGE-01
 //   - INVARIANT: SAFEID-UPSTREAM-FUNNEL-HARD-01
 //
-// AI-rebust rating: closed Hard funnel (charter §"Funnel 双向锁评级").
+// AI-robust rating: closed Hard funnel (charter §"Funnel 双向锁评级").
 //
 //	Downstream Hard (SAFEID-WIREMESSAGE-USAGE-01) — string-typed concept
 //	funnel (charter §"Hard 范本目录"). Form uniqueness:
@@ -41,7 +41,7 @@
 //
 // Scanning tool: typeseval.SharedResolver via RunTyped + go/types struct
 // field inspection (kernel/outbox package scope, no fixture). Selected per
-// ai-collab.md §"载体决策原则" — type information required (resolve named
+// ai-robust.md §"载体决策原则" — type information required (resolve named
 // type to package + name; resolve scope.Lookup to detect unexported/exported
 // re-export).
 //
@@ -590,7 +590,7 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 // PR adding the literal token `type WireMessage` is caught even if the
 // go/types loader misbehaves under build tags.
 //
-// Uses [Run] + [DirsScope] per ai-collab.md §"载体决策原则" — pure AST
+// Uses [Run] + [DirsScope] per ai-robust.md §"载体决策原则" — pure AST
 // pattern, no type information required (looking for a literal `type
 // WireMessage` token, not its resolved type). [DirsScope] applies the
 // default file skip set (vendor / testdata / generated / worktrees /

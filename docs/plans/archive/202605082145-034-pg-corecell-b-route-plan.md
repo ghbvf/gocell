@@ -119,7 +119,7 @@ Wave 2（S1 通过后）：
 
 **v6 状态同步（2026-05-14）**：S4b (PR #490) 已 ship —— JWT 写入 `jti` + `authz_epoch` claims（删 `AuthzEpochAtIssue: 0` 硬编 placeholder）；新增 `credentialinvalidate.Invalidator` 3-op 原子 funnel (`BumpAuthzEpoch` + `RevokeForSubject` + `RevokeUser`)；identitymanage Lock/Delete/ChangePassword/Update demotion + rbacassign Revoke 共 5 处 credential event 全部路由进 funnel；sessionvalidate `enforceSessionState` 加 `userRepo.GetByID` epoch 比对 + session/userRepo infra error → `KindUnavailable` 503 (`ErrAuthServiceUnavailable`)；refresh reuse 检测命中走 `CredentialEventRefreshReuse` cascade revoke；sessionlogout consumer 降级 audit/ack-only + Action enum 白名单（B2-C-06 闭环）；migration 025 删 `sessions.authz_epoch_at_issue` 列（claim 已带，行内 pin 零额外防御）；archtest 新增 `credential_invalidate_funnel_invariants_test.go` + `sessionvalidate_epoch_compare_test.go`；ADR-credential §D2 完整生效。S4a 遗留 FU-1（rbacassign same-tx revoke 恢复，删 `syncSessionRevocation`）/ FU-2（sessionvalidate 503 区分）一并 in-scope 闭环。
 
-PR #490 review 暴露两件**未在 S4b 同 PR 修复**的 finding，因属"未来触发型"，落 backlog 独立条目（非"PR review findings 默认 in-scope"违反——已通过工时显著超 S4b 范围 + AI-rebust 升级 ADR / QPS 阈值前不可观测的明确触发条件论证）：
+PR #490 review 暴露两件**未在 S4b 同 PR 修复**的 finding，因属"未来触发型"，落 backlog 独立条目（非"PR review findings 默认 in-scope"违反——已通过工时显著超 S4b 范围 + AI-robust 升级 ADR / QPS 阈值前不可观测的明确触发条件论证）：
 - **REQUIRED-DEP-NIL-GUARD-01**（cap-14）— OUTBOX-SERVICE-01 archtest scope 只守 `txRunner` 一个字段，PR #490 第五轮 review 手动补齐五处 service 的 `validation.IsNilInterface` guard；改 typeseval-based Soft → Hard archtest 触发条件为"下次新增 service"
 - **ENFORCESESSIONSTATE-HOTPATH-OPT-01**（cap-14）— `enforceSessionState` 两次串行 PG 读（`sessionStore.Get` + `userRepo.GetByID`）；S4b §HIGH-4 决策不包 read-only tx；触发条件为"生产 QPS / P99 延迟阈值"
 
@@ -363,7 +363,7 @@ runtime/auth/session/
 - **FU-1（→ S4b 同 PR）**：rbacassign 删 `syncSessionRevocation bool` 二态字段；durable mode 恢复 same-tx `sessionStore.RevokeForSubject + refreshStore.RevokeUser`（与 identitymanage ChangePassword 对齐，ADR-credential §D5 合规）；`event.role.{assigned,revoked}.v1` consumer 降格为 fanout/audit，不再作为 primary credential invalidation 路径
 - **FU-2（→ S4b 同 PR）**：sessionvalidate `enforceSessionState` 把 `sessionStore.Get` 的 infra error 从 `ErrAuthInvalidToken`（KindUnauthenticated）改为 `KindUnavailable` + 新错误码 `ErrAuthServiceUnavailable`；`runtime/auth/middleware.go` AuthMiddleware 按 Kind 分流 401 / 503；防枚举仍统一文案（redaction 在 wire 层做，不在 errcode.Kind 层做）。与 PR #482 sessionlogout 的 503/404 区分对齐到 sessionvalidate 路径
 - **FU-3a（→ D4 并行小 PR）**：`contracts/http/auth/login/v1/contract.yaml` 403 description 由 `ERR_AUTH_PASSWORD_RESET_REQUIRED` 改为反映实际代码路径（`ErrAuthUserNotActive` for suspended/locked）；`contracts/http/auth/refresh/v1/contract.yaml` 补 403 声明（refresh 返回 `ErrAuthUserNotActive`）；CH-04 双源校验通过
-- **FU-3b（→ S4c 同 PR）**：`tools/archtest/session_protocol_composition_root_test.go` 升级为 type-aware（`typeseval.ResolvePackageRef`），拒绝 `import sess "..."; sess.NewProtocol(...)` 绕过；`_test.go` 排除策略显式记入 godoc。`tools/archtest/refresh_invariants_test.go` 把守护从旧 `sessionRepo.*` API 改守 `Peek → sessionStore.Get → userRepo.GetByID → Rotate` 新形态。AI-rebust 评级 Soft → Medium
+- **FU-3b（→ S4c 同 PR）**：`tools/archtest/session_protocol_composition_root_test.go` 升级为 type-aware（`typeseval.ResolvePackageRef`），拒绝 `import sess "..."; sess.NewProtocol(...)` 绕过；`_test.go` 排除策略显式记入 godoc。`tools/archtest/refresh_invariants_test.go` 把守护从旧 `sessionRepo.*` API 改守 `Peek → sessionStore.Get → userRepo.GetByID → Rotate` 新形态。AI-robust 评级 Soft → Medium
 
 **范围**：
 - `cmd/corebundle/access_module.go` postgres 分支删除 `WithInMemoryDefaults` 对 session/refresh 的隐式兜底；显式构造 `session.MustNewProtocol(...)`
@@ -410,7 +410,7 @@ runtime/auth/session/
 - S4a FU-1 (rbacassign 删 `syncSessionRevocation` + same-tx revoke 恢复) ✅ — PR review findings 默认 in-scope
 - S4a FU-2 (sessionvalidate 503 区分 + `ErrAuthServiceUnavailable`) ✅ — PR review findings 默认 in-scope
 
-**ship 后 review FU（独立 backlog 触发型，不立即排期）**：PR #490 第五轮 review 暴露两件**未触发"in-scope 默认修"原则**的 finding（理由：工时显著超 S4b 范围 + AI-rebust 升级 ADR / QPS 阈值前不可观测的明确触发条件论证），按 ai-collab.md "既有 Soft 的补丁优先升级到 Hard/Medium" + memory `feedback_pr_findings_default_inscope` 例外条款独立登记：
+**ship 后 review FU（独立 backlog 触发型，不立即排期）**：PR #490 第五轮 review 暴露两件**未触发"in-scope 默认修"原则**的 finding（理由：工时显著超 S4b 范围 + AI-robust 升级 ADR / QPS 阈值前不可观测的明确触发条件论证），按 ai-robust.md "既有 Soft 的补丁优先升级到 Hard/Medium" + memory `feedback_pr_findings_default_inscope` 例外条款独立登记：
 - **REQUIRED-DEP-NIL-GUARD-01**（cap-14-tooling）— Service required-dep nil-guard archtest（Soft→Hard 升级）。OUTBOX-SERVICE-01 archtest scope 只守 `txRunner` 一个字段，PR #490 第五轮 review 手动补齐五处 service (rbacassign / authorizationdecide / rbaccheck) `validation.IsNilInterface` guard；触发条件 = 下次新增 service。修复方向：用 `typeseval` 扫每个 `func NewXxx(...) (*Xxx, error)` 入参签名 + 对照 body 前 30 行 nil guard 调用集合 + RED fixture
 - **ENFORCESESSIONSTATE-HOTPATH-OPT-01**（cap-14-tooling）— sessionvalidate `enforceSessionState` 两次串行 PG 读优化。每次 access token 校验走 `sessionStore.Get(sid)` + `userRepo.GetByID(sub)` 两次串行 PG 读 (~2 round-trip / 请求)；plan §HIGH-4 决策为不包 read-only tx（无快照保证）；触发条件 = 生产 QPS / P99 延迟阈值（暂未设定）。修复方向：(a) 单 SQL JOIN sessions + users（cell-private SQL，避免跨 repo 协议化）/ (b) Redis epoch snapshot cache（TTL ≤ JWT 短 exp）/ (c) 请求合并 cache；需先写设计 ADR
 
@@ -439,7 +439,7 @@ runtime/auth/session/
 - access JWT 删 `authz_epoch` claim：`auth.Claims.AuthzEpoch` 字段删除 + `standardClaims` map 删 key + mint 路径不写（A7）
 - archtest：`JWT-CLAIMS-NO-AUTHZ-EPOCH-01` Hard 三 prong（struct field + standardClaims map + jwt.go literal scan）；`SESSIONVALIDATE-EPOCH-SOURCE-01` Hard（row != claim 锁源）；`SESSIONREFRESH-STALE-EPOCH-REJECT-01` Hard（rejectIfStaleEpoch form + prong 4 NEGATIVE cascadeRevoke，S4e 重写）；`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` Medium（`Invalidator.Apply` caller allowlist）
 - ADR `202605101400-adr-credential-session-protocol.md` §0 A1 RETRACTED + A7/A8/A9/A10 新增 + §3 威胁矩阵整表重跑 + §D1/D2/D4.2 SQL 修订 + 原文与 amendment 矛盾段落同 PR 重写
-- rules `ai-collab.md` §Review checklist 加双向 funnel 评级 + ADR amendment 重跑威胁矩阵规则；`contract-fanout.md` 触发条件加 DROP COLUMN / schema_guard.forbiddenColumns 新 entry + Invariant inventory 行
+- rules `ai-robust.md` §Review checklist 加双向 funnel 评级 + ADR amendment 重跑威胁矩阵规则；`contract-fanout.md` 触发条件加 DROP COLUMN / schema_guard.forbiddenColumns 新 entry + Invariant inventory 行
 
 **验收**：
 - `make verify` 全绿；`hack/verify-archtest.sh` 全绿（四条 archtest 全 PASS，含 RED fixture 反向自检）
@@ -478,7 +478,7 @@ sessionrefresh 漏检 `CanAuthenticate()`，无单一 Hard 收口。
 - `B2-C-13 L2 跨层 e2e 回归不足`
 - `AUTH-CACHE-01` 仅在 durable correctness 完成后接入，默认关闭；不进入 S4a/S4b
 - `PR267-FU-AUTHTEST-INTERNAL` / `PR250-F3 Event wire byte pinning`
-- **S4a 遗留 FU-3b**：`tools/archtest/session_protocol_composition_root_test.go` 升 type-aware（`typeseval.ResolvePackageRef`），拒绝 `import sess "..."; sess.NewProtocol(...)` 绕过；`_test.go` 排除策略显式记入 godoc。`tools/archtest/refresh_invariants_test.go` 守护从旧 `sessionRepo.*` API 改守 `Peek → sessionStore.Get → userRepo.GetByID → Rotate` 新形态。AI-rebust Soft → Medium
+- **S4a 遗留 FU-3b**：`tools/archtest/session_protocol_composition_root_test.go` 升 type-aware（`typeseval.ResolvePackageRef`），拒绝 `import sess "..."; sess.NewProtocol(...)` 绕过；`_test.go` 排除策略显式记入 godoc。`tools/archtest/refresh_invariants_test.go` 守护从旧 `sessionRepo.*` API 改守 `Peek → sessionStore.Get → userRepo.GetByID → Rotate` 新形态。AI-robust Soft → Medium
 
 **并行拆解（v8）**：S4c 不再单 PR 收口，拆成 5 个独立 worktree 任务，按文件域与 PR #501（PR #494 RC 收口）/ #502（CLI-HARDEN）分流。
 

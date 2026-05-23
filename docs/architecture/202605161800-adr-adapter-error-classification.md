@@ -83,7 +83,7 @@ transient error, Rejects a positively-permanent classified error
 errors on the Requeue (retry-then-budget-DLX) path — fail-closed toward not
 losing an event on a transient blip. Mirrors the `configreceive` precedent.
 
-## Funnel double-lock grading (ai-collab.md §"Funnel 双向锁")
+## Funnel double-lock grading (ai-robust.md §"Funnel 双向锁")
 
 | Side | Mechanism | Grade |
 |------|-----------|-------|

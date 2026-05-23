@@ -11,7 +11,7 @@
 // that the sealed marker (kernel/persistence.CellTxManager,
 // kernel/outbox.CellPublisher / CellWriter) eliminated.
 //
-// AI-rebust 评级：Medium (archtest type-aware via typeseval.SharedResolver
+// AI-robust 评级：Medium (archtest type-aware via typeseval.SharedResolver
 // caller-package check). The sealed marker is the AI-HARD field/assignment
 // defense; public With* raw-parameter signatures remain syntactically
 // expressible and are guarded by CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01.
@@ -211,7 +211,7 @@ func TestCellRawInfraWrapperLocation01_RealRepoClean(t *testing.T) {
 // build-tag-gated wrapfixture/violation package and asserts the scanner
 // reports the wrap call as a violation (caller path is not allowlisted).
 //
-// Per ai-collab.md §"real source AST capture (AI 难造假)": the fixture is
+// Per ai-robust.md §"real source AST capture (AI 难造假)": the fixture is
 // a real Go package loaded via packages.Load with the archtest_fixture
 // build tag. Bypassing this test requires modifying real source code — a
 // hand-crafted AST cannot satisfy go/types canonical-name resolution.

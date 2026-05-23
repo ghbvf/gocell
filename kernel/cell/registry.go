@@ -68,7 +68,7 @@ type Registry interface {
 	// parameter rather than a SubscriptionOption: codegen (contractgen
 	// NewSubscription + cellgen cell.tmpl) injects it from cell metadata at
 	// compile time, so a missing cellID is a compile failure at the
-	// reg.Subscribe call site (HARD contract). This is the AI-rebust gate for
+	// reg.Subscribe call site (HARD contract). This is the AI-robust gate for
 	// "metric/log owner must trace to cell metadata, not to consumerGroup
 	// drift" — making cellID an option would silently demote the contract
 	// from compile-time to opt-in.

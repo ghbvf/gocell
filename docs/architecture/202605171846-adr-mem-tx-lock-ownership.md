@@ -33,7 +33,7 @@ goroutine 测试即让 repo 方法误判跳锁、无锁并发写 map → fatal�
 `identitymanage_credential_race_test.go` 已为同一陷阱踩坑修过两次（注释告警），
 本次是第三次复发——证明根因在 L3：危险组合「在 tx 上下文 + 不持锁 + 跳锁」
 在 bool sentinel + 公开 `WithTxContext` 下**可被表达**，纯删/改测试是 L1 补丁，
-不闭根因（AI 协作章程：同类问题第 N 轮复发，根因必在 L3）。
+不闭根因（AI-robust 治理章程：同类问题第 N 轮复发，根因必在 L3）。
 
 ## Decisions
 
@@ -60,7 +60,7 @@ type memTxToken struct {
 且 store 身份匹配）→ 跳 per-call 锁，整闭包持锁，跨方法原子性不变（等价 PG
 SELECT FOR UPDATE-until-commit）。`sync.Mutex` 不可重入约束不变。
 
-### D2. AI-rebust 评级：Hard（type system + 私有字段封装），funnel 双向锁
+### D2. AI-robust 评级：Hard（type system + 私有字段封装），funnel 双向锁
 
 - **上游 Hard**：`memTxToken` 与 `holdsLock` 均不导出。构造 `holdsLock=true`
   token 的唯一 callsite 是包内 `memTxRunner.RunInTx`（私有 struct，刚
@@ -70,7 +70,7 @@ SELECT FOR UPDATE-until-commit）。`sync.Mutex` 不可重入约束不变。
 - **下游 Hard**：跳 per-call 锁的能力仅当 `txHoldsLock` 返回 true；该函数
   AND 校验 `holdsLock && store==s`。
 
-闭环成立（对照 ai-collab.md §Funnel 双向锁：下游 Hard + 上游 Hard）。
+闭环成立（对照 ai-robust.md §Funnel 双向锁：下游 Hard + 上游 Hard）。
 
 ### D3. archtest `MEM-TX-LOCK-OWNERSHIP-01`（Medium 双重防线）
 

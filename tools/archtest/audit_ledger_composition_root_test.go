@@ -6,7 +6,7 @@
 // Cells, runtime/* (non-ledger), adapters/*, and tests outside ledger/* must
 // receive an injected *ledger.Protocol — not construct one.
 //
-// AI-rebust 评级：Medium-true (type-aware via typeseval.LoadProductionPackages
+// AI-robust 评级：Medium-true (type-aware via typeseval.LoadProductionPackages
 // + typeseval.ResolvePackageRef). Resolution is by canonical *types.PkgName
 // import path (info.Uses[sel.X].(*types.PkgName).Imported().Path()), NOT AST
 // identifier name, so import aliases (`import foo "runtime/audit/ledger";
@@ -20,7 +20,7 @@
 // paradigm. Adopting a composition-root token (akin to `WrapForCell`) would
 // require restructuring ledger.NewProtocol's signature and is out of scope
 // for an archtest upgrade PR. The type-aware archtest is the highest grade
-// reachable here; see ai-collab.md §"载体决策原则" ≥ Medium 立项硬门槛.
+// reachable here; see ai-robust.md §"载体决策原则" ≥ Medium 立项硬门槛.
 //
 // Allowlist is enumerated, not prefix-based — adding a sibling sub-package
 // (e.g. `runtime/audit/ledger/dump/`) must be an explicit decision (K-04).
@@ -149,7 +149,7 @@ func TestAuditLedgerProtocol_CompositionRootOnly(t *testing.T) {
 // Imported().Path(), so the canonical import path matches regardless of the
 // alias chosen at import.
 //
-// Per ai-collab.md §"Hard 范本": fixture is a real Go package loaded via
+// Per ai-robust.md §"Hard 范本": fixture is a real Go package loaded via
 // packages.Load with the archtest_fixture build tag. Bypassing this test
 // requires modifying real source code.
 func TestAuditLedgerProtocol_ScannerCatchesAliasBypass(t *testing.T) {

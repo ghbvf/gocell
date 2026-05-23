@@ -370,7 +370,7 @@ func exhaustiveCorpus() []string {
 //
 // Any change to needsQuoting that alters a single classification fails this
 // test deterministically (no string-anchor / comment-anchor escape), so it
-// is Hard by enumeration form per ai-collab.md §"Hard 范本"
+// is Hard by enumeration form per ai-robust.md §"Hard 范本"
 // (real-input enumeration > hand-crafted fixture). It supersedes — does not
 // duplicate — the single-purpose round-trip tests above, which remain as
 // human-readable regression documentation.

@@ -12,7 +12,7 @@
 //	CELL-IFACE-ISP-METHODSETS-01    每个子接口的方法集合必须精确匹配契约
 //	CELL-IFACE-ISP-BASECELL-CHECK-01 BaseCell compile-time check 必须四段式分写
 //
-// AI-rebust 评级：Medium（AST type-aware 识别 interface embedded type expression）。
+// AI-robust 评级：Medium（AST type-aware 识别 interface embedded type expression）。
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D1/D2/D3
 // ref: kubernetes/apimachinery/pkg/apis/meta/v1.ObjectMetaAccessor + io.ReadWriter pattern
@@ -311,7 +311,7 @@ func equalStringSlices(a, b []string) bool {
 //  2. Re-running `go test ./tools/archtest/... -run TestCellIfaceISP00` once;
 //     copy the "got" value printed by the failure into this constant.
 //
-// AI-rebust rating upgrade: Hard (source-driven hash — silent modification of
+// AI-robust rating upgrade: Hard (source-driven hash — silent modification of
 // kernel/cell/interfaces.go is impossible without triggering a hash mismatch;
 // prior hand-crafted-data hash only caught drift in the expected tables, not
 // in the source).
@@ -329,7 +329,7 @@ const expectedMethodSetsSHA256 = "a2cf7188a2b0744897b672580bfc4df6e2e37f0ebc904a
 // so AI cannot bypass this test by only modifying the expected tables while
 // leaving kernel/cell/interfaces.go untouched.
 //
-// AI-rebust rating: Hard (source-driven hash — silent modification impossible).
+// AI-robust rating: Hard (source-driven hash — silent modification impossible).
 func TestCellIfaceISP00_MethodSetsHashGuard(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)

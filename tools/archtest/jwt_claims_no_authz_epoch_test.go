@@ -5,7 +5,7 @@ package archtest
 //
 // INVARIANT: JWT-CLAIMS-NO-AUTHZ-EPOCH-01
 //
-// AI-rebust grade: Hard (form uniqueness via four independent AST anchors
+// AI-robust grade: Hard (form uniqueness via four independent AST anchors
 // covering the field declaration, the decoder normalization, the mint-path
 // literal, and the struct-tag JSON key). The rule has four production-side
 // prongs plus two RED fixtures:
@@ -40,7 +40,7 @@ package archtest
 //       named "Epoch" with `json:"authz_epoch"` tag (prong 3b form; bypasses
 //       prong 1 and the old prong 3 bare-literal scan).
 //
-// Blind-spot disclosure (ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot disclosure (ai-robust.md §"工具选定后强制盲区自检"):
 //   - field rename to a JSON-tagged sibling (e.g. `Epoch int64 \`json:"authz_epoch"\``)
 //     would bypass prong 1. It is now caught by prong 3b (StructTagJSONKey
 //     parses the raw-string tag and extracts the JSON key). Previously this

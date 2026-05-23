@@ -10,7 +10,7 @@
 //     uniqueness on testwait.External); upstream form-uniqueness is locked
 //     by sibling archtest TEST-EVENTUALLY-FUNNEL-01 (bans bare
 //     require.Eventually / assert.Eventually / *WithT across the module).
-//     Together they form a Hard funnel per ai-collab.md §"Funnel 双向锁评级"
+//     Together they form a Hard funnel per ai-robust.md §"Funnel 双向锁评级"
 //     and Hard 范本 "typed marker funnel for unbounded ops" (sibling of
 //     panicregister.Approved).
 //   - Deterministic: blocks on a channel signal with timeout — no polling,

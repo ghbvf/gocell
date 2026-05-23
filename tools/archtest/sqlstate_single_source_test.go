@@ -33,7 +33,7 @@
 // delegate the P0001 classification to pgquery.IsRaiseException (it no longer
 // reads .Code), and the iotdevice duplicate was deleted.
 //
-// # AI-rebust grading (ai-collab.md §三档分级)
+// # AI-robust grading (ai-robust.md §三档分级)
 //
 // Medium (type-aware archtest; archtest-bound, not compile-time — Go cannot
 // forbid reading a struct field, same ceiling and precedent as
@@ -46,7 +46,7 @@
 // of production files permitted to read pgconn.PgError.Code, so the blind spots
 // below cannot silently hide a new duplicate.
 //
-// # Blind spots (ai-collab.md §"工具选定后强制盲区自检")
+// # Blind spots (ai-robust.md §"工具选定后强制盲区自检")
 //
 // BS-1 Non-constant RHS: `code := "23505"; pgErr.Code == code` —
 // EvaluateConstString folds simple const idents but a runtime variable defeats

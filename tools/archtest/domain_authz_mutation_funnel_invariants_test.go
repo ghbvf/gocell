@@ -6,7 +6,7 @@ package archtest
 // INVARIANT: DOMAIN-AUTHZ-FIELD-PRIVATE-01
 // INVARIANT: AUTHZ-MUTATION-APPLY-FUNNEL-01
 //
-// Funnel 双向锁评级 (ai-collab.md §"Funnel 双向锁评级"):
+// Funnel 双向锁评级 (ai-robust.md §"Funnel 双向锁评级"):
 //
 //   Downstream Hard (DOMAIN-AUTHZ-FIELD-PRIVATE-01):
 //     Cross-package write of domain.User authz fields (status,
@@ -66,7 +66,7 @@ package archtest
 // scanner.EachInSubtree[ast.CallExpr] for Rule (a);
 // go/types struct field and method set inspection for DOMAIN-AUTHZ-FIELD-PRIVATE-01.
 //
-// Blind-spot self-check (ai-collab.md §"工具选定后强制盲区自检"):
+// Blind-spot self-check (ai-robust.md §"工具选定后强制盲区自检"):
 //
 // For AUTHZ-MUTATION-APPLY-FUNNEL-01 — ResolveMethodCall resolves via
 // info.Selections. AST forms NOT covered:

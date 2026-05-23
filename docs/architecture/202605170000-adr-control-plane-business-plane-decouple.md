@@ -19,7 +19,7 @@ PR #212 shipped the C.1/C.2/C.3 decouple; a second-round review found that the
 §D-B "OnStart = owner ctx, no startup deadline" contract, while correct as a
 single-truth model, had no deadlock backstop and several adjacent gaps. This
 amendment closes them. **The original §D-A/§D-B prose and the 威胁分析 table
-below are rewritten in place** — per ai-collab.md「ADR amendment 落地必查」, no
+below are rewritten in place** — per ai-robust.md「ADR amendment 落地必查」, no
 "historical context" dual truth source is retained.
 
 Deltas (each pinned by a regression test):
@@ -154,7 +154,7 @@ func controlPlaneProbeTimer(d time.Duration) *time.Timer {
 使用点（允许 allowMarker）。trailing `(CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)`
 是内联 backlog 引用，属于 marker 语法的一部分，非可选注释。
 
-**AI-rebust 评级（双栏）**：
+**AI-robust 评级（双栏）**：
 
 | 维度 | 评级 | 根据 |
 |---|---|---|
@@ -184,7 +184,7 @@ ref: `tools/archtest/prod_clock_injection_fixtures_test.go`（反向自检 fixtu
 
 **本 clock carve-out 不登记于 `202605121800-adr-archtest-carveout-narrow.md`**：该 ADR 的 `CARVEOUT-REGISTRY` 仅定义 `ERRCODE-KIND-LITERAL-01` 规则的豁免，`ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` archtest 的解析锚点限定在该规则范围内。将 clock carve-out 插入该 registry 会破坏 `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 的严格等价断言，导致 CI 误报。
 
-**Medium 同 PR Hard 升级 backlog 登记**（ai-collab.md 要求，不可 silent carryover）：
+**Medium 同 PR Hard 升级 backlog 登记**（ai-robust.md 要求，不可 silent carryover）：
 
 `CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01` — Hard 路径 = 引入 sealed typed
 real-only 控制面时钟 funnel（让调用方连 `time.NewTicker`/`time.NewTimer` 都无法
@@ -331,7 +331,7 @@ worker goroutine（sweeper loop、refresh GC loop）在 `lifecycle.Stop` 执行�
 
 ### 威胁分析
 
-> 逐行重评（ai-collab.md「ADR amendment 落地必查」）：原表无格子从 ✅ 退化为
+> 逐行重评（ai-robust.md「ADR amendment 落地必查」）：原表无格子从 ✅ 退化为
 > ⚠️/❌；原"StartTimeout 强制 OnStart 超时 = 语义变更已知（⚠️ 残留）"一行的
 > 残留风险由 A1-1 补偿后转为「消除」。"OnStart 永不返回 wedge `Run()`"一行由
 > A1-1-amended（unwind grace 有界化 + abandon）改善：原表述含"忽略 ctx →

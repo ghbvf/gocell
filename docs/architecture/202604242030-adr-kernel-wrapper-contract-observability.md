@@ -27,7 +27,7 @@
 > test-only package `runtime/observability/tracingtest` (archtest
 > `TRACING-SIMPLETRACER-TEST-ONLY-01`). §1, §10, and the §Neutral
 > "source-compatible via type aliases" line are rewritten in-place below
-> to remove the now-false alias claim (ai-collab.md §"ADR amendment 落地
+> to remove the now-false alias claim (ai-robust.md §"ADR amendment 落地
 > 必查" — no dual truth source).
 
 ## Context

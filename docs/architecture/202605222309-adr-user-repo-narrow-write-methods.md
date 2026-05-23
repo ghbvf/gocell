@@ -19,16 +19,16 @@
 - `authz_epoch` (invalidation epoch)
 - `updated_at`
 
-Callers depended on godoc convention ("Do NOT call this for password changes") to avoid field bleed. From an AI-collab viewpoint this is **Soft** enforcement: a future maintainer can inadvertently pass a `*domain.User` with a modified `password_hash` via the `Update` path and silently rotate credentials without triggering any credential-invalidation event.
+Callers depended on godoc convention ("Do NOT call this for password changes") to avoid field bleed. From an AI-robust viewpoint this is **Soft** enforcement: a future maintainer can inadvertently pass a `*domain.User` with a modified `password_hash` via the `Update` path and silently rotate credentials without triggering any credential-invalidation event.
 
 ### Prior narrow method introductions
 
 - **S6** (PR introducing `UpdatePassword`): first narrow method, CAS-guarded password change path with explicit `password_version` parameter
 - **PR #585 P1#3**: identified admin-unlock re-lock race — admin activating a locked user did not zero the lockout counters because the `Update` caller held responsibility for that cleanup (Soft)
 
-### AI-rebust motivation
+### AI-robust motivation
 
-`.claude/rules/gocell/ai-collab.md` §"Soft → Hard 改造方向":
+`.claude/rules/gocell/ai-robust.md` §"Soft → Hard 改造方向":
 
 > 字符串锚点 → typed function call
 
@@ -109,7 +109,7 @@ A future caller may legitimately need to transition a user to `StatusActive` wit
 | Future maintainer re-introduces generic `Update(*User)` | ⚠️ Soft — godoc convention only | 🛡️ Medium archtest — `USERREPO-METHOD-SET-FROZEN-01` locks the 12-method set in CI | §2 D3 |
 | In-memory shadow mutation drifts from DB write | ⚠️ Soft — `applyNonAuthzFields` + `repo.Update` two separate paths | ✅ Hard — `UpdateProfile` returns `*User` from persisted row; no shadow mutation path | §2 D4 |
 
-**AI-rebust rating for USERREPO-METHOD-SET-FROZEN-01**: Medium (AST type-aware interface direct method set exact-match, same pattern as `CELL-IFACE-ISP-METHODSETS-01`). The caller-facing method-signature dimension is Hard — any regression to `Update(*User)` is a compile error because callers already use the narrow methods.
+**AI-robust rating for USERREPO-METHOD-SET-FROZEN-01**: Medium (AST type-aware interface direct method set exact-match, same pattern as `CELL-IFACE-ISP-METHODSETS-01`). The caller-facing method-signature dimension is Hard — any regression to `Update(*User)` is a compile error because callers already use the narrow methods.
 
 ---
 

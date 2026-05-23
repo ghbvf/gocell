@@ -20,7 +20,7 @@ import (
 // 由 archtest USERREPO-NONEMPTY-CAST-FUNNEL-01 锁包内 callsite allowlist
 // (Medium 上游 + Hard 下游)。
 //
-// ref: ai-collab.md "string-typed concept funnel" Hard 范本
+// ref: ai-robust.md "string-typed concept funnel" Hard 范本
 // ref: keycloak UserModel.setEmail (throws on empty)
 type NonEmpty string
 

@@ -91,7 +91,7 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 }
 
 // TestPrometheusConstructor_RecognizesPromwrapFunnel is the codegen↔funnel
-// drift guard (AI-rebust Medium, archtest-bound). promwrap is the sole
+// drift guard (AI-robust Medium, archtest-bound). promwrap is the sole
 // sanctioned production Prometheus constructor funnel; the schema scanner must
 // recognize every promwrap.New* export or the metric it constructs silently
 // becomes an unresolvable literal (the very ERR_METRICS_SCHEMA_UNRESOLVED that

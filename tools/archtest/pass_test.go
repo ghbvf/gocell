@@ -694,7 +694,7 @@ func TestBuildContextPredicateReExported(t *testing.T) {
 // asserts that none of the 6 loader symbols appear as exported identifiers,
 // and that no exported function or type signature mentions *packages.Package.
 //
-// # AI-rebust: Hard
+// # AI-robust: Hard
 //
 // The Hard property comes from "not in the façade = not expressible at the
 // call site": if a loader symbol is absent from the façade's exported set,
@@ -702,7 +702,7 @@ func TestBuildContextPredicateReExported(t *testing.T) {
 // compiler will reject it. This test locks the boundary so a future edit that
 // accidentally re-exports a loader symbol fails CI immediately.
 //
-// # Blind spots covered (per ai-collab.md Hard evidence requirement)
+// # Blind spots covered (per ai-robust.md Hard evidence requirement)
 //
 // Forms this test detects:
 //   - Top-level exported var/const/func/type declarations with a banned name.

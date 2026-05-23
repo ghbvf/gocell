@@ -30,7 +30,7 @@
 // config_drift, outbox_failopen_rate_<cell>), cellgen repo probes, and
 // adapters — one funnel, one scan.
 //
-// Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"):
+// Declared blind spots (ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. Fully runtime-computed names with NO string literal at all — e.g.
 //     healthz.NewProbe(buildName(x), fn) where buildName returns a non-literal

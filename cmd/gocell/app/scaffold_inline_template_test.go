@@ -9,7 +9,7 @@
 // contracts deferred. Template degradation that loses the literal silently
 // flips drafts to codegen=true, breaking the deferred-command workflow.
 //
-// AI-rebust evaluation: Medium. Real-output capture (renders the template,
+// AI-robust evaluation: Medium. Real-output capture (renders the template,
 // parses the YAML, asserts semantic key/value pair) is robust to whitespace
 // or formatting changes but fails immediately if the key or its value
 // degrades. Cannot be Hard: the template is text/template hand-written; no
@@ -30,7 +30,7 @@ import (
 // mapping contains a `codegen` key with value `false`.
 //
 // INVARIANT: SCAFFOLD-INLINE-TEMPLATE-ARCHTEST
-// AI-rebust: Medium (real-output capture); see file-level godoc for rationale.
+// AI-robust: Medium (real-output capture); see file-level godoc for rationale.
 //
 // Blind-spot self-check: this test only walks top-level MappingNode.Content
 // pairs. Nested `codegen:` keys (e.g. under `endpoints:`) would not be

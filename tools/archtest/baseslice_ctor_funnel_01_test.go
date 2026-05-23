@@ -21,7 +21,7 @@
 //     (codegen output). Non-gen production code must call slicePkg.SliceMetadata().
 //     Exempt: `*_gen.go` files and `kernel/metadata` package itself (type tests).
 //
-// AI-rebust grade: Medium (type-aware AST funnel lock, scoped to production
+// AI-robust grade: Medium (type-aware AST funnel lock, scoped to production
 // packages via RunTypedProduction). Hard-side counterpart is the deletion of
 // `cell.NewBaseSlice` plus the codegen funnel projecting slice.yaml into
 // slice_gen.go.sliceMeta — together they make the literal form unrepresentable

@@ -1,7 +1,7 @@
 // INVARIANT: ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01
 //
 // Hard funnel double-lock for adapter transient-error classification
-// (ai-collab.md §"Funnel 双向锁" + §"Hard 范本" typed-function-call form).
+// (ai-robust.md §"Funnel 双向锁" + §"Hard 范本" typed-function-call form).
 //
 //   - Downstream Hard: the private errcode.Error.transient marker — the single
 //     signal errcode.IsTransient keys on for *Error — is WRITTEN only inside
@@ -19,7 +19,7 @@
 // Tool: archtest.RunTypedProduction (040 Pass-Driver) + *types.Info call /
 // field resolution. NOT exempted (uses archtest.Pass façade per ADR 040 stage-4 terminal state).
 //
-// Declared blind spots (ai-collab.md §"工具选定后强制盲区自检"), each with a
+// Declared blind spots (ai-robust.md §"工具选定后强制盲区自检"), each with a
 // compensating argument and/or reverse self-check fixture:
 //
 //  1. Reflective field set (reflect.Value.SetBool on transient): impossible —
@@ -67,7 +67,7 @@ import (
 )
 
 // transientMarkerWriterFunc is the single function name allowed to write the
-// errcode.Error.transient marker. Form-uniqueness anchor (ai-collab Hard 范本).
+// errcode.Error.transient marker. Form-uniqueness anchor (ai-robust Hard 范本).
 const transientMarkerWriterFunc = "WrapInfra"
 
 // transientMarkerField is the unexported marker field name on errcode.Error.
@@ -119,7 +119,7 @@ func TestAdapterErrorClassificationTransient01(t *testing.T) {
 }
 
 // TestAdapterErrorClassificationTransient01_FixturePattern is the reverse
-// self-check (ai-collab.md §"工具选定后强制盲区自检"): a real build-tag-gated
+// self-check (ai-robust.md §"工具选定后强制盲区自检"): a real build-tag-gated
 // package whose two non-WrapInfra transient-marker writes (assignment +
 // composite literal) MUST be reported, while the WrapInfra writer and a
 // read-only access MUST NOT. Asserts the exact count to catch both

@@ -82,7 +82,7 @@ scaffold cell 的"dry-run 不完整 + 跨阶段无 rollback"对称问题登记 b
 - **方案 B：CLI 内部合并 plan，kernel 不动**。被拒。`autoGenerateAssemblyArtifacts` 还在，re-parse 还在，wrapper 没消失；L2 PR 整体不彻底。
 - **保留 `AssemblyScaffoldSpec.DryRun`**。被拒。dry-run 是写盘决策，不属于 render 阶段——保留它就是把 kernel 拉回 "execute" 角色，违反 render-only 抽象。
 
-## AI-rebust evaluation
+## AI-robust evaluation
 
 | Defense | Mechanism | 档 |
 |---|---|---|
