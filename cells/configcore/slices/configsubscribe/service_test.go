@@ -75,7 +75,7 @@ func requireAck(t *testing.T, result outbox.HandleResult) {
 // mustNewService constructs a Service for testing and fails the test on error.
 func mustNewService(t *testing.T, logger *slog.Logger, opts ...Option) *Service {
 	t.Helper()
-	svc, err := NewService(logger, opts...) //archtest:allow:clock-injection:via-slice WithClock supplied by callers via opts; configsubscribe.NewService enforces it through MustHaveClock
+	svc, err := NewService(logger, opts...) //archtest:allow:clock-injection:via-slice WithClock via caller opts
 	require.NoError(t, err)
 	return svc
 }

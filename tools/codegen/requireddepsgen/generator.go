@@ -263,43 +263,56 @@ func parseStructFields(pkgName string, st *ast.StructType) ([]fieldGuard, error)
 func TagSyntaxValid(raw string) bool {
 	tag := raw
 	for tag != "" {
-		// Skip leading spaces.
-		i := 0
-		for i < len(tag) && tag[i] == ' ' {
-			i++
-		}
-		tag = tag[i:]
-		if tag == "" {
-			break
-		}
-		// Scan to the colon. A space, quote or control char before ':', an
-		// empty key, or a colon not followed by '"' is malformed.
-		i = 0
-		for i < len(tag) && tag[i] > ' ' && tag[i] != ':' && tag[i] != '"' && tag[i] != 0x7f {
-			i++
-		}
-		if i == 0 || i+1 >= len(tag) || tag[i] != ':' || tag[i+1] != '"' {
+		rest, ok := consumeOneTagPair(tag)
+		if !ok {
 			return false
 		}
-		tag = tag[i+1:]
-		// Scan the quoted value to its closing quote (honoring backslash escapes).
-		i = 1
-		for i < len(tag) && tag[i] != '"' {
-			if tag[i] == '\\' {
-				i++
-			}
-			i++
-		}
-		if i >= len(tag) {
-			return false
-		}
-		qvalue := tag[:i+1]
-		tag = tag[i+1:]
-		if _, err := strconv.Unquote(qvalue); err != nil {
-			return false
-		}
+		tag = rest
 	}
 	return true
+}
+
+// consumeOneTagPair skips leading spaces and consumes one conventional
+// key:"value" pair from tag, returning the remainder. ok=false on any
+// malformation. A remainder of only spaces returns ("", true) so the
+// TagSyntaxValid loop terminates as valid.
+func consumeOneTagPair(tag string) (rest string, ok bool) {
+	for len(tag) > 0 && tag[0] == ' ' {
+		tag = tag[1:]
+	}
+	if tag == "" {
+		return "", true
+	}
+	// Scan the key up to the colon. A space, quote or control char before ':',
+	// an empty key, or a colon not followed by '"' is malformed.
+	i := 0
+	for i < len(tag) && tag[i] > ' ' && tag[i] != ':' && tag[i] != '"' && tag[i] != 0x7f {
+		i++
+	}
+	if i == 0 || i+1 >= len(tag) || tag[i] != ':' || tag[i+1] != '"' {
+		return "", false
+	}
+	return consumeQuotedValue(tag[i+1:])
+}
+
+// consumeQuotedValue consumes a leading Go-quoted string from tag (which begins
+// at the opening '"') and returns the remainder. ok=false when the quote is
+// unterminated or the quoted form does not unquote.
+func consumeQuotedValue(tag string) (rest string, ok bool) {
+	i := 1
+	for i < len(tag) && tag[i] != '"' {
+		if tag[i] == '\\' {
+			i++
+		}
+		i++
+	}
+	if i >= len(tag) {
+		return "", false
+	}
+	if _, err := strconv.Unquote(tag[:i+1]); err != nil {
+		return "", false
+	}
+	return tag[i+1:], true
 }
 
 // buildGuard constructs the fieldGuard for a single named field.
