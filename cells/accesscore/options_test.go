@@ -276,7 +276,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 
 // TestHealthCheckers_WithDirectEmitter verifies that after Init with a
 // DirectEmitter-backed publisher, both the repo probe and the
-// outbox-failopen-rate probe are registered.
+// outbox_failopen_rate probe are registered.
 func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
@@ -302,7 +302,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		"session.Store satisfies RepoProber; repo probe must be registered")
 	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
-	const emitterKey = "outbox-failopen-rate.accesscore"
+	const emitterKey = "outbox_failopen_rate_accesscore"
 	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter health checker must be aggregated")
 	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
@@ -312,7 +312,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 // only the repo probe appears — no emitter probes.
 func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	// WriterEmitter (NoopWriter path) does not implement healthz.ProbeSet,
-	// so no outbox-failopen-rate probe is registered.
+	// so no outbox_failopen_rate probe is registered.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
@@ -340,7 +340,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore.RepoReady must return nil (in-memory always ready)")
 	for _, k := range agg.ProbeNames() {
-		assert.NotContains(t, k, "outbox-failopen-rate",
+		assert.NotContains(t, k, "outbox_failopen_rate",
 			"WriterEmitter must not produce outbox probe: key=%s", k)
 	}
 }

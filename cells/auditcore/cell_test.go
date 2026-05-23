@@ -549,7 +549,7 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 }
 
 // TestAuditCore_HealthCheckers_WithDirectEmitter verifies that after Init with
-// a DirectEmitter-backed publisher, the outbox-failopen-rate probe scoped to
+// a DirectEmitter-backed publisher, the outbox_failopen_rate probe scoped to
 // "auditcore" is registered.
 func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell(t)
@@ -557,7 +557,7 @@ func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), recorder))
 	agg := drainProbeSnapshot(t, recorder)
 
-	const emitterKey = "outbox-failopen-rate.auditcore"
+	const emitterKey = "outbox_failopen_rate_auditcore"
 	require.True(t, agg.HasProbe(emitterKey), "DirectEmitter health probe must be registered")
 	assert.NoError(t, agg.Probe(emitterKey).Check(context.Background()), "fresh emitter should be healthy")
 }
@@ -659,8 +659,8 @@ func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), recorder))
 	agg := drainProbeSnapshot(t, recorder)
 	// WriterEmitter does not add emitter probes; only repo probe is present.
-	assert.False(t, agg.HasProbe("outbox-failopen-rate.auditcore"),
-		"WriterEmitter must not add outbox-failopen-rate probe")
+	assert.False(t, agg.HasProbe("outbox_failopen_rate_auditcore"),
+		"WriterEmitter must not add outbox_failopen_rate probe")
 	assert.True(t, agg.HasProbe(ProbeRepoReady),
 		"repo probe must always be registered via RegisterRepoReady")
 }

@@ -60,7 +60,7 @@ func TestWithClock_UsesInjectedClock(t *testing.T) {
 
 func TestNewAggregator_NilClockPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("expected panic on nil clock, got none")
 		}
 	}()
@@ -71,7 +71,7 @@ func TestNewAggregator_NilClockPanics(t *testing.T) {
 
 func TestNewAggregator_ZeroDeadlinePanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("expected panic on zero deadline, got none")
 		}
 	}()

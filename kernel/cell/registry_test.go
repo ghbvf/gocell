@@ -150,6 +150,25 @@ func TestRegistry_Healthz_RegisterAfterSnapshot_Panics(t *testing.T) {
 	})
 }
 
+// emptyNameProbe is a malformed Probe whose Name() is empty. It cannot be built
+// via healthz.NewProbe (which panics on an empty name), so this local type
+// exercises the recorder sink's registration-time name validation.
+type emptyNameProbe struct{}
+
+func (emptyNameProbe) Name() string                  { return "" }
+func (emptyNameProbe) Check(_ context.Context) error { return nil }
+
+// TestRegistry_Healthz_RejectsNilAndEmptyName verifies the write-side sink
+// rejects a nil probe and an empty-name probe with ErrInvalidProbeName (mirrors
+// the runtime aggregator contract) and does not accumulate the rejected probe.
+func TestRegistry_Healthz_RejectsNilAndEmptyName(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	sink := rec.Healthz()
+	assert.ErrorIs(t, sink.Register(nil), healthz.ErrInvalidProbeName)
+	assert.ErrorIs(t, sink.Register(emptyNameProbe{}), healthz.ErrInvalidProbeName)
+	assert.Empty(t, rec.Snapshot().Probes, "rejected probes must not be accumulated")
+}
+
 // ---------------------------------------------------------------------------
 // TestRegistry_RouteGroup_AccumulatesInOrder
 // ---------------------------------------------------------------------------

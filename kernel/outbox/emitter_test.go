@@ -478,7 +478,7 @@ func TestDirectEmitter_Probes_DegradedOnHighDropRatio(t *testing.T) {
 
 	probes := e.Probes()
 	require.Len(t, probes, 1)
-	require.Equal(t, "outbox-failopen-rate.testcell", probes[0].Name())
+	require.Equal(t, "outbox_failopen_rate_testcell", probes[0].Name())
 
 	// 10 drops / 10 total = 100% > 5% default threshold → Tripped
 	checkErr := probes[0].Check(ctx)
@@ -501,7 +501,7 @@ func TestDirectEmitter_Probes_HealthyOnLowDropRatio(t *testing.T) {
 
 	probes := e.Probes()
 	require.Len(t, probes, 1)
-	require.Equal(t, "outbox-failopen-rate.testcell", probes[0].Name())
+	require.Equal(t, "outbox_failopen_rate_testcell", probes[0].Name())
 
 	// 0 drops / 10 total = 0% < 5% threshold → not tripped
 	checkErr := probes[0].Check(ctx)

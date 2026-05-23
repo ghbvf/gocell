@@ -18,8 +18,13 @@ const badConst = "widget-repo-ready"
 
 func noop(context.Context) error { return nil }
 
+// runtimeID is a non-constant segment used to build a composed probe name,
+// exercising the string-literal-operand path of the rule.
+func runtimeID() string { return "widget" }
+
 // Package-level vars keep the calls in production (non-test) AST.
 var (
-	_ = healthz.NewProbe("bad-literal-ready", noop) // BasicLit form
-	_ = healthz.NewProbe(badConst, noop)            // const-Ident form
+	_ = healthz.NewProbe("bad-literal-ready", noop)       // BasicLit form
+	_ = healthz.NewProbe(badConst, noop)                  // const-Ident form
+	_ = healthz.NewProbe("prefix-bad_"+runtimeID(), noop) // composed: literal-operand hyphen
 )

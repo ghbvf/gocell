@@ -109,16 +109,16 @@ func (a *aggregator) Deregister(name string) {
 
 // Evaluate runs all registered probes concurrently and returns a [healthz.Snapshot].
 //
-// Each probe runs under a fresh context derived from context.Background()
-// (not from the provided ctx) with the configured per-probe deadline. This
-// matches the pattern in runtime/http/health.runProbesParallel: request-level
-// cancellations (e.g. kubelet disconnecting) must not cancel probe execution
-// mid-flight since the probe result should reflect real dependency health, not
-// transport noise.
-//
-// The ctx parameter is accepted for interface conformance and future use (e.g.
-// trace propagation) but does not govern probe execution deadlines in this
-// implementation.
+// Each probe runs under a context derived from the provided ctx via
+// [context.WithoutCancel] plus the configured per-probe deadline: probe
+// execution inherits request-scoped values (e.g. trace IDs) but is decoupled
+// from request-level cancellation — a kubelet disconnect (ctx cancellation)
+// must not cancel probe execution mid-flight, since the probe result should
+// reflect real dependency health, not transport noise. This matches the
+// pattern in runtime/http/health.runProbesParallel. (The HTTP transport passes
+// context.Background(); WithoutCancel of a background ctx is itself a plain
+// background ctx, so this is value-propagation-ready without changing the
+// transport path.)
 //
 // The returned Snapshot.Probes slice is sorted by Name for stable wire output.
 // Snapshot.Overall is the worst-case status across all probes per
@@ -139,9 +139,10 @@ func (a *aggregator) Evaluate(ctx context.Context) healthz.Snapshot {
 		}
 	}
 
-	// Each probe runs under a background-derived context with the configured
-	// deadline. The parent ctx is intentionally not used here — see godoc.
-	probeCtx, cancel := context.WithTimeout(context.Background(), a.deadline)
+	// Probe context: inherits ctx values (trace) via WithoutCancel but is
+	// decoupled from ctx cancellation, then bounded by the per-probe deadline.
+	// See godoc for the cancellation-isolation rationale.
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.deadline)
 	defer cancel()
 
 	results := make([]healthz.ProbeResult, len(probes))

@@ -230,7 +230,8 @@ GOCELL_READYZ_VERBOSE_DISABLED=1
 ```
 
 When `VerboseDisabled` is in effect, every `?verbose` request is answered
-with the plain aggregate body instead of 401. `VerboseDisabled=1` is
+with the normal aggregate response (200 plain status body or 503 error
+envelope) instead of 401. `VerboseDisabled=1` is
 rejected in `GOCELL_ADAPTER_MODE=real`: production must retain the
 token-gated diagnostic channel.
 
@@ -242,7 +243,7 @@ same error envelope described under "Response shape"):
 
 | Server state | Request | Response |
 |--------------|---------|----------|
-| `WithVerboseDisabled()` set (e.g. `GOCELL_READYZ_VERBOSE_DISABLED=1`) | any `?verbose` | **200 / 503 plain aggregate body** (no verbose fields) |
+| `WithVerboseDisabled()` set (e.g. `GOCELL_READYZ_VERBOSE_DISABLED=1`) | any `?verbose` | **200 plain status body** (no verbose fields) / **503 error envelope** |
 | token configured + header matches | `?verbose` with matching `X-Readyz-Token` | **200 verbose body** (cells/dependencies/adapters) / **503 plain error envelope** — a verbose-authorised 503 carries no verbose fields on the wire; status/reason ride on slog only (see preamble) |
 | token configured + header missing/mismatched | `?verbose` with wrong / no `X-Readyz-Token` | **401** `ERR_READYZ_VERBOSE_DENIED` |
 | token unset (and not disabled) — should never happen in prod (Validate refuses startup) | `?verbose` | **401** `ERR_READYZ_VERBOSE_DENIED` |

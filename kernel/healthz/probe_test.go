@@ -31,7 +31,7 @@ func TestNewProbe_EmptyNamePanics(t *testing.T) {
 	t.Parallel()
 
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Errorf("expected panic on empty name")
 		}
 	}()
@@ -42,7 +42,7 @@ func TestNewProbe_NilFnPanics(t *testing.T) {
 	t.Parallel()
 
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Errorf("expected panic on nil fn")
 		}
 	}()

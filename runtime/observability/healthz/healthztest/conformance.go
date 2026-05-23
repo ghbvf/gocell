@@ -18,6 +18,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
+// Shared assertion-message formats — these literals recur across multiple
+// conformance sub-tests (extracted per go:S1192).
+const (
+	msgOverallWant = "Overall = %s, want %s"
+	msgRegisterErr = "Register: %v"
+)
+
 // RunAggregatorConformance validates that the given factory produces
 // [kernel/healthz.Aggregator] implementations satisfying the full kernel
 // contract. It is the single-source conformance harness; future postgres or
@@ -61,11 +68,11 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		agg := factory()
 		p := khealthz.NewProbe("alpha_ready", func(_ context.Context) error { return nil })
 		if err := agg.Register(p); err != nil {
-			t.Fatalf("Register: %v", err)
+			t.Fatalf(msgRegisterErr, err)
 		}
 		snap := agg.Evaluate(context.Background())
 		if snap.Overall != khealthz.StatusUp {
-			t.Errorf("Overall = %s, want %s", snap.Overall, khealthz.StatusUp)
+			t.Errorf(msgOverallWant, snap.Overall, khealthz.StatusUp)
 		}
 		if len(snap.Probes) != 1 {
 			t.Fatalf("Probes len = %d, want 1", len(snap.Probes))
@@ -89,7 +96,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		}
 		snap := agg.Evaluate(context.Background())
 		if snap.Overall != khealthz.StatusDown {
-			t.Errorf("Overall = %s, want %s", snap.Overall, khealthz.StatusDown)
+			t.Errorf(msgOverallWant, snap.Overall, khealthz.StatusDown)
 		}
 	})
 
@@ -127,7 +134,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		}
 		snap := agg.Evaluate(context.Background())
 		if snap.Overall != khealthz.StatusDegraded {
-			t.Errorf("Overall = %s, want %s", snap.Overall, khealthz.StatusDegraded)
+			t.Errorf(msgOverallWant, snap.Overall, khealthz.StatusDegraded)
 		}
 	})
 
@@ -170,7 +177,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 			return errors.New("failure")
 		})
 		if err := agg.Register(downProbe); err != nil {
-			t.Fatalf("Register: %v", err)
+			t.Fatalf(msgRegisterErr, err)
 		}
 		// Before deregister — should be Down.
 		snap := agg.Evaluate(context.Background())
@@ -205,7 +212,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 				errcode.Assertion("test panic payload")))
 		})
 		if err := agg.Register(p); err != nil {
-			t.Fatalf("Register: %v", err)
+			t.Fatalf(msgRegisterErr, err)
 		}
 		snap := agg.Evaluate(context.Background())
 		if snap.Overall != khealthz.StatusDown {

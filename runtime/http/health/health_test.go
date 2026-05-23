@@ -1336,7 +1336,7 @@ func TestReadyz_DegradedReturns200WithStatusField(t *testing.T) {
 	agg := newAgg(clock.Real())
 	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, agg.Register(khealthz.NewProbe("outbox-failopen-rate.configcore", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate_configcore", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
 	})))
 
@@ -1479,7 +1479,7 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	agg := newAgg(clock.Real())
 	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, agg.Register(khealthz.NewProbe("outbox-failopen-rate.configcore", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate_configcore", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
 	})))
 
@@ -1492,8 +1492,8 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	data := dataBody(t, rec)
 	deps, ok := data["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose body must contain dependencies map")
-	entry, ok := deps["outbox-failopen-rate.configcore"].(map[string]any)
-	require.True(t, ok, "outbox-failopen-rate.configcore must be present in dependencies")
+	entry, ok := deps["outbox_failopen_rate_configcore"].(map[string]any)
+	require.True(t, ok, "outbox_failopen_rate_configcore must be present in dependencies")
 	assert.Equal(t, "degraded", entry["status"],
 		"verbose dependency entry status must be 'degraded'")
 	// Wire shape per ADR 202605171200 §3: error text belongs to channel d (slog),
@@ -1640,7 +1640,7 @@ func TestReadyz_HealthyAllAcrossBoard(t *testing.T) {
 // runOneProbe call (which was a package-internal function removed in B4).
 func TestAggregator_DegradedSentinelMappedToDegraded(t *testing.T) {
 	agg := newAggWithDeadline(clock.Real(), testtime.D5s)
-	require.NoError(t, agg.Register(khealthz.NewProbe("outbox-failopen-rate", func(_ context.Context) error {
+	require.NoError(t, agg.Register(khealthz.NewProbe("outbox_failopen_rate", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
 	})))
 
