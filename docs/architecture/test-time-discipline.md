@@ -37,7 +37,7 @@ the entire suite.
   `**/storetest/`, `**/healthtest/`, `**/contracttest/`, `**/commandtest/`
 
 The static guard lives at `tools/archtest/test_time_literal_test.go`. The
-`hack/verify-test-time-literal.sh` script wires it into `make verify`.
+`hack/verify-archtest-invariants.sh` script wires it into `make verify`.
 
 ## How to write a new test
 
@@ -167,7 +167,7 @@ the FakeClock event loop has no signal source — only the test's own
 ## Platform scope
 
 The gates run on Linux CI (the tools shard in `_build-lint.yml` and the
-governance verify path via `hack/verify-test-time-literal.sh`). Files
+governance verify path via `hack/verify-archtest-invariants.sh`). Files
 gated behind `//go:build darwin` / `//go:build windows` etc. are
 invisible to the Linux build context and therefore not statically
 scanned by these gates. The test-code library (`pkg/testutil/testtime`,
@@ -201,4 +201,4 @@ becomes the right escalation.
 - Sibling gate: `tools/archtest/prod_duration_const_test.go` (PR#336 PROD-DURATION-CONST-01)
 - Constants: `pkg/testutil/testtime/testtime.go`
 - Gate implementation: `tools/archtest/test_time_literal_test.go`
-- Verify script: `hack/verify-test-time-literal.sh`
+- Verify script: `hack/verify-archtest-invariants.sh`
