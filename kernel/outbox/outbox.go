@@ -200,7 +200,7 @@ func (e Entry) Validate() error {
 			errcode.WithDetails(slog.Int("size", len(e.Payload)), slog.Int("max", MaxPayloadBytes)))
 	}
 	// CWE-117 defense in depth at the in-memory boundary. Wire-side enforcement
-	// lives in WireMessage's SafeID fields; this guards programmer-constructed
+	// lives in wireMessage's SafeID fields (see envelope.go); this guards programmer-constructed
 	// Entries (e.g., business-code literal Entry{ID: "evil\n"} that never enters
 	// the wire decode funnel). Without this check, an unsafe in-memory Entry can
 	// reach adapters/postgres.Write → INSERT → relay log injection.

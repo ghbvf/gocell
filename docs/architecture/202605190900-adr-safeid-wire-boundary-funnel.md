@@ -1,8 +1,69 @@
 # ADR: SafeID Wire-Boundary Funnel
 
 - **Date**: 2026-05-19
-- **Status**: Accepted
-- **Refs**: PR #582, backlog `G-08(c)`, `SAFEID-UPSTREAM-FUNNEL-HARD-01`
+- **Status**: Accepted (amended 2026-05-22 — upstream upgraded to Hard via type-system seal)
+- **Refs**: PR #582, gh issue #713, backlog `G-08(c)`, `SAFEID-UPSTREAM-FUNNEL-HARD-01` (closed)
+
+## §0 Amendment (2026-05-22) — Upstream Hard via Type-System Seal
+
+Issue #713 (`SAFEID-UPSTREAM-FUNNEL-HARD-01`) tracked the upstream funnel
+upgrade from Medium-by-necessity to Hard. The original backlog entry
+proposed an archtest caller-allowlist; that approach was rejected on
+review because charter §"Funnel 双向锁评级" rates archtest caller-allowlists
+as Medium, not Hard. The industry precedent for an unexported codec
+gating wire decode is Kratos `transport/grpc/codec.go` (zero-size
+unexported codec struct with single registration); etcd `server/wal/wal.go`
+provides an adjacent "sealed handle via unexported fields + factory-only
+construction" pattern at the `WAL` handle level (distinct from etcd's
+wire-level `wal.Record`). Watermill `message.Message` is NOT a direct
+precedent — its UUID/Metadata/Payload are exported; only the ack
+lifecycle is sealed via unexported channels.
+
+**Adopted change**: rename `kernel/outbox.WireMessage` → `wireMessage`
+(lowercase, package-private). The public envelope I/O surface is unchanged
+— `MarshalEnvelope(entry Entry) ([]byte, error)` and `UnmarshalEnvelope(
+topic, raw) (Entry, error)` neither expose nor accept the envelope type
+in their signatures, so the rename is API-transparent to external callers.
+
+After the seal:
+- Cross-package `outbox.WireMessage{...}` / `var msg outbox.wireMessage` /
+  `json.Unmarshal(b, &outbox.WireMessage{})` are compile-time errors.
+- Go package-level visibility is the upstream Hard mechanism; the
+  `SAFEID-UPSTREAM-FUNNEL-HARD-01` archtest is a regression guard against
+  future re-exports (struct or alias).
+- The closed Hard funnel is now: Hard upstream (Go visibility +
+  archtest naming check) + Hard downstream (SafeID field types + reflective
+  deny-by-default archtest).
+
+**Threat-matrix re-evaluation** (per charter §"ADR amendment 落地必查"):
+
+| Threat | Pre-amendment | Post-amendment |
+|--------|---------------|---------------|
+| Wire-decode bypass via direct `json.Unmarshal(b, &WireMessage{})` outside `UnmarshalEnvelope` | ⚠️ Medium-by-necessity (would skip `schemaVersion` / required-field checks; SafeID still fires) | ✅ Compile-time impossible (cross-package reference to `wireMessage` is forbidden) |
+| Future re-export under ANY exported name: alias (`type Envelope = wireMessage`), defined-type sharing underlying (`type Envelope wireMessage`), or fresh struct copy with the canonical wire-shape fields | ❌ Not detected | ✅ Caught by `SAFEID-UPSTREAM-FUNNEL-HARD-01` checks 5+6: types.Unalias-normalized identity equality (alias / materialized `*types.Alias`); underlying-struct identity equality (defined-type); SchemaVersion + ≥7/10 canonical field overlap (fresh struct). AST `NoReExport` reverse self-test additionally guards the exact-name `type WireMessage` token. |
+| In-memory `SafeID(rawUnsafe)` cast within a trusted package | ⚠️ Permitted (Go's max grade for typed strings) | ⚠️ Unchanged — `MarshalEnvelope`'s `ParseSafeID` producer-side fail-fast still rejects at marshal time |
+| Test helper that builds attack-vector wire bytes (negative testing) | ⚠️ Used `WireMessage{}` literal cast bypass | ✅ Tests build raw `[]byte` JSON templates; the seal forbids in-Go construction, aligning with the principle that wire-format faults are byte-level |
+
+Industry references (commit message `ref:` slugs):
+
+- ref: go-kratos/kratos `transport/grpc/codec.go` — zero-size unexported
+  codec struct with single registration. **Primary equivalent**: the
+  unexported codec type gating decode is the same form-class as GoCell's
+  unexported `wireMessage` gating `outbox.UnmarshalEnvelope`.
+- ref: etcd-io/etcd `server/wal/wal.go` — `WAL` handle sealed via
+  unexported fields + factory-only constructors (`Create` / `Open` /
+  `OpenForRead`). **Cited at the handle level**, not at the wire-level
+  `wal.Record` which has different framing semantics.
+- Watermill `message.Message` is intentionally NOT cited as a precedent —
+  its UUID/Metadata/Payload fields are exported; only the ack channels
+  are sealed. Envelope construction is reachable cross-package; that
+  shape is a partial seal, not the Hard upstream guarantee this funnel
+  requires.
+
+The rest of this ADR retains its original decision and trust model;
+sections that originally read "Medium-by-necessity" have been rewritten
+below in §"Funnel rating" per charter §"ADR amendment 落地必查" (no
+two-truths history retention).
 
 ## Context
 
@@ -46,7 +107,7 @@ Adopt the **string-typed concept funnel** (charter §"Hard 范本" 第 3 条).
 
 ## Two-layer trust model
 
-- **WireMessage** (wire boundary): all ID-shaped fields are `SafeID`.
+- **wireMessage** (wire boundary, package-private after §0 amendment): all ID-shaped fields are `SafeID`.
   This is the CWE-117 closure layer.
 - **Entry** (in-memory): keeps `string`. Entry is constructed by trusted
   paths (`MustNewEntryID` is `IsSafeID` by construction;
@@ -60,14 +121,22 @@ Adopt the **string-typed concept funnel** (charter §"Hard 范本" 第 3 条).
 
 | Direction | Rating | Mechanism |
 |-----------|--------|-----------|
-| Downstream | **Hard** | Field type `SafeID` makes "decode without validation" unrepresentable. `SAFEID-WIREMESSAGE-USAGE-01` archtest locks the field types. |
-| Upstream | **Medium-by-necessity** | `UnmarshalEnvelope` is the only caller invoking `json.Unmarshal` against the envelope across transports today (RabbitMQ subscriber + in-memory event bus). Validated by inspection, not archtest. Upgrade path: `SAFEID-UPSTREAM-FUNNEL-HARD-01` registered in backlog — archtest caller-allowlist for direct `json.Unmarshal(bytes, &WireMessage{})`. |
+| Downstream | **Hard** | Field type `idutil.SafeID` makes "decode without validation" unrepresentable. `SAFEID-WIREMESSAGE-USAGE-01` archtest reflectively locks the field types (deny-by-default with explicit carve-outs). |
+| Upstream | **Hard** (since §0 amendment 2026-05-22) | Wire envelope struct `wireMessage` is package-private. Cross-package `outbox.WireMessage{...}` / `outbox.wireMessage{...}` / `json.Unmarshal(b, &outbox.WireMessage{})` are compile-time errors — Go package-level visibility is the upstream type-system seal. `SAFEID-UPSTREAM-FUNNEL-HARD-01` archtest is the regression guard (verifies unexported `wireMessage` exists, no exported `WireMessage` re-export, canonical field set intact; reverse self-test AST-scans for `type WireMessage` declarations). |
 
-The downstream Hard alone closes the CWE-117 vector even without
-upstream Hard: any caller that decodes a `WireMessage` from JSON will
-trigger `SafeID.UnmarshalJSON`. The remaining upstream gap is whether a
-direct decode would skip non-SafeID validations (`schemaVersion`,
-required-field). That gap is documented in the upgrade backlog.
+Closed Hard funnel: the only paths from `[]byte` ↔ envelope semantics
+across package boundaries are `outbox.MarshalEnvelope(Entry) ([]byte,
+error)` and `outbox.UnmarshalEnvelope(topic, raw) (Entry, error)`.
+Neither signature exposes the envelope struct; both call SafeID-aware
+producer / consumer paths internally (`MarshalEnvelope` invokes
+`idutil.ParseSafeID` per ID-shaped field; `UnmarshalEnvelope` relies on
+the Go runtime's `json.Unmarshal` → `SafeID.UnmarshalJSON` dispatch +
+required-field and `schemaVersion` post-checks).
+
+CWE-117 closure: both upstream and downstream layers independently
+close the log-injection vector. The amendment removes the prior
+"Medium-by-necessity" carve-out — direct `json.Unmarshal` against the
+envelope is now syntactically inexpressible from outside `kernel/outbox`.
 
 ## Character set choice
 
@@ -111,12 +180,14 @@ zero regression in `make verify` and `hack/verify-archtest.sh`).
 
 - New typed wrapper `SafeID` in `pkg/idutil`. All call sites that
   serialize/deserialize an envelope go through it implicitly.
-- Test fixtures that construct `WireMessage` directly need
-  `idutil.SafeID(literal)` casts. Documented in `SafeID` godoc as a
-  trusted-path bypass; tests that construct attack vectors must assert
-  downstream rejection (`makeDeliveryBody` precedent).
-- Future ID-shaped wire field additions to `WireMessage` /
-  `ObservabilityMetadata` automatically inherit the funnel.
+- Cross-package test fixtures that previously built `outbox.WireMessage{
+  ID: idutil.SafeID(...), ...}` directly migrate to
+  `outbox.MarshalEnvelope(entry)` (safe inputs) or raw `[]byte` JSON
+  templates (attack-vector negative tests). The §0 amendment makes
+  `outbox.WireMessage` cross-package reference a compile error, so
+  attack-vector tests cannot accidentally rely on in-Go construction.
+- Future ID-shaped wire field additions to the unexported `wireMessage`
+  / `ObservabilityMetadata` automatically inherit the funnel.
 - `validateObservabilityID` removed; `SafeID.Validate` is the single
   source of truth.
 
@@ -129,5 +200,14 @@ zero regression in `make verify` and `hack/verify-archtest.sh`).
   comparable typed wrapper with embedded validation
 - `k8s.io/apimachinery/pkg/util/validation` — exported length-constant
   pattern (`idutil.MaxMetadataIDLen` mirrors)
-- Backlog `SAFEID-UPSTREAM-FUNNEL-HARD-01` (upstream Hard upgrade
-  path) — see `docs/backlog/cap-13-observability.md`
+- Backlog `SAFEID-UPSTREAM-FUNNEL-HARD-01` — closed by issue #713
+  amendment §0 (upstream sealed via Go visibility; archtest
+  `SAFEID-UPSTREAM-FUNNEL-HARD-01` is the regression guard)
+- ref: go-kratos/kratos `transport/grpc/codec.go` — primary equivalent
+  (zero-size unexported codec struct, single registration)
+- ref: etcd-io/etcd `server/wal/wal.go` — sealed handle pattern
+  (unexported fields + factory-only construction; cited at `WAL` handle
+  level, distinct from wire-level `wal.Record`)
+- Watermill `message.Message` is NOT cited as a precedent — exported
+  UUID/Metadata/Payload fields make envelope construction reachable
+  cross-package; only ack channels are sealed (partial seal)

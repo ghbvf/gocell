@@ -2,7 +2,6 @@ package outbox_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -249,14 +248,15 @@ func TestRelay_HappyPath_ClaimPublishMarkPublished(t *testing.T) {
 		assert.Equal(t, "published", row.Status, "entry %s should be published", row.Entry.ID)
 	}
 
-	// Verify wire envelope contains correct payload.
+	// Verify wire envelope contains correct payload via the public funnel
+	// (SAFEID-UPSTREAM-FUNNEL-HARD-01: kout.wireMessage is package-private).
 	captured := pub.Captured()
 	require.Len(t, captured, 3)
-	var msg kout.WireMessage
-	require.NoError(t, json.Unmarshal(captured[0].payload, &msg))
-	assert.NotEmpty(t, msg.ID)
-	assert.NotEmpty(t, msg.EventType)
-	assert.True(t, len(msg.Payload) > 0)
+	entryDecoded, err := kout.UnmarshalEnvelope("", captured[0].payload)
+	require.NoError(t, err)
+	assert.NotEmpty(t, entryDecoded.ID)
+	assert.NotEmpty(t, entryDecoded.EventType)
+	assert.True(t, len(entryDecoded.Payload) > 0)
 }
 
 func TestRelay_TransientFailure_MarkRetryWithBackoff(t *testing.T) {
@@ -597,13 +597,15 @@ func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 	require.Len(t, captured, 1)
 	assert.Equal(t, "orders.v1", captured[0].topic, "topic from entry.Topic must be used")
 
-	var msg kout.WireMessage
-	require.NoError(t, json.Unmarshal(captured[0].payload, &msg))
-	assert.Equal(t, "env-test", string(msg.ID))
-	assert.Equal(t, "agg-1", string(msg.AggregateID))
-	assert.Equal(t, "order", string(msg.AggregateType))
-	assert.Equal(t, "order.created", string(msg.EventType))
-	assert.JSONEq(t, `{"amount":42}`, string(msg.Payload))
+	// SAFEID-UPSTREAM-FUNNEL-HARD-01 sealed kout.wireMessage as package-private;
+	// decode the captured wire payload via the public UnmarshalEnvelope funnel.
+	entryDecoded, err := kout.UnmarshalEnvelope("", captured[0].payload)
+	require.NoError(t, err)
+	assert.Equal(t, "env-test", entryDecoded.ID)
+	assert.Equal(t, "agg-1", entryDecoded.AggregateID)
+	assert.Equal(t, "order", entryDecoded.AggregateType)
+	assert.Equal(t, "order.created", entryDecoded.EventType)
+	assert.JSONEq(t, `{"amount":42}`, string(entryDecoded.Payload))
 }
 
 func TestRelay_Metrics_RecordedOnPollCycle(t *testing.T) {

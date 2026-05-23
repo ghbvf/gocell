@@ -17,14 +17,37 @@ const EnvelopeSchemaV1 = "v1"
 var ErrUnknownEnvelopeVersion = errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 	"outbox: unknown envelope schema version")
 
-// WireMessage is the canonical wire envelope used by outbox relay and direct
-// publisher paths across transports.
+// wireMessage is the package-private wire envelope used by outbox relay and
+// direct publisher paths across transports. It is encoded via MarshalEnvelope
+// and decoded via UnmarshalEnvelope; no cross-package construction or
+// json.Unmarshal-target reference is reachable — Go package-level visibility
+// is the upstream Hard seal of the SafeID funnel.
 //
 // ID-shaped fields use idutil.SafeID, whose UnmarshalJSON fail-closes on
-// unsafe characters (CWE-117 log injection) and length-cap violation. See
-// SAFEID-WIREMESSAGE-USAGE-01 archtest and ai-collab.md §"Hard 范本" 第 3 条
-// string-typed concept funnel.
-type WireMessage struct {
+// unsafe characters (CWE-117 log injection) and length-cap violation. The
+// closed Hard funnel:
+//
+//   - Downstream: SAFEID-WIREMESSAGE-USAGE-01 archtest reflectively asserts
+//     every exported field is idutil.SafeID-typed (with explicit carve-outs).
+//     ai-collab.md §"Hard 范本目录" 第 3 条 string-typed concept funnel.
+//   - Upstream: SAFEID-UPSTREAM-FUNNEL-HARD-01 archtest asserts the struct
+//     is unexported and no exported WireMessage re-export exists. Combined
+//     with Go visibility, packages outside kernel/outbox cannot construct,
+//     reference, or json.Unmarshal-target the envelope — only the public
+//     MarshalEnvelope / UnmarshalEnvelope move bytes ↔ envelope.
+//     ai-collab.md §"Hard 范本目录" JSON-wire-decode struct sealing.
+//
+// ref: go-kratos/kratos transport/grpc/codec.go — zero-size unexported codec
+// struct, the closest industry equivalent (encoding/json wire decoder gated
+// by an unexported type with single registration). ref: etcd-io/etcd
+// server/wal/wal.go — WAL handle sealed via unexported fields + factory-only
+// constructors (Create / Open / OpenForRead); cited at the handle level,
+// distinct from etcd's wire-level wal.Record which has different framing
+// semantics. Watermill message.Message is NOT a precedent here — its UUID /
+// Metadata / Payload fields are exported, only the ack lifecycle is sealed
+// via unexported channels, so envelope construction is not compile-time
+// impossible cross-package.
+type wireMessage struct {
 	SchemaVersion string                `json:"schemaVersion"`
 	ID            idutil.SafeID         `json:"id"`
 	AggregateID   idutil.SafeID         `json:"aggregateId,omitempty"`
@@ -79,7 +102,7 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: marshal envelope: invalid observability", err)
 	}
-	msg := WireMessage{
+	msg := wireMessage{
 		SchemaVersion: EnvelopeSchemaV1,
 		ID:            id,
 		AggregateID:   aggID,
@@ -104,7 +127,7 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 // ErrEnvelopeSchema for consistent error classification across the
 // schema-version / missing-field / unsafe-id rejection paths.
 func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
-	var msg WireMessage
+	var msg wireMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return Entry{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: unmarshal envelope", err)

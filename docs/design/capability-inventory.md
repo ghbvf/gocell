@@ -151,7 +151,7 @@
 ### 3.13 outbox — Transactional Outbox runtime
 - `Store` — SQL-dialect-neutral 接口 (ClaimPending / MarkPublished / MarkRetry / MarkDead / ReclaimStale / CleanupPublished / CleanupDead / OldestEligibleAt)；adapters/postgres.PGOutboxStore 是当前唯一实现，FakeStore 在 `outboxtest` 提供
 - `Relay` — worker.Worker，编排 pollLoop / reclaimLoop / cleanupLoop 三 goroutine；cleanup 数据驱动（睡到 oldest+retention），无固定定时器
-- `WireMessage` + `MarshalEnvelope` / `UnmarshalEnvelope` — outbox → broker 的标准 envelope（替代 adapters/postgres + adapters/rabbitmq + runtime/eventbus 三处重复 struct，S28）
+- `MarshalEnvelope(Entry) ([]byte, error)` / `UnmarshalEnvelope(topic, raw) (Entry, error)` — outbox → broker 的标准 v1 wire envelope I/O（package-private `wireMessage` struct，跨包不可构造；替代 adapters/postgres + adapters/rabbitmq + runtime/eventbus 三处重复 struct，S28）
 - `outboxtest.RunStoreConformanceSuite` — Store 契约 18 子测，FakeStore 与 PGOutboxStore 必须同时通过
 
 ---
