@@ -23,8 +23,8 @@ import (
 const verifyArchtestScriptMarker = "hack/verify-archtest.sh"
 
 // TestVerifyArchtestCIExplicitShardCount asserts that the verify-archtest
-// CI job in .github/workflows/_build-lint.yml sets SHARD_COUNT=16 explicitly
-// in step env, rather than relying on the script default.
+// CI job in .github/workflows/archtest-nightly.yml sets SHARD_COUNT=16
+// explicitly in step env, rather than relying on the script default.
 //
 // Background: hack/verify-archtest.sh default SHARD_COUNT is 1 (local-friendly:
 // single process, ~300 Test* share *types.Info cache, lowest CPU). CI must set
@@ -37,11 +37,16 @@ const verifyArchtestScriptMarker = "hack/verify-archtest.sh"
 // must explicit SHARD_COUNT=16" cannot be bypassed without modifying this
 // archtest in the same PR. Violation is reviewer-visible diff.
 //
+// The guard targets .github/workflows/archtest-nightly.yml — the sole
+// authoritative CI gate for the archtest matrix (ADR 202605120000
+// §Amendment 2026-05-23-pr-time-to-nightly). Local PR-time fast-feedback
+// is hack/githooks/pre-push (K=4 parallel fan-out).
+//
 // ref: ADR docs/architecture/202605120000-adr-archtest-process-isolation.md
-// §Amendment 2026-05-23.
+// §Amendment 2026-05-23 + §Amendment 2026-05-23-pr-time-to-nightly.
 func TestVerifyArchtestCIExplicitShardCount(t *testing.T) {
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "archtest-nightly.yml")))
 	require.NoError(t, err)
 	require.NoError(t, validateVerifyArchtestExplicitShardCount(body))
 }
@@ -187,11 +192,11 @@ func validateVerifyArchtestExplicitShardCount(body []byte) error {
 	var cfg archtestWorkflowConfig
 	dec := yaml.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&cfg); err != nil {
-		return fmt.Errorf("parse _build-lint.yml: %w", err)
+		return fmt.Errorf("parse archtest-nightly.yml: %w", err)
 	}
 	job, ok := cfg.Jobs["verify-archtest"]
 	if !ok {
-		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest missing from _build-lint.yml")
+		return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: jobs.verify-archtest missing from archtest-nightly.yml")
 	}
 	invocations := 0
 	for _, step := range job.Steps {

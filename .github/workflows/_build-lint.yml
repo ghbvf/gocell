@@ -57,13 +57,16 @@ jobs:
             pkgs: ./kernel/...
             static_checks: true
           - shard: tools
-            # archtest is split out to the verify-archtest job below (process
-            # isolation — see hack/verify-archtest.sh + ADR
-            # 202605120000-adr-archtest-process-isolation.md). The remaining
-            # tools/ subpackages (codegen / depgraph / generatedverify /
-            # metricschema / slowgate / etc.) are discovered at runtime by the
-            # Test step via `go list ./tools/...`; any new tools/<sub> package
-            # joins coverage automatically with zero yml maintenance.
+            # archtest 16-shard matrix runs in .github/workflows/archtest-nightly.yml
+            # (process-isolated, schedule-driven). Excluded here to avoid
+            # duplicate execution + OOM in the PR-time tools shard. See
+            # hack/verify-archtest.sh + ADR
+            # 202605120000-adr-archtest-process-isolation.md §Amendment
+            # 2026-05-23-pr-time-to-nightly. The remaining tools/ subpackages
+            # (codegen / depgraph / generatedverify / metricschema / slowgate
+            # / etc.) are discovered at runtime by the Test step via
+            # `go list ./tools/...`; any new tools/<sub> package joins
+            # coverage automatically with zero yml maintenance.
             pkgs: _dynamic_archtest_excluded
             static_checks: false
           - shard: runtime
@@ -182,10 +185,10 @@ jobs:
           PKGS='${{ matrix.pkgs }}'
           if [ "$PKGS" = "_dynamic_archtest_excluded" ]; then
             # tools shard runtime discovery: every ./tools/<sub> package
-            # except archtest (which runs in the dedicated verify-archtest
-            # job — see ADR 202605120000). Using `go list` as the ground
-            # truth makes "new tools subpackage not covered" violation
-            # unrepresentable.
+            # except archtest (which runs in archtest-nightly.yml — see
+            # ADR 202605120000 §Amendment 2026-05-23-pr-time-to-nightly).
+            # Using `go list` as the ground truth makes "new tools
+            # subpackage not covered" violation unrepresentable.
             PKGS=$(go list ./tools/... | grep -v '^github.com/ghbvf/gocell/tools/archtest$' | tr '\n' ' ')
           fi
           go test \
@@ -217,10 +220,23 @@ jobs:
       # ban) are owned by the dedicated Governance Strict workflow
       # (.github/workflows/governance.yml → `make verify`). Running them
       # here would duplicate work and create two paths to update whenever a
-      # gate is added. archtest layer/cell-internal guards are covered by
-      # the dedicated tools shard (./tools/...) which runs in parallel with
-      # this kernel shard, and are additionally re-run inside `make verify`
-      # (cheap, < 30s).
+      # gate is added. archtest layer/cell-internal guards are NOT covered
+      # by this workflow at all on push / pull_request: per ADR
+      # 202605120000 §D6 + §Amendment 2026-05-23-pr-time-to-nightly, the
+      # sole CI archtest gate is .github/workflows/archtest-nightly.yml
+      # (schedule cron + workflow_dispatch, 16-shard matrix). The tools
+      # shard above runs only tools/archtest/internal/{scanner,typeseval,
+      # rawparamfixture,wrapfixture} sub-package unit tests (lightweight,
+      # do not accumulate *types.Info graph); the top-level archtest package
+      # is excluded by the sentinel _dynamic_archtest_excluded (see the
+      # build-test matrix tools entry). governance.yml's `make verify`
+      # likewise sets VERIFY_SKIP=archtest to delegate to the nightly job.
+      # Push / PR archtest has no local coverage either: hack/githooks/
+      # pre-push deliberately omits archtest after PR #887 review round-2
+      # (CPU/RSS budget — ~3min wall + 43 GB RSS violates the hook's sub-
+      # 10s deterministic contract; see ADR §"pre-push archtest 撤回").
+      # Developers who want PR-time archtest feedback run `make verify`
+      # or `bash hack/verify-archtest.sh` explicitly.
 
       # Compile-verify e2e package even when integration-test job is skipped.
       # The e2e build tag gates runtime behaviour; this step ensures type/import
@@ -266,67 +282,21 @@ jobs:
           path: coverage-shard-${{ matrix.shard }}.out
           retention-days: 1
 
-  # verify-archtest runs the tools/archtest top-level package across 16
-  # process-isolated shards. Splits out of the build-test (tools) shard
-  # because typeseval.SharedResolver accumulates *types.Info per cacheKey;
-  # running all ~300 top-level Test* funcs in one process accumulated 20+
-  # GB peak RSS on GHA 2-core 7GB runners (OOM SIGTERM after PR #445).
-  # Each matrix shard is an independent Go process — process exit releases
-  # the cached type graphs, so per-shard peak RSS stays under 5 GB.
-  # Phase 0 measurement justification: phase0-baseline.txt produced during
-  # the PR landing this job. See ADR
-  # docs/architecture/202605120000-adr-archtest-process-isolation.md.
-  verify-archtest:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      - name: Pre-download modules
-        timeout-minutes: 3
-        run: go mod download -x
-
-      - name: Build slowgate
-        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
-
-      - name: Verify archtest shard ${{ matrix.shard }}
-        env:
-          # CI must set SHARD_COUNT=16 explicitly (GHA 2-core 7 GB shard
-          # RSS budget, see ADR 202605120000). hack/verify-archtest.sh
-          # default is 1 (local-friendly) and intentionally differs — the
-          # two values encode local vs CI context, no SYNC guard needed.
-          SHARD_COUNT: 16
-          SHARD_TARGET: ${{ matrix.shard }}
-          TIMEOUT: 5m
-          SLOWGATE_BIN: ${{ runner.temp }}/slowgate
-          SLOWGATE_THRESHOLD: 20s
-          SLOWGATE_ALLOWLIST: tools/slowgate/allowlist.txt
-        run: bash hack/verify-archtest.sh
-
-      # Mirror the build-test failure-only artifact pattern: the script
-      # tees `go test -json` into $RUNNER_TEMP/archtest-shard-N.json before
-      # piping through slowgate, so this artifact captures full event
-      # stream (test panics, build errors, sub-test traces) for diagnosis
-      # without paying upload cost on the success path.
-      - name: Upload archtest-json artifact (failure only)
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: archtest-shard-${{ matrix.shard }}-json
-          path: ${{ runner.temp }}/archtest-shard-${{ matrix.shard }}.json
-          retention-days: 3
-          if-no-files-found: ignore
+  # archtest 16-shard matrix moved to .github/workflows/archtest-nightly.yml
+  # (schedule-driven + workflow_dispatch). There is NO PR-time local
+  # fast-feedback replacement: hack/githooks/pre-push deliberately omits
+  # archtest after PR #887 review round-2 (CPU/RSS budget violates the
+  # hook's sub-10s deterministic contract — see ADR §"pre-push archtest
+  # 撤回"). Developers who want PR-time archtest feedback run `make verify`
+  # or `bash hack/verify-archtest.sh` explicitly. Rationale for the PR-time
+  # matrix removal: brittleness (modulo-shift SLOW, tagGroup OOM templates,
+  # GHA runner spot preempt amplified 16×) outweighed value; nightly
+  # catches true invariant violations within 24h, surfacing via GHA default
+  # email-to-watchers + Actions UI red ✗ + workflow_dispatch rerun. (An
+  # alert-on-failure job auto-opening a P0 issue was tried in PR #887
+  # round-1 and dropped in review round-2 for fragile `issues: write`
+  # surface — see ADR §"alert-on-failure 撤回".) See ADR 202605120000
+  # §Amendment 2026-05-23-pr-time-to-nightly.
 
   integration-test:
     if: ${{ inputs.run-integration }}

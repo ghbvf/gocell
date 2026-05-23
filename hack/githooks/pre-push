@@ -4,13 +4,12 @@
 # memory: ai-collab.md §1). It is NOT a full `make verify` — only the
 # subset that is (a) deterministic offline, (b) sub-10s on a WARM cache,
 # (c) high "forgot to run" rate. Infra-bound gates (go test against
-# testcontainers, the full archtest 16-shard matrix) stay in CI. Two
-# carved-out exceptions ride the parallel fan-out: the single archtest
-# rule TEST-TIME-LITERAL-01 (deviation 4) and CI-faithful golangci-lint
-# (deviation 5). Both are ~free when warm because the fan-out cost is
-# max(gate), not the sum — see deviations 4/5 for the cold-cache caveat.
+# testcontainers) stay in CI. CI-faithful golangci-lint (deviation 4) is
+# the only inclusion that breaches the sub-10s budget on cold cache; it
+# is accepted because warm steady-state is ~7s alongside build/vet, and
+# the cold cost is unavoidable CI work that the push pays regardless.
 #
-# Not a 1:1 CI mirror — five deliberate deviations:
+# Not a 1:1 CI mirror — four deliberate deviations:
 #   - The gofumpt gate runs `go run mvdan.cc/gofumpt` (version resolved from the repo
 #     go.mod) rather than an ambient $PATH `gofumpt`. A host-installed
 #     gofumpt drifts from the version the CI formatter gate enforces
@@ -31,22 +30,19 @@
 #     build). The other three commands do mirror real CI steps
 #     (_build-lint.yml: go build ./... / go vet ./... / go vet -tags=e2e
 #     ./tests/e2e/...).
-#   - One archtest rule — `go test -run ^TestTestTimeLiteralConst$
-#     ./tools/archtest` (TEST-TIME-LITERAL-01) — runs even though the
-#     header otherwise keeps archtest in CI. It qualifies on all three
-#     inclusion criteria: pure offline AST/type analysis (deterministic),
-#     ~6-7s on a warm cache (a `go/packages` typed full-module load — NOT
-#     the ~1-2s the test's own comment claims, which counts only the AST
-#     walk), and a repeatedly-forgotten failure mode for AI co-authors who
-#     add a `time.Duration` literal in a *_test.go without hoisting it to a
-#     package-level const. To stay within the sub-10s budget it rides the
-#     single parallel fan-out (see "Execution" below) and is gated on
-#     test-code file changes (test_code_re), so a non-test push pays ~0
-#     and a test-code push pays ~max(build/vet, archtest) ≈ 7-9s, not the
-#     sum. The rest of the archtest matrix (process-isolated 16-shard,
-#     4GB+ RSS) stays in CI — this is a single ~7s test function, not the
-#     suite. run_bg isolates each job's output to its own logfile, so
-#     parallel execution does not interleave failure logs.
+#   - archtest is NOT run here. PR #887 first round wired
+#     `SHARD_COUNT=4 bash hack/verify-archtest.sh` as a PR-time
+#     replacement after ADR 202605120000 §Amendment 2026-05-23-pr-time-
+#     to-nightly removed the matrix from PR CI; review second round
+#     dropped that inclusion. Measured cost was ~3 min wall on the
+#     calibrated 18-core workstation with 43 GB peak RSS — CPU 100% +
+#     43 GB RSS for the duration breaks the hook's sub-10s budget by
+#     18× and competes with other developer work on the machine. archtest
+#     belongs in `make verify` (developer-triggered, opt-in) and the
+#     nightly schedule (≤24h tomato; failures surface via GHA email +
+#     Actions UI + workflow_dispatch rerun) — not in an implicit
+#     pre-push gate. Developers who want PR-time archtest feedback run
+#     `bash hack/verify-archtest.sh` or `make verify` explicitly.
 #   - golangci-lint runs CI-faithfully —
 #     `golangci-lint run --new-from-merge-base=origin/develop` with the
 #     version pinned by hack/lib/golangci-lint.sh (the project's single
@@ -74,18 +70,15 @@
 #
 # Execution: every gate is independent (no shared mutable state; the Go
 # build/test cache is concurrency-safe across parallel `go` invocations),
-# so all of them — gofumpt / build×2 / vet×2 / archtest / golangci-lint /
-# codegen-verify — run in a SINGLE parallel fan-out behind one wait
-# barrier. Wall cost is ~max(slowest gate), not the sum of serial tiers.
-# Each gate is still change-gated: a docs-only push launches nothing
-# (~0s); a .go push on a WARM cache pays ~max(build/vet/archtest/lint) ≈
-# 7-9s; a .go push on a COLD cache is dominated by golangci-lint
-# (~5min measured, see deviation 5 — unavoidable CI work, paid once,
-# then warm); a schema/contract push additionally runs the codegen
-# staleness probe in the same fan-out (no extra wall time unless it is
-# the slowest job). The "Tier N" labels below are kept only as stable
-# gate identities for cross-references; they no longer imply serial
-# ordering.
+# so all of them — gofumpt / build×2 / vet×2 / golangci-lint / codegen-
+# verify — run in a SINGLE parallel fan-out behind one wait barrier.
+# Wall cost is ~max(slowest gate), not the sum of serial tiers. Each gate
+# is still change-gated: a docs-only push launches nothing (~0s); a .go
+# push on a WARM cache pays ~max(build/vet/lint) ≈ 7-15s. Cold-cache is
+# dominated by golangci-lint (~5min measured, see deviation 4 —
+# unavoidable CI work, paid once, then warm); a schema/contract push
+# additionally runs the codegen staleness probe in the same fan-out (no
+# extra wall time unless it is the slowest job).
 #
 # Honest scope (ai-collab grading): this is Medium AI-rebust — `git push
 # --no-verify` bypasses it and a fresh clone/worktree without
@@ -104,6 +97,10 @@
 
 set -euo pipefail
 
+# $TMPDIR is user-controlled but the git hook threat model is local-only:
+# an attacker who can write $TMPDIR already has local write access and can
+# modify the hook itself. The accepted limitation is documented here rather
+# than treated as a blocker.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
@@ -117,6 +114,9 @@ note() { printf '  pre-push: %s\n' "$1" >&2; }
 # at top level (not inside a gate `if`) so it is declared once, alongside
 # note().
 pids=() ; names=() ; logs=()
+# Cleanup tempfiles on exit/interrupt. ${logs[@]:-} is safe under set -u
+# when the array is still empty (Ctrl-C before any run_bg call).
+trap 'rm -f "${logs[@]:-}"' EXIT INT TERM
 run_bg() {
     local name="$1"; shift
     local log; log="$(mktemp "${TMPDIR:-/tmp}/prepush.XXXXXX")"
@@ -160,43 +160,26 @@ for r in "${ranges[@]}"; do
     changed+=$'\n'"$(git diff --name-only --diff-filter=ACMR "${r}" 2>/dev/null || true)"
 done
 
-# test_code_re mirrors tools/internal/fileroles.IsTestCode (the canonical
-# classifier TEST-TIME-LITERAL-01 scans): *_test.go / **/conformance.go /
-# the six **/<x>test/ helper trees, minus the hard exclusions
-# (tools/archtest/, vendor/, generated/, any testdata/). A bash regex is a
-# deliberate approximation — a miss only degrades to "CI catches it" (header
-# philosophy: the hook is an aid, not the SoT). The gate itself still scans
-# the WHOLE module's test code; this trigger only decides whether *this push*
-# is likely to have introduced a new test-time literal worth the ~2s probe.
-test_code_re='(_test\.go|/conformance\.go|/(locktest|outboxtest|storetest|healthtest|contracttest|commandtest)/)'
-test_code_excl='^(tools/archtest/|vendor/|generated/)|/testdata/|^testdata/'
-
 if [[ ${force_all} -eq 1 ]]; then
     go_files="$(git ls-files '*.go')"
     go_changed=1
     codegen_changed=1
-    test_code_changed=1
 else
     go_files="$(printf '%s\n' "${changed}" | grep -E '\.go$' || true)"
     [[ -n "${go_files}" ]] && go_changed=1 || go_changed=0
-    # NEVER pipe into `grep -q` here. `grep -q` exits on the first match,
-    # closing the pipe; on a large changeset (>~64KB of paths — routine for
-    # a multi-commit merge-base..HEAD range) the upstream producer is still
+    # Codegen sources: schema / contract|cell|slice|assembly yaml / any
+    # template, plus the generators and the staleness verifier themselves
+    # (tools/codegen, tools/generatedverify, cmd/gocell). NEVER pipe into
+    # `grep -q` here. `grep -q` exits on the first match, closing the
+    # pipe; on a large changeset (>~64KB of paths — routine for a multi-
+    # commit merge-base..HEAD range) the upstream producer is still
     # writing and dies with SIGPIPE (exit 141). Under `set -o pipefail`
-    # that makes the whole pipeline non-zero, the `if` false, and the gate
-    # is SILENTLY SKIPPED — a fail-OPEN false-negative that defeats the
-    # gate's purpose and contradicts the hook's fail-closed contract
+    # that makes the whole pipeline non-zero, the `if` false, and the
+    # gate is SILENTLY SKIPPED — a fail-OPEN false-negative that defeats
+    # the gate's purpose and contradicts the hook's fail-closed contract
     # (reproduced: status=141 every trial at ~420KB). Instead capture the
     # full (no -q) match into a var with `|| true` (neutralises pipefail
     # when there is legitimately no match) and test emptiness.
-    test_hits="$(printf '%s\n' "${changed}" | grep -E "${test_code_re}" | grep -vE "${test_code_excl}" || true)"
-    [[ -n "${test_hits}" ]] && test_code_changed=1 || test_code_changed=0
-    # Codegen sources: schema / contract|cell|slice|assembly yaml / any
-    # template, plus the generators and the staleness verifier themselves
-    # (tools/codegen, tools/generatedverify, cmd/gocell). Same no-`grep -q`
-    # rule as above (this site previously used `grep -qE` and had the
-    # identical SIGPIPE false-negative). A miss here only degrades to "CI
-    # catches it" — the hook is an aid, not the SoT.
     codegen_hits="$(printf '%s\n' "${changed}" | grep -E '(\.schema\.json|/(cell|slice|assembly|contract)\.yaml|\.tmpl|tools/codegen/.*\.go|tools/generatedverify/.*\.go|cmd/gocell/.*\.go)$' || true)"
     [[ -n "${codegen_hits}" ]] && codegen_changed=1 || codegen_changed=0
 fi
@@ -289,14 +272,9 @@ lint_gate() {
 #   Tier 2  build/vet ×4      — whole-module compile + vet; integration
 #                               and e2e tags are the header-documented
 #                               deliberate CI-structure deviations.
-#   Tier 5  golangci-lint     — CI-faithful PR-mode lint
+#   Tier 4  golangci-lint     — CI-faithful PR-mode lint
 #                               (--new-from-merge-base=origin/develop);
-#                               warm ~7s, cold ~5min (deviation 5).
-#   Tier 4  TEST-TIME-LITERAL-01 — one archtest rule, only when a
-#                               test-code .go file changed (test_code_re
-#                               mirrors fileroles.IsTestCode;
-#                               test_code_changed=1 ⇒ go_changed=1 since
-#                               every test-code path is a .go file).
+#                               warm ~7s, cold ~5min (deviation 4).
 #   Tier 3  codegen staleness — only when a codegen *source* changed; can
 #                               fire with go_changed=0 (schema/tmpl-only
 #                               push), so it has its own gate, not nested
@@ -329,11 +307,6 @@ if [[ ${go_changed} -eq 1 ]]; then
     run_bg "go vet -tags=e2e ./tests/e2e/..."      go vet -tags=e2e ./tests/e2e/...
 
     run_bg "golangci-lint (CI-faithful; run: make fmt / fix lint)" lint_gate
-
-    if [[ ${test_code_changed} -eq 1 ]]; then
-        run_bg "TEST-TIME-LITERAL-01 (go test -run ^TestTestTimeLiteralConst\$ ./tools/archtest)" \
-            go test -count=1 -run '^TestTestTimeLiteralConst$' ./tools/archtest
-    fi
 fi
 
 if [[ ${codegen_changed} -eq 1 ]]; then

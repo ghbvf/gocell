@@ -19,14 +19,14 @@
 #   SHARD_COUNT       Number of shards to partition Test* functions across.
 #                     Default 1 (local-friendly: single process, ~300 Test*
 #                     share *types.Info cache, lowest CPU). CI explicitly
-#                     sets SHARD_COUNT=16 in .github/workflows/_build-lint.yml
+#                     sets SHARD_COUNT=16 in .github/workflows/archtest-nightly.yml
 #                     verify-archtest job — required by GHA 2-core 7 GB
 #                     shard runner RSS budget (Phase 0 measured max peak RSS
 #                     4.22 GB / shard on macOS for K=16; safe under Linux
 #                     7 GB GHA). See ADR 202605120000.
 #   SHARD_TARGET      If set, run only that shard index [0, SHARD_COUNT).
-#                     Used by CI matrix. If empty, all shards run serially
-#                     in this process invocation.
+#                     Used by CI matrix. If empty, see "Execution modes"
+#                     header for the SHARD_COUNT-derived behavior.
 #   TIMEOUT           Go test timeout per shard. Default 5m.
 #   SLOWGATE_BIN      Path to slowgate binary. If executable, each shard's
 #                     `go test -json` stream is piped through it. If unset/
@@ -42,6 +42,25 @@
 #                     Goes through the same shard_pattern() function that
 #                     run_shard() uses — single source of truth for the
 #                     modulo assignment algorithm.
+#
+# Execution modes (no opt-in flag — derived from env shape):
+#   SHARD_TARGET set                  → single shard per process (CI matrix).
+#   SHARD_TARGET unset, SHARD_COUNT=1 → single shard, streaming stdout (local default).
+#   SHARD_TARGET unset, SHARD_COUNT>1 → all shards concurrent (background `&` +
+#                                       wait barrier; each shard's combined
+#                                       output buffered to a tempfile and
+#                                       flushed in shard order after wait).
+#                                       For the pre-push hook on a workstation
+#                                       where K=1 single-process ~5min wall is
+#                                       too slow and a K=N serial for-loop is
+#                                       even slower (each shard re-runs
+#                                       packages.Load with no cross-shard
+#                                       cache). RSS scales linearly: K=8 ≈ 33
+#                                       GB peak on macOS — sized for workstation
+#                                       use, not GHA 7 GB runners (which keep
+#                                       using SHARD_TARGET single-shard).
+#                                       See ADR 202605120000 §Amendment
+#                                       2026-05-23-pr-time-to-nightly.
 
 set -euo pipefail
 
@@ -49,7 +68,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 readonly ARCHTEST_PKG="./tools/archtest"
 # Default 1 (local). CI sets SHARD_COUNT=16 explicitly in
-# .github/workflows/_build-lint.yml::verify-archtest (GHA 7 GB RSS budget).
+# .github/workflows/archtest-nightly.yml::verify-archtest (GHA 7 GB RSS budget).
 # These two values intentionally differ — they encode "local vs CI context"
 # rather than a single global truth, so no SYNC guard is required.
 readonly SHARD_COUNT="${SHARD_COUNT:-1}"
@@ -149,11 +168,44 @@ run_shard() {
 }
 
 if [ -n "${SHARD_TARGET:-}" ]; then
+  # CI matrix path: single shard per process (each GHA matrix entry sets
+  # SHARD_TARGET=<s> for true cross-runner parallelism).
   run_shard "$SHARD_TARGET"
+elif [ "$SHARD_COUNT" -le 1 ]; then
+  # Local default (SHARD_COUNT=1): single shard, streaming stdout — gives
+  # the developer live test progress instead of a buffered post-mortem.
+  run_shard 0
 else
+  # Local multi-shard path (SHARD_COUNT>1, no SHARD_TARGET): parallel
+  # fan-out. Each shard is process-isolated (no shared mutable state), so
+  # they run concurrently. Capture per-shard combined output to a tempfile,
+  # join at one wait barrier, then emit logs in shard order so the
+  # interleaved console output remains readable. Serial multi-shard mode
+  # was dropped — it was always slower than K=1 (each shard re-loads
+  # packages.Load with no cross-shard cache) and no caller used it.
+  pids=()
+  logs=()
+  # Cleanup tempfiles on exit/interrupt. ${logs[@]:-} is safe under set -u
+  # when the array is still empty (Ctrl-C before any mktemp).
+  trap 'rm -f "${logs[@]:-}"' EXIT INT TERM
   for s in $(seq 0 $((SHARD_COUNT - 1))); do
-    run_shard "$s"
+    log=$(mktemp "${TMPDIR:-/tmp}/archtest-shard-XXXXXX")
+    ( run_shard "$s" ) > "$log" 2>&1 &
+    pids+=($!)
+    logs+=("$log")
   done
+  fail=0
+  for i in "${!pids[@]}"; do
+    if ! wait "${pids[$i]}"; then
+      fail=1
+    fi
+    cat "${logs[$i]}"
+    rm -f "${logs[$i]}"
+  done
+  if [ "$fail" -ne 0 ]; then
+    echo "verify-archtest: FAIL (SHARD_COUNT=$SHARD_COUNT parallel, TOTAL=$TOTAL)" >&2
+    exit 1
+  fi
 fi
 
 echo "verify-archtest: PASS (SHARD_COUNT=$SHARD_COUNT, TOTAL=$TOTAL)"
