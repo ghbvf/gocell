@@ -32,10 +32,6 @@
 # Local (no GOCELL_BIN set): transparent fallback to `go run` — no change
 # to developer workflow.
 #
-# Archtest: GOCELL-BIN-FUNNEL-01 in tools/archtest/gocell_bin_funnel_test.go
-# enforces that every verify-*.sh using `go run ./cmd/gocell` sources this
-# file and routes through gocell::cli.
-#
 # ref: kubernetes/kubernetes hack/lib/util.sh (shared helpers sourced by verify-*.sh)
 
 gocell::cli() {

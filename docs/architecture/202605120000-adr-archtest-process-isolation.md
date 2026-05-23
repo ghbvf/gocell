@@ -249,7 +249,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 - `hack/githooks/pre-push` 撤回 archtest 调用与 governance trigger（详见 §"pre-push archtest 撤回"），保留 gofumpt / build / vet / golangci-lint / codegen-verify 等 sub-10s 友好 gate；deviation 4 重号为 golangci-lint，Tier 4 同步重号
 - `tools/archtest/archtest_ci_shard_count_test.go` yaml 路径迁移到 `archtest-nightly.yml`
 - `CLAUDE.md`、`.claude/rules/gocell/ai-robust.md` archtest 入口描述更新
-- **`hack/verify-archtest-invariants.sh` 新建（PR2 落地）**：合并 4 个 PR-time archtest gate（verify-prod-clock-injection.sh / verify-prod-duration.sh / verify-test-time-literal.sh / verify-panic-registered.sh）为单次 `go test ./tools/archtest -run '^(TestProd...)'` 调用，消除 4 次重复 typed AST 加载（详见 plan ship-curious-treasure.md 方案 G）
+- **`hack/verify-archtest-invariants.sh`**（**将由 PR2 创建** — refactor/archtest-prtime-merge）：合并 4 个 PR-time archtest gate（verify-prod-clock-injection.sh / verify-prod-duration.sh / verify-test-time-literal.sh / verify-panic-registered.sh）为单次 `go test ./tools/archtest -run '^(TestProd...)'` 调用，消除 4 次重复 typed AST 加载（详见 plan ship-curious-treasure.md 方案 G）
 
 ### D8. 4 类 PR-time archtest gate（恢复 §"PR-time fast-feedback gate"）
 

@@ -8,8 +8,7 @@
 
 # GOCELL_CLI: route gocell invocations through the pre-compiled binary when
 # GOCELL_BIN is set (CI path), or fall back to `go run ./cmd/gocell` otherwise
-# (local dev). This mirrors hack/lib/gocell-bin.sh::gocell::cli and ensures
-# Makefile targets participate in the GOCELL-BIN-FUNNEL-01 discipline.
+# (local dev). This mirrors hack/lib/gocell-bin.sh::gocell::cli.
 GOCELL_CLI := $(if $(GOCELL_BIN),$(GOCELL_BIN),go run ./cmd/gocell)
 
 # ---------------------------------------------------------------------------
