@@ -23,7 +23,10 @@ func TestNewService_NilRoleRepo(t *testing.T) {
 		roleRepo ports.RoleRepository
 	}{
 		{"bare nil", nil},
-		{"typed nil", (ports.RoleRepository)(nil)},
+		// Real typed-nil: nil *mem.RoleRepository boxed into the interface —
+		// non-nil interface, nil underlying. validation.IsNilInterface catches
+		// it; bare `== nil` would not.
+		{"typed nil", (*mem.RoleRepository)(nil)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

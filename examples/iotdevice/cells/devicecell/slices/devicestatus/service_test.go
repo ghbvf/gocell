@@ -37,7 +37,10 @@ func TestNewService_NilRepo(t *testing.T) {
 		repo domain.DeviceRepository
 	}{
 		{"bare nil", nil},
-		{"typed nil", (domain.DeviceRepository)(nil)},
+		// Real typed-nil: nil *mem.DeviceRepository boxed into the interface —
+		// non-nil interface, nil underlying. validation.IsNilInterface catches
+		// it; bare `== nil` would not.
+		{"typed nil", (*mem.DeviceRepository)(nil)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

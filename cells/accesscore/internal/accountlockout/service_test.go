@@ -556,6 +556,25 @@ func TestNewService_RejectsNilDeps(t *testing.T) {
 	})
 }
 
+// TestWithMetrics_TypedNil_KeepsNoopDefault is the regression guard for the
+// builder-noop typed-nil contract of WithMetrics. A typed-nil *fakeMetrics is a
+// non-nil interface wrapping a nil pointer; a bare `m != nil` check would store
+// it, overwriting the noopMetrics default, and IncAccountLockout would then
+// deref the nil pointer and panic. WithMetrics must reject it.
+func TestWithMetrics_TypedNil_KeepsNoopDefault(t *testing.T) {
+	var typedNil *fakeMetrics // nil pointer boxed in MetricsRecorder
+	s := &Service{metrics: noopMetrics{}}
+
+	WithMetrics(typedNil)(s)
+
+	if _, ok := s.metrics.(noopMetrics); !ok {
+		t.Fatalf("typed-nil recorder overwrote noop default: got %T", s.metrics)
+	}
+	// Must not panic: noopMetrics swallows the call; a stored typed-nil would
+	// deref nil here.
+	s.metrics.IncAccountLockout("threshold_locked")
+}
+
 // Sanity: make sure fakeUserRepo conforms to the ports.UserRepository surface
 // statically. This guards the test's fake from drifting if the interface
 // grows new methods.

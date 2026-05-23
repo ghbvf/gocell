@@ -55,30 +55,46 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// Sentinel errors returned by Generate.
+// Sentinel errors returned by Generate. Declared via errcode.New (not
+// errors.New) so exported package-scope sentinels participate in the project
+// error taxonomy — EXPORTED-ERROR-NEW-01 bans exported errors.New sentinels
+// module-wide, tools/ included. They keep stable pointer identity (single
+// package-var construction), so errors.Is against them is unaffected.
 var (
 	// ErrNoServiceStruct is returned when service.go contains no
 	// "type Service struct" declaration.
-	ErrNoServiceStruct = errors.New("requireddepsgen: no Service struct in service.go")
+	ErrNoServiceStruct = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"requireddepsgen: no Service struct in service.go")
 
 	// ErrUnknownTagValue is returned when a struct field has a gocell tag
 	// whose value is not "" or "required", or when gocellKind/gocellCode tags
 	// contain values that do not match the errcode identifier whitelist.
-	ErrUnknownTagValue = errors.New("requireddepsgen: unknown gocell tag value (allowed: \"\", \"required\")")
+	ErrUnknownTagValue = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"requireddepsgen: unknown gocell tag value (allowed: \"\", \"required\")")
 
-	// ErrBadTagSyntax is returned when a struct field tag is malformed and
-	// cannot be parsed by reflect.StructTag.
-	ErrBadTagSyntax = errors.New("requireddepsgen: malformed struct tag")
+	// ErrBadTagSyntax is returned when a struct field carries a malformed
+	// struct tag (one reflect.StructTag.Lookup would silently drop). Surfacing
+	// it fail-closed prevents a typo'd tag from silently skipping a required
+	// dependency guard.
+	ErrBadTagSyntax = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"requireddepsgen: malformed struct tag")
 )
 
-// errcodeIdentRE matches valid errcode identifier overrides for gocellKind and
-// gocellCode tags. Values must be qualified identifiers of the form
-// errcode.Kind<Name> or errcode.Err<Name> to prevent code injection via struct
-// tags. Any other value — including those containing semicolons, parentheses,
-// slashes, or other Go syntax characters — is rejected with ErrUnknownTagValue.
-var errcodeIdentRE = regexp.MustCompile(`^errcode\.(Kind|Err)[A-Z][A-Za-z0-9]*$`)
+// errcodeKindRE and errcodeCodeRE match valid errcode identifier overrides for
+// the gocellKind and gocellCode tags respectively. Values must be qualified
+// identifiers of the form errcode.Kind<Name> (kind) or errcode.Err<Name>
+// (code) to prevent code injection via struct tags AND to prevent a kind being
+// supplied where a code is expected (or vice versa). Any other value — including
+// a well-formed errcode identifier of the wrong family — is rejected with
+// ErrUnknownTagValue.
+var (
+	errcodeKindRE = regexp.MustCompile(`^errcode\.Kind[A-Z][A-Za-z0-9]*$`)
+	errcodeCodeRE = regexp.MustCompile(`^errcode\.Err[A-Z][A-Za-z0-9]*$`)
+)
 
 const (
 	modulePrefix     = "github.com/ghbvf/gocell"
@@ -140,7 +156,7 @@ func GenerateWithOpts(slicePath string, opts Opts) ([]byte, error) {
 // Slices whose service.go does not declare a "Service" struct are silently
 // skipped (ErrNoServiceStruct). All other errors are fatal.
 func GenerateAll(modRoot string) (map[string][]byte, error) {
-	slicePaths, err := findSlicePaths(modRoot)
+	slicePaths, err := FindSlicePaths(modRoot)
 	if err != nil {
 		return nil, fmt.Errorf("requireddepsgen: walk %s: %w", modRoot, err)
 	}
@@ -205,6 +221,12 @@ func parseStructFields(pkgName string, st *ast.StructType) ([]fieldGuard, error)
 		}
 
 		rawTag := strings.Trim(field.Tag.Value, "`")
+		// reflect.StructTag.Get silently treats a malformed tag as absent,
+		// which would drop a required-dep guard without a trace. Fail closed:
+		// any malformed tag on a Service field is a hard error.
+		if !TagSyntaxValid(rawTag) {
+			return nil, fmt.Errorf("%w: %q", ErrBadTagSyntax, rawTag)
+		}
 		tag := reflect.StructTag(rawTag)
 
 		gocellVal := tag.Get("gocell")
@@ -230,6 +252,56 @@ func parseStructFields(pkgName string, st *ast.StructType) ([]fieldGuard, error)
 	return guards, nil
 }
 
+// TagSyntaxValid reports whether raw (the unquoted struct-tag body, e.g.
+// `json:"x" gocell:"required"`) is a well-formed sequence of conventional
+// key:"value" pairs. It mirrors the scan loop of reflect.StructTag.Lookup but,
+// unlike Lookup — which silently stops at the first malformed pair and reports
+// the key as absent — returns false on any malformation so callers can fail
+// closed. Exported so the REQUIRED-DEP-NIL-GUARD-01 A4 archtest shares this
+// single malformed-tag definition rather than re-deriving it.
+// ref: Go src reflect/type.go StructTag.Lookup.
+func TagSyntaxValid(raw string) bool {
+	tag := raw
+	for tag != "" {
+		// Skip leading spaces.
+		i := 0
+		for i < len(tag) && tag[i] == ' ' {
+			i++
+		}
+		tag = tag[i:]
+		if tag == "" {
+			break
+		}
+		// Scan to the colon. A space, quote or control char before ':', an
+		// empty key, or a colon not followed by '"' is malformed.
+		i = 0
+		for i < len(tag) && tag[i] > ' ' && tag[i] != ':' && tag[i] != '"' && tag[i] != 0x7f {
+			i++
+		}
+		if i == 0 || i+1 >= len(tag) || tag[i] != ':' || tag[i+1] != '"' {
+			return false
+		}
+		tag = tag[i+1:]
+		// Scan the quoted value to its closing quote (honoring backslash escapes).
+		i = 1
+		for i < len(tag) && tag[i] != '"' {
+			if tag[i] == '\\' {
+				i++
+			}
+			i++
+		}
+		if i >= len(tag) {
+			return false
+		}
+		qvalue := tag[:i+1]
+		tag = tag[i+1:]
+		if _, err := strconv.Unquote(qvalue); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // buildGuard constructs the fieldGuard for a single named field.
 // Returns an error when gocellKind or gocellCode values do not match the
 // errcode identifier whitelist (errcode.Kind* or errcode.Err*), preventing
@@ -237,11 +309,11 @@ func parseStructFields(pkgName string, st *ast.StructType) ([]fieldGuard, error)
 func buildGuard(pkgName, fieldName string, fieldType ast.Expr, tag reflect.StructTag) (fieldGuard, error) {
 	isPtr := isPointerType(fieldType)
 
-	kind, err := resolveTagOrDefault(tag.Get("gocellKind"), defaultKind, "errcode.")
+	kind, err := resolveTagOrDefault(tag.Get("gocellKind"), defaultKind, "errcode.", errcodeKindRE)
 	if err != nil {
 		return fieldGuard{}, fmt.Errorf("field %s gocellKind: %w", fieldName, err)
 	}
-	code, err := resolveTagOrDefault(tag.Get("gocellCode"), defaultCode, "errcode.")
+	code, err := resolveTagOrDefault(tag.Get("gocellCode"), defaultCode, "errcode.", errcodeCodeRE)
 	if err != nil {
 		return fieldGuard{}, fmt.Errorf("field %s gocellCode: %w", fieldName, err)
 	}
@@ -268,9 +340,11 @@ func isPointerType(expr ast.Expr) bool {
 
 // resolveTagOrDefault qualifies a bare identifier with prefix if not already
 // qualified, falling back to def when val is empty. Returns ErrUnknownTagValue
-// when the resulting qualified identifier does not match errcodeIdentRE,
-// preventing code injection via maliciously crafted gocellKind/gocellCode tags.
-func resolveTagOrDefault(val, def, prefix string) (string, error) {
+// when the resulting qualified identifier does not match re — the family-specific
+// whitelist (errcodeKindRE for gocellKind, errcodeCodeRE for gocellCode). This
+// rejects both code injection via maliciously crafted tags AND a kind supplied
+// where a code is expected (or vice versa).
+func resolveTagOrDefault(val, def, prefix string, re *regexp.Regexp) (string, error) {
 	if val == "" {
 		return def, nil
 	}
@@ -278,9 +352,9 @@ func resolveTagOrDefault(val, def, prefix string) (string, error) {
 	if !strings.HasPrefix(val, prefix) {
 		qualified = prefix + val
 	}
-	if !errcodeIdentRE.MatchString(qualified) {
-		return "", fmt.Errorf("%w: %q is not a valid errcode identifier (must match errcode.(Kind|Err)[A-Z][A-Za-z0-9]*)",
-			ErrUnknownTagValue, qualified)
+	if !re.MatchString(qualified) {
+		return "", fmt.Errorf("%w: %q is not a valid errcode identifier for this tag (must match %s)",
+			ErrUnknownTagValue, qualified, re.String())
 	}
 	return qualified, nil
 }
@@ -350,8 +424,11 @@ func writeGuard(buf *bytes.Buffer, g fieldGuard) {
 	buf.WriteString("\t}\n")
 }
 
-// findSlicePaths discovers all slice directories containing a service.go under modRoot.
-func findSlicePaths(modRoot string) ([]string, error) {
+// FindSlicePaths discovers all slice directories containing a service.go under
+// modRoot. Exported so the REQUIRED-DEP-NIL-GUARD-01 A1 archtest regen-diffs the
+// exact same set of gen files the generator emits — generator and verifier share
+// one discovery, so no gen file can escape the byte-granularity Hard check.
+func FindSlicePaths(modRoot string) ([]string, error) {
 	patterns := []string{
 		filepath.Join(modRoot, "cells", "*", "slices", "*"),
 		filepath.Join(modRoot, "cells", "*", "slices", "*", "*"),

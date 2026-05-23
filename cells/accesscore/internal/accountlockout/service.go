@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Service is the auto-lockout mediator. sessionlogin calls RecordFailure /
@@ -64,9 +65,12 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithMetrics injects the metrics recorder. Default is a no-op recorder.
+// Typed-nil inputs are not stored (builder-noop semantics): a bare `m != nil`
+// would let a typed-nil recorder overwrite the noopMetrics default and panic at
+// the first IncAccountLockout call. See runtime-api.md "Option 范式分层".
 func WithMetrics(m MetricsRecorder) Option {
 	return func(s *Service) {
-		if m != nil {
+		if !validation.IsNilInterface(m) {
 			s.metrics = m
 		}
 	}

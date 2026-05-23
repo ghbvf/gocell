@@ -382,6 +382,67 @@ func TestGenerate_InjectionAttempt_ReturnsError(t *testing.T) {
 	}
 }
 
+// TestGenerate_MalformedTag_ReturnsBadTagSyntax verifies that a struct field
+// whose tag is malformed at the struct-tag-convention level (a valid Go
+// backtick literal, but not well-formed key:"value" pairs) fails closed with
+// ErrBadTagSyntax instead of being silently treated as untagged — which would
+// drop a required-dep guard. reflect.StructTag.Get returns "" for these.
+func TestGenerate_MalformedTag_ReturnsBadTagSyntax(t *testing.T) {
+	cases := []struct {
+		name   string
+		rawTag string
+	}{
+		{name: "value not quoted", rawTag: `gocell:required`},
+		{name: "unterminated quote", rawTag: `gocell:"required`},
+		{name: "missing colon", rawTag: `gocell"required"`},
+		{name: "empty key", rawTag: `:"required"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "package mypkg\n\ntype Repo interface{ Get() }\n\ntype Service struct {\n" +
+				"\trepo Repo `" + tc.rawTag + "`\n}\n"
+			dir := writeFixture(t, src)
+			_, err := requireddepsgen.Generate(dir)
+			if err == nil {
+				t.Fatalf("expected error for malformed tag=%q, got nil", tc.rawTag)
+			}
+			if !errors.Is(err, requireddepsgen.ErrBadTagSyntax) {
+				t.Errorf("expected ErrBadTagSyntax; got %v", err)
+			}
+		})
+	}
+}
+
+// TestGenerate_KindCodeFamilySwapped_ReturnsError verifies that a code-family
+// identifier supplied to gocellKind (or a kind-family identifier to gocellCode)
+// is rejected — even though both are well-formed errcode identifiers. The
+// per-tag whitelists (errcodeKindRE / errcodeCodeRE) prevent this swap; a single
+// shared regex would have accepted both.
+func TestGenerate_KindCodeFamilySwapped_ReturnsError(t *testing.T) {
+	cases := []struct {
+		name   string
+		rawTag string
+	}{
+		{name: "code in gocellKind slot", rawTag: `gocell:"required" gocellKind:"ErrValidationFailed"`},
+		{name: "kind in gocellCode slot", rawTag: `gocell:"required" gocellCode:"KindInvalid"`},
+		{name: "fully-qualified code in kind slot", rawTag: `gocell:"required" gocellKind:"errcode.ErrValidationFailed"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "package mypkg\n\ntype Repo interface{ Get() }\n\ntype Service struct {\n" +
+				"\trepo Repo `" + tc.rawTag + "`\n}\n"
+			dir := writeFixture(t, src)
+			_, err := requireddepsgen.Generate(dir)
+			if err == nil {
+				t.Fatalf("expected error for swapped family tag=%q, got nil", tc.rawTag)
+			}
+			if !errors.Is(err, requireddepsgen.ErrUnknownTagValue) {
+				t.Errorf("expected ErrUnknownTagValue; got %v", err)
+			}
+		})
+	}
+}
+
 // TestGenerate_ErrMsgWithSpecialChars_ProducesValidSource verifies that
 // gocellErr values containing characters that would break naive string
 // concatenation (e.g. backslash, embedded double-quote) are safely quoted
