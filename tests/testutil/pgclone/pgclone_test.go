@@ -310,6 +310,32 @@ func TestSharedSingleton_ContainerStartsOnce(t *testing.T) {
 	_ = pgcloneSelfTest.EmptyDSN(t)
 	dsn2 := pgcloneSelfTest.adminDSN
 	if dsn1 != dsn2 {
-		t.Fatalf("adminDSN changed across calls; container re-spawned (dsn1=%q dsn2=%q)", dsn1, dsn2)
+		// adminDSN carries the (test) PG password — assert equality without
+		// logging either value.
+		t.Fatal("adminDSN changed across calls; container was re-spawned (singleton broken)")
+	}
+}
+
+// TestCloneManaged_ReleaseDropsDB verifies CloneManaged returns a usable DSN
+// (migrated template inherited) and that release() drops the per-test DB. This
+// is the manual-lifecycle path for callers that mint inside a loop (e.g. a
+// benchmark's b.N loop); unlike CloneDSN it registers no t.Cleanup, so the
+// caller owns the drop and the DB must not linger after release.
+func TestCloneManaged_ReleaseDropsDB(t *testing.T) {
+	ctx := context.Background()
+	dsn, release := pgcloneSelfTest.CloneManaged(t)
+
+	if !tableExists(ctx, t, dsn, seedTable) {
+		release()
+		t.Fatalf("CloneManaged DSN did not inherit template seed table %q", seedTable)
+	}
+
+	release()
+
+	// After release the per-test DB is dropped; a fresh connect must fail.
+	conn, err := pgx.Connect(ctx, dsn)
+	if err == nil {
+		_ = conn.Close(ctx)
+		t.Fatal("CloneManaged release() must drop the per-test DB; connect to it unexpectedly succeeded")
 	}
 }

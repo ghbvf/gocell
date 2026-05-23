@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -21,21 +22,31 @@ import (
 // use pgclone directly with this in-package migration callback. pgclone is the
 // single sanctioned holder of tcpostgres.Run (PG-TESTCONTAINER-FUNNEL-01).
 var sharedPG = pgclone.New("gocell_adapters_postgres_test_template",
-	func(ctx context.Context, dsn string) error {
+	func(ctx context.Context, dsn string) (err error) {
 		pool, err := NewPool(ctx, Config{DSN: dsn})
 		if err != nil {
-			return err
+			return fmt.Errorf("open template pool: %w", err)
 		}
-		defer func() { _ = pool.Close(ctx) }()
+		defer func() {
+			// Close error matters: a lingering connection on the template blocks
+			// the first CREATE DATABASE ... TEMPLATE clone. Surface it (when the
+			// migration itself succeeded) so boot fails fast with a clear cause.
+			if cerr := pool.Close(ctx); cerr != nil && err == nil {
+				err = fmt.Errorf("close migration pool: %w", cerr)
+			}
+		}()
 		fsys, err := MigrationsFS()
 		if err != nil {
-			return err
+			return fmt.Errorf("load migrations fs: %w", err)
 		}
 		migrator, err := NewMigrator(pool, fsys, "schema_migrations")
 		if err != nil {
-			return err
+			return fmt.Errorf("new migrator: %w", err)
 		}
-		return migrator.Up(ctx)
+		if err := migrator.Up(ctx); err != nil {
+			return fmt.Errorf("migrate up: %w", err)
+		}
+		return nil
 	})
 
 // TestMain owns shared-container teardown. Runs once per test binary after all

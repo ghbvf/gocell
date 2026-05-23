@@ -84,9 +84,9 @@ var pgTestcontainerFunnelAllowlist = []string{
 const archtestInternalPrefix = "tools/archtest/internal/"
 
 // TestPG_TESTCONTAINER_FUNNEL_01 fails if any file outside the allowlist calls
-// tcpostgres.Run. Until adapters/postgres migrates to pgclone this is RED
-// (its setupPostgres + setupPostgresForBench helpers still call it) — the
-// intended pin for the refactor.
+// tcpostgres.Run. adapters/postgres now mints per-test DBs via pgclone, so the
+// sole sanctioned holder is tests/testutil/pgclone; this scan keeps it that way
+// (the backlogged carve-outs are the only other allowed callers).
 func TestPG_TESTCONTAINER_FUNNEL_01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)

@@ -55,7 +55,7 @@ func New(templateDB string) *Shared {
 func applyMigrations(ctx context.Context, templateDSN string) (err error) {
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: templateDSN})
 	if err != nil {
-		return err
+		return fmt.Errorf("open template pool: %w", err)
 	}
 	defer func() {
 		// A close error matters here: a lingering connection on the template
@@ -69,13 +69,16 @@ func applyMigrations(ctx context.Context, templateDSN string) (err error) {
 
 	migrationsFS, err := adapterpg.MigrationsFS()
 	if err != nil {
-		return err
+		return fmt.Errorf("load migrations fs: %w", err)
 	}
 	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
 	if err != nil {
-		return err
+		return fmt.Errorf("new migrator: %w", err)
 	}
-	return migrator.Up(ctx)
+	if err := migrator.Up(ctx); err != nil {
+		return fmt.Errorf("migrate up: %w", err)
+	}
+	return nil
 }
 
 // NewPerTestPool clones the shared template database into a fresh per-test
