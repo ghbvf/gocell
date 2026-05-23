@@ -34,9 +34,11 @@
 package authzmutate
 
 import (
+	"context"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -78,9 +80,14 @@ type Mutation interface {
 	// event that requires an epoch-bump + session/refresh revocation.
 	Invalidates() bool
 
-	// apply executes the domain mutation on u. Called exclusively from
-	// Mutator.Apply inside a RunInTx closure.
-	apply(u *domain.User, now time.Time)
+	// persist writes the mutation directly to the repository via the
+	// appropriate narrow port method. Called exclusively from
+	// Mutator.ApplyInTx inside a RunInTx closure.
+	//
+	// Precondition: Mutator.ApplyInTx validates m != nil before calling persist;
+	// implementations may assume the receiver is a concrete sealed Mutation
+	// variant and need not nil-check the repo (also validated by ApplyInTx).
+	persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error
 
 	// mutationOK seals the interface to this package.
 	mutationOK()
@@ -91,8 +98,8 @@ type LockUser struct{}
 
 func (LockUser) Event() session.CredentialEvent { return session.CredentialEventLock }
 func (LockUser) Invalidates() bool              { return true }
-func (LockUser) apply(u *domain.User, now time.Time) {
-	u.SetStatus(domain.StatusLocked, now)
+func (LockUser) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
+	return repo.UpdateLockState(ctx, userID, domain.StatusLocked, now)
 }
 func (LockUser) mutationOK() {}
 
@@ -112,8 +119,8 @@ type SuspendUser struct{}
 
 func (SuspendUser) Event() session.CredentialEvent { return session.CredentialEventLock }
 func (SuspendUser) Invalidates() bool              { return true }
-func (SuspendUser) apply(u *domain.User, now time.Time) {
-	u.SetStatus(domain.StatusSuspended, now)
+func (SuspendUser) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
+	return repo.UpdateLockState(ctx, userID, domain.StatusSuspended, now)
 }
 func (SuspendUser) mutationOK() {}
 
@@ -121,21 +128,22 @@ func (SuspendUser) mutationOK() {}
 // Existing sessions remain valid; no epoch-bump needed.
 // ref: ADR §A6 / OAuth Security BCP §4.13.2 (scope-expanding ops don't revoke).
 //
-// Auto-lockout interaction: apply also calls u.ResetFailedLogins() to clear
-// the failed_login_count / last_failed_at / locked_until columns. Without
-// this, a manual admin unlock would not reset the counter, and the very
-// next failed login could re-trigger the auto-lock immediately (since the
-// stored counter is still at or above the threshold). Lazy-unlock by
-// accountlockout.TryLazyUnlock also routes through this mutation, so the
-// reset behavior is shared by both unlock paths
+// Auto-lockout interaction: persist calls UpdateLockState(status=Active) which
+// atomically zeros failed_login_count / last_failed_at / locked_until in the
+// same SQL CASE statement (mem mirrors via ResetFailedLogins). This is a
+// column-level invariant — "activate without lockout reset" is not expressible
+// at the call site, closing the PR #585 P1#3 admin-unlock re-lock race at the
+// schema layer. Both admin-unlock and lazy-unlock (accountlockout.TryLazyUnlock)
+// routes through this mutation, so the reset is shared by both paths
 // (ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01).
+// ref: ports.UserRepository.UpdateLockState godoc for the column-level invariant
+// statement; PR #585 P1#3; ADR 202605222309.
 type ActivateUser struct{}
 
 func (ActivateUser) Event() session.CredentialEvent { return session.CredentialEventLock }
 func (ActivateUser) Invalidates() bool              { return false }
-func (ActivateUser) apply(u *domain.User, now time.Time) {
-	u.SetStatus(domain.StatusActive, now)
-	u.ResetFailedLogins()
+func (ActivateUser) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
+	return repo.UpdateLockState(ctx, userID, domain.StatusActive, now)
 }
 func (ActivateUser) mutationOK() {}
 
@@ -148,8 +156,8 @@ func (RequirePasswordReset) Event() session.CredentialEvent {
 	return session.CredentialEventPasswordReset
 }
 func (RequirePasswordReset) Invalidates() bool { return true }
-func (RequirePasswordReset) apply(u *domain.User, now time.Time) {
-	u.SetPasswordResetRequired(true, now)
+func (RequirePasswordReset) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
+	return repo.UpdatePasswordResetFlag(ctx, userID, true, now)
 }
 func (RequirePasswordReset) mutationOK() {}
 
@@ -163,7 +171,7 @@ func (ClearPasswordReset) Event() session.CredentialEvent {
 	return session.CredentialEventPasswordReset
 }
 func (ClearPasswordReset) Invalidates() bool { return false }
-func (ClearPasswordReset) apply(u *domain.User, now time.Time) {
-	u.SetPasswordResetRequired(false, now)
+func (ClearPasswordReset) persist(ctx context.Context, repo ports.UserRepository, userID string, now time.Time) error {
+	return repo.UpdatePasswordResetFlag(ctx, userID, false, now)
 }
 func (ClearPasswordReset) mutationOK() {}

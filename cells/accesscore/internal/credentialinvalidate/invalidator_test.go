@@ -45,8 +45,16 @@ func (s *stubUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User,
 	panic("stubUserRepo.GetByUsername: unexpected call")
 }
 
-func (s *stubUserRepo) Update(_ context.Context, _ *domain.User) error {
-	panic("stubUserRepo.Update: unexpected call")
+func (s *stubUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+	panic("stubUserRepo.UpdateProfile: unexpected call")
+}
+
+func (s *stubUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
+	panic("stubUserRepo.UpdateLockState: unexpected call")
+}
+
+func (s *stubUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
+	panic("stubUserRepo.UpdatePasswordResetFlag: unexpected call")
 }
 
 func (s *stubUserRepo) Delete(_ context.Context, _ string) error {

@@ -285,8 +285,7 @@ func TestService_Login(t *testing.T) {
 			setup: func(r *mem.UserRepository) {
 				seedUser(r, "locked", "pass")
 				u, _ := r.GetByUsername(context.Background(), "locked")
-				u.SetStatus(domain.StatusLocked, time.Now())
-				_ = r.Update(context.Background(), u)
+				_ = r.UpdateLockState(context.Background(), u.ID, domain.StatusLocked, time.Now())
 			},
 			input:   LoginInput{Username: "locked", Password: "pass"},
 			wantErr: true,

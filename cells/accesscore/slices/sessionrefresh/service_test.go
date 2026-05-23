@@ -480,8 +480,7 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 			require.NoError(t, err)
 			u.ID = "usr-notactive-" + string(tc.status)
 			require.NoError(t, userRepo.Create(context.Background(), u))
-			u.SetStatus(tc.status, time.Now())
-			require.NoError(t, userRepo.Update(context.Background(), u))
+			require.NoError(t, userRepo.UpdateLockState(context.Background(), u.ID, tc.status, time.Now()))
 
 			sess := newTestSession(u.ID, "sess-"+u.ID)
 			require.NoError(t, sessionStore.Create(context.Background(), sess))
@@ -539,8 +538,7 @@ func TestService_Refresh_RevokedSession_RevokeBeforeUserLookup(t *testing.T) {
 	require.NoError(t, err)
 	u.ID = "usr-ordering"
 	require.NoError(t, userRepo.Create(context.Background(), u))
-	u.SetStatus(domain.StatusSuspended, time.Now())
-	require.NoError(t, userRepo.Update(context.Background(), u))
+	require.NoError(t, userRepo.UpdateLockState(context.Background(), u.ID, domain.StatusSuspended, time.Now()))
 
 	// Session is revoked → revoke-first prong rejects with uniform 401
 	// before reaching user lookup.
@@ -624,8 +622,19 @@ func (refreshUnavailableUserRepo) Create(_ context.Context, _ *domain.User) erro
 func (refreshUnavailableUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
 }
-func (refreshUnavailableUserRepo) Update(_ context.Context, _ *domain.User) error { return nil }
-func (refreshUnavailableUserRepo) Delete(_ context.Context, _ string) error       { return nil }
+
+func (refreshUnavailableUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "n/a")
+}
+
+func (refreshUnavailableUserRepo) UpdateLockState(_ context.Context, _ string, _ domain.UserStatus, _ time.Time) error {
+	return nil
+}
+
+func (refreshUnavailableUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
+	return nil
+}
+func (refreshUnavailableUserRepo) Delete(_ context.Context, _ string) error { return nil }
 func (refreshUnavailableUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bool, _ int64) (int64, error) {
 	return 0, nil
 }

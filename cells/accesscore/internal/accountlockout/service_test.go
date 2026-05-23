@@ -22,6 +22,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
+// errFakeRepoUnused is returned by fake-repo stub methods that the test does
+// not exercise. A sentinel error keeps the linter happy and surfaces an
+// accidental call as a recognizable failure instead of a silent nil pair.
+var errFakeRepoUnused = errors.New("fakeUserRepo: method not exercised in this test")
+
 // fakeEmitter collects all outbox entries emitted during the test.
 type fakeEmitter struct {
 	mu      sync.Mutex
@@ -144,15 +149,46 @@ func (r *fakeUserRepo) GetByUsernameForUpdate(ctx context.Context, username stri
 	return r.GetByUsername(ctx, username)
 }
 
-func (r *fakeUserRepo) Update(_ context.Context, u *domain.User) error {
+func (r *fakeUserRepo) UpdateProfile(_ context.Context, _ string, _, _ *domain.NonEmpty, _ time.Time) (*domain.User, error) {
+	return nil, errFakeRepoUnused
+}
+
+// mirrors authzmutate LockUser / SuspendUser / ActivateUser side effect.
+func (r *fakeUserRepo) UpdateLockState(_ context.Context, userID string, status domain.UserStatus, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.byID[u.ID]; !ok {
+	u, ok := r.byID[userID]
+	if !ok {
 		return errors.New("not found")
 	}
-	r.byID[u.ID] = cloneForFake(u)
+	var failedLoginCount int
+	var lastFailedAt *time.Time
+	var lockedUntil *time.Time
+	if status == domain.StatusActive {
+		failedLoginCount = 0
+	} else {
+		failedLoginCount = u.FailedLoginCount()
+		lastFailedAt = u.LastFailedAt()
+		lockedUntil = u.AutoLockoutDeadline()
+	}
+	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID: u.ID, Username: u.Username, Email: u.Email,
+		PasswordHash: u.PasswordHash, PasswordVersion: u.PasswordVersion,
+		PasswordResetRequired: u.PasswordResetRequired(),
+		Status:                status, Source: u.CreationSource,
+		AuthzEpoch: u.AuthzEpoch(), CreatedAt: u.CreatedAt, UpdatedAt: now,
+		FailedLoginCount: failedLoginCount, LastFailedAt: lastFailedAt, LockedUntil: lockedUntil,
+	})
+	if err != nil {
+		return err
+	}
+	r.byID[userID] = updated
 	r.updateCalls++
 	return nil
+}
+
+func (r *fakeUserRepo) UpdatePasswordResetFlag(_ context.Context, _ string, _ bool, _ time.Time) error {
+	return errFakeRepoUnused
 }
 
 func (r *fakeUserRepo) Delete(_ context.Context, id string) error {

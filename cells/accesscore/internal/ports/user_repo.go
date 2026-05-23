@@ -4,20 +4,117 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 )
 
 // UserRepository persists and retrieves User aggregates.
+//
+// # Write-method shape contract (USERREPO-METHOD-SET-FROZEN-01)
+//
+// Writes are split per use case so the column set each caller touches is
+// expressed in method signature (Hard, type-system enforced; tools/archtest
+// USERREPO-METHOD-SET-FROZEN-01 locks the method set):
+//
+//   - UpdateProfile           — username, email, updated_at
+//   - UpdateLockState         — status, updated_at (+ lockout reset iff status=Active)
+//   - UpdatePasswordResetFlag — password_reset_required, updated_at
+//   - UpdatePassword          — password_hash, password_reset_required,
+//     password_version (CAS), updated_at
+//   - UpdateLockoutFields     — failed_login_count, last_failed_at, locked_until,
+//     updated_at (auto-lockout path only)
+//   - BumpAuthzEpoch          — authz_epoch (single-column atomic increment)
+//
+// Each method's godoc declares which columns it touches and which it does NOT.
+// Adding a "generic Update(*domain.User)" back is rejected by archtest.
+//
+// ref: docs/architecture/202605222309-adr-user-repo-narrow-write-methods.md
+// ref: github.com/ory/kratos/identity/pool.go UpdateIdentityColumns pattern
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByID(ctx context.Context, id string) (*domain.User, error)
 	GetByUsername(ctx context.Context, username string) (*domain.User, error)
-	// Update overwrites the mutable fields of an existing user. Reserved for
-	// Lock / Unlock / UpdateProfile paths. Do NOT call this for password
-	// changes — use UpdatePassword to get CAS-guarded semantics (S6).
-	Update(ctx context.Context, user *domain.User) error
 	Delete(ctx context.Context, id string) error
+
+	// UpdateProfile writes username / email / updated_at only.
+	//
+	// PATCH semantics: nil name/email skips that column (SQL COALESCE / mem
+	// pointer-nil branch). Empty-string values are unrepresentable at the type
+	// boundary — *domain.NonEmpty constructor (NewNonEmpty / UnmarshalJSON)
+	// rejects "" so service-layer runtime checks are not required.
+	//
+	// Returns the post-write *domain.User reconstituted from the persisted
+	// row (PG: RETURNING explicit user columns; mem: ReconstituteUser after
+	// in-place write). The
+	// returned aggregate is the new system-of-record value; caller MUST use
+	// it for downstream publish / audit.
+	//
+	// Does NOT touch: password_hash / password_version / password_reset_required
+	// / status / authz_epoch / failed_login_count / last_failed_at / locked_until.
+	//
+	// Errors:
+	//   - ErrAuthUserNotFound (KindNotFound / 404) — userID does not exist
+	//   - ErrAuthUserDuplicate (KindConflict / 409) — username or email collides
+	//     with another row (unique constraint violation)
+	//   - ErrInternal (KindInternal / 500) — other DB errors
+	UpdateProfile(
+		ctx context.Context,
+		userID string,
+		name, email *domain.NonEmpty,
+		now time.Time,
+	) (*domain.User, error)
+
+	// UpdateLockState writes status + updated_at, with conditional auto-lockout
+	// reset bound to the target status: status == StatusActive atomically zeros
+	// failed_login_count / last_failed_at / locked_until in the same statement
+	// (mem mirrors via ResetFailedLogins). This is a column-level invariant —
+	// "activate without lockout reset" is not expressible at the call site,
+	// closing the PR #585 P1#3 admin-unlock re-lock race at the schema layer.
+	//
+	// Touches: status, updated_at, and (iff status == StatusActive) the three
+	// auto-lockout columns.
+	//
+	// Does NOT touch: username / email / password_hash / password_version /
+	// password_reset_required / authz_epoch.
+	//
+	// Effective-admin guard runs at the persistence boundary: PG migration 024
+	// effective_admin_invariant_on_users BEFORE UPDATE trigger; mem
+	// guardEffectiveAdminRemovalLocked. Returns ErrAuthLastAdminProtected
+	// (KindPermissionDenied / 403) when the change would demote the sole
+	// effective admin.
+	//
+	// Returns only error (not the updated aggregate); callers that need the
+	// post-write User state should call GetByID after the mutation.
+	//
+	// Errors:
+	//   - ErrAuthUserNotFound (KindNotFound / 404) — userID does not exist
+	//   - ErrAuthLastAdminProtected (KindPermissionDenied / 403) — last admin
+	//   - ErrInternal (KindInternal / 500) — other DB errors
+	UpdateLockState(
+		ctx context.Context,
+		userID string,
+		status domain.UserStatus,
+		now time.Time,
+	) error
+
+	// UpdatePasswordResetFlag writes password_reset_required + updated_at only.
+	//
+	// Does NOT touch: username / email / password_hash / password_version /
+	// status / authz_epoch / failed_login_count / last_failed_at / locked_until.
+	//
+	// Returns only error (not the updated aggregate); callers that need the
+	// post-write User state should call GetByID after the mutation.
+	//
+	// Errors:
+	//   - ErrAuthUserNotFound (KindNotFound / 404) — userID does not exist
+	//   - ErrInternal (KindInternal / 500) — other DB errors
+	UpdatePasswordResetFlag(
+		ctx context.Context,
+		userID string,
+		required bool,
+		now time.Time,
+	) error
 
 	// UpdatePassword applies a CAS-guarded password change.
 	//
@@ -78,8 +175,8 @@ type UserRepository interface {
 	// last_failed_at, locked_until) for an existing user. Called exclusively
 	// from cells/accesscore/internal/accountlockout. The status / authz_epoch
 	// / password_hash columns are NOT touched by this path — status
-	// transitions remain the responsibility of authzmutate.Mutator.ApplyInTx
-	// (which calls Update for status changes).
+	// transitions go through UpdateLockState, which itself zeros the lockout
+	// columns when status == Active (atomic via SQL CASE / mem mirror).
 	//
 	// Must be invoked within an ambient transaction (txCtx) so the counter
 	// update co-commits with the surrounding sessionlogin tx (L2 OutboxFact).

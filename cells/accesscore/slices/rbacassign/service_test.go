@@ -246,10 +246,7 @@ func TestService_Revoke(t *testing.T) {
 				assignActiveAdmin(t, s, "usr-1")
 				assignActiveAdmin(t, s, "usr-2")
 				// Lock usr-2 — now usr-1 is the sole effective admin.
-				u, err := s.UserRepository().GetByID(context.Background(), "usr-2")
-				require.NoError(t, err)
-				u.SetStatus(domain.StatusLocked, time.Now())
-				require.NoError(t, s.UserRepository().Update(context.Background(), u))
+				require.NoError(t, s.UserRepository().UpdateLockState(context.Background(), "usr-2", domain.StatusLocked, time.Now()))
 			},
 			wantErr:  true,
 			wantCode: errcode.ErrAuthLastAdminProtected,
@@ -264,10 +261,7 @@ func TestService_Revoke(t *testing.T) {
 			setup: func(t *testing.T, s *mem.Store) {
 				assignActiveAdmin(t, s, "usr-active")
 				assignActiveAdmin(t, s, "usr-locked")
-				u, err := s.UserRepository().GetByID(context.Background(), "usr-locked")
-				require.NoError(t, err)
-				u.SetStatus(domain.StatusLocked, time.Now())
-				require.NoError(t, s.UserRepository().Update(context.Background(), u))
+				require.NoError(t, s.UserRepository().UpdateLockState(context.Background(), "usr-locked", domain.StatusLocked, time.Now()))
 			},
 			wantErr: false,
 		},

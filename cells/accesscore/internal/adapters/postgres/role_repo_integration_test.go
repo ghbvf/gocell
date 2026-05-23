@@ -725,17 +725,14 @@ func TestPGUserRepo_Update_LastAdminProtected_Mapping_PG(t *testing.T) {
 	_, err := roleRepo.AssignToUser(ctx, sole.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
-	// Read-modify-write: demote status to locked. Trigger must block.
-	got, err := userRepo.GetByID(ctx, sole.ID)
-	require.NoError(t, err)
-	got.SetStatus(domain.StatusLocked, time.Now().UTC())
-	err = userRepo.Update(ctx, got)
-	require.Error(t, err, "Update on sole effective admin status demotion must surface a typed error")
+	// Demote status to locked via the narrow UpdateLockState path. Trigger must block.
+	err = userRepo.UpdateLockState(ctx, sole.ID, domain.StatusLocked, time.Now().UTC())
+	require.Error(t, err, "UpdateLockState on sole effective admin status demotion must surface a typed error")
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthLastAdminProtected, ec.Code,
-		"PGUserRepo.Update must map P0001 trigger error to ErrAuthLastAdminProtected (403)")
+		"PGUserRepo.UpdateLockState must map P0001 trigger error to ErrAuthLastAdminProtected (403)")
 	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
 	assert.Contains(t, ec.Message, "last effective admin")
 }

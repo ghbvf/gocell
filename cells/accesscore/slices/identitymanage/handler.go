@@ -54,6 +54,21 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// nonEmptyPtr is the handler-side bridge between the generated DTO (plain
+// string fields) and the typed *domain.NonEmpty PATCH semantic: empty string
+// → nil (PATCH "not provided"); non-empty → pointer to a NonEmpty value.
+//
+// Explicit conversion `domain.NonEmpty(s)` is OK here because s is already
+// known non-empty (we just checked). USERREPO-NONEMPTY-CAST-FUNNEL-01 archtest
+// allowlists this callsite alongside the nonempty.go constructor self.
+func nonEmptyPtr(s string) *domain.NonEmpty {
+	if s == "" {
+		return nil
+	}
+	n := domain.NonEmpty(s)
+	return &n
+}
+
 // CreateAdapter implements creategen.Service for http.auth.user.create.v1.
 type CreateAdapter struct{ S *Service }
 
@@ -107,7 +122,7 @@ type UpdateAdapter struct{ S *Service }
 func (a UpdateAdapter) Update(ctx context.Context, req *updategen.Request) (updategen.UpdateResponseObject, error) {
 	user, err := a.S.Update(ctx, UpdateInput{
 		ID:    req.ID,
-		Email: strPtr(req.Email),
+		Email: nonEmptyPtr(req.Email),
 	})
 	if err != nil {
 		return nil, err
@@ -133,8 +148,8 @@ type PatchAdapter struct{ S *Service }
 func (a PatchAdapter) Patch(ctx context.Context, req *patchgen.Request) (patchgen.PatchResponseObject, error) {
 	user, err := a.S.Update(ctx, UpdateInput{
 		ID:                   req.ID,
-		Name:                 strPtr(req.Name),
-		Email:                strPtr(req.Email),
+		Name:                 nonEmptyPtr(req.Name),
+		Email:                nonEmptyPtr(req.Email),
 		Status:               strPtr(req.Status),
 		RequirePasswordReset: req.RequirePasswordReset, // *bool: nil=absent, &false=clear, &true=set
 	})

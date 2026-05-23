@@ -56,7 +56,7 @@ var expectedSubInterfaceMethods = map[string][]string{
 func TestCellIfaceISP01_CellComposesFourSubInterfaces(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	cellIface := loadInterfaceType(t, root, "Cell")
+	cellIface := loadInterfaceType(t, root, "kernel/cell", "Cell")
 	if cellIface == nil {
 		t.Fatal("CELL-IFACE-ISP-COMPOSITE-01: Cell interface not found in kernel/cell/interfaces.go")
 	}
@@ -92,7 +92,7 @@ func TestCellIfaceISP02_SubInterfaceMethodSets(t *testing.T) {
 		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			iface := loadInterfaceType(t, root, name)
+			iface := loadInterfaceType(t, root, "kernel/cell", name)
 			if iface == nil {
 				t.Fatalf("CELL-IFACE-ISP-METHODSETS-01: sub-interface %s not found in kernel/cell/interfaces.go", name)
 			}
@@ -162,48 +162,58 @@ func TestCellIfaceISP03_BaseCellFourSegmentCheck(t *testing.T) {
 
 // ---------- helpers (file-local) ----------
 
-// loadInterfaceType scans all non-test *.go files in kernel/cell/ and returns
+// loadInterfaceType scans all non-test *.go files in <root>/<dirRel> and returns
 // the named *ast.InterfaceType, or nil if the named type does not exist or is
-// not an interface. Scanning the whole package (not just interfaces.go) ensures
+// not an interface. Scanning the whole package (not just a single file) ensures
 // the invariant is not defeated by moving a type declaration to a new file.
 // Uses scanner.DirsScope to enumerate files (SCANNER-FRAMEWORK-USAGE-01 compliant).
-func loadInterfaceType(t *testing.T, root, name string) *ast.InterfaceType {
+func loadInterfaceType(t *testing.T, root, dirRel, name string) *ast.InterfaceType {
 	t.Helper()
-	scope := scanner.DirsScope(root, []string{"kernel/cell"})
+	scope := scanner.DirsScope(root, []string{dirRel})
 	files, err := scope.Files()
 	if err != nil {
-		t.Fatalf("scanner.DirsScope kernel/cell: %v", err)
+		t.Fatalf("scanner.DirsScope %s: %v", dirRel, err)
 	}
 	if len(files) == 0 {
-		t.Fatal("loadInterfaceType: no .go files found in kernel/cell")
+		t.Fatalf("loadInterfaceType: no .go files found in %s", dirRel)
 	}
 	for _, path := range files {
-		fset := token.NewFileSet()
-		f, perr := parser.ParseFile(fset, path, nil, 0)
-		if perr != nil {
-			t.Fatalf("parse %s: %v", filepath.Base(path), perr)
-		}
-		var found *ast.InterfaceType
-		var bail bool
-		scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-			if found != nil || bail || ts.Name.Name != name {
-				return
-			}
-			iface, ok := ts.Type.(*ast.InterfaceType)
-			if !ok {
-				bail = true
-				return
-			}
-			found = iface
-		})
-		if found != nil {
-			return found
+		iface, bail := findInterfaceInFile(t, path, name)
+		if iface != nil {
+			return iface
 		}
 		if bail {
 			return nil
 		}
 	}
 	return nil
+}
+
+// findInterfaceInFile parses path and looks for a top-level type declaration
+// named `name`. Three outcomes:
+//   - iface != nil:    found a matching interface
+//   - bail == true:    found a type decl with that name but it is NOT an
+//     interface; further files cannot redefine the same top-level name in
+//     Go, so caller stops scanning
+//   - both zero values: not in this file, caller tries the next
+func findInterfaceInFile(t *testing.T, path, name string) (iface *ast.InterfaceType, bail bool) {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filepath.Base(path), err)
+	}
+	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if iface != nil || bail || ts.Name.Name != name {
+			return
+		}
+		if i, ok := ts.Type.(*ast.InterfaceType); ok {
+			iface = i
+			return
+		}
+		bail = true
+	})
+	return
 }
 
 // embeddedTypeNames returns the names of types embedded in an interface
@@ -327,7 +337,7 @@ func TestCellIfaceISP00_MethodSetsHashGuard(t *testing.T) {
 	// Build the (sub-interface → method-set) map by reading the actual AST.
 	liveMethodSets := make(map[string][]string, len(expectedSubInterfaces))
 	for _, name := range expectedSubInterfaces {
-		iface := loadInterfaceType(t, root, name)
+		iface := loadInterfaceType(t, root, "kernel/cell", name)
 		if iface == nil {
 			t.Fatalf("CELL-IFACE-ISP-METHODSETS-01: sub-interface %s not found in kernel/cell/interfaces.go — "+
 				"cannot compute source-driven hash", name)
