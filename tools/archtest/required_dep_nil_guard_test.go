@@ -292,16 +292,15 @@ func scanA2(p *Pass, file *ast.File) []Diagnostic {
 		return nil
 	}
 	var out []Diagnostic
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil || fn.Body == nil {
-			continue
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Recv != nil || fn.Body == nil {
+			return
 		}
 		if !constructorReturnsStarService(fn) {
-			continue
+			return
 		}
 		out = append(out, checkA2Constructor(p, file, fn)...)
-	}
+	})
 	return out
 }
 
@@ -358,19 +357,15 @@ func optsLoopEnd(fn *ast.FuncDecl) token.Pos {
 	}
 	optsName := last.Names[0].Name
 
-	// Walk top-level statements looking for a range loop over the opts param.
-	for _, stmt := range fn.Body.List {
-		rs, ok := stmt.(*ast.RangeStmt)
-		if !ok {
-			continue
-		}
+	// Find the top-level range loop over the opts param.
+	rs, ok := FindFirstChild[ast.RangeStmt](fn.Body, func(rs *ast.RangeStmt) bool {
 		x, ok := rs.X.(*ast.Ident)
-		if !ok || x.Name != optsName {
-			continue
-		}
-		return rs.End()
+		return ok && x.Name == optsName
+	})
+	if !ok {
+		return token.NoPos
 	}
-	return token.NoPos
+	return rs.End()
 }
 
 // constructorReturnsStarService returns true when fn is a top-level New*
@@ -857,10 +852,9 @@ func scanB2RequiredFieldNilCompare(p *Pass, file *ast.File) []Diagnostic {
 		return nil
 	}
 	var out []Diagnostic
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
 		EachInSubtree[ast.BinaryExpr](fn.Body, func(be *ast.BinaryExpr) {
 			op := be.Op.String()
@@ -883,7 +877,7 @@ func scanB2RequiredFieldNilCompare(p *Pass, file *ast.File) []Diagnostic {
 					formatNilCompare(be)),
 			})
 		})
-	}
+	})
 	return out
 }
 
@@ -891,19 +885,17 @@ func scanB2RequiredFieldNilCompare(p *Pass, file *ast.File) []Diagnostic {
 // from the file's Service struct (returns empty when no Service struct exists).
 func requiredFieldNames(file *ast.File) map[string]bool {
 	out := make(map[string]bool)
-	for _, decl := range file.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
+	EachInChildren[ast.GenDecl](file, func(genDecl *ast.GenDecl) {
+		if genDecl.Tok != token.TYPE {
+			return
 		}
-		for _, spec := range genDecl.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok || ts.Name.Name != "Service" {
-				continue
+		EachInChildren[ast.TypeSpec](genDecl, func(ts *ast.TypeSpec) {
+			if ts.Name.Name != "Service" {
+				return
 			}
 			st, ok := ts.Type.(*ast.StructType)
 			if !ok {
-				continue
+				return
 			}
 			for _, f := range st.Fields.List {
 				if f.Tag == nil {
@@ -917,8 +909,8 @@ func requiredFieldNames(file *ast.File) map[string]bool {
 					out[name.Name] = true
 				}
 			}
-		}
-	}
+		})
+	})
 	return out
 }
 
