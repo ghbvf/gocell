@@ -69,7 +69,7 @@ K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不�
 
 本地路径：
 - 开发者本地 `make verify`（无 `VERIFY_SKIP` env）仍调 `hack/verify-archtest.sh`，作为一键全跑
-- `hack/githooks/pre-push` 在 `go_changed || archtest_governance_changed` 命中时并行 fan-out（默认 K=4，`SHARD_COUNT` env 可覆盖）作为 PR-time 快速反馈
+- `hack/githooks/pre-push` 因 CPU/RSS 预算（实测 ~3min wall + 43 GB RSS + 18-core 全打满，违反 sub-10s 预算 18×）不跑 archtest（详见 §"pre-push archtest 撤回"）；开发者要 PR-time archtest 反馈走 `make verify` 或 `bash hack/verify-archtest.sh` 显式触发
 - 脚本因 `SLOWGATE_BIN` 缺失走 plain go test 路径——by-design 单本地路径（slowgate budget gate 是 CI 关注点，本地 dev 关注正确性）
 - 故 script 仍有「`SLOWGATE_BIN` 在则 pipe；不在则 plain」的内部分支，但 CI 只有一个 caller（nightly matrix）注入 `SLOWGATE_BIN`，没有 caller-divergent 契约
 
@@ -204,13 +204,13 @@ PR-time 16-shard matrix（PR / push 上 `_build-lint.yml::verify-archtest`）累
 
 2. **新建 nightly schedule**——`.github/workflows/archtest-nightly.yml`：`cron: '0 18 * * *'`（UTC ≈ 北京 02:00）+ `workflow_dispatch`；16-shard matrix 结构 1:1 复用旧 PR-time job。失败兜底走 GHA 平台自带反馈通道（workflow run 失败默认邮件通知 watchers、Actions UI 红 ✗、`workflow_dispatch` 手动 rerun），**不**自动开 issue——见下方 §"alert-on-failure 撤回"。
 
-3. **本地 pre-push 跑全量 archtest**——`hack/verify-archtest.sh` 新增"Execution modes"语义：
+3. **`hack/verify-archtest.sh` 新增"Execution modes"语义**——为开发者本地手动触发与未来 caller 提供 K 值选择：
    - `SHARD_TARGET` 设 → 单 shard 单 process（CI matrix 路径不变）
    - `SHARD_TARGET` 未设 + `SHARD_COUNT=1` → 单 shard 流式输出（local default，PR #878 落地）
    - `SHARD_TARGET` 未设 + `SHARD_COUNT>1` → **并行 fan-out**（background `&` + wait barrier + 每 shard 临时文件收集 stdout，wait 后按 shard 序输出）
    - 旧 K=N 串行 for-loop 模式删除——实测它总比 K=1 慢（每 shard 重新 packages.Load 无 cache 共享）且无 caller 用它。
 
-4. **pre-push 调用 K=4**——`hack/githooks/pre-push` 中替换原 `TEST-TIME-LITERAL-01` 单条采样为 `env SHARD_COUNT=4 bash hack/verify-archtest.sh`。
+4. **pre-push 不跑 archtest**——初版决策曾把 `env SHARD_COUNT=4 bash hack/verify-archtest.sh` 接入 `hack/githooks/pre-push` 作为 PR-time 快速反馈替代，PR #887 review round-2 撤回，详见下方 §"pre-push archtest 撤回"。本地 archtest 反馈走 `make verify` 一键全跑或 `bash hack/verify-archtest.sh` 显式触发。
 
 ### Workstation 标定（K 值选择实证）
 
@@ -233,7 +233,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 | §D3 ARCHTEST-VERIFY-COVERAGE-01 元守卫 | ✅ 不变，运行时间从 PR-time → nightly | discovery drift 触发条件单一（改脚本），PR diff 显著 |
 | §D4 governance.yml VERIFY_SKIP | ✅ env 保留不变 | 注释更新指向新 nightly yaml |
 | §D5 slowgate | ⚠️ 仍跑但延迟暴露 | brittleness 转 nightly 兜底；失败靠 GHA 平台邮件 + Actions UI + `workflow_dispatch` rerun |
-| § "PR-time fast-feedback gate" | ❌ 失效 | pre-push 本地 K=4 并行替代（实测 ~3 min wall） |
+| § "PR-time fast-feedback gate" | ❌ 失效（无替代） | 开发者本地按需 `make verify` 或 `bash hack/verify-archtest.sh`；nightly ≤24h 兜底。round-1 曾用 pre-push K=4 fan-out 替代，因 ~3min wall + 43 GB RSS + 18-core 全打满破 sub-10s 预算 round-2 撤回 |
 | § "single authoritative owner" | ✅ owner 从 `_build-lint.yml::verify-archtest` 平移至 `archtest-nightly.yml::verify-archtest`（同名 job，不同 yaml）| 注释 + ADR 文本同 PR 重写 |
 
 §D4 / §D6 段原文同 PR 重写以与现状一致（per ai-collab.md §"ADR amendment 落地必查" 禁止"原文保留作历史脉络"）。
@@ -244,7 +244,7 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 - `.github/workflows/_build-lint.yml` 删 verify-archtest job + tools shard 注释指向 nightly
 - `.github/workflows/governance.yml` VERIFY_SKIP 注释指向 nightly
 - `hack/verify-archtest.sh` "Execution modes" 文档 + 并行 fan-out 分支
-- `hack/githooks/pre-push` 用 `${SHARD_COUNT:-4}` 并行 + `go_changed || archtest_governance_changed` 触发 + 注释重写（deviation 4 / Tier 4）
+- `hack/githooks/pre-push` 撤回 archtest 调用与 governance trigger（详见 §"pre-push archtest 撤回"），保留 gofumpt / build / vet / golangci-lint / codegen-verify 等 sub-10s 友好 gate；deviation 4 重号为 golangci-lint，Tier 4 同步重号
 - `tools/archtest/archtest_ci_shard_count_test.go` yaml 路径迁移到 `archtest-nightly.yml`
 - `CLAUDE.md`、`.claude/rules/gocell/ai-collab.md` archtest 入口描述更新
 
@@ -263,3 +263,19 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 - **L3 概念模型**：GitHub Issues 不是 alert backbone；真正的 alert 应走 Slack / PagerDuty webhook（语义正确的 alert 通道）
 
 裁决：同 PR 内撤回 alert-on-failure job 整段 + 顶层 `issues: write` 权限。nightly 失败靠 GHA 平台自带反馈。未来若真需要 alert backbone，使用 webhook 形式，不回到 GitHub Issues。
+
+### pre-push archtest 撤回（PR #887 review round-2）
+
+初版决策 4 把 `env SHARD_COUNT=4 bash hack/verify-archtest.sh` 接入 `hack/githooks/pre-push` 作为 PR-time 快速反馈替代（18-core / 128 GB workstation 标定 K=4 wall ~3 min / RSS 43 GB）。PR #887 review round-2 复测发现实际开发场景下：
+
+- 18-core 在 archtest 跑期间 100% 打满，与开发者其他并行任务（IDE 索引、其它 build、agent）冲突
+- 43 GB peak RSS 在 64 GB 机器上接近内存上限，触发 swap
+- pre-push 头部注释自承"breaches the sub-10s budget by 18×, but accepted"——一个 sub-10s deterministic hook 不应承载 ~3min 的重 gate
+
+激进自审三层（per ai-collab.md §"激进自审三层覆盖"）：
+
+- **L1 代码补丁**：F4（governance trigger）+ F5（SHARD_COUNT 可配置）是对一个本身不该存在的接入打两个补丁
+- **L2 PR 整体决策组合**：pre-push hook 设计目标是 sub-10s deterministic offline gate（其头部第一段明确）；把 ~3min CPU/RSS 重 gate 隐式塞进每次 `git push` 违反这个设计契约；开发者用 `git push --no-verify` 绕过的代价反向使 pre-push 形成 anti-pattern
+- **L3 概念模型**：archtest 是开发者主动触发的合规体检，不是隐式 push gate；正确语义是 explicit `make verify` / `bash hack/verify-archtest.sh`（开发者承担 CPU/RSS 代价）+ nightly 兜底（≤24h，无开发者代价）
+
+裁决：同 PR 内撤回 pre-push archtest 调用 + `archtest_governance_changed` 触发探测 + 头部 deviation 4 / Tier 4 标号；`hack/verify-archtest.sh` "Execution modes" 与并行 fan-out 能力保留（为 `make verify` 与显式调用提供选择）。未来若 CPU/RSS 代价显著下降（更小 archtest 集 / cross-shard cache）再评估接回 pre-push 的可能性。
