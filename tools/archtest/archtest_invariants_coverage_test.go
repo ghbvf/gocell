@@ -74,7 +74,11 @@ func parseInvariantsScriptFuncs(t *testing.T, repoRoot string) map[string]struct
 	if err != nil {
 		t.Fatalf("ARCHTEST-INVARIANTS-COVERAGE-01: cannot open %s: %v", scriptPath, err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("ARCHTEST-INVARIANTS-COVERAGE-01: closing %s: %v", scriptPath, err)
+		}
+	}()
 
 	// Match: -run '^(TestFoo|TestBar|...)$'
 	// The names may span across a line continuation — we read the full file
