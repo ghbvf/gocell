@@ -27,13 +27,15 @@
 // helpers across multiple _test.go files collapse onto one container + one
 // migration.
 //
-// AI-rebust funnel rating (see .claude/rules/gocell/ai-collab.md): the
-// PG-TESTCONTAINER-FUNNEL guard (depguard import ban + typed archtest
-// callsite identity) is Medium/Medium. Hard is structurally unreachable for
-// "ban a third-party symbol outside an allowlist" — Go has no import
-// visibility modifier, so the compiler cannot forbid importing a public
-// package. Lint-time import-ban + type-resolved callee archtest is the
-// highest tier this rule shape can reach in Go.
+// The PG-TESTCONTAINER-FUNNEL guard (a pure-AST archtest — the callsites are
+// //go:build integration files invisible to golangci-lint/typed tooling) keeps
+// tcpostgres.Run out of every other package. Its AI-rebust rating and
+// blind-spot inventory live in tools/archtest/pg_testcontainer_funnel_test.go.
+//
+// Most callers outside adapters/postgres should use tests/testutil/pgshare,
+// which wraps pgclone with a typed *adapterpg.Pool return. Only white-box
+// `package postgres` tests (which cannot import pgshare without an import
+// cycle) use pgclone directly.
 package pgclone
 
 import (
@@ -52,11 +54,14 @@ import (
 )
 
 // MigrateFunc applies the caller's migration set to the template database at
-// templateDSN. The implementation MUST close any pool/connection it opens
-// before returning: CREATE DATABASE ... TEMPLATE rejects a source DB with
-// active connections, so a lingering connection blocks every subsequent
-// CloneDSN. Callers typically use adapterpg.NewPool + NewMigrator + Up with a
-// deferred pool.Close.
+// templateDSN. Callers typically use adapterpg.NewPool + NewMigrator + Up with
+// a deferred pool.Close.
+//
+// WARNING: the implementation MUST close every pool/connection it opens before
+// returning. CREATE DATABASE ... TEMPLATE rejects a source DB with active
+// connections, so a single lingering connection silently breaks EVERY
+// subsequent CloneDSN call. Use a deferred Close (see pgshare.applyMigrations
+// for the canonical pattern).
 type MigrateFunc func(ctx context.Context, templateDSN string) error
 
 // Shared owns the per-package container + template DB lifecycle. Create one
@@ -137,7 +142,7 @@ func (s *Shared) perTestDSN(tb testing.TB, migrated bool) string {
 		err = createDatabase(ctx, s.adminDSN, dbName)
 	}
 	if err != nil {
-		tb.Fatalf("mint per-test DB %s: %v", dbName, err)
+		tb.Fatalf("mint per-test DB %s (migrated=%v): %v", dbName, migrated, err)
 	}
 
 	tb.Cleanup(func() {
@@ -275,7 +280,11 @@ func execAdmin(ctx context.Context, adminDSN, sql string) error {
 	if err != nil {
 		return fmt.Errorf("connect admin: %w", err)
 	}
-	defer func() { _ = conn.Close(ctx) }()
+	defer func() {
+		if cerr := conn.Close(ctx); cerr != nil {
+			slog.Default().Warn("pgclone: admin conn close failed", "error", cerr)
+		}
+	}()
 	if _, err := conn.Exec(ctx, sql); err != nil {
 		return fmt.Errorf("exec admin sql: %w", err)
 	}

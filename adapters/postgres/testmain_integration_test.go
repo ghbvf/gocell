@@ -57,7 +57,8 @@ func migratedPool(tb testing.TB) *Pool {
 
 // emptyPool returns a Pool to a fresh empty per-test database (template1, no
 // schema). For migration/schema tests that run their own Up/UpTo/provider.Down
-// against a clean database. Cleanup is registered via tb.Cleanup.
+// against a clean database. Cleanup is registered via tb.Cleanup — callers
+// must not Close manually.
 func emptyPool(tb testing.TB) *Pool {
 	tb.Helper()
 	return openPerTestPool(tb, sharedPG.EmptyDSN(tb))
