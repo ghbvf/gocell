@@ -5,6 +5,14 @@ on:
     branches: [develop, main, 'release/**']
   pull_request:
     branches: [develop, main, 'release/**']
+    # Skip governance on purely-documentation PRs. `docs/**` and top-level
+    # *.md files do not affect `gocell validate` output (confirmed: cmd/gocell
+    # does not load .claude/rules or docs/ at runtime). push to develop/main
+    # is NOT filtered — it acts as the unconditional baseline sweep.
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'README.md'
 
 # Governance Strict is the K8s-style `make verify` runner — it discovers and
 # executes every hack/verify-*.sh gate in deterministic order, accumulating
@@ -47,6 +55,14 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      # Pre-compile gocell once and share across the 11 verify-*.sh gates that
+      # invoke it. Each `go run ./cmd/gocell` cold-links 18 MB (~1.2-1.8s);
+      # building once and injecting GOCELL_BIN saves ~16s per CI run.
+      # hack/lib/gocell-bin.sh::gocell::cli checks GOCELL_BIN first, falls
+      # back to `go run` when unset (local dev path unchanged).
+      - name: Build gocell binary
+        run: go build -o "$RUNNER_TEMP/gocell" ./cmd/gocell
+
       - name: make verify
         # VERIFY_SKIP=archtest: delegate archtest to the matrix
         # archtest-nightly.yml job (single-owner principle, see comment
@@ -63,4 +79,5 @@ jobs:
         # local dev focuses on correctness).
         env:
           VERIFY_SKIP: archtest
+          GOCELL_BIN: ${{ runner.temp }}/gocell
         run: make verify
