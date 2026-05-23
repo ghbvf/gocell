@@ -42,7 +42,7 @@ import (
 // splitting each into a top-level function fragments the contract narrative
 // and breaks single-source-of-truth invariant: one function = full contract.
 //
-//nolint:gocognit,cyclop,funlen // conformance harness inlines 11 t.Run subtests by design;
+//nolint:gocognit,cyclop,funlen // conformance harness inlines 13 t.Run subtests by design;
 func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) {
 	t.Helper()
 
@@ -140,6 +140,27 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		err := agg.Register(p)
 		if !errors.Is(err, khealthz.ErrDuplicateProbe) {
 			t.Errorf("second Register err = %v, want ErrDuplicateProbe", err)
+		}
+	})
+
+	t.Run("nil_probe_returns_invalid_probe_name", func(t *testing.T) {
+		agg := factory()
+		err := agg.Register(nil)
+		if !errors.Is(err, khealthz.ErrInvalidProbeName) {
+			t.Errorf("Register(nil) err = %v, want ErrInvalidProbeName", err)
+		}
+	})
+
+	t.Run("empty_name_returns_invalid_probe_name", func(t *testing.T) {
+		agg := factory()
+		err := agg.Register(emptyNameProbe{})
+		if !errors.Is(err, khealthz.ErrInvalidProbeName) {
+			t.Errorf("Register(empty-name probe) err = %v, want ErrInvalidProbeName", err)
+		}
+		// The rejected probe must not pollute the snapshot.
+		snap := agg.Evaluate(context.Background())
+		if len(snap.Probes) != 0 {
+			t.Errorf("after rejected Register: Probes len = %d, want 0", len(snap.Probes))
 		}
 	})
 
@@ -249,6 +270,15 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 	})
 }
 
+// emptyNameProbe is a deliberately malformed Probe whose Name() is empty. It
+// cannot be built via khealthz.NewProbe (which panics on an empty name), so the
+// conformance harness constructs it directly to exercise the Aggregator's
+// registration-time name validation (ErrInvalidProbeName).
+type emptyNameProbe struct{}
+
+func (emptyNameProbe) Name() string                  { return "" }
+func (emptyNameProbe) Check(_ context.Context) error { return nil }
+
 // probeNameForWorker returns a unique probe name for use in concurrency tests.
 // It avoids package-level state; the name just needs to be unique per worker.
 func probeNameForWorker(n int) string {
@@ -286,6 +316,12 @@ type FakeAggregator struct {
 
 // Register implements [kernel/healthz.Aggregator].
 func (a *FakeAggregator) Register(p khealthz.Probe) error {
+	if p == nil {
+		return fmt.Errorf("%w: nil probe", khealthz.ErrInvalidProbeName)
+	}
+	if p.Name() == "" {
+		return fmt.Errorf("%w: empty probe name", khealthz.ErrInvalidProbeName)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, dup := a.probes[p.Name()]; dup {

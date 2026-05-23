@@ -48,7 +48,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 	// race the barrier release and the dedup window would close early.
 	probeRelease := make(chan struct{})
 	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
-	h := New(asm, agg, clock.Real(), WithVerboseDisabled(), WithDeadline(testtime.D2s))
+	h := New(asm, agg, clock.Real(), WithVerboseDisabled())
 	require.NoError(t, agg.Register(khealthz.NewProbe("slow", func(ctx context.Context) error {
 		callCount.Add(1)
 		select {

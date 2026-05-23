@@ -67,7 +67,7 @@ func TestConfigCore_InitDemoMode_EmitsNonDurableDegradationWarn(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, c.Init(context.Background(),
-		cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo, newTestAgg())))
+		cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
 
 	var warn *slog.Record
 	for i := range cap.records {

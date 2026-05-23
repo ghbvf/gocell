@@ -182,7 +182,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	intReg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())
+	intReg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), intReg))
 
 	intSnap := intReg.Snapshot()

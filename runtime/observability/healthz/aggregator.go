@@ -75,13 +75,21 @@ func NewAggregator(opts ...Option) healthz.Aggregator {
 	return a
 }
 
-// Register adds p to the registry. Returns [healthz.ErrDuplicateProbe] (via
-// errors.Is) if a probe with the same Name() is already registered. The probe's
-// Check function is wrapped with a ctx-safe racing wrapper at registration time
-// so that a canceled context always terminates the outer call even when the
-// underlying function is uncooperative.
+// Register adds p to the registry. Returns [healthz.ErrInvalidProbeName] (via
+// errors.Is) when p is nil or its Name() is empty, and [healthz.ErrDuplicateProbe]
+// when a probe with the same Name() is already registered — enforcing the
+// Probe-godoc contract that naming is validated at registration time. The
+// probe's Check function is wrapped with a ctx-safe racing wrapper at
+// registration time so that a canceled context always terminates the outer
+// call even when the underlying function is uncooperative.
 func (a *aggregator) Register(p healthz.Probe) error {
+	if p == nil {
+		return fmt.Errorf("%w: nil probe", healthz.ErrInvalidProbeName)
+	}
 	name := p.Name()
+	if name == "" {
+		return fmt.Errorf("%w: empty probe name", healthz.ErrInvalidProbeName)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, exists := a.probes[name]; exists {

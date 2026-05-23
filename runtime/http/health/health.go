@@ -33,7 +33,6 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"golang.org/x/sync/singleflight"
 
@@ -64,14 +63,6 @@ const (
 
 // Option configures a Handler.
 type Option func(*Handler)
-
-// WithDeadline is retained for API continuity but is a no-op on Handler
-// since probe execution deadlines are now owned by the injected Aggregator.
-// Configure probe deadlines via runtime/observability/healthz.WithDeadline at
-// Aggregator construction time.
-func WithDeadline(_ time.Duration) Option {
-	return func(_ *Handler) {}
-}
 
 // WithVerboseDisabled declares that this Handler must never serve verbose
 // output. Any request carrying ?verbose (with or without a token) is answered

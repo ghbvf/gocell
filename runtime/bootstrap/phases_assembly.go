@@ -38,9 +38,8 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"bootstrap: WithHealthAggregator: both bare-nil and typed-nil interface values are rejected at phase0")
 	}
-	// Construct a default aggregator when WithHealthAggregator was not called.
-	if b.healthAggregator == nil {
-		b.healthAggregator = obshealthz.NewAggregator(obshealthz.WithClock(b.clock))
+	if err := b.resolveHealthAggregator(); err != nil {
+		return err
 	}
 	if err := b.validateHealthCheckers(); err != nil {
 		return err
@@ -84,6 +83,29 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	// Advisory check (non-blocking): warn when the declared K8s grace period
 	// is smaller than the bootstrap shutdown budget plus a 10s safety margin.
 	b.warnTerminationGracePeriodInsufficient()
+	return nil
+}
+
+// resolveHealthAggregator constructs the default healthz.Aggregator when
+// WithHealthAggregator was not called, applying the WithReadyzDeadline
+// per-probe deadline. The deadline is owned by the aggregator, so it can only
+// be applied to the default aggregator built here; a custom aggregator owns its
+// own deadline, making WithReadyzDeadline + WithHealthAggregator contradictory
+// wiring → fail-fast rather than silently ignore the deadline.
+func (b *Bootstrap) resolveHealthAggregator() error {
+	switch {
+	case b.healthAggregator == nil:
+		aggOpts := []obshealthz.Option{obshealthz.WithClock(b.clock)}
+		if b.readyzDeadline > 0 {
+			aggOpts = append(aggOpts, obshealthz.WithDeadline(b.readyzDeadline))
+		}
+		b.healthAggregator = obshealthz.NewAggregator(aggOpts...)
+	case b.readyzDeadline > 0:
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"bootstrap: WithReadyzDeadline cannot combine with WithHealthAggregator; "+
+				"a custom aggregator owns its own probe deadline (set it via "+
+				"runtime/observability/healthz.WithDeadline at aggregator construction)")
+	}
 	return nil
 }
 

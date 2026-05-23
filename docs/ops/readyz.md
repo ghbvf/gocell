@@ -243,7 +243,7 @@ same error envelope described under "Response shape"):
 | Server state | Request | Response |
 |--------------|---------|----------|
 | `WithVerboseDisabled()` set (e.g. `GOCELL_READYZ_VERBOSE_DISABLED=1`) | any `?verbose` | **200 / 503 plain aggregate body** (no verbose fields) |
-| token configured + header matches | `?verbose` with matching `X-Readyz-Token` | **200 / 503 verbose body** |
+| token configured + header matches | `?verbose` with matching `X-Readyz-Token` | **200 verbose body** (cells/dependencies/adapters) / **503 plain error envelope** — a verbose-authorised 503 carries no verbose fields on the wire; status/reason ride on slog only (see preamble) |
 | token configured + header missing/mismatched | `?verbose` with wrong / no `X-Readyz-Token` | **401** `ERR_READYZ_VERBOSE_DENIED` |
 | token unset (and not disabled) — should never happen in prod (Validate refuses startup) | `?verbose` | **401** `ERR_READYZ_VERBOSE_DENIED` |
 

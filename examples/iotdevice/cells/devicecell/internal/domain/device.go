@@ -23,6 +23,6 @@ type DeviceRepository interface {
 	// List returns a paginated list of devices sorted by name ASC, id ASC.
 	List(ctx context.Context, params query.ListParams) ([]*Device, error)
 	// RepoReady verifies the devices table is reachable and readable.
-	// Used by the cell-level readiness probe registered as "device_repo_ready".
+	// Used by the cell-level readiness probe registered as "devicecell_repo_ready".
 	RepoReady(ctx context.Context) error
 }

@@ -843,7 +843,7 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 
 	// Use a generous deadline so these tests do not time out.
 	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
-	h := New(asm, agg, clock.Real(), WithDeadline(testtime.D2s))
+	h := New(asm, agg, clock.Real())
 	for _, name := range []string{"probe-a", "probe-b", "probe-c"} {
 		require.NoError(t, agg.Register(khealthz.NewProbe(name, func(_ context.Context) error {
 			time.Sleep(testtime.D100ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
@@ -883,7 +883,7 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	agg := newAggWithDeadline(clock.Real(), testtime.MediumPoll)
-	h := New(asm, agg, clock.Real(), WithDeadline(testtime.MediumPoll))
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, agg.Register(khealthz.NewProbe("slow", func(ctx context.Context) error {
 		select {
@@ -922,7 +922,7 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 
 	probeDone := make(chan struct{})
 	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
-	h := New(asm, agg, clock.Real(), WithDeadline(testtime.D2s))
+	h := New(asm, agg, clock.Real())
 	require.NoError(t, agg.Register(khealthz.NewProbe("slow-probe", func(ctx context.Context) error {
 		// Probe takes 100 ms but the HTTP request ctx will be canceled
 		// almost immediately — probe must NOT be affected.
@@ -964,7 +964,7 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
-	h := New(asm, agg, clock.Real(), WithDeadline(testtime.D2s))
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, agg.Register(khealthz.NewProbe("panicking", func(_ context.Context) error {
 		panic("something went very wrong")
@@ -1067,7 +1067,7 @@ func TestReadyz_VerbosePanicSecret_RedactedInSlog(t *testing.T) {
 
 	const leakSentinel = "panic-leak-sentinel-c91d"
 	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
-	h := New(asm, agg, clock.Real(), WithDeadline(testtime.D2s))
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, agg.Register(khealthz.NewProbe("panicking", func(_ context.Context) error {
 		// Use api-key / password — keys present in pkg/redaction.sensitiveKeyPattern.
@@ -1170,7 +1170,7 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	agg := newAggWithDeadline(clock.Real(), healthDeadlineShort)
-	h := New(asm, agg, clock.Real(), WithVerboseDisabled(), WithDeadline(healthDeadlineShort))
+	h := New(asm, agg, clock.Real(), WithVerboseDisabled())
 
 	// Uncooperative probe: blocks on a channel that only the test closes on
 	// cleanup. Without wrapCtxSafe this would hold runProbesParallel open
@@ -1213,7 +1213,7 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	agg := newAggWithDeadline(clock.Real(), healthDeadlineShort)
-	h := New(asm, agg, clock.Real(), WithDeadline(healthDeadlineShort))
+	h := New(asm, agg, clock.Real())
 	h.SetVerboseToken(testVerboseToken)
 
 	unblock := make(chan struct{})

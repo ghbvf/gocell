@@ -60,7 +60,7 @@ func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
 		withTestBootstrapAuth(),
 		// withTestSetupLock() omitted on purpose.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err, "missing WithSetupLock must produce a phase0 error")
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -101,7 +101,7 @@ func TestWithSetupLock_NilOption_RejectedAtInit(t *testing.T) {
 				withTestBootstrapAuth(),
 				withSetupLock(tc.lock),
 			)
-			err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
+			err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 			require.Error(t, err)
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec))
@@ -130,7 +130,7 @@ func TestWithInMemoryDefaults(t *testing.T) {
 	assert.NotNil(t, c.roleRepo)
 	// Verify sessionStore is wired before Init (explicit injection, no clock deferral).
 	assert.NotNil(t, c.sessionStore)
-	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
 	assert.NotNil(t, c.sessionStore)
 }
 
@@ -153,9 +153,9 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	agg := newTestAgg()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
+	agg := drainProbeSnapshot(t, rec)
 	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
 	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"session.Store satisfies RepoProber; repo probe must be registered")
@@ -180,9 +180,9 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	agg := newTestAgg()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
+	agg := drainProbeSnapshot(t, rec)
 	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
 	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"session.Store satisfies RepoProber; repo probe must be registered")
@@ -193,7 +193,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 func TestRegisterSubscriptions(t *testing.T) {
 	c := newTestCell(t)
 	ctx := context.Background()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg())
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
@@ -229,7 +229,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable, newTestAgg()))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErrOutbox *errcode.Error
 	require.True(t, errors.As(err, &ecErrOutbox))
@@ -251,7 +251,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable, newTestAgg()))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -268,7 +268,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
@@ -293,9 +293,9 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		withTestSetupLock(),
 		withTestBootstrapAuth(),
 	)
-	agg := newTestAgg()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
+	agg := drainProbeSnapshot(t, rec)
 
 	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
 	require.True(t, agg.HasProbe(ProbeRepoReady),
@@ -331,9 +331,9 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		withTestBootstrapAuth(),
 		withTestSetupLock(),
 	)
-	agg := newTestAgg()
-	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, agg)
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
+	agg := drainProbeSnapshot(t, rec)
 	// ProbeRepoReady = "accesscore_repo_ready" (cellgen-generated constant).
 	require.True(t, agg.HasProbe(ProbeRepoReady),
 		"session.Store satisfies RepoProber; repo probe must be registered")
@@ -368,7 +368,7 @@ func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 		withTestSetupLock(),
 		// withTestCASProtocol() omitted on purpose.
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err, "missing WithCASProtocol must produce a phase0 error")
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -395,7 +395,7 @@ func TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
 		withTestSetupLock(),
 		WithCASProtocol(nil), // bare-nil intentionally
 	)
-	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo, newTestAgg()))
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))

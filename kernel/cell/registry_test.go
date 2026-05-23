@@ -19,32 +19,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// fakeAggregator — test-local stub for healthz.Aggregator.
-// ---------------------------------------------------------------------------
-
-type fakeAggregator struct {
-	probes map[string]healthz.Probe
-}
-
-func newFakeAggregator() *fakeAggregator {
-	return &fakeAggregator{probes: make(map[string]healthz.Probe)}
-}
-
-func (f *fakeAggregator) Register(p healthz.Probe) error {
-	if _, dup := f.probes[p.Name()]; dup {
-		return healthz.ErrDuplicateProbe
-	}
-	f.probes[p.Name()] = p
-	return nil
-}
-
-func (f *fakeAggregator) Deregister(name string) { delete(f.probes, name) }
-
-func (f *fakeAggregator) Evaluate(_ context.Context) healthz.Snapshot {
-	return healthz.Snapshot{}
-}
-
-// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 
@@ -67,7 +41,7 @@ func testRegistrySpec(topic string) contractspec.ContractSpec {
 
 func TestRegistry_Config_ReturnsConstructorValue(t *testing.T) {
 	cfg := map[string]any{"port": 8080, "debug": true}
-	rec := NewRegistryRecorder(cfg, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(cfg, DurabilityDurable)
 	assert.Equal(t, cfg, rec.Config())
 }
 
@@ -76,51 +50,54 @@ func TestRegistry_Config_ReturnsConstructorValue(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_DurabilityMode_ReturnsConstructorValue(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDemo, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDemo)
 	assert.Equal(t, DurabilityDemo, rec.DurabilityMode())
 }
 
 // ---------------------------------------------------------------------------
-// TestRegistry_Healthz_ReturnsSameAggregator
+// TestRegistry_Healthz_ReturnsWriteSink
 // ---------------------------------------------------------------------------
 
-// TestRegistry_Healthz_ReturnsSameAggregator verifies that Healthz() returns
-// the aggregator injected at construction time — same pointer identity.
-func TestRegistry_Healthz_ReturnsSameAggregator(t *testing.T) {
-	agg := newFakeAggregator()
-	rec := NewRegistryRecorder(nil, DurabilityDurable, agg)
-	assert.Same(t, agg, rec.Healthz().(*fakeAggregator))
+// TestRegistry_Healthz_ReturnsWriteSink verifies Healthz() returns a usable
+// write-side sink. The recorder is a pure accumulator and holds no live
+// aggregator; its sink's Evaluate is a documented no-op.
+func TestRegistry_Healthz_ReturnsWriteSink(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	sink := rec.Healthz()
+	require.NotNil(t, sink)
+
+	snap := sink.Evaluate(context.Background())
+	assert.Equal(t, healthz.StatusUp, snap.Overall)
+	assert.Empty(t, snap.Probes)
 }
 
 // ---------------------------------------------------------------------------
-// TestRegistry_Healthz_RegisterProbe_StoresInAggregator
+// TestRegistry_Healthz_RegisterProbe_AccumulatesInSnapshot
 // ---------------------------------------------------------------------------
 
-// TestRegistry_Healthz_RegisterProbe_StoresInAggregator verifies that probes
-// registered via reg.Healthz().Register(...) are visible in the aggregator.
-func TestRegistry_Healthz_RegisterProbe_StoresInAggregator(t *testing.T) {
-	agg := newFakeAggregator()
-	rec := NewRegistryRecorder(nil, DurabilityDurable, agg)
+// TestRegistry_Healthz_RegisterProbe_AccumulatesInSnapshot verifies that probes
+// registered via reg.Healthz().Register(...) appear in the RegistrySnapshot for
+// the bootstrap layer to drain onto the runtime aggregator.
+func TestRegistry_Healthz_RegisterProbe_AccumulatesInSnapshot(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
 	probe := healthz.NewProbe("foo_ready", func(_ context.Context) error { return nil })
-	err := rec.Healthz().Register(probe)
-	require.NoError(t, err)
+	require.NoError(t, rec.Healthz().Register(probe))
 
-	stored, ok := agg.probes["foo_ready"]
-	require.True(t, ok, "probe must be stored in aggregator")
-	assert.Equal(t, "foo_ready", stored.Name())
+	snap := rec.Snapshot()
+	require.Len(t, snap.Probes, 1)
+	assert.Equal(t, "foo_ready", snap.Probes[0].Name())
 }
 
 // ---------------------------------------------------------------------------
-// TestRegistry_Healthz_DuplicateName_AggregatorRejectsSecond
+// TestRegistry_Healthz_DuplicateName_RejectsSecond
 // ---------------------------------------------------------------------------
 
-// TestRegistry_Healthz_DuplicateName_AggregatorRejectsSecond verifies that
-// registering a second probe with the same name returns ErrDuplicateProbe.
-// (Duplicate semantics are now enforced by the aggregator, not the recorder.)
-func TestRegistry_Healthz_DuplicateName_AggregatorRejectsSecond(t *testing.T) {
-	agg := newFakeAggregator()
-	rec := NewRegistryRecorder(nil, DurabilityDurable, agg)
+// TestRegistry_Healthz_DuplicateName_RejectsSecond verifies that registering a
+// second probe with the same name returns ErrDuplicateProbe and does not store
+// the duplicate (first-wins, same contract as the runtime aggregator).
+func TestRegistry_Healthz_DuplicateName_RejectsSecond(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
 	p1 := healthz.NewProbe("my_probe", func(_ context.Context) error { return nil })
 	p2 := healthz.NewProbe("my_probe", func(_ context.Context) error { return errors.New("fail") })
@@ -129,15 +106,47 @@ func TestRegistry_Healthz_DuplicateName_AggregatorRejectsSecond(t *testing.T) {
 	err := rec.Healthz().Register(p2)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, healthz.ErrDuplicateProbe))
+
+	require.Len(t, rec.Snapshot().Probes, 1)
 }
 
 // ---------------------------------------------------------------------------
-// TestRegistry_NilAggregator_Panics
+// TestRegistry_Healthz_Deregister_RemovesProbe
 // ---------------------------------------------------------------------------
 
-func TestRegistry_NilAggregator_Panics(t *testing.T) {
+// TestRegistry_Healthz_Deregister_RemovesProbe verifies the write-side sink's
+// Deregister drops an accumulated probe (and frees the name for re-register).
+func TestRegistry_Healthz_Deregister_RemovesProbe(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	sink := rec.Healthz()
+
+	require.NoError(t, sink.Register(healthz.NewProbe("a_ready", func(_ context.Context) error { return nil })))
+	require.NoError(t, sink.Register(healthz.NewProbe("b_ready", func(_ context.Context) error { return nil })))
+	sink.Deregister("a_ready")
+	sink.Deregister("missing_ready") // no-op on unknown name
+
+	// Name freed: re-register under the deregistered name succeeds.
+	require.NoError(t, sink.Register(healthz.NewProbe("a_ready", func(_ context.Context) error { return nil })))
+
+	names := make([]string, 0, 2)
+	for _, p := range rec.Snapshot().Probes {
+		names = append(names, p.Name())
+	}
+	assert.ElementsMatch(t, []string{"b_ready", "a_ready"}, names)
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Healthz_RegisterAfterSnapshot_Panics
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Healthz_RegisterAfterSnapshot_Panics verifies probe registration
+// after Snapshot() panics — same finalize guard as the other registration
+// methods (no lazy registration past sealing).
+func TestRegistry_Healthz_RegisterAfterSnapshot_Panics(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	_ = rec.Snapshot() // finalize
 	assert.Panics(t, func() {
-		NewRegistryRecorder(nil, DurabilityDurable, nil)
+		_ = rec.Healthz().Register(healthz.NewProbe("late_ready", func(_ context.Context) error { return nil }))
 	})
 }
 
@@ -146,7 +155,7 @@ func TestRegistry_NilAggregator_Panics(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_RouteGroup_AccumulatesInOrder(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
 	g1 := SingleGroup(PrimaryListener, "/api/v1/a", func(RouteMux) error { return nil })
 	g2 := SingleGroup(InternalListener, "/internal/v1/b", func(RouteMux) error { return nil })
@@ -164,7 +173,7 @@ func TestRegistry_RouteGroup_AccumulatesInOrder(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_Subscribe_RejectsNilHandler(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	err := rec.Subscribe(testRegistrySpec("user.created"), nil, "cg-test", "ordercell")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "handler")
@@ -175,7 +184,7 @@ func TestRegistry_Subscribe_RejectsNilHandler(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_Subscribe_RejectsEmptyConsumerGroup(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	err := rec.Subscribe(testRegistrySpec("user.created"), noopHandler, "", "ordercell")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "consumerGroup")
@@ -190,7 +199,7 @@ func TestRegistry_Subscribe_RejectsEmptyConsumerGroup(t *testing.T) {
 // cellgen template) sees a fail-fast error rather than a downstream silent
 // failure in bootstrap drain.
 func TestRegistry_Subscribe_RejectsEmptyCellID(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	err := rec.Subscribe(testRegistrySpec("user.created"), noopHandler, "cg-test", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cellID")
@@ -206,7 +215,7 @@ func TestRegistry_Subscribe_RejectsEmptyCellID(t *testing.T) {
 // error mentioning "cellID" and must NOT mention "ContractID" — proving
 // the ordering: cellID guard fires first.
 func TestRegistry_Subscribe_CellIDCheckedBeforeContractTriple(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	spec := testRegistrySpec("order.placed") // valid Topic, Kind, ContractID
 	err := rec.Subscribe(spec, noopHandler, "cg-order", "")
 	require.Error(t, err)
@@ -221,7 +230,7 @@ func TestRegistry_Subscribe_CellIDCheckedBeforeContractTriple(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_Subscribe_RejectsBadSpecKind(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	spec := contractspec.ContractSpec{
 		ID:        "http.foo.v1",
 		Kind:      cellvocab.ContractHTTP, // not event
@@ -240,7 +249,7 @@ func TestRegistry_Subscribe_RejectsBadSpecKind(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_Subscribe_HappyPath_AppendsToSnapshot(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
 	spec := testRegistrySpec("order.placed")
 	err := rec.Subscribe(spec, noopHandler, "cg-order", "ordercell", WithSubscriptionSliceID("order-slice"))
@@ -260,7 +269,7 @@ func TestRegistry_Subscribe_HappyPath_AppendsToSnapshot(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_Lifecycle_EmptyName_Panics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	assert.Panics(t, func() {
 		rec.Lifecycle(LifecycleHook{Name: "", OnStart: func(context.Context) error { return nil }})
 	})
@@ -271,7 +280,7 @@ func TestRegistry_Lifecycle_EmptyName_Panics(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_Lifecycle_AccumulatesInOrder(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
 	rec.Lifecycle(LifecycleHook{Name: "alpha", OnStart: func(context.Context) error { return nil }})
 	rec.Lifecycle(LifecycleHook{Name: "beta", OnStop: func(context.Context) error { return nil }})
@@ -287,7 +296,7 @@ func TestRegistry_Lifecycle_AccumulatesInOrder(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_OnConfigReload_PrefixesRecorded(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
 	fn1 := func(_ context.Context, _ ConfigChangeEvent) error { return nil }
 	fn2 := func(_ context.Context, _ ConfigChangeEvent) error { return nil }
@@ -307,7 +316,7 @@ func TestRegistry_OnConfigReload_PrefixesRecorded(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_OnConfigReload_EmptyPrefixPanics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	fn := func(_ context.Context, _ ConfigChangeEvent) error { return nil }
 	assert.Panics(t, func() {
 		rec.OnConfigReload([]string{"valid.", ""}, fn) // empty string in slice → panic
@@ -319,7 +328,7 @@ func TestRegistry_OnConfigReload_EmptyPrefixPanics(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_PostSnapshot_RouteGroup_Panics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	_ = rec.Snapshot() // finalize
 	assert.Panics(t, func() {
 		rec.RouteGroup(SingleGroup(PrimaryListener, "/", func(RouteMux) error { return nil }))
@@ -331,7 +340,7 @@ func TestRegistry_PostSnapshot_RouteGroup_Panics(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_PostSnapshot_Subscribe_Panics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	_ = rec.Snapshot() // finalize
 	assert.Panics(t, func() {
 		_ = rec.Subscribe(testRegistrySpec("x"), noopHandler, "cg", "ordercell")
@@ -343,7 +352,7 @@ func TestRegistry_PostSnapshot_Subscribe_Panics(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_PostSnapshot_Lifecycle_Panics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	_ = rec.Snapshot() // finalize
 	assert.Panics(t, func() {
 		rec.Lifecycle(LifecycleHook{Name: "x"})
@@ -355,7 +364,7 @@ func TestRegistry_PostSnapshot_Lifecycle_Panics(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_PostSnapshot_OnConfigReload_Panics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	_ = rec.Snapshot()
 	assert.Panics(t, func() {
 		rec.OnConfigReload(nil, func(_ context.Context, _ ConfigChangeEvent) error { return nil })
@@ -425,7 +434,7 @@ func TestRouteGroupStruct_FieldCombinations(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_Subscribe_RejectsEmptyTopic(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	spec := contractspec.ContractSpec{
 		ID:        "event.foo.v1",
 		Kind:      cellvocab.ContractEvent,
@@ -442,7 +451,7 @@ func TestRegistry_Subscribe_RejectsEmptyTopic(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRegistry_OnConfigReload_NilFn_Panics(t *testing.T) {
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 	require.Panics(t, func() {
 		rec.OnConfigReload([]string{"cfg."}, nil)
 	})
@@ -455,7 +464,7 @@ func TestRegistry_OnConfigReload_NilFn_Panics(t *testing.T) {
 func TestRegistry_Snapshot_DefensiveCopy(t *testing.T) {
 	// Verify that the RegistrySnapshot is a defensive copy: mutating the
 	// snapshot's slices must not affect the recorder's internal state.
-	rec := NewRegistryRecorder(nil, DurabilityDurable, newFakeAggregator())
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
 
 	// Register one of each accumulated type before taking the snapshot.
 	rec.RouteGroup(SingleGroup(PrimaryListener, "/api/v1/x", func(RouteMux) error { return nil }))
@@ -482,12 +491,11 @@ func TestRegistry_Snapshot_DefensiveCopy(t *testing.T) {
 func TestRegistry_WithLogger_UsesCustomLogger(t *testing.T) {
 	var logBuf strings.Builder
 	handler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	agg := newFakeAggregator()
-	rec := NewRegistryRecorderWithLogger(nil, DurabilityDurable, agg, slog.New(handler))
+	rec := NewRegistryRecorderWithLogger(nil, DurabilityDurable, slog.New(handler))
 
 	// Recorder must be usable after construction.
 	assert.NotNil(t, rec)
-	assert.Same(t, agg, rec.Healthz().(*fakeAggregator))
+	require.NotNil(t, rec.Healthz())
 }
 
 // Compile-time: RouteGroup.Register accepts RouteMux.

@@ -861,12 +861,11 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 // --- Registry.Healthz drain tests ---
 
 func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
-	// Note: kernel/assembly.startInternal always uses noopAggregator{} for the
-	// RegistryRecorder passed to Cell.Init. Cell-registered probes therefore
-	// cannot be injected into bootstrap's healthz.Aggregator until kernel is
-	// updated (B8 scope). This test verifies the equivalent behavior using
-	// WithHealthChecker — the composition-root path that IS wired to the
-	// bootstrap aggregator by drainProbes.
+	// This test covers the framework-probe path: WithHealthChecker is the
+	// composition-root entry that drainProbes wires onto bootstrap's aggregator.
+	// The cell-registered probe path (reg.Healthz().Register during Init →
+	// RegistrySnapshot.Probes → drainCellProbes) is covered by
+	// TestBootstrap_CellProbe_DrainAppearsInReadyz.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
@@ -923,12 +922,71 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	}
 }
 
+// TestBootstrap_CellProbe_DrainAppearsInReadyz proves the F1 fix end-to-end: a
+// cell that registers a probe via reg.Healthz().Register during Init has that
+// probe accumulated into RegistrySnapshot.Probes, drained onto the runtime
+// aggregator by drainCellProbes, and surfaced in /readyz verbose output. Before
+// the snapshot-drain fix the recorder discarded the probe into a noopAggregator.
+func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-cell-probe", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	// snapshotCheckCell.Init registers healthz probe "probe.<id>" via reg.Healthz().
+	require.NoError(t, asm.Register(newSnapshotCheckCell("widget")))
+
+	b := New(
+		WithClock(clock.Real()),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "200 verbose response must contain dependencies map")
+	probe, ok := deps["probe.widget"].(map[string]any)
+	require.True(t, ok, "cell-registered probe must appear in /readyz verbose dependencies")
+	assert.Equal(t, "healthy", probe["status"],
+		"cell probe registered via reg.Healthz() must be drained to /readyz")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
 func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
-	// Note: kernel/assembly.startInternal always uses noopAggregator{} for the
-	// RegistryRecorder passed to Cell.Init, so cell-registered probes cannot
-	// conflict at the bootstrap aggregator level until B8. Duplicate detection
-	// is exercised here via WithHealthChecker — the composition-root path that
-	// drainProbes wires into bootstrap's aggregator.
+	// Duplicate detection is exercised here via WithHealthChecker — the
+	// composition-root path that drainProbes wires onto bootstrap's aggregator.
+	// Cell-probe duplicate fail-fast (drainCellProbes → aggregator.Register →
+	// ErrDuplicateProbe) shares the same aggregator first-wins contract.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 

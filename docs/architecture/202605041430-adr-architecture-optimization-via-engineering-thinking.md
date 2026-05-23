@@ -284,7 +284,7 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 |---|---|
 | `runtime/observability/healthz/aggregator.go` | 默认实现，Register 在内部 aggregator 实现中调用 |
 | `runtime/observability/healthz/healthztest/conformance.go` | 合规测试 harness（healthztest subpackage），合法调用 Register |
-| `runtime/bootstrap/phases_lifecycle.go` | drainProbes — framework probe drain |
+| `runtime/bootstrap/phases_lifecycle.go` | drainProbes — cell-probe drain (drainCellProbes: RegistrySnapshot.Probes → aggregator) + framework probe drain |
 | `runtime/bootstrap/phases_events.go` | registerHealthChecker — event router probe |
 | `runtime/bootstrap/bootstrap_phases.go` | registerHealthChecker helper |
 | `cells/<cell>/healthz_gen.go` | cellgen 出的 typed helper（RegisterRepoReady / RegisterEmitterProbes） |
@@ -295,7 +295,7 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 | 原则 | K8s 实例 | GoCell 等价异形（更新后） | 时间维度 |
 |---|---|---|---|
 | P-A1 | spec/status subresource | codegen 出 Go 类型 + `kernel/healthz.Aggregator` 运行时接口 | 编译期 + 运行时 |
-| P-A2 | apiserver 强制 status 由 controller 写 | `kernel/healthz.Aggregator` 接口（boot-time 注入）+ cellgen 派生 typed helper | 运行时接口 + 编译期 funnel |
+| P-A2 | apiserver 强制 status 由 controller 写 | `kernel/healthz.Aggregator` 接口（boot-time drain：cell 经 `reg.Healthz()` 把 probe 累积进 `RegistrySnapshot.Probes`，bootstrap phase5 `drainCellProbes` 注册进运行时 aggregator——与 RouteGroups/Subscriptions 同形态，recorder 不持有 live aggregator）+ cellgen 派生 typed helper | 运行时接口 + 编译期 funnel |
 | P-A3 | conditions 层级 | 内存 Aggregator 树（`runtime/observability/healthz`）+ adapter 输出（延期） | 运行时 |
 
 P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel"——cellgen 在编译期将 `RepoProber` 注入 typed helper，进一步前移约束（对齐 P-E1"能在编译期完成的事不推运行时"）。该格升级不引入矛盾，P-A2 行无 ✅→⚠️ 退化。
