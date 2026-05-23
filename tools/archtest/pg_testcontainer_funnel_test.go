@@ -38,10 +38,12 @@
 //     globally banned by revive dot-imports).
 //   - Reflection-based construction: out of scope, treated as theoretical.
 //
-// Carve-outs (allowlisted, backlog: migrate to pgclone): cmd/corebundle,
+// Carve-outs (allowlisted, backlog #890: migrate to pgclone): cmd/corebundle,
 // tests/integration, examples/iotdevice, cells/accesscore/slices/identitymanage —
 // each has a distinct container need (full-app e2e harness / independent
 // migration set / full-chain). They are NOT the adapters/postgres bottleneck.
+// Per ai-collab.md §Funnel 双向锁评级, this Medium-upstream transition form is
+// tracked for closure by backlog #890.
 package archtest
 
 import (
@@ -66,7 +68,7 @@ const pgTestcontainerModulePath = "github.com/testcontainers/testcontainers-go/m
 // the sanctioned funnel; the rest are backlogged carve-outs.
 var pgTestcontainerFunnelAllowlist = []string{
 	"tests/testutil/pgclone/", // the sanctioned holder
-	// Backlog: migrate these to pgclone. Each has a distinct container need:
+	// Backlog #890: migrate these to pgclone. Each has a distinct container need:
 	"cmd/corebundle/",                         // full-app e2e + outbox wiring harness
 	"tests/integration/",                      // full-chain L2 atomicity / outbox harness
 	"examples/iotdevice/",                     // example with its own PG migration set
