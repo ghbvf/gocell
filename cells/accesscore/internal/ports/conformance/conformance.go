@@ -57,6 +57,11 @@ const (
 	lockoutFixtureLockedUntil = 15 * time.Minute
 )
 
+// exampleEmailDomain is the synthetic email suffix appended to generated
+// usernames across conformance fixtures (no real mailbox; uniqueness comes
+// from the username/UUID prefix).
+const exampleEmailDomain = "@example.com"
+
 // UserRepoFactory constructs a fresh ports.UserRepository, its paired
 // persistence.TxRunner, and a cleanup func for use in a single test sub-case.
 // The factory is called once per sub-test; the cleanup func is registered via
@@ -199,7 +204,7 @@ func seedActive(t *testing.T, txRunner persistence.TxRunner, repo ports.UserRepo
 	u, err := domain.ReconstituteUser(domain.ReconstituteUserParams{ //nolint:gosec // test helper, not real credentials
 		ID:           id,
 		Username:     username,
-		Email:        username + "@example.com",
+		Email:        username + exampleEmailDomain,
 		PasswordHash: "$2a$12$conformancefakehash",
 		Status:       domain.StatusActive,
 		Source:       domain.UserSourceIdentity,
@@ -671,7 +676,7 @@ func conformUpdateLockoutFieldsNotFound(t *testing.T, factory UserRepoFactory) e
 	t.Cleanup(cleanup)
 
 	phantom := uuid.NewString()
-	phantom2 := uuid.NewString() + "@example.com"
+	phantom2 := uuid.NewString() + exampleEmailDomain
 	now := time.Now().UTC()
 	// fakeHash is a syntactically valid bcrypt string used only as a test
 	// placeholder; it is not a real credential.
@@ -794,7 +799,7 @@ func conformUpdateProfileSucceeds(t *testing.T, factory UserRepoFactory) {
 	initialPwdVer := u.PasswordVersion
 
 	newName := "renamed_" + uuid.NewString()
-	newEmail := newName + "@example.com"
+	newEmail := newName + exampleEmailDomain
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	updated, err := repo.UpdateProfile(context.Background(), u.ID, nePtr(newName), nePtr(newEmail), now)
@@ -869,7 +874,7 @@ func conformUpdateProfilePartialPATCH(t *testing.T, factory UserRepoFactory) {
 	}
 
 	// Update email only; name pointer is nil.
-	newEmail := "only_email_" + uuid.NewString() + "@example.com"
+	newEmail := "only_email_" + uuid.NewString() + exampleEmailDomain
 	if _, err := repo.UpdateProfile(context.Background(), u.ID, nil, nePtr(newEmail), now); err != nil {
 		t.Fatalf("UpdateProfile_PartialPATCH: email-only: %v", err)
 	}
@@ -915,7 +920,7 @@ func conformUpdateProfileNotFound(t *testing.T, factory UserRepoFactory) error {
 
 	phantom := uuid.NewString()
 	ghostName := "ghost_" + phantom
-	ghostEmail := ghostName + "@example.com"
+	ghostEmail := ghostName + exampleEmailDomain
 	_, err := repo.UpdateProfile(context.Background(), phantom, nePtr(ghostName), nePtr(ghostEmail),
 		time.Now().UTC().Truncate(time.Millisecond))
 	if err == nil {
