@@ -416,12 +416,21 @@ var adapterPromAllowedNewRegisterExports = map[string]struct{}{
 //
 // # Blind spots & reverse self-checks
 //
-//   - BS-A1 reflect.ValueOf(adapterPromPkg.NewXxx): covered by self-check
-//     scanning all production files for reflect-by-name references to the
-//     five symbols.
-//   - BS-A2 function-value capture (var fn = promadapter.NewCounter; fn(...)):
-//     covered by walking *types.Info.Uses for the five symbol references in
-//     non-call expression positions.
+// adapterPromCallerAllowlistRule only inspects direct CallExpr.Fun positions,
+// so a non-call *value reference* to a funnel symbol would route around the
+// caller allowlist. Both documented bypass forms are SelectorExpr nodes that
+// are NOT the Fun of a CallExpr, so adapterPromValueRefCheck (run below) closes
+// both in one scan:
+//
+//   - BS-A1 reflect-value indirection: reflect.ValueOf(promadapter.NewXxx) —
+//     the symbol SelectorExpr sits in argument position, never called directly.
+//   - BS-A2 function-value capture: var fn = promadapter.NewCounter; fn(...) —
+//     the symbol SelectorExpr sits in a var/assign initializer.
+//
+// String-name reflection (reflect.ValueOf("NewCounter")) is intentionally not
+// a separate check: a package-level func cannot be reflectively obtained from a
+// name string without first taking its value via a SelectorExpr, which BS-A1
+// already catches.
 func TestAdapterPromCallerAllowlist(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
@@ -430,6 +439,16 @@ func TestAdapterPromCallerAllowlist(t *testing.T) {
 	for _, d := range diags {
 		t.Errorf("METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 %s:%d: %s", d.Rel, d.Line, d.Message)
 	}
+
+	// BS-A1/BS-A2 reverse self-check: no production file outside
+	// adapters/prometheus references a funnel symbol as a value (function-value
+	// capture or reflect-value indirection), which would bypass the direct-call
+	// allowlist above.
+	valueRefDiags := RunTypedProduction(t, TypedOpts{}, adapterPromValueRefCheck)
+	assert.Empty(t, valueRefDiags,
+		"METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 BS-A1/BS-A2: found a funnel symbol used as a "+
+			"value (not a direct call); this bypasses the caller allowlist — route through "+
+			"kernel/observability/metrics.Provider")
 }
 
 // adapterPromCallerAllowlistRule is the rule function for
@@ -471,6 +490,66 @@ func adapterPromCallerAllowlistRule(p *Pass) []Diagnostic {
 						"kernel/observability/metrics.Provider OR add this file to the "+
 						"allowlist in the same PR (and explain why the new caller is justified)",
 					rel, adapterPromPkg, name,
+				),
+			})
+		})
+	}
+	return diags
+}
+
+// isAdapterPromFunnelSymbol reports whether name is one of the public
+// adapters/prometheus funnel symbols governed by the caller allowlist. The
+// allowlist map is the single source of truth for the symbol set, shared by
+// the direct-call rule and the BS-A1/BS-A2 value-reference self-check.
+func isAdapterPromFunnelSymbol(name string) bool {
+	_, ok := adapterPromCallerAllowlist[name]
+	return ok
+}
+
+// adapterPromValueRefCheck implements the BS-A1/BS-A2 reverse self-check for
+// METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01: no production code outside
+// adapters/prometheus references a funnel symbol as a *value* — a SelectorExpr
+// resolving to adapterPromPkg + a funnel symbol that is NOT the Fun of a
+// CallExpr. This closes the bypass the direct-call allowlist cannot see:
+// `var fn = promadapter.NewCounter; fn(opts)` (the capture point is the
+// SelectorExpr in the var initializer) and `reflect.ValueOf(promadapter.NewXxx)`
+// (the SelectorExpr in argument position). Value indirection of a funnel symbol
+// is banned everywhere outside adapters/prometheus — there is no legitimate need
+// for it, so unlike the direct-call rule there is no per-file allowlist.
+//
+// Mirrors the inner-ring scanFuncValueIndirections (BS-3) shape.
+func adapterPromValueRefCheck(p *Pass) []Diagnostic {
+	if p.TypesInfo == nil || p.Fset == nil {
+		return nil
+	}
+	if p.Pkg != nil && p.Pkg.Path() == adapterPromPkg {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if strings.HasPrefix(rel, "adapters/prometheus/") {
+			continue
+		}
+		callFunPositions := make(map[token.Pos]bool)
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			callFunPositions[call.Fun.Pos()] = true
+		})
+		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+			if callFunPositions[sel.Pos()] {
+				return
+			}
+			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, sel)
+			if !ok || pkgPath != adapterPromPkg || !isAdapterPromFunnelSymbol(name) {
+				return
+			}
+			diags = append(diags, Diagnostic{
+				Rel:  rel,
+				Line: p.Fset.Position(sel.Pos()).Line,
+				Message: fmt.Sprintf(
+					"METRICS-ADAPTERPROM-CALLER-ALLOWLIST-01 BS-A1/BS-A2: %s.%s used as a value "+
+						"(not a direct call), bypassing the caller allowlist; route through "+
+						"kernel/observability/metrics.Provider", adapterPromPkg, name,
 				),
 			})
 		})
