@@ -1,0 +1,3 @@
+module fixturetest/errorfirsttypednilfixture/constructor_validate_required_delegation_passes
+
+go 1.22

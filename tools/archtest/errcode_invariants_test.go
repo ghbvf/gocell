@@ -1250,6 +1250,7 @@ func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
 		"aliased_validation_violates",
 		"unnamed_param_passes",
 		"blank_param_passes",
+		"constructor_validate_required_delegation_passes",
 	}
 
 	for _, dir := range dirs {
@@ -1510,6 +1511,16 @@ func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.F
 		if fd.Body == nil || !isErrorFirstConstructor(fd) {
 			return
 		}
+		// A constructor that delegates to the generated validateRequired()
+		// funnel (REQUIRED-DEP-NIL-GUARD-01) cedes required-dep nil checking to
+		// that single source of truth: A1 locks the generated method to the
+		// struct's gocell:"required" tags, A2 forces it to be called post-options
+		// and its error consumed, A3 bans a hand-written IsNilInterface on those
+		// fields. Re-requiring an inline per-param guard here would directly
+		// contradict A3. The two rules compose: inline guard OR funnel.
+		if bodyCallsValidateRequired(fd.Body) {
+			return
+		}
 		for _, param := range nillableDependencyParams(info, fd) {
 			if hasNilGuard(fd.Body, param.name, param.kind) {
 				continue
@@ -1524,6 +1535,20 @@ func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.F
 		}
 	})
 	return out
+}
+
+// bodyCallsValidateRequired reports whether body contains a call to a method
+// named validateRequired (the REQUIRED-DEP-NIL-GUARD-01 generated funnel).
+// Reuses isValidateRequiredCallExpr from required_dep_nil_guard_test.go (same
+// package) so both rules agree on the funnel callsite shape.
+func bodyCallsValidateRequired(body *ast.BlockStmt) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+		if isValidateRequiredCallExpr(call) {
+			found = true
+		}
+	})
+	return found
 }
 
 // isInitFunc returns true if fd is `func init()` (no receiver, no params, no
