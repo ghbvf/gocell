@@ -2,7 +2,8 @@ package domain
 
 import (
 	"encoding/json"
-	"errors"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // NonEmpty is a string guaranteed non-empty at the type-system layer.
@@ -24,8 +25,12 @@ import (
 type NonEmpty string
 
 // ErrEmpty signals that an empty string was supplied to a NonEmpty
-// constructor / JSON unmarshal path.
-var ErrEmpty = errors.New("nonempty: empty string not allowed")
+// constructor / JSON unmarshal path. Exported sentinel must route through
+// errcode.New (EXPORTED-ERROR-NEW-01); empty string is caller input, so it is
+// a KindInvalid / ErrValidationFailed (400) — callers still match it via
+// errors.Is by identity, since NewNonEmpty / UnmarshalJSON return this var.
+var ErrEmpty = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+	"nonempty: empty string not allowed")
 
 // NewNonEmpty constructs a NonEmpty value, rejecting "".
 func NewNonEmpty(s string) (NonEmpty, error) {
