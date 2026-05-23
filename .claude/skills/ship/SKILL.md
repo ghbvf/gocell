@@ -151,7 +151,6 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 
 多 agent 时并行启动，每个 agent prompt 自包含其负责维度；全部完成后由主 agent 汇总去重 findings 表（含 Cx 分级）。
 
-Review结束后查看（`gh pr checks <编号>`），禁止自动循环等待CI结束
 ---
 
 ## 阶段 8：Fix
