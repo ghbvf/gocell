@@ -7,6 +7,7 @@ package saga
 // Fake helpers live in testfakes_test.go (same package, test-only).
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -81,7 +82,6 @@ func newTestHarness(t *testing.T, defs ...*ksaga.Definition) *testHarness {
 		ClaimBatchSize:    16,
 		LeaseDuration:     testtime.D60s,
 		HeartbeatInterval: testtime.D20s,
-		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	c, err := NewCoordinator(j, tx, em, reg, clk,
@@ -477,7 +477,6 @@ func TestIntegration_TotalSagaTimeout(t *testing.T) {
 func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 	const defID idutil.SafeID = "heartbeatext"
 	stepBlockCh := make(chan struct{}) // unblocked by the test after heartbeats
-	stepDoneCh := make(chan struct{})  // closed when step returns
 
 	def := &ksaga.Definition{
 		ID: defID,
@@ -506,7 +505,6 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 		ClaimBatchSize:    16,
 		LeaseDuration:     leaseDuration,
 		HeartbeatInterval: heartbeatInterval,
-		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -560,7 +558,7 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		clk.Advance(testtime.D150ms)
 		// Let heartbeatLoop tick.
-		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep negative-test: heartbeat fired; no observable event, absence verified next
+		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep heartbeat-async: only side-effect is "lease NOT expired" (negative-test)
 
 		// Verify instance is still NOT re-claimable (lease is held and active).
 		claimed, _, err := j.ClaimPending(context.Background(), 16, leaseDuration)
@@ -574,7 +572,6 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 
 	// Unblock the step so the coordinator finishes cleanly.
 	close(stepBlockCh)
-	_ = stepDoneCh
 
 	// Stop the coordinator.
 	cancel()
@@ -628,7 +625,6 @@ func TestIntegration_ClaimContention(t *testing.T) {
 		ClaimBatchSize:    1, // each coordinator claims at most 1 instance
 		LeaseDuration:     testtime.D60s,
 		HeartbeatInterval: testtime.D20s,
-		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	disp1 := &recordingDispatcher{}
@@ -693,8 +689,12 @@ func TestIntegration_ClaimContention(t *testing.T) {
 	cancel2()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
 	defer stopCancel()
-	_ = c1.Stop(stopCtx)
-	_ = c2.Stop(stopCtx)
+	if err := c1.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("c1 Stop: %v", err)
+	}
+	if err := c2.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("c2 Stop: %v", err)
+	}
 	select {
 	case <-done1:
 	case <-time.After(testtime.D3s):
@@ -733,8 +733,8 @@ func TestIntegration_ClaimContention(t *testing.T) {
 // Expected journal: [StepCompleted v1, StepCompleted v2, SagaSucceeded v3].
 func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	const defID idutil.SafeID = "resume2step"
-	step1Done := make(chan struct{}) // closed when step 1 completes its tick
 	step2Ran := false
+	var step2ReceivedState []byte
 
 	def := &ksaga.Definition{
 		ID: defID,
@@ -747,8 +747,9 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 			},
 			{
 				Name: "step2",
-				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+				Run: func(_ context.Context, _ *ksaga.Instance, prevState []byte) ([]byte, error) {
 					step2Ran = true
+					step2ReceivedState = prevState
 					return []byte(`{"step":2}`), nil
 				},
 			},
@@ -764,7 +765,6 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 		ClaimBatchSize:    16,
 		LeaseDuration:     testtime.D60s,
 		HeartbeatInterval: testtime.D20s,
-		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	// First coordinator: drive step 1 only.
@@ -801,7 +801,6 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 		evs, err := j.Load(context.Background(), inst.ID)
 		return err == nil && len(evs) == 1 && evs[0].Kind == journal.KindStepCompleted
 	})
-	close(step1Done)
 
 	// Stop coordinator 1 before step 2 can run.
 	cancel1()
@@ -882,7 +881,12 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	if !step2Ran {
 		t.Error("step2 was not executed by coordinator 2")
 	}
-	_ = step1Done
+	// Verify that foldEvents correctly passed step 1's output payload to step 2
+	// (L3 replay reconstruction discipline: prevState passthrough).
+	expectedPrevState := []byte(`{"step":1}`)
+	if !bytes.Equal(step2ReceivedState, expectedPrevState) {
+		t.Errorf("step2 prevState = %q, want %q", step2ReceivedState, expectedPrevState)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -920,7 +924,6 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 		ClaimBatchSize:    16,
 		LeaseDuration:     testtime.D60s,
 		HeartbeatInterval: testtime.D20s,
-		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))

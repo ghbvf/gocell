@@ -2,7 +2,6 @@ package saga_test
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 
 	"github.com/ghbvf/gocell/runtime/saga"
@@ -30,36 +29,3 @@ func TestNoopDispatcher_Kick_NoSideEffects(t *testing.T) {
 		d.Kick(context.Background())
 	}
 }
-
-// recordingDispatcher is a package-internal test helper for integration tests
-// in later PRs. It counts how many times Kick has been called.
-type recordingDispatcher struct {
-	kicks atomic.Int32
-}
-
-func (r *recordingDispatcher) Kick(context.Context) {
-	r.kicks.Add(1)
-}
-
-func (r *recordingDispatcher) KickCount() int {
-	return int(r.kicks.Load())
-}
-
-func TestRecordingDispatcher_CountsKicks(t *testing.T) {
-	d := &recordingDispatcher{}
-	if got := d.KickCount(); got != 0 {
-		t.Fatalf("initial KickCount = %d, want 0", got)
-	}
-
-	const n = 5
-	for range n {
-		d.Kick(context.Background())
-	}
-	if got := d.KickCount(); got != n {
-		t.Fatalf("KickCount = %d, want %d", got, n)
-	}
-}
-
-// recordingDispatcher must satisfy Dispatcher so integration tests can pass it
-// as a Dispatcher.
-var _ saga.Dispatcher = (*recordingDispatcher)(nil)

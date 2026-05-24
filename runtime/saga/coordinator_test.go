@@ -119,9 +119,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.HeartbeatInterval != testtime.D10s {
 		t.Errorf("HeartbeatInterval = %v, want 10s", cfg.HeartbeatInterval)
 	}
-	if cfg.EmptyClaimBackoff != testtime.D200ms {
-		t.Errorf("EmptyClaimBackoff = %v, want 200ms", cfg.EmptyClaimBackoff)
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +145,6 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize:    16,
 				LeaseDuration:     testtime.D30s,
 				HeartbeatInterval: testtime.D10s,
-				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
@@ -159,7 +155,6 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize:    16,
 				LeaseDuration:     testtime.D30s,
 				HeartbeatInterval: testtime.D10s,
-				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
@@ -170,7 +165,16 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize:    0,
 				LeaseDuration:     testtime.D30s,
 				HeartbeatInterval: testtime.D10s,
-				EmptyClaimBackoff: testtime.D200ms,
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative ClaimBatchSize",
+			cfg: Config{
+				PollInterval:      testtime.D200ms,
+				ClaimBatchSize:    -1,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
 			},
 			wantErr: true,
 		},
@@ -181,7 +185,6 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize:    16,
 				LeaseDuration:     0,
 				HeartbeatInterval: testtime.D10s,
-				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
@@ -192,18 +195,6 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize:    16,
 				LeaseDuration:     testtime.D30s,
 				HeartbeatInterval: 0,
-				EmptyClaimBackoff: testtime.D200ms,
-			},
-			wantErr: true,
-		},
-		{
-			name: "zero EmptyClaimBackoff",
-			cfg: Config{
-				PollInterval:      testtime.D200ms,
-				ClaimBatchSize:    16,
-				LeaseDuration:     testtime.D30s,
-				HeartbeatInterval: testtime.D10s,
-				EmptyClaimBackoff: 0,
 			},
 			wantErr: true,
 		},
@@ -214,7 +205,6 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize:    16,
 				LeaseDuration:     testtime.D20s,
 				HeartbeatInterval: testtime.D10s, // 10*2 == 20 → invalid
-				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
@@ -225,7 +215,6 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize:    16,
 				LeaseDuration:     testtime.D15s,
 				HeartbeatInterval: testtime.D10s, // 10*2 > 15 → invalid
-				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
@@ -236,7 +225,6 @@ func TestConfig_Validate(t *testing.T) {
 				ClaimBatchSize:    16,
 				LeaseDuration:     testtime.D30s,
 				HeartbeatInterval: testHeartbeatValid, // 9*2 < 30 → valid
-				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: false,
 		},
@@ -439,6 +427,29 @@ func TestFoldEvents(t *testing.T) {
 				{Kind: journal.KindStepFailed, StepName: "step1"},
 			},
 			wantErr: true,
+		},
+		// Terminal/compensation events in history are defensively ignored by foldEvents
+		// (the Journal should have MarkTerminal'd so coordinator never re-claims such
+		// instances in practice). The cursor stays at the last KindStepCompleted seen.
+		{
+			name: "KindCompensationStarted in history → skipped, cursor stays at prior StepCompleted",
+			events: []journal.Event{
+				{Kind: journal.KindStepCompleted, StepName: "step1", Payload: []byte(`{"a":1}`)},
+				{Kind: journal.KindCompensationStarted},
+			},
+			wantCursor:    1,
+			wantPrevState: []byte(`{"a":1}`),
+			wantErr:       false,
+		},
+		{
+			name: "KindSagaSucceeded in history → skipped, cursor from prior StepCompleted",
+			events: []journal.Event{
+				{Kind: journal.KindStepCompleted, StepName: "step1", Payload: []byte(`{"a":1}`)},
+				{Kind: journal.KindSagaSucceeded},
+			},
+			wantCursor:    1,
+			wantPrevState: []byte(`{"a":1}`),
+			wantErr:       false,
 		},
 	}
 	for _, tt := range tests {
