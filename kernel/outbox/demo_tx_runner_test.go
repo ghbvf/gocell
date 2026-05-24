@@ -29,13 +29,13 @@ func TestDemoTxRunner_RunInTx_NilFn(t *testing.T) {
 }
 
 // TestDemoTxRunner_RunInTx_ExecutesFn covers the happy path: fn runs once with
-// the supplied context and its return value propagates verbatim.
+// a ctx derived from the supplied one and its return value propagates verbatim.
 func TestDemoTxRunner_RunInTx_ExecutesFn(t *testing.T) {
 	t.Parallel()
+	type marker struct{}
 	called := 0
-	gotCtx := context.Background()
-	wantCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	var gotCtx context.Context
+	wantCtx := context.WithValue(context.Background(), marker{}, "sentinel")
 
 	err := outbox.DemoTxRunner{}.RunInTx(wantCtx, func(ctx context.Context) error {
 		called++
@@ -44,7 +44,11 @@ func TestDemoTxRunner_RunInTx_ExecutesFn(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 1, called, "fn must run exactly once")
-	assert.Same(t, wantCtx, gotCtx, "fn must receive the ctx passed to RunInTx")
+	// DemoTxRunner installs an after-commit registry on the ctx, so fn receives
+	// a derived ctx (not the same value); values from the supplied ctx remain
+	// visible through it.
+	assert.Equal(t, "sentinel", gotCtx.Value(marker{}),
+		"fn must receive a ctx derived from the one passed to RunInTx")
 }
 
 // TestDemoTxRunner_RunInTx_PropagatesError confirms fn errors flow back to the

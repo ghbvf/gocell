@@ -26,7 +26,16 @@ func (DemoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 	if fn == nil {
 		return nil
 	}
-	return fn(ctx)
+	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
+	mark := persistence.AfterCommitMark(ctx)
+	if err := fn(ctx); err != nil {
+		persistence.TruncateAfterCommitTo(ctx, mark) // discard this scope's hooks
+		return err
+	}
+	if drainAfterCommit {
+		persistence.RunAfterCommitHooks(ctx)
+	}
+	return nil
 }
 
 // DemoCellTxManager returns a sealed persistence.CellTxManager backed by
