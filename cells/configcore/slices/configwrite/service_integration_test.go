@@ -159,10 +159,10 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 		"deleted entry must return ErrConfigRepoNotFound")
 }
 
-// TestCreate_RollbackOnOutboxFailure verifies that when the outbox write
-// returns a permanent error, the config_entries row is absent (transaction
-// rolled back atomically).
-func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
+// TestL2Atomicity_configwrite_RollsBack verifies that when the outbox write
+// returns a permanent error on Create, the config_entries row is absent
+// (transaction rolled back atomically — L2 canonical rollback proof).
+func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	ctx := context.Background()
 	pool := sharedPG.NewPerTestPool(t)
 
@@ -190,4 +190,97 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	require.ErrorAs(t, getErr, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code,
 		"config entry must not persist after outbox-failure rollback")
+}
+
+// TestL2Atomicity_configwrite_RollsBack_Update verifies that when the outbox
+// write fails during Update, the config_entries row stays at the pre-update
+// version (Update rolled back atomically — per-mutation L2 rollback proof).
+func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
+	ctx := context.Background()
+	pool := sharedPG.NewPerTestPool(t)
+	txMgr := adapterpg.NewTxManager(pool)
+
+	session := cellpg.NewSession(pool.DB())
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
+
+	// Phase 1: seed the entry with a pass-through writer so the Create commits.
+	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real()))),
+		WithTxManager(persistence.WrapForCell(txMgr)),
+	)
+	require.NoError(t, err)
+	_, err = passSvc.Create(adminIntegCtx(), CreateInput{Key: "rollback.update.key", Value: "initial"})
+	require.NoError(t, err)
+
+	// Verify the seed committed at version 1.
+	seedEntry, err := repo.GetByKey(ctx, "rollback.update.key")
+	require.NoError(t, err)
+	require.Equal(t, 1, seedEntry.Version, "seed must commit at version 1")
+
+	// Phase 2: construct a second Service against the SAME pool/txMgr but with
+	// a failing writer. Update must error and the row must stay at version 1.
+	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
+	failSvc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
+		WithTxManager(persistence.WrapForCell(txMgr)),
+	)
+	require.NoError(t, err)
+
+	_, err = failSvc.Update(adminIntegCtx(), UpdateInput{
+		Key:             "rollback.update.key",
+		Value:           "should-not-persist",
+		ExpectedVersion: 1,
+	})
+	require.Error(t, err)
+
+	// config_entries must still be at version 1 (UPDATE rolled back).
+	afterEntry, getErr := repo.GetByKey(ctx, "rollback.update.key")
+	require.NoError(t, getErr)
+	assert.Equal(t, 1, afterEntry.Version,
+		"config_entries version must not change when outbox write fails (atomic Update rollback)")
+	assert.Equal(t, "initial", afterEntry.Value,
+		"config_entries value must not change when outbox write fails (atomic Update rollback)")
+}
+
+// TestL2Atomicity_configwrite_RollsBack_Delete verifies that when the outbox
+// write fails during Delete, the config_entries row is still present
+// (Delete rolled back atomically — per-mutation L2 rollback proof).
+func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
+	ctx := context.Background()
+	pool := sharedPG.NewPerTestPool(t)
+	txMgr := adapterpg.NewTxManager(pool)
+
+	session := cellpg.NewSession(pool.DB())
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
+
+	// Phase 1: seed the entry with a pass-through writer so the Create commits.
+	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real()))),
+		WithTxManager(persistence.WrapForCell(txMgr)),
+	)
+	require.NoError(t, err)
+	_, err = passSvc.Create(adminIntegCtx(), CreateInput{Key: "rollback.delete.key", Value: "to-be-deleted"})
+	require.NoError(t, err)
+
+	// Verify the seed committed.
+	_, err = repo.GetByKey(ctx, "rollback.delete.key")
+	require.NoError(t, err, "seed entry must exist before the failing Delete")
+
+	// Phase 2: failing-writer Service — Delete must error and the row must survive.
+	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
+	failSvc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
+		WithTxManager(persistence.WrapForCell(txMgr)),
+	)
+	require.NoError(t, err)
+
+	deleteErr := failSvc.Delete(adminIntegCtx(), "rollback.delete.key", 1)
+	require.Error(t, deleteErr)
+
+	// config_entries row must still exist (DELETE rolled back).
+	afterEntry, getErr := repo.GetByKey(ctx, "rollback.delete.key")
+	require.NoError(t, getErr,
+		"config_entries row must still exist when outbox write fails (atomic Delete rollback)")
+	assert.Equal(t, "to-be-deleted", afterEntry.Value,
+		"config_entries value must be unchanged when outbox write fails (atomic Delete rollback)")
 }
