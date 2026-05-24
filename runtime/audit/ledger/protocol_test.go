@@ -246,30 +246,21 @@ func TestNewProtocol_WithNamespaceMissing_Rejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// A-06 RED: With* Option nil → immediate error (short-circuit), not sticky sentinel.
+// With* Option nil → immediate error (short-circuit, no sentinel sticky).
 //
-// Current implementation uses a sentinel flag (hmacKeyNil / restartRecoveryNil /
-// idempotencyNil) that is checked only at the end of NewProtocol. The target
-// semantics require the Option func itself to return an error immediately so that
-// NewProtocol short-circuits and does NOT execute subsequent options.
-//
-// We test this by inserting a side-effect "probe" option after the nil option:
-//   - RED (current): probe runs because nil option returns nil error
-//   - GREEN (after fix): probe does NOT run because nil option returns error → short-circuit
+// Each Option func returns a non-nil error on receiving an invalid input
+// (nil / empty / zero-value), causing NewProtocol to stop applying subsequent
+// options. The pattern below inserts an invalid option followed by a valid one
+// and asserts the immediate error wins — the second valid call cannot mask the
+// first invalid call.
 // ---------------------------------------------------------------------------
 
 // TestWithChainHMAC_NilReturnsError_Immediate verifies that WithChainHMAC(nil)
-// causes NewProtocol to short-circuit immediately, not execute subsequent options.
-//
-// A-06 RED: current WithChainHMAC(nil) returns nil error (sets hmacKeyNil sentinel).
-// The sentinel-sticky doctrine means the nil option returns nil, subsequent options
-// still run, and the error is only detected at the END of NewProtocol.
-//
-// After A-06 fix: the Option itself must return a non-nil error immediately,
-// making NewProtocol stop applying further options. The observable: passing
-// WithChainHMAC(nil) then WithChainHMAC(validKey) must still fail — and the
-// error message must indicate "nil/empty key" (immediate error), not the deferred
-// "HMAC key required (use WithChainHMAC)" sentinel message.
+// returns an error immediately so NewProtocol short-circuits and does not
+// execute subsequent options. The observable: passing WithChainHMAC(nil) then
+// WithChainHMAC(validKey) must still fail, and the error message must mention
+// "nil"/"empty" (immediate error from the Option func itself, not a deferred
+// "key required" message).
 func TestWithChainHMAC_NilReturnsError_Immediate(t *testing.T) {
 	t.Parallel()
 	ns, _ := ledger.ParseNamespaceID("auditcore")
@@ -286,22 +277,19 @@ func TestWithChainHMAC_NilReturnsError_Immediate(t *testing.T) {
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	if err == nil {
-		t.Fatal("A-06: WithChainHMAC(nil) followed by valid key must still return error")
+		t.Fatal("WithChainHMAC(nil) followed by valid key must still return error")
 	}
 	errStr := err.Error()
-	// RED assertion: current deferred sentinel message is "HMAC key required (use WithChainHMAC".
-	// GREEN: immediate error mentions "nil" or "empty" (not the deferred sentinel).
-	// This FAILS in RED state because the sentinel message does not contain "nil" or "empty".
+	// Immediate error must mention "nil" or "empty" — not a deferred "key required" sentinel.
 	if !containsAny(errStr, "nil", "empty", "missing key") {
-		t.Errorf("A-06 RED: WithChainHMAC(nil) should immediately return error "+
-			"mentioning 'nil' or 'empty', got deferred sentinel message: %q", errStr)
+		t.Errorf("WithChainHMAC(nil) should immediately return error "+
+			"mentioning 'nil' or 'empty', got %q", errStr)
 	}
 }
 
 // TestWithNamespace_EmptyReturnsError_Immediate verifies that WithNamespace("")
-// causes NewProtocol to short-circuit immediately.
-//
-// A-06 RED: current WithNamespace("") sets namespaceNil sentinel (deferred check).
+// returns an error immediately so NewProtocol short-circuits and does not
+// apply the subsequent valid namespace.
 func TestWithNamespace_EmptyReturnsError_Immediate(t *testing.T) {
 	t.Parallel()
 	validKey := make([]byte, 32)
@@ -310,9 +298,8 @@ func TestWithNamespace_EmptyReturnsError_Immediate(t *testing.T) {
 	}
 	validNS, _ := ledger.ParseNamespaceID("auditcore")
 
-	// Passing empty namespace then valid namespace: target semantics = short-circuit,
-	// valid NS option never runs → protocol is nil.
-	// Current semantics = sentinel-sticky → error at end even after valid NS is set.
+	// Passing empty namespace then valid namespace: short-circuit semantics =
+	// valid NS option never runs because the first call returns an error.
 	_, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(validKey),
 		ledger.WithNamespace(""), // empty NamespaceID = typed zero value
@@ -321,21 +308,19 @@ func TestWithNamespace_EmptyReturnsError_Immediate(t *testing.T) {
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	if err == nil {
-		t.Fatal("A-06: WithNamespace(\"\") followed by valid namespace must still return error")
+		t.Fatal("WithNamespace(\"\") followed by valid namespace must still return error")
 	}
 	errStr := err.Error()
-	// A-06 RED: current error is the deferred "namespace required" sentinel message.
-	// GREEN: error is immediate and mentions "empty" or the zero-value namespace specifically.
+	// Immediate error must mention "empty" — not a deferred "namespace required" sentinel.
 	if !containsAny(errStr, "empty", "must not be empty", "namespace ID must not be empty") {
-		t.Errorf("A-06 RED: WithNamespace(\"\") should immediately return error "+
-			"mentioning empty namespace, got deferred sentinel: %q", errStr)
+		t.Errorf("WithNamespace(\"\") should immediately return error "+
+			"mentioning empty namespace, got %q", errStr)
 	}
 }
 
 // TestWithRestartRecovery_NilReturnsError_Immediate verifies that
-// WithRestartRecovery(nil) causes NewProtocol to short-circuit immediately.
-//
-// A-06 RED: current implementation sets restartRecoveryNil sentinel (deferred).
+// WithRestartRecovery(nil) returns an error immediately so NewProtocol
+// short-circuits and does not apply the subsequent valid mode.
 func TestWithRestartRecovery_NilReturnsError_Immediate(t *testing.T) {
 	t.Parallel()
 	validKey := make([]byte, 32)
@@ -345,7 +330,7 @@ func TestWithRestartRecovery_NilReturnsError_Immediate(t *testing.T) {
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	var nilRR ledger.RestartRecoveryMode // typed nil
 
-	// nil then valid: target = short-circuit; current = sentinel-sticky error at end.
+	// nil then valid: short-circuit means the valid mode never runs.
 	_, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(validKey),
 		ledger.WithNamespace(ns),
@@ -354,22 +339,19 @@ func TestWithRestartRecovery_NilReturnsError_Immediate(t *testing.T) {
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	if err == nil {
-		t.Fatal("A-06: WithRestartRecovery(nil) followed by valid mode must still return error")
+		t.Fatal("WithRestartRecovery(nil) followed by valid mode must still return error")
 	}
 	errStr := err.Error()
-	// A-06 RED: current error is the deferred sentinel message.
-	// GREEN: error comes from WithRestartRecovery option immediately and mentions
-	// nil/invalid directly rather than "restart recovery mode required".
+	// Immediate error must mention nil/invalid — not a deferred "mode required" sentinel.
 	if !containsAny(errStr, "nil", "invalid", "must not be nil") {
-		t.Errorf("A-06 RED: WithRestartRecovery(nil) should immediately error "+
-			"mentioning nil/invalid, got deferred sentinel: %q", errStr)
+		t.Errorf("WithRestartRecovery(nil) should immediately error "+
+			"mentioning nil/invalid, got %q", errStr)
 	}
 }
 
 // TestWithIdempotency_NilReturnsError_Immediate verifies that
-// WithIdempotency(nil) causes NewProtocol to short-circuit immediately.
-//
-// A-06 RED: current implementation sets idempotencyNil sentinel (deferred).
+// WithIdempotency(nil) returns an error immediately so NewProtocol
+// short-circuits and does not apply the subsequent valid mode.
 func TestWithIdempotency_NilReturnsError_Immediate(t *testing.T) {
 	t.Parallel()
 	validKey := make([]byte, 32)
@@ -379,7 +361,7 @@ func TestWithIdempotency_NilReturnsError_Immediate(t *testing.T) {
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	var nilIM ledger.IdempotencyMode // typed nil
 
-	// nil then valid: target = short-circuit; current = sentinel-sticky error at end.
+	// nil then valid: short-circuit means the valid mode never runs.
 	_, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(validKey),
 		ledger.WithNamespace(ns),
@@ -388,14 +370,13 @@ func TestWithIdempotency_NilReturnsError_Immediate(t *testing.T) {
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	if err == nil {
-		t.Fatal("A-06: WithIdempotency(nil) followed by valid mode must still return error")
+		t.Fatal("WithIdempotency(nil) followed by valid mode must still return error")
 	}
 	errStr := err.Error()
-	// A-06 RED: current error is the deferred sentinel message.
-	// GREEN: error comes from WithIdempotency option immediately and mentions nil.
+	// Immediate error must mention nil/invalid — not a deferred "mode required" sentinel.
 	if !containsAny(errStr, "nil", "invalid", "must not be nil") {
-		t.Errorf("A-06 RED: WithIdempotency(nil) should immediately error "+
-			"mentioning nil/invalid, got deferred sentinel: %q", errStr)
+		t.Errorf("WithIdempotency(nil) should immediately error "+
+			"mentioning nil/invalid, got %q", errStr)
 	}
 }
 

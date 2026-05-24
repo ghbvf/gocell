@@ -24,11 +24,6 @@
 //
 // Allowlist is enumerated, not prefix-based — adding a sibling sub-package
 // (e.g. `runtime/audit/ledger/dump/`) must be an explicit decision (K-04).
-//
-// Sentinel sticky doctrine: 4 wiring options (WithChainHMAC / WithNamespace /
-// WithRestartRecovery / WithIdempotency) each have a xxxNil bool sticky flag
-// that is set when a nil interface value is received and is never cleared by
-// a subsequent valid call — misconfiguration must not be silently masked.
 package archtest
 
 import (
