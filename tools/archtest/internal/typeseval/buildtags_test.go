@@ -38,6 +38,15 @@ var repoSkipTagAllowlist = map[string]bool{
 	// into KnownNonDefaultTags() (doing so causes LoadPackages to attempt
 	// loading the absent generated file → undefined symbol on clean tree).
 	"catalog_gen": true,
+	// archtest_fixture — build-mode marker for archtest RED/GREEN fixtures
+	// (internal/*fixture*/, testdata/*_fixtures/, and the in-package
+	// passfunnel_inpkg_redfixture.go). It must NOT be propagated into
+	// KnownNonDefaultTags() (#944): the fixture tag is fixture-only, loaded
+	// exclusively via archtest.RunTypedFixture (or the framework-exempt
+	// SharedResolver calls in the funnel self-tests), never via a generic
+	// FlatNonDefaultTags() union scan. Recognizing it here keeps the coverage
+	// self-test fail-closed without reopening the FlatNonDefaultTags bypass.
+	"archtest_fixture": true,
 }
 
 // isGoVersionTag matches tags like "go1.18", "go1.21", etc.

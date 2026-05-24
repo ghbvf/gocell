@@ -380,7 +380,7 @@ func TestAfterCommitHookPureTransient_A1A2_Fixtures(t *testing.T) {
 // violates A1/A2. (No hooks exist yet — saga is a later PR — so the set is
 // empty; this guards future hook authors.)
 func TestAfterCommitHookPureTransient_A1A2_Production(t *testing.T) {
-	diags := RunTypedProduction(t, TypedOpts{Tags: ProductionFlatTags()}, func(p *Pass) []Diagnostic {
+	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -416,7 +416,7 @@ func TestAfterCommitHookPureTransient_A3_Fixture(t *testing.T) {
 // TestAfterCommitHookPureTransient_A3_Production asserts the registry plumbing
 // funcs are called only from the allowlisted TxRunner implementations.
 func TestAfterCommitHookPureTransient_A3_Production(t *testing.T) {
-	diags := RunTypedProduction(t, TypedOpts{Tags: ProductionFlatTags()}, func(p *Pass) []Diagnostic {
+	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -434,7 +434,7 @@ func TestAfterCommitHookPureTransient_A3_Production(t *testing.T) {
 // (reflection MethodByName) inside production hook bodies. With no production
 // hooks yet the set is empty; the check bites when saga adds hooks.
 func TestAfterCommitHookPureTransient_BlindSpots_NoEscapeInProduction(t *testing.T) {
-	diags := RunTypedProduction(t, TypedOpts{Tags: ProductionFlatTags()}, func(p *Pass) []Diagnostic {
+	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}

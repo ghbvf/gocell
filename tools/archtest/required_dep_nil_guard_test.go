@@ -72,10 +72,11 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
 )
 
-// fixtureBuildTag is emitted into fixture service_required_gen.go files so
-// they compile only under //go:build archtest_fixture. A1 fixture comparison
-// runs the generator with this tag; production A1 uses the empty tag.
-const fixtureBuildTag = "archtest_fixture"
+// fixtureBuildTag — the canonical unexported const declared in fixture.go — is
+// emitted into fixture service_required_gen.go files so they compile only under
+// //go:build archtest_fixture. A1 fixture comparison runs the generator with
+// this tag; production A1 uses the empty tag. (#944 consolidated the former
+// file-local const here onto the package single source.)
 
 // requiredDepNilGuardRule is the rule ID for diagnostic messages.
 const requiredDepNilGuardRule = "REQUIRED-DEP-NIL-GUARD-01"
@@ -972,7 +973,7 @@ func TestRequiredDepNilGuard_BlindSpot_B3_NoIndirectIsNilInterfaceRef(t *testing
 		return nil
 	}
 	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tags: ProductionFlatTags()}, []string{"./..."}, scan)
+	_ = RunTyped(t, TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].Rel != violations[j].Rel {
@@ -1066,7 +1067,7 @@ func TestRequiredDepNilGuard_BlindSpot_B5_NoValidateRequiredMethodValueLeak(t *t
 		return nil
 	}
 	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tags: ProductionFlatTags()}, []string{"./..."}, scan)
+	_ = RunTyped(t, TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].Rel != violations[j].Rel {

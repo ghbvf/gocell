@@ -29,13 +29,14 @@ func KnownNonDefaultTags() [][]string {
 		{"examples_smoke"},
 		{"integration", "otelcollector"},
 		{"integration_cluster"},
-		// archtest_fixture — 守护本 tag 的 archtest 测试函数：
-		//   - TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation
-		//   - TestCellRawInfraWrapperLocation01_ScannerDetectsViolation
-		// 修改本条目前请确认对应 detection-test 仍能加载 fixture 包。
-		// Excluded from `go build ./...` and `go test ./...` so fixtures never
-		// pollute real-repo scans (ai-robust.md §"real source AST capture").
-		{"archtest_fixture"},
+		// archtest_fixture is deliberately ABSENT (#944): the fixture build tag
+		// is NOT a generic production tag and must never enter this union, or a
+		// business RunTyped(Tags: FlatNonDefaultTags()) scan would load
+		// fixture-tagged code, bypassing the RunTypedFixture funnel. The tag is
+		// a build-mode skip marker recognized by the coverage self-test via
+		// repoSkipTagAllowlist (buildtags_test.go), alongside catalog_gen/never.
+		// The only sanctioned fixture loader is archtest.RunTypedFixture, whose
+		// body injects the literal internally.
 	}
 }
 

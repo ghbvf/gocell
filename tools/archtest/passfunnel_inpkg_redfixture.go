@@ -20,7 +20,7 @@
 // The function is never invoked; it exists only as *ast.CallExpr +
 // *types.Info source for the detector. typeseval.ResolvePackageRef resolves
 // the bare-Ident callee `runTypedWithRoot` to (archtestPkgPath,
-// "runTypedWithRoot"), which the loader set matches; the FixtureBuildTag
+// "runTypedWithRoot"), which the loader set matches; the fixtureBuildTag
 // Ident inside the Tags slice EvaluateConstString-resolves to
 // "archtest_fixture".
 
@@ -30,5 +30,5 @@ package archtest
 // unexported runTypedWithRoot loader fed the fixture build tag.
 func fixtureTagBypassInPkgRunTypedWithRoot() {
 	// Form E — same-package unexported runTypedWithRoot loader.
-	_ = runTypedWithRoot(nil, "", TypedOpts{Tags: []string{FixtureBuildTag}}, nil, nil)
+	_ = runTypedWithRoot(nil, "", TypedOpts{Tags: []string{fixtureBuildTag}}, nil, nil)
 }

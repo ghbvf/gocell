@@ -29,9 +29,9 @@ package archtest
 // EvaluateConstString resolves to "archtest_fixture" — catching BasicLit
 // literal / same-pkg const Ident / cross-pkg SelectorExpr / BinaryExpr
 // const-concat uniformly. The (callee, arg) pair shape disambiguates
-// legitimate identity uses (e.g., containsTag(group, FixtureBuildTag) in
-// panic_invariants_test.go — callee not in loader set) from bypass
-// (loader callee + same value resolves). Isomorphic to charter §Hard 范本
+// legitimate same-package identity uses (e.g., a non-loader callee receiving
+// the unexported fixtureBuildTag const) from bypass (loader callee + same
+// value resolves). Isomorphic to charter §Hard 范本
 // 第 2 条 panic(panicregister.Approved(reason, value)) form. See
 // docs/architecture/202605141519-adr-archtest-pass-funnel.md.
 //
@@ -366,10 +366,10 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 
 // fixtureTagSentinelValue is the build-tag string value the detector rejects
 // when it appears (in any EvaluateConstString-resolvable form) inside a
-// LOADER_SET CallExpr's arg subtree. The value is the same literal that
-// archtest.FixtureBuildTag exports; declaring it as an unexported const
-// inside the framework self-test file lets the detector compare without
-// referencing the exported const (avoiding a circular semantic where the
+// LOADER_SET CallExpr's arg subtree. The value is the same literal as the
+// unexported fixtureBuildTag const (fixture.go); declaring it as an unexported
+// const inside the framework self-test file lets the detector compare without
+// referencing that const (avoiding a circular semantic where the
 // detector itself would carry a "loader-arg bypass" pattern its own rule
 // would flag if this file were not in passFunnelPermanentExempt).
 const fixtureTagSentinelValue = "archtest_fixture"
@@ -435,9 +435,10 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 // isn't" gray zone. The arg-side predicate of this rule is *broader*
 // than Approved's BasicLit-only check — it admits any const-resolvable
 // shape — because tag identity in build-tag slices legitimately uses
-// const references (e.g., callers passing archtest.FixtureBuildTag is
-// a semantically distinct *legitimate* form when the callee is, say,
-// `containsTag(...)`, but a bypass form when the callee is a loader).
+// const references (e.g., a same-package caller passing the unexported
+// fixtureBuildTag is a semantically distinct *legitimate* form when the
+// callee is, say, `containsTag(...)`, but a bypass form when the callee
+// is a loader).
 // The (callee, arg) pair is what disambiguates legitimate identity
 // from bypass.
 //
@@ -458,7 +459,7 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //
 // # Closed by #944
 //
-//   - Same-file var-indirection: `var tagSet = []string{FixtureBuildTag};
+//   - Same-file var-indirection: `var tagSet = []string{fixtureBuildTag};
 //     RunTyped(.., TypedOpts{Tags: tagSet}, ..)`. collectFixtureTagBoundObjects
 //     records, file-scoped, every types.Object bound (single `:=` / `=` /
 //     `var`) to a slice literal carrying a fixture-tag-resolving element; the
@@ -475,7 +476,7 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //
 // # Blind spots (accepted, same grade as PASS-FUNNEL-LOADPACKAGES-01)
 //
-//   - Multi-RHS positional binding (`a, t := x, []string{FixtureBuildTag}`):
+//   - Multi-RHS positional binding (`a, t := x, []string{fixtureBuildTag}`):
 //     collectFixtureTagBoundObjects recognizes single-binding shape only.
 //     Same narrow accepted sub-gap as taggroup BS-4. Inter-procedural Hard
 //     upgrade tracked via gh issue (see ADR 202605141519 §#944).
@@ -508,8 +509,12 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //   - Form A — BasicLit "archtest_fixture" direct
 //   - Form B — same-pkg const Ident (localFixtureTag)
 //   - Form C — BinaryExpr "archtest" + "_fixture"
-//   - Form D — cross-pkg SelectorExpr archtest.FixtureBuildTag
 //   - Form F — same-file var bound to a fixture-tag slice (var-indirection)
+//
+// The former Form D (cross-pkg SelectorExpr archtest.FixtureBuildTag) is GONE:
+// fixtureBuildTag is unexported (#944), so that vector is a compile error
+// outside package archtest (type-system-Hard, no RED fixture). The detector's
+// SelectorExpr walker is retained as defense-in-depth.
 //
 // Form E (same-package unexported runTypedWithRoot) lives in-package
 // (passfunnel_inpkg_redfixture.go) and is asserted via a dedicated
@@ -563,10 +568,9 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 			diags = append(diags, scanner.Diagnostic{
 				Rel:  tgt.rel,
 				Line: line,
-				Message: "use archtest.RunTypedFixture (fixture-load path) " +
-					"or archtest.FixtureBuildTag (typed-identity path, only " +
-					"outside LOADER_SET callees) instead of feeding the " +
-					"archtest_fixture build tag to " + path + "." + name +
+				Message: "use archtest.RunTypedFixture (the only sanctioned " +
+					"fixture-load path) instead of feeding the archtest_fixture " +
+					"build tag to " + path + "." + name +
 					" (PASS-FUNNEL-FIXTURE-TAG-01)",
 			})
 		}
@@ -643,7 +647,7 @@ func exprCarriesFixtureTag(info *types.Info, expr ast.Expr) bool {
 
 // collectFixtureTagBoundObjects returns the set of types.Object bound — anywhere
 // in file via a single `:=` / `=` / `var` — to an expression whose subtree
-// carries the fixture tag (e.g. `var tags = []string{FixtureBuildTag}`). This
+// carries the fixture tag (e.g. `var tags = []string{fixtureBuildTag}`). This
 // closes the var-indirection Blind spot of PASS-FUNNEL-FIXTURE-TAG-01 (#944): at
 // a loader call site the Tags arg is then a plain *ast.Ident the const evaluator
 // cannot resolve, so diagsFixtureTagBypass traces the binding object instead.
@@ -655,7 +659,7 @@ func exprCarriesFixtureTag(info *types.Info, expr ast.Expr) bool {
 // redundant-not-harmful: a const-ident arg is always reported via the const path
 // first (the Ident walker returns before the bound-object check), so the const
 // branch of boundObjs is never the deciding factor. Multi-RHS positional binding
-// (`a, t := x, []string{FixtureBuildTag}`) is the same narrow accepted sub-gap
+// (`a, t := x, []string{fixtureBuildTag}`) is the same narrow accepted sub-gap
 // as taggroup BS-4; cross-func / cross-file escape is the same accepted Blind
 // spot as the sibling rules. Inter-procedural Hard upgrade tracked via gh issue
 // (see package godoc / ADR 202605141519 §#944).
@@ -792,9 +796,13 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 //   - For fixture loading: call archtest.RunTypedFixture(t, FixtureOpts{...},
 //     patterns, rule). FixtureOpts deliberately lacks a Tags field, so the
 //     build tag stays inside the framework body.
-//   - For tag-identity tests (e.g., skipping the fixture tag group from a
-//     module-wide RunTyped scan): reference archtest.FixtureBuildTag, the
-//     typed string const exported by fixture.go.
+//
+// There is no longer any legitimate business reason to reference the fixture
+// tag from Go code (#944): it was removed from the generic tag union, so no
+// module-wide RunTyped(Tags: FlatNonDefaultTags()) scan activates fixture code
+// and there is no "skip the fixture tag group" case. The literal lives only in
+// the unexported fixtureBuildTag const (fixture.go) and the //go:build
+// directives of fixture packages — both framework-internal.
 //
 // Detection: BasicLit STRING walk with unquoted-value equality on
 // "archtest_fixture". Exempt: passFunnelPermanentExempt (3 framework
@@ -1126,19 +1134,21 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	//   - Form A — BasicLit "archtest_fixture" direct
 	//   - Form B — same-pkg const Ident (localFixtureTag)
 	//   - Form C — BinaryExpr "archtest" + "_fixture"
-	//   - Form D — cross-pkg SelectorExpr archtest.FixtureBuildTag
 	//   - Form F — same-file var bound to a fixture-tag slice (var-indirection)
 	// plus two GREEN-parity negatives (non-fixture-tag var to a loader; fixture
 	// tag to a non-LOADER_SET callee) that MUST produce zero diagnostics. The
 	// same-package Form E (unexported runTypedWithRoot) is asserted separately
 	// below via a dedicated package-archtest load (Form E cannot live in the
-	// cross-package fixture — runTypedWithRoot is unexported).
+	// cross-package fixture — runTypedWithRoot is unexported). The former Form D
+	// (cross-pkg SelectorExpr archtest.FixtureBuildTag) is GONE: fixtureBuildTag
+	// is unexported (#944), so that vector is type-system-Hard — a compile error,
+	// not an archtest finding — and has no RED fixture.
 	//
 	// Form identification uses the diagnostic Line number to look up the
 	// fixture source line (anchor comment + 1), so assertions stay stable under
 	// unrelated edits that shift line numbers.
 	const redfixtureRel = "tools/archtest/internal/passfunnelfixture/redfixture.go"
-	crossPkgForms := []string{"A", "B", "C", "D", "F"}
+	crossPkgForms := []string{"A", "B", "C", "F"}
 	var fixtureTagDiags []scanner.Diagnostic
 	for _, tgt := range fixtureTargets {
 		fixtureTagDiags = append(fixtureTagDiags, diagsFixtureTagBypass(tgt)...)
@@ -1255,12 +1265,12 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 func TestFlatNonDefaultTagsExcludesFixtureTag(t *testing.T) {
 	t.Parallel()
 	for _, tag := range FlatNonDefaultTags() {
-		if tag == FixtureBuildTag {
+		if tag == fixtureBuildTag {
 			t.Fatalf("FlatNonDefaultTags() must not contain the fixture build tag %q: "+
 				"it was removed from KnownNonDefaultTags in #944 so module-wide scans "+
 				"never load fixture-tagged code. The only sanctioned fixture loader is "+
 				"RunTypedFixture; re-adding the tag reopens the FlatNonDefaultTags bypass.",
-				FixtureBuildTag)
+				fixtureBuildTag)
 		}
 	}
 }

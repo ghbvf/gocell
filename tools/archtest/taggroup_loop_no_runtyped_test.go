@@ -45,8 +45,8 @@ import (
 // outside a tagGroup loop is OK.
 //
 // Compliant idioms (see fixture green_*):
-//   - single RunTyped(t, TypedOpts{Tags: ProductionFlatTags()}, ...)
-//   - two RunTyped calls: tags=nil + tags=ProductionFlatTags() with shared
+//   - single RunTyped(t, TypedOpts{Tags: FlatNonDefaultTags()}, ...)
+//   - two RunTyped calls: tags=nil + tags=FlatNonDefaultTags() with shared
 //     seen-map dedup (defensive: covers reverse build directives //go:build
 //     !X which are silently excluded from a -tags=...,X,... union load)
 //
@@ -111,8 +111,8 @@ import (
 //      first real event of a helper-wrapped tagGroup loop reaching CI.
 //
 // Reverse fixture-precision self-check (Test_TaggroupLoopFixturePrecisionGate)
-// enforces that GREEN fixtures (single RunTyped(ProductionFlatTags()),
-// two-load nil+ProductionFlatTags, and the BS-4 parity binding) do NOT trip
+// enforces that GREEN fixtures (single RunTyped(FlatNonDefaultTags()),
+// two-load nil+FlatNonDefaultTags, and the BS-4 parity binding) do NOT trip
 // the rule.
 
 const (
@@ -240,10 +240,10 @@ func scanFileForTaggroupViolations(p *Pass, file *ast.File, rel string) []Diagno
 			Line: hitLine,
 			Message: fmt.Sprintf(
 				"for-range over %s with %s inside loop body — "+
-					"replace with single RunTyped(Tags: archtest.ProductionFlatTags()) "+
-					"or two-load nil+ProductionFlatTags pattern "+
+					"replace with single RunTyped(Tags: archtest.FlatNonDefaultTags()) "+
+					"or two-load nil+FlatNonDefaultTags pattern "+
 					"(see ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md;"+
-					" ProductionFlatTags defined in tools/archtest/resolve.go)",
+					" FlatNonDefaultTags defined in tools/archtest/resolve.go)",
 				taggroupLoopKnownTagsName, taggroupLoopRunTypedName,
 			),
 		})

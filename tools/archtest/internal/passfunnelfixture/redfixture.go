@@ -4,8 +4,8 @@
 // point usages that exercise the PASS-FUNNEL-* meta-archtest detectors in
 // pass_funnel_test.go. Gated by the archtest_fixture build tag (kept as
 // a literal here because Go's //go:build syntax cannot reference Go
-// constants — must agree with the literal value of archtest.FixtureBuildTag
-// declared in tools/archtest/fixture.go).
+// constants — must agree with the literal value of the unexported
+// fixtureBuildTag const declared in tools/archtest/fixture.go).
 //
 // TestPassFunnel_FixtureCoverage loads this package with the
 // archtest_fixture tag via typeseval.SharedResolver (framework self-test
@@ -53,12 +53,6 @@ import (
 	// VIOLATION sources for PASS-FUNNEL-RESOLVE-01 — same package, different symbols.
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	te "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-
-	// Cross-pkg exported const source for PASS-FUNNEL-FIXTURE-TAG-01 Form D
-	// (`archtest.FixtureBuildTag`). No cycle: archtest package does not import
-	// passfunnelfixture (it loads this fixture at runtime via SharedResolver),
-	// so a child→parent import is safe.
-	"github.com/ghbvf/gocell/tools/archtest"
 )
 
 // VIOLATION samples — value references suffice for typeseval.ResolvePackageRef
@@ -142,13 +136,19 @@ var (
 // EvaluateConstString resolves to the literal value "archtest_fixture".
 const localFixtureTag = "archtest_fixture"
 
-// fixtureTagBypassRedForms exercises all 4 EvaluateConstString-resolvable
-// arg shapes that a business archtest could in principle use to feed the
-// archtest_fixture build tag to a loader from LOADER_SET (typeseval.
-// SharedResolver / LoadPackages / LoadProductionPackages plus archtest.
-// RunTyped / RunTypedProduction / RunTypedDir). The detector must catch
-// every form regardless of whether the literal is direct, via local const,
-// via cross-pkg exported const, or via const concatenation.
+// fixtureTagBypassRedForms exercises the const-resolvable arg shapes a business
+// archtest could use to feed the archtest_fixture build tag to a loader from
+// LOADER_SET (typeseval.SharedResolver / LoadPackages / LoadProductionPackages
+// plus archtest.RunTyped / RunTypedProduction / RunTypedDir / runTypedWithRoot).
+// The detector must catch every form regardless of whether the literal is
+// direct, via local const, or via const concatenation.
+//
+// Note (#944): the former Form D (cross-pkg SelectorExpr archtest.FixtureBuildTag)
+// is GONE — fixtureBuildTag is now unexported, so the cross-package selector is a
+// compile error, not an archtest finding. That vector is type-system-Hard; no RED
+// fixture can (or should) express it. The detector's SelectorExpr walker is
+// retained as defense-in-depth against any future re-exported const equal to the
+// sentinel, but has no live RED fixture by design.
 //
 // The function is never invoked at runtime; the package is gated by
 // //go:build archtest_fixture and exists only as *ast.CallExpr +
@@ -158,7 +158,7 @@ const localFixtureTag = "archtest_fixture"
 // already a permanent RunTypedFixture-adjacent loader that business
 // archtest must not call directly (also caught by PASS-FUNNEL-LOADPACKAGES-01),
 // and (iii) the detector predicate is callee-shape-agnostic across the
-// LOADER_SET — a single callee suffices to lock all 4 arg shapes; the
+// LOADER_SET — a single callee suffices to lock the arg shapes; the
 // remaining LOADER_SET members add no new arg-shape coverage axis.
 func fixtureTagBypassRedForms() {
 	// Form A — BasicLit STRING literal direct.
@@ -167,8 +167,6 @@ func fixtureTagBypassRedForms() {
 	_, _ = typeseval.SharedResolver("/dummy", false, []string{localFixtureTag}, "x")
 	// Form C — BinaryExpr const concatenation.
 	_, _ = typeseval.SharedResolver("/dummy", false, []string{"archtest" + "_fixture"}, "x")
-	// Form D — cross-pkg SelectorExpr to exported const (archtest.FixtureBuildTag).
-	_, _ = typeseval.SharedResolver("/dummy", false, []string{archtest.FixtureBuildTag}, "x")
 }
 
 // fixtureTagSlice exercises Form F: a same-file var bound to a []string
