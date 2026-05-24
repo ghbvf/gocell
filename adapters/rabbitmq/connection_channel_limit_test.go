@@ -320,11 +320,7 @@ func TestReconnect_DrainPool_ReleasesInUseChannels(t *testing.T) {
 		return mocks[0].notifyCloseCh != nil
 	}, testtime.D2s, testtime.D10ms, "reconnectLoop must have registered NotifyClose")
 
-	mocks[0].mu.Lock()
-	notifyCh := mocks[0].notifyCloseCh
-	mocks[0].isClosed = true
-	mocks[0].mu.Unlock()
-	notifyCh <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+	mocks[0].triggerBrokerClose()
 
 	// Wait for reconnect to complete (dial count reaches 2).
 	testwait.External(t, "amqp-reconnect-completed", func() bool {

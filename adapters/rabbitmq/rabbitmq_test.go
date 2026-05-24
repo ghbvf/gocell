@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -123,6 +124,11 @@ type mockChannel struct {
 
 	consumeDeliveries chan amqp.Delivery
 	consumeErr        error
+	consumeCalled     bool
+	// deliveriesOnce guards closeDeliveries: a broker disconnect can reach the
+	// same channel through several paths (pool drain, multi-cycle reconnect,
+	// deferred Subscriber.Close), and double-closing consumeDeliveries would panic.
+	deliveriesOnce sync.Once
 
 	cancelCalled   bool
 	cancelCount    int64
@@ -193,10 +199,28 @@ func (m *mockChannel) PublishWithContext(_ context.Context, exchange, key string
 func (m *mockChannel) Consume(
 	queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table,
 ) (<-chan amqp.Delivery, error) {
+	m.mu.Lock()
 	if m.consumeErr != nil {
-		return nil, m.consumeErr
+		err := m.consumeErr
+		m.mu.Unlock()
+		return nil, err
 	}
+	m.consumeCalled = true
+	m.mu.Unlock()
 	return m.consumeDeliveries, nil
+}
+
+// closeDeliveries closes consumeDeliveries exactly once. Real amqp091-go closes a
+// consumer's delivery channel when the underlying connection drops; the mock must
+// model this so a blocked consumeLoop observes the close (errSubscriptionLost)
+// instead of parking forever.
+//
+// Called by triggerBrokerClose (the broker-disconnect path) and directly by tests
+// that close a single channel's stream. sync.Once provides the concurrency
+// guarantee, so it is deliberately safe to call without holding ch.mu — e.g.
+// triggerBrokerClose invokes it while holding m.mu but not ch.mu.
+func (m *mockChannel) closeDeliveries() {
+	m.deliveriesOnce.Do(func() { close(m.consumeDeliveries) })
 }
 
 func (m *mockChannel) Cancel(consumer string, noWait bool) error {
@@ -386,6 +410,93 @@ func (m *mockConnection) Close() error {
 	return m.closeErr
 }
 
+// triggerBrokerClose models a broker-forced connection loss as one faithful step:
+// mark the connection closed, close every issued channel's consumer delivery
+// channel (real amqp091-go closes consumer channels on connection drop, so a
+// blocked consumeLoop observes errSubscriptionLost → awaitReconnect →
+// WaitConnected), then deliver the close error to the registered NotifyClose
+// receiver (so the reconnect loop re-dials). It is the single canonical
+// broker-disconnect path; tests MUST NOT hand-roll the lock/isClosed/deliveries/
+// notify steps separately — omitting the deliveries close is exactly the #930
+// defect.
+//
+// Precondition: NotifyClose is already registered. Callers barrier on it first:
+//
+//	testwait.External(t, "amqp-notify-close-registered", func() bool {
+//		m.mu.Lock(); defer m.mu.Unlock()
+//		return m.notifyCloseCh != nil
+//	}, testtime.D2s, testtime.D1ms)
+//	m.triggerBrokerClose()
+func (m *mockConnection) triggerBrokerClose() {
+	m.mu.Lock()
+	m.isClosed = true
+	for _, ch := range m.channels {
+		ch.closeDeliveries()
+	}
+	notify := m.notifyCloseCh
+	m.mu.Unlock()
+	// Code 320 CONNECTION_FORCED, Recover=true: the canonical retryable
+	// broker-forced close, so the reconnect loop re-dials.
+	notify <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+}
+
+// consumingStarted reports whether any issued channel has had Consume called.
+// At that point the subscriber has passed subscribeOnce's AcquireChannel/Qos/
+// declareTopology setup and is on the consumeLoop path — either in the brief
+// non-blocking tail (newSubscriptionRun/addRun/slog) or already parked on
+// <-deliveries. Either way it has left the AcquireChannel-setup terminal path,
+// which is what matters: tests barrier on this before triggerBrokerClose so the
+// delivery-channel close deterministically drives consumeLoop→
+// errSubscriptionLost→awaitReconnect→WaitConnected rather than racing the setup
+// path.
+func (m *mockConnection) consumingStarted() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ch := range m.channels {
+		ch.mu.Lock()
+		started := ch.consumeCalled
+		ch.mu.Unlock()
+		if started {
+			return true
+		}
+	}
+	return false
+}
+
+// advanceFakeReconnectUntil steps fc through reconnect backoff cycles — gated on
+// PendingTimers so it never Advances into an unregistered timer (mirrors
+// runtime/distlock/manager_test.go::waitPendingTimers) — until resultCh produces a
+// value, then returns it. With the connection on a FakeClock the whole reconnect
+// path is deterministic; the EventuallyLong backstop never fires in practice.
+//
+// Each Advance is testtime.FastPoll, which fires the jittered backoff timer in one
+// step only while the connection's ReconnectMaxBackoff ≤ FastPoll (true for the
+// callers here). When PendingTimers()==0 — the reconnect goroutine has not yet
+// re-armed its timer — the loop simply yields on the D1ms wall-clock tick and
+// re-checks; the EventuallyLong backstop bounds the total wall time.
+//
+// T is generic so the helper serves any result channel (today <-chan error from
+// Subscribe/WaitConnected; future <-chan struct{} barriers) without duplication.
+func advanceFakeReconnectUntil[T any](t *testing.T, fc *clockmock.FakeClock, resultCh <-chan T) T {
+	t.Helper()
+	var got T
+	have := false
+	testwait.External(t, "amqp-fake-reconnect-result", func() bool {
+		if fc.PendingTimers() > 0 {
+			fc.Advance(testtime.FastPoll) // ≥ ReconnectMaxBackoff cap: fires the jittered timer this step
+		}
+		select {
+		case got = <-resultCh:
+			have = true
+			return true
+		default:
+			return false
+		}
+	}, testtime.EventuallyLong, testtime.D1ms)
+	require.True(t, have, "fake reconnect did not produce a result within budget")
+	return got
+}
+
 // --- Mock Publisher (for DLQ) ---
 
 // mockPublisher was removed: ConsumerBase no longer uses application-side
@@ -505,6 +616,10 @@ func TestNewConnection_RecoverableDialError(t *testing.T) {
 func TestConnection_Health_ConnRaceWindow(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
+	// NOTE: intentionally NOT triggerBrokerClose() — this models the
+	// IsClosed-but-connected race window (no NotifyClose, no reconnect), not a
+	// broker-forced disconnect. triggerBrokerClose would fire NotifyClose and
+	// close deliveries, changing the scenario.
 	mockConn.mu.Lock()
 	mockConn.isClosed = true
 	mockConn.mu.Unlock()
@@ -550,6 +665,10 @@ func TestConnection_AcquireChannel(t *testing.T) {
 func TestConnection_AcquireChannel_ConnRaceWindow(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
+	// NOTE: intentionally NOT triggerBrokerClose() — this models the
+	// IsClosed-but-connected race window (no NotifyClose, no reconnect), not a
+	// broker-forced disconnect. triggerBrokerClose would fire NotifyClose and
+	// close deliveries, changing the scenario.
 	mockConn.mu.Lock()
 	mockConn.isClosed = true
 	mockConn.mu.Unlock()
@@ -901,12 +1020,8 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 		return mocks[0].notifyCloseCh != nil
 	}, testtime.D2s, testtime.D1ms, "reconnectLoop did not call NotifyClose")
 
-	// Now send on the channel that reconnectLoop is actually selecting on.
-	mocks[0].mu.Lock()
-	ch := mocks[0].notifyCloseCh
-	mocks[0].isClosed = true
-	mocks[0].mu.Unlock()
-	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+	// Trigger the broker-forced close reconnectLoop is selecting on.
+	mocks[0].triggerBrokerClose()
 
 	// reconnectLoop should reconnect. Verify dial was called again.
 	testwait.External(t, "amqp-reconnect-completed", func() bool {
@@ -964,11 +1079,7 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 	}, testtime.D2s, testtime.D1ms, "reconnectLoop did not call NotifyClose")
 
 	// Trigger disconnect.
-	mocks[0].mu.Lock()
-	ch := mocks[0].notifyCloseCh
-	mocks[0].isClosed = true
-	mocks[0].mu.Unlock()
-	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+	mocks[0].triggerBrokerClose()
 
 	// Wait for reconnection to succeed (dial count >= 4: 1 initial + 2 failed + 1 success).
 	testwait.External(t, "amqp-reconnect-completed", func() bool {
@@ -3792,11 +3903,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	}, testtime.D2s, testtime.D1ms)
 
 	// Trigger disconnect.
-	mock1.mu.Lock()
-	ch := mock1.notifyCloseCh
-	mock1.isClosed = true
-	mock1.mu.Unlock()
-	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+	mock1.triggerBrokerClose()
 
 	// Wait until reconnect dial is blocked (dialCount == 2).
 	testwait.External(t, "amqp-reconnect-completed", func() bool {
@@ -4243,11 +4350,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 	}, testtime.D2s, testtime.D1ms)
 
 	// Trigger disconnect.
-	mock1.mu.Lock()
-	ch := mock1.notifyCloseCh
-	mock1.isClosed = true
-	mock1.mu.Unlock()
-	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+	mock1.triggerBrokerClose()
 
 	// Wait until reconnect dial is blocked — state should be Disconnected.
 	testwait.External(t, "amqp-reconnect-completed", func() bool {
