@@ -138,7 +138,7 @@ gh api -H "GraphQL-Features: sub_issues" graphql -f query='query {
 - [ ] #235 子条 2 标题
 ```
 
-存量父 issue 不强制迁移；新建大型任务优先用形态 A。`daily-planner` skill 同时识别两种形态（GraphQL `subIssues` 字段 + body grep 双源回落）。
+存量父 issue 不强制迁移，但只有形态 A（原生 sub-issue）能被 `daily-planner` skill 识别——skill 只查 GraphQL `subIssues` 字段，**不**解析 markdown body task list。形态 B 的子条目相当于 daily-planner 视角下的"未追踪"，需要时升级到形态 A。
 
 ### 跟踪与排期
 

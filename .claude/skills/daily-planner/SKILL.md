@@ -306,10 +306,12 @@ Agent(
 
 # 4.1 plan.json 校验。两层 gate：
 #   (a) schema：类型 + action 取值集
-#   (b) membership：item_id ∈ items.json；target_iteration_id == TODAY_ITERATION_ID；
+#   (b) membership：item_id ∈ allowed set（本轮 input 集对应 item ∪ carry-over item）；
+#       target_iteration_id == TODAY_ITERATION_ID；
 #       current_iteration_id（若非空）∈ iter-config.json 的 iteration IDs
-# 校验失败 fail-closed：plan.json 是 agent (LLM) 生成的，必须当作未经信任的输入对待，
-# 防止"未在候选集中的 item / 非 TODAY 的 target iteration / 未知 action"被直接写真值。
+# 校验失败 fail-closed：plan.json 是 agent (LLM) 生成的，必须当作未经信任的输入对待。
+# allowed set 由 bash 独立从 items.json + issues.json + YESTERDAY_ITERATION_ID 算出，
+# 不复用 agent 的判定——防止 agent 把任意 Project item（不在本轮排期范围）写入 today。
 jq -e '
   (type == "array") and
   all(.[];
@@ -323,8 +325,25 @@ jq -e '
   exit 1
 }
 
-# 候选 item_id 集 (Project v2 已有 items)；候选 iteration_id 集 (field configuration)
-jq -r '.[].id' "$WORKDIR/items.json" | sort -u > "$WORKDIR/valid-item-ids.txt"
+# 候选 item_id 集 = (本轮 input 集对应的 Project item) ∪ (carry-over item)，
+# 由 bash 用 items.json + issues.json + YESTERDAY_ITERATION_ID 确定性算出，
+# **不**信任 agent 的取舍——agent 偏离时由 bash 收口 fail-closed。
+# 校验范围比"任意 Project item"窄，对齐 skill 的安全边界：
+# "LLM 排计划，bash 守真实 mutation"。
+jq -r --slurpfile issues "$WORKDIR/issues.json" --arg yid "${YESTERDAY_ITERATION_ID:-}" '
+  ($issues[0] | map(.number)) as $inputNums |
+  .[] | select(
+    # (a) Project item linked to an input backlog issue
+    (.content.number != null and ($inputNums | index(.content.number) != null))
+    or
+    # (b) carry-over: yesterday iter + OPEN + not Done
+    ($yid != "" and .iter.iterationId == $yid
+     and .content.state == "OPEN"
+     and (.status == null or .status.name != "Done"))
+  ) | .id
+' "$WORKDIR/items.json" | sort -u > "$WORKDIR/valid-item-ids.txt"
+
+# 候选 iteration_id 集 (field configuration)
 jq -r '.data.user.projectV2.field.configuration.iterations[].id' \
   "$WORKDIR/iter-config.json" | sort -u > "$WORKDIR/valid-iter-ids.txt"
 # 2.2 新建的 today iteration 也合法；merge 进去。
@@ -338,7 +357,7 @@ while read -r row; do
   cur=$(jq -r '.current_iteration_id // ""' <<<"$row")
 
   if ! grep -qxF "$item_id" "$WORKDIR/valid-item-ids.txt"; then
-    echo "ERROR: plan.json item_id not in Project v2 items: $item_id" >&2
+    echo "ERROR: plan.json item_id not in allowed set (input issues ∪ carry-over): $item_id" >&2
     VIOLATIONS=$((VIOLATIONS+1))
   fi
   if [[ "$tgt" != "$TODAY_ITERATION_ID" ]]; then
@@ -401,11 +420,11 @@ if [[ ${#FAILED_ITEMS[@]} -gt 0 ]]; then
   echo "" >&2
   echo "# --- partial apply detected: ${#APPLIED_ITEMS[@]} applied / ${#FAILED_ITEMS[@]} failed ---" >&2
   if [[ ${#APPLIED_ITEMS[@]} -gt 0 ]]; then
-    echo "# --- rollback commands for ALREADY-APPLIED items (REVIEW EACH BEFORE EXEC; prev_iter==\"\" 表示原本无 iteration) ---" >&2
+    echo "# --- rollback commands for ALREADY-APPLIED items (REVIEW EACH BEFORE EXEC; prev_iter==\"\" 表示原本无 iteration → --clear) ---" >&2
     for entry in "${APPLIED_ITEMS[@]}"; do
       IFS='|' read -r a_item a_prev _ <<<"$entry"
       if [[ -z "$a_prev" ]]; then
-        echo "# $a_item: original had no iteration; rollback = clear field value via UI (gh project item-edit lacks --clear-iteration)" >&2
+        echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $a_item --field-id $ITERATION_FIELD_ID --clear" >&2
       else
         echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $a_item --field-id $ITERATION_FIELD_ID --iteration-id $a_prev" >&2
       fi

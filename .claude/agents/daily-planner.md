@@ -96,7 +96,7 @@ for item in items.json:
 | `cap-x-cross` label | 标 `[需人工确认]`，**不**自动入队 |
 | 同 cap 已有 ≥3 入队 | 后续同 cap 项 `[CAP COLLISION]` 退 Unscheduled |
 | `bundle-parent` 父 issue 仍 OPEN | carry-over（子全 close 后父仍 open → 视为未完成，让人手 close 父） |
-| sub-issue（GitHub 原生 / markdown task list） | 正常打分；brief 注 `(parent #N)` |
+| sub-issue（GitHub 原生 sub-issue API） | 正常打分；brief 注 `(parent #N)`。markdown body task list 形态**不**识别（升级到原生 sub-issue 才能被追踪） |
 | YESTERDAY_ITERATION_ID 为空 | carry-over 跳过 + Warnings 注 `[CARRY-OVER DISABLED] yesterday iteration not found` |
 | 输入集 + carry-over 全空 | Warnings 注 `[EMPTY INPUT SET]`；brief 显示空 Wave；plan.json = `[]` |
 
