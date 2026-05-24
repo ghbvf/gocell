@@ -213,6 +213,11 @@ ref: `docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1`
 
 option 名称后缀对应 cell 能力的真实分布：`WithOutboxDeps` 表示同时持有 publisher 与 writer 的平台 cell，`WithOutboxWriter` 表示只写 outbox 不主动 publish 的 L2 cell，`WithDirectPublisher` 表示绕过 outbox 直接发布的 L4 cell。选错 option 形态会让能力边界在代码审查时不可见，增加 L2/L4 混淆风险。
 
+> 备注：上表按 **cell 能力维度**（哪些 outbox 路径有/无）描述 Option 形态。
+> 对应的 **sealed marker 类型维度**（哪种 raw infra 对应哪个 sealed marker / wrap 函数）
+> 见 `.claude/rules/gocell/cell-patterns.md` §"Sealed Marker Wrap Pattern"——两表互补：
+> 这里告诉你"该用哪种 Option"，那里告诉你"Option 的参数类型背后是哪个 wrap 函数"。
+
 ### 6. 注册 HTTP 路由（可选）
 
 通过 `reg.RouteGroup(...)` 在 `Init` 内声明每组路由所属的物理 listener，

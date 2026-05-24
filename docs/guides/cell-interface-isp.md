@@ -185,6 +185,8 @@ type MyCell struct {
 你只需要覆盖业务相关的方法（通常是 `Init`，以及 codegen 生成的 metadata accessor），
 不需要关心哪些方法属于哪个子接口。
 
+> 如果你不写 framework 内部组件（如自定义 middleware / metrics collector），跳过下一节即可——直接嵌 `BaseCell` 是 99% 场景的正解。
+
 ### 极少数情况：自定义 framework 组件，需按 ISP 声明最小依赖
 
 如果你在实现 framework 内部组件（如自定义 metrics collector、自定义 middleware、
