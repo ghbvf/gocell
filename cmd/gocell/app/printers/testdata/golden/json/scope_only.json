@@ -8,6 +8,7 @@
       "scope": "project",
       "field": "cells",
       "message": "circular dependency detected",
+      "fix": "",
       "line": 0,
       "column": 0
     }

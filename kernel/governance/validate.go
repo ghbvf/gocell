@@ -55,6 +55,17 @@ type ValidationResult struct {
 	Scope     string // virtual scope name; empty when File is set
 	Field     string // field path within YAML, e.g. "contractUsages[0].role"
 	Message   string
+	// Fix is the remediation guidance for a finding ("how to make this rule
+	// pass"). It is REQUIRED and non-empty for all findings regardless of
+	// severity: both error and warning results carry structured remediation
+	// guidance in this typed field. Splitting Fix out of Message replaces the
+	// old "; fix:" Message-substring convention (INV-3 Soft anchor) with a
+	// typed field: all findings are constructed exclusively through newError /
+	// newWarning / newErrorAt / newScopedError, each of which takes fix as a
+	// mandatory positional argument (GOVERNANCE-RULE-ERROR-FIX-FIELD-01).
+	// Renderers surface it as a distinct "fix:" line / JSON field, never
+	// re-concatenated into Message.
+	Fix string
 	// Line and Column locate the offending value inside File. They are 1-based
 	// (matching yaml.v3) and zero when the position is unknown — e.g. the
 	// ProjectMeta was constructed without FileNodes, or the field path cannot
@@ -65,8 +76,9 @@ type ValidationResult struct {
 }
 
 // Validator runs all validation rules against a parsed project. It embeds
-// locator to share locate/newResult with DependencyChecker and to promote
-// the project field so existing rule code keeps using v.project.* directly.
+// locator to share locate + the typed constructors (newError/newWarning/newScopedError)
+// with DependencyChecker and to promote the project field so existing rule code
+// keeps using v.project.* directly.
 type Validator struct {
 	locator
 	root             string                            // project root for file existence checks

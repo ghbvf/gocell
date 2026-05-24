@@ -8,6 +8,7 @@
       "scope": "",
       "field": "schema",
       "message": "type <string> & ref <user/x> not allowed when count > 0",
+      "fix": "",
       "line": 1,
       "column": 0
     }

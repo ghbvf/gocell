@@ -28,7 +28,8 @@ import (
 // Edges:
 //   - <recvName>.<methodName> selector / call → enqueue same-receiver method
 //   - freeFunc(...) call → enqueue free function (e.g. docNamingResult)
-//   - <recvName>.newResult / newScopedResult call → extract first arg as ID
+//   - .<emitter>() call resolving (via the *locator-receiver type-identity gate,
+//     or the package-level newErrorAt signature gate) → extract first arg as ID
 //   - ValidationResult{Code: ...} composite literal → extract Code value
 //
 // ID arg resolution is fail-fast: only string literals and package-level
@@ -431,8 +432,9 @@ func collectBFSRoots(funcIdx map[funcKey]*ast.FuncDecl) []funcKey {
 
 // walkRule performs the BFS step for one node. ast.Inspect walks the
 // function body, simultaneously enqueuing newly-discovered methods / free
-// functions and collecting rule IDs emitted via newResult, newScopedResult,
-// or ValidationResult composite literals.
+// functions and collecting rule IDs emitted via .<emitter>() call resolving
+// (via the *locator-receiver type-identity gate, or the package-level newErrorAt
+// signature gate), or ValidationResult composite literals.
 //
 // bfsContext bundles the immutable inputs and mutable state of one BFS
 // run so individual visit-helpers don't need to thread eight or more
@@ -540,8 +542,24 @@ func (c *bfsContext) enqueueMethodValue(x *ast.SelectorExpr, recvName, recvType 
 // flow correctly without further changes.
 func (c *bfsContext) handleCall(x *ast.CallExpr) {
 	if id, ok := x.Fun.(*ast.Ident); ok {
-		// Free-function callsite. Enqueue the callee; rule IDs are not
-		// carried as positional args at the callsite by convention.
+		// newErrorAt is a package-level emitter (no *locator receiver — it
+		// never consults the yaml.Node cache, so package-level emit/doc scan
+		// helpers without a locator can use it). It carries the rule ID as
+		// Args[0] like the method emitters; capture it from the callsite and
+		// do NOT enqueue the body — the body only forwards parameters into a
+		// ValidationResult, so there is nothing further to discover, and
+		// walking its `Code: <param>` composite would trip the const-only ID
+		// guard. Detection is signature-based (param 0 RuleCode, single
+		// ValidationResult result, no receiver), not name-based.
+		if c.isPackageLevelEmitter(id) {
+			if len(x.Args) > 0 {
+				if ruleID := c.resolveID(x.Args[0]); ruleID != "" {
+					c.reachable[ruleID] = struct{}{}
+				}
+			}
+			return
+		}
+		// Other free-function callsites: enqueue the callee for traversal.
 		if _, exists := c.funcIdx[funcKey{recv: "", name: id.Name}]; exists {
 			c.queue = append(c.queue, funcKey{recv: "", name: id.Name})
 		}
@@ -561,6 +579,28 @@ func (c *bfsContext) handleCall(x *ast.CallExpr) {
 	if id := c.resolveID(x.Args[0]); id != "" {
 		c.reachable[id] = struct{}{}
 	}
+}
+
+// isPackageLevelEmitter reports whether id resolves to a package-level
+// (receiver-less) function with the canonical emitter shape — param 0
+// RuleCode, single ValidationResult result. This is newErrorAt: it has no
+// receiver, so signatureMatchesValidationResultEmitter's locator-receiver gate
+// excludes it, and the rule ID must be captured from the callsite Args[0]
+// instead. Detection is type-based (no name anchor), mirroring the method gate.
+func (c *bfsContext) isPackageLevelEmitter(id *ast.Ident) bool {
+	fn, ok := c.typesInfo.Uses[id].(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() != nil || sig.Variadic() {
+		return false
+	}
+	if sig.Params().Len() < 1 || sig.Results().Len() != 1 {
+		return false
+	}
+	return types.Identical(sig.Params().At(0).Type(), c.gate.ruleCodeType) &&
+		types.Identical(sig.Results().At(0).Type(), c.gate.validationResultType)
 }
 
 // signatureMatchesValidationResultEmitter reports whether sig is a method

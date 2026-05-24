@@ -5,9 +5,9 @@ package governance
 // literals non-assignable to the Code field of ValidationResult without an
 // explicit conversion. Archtest INV-2
 // (GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01) enforces that every call to
-// newResult / newScopedResult, and every ValidationResult CompositeLit inside
-// kernel/governance, uses one of these package-scope RuleCode constants rather
-// than an ad-hoc string literal.
+// newError / newWarning / newScopedError / newErrorAt, and every
+// ValidationResult CompositeLit inside kernel/governance, uses one of these
+// package-scope RuleCode constants rather than an ad-hoc string literal.
 //
 // rulecodes.go is the single source of truth for governance rule code
 // literals emitted by all three registration roots:

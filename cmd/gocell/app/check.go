@@ -282,6 +282,7 @@ func checkSliceCoverage(args []string) error {
 				IssueType: governance.IssueRequired,
 				Scope:     cmdSliceCoverage,
 				Message:   fmt.Sprintf("cell %q not found in project; available cells: %s", *cellID, availableCellsMsg(project.Cells)),
+				Fix:       "check the --cell flag value; the cell ID must match an id field in a cells/<cellID>/cell.yaml file",
 			}}, cmdSliceCoverage, "")
 		}
 	}
@@ -334,6 +335,7 @@ func sliceDirCheck(root, cid string) []governance.ValidationResult {
 			IssueType: governance.IssueInvalid,
 			File:      filepath.ToSlash(filepath.Join("cells", cid, "slices")),
 			Message:   fmt.Sprintf("cannot read slices dir for cell %q: %v", cid, err),
+			Fix:       "ensure the cells/<cellID>/slices/ directory exists and is readable",
 		}}
 	}
 	for _, e := range entries {
@@ -348,6 +350,8 @@ func sliceDirCheck(root, cid string) []governance.ValidationResult {
 				IssueType: governance.IssueRequired,
 				Scope:     cmdSliceCoverage,
 				Message:   fmt.Sprintf("cell %q: slices/%s has no slice.yaml", cid, e.Name()),
+				Fix: fmt.Sprintf("add a slice.yaml to cells/%s/slices/%s/ declaring the slice id, "+
+					"belongsToCell, contractUsages, and verify fields", cid, e.Name()),
 			})
 		}
 	}
@@ -382,6 +386,7 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 					"slice %q has belongsToCell=%q but lives under %q (expected under %q)",
 					sl.ID, sl.BelongsToCell, actualParent, expectedSlicesParent,
 				),
+				Fix: fmt.Sprintf("set belongsToCell: %s in slice.yaml or move the slice directory under cells/%s/slices/", cid, cid),
 			})
 		}
 		if sl.Dir != sl.ID {
@@ -391,6 +396,8 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 				IssueType: governance.IssueMismatch,
 				File:      sl.File,
 				Message:   fmt.Sprintf("slice %q: directory name %q does not match slice id %q", sl.ID, sl.Dir, sl.ID),
+				Fix: fmt.Sprintf("rename the directory to match the slice id %q, or update the id "+
+					"field in slice.yaml to match the directory name %q", sl.ID, sl.Dir),
 			})
 		}
 	}
@@ -439,6 +446,7 @@ func checkAssemblyCompleteness(args []string) error {
 				IssueType: governance.IssueDuplicate,
 				File:      asm.File,
 				Message:   fmt.Sprintf("assembly %q: cell %q declared more than once", *id, cid),
+				Fix:       "remove the duplicate cell entry from the cells list in assembly.yaml",
 			})
 			continue
 		}
@@ -450,6 +458,7 @@ func checkAssemblyCompleteness(args []string) error {
 				IssueType: governance.IssueRefNotFound,
 				File:      asm.File,
 				Message:   fmt.Sprintf("assembly %q: cell %q not found in project metadata", *id, cid),
+				Fix:       fmt.Sprintf("add a cell.yaml for %q under cells/%s/ or remove it from the assembly cells list", cid, cid),
 			})
 		}
 	}
@@ -542,6 +551,7 @@ func journeyStatusCheck(jm *metadata.JourneyMeta, statusCount map[string]int) []
 			IssueType: governance.IssueRequired,
 			File:      jm.File,
 			Message:   fmt.Sprintf("journey %q has no entry in status-board.yaml", jm.ID),
+			Fix:       fmt.Sprintf("add an entry with journeyId: %q to journeys/status-board.yaml", jm.ID),
 		}}
 	case count > 1:
 		return []governance.ValidationResult{{
@@ -550,6 +560,7 @@ func journeyStatusCheck(jm *metadata.JourneyMeta, statusCount map[string]int) []
 			IssueType: governance.IssueDuplicate,
 			Scope:     cmdJourneyReadiness,
 			Message:   fmt.Sprintf("journey %q has %d entries in status-board.yaml (expected 1)", jm.ID, count),
+			Fix:       fmt.Sprintf("remove duplicate entries for journeyId: %q in journeys/status-board.yaml, leaving exactly one", jm.ID),
 		}}
 	}
 	return nil
@@ -566,6 +577,7 @@ func journeyContractCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMet
 				IssueType: governance.IssueRefNotFound,
 				File:      jm.File,
 				Message:   fmt.Sprintf("journey %q references unknown contract %q", jm.ID, contractID),
+				Fix:       fmt.Sprintf("create a contract.yaml for %q under contracts/ or remove it from the journey contracts list", contractID),
 			})
 		}
 	}
@@ -583,6 +595,7 @@ func journeyCellCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMeta) [
 				IssueType: governance.IssueRefNotFound,
 				File:      jm.File,
 				Message:   fmt.Sprintf("journey %q references unknown cell %q", jm.ID, cid),
+				Fix:       fmt.Sprintf("create a cell.yaml for %q under cells/%s/ or remove it from the journey cells list", cid, cid),
 			})
 		}
 	}
@@ -675,6 +688,7 @@ func l0ImportsForCell(root string, cm *metadata.CellMeta) []governance.Validatio
 			IssueType: governance.IssueRequired,
 			File:      cm.File,
 			Message:   fmt.Sprintf("L0 cell %q has no l0Dependencies declared in cell.yaml", cm.ID),
+			Fix:       "add an l0Dependencies list to cell.yaml declaring each sibling L0 cell this cell imports",
 		})
 	}
 
@@ -728,6 +742,7 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 			File:      filepath.ToSlash(cm.File),
 			Scope:     cmdL0Imports,
 			Message:   fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
+			Fix:       "ensure the cell directory compiles cleanly; run `go build ./cells/<cellID>/...` to identify build errors",
 		}}, true
 	}
 
@@ -743,6 +758,7 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 					File:      filepath.ToSlash(cm.File),
 					Scope:     cmdL0Imports,
 					Message:   fmt.Sprintf("packages.Load error for cell %q package %q: %v", cm.ID, pkg.PkgPath, pe),
+					Fix:       "fix the compilation error in the listed package; run `go build ./cells/<cellID>/...` to reproduce",
 				})
 			}
 		}
@@ -771,6 +787,7 @@ func l0UndeclaredImports(cm *metadata.CellMeta, imported, declared map[string]bo
 				IssueType: governance.IssueInvalid,
 				File:      cm.File,
 				Message:   fmt.Sprintf("L0 cell %q imports cell %q but does not declare it in l0Dependencies", cm.ID, importedCellID),
+				Fix:       fmt.Sprintf("add {cell: %q} to the l0Dependencies list in cell.yaml", importedCellID),
 			})
 		}
 	}
@@ -788,6 +805,8 @@ func l0DanglingDeclarations(cm *metadata.CellMeta, imported, declared map[string
 				IssueType: governance.IssueInvalid,
 				File:      cm.File,
 				Message:   fmt.Sprintf("L0 cell %q declares l0Dependency %q but does not import it", cm.ID, declaredCellID),
+				Fix: fmt.Sprintf("remove {cell: %q} from l0Dependencies in cell.yaml or add the "+
+					"missing import in the cell's Go source", declaredCellID),
 			})
 		}
 	}
@@ -938,6 +957,8 @@ func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.
 				Line:      pos.Line,
 				Column:    pos.Column,
 				Message:   diag.Message,
+				Fix: "replace the unconditional t.Skip() with a conditional skip guarded by a " +
+					"build tag or environment variable, or remove it entirely",
 			})
 		}
 	}

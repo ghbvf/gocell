@@ -61,8 +61,8 @@ func TestFMT13_MissingEndpointsHTTP(t *testing.T) {
 	if !strings.Contains(fmt13Errors[0].Message, "endpoints.http") {
 		t.Errorf("FMT-13: expected 'endpoints.http' in message, got: %s", fmt13Errors[0].Message)
 	}
-	if !strings.Contains(fmt13Errors[0].Message, "method:") {
-		t.Errorf("FMT-13: expected 'method:' YAML template in message, got: %s", fmt13Errors[0].Message)
+	if !strings.Contains(fmt13Errors[0].Fix, "method:") {
+		t.Errorf("FMT-13: expected 'method:' YAML template in fix guidance, got: %s", fmt13Errors[0].Fix)
 	}
 }
 
@@ -1481,7 +1481,7 @@ func runFMT34Case(t *testing.T, tt fmt34TestCase) {
 }
 
 // assertFMT34Findings checks that matches has the expected count, that every
-// finding carries SeverityError + "; fix:" suffix (INV-3 contract), and that
+// finding carries SeverityError and a non-empty Fix field (INV-3 contract), and that
 // every expected field path appears in the result set.
 func assertFMT34Findings(t *testing.T, tt fmt34TestCase, matches []ValidationResult) {
 	t.Helper()
@@ -1509,10 +1509,12 @@ func assertFMT34Severity(t *testing.T, name string, m ValidationResult) {
 	}
 }
 
+// assertFMT34FixSuffix checks that every FMT-34 finding has a non-empty Fix
+// field — the INV-3 contract that fix guidance is always present on errors.
 func assertFMT34FixSuffix(t *testing.T, name string, m ValidationResult) {
 	t.Helper()
-	if !strings.Contains(m.Message, "; fix:") {
-		t.Errorf("FMT-34 %s: message must contain '; fix:' suffix, got: %q",
+	if m.Fix == "" {
+		t.Errorf("FMT-34 %s: Fix field must be non-empty, got empty fix for message: %q",
 			name, m.Message)
 	}
 }

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "gocell",
+          "version": "test-1.0.0",
+          "informationUri": "https://github.com/ghbvf/gocell",
+          "rules": [
+            {
+              "id": "FMT-13",
+              "shortDescription": {
+                "text": "HTTP contract \"x\" must declare endpoints.http"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "FMT-13",
+          "level": "error",
+          "message": {
+            "text": "HTTP contract \"x\" must declare endpoints.http (field: endpoints.http)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "contracts/http/x/v1/contract.yaml",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 3,
+                  "startColumn": 1
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fix": "add endpoints.http to contract.yaml:\n  http:\n    method: GET\n    path: /api/v1/...\n    successStatus: 200"
+          }
+        }
+      ],
+      "originalUriBaseIds": {
+        "SRCROOT": {}
+      }
+    }
+  ]
+}

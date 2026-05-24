@@ -89,16 +89,19 @@ func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []
 			continue
 		}
 		candidateHint := v.buildCandidateSliceHint(c.Endpoints.Server)
-		results = append(results, v.newResult(
-			codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeCONTRACTENDPOINTTESTMAPPING01, IssueRequired,
 			contractFile(c),
 			"id",
 			fmt.Sprintf(
 				"active HTTP contract %q (server cell: %s) is not referenced by any slice "+
-					"verify.contract entry with .serve role; "+
-					"fix: add \"contract.%s.serve\" to a slice in cell %q under verify.contract, "+
-					"or change lifecycle to experimental/deprecated%s",
-				c.ID, c.Endpoints.Server, c.ID, c.Endpoints.Server, candidateHint,
+					"verify.contract entry with .serve role%s",
+				c.ID, c.Endpoints.Server, candidateHint,
+			),
+			fmt.Sprintf(
+				"add \"contract.%s.serve\" to a slice in cell %q under verify.contract, "+
+					"or change lifecycle to experimental/deprecated",
+				c.ID, c.Endpoints.Server,
 			),
 		))
 	}
@@ -113,7 +116,8 @@ func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []
 // "skip" filter for direction B, silently passing dangling references,
 // role/lifecycle drift, and platform-slice-serving-examples-contract cases
 // (review F4); the per-check helpers below were extracted to keep cognitive
-// complexity ≤ 15 per CLAUDE.md while preserving distinct ; fix: clauses.
+// complexity ≤ 15 per CLAUDE.md while preserving each check's distinct fix
+// guidance (the newError fix argument).
 func (v *Validator) ctmSliceToContract() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
@@ -165,14 +169,14 @@ func (v *Validator) ctmCheckContractExists(
 	if c != nil {
 		return nil
 	}
-	r := v.newResult(
-		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueRefNotFound,
+	r := v.newError(
+		codeCONTRACTENDPOINTTESTMAPPING01, IssueRefNotFound,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
-			"slice %q declares verify.contract %q (.serve role) but contract %q does not exist; "+
-				"fix: remove this entry, fix the contract ID typo, or add the missing contract.yaml",
+			"slice %q declares verify.contract %q (.serve role) but contract %q does not exist",
 			s.ID, entry, contractID,
 		),
+		"remove this entry, fix the contract ID typo, or add the missing contract.yaml",
 	)
 	return &r
 }
@@ -186,14 +190,14 @@ func (v *Validator) ctmCheckKindHTTP(
 	if c.Kind == "http" {
 		return nil
 	}
-	r := v.newResult(
-		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+	r := v.newError(
+		codeCONTRACTENDPOINTTESTMAPPING01, IssueMismatch,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
-			"slice %q declares verify.contract %q (.serve role) but contract %q kind is %q (must be \"http\"); "+
-				"fix: remove this entry; event contracts use ADV-06 (endpoints.subscribers) not .serve",
+			"slice %q declares verify.contract %q (.serve role) but contract %q kind is %q (must be \"http\")",
 			s.ID, entry, contractID, c.Kind,
 		),
+		"remove this entry; event contracts use ADV-06 (endpoints.subscribers) not .serve",
 	)
 	return &r
 }
@@ -207,14 +211,14 @@ func (v *Validator) ctmCheckLifecycleActive(
 	if c.Lifecycle == "active" {
 		return nil
 	}
-	r := v.newResult(
-		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+	r := v.newError(
+		codeCONTRACTENDPOINTTESTMAPPING01, IssueMismatch,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
-			"slice %q declares verify.contract %q (.serve role) but contract %q lifecycle is %q (must be \"active\"); "+
-				"fix: remove this entry, or promote the contract to lifecycle: active",
+			"slice %q declares verify.contract %q (.serve role) but contract %q lifecycle is %q (must be \"active\")",
 			s.ID, entry, contractID, c.Lifecycle,
 		),
+		"remove this entry, or promote the contract to lifecycle: active",
 	)
 	return &r
 }
@@ -231,14 +235,14 @@ func (v *Validator) ctmCheckExamplesArrow(
 	if !strings.HasPrefix(c.File, examplesPathPrefix) || strings.HasPrefix(sliceFile(s), examplesPathPrefix) {
 		return nil
 	}
-	r := v.newResult(
-		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueForbidden,
+	r := v.newError(
+		codeCONTRACTENDPOINTTESTMAPPING01, IssueForbidden,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
-			"slice %q declares verify.contract %q (.serve role) but contract %q lives under examples/ (%s); "+
-				"fix: remove this entry — platform slices must not serve example contracts (examples depend on platform, not the reverse)",
+			"slice %q declares verify.contract %q (.serve role) but contract %q lives under examples/ (%s)",
 			s.ID, entry, contractID, c.File,
 		),
+		"remove this entry — platform slices must not serve example contracts (examples depend on platform, not the reverse)",
 	)
 	return &r
 }
@@ -253,14 +257,17 @@ func (v *Validator) ctmCheckServerMatch(
 	if c.Endpoints.Server == s.BelongsToCell {
 		return nil
 	}
-	r := v.newResult(
-		codeCONTRACTENDPOINTTESTMAPPING01, SeverityError, IssueMismatch,
+	r := v.newError(
+		codeCONTRACTENDPOINTTESTMAPPING01, IssueMismatch,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
-			"slice %q declares verify.contract %q (.serve role) but contract's endpoints.server (%s) ≠ slice's belongsToCell (%s); "+
-				"fix: remove this entry or change the slice's belongsToCell to match, "+
+			"slice %q declares verify.contract %q (.serve role) but contract's endpoints.server (%s) ≠ slice's belongsToCell (%s)",
+			s.ID, entry, c.Endpoints.Server, s.BelongsToCell,
+		),
+		fmt.Sprintf(
+			"remove this entry or change the slice's belongsToCell to match, "+
 				"or update contract %q endpoints.server to %q",
-			s.ID, entry, c.Endpoints.Server, s.BelongsToCell, contractID, s.BelongsToCell,
+			contractID, s.BelongsToCell,
 		),
 	)
 	return &r

@@ -21,17 +21,19 @@ func (v *Validator) CheckContractHealth(contracts []*metadata.ContractMeta) []Va
 	var results []ValidationResult
 	for _, c := range contracts {
 		if c.OwnerCell == "" {
-			results = append(results, v.newResult(
-				codeCH01, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeCH01, IssueRequired,
 				c.File, "ownerCell",
-				fmt.Sprintf("%s: missing ownerCell; fix: set ownerCell to the cell id that owns this contract", c.ID),
+				fmt.Sprintf("%s: missing ownerCell", c.ID),
+				"set ownerCell to the cell id that owns this contract",
 			))
 		}
 		if c.Lifecycle == "" {
-			results = append(results, v.newResult(
-				codeCH02, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeCH02, IssueRequired,
 				c.File, "lifecycle",
-				fmt.Sprintf("%s: missing lifecycle; fix: set lifecycle to draft, active, or deprecated", c.ID),
+				fmt.Sprintf("%s: missing lifecycle", c.ID),
+				"set lifecycle to draft, active, or deprecated",
 			))
 		}
 		if c.Kind == "http" {
@@ -53,21 +55,22 @@ func (v *Validator) checkHTTPSchemaRefs(c *metadata.ContractMeta) []ValidationRe
 	}
 
 	if c.SchemaRefs.Request == "" && c.SchemaRefs.Response == "" {
-		return []ValidationResult{v.newResult(
-			codeCH03, SeverityError, IssueRequired,
+		return []ValidationResult{v.newError(
+			codeCH03, IssueRequired,
 			c.File, "schemaRefs",
-			fmt.Sprintf("%s: HTTP contract missing schemaRefs;"+
-				" fix: add schemaRefs.request and schemaRefs.response pointing to JSON schema files", c.ID),
+			fmt.Sprintf("%s: HTTP contract missing schemaRefs", c.ID),
+			"add schemaRefs.request and schemaRefs.response pointing to JSON schema files",
 		)}
 	}
 
 	var results []ValidationResult
 
 	if c.SchemaRefs.Response == "" {
-		results = append(results, v.newResult(
-			codeCH03, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeCH03, IssueRequired,
 			c.File, "schemaRefs.response",
-			fmt.Sprintf("%s: HTTP contract missing response schemaRefs; fix: add schemaRefs.response pointing to a JSON schema file", c.ID),
+			fmt.Sprintf("%s: HTTP contract missing response schemaRefs", c.ID),
+			"add schemaRefs.response pointing to a JSON schema file",
 		))
 	}
 
@@ -83,10 +86,11 @@ func (v *Validator) checkHTTPSchemaRefs(c *metadata.ContractMeta) []ValidationRe
 func (v *Validator) checkHTTPMethodSchema(c *metadata.ContractMeta) []ValidationResult {
 	method := c.Endpoints.HTTP.Method
 	if (method == "PUT" || method == "PATCH") && c.SchemaRefs.Request == "" {
-		return []ValidationResult{v.newResult(
-			codeCH03, SeverityError, IssueRequired,
+		return []ValidationResult{v.newError(
+			codeCH03, IssueRequired,
 			c.File, "schemaRefs.request",
-			fmt.Sprintf("%s: %s contract missing request schemaRefs; fix: add schemaRefs.request pointing to a JSON schema file", c.ID, method),
+			fmt.Sprintf("%s: %s contract missing request schemaRefs", c.ID, method),
+			"add schemaRefs.request pointing to a JSON schema file",
 		)}
 	}
 	return nil
@@ -106,11 +110,11 @@ func (v *Validator) checkHTTPResponseEntries(c *metadata.ContractMeta) []Validat
 	for _, status := range statuses {
 		resp := c.Endpoints.HTTP.Responses[status]
 		if resp.SchemaRef == "" {
-			results = append(results, v.newResult(
-				codeCH03, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeCH03, IssueRequired,
 				c.File, fmt.Sprintf("endpoints.http.responses[%d].schemaRef", status),
-				fmt.Sprintf("%s: responses[%d] declared but missing schemaRef;"+
-					" fix: add schemaRef pointing to a JSON schema file for status %d", c.ID, status, status),
+				fmt.Sprintf("%s: responses[%d] declared but missing schemaRef", c.ID, status),
+				fmt.Sprintf("add schemaRef pointing to a JSON schema file for status %d", status),
 			))
 		}
 	}

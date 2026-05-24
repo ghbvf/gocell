@@ -8,6 +8,7 @@
       "scope": "",
       "field": "owner",
       "message": "owner missing",
+      "fix": "",
       "line": 0,
       "column": 0
     }

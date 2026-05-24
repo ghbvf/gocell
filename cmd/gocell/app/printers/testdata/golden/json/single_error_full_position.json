@@ -8,6 +8,7 @@
       "scope": "",
       "field": "contractUsages[0].contractId",
       "message": "contract 'auth.session.v1' not found",
+      "fix": "",
       "line": 14,
       "column": 5
     }

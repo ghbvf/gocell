@@ -14,11 +14,12 @@ func (v *Validator) validateREF01() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		if _, ok := v.project.Cells[s.BelongsToCell]; !ok {
-			results = append(results, v.newResult(
-				codeREF01, SeverityError, IssueRefNotFound,
+			results = append(results, v.newError(
+				codeREF01, IssueRefNotFound,
 				sliceFile(s),
 				"belongsToCell",
-				fmt.Sprintf("slice %q references non-existent cell %q; fix: update belongsToCell to an existing cell id", s.ID, s.BelongsToCell),
+				fmt.Sprintf("slice %q references non-existent cell %q", s.ID, s.BelongsToCell),
+				"update belongsToCell to an existing cell id",
 			))
 		}
 	}
@@ -31,12 +32,12 @@ func (v *Validator) validateREF02() []ValidationResult {
 	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			if _, ok := v.project.Contracts[cu.Contract]; !ok {
-				results = append(results, v.newResult(
-					codeREF02, SeverityError, IssueRefNotFound,
+				results = append(results, v.newError(
+					codeREF02, IssueRefNotFound,
 					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].contract", i),
-					fmt.Sprintf("slice %q references non-existent contract %q;"+
-						" fix: add the contract to contracts/ or remove this contractUsage", s.ID, cu.Contract),
+					fmt.Sprintf("slice %q references non-existent contract %q", s.ID, cu.Contract),
+					"add the contract to contracts/ or remove this contractUsage",
 				))
 			}
 		}
@@ -49,11 +50,12 @@ func (v *Validator) validateREF03() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if _, ok := v.project.Cells[c.OwnerCell]; !ok {
-			results = append(results, v.newResult(
-				codeREF03, SeverityError, IssueRefNotFound,
+			results = append(results, v.newError(
+				codeREF03, IssueRefNotFound,
 				contractFile(c),
 				"ownerCell",
-				fmt.Sprintf("contract %q ownerCell %q is not a known cell; fix: set ownerCell to an existing cell id", c.ID, c.OwnerCell),
+				fmt.Sprintf("contract %q ownerCell %q is not a known cell", c.ID, c.OwnerCell),
+				"set ownerCell to an existing cell id",
 			))
 		}
 	}
@@ -72,11 +74,12 @@ func (v *Validator) validateREF04() []ValidationResult {
 			continue
 		}
 		if c.ID != c.Dir {
-			results = append(results, v.newResult(
-				codeREF04, SeverityError, IssueRefNotFound,
+			results = append(results, v.newError(
+				codeREF04, IssueRefNotFound,
 				cellFile(c),
 				"id",
-				fmt.Sprintf("cell id %q does not match directory name %q; fix: rename the directory to match the cell id", c.ID, c.Dir),
+				fmt.Sprintf("cell id %q does not match directory name %q", c.ID, c.Dir),
+				"rename the directory to match the cell id",
 			))
 		}
 	}
@@ -95,11 +98,12 @@ func (v *Validator) validateREF05() []ValidationResult {
 			continue
 		}
 		if s.ID != s.Dir {
-			results = append(results, v.newResult(
-				codeREF05, SeverityError, IssueRefNotFound,
+			results = append(results, v.newError(
+				codeREF05, IssueRefNotFound,
 				sliceFile(s),
 				"id",
-				fmt.Sprintf("slice id %q does not match directory name %q; fix: rename the directory to match the slice id", s.ID, s.Dir),
+				fmt.Sprintf("slice id %q does not match directory name %q", s.ID, s.Dir),
+				"rename the directory to match the slice id",
 			))
 		}
 	}
@@ -112,11 +116,12 @@ func (v *Validator) validateREF06() []ValidationResult {
 	for _, j := range v.project.Journeys {
 		for i, cellRef := range j.Cells {
 			if _, ok := v.project.Cells[cellRef]; !ok {
-				results = append(results, v.newResult(
-					codeREF06, SeverityError, IssueRefNotFound,
+				results = append(results, v.newError(
+					codeREF06, IssueRefNotFound,
 					journeyFile(j),
 					fmt.Sprintf("cells[%d]", i),
-					fmt.Sprintf("journey %q references non-existent cell %q; fix: remove the cell reference or create the cell", j.ID, cellRef),
+					fmt.Sprintf("journey %q references non-existent cell %q", j.ID, cellRef),
+					"remove the cell reference or create the cell",
 				))
 			}
 		}
@@ -130,11 +135,12 @@ func (v *Validator) validateREF07() []ValidationResult {
 	for _, j := range v.project.Journeys {
 		for i, cRef := range j.Contracts {
 			if _, ok := v.project.Contracts[cRef]; !ok {
-				results = append(results, v.newResult(
-					codeREF07, SeverityError, IssueRefNotFound,
+				results = append(results, v.newError(
+					codeREF07, IssueRefNotFound,
 					journeyFile(j),
 					fmt.Sprintf("contracts[%d]", i),
-					fmt.Sprintf("journey %q references non-existent contract %q; fix: remove the contract reference or create the contract", j.ID, cRef),
+					fmt.Sprintf("journey %q references non-existent contract %q", j.ID, cRef),
+					"remove the contract reference or create the contract",
 				))
 			}
 		}
@@ -148,11 +154,12 @@ func (v *Validator) validateREF08() []ValidationResult {
 	for _, a := range v.project.Assemblies {
 		for i, cellRef := range a.Cells {
 			if _, ok := v.project.Cells[cellRef]; !ok {
-				results = append(results, v.newResult(
-					codeREF08, SeverityError, IssueRefNotFound,
+				results = append(results, v.newError(
+					codeREF08, IssueRefNotFound,
 					assemblyFile(a),
 					fmt.Sprintf("cells[%d]", i),
-					fmt.Sprintf("assembly %q references non-existent cell %q; fix: remove the cell reference or create the cell", a.ID, cellRef),
+					fmt.Sprintf("assembly %q references non-existent cell %q", a.ID, cellRef),
+					"remove the cell reference or create the cell",
 				))
 			}
 		}
@@ -166,12 +173,12 @@ func (v *Validator) validateREF09() []ValidationResult {
 	for _, c := range v.project.Cells {
 		for i, dep := range c.L0Dependencies {
 			if _, ok := v.project.Cells[dep.Cell]; !ok {
-				results = append(results, v.newResult(
-					codeREF09, SeverityError, IssueRefNotFound,
+				results = append(results, v.newError(
+					codeREF09, IssueRefNotFound,
 					cellFile(c),
 					fmt.Sprintf("l0Dependencies[%d].cell", i),
-					fmt.Sprintf("cell %q l0Dependencies references non-existent cell %q;"+
-						" fix: remove the dependency or create the referenced cell", c.ID, dep.Cell),
+					fmt.Sprintf("cell %q l0Dependencies references non-existent cell %q", c.ID, dep.Cell),
+					"remove the dependency or create the referenced cell",
 				))
 			}
 		}
@@ -184,11 +191,12 @@ func (v *Validator) validateREF10() []ValidationResult {
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
 		if a.Build.Entrypoint == "" {
-			results = append(results, v.newResult(
-				codeREF10, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeREF10, IssueRequired,
 				assemblyFile(a),
 				fieldBuildEntrypoint,
-				fmt.Sprintf("assembly %q must have build.entrypoint; fix: set build.entrypoint to the main package path", a.ID),
+				fmt.Sprintf("assembly %q must have build.entrypoint", a.ID),
+				"set build.entrypoint to the main package path",
 			))
 		}
 	}
@@ -210,22 +218,22 @@ func (v *Validator) validateREF11() []ValidationResult {
 		repoRoot := repositoryRoot(v.root)
 		fullPath := filepath.Join(repoRoot, a.Build.Entrypoint)
 		if !IsWithinRoot(repoRoot, fullPath) {
-			results = append(results, v.newResult(
-				codeREF11, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeREF11, IssueInvalid,
 				assemblyFile(a),
 				fieldBuildEntrypoint,
-				fmt.Sprintf("assembly %q build.entrypoint %q: path escapes project root;"+
-					" fix: use a path relative to the repository root", a.ID, a.Build.Entrypoint),
+				fmt.Sprintf("assembly %q build.entrypoint %q: path escapes project root", a.ID, a.Build.Entrypoint),
+				"use a path relative to the repository root",
 			))
 			continue
 		}
 		if !v.fileExists(fullPath) {
-			results = append(results, v.newResult(
-				codeREF11, SeverityError, IssueRefNotFound,
+			results = append(results, v.newError(
+				codeREF11, IssueRefNotFound,
 				assemblyFile(a),
 				fieldBuildEntrypoint,
-				fmt.Sprintf("assembly %q build.entrypoint %q does not exist;"+
-					" fix: create the entrypoint file or correct the path", a.ID, a.Build.Entrypoint),
+				fmt.Sprintf("assembly %q build.entrypoint %q does not exist", a.ID, a.Build.Entrypoint),
+				"create the entrypoint file or correct the path",
 			))
 		}
 	}
@@ -241,12 +249,12 @@ func (v *Validator) validateREF13() []ValidationResult {
 			continue // FMT-07 covers missing provider
 		}
 		if !v.actorExists(provider) {
-			results = append(results, v.newResult(
-				codeREF13, SeverityError, IssueRefNotFound,
+			results = append(results, v.newError(
+				codeREF13, IssueRefNotFound,
 				contractFile(c),
 				"endpoints",
-				fmt.Sprintf("contract %q provider actor %q is not a known cell or actor;"+
-					" fix: register the actor in actors.yaml or use an existing cell id", c.ID, provider),
+				fmt.Sprintf("contract %q provider actor %q is not a known cell or actor", c.ID, provider),
+				"register the actor in actors.yaml or use an existing cell id",
 			))
 		}
 	}
@@ -264,16 +272,16 @@ func (v *Validator) validateREF14() []ValidationResult {
 				continue
 			}
 			if !v.actorExists(actor) {
-				results = append(results, v.newResult(
-					codeREF14, SeverityError, IssueRefNotFound,
+				results = append(results, v.newError(
+					codeREF14, IssueRefNotFound,
 					contractFile(c),
 					// The YAML key depends on kind: clients / subscribers /
 					// invokers / readers. Using a logical name "consumers"
 					// here would defeat the locator because it does not exist
 					// in the source file.
 					fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i),
-					fmt.Sprintf("contract %q consumer actor %q is not a known cell or actor;"+
-						" fix: register the actor in actors.yaml or use an existing cell id", c.ID, actor),
+					fmt.Sprintf("contract %q consumer actor %q is not a known cell or actor", c.ID, actor),
+					"register the actor in actors.yaml or use an existing cell id",
 				))
 			}
 		}
@@ -286,12 +294,12 @@ func (v *Validator) validateREF15() []ValidationResult {
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
 		if a.ID != a.Dir {
-			results = append(results, v.newResult(
-				codeREF15, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeREF15, IssueMismatch,
 				assemblyFile(a),
 				"id",
-				fmt.Sprintf("assembly id %q does not match map key %q (expected directory name);"+
-					" fix: rename the directory to match the assembly id", a.ID, a.Dir),
+				fmt.Sprintf("assembly id %q does not match map key %q (expected directory name)", a.ID, a.Dir),
+				"rename the directory to match the assembly id",
 			))
 		}
 	}
@@ -313,25 +321,25 @@ func (v *Validator) validateREF16() []ValidationResult {
 		generatedDir := metadata.AssemblyGeneratedDir(a)
 		boundaryPath := filepath.Join(v.root, filepath.FromSlash(generatedDir), "boundary.yaml")
 		if !IsWithinRoot(v.root, boundaryPath) {
-			results = append(results, v.newResult(
-				codeREF16, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeREF16, IssueInvalid,
 				assemblyFile(a),
 				"id",
-				fmt.Sprintf("assembly %q boundary.yaml path escapes project root;"+
-					" fix: ensure the assembly id does not contain path traversal characters", a.ID),
+				fmt.Sprintf("assembly %q boundary.yaml path escapes project root", a.ID),
+				"ensure the assembly id does not contain path traversal characters",
 			))
 			continue
 		}
 		if !v.fileExists(boundaryPath) {
-			results = append(results, v.newResult(
-				codeREF16, SeverityWarning, IssueRefNotFound,
+			results = append(results, v.newWarning(
+				codeREF16, IssueRefNotFound,
 				assemblyFile(a),
 				"id",
 				fmt.Sprintf(
-					"assembly %q has no generated boundary.yaml at %s/boundary.yaml;"+
-						" run 'gocell generate' to create it",
+					"assembly %q has no generated boundary.yaml at %s/boundary.yaml",
 					a.ID, generatedDir,
 				),
+				"run 'gocell generate' to create the boundary.yaml",
 			))
 		}
 	}
@@ -375,25 +383,26 @@ func (v *Validator) validateREF17() []ValidationResult {
 			field := fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i)
 			switch {
 			case client == "*":
-				results = append(results, v.newResult(
-					codeREF17, SeverityError, IssueForbidden,
+				results = append(results, v.newError(
+					codeREF17, IssueForbidden,
 					contractFile(c), field,
 					fmt.Sprintf(
 						"contract %q is internal (path %q) but clients contains wildcard %q;"+
-							" wildcards admit external actors, list explicit internal cell IDs instead; fix: replace the wildcard with explicit cell IDs",
+							" wildcards admit external actors, list explicit internal cell IDs instead",
 						c.ID, path, client,
 					),
+					"replace the wildcard with explicit cell IDs",
 				))
 			case v.isExternalActor(client):
-				results = append(results, v.newResult(
-					codeREF17, SeverityError, IssueForbidden,
+				results = append(results, v.newError(
+					codeREF17, IssueForbidden,
 					contractFile(c), field,
 					fmt.Sprintf(
 						"contract %q is internal (path %q) but client %q is registered in actors.yaml (external);"+
-							" remove it or move the endpoint to a public path;"+
-							" fix: remove the external actor from clients or change the endpoint path to a public prefix",
+							" remove it or move the endpoint to a public path",
 						c.ID, path, client,
 					),
+					"remove the external actor from clients or change the endpoint path to a public prefix",
 				))
 			}
 		}

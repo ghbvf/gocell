@@ -280,6 +280,7 @@ var goldenCases = []struct {
 				Column:   1,
 				Field:    "名称",
 				Message:  "包含 \"引号\" 和 换行\n以及 emoji 🚀",
+				Fix:      "修复：使用 ASCII 名称，避免 emoji 🚀 与 <特殊> 字符 & \"引号\"\n第二行建议",
 			},
 		},
 	},
@@ -297,6 +298,44 @@ var goldenCases = []struct {
 				Line:     1,
 				Field:    "schema",
 				Message:  "type <string> & ref <user/x> not allowed when count > 0",
+			},
+		},
+	},
+	{
+		// Exercises the non-empty Fix rendering path: text writes a
+		// "fix: <guidance>" line; JSON emits a non-empty "fix" field;
+		// SARIF appends "; fix: <guidance>" to message.text.
+		name: "single_error_with_fix",
+		results: []governance.ValidationResult{
+			{
+				Code:     "FMT-13",
+				Severity: governance.SeverityError,
+				File:     "contracts/http/x/v1/contract.yaml",
+				Line:     3,
+				Column:   5,
+				Field:    "endpoints.http",
+				Message:  "HTTP contract \"x\" must declare endpoints.http",
+				Fix:      "add endpoints.http to contract.yaml with method/path/successStatus",
+			},
+		},
+	},
+	{
+		// Multi-line Fix (FMT-13-style copy-pasteable YAML block). Locks how
+		// each format renders a Fix containing embedded newlines: text prints
+		// the first line after "fix: " with continuation lines verbatim; JSON
+		// encodes the \n inside the "fix" string; SARIF appends the whole block
+		// to message.text. Without this case the multi-line Fix path is unlocked
+		// (production advHintFMT13MissingHTTPFix is multi-line).
+		name: "error_with_multiline_fix",
+		results: []governance.ValidationResult{
+			{
+				Code:     "FMT-13",
+				Severity: governance.SeverityError,
+				File:     "contracts/http/x/v1/contract.yaml",
+				Line:     3,
+				Field:    "endpoints.http",
+				Message:  "HTTP contract \"x\" must declare endpoints.http",
+				Fix:      "add endpoints.http to contract.yaml:\n  http:\n    method: GET\n    path: /api/v1/...\n    successStatus: 200",
 			},
 		},
 	},
@@ -530,7 +569,9 @@ func TestText_PreservesInputOrderWithinSeverity(t *testing.T) {
 // when a message contains \n (e.g. FMT-13's copy-pasteable YAML hint),
 // the (field: ...) suffix lands on the first line only. Subsequent
 // lines render verbatim so the embedded snippet stays copy-pasteable
-// without trailing field info corrupting it.
+// without trailing field info corrupting it. A non-empty Fix is included
+// to verify that the "fix:" line appears AFTER all message lines and
+// BEFORE the "at" anchor line.
 func TestText_MultilineMessage_FieldOnFirstLineOnly(t *testing.T) {
 	results := []governance.ValidationResult{
 		{
@@ -539,6 +580,7 @@ func TestText_MultilineMessage_FieldOnFirstLineOnly(t *testing.T) {
 			File:     "contracts/x/contract.yaml",
 			Field:    "endpoints.http.pathParams",
 			Message:  "placeholder \"id\" has no pathParams declaration; add to contract.yaml:\n  pathParams:\n    id:\n      type: string",
+			Fix:      "declare pathParams.id with type: string",
 		},
 	}
 	var buf bytes.Buffer
@@ -552,6 +594,15 @@ func TestText_MultilineMessage_FieldOnFirstLineOnly(t *testing.T) {
 		"YAML hint lines must render verbatim, no (field: ...) appended after them")
 	assert.NotContains(t, out, "type: string (field:",
 		"field suffix must NOT trail the multi-line YAML hint")
+
+	// Fix line ordering: must appear after all message lines and before the "at" anchor.
+	fixIdx := strings.Index(out, "fix: declare pathParams.id")
+	atIdx := strings.Index(out, "at contracts/x/contract.yaml")
+	typeIdx := strings.Index(out, "type: string")
+	require.NotEqual(t, -1, fixIdx, "fix: line must be present in output")
+	require.NotEqual(t, -1, atIdx, "at anchor line must be present")
+	assert.Greater(t, fixIdx, typeIdx, "fix: line must appear AFTER the last message line")
+	assert.Less(t, fixIdx, atIdx, "fix: line must appear BEFORE the at anchor")
 }
 
 // TestJSON_DoesNotEscapeHTMLChars locks SetEscapeHTML(false): messages with
@@ -637,6 +688,64 @@ func TestSARIF_NormalizeArtifactURI(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestSARIF_FixInProperties verifies that a non-empty Fix field is rendered
+// into result.properties.fix (SARIF 2.1.0 §3.8 property bag) and is NOT
+// appended to message.text as a "; fix: " suffix. This is the single-source
+// contract: Fix lives exclusively in the structured properties channel.
+func TestSARIF_FixInProperties(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:     "FMT-13",
+			Severity: governance.SeverityError,
+			File:     "contracts/x/contract.yaml",
+			Line:     1,
+			Message:  "HTTP contract must declare endpoints.http",
+			Fix:      "add endpoints.http with method/path/successStatus",
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(results))
+
+	var parsed sarifLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed.Runs[0].Results, 1)
+
+	result := parsed.Runs[0].Results[0]
+
+	// Fix must appear in properties.fix — not in message.text.
+	require.NotNil(t, result.Properties,
+		"result.properties must be present when Fix is non-empty")
+	assert.Equal(t, "add endpoints.http with method/path/successStatus",
+		result.Properties.Fix,
+		"result.properties.fix must equal the Fix field value")
+
+	// message.text must NOT contain the "; fix: " suffix.
+	assert.NotContains(t, result.Message.Text, "; fix:",
+		"message.text must not carry the fix suffix — fix is in properties.fix only")
+}
+
+// TestSARIF_EmptyFix_NoProperties verifies that when Fix is empty, the
+// properties field is omitted from the SARIF result (omitempty).
+func TestSARIF_EmptyFix_NoProperties(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:     "REF-01",
+			Severity: governance.SeverityError,
+			File:     "cells/x/cell.yaml",
+			Line:     1,
+			Message:  "no fix here",
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(results))
+
+	var parsed sarifLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed.Runs[0].Results, 1)
+	assert.Nil(t, parsed.Runs[0].Results[0].Properties,
+		"result.properties must be absent when Fix is empty")
 }
 
 // TestSARIF_OriginalUriBaseIDsAlwaysPresent verifies that the SRCROOT base ID

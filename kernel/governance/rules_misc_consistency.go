@@ -231,22 +231,20 @@ func isExamplePath(p string) bool {
 func (v *Validator) checkConsistencyConstraints12(c *metadata.ContractMeta) ([]ValidationResult, bool) {
 	// Constraint 1: L2+ HTTP contract must have non-empty triggers.
 	if isL2OrHigher(c.ConsistencyLevel) && len(c.Triggers) == 0 {
-		return []ValidationResult{v.newResult(
-			codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRequired,
+		return []ValidationResult{v.newError(
+			codeCONTRACTCONSISTENCYEMIT01, IssueRequired,
 			contractFile(c), "triggers",
-			fmt.Sprintf("contract %q: L2+ HTTP contract must declare non-empty triggers (matches outbox.Emit topics);"+
-				" fix: list the event contract ids emitted by this endpoint under triggers in contract.yaml",
-				c.ID),
+			fmt.Sprintf("contract %q: L2+ HTTP contract must declare non-empty triggers (matches outbox.Emit topics)", c.ID),
+			"list the event contract ids emitted by this endpoint under triggers in contract.yaml",
 		)}, true
 	}
 	// Constraint 2: triggers present but level ∈ {L0, L1}.
 	if len(c.Triggers) > 0 && !isL2OrHigher(c.ConsistencyLevel) {
-		return []ValidationResult{v.newResult(
-			codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueMismatch,
+		return []ValidationResult{v.newError(
+			codeCONTRACTCONSISTENCYEMIT01, IssueMismatch,
 			contractFile(c), "triggers",
-			fmt.Sprintf("contract %q declares triggers but consistencyLevel=%s; triggers imply L2+;"+
-				" fix: raise consistencyLevel to L2 (or higher) or remove the triggers from contract.yaml",
-				c.ID, c.ConsistencyLevel),
+			fmt.Sprintf("contract %q declares triggers but consistencyLevel=%s; triggers imply L2+", c.ID, c.ConsistencyLevel),
+			"raise consistencyLevel to L2 (or higher) or remove the triggers from contract.yaml",
 		)}, true
 	}
 	return nil, false
@@ -259,47 +257,48 @@ func (v *Validator) checkTriggerContracts(
 ) []ValidationResult {
 	var results []ValidationResult
 	if len(servingSlices) == 0 {
-		results = append(results, v.newResult(
-			codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRefNotFound,
+		results = append(results, v.newError(
+			codeCONTRACTCONSISTENCYEMIT01, IssueRefNotFound,
 			contractFile(c), "triggers",
-			fmt.Sprintf("contract %q declares triggers but no slice declares role: serve for it;"+
-				" fix: add contractUsages: {contract: %q, role: serve} to the slice that owns this HTTP endpoint",
-				c.ID, c.ID),
+			fmt.Sprintf("contract %q declares triggers but no slice declares role: serve for it", c.ID),
+			fmt.Sprintf("add contractUsages: {contract: %q, role: serve} to the slice that owns this HTTP endpoint", c.ID),
 		))
 	}
 	for _, t := range c.Triggers {
 		eventContract, ok := idx.contractByID[t]
 		if !ok {
-			results = append(results, v.newResult(
-				codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRefNotFound,
+			results = append(results, v.newError(
+				codeCONTRACTCONSISTENCYEMIT01, IssueRefNotFound,
 				contractFile(c), "triggers",
-				fmt.Sprintf("contract %q declares trigger %q but it does not reference an existing event contract;"+
-					" fix: create the event contract or correct the trigger id to match an existing contract",
-					c.ID, t),
+				fmt.Sprintf("contract %q declares trigger %q but it does not reference an existing event contract", c.ID, t),
+				"create the event contract or correct the trigger id to match an existing contract",
 			))
 			continue
 		}
 		if cellvocab.ContractKind(eventContract.Kind) != cellvocab.ContractEvent {
-			results = append(results, v.newResult(
-				codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeCONTRACTCONSISTENCYEMIT01, IssueMismatch,
 				contractFile(c), "triggers",
 				fmt.Sprintf(advHintCCE01TriggerNotEvent, c.ID, t, eventContract.Kind),
+				advHintCCE01TriggerNotEventFix,
 			))
 			continue
 		}
 		if eventContract.OwnerCell != c.OwnerCell || eventContract.Endpoints.Publisher != c.OwnerCell {
-			results = append(results, v.newResult(
-				codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeCONTRACTCONSISTENCYEMIT01, IssueMismatch,
 				contractFile(c), "triggers",
 				fmt.Sprintf(advHintCCE01OwnerMismatch, c.ID, t, c.OwnerCell),
+				advHintCCE01OwnerMismatchFix,
 			))
 		}
 		for _, ref := range servingSlices {
 			if !slicePublishes(idx, ref, t) {
-				results = append(results, v.newResult(
-					codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueMismatch,
+				results = append(results, v.newError(
+					codeCONTRACTCONSISTENCYEMIT01, IssueMismatch,
 					contractFile(c), "triggers",
 					fmt.Sprintf(advHintCCE01SliceNotPublish, c.ID, t, ref.cellID, ref.sliceID),
+					advHintCCE01SliceNotPublishFix,
 				))
 			}
 		}
@@ -328,10 +327,11 @@ func (v *Validator) checkForwardTriggers(
 		emitTopics := sliceEmitSets[ref.key()]
 		for _, t := range c.Triggers {
 			if _, found := emitTopics[t]; !found {
-				results = append(results, v.newResult(
-					codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRefNotFound,
+				results = append(results, v.newError(
+					codeCONTRACTCONSISTENCYEMIT01, IssueRefNotFound,
 					contractFile(c), "triggers",
 					fmt.Sprintf(advHintCCE01TriggerNotEmitted, c.ID, t, ref.dir, ref.cellID, ref.sliceID),
+					advHintCCE01TriggerNotEmittedFix,
 				))
 			}
 		}
@@ -349,10 +349,11 @@ func (v *Validator) checkReverseEmits(
 	var results []ValidationResult
 	for t := range emitTopics {
 		if _, found := declared[t]; !found {
-			results = append(results, v.newScopedResult(
-				codeCONTRACTCONSISTENCYEMIT01, SeverityError, IssueRefNotFound,
+			results = append(results, v.newScopedError(
+				codeCONTRACTCONSISTENCYEMIT01, IssueRefNotFound,
 				"project", "triggers",
-				fmt.Sprintf(advHintCCE01ReverseEmit, t, ref.cellID, ref.sliceID, t),
+				fmt.Sprintf(advHintCCE01ReverseEmit, t, ref.cellID, ref.sliceID),
+				advHintCCE01ReverseEmitFix,
 			))
 		}
 	}
@@ -374,15 +375,13 @@ func scanSliceEmitTopics(root string, ref sliceRef, fileForError string) (map[st
 	fset := token.NewFileSet()
 	allFiles, err := collectParsedFiles(fset, sliceDir)
 	if err != nil {
-		results = append(results, ValidationResult{
-			Code:      codeCONTRACTCONSISTENCYEMIT01,
-			Severity:  SeverityError,
-			IssueType: IssueInvalid,
-			File:      fileForError,
-			Field:     "triggers",
-			Message: fmt.Sprintf("cannot scan emitted topics in %s/%s: %v;"+
-				" fix: ensure the slice source files are readable and free of parse errors", ref.cellID, ref.sliceID, err),
-		})
+		results = append(results, newErrorAt(
+			codeCONTRACTCONSISTENCYEMIT01, IssueInvalid,
+			fileForError, metadata.Position{},
+			"triggers",
+			fmt.Sprintf("cannot scan emitted topics in %s/%s: %v", ref.cellID, ref.sliceID, err),
+			"ensure the slice source files are readable and free of parse errors",
+		))
 		return topics, results
 	}
 	helperMap := buildHelperEmitMap(allFiles, pkgConsts)
@@ -1127,16 +1126,13 @@ func collectHelperCallTopics(
 	}
 	{
 		relFile, line, col := dynamicTopicFilePos(topicArg, ctx.fset, ctx.root)
-		return []ValidationResult{{
-			Code:      codeCONTRACTCONSISTENCYEMIT01,
-			Severity:  SeverityError,
-			IssueType: IssueInvalid,
-			File:      relFile,
-			Field:     "triggers",
-			Message:   fmt.Sprintf(advHintCCE01DynamicTopicHelper, relFile, line, col),
-			Line:      line,
-			Column:    col,
-		}}
+		return []ValidationResult{newErrorAt(
+			codeCONTRACTCONSISTENCYEMIT01, IssueInvalid,
+			relFile, metadata.Position{Line: line, Column: col},
+			"triggers",
+			fmt.Sprintf(advHintCCE01DynamicTopicHelper, relFile, line, col),
+			advHintCCE01DynamicTopicHelperFix,
+		)}
 	}
 }
 
@@ -1159,16 +1155,13 @@ func collectOutboxEmitTopic(
 	}
 	if isDynamicExpr(topicExpr) {
 		relFile, line, col := dynamicTopicFilePos(topicExpr, ctx.fset, ctx.root)
-		return []ValidationResult{{
-			Code:      codeCONTRACTCONSISTENCYEMIT01,
-			Severity:  SeverityError,
-			IssueType: IssueInvalid,
-			File:      relFile,
-			Field:     "triggers",
-			Message:   fmt.Sprintf(advHintCCE01DynamicTopicEmit, relFile, line, col),
-			Line:      line,
-			Column:    col,
-		}}
+		return []ValidationResult{newErrorAt(
+			codeCONTRACTCONSISTENCYEMIT01, IssueInvalid,
+			relFile, metadata.Position{Line: line, Column: col},
+			"triggers",
+			fmt.Sprintf(advHintCCE01DynamicTopicEmit, relFile, line, col),
+			advHintCCE01DynamicTopicEmitFix,
+		)}
 	}
 	_ = state
 	return nil
@@ -1279,15 +1272,13 @@ func buildPkgConsts(cellDir, fileForError string) (cellPkgConsts, []ValidationRe
 			pkgConsts[pkgIdent] = pkgConstMap{}
 		}
 		if err := parseGoDir(dir, pkgConsts[pkgIdent]); err != nil {
-			results = append(results, ValidationResult{
-				Code:      codeCONTRACTCONSISTENCYEMIT01,
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      fileForError,
-				Field:     "triggers",
-				Message: fmt.Sprintf("cannot scan constants in %s: %v;"+
-					" fix: ensure the directory exists, is readable, and contains valid Go source files", filepath.ToSlash(dir), err),
-			})
+			results = append(results, newErrorAt(
+				codeCONTRACTCONSISTENCYEMIT01, IssueInvalid,
+				fileForError, metadata.Position{},
+				"triggers",
+				fmt.Sprintf("cannot scan constants in %s: %v", filepath.ToSlash(dir), err),
+				"ensure the directory exists, is readable, and contains valid Go source files",
+			))
 		}
 	}
 	return pkgConsts, results
@@ -1519,16 +1510,13 @@ func extractEventTypeFromCompLit(compLit *ast.CompositeLit, ctx emitScanContext)
 		}
 		if isDynamicExpr(kv.Value) {
 			relFile, line, col := dynamicTopicFilePos(kv.Value, ctx.fset, ctx.root)
-			return "", false, []ValidationResult{{
-				Code:      codeCONTRACTCONSISTENCYEMIT01,
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      relFile,
-				Field:     "triggers",
-				Message:   fmt.Sprintf(advHintCCE01DynamicTopicReceiver, relFile, line, col),
-				Line:      line,
-				Column:    col,
-			}}
+			return "", false, []ValidationResult{newErrorAt(
+				codeCONTRACTCONSISTENCYEMIT01, IssueInvalid,
+				relFile, metadata.Position{Line: line, Column: col},
+				"triggers",
+				fmt.Sprintf(advHintCCE01DynamicTopicReceiver, relFile, line, col),
+				advHintCCE01DynamicTopicReceiverFix,
+			)}
 		}
 		return "", false, nil
 	}

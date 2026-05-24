@@ -1,19 +1,17 @@
 // Package composite_lit_no_message_red is a testdata fixture for INV-3
-// (GOVERNANCE-RULE-ERROR-MESSAGE-FIX-SUFFIX-01) negative case.
+// (GOVERNANCE-RULE-ERROR-FIX-FIELD-01) negative case — the construction-funnel
+// scan path.
 //
-// Shape tested: ValidationResult{Severity: SeverityError, ...} that omits
-// the Message: field entirely. Without the completeness check, the legacy
-// key loop saw msgExpr == nil and silently returned; the violation is now
-// surfaced because a missing Message can never carry the "; fix:" anchor.
-//
-// Expected: 1 violation from the CompositeLit scan path.
+// Shape tested: a raw ValidationResult{} composite literal that omits most
+// fields. Any raw composite outside locator.go is forbidden (it bypasses the
+// constructor funnel and the mandatory typed Fix), regardless of which fields
+// it sets. Expected: 1 violation from the funnel scan path.
 package composite_lit_no_message_red
 
 import gov "github.com/ghbvf/gocell/kernel/governance"
 
-// violateNoMessage returns an error result without a Message field. Every
-// SeverityError result must declare its own actionable Message; omitting it
-// silently drops the remediation guidance from the rule output.
+// violateNoMessage constructs a raw ValidationResult composite literal — the
+// forbidden bypass shape.
 func violateNoMessage() gov.ValidationResult {
 	return gov.ValidationResult{
 		Severity: gov.SeverityError,

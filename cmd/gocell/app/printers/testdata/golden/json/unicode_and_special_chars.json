@@ -8,6 +8,7 @@
       "scope": "",
       "field": "名称",
       "message": "包含 \"引号\" 和 换行\n以及 emoji 🚀",
+      "fix": "修复：使用 ASCII 名称，避免 emoji 🚀 与 <特殊> 字符 & \"引号\"\n第二行建议",
       "line": 1,
       "column": 1
     }

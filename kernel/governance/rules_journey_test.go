@@ -37,8 +37,7 @@ func TestJOURNEYCONTRACTEXISTENCE01_ActiveContractWithoutJourney(t *testing.T) {
 	assert.Equal(t, IssueRequired, r.IssueType)
 	assert.Equal(t, "contracts/event/session/created/v1/contract.yaml", r.File)
 	assert.Equal(t, "id", r.Field)
-	assert.True(t, strings.Contains(r.Message, "; fix:"),
-		"SeverityError messages must include `; fix:` anchor (INV-3); got: %s", r.Message)
+	assert.NotEmpty(t, r.Fix, "SeverityError findings must have a non-empty Fix field (INV-3)")
 }
 
 func TestJOURNEYCONTRACTEXISTENCE01_DeprecatedContractExempt(t *testing.T) {
@@ -113,7 +112,7 @@ func TestJOURNEYSTATUSLIFECYCLE01_TodoMustBeExperimental(t *testing.T) {
 	assert.Equal(t, IssueMismatch, r.IssueType)
 	assert.Equal(t, "journeys/status-board.yaml", r.File)
 	assert.Equal(t, "[0].state", r.Field)
-	assert.True(t, strings.Contains(r.Message, "; fix:"))
+	assert.NotEmpty(t, r.Fix, "SeverityError findings must have a non-empty Fix field")
 	// Error message must list the actual allowed set so authors know what to pick.
 	assert.True(t, strings.Contains(r.Message, "experimental"),
 		"error message must enumerate allowed lifecycles; got: %s", r.Message)

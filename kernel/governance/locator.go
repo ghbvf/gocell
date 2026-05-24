@@ -37,7 +37,7 @@ func parentFieldPath(p string) string {
 
 // locator provides position-enriched ValidationResult construction. It is
 // embedded into Validator and DependencyChecker so both share a single
-// implementation of locate/newResult — one copy, not two.
+// implementation of locate/newError/newWarning/newScopedError — one copy, not two.
 //
 // The embedded form also promotes the `project` field, which is why existing
 // rule code continues to read `v.project.Cells` / `dc.project.Slices` without
@@ -55,7 +55,7 @@ type locator struct {
 // an ancestor that does exist, so callers anchor at the closest concrete
 // parent instead of (0, 0). Returns (0, 0) only when the file is unknown
 // or no part of the path resolves at all.
-// Rules should prefer newResult, which wraps this call.
+// Rules should prefer newError / newWarning / newScopedError, which wrap this call.
 func (l *locator) locate(file, field string) (line, col int) {
 	if file == "" || field == "" {
 		return 0, 0
@@ -72,45 +72,81 @@ func (l *locator) locate(file, field string) (line, col int) {
 	return 0, 0
 }
 
-// newResult constructs a ValidationResult with Line/Column auto-populated
-// from the yaml.Node cache. Rule implementations should prefer this builder
-// over struct literals so locations stay consistent across all findings.
-func (l *locator) newResult(code RuleCode, sev Severity, typ IssueType, file, field, msg string) ValidationResult {
+// newError constructs a SeverityError ValidationResult with Line/Column
+// auto-populated from the yaml.Node cache. fix is the remediation guidance and
+// is REQUIRED: choosing the error severity means choosing the constructor that
+// structurally demands a fix (the "typed function choice" funnel — see
+// ValidationResult.Fix). Rule implementations construct error findings
+// exclusively through newError / newErrorAt / newScopedError; raw
+// ValidationResult{Severity: SeverityError} literals are rejected by
+// GOVERNANCE-RULE-ERROR-FIX-FIELD-01.
+func (l *locator) newError(code RuleCode, typ IssueType, file, field, msg, fix string) ValidationResult {
 	file = l.resolveFile(file)
 	line, col := l.locate(file, field)
 	return ValidationResult{
 		Code:      code,
-		Severity:  sev,
+		Severity:  SeverityError,
 		IssueType: typ,
 		File:      file,
 		Field:     field,
 		Message:   msg,
+		Fix:       fix,
 		Line:      line,
 		Column:    col,
 	}
 }
 
-// newResultAt constructs a ValidationResult with caller-supplied Line/Column.
-// Use this when the source position comes from content scanning (e.g. line-by-
-// line text scan) rather than the yaml.Node cache. The file argument is not
-// resolved through the canonical-file resolver because content scanning
-// already works with relative paths directly.
-//
-// unparam: code currently only receives codeDOCNAME01 because DOC-NAME-01 is
-// the only rule using content-scanning positions. The parameter is retained
-// for INV-2 (GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01) enforcement, which
-// requires every newResultAt call site to pass a RuleCode-typed const.
-func (l *locator) newResultAt(
-	code RuleCode, sev Severity, typ IssueType, //nolint:unparam // see comment above
-	file string, pos metadata.Position, field, msg string,
-) ValidationResult {
+// newWarning constructs a SeverityWarning ValidationResult with Line/Column
+// auto-populated from the yaml.Node cache. fix is REQUIRED, same as the error
+// constructors: the typed-Fix contract covers EVERY finding regardless of
+// severity. Severity decides blocking (error) vs advisory (warning); it does
+// NOT decide whether remediation guidance is structured. A warning's "how to
+// fix" therefore lives in the typed Fix field, never as a Message substring —
+// the same anti-pattern this funnel eliminates for errors
+// (GOVERNANCE-RULE-ERROR-FIX-FIELD-01 enforces non-empty Fix on all four
+// constructors).
+func (l *locator) newWarning(code RuleCode, typ IssueType, file, field, msg, fix string) ValidationResult {
+	file = l.resolveFile(file)
+	line, col := l.locate(file, field)
 	return ValidationResult{
 		Code:      code,
-		Severity:  sev,
+		Severity:  SeverityWarning,
 		IssueType: typ,
 		File:      file,
 		Field:     field,
 		Message:   msg,
+		Fix:       fix,
+		Line:      line,
+		Column:    col,
+	}
+}
+
+// newErrorAt constructs a SeverityError ValidationResult with caller-supplied
+// Line/Column. Use this when the source position comes from content scanning
+// (e.g. line-by-line text scan) rather than the yaml.Node cache. The file
+// argument is not resolved through the canonical-file resolver because content
+// scanning already works with relative paths directly. fix is REQUIRED (same
+// funnel as newError).
+//
+// Unlike newError / newWarning / newScopedError this is a package-level
+// function, not a locator method: it never consults the yaml.Node cache
+// (positions are supplied by the caller), so the package-level emit/doc scan
+// helpers that have no locator receiver can construct error findings through
+// the same funnel instead of raw ValidationResult{} literals.
+//
+// Example: newErrorAt(codeDOCNAME01, IssueInvalid, rel, metadata.Position{}, "include", msg, fix).
+func newErrorAt(
+	code RuleCode, typ IssueType,
+	file string, pos metadata.Position, field, msg, fix string,
+) ValidationResult {
+	return ValidationResult{
+		Code:      code,
+		Severity:  SeverityError,
+		IssueType: typ,
+		File:      file,
+		Field:     field,
+		Message:   msg,
+		Fix:       fix,
 		Line:      pos.Line,
 		Column:    pos.Column,
 	}
@@ -226,18 +262,21 @@ func canonicalAssemblyID(file string) (string, bool) {
 	return "", false
 }
 
-// newScopedResult constructs a ValidationResult for checks that span multiple
-// files (or none at all). Pass a virtual scope name (e.g. "project") instead
-// of a file path; Line/Column are always zero because there is no single
-// location to point at. Renderers distinguish Scope from File so users do
-// not mistake the scope label for a jumpable path.
-func (l *locator) newScopedResult(code RuleCode, sev Severity, typ IssueType, scope, field, msg string) ValidationResult {
+// newScopedError constructs a SeverityError ValidationResult for checks that
+// span multiple files (or none at all). Pass a virtual scope name (e.g.
+// "project") instead of a file path; Line/Column are always zero because there
+// is no single location to point at. Renderers distinguish Scope from File so
+// users do not mistake the scope label for a jumpable path. fix is REQUIRED
+// (same funnel as newError). There is no newScopedWarning — no scoped warning
+// site exists, and the absence is itself part of the funnel.
+func (l *locator) newScopedError(code RuleCode, typ IssueType, scope, field, msg, fix string) ValidationResult {
 	return ValidationResult{
 		Code:      code,
-		Severity:  sev,
+		Severity:  SeverityError,
 		IssueType: typ,
 		Scope:     scope,
 		Field:     field,
 		Message:   msg,
+		Fix:       fix,
 	}
 }

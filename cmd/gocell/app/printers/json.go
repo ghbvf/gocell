@@ -13,7 +13,7 @@ import (
 //
 //	{
 //	  "issues": [ { code, severity, issueType, file, scope, field, message,
-//	                line, column }, ... ],
+//	                fix, line, column }, ... ],
 //	  "summary": { "errors": N, "warnings": M }
 //	}
 //
@@ -45,6 +45,7 @@ type resultJSON struct {
 	Scope     string `json:"scope"`
 	Field     string `json:"field"`
 	Message   string `json:"message"`
+	Fix       string `json:"fix"`
 	Line      int    `json:"line"`
 	Column    int    `json:"column"`
 }
@@ -109,6 +110,7 @@ func toResultJSON(r governance.ValidationResult) resultJSON {
 		Scope:     r.Scope,
 		Field:     r.Field,
 		Message:   r.Message,
+		Fix:       r.Fix,
 		Line:      r.Line,
 		Column:    r.Column,
 	}
