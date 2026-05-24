@@ -93,11 +93,10 @@ func TestProjectionConsistency01(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		project       *metadata.ProjectMeta
-		wantErrCount  int
-		wantField     string
-		wantCodeMatch bool
+		name         string
+		project      *metadata.ProjectMeta
+		wantErrCount int
+		wantField    string
 	}{
 		{
 			name:         "projection L2 → error",

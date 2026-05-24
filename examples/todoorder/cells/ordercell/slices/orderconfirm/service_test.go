@@ -188,8 +188,14 @@ func TestService_Confirm_InvalidStatus(t *testing.T) {
 	}
 }
 
-// TestService_Confirm_TxRollback verifies atomicity: emit failure inside tx does not persist status change.
-func TestService_Confirm_TxRollback(t *testing.T) {
+// TestService_Confirm_EmitFailure_ReturnsError verifies that an outbox emit failure
+// inside the transaction causes Confirm to return an error.
+//
+// Note: stubTxRunner has no real rollback semantics — it executes fn directly
+// without a database transaction. Actual atomicity (status change rolled back on
+// emit failure) requires testcontainers + a real PG transaction. This test
+// documents the stub boundary and verifies the error propagation path only.
+func TestService_Confirm_EmitFailure_ReturnsError(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	orderID := seedOrder(t, repo)
 
@@ -202,10 +208,15 @@ func TestService_Confirm_TxRollback(t *testing.T) {
 	// emit failure inside RunInTx → RunInTx returns error → Confirm returns error
 	require.Error(t, err)
 
-	// stubTxRunner has no real rollback; document that with real PG tx the order
-	// status would NOT be updated. Here we verify no outbox entry was captured
-	// (the Write failed before appending).
+	// No outbox entry was captured (Write failed before appending).
 	assert.Empty(t, writer.entries)
+
+	// stub has no rollback, so status IS changed — document the stub boundary:
+	// with a real PG transaction the status would remain pending on emit failure.
+	order, getErr := repo.GetByID(context.Background(), orderID)
+	require.NoError(t, getErr)
+	assert.Equal(t, domain.StatusConfirmed, order.Status,
+		"stub has no rollback: status was updated before emit failure; real PG tx would roll this back")
 }
 
 // TestNewService_NilDep verifies required-dep nil guard.

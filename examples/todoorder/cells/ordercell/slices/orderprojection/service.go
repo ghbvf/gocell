@@ -120,16 +120,14 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // NewService creates a new orderprojection Service.
-func NewService(logger *slog.Logger, opts ...Option) (*Service, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+// Default logger is slog.Default(); use WithLogger to override.
+func NewService(opts ...Option) (*Service, error) {
 	s := &Service{
 		store: &store{
 			byStatus: make(map[string][]string),
 			orderAt:  make(map[string]string),
 		},
-		logger: logger,
+		logger: slog.Default(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -146,6 +144,7 @@ func NewService(logger *slog.Logger, opts ...Option) (*Service, error) {
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false).
+// Demo mode: in-process bus, no DLX exchange; production: set SubscriberConfig.DLXExchange.
 func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload ordercreated.Payload
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
@@ -159,6 +158,9 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) ou
 
 	// Idempotency guard: if we already know this order, no-op Ack.
 	if _, exists := s.store.orderAt[payload.ID]; exists {
+		s.logger.Debug("orderprojection: idempotent ack — already applied",
+			slog.String("order_id", payload.ID),
+			slog.String("entry_id", entry.ID))
 		return outbox.Ack()
 	}
 
@@ -186,6 +188,7 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) ou
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false).
+// Demo mode: in-process bus, no DLX exchange; production: set SubscriberConfig.DLXExchange.
 func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload orderstatuschanged.Payload
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
@@ -199,6 +202,9 @@ func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Ent
 
 	// Idempotency guard: if this order is already at newStatus, no-op Ack.
 	if cur, exists := s.store.orderAt[payload.ID]; exists && cur == payload.NewStatus {
+		s.logger.Debug("orderprojection: idempotent ack — already applied",
+			slog.String("order_id", payload.ID),
+			slog.String("entry_id", entry.ID))
 		return outbox.Ack()
 	}
 
@@ -244,6 +250,8 @@ func (s *Service) Query(_ context.Context) Summary {
 		}
 		cp := make([]string, len(ids))
 		copy(cp, ids)
+		// Sort order IDs within each bucket for byte-identical rebuild guarantee.
+		sort.Strings(cp)
 		statuses = append(statuses, StatusBucket{
 			Status:   name,
 			Count:    int64(len(ids)),
@@ -274,6 +282,9 @@ func (s *Service) Rebuild(_ context.Context) (RebuildReport, error) {
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
 
+	s.logger.Info("orderprojection: rebuild started",
+		slog.Int("log_entries", len(s.store.log)))
+
 	// capture log before clearing
 	log := make([]projectedEvent, len(s.store.log))
 	copy(log, s.store.log)
@@ -297,9 +308,15 @@ func (s *Service) Rebuild(_ context.Context) (RebuildReport, error) {
 		lastSeq = log[len(log)-1].seq
 	}
 
-	return RebuildReport{
+	report := RebuildReport{
 		EventsReplayed:  len(log),
 		StatusesRebuilt: len(s.store.byStatus),
 		LastAppliedSeq:  lastSeq,
-	}, nil
+	}
+
+	s.logger.Info("orderprojection: rebuild completed",
+		slog.Int("events_replayed", report.EventsReplayed),
+		slog.Int64("last_seq", report.LastAppliedSeq))
+
+	return report, nil
 }

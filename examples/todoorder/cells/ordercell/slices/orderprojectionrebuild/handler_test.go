@@ -2,7 +2,6 @@ package orderprojectionrebuild
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,7 +20,7 @@ import (
 
 func newTestAdapter(t *testing.T) (*orderprojection.Service, *RebuildAdapter) {
 	t.Helper()
-	svc, err := orderprojection.NewService(slog.Default())
+	svc, err := orderprojection.NewService()
 	require.NoError(t, err)
 	return svc, NewRebuildAdapter(svc)
 }

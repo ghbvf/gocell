@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
@@ -33,7 +34,8 @@ func (r *OrderRepository) Create(_ context.Context, order *domain.Order) error {
 
 	if _, exists := r.orders[order.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("order %q already exists", order.ID))
+			"order already exists",
+			errcode.WithDetails(slog.String("orderId", order.ID)))
 	}
 	// Store a copy to avoid external mutation.
 	stored := *order
@@ -49,7 +51,8 @@ func (r *OrderRepository) GetByID(_ context.Context, id string) (*domain.Order, 
 	o, ok := r.orders[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
-			fmt.Sprintf("order %q not found", id))
+			"order not found",
+			errcode.WithDetails(slog.String("orderId", id)))
 	}
 	// Return a copy.
 	out := *o
@@ -65,7 +68,8 @@ func (r *OrderRepository) UpdateStatus(_ context.Context, id, newStatus string) 
 	o, ok := r.orders[id]
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
-			fmt.Sprintf("order %q not found", id))
+			"order not found",
+			errcode.WithDetails(slog.String("orderId", id)))
 	}
 	o.Status = newStatus
 	return nil

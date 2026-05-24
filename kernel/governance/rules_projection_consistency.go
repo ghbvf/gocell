@@ -27,6 +27,10 @@ package governance
 //     empty/low ConsistencyLevel that never passed through the YAML parser. The
 //     governance rule reports it explicitly so a programmatic fixture cannot
 //     silently declare a projection at L2.
+//
+//   - Hard 化路径：在 metadata parser Load 时运行 jsonschema.Validate 可将
+//     schema enum gate 升级为 parse-time 强制（基础设施已有）。
+//     升级追踪：gh issue（PR #937 review 待开）。
 
 import (
 	"fmt"

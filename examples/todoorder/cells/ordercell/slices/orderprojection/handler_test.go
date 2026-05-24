@@ -2,7 +2,6 @@ package orderprojection
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +16,7 @@ var allowAllPolicy = func(*http.Request) error { return nil }
 
 func newSummaryHandler(t *testing.T) (*Service, *projectionsummary.Handler) {
 	t.Helper()
-	svc, err := NewService(slog.Default())
+	svc, err := NewService()
 	require.NoError(t, err)
 	summaryH := projectionsummary.NewHandler(NewSummaryAdapter(svc), allowAllPolicy)
 	return svc, summaryH

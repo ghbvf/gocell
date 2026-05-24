@@ -150,36 +150,61 @@ The loop has four parts, all inside `ordercell`:
    in-memory status-grouped read model declared as the
    `projection.order.status-summary.v1` contract (GoCell's first
    `kind: projection` instance). The read model is a *derived view* (per-status
-   counts + order IDs) the write-side `orders` map cannot serve cheaply.
+   counts + order IDs) the write-side `orders` map cannot cheaply serve — `GET
+   /api/v1/orders/` returns a flat list of complete order records; `GET
+   /api/v1/orders/projection/summary` returns a server-side aggregated-by-status
+   read model (`{statuses:[{status,count,orderIds}]}`) that the write-side
+   by-id map cannot provide without a full scan.
 3. **Query** — `GET /api/v1/orders/projection/summary` reads the projection.
 4. **Rebuild** — `POST /internal/v1/orders/projection/rebuild` (internal
    listener, service-token + caller-cell auth) replays the slice's own
    append-only event log to reconstruct the read model. This demonstrates
    business-level rebuild without any `kernel/replay` primitive.
 
+> **Security note (demo simplification)**: this demo's `Order` has no
+> `ownerID`; `projection/summary` exposes all `orderIds` and `orderconfirm`
+> does not validate the caller's ownership. Production use requires adding
+> `ownerID` to `Order` and enforcing per-user filtering / IDOR guard at the
+> service layer (see the `accesscore` session owner-guard pattern).
+
+> **Demo mode — NoopWriter does not deliver events to the projection**: `run.go`
+> uses `outbox.NoopWriter{}`, so events are validated then discarded; there is
+> no in-process fan-out. In demo mode, `PATCH confirm` does not update the
+> projection, so `GET /projection/summary` always returns an empty statuses
+> array and `POST /projection/rebuild` always reports `eventsReplayed:0`. The
+> outputs below reflect **durable mode** (real broker + relay) or the unit
+> tests in `orderprojection/service_test.go`. For the projection closed-loop
+> runtime validation, see that test file.
+
 ```bash
-# Confirm an order (PATCH) → publishes order-status-changed
+# Confirm an order (PATCH) → publishes order-status-changed (durable mode only)
 curl -X PATCH -H "Authorization: Bearer $TODOORDER_TOKEN" \
   -H "Content-Type: application/json" -d '{"status":"confirmed"}' \
   http://localhost:8082/api/v1/orders/{id}/status
 
-# Query the status-grouped read model (eventually consistent)
+# Query the status-grouped read model (eventually consistent; empty in demo mode)
 curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
   http://localhost:8082/api/v1/orders/projection/summary
-# {"data":{"statuses":[{"status":"confirmed","count":1,"orderIds":["ord-..."]}],"totalOrders":1,"lastAppliedSeq":2}}
+# {"data":{"statuses":[{"status":"confirmed","count":1,"orderIds":["ord-..."]}],"totalOrders":1,"lastAppliedSeq":1}}
 
-# Rebuild the projection from the event log (internal listener :9082, service token)
+# Rebuild the projection from the event log (internal listener :9082)
+# NOTE: the internal listener requires a 4-part HMAC service-token header
+# (ts:nonce:callerCell:mac). The demo provides no token-generation script;
+# validate this path via the orderprojectionrebuild contract/handler tests,
+# which use auth.TestServiceContext("ordercell").
 curl -X POST http://localhost:9082/internal/v1/orders/projection/rebuild
-# {"data":{"eventsReplayed":2,"statusesRebuilt":1,"lastAppliedSeq":2}}
+# Without a valid service-token the above returns 401.
+# Expected response in durable mode:
+# {"data":{"eventsReplayed":2,"statusesRebuilt":1,"lastAppliedSeq":1}}
 ```
 
 > **Demo limitation**: the projection's event log is unbounded by design — a
 > production projection would snapshot + truncate, or replay from a durable
 > outbox. The public summary slice and the internal rebuild slice are kept
 > separate (`orderprojection` vs `orderprojectionrebuild`) per governance rule
-> FMT-33 (public/internal trust-boundary segregation). Governance rule
-> `PROJECTION-CONSISTENCY-01` enforces that every `kind: projection` contract
-> declares `consistencyLevel >= L3`.
+> FMT-33 (public/internal trust-boundary segregation). If `gocell validate`
+> reports `PROJECTION-CONSISTENCY-01`, set `consistencyLevel` to `L3` or `L4`
+> in the projection's `contract.yaml`.
 
 ## Durable Wiring Checklist
 

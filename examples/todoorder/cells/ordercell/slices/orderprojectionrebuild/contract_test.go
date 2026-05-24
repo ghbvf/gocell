@@ -1,7 +1,6 @@
 package orderprojectionrebuild
 
 import (
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,7 +18,7 @@ func TestHttpOrderProjectionRebuildV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.projection-rebuild.v1")
 
-	svc, err := orderprojection.NewService(slog.Default())
+	svc, err := orderprojection.NewService()
 	require.NoError(t, err)
 	h := projectionrebuild.NewHandler(NewRebuildAdapter(svc), func(*http.Request) error { return nil })
 

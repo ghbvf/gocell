@@ -20,19 +20,19 @@ var _ projectionrebuild.Service = (*RebuildAdapter)(nil)
 // RebuildAdapter bridges orderprojection.Service to the generated
 // projectionrebuild.Service interface for the internal rebuild endpoint.
 type RebuildAdapter struct {
-	S *orderprojection.Service
+	svc *orderprojection.Service
 }
 
 // NewRebuildAdapter creates a RebuildAdapter.
 func NewRebuildAdapter(s *orderprojection.Service) *RebuildAdapter {
-	return &RebuildAdapter{S: s}
+	return &RebuildAdapter{svc: s}
 }
 
 // ProjectionRebuild implements projectionrebuild.Service.
 func (a *RebuildAdapter) ProjectionRebuild(
 	ctx context.Context, _ *projectionrebuild.Request,
 ) (projectionrebuild.ProjectionRebuildResponseObject, error) {
-	report, err := a.S.Rebuild(ctx)
+	report, err := a.svc.Rebuild(ctx)
 	if err != nil {
 		return nil, err
 	}

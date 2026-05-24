@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"reflect"
 	"strconv"
 	"sync"
@@ -21,7 +20,7 @@ import (
 
 func newTestService(t *testing.T) *Service {
 	t.Helper()
-	svc, err := NewService(slog.Default())
+	svc, err := NewService()
 	require.NoError(t, err)
 	return svc
 }
@@ -272,6 +271,7 @@ func TestRebuild_ReportCounts(t *testing.T) {
 }
 
 func TestConcurrency_HandleAndQuery_NoDataRace(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 	ctx := context.Background()
 

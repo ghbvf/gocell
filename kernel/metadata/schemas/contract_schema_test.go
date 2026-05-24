@@ -449,12 +449,16 @@ func TestContractSchemaAuthBoolMatrix(t *testing.T) {
 }
 
 // TestProjectionConsistencyLevelSchemaEnum verifies the PROJECTION-CONSISTENCY-01
-// schema upper gate: the contract.schema.json projection if/then block restricts
-// consistencyLevel to ["L3","L4"]. This test is the Hard schema-layer oracle;
-// the governance rule validateProjectionConsistency is the Medium second layer
-// covering in-memory fixtures that bypass the parser.
+// schema gate: the contract.schema.json projection if/then block restricts
+// consistencyLevel to ["L3","L4"].
 //
-// INVARIANT: PROJECTION-CONSISTENCY-01 (schema enum gate, Hard at schema test layer)
+// AI-robust evaluation: schema enum is a documentation + test-layer constraint;
+// the metadata parser does not run jsonschema.Validate at load time, so the
+// validate-time governance rule PROJECTION-CONSISTENCY-01 is the real enforcement
+// (Medium). This test covers the YAML-parsed path; the governance rule covers
+// in-memory fixtures that bypass the parser.
+//
+// INVARIANT: PROJECTION-CONSISTENCY-01 (schema enum gate, Medium — parser does not validate at load time)
 func TestProjectionConsistencyLevelSchemaEnum(t *testing.T) {
 	schema := compileContractSchemaForTest(t)
 

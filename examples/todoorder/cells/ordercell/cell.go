@@ -244,7 +244,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	// (projection.order.status-summary.v1), serves the summary query, and exposes
 	// a business-level rebuild on the internal listener. The subscription wiring
 	// is emitted into cell_gen.go from the +slice:subscribe markers above.
-	projSvc, err := orderprojection.NewService(c.logger)
+	projSvc, err := orderprojection.NewService(orderprojection.WithLogger(c.logger))
 	if err != nil {
 		return fmt.Errorf("orderprojection: %w", err)
 	}

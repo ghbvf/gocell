@@ -17,19 +17,19 @@ var _ projectionsummary.Service = (*SummaryAdapter)(nil)
 
 // SummaryAdapter bridges Service to the generated projectionsummary.Service interface.
 type SummaryAdapter struct {
-	S *Service
+	svc *Service
 }
 
 // NewSummaryAdapter creates a SummaryAdapter.
 func NewSummaryAdapter(s *Service) *SummaryAdapter {
-	return &SummaryAdapter{S: s}
+	return &SummaryAdapter{svc: s}
 }
 
 // ProjectionSummary implements projectionsummary.Service.
 func (a *SummaryAdapter) ProjectionSummary(
 	ctx context.Context, _ *projectionsummary.Request,
 ) (projectionsummary.ProjectionSummaryResponseObject, error) {
-	summary := a.S.Query(ctx)
+	summary := a.svc.Query(ctx)
 
 	statuses := make([]*projectionsummary.ResponseDataStatusesItem, 0, len(summary.Statuses))
 	for _, b := range summary.Statuses {

@@ -118,7 +118,8 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ":8082",
 			[]auth.ListenerAuth{jwtPlan}),
-		bootstrap.WithListener(cell.InternalListener, ":9082", internalAuthChain),
+		// demo loopback 隔离，生产按容器网络拓扑配置
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9082", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	)
 
