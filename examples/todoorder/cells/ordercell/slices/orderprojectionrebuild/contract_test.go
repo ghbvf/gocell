@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	orderprojection "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderprojection"
+	internalproj "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/orderprojection"
 	projectionrebuild "github.com/ghbvf/gocell/generated/contracts/http/order/projection-rebuild/v1"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
@@ -18,7 +18,7 @@ func TestHttpOrderProjectionRebuildV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.projection-rebuild.v1")
 
-	svc, err := orderprojection.NewService()
+	svc, err := internalproj.NewService()
 	require.NoError(t, err)
 	h := projectionrebuild.NewHandler(NewRebuildAdapter(svc), func(*http.Request) error { return nil })
 

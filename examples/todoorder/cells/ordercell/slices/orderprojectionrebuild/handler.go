@@ -2,29 +2,29 @@
 // projection-rebuild slice: POST /internal/v1/orders/projection/rebuild,
 // mounted on the InternalListener (service-token + caller-cell auth). It
 // shares the projection store with the public orderprojection slice via the
-// injected *orderprojection.Service. Public and internal HTTP surfaces are
-// kept in separate slices per governance rule
+// shared internal package cells/ordercell/internal/orderprojection. Public
+// and internal HTTP surfaces are kept in separate slices per governance rule
 // SLICE-HTTP-VISIBILITY-SEGREGATION-01 (FMT-33).
 package orderprojectionrebuild
 
 import (
 	"context"
 
-	orderprojection "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderprojection"
+	internalproj "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/orderprojection"
 	projectionrebuild "github.com/ghbvf/gocell/generated/contracts/http/order/projection-rebuild/v1"
 )
 
 // Compile-time assertion: RebuildAdapter implements the generated Service interface.
 var _ projectionrebuild.Service = (*RebuildAdapter)(nil)
 
-// RebuildAdapter bridges orderprojection.Service to the generated
+// RebuildAdapter bridges internalproj.Service to the generated
 // projectionrebuild.Service interface for the internal rebuild endpoint.
 type RebuildAdapter struct {
-	svc *orderprojection.Service
+	svc *internalproj.Service
 }
 
 // NewRebuildAdapter creates a RebuildAdapter.
-func NewRebuildAdapter(s *orderprojection.Service) *RebuildAdapter {
+func NewRebuildAdapter(s *internalproj.Service) *RebuildAdapter {
 	return &RebuildAdapter{svc: s}
 }
 

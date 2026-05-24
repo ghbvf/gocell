@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	orderprojection "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderprojection"
+	internalproj "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/orderprojection"
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	projectionrebuild "github.com/ghbvf/gocell/generated/contracts/http/order/projection-rebuild/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -18,9 +18,9 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-func newTestAdapter(t *testing.T) (*orderprojection.Service, *RebuildAdapter) {
+func newTestAdapter(t *testing.T) (*internalproj.Service, *RebuildAdapter) {
 	t.Helper()
-	svc, err := orderprojection.NewService()
+	svc, err := internalproj.NewService()
 	require.NoError(t, err)
 	return svc, NewRebuildAdapter(svc)
 }
