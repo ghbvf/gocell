@@ -7,7 +7,8 @@
 // kernel/saga uses these helpers. kernel/command predates this package and
 // still inlines the same lookup/defensive-copy bodies; migrating it is a
 // candidate cleanup (it must be done without dropping command below the 90%
-// kernel coverage gate, since the removed lines are fully covered).
+// kernel coverage gate, since the removed lines are fully covered). Tracked in
+// gh issue #936.
 //
 // The helpers are intentionally tiny and type-agnostic: per-state-machine
 // concerns — the Status enum, its String/Valid/IsTerminal methods, and the
