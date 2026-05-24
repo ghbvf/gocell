@@ -397,6 +397,10 @@
       "then": {
         "required": ["replayable"],
         "properties": {
+          "consistencyLevel": {
+            "enum": ["L3", "L4"],
+            "description": "Projection contracts must be L3 (WorkflowEventual) or L4 (DeviceLatent); they depend on cross-cell eventual consistency by definition."
+          },
           "endpoints": {
             "type": "object",
             "required": ["provider", "readers"],
