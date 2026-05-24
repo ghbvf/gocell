@@ -204,7 +204,7 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 			hub.state.Store(tt.state)
 			checkers := hub.Checkers()
 			require.NotEmpty(t, checkers, "Checkers must return a non-empty map")
-			fn, ok := checkers["websocket_hub_ready"]
+			fn, ok := checkers[string(ProbeReady)]
 			require.True(t, ok, "must have 'websocket_hub_ready' key")
 			err := fn(context.Background())
 			if tt.wantNil {
@@ -242,7 +242,7 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 
 		// Checkers must report non-nil while stopping.
 		checkers := hub.Checkers()
-		fn, ok := checkers["websocket_hub_ready"]
+		fn, ok := checkers[string(ProbeReady)]
 		require.True(t, ok)
 		assert.Error(t, fn(context.Background()), "Checkers must return error while hub is stopping")
 

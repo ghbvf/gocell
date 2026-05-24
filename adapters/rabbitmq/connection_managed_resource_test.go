@@ -23,7 +23,7 @@ func TestConnection_Checkers_HealthyConnected(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 
 	checkers := conn.Checkers()
-	probe, ok := checkers["rabbitmq_ready"]
+	probe, ok := checkers[string(ProbeReady)]
 	if !ok {
 		t.Fatalf("Checkers() missing 'rabbitmq_ready'; got keys: %v", keysOf(checkers))
 	}
@@ -39,7 +39,7 @@ func TestConnection_Checkers_HonorsCtxDeadline(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	probe := conn.Checkers()["rabbitmq_ready"]
+	probe := conn.Checkers()[string(ProbeReady)]
 	start := time.Now()
 	err := probe(canceled)
 	elapsed := time.Since(start)
@@ -64,7 +64,7 @@ func TestConnection_Checkers_UnhealthyDisconnected(t *testing.T) {
 	conn.state = StateDisconnected
 	conn.mu.Unlock()
 
-	err := conn.Checkers()["rabbitmq_ready"](context.Background())
+	err := conn.Checkers()[string(ProbeReady)](context.Background())
 	if err == nil {
 		t.Fatal("rabbitmq_ready in StateDisconnected must return an error, got nil")
 	}
@@ -85,7 +85,7 @@ func TestConnection_Checkers_UnhealthyWhenPermanentRecorded(t *testing.T) {
 	conn.permanentErr = permanentErr
 	conn.mu.Unlock()
 
-	err := conn.Checkers()["rabbitmq_ready"](context.Background())
+	err := conn.Checkers()[string(ProbeReady)](context.Background())
 	if err == nil {
 		t.Fatal("rabbitmq_ready with permanentErr set must return that error, got nil")
 	}

@@ -26,6 +26,12 @@
 //     bare string non-assignable to a ReadyProbeName const, the only authoring
 //     path is "declare a typed const in a sanctioned package".
 //
+// Both locks are archtest-bound Hard (CI-enforced), the same档 as
+// GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01. Go has no package-level const
+// visibility seal, so a compile-time upstream seal is not expressible for this
+// string-typed concept funnel shape — archtest-bound is the maximum achievable
+// and is not a Medium-upstream transitional form requiring a Hard-ization issue.
+//
 // Out of scope (NOT ReadyProbeName, intentionally bare string): framework probes
 // through healthz.NewProbe / bootstrap.WithHealthChecker (config_watcher,
 // outbox_failopen_rate_<cell>, …) and runtime/outbox.Relay budget keys
@@ -48,13 +54,16 @@
 //     declared in a non-adapter package). Covered by .../decl_bypass_red, which
 //     applies the sanctioned-package guard and asserts the const's package is
 //     flagged.
-//  4. A future adapter that authors probe names with BARE _ready string literals
-//     in a package NOT in the sanctioned set escapes construction_funnel (which
-//     only scans sanctioned packages). Compensation: the
+//  4. A future adapter that authors probe names with a bare _ready string
+//     CONSTANT in a package NOT in the sanctioned set escapes construction_funnel
+//     (which only scans sanctioned packages). Compensation: the
 //     sanctioned_set_covers_all_checkers meta-check loads production, discovers
 //     every Checkers() returning a map[string]func with a _ready-shaped string
-//     LITERAL key, and asserts that package is in the sanctioned set — so a new
-//     bare-literal probe author fails loudly until it is funneled.
+//     constant key (BasicLit / const ident / BinaryExpr concat, folded via
+//     EvaluateConstString), and asserts that package is in the sanctioned set —
+//     so a new bare-constant probe author fails loudly until it is funneled. The
+//     HealthToCheckers-arg branch is scanned package-wide (not only inside
+//     Checkers), so a probe authored from a helper method does not escape.
 //  5. Shadowing the builtin `string` identifier inside a sanctioned Checkers
 //     (so string(x) is not the conversion). Non-fixturable; compensation:
 //     shadowing a predeclared identifier is independently caught by go vet /
@@ -91,8 +100,15 @@ var readyProbeValueShape = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*_re
 // readyProbeSanctionedPkgs is the module-relative set of packages allowed to
 // DECLARE healthz.ReadyProbeName consts and author probe-name constructions.
 // A const declared elsewhere is a declaration-site bypass; a Checkers() in a
-// package outside this set authoring _ready literals is caught by the
+// package outside this set authoring _ready constants is caught by the
 // sanctioned_set_covers_all_checkers meta-check.
+//
+// Maintenance: a NEW adapter readiness probe requires three coordinated edits —
+// (1) declare a `const ProbeReady healthz.ReadyProbeName = "<name>_ready"` in the
+// owning package; (2) add that package here; (3) add its entry to
+// goldenReadyProbeNames(). adapters/adapterutil is intentionally NOT listed: it
+// is the funnel boundary (HealthToCheckers's body does the sole string(name)
+// conversion), not a probe-authoring site.
 var readyProbeSanctionedPkgs = map[string]struct{}{
 	"adapters/postgres": {},
 	"adapters/redis":    {},
@@ -106,7 +122,9 @@ var readyProbeSanctionedPkgs = map[string]struct{}{
 // goldenReadyProbeNames freezes the full inventory of declared ReadyProbeName
 // consts as "<module-relative-pkg>.<ConstName>=<value>". Adding, removing, or
 // renaming any probe — including an observability dashboard mass rename — forces
-// a deliberate one-line diff here, mirroring goldenRuleIDs() for RuleCode.
+// a deliberate one-line diff here, mirroring goldenRuleIDs() for RuleCode. Pair
+// any edit with the corresponding readyProbeSanctionedPkgs change (see its godoc
+// for the three-step new-probe checklist).
 func goldenReadyProbeNames() []string {
 	return []string{
 		"adapters/oidc.ProbeReady=oidc_ready",
@@ -125,6 +143,7 @@ func goldenReadyProbeNames() []string {
 // value-shape checks plus the golden inventory; the testdata fixtures exercise
 // the blind-spot self-checks against the shared scan helpers.
 func TestOpsContractStringFunnel(t *testing.T) {
+	t.Parallel()
 	root := findModuleRoot(t)
 	modPath := readModulePath(t, root)
 	// healthzPkgPath is the package const declared in readyz_probe_naming_test.go.
@@ -141,24 +160,18 @@ func TestOpsContractStringFunnel(t *testing.T) {
 		var ds []Diagnostic
 		_, sanctioned := readyProbeSanctionedPkgs[pkgRel]
 
-		// declaration-site lock + value-shape + golden, per declared const.
+		// declaration-site lock (upstream Hard) — shared with the
+		// decl_bypass_red fixture so that fixture is a real regression barrier
+		// on this guard rather than a tautology.
+		ds = append(ds, readyProbeDeclarationSiteViolations(pkgRel, declared, p.Fset)...)
+
+		// value-shape (once per declared const) + golden accumulation.
 		for c := range declared {
-			pos := p.Fset.Position(c.Pos())
 			val, ok := readyProbeConstValue(c)
-			// declaration-site lock (upstream Hard).
-			if !sanctioned {
-				ds = append(ds, Diagnostic{
-					Rel:  pkgRel,
-					Line: pos.Line,
-					Message: readyProbeNameTypeName + " const " + strconv.Quote(c.Name()) +
-						" declared outside the sanctioned ready-probe package set",
-				})
-			}
-			// value-shape (once per declared const).
 			if !ok || !readyProbeValueShape.MatchString(val) {
 				ds = append(ds, Diagnostic{
 					Rel:  pkgRel,
-					Line: pos.Line,
+					Line: p.Fset.Position(c.Pos()).Line,
 					Message: readyProbeNameTypeName + " const " + strconv.Quote(c.Name()) +
 						" value " + strconv.Quote(val) + " must be snake_case ending in _ready",
 				})
@@ -219,6 +232,29 @@ func collectReadyProbeNameConsts(p *Pass, healthzPkgPath string) map[*types.Cons
 	return out
 }
 
+// readyProbeDeclarationSiteViolations is the upstream-Hard declaration-site
+// lock: a ReadyProbeName const may only be declared in a sanctioned ready-probe
+// package. Returns one Diagnostic per declared const when pkgRel is NOT
+// sanctioned. Shared between the production scan and the decl_bypass_red fixture
+// so the fixture genuinely regresses this guard (delete the guard → fixture
+// fails), instead of re-implementing the condition inline.
+func readyProbeDeclarationSiteViolations(pkgRel string, declared map[*types.Const]struct{}, fset *token.FileSet) []Diagnostic {
+	if _, sanctioned := readyProbeSanctionedPkgs[pkgRel]; sanctioned {
+		return nil
+	}
+	var ds []Diagnostic
+	for c := range declared {
+		ds = append(ds, Diagnostic{
+			Rel:  pkgRel,
+			Line: fset.Position(c.Pos()).Line,
+			Message: readyProbeNameTypeName + " const " + strconv.Quote(c.Name()) +
+				" declared outside the sanctioned ready-probe package set; declare it in the" +
+				" owning adapter package and add that package to readyProbeSanctionedPkgs",
+		})
+	}
+	return ds
+}
+
 // readyProbeConstValue extracts the string value of a ReadyProbeName const.
 func readyProbeConstValue(c *types.Const) (string, bool) {
 	v := c.Val()
@@ -240,6 +276,9 @@ func scanReadyProbeConstructionViolations(
 	declared map[*types.Const]struct{},
 ) []Diagnostic {
 	var ds []Diagnostic
+
+	// (A) direct map[string]func(context.Context) error literal keys inside an
+	// exported-receiver Checkers() method.
 	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Name.Name != "Checkers" || fn.Recv == nil || len(fn.Recv.List) == 0 || fn.Body == nil {
 			return
@@ -248,8 +287,6 @@ func scanReadyProbeConstructionViolations(
 		if recv == "" || !ast.IsExported(recv) {
 			return
 		}
-
-		// (A) direct map[string]func(context.Context) error literal keys.
 		EachInSubtree[ast.CompositeLit](fn.Body, func(cl *ast.CompositeLit) {
 			if !isReadyProbeCheckerMap(cl, info) {
 				return
@@ -261,26 +298,28 @@ func scanReadyProbeConstructionViolations(
 				ds = append(ds, Diagnostic{
 					Rel:  rel,
 					Line: fset.Position(kv.Key.Pos()).Line,
-					Message: rel + "." + recv + " Checkers map key must be string(<" + readyProbeNameTypeName +
-						" const>) — got AST shape " + astShapeName(kv.Key),
+					Message: rel + "." + recv + " Checkers map key must reference a " + readyProbeNameTypeName +
+						" const, e.g. string(ProbeReady) — got AST shape " + astShapeName(kv.Key),
 				})
 			})
 		})
+	})
 
-		// (B) adapterutil.HealthToCheckers(<const>, …) first arg.
-		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-			if !isHealthToCheckersCall(call, info) || len(call.Args) == 0 {
-				return
-			}
-			if probeNameExprResolves(call.Args[0], info, declared) {
-				return
-			}
-			ds = append(ds, Diagnostic{
-				Rel:  rel,
-				Line: fset.Position(call.Args[0].Pos()).Line,
-				Message: rel + "." + recv + " HealthToCheckers name arg must be a " + readyProbeNameTypeName +
-					" const — got AST shape " + astShapeName(call.Args[0]),
-			})
+	// (B) adapterutil.HealthToCheckers(<const>, …) first arg — scanned
+	// package-wide (not only inside Checkers) so a probe name authored from a
+	// helper method cannot escape the funnel.
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isHealthToCheckersCall(call, info) || len(call.Args) == 0 {
+			return
+		}
+		if probeNameExprResolves(call.Args[0], info, declared) {
+			return
+		}
+		ds = append(ds, Diagnostic{
+			Rel:  rel,
+			Line: fset.Position(call.Args[0].Pos()).Line,
+			Message: rel + " HealthToCheckers name arg must be a " + readyProbeNameTypeName +
+				" const — got AST shape " + astShapeName(call.Args[0]),
 		})
 	})
 	return ds
@@ -351,7 +390,11 @@ func isHealthToCheckersCall(call *ast.CallExpr, info *types.Info) bool {
 
 // testOpsContractSanctionedSetCoverage is the upstream-Hard compensation
 // (blind spot #4): any production Checkers() returning a map[string]func with a
-// _ready-shaped string LITERAL key must live in a sanctioned package.
+// _ready-shaped string-CONSTANT key (BasicLit, const ident, or BinaryExpr
+// concat — folded via EvaluateConstString) must live in a sanctioned package,
+// so a new bare-literal probe author fails loud until funneled. A runtime
+// (non-constant) key folds to ("", false) and is left to the construction
+// funnel inside sanctioned packages.
 func testOpsContractSanctionedSetCoverage(t *testing.T, modPath string) {
 	var violations []string
 	RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
@@ -372,15 +415,14 @@ func testOpsContractSanctionedSetCoverage(t *testing.T, modPath string) {
 						return
 					}
 					EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
-						lit, ok := kv.Key.(*ast.BasicLit)
-						if !ok {
-							return
-						}
-						val, ok := StringLitValue(lit)
+						// Fold the key as a string constant: covers BasicLit,
+						// const ident, and BinaryExpr concat. A non-constant
+						// (runtime) key folds to ok=false and is ignored here.
+						val, ok := EvaluateConstString(p.TypesInfo, kv.Key)
 						if ok && readyProbeValueShape.MatchString(val) {
 							violations = append(violations,
 								pkgRel+" authors _ready probe "+strconv.Quote(val)+
-									" with a bare literal but is not in readyProbeSanctionedPkgs")
+									" with a bare string constant but is not in readyProbeSanctionedPkgs")
 						}
 					})
 				})
@@ -451,27 +493,24 @@ func collectLocalReadyProbeNameConsts(p *Pass) map[*types.Const]struct{} {
 
 // testOpsContractDeclBypassFixture proves the declaration-site guard flags a
 // ReadyProbeName const declared in a package outside the sanctioned set
-// (blind spot #3). The fixture uses a local mirror type; the guard logic
-// (package ∉ sanctioned) is the production declaration_site_lock condition.
+// (blind spot #3). It drives the SAME production helper
+// (readyProbeDeclarationSiteViolations) the main scan uses, so deleting that
+// guard makes this fixture fail — it is not a tautology. The fixture uses a
+// local mirror type; the guard logic (package ∉ sanctioned) is type-agnostic.
 func testOpsContractDeclBypassFixture(t *testing.T) {
 	const pattern = "./tools/archtest/testdata/ops_contract_string_funnel_fixtures/decl_bypass_red"
-	var flagged []string
+	var diags []Diagnostic
 	RunTyped(t, TypedOpts{Tests: false}, []string{pattern}, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
 		declared := collectLocalReadyProbeNameConsts(p)
 		require.NotEmpty(t, declared, "fixture must declare a ReadyProbeName const")
-		// The fixture package is, by construction, not in the sanctioned set.
-		pkgRel := p.Pkg.Path()
-		if _, ok := readyProbeSanctionedPkgs[pkgRel]; ok {
-			return nil
-		}
-		for c := range declared {
-			flagged = append(flagged, c.Name())
-		}
+		// The fixture package path is, by construction, not in the sanctioned
+		// set, so the production guard must emit a violation.
+		diags = readyProbeDeclarationSiteViolations(p.Pkg.Path(), declared, p.Fset)
 		return nil
 	})
-	assert.NotEmpty(t, flagged,
-		"a ReadyProbeName const declared outside the sanctioned package set must be flagged by the declaration-site guard")
+	assert.NotEmpty(t, diags,
+		"readyProbeDeclarationSiteViolations must flag a ReadyProbeName const declared outside the sanctioned package set")
 }

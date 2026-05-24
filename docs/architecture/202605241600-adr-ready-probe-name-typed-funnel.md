@@ -102,10 +102,12 @@ interface 规则**；唯一签名变更 `adapterutil.HealthToCheckers` 是 helpe
 ## §5 sanctioned-set 诚实 caveat + 补偿
 
 construction_funnel 只扫 sanctioned package 集；一个**未列入**该集的新 adapter
-若用裸 `_ready` 字面量授权 probe 会逃逸。补偿：`sanctioned_set_covers_all_checkers`
+若用裸 `_ready` 字符串常量授权 probe 会逃逸。补偿：`sanctioned_set_covers_all_checkers`
 meta-check 加载 production，发现任何 `Checkers()` 返回 `map[string]func` 且含
-`_ready` 形状字面量 key 的 package，断言其 ∈ sanctioned 集——新 bare-literal
-probe 作者会 fail loud，直到被纳入 funnel。
+`_ready` 形状字符串常量 key（BasicLit / const ident / BinaryExpr concat，经
+`EvaluateConstString` 折叠）的 package，断言其 ∈ sanctioned 集——新 bare-constant
+probe 作者会 fail loud，直到被纳入 funnel。`HealthToCheckers` 首参分支 package-wide
+扫描（不限于 `Checkers()` 方法体），故从 helper 方法授权 probe 也不逃逸。
 
 ## §6 影响 / 迁移
 
@@ -118,6 +120,11 @@ probe 作者会 fail loud，直到被纳入 funnel。
 - `bootstrap.WithHealthChecker` 命名扫描原本在 prod 无 callsite（vacuous），随
   health_aggregation 扫描器一并删除；未来若 composition root 用它注册 adapter
   probe，命名归 composition root 责任（已在删除点 godoc 标注）。
+- **所有 8 个 probe 的字符串值完全不变**（`postgres_ready` / `postgres_indexes_valid_ready`
+  / `redis_ready` / `s3_ready` / `rabbitmq_ready` / `vault_transit_ready` /
+  `oidc_ready` / `websocket_hub_ready`）——本 PR 只改承载方式（untyped string →
+  typed const），`/readyz` verbose `dependencies` 键名与改前一致，**dashboard /
+  alert 无需更新**。
 
 ## §7 状态对照（覆盖表逐行）
 
@@ -130,3 +137,22 @@ probe 作者会 fail loud，直到被纳入 funnel。
 | 新 adapter 未纳入 funnel | 无 | sanctioned_set_covers meta-check | Hard（兜底） |
 | framework probe（config_watcher 等） | READYZ-PROBE-NAMING-01 hyphen | 不变 | 既有 |
 | cell repo probe | cellgen RegisterRepoReady | 不变 | 既有 Hard |
+
+## §8 新增 adapter readiness probe 操作步骤（三步）
+
+新增一个 adapter `_ready` probe（或纳入一个新 adapter 到 funnel）需要三处协同编辑，
+缺一则 archtest 红：
+
+1. **声明 typed const**：在 owning 包写
+   `const ProbeReady healthz.ReadyProbeName = "<name>_ready"`，构造点用
+   `string(ProbeReady)` 作 Checkers map key，或把 const 传给
+   `adapterutil.HealthToCheckers`。
+2. **加入 sanctioned 集**：把包的 module-relative path 加进
+   `tools/archtest/ops_contract_string_funnel_test.go` 的 `readyProbeSanctionedPkgs`
+   （否则 construction_funnel 不扫它，且 `sanctioned_set_covers` meta-check 红）。
+3. **更新 golden**：把 `<pkg>.<Const>=<value>` 加进同文件 `goldenReadyProbeNames()`
+   （否则 golden_inventory 红）。
+
+archtest 失败信息已指向以上动作（declaration-site / construction / sanctioned-set
+三处的 message + `readyProbeSanctionedPkgs` / `goldenReadyProbeNames` godoc 都列了
+该 checklist）。

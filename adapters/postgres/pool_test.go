@@ -310,7 +310,7 @@ func TestPool_CheckersReturnsBothProbes(t *testing.T) {
 	p := &Pool{} // stub: inner=nil; Checkers() must not dereference inner
 	checkers := p.Checkers()
 	require.Len(t, checkers, 2, "expected 2 checkers (postgres_ready + postgres_indexes_valid_ready)")
-	for _, name := range []string{"postgres_ready", "postgres_indexes_valid_ready"} {
+	for _, name := range []string{string(ProbeReady), string(ProbeIndexesValidReady)} {
 		fn, ok := checkers[name]
 		if !ok {
 			t.Errorf("expected checker named %q", name)
@@ -359,7 +359,7 @@ func TestPool_CheckerTimeout(t *testing.T) {
 	}
 
 	checkers := p.Checkers()
-	fn := checkers["postgres_ready"]
+	fn := checkers[string(ProbeReady)]
 	require.NotNil(t, fn, "postgres_ready checker must not be nil")
 
 	require.NoError(t, fn(context.Background()))
