@@ -113,6 +113,13 @@ type HTTPAuthMeta struct {
 // govern both integer and number parameters; use integer-valued bounds in
 // contract.yaml until ParamSchema grows decimal bound fields.
 type ParamSchema struct {
+	// Ref is a relative path to a shared JSON Schema mixin that single-sources
+	// the value shape (type/minimum/maximum/minLength/maxLength) for this param.
+	// It is mutually exclusive with inline type, minimum, maximum, minLength,
+	// maxLength, and format declarations; resolved at parse time so governance
+	// (FMT-25) and contractgen see a fully-resolved ParamSchema transparently.
+	// The Ref field is preserved after resolution for traceability.
+	Ref       string `yaml:"$ref,omitempty"      json:"$ref,omitempty"`
 	Type      string `yaml:"type"                json:"type"`
 	Required  *bool  `yaml:"required,omitempty"  json:"required,omitempty"`
 	Format    string `yaml:"format,omitempty"    json:"format,omitempty"`

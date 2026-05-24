@@ -261,29 +261,18 @@ func canonicalRef(t *testing.T, fileRel string) string {
 	return filepath.ToSlash(rel)
 }
 
-// walkContractFiles invokes fn for every file named base under contracts/.
+// walkContractFiles invokes fn for every file named base under contracts/,
+// using the sanctioned archtest content scanner (SCANNER-FRAMEWORK-USAGE-01
+// bans filepath.WalkDir in archtest files).
 func walkContractFiles(t *testing.T, root, base string, fn func(relPath string, raw []byte)) {
 	t.Helper()
-	contractsRoot := filepath.Join(root, "contracts")
-	err := filepath.WalkDir(contractsRoot, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() || d.Name() != base {
-			return nil
-		}
-		raw, err := os.ReadFile(path) //nolint:gosec // G304: archtest reads fixed contract paths
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		fn(filepath.ToSlash(rel), raw)
-		return nil
+	suffix := base[strings.LastIndex(base, "."):]
+	scope := DirsScope(root, []string{"contracts"}, MatchRels(func(rel string) bool {
+		return filepath.Base(rel) == base
+	}))
+	EachContentFile(t, scope, []string{suffix}, func(_ *testing.T, fc ContentContext) {
+		fn(filepath.ToSlash(fc.Rel), fc.Bytes)
 	})
-	require.NoError(t, err)
 }
 
 // stringInList reports whether want is in a YAML/JSON []any of strings.

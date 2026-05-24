@@ -7,12 +7,7 @@
     "enabled": { "type": "boolean" },
     "rolloutPercentage": { "type": "integer", "minimum": 0, "maximum": 100 },
     "description": { "type": "string", "minLength": 0, "maxLength": 1024 },
-    "expectedVersion": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 99999,
-      "description": "Compare-and-swap guard. Must equal the flag's current version; mismatch returns 409 ERR_VERSION_CONFLICT."
-    }
+    "expectedVersion": { "$ref": "../../../../../shared/cas/v1/expected_version.schema.json" }
   },
   "required": ["enabled", "rolloutPercentage", "description", "expectedVersion"],
   "additionalProperties": false

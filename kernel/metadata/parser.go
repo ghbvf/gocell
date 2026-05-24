@@ -318,6 +318,10 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	m.Dir, _ = contractDirFromPath(path)
 	m.File = filepath.ToSlash(path)
 
+	if err := resolveParamRefs(fsys, &m); err != nil {
+		return err
+	}
+
 	if _, exists := pm.Contracts[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate contract ID",
