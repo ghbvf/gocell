@@ -56,7 +56,7 @@ func TestOrderCell_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, rec))
-	assert.Len(t, c.OwnedSlices(), 2, "should have 2 slices (order-create, order-query)")
+	assert.Len(t, c.OwnedSlices(), 5, "expected 5 owned slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -73,7 +73,7 @@ func TestOrderCell_Metadata(t *testing.T) {
 	c := newTestCell()
 	assert.Equal(t, "ordercell", c.ID())
 	assert.Equal(t, cellvocab.CellTypeCore, c.Type())
-	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.L3, c.ConsistencyLevel())
 }
 
 func TestOrderCell_Startup(t *testing.T) {
@@ -103,7 +103,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 				WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 				WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 			},
-			wantSlices: 2,
+			wantSlices: 5,
 		},
 		{
 			name: "with explicit repo + NoopWriter + NoopTxRunner",
@@ -112,7 +112,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 				WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 				WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 			},
-			wantSlices: 2,
+			wantSlices: 5,
 		},
 	}
 

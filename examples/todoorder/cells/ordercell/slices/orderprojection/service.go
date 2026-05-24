@@ -61,7 +61,7 @@ type RebuildReport struct {
 // store is the mutable projection state. All mutations hold mu.Lock();
 // reads that need a consistent snapshot hold mu.RLock().
 type store struct {
-	mu      sync.RWMutex
+	mu       sync.RWMutex
 	byStatus map[string][]string // status → ordered list of orderIDs
 	orderAt  map[string]string   // orderID → current status
 	log      []projectedEvent    // append-only event log for replay
@@ -145,7 +145,7 @@ func NewService(logger *slog.Logger, opts ...Option) (*Service, error) {
 // Consumer: cg-ordercell-order-created
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
-// DLX: broker-native via DispositionReject → Nack(requeue=false)
+// DLX: broker-native via DispositionReject → Nack(requeue=false).
 func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload ordercreated.Payload
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
@@ -185,7 +185,7 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) ou
 // Consumer: cg-ordercell-order-status-changed
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
-// DLX: broker-native via DispositionReject → Nack(requeue=false)
+// DLX: broker-native via DispositionReject → Nack(requeue=false).
 func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload orderstatuschanged.Payload
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {

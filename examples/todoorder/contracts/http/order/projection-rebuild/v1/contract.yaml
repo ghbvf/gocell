@@ -17,11 +17,11 @@ endpoints:
         - 401
         - 403
     responses:
-      401:
-        description: "Unauthorized — missing or invalid service token"
+      400:
+        description: "Bad request — malformed JSON body or oversized payload"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
-      403:
-        description: "Forbidden — caller is not in the allowed client list"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

@@ -61,28 +61,28 @@ func (r ProjectionRebuild200JSONResponse) visitProjectionRebuildResponse(ctx con
 	return nil
 }
 
-// ProjectionRebuild401ErrorResponse renders an HTTP 401 error response.
+// ProjectionRebuild400ErrorResponse renders an HTTP 400 error response.
 // Body carries an errcode.Error whose Kind/Code/Message/Details follow the
 // canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
 // (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
-type ProjectionRebuild401ErrorResponse struct {
+type ProjectionRebuild400ErrorResponse struct {
 	Body errcode.Error
 }
 
-func (r ProjectionRebuild401ErrorResponse) visitProjectionRebuildResponse(ctx context.Context, w http.ResponseWriter) error {
-	httputil.WriteErrorWithStatus(ctx, w, 401, &r.Body)
+func (r ProjectionRebuild400ErrorResponse) visitProjectionRebuildResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
 	return nil
 }
 
-// ProjectionRebuild403ErrorResponse renders an HTTP 403 error response.
+// ProjectionRebuild413ErrorResponse renders an HTTP 413 error response.
 // Body carries an errcode.Error whose Kind/Code/Message/Details follow the
 // canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
 // (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
-type ProjectionRebuild403ErrorResponse struct {
+type ProjectionRebuild413ErrorResponse struct {
 	Body errcode.Error
 }
 
-func (r ProjectionRebuild403ErrorResponse) visitProjectionRebuildResponse(ctx context.Context, w http.ResponseWriter) error {
-	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
+func (r ProjectionRebuild413ErrorResponse) visitProjectionRebuildResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
 	return nil
 }

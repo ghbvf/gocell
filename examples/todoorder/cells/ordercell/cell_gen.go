@@ -5,7 +5,10 @@ package ordercell
 
 import (
 	"context"
+	"fmt"
 
+	sub0 "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
+	sub1 "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -19,7 +22,7 @@ var _ cell.Cell = (*OrderCell)(nil)
 var cellMeta = &metadata.CellMeta{
 	ID:               "ordercell",
 	Type:             "core",
-	ConsistencyLevel: "L2",
+	ConsistencyLevel: "L3",
 	DurabilityMode:   "durable",
 	Owner:            metadata.OwnerMeta{Team: "examples", Role: "order-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "orders"},
@@ -55,10 +58,37 @@ func (c *OrderCell) Init(ctx context.Context, reg cell.Registrar) error {
 				captureErr(c.createHandler.RegisterRoutes(s))
 				captureErr(c.getHandler.RegisterRoutes(s))
 				captureErr(c.listHandler.RegisterRoutes(s))
+				captureErr(c.confirmHandler.RegisterRoutes(s))
+				captureErr(c.projectionSummaryHandler.RegisterRoutes(s))
 			})
 			return firstErr
 		},
 	})
+
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.InternalListener,
+		Prefix:   "/internal/v1",
+		Register: func(mux cell.RouteMux) error {
+			var firstErr error
+			captureErr := func(err error) {
+				if err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+			mux.Route("/orders", func(s cell.RouteMux) {
+				captureErr(c.projectionRebuildHandler.RegisterRoutes(s))
+			})
+			return firstErr
+		},
+	})
+
+	if err := sub0.NewSubscription(c.projectionSvc.HandleOrderCreated, "ordercell", "ordercell", "orderprojection").Mount(reg); err != nil {
+		return fmt.Errorf("ordercell: subscribe event.order-created.v1: %w", err)
+	}
+
+	if err := sub1.NewSubscription(c.projectionSvc.HandleOrderStatusChanged, "ordercell", "ordercell", "orderprojection").Mount(reg); err != nil {
+		return fmt.Errorf("ordercell: subscribe event.order-status-changed.v1: %w", err)
+	}
 
 	return nil
 }

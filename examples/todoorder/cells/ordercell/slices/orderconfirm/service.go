@@ -126,6 +126,7 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 
 	// Apply domain transition — returns conflict if not pending
 	if err := order.Confirm(); err != nil {
+		//nolint:nilerr // typed-envelope: business 409 returned as typed response struct, not via error (cell-patterns)
 		return confirmv1.Confirm409ErrorResponse{
 			Body: *errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"order-confirm: order cannot be confirmed",

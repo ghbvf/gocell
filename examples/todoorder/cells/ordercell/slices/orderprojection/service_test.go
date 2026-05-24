@@ -6,14 +6,17 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	orderstatuschanged "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func newTestService(t *testing.T) *Service {
@@ -31,9 +34,9 @@ func makeCreatedEntry(t *testing.T, id, status string) outbox.Entry {
 	return outbox.Entry{ID: "entry-" + id, Payload: b}
 }
 
-func makeStatusChangedEntry(t *testing.T, id, oldStatus, newStatus string) outbox.Entry {
+func makeStatusChangedEntry(t *testing.T, id string) outbox.Entry {
 	t.Helper()
-	payload := orderstatuschanged.Payload{ID: id, OldStatus: oldStatus, NewStatus: newStatus}
+	payload := orderstatuschanged.Payload{ID: id, OldStatus: domain.StatusPending, NewStatus: domain.StatusConfirmed}
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
 	return outbox.Entry{ID: "entry-sc-" + id, Payload: b}
@@ -60,7 +63,7 @@ func TestHandleOrderStatusChanged_MovesFromPendingToConfirmed(t *testing.T) {
 	ctx := context.Background()
 
 	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-1", "pending"))
-	result := svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", "pending", "confirmed"))
+	result := svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1"))
 
 	assert.Equal(t, outbox.Ack(), result)
 	summary := svc.Query(ctx)
@@ -133,9 +136,9 @@ func TestHandleOrderStatusChanged_Idempotent_SameIDSameNewStatus(t *testing.T) {
 	ctx := context.Background()
 
 	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-1", "pending"))
-	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", "pending", "confirmed"))
+	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1"))
 	// replay same status change
-	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", "pending", "confirmed"))
+	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1"))
 
 	summary := svc.Query(ctx)
 	assert.Equal(t, int64(1), summary.TotalOrders)
@@ -150,7 +153,7 @@ func TestHandleOrderStatusChanged_OutOfOrder_ConvergentToNewStatus(t *testing.T)
 	ctx := context.Background()
 
 	// status-changed arrives before created
-	result := svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", "pending", "confirmed"))
+	result := svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1"))
 	assert.Equal(t, outbox.Ack(), result)
 
 	summary := svc.Query(ctx)
@@ -186,7 +189,7 @@ func TestQuery_TotalOrdersAndLastAppliedSeq(t *testing.T) {
 
 	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-1", "pending"))
 	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-2", "pending"))
-	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", "pending", "confirmed"))
+	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1"))
 
 	summary := svc.Query(ctx)
 	assert.Equal(t, int64(2), summary.TotalOrders)
@@ -199,7 +202,7 @@ func TestRebuild_Idempotent_SummaryDeepEqual(t *testing.T) {
 
 	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-1", "pending"))
 	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-2", "pending"))
-	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", "pending", "confirmed"))
+	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1"))
 
 	before := svc.Query(ctx)
 
@@ -255,7 +258,7 @@ func TestRebuild_ReportCounts(t *testing.T) {
 
 	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-1", "pending"))
 	svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "order-2", "pending"))
-	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1", "pending", "confirmed"))
+	svc.HandleOrderStatusChanged(ctx, makeStatusChangedEntry(t, "order-1"))
 
 	svc.store.mu.RLock()
 	logLen := len(svc.store.log)
@@ -277,7 +280,7 @@ func TestConcurrency_HandleAndQuery_NoDataRace(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			id := "order-" + string(rune('0'+i))
+			id := "order-" + strconv.Itoa(i)
 			svc.HandleOrderCreated(ctx, makeCreatedEntry(t, id, "pending"))
 		}(i)
 	}

@@ -1,0 +1,17 @@
+id: orderprojectionrebuild
+belongsToCell: ordercell
+consistencyLevel: L3
+
+contractUsages:
+  - contract: http.order.projection-rebuild.v1
+    role: serve
+
+verify:
+  unit:
+    - unit.orderprojectionrebuild.handler
+  contract:
+    - contract.http.order.projection-rebuild.v1.serve
+  waivers: []
+
+allowedFiles:
+  - examples/todoorder/cells/ordercell/slices/orderprojectionrebuild/**

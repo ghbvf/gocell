@@ -132,6 +132,55 @@ Response (200):
 {"data":{"id":"ord-...","item":"test","status":"pending","createdAt":"..."}}
 ```
 
+### Status-grouped projection (L3 CQRS read model)
+
+This example ships the canonical **L3 read-model projection** reference (backlog
+`L3-EXAMPLE-PROJECTION-01`). It is the official replacement for the rejected
+framework-level CQRS core (GAP-8, voted down 0/6): the framework gives you the
+event gateway and you build the read model yourself — *business-level CQRS, not
+framework CQRS*.
+
+The loop has four parts, all inside `ordercell`:
+
+1. **Command** — `orderconfirm` slice (L2): `PATCH /api/v1/orders/{id}/status`
+   confirms a pending order and publishes `event.order-status-changed.v1`
+   through the transactional outbox.
+2. **Projection** — `orderprojection` slice (L3): subscribes to
+   `event.order-created.v1` + `event.order-status-changed.v1`, maintaining an
+   in-memory status-grouped read model declared as the
+   `projection.order.status-summary.v1` contract (GoCell's first
+   `kind: projection` instance). The read model is a *derived view* (per-status
+   counts + order IDs) the write-side `orders` map cannot serve cheaply.
+3. **Query** — `GET /api/v1/orders/projection/summary` reads the projection.
+4. **Rebuild** — `POST /internal/v1/orders/projection/rebuild` (internal
+   listener, service-token + caller-cell auth) replays the slice's own
+   append-only event log to reconstruct the read model. This demonstrates
+   business-level rebuild without any `kernel/replay` primitive.
+
+```bash
+# Confirm an order (PATCH) → publishes order-status-changed
+curl -X PATCH -H "Authorization: Bearer $TODOORDER_TOKEN" \
+  -H "Content-Type: application/json" -d '{"status":"confirmed"}' \
+  http://localhost:8082/api/v1/orders/{id}/status
+
+# Query the status-grouped read model (eventually consistent)
+curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
+  http://localhost:8082/api/v1/orders/projection/summary
+# {"data":{"statuses":[{"status":"confirmed","count":1,"orderIds":["ord-..."]}],"totalOrders":1,"lastAppliedSeq":2}}
+
+# Rebuild the projection from the event log (internal listener :9082, service token)
+curl -X POST http://localhost:9082/internal/v1/orders/projection/rebuild
+# {"data":{"eventsReplayed":2,"statusesRebuilt":1,"lastAppliedSeq":2}}
+```
+
+> **Demo limitation**: the projection's event log is unbounded by design — a
+> production projection would snapshot + truncate, or replay from a durable
+> outbox. The public summary slice and the internal rebuild slice are kept
+> separate (`orderprojection` vs `orderprojectionrebuild`) per governance rule
+> FMT-33 (public/internal trust-boundary segregation). Governance rule
+> `PROJECTION-CONSISTENCY-01` enforces that every `kind: projection` contract
+> declares `consistencyLevel >= L3`.
+
 ## Durable Wiring Checklist
 
 To move from demo mode to a durable L2 path, wire all of the following into the example application:

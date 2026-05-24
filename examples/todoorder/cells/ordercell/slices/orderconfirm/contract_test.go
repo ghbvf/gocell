@@ -20,19 +20,6 @@ import (
 
 var allowAllContractPolicy = func(*http.Request) error { return nil }
 
-func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
-	t.Helper()
-	repo := mem.NewOrderRepository()
-	writer := &recordingWriter{}
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(mustEmitter(t, writer)),
-		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
-	)
-	require.NoError(t, err)
-	h := confirmv1.NewHandler(svc, allowAllContractPolicy)
-	return h, writer
-}
-
 // newContractHandlerWithRepo creates a handler backed by the given repo.
 func newContractHandlerWithRepo(t testing.TB, repo *mem.OrderRepository) (http.Handler, *recordingWriter) {
 	t.Helper()

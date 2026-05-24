@@ -11,8 +11,6 @@ contractUsages:
     role: provide
   - contract: http.order.projection-summary.v1
     role: serve
-  - contract: http.order.projection-rebuild.v1
-    role: serve
 
 verify:
   unit:
@@ -22,7 +20,6 @@ verify:
     - contract.event.order-status-changed.v1.subscribe
     - contract.projection.order.status-summary.v1.provide
     - contract.http.order.projection-summary.v1.serve
-    - contract.http.order.projection-rebuild.v1.serve
 
 allowedFiles:
   - examples/todoorder/cells/ordercell/slices/orderprojection/**
