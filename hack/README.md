@@ -59,6 +59,7 @@ itself enforces.
 | `verify-govalidate.sh` | `gocell validate --strict` (FMT, ADV, REF, LAYER, VERIFY, CONTRACT-CONSISTENCY) |
 | `verify-journey.sh` | `gocell verify journey --active` (active journeys carry executable auto checks) |
 | `verify-archtest-invariants.sh` | merged PR-time gate for PROD-CLOCK-INJECTION-01 + KERNEL-CLOCK-LEAF-FALLBACK + KERNEL-CLOCK-LEAF-FALLBACK-FIXTURES + PROD-CLOCK-INJECTION-FIXTURES + PROD-DURATION-CONST-01 + PROD-DURATION-CONST-FIXTURES + TEST-TIME-LITERAL-01 + TEST-SLEEP-DISCIPLINE-01 + TEST-TIME-LITERAL-FIXTURES + PANIC-REGISTERED-01 + PANIC-REGISTERED-SCANNER-FIXTURES; runs all 11 `TestProd*` / `TestKernelClockLeafFallback*` / `TestTest*` / `TestPanic*` functions in a single shared-resolver `go test` invocation (~33s) |
+| `verify-local-compose.sh` | `docker-compose.local.yml` structural checks / `Dockerfile.corebundle` JWT env-set guard / Makefile target / `.gitignore` `.env.local` |
 | `verify-scaffold-reject.sh` | `gocell scaffold slice` rejects kebab-case names |
 | `verify-shellcheck.sh` | `shellcheck` lints every `*.sh` under `scripts/ hack/ tests/`. Disabled lints `SC1090,SC1091,SC2230` mirror `kubernetes/kubernetes hack/verify-shellcheck.sh`. Replaces the regex-only `verify-shell-safety.sh` from PR #350 |
 | `verify-supply-chain-clean.sh` | drift detection: blocks `--exclude/--ignore/-skip` flags + `.govulncheckignore` / `.semgrepignore` / CodeQL `paths-ignore` workarounds |
