@@ -56,6 +56,8 @@ paths:
 | L3 | event replay 测试 + 投影重建测试 |
 | L4 | 状态机转换测试 + 超时/重试测试 + 延迟到达测试 |
 
+> L2 覆盖由 archtest `L2-OUTBOX-ATOMICITY-COVERAGE-01` Hard 强制（从 `consistencyLevel: L2` 枚举单元 + 按 Service 定义包名派生期望测试名 exact-name match，缺失即 CI 红）。subtype 分类（producer / hybrid / store-level）与各类测试位置/断言要求见 ADR `docs/architecture/202605241940-adr-l2-atomicity-subtypes.md`。
+
 ## 工程质量护栏
 
 - 函数认知复杂度上限 15，超过必须拆分
