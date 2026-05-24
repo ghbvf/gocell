@@ -104,6 +104,16 @@ PR #522 cleared `LegacyAllowlist` to zero via consolidated batch migration (37 r
 
 ### PR #536 review R1 amendment — façade bypass closure (2026-05-17, R1 + R1.1 combined)
 
+> **Partially superseded by §#944 amendment (2026-05-25).** R1 introduced
+> `FixtureBuildTag` as an **exported** const and a "typed-identity" Go-code
+> reference path; #944 later **unexported** it (`fixtureBuildTag`) and eliminated
+> the identity-reference need entirely (the fixture tag is no longer in the
+> generic tag union, so there is no "skip the fixture tag group" case). Where
+> this dated log entry below says `archtest.FixtureBuildTag` / "exported" /
+> "skip predicate", read the current state from §Hard-line defense #4 + §#944
+> amendment. The R1/R1.1 narrative is retained as the amendment log; the
+> authoritative current-state tables supersede it.
+
 PR #536 first-cut shipped `RunTypedFixture` + `FixtureOpts` as the downstream Hard ("outward Hard": `FixtureOpts` has no `Tags` field, compile-time block). The review caught that the upstream side was Soft: `RunTyped` still accepts arbitrary `Tags`, so business archtest could write `RunTyped(t, TypedOpts{Tags: []string{"archtest_fixture"}}, ...)` and bypass `RunTypedFixture` entirely — the new façade was self-discipline rather than enforced. The first-cut also retained one bare `"archtest_fixture"` literal in `http_contract_visibility_type_segregation_01_test.go:352` and one in `panic_invariants_test.go:367` (the latter unrelated to fixture loading: it identified the fixture tag group inside a module-wide `RunTyped` scan), both of which would have continued to pass review without an upstream rule.
 
 R1 closes the upstream leg via two new pieces:

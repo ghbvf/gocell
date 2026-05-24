@@ -3,7 +3,7 @@ package archtest
 import "testing"
 
 // fixtureBuildTag is the build-tag literal that gates archtest fixture
-// sub-packages. Two placement conventions coexist:
+// sub-packages. Three placement conventions coexist:
 //
 //   - internal/<name>/ — fixture exposed as a Go sub-package importable by
 //     name; used when the fixture needs to be referenced from other
@@ -16,11 +16,16 @@ import "testing"
 //   - testdata/<rule_fixtures>/<case>/ — pattern-based fixture loaded by
 //     path; used for rules with a golden file per case (e.g.
 //     testdata/testwait_external_fixtures/, testdata/eventually_funnel_fixtures/).
+//   - package-root non-_test.go — in-package fixture used ONLY when the
+//     fixture must reference an UNEXPORTED package-archtest symbol that a
+//     cross-package internal/ fixture cannot reach (e.g.
+//     passfunnel_inpkg_redfixture.go references the unexported runTypedWithRoot
+//     for PASS-FUNNEL-FIXTURE-TAG-01 Form E). Loaded via a dedicated
+//     SharedResolver(..., "./tools/archtest") call in the rule's coverage test.
 //
-// Both conventions are protected by the archtest_fixture build tag and the
-// same façade-bypass guard. Pick internal/ when the fixture is named helper
-// code consumed by other archtest packages; pick testdata/ when the fixture
-// is one of many "red / green" pattern cases with a golden diag file.
+// All three conventions are protected by the archtest_fixture build tag and
+// the same façade-bypass guard. Prefer internal/ or testdata/; reach for the
+// package-root form only for the unexported-symbol case above.
 //
 // # Unexported by design (#944)
 //

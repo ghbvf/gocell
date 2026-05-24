@@ -45,6 +45,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"maps"
 	"os"
@@ -529,8 +530,10 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 // passFunnelPermanentExempt (3 framework files: pass_funnel_test.go +
 // pass_test.go + archtest_test.go) — these implement or directly test the
 // funnel machinery and must reference the literal by structural necessity.
-// fixture.go is excluded from the scan automatically because
-// loadPassFunnelTargets filters to *_test.go files (line 138).
+// Non-_test.go files are excluded from the scan automatically because
+// loadPassFunnelTargets filters to *_test.go files: this covers both fixture.go
+// (declares fixtureBuildTag) and passfunnel_inpkg_redfixture.go (the Form E
+// in-package fixture, which intentionally calls runTypedWithRoot with the tag).
 func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 	info := tgt.pkg.TypesInfo
 	fset := tgt.pkg.Fset
@@ -568,9 +571,10 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 			diags = append(diags, scanner.Diagnostic{
 				Rel:  tgt.rel,
 				Line: line,
-				Message: "use archtest.RunTypedFixture (the only sanctioned " +
-					"fixture-load path) instead of feeding the archtest_fixture " +
-					"build tag to " + path + "." + name +
+				Message: "use archtest.RunTypedFixture(t, FixtureOpts{...}, patterns, " +
+					"rule) (the only sanctioned fixture-load path; FixtureOpts has no " +
+					"Tags field — see tools/archtest/fixture.go) instead of feeding the " +
+					"archtest_fixture build tag to " + path + "." + name +
 					" (PASS-FUNNEL-FIXTURE-TAG-01)",
 			})
 		}
@@ -655,14 +659,14 @@ func exprCarriesFixtureTag(info *types.Info, expr ast.Expr) bool {
 // Scope is file-level (the realistic copy template declares the binding in the
 // same file as the loader call) and single-binding only (LHS/RHS length 1),
 // mirroring collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_test.go.
-// A const ValueSpec that carries the literal is also collected here, but that is
-// redundant-not-harmful: a const-ident arg is always reported via the const path
-// first (the Ident walker returns before the bound-object check), so the const
-// branch of boundObjs is never the deciding factor. Multi-RHS positional binding
-// (`a, t := x, []string{fixtureBuildTag}`) is the same narrow accepted sub-gap
-// as taggroup BS-4; cross-func / cross-file escape is the same accepted Blind
-// spot as the sibling rules. Inter-procedural Hard upgrade tracked via gh issue #973
-// (see package godoc / ADR 202605141519 §#944).
+// Only `var` declarations and `:=` / `=` assignments are collected — `const`
+// ValueSpecs are deliberately skipped because a const ident is already reported
+// via the const path in the Ident walker (it never reaches the bound-object
+// check), so collecting it here would be pure redundancy. Multi-RHS positional
+// binding (`a, t := x, []string{fixtureBuildTag}`) is the same narrow accepted
+// sub-gap as taggroup BS-4; cross-func / cross-file escape is the same accepted
+// Blind spot as the sibling rules. Inter-procedural Hard upgrade tracked via gh
+// issue #973 (see package godoc / ADR 202605141519 §#944).
 func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.Object]struct{} {
 	out := make(map[types.Object]struct{})
 	bindIdent := func(id *ast.Ident) {
@@ -684,12 +688,21 @@ func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.O
 			bindIdent(id)
 		}
 	})
-	scanner.EachInSubtree[ast.ValueSpec](file, func(vs *ast.ValueSpec) {
-		if len(vs.Names) != 1 || len(vs.Values) != 1 {
+	// `var x = []string{...}` only — token.CONST specs are skipped (covered by
+	// the const path). EachInSubtree over GenDecl gives access to the Tok that a
+	// bare ValueSpec walk cannot see.
+	scanner.EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
+		if gd.Tok != token.VAR {
 			return
 		}
-		if exprCarriesFixtureTag(info, vs.Values[0]) {
-			bindIdent(vs.Names[0])
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
+				continue
+			}
+			if exprCarriesFixtureTag(info, vs.Values[0]) {
+				bindIdent(vs.Names[0])
+			}
 		}
 	})
 	return out
@@ -786,16 +799,11 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 
 // TestPassFunnelFixtureTagBypass01 — PASS-FUNNEL-FIXTURE-TAG-01.
 //
-// Archtest tools/archtest/<file>_test.go must NOT contain a bare STRING
-// literal "archtest_fixture". The literal is the only AST form through
-// which a business archtest can carry the fixture build tag into a call
-// site (either as a Tags slice element passed to RunTyped /
-// typeseval.SharedResolver to bypass RunTypedFixture, or as a comparison
-// target to identify the fixture tag group). Authors must:
-//
-//   - For fixture loading: call archtest.RunTypedFixture(t, FixtureOpts{...},
-//     patterns, rule). FixtureOpts deliberately lacks a Tags field, so the
-//     build tag stays inside the framework body.
+// Archtest tools/archtest/<file>_test.go must NOT feed the archtest_fixture
+// build tag into a loader's Tags. The only sanctioned fixture-load path is
+// archtest.RunTypedFixture(t, FixtureOpts{...}, patterns, rule) — FixtureOpts
+// deliberately lacks a Tags field, so the build tag stays inside the framework
+// body.
 //
 // There is no longer any legitimate business reason to reference the fixture
 // tag from Go code (#944): it was removed from the generic tag union, so no
@@ -804,13 +812,19 @@ func TestPassFunnelPackagesImport01(t *testing.T) {
 // the unexported fixtureBuildTag const (fixture.go) and the //go:build
 // directives of fixture packages — both framework-internal.
 //
-// Detection: BasicLit STRING walk with unquoted-value equality on
-// "archtest_fixture". Exempt: passFunnelPermanentExempt (3 framework
-// files); fixture.go is filtered out by loadPassFunnelTargets's
+// Detection (delegated to diagsFixtureTagBypass): a (callee, arg)-pair walk —
+// it fires only when a CallExpr's callee resolves via *types.Info to a member
+// of fixtureTagLoaderSet AND an arg subtree carries "archtest_fixture" (as a
+// const-resolvable Expr or a same-file var-binding). It is NOT a blanket
+// BasicLit walk: a bare "archtest_fixture" literal outside a loader callsite
+// is a legitimate identity use and does not fire. Exempt:
+// passFunnelPermanentExempt (3 framework files); fixture.go and
+// passfunnel_inpkg_redfixture.go are filtered out by loadPassFunnelTargets's
 // *_test.go suffix check.
 //
-// AI-robust: archtest-bound form-uniqueness Hard (see diagsFixtureTagBypass
-// godoc for full evidence and accepted blind spots).
+// AI-robust: archtest-bound (callee, arg) form-uniqueness Hard, with a residual
+// Medium for cross-func/cross-file var escape (gh issue #973) — see
+// diagsFixtureTagBypass godoc for full evidence and accepted blind spots.
 func TestPassFunnelFixtureTagBypass01(t *testing.T) {
 	targets := loadPassFunnelTargets(t)
 	var diags []scanner.Diagnostic
