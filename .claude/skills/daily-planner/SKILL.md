@@ -2,7 +2,7 @@
 name: daily-planner
 description: "每日 backlog → Project v2 Iteration 调度（wave 模型 + carry-over + 周末自动识别）。默认 dry-run；--apply 才写入。仅用户显式 /daily-planner 触发，避免 AI 主动调用对真实 Project v2 写入。"
 argument-hint: "[--apply] [--date=YYYY-MM-DD] [--weekend|--weekday] [--include-p2] [--include-p3]"
-allowed-tools: [Bash, Read, Write, Agent]
+allowed-tools: [Bash, Read, Write, Agent, AskUserQuestion]
 disable-model-invocation: true
 ---
 
@@ -66,12 +66,29 @@ fi
 
 # 0.2 Project node + Iteration field ID
 PROJECT_NODE_ID=$(gh project view 3 --owner ghbvf --format json | jq -r '.id')
-ITERATION_FIELD_ID=$(gh project field-list 3 --owner ghbvf --format json \
-  | jq -r '.fields[] | select(.name=="Iteration").id')
+FIELD_LIST_JSON=$(gh project field-list 3 --owner ghbvf --format json)
+ITERATION_FIELD_ID=$(jq -r '.fields[] | select(.name=="Iteration").id' <<<"$FIELD_LIST_JSON")
 [[ -z "$PROJECT_NODE_ID" || -z "$ITERATION_FIELD_ID" ]] && {
   echo "ERROR: failed to resolve PROJECT_NODE_ID or ITERATION_FIELD_ID" >&2
   exit 1
 }
+
+# 0.4 Wave single-select field ID + option IDs（C3c）
+# fail-CLOSED：apply 模式下查不到 WAVE_FIELD_ID → 阶段 4 的 apply-gate.sh 会 fail-fast。
+# dry-run 模式下 WAVE_FIELD_ID 为空时 agent 仍可出 plan（wave_option_id 字段设 ""）。
+WAVE_FIELD_ID=$(jq -r '.fields[] | select(.name=="Wave").id // ""' <<<"$FIELD_LIST_JSON")
+WAVE_OPTION_IDS=""
+if [[ -n "$WAVE_FIELD_ID" ]]; then
+  # 取 Wave single-select 的所有 option id，逗号分隔
+  WAVE_OPTION_IDS=$(jq -r \
+    '[.fields[] | select(.name=="Wave") | .options[]?.id] | join(",")' \
+    <<<"$FIELD_LIST_JSON")
+fi
+# wave_number → option_id 映射（agent 用；顺序 = Wave 1/2/3/4 按 options 数组顺序）
+WAVE_OPTION_ID_WAVE1=$(jq -r '.fields[] | select(.name=="Wave") | .options[0]?.id // ""' <<<"$FIELD_LIST_JSON")
+WAVE_OPTION_ID_WAVE2=$(jq -r '.fields[] | select(.name=="Wave") | .options[1]?.id // ""' <<<"$FIELD_LIST_JSON")
+WAVE_OPTION_ID_WAVE3=$(jq -r '.fields[] | select(.name=="Wave") | .options[2]?.id // ""' <<<"$FIELD_LIST_JSON")
+WAVE_OPTION_ID_WAVE4=$(jq -r '.fields[] | select(.name=="Wave") | .options[3]?.id // ""' <<<"$FIELD_LIST_JSON")
 
 # 0.3 日期 + 模式（weekday/weekend）。python3 用 sys.argv 传 $DATE 防 shell 注入
 DATE="${DATE:-$(date +%Y-%m-%d)}"
@@ -172,6 +189,48 @@ if ! gh api graphql -H "GraphQL-Features: sub_issues" -f query='query {
 fi
 ```
 
+## 阶段 1.5：拉取 blocked-by 依赖 DAG
+
+```bash
+# 1.5 Native blocked-by 边（C2b）→ $WORKDIR/deps.json
+# GraphQL 字段 `blockedBy(first: N)` 是正式 API（无 preview header 需求，
+# 2026-05-25 live introspection 实测于 ghbvf/gocell 账号确认）。
+# schema：{ "<issue_number_string>": { "blocked_by": [<int>, ...] }, ... }
+# 仅含有入边的 issue；空图 = {}。
+# 降级策略：仅真·瞬态 API 错误才降级，loud WARN + [DEP DATA UNAVAILABLE] 标记，
+# **禁止 silent {}**（区别于 sub-issues 的静默 fallback）。
+DEPS_JSON="{}"
+DEP_FETCH_FAILED=false
+issue_count_for_deps=$(jq 'length' "$WORKDIR/issues.json")
+if [[ "$issue_count_for_deps" -gt 0 ]]; then
+  while IFS= read -r inum; do
+    if ! blocked_raw=$(gh api graphql \
+        -f query='query($num: Int!) {
+          repository(owner:"ghbvf", name:"gocell") {
+            issue(number: $num) {
+              blockedBy(first: 20) { nodes { number } }
+            }
+          }
+        }' -F num="$inum" 2>/tmp/deps-err-"$inum"); then
+      echo "WARN: blocked-by query failed for issue #$inum (transient?); detail:" >&2
+      sed 's/^/  /' /tmp/deps-err-"$inum" >&2
+      DEP_FETCH_FAILED=true
+      continue
+    fi
+    blocked_nums=$(echo "$blocked_raw" | jq '[.data.repository.issue.blockedBy.nodes[].number]')
+    if [[ "$(echo "$blocked_nums" | jq 'length')" -gt 0 ]]; then
+      DEPS_JSON=$(echo "$DEPS_JSON" | jq --arg n "$inum" --argjson b "$blocked_nums" \
+        '. + {($n): {"blocked_by": $b}}')
+    fi
+  done < <(jq -r '.[].number' "$WORKDIR/issues.json")
+fi
+if $DEP_FETCH_FAILED; then
+  echo "WARN: one or more blocked-by queries failed; deps.json may be incomplete [DEP DATA UNAVAILABLE]" >&2
+fi
+echo "$DEPS_JSON" > "$WORKDIR/deps.json"
+echo "INFO: deps.json: $(jq 'keys | length' "$WORKDIR/deps.json") issues with blockers" >&2
+```
+
 ## 阶段 2：确保 today iteration 存在
 
 ```bash
@@ -258,7 +317,7 @@ tool。每个 `{VAR}` 都必须能在 bash 上下文中找到对应变量。
 PLAN_PATH="$WORKDIR/plan.json"
 
 Agent(
-  description: "Score backlog + carry-over + wave grouping",
+  description: "Score backlog + carry-over + wave grouping + parallel_group + wave_option_id",
   subagent_type: "daily-planner",
   prompt: f"""
     Constants:
@@ -272,28 +331,76 @@ Agent(
       WAVE_COUNT = {WAVE_COUNT}                           # 2|4
       WAVE_SIZE = 5                                       # 容量 = WAVE_COUNT * WAVE_SIZE
       MODE = {"apply" if APPLY else "dry-run"}
+      WAVE_FIELD_ID = {WAVE_FIELD_ID}                    # Wave single-select field ID（空=字段未配置）
+      WAVE_OPTION_IDS = {WAVE_OPTION_IDS}                # 逗号分隔已知 wave option id
+      WAVE_OPTION_ID_WAVE1 = {WAVE_OPTION_ID_WAVE1}      # Wave 1 option id
+      WAVE_OPTION_ID_WAVE2 = {WAVE_OPTION_ID_WAVE2}      # Wave 2 option id
+      WAVE_OPTION_ID_WAVE3 = {WAVE_OPTION_ID_WAVE3}      # Wave 3 option id
+      WAVE_OPTION_ID_WAVE4 = {WAVE_OPTION_ID_WAVE4}      # Wave 4 option id
 
     Data files (Read these):
       {WORKDIR}/issues.json        — backlog 池 (P0/P1 默认；P2/P3 视 flag)
       {WORKDIR}/items.json         — Project v2 items（含 iteration / status / state）
       {WORKDIR}/iter-config.json   — Iteration 配置
       {WORKDIR}/sub-issues.json    — sub-issue 关系（GraphQL 原生）
+      {WORKDIR}/deps.json          — blocked-by DAG（C2b）：{ "<issue_num>": { "blocked_by": [<int>,...] } }
 
     Tasks:
-      1. Read all 4 files
+      1. Read all 5 files
       2. Compute carry-over (if not CARRY_OVER_DISABLED): items.json 中
          iter.iterationId == YESTERDAY_ITERATION_ID AND content.state == "OPEN"
          AND (status==null OR status.name != "Done") 的 issue → 加入 carry-over 列表
-      3. Score P0/P1 池 per WSJF 简化版（详 agent.md §排序算法）
-      4. Wave 调度：
+      3. Score P0/P1 池 per WSJF 简化版（详 agent.md §排序算法）；
+         解析每个 issue body 的 "### Affected paths" 段（C2c）作为 affected_paths[]；
+         解析失败 → brief 标 [AFFECTED PATHS MALFORMED] + affected_paths=[]
+      4. 拓扑排序（C2b）：消费 deps.json blocked_by 边建 DAG；
+         环 → 不阻塞 + brief Warnings [DEP CYCLE]；
+         跨 iteration 不可解 → Warnings [DEP CROSS-ITERATION]，dependent 仍可排但标记
+      5. Wave 调度：
          - Wave 1 头部填 carry-over（按原 WSJF score 排序）
          - 剩余 Wave 1 / Wave 2+ 填 新 issue 按分数降序
          - 容量 = WAVE_COUNT × WAVE_SIZE；超出 → Unscheduled [capacity overflow]
          - 空输入集（input + carry-over 均 0）→ brief Warnings [EMPTY INPUT SET]，plan=[]
-      5. Emit brief markdown to STDOUT（详 agent.md §输出格式）
-      6. Write plan.json to {PLAN_PATH}（详 agent.md §输出 #2）
+         - placement 守拓扑：blocker.wave ≤ dependent.wave（dependent 顺延到其最晚 blocker 之后）
+      6. parallel_group（C2c）：每 wave 对 affected_paths 前缀重合做 union-find，
+         每连通分量=一组；无 affected_paths → singleton 可并行。
+         全局唯一 int，(wave 升序, 首次出现) 从 1 分配。
+      7. wave_option_id（C3c）：action=="set" 时根据 wave 编号从 WAVE_OPTION_ID_WAVE* 常量取值；
+         WAVE_FIELD_ID 为空时置 ""。
+      8. Emit brief markdown to STDOUT（详 agent.md §输出格式）
+      9. Write plan.json to {PLAN_PATH}（详 agent.md §输出 #2）
+         新增字段：parallel_group (int>=1) + wave_option_id (str，action==skip 可为 "")
   """
 )
+```
+
+## 阶段 3.5：Apply 前确认 gate（仅 `--apply` + plan 非空）
+
+apply 模式下，agent 出 plan.json 后、执行写入前，宿主 LLM 用 `AskUserQuestion` 向用户确认。
+dry-run 不执行此阶段（无 mutation，无需确认）。
+
+```
+# 伪代码：宿主 LLM 逻辑（非 bash）
+if APPLY == "true":
+  plan = read_json(PLAN_PATH)
+  if len(plan) == 0:
+    # 空 plan，无需确认，直接跳阶段 4
+    pass
+  else:
+    answer = AskUserQuestion(
+      question="plan.json 已生成（共 {len(plan)} 条）。是否立即写入 Project v2？",
+      options=["Yes — 立即写入", "No — 退出，不写入", "Show plan.json — 查看后决策"]
+    )
+    if answer == "Yes":
+      # 继续阶段 4（同 $WORKDIR，无 drift）
+      pass
+    elif answer == "No":
+      echo "INFO: 用户取消，退出，零 mutation。" >&2
+      exit 0
+    elif answer starts with "Show":
+      # 宿主 LLM 用 Read 展示 $WORKDIR/plan.json 全文
+      Read(PLAN_PATH)
+      # 然后回问（loop），直到 Yes 或 No
 ```
 
 ## 阶段 4：Apply 分支（仅 `--apply`）
@@ -305,6 +412,8 @@ Agent(
 }
 # 所有校验与写入逻辑在 lib/ 脚本中（单源，零平行副本）。
 # 校验失败 fail-closed：plan.json 是 agent (LLM) 生成的，必须当作未经信任的输入对待。
+# WAVE_FIELD_ID/WAVE_OPTION_IDS 由阶段 0 动态查出，通过 env 传给子脚本。
+export WAVE_FIELD_ID WAVE_OPTION_IDS
 SKILL_DIR=".claude/skills/daily-planner"
 bash "$SKILL_DIR/lib/apply-gate.sh"  || exit 1
 bash "$SKILL_DIR/lib/apply-write.sh"
@@ -314,21 +423,38 @@ bash "$SKILL_DIR/lib/apply-write.sh"
 
 宿主 LLM 把以下信息综合到对话回应：
 
-1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节）
-2. **Audit 行**（仅 apply 模式，由 4.4 写到 stderr）
-3. **Per-item NDJSON 路径**（仅 apply 模式，由 4.4 写到 stderr：`$WORKDIR/audit.ndjson`）——每行含 ts/date/mode/action/item_id/prev_iteration_id/target_iteration_id/result，是 partial apply / 还原 old iteration / 重放的真值源
-4. **失败回滚命令清单**（仅 apply 模式有失败项时，由 4.3 写到 stderr，已是真实可执行命令；回滚目标是**已写入**的项，不是失败项）
-5. **WORKDIR 清理提示**：`rm -rf $WORKDIR`（保留供 apply 失败后追溯 + per-item audit；用户审查后手动清）
+1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节 + parallel_group 分组说明）
+2. **Audit 行**（仅 apply 模式，由 apply-write.sh 写到 stderr）
+3. **Per-item NDJSON 路径**（仅 apply 模式：`$WORKDIR/audit.ndjson`）——每行含 ts/date/mode/action/item_id/prev_iteration_id/target_iteration_id/result，是 partial apply / 还原 old iteration / 重放的真值源
+4. **失败回滚命令清单**（仅 apply 模式有失败项时，由 apply-write.sh 写到 stderr；回滚目标是**已写入**的项，不是失败项）
+5. **Wave 写入情况**（仅 apply 模式）：已写入 Wave 字段的项数（apply-write.sh 写 Wave 时 WARN 失败会标注）
+6. **WORKDIR 清理提示**：`rm -rf $WORKDIR`（保留供 apply 失败后追溯 + per-item audit；用户审查后手动清）
 
 ## 约束
 
 - 所有 `gh` 命令 `dangerouslyDisableSandbox: true`
 - **默认 dry-run；`--apply` 必须显式 opt-in**——所有 Project v2 mutation（含 `updateProjectV2Field` field-configuration append、`gh project item-edit` field-value 写入）必须在 `APPLY=true` 分支内；dry-run 路径零 mutation
-- 只写 Project v2 Iteration field value + Iteration field configuration（append-only 追加 daily option）；**不动 Status / Estimate / labels / issue body / comment / title**
+- 可写字段：Project v2 **Iteration** field value（主写）+ **Wave** single-select field value（C3c，apply-write.sh 在 Iteration 写入成功后追写）+ Iteration field configuration（append-only 追加 daily option）
+- **不动 Status / Estimate / labels / issue body / comment / title**
 - 不创建 / 修改 / 关闭 issue
 - 不修改代码、不跑 build/test
-- **Plan.json 来自 agent (LLM) → 当作未经信任的输入**：apply 前两层 gate（schema + membership：item_id ∈ Project items、target == TODAY_ITERATION_ID、action ∈ {set, skip}），任一违规整体 fail-closed
+- **Plan.json 来自 agent (LLM) → 当作未经信任的输入**：apply 前两层 gate（schema + membership：item_id ∈ Project items、target == TODAY_ITERATION_ID、action ∈ {set, skip}，parallel_group int≥1，wave_option_id ∈ WAVE_OPTION_IDS），任一违规整体 fail-closed
+- **Wave field fail-closed**：apply 模式下 WAVE_FIELD_ID 为空（字段未配置 / 字段名拼错） → apply-gate.sh fail-fast，零 mutation；详见 `## C3a 前置` 段
 - Apply 失败不自动回滚（输出回滚命令清单交人决策）；**回滚目标 = 已写入项**（partial apply 残留），失败项另列在 retry section
-- **不在本地长期落盘**：brief = stdout，plan.json / audit.ndjson = `$WORKDIR/` mktemp 临时；per-item NDJSON 提供 partial apply / 还原 / 重放所需的真值
+- **不在本地长期落盘**：brief = stdout，plan.json / audit.ndjson / deps.json = `$WORKDIR/` mktemp 临时；per-item NDJSON 提供 partial apply / 还原 / 重放所需的真值
 - 字段 ID 每次启动从 `gh` 查询，不硬编（避免 Project v2 迁移后双源漂移）
 - token 无 `project` scope → fail-fast 退出（无云沙箱降级）
+- **blocked-by 降级策略**：仅真·瞬态 API 错误才降级，loud WARN + `[DEP DATA UNAVAILABLE]`；结构性不支持 = `{}`（需 ADR carve-out + backlog 追踪）
+
+## C3a 前置：Project v2 配置（已完成）
+
+Project v2 #3（owner `ghbvf`）Wave 字段配置状态：
+
+| 配置项 | 状态 | 说明 |
+|--------|------|------|
+| **Wave 字段**（single-select） | ✅ 已建 | options：Wave 1 / Wave 2 / Wave 3 / Wave 4 |
+| `Item added to project` workflow | ✅ 已开 | target Status = Backlog |
+| `Pull request merged` workflow | ✅ 已开 | target Status = Done |
+| `Pull request linked to issue` workflow | ✅ 已开 | target Status = In review（/ship 不写 In review，交此 workflow）|
+
+字段 ID 由阶段 0 动态查询（`gh project field-list`），不硬编。`WAVE_FIELD_ID` 为空时 apply-gate.sh fail-fast，提示 `ERROR: Wave field missing; complete C3a config`。
