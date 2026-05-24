@@ -1607,7 +1607,9 @@ func (f *fakeAuthMethod) Login(_ context.Context) (AuthResult, error) {
 // New PR-A8 tests: auth method, nil guard, real-mode guard
 // ---------------------------------------------------------------------------
 
-// TestNewTransitKeyProvider_NilAuth_Fails verifies that nil auth is rejected.
+// TestNewTransitKeyProvider_NilAuth_Fails verifies that nil auth is rejected
+// with the programmer-error code (ErrInternal). A wiring defect is not a
+// Vault auth failure; the latter is reserved for actual auth.Login errors.
 func TestNewTransitKeyProvider_NilAuth_Fails(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
 	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
@@ -1618,14 +1620,15 @@ func TestNewTransitKeyProvider_NilAuth_Fails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nil AuthMethod, got nil")
 	}
-	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
-		t.Errorf("expected ErrVaultAuthFailed in error chain, got: %v", err)
+	if !errChainHasCode(err, errcode.ErrInternal) {
+		t.Errorf("expected ErrInternal in error chain (wiring defect), got: %v", err)
 	}
 }
 
 // TestNewTransitKeyProvider_NilMetrics_Fails verifies that the metrics
 // constructor parameter is required — a nil *TransitMetrics is a programmer-
-// error (missing wiring call to vault.NewTransitMetrics) and must fail fast.
+// error (missing wiring call to vault.NewTransitMetrics) and must fail fast
+// with the programmer-error code (ErrInternal), not ErrVaultAuthFailed.
 func TestNewTransitKeyProvider_NilMetrics_Fails(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
 	_, err := NewTransitKeyProvider(
@@ -1635,8 +1638,8 @@ func TestNewTransitKeyProvider_NilMetrics_Fails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nil *TransitMetrics, got nil")
 	}
-	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
-		t.Errorf("expected ErrVaultAuthFailed in error chain, got: %v", err)
+	if !errChainHasCode(err, errcode.ErrInternal) {
+		t.Errorf("expected ErrInternal in error chain (wiring defect), got: %v", err)
 	}
 }
 

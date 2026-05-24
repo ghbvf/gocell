@@ -687,12 +687,18 @@ func NewTransitKeyProvider(
 	ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod, clk clock.Clock, metrics *TransitMetrics,
 ) (*TransitKeyProvider, error) {
 	clock.MustHaveClock(clk, "vault.NewTransitKeyProvider")
+	// Required-dependency guards: wiring defects at the composition root, not
+	// Vault auth failures. KindInternal + ErrInternal matches the errcode
+	// convention for programmer-error sites — operators chasing the public
+	// error code see "internal" rather than being misrouted to Vault auth
+	// triage. (Was ErrVaultAuthFailed previously, which conflated wiring
+	// defects with real Vault auth failures.)
 	if auth == nil {
-		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"vault-transit: auth method is required (pass NewStaticTokenAuth in tests)")
 	}
 	if metrics == nil {
-		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"vault-transit: metrics is required (use vault.NewTransitMetrics(reg) and pass it in)")
 	}
 	if mountPath == "" {
