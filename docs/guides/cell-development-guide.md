@@ -85,7 +85,15 @@ import (
     "github.com/ghbvf/gocell/kernel/cell"
 )
 
-var _ cell.Cell = (*MyCell)(nil)
+// ISP split: cell.Cell is decomposed into four focused interfaces. Each assertion
+// independently verifies compliance at compile time.
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md §D3
+var (
+    _ cell.CellIdentity  = (*MyCell)(nil)
+    _ cell.CellLifecycle = (*MyCell)(nil)
+    _ cell.CellStatus    = (*MyCell)(nil)
+    _ cell.CellInventory = (*MyCell)(nil)
+)
 
 type MyCell struct {
     *cell.BaseCell
@@ -115,7 +123,97 @@ func (c *MyCell) initInternal(ctx context.Context, reg cell.Registrar) error {
 `cell.go` 中的 `// +cell:listener` / `// +slice:route` / `// +slice:subscribe` markers
 生成 RouteGroup/Subscribe 注册代码（参考 `cells/configcore/cell_gen.go`）。
 
-### 4. 注册 HTTP 路由（可选）
+### 4. Outbox 注入：sealed marker 模式
+
+Raw infra 类型（`outbox.Publisher`、`outbox.Writer`、`persistence.TxRunner`）**不能**直接出现在 `cell.go` 的 `With*` Option 签名中。原因：这些类型无法区分"production-wired"与"demo/test-wired"，调用方可以不过 composition root 直接传入任意实现，违背了 sealed marker 的设计意图（见 ADR `docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1`）。
+
+框架提供三个 sealed marker 类型，仅可通过对应的 `Wrap*ForCell` / `WrapForCell` 构造函数获取：
+
+- `outbox.CellPublisher` — 封装 `outbox.Publisher`，通过 `outbox.WrapPublisherForCell(pub)` 构造
+- `outbox.CellWriter` — 封装 `outbox.Writer`，通过 `outbox.WrapWriterForCell(w)` 构造
+- `persistence.CellTxManager` — 封装 `persistence.TxRunner`，通过 `persistence.WrapForCell(txRunner)` 构造
+
+#### 最小 cell.go 示例
+
+```go
+// cell.go
+package mycell
+
+import (
+    "github.com/ghbvf/gocell/kernel/outbox"
+    "github.com/ghbvf/gocell/kernel/persistence"
+    "github.com/ghbvf/gocell/kernel/cell"
+)
+
+type MyCell struct {
+    cell.BaseCell
+    pendingPublisher outbox.CellPublisher
+    pendingWriter    outbox.CellWriter
+    txMgr            persistence.CellTxManager
+}
+
+// WithOutboxDeps 注入 sealed outbox 依赖。pub 和 w 必须通过
+// outbox.WrapPublisherForCell / outbox.WrapWriterForCell 在 composition root 构造。
+func WithOutboxDeps(p outbox.CellPublisher, w outbox.CellWriter) Option {
+    return func(c *MyCell) {
+        c.pendingPublisher = p
+        c.pendingWriter = w
+    }
+}
+
+// WithTxManager 注入 sealed tx 依赖。tx 必须通过 persistence.WrapForCell 在
+// composition root 构造。nil 静默忽略；最终 nil 校验由 validateRequired() 完成。
+func WithTxManager(tx persistence.CellTxManager) Option {
+    return func(c *MyCell) {
+        if tx == (persistence.CellTxManager{}) {
+            return
+        }
+        c.txMgr = tx
+    }
+}
+```
+
+#### Composition root 对照例
+
+```go
+// demo / 测试模式 — 用 noop 实现在 composition root 构造 sealed marker
+mycell.New(
+    mycell.WithOutboxDeps(
+        outbox.WrapPublisherForCell(outbox.DiscardPublisher{}),
+        outbox.WrapWriterForCell(outbox.NoopWriter{}),
+    ),
+    mycell.WithTxManager(persistence.WrapForCell(persistence.DemoTxRunner{})),
+)
+
+// production 模式 — 用真实 adapter 在 composition root 构造 sealed marker
+mycell.New(
+    mycell.WithOutboxDeps(
+        outbox.WrapPublisherForCell(rabbitPub),
+        outbox.WrapWriterForCell(pgWriter),
+    ),
+    mycell.WithTxManager(persistence.WrapForCell(pgTxRunner)),
+)
+```
+
+两种模式下 `cell.go` 代码完全一致；切换点仅在 `cmd/myapp/main.go`（或 `examples/.../main.go`）的 composition root。
+
+Cross-link: 常见问题与设计理由见 `docs/guides/why-sealed-marker.md`。
+
+ref: `docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md §D1`
+
+### 5. 按 cell 能力选 outbox option 形态
+
+不同 cell 能力对应不同的 Option 组合，选错会导致 option 名称与真实能力不匹配：
+
+| Cell 能力 | 一致性级别 | Option 形态 | 示例 |
+|----------|-----------|------------|------|
+| 平台 cell（pub + writer + tx） | L1/L2 | `WithOutboxDeps(pub, writer)` + `WithTxManager(tx)` | `cells/accesscore` `cells/configcore` `cells/auditcore` |
+| L2 outbox-only（仅 writer + tx） | L2 OutboxFact | `WithOutboxWriter(writer)` + `WithTxManager(tx)` | `examples/todoorder/cells/ordercell` |
+| L4 publish-only（仅 publisher） | L4 DeviceLatent | `WithDirectPublisher(pub)` | `examples/iotdevice/cells/devicecell` |
+
+option 名称后缀对应 cell 能力的真实分布：`WithOutboxDeps` 表示同时持有 publisher 与 writer 的平台 cell，`WithOutboxWriter` 表示只写 outbox 不主动 publish 的 L2 cell，`WithDirectPublisher` 表示绕过 outbox 直接发布的 L4 cell。选错 option 形态会让能力边界在代码审查时不可见，增加 L2/L4 混淆风险。
+
+### 6. 注册 HTTP 路由（可选）
 
 通过 `reg.RouteGroup(...)` 在 `Init` 内声明每组路由所属的物理 listener，
 并在 `Register` 闭包里使用 `auth.Mount` 声明鉴权语义（参见
@@ -194,7 +292,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 - 禁止在 `Route` / `Group` / `With` 嵌套子作用域里再次进入 `/internal/v1/*`——会触发 `chiRouterAdapter.guardNestedInternalRegistration` panic（顶层 Router 是内外 mux 分流的唯一入口）。
 - `/healthz` / `/readyz` / `/metrics` 只在 health listener；未声明 health listener 时才 fallback 到 primary。
 
-### 5. 注册事件订阅（可选）
+### 7. 注册事件订阅（可选）
 
 通过 `reg.Subscribe(...)` 在 `Init` 内声明订阅意图——禁止手动启动 goroutine 或
 直接调 `Subscriber.Subscribe`，goroutine 生命周期、错误收敛、Setup/Ready 阶段
@@ -236,7 +334,7 @@ EventRouter 在所有 cell 注册完成后按四阶段生命周期启动：
    `bootstrap.WithEventRouterReadyTimeout` 可调），任何未就绪的订阅会出现在错误信息中
 4. **Block**：阻塞至 ctx cancel 或运行时错误
 
-### 6. 注册到 Assembly
+### 8. 注册到 Assembly
 
 ```go
 asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo})
