@@ -34,7 +34,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 ---
 
-## 方案与计划原则（阶段 1 汇总 / 阶段 2 计划必须满足）
+### 方案与计划原则（阶段 1 汇总 / 阶段 2 计划必须满足）
 
 - **彻底**：根因 + 完整解法，不留 TODO/FIXME/follow-up；范围内紧密相关的小工作一并纳入，不拆 P2/后续 PR
 - **不向后兼容**：删字段/改签名/换实现直接做，不留 deprecation 别名、不留兼容 shim、不留旧路径
@@ -53,7 +53,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 ---
 
-## 阶段 2：计划（L1 跳过）
+## 阶段 2：计划
 
 按"方案与计划原则"生成改动文件清单（按依赖顺序）、任务分组（串行/并行批次）、TDD 测试先写清单、对标参考（`ref: framework file`）。生成后执行"反思自检"，L3 用 AskUserQuestion 与用户确认计划后继续。
 
