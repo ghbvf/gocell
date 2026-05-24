@@ -56,6 +56,21 @@ func (r *OrderRepository) GetByID(_ context.Context, id string) (*domain.Order, 
 	return &out, nil
 }
 
+// UpdateStatus updates the status of an existing order.
+// Returns ErrOrderNotFound if no order with the given ID exists.
+func (r *OrderRepository) UpdateStatus(_ context.Context, id, newStatus string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	o, ok := r.orders[id]
+	if !ok {
+		return errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
+			fmt.Sprintf("order %q not found", id))
+	}
+	o.Status = newStatus
+	return nil
+}
+
 // List returns orders sorted and paginated according to params.
 // It applies keyset cursor filtering and returns up to FetchLimit() rows
 // for N+1 hasMore detection.

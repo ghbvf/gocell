@@ -1,0 +1,21 @@
+id: http.order.projection-summary.v1
+kind: http
+ownerCell: ordercell
+consistencyLevel: L3
+lifecycle: active
+endpoints:
+  server: ordercell
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/orders/projection/summary
+    successStatus: 200
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — invalid query parameters"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

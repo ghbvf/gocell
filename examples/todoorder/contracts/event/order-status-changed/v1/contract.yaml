@@ -1,4 +1,4 @@
-id: event.order-created.v1
+id: event.order-status-changed.v1
 kind: event
 ownerCell: ordercell
 consistencyLevel: L2

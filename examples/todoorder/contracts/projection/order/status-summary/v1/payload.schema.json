@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "projection.order.status-summary.v1.payload",
+  "type": "object",
+  "properties": {
+    "statuses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "orderIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "totalOrders": {
+      "type": "integer"
+    },
+    "lastAppliedSeq": {
+      "type": "integer"
+    }
+  }
+}
