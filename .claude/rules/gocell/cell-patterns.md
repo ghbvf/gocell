@@ -70,6 +70,24 @@ CLAUDE.md "Cell 之间只通过 contract 通信"——**contract = `payload.sche
 
 当前 `gocell` CLI 的 `scaffold` / `generate` 不含 schema → Go 能力。
 
+## internal/ 子包布局（必备 vs 按需增长）
+
+cell 的 `internal/` 子包分两类，`gocell scaffold cell` 只预生成必备层的 `doc.go` 起始文件，其余按功能增长时手建（对标 go-kratos/kratos-layout 每架构层一个起始文件、go-zero goctl 按声明裁剪从不产空目录——git 不跟踪空目录）：
+
+| 子包 | 类别 | 说明 |
+|---|---|---|
+| `internal/ports/` | **必备**（scaffold 预生成 `doc.go`） | 仓储/服务接口定义；adapter（mem / 按需 postgres）依赖内向 |
+| `internal/mem/` | **必备**（scaffold 预生成 `doc.go`） | ports 接口的 in-memory 实现，供 demo 模式与测试 |
+| `internal/domain/` | 按需 | 充血领域模型（含不变量）；非所有 cell 需要（auditcore append-only 即无） |
+| `internal/dto/` | 按需 | B 档共享 DTO（见上「DTO 作用域三档」） |
+| `internal/events/` | 按需 | cell 内事件类型（如 configcore fan-out） |
+| `internal/adapters/` | 按需 | 具体 adapter 实现（如 `adapters/postgres/`），由 `gocell generate adapter` 或手建 |
+| `internal/testutil/` | 按需 | 测试工具，首次写集成测试时建 |
+
+约束：
+- 三个存量平台 cell 的 internal/ 形态各异（auditcore 仅 `appender`/`dto`）是历史演化的合理结果，**不回填**——append-only cell 无需 domain/mem 是正确形态。
+- "必备性"由 scaffold deterministic 产出（`tools/codegen/cellgen/scaffold_bundle.go::planInternalArchLayers`，scaffold bundle golden 锁定）+ 本文档约定承载，对手写存量**无 archtest 强约束**（文件布局是 Soft，按 `ai-robust.md` 不为此立 archtest）。
+
 ## Init() fail-fast
 
 依赖缺失在 Init() 报错，不降级运行。Cells 持有 sealed marker 字段（`outbox.CellPublisher` / `outbox.CellWriter` / `persistence.CellTxManager`），demo 信号通过包装的 `outbox.DiscardPublisher{}` / `outbox.NoopWriter{}` 透传 `Noop()` 进入 fail-fast 检查。

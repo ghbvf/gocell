@@ -68,6 +68,9 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 	wantFiles := []string{
 		"cells/myhttpcell/cell.yaml",
 		"cells/myhttpcell/cell.go",
+		// Mandatory internal/ architecture layers (ports + mem) seeded for every cell.
+		"cells/myhttpcell/internal/ports/doc.go",
+		"cells/myhttpcell/internal/mem/doc.go",
 		"cells/myhttpcell/slices/myhttpcellexample/slice.yaml",
 		"cells/myhttpcell/slices/myhttpcellexample/service.go",
 		"cells/myhttpcell/slices/myhttpcellexample/service_test.go",
@@ -121,6 +124,8 @@ func TestScaffoldCellBundle_Events(t *testing.T) {
 	wantFiles := []string{
 		"cells/myevtcell/cell.yaml",
 		"cells/myevtcell/cell.go",
+		"cells/myevtcell/internal/ports/doc.go",
+		"cells/myevtcell/internal/mem/doc.go",
 		"cells/myevtcell/slices/myevtcellexample/slice.yaml",
 		"cells/myevtcell/slices/myevtcellexample/service.go",
 		"cells/myevtcell/slices/myevtcellexample/service_test.go",
