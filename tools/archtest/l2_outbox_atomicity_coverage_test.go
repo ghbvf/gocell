@@ -67,7 +67,6 @@ package archtest
 
 import (
 	"go/ast"
-	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -424,18 +423,21 @@ func l2CollectTestFuncs(t *testing.T, root string) map[string]l2TestFuncInfo {
 	return result
 }
 
-// l2FileHasIntegrationTag reports whether the file at absPath carries a
-// //go:build integration constraint (or the legacy // +build integration form).
+// l2FileHasIntegrationTag reports whether the file at absPath is exclusively
+// gated on the integration build tag (builds with -tags=integration on top of
+// toolchain defaults, and NOT without it). Delegates to the package-canonical
+// fileHasExclusivelyTag so build-constraint evaluation flows through
+// BuildContextPredicate (TYPESEVAL-EVAL-PREDICATE-CENTRALIZED-01) and inherits
+// the drifting toolchain-default tag set rather than a hand-written predicate.
 func l2FileHasIntegrationTag(absPath string) bool {
 	if absPath == "" {
 		return false
 	}
-	expr, err := ParseBuildConstraint(absPath)
-	if err != nil || expr == nil {
+	has, err := fileHasExclusivelyTag(absPath, "integration")
+	if err != nil {
 		return false
 	}
-	// Evaluate with "integration" as the only active tag.
-	return expr.Eval(func(tag string) bool { return tag == "integration" })
+	return has
 }
 
 // l2IsStandardTestFunc reports whether ft matches func(*testing.T).
@@ -662,67 +664,11 @@ func l2AssertBodyHasAssertion(t *testing.T, name string, fd *ast.FuncDecl, rel s
 	}
 }
 
-// ---- Build-tag check helper (used in integration tag self-verification) ----
-
-// l2ParseIntegrationConstraint is a thin wrapper around the file scanner to
-// extract and evaluate a //go:build integration constraint from src content.
-// Used by inline tests; production path uses l2FileHasIntegrationTag.
-func l2ParseIntegrationConstraint(src string) bool {
-	for _, line := range strings.Split(src, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "//go:build") {
-			continue
-		}
-		expr, err := constraint.Parse(line)
-		if err != nil {
-			return false
-		}
-		return expr.Eval(func(tag string) bool { return tag == "integration" })
-	}
-	return false
-}
-
-// TestL2OutboxAtomicityCoverage_IntegrationTagParser verifies that the
-// integration tag parser correctly identifies //go:build integration files
-// and rejects unconstrained ones.
-func TestL2OutboxAtomicityCoverage_IntegrationTagParser(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		src  string
-		want bool
-	}{
-		{
-			name: "has integration tag",
-			src:  "//go:build integration\n\npackage foo\n",
-			want: true,
-		},
-		{
-			name: "no build tag",
-			src:  "package foo\n",
-			want: false,
-		},
-		{
-			name: "different tag",
-			src:  "//go:build e2e\n\npackage foo\n",
-			want: false,
-		},
-		{
-			name: "compound tag with integration",
-			src:  "//go:build integration && !race\n\npackage foo\n",
-			want: true,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := l2ParseIntegrationConstraint(tc.src)
-			assert.Equal(t, tc.want, got,
-				"l2ParseIntegrationConstraint(%q) = %v, want %v", tc.src, got, tc.want)
-		})
-	}
-}
+// Build-tag detection is delegated to the package-canonical
+// fileHasExclusivelyTag (see l2FileHasIntegrationTag) so constraint evaluation
+// flows through BuildContextPredicate; that helper carries its own parser
+// self-checks in ci_integration_discovery_invariants_test.go, so no duplicate
+// parser/self-check is maintained here.
 
 // ---- Inline fixture for AST-scan correctness ----
 
