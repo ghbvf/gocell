@@ -880,6 +880,9 @@ jobs:
       - name: Verify assembly codegen (K#10)
         run: ./hack/verify-codegen-assembly.sh
 
+      - name: Verify shared-schema codegen
+        run: ./hack/verify-codegen-shared-schema.sh
+
       - name: Verify scaffold bundle (sandbox)
         run: ./hack/verify-scaffold-bundle.sh
       - name: Verify scaffold assembly (sandbox)

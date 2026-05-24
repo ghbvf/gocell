@@ -1,6 +1,7 @@
 package codegen_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -200,5 +201,207 @@ func TestWrite_CreatesParentDirs(t *testing.T) {
 	got := fileutil.MustReadFile(t, path)
 	if string(got) != generatedHeader {
 		t.Errorf("file contents mismatch after parent-dir creation")
+	}
+}
+
+// nonGeneratedJSON is a hand-written JSON file that carries no gocell generated
+// header. Write must refuse to overwrite it unless Headerless=true.
+const nonGeneratedJSON = `{"a":1}` + "\n"
+
+// newContent is the replacement payload used in Headerless tests.
+const newJSONContent = `{"a":2,"b":"updated"}` + "\n"
+
+func TestWrite_Headerless(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// setup optionally creates a file at path before calling Write.
+		setup func(t *testing.T, path string)
+		opts  func(dir, path string) codegen.WriteOptions
+		// wantAction is the expected WriteResult.Action; ignored when wantErr=true.
+		wantAction codegen.WriteAction
+		// wantErr asserts that Write returns a non-nil error.
+		wantErr bool
+		// wantFileContent is checked when non-empty and wantErr=false.
+		wantFileContent string
+		// wantFileUnchanged asserts the file on disk was NOT modified after Write.
+		// Only meaningful when setup creates a file first.
+		wantFileUnchanged bool
+		// wantFileNotExist asserts the file was NOT created on disk after Write.
+		// Used for DryRun cases where no setup file exists.
+		wantFileNotExist bool
+	}{
+		{
+			name: "Headerless=true overwrites existing non-generated JSON file",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(nonGeneratedJSON), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			opts: func(dir, path string) codegen.WriteOptions {
+				return codegen.WriteOptions{
+					Path:       path,
+					Content:    []byte(newJSONContent),
+					RepoRoot:   dir,
+					Headerless: true,
+				}
+			},
+			wantAction:      codegen.ActionWritten,
+			wantFileContent: newJSONContent,
+		},
+		{
+			name: "Headerless=true returns ActionUnchanged when content already matches",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(nonGeneratedJSON), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			opts: func(dir, path string) codegen.WriteOptions {
+				return codegen.WriteOptions{
+					Path:       path,
+					Content:    []byte(nonGeneratedJSON),
+					RepoRoot:   dir,
+					Headerless: true,
+				}
+			},
+			wantAction: codegen.ActionUnchanged,
+		},
+		{
+			name: "Headerless=true Verify=true returns ActionDrifted when content differs",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(nonGeneratedJSON), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			opts: func(dir, path string) codegen.WriteOptions {
+				return codegen.WriteOptions{
+					Path:       path,
+					Content:    []byte(newJSONContent),
+					RepoRoot:   dir,
+					Headerless: true,
+					Verify:     true,
+				}
+			},
+			wantAction:        codegen.ActionDrifted,
+			wantFileUnchanged: true, // Verify must NOT write
+		},
+		{
+			name:  "Headerless=true Verify=true returns ActionDrifted when file missing",
+			setup: nil, // file intentionally absent
+			opts: func(dir, path string) codegen.WriteOptions {
+				return codegen.WriteOptions{
+					Path:       path,
+					Content:    []byte(newJSONContent),
+					RepoRoot:   dir,
+					Headerless: true,
+					Verify:     true,
+				}
+			},
+			wantAction: codegen.ActionDrifted,
+		},
+		{
+			name: "Headerless=false (default) still refuses to overwrite non-generated file",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(nonGeneratedJSON), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			opts: func(dir, path string) codegen.WriteOptions {
+				return codegen.WriteOptions{
+					Path:     path,
+					Content:  []byte(newJSONContent),
+					RepoRoot: dir,
+					// Headerless deliberately omitted — zero value = false
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name:  "Headerless=true DryRun=true on non-existent file returns ActionWouldWrite without creating file",
+			setup: nil, // destination file intentionally absent
+			opts: func(dir, path string) codegen.WriteOptions {
+				return codegen.WriteOptions{
+					Path:       path,
+					Content:    []byte(newJSONContent),
+					RepoRoot:   dir,
+					Headerless: true,
+					DryRun:     true,
+				}
+			},
+			wantAction:       codegen.ActionWouldWrite,
+			wantFileNotExist: true,
+		},
+		{
+			name:  "Headerless=true with path escaping RepoRoot returns error",
+			setup: nil,
+			opts: func(dir, path string) codegen.WriteOptions {
+				// Construct a path that resolves outside dir via ".."
+				escapedPath := filepath.Join(dir, "..", "outside.json")
+				return codegen.WriteOptions{
+					Path:       escapedPath,
+					Content:    []byte(newJSONContent),
+					RepoRoot:   dir,
+					Headerless: true,
+				}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "schema.json")
+
+			if tc.setup != nil {
+				tc.setup(t, path)
+			}
+
+			// Snapshot the file content before calling Write (for wantFileUnchanged).
+			var beforeContent []byte
+			if tc.wantFileUnchanged {
+				beforeContent = fileutil.MustReadFile(t, path)
+			}
+
+			res, err := codegen.Write(tc.opts(dir, path))
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Action != tc.wantAction {
+				t.Errorf("Action = %q, want %q", res.Action, tc.wantAction)
+			}
+			if tc.wantFileContent != "" {
+				got := fileutil.MustReadFile(t, path)
+				if string(got) != tc.wantFileContent {
+					t.Errorf("file content = %q, want %q", string(got), tc.wantFileContent)
+				}
+			}
+			if tc.wantFileUnchanged {
+				got := fileutil.MustReadFile(t, path)
+				if !bytes.Equal(got, beforeContent) {
+					t.Errorf("Verify=true must not write file; content changed from %q to %q",
+						string(beforeContent), string(got))
+				}
+			}
+			if tc.wantFileNotExist {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Errorf("DryRun must not create file; os.Stat err = %v", err)
+				}
+			}
+		})
 	}
 }

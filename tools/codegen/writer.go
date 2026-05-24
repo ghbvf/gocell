@@ -55,6 +55,16 @@ type WriteOptions struct {
 	// DryRun and Verify are mutually exclusive at the CLI layer; combining
 	// them here is harmless — Verify dominates (no write either way).
 	Verify bool
+	// Headerless opts out of the "existing file must carry the gocell
+	// generated header" guard. Reserved exclusively for artifacts that
+	// cannot carry a Go-style line comment (e.g. JSON schema files).
+	// When true, Write will overwrite any existing file without checking
+	// for the generated header; the within-root and Action state-machine
+	// invariants are unaffected.
+	//
+	// Caller allowlist: only tools/codegen/sharedschema may set this field.
+	// Enforced by archtest SHARED-SCHEMA-MIRROR-FUNNEL-01 A2.
+	Headerless bool
 }
 
 // WriteResult reports the outcome of a Write call.
@@ -90,7 +100,7 @@ func Write(opts WriteOptions) (WriteResult, error) {
 	existing, readErr := os.ReadFile(filepath.Clean(opts.Path))
 	switch {
 	case readErr == nil:
-		if !governance.IsGoCellGenerated(existing) {
+		if !opts.Headerless && !governance.IsGoCellGenerated(existing) {
 			return res, fmt.Errorf("codegen write: refusing to overwrite non-generated file %s "+
 				"(generated files must start with the gocell header; remove the file or move "+
 				"hand-written code to a sibling file (e.g., run.go or app.go in the same package) and re-run generation)", opts.Path)

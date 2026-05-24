@@ -90,6 +90,17 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		},
 		run: func(_ context.Context, a []string) error { return generateRequiredDeps(a) },
 	},
+	{
+		name: "shared-schema",
+		help: []string{
+			"Derive byte-identical mirror copies of",
+			"contracts/shared/errors/error-response-v1.schema.json",
+			"to every destination declared in sharedschema.Mirrors.",
+			"--all (required) [--dry-run].",
+			"CI: commit mirrors and run `gocell verify codegen-shared-schema`.",
+		},
+		run: func(_ context.Context, a []string) error { return generateSharedSchema(a) },
+	},
 }
 
 // runGenerate dispatches `gocell generate <type>` through the
