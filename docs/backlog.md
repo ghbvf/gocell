@@ -175,10 +175,7 @@ backlog 池 → 每日工作焦点调度由 `/daily-planner` skill + `daily-plan
 # 指定日期（按 1-day iteration 推断；缺失自动新建）
 /daily-planner --apply --date=2026-05-25
 
-# 容量覆盖（默认 30 工作日 / 60 周末）
-/daily-planner --apply --capacity=40
-
-# 强制周末模式（出差/补班等场景）
+# 强制周末模式（出差/补班等场景；影响 wave 数 → 容量）
 /daily-planner --apply --weekend
 /daily-planner --apply --weekday
 
@@ -200,14 +197,16 @@ daily-planner 默认只把 `label:backlog AND (label:pri-p0 OR label:pri-p1)` �
 
 ### Wave 模型
 
-| 模式 | wave_count | wave_size | 当日 issue 上限 | ∑Cx 软警告 |
-|------|------------|-----------|--------------|-----------|
-| 工作日 | 2 | 5 | 10 | 30 |
-| 周末 | 4 | 5 | 20 | 60 |
+**容量公式**：`容量 = WAVE_COUNT × WAVE_SIZE`（一任务一容量，不引入 ∑Cx 加权）
 
-- **wave_size=5** 对齐 Miller's Law 认知槽（5-7 chunk）
-- **wave_count × 5** 是硬上限；超出 → Unscheduled `[wave overflow]`
-- **∑Cx ≤ CAPACITY** 是软警告；超出 → brief Warnings `[CAPACITY EXCEEDED]`，不阻塞
+| 模式 | WAVE_COUNT | WAVE_SIZE | 容量 (issue 数) |
+|------|-----------|-----------|----------------|
+| 工作日 | 2 | 5 | **10** |
+| 周末 | 4 | 5 | **20** |
+
+- **WAVE_SIZE=5** 固定，对齐 Miller's Law 认知槽（5-7 chunk）
+- **超容量的 issue** → Unscheduled，标注 `[capacity overflow]`
+- **Estimate (Cx1-4)** 仅在 brief 表格作参考显示，**不参与容量约束**
 - **周末检测** `date +%u >= 6`（自动）；`--weekend` / `--weekday` flag 显式覆盖
 
 ### Carry-over（昨日未完成 → 今日）

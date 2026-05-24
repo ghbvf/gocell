@@ -24,7 +24,8 @@ Project v2 字段 ID 由 skill 阶段 0 用 `gh` 命令动态查询后注入 pro
 ```
 PROJECT_NODE_ID, ITERATION_FIELD_ID,
 TODAY_ITERATION_ID, YESTERDAY_ITERATION_ID（可能空）,
-DATE, IS_WEEKEND, WAVE_COUNT, WAVE_SIZE=5, ISSUE_CAP, CAPACITY, MODE
+DATE, IS_WEEKEND, WAVE_COUNT (2|4), WAVE_SIZE=5, MODE
+（容量 = WAVE_COUNT × WAVE_SIZE，一任务一容量，不暴露其他容量变量）
 ```
 
 ## 排序算法（简化 WSJF）
@@ -42,20 +43,16 @@ Estimate **不入分数**，作"软约束容量警告"（详 §Wave 调度）。
 
 ## Wave 调度规则
 
-```
-ISSUE_CAP  = WAVE_COUNT × 5   （硬上限：工作日 10 / 周末 20）
-CAPACITY   = ∑Cx 软警告       （工作日 30 / 周末 60；超出 brief Warnings 警告，不阻塞）
-```
+**容量公式**：`容量 = WAVE_COUNT × WAVE_SIZE`（工作日 2×5=10；周末 4×5=20）。一任务一容量，**Estimate (Cx1-4) 不参与约束**（仅在 brief 作参考显示）。
 
 **填充顺序**（硬规则）：
 
 1. **Carry-over 优先 Wave 1 头部**：昨日 iteration 内 `issue.state == "OPEN"` AND `Project v2 Status != "Done"` 的 issue 按**原 WSJF score** 排入 Wave 1。
-   - 若 carry-over > 5 → 溢出顺延 Wave 2 头部（不退 Unscheduled）
-   - 若 carry-over ≥ ISSUE_CAP → 新 issue 全部入 Unscheduled，brief Warnings 标 `[BACKLOG SATURATED]`
+   - 若 carry-over > WAVE_SIZE → 溢出顺延 Wave 2 头部（不退 Unscheduled）
+   - 若 carry-over ≥ WAVE_COUNT × WAVE_SIZE → 新 issue 全部入 Unscheduled，brief Warnings 标 `[BACKLOG SATURATED]`
 2. **新 P0/P1（默认输入集）** 按 WSJF 降序填 Wave 1 剩余 slot
 3. **Wave 2+** 填新 issue 剩余项；周末 Wave 3/4 同理
-4. **超 ISSUE_CAP 的新 issue** → Unscheduled，标注 reason `[wave overflow]`
-5. **∑Cx 超 CAPACITY** → Warnings 加一行 `[CAPACITY EXCEEDED] ∑Cx=X > CAPACITY=Y`，不退 issue（issue 数硬约束已 cap）
+4. **超容量的新 issue** → Unscheduled，标注 reason `[capacity overflow]`
 
 ## items.json 结构（skill 阶段 1.2 GraphQL paginated 产出）
 
@@ -125,13 +122,13 @@ for item in items.json:
 
 ## Warnings
 - [CARRY-OVER N items / oldest day:N]
-- [CAPACITY EXCEEDED] ∑Cx=N > CAPACITY=M
+- [BACKLOG SATURATED] carry-over 占满所有容量，新 issue 全退 Unscheduled
 - [STUCK day:N] #M …
 - 其他
 
 ## Plan Summary
-- 模式: weekday/weekend, wave_count=N, wave_size=5, ISSUE_CAP=N, CAPACITY=N
-- 入队: N issue / ∑Cx=N
+- 模式: weekday/weekend, wave_count=N, wave_size=5, 容量=N
+- 入队: N issue（参考 ∑Cx=M）
 - carry-over: N（最老 day:N）
 - 已在 today iteration（skip apply）: N
 - 待 apply: N

@@ -1,7 +1,7 @@
 ---
 name: daily-planner
 description: "每日 backlog → Project v2 Iteration 调度（wave 模型 + carry-over + 周末自动识别）。默认 dry-run；--apply 才写入。仅用户显式 /daily-planner 触发，避免 AI 主动调用对真实 Project v2 写入。"
-argument-hint: "[--apply] [--date=YYYY-MM-DD] [--capacity=N] [--weekend|--weekday] [--include-p2] [--include-p3]"
+argument-hint: "[--apply] [--date=YYYY-MM-DD] [--weekend|--weekday] [--include-p2] [--include-p3]"
 allowed-tools: [Bash, Read, Write, Agent]
 disable-model-invocation: true
 ---
@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 - **Project v2 是真值源**：当日排期写入 Iteration field value；不在本地长期归档 brief / audit log
 - **默认输入集 = P0 + P1**：单人项目 P3 大头不参与每日排期；`--include-p2` / `--include-p3` 可扩
-- **Wave 模型**：工作日 2 wave × 5 issue / 周末 4 wave × 5 issue；wave_count × 5 是硬上限，∑Cx ≤ capacity 是软警告
+- **Wave 模型**：工作日 2 wave × 5 issue = 10 容量 / 周末 4 wave × 5 issue = 20 容量（一任务一容量；不引入 ∑Cx 加权）
 - **Carry-over 硬规则**：昨日 iteration 内 issue.state≠CLOSED 且 Status≠Done 的项**优先占 Wave 1 头部**
 - **字段 ID 动态查询**：每次启动从 `gh` 拉真实 ID，不维护硬编副本
 
@@ -24,8 +24,7 @@ disable-model-invocation: true
 |------|------|------|
 | `--apply` | off | 写入 Project v2 Iteration 字段（含 carry-over move）；未传则纯 dry-run |
 | `--date=YYYY-MM-DD` | today | 目标排期日期 |
-| `--capacity=N` | 30 工作日 / 60 周末 | ∑Cx 软警告阈值（Cx1=1/Cx2=2/Cx3=3/Cx4=4） |
-| `--weekend` / `--weekday` | 自动 `date +%u` | 强制模式覆盖 |
+| `--weekend` / `--weekday` | 自动 `date +%u` | 强制模式覆盖（影响 wave 数 → 容量）|
 | `--include-p2` | off | 加入 P2 issue 作输入 |
 | `--include-p3` | off | 加入 P3 issue（极少需要；P3 默认 nice-to-have） |
 
@@ -59,16 +58,8 @@ elif [[ "$DOW" -ge 6 ]]; then IS_WEEKEND=true
 else IS_WEEKEND=false
 fi
 
-if [[ "$IS_WEEKEND" == "true" ]]; then
-  WAVE_COUNT=4
-  CAPACITY_DEFAULT=60
-else
-  WAVE_COUNT=2
-  CAPACITY_DEFAULT=30
-fi
-CAPACITY="${CAPACITY:-$CAPACITY_DEFAULT}"
 WAVE_SIZE=5  # 固定，Miller's Law
-ISSUE_CAP=$(( WAVE_COUNT * WAVE_SIZE ))
+WAVE_COUNT=$([[ "$IS_WEEKEND" == "true" ]] && echo 4 || echo 2)
 ```
 
 ## 阶段 1：拉取数据
@@ -215,9 +206,7 @@ Agent(
       DATE = {DATE}                                       # YYYY-MM-DD
       IS_WEEKEND = {IS_WEEKEND}                           # true|false
       WAVE_COUNT = {WAVE_COUNT}                           # 2|4
-      WAVE_SIZE = 5
-      ISSUE_CAP = {ISSUE_CAP}                             # WAVE_COUNT * 5
-      CAPACITY = {CAPACITY}                               # ∑Cx 软警告阈值
+      WAVE_SIZE = 5                                       # 容量 = WAVE_COUNT * WAVE_SIZE
       MODE = {"apply" if APPLY else "dry-run"}
 
     Data files (Read these):
@@ -234,8 +223,7 @@ Agent(
       4. Wave 调度：
          - Wave 1 头部填 carry-over（按原 WSJF score 排序）
          - 剩余 Wave 1 / Wave 2+ 填 新 issue 按分数降序
-         - 硬约束: 总 issue 数 ≤ ISSUE_CAP
-         - 软约束: ∑Cx 超 CAPACITY 时在 Warnings 标注，不阻塞
+         - 容量 = WAVE_COUNT × WAVE_SIZE（一任务一容量；超出 → Unscheduled [capacity overflow]）
       5. Emit brief markdown to STDOUT（详 agent.md §输出格式）
       6. Write plan.json to {PLAN_PATH}（详 agent.md §输出 #2）
   """
@@ -287,7 +275,7 @@ done < <(jq -c '.[]' "$WORKDIR/plan.json")
 主 LLM 把以下信息综合到对话回应：
 
 1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节）
-2. **Audit 行**（仅 apply 模式）：`[audit] $(date -u +%FT%TZ) date=$DATE mode=$([[ $IS_WEEKEND == true ]] && echo weekend || echo weekday) wave_count=$WAVE_COUNT capacity=$CAPACITY applied=$APPLIED skipped=$SKIPPED failed=${#FAILED_ITEMS[@]}`
+2. **Audit 行**（仅 apply 模式）：`[audit] $(date -u +%FT%TZ) date=$DATE mode=$([[ $IS_WEEKEND == true ]] && echo weekend || echo weekday) wave_count=$WAVE_COUNT applied=$APPLIED skipped=$SKIPPED failed=${#FAILED_ITEMS[@]}`
 3. **失败回滚命令**（仅有失败项时；**逐条审查后再执行**，不要批量复制粘贴）：
    ```
    # 以下命令仅对失败项有效，逐条确认对应项确需回滚再执行
