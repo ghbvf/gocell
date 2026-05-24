@@ -1,3 +1,22 @@
+// Package ledger — in-package (white-box) test file.
+//
+// This file uses `package ledger` (not `package ledger_test`) so the test
+// helpers tamperEntryHash / tamperEntryPrevHash can access *MemStore's
+// unexported entries field. The sibling mem_store_test.go uses
+// `package ledger_test` (black-box, exercises only the public surface).
+//
+// Test-only physical exclusion (A-05, ADR docs/architecture/202605171800-
+// adr-kernel-mustctor-removal.md): defining the tamper helpers in this
+// _test.go file removes them from the production binary (Go `go build` does
+// not compile _test.go), making "any production caller of tamper" not just
+// banned but unrepresentable.
+//
+// Panic discipline: bare panic(fmt.Sprintf(...)) is used below for
+// out-of-range diagnostics because PANIC-REGISTERED-01 archtest skips
+// _test.go files. If future maintainers need a tamper helper in
+// production source (mem_store.go), the panic must be wrapped with
+// panicregister.Approved(...) per PANIC-REGISTERED-01.
+
 package ledger
 
 import (

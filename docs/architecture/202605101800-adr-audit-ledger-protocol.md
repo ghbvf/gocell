@@ -58,7 +58,7 @@ hash = hex.EncodeToString(HMAC-SHA256(key, msg))
 **HMAC key 安全要求**：
 - key 必须 ≥ 32 bytes（hash output 大小；短 key 降低 HMAC 安全强度）
 - key 不得出现在错误消息或 slog 字段中
-- key 通过 `WithChainHMAC` 注入；`Protocol.HMACKey()` 返回 defensive copy
+- key 通过 `WithChainHMAC` 注入，完成后 caller 切片被 `clear(key)` 清零；Protocol 不暴露 raw key getter（A-08 删除，防止 key 材料从 export 表面泄漏）
 
 ref: google/trillian log/sequencer.go@master
 
