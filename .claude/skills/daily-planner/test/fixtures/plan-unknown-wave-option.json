@@ -1,0 +1,15 @@
+[
+  {
+    "item_id": "PVTI_ITEM_101",
+    "issue_number": 101,
+    "issue_title": "Issue 101",
+    "wave": 1,
+    "current_iteration_id": "ITER_TODAY",
+    "target_iteration_id": "ITER_TODAY",
+    "action": "set",
+    "carry_over": false,
+    "score": 9.5,
+    "parallel_group": 1,
+    "wave_option_id": "OPT_WAVE_UNKNOWN"
+  }
+]
