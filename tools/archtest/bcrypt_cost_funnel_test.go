@@ -60,6 +60,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -231,23 +232,29 @@ func TestBCRYPT_COST_FUNNEL_01_A1_RedFixture(t *testing.T) {
 }
 
 // TestBCRYPT_COST_FUNNEL_01_A2_RedFixture asserts the A2 detector fires on a
-// known-positive: internal/bcryptcostredfixture/a2_testhasher_ref.go calls
-// credential.NewTestHasher from a (would-be) non-test file. The fixture carries
-// //go:build ignore — it cannot compile (internal-package import) but
-// parser.ParseFile reads it regardless, so the detector is exercised without a
-// broken detector silently passing the real A2 scan.
+// known-positive: credential.NewTestHasher called from a (would-be) non-test
+// file. Unlike A1's committed fixture (which imports the public bcrypt package
+// and compiles), an A2 fixture would have to import cells/accesscore/internal/credential
+// — illegal from tools/archtest under Go's internal rule, and committing a
+// //go:build ignore file introduces an "ignore" build tag that the repo's
+// build-tag governance rejects. So the source is written to a temp file and
+// parsed (never compiled): parser.ParseFile reads it, the toolchain never does.
 func TestBCRYPT_COST_FUNNEL_01_A2_RedFixture(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	fixturePath := filepath.Join(root, "tools", "archtest", "internal", "bcryptcostredfixture", "a2_testhasher_ref.go")
-	line, ok, err := firstQualifiedSelectorLine(fixturePath, credentialModulePath, "credential", "NewTestHasher")
+	src := "package redfixture\n\n" +
+		"import \"" + credentialModulePath + "\"\n\n" +
+		"var _ = credential.NewTestHasher(4)\n"
+	path := filepath.Join(t.TempDir(), "a2_red.go")
+	require.NoError(t, os.WriteFile(path, []byte(src), 0o600))
+
+	line, ok, err := firstQualifiedSelectorLine(path, credentialModulePath, "credential", "NewTestHasher")
 	require.NoError(t, err, "parse A2 RED fixture")
 	if !ok {
-		t.Error("BCRYPT-COST-FUNNEL-01 A2 RED fixture: detector found no credential.NewTestHasher in " +
-			"a2_testhasher_ref.go; firstQualifiedSelectorLine may be broken")
+		t.Error("BCRYPT-COST-FUNNEL-01 A2 RED fixture: detector found no credential.NewTestHasher; " +
+			"firstQualifiedSelectorLine may be broken")
 		return
 	}
-	t.Logf("A2 RED fixture hit at a2_testhasher_ref.go:%d", line)
+	t.Logf("A2 RED fixture hit at line %d", line)
 }
 
 // TestBCRYPT_COST_FUNNEL_01_NoDotImportBlindSpot closes the dot-import blind
