@@ -184,7 +184,7 @@ Agent(
          union → 整 wave 落同一 conflict_group，brief 标 [AFFECTED PATHS MISSING — shared
          footprint]。全局唯一 int ≥ 1，(wave 升序, 首次出现) 从 1 分配。
          **无机器消费者**——ship --from-plan 移除后该列仅供人工参考（ADR 202605250010），
-         apply-gate 不再校验；缺失也不阻断 apply（续保留与否见 backlog）。
+         apply-gate 不再校验；缺失也不阻断 apply（续保留与否见 ADR 202605250010 §Amendment）。
       7. wave_option_id（C3c）：action=="set" 时根据 wave 编号从 WAVE_OPTION_ID_WAVE* 常量取值；
          WAVE_FIELD_ID 为空时置 ""。
       8. Emit brief markdown to STDOUT（详 agent.md §输出格式）

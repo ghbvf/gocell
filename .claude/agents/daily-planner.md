@@ -198,7 +198,7 @@ Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人
 
 字段说明：
 - `action="skip"` 由 agent 标注当 `current_iteration_id == TODAY_ITERATION_ID`（客户端幂等，避免冗余 mutation）；`skip` 时 `wave_option_id` 可为 `""`。
-- `conflict_group`：全 plan 全局唯一正整数（≥1），**advisory 显示列**。同值 issue 共享文件、不同值 issue 文件独立。跨 wave 不共组。由 STEP 6 union-find 在 wave 内按 affected_paths 前缀重合分组派生，(wave 升序, 首次出现) 从 1 起全局分配。空 affected_paths 走 wildcard 语义：与同 wave 所有 item union，整 wave 落入同一 conflict_group。**ship --from-plan 移除后无机器消费者**（ADR 202605250010）；`apply-gate.sh` 不再校验该字段，缺失或非整数不阻断 apply。建议续保留供人工读 brief Group 列，整链删除评估见 backlog。
+- `conflict_group`：全 plan 全局唯一正整数（≥1），**advisory 显示列**。同值 issue 共享文件、不同值 issue 文件独立。跨 wave 不共组。由 STEP 6 union-find 在 wave 内按 affected_paths 前缀重合分组派生，(wave 升序, 首次出现) 从 1 起全局分配。空 affected_paths 走 wildcard 语义：与同 wave 所有 item union，整 wave 落入同一 conflict_group。**ship --from-plan 移除后无机器消费者**（ADR 202605250010）；`apply-gate.sh` 不再校验该字段，缺失或非整数不阻断 apply。续保留供人工读 brief Group 列；整链删除评估见 ADR 202605250010 §Amendment。
 - `wave_option_id`：对应 Project v2 Wave 字段的 single-select option id，由 skill 阶段 0 查询后将 wave→option-id 映射注入 prompt，agent 按 entry 的 wave 值填写。`apply-gate.sh` 在 `WAVE_FIELD_ID` 非空时校验该值必须在已知 option id 集合内。
 
 ## 约束

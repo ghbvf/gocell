@@ -92,7 +92,9 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 
 `conflict_group` 本身（affected_paths 解析 + STEP 6 union-find + plan.json 字段 + brief
 Group 列）按用户知情决策**保留为 advisory 显示列**。这是经"彻底 / 优雅简洁"四原则自审
-后被标记的已知偏离（consumerless 显示列）——整链删除评估已开 backlog 跟踪，不 silent。
+后被标记的已知偏离（consumerless 显示列）：彻底做法是整链删除，用户知情后选择保留。
+**本 Amendment 即该偏离的真值源记录**——用户决策不另开 backlog issue，未来重审整链删除
+时以此 Amendment 为起点。
 
 ## Related
 
