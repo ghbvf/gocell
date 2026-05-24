@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 - **Project v2 是真值源**：当日排期写入 Iteration field value；不在本地长期归档 brief / audit log
 - **默认输入集 = P0 + P1**：单人项目 P3 大头不参与每日排期；`--include-p2` / `--include-p3` 可扩
-- **Wave 模型**：工作日 2 wave × 5 issue = 10 容量 / 周末 4 wave × 5 issue = 20 容量（一任务一容量；不引入 ∑Cx 加权）
+- **Wave 模型**：工作日 2 wave × 5 issue = 10 容量 / 周末 4 wave × 5 issue = 20 容量
 - **Carry-over 硬规则**：昨日 iteration 内 issue.state≠CLOSED 且 Status≠Done 的项**优先占 Wave 1 头部**
 - **字段 ID 动态查询**：每次启动从 `gh` 拉真实 ID，不维护硬编副本
 
@@ -28,13 +28,38 @@ disable-model-invocation: true
 | `--include-p2` | off | 加入 P2 issue 作输入 |
 | `--include-p3` | off | 加入 P3 issue（极少需要；P3 默认 nice-to-have） |
 
+`disable-model-invocation: true`（frontmatter）= 阻止 AI 在日常对话里"看到 today / standup 关键词"就主动调本 skill；仅用户显式 `/daily-planner` 触发。
+
+## Argument parsing convention
+
+宿主 LLM 收到用户 `/daily-planner <args>` 后，将 flag 解析为环境变量再执行下列 bash：
+
+| Flag | Env 设置 |
+|------|---------|
+| `--apply` | `APPLY=true` |
+| `--date=YYYY-MM-DD` | `DATE=YYYY-MM-DD` |
+| `--weekend` | `FORCE_WEEKEND=true` |
+| `--weekday` | `FORCE_WEEKDAY=true` |
+| `--include-p2` | `INCLUDE_P2=true` |
+| `--include-p3` | `INCLUDE_P3=true` |
+
+未设的 env 默认 unset（bash `${VAR:-}` 兜底）。
+
 ---
 
 ## 阶段 0：常量动态查询 + token scope fail-fast + 模式探测
 
 ```bash
-# 0.1 Token scope（无 project scope → 直接退出；删除原降级模式）
-if ! gh auth status 2>&1 | grep -qiE "scopes:.*\bproject\b"; then
+set -euo pipefail
+
+# 0.1 Token scope。先区分未登录 vs 缺 scope（gh auth status 失败 → 未登录；
+# 成功但 grep 不到 → 缺 scope）。grep 用宽松正则，跨 gh 版本健壮。
+if ! AUTH_STATUS=$(gh auth status 2>&1); then
+  echo "ERROR: gh auth status failed; run: gh auth login" >&2
+  echo "$AUTH_STATUS" >&2
+  exit 1
+fi
+if ! grep -qiE "scopes:.*\bproject\b" <<<"$AUTH_STATUS"; then
   echo "ERROR: token missing 'project' scope; run: gh auth refresh -s project" >&2
   exit 1
 fi
@@ -48,12 +73,17 @@ ITERATION_FIELD_ID=$(gh project field-list 3 --owner ghbvf --format json \
   exit 1
 }
 
-# 0.3 日期 + 模式（weekday/weekend）。用 python3 跨 macOS BSD / Linux GNU date 兼容
+# 0.3 日期 + 模式（weekday/weekend）。python3 用 sys.argv 传 $DATE 防 shell 注入
 DATE="${DATE:-$(date +%Y-%m-%d)}"
-DOW=$(python3 -c "from datetime import date; print(date.fromisoformat('$DATE').isoweekday())")
-# 自动判定，flag 覆盖
-if [[ "$FORCE_WEEKEND" == "true" ]]; then IS_WEEKEND=true
-elif [[ "$FORCE_WEEKDAY" == "true" ]]; then IS_WEEKEND=false
+DOW=$(python3 -c 'import sys,datetime; print(datetime.date.fromisoformat(sys.argv[1]).isoweekday())' "$DATE")
+
+# --weekend / --weekday 互斥（同传 fail-fast 不静默吞错）
+if [[ "${FORCE_WEEKEND:-}" == "true" && "${FORCE_WEEKDAY:-}" == "true" ]]; then
+  echo "ERROR: --weekend and --weekday are mutually exclusive" >&2
+  exit 1
+fi
+if [[ "${FORCE_WEEKEND:-}" == "true" ]]; then IS_WEEKEND=true
+elif [[ "${FORCE_WEEKDAY:-}" == "true" ]]; then IS_WEEKEND=false
 elif [[ "$DOW" -ge 6 ]]; then IS_WEEKEND=true
 else IS_WEEKEND=false
 fi
@@ -68,22 +98,21 @@ WAVE_COUNT=$([[ "$IS_WEEKEND" == "true" ]] && echo 4 || echo 2)
 WORKDIR="$(mktemp -d -t daily-planner.XXXXXX)"
 chmod 700 "$WORKDIR"
 
-# 1.1 输入集：P0 + P1 (默认) + 可选 P2/P3
-PRI_TERMS='label:pri-p0,label:pri-p1'
-[[ "$INCLUDE_P2" == "true" ]] && PRI_TERMS="$PRI_TERMS,label:pri-p2"
-[[ "$INCLUDE_P3" == "true" ]] && PRI_TERMS="$PRI_TERMS,label:pri-p3"
+# 1.1 输入集：P0 + P1 (默认) + 可选 P2/P3。GitHub label search 是 AND 语义，需逐 label 拉
+PRI_LABELS=(pri-p0 pri-p1)
+[[ "${INCLUDE_P2:-}" == "true" ]] && PRI_LABELS+=(pri-p2)
+[[ "${INCLUDE_P3:-}" == "true" ]] && PRI_LABELS+=(pri-p3)
 
-# 用多次 gh issue list 联合（GitHub label search 是 AND 语义，需逐 label 拉再合并）
 echo "[]" > "$WORKDIR/issues.json"
-for term in ${PRI_TERMS//,/ }; do
-  pri_label="${term#label:}"
+for pri_label in "${PRI_LABELS[@]}"; do
   gh issue list --repo ghbvf/gocell --label backlog --label "$pri_label" \
     --state open --json number,title,labels,createdAt,body,url --limit 200 \
     > "$WORKDIR/issues-$pri_label.json"
-  jq -s '.[0] + .[1]' "$WORKDIR/issues.json" "$WORKDIR/issues-$pri_label.json" \
+  jq -s '(.[0] + .[1]) | unique_by(.number)' \
+    "$WORKDIR/issues.json" "$WORKDIR/issues-$pri_label.json" \
     > "$WORKDIR/issues.tmp" && mv "$WORKDIR/issues.tmp" "$WORKDIR/issues.json"
 done
-echo "INFO: input set = $(jq 'length' "$WORKDIR/issues.json") issues (priority labels: $PRI_TERMS)"
+echo "INFO: input set = $(jq 'length' "$WORKDIR/issues.json") issues (priorities: ${PRI_LABELS[*]})" >&2
 
 # 1.2 Project v2 items（用 GraphQL paginated，因为 gh project item-list 不返回 iteration value 和 issue.state）
 # 输出 NDJSON 多页，jq -s 合并所有页的 nodes
@@ -108,7 +137,7 @@ query($endCursor: String) {
     }
   }}
 }' | jq -s '[.[].data.user.projectV2.items.nodes[]]' > "$WORKDIR/items.json"
-echo "INFO: $(jq 'length' "$WORKDIR/items.json") Project v2 items loaded"
+echo "INFO: $(jq 'length' "$WORKDIR/items.json") Project v2 items loaded" >&2
 
 # 1.3 Iteration 配置（拿当前所有 iteration option）
 gh api graphql -f query='query {
@@ -136,7 +165,9 @@ gh api graphql -H "GraphQL-Features: sub_issues" -f query='query {
 ## 阶段 2：确保 today iteration 存在
 
 ```bash
-# 2.1 推断 $DATE 对应的 iteration option（注意 pipe 后 root context 丢失，用 `as $it` 绑定保留）
+# 2.1 推断 $DATE 对应的 iteration option
+# jq 在 select() 内嵌套 pipe 后 . 会被覆盖为子表达式中间值；用 `as $it` 把当前
+# iteration 对象绑定为变量，确保算术子表达式仍能引用其 startDate / duration
 TODAY_ITERATION_ID=$(jq -r --arg d "$DATE" '
   .data.user.projectV2.field.configuration.iterations[]
   | . as $it
@@ -148,11 +179,16 @@ TODAY_ITERATION_ID=$(jq -r --arg d "$DATE" '
 # 2.2 缺失则用 GraphQL mutation append 一个 1-day iteration option 覆盖 $DATE
 if [[ -z "$TODAY_ITERATION_ID" ]]; then
   EXISTING=$(jq -c '.data.user.projectV2.field.configuration.iterations | map({title, startDate, duration})' "$WORKDIR/iter-config.json")
-  NEW_TITLE="Iteration $(jq 'length + 1' <<<"$EXISTING")"
+  NEW_TITLE="Iteration $(jq 'length + 1' <<<"$EXISTING")"  # 命名仅展示用，实际唯一 ID 由 GitHub 生成
   ALL_ITERS=$(jq -c --arg title "$NEW_TITLE" --arg d "$DATE" \
                '. + [{title: $title, startDate: $d, duration: 1}]' <<<"$EXISTING")
 
-  # 类型名 ProjectV2Iteration 是 INPUT_OBJECT（GraphQL 2026-05-24 introspection 实测）
+  # iterationConfiguration.startDate / .duration 是 field-level "cycle 起点 / 周期" 配置，
+  # iterations 数组每项 startDate / duration 才决定每个 option 的 daily 边界。
+  # 用 EXISTING 第一项的 startDate / duration 作 cycle 锚点（保持已有配置不变；
+  # 实际新增的 option 在 iterations 数组最后一项）。
+  # 类型名 ProjectV2Iteration 是 INPUT_OBJECT（GraphQL 2026-05-24 introspection 实测）。
+  # `-F` 大写才把 value 当 raw JSON/array 传入；`-f` 小写是 string 字面量（数组场景必 fail）。
   gh api graphql -f query='
     mutation($fid: ID!, $start: Date!, $dur: Int!, $iters: [ProjectV2Iteration!]!) {
       updateProjectV2Field(input: {
@@ -165,7 +201,7 @@ if [[ -z "$TODAY_ITERATION_ID" ]]; then
     -f fid="$ITERATION_FIELD_ID" \
     -f start="$(jq -r '.[0].startDate' <<<"$ALL_ITERS")" \
     -F dur="$(jq -r '.[0].duration' <<<"$ALL_ITERS")" \
-    -f iters="$ALL_ITERS" \
+    -F iters="$ALL_ITERS" \
     > "$WORKDIR/iter-config-after.json"
 
   TODAY_ITERATION_ID=$(jq -r --arg d "$DATE" '
@@ -179,17 +215,25 @@ if [[ -z "$TODAY_ITERATION_ID" ]]; then
   echo "INFO: created new daily iteration for $DATE -> $TODAY_ITERATION_ID" >&2
 fi
 
-# 2.3 推断昨日 iteration ID（carry-over 源）
-YESTERDAY=$(python3 -c "from datetime import date,timedelta; print(date.fromisoformat('$DATE') - timedelta(days=1))")
+# 2.3 推断昨日 iteration ID（carry-over 源）。python3 用 sys.argv 传 $DATE 防注入
+YESTERDAY=$(python3 -c 'import sys,datetime; print(datetime.date.fromisoformat(sys.argv[1]) - datetime.timedelta(days=1))' "$DATE")
 YESTERDAY_ITERATION_ID=$(jq -r --arg d "$YESTERDAY" '
   .data.user.projectV2.field.configuration.iterations[]
   | . as $it
   | select($it.startDate == $d).id
 ' "$WORKDIR/iter-config.json")
-[[ -z "$YESTERDAY_ITERATION_ID" ]] && echo "WARN: yesterday iteration not found ($YESTERDAY); carry-over disabled" >&2
+CARRY_OVER_DISABLED=false
+if [[ -z "$YESTERDAY_ITERATION_ID" ]]; then
+  CARRY_OVER_DISABLED=true
+  echo "WARN: yesterday iteration not found ($YESTERDAY); carry-over disabled" >&2
+fi
 ```
 
 ## 阶段 3：派发 daily-planner agent 评分排序
+
+下面 `Agent(...)` 块是**宿主 LLM 伪代码模板**（不是 bash），由宿主 LLM 把
+`{VAR}` 占位符替换为上方 bash 阶段 0-2 设置的环境变量真实值后，调用 Agent
+tool。每个 `{VAR}` 都必须能在 bash 上下文中找到对应变量。
 
 ```
 PLAN_PATH="$WORKDIR/plan.json"
@@ -203,6 +247,7 @@ Agent(
       ITERATION_FIELD_ID = {ITERATION_FIELD_ID}
       TODAY_ITERATION_ID = {TODAY_ITERATION_ID}
       YESTERDAY_ITERATION_ID = {YESTERDAY_ITERATION_ID}  # 可能空（首日 / 假期跳过后）
+      CARRY_OVER_DISABLED = {CARRY_OVER_DISABLED}        # true 时 brief Warnings 必加 [CARRY-OVER DISABLED]
       DATE = {DATE}                                       # YYYY-MM-DD
       IS_WEEKEND = {IS_WEEKEND}                           # true|false
       WAVE_COUNT = {WAVE_COUNT}                           # 2|4
@@ -217,13 +262,15 @@ Agent(
 
     Tasks:
       1. Read all 4 files
-      2. Compute carry-over: items.json 中 iteration == YESTERDAY_ITERATION_ID 且
-         (issue.state == "OPEN") AND (status != "Done") 的 issue → 加入 carry-over 列表
+      2. Compute carry-over (if not CARRY_OVER_DISABLED): items.json 中
+         iter.iterationId == YESTERDAY_ITERATION_ID AND content.state == "OPEN"
+         AND (status==null OR status.name != "Done") 的 issue → 加入 carry-over 列表
       3. Score P0/P1 池 per WSJF 简化版（详 agent.md §排序算法）
       4. Wave 调度：
          - Wave 1 头部填 carry-over（按原 WSJF score 排序）
          - 剩余 Wave 1 / Wave 2+ 填 新 issue 按分数降序
-         - 容量 = WAVE_COUNT × WAVE_SIZE（一任务一容量；超出 → Unscheduled [capacity overflow]）
+         - 容量 = WAVE_COUNT × WAVE_SIZE；超出 → Unscheduled [capacity overflow]
+         - 空输入集（input + carry-over 均 0）→ brief Warnings [EMPTY INPUT SET]，plan=[]
       5. Emit brief markdown to STDOUT（详 agent.md §输出格式）
       6. Write plan.json to {PLAN_PATH}（详 agent.md §输出 #2）
   """
@@ -268,21 +315,36 @@ while read -r row; do
     FAILED_ITEMS+=("$item_id|$cur|$tgt")
   fi
 done < <(jq -c '.[]' "$WORKDIR/plan.json")
+
+# 4.3 生成回滚命令清单（实际值展开，避免占位符被 shell 误解析为重定向）
+if [[ ${#FAILED_ITEMS[@]} -gt 0 ]]; then
+  echo "" >&2
+  echo "# --- rollback commands (REVIEW EACH BEFORE EXEC; cur_iter==\"\" 表示失败项原本无 iteration) ---" >&2
+  for entry in "${FAILED_ITEMS[@]}"; do
+    IFS='|' read -r f_item f_cur _ <<<"$entry"
+    if [[ -z "$f_cur" ]]; then
+      echo "# $f_item: original had no iteration; rollback = clear field value (use gh project item-edit --clear iteration in UI)" >&2
+    else
+      echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $f_item --field-id $ITERATION_FIELD_ID --iteration-id $f_cur" >&2
+    fi
+  done
+  echo "# --- end rollback ---" >&2
+fi
+
+# 4.4 Audit 行
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+MODE_STR=$([[ "$IS_WEEKEND" == "true" ]] && echo weekend || echo weekday)
+echo "[audit] $TS date=$DATE mode=$MODE_STR wave_count=$WAVE_COUNT applied=$APPLIED skipped=$SKIPPED failed=${#FAILED_ITEMS[@]}" >&2
 ```
 
 ## 阶段 5：报告
 
-主 LLM 把以下信息综合到对话回应：
+宿主 LLM 把以下信息综合到对话回应：
 
 1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节）
-2. **Audit 行**（仅 apply 模式）：`[audit] $(date -u +%FT%TZ) date=$DATE mode=$([[ $IS_WEEKEND == true ]] && echo weekend || echo weekday) wave_count=$WAVE_COUNT applied=$APPLIED skipped=$SKIPPED failed=${#FAILED_ITEMS[@]}`
-3. **失败回滚命令**（仅有失败项时；**逐条审查后再执行**，不要批量复制粘贴）：
-   ```
-   # 以下命令仅对失败项有效，逐条确认对应项确需回滚再执行
-   gh project item-edit --project-id <PID> --id <ITEM> --field-id <FID> --iteration-id <OLD_ITER_ID>
-   ...
-   ```
-4. **WORKDIR 清理提示**：`rm -rf $WORKDIR`
+2. **Audit 行**（仅 apply 模式，由 4.4 写到 stderr）
+3. **失败回滚命令清单**（仅 apply 模式有失败项时，由 4.3 写到 stderr，已是真实可执行命令）
+4. **WORKDIR 清理提示**：`rm -rf $WORKDIR`（保留供 apply 失败后追溯；用户审查后手动清）
 
 ## 约束
 

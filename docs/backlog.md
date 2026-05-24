@@ -197,7 +197,7 @@ daily-planner 默认只把 `label:backlog AND (label:pri-p0 OR label:pri-p1)` �
 
 ### Wave 模型
 
-**容量公式**：`容量 = WAVE_COUNT × WAVE_SIZE`（一任务一容量，不引入 ∑Cx 加权）
+**容量公式**：`容量 = WAVE_COUNT × WAVE_SIZE`
 
 | 模式 | WAVE_COUNT | WAVE_SIZE | 容量 (issue 数) |
 |------|-----------|-----------|----------------|
@@ -206,7 +206,6 @@ daily-planner 默认只把 `label:backlog AND (label:pri-p0 OR label:pri-p1)` �
 
 - **WAVE_SIZE=5** 固定，对齐 Miller's Law 认知槽（5-7 chunk）
 - **超容量的 issue** → Unscheduled，标注 `[capacity overflow]`
-- **Estimate (Cx1-4)** 仅在 brief 表格作参考显示，**不参与容量约束**
 - **周末检测** `date +%u >= 6`（自动）；`--weekend` / `--weekday` flag 显式覆盖
 
 ### Carry-over（昨日未完成 → 今日）
@@ -214,7 +213,6 @@ daily-planner 默认只把 `label:backlog AND (label:pri-p0 OR label:pri-p1)` �
 skill 拉昨日 iteration 的 items；满足 `issue.state == OPEN AND Project Status != Done` 的 issue **优先占 Wave 1 头部**（按原 WSJF score 排序）：
 
 - carry-over > 5 → 顺延 Wave 2 头部（**不退** Unscheduled）
-- 连续 ≥3 天未完成 → Warnings 标 `[STUCK day:N]`（只警告仍 carry，由人决策是否拆分 / 降 priority）
 - 已完成判断用 OR 语义（覆盖手动改 Status=Done 但 issue 未 close 的脱节场景）
 - **不写 audit comment**（保持 agent 对 issue 完全只读；历史回溯靠对话窗 brief + git log + Project v2 activity feed）
 
@@ -232,8 +230,6 @@ score = pri_weight × flag_multiplier
   pri_weight:        P0=100 / P1=50 / P2=20 / P3=5 / pri-missing=110（强制首位）
   flag_multiplier:   hard=3 / planned=2 / cond(trigger 满足)=1.5 / cond(pending)=0.3 / soft=1
 ```
-
-Estimate **不入分数**，作 ∑Cx 软警告基准（Cx1=1 / Cx2=2 / Cx3=3 / Cx4=4）。
 
 异常处理：`pri-missing` 强制首位 + `[NEEDS PRIORITY]`；缺 cap/flag/type 任一 → `[MISSING LABEL]` 不入队；`cap-x-cross` label → `[需人工确认]` 不入队；同 cap 已 ≥3 入队 → 后续 `[CAP COLLISION]` 退 Unscheduled；`bundle-parent` 父 issue（仍 OPEN）→ carry-over（子全 close 不自动闭父，让人手 close）。
 

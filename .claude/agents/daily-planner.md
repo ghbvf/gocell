@@ -24,8 +24,11 @@ Project v2 字段 ID 由 skill 阶段 0 用 `gh` 命令动态查询后注入 pro
 ```
 PROJECT_NODE_ID, ITERATION_FIELD_ID,
 TODAY_ITERATION_ID, YESTERDAY_ITERATION_ID（可能空）,
-DATE, IS_WEEKEND, WAVE_COUNT (2|4), WAVE_SIZE=5, MODE
-（容量 = WAVE_COUNT × WAVE_SIZE，一任务一容量，不暴露其他容量变量）
+DATE, IS_WEEKEND, WAVE_COUNT (2|4), WAVE_SIZE=5,
+TODAY_ITERATION_ID, YESTERDAY_ITERATION_ID (可能空),
+CARRY_OVER_DISABLED (true 时 brief Warnings 必加 [CARRY-OVER DISABLED]),
+MODE (apply|dry-run)
+（容量 = WAVE_COUNT × WAVE_SIZE）
 ```
 
 ## 排序算法（简化 WSJF）
@@ -35,15 +38,13 @@ score = pri_weight × flag_multiplier
 
 pri_weight:        P0=100 / P1=50 / P2=20 / P3=5
                    pri-missing 哨兵 → 110（强制首位）
-flag_multiplier:   hard=3.0 / planned=2.0 / cond(trigger 满足)=1.5
-                   cond(pending)=0.3 / soft=1.0
+flag_multiplier:   hard=3 / planned=2 / cond(trigger 满足)=1.5
+                   cond(pending)=0.3 / soft=1
 ```
-
-Estimate **不入分数**，作"软约束容量警告"（详 §Wave 调度）。
 
 ## Wave 调度规则
 
-**容量公式**：`容量 = WAVE_COUNT × WAVE_SIZE`（工作日 2×5=10；周末 4×5=20）。一任务一容量，**Estimate (Cx1-4) 不参与约束**（仅在 brief 作参考显示）。
+`容量 = WAVE_COUNT × WAVE_SIZE` = 工作日 10 / 周末 20。
 
 **填充顺序**（硬规则）：
 
@@ -78,23 +79,26 @@ for item in items.json:
             carry_over.append(item)
 ```
 
-**已完成判断**用 OR 语义：`state == "CLOSED" OR status.name == "Done"` 任一即视为完成跳过（含手动改 Done 但 issue 未 close 的脱节场景）。
+### 已完成判断 + 幂等
+
+用 OR 语义：`state == "CLOSED" OR status.name == "Done"` 任一即视为完成跳过（含手动改 Done 但 issue 未 close 的脱节场景）。
 
 **幂等检测**：item.iter.iterationId == TODAY_ITERATION_ID → plan.json 中标 `action="skip"`。
 
-**stuck 警告**：若 issue 在连续 ≥3 个历史 iteration（昨日 / 前日 / 大前日）均出现，brief Warnings 加 `[STUCK day:N] #M`（只警告，仍 carry）。
+**CARRY_OVER_DISABLED**：skill 阶段 2.3 检测到 YESTERDAY_ITERATION_ID 为空（首日 / 假期跳过）时设 true；agent 跳过 carry-over 计算，brief Warnings 章节追加 `[CARRY-OVER DISABLED] yesterday iteration not found`。
 
 ## 异常处理矩阵
 
 | 异常形态 | 处理 |
 |---------|------|
 | `pri-missing` label | 排首位 + `[NEEDS PRIORITY]` |
-| 缺 cap-* / flag-* / type-* 任一 | 标 `[MISSING LABEL]`，**不**入队列 |
+| 缺 cap-* / flag-* / type-* 任一 | 标 `[MISSING LABEL: cap]` / `[MISSING LABEL: flag]` / `[MISSING LABEL: type]`（多缺合并 `[MISSING LABEL: cap,flag]`），**不**入队列 |
 | `cap-x-cross` label | 标 `[需人工确认]`，**不**自动入队 |
 | 同 cap 已有 ≥3 入队 | 后续同 cap 项 `[CAP COLLISION]` 退 Unscheduled |
 | `bundle-parent` 父 issue 仍 OPEN | carry-over（子全 close 后父仍 open → 视为未完成，让人手 close 父） |
 | sub-issue（GitHub 原生 / markdown task list） | 正常打分；brief 注 `(parent #N)` |
 | YESTERDAY_ITERATION_ID 为空 | carry-over 跳过 + Warnings 注 `[CARRY-OVER DISABLED] yesterday iteration not found` |
+| 输入集 + carry-over 全空 | Warnings 注 `[EMPTY INPUT SET]`；brief 显示空 Wave；plan.json = `[]` |
 
 ## 输出
 
@@ -105,11 +109,11 @@ for item in items.json:
 ```markdown
 ## Today's Plan — YYYY-MM-DD (Weekday/Weekend, wave_count=N)
 
-## Wave 1  [N items, ∑Cx=X]
+## Wave 1
 | Rank | Issue | Title | pri | flag | cap | Cx | Score | Notes |
 |------|-------|-------|-----|------|-----|----|----|-------|
 
-## Wave 2  [N items, ∑Cx=X]
+## Wave 2
 （表同上）
 
 （周末展开 Wave 3 / Wave 4）
@@ -121,20 +125,21 @@ for item in items.json:
 | Cap | Count |
 
 ## Warnings
-- [CARRY-OVER N items / oldest day:N]
+- [CARRY-OVER N items]
 - [BACKLOG SATURATED] carry-over 占满所有容量，新 issue 全退 Unscheduled
-- [STUCK day:N] #M …
+- [CARRY-OVER DISABLED] yesterday iteration not found（当 CARRY_OVER_DISABLED=true）
+- [EMPTY INPUT SET] 输入池为空（当输入 + carry-over 全 0）
 - 其他
 
 ## Plan Summary
 - 模式: weekday/weekend, wave_count=N, wave_size=5, 容量=N
-- 入队: N issue（参考 ∑Cx=M）
-- carry-over: N（最老 day:N）
+- 入队: N issue
+- carry-over: N
 - 已在 today iteration（skip apply）: N
 - 待 apply: N
 ```
 
-Notes 列标注：`[carry-over day:N]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人工确认]` 等。
+Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人工确认]` 等。
 
 ### 2. plan.json 写到 PLAN_PATH
 
@@ -149,7 +154,6 @@ Notes 列标注：`[carry-over day:N]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[
     "target_iteration_id": "<TODAY_ITERATION_ID>",
     "action": "set" | "skip",
     "carry_over": true | false,
-    "carry_over_days": 2,
     "score": 150.0
   }
 ]
