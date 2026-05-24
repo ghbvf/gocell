@@ -21,12 +21,25 @@ import (
 // and archtest AFTERCOMMIT-HOOK-PURE-TRANSIENT-01 statically rejects hook
 // bodies that reach for the tx or outbox writer.
 //
-// Failure semantics are best-effort: a panicking hook is recovered and logged,
-// never propagated to the committing goroutine. This is a deliberate deviation
-// from spring-tx, whose afterCommit propagates exceptions — the commit is
-// already durable, so a transient-hook failure must not surface as a request
+// Failure semantics are best-effort: a panicking hook is recovered and logged
+// at Warn, never propagated to the committing goroutine. This is a deliberate
+// deviation from spring-tx, whose afterCommit propagates exceptions — the commit
+// is already durable, so a transient-hook failure must not surface as a request
 // error or trigger a rollback. See
 // docs/architecture/202605230300-adr-aftercommit-hook-narrow-scope.md.
+//
+// Hooks run without a deadline (context.WithoutCancel); a hook doing network I/O
+// or heavy work MUST install its own timeout (context.WithTimeout) so it cannot
+// block the committing goroutine — and thus RunInTx's return — indefinitely.
+//
+// Example (saga dispatcher kick — the canonical use):
+//
+//	persistence.RegisterAfterCommit(ctx, func(ctx context.Context) {
+//	    dispatcher.Kick(ctx) // ctx still carries trace/request-id; the tx is stripped
+//	})
+//
+// Spring-tx analog: TransactionSynchronization.afterCommit(); registration is
+// persistence.RegisterAfterCommit (≙ TransactionSynchronizationManager.registerSynchronization).
 type AfterCommitHook func(ctx context.Context)
 
 // afterCommitRegistryKey is the context key under which the per-transaction
@@ -51,7 +64,9 @@ type afterCommitRegistry struct {
 // registry) is a programmer error and panics through the approved funnel —
 // scheduling a post-commit side effect with no commit to follow would silently
 // drop the effect. (spring-tx's registerSynchronization likewise throws
-// IllegalStateException when no synchronization is active.)
+// IllegalStateException when no synchronization is active.) The panic
+// propagates up the stack; in an HTTP request it is recovered by the framework
+// Recovery middleware as a 500. In tests, assert it with require.Panics.
 //
 // A nil hook is ignored. A hook registered while hooks are draining is ignored
 // (snapshot semantics; there is no second round).
@@ -114,7 +129,11 @@ func RunAfterCommitHooks(ctx context.Context) {
 func runAfterCommitHook(ctx context.Context, index int, hook AfterCommitHook) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("persistence: after-commit hook panicked; commit is durable, side effect skipped",
+			// Warn, not Error: the commit is durable, so a skipped transient side
+			// effect is degraded operation, not a correctness failure (per
+			// observability.md). WarnContext lets a context-aware slog handler
+			// attach request/trace correlation from the (still-populated) ctx.
+			slog.WarnContext(ctx, "persistence: after-commit hook panicked; side effect skipped (commit is durable)",
 				slog.Int("hook_index", index),
 				slog.Any("panic", redaction.RedactAny(r)),
 			)

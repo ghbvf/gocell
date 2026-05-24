@@ -1,7 +1,9 @@
 package persistence
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -119,4 +121,30 @@ func TestWithAfterCommitRegistry_NestedReturnsNotInstalled(t *testing.T) {
 func TestRunAfterCommitHooks_NoRegistryIsNoop(t *testing.T) {
 	require.NotPanics(t, func() { RunAfterCommitHooks(context.Background()) },
 		"draining a ctx with no registry is a safe no-op")
+}
+
+func TestRunAfterCommitHooks_SecondDrainIsNoop(t *testing.T) {
+	ctx, _ := WithAfterCommitRegistry(context.Background())
+	n := 0
+	RegisterAfterCommit(ctx, func(context.Context) { n++ })
+	RunAfterCommitHooks(ctx)
+	RunAfterCommitHooks(ctx) // a second drain must not re-run hooks
+	assert.Equal(t, 1, n, "hooks fire exactly once; a second drain is a no-op")
+}
+
+func TestRunAfterCommitHooks_PanicLoggedAtWarn(t *testing.T) {
+	var buf bytes.Buffer
+	// Capture at Warn so the test fails if the panic log is dropped to a lower
+	// level (or raised to Error, which would also be wrong per observability.md).
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(prev)
+
+	ctx, _ := WithAfterCommitRegistry(context.Background())
+	RegisterAfterCommit(ctx, func(context.Context) { panic("boom") })
+	RunAfterCommitHooks(ctx)
+
+	out := buf.String()
+	assert.Contains(t, out, "after-commit hook panicked", "panic must be logged")
+	assert.Contains(t, out, "level=WARN", "panic must log at Warn, not Error")
 }

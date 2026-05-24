@@ -62,10 +62,13 @@ likewise throws `IllegalStateException`.)
 
 ### D5 — Best-effort failure: swallow + log + per-hook recover
 
-Each hook runs under its own `recover`; a panic is logged at `slog.Error` (hook
-index + redacted payload) and never propagated. The commit is already durable, so
-a transient-hook failure must not surface as a request error or trigger a
-rollback. This is a **deliberate deviation from spring-tx** — see §Benchmark.
+Each hook runs under its own `recover`; a panic is logged at `slog.Warn`
+(`slog.WarnContext`, hook index + redacted payload) and never propagated. The
+commit is already durable, so a transient-hook failure is **degraded operation,
+not a correctness failure** — per observability.md, that is Warn, not Error;
+firing Error here would create alert noise that masks real correctness faults.
+The failure must not surface as a request error or trigger a rollback. This is a
+**deliberate deviation from spring-tx** — see §Benchmark.
 
 ### D6 — Structural tx unreachability
 
@@ -87,14 +90,14 @@ Trace / request-id keys live under different keys and survive.
 | nesting | `isNewSynchronization()` guard; savepoint release does not fire | outermost-only via `installed` flag — **adopt** |
 | no active tx | `registerSynchronization` throws `IllegalStateException` | panic fail-fast — **adopt** |
 | re-register during drain | snapshot; silently ignored (issue #26384) | `draining` flag ignores re-registration — **adopt** |
-| **failure** | `afterCommit()` **propagates** (no try-catch) | swallow + slog.Error + per-hook recover — **deliberate deviation** |
+| **failure** | `afterCommit()` **propagates** (no try-catch) | swallow + slog.Warn + per-hook recover — **deliberate deviation** |
 
 **Deviation rationale (D5)**: spring propagates so a stateful framework can show
 the user an error. GoCell hooks are best-effort transient actions; the commit is
 durable and a hook failure must not become a request failure or rollback.
 Compensations: (a) per-hook recover so one failure doesn't stop the rest; (b)
-`slog.Error` with hook identity for traceability; (c) the `AfterCommitHook`
-godoc states best-effort explicitly. A future "run on commit *and* rollback"
+`slog.WarnContext` with hook identity + request/trace correlation for
+traceability; (c) the `AfterCommitHook` godoc states best-effort explicitly. A future "run on commit *and* rollback"
 cleanup hook would be a separate `RegisterAfterCompletion` (mirroring spring),
 not a mode flag on this one.
 
@@ -112,6 +115,17 @@ not a mode flag on this one.
 | T4 | Nested savepoint fires hooks before durability | D3 outermost-only | ✅ |
 | T5 | Panicking hook crashes process / aborts commit | D2 sync + D5 per-hook recover | ✅ |
 | T6 | Hook leaks tx beyond commit and corrupts a reused connection | D6 ctx strip + T1 controls | ✅ for ctx path; ⚠️ captured-txCtx residual = T1 |
+| T7 | mem runner drains hooks while holding `store.mu`; a hook touching the store deadlocks on the non-reentrant mutex | mem `RunInTx` drains **after** `store.mu.Unlock()` (hook ctx carries no holdsLock token → fresh lock acquisition) | ✅ |
+
+> **Adapter-key residual (⚠️, Medium, kernel cannot close)**: `RunAfterCommitHooks`
+> strips only the kernel-owned `TxCtxKey`. Adapter-private keys —
+> `adapters/postgres.savepointDepthKey`, `accesscore/mem.memTxKey` — remain on the
+> hook ctx because kernel/persistence cannot reference them (layering). The
+> savepointDepthKey residual is inert (a hook creating a savepoint would still get
+> a nil tx from the stripped `TxCtxKey`); the memTxKey residual is avoided in
+> practice because the mem drain ctx never carried the token (it is added only to
+> the throwaway ctx passed to fn). This residual is covered by archtest A2 + D6,
+> not by a kernel-level strip.
 
 ## AI-robust ratings (honest, not over-claimed)
 
@@ -127,8 +141,13 @@ not a mode flag on this one.
   configcore noop, todoorder demo) installs + drains the registry; new runners
   must pass `RunAfterCommitConformance` (contract-fanout 载体 2+3).
 - A per-hook failure **counter** (`aftercommit_hook_failures_total`) is *not*
-  added in this PR; v1 relies on `slog.Error`. Tracked in gh issue #921
-  (AFTERCOMMIT-HOOK-FAILURE-METRIC).
+  added in this PR; v1 relies on `slog.Warn`. **v1-acceptable rationale**: the
+  only consumer at v1 is the saga dispatcher kick, a hook panic is a programmer
+  error (not an expected runtime failure mode), and the `WarnContext` log carries
+  hook identity + request correlation — sufficient for a log-based alert until a
+  second consumer raises the value of aggregation. Adding the counter pulls in
+  the metric-registration funnel (`MustValidateLabels`), so it is deferred.
+  Tracked in gh issue #921 (AFTERCOMMIT-HOOK-FAILURE-METRIC).
 
 ref: spring-framework `spring-tx/.../TransactionSynchronizationManager.java`,
 `AbstractPlatformTransactionManager.java`, `TransactionSynchronization.java`,

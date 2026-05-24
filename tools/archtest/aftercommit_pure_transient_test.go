@@ -48,6 +48,10 @@
 //	B4 — hook body calls a same-package unexported helper that touches the tx →
 //	     A2's one-level heuristic catches the simplest case (fixture
 //	     red_local_helper); deeper chains remain uncaught (Medium, documented).
+//	     Scope caveat: the heuristic resolves only package-level funcs
+//	     (packageFuncDecls filters Recv==nil), so a same-package *method* helper
+//	     (obj.doWrite() whose body touches the tx) is a B4 deeper-chain miss, not
+//	     a separate gap.
 //
 // ref: spring-tx TransactionSynchronization (afterCommit semantics);
 //

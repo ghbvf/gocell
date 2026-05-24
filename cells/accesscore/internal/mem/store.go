@@ -123,16 +123,25 @@ type memTxRunner struct{ s *Store }
 // Repository methods called from fn must not acquire store.mu (txHoldsLock
 // returns true for this store, so they skip locking to avoid a deadlock).
 func (r memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
 	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
-	if err := fn(context.WithValue(ctx, memTxKey{}, &memTxToken{store: r.s, holdsLock: true})); err != nil {
+	if err := r.runLocked(ctx, fn); err != nil {
 		return err
 	}
 	if drainAfterCommit {
+		// Drain AFTER releasing store.mu. store.mu is non-reentrant; the hook ctx
+		// no longer carries the holdsLock token, so a hook that legitimately
+		// touches the store would acquire store.mu fresh — under the lock that
+		// would deadlock. Mirrors PG firing hooks after the commit is durable.
 		persistence.RunAfterCommitHooks(ctx)
 	}
 	return nil
+}
+
+// runLocked holds store.mu for the duration of fn, injecting the holdsLock token.
+func (r memTxRunner) runLocked(ctx context.Context, fn func(context.Context) error) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	return fn(context.WithValue(ctx, memTxKey{}, &memTxToken{store: r.s, holdsLock: true}))
 }
 
 // Store is the shared backing for an in-memory accesscore deployment. The
