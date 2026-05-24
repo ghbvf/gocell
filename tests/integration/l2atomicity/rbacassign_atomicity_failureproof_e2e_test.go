@@ -76,9 +76,9 @@ func newSelectiveFailWriter(inner outbox.Writer) *selectiveFailWriter {
 }
 
 // roleAssignmentCount returns the number of role_assignments rows for
-// (userID, roleID). Inlined rather than added to helpers_test.go so the
-// helper remains scoped to the only test that needs it; if a future test
-// adopts the same query, hoist then.
+// (userID, roleID). Inlined rather than added to helpers_test.go because
+// it is only used by the two atomicity tests in this file (Assign and Revoke);
+// if a test outside this file adopts the same query, hoist then.
 func roleAssignmentCount(t *testing.T, h *l2Harness, userID, roleID string) int {
 	t.Helper()
 	var n int
@@ -132,8 +132,8 @@ func postRoleEndpoint(t *testing.T, h *l2Harness, action, userID, roleID string)
 // write (role_assignments INSERT via PGRoleRepo.AssignToUser) rolls back
 // atomically and no row persists.
 //
-// Mirrors TestAuditLedgerStore_OutboxAtomicityFailureProof
-// (adapters/postgres/audit_ledger_store_test.go AUDITAPPEND-L2-FAILURE-PROOF-01)
+// Mirrors TestL2Atomicity_auditcore_RollsBack
+// (adapters/postgres/audit_ledger_store_test.go)
 // but injects failure at the writer layer (where issue #655 specifies — "故意
 // fail writer") rather than the txRunner closure. Drives the full HTTP →
 // service-token-auth → handler → service → persistChange → emitter →
@@ -187,10 +187,10 @@ func TestL2Atomicity_rbacassign_RollsBack(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestL2_RbacRevoke_OutboxWriteFailure_RollsBack (RBACASSIGN-L2-PG-ATOMICITY-01)
+// TestL2Atomicity_rbacassign_RollsBack_Revoke (L2-OUTBOX-ATOMICITY-COVERAGE-01)
 // ---------------------------------------------------------------------------
 
-// TestL2_RbacRevoke_OutboxWriteFailure_RollsBack proves the stronger L2
+// TestL2Atomicity_rbacassign_RollsBack_Revoke proves the stronger L2
 // invariant for the Revoke path: when the outbox writer fails, the
 // credentialinvalidate.Invalidator cascade
 // (BumpAuthzEpoch + RevokeForSubject + RevokeUser) rolls back atomically
@@ -201,7 +201,7 @@ func TestL2Atomicity_rbacassign_RollsBack(t *testing.T) {
 // login + session/refresh chain creation all succeed normally. The failure
 // window is opened only for event.role.revoked.v1 immediately before the
 // revoke call.
-func TestL2_RbacRevoke_OutboxWriteFailure_RollsBack(t *testing.T) {
+func TestL2Atomicity_rbacassign_RollsBack_Revoke(t *testing.T) {
 	sw := newSelectiveFailWriter(adapterpg.NewOutboxWriter(clock.Real()))
 	h := newL2HarnessWithWriter(t, sw)
 	ctx := context.Background()

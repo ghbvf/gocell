@@ -162,17 +162,22 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 // TestL2Atomicity_configwrite_RollsBack verifies that when the outbox write
 // returns a permanent error on Create, the config_entries row is absent
 // (transaction rolled back atomically — L2 canonical rollback proof).
+//
+// Negative control: after asserting the rollback, a second Service with a
+// pass-through writer performs the same Create and asserts the row persists.
+// This guards against a vacuous-pass scenario where the test setup itself is
+// broken (e.g., the key was never written in the first place).
 func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	ctx := context.Background()
 	pool := sharedPG.NewPerTestPool(t)
 
 	session := cellpg.NewSession(pool.DB())
 	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
+	txMgr := adapterpg.NewTxManager(pool)
 
 	// Inject a writer that always fails — simulates outbox unavailable.
 	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
 
-	txMgr := adapterpg.NewTxManager(pool)
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(persistence.WrapForCell(txMgr)),
@@ -181,7 +186,14 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 
 	_, err = svc.Create(adminIntegCtx(), CreateInput{Key: "rollback.test", Value: "v"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outbox")
+	// Exact-sentinel check: the error must wrap the injected sentinel, not a
+	// coincidental substring match from unrelated infrastructure.
+	assert.ErrorIs(t, err, failingWriter.Err,
+		"Create error must wrap the injected outbox sentinel")
+	// Write-was-invoked proof: Calls must be 1; a wiring bug that skips Write
+	// would still produce a rollback but would not exercise the L2 path at all.
+	assert.Equal(t, 1, failingWriter.Calls,
+		"writer.Write must be invoked exactly once before rollback")
 
 	// config_entries row must NOT exist (rolled back).
 	_, getErr := repo.GetByKey(ctx, "rollback.test")
@@ -190,6 +202,24 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	require.ErrorAs(t, getErr, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code,
 		"config entry must not persist after outbox-failure rollback")
+
+	// Negative control: pass-through Service on the same pool/txMgr must
+	// succeed, proving the rollback assertion above is not vacuously trivial
+	// (i.e., Create genuinely writes a row on the happy path).
+	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real()))),
+		WithTxManager(persistence.WrapForCell(txMgr)),
+	)
+	require.NoError(t, err)
+	got, err := passSvc.Create(adminIntegCtx(), CreateInput{Key: "rollback.test", Value: "v"})
+	require.NoError(t, err, "negative control: Create must succeed with pass-through writer")
+	assert.Equal(t, "rollback.test", got.Key)
+	assert.Equal(t, "v", got.Value)
+
+	controlEntry, getErr := repo.GetByKey(ctx, "rollback.test")
+	require.NoError(t, getErr, "negative control: config_entries row must exist after successful Create")
+	assert.Equal(t, "v", controlEntry.Value,
+		"negative control: persisted value must match the Create input")
 }
 
 // TestL2Atomicity_configwrite_RollsBack_Update verifies that when the outbox
@@ -232,6 +262,10 @@ func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
 		ExpectedVersion: 1,
 	})
 	require.Error(t, err)
+	assert.ErrorIs(t, err, failingWriter.Err,
+		"Update error must wrap the injected outbox sentinel")
+	assert.Equal(t, 1, failingWriter.Calls,
+		"writer.Write must be invoked exactly once before Update rollback")
 
 	// config_entries must still be at version 1 (UPDATE rolled back).
 	afterEntry, getErr := repo.GetByKey(ctx, "rollback.update.key")
@@ -276,6 +310,10 @@ func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
 
 	deleteErr := failSvc.Delete(adminIntegCtx(), "rollback.delete.key", 1)
 	require.Error(t, deleteErr)
+	assert.ErrorIs(t, deleteErr, failingWriter.Err,
+		"Delete error must wrap the injected outbox sentinel")
+	assert.Equal(t, 1, failingWriter.Calls,
+		"writer.Write must be invoked exactly once before Delete rollback")
 
 	// config_entries row must still exist (DELETE rolled back).
 	afterEntry, getErr := repo.GetByKey(ctx, "rollback.delete.key")

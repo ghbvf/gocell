@@ -328,6 +328,18 @@ func TestL2Atomicity_auditcore_RollsBack(t *testing.T) {
 		Scan(&countAfter))
 	assert.Equal(t, countBefore, countAfter,
 		"store.Append must roll back atomically with outbox failure: no new row must persist")
+
+	// Negative control: a successful Append on the same store must persist a
+	// row, proving the rollback assertion above is not vacuous (i.e., Append
+	// genuinely writes a row on the happy path and the store is properly wired).
+	e2 := storetest.NewEntryFixture(t, "atomicity-control-evt", "atomicity.control", "actor", fc.Now())
+	require.NoError(t, store.Append(ctx, e2), "negative control: Append must succeed without outbox failure")
+	var countControl int
+	require.NoError(t, p.DB().QueryRow(ctx,
+		"SELECT count(*) FROM audit_entries WHERE namespace = $1", string(ns)).
+		Scan(&countControl))
+	assert.Equal(t, countAfter+1, countControl,
+		"negative control: successful Append must persist exactly one new audit_entries row")
 }
 
 // ---------------------------------------------------------------------------

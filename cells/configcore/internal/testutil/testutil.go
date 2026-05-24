@@ -15,12 +15,17 @@ import (
 )
 
 // RecordingWriter records outbox entries written to it. Set Err to simulate failures.
+// Calls is incremented on every Write call, including calls that return Err,
+// so tests can assert the writer was actually invoked (not silently skipped due
+// to a wiring bug).
 type RecordingWriter struct {
 	Entries []outbox.Entry
 	Err     error
+	Calls   int
 }
 
 func (w *RecordingWriter) Write(_ context.Context, entry outbox.Entry) error {
+	w.Calls++
 	if w.Err != nil {
 		return w.Err
 	}

@@ -241,7 +241,8 @@ func TestL2Atomicity_configpublish_RollsBack(t *testing.T) {
 
 	_, err = svcFail.Rollback(svcCtx, "rollback.failure.key", 1, versionBefore)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outbox")
+	assert.ErrorIs(t, err, failingWriter.err,
+		"Rollback error must wrap the injected outbox sentinel")
 
 	// config_entries version must NOT have changed (rolled back).
 	entryAfter, err := bundle.repo.GetByKey(ctx, "rollback.failure.key")
@@ -252,6 +253,25 @@ func TestL2Atomicity_configpublish_RollsBack(t *testing.T) {
 		"entry-upserted outbox row must roll back when the later rollback audit write fails")
 	assert.Equal(t, beforeAudit, countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback),
 		"rollback audit outbox row must not be committed after writer failure")
+
+	// Negative control: pass-through Service on the same pool/txMgr must
+	// succeed and increment the version. This guards against a vacuous-pass
+	// where the prior version-unchanged assertion would hold even if Rollback
+	// were a no-op, by proving Rollback genuinely bumps the version when the
+	// outbox write succeeds.
+	passBundle := setupPublishBundle(t)
+	// Re-seed and publish on the pass-through bundle to get a valid Rollback target.
+	seedConfigEntry(t, passBundle, "rollback.failure.control.key", "control-value")
+	_, err = passBundle.svc.Publish(svcCtx, "rollback.failure.control.key")
+	require.NoError(t, err)
+	controlBefore, err := passBundle.repo.GetByKey(ctx, "rollback.failure.control.key")
+	require.NoError(t, err)
+	_, err = passBundle.svc.Rollback(svcCtx, "rollback.failure.control.key", 1, controlBefore.Version)
+	require.NoError(t, err, "negative control: Rollback must succeed with pass-through writer")
+	controlAfter, err := passBundle.repo.GetByKey(ctx, "rollback.failure.control.key")
+	require.NoError(t, err)
+	assert.Equal(t, controlBefore.Version+1, controlAfter.Version,
+		"negative control: Rollback must increment config_entries version on success")
 }
 
 // TestL2Atomicity_configpublish_RollsBack_Publish verifies that when the outbox
@@ -284,6 +304,8 @@ func TestL2Atomicity_configpublish_RollsBack_Publish(t *testing.T) {
 
 	_, err = svcFail.Publish(svcCtx, "rollback.publish.key")
 	require.Error(t, err)
+	assert.ErrorIs(t, err, failingWriter.err,
+		"Publish error must wrap the injected outbox sentinel")
 
 	// Outbox-side: the version-published row must NOT exist (rolled back).
 	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigVersionPublished)
@@ -297,6 +319,19 @@ func TestL2Atomicity_configpublish_RollsBack_Publish(t *testing.T) {
 	_, verErr := bundle.repo.GetVersion(ctx, liveEntry.ID, 1)
 	require.Error(t, verErr,
 		"config_versions row must not exist when outbox write fails (atomic Publish rollback)")
+
+	// Negative control: pass-through Service on a fresh bundle must succeed
+	// and leave a config_versions row. This proves Publish genuinely persists
+	// the version on the happy path, making the rollback assertion non-vacuous.
+	passBundle := setupPublishBundle(t)
+	seedConfigEntry(t, passBundle, "rollback.publish.control.key", "control-value")
+	_, err = passBundle.svc.Publish(svcCtx, "rollback.publish.control.key")
+	require.NoError(t, err, "negative control: Publish must succeed with pass-through writer")
+	controlEntry, err := passBundle.repo.GetByKey(ctx, "rollback.publish.control.key")
+	require.NoError(t, err)
+	_, err = passBundle.repo.GetVersion(ctx, controlEntry.ID, 1)
+	require.NoError(t, err,
+		"negative control: config_versions row must exist after successful Publish")
 }
 
 type failOnWriteNumberWriter struct {

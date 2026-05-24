@@ -50,12 +50,11 @@ func TestL2Atomicity_sessionlogout_RollsBack(t *testing.T) {
 	// and victim login all pass through (failType is "").
 	adminLogin := httpLogin(t, h.base, adminUsername, adminPassword)
 	const victimUsername = "l2-sessionlogout-atomicity-user"
-	const victimLogoutPassword = "VictimPass!99"
 	victimID := httpCreateUser(t, h.base, adminLogin.AccessToken,
-		victimUsername, "sessionlogout-atomicity@l2.local", victimLogoutPassword)
+		victimUsername, "sessionlogout-atomicity@l2.local", victimPassword)
 
 	// Login the victim so there is a live session to revoke.
-	victimLogin := httpLogin(t, h.base, victimUsername, victimLogoutPassword)
+	victimLogin := httpLogin(t, h.base, victimUsername, victimPassword)
 	require.NotEmpty(t, victimLogin.SessionID, "setup: victim must have a live session")
 
 	require.Equal(t, 1, countLiveSessions(t, h, victimID),

@@ -61,7 +61,7 @@ func TestL2Atomicity_identitymanage_RollsBack(t *testing.T) {
 	// will fail when identitymanage.Service tries to emit event.user.created.v1
 	// inside the transaction, causing the txRunner to roll back the users INSERT.
 	status := httpCreateUserStatus(t, h.base, adminLogin.AccessToken,
-		newUsername, "identitymanage-atomicity@l2.local", "VictimPass!99")
+		newUsername, "identitymanage-atomicity@l2.local", victimPassword)
 	require.Equal(t, http.StatusInternalServerError, status,
 		"user creation must surface 500 when outbox writer fails")
 
@@ -80,7 +80,7 @@ func TestL2Atomicity_identitymanage_RollsBack(t *testing.T) {
 	// succeed and a user row must appear.
 	sw.failType.Store("")
 	httpCreateUser(t, h.base, adminLogin.AccessToken,
-		newUsername, "identitymanage-atomicity@l2.local", "VictimPass!99")
+		newUsername, "identitymanage-atomicity@l2.local", victimPassword)
 	assert.Equal(t, 1, userCountByUsername(t, h, newUsername),
 		"control: users row MUST persist on happy user creation")
 }

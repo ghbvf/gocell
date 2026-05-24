@@ -53,9 +53,8 @@ func TestL2Atomicity_sessionlogin_RollsBack(t *testing.T) {
 	// both pass through (failType is "").
 	adminLogin := httpLogin(t, h.base, adminUsername, adminPassword)
 	const victimUsername = "l2-sessionlogin-atomicity-user"
-	const victimLoginPassword = "VictimPass!99"
 	victimID := httpCreateUser(t, h.base, adminLogin.AccessToken,
-		victimUsername, "sessionlogin-atomicity@l2.local", victimLoginPassword)
+		victimUsername, "sessionlogin-atomicity@l2.local", victimPassword)
 
 	require.Equal(t, 0, countLiveSessions(t, h, victimID),
 		"baseline: victim must have no live sessions before login-under-test")
@@ -70,7 +69,7 @@ func TestL2Atomicity_sessionlogin_RollsBack(t *testing.T) {
 	// transaction, causing the txRunner to roll back the sessions INSERT.
 	loginBody, _ := json.Marshal(map[string]string{
 		"username": victimUsername,
-		"password": victimLoginPassword,
+		"password": victimPassword,
 	})
 	req, _ := http.NewRequest(http.MethodPost, h.base+"/api/v1/access/sessions/login",
 		bytes.NewReader(loginBody))
@@ -96,7 +95,7 @@ func TestL2Atomicity_sessionlogin_RollsBack(t *testing.T) {
 	// Negative control: with the trigger cleared, the same login path must
 	// succeed and a session row must appear.
 	sw.failType.Store("")
-	victimLogin := httpLogin(t, h.base, victimUsername, victimLoginPassword)
+	victimLogin := httpLogin(t, h.base, victimUsername, victimPassword)
 	assert.Equal(t, 1, countLiveSessions(t, h, victimID),
 		"control: sessions row MUST persist on happy login")
 	assert.NotEmpty(t, victimLogin.SessionID, "control: sessionId must be present")
