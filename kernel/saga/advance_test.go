@@ -1,6 +1,7 @@
 package saga
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -186,6 +187,22 @@ func TestAdvanceStep(t *testing.T) {
 			requireValidationError(t, err)
 			assert.Equal(t, 0, inst.CurrentStep)
 		}
+	})
+	t.Run("rejects negative CurrentStep (corrupt/replayed instance)", func(t *testing.T) {
+		t.Parallel()
+		inst := instanceInState(t, StatusRunning)
+		inst.CurrentStep = -1 // test-only: simulate a corrupt/loaded cursor
+		err := AdvanceStep(&inst, 3, testBase.Add(testtime.D5s))
+		requireValidationError(t, err)
+		assert.Equal(t, -1, inst.CurrentStep, "must not advance a corrupt cursor")
+	})
+	t.Run("rejects CurrentStep at math.MaxInt without overflow", func(t *testing.T) {
+		t.Parallel()
+		inst := instanceInState(t, StatusRunning)
+		inst.CurrentStep = math.MaxInt // test-only: CurrentStep+1 would wrap to MinInt
+		err := AdvanceStep(&inst, 3, testBase.Add(testtime.D5s))
+		requireValidationError(t, err)
+		assert.Equal(t, math.MaxInt, inst.CurrentStep, "must reject, not wrap to MinInt")
 	})
 	t.Run("rejects when not running", func(t *testing.T) {
 		t.Parallel()

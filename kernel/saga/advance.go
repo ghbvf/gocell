@@ -39,11 +39,13 @@ func AdvanceSaga(inst *Instance, to Status, now time.Time) error {
 // stepCount is the total number of steps in the definition (the Coordinator
 // passes def.Len()); this keeps AdvanceStep self-contained and free of any
 // dependency on the SagaDefinition type. Fail-closed: rejects when the saga is
-// not Running, when stepCount is not positive, when advancing would exceed the
-// last step (CurrentStep+1 >= stepCount), or on clock regression.
+// not Running, when stepCount is not positive, when CurrentStep is out of the
+// valid cursor range [0, stepCount-1), or on clock regression. The range check
+// is the guardian of CurrentStep for replayed/loaded instances (PR-02/PR-04),
+// not just freshly constructed ones.
 //
-// AdvanceStep is NOT used for the final step: once CurrentStep+1 would reach
-// stepCount, the Coordinator instead transitions Running → Succeeded via
+// AdvanceStep is NOT used for the final step: once CurrentStep reaches
+// stepCount-1, the Coordinator instead transitions Running → Succeeded via
 // AdvanceSaga.
 func AdvanceStep(inst *Instance, stepCount int, now time.Time) error {
 	if inst == nil {
@@ -59,7 +61,16 @@ func AdvanceStep(inst *Instance, stepCount int, now time.Time) error {
 			"saga: AdvanceStep requires positive stepCount",
 			errcode.WithInternal(fmt.Sprintf("stepCount=%d", stepCount)))
 	}
-	if inst.CurrentStep+1 >= stepCount {
+	if inst.CurrentStep < 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga: AdvanceStep on instance with negative CurrentStep",
+			errcode.WithInternal(fmt.Sprintf("currentStep=%d", inst.CurrentStep)))
+	}
+	// Compared as CurrentStep >= stepCount-1 (not CurrentStep+1 >= stepCount) to
+	// stay overflow-safe: a corrupt/replayed CurrentStep near math.MaxInt would
+	// otherwise wrap negative under +1 and slip past the bound. stepCount is
+	// guaranteed positive above, so stepCount-1 never underflows.
+	if inst.CurrentStep >= stepCount-1 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga: AdvanceStep would exceed step count",
 			errcode.WithInternal(fmt.Sprintf("currentStep=%d stepCount=%d", inst.CurrentStep, stepCount)))
