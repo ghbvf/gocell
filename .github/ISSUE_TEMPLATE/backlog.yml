@@ -66,6 +66,20 @@ body:
     validations:
       required: false
 
+  - type: textarea
+    id: affected-paths
+    attributes:
+      label: Affected paths
+      description: >
+        gocell 路径前缀 list（每行一个）。供 daily-planner 做 wave 内 parallel_group 分组：
+        路径前缀有重合的 issue 分进同一 parallel_group（串行），无重合的可并行。
+        可选——仅打算被 daily-planner 自动并行调度的 issue 需填；空值等同于无冲突（singleton 可并行）。
+      placeholder: |
+        .claude/skills/daily-planner/
+        .github/workflows/
+    validations:
+      required: false
+
   - type: input
     id: source
     attributes:
