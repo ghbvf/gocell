@@ -19,10 +19,8 @@ endpoints:
         maxLength: 256
     queryParams:
       expectedVersion:
-        type: integer
+        $ref: "../../../../shared/cas/v1/expected_version.schema.json"
         required: true
-        minimum: 1
-        maximum: 99999
     successStatus: 204
     auth:
       responses:

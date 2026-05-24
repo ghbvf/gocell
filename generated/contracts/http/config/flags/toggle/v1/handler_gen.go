@@ -29,7 +29,7 @@ var contractSpec = contractspec.ContractSpec{
 
 // requestSchemaJSON is the embedded request schema for runtime validation.
 // Compiled once at handler construction time by schemavalidate.NewValidator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.config.flags.toggle.v1.request\",\"type\":\"object\",\"required\":[\"enabled\",\"expectedVersion\"],\"properties\":{\"enabled\":{\"type\":\"boolean\"},\"expectedVersion\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":99999,\"description\":\"Compare-and-swap guard. Must equal the flag's current version; mismatch returns 409 ERR_VERSION_CONFLICT.\"}},\"additionalProperties\":false}")
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"enabled\":{\"type\":\"boolean\"},\"expectedVersion\":{\"description\":\"Compare-and-swap guard. Must equal the resource's current version; mismatch returns 409 ERR_VERSION_CONFLICT.\",\"maximum\":99999,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"enabled\",\"expectedVersion\"],\"title\":\"http.config.flags.toggle.v1.request\",\"type\":\"object\"}")
 
 // Handler wires HTTP decode/encode + auth.Mount for http.config.flags.toggle.v1.
 type Handler struct {

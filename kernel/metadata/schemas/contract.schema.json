@@ -74,9 +74,12 @@
   "$defs": {
     "paramSchema": {
       "type": "object",
-      "required": ["type"],
       "additionalProperties": false,
       "properties": {
+        "$ref": {
+          "type": "string",
+          "description": "Single-source value-shape reference to a shared mixin schema (resolved at parse time); mutually exclusive with inline type/minimum/maximum/minLength/maxLength/format."
+        },
         "type": {
           "type": "string",
           "enum": ["string", "integer", "number", "boolean"],
@@ -108,7 +111,26 @@
           "type": "integer",
           "description": "Maximum numeric value accepted for this parameter. Required by FMT-25 for integer and number path/query params."
         }
-      }
+      },
+      "allOf": [
+        {
+          "description": "When $ref is present, inline type/minimum/maximum/minLength/maxLength/format must be absent (resolved at parse time).",
+          "if": {"required": ["$ref"]},
+          "then": {
+            "not": {
+              "anyOf": [
+                {"required": ["type"]},
+                {"required": ["minimum"]},
+                {"required": ["maximum"]},
+                {"required": ["minLength"]},
+                {"required": ["maxLength"]},
+                {"required": ["format"]}
+              ]
+            }
+          },
+          "else": {"required": ["type"]}
+        }
+      ]
     }
   },
   "allOf": [

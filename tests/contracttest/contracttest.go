@@ -119,6 +119,14 @@ func Load(t testing.TB, contractDir string) *Contract {
 		t.Fatalf("contracttest.Load: parse contract.yaml: %v", err)
 	}
 
+	// Resolve param $ref (single-source value-shape from a shared mixin) up
+	// front so both the transport view (c.HTTP) and the compiled param schemas
+	// observe the fully back-filled ParamSchema. Mutates cy's maps in place.
+	if cy.Endpoints.HTTP != nil {
+		resolveParamMapForTest(t, contractDir, cy.Endpoints.HTTP.PathParams)
+		resolveParamMapForTest(t, contractDir, cy.Endpoints.HTTP.QueryParams)
+	}
+
 	c := &Contract{
 		ID:               cy.ID,
 		Kind:             cy.Kind,
@@ -152,6 +160,34 @@ func Load(t testing.TB, contractDir string) *Contract {
 	}
 
 	return c
+}
+
+// resolveParamMapForTest resolves every param $ref (single-source value-shape
+// from a shared mixin) in params in place, reusing the same resolution semantics
+// as the metadata parser via metadata.ResolveParamRef. The injected reader
+// mirrors compileSchemaFile's path resolution + allow-list, so a $ref must stay
+// in the contract dir or under contracts/shared/. Params without a $ref are left
+// unchanged.
+func resolveParamMapForTest(t testing.TB, contractDir string, params map[string]metadata.ParamSchema) {
+	t.Helper()
+	for name, param := range params {
+		if param.Ref == "" {
+			continue
+		}
+		resolved, err := metadata.ResolveParamRef(name, contractDir, param,
+			func(dir, ref string) ([]byte, error) {
+				cleanDir := filepath.Clean(dir)
+				fullPath := filepath.Clean(filepath.Join(cleanDir, ref))
+				if !pathWithinAllowList(t, cleanDir, fullPath) {
+					return nil, fmt.Errorf("param $ref %q escapes allow-list (must stay in dir or under contracts/shared/)", ref)
+				}
+				return fixtureload.LoadFixture(fullPath)
+			})
+		if err != nil {
+			t.Fatalf("contracttest.Load: resolve param %q $ref %q: %v", name, param.Ref, err)
+		}
+		params[name] = resolved
+	}
 }
 
 // LoadFromString builds a Contract from inline JSON schema strings, bypassing

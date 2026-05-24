@@ -6,6 +6,7 @@ package governance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -2152,6 +2153,139 @@ func TestFMT25_NonHTTPContractIgnored(t *testing.T) {
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	assert.Empty(t, matches, "non-HTTP contract must not be scanned by FMT-25")
+}
+
+// =============================================================================
+// FMT-25 cross-file $ref inlining (mixin support)
+// =============================================================================
+
+// fmt25MixinFixture creates the directory layout used by cross-file $ref tests:
+//
+//	<root>/contracts/http/test/v1/request.schema.json  ← main schema (requestBody)
+//	<root>/<mixinRel>                                  ← mixin file (created by caller)
+//
+// It returns the project root dir and the absolute path to request.schema.json.
+func fmt25MixinFixture(t *testing.T, requestBody string) (rootDir, schemaPath string) {
+	t.Helper()
+	rootDir = t.TempDir()
+	const contractRel = "contracts/http/test/v1"
+	full := filepath.Join(rootDir, contractRel)
+	require.NoError(t, os.MkdirAll(full, 0o755))
+	schemaPath = filepath.Join(full, "request.schema.json")
+	require.NoError(t, os.WriteFile(schemaPath, []byte(requestBody), 0o644))
+	return rootDir, schemaPath
+}
+
+// TestFMT25_CrossFileRef tests cover the cross-file $ref inlining introduced in
+// this PR (scanSchemaForInputConstraints → inlineCrossFileSchemaRefs).
+func TestFMT25_CrossFileRef(t *testing.T) {
+	// Schema is at contracts/http/test/v1/request.schema.json.
+	// Going ../../../../ from there reaches the project root.
+	// So the mixin at contracts/shared/cas/v1/ is referenced as:
+	// ../../../../contracts/shared/cas/v1/expected_version.schema.json
+	const mixinRef = "../../../../contracts/shared/cas/v1/expected_version.schema.json"
+
+	// (a) $ref to mixin that declares integer with minimum+maximum → FMT-25 passes.
+	t.Run("mixin_with_full_integer_constraints_passes", func(t *testing.T) {
+		rootDir, schemaPath := fmt25MixinFixture(t, `{
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"version": {"$ref": "`+mixinRef+`"}
+			}
+		}`)
+		mixinDir := filepath.Join(rootDir, "contracts", "shared", "cas", "v1")
+		require.NoError(t, os.MkdirAll(mixinDir, 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(mixinDir, "expected_version.schema.json"),
+			[]byte(`{"type":"integer","minimum":0,"maximum":2147483647}`),
+			0o644))
+
+		violations, err := scanSchemaForInputConstraints(schemaPath, rootDir)
+		require.NoError(t, err)
+		assert.Empty(t, violations, "mixin with integer minimum+maximum must produce no violations, got: %v", violations)
+	})
+
+	// (b) $ref to mixin that is integer WITHOUT maximum → FMT-25 reports missing
+	// maximum at the right path ($.version, not the mixin file path).
+	t.Run("mixin_missing_maximum_reports_at_ref_path", func(t *testing.T) {
+		rootDir, schemaPath := fmt25MixinFixture(t, `{
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"version": {"$ref": "`+mixinRef+`"}
+			}
+		}`)
+		mixinDir := filepath.Join(rootDir, "contracts", "shared", "cas", "v1")
+		require.NoError(t, os.MkdirAll(mixinDir, 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(mixinDir, "expected_version.schema.json"),
+			[]byte(`{"type":"integer","minimum":0}`),
+			0o644))
+
+		violations, err := scanSchemaForInputConstraints(schemaPath, rootDir)
+		require.NoError(t, err)
+		require.Len(t, violations, 1, "mixin without maximum must produce 1 violation, got: %v", violations)
+		assert.Equal(t, "$.version", violations[0].location, "violation path must be the schema field, not the mixin file")
+		assert.Equal(t, "maximum", violations[0].missing)
+	})
+
+	// (c) Missing mixin file → error message references the $ref target, not the main schema.
+	t.Run("missing_mixin_error_references_ref_target", func(t *testing.T) {
+		rootDir, schemaPath := fmt25MixinFixture(t, `{
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"version": {"$ref": "`+mixinRef+`"}
+			}
+		}`)
+
+		_, err := scanSchemaForInputConstraints(schemaPath, rootDir)
+		require.Error(t, err, "missing mixin must return an error")
+		var walkErr *schemaWalkError
+		require.True(t, errors.As(err, &walkErr), "error must be *schemaWalkError, got: %T %v", err, err)
+		// The error must reference the $ref path, not the main schema file name.
+		assert.Contains(t, walkErr.Error(), "expected_version.schema.json",
+			"error must name the $ref target, not the main schema")
+		assert.NotContains(t, walkErr.Error(), "request.schema.json",
+			"error must NOT name the main schema as the missing file")
+	})
+
+	// (d) Absolute-path $ref is rejected (F1 security guard).
+	t.Run("absolute_path_ref_rejected", func(t *testing.T) {
+		rootDir, schemaPath := fmt25MixinFixture(t, `{
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"bad": {"$ref": "/etc/passwd"}
+			}
+		}`)
+
+		_, err := scanSchemaForInputConstraints(schemaPath, rootDir)
+		require.Error(t, err, "absolute $ref must return an error")
+		var walkErr *schemaWalkError
+		require.True(t, errors.As(err, &walkErr), "error must be *schemaWalkError, got: %T %v", err, err)
+		assert.Contains(t, walkErr.Error(), "must be relative",
+			"error message must state the $ref must be relative")
+	})
+
+	// (e) Path-escaping relative $ref is rejected by IsWithinRoot guard.
+	t.Run("path_escaping_relative_ref_rejected", func(t *testing.T) {
+		rootDir, schemaPath := fmt25MixinFixture(t, `{
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"bad": {"$ref": "../../../../../../../../../../etc/x"}
+			}
+		}`)
+
+		_, err := scanSchemaForInputConstraints(schemaPath, rootDir)
+		require.Error(t, err, "path-escaping $ref must return an error")
+		var walkErr *schemaWalkError
+		require.True(t, errors.As(err, &walkErr), "error must be *schemaWalkError, got: %T %v", err, err)
+		assert.Contains(t, walkErr.Error(), "escapes project root",
+			"error message must state the $ref escapes project root")
+	})
 }
 
 // FMT-20 helpers (fmt20Fixture, fmt20ResponseFixture, assertFMT20RequiredFields,

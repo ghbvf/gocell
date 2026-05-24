@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -327,7 +328,7 @@ func scanSchemaForStrictMissing(absPath string) ([]string, error) {
 	}
 	var schema map[string]any
 	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil, fmt.Errorf("invalid JSON schema %s: %w", absPath, err)
+		return nil, fmt.Errorf(invalidJSONSchemaMsgFmt, absPath, err)
 	}
 	var missing []string
 	walkSchemaObject(schema, "$", &missing)
@@ -732,7 +733,7 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 				c.ID, c.SchemaRefs.Request, resolveErr),
 		)}
 	}
-	missing, err := scanSchemaForInputConstraints(resolved.AbsPath)
+	missing, err := scanSchemaForInputConstraints(resolved.AbsPath, v.root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []ValidationResult{v.newResult(
@@ -826,15 +827,26 @@ func pathParamsReadyForInputConstraints(h *metadata.HTTPTransportMeta) bool {
 // emitting a violation for each missing minLength/maxLength on strings and
 // minimum/maximum on integer/number nodes. Paths use the same JSON-pointer style as
 // scanSchemaForStrictMissing (e.g. "$", "$.user.name", "$.tags.items").
-func scanSchemaForInputConstraints(absPath string) ([]inputConstraintViolation, error) {
+//
+// Cross-file $ref nodes (e.g. a shared CAS expectedVersion mixin under
+// contracts/shared/) are inlined first via inlineCrossFileSchemaRefs so the
+// constraint check sees the referenced node's type/minimum/maximum wherever the
+// single source actually lives. Same-file (#/...) $ref resolution is left to the
+// existing local walker. projectRoot bounds the path-traversal guard.
+func scanSchemaForInputConstraints(absPath, projectRoot string) ([]inputConstraintViolation, error) {
 	raw, err := os.ReadFile(filepath.Clean(absPath))
 	if err != nil {
 		return nil, err
 	}
 	var schema map[string]any
 	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil, fmt.Errorf("invalid JSON schema %s: %w", absPath, err)
+		return nil, fmt.Errorf(invalidJSONSchemaMsgFmt, absPath, err)
 	}
+	inlined, err := inlineCrossFileSchemaRefs(schema, filepath.Dir(absPath), projectRoot, map[string]bool{})
+	if err != nil {
+		return nil, err
+	}
+	schema, _ = inlined.(map[string]any)
 	var missing []inputConstraintViolation
 	if err := walkSchemaTreeDepthInput(schema, "$", func(n map[string]any, p string) {
 		checkInputConstraints(n, p, &missing)
@@ -849,6 +861,114 @@ func scanSchemaForInputConstraints(absPath string) ([]inputConstraintViolation, 
 		return missing[i].missing < missing[j].missing
 	})
 	return missing, nil
+}
+
+// inlineCrossFileSchemaRefs recursively replaces every cross-file $ref node
+// (a relative path like "../../shared/cas/v1/expected_version.schema.json") with
+// the referenced schema's content, so downstream constraint checks see the real
+// type/minimum/maximum. Same-file refs ("#/...") and absolute URLs are left
+// untouched. dir is the directory of the file currently being walked; projectRoot
+// bounds the path-traversal guard; seen breaks cross-file cycles by absolute path.
+//
+// The passed node (when a map) is mutated in place. Callers must pass a
+// freshly-unmarshalled map, not a shared or cached map, to avoid corrupting
+// other consumers.
+func inlineCrossFileSchemaRefs(node any, dir, projectRoot string, seen map[string]bool) (any, error) {
+	switch n := node.(type) {
+	case map[string]any:
+		return inlineRefsInMap(n, dir, projectRoot, seen)
+	case []any:
+		return inlineRefsInSlice(n, dir, projectRoot, seen)
+	default:
+		return node, nil
+	}
+}
+
+// inlineRefsInMap replaces a cross-file $ref map with its referenced content, or
+// recurses into each child value. It mutates n in place for non-$ref maps;
+// callers must pass a freshly-unmarshalled map, not a shared or cached one.
+func inlineRefsInMap(n map[string]any, dir, projectRoot string, seen map[string]bool) (any, error) {
+	if ref, ok := n["$ref"].(string); ok && isCrossFileSchemaRef(ref) {
+		return resolveCrossFileSchemaRef(ref, dir, projectRoot, seen)
+	}
+	for key, child := range n {
+		resolved, err := inlineCrossFileSchemaRefs(child, dir, projectRoot, seen)
+		if err != nil {
+			return nil, err
+		}
+		n[key] = resolved
+	}
+	return n, nil
+}
+
+// inlineRefsInSlice recurses into each element of a schema array (allOf, etc.).
+func inlineRefsInSlice(n []any, dir, projectRoot string, seen map[string]bool) (any, error) {
+	for i, child := range n {
+		resolved, err := inlineCrossFileSchemaRefs(child, dir, projectRoot, seen)
+		if err != nil {
+			return nil, err
+		}
+		n[i] = resolved
+	}
+	return n, nil
+}
+
+// isCrossFileSchemaRef reports whether ref points at another file (not a
+// same-file JSON pointer and not an absolute URL).
+func isCrossFileSchemaRef(ref string) bool {
+	return ref != "" &&
+		!strings.HasPrefix(ref, "#") &&
+		!strings.HasPrefix(ref, "http://") &&
+		!strings.HasPrefix(ref, "https://")
+}
+
+// invalidJSONSchemaMsgFmt is the shared fmt.Errorf format for an unparseable
+// JSON schema file (main request schema or a cross-file $ref target).
+const invalidJSONSchemaMsgFmt = "invalid JSON schema %s: %w"
+
+// isAbsoluteSchemaRef reports whether a forward-slash $ref is absolute on ANY
+// OS: a leading "/" (POSIX, via path.IsAbs) or a Windows drive/UNC root (via
+// filepath.IsAbs after FromSlash). Contract $refs are forward-slash by
+// convention, so "/etc/passwd" must be detected as absolute regardless of the
+// host OS — filepath.IsAbs alone returns false for "/x" on Windows, which let an
+// absolute ref slip past on windows-latest.
+func isAbsoluteSchemaRef(ref string) bool {
+	return path.IsAbs(ref) || filepath.IsAbs(filepath.FromSlash(ref))
+}
+
+// resolveCrossFileSchemaRef reads the referenced file (guarded within
+// projectRoot) and returns its fully-inlined content.
+func resolveCrossFileSchemaRef(ref, dir, projectRoot string, seen map[string]bool) (any, error) {
+	// Reject absolute-path $ref values before any path join. filepath.Join drops
+	// the base directory when the second argument is absolute (e.g.
+	// filepath.Join("/a/b", "/etc/passwd") == "/etc/passwd"), so we must check
+	// before joining. This mirrors the contractgen bundler behavior
+	// (tools/codegen/contractgen/refbundle.go::validateRefString).
+	if isAbsoluteSchemaRef(ref) {
+		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref %q must be relative", ref)}
+	}
+	targetAbs := filepath.Clean(filepath.Join(dir, filepath.FromSlash(ref)))
+	if projectRoot != "" && !IsWithinRoot(projectRoot, targetAbs) {
+		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref %q escapes project root", ref)}
+	}
+	if seen[targetAbs] {
+		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cyclic cross-file $ref %q", ref)}
+	}
+	raw, err := os.ReadFile(filepath.Clean(targetAbs))
+	if err != nil {
+		// Wrap as schemaWalkError so the caller's os.IsNotExist branch does not
+		// mis-attribute the missing file to the main schema. The walkErr branch
+		// (~line 746) surfaces the $ref path in the field + message instead.
+		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref target %q not found: %v", targetAbs, err)}
+	}
+	var target any
+	if err := json.Unmarshal(raw, &target); err != nil {
+		return nil, fmt.Errorf(invalidJSONSchemaMsgFmt, targetAbs, err)
+	}
+	seen[targetAbs] = true
+	resolved, err := inlineCrossFileSchemaRefs(target, filepath.Dir(targetAbs), projectRoot, seen)
+	delete(seen, targetAbs)
+	return resolved, err
 }
 
 // checkInputConstraints branches on node["type"] and records missing facets.

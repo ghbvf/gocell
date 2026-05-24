@@ -121,10 +121,17 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		if err != nil {
 			return fmt.Errorf("contractgen build: %q read request schema for embed: %w", contract.ID, err)
 		}
+		// Resolve external $ref entries so the embedded schema is self-contained.
+		// schemavalidate.NewValidator (santhosh-tekuri, base URI "mem:///") has no
+		// external loader; an unresolved $ref would fail to compile at codegen time.
+		bundled, err := bundleSchemaRefs(rootDir, reqPath, schemaBytes)
+		if err != nil {
+			return fmt.Errorf("contractgen build: %q bundle request schema $ref: %w", contract.ID, err)
+		}
 		// Compact to a single line: eliminates newlines so the schema can be
 		// safely embedded in the generated file as a Go interpreted string literal.
 		var compacted bytes.Buffer
-		if err := json.Compact(&compacted, schemaBytes); err != nil {
+		if err := json.Compact(&compacted, bundled); err != nil {
 			return fmt.Errorf("contractgen build: %q compact request schema: %w", contract.ID, err)
 		}
 		// Validate schema compiles before embedding — fail-fast at codegen time
