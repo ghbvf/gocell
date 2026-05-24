@@ -13,12 +13,14 @@
 //     in the repo must be either the canonical file or a declared mirror
 //     destination. Undeclared copies fail the test.
 //
-//   - A2 (caller-allowlist): `codegen.WriteOptions{..., Headerless: true, ...}`
-//     composite literals must only appear in package
-//     `tools/codegen/sharedschema`. The `Headerless` escape-hatch exists solely
-//     so sharedschema can write JSON mirrors without the standard gocell
-//     generated-file header (which would corrupt the JSON). Any other callsite
-//     is forbidden — it would silently bypass the single-source funnel.
+//   - A2 (caller-allowlist): a composite literal that SETS the
+//     `codegen.WriteOptions.Headerless` field (any value, not just the literal
+//     `true`) must only appear in package `tools/codegen/sharedschema`. The
+//     `Headerless` escape-hatch exists solely so sharedschema can write JSON
+//     mirrors without the standard gocell generated-file header (which would
+//     corrupt the JSON). Any other callsite is forbidden — it would silently
+//     bypass the single-source funnel. Locking field-presence (not the literal
+//     value) defeats value laundering via const / bool-expr / selector.
 //
 // AI-robust grade (funnel double-lock):
 //
@@ -41,10 +43,12 @@
 //     (A copy under a testdata/ tree is out of A1's scan scope — see Carve-out.)
 //
 //   - ② Headerless escape-hatch misused in a package other than sharedschema
-//     (a caller sets Headerless: true to bypass the header guard on an
+//     (a caller sets the Headerless field — by ANY value, including a const or
+//     expression that launders the literal — to bypass the header guard on an
 //     unrelated file write): covered by A2 — typed AST scan over production
-//     packages rejects the composite literal outside the allowlist.
-//     Validated by the inline allowlist check in TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2.
+//     packages rejects any composite literal that sets Headerless outside the
+//     allowlist. Validated by TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2 (production)
+//     and TestSharedSchemaMirror_HeaderlessMatcher_CatchesNonLiteral (matcher).
 //
 //   - ③ CI step "Verify shared-schema codegen" omitted from the verify-codegen
 //     workflow job: covered by ci_pinning_test.go codegenStepNames (the step
@@ -75,6 +79,7 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/types"
 	"path/filepath"
 	"strings"
@@ -148,8 +153,10 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 }
 
 // TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2 (caller-allowlist) asserts that every
-// production composite literal `codegen.WriteOptions{..., Headerless: true, ...}`
-// lives in package tools/codegen/sharedschema and nowhere else.
+// production composite literal that sets the codegen.WriteOptions Headerless
+// field (any value) lives in package tools/codegen/sharedschema and nowhere
+// else. Locking field-presence rather than the literal `true` closes value
+// laundering (const / bool-expr / selector).
 //
 // The Headerless field is the escape-hatch that allows sharedschema to write
 // JSON mirrors without the standard gocell generated-file header (which would
@@ -180,15 +187,16 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2(t *testing.T) {
 				if !isWriteOptionsType(p.TypesInfo, lit.Type, writeOptsPkgPath) {
 					return
 				}
-				if !hasHeaderlessTrue(lit) {
+				if !hasHeaderlessField(lit) {
 					return
 				}
 				pos := p.Fset.Position(lit.Pos())
 				ds = append(ds, Diagnostic{
 					Rel:  rel,
 					Line: pos.Line,
-					Message: "forbidden: codegen.WriteOptions{Headerless: true} outside " +
-						"tools/codegen/sharedschema — Headerless is reserved for the shared-schema mirror funnel",
+					Message: "forbidden: codegen.WriteOptions sets the Headerless field outside " +
+						"tools/codegen/sharedschema — Headerless is reserved for the shared-schema mirror funnel " +
+						"(value is irrelevant: opting in at all is the violation)",
 				})
 			})
 		}
@@ -226,6 +234,39 @@ func TestSharedSchemaMirror_SubsetHelper_CatchesRogue(t *testing.T) {
 	}
 	if !foundRogue {
 		t.Errorf("expected rogue path in violations, got: %v", violations)
+	}
+}
+
+// TestSharedSchemaMirror_HeaderlessMatcher_CatchesNonLiteral is the blind-spot
+// negative self-check for blind-spot ②. It proves hasHeaderlessField matches a
+// Headerless field set to a NON-literal value (const ident / bool expression /
+// selector), not only the literal `true` — closing the value-laundering bypass
+// that the old hasHeaderlessTrue (value == "true" only) left open.
+func TestSharedSchemaMirror_HeaderlessMatcher_CatchesNonLiteral(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		expr string
+		want bool
+	}{
+		{"literal true", `codegen.WriteOptions{Headerless: true}`, true},
+		{"const ident (laundered)", `codegen.WriteOptions{Headerless: enableHeaderless}`, true},
+		{"bool expression", `codegen.WriteOptions{Headerless: 1 == 1}`, true},
+		{"selector", `codegen.WriteOptions{Headerless: cfg.Flag}`, true},
+		{"explicit false (field still set)", `codegen.WriteOptions{Headerless: false}`, true},
+		{"field absent", `codegen.WriteOptions{Path: "x"}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			expr, err := parser.ParseExpr(tt.expr)
+			require.NoError(t, err, "parse expr")
+			lit, ok := expr.(*ast.CompositeLit)
+			require.True(t, ok, "expr is not a composite literal")
+			if got := hasHeaderlessField(lit); got != tt.want {
+				t.Errorf("hasHeaderlessField(%s) = %v, want %v", tt.expr, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -280,18 +321,21 @@ func isWriteOptionsType(info *types.Info, expr ast.Expr, writeOptsPkgPath string
 	return obj.Pkg().Path() == writeOptsPkgPath && obj.Name() == "WriteOptions"
 }
 
-// hasHeaderlessTrue returns true when the CompositeLit contains a key-value
-// element `Headerless: true`. SCANNER-FRAMEWORK-USAGE-01: direct-child AST
-// iteration goes through EachInChildren, not a for-range over lit.Elts.
-func hasHeaderlessTrue(lit *ast.CompositeLit) bool {
+// hasHeaderlessField reports whether the CompositeLit sets the Headerless field
+// at all, regardless of value. The funnel locks the *ability* to opt into the
+// Headerless escape hatch — not a specific literal value. Matching only
+// `Headerless: true` would let a caller launder the value through a const
+// (`Headerless: enableHeaderless`), a bool expression (`Headerless: 1 == 1`), or
+// a selector (`Headerless: cfg.Flag`) and bypass A2. `Headerless: false` outside
+// sharedschema is meaningless anyway, so forbidding the field's presence
+// entirely is both correct and conservative.
+//
+// SCANNER-FRAMEWORK-USAGE-01: direct-child AST iteration goes through
+// EachInChildren, not a for-range over lit.Elts.
+func hasHeaderlessField(lit *ast.CompositeLit) bool {
 	var found bool
 	EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
-		ident, ok := kv.Key.(*ast.Ident)
-		if !ok || ident.Name != "Headerless" {
-			return
-		}
-		// Value must be the boolean literal `true`.
-		if v, ok := kv.Value.(*ast.Ident); ok && v.Name == "true" {
+		if ident, ok := kv.Key.(*ast.Ident); ok && ident.Name == "Headerless" {
 			found = true
 		}
 	})
