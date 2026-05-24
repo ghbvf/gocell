@@ -373,8 +373,8 @@ func TestCheckers_ReadyWhenStateHealthy(t *testing.T) {
 	c := newTestClient(validConfig(), mock)
 	// state is nil (healthy by default after zero-value)
 	checkers := c.Checkers()
-	require.Contains(t, checkers, ReadyProbeName)
-	require.NoError(t, checkers[ReadyProbeName](context.Background()))
+	require.Contains(t, checkers, string(ProbeReady))
+	require.NoError(t, checkers[string(ProbeReady)](context.Background()))
 }
 
 func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
@@ -386,8 +386,8 @@ func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
 	c.state.Store(&sentinel)
 
 	checkers := c.Checkers()
-	require.Contains(t, checkers, ReadyProbeName)
-	err := checkers[ReadyProbeName](context.Background())
+	require.Contains(t, checkers, string(ProbeReady))
+	err := checkers[string(ProbeReady)](context.Background())
 	require.Error(t, err)
 	assert.Equal(t, sentinel, err)
 }
@@ -399,7 +399,7 @@ func TestCheckers_NoNetworkCall(t *testing.T) {
 	c := newTestClient(validConfig(), mock)
 	checkers := c.Checkers()
 
-	_ = checkers[ReadyProbeName](context.Background())
+	_ = checkers[string(ProbeReady)](context.Background())
 	assert.EqualValues(t, 0, mock.callCount.Load(), "Checkers probe must not call HeadBucket")
 }
 
@@ -461,7 +461,7 @@ func TestWorker_UpdatesStateOnError(t *testing.T) {
 	checkers := c.Checkers()
 	var lastErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		lastErr = checkers[ReadyProbeName](context.Background())
+		lastErr = checkers[string(ProbeReady)](context.Background())
 		return lastErr != nil
 	}, testtime.D250ms, testtime.FastPoll)
 
@@ -502,7 +502,7 @@ func TestWorker_StateBecomesHealthyAfterRecovery(t *testing.T) {
 	checkers := c.Checkers()
 	var lastErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		lastErr = checkers[ReadyProbeName](context.Background())
+		lastErr = checkers[string(ProbeReady)](context.Background())
 		return callN.Load() >= 2 && lastErr == nil
 	}, testtime.D300ms, testtime.FastPoll)
 
@@ -846,7 +846,7 @@ func TestWorker_Tick403_StateUnhealthyPermanent(t *testing.T) {
 	checkers := c.Checkers()
 	var stateErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		stateErr = checkers[ReadyProbeName](context.Background())
+		stateErr = checkers[string(ProbeReady)](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 403 tick")
 
@@ -883,7 +883,7 @@ func TestWorker_Tick5xx_StateUnhealthyTransient(t *testing.T) {
 	checkers := c.Checkers()
 	var stateErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		stateErr = checkers[ReadyProbeName](context.Background())
+		stateErr = checkers[string(ProbeReady)](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 503 tick")
 
@@ -927,7 +927,7 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 	// Phase 1: wait for state to become unhealthy with a transient error.
 	var stateErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		stateErr = checkers[ReadyProbeName](context.Background())
+		stateErr = checkers[string(ProbeReady)](context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after timeout ticks")
 	assert.True(t, errcode.IsTransient(stateErr), "timeout tick error must be transient")
@@ -935,7 +935,7 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 	// Phase 2: wait for state to recover to healthy (nil).
 	// Budget widened to D500ms to absorb CI scheduler jitter between ticks 2 and 3.
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		return checkers[ReadyProbeName](context.Background()) == nil
+		return checkers[string(ProbeReady)](context.Background()) == nil
 	}, testtime.D500ms, testtime.FastPoll, "state must recover to healthy after success ticks")
 
 	cancel()
@@ -979,18 +979,6 @@ func assertHealthRequestShape(t *testing.T, tr *recordingTransport) {
 		"HeadBucket path: /{bucket}")
 }
 
-// ---------------------------------------------------------------------------
-// F3 — Ops contract literal anchor
-// ---------------------------------------------------------------------------
-
-// TestReadyProbeName_LiteralAnchor locks the "s3_ready" string contract.
-// production Checkers + all tests reference ReadyProbeName; without this
-// anchor a const-value rename drifts silently.
-//
-// AI-robust rating: Soft (string convention).
-//
-// ref: .claude/rules/gocell/observability.md「Readyz Probe 命名」
-func TestReadyProbeName_LiteralAnchor(t *testing.T) {
-	assert.Equal(t, "s3_ready", ReadyProbeName,
-		"ReadyProbeName is an ops contract — dashboards/alerts depend on this literal")
-}
+// The "s3_ready" ops-contract literal is now funneled + frozen by archtest
+// OPS-CONTRACT-STRING-FUNNEL-01 (golden inventory adapters/s3.ProbeReady=s3_ready);
+// the prior Soft string-anchor unit test was removed (no parallel Soft+Hard).

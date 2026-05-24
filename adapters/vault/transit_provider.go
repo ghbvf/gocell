@@ -20,6 +20,7 @@ import (
 	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/aeadutil"
@@ -1155,8 +1156,17 @@ func validVaultKeyVersion(version string) bool {
 var _ lifecycle.ManagedResource = (*TransitKeyProvider)(nil)
 
 // transitReadinessTimeout is the per-probe context deadline for vault_transit_ready.
-// 3 seconds is sufficient for LAN Vault deployments.
+// 3 seconds is sufficient for LAN Vault deployments. Intentionally tighter than
+// adapterutil.DefaultProbeTimeout (5s): a transit/keys/{name} metadata read is a
+// single fast round-trip, so a slow Vault should mark the probe down quickly
+// rather than hold /readyz near the aggregator deadline. This is why the Checkers
+// map is built directly here instead of via adapterutil.HealthToCheckers (which
+// would apply the 5s default).
 const transitReadinessTimeout = 3 * time.Second
+
+// ProbeReady is the ops-contract name for the Vault transit readiness probe.
+// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
+const ProbeReady healthz.ReadyProbeName = "vault_transit_ready"
 
 // Checkers returns a map of readiness probe functions for TransitKeyProvider.
 // The single probe "vault_transit_ready" reads transit/keys/{keyName} metadata
@@ -1178,7 +1188,7 @@ const transitReadinessTimeout = 3 * time.Second
 //	uses auth/token/lookup-self + business-path probe, not sys/health
 func (p *TransitKeyProvider) Checkers() map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		"vault_transit_ready": func(ctx context.Context) error {
+		string(ProbeReady): func(ctx context.Context) error {
 			probeCtx, cancel := context.WithTimeout(ctx, transitReadinessTimeout)
 			defer cancel()
 			_, err := p.readLatestVersion(probeCtx)

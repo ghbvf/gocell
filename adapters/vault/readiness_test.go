@@ -50,7 +50,7 @@ func TestTransitReadiness_Healthy(t *testing.T) {
 	checkers := p.Checkers()
 	require.NotNil(t, checkers, "Checkers must not return nil")
 
-	probe, ok := checkers["vault_transit_ready"]
+	probe, ok := checkers[string(vaultadapter.ProbeReady)]
 	require.True(t, ok, "Checkers must contain 'vault_transit_ready' key")
 	require.NotNil(t, probe, "vault_transit_ready probe must not be nil")
 
@@ -89,7 +89,7 @@ func TestTransitReadiness_MountDeleted(t *testing.T) {
 	require.NoError(t, err, "Unmount transit must succeed (dev root token has sys capability)")
 
 	checkers := p.Checkers()
-	probe := checkers["vault_transit_ready"]
+	probe := checkers[string(vaultadapter.ProbeReady)]
 	require.NotNil(t, probe)
 
 	probeErr := probe(context.Background())
@@ -161,7 +161,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 		err = rootClient.Sys().UnmountWithContext(context.Background(), "transit")
 		require.NoError(t, err, "Unmount transit must succeed")
 		checkers := p.Checkers()
-		probe := checkers["vault_transit_ready"]
+		probe := checkers[string(vaultadapter.ProbeReady)]
 		require.NotNil(t, probe)
 		probeErr := probe(context.Background())
 		require.Error(t, probeErr, "probe must return error after transit unmount")
@@ -173,7 +173,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 	}
 
 	checkers := pUnreachable.Checkers()
-	probe := checkers["vault_transit_ready"]
+	probe := checkers[string(vaultadapter.ProbeReady)]
 	require.NotNil(t, probe)
 
 	// The probe internally uses context.WithTimeout(3s), but since we also set
@@ -263,7 +263,7 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 
 	// Verify the probe works before revocation (confirms the policy grants access).
 	checkers := p.Checkers()
-	probe := checkers["vault_transit_ready"]
+	probe := checkers[string(vaultadapter.ProbeReady)]
 	require.NotNil(t, probe)
 	require.NoError(t, probe(context.Background()), "probe must succeed with valid child token (policy grants transit read)")
 

@@ -161,60 +161,9 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	assert.Empty(t, violations, "A54 ManagedResource contract violations")
 }
 
-func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
-	root := findModuleRoot(t)
-	modulePath := readModulePath(t, root)
-	adapterPrefix := modulePath + "/adapters/"
-	coreBundlePkg := modulePath + "/cmd/corebundle"
-
-	var violations []string
-	RunTypedProduction(t, TypedOpts{Tests: false},
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil {
-				return nil
-			}
-			pkgPath := p.Pkg.Path()
-
-			adapterPkg, ok := strings.CutPrefix(pkgPath, adapterPrefix)
-			if ok && !strings.Contains(adapterPkg, "/") {
-				violations = append(violations,
-					adapterCheckerNameViolationsFromPass(p.Fset, p.Files, p.TypesInfo, "adapters/"+adapterPkg)...)
-				return nil
-			}
-			if pkgPath == coreBundlePkg {
-				violations = append(violations,
-					healthCheckerCallNameViolationsFromPass(p.Fset, p.Files, p.TypesInfo, "cmd/corebundle")...)
-			}
-			return nil
-		})
-
-	sort.Strings(violations)
-	assert.Empty(t, violations, "adapter ManagedResource ready probes must use stable snake_case names ending in _ready")
-}
-
-// TestRuntimeWebsocketCheckerNamesUseReadySuffix enforces the
-// observability rule (Readyz Probe Naming) for runtime/websocket.Hub:
-// all Checkers() map keys must be snake_case and end with "_ready".
-//
-// This extends the adapter coverage from TestAdapterManagedResourceCheckerNamesUseReadySuffix
-// to the runtime/websocket package, which owns a ManagedResource
-// but lives in runtime/ rather than adapters/.
-func TestRuntimeWebsocketCheckerNamesUseReadySuffix(t *testing.T) {
-	root := findModuleRoot(t)
-	modulePath := readModulePath(t, root)
-	websocketPkg := modulePath + "/runtime/websocket"
-
-	var violations []string
-	RunTypedProduction(t, TypedOpts{Tests: false},
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != websocketPkg {
-				return nil
-			}
-			violations = append(violations,
-				adapterCheckerNameViolationsFromPass(p.Fset, p.Files, p.TypesInfo, "runtime/websocket")...)
-			return nil
-		})
-
-	sort.Strings(violations)
-	assert.Empty(t, violations, "runtime/websocket ManagedResource probe names must be snake_case and end with _ready")
-}
+// Adapter/runtime ready-probe NAME enforcement (snake_case + _ready + single
+// source) moved to the Hard OPS-CONTRACT-STRING-FUNNEL-01 funnel
+// (tools/archtest/ops_contract_string_funnel_test.go). The prior Soft regex
+// scanners (TestAdapterManagedResourceCheckerNamesUseReadySuffix /
+// TestRuntimeWebsocketCheckerNamesUseReadySuffix) were removed — no parallel
+// Soft+Hard. This file keeps only the ManagedResource COMPLETENESS contract.

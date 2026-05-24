@@ -88,7 +88,8 @@ ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sib
 
 - Adapter readiness probe 使用 stable snake_case，并以后缀 `_ready` 表示依赖可用性，例如 `rabbitmq_ready`、`vault_transit_ready`。
 - 一个 adapter 只有单一外部依赖时，禁止同时暴露多个同义 ready probe；多角色 worker 可用 `component-role` 拆分不同失败域。
-- probe 名是运维契约；改名必须同步 dashboard / alert / 文档，并用 archtest 或单测锁定。
+- probe 名是运维契约；改名必须同步 dashboard / alert / 文档。
+- Adapter probe 名是 `kernel/healthz.ReadyProbeName` typed-string funnel：各 adapter 声明 typed const（如 `postgres.ProbeReady`），构造点（Checkers map key 走 `string(<const>)`、`adapterutil.HealthToCheckers` 首参收 typed）只能引用声明的 const，裸字面量在静态分析层不可表达。archtest `OPS-CONTRACT-STRING-FUNNEL-01` 双向锁（下游构造解析 + 上游声明站点锁）+ golden inventory；符号清单活在该 archtest 的 package godoc。框架 probe（`config_watcher` / `outbox_failopen_rate_<cell>`）走 `NewProbe` / `WithHealthChecker` 的裸 `string`，由 `READYZ-PROBE-NAMING-01` 守 hyphen；cell repo probe 由 cellgen `RegisterRepoReady` funnel。
 
 ### Cell 级别 Repo Readiness Probe
 

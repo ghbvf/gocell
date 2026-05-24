@@ -102,9 +102,9 @@ func startWorkerWithTickProof(t *testing.T, ctx context.Context, client *Client,
 	client.state.Store(&sentinel)
 
 	checkers := client.Checkers()
-	require.Contains(t, checkers, ReadyProbeName)
+	require.Contains(t, checkers, string(ProbeReady))
 	testwait.External(t, "s3-worker-tick-executed", func() bool {
-		return checkers[ReadyProbeName](ctx) == nil
+		return checkers[string(ProbeReady)](ctx) == nil
 	}, timeout, testtime.SlowPoll,
 		"s3_ready should clear worker-tick-proof sentinel once worker probes healthy MinIO")
 }
@@ -151,8 +151,8 @@ func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 
 	// State-machine probe: reads atomic state, no network I/O.
 	checkers := client.Checkers()
-	require.Contains(t, checkers, ReadyProbeName)
-	assert.NoError(t, checkers[ReadyProbeName](ctx), "s3_ready checker should be nil")
+	require.Contains(t, checkers, string(ProbeReady))
+	assert.NoError(t, checkers[string(ProbeReady)](ctx), "s3_ready checker should be nil")
 }
 
 // TestIntegration_S3_RecoveryAfterContainerRestart verifies the stop/start
@@ -270,7 +270,7 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	require.NoError(t, ctr.Stop(ctx, &stopTimeout), "stop container for worker test")
 
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		return checkers[ReadyProbeName](ctx) != nil
+		return checkers[string(ProbeReady)](ctx) != nil
 	}, testtime.EventuallyExtraLong, testtime.SlowPoll,
 		"s3_ready should flip to non-nil error while container is stopped")
 

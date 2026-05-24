@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -18,6 +19,15 @@ import (
 var (
 	_ lifecycle.ContextCloser   = (*Pool)(nil)
 	_ lifecycle.ManagedResource = (*Pool)(nil)
+)
+
+// Pool readiness-probe names. healthz.ReadyProbeName-typed consts funneled by
+// archtest OPS-CONTRACT-STRING-FUNNEL-01 (snake_case + _ready).
+const (
+	// ProbeReady probes basic pool liveness (Ping).
+	ProbeReady healthz.ReadyProbeName = "postgres_ready"
+	// ProbeIndexesValidReady probes that all expected indexes are valid.
+	ProbeIndexesValidReady healthz.ReadyProbeName = "postgres_indexes_valid_ready"
 )
 
 // Default pool configuration values.
@@ -188,12 +198,12 @@ func (p *Pool) Checkers() map[string]func(context.Context) error {
 		healthFn = p.Health
 	}
 	return map[string]func(context.Context) error{
-		"postgres_ready": func(ctx context.Context) error {
+		string(ProbeReady): func(ctx context.Context) error {
 			probeCtx, cancel := context.WithTimeout(ctx, adapterutil.DefaultProbeTimeout)
 			defer cancel()
 			return healthFn(probeCtx)
 		},
-		"postgres_indexes_valid_ready": func(ctx context.Context) error {
+		string(ProbeIndexesValidReady): func(ctx context.Context) error {
 			probeCtx, cancel := context.WithTimeout(ctx, adapterutil.DefaultProbeTimeout)
 			defer cancel()
 			return InvalidIndexCheck(probeCtx, p)

@@ -11,13 +11,18 @@ import (
 //
 // Name returns a stable lower-case snake_case identifier ending in "_ready"
 // for dependency probes; framework probes use stable identifiers without the
-// "_ready" suffix. Name shape (snake_case + _ready suffix) is enforced
-// **statically** by archtest READYZ-PROBE-NAMING-01 (see
-// tools/archtest/readyz_probe_naming_test.go) rather than at runtime —
-// runtime Aggregator.Register only rejects empty and duplicate names. The
-// archtest is the single source of truth for naming policy; adding a runtime
-// regex check would create a parallel governance surface and is intentionally
-// avoided.
+// "_ready" suffix. Name shape is enforced **statically** by archtest, not at
+// runtime (runtime Aggregator.Register only rejects empty and duplicate names);
+// adding a runtime regex check would create a parallel governance surface and is
+// intentionally avoided. Two archtests split the surface by authoring site:
+//   - adapter dependency-availability probes authored via
+//     lifecycle.ManagedResource.Checkers() / adapterutil.HealthToCheckers —
+//     OPS-CONTRACT-STRING-FUNNEL-01 (must be a healthz.ReadyProbeName const;
+//     see kernel/healthz/readyprobename.go);
+//   - framework + cellgen probes constructed directly via NewProbe(name, fn)
+//     (config_watcher, outbox_failopen_rate_<cell>, <cell>_repo_ready) —
+//     READYZ-PROBE-NAMING-01 (no hyphens; see
+//     tools/archtest/readyz_probe_naming_test.go).
 //
 // Check is invoked by the Aggregator with a context carrying the probe
 // deadline. Returning nil indicates healthy; a non-nil error indicates

@@ -16,6 +16,7 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -30,11 +31,11 @@ const (
 	// NO magic literal: this const is the single source of truth for the 30s default.
 	defaultS3HealthInterval = 30 * time.Second
 
-	// ReadyProbeName is the ops-contract name for the S3 readiness probe registered
-	// by Checkers(). Probe name follows the observability rule: snake_case + "_ready"
-	// suffix. Single-sourced here so production code and tests reference the same
-	// identifier without drift.
-	ReadyProbeName = "s3_ready"
+	// ProbeReady is the ops-contract name for the S3 readiness probe registered
+	// by Checkers(). It is a healthz.ReadyProbeName-typed const (snake_case +
+	// "_ready" suffix), funneled by archtest OPS-CONTRACT-STRING-FUNNEL-01 so
+	// production code and tests reference the same identifier without drift.
+	ProbeReady healthz.ReadyProbeName = "s3_ready"
 )
 
 // bucketHeader is the narrow interface used by the health state machine.
@@ -286,17 +287,17 @@ func (c *Client) Health(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 // Checkers implements lifecycle.ManagedResource. It returns a single probe
-// keyed by ReadyProbeName ("s3_ready") that reads the latest health state
+// keyed by ProbeReady ("s3_ready") that reads the latest health state
 // without any network call.
 //
 // probe name follows the observability rule: snake_case + "_ready" suffix.
-// ReadyProbeName is the single source of truth; both this method and tests
+// ProbeReady is the single source of truth; both this method and tests
 // reference it so the name cannot drift.
 //
 // ref: runtime/websocket/hub.go Checkers — state-read probe pattern.
 func (c *Client) Checkers() map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		ReadyProbeName: func(_ context.Context) error {
+		string(ProbeReady): func(_ context.Context) error {
 			if errPtr := c.state.Load(); errPtr != nil {
 				return *errPtr
 			}

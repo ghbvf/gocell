@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -207,12 +208,16 @@ func (a *Adapter) Verifier(ctx context.Context) (*gooidc.IDTokenVerifier, error)
 	return p.Verifier(&gooidc.Config{ClientID: a.config.ClientID}), nil
 }
 
+// ProbeReady is the ops-contract name for the OIDC readiness probe.
+// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
+const ProbeReady healthz.ReadyProbeName = "oidc_ready"
+
 // Checkers returns a readyz probe for the OIDC provider. The probe verifies
 // that the cached provider is populated without re-discovering.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
 func (a *Adapter) Checkers() map[string]func(context.Context) error {
-	return adapterutil.HealthToCheckers("oidc_ready", a.healthProbe, adapterutil.DefaultProbeTimeout)
+	return adapterutil.HealthToCheckers(ProbeReady, a.healthProbe, adapterutil.DefaultProbeTimeout)
 }
 
 // Worker returns a worker.Worker that drives the periodic OIDC re-discovery
