@@ -21,15 +21,32 @@
 //   - R3 (usage-point funnel): methods on repo/store structs that hold a
 //     pgExecutor field must NOT (a) access <x>.pool directly (where <x>
 //     resolves to pgExecutor type via *types.Info) nor (b) call
-//     <x>.ExecDirect(...) unless the callsite is on the static allowlist.
-//     The allowlist is keyed by (file, enclosing function name) and currently
-//     contains exactly one entry:
-//     "adapters/postgres/refresh_store.go::revokeSessionDetachedAt" — the
-//     intentional independent-commit cascade-revoke compensation path.
+//     <x>.ExecDirect(...) without a sibling pgrepoapproved.ApprovedExecDirect
+//     marker in the SAME approval scope (FuncDecl body OR nested FuncLit body
+//     — closures are independent scopes). The marker is a typed funnel from
+//     pkg/pgrepoapproved; 5-门 form-uniqueness (callee resolves to the funnel,
+//     arg[0] is *ast.BasicLit + token.STRING + kebab-case regex + non-
+//     placeholder) plus same-scope co-location pin the allowed bypass to its
+//     source location. Currently exactly one production callsite holds a
+//     marker: adapters/postgres/refresh_store.go::revokeSessionDetachedAt
+//     (the intentional independent-commit cascade-revoke compensation path).
+//
+// # Discovery
+//
+// The set of in-scope packages is auto-derived at test time by
+// discoverPGAdapterPackages: a production package is in scope iff its scope
+// declares a type named "pgExecutor". This replaces the former hand-maintained
+// pgRepoPackagePatterns list — a structural property the rule already relies
+// on becomes the discovery signal, so adding a new PG adapter package that
+// follows the pgExecutor convention is automatically covered, and renaming
+// pgExecutor out of scope is caught by TestPGRepoAmbientTx_DiscoveryCoverage.
+// Packages that use a different funnel pattern (e.g., configcore's
+// Session/DBTX) are correctly excluded; they require a separate archtest if
+// equivalent governance is desired.
 //
 // # AI-robust grading (Funnel 双向锁评级)
 //
-// 下游 Hard / 上游 Medium (PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01).
+// 下游 Hard / 上游 Medium (Hard terminal state tracked: gh issue #916 PGEXECUTOR-SEAL-INTERFACE-01).
 //
 // 上游 Medium: intra-package compile Hard is unreachable — adapters/postgres
 // repos share the package with pgExecutor; Go package-level visibility means a
@@ -37,12 +54,14 @@
 // compiler cannot block it. The ceiling is archtest-bound form-uniqueness (same
 // grade and precedent as PANIC-REGISTERED-01 / panic(panicregister.Approved)
 // per ai-robust.md §Hard 范本 #2 caveat). R1+R2 guard holding+construction;
-// R3 adds callsite caller-allowlist enforcement so that the only existing
-// legitimate bypass (revokeSessionDetachedAt) is statically pinned and any NEW
-// bypass immediately fails CI. This elevates upstream enforcement from doc-only
-// to archtest-enforced Medium (caller-allowlist form). Hard terminal state
-// remains: seal pgExecutor behind an exported interface + private construction
-// funnel making bypass unexpressible package-externally.
+// R3(a) pins pool field access; R3(b) elevates the former hand-maintained
+// string allowlist to a Hard typed marker funnel
+// (pkg/pgrepoapproved.ApprovedExecDirect — sibling deployment of
+// panicregister.Approved). Discovery itself moved from Soft hand-maintained
+// list to Medium type-aware auto-derivation in PR #502 (issue #823).
+// Hard terminal state for the upstream remains: seal pgExecutor behind an
+// exported interface + private construction funnel making bypass unexpressible
+// package-externally — tracked at gh issue #916 (PGEXECUTOR-SEAL-INTERFACE-01).
 //
 // 下游 Hard via form-uniqueness (archtest-bound), NOT compile-time:
 //
@@ -71,10 +90,16 @@
 //     (a) For pool access: any SelectorExpr `<x>.pool` where <x> resolves to
 //     pgExecutor and `.pool` is accessed from outside pgExecutor's own methods.
 //     (b) For ExecDirect calls: any CallExpr `<x>.ExecDirect(...)` where <x>
-//     resolves to pgExecutor, unless the enclosing function is on the static
-//     allowlist map[string]struct{} keyed by "file::funcname".
-//     Exempted: pgExecutor's own methods (they legitimately use e.pool /
-//     call ExecDirect on self); newPGExecutor constructor.
+//     resolves to pgExecutor, unless the SAME approval scope (FuncDecl body
+//     OR enclosing FuncLit body — not nested closure) contains a sibling
+//     CallExpr to pkg/pgrepoapproved.ApprovedExecDirect whose first argument
+//     is a kebab-case BasicLit (regex ^[a-z][a-z0-9-]+$, not a placeholder
+//     identifier). Callee identity is verified via *types.Info.Uses; arg form
+//     is verified via *ast.BasicLit + token.STRING + strconv.Unquote + regex.
+//     No string anchors / no hand-maintained map. Exempted: pgExecutor's own
+//     methods (they legitimately use e.pool / call ExecDirect on self);
+//     newPGExecutor
+//     constructor.
 //
 // # RED fixtures
 //
@@ -122,11 +147,13 @@
 // in cells/accesscore/pg_bundle.go (package accesscore). NewPGBundle accepts
 // *pgxpool.Pool as a constructor parameter but the PGBundle struct does NOT
 // retain it — only derived primitives (userRepo / roleRepo / setupLock /
-// txRunner). cells/accesscore is intentionally excluded from
-// pgRepoPackagePatterns. Reverse self-check: TestPGRepoAmbientTx_SelfCheck
-// BS-5 now asserts no struct in cells/accesscore (outside pgExecutor and
-// internal/) carries *pgxpool.Pool as a field — function-signature usage in
-// NewPGBundle is permitted because it does not persist the pool.
+// txRunner). cells/accesscore is intentionally excluded from discovery: its
+// package scope does not declare pgExecutor, so discoverPGAdapterPackages
+// does not place it in scope. Reverse self-check:
+// TestPGRepoAmbientTx_SelfCheck BS-5 asserts no struct in cells/accesscore
+// (outside pgExecutor and internal/) carries *pgxpool.Pool as a field —
+// function-signature usage in NewPGBundle is permitted because it does not
+// persist the pool.
 //
 // BS-6 R3 method-value indirection: `var fn = s.db.ExecDirect; fn(ctx, sql)` —
 // R3's ExecDirect detection looks for a CallExpr whose Fun is a SelectorExpr with
@@ -145,6 +172,14 @@
 // Accepted: pool is an unexported field — the only way to capture it locally is
 // inside the same package; the repo has no such pattern. Covered by
 // TestPGRepoAmbientTx_SelfCheck BS-7 reverse self-check.
+//
+// BS-8 R3(b) spurious marker: pgrepoapproved.ApprovedExecDirect marker placed
+// in a FuncDecl body that does NOT actually call pgExecutor.ExecDirect — a
+// review hazard because it documents an ADR-approved bypass that never
+// happens, decaying the audit trail. R3(b) itself does not check this (it
+// only fires when ExecDirect is called without a marker). Covered by
+// TestPGRepoAmbientTx_SelfCheck BS-8: scans every production FuncDecl body
+// holding a marker and requires a co-located pgExecutor.ExecDirect call.
 package archtest
 
 import (
@@ -153,77 +188,130 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 const (
-	pgxpoolImportPath = "github.com/jackc/pgx/v5/pgxpool"
-	pgxpoolTypeName   = "Pool"
-	pgExecutorName    = "pgExecutor"
-	newPGExecutorName = "newPGExecutor"
-	execDirectName    = "ExecDirect"
-	poolFieldName     = "pool"
+	pgxpoolImportPath           = "github.com/jackc/pgx/v5/pgxpool"
+	pgxpoolTypeName             = "Pool"
+	pgExecutorName              = "pgExecutor"
+	newPGExecutorName           = "newPGExecutor"
+	execDirectName              = "ExecDirect"
+	poolFieldName               = "pool"
+	approvedMarkerImportPath    = "github.com/ghbvf/gocell/pkg/pgrepoapproved"
+	approvedMarkerFuncName      = "ApprovedExecDirect"
+	expectedPGAdapterPackageMin = 3 // discovery coverage floor; see ADR §3.
 )
 
-// r3ExecDirectAllowlist is the static callsite allowlist for R3(b): the ONLY
-// production callsites permitted to call pgExecutor.ExecDirect from a
-// repo/store method. Keys are "relative-file::enclosing-func-name".
-//
-// Current single allowlist entry:
-//
-//	adapters/postgres/refresh_store.go::revokeSessionDetachedAt
-//
-// This is the intentional independent-commit cascade-revoke compensation path
-// (security response that must commit independently of the ambient transaction).
-// See PGRefreshStore.revokeSessionDetachedAt godoc and ADR
-// docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md.
-//
-// Maintenance obligation: add a new entry ONLY when there is an ADR-explicit
-// rationale for bypassing the ambient transaction. Any new *_repo.go/*_store.go
-// method calling ExecDirect that is NOT here will fail CI immediately.
-var r3ExecDirectAllowlist = map[string]struct{}{
-	"adapters/postgres/refresh_store.go::revokeSessionDetachedAt": {},
+// pgAdapterPackagesCache holds the once-computed result of
+// discoverPGAdapterPackages. Three parallel tests (TestPGRepoAmbientTx,
+// TestPGRepoAmbientTx_DiscoveryCoverage, TestPGRepoAmbientTx_SelfCheck) each
+// call discoverPGAdapterPackages; without caching each would execute a full
+// RunTyped/packages.Load sweep. The cached slice is a deduped sorted read-only
+// value — safe for concurrent readers once populated by sync.Once.
+var (
+	pgAdapterPackagesOnce  sync.Once
+	pgAdapterPackagesCache []string
+)
+
+// pgrepoApprovedReasonFormat is the required format for the reason argument to
+// pgrepoapproved.ApprovedExecDirect: kebab-case identifier (lowercase letters,
+// digits, hyphens; starting with lowercase letter; length ≥ 2). Snake_case,
+// PascalCase, single-char, and leading-hyphen strings all fail. Aligned with
+// panicregister precedent (panic_invariants_test.go::panicRegisteredReasonFormat).
+var pgrepoApprovedReasonFormat = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
+
+// pgrepoApprovedReasonPlaceholder matches reason literals that are placeholder
+// identifiers (todo / fixme / tbd / xxx / placeholder / wip) optionally followed
+// by a hyphen and more text. Rejected because they provide no descriptive
+// information about the bypass site. Aligned with panicregister precedent.
+var pgrepoApprovedReasonPlaceholder = regexp.MustCompile(`^(todo|fixme|tbd|xxx|placeholder|wip)(-|$)`)
+
+// inspectStopAtFuncLit walks body's AST invoking visit on every non-FuncLit
+// node, but stops descending at *ast.FuncLit boundaries. R3 uses this to bound
+// the "approval scope" to a single FuncDecl/FuncLit body — markers and
+// ExecDirect calls must co-locate in the SAME scope, not the entire subtree.
+// Without this scope bound, a marker in a nested closure could batch-approve
+// outer-scope ExecDirect calls (and vice versa), defeating the audit-trail
+// intent. See F1 in PR #917 round-2 review.
+func inspectStopAtFuncLit(body ast.Node, visit func(ast.Node)) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		visit(n)
+		return true
+	})
 }
 
-// modulePathPrefix is the go.mod module path plus trailing slash. Trimming it
-// from a pgRepoPackagePatterns entry yields the module-relative package
-// directory, which is the form Pass.Rel() / Diagnostic.Rel use. Deriving the
-// production-scope predicate from this single source (see isProductionRepoPkg)
-// removes the former hand-maintained literal list that silently drifted out of
-// sync with pgRepoPackagePatterns (the iotdevice pattern was missing from it).
-const modulePathPrefix = "github.com/ghbvf/gocell/"
-
-// pgRepoPackagePatterns lists the import patterns whose production .go files
-// the archtest must parse with full TypesInfo. All three PG adapter packages
-// (adapters/postgres, the accesscore cell-private adapter, and the iotdevice
-// example cell-private adapter) are included since each declares a pgExecutor
-// and their repos are subject to the same funnel rule.
+// discoverPGAdapterPackages auto-discovers all production packages that
+// declare a package-local type named pgExecutor. The discovery signal replaces
+// the former hand-maintained pgRepoPackagePatterns list: a package is in
+// scope of PG-REPO-AMBIENT-TX-01 iff its package scope declares pgExecutor,
+// which is itself the structural funnel the rule already depends on.
 //
-// Maintenance obligation: whenever a new PG adapter package is added to the
-// repo that declares its own pgExecutor struct and *_repo.go or *_store.go
-// files, this list MUST be extended to include that package. Omitting a package
-// silently zeroes R1/R2 coverage for all repos in that package — the companion
-// assertProductionCoverage guard only validates packages already listed here;
-// it cannot detect entirely missing packages.
+// Returned slice is the set of import paths (deduped, sorted) and is suitable
+// for direct use with RunTyped. Packages whose scope does not contain
+// pgExecutor (including configcore's Session/DBTX alternative funnel) are
+// intentionally excluded — they need a separate archtest if/when they want
+// equivalent governance.
 //
-// Note: cells/accesscore (the PGBundle host) is intentionally NOT in this
-// list — it is a composition-root bridge package, not a repo/store package.
-// NewPGBundle's *pgxpool.Pool function-signature usage is covered by the
-// BS-5 self-check, which asserts no struct in cells/accesscore (outside the
-// internal/ tree) carries *pgxpool.Pool as a field.
-var pgRepoPackagePatterns = []string{
-	"github.com/ghbvf/gocell/adapters/postgres",
-	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres",
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/adapters/postgres",
+// The result is computed once per test binary execution via sync.Once and
+// cached for concurrent reuse. The returned slice is read-only; callers must
+// not mutate it. Three parallel tests share this cache: TestPGRepoAmbientTx,
+// TestPGRepoAmbientTx_DiscoveryCoverage, and TestPGRepoAmbientTx_SelfCheck.
+//
+// See package godoc §Discovery and ADR
+// docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md.
+func discoverPGAdapterPackages(t *testing.T) []string {
+	t.Helper()
+	pgAdapterPackagesOnce.Do(func() {
+		root := findModuleRoot(t)
+		var paths []string
+		_ = RunTyped(t, TypedOpts{Tests: false}, prodscan.Patterns(root), func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Scope() == nil {
+				return nil
+			}
+			obj := p.Pkg.Scope().Lookup(pgExecutorName)
+			if obj == nil {
+				return nil
+			}
+			// F3 (PR #917 round-2): require obj to be a *types.TypeName whose
+			// type is a named struct. A var/const/func/alias named pgExecutor
+			// does not declare the funnel and must not put the package in scope.
+			tn, ok := obj.(*types.TypeName)
+			if !ok {
+				return nil
+			}
+			named, ok := tn.Type().(*types.Named)
+			if !ok {
+				return nil
+			}
+			if _, ok := named.Underlying().(*types.Struct); !ok {
+				return nil
+			}
+			paths = append(paths, p.Pkg.Path())
+			return nil
+		})
+		sort.Strings(paths)
+		pgAdapterPackagesCache = paths
+	})
+	return pgAdapterPackagesCache
 }
 
 // TestPGRepoAmbientTx guards PG-REPO-AMBIENT-TX-01 against the production
-// packages. RED fixtures are exercised separately by
+// packages. Discovery is type-aware (see discoverPGAdapterPackages): the set
+// of in-scope packages is derived from "package scope declares pgExecutor",
+// not from a hand-maintained list. RED fixtures are exercised separately by
 // TestPGRepoAmbientTx_RedFixtureDetected. Blind-spot self-checks are in
 // TestPGRepoAmbientTx_SelfCheck.
 func TestPGRepoAmbientTx(t *testing.T) {
@@ -233,18 +321,20 @@ func TestPGRepoAmbientTx(t *testing.T) {
 			"(loads PG repo packages with TypesInfo, ~2-3s)")
 	}
 
-	diags := RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, pgRepoAmbientTxRule)
+	packages := discoverPGAdapterPackages(t)
+	assert.GreaterOrEqual(t, len(packages), expectedPGAdapterPackageMin,
+		"PG-REPO-AMBIENT-TX-01 discovery coverage floor: expected at least %d packages "+
+			"declaring pgExecutor; got %d (%v). A refactor may have broken the discovery "+
+			"signal (e.g., renamed pgExecutor or moved its declaration out of package scope).",
+		expectedPGAdapterPackageMin, len(packages), packages)
+
+	diags := RunTyped(t, TypedOpts{}, packages, pgRepoAmbientTxRule)
 	sort.Slice(diags, func(i, j int) bool {
 		if diags[i].Rel != diags[j].Rel {
 			return diags[i].Rel < diags[j].Rel
 		}
 		return diags[i].Line < diags[j].Line
 	})
-
-	// Companion coverage guard: each package pattern must contribute at least
-	// one *_repo.go or *_store.go to the parsed set. A silent import-path drift
-	// would zero out the rule's coverage.
-	assertProductionCoverage(t)
 
 	for _, d := range diags {
 		t.Errorf("PG-REPO-AMBIENT-TX-01 %s:%d: %s", d.Rel, d.Line, d.Message)
@@ -255,29 +345,26 @@ func TestPGRepoAmbientTx(t *testing.T) {
 // Extracted so the same logic is exercised by both the production-package test
 // and the RED-fixture test.
 //
-// File scope: only *_repo.go and *_store.go files are checked. Infrastructure
+// File scope: in production packages (those whose package scope contains
+// pgExecutor), only *_repo.go and *_store.go files are checked. Infrastructure
 // files (pool.go, tx_manager.go, pg_executor.go, etc.) legitimately hold raw
-// *pgxpool.Pool fields and are intentionally out of scope. The fixture package
-// uses plain .go files without the _repo/_store suffix; the fixture filename
-// itself (fixture.go) is in scope for the fixture test by design — the rule
-// checks all files when no suffix filter applies to fixture packages. To keep
-// the production and fixture paths consistent, R1/R2 scans all files passed
-// via p.Files; the production test separately applies the filename-suffix
-// coverage guard via assertProductionCoverage.
+// *pgxpool.Pool fields and are intentionally out of scope. For fixture packages
+// (loaded under tools/archtest/internal/..., which prodscan.Patterns does not
+// reach), the rule checks all files so RED fixtures named fixture.go are still
+// detected — the production-vs-fixture distinction is structural: discovery
+// only ever hands production packages here, so the suffix filter is always
+// correct for them; fixture packages reach this function via RunTypedFixture
+// in a separate test path where no discovery filter applies.
 //
-// Infrastructure exemptions are applied via the isInfraFile predicate, which
-// excludes files that are NOT *_repo.go or *_store.go from the R1/R2 checks
-// in the production packages. For fixture packages (which don't follow the
-// _repo/_store naming), the rule applies to all files so the RED fixtures are
-// detected.
+// The production/fixture branch uses the same heuristic as discovery: a
+// production PG adapter package has its files under a directory whose go.mod
+// module-relative path is NOT below tools/archtest/internal/. We detect this
+// by looking at p.Rel(file) prefix: fixture rels start with "tools/archtest/"
+// while production rels start with cells/, adapters/, examples/, etc.
 func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 	if p.TypesInfo == nil || p.Fset == nil {
 		return nil
 	}
-	// pkgPath is the import path of the package being scanned. It is used by
-	// bodyCallsNewPGExecutorWith to assert that the resolved newPGExecutor callee
-	// belongs to this same package (package-local function), not a same-named
-	// function in a different package.
 	var pkgPath string
 	if p.Pkg != nil {
 		pkgPath = p.Pkg.Path()
@@ -286,14 +373,17 @@ func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 	for _, file := range p.Files {
 		rel := p.Rel(file)
 		base := filepath.Base(rel)
-		// In production packages, only check *_repo.go and *_store.go.
-		// Infrastructure files (pool.go, tx_manager.go, pg_executor.go, errors.go,
-		// etc.) legitimately need *pgxpool.Pool fields. Fixture files have no
-		// _repo/_store suffix but should still be checked for RED fixture coverage.
-		// The production-scope predicate is DERIVED from pgRepoPackagePatterns
-		// (single source) so adding a fourth PG adapter package cannot leave the
-		// suffix filter silently disabled for it.
-		if isProductionRepoPkg(rel) {
+		// Fixture packages reside under tools/archtest/internal/ and are loaded
+		// via RunTypedFixture (separate test path), never through production
+		// discovery. The tools/archtest/ prefix check is a Soft convention: fixture
+		// packages MUST be placed under tools/archtest/internal/ as documented by
+		// RunTypedFixture and the fixture naming convention; misplacing a fixture
+		// package outside that prefix would cause R1/R2/R3 to apply the
+		// _repo.go/_store.go suffix filter and miss the fixture's intentional
+		// violations. Production packages always start with cells/, adapters/,
+		// examples/, etc., so the prefix boundary is structurally stable but not
+		// mechanically enforced beyond this string check.
+		if !strings.HasPrefix(rel, "tools/archtest/") {
 			if !strings.HasSuffix(base, "_repo.go") && !strings.HasSuffix(base, "_store.go") {
 				continue
 			}
@@ -303,30 +393,6 @@ func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 		diags = append(diags, scanR3UsagePoints(p.Fset, file, rel, p.TypesInfo, pkgPath)...)
 	}
 	return diags
-}
-
-// isProductionRepoPkg reports whether the module-relative file path rel lives
-// in one of the production PG adapter packages listed in pgRepoPackagePatterns.
-// It is the single-source replacement for the former hand-maintained substring
-// disjunction; the iotdevice package pattern was absent from that literal list,
-// so its files escaped the *_repo.go/*_store.go suffix filter. Fixture packages
-// (loaded under a separate tools/archtest/internal/... pattern) are never under
-// these prefixes, so they correctly return false and remain fully scanned.
-//
-// rel is always a *.go file path (from Pass.Rel), never the package directory,
-// so only HasPrefix("<dir>/") matches — equality against a bare directory is
-// not a reachable case and intentionally not checked.
-func isProductionRepoPkg(rel string) bool {
-	for _, pattern := range pgRepoPackagePatterns {
-		relDir := strings.TrimPrefix(pattern, modulePathPrefix)
-		if relDir == pattern {
-			continue // not a module-local pattern; defensive, should not happen
-		}
-		if strings.HasPrefix(rel, relDir+"/") {
-			return true
-		}
-	}
-	return false
 }
 
 // scanR1PoolFields implements R1: every struct field whose type resolves to
@@ -437,7 +503,10 @@ func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *typ
 }
 
 // scanR3UsagePoints implements R3: repo/store methods must not access
-// pgExecutor.pool directly nor call pgExecutor.ExecDirect outside the allowlist.
+// pgExecutor.pool directly nor call pgExecutor.ExecDirect without a sibling
+// pgrepoapproved.ApprovedExecDirect(literal) marker in the SAME approval
+// scope (= same FuncDecl body OR same FuncLit body — nested closures are
+// independent scopes).
 //
 // pkgPath is the import path of the package being scanned and is used to verify
 // that the resolved pgExecutor type belongs to this same package (package-local
@@ -450,12 +519,17 @@ func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *typ
 // (via *types.Info.Types) resolves to pgExecutor. Exempt: pgExecutor's own
 // methods (receiver type == pgExecutor); newPGExecutor.
 //
-// (b) ExecDirect call outside allowlist: any CallExpr `<x>.ExecDirect(...)` where
-// <x> resolves to pgExecutor, unless the enclosing FuncDecl's canonical key
-// "relative-file::func-name" is in r3ExecDirectAllowlist. Exempt: pgExecutor's
-// own methods.
+// (b) ExecDirect call without same-scope marker: any CallExpr
+// `<x>.ExecDirect(...)` where <x> resolves to pgExecutor is rejected unless
+// the SAME approval scope contains a CallExpr resolving to
+// pkg/pgrepoapproved.ApprovedExecDirect whose first argument is a kebab-case
+// const string literal. See bodyHasApprovedExecDirectMarker godoc for the full
+// form-uniqueness chain. Exempt: pgExecutor's own methods.
 //
-// Cognitive complexity: split into two sub-helpers to stay ≤15.
+// Approval scope handling (F1 in PR #917 round-2 review): we visit each
+// FuncDecl body once, then recursively visit every nested *ast.FuncLit body
+// as its own independent scope. inspectStopAtFuncLit bounds each per-scope
+// scan so a marker in scope X cannot approve ExecDirect calls in scope Y.
 func scanR3UsagePoints(fset *token.FileSet, file *ast.File, rel string, info *types.Info, pkgPath string) []Diagnostic {
 	var diags []Diagnostic
 	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
@@ -470,18 +544,35 @@ func scanR3UsagePoints(fset *token.FileSet, file *ast.File, rel string, info *ty
 		if fn.Body == nil {
 			return
 		}
-		enclosingKey := rel + "::" + fn.Name.Name
+		// Scope 1: the FuncDecl body itself.
 		diags = append(diags, scanR3PoolAccess(fset, fn.Body, rel, info, pkgPath)...)
-		diags = append(diags, scanR3ExecDirect(fset, fn.Body, rel, info, pkgPath, enclosingKey)...)
+		diags = append(diags, scanR3ExecDirect(fset, fn.Body, rel, info, pkgPath)...)
+		// Scope 2..N: every nested FuncLit body inside this FuncDecl is its
+		// own independent approval scope. Use EachInSubtree on the unmodified
+		// body to find FuncLits; the per-scope helpers themselves stop at
+		// FuncLit boundaries via inspectStopAtFuncLit, so they only see the
+		// scope-local AST of whichever body they are called on.
+		EachInSubtree[ast.FuncLit](fn.Body, func(fl *ast.FuncLit) {
+			if fl.Body == nil {
+				return
+			}
+			diags = append(diags, scanR3PoolAccess(fset, fl.Body, rel, info, pkgPath)...)
+			diags = append(diags, scanR3ExecDirect(fset, fl.Body, rel, info, pkgPath)...)
+		})
 	})
 	return diags
 }
 
 // scanR3PoolAccess flags SelectorExpr `<x>.pool` where <x> resolves to the
-// package-local pgExecutor type.
+// package-local pgExecutor type. Scope-bounded: walk stops at nested FuncLit
+// boundaries (each FuncLit is scanned separately by scanR3UsagePoints).
 func scanR3PoolAccess(fset *token.FileSet, body *ast.BlockStmt, rel string, info *types.Info, pkgPath string) []Diagnostic {
 	var diags []Diagnostic
-	EachInSubtree[ast.SelectorExpr](body, func(sel *ast.SelectorExpr) {
+	inspectStopAtFuncLit(body, func(n ast.Node) {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
 		if sel.Sel.Name != poolFieldName {
 			return
 		}
@@ -493,27 +584,48 @@ func scanR3PoolAccess(fset *token.FileSet, body *ast.BlockStmt, rel string, info
 			Rel:  rel,
 			Line: line,
 			Message: "R3: direct access to pgExecutor.pool field bypasses ambient-tx routing; " +
-				"use e.Exec/e.Query/e.QueryRow (or ExecDirect for allowlisted compensation paths)",
+				"use e.Exec/e.Query/e.QueryRow (or ExecDirect with sibling " +
+				"pgrepoapproved.ApprovedExecDirect marker for ADR-approved compensation paths)",
 		})
 	})
 	return diags
 }
 
 // scanR3ExecDirect flags CallExpr `<x>.ExecDirect(...)` where <x> resolves to
-// pgExecutor, unless enclosingKey is in r3ExecDirectAllowlist.
+// pgExecutor, unless the SAME approval scope (the body argument — a FuncDecl
+// body OR a nested FuncLit body, depending on how scanR3UsagePoints invoked
+// this) contains a sibling pgrepoapproved.ApprovedExecDirect marker call.
+// Walk is scope-bounded via inspectStopAtFuncLit: nested FuncLit bodies are
+// NOT descended into here; scanR3UsagePoints visits each FuncLit body as its
+// own independent approval scope. See bodyHasApprovedExecDirectMarker for the
+// 5-门 marker form chain (callee identity + BasicLit + token.STRING +
+// kebab-case regex + non-placeholder).
+//
+// One marker satisfies the check for every ExecDirect call in the same scope.
+// Multiple markers in one scope are allowed (harmless redundancy); BS-8
+// reverse self-check separately pins that a marker only co-locates with an
+// actual ExecDirect call (spurious-marker detection).
+//
+// Marker order relative to ExecDirect calls is NOT enforced — co-location
+// (same approval scope) is the only structural requirement. By convention
+// the marker is placed before the ExecDirect call for readability, but the
+// archtest passes regardless of order.
 func scanR3ExecDirect(
 	fset *token.FileSet,
 	body *ast.BlockStmt,
 	rel string,
 	info *types.Info,
 	pkgPath string,
-	enclosingKey string,
 ) []Diagnostic {
-	var diags []Diagnostic
-	if _, allowed := r3ExecDirectAllowlist[enclosingKey]; allowed {
+	if bodyHasApprovedExecDirectMarker(body, info) {
 		return nil
 	}
-	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+	var diags []Diagnostic
+	inspectStopAtFuncLit(body, func(n ast.Node) {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return
+		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return
@@ -528,12 +640,81 @@ func scanR3ExecDirect(
 		diags = append(diags, Diagnostic{
 			Rel:  rel,
 			Line: line,
-			Message: "R3: pgExecutor.ExecDirect call outside the allowlist bypasses ambient-tx " +
-				"routing; only allowlisted compensation callsites may call ExecDirect " +
-				"(see r3ExecDirectAllowlist in pg_repo_ambient_tx_test.go)",
+			Message: "R3: pgExecutor.ExecDirect call requires sibling " +
+				"pgrepoapproved.ApprovedExecDirect(<kebab-case-literal>) marker in the same " +
+				"approval scope (FuncDecl/FuncLit body, not nested closure) to document the " +
+				"ADR-approved bypass of ambient tx; " +
+				"add 'pgrepoapproved.ApprovedExecDirect(\"your-adr-reason\")' before the " +
+				"ExecDirect call; see pkg/pgrepoapproved and ADR " +
+				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
 		})
 	})
 	return diags
+}
+
+// bodyHasApprovedExecDirectMarker reports whether body contains a CallExpr
+// whose callee resolves to pkg/pgrepoapproved.ApprovedExecDirect AND whose
+// first argument is a kebab-case const string literal. Form-uniqueness chain
+// (each rule a separate REJECT branch):
+//
+//  1. callee resolves via *types.Info.Uses to *types.Func with name
+//     "ApprovedExecDirect" AND Pkg().Path() == pkg/pgrepoapproved
+//  2. arg[0] is a *ast.BasicLit with Kind == token.STRING (rejects const
+//     identifiers, constant-folded "a"+"b" concatenation, variable references,
+//     fmt.Sprintf, and anything else that would erase the source-level reason)
+//  3. strconv.Unquote(arg[0]) matches pgrepoApprovedReasonFormat
+//     (^[a-z][a-z0-9-]+$ — kebab-case identifier, length ≥ 2)
+//  4. unquoted value is NOT a placeholder identifier (todo/fixme/tbd/xxx/
+//     placeholder/wip per pgrepoApprovedReasonPlaceholder)
+//
+// Scope bound (F1 in PR #917 round-2 review): scan stops at *ast.FuncLit
+// boundaries via inspectStopAtFuncLit. A marker in a nested closure does NOT
+// approve outer-scope ExecDirect calls; conversely, an outer-scope marker does
+// NOT approve ExecDirect calls inside nested closures. Each FuncDecl /
+// FuncLit body is an independent approval scope (handled by scanR3UsagePoints
+// recursing into FuncLits with this same per-scope check).
+//
+// Order is not enforced: marker may appear before, after, or between
+// ExecDirect calls in the same scope — convention is before for readability.
+// One marker satisfies the check for all ExecDirect calls in the same scope;
+// multiple markers in one scope are allowed (harmless redundancy).
+func bodyHasApprovedExecDirectMarker(body *ast.BlockStmt, info *types.Info) bool {
+	found := false
+	inspectStopAtFuncLit(body, func(n ast.Node) {
+		if found {
+			return
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return
+		}
+		fn := resolveCalleeFunc(call.Fun, info)
+		if fn == nil || fn.Name() != approvedMarkerFuncName {
+			return
+		}
+		if fn.Pkg() == nil || fn.Pkg().Path() != approvedMarkerImportPath {
+			return
+		}
+		if len(call.Args) == 0 {
+			return
+		}
+		// F2 rule 2: arg[0] must be a *ast.BasicLit + token.STRING.
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return
+		}
+		// F2 rule 3: kebab-case format.
+		val, err := strconv.Unquote(lit.Value)
+		if err != nil || !pgrepoApprovedReasonFormat.MatchString(val) {
+			return
+		}
+		// F2 rule 4: not a placeholder identifier.
+		if pgrepoApprovedReasonPlaceholder.MatchString(val) {
+			return
+		}
+		found = true
+	})
+	return found
 }
 
 // isPgExecutorType reports whether expr's static type resolves to the
@@ -687,34 +868,6 @@ func isPgxPoolType(expr ast.Expr, info *types.Info) bool {
 	return obj.Pkg().Path() == pgxpoolImportPath && obj.Name() == pgxpoolTypeName
 }
 
-// assertProductionCoverage fails the test if any of the production package
-// patterns in pgRepoPackagePatterns did not yield at least one *_repo.go or
-// *_store.go file. This prevents a silent coverage zero-out caused by
-// import-path drift or package renaming.
-func assertProductionCoverage(t *testing.T) {
-	t.Helper()
-	if testing.Short() {
-		return
-	}
-	for _, pattern := range pgRepoPackagePatterns {
-		found := false
-		_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
-			for _, f := range p.Files {
-				base := filepath.Base(p.Rel(f))
-				if strings.HasSuffix(base, "_repo.go") || strings.HasSuffix(base, "_store.go") {
-					found = true
-				}
-			}
-			return nil
-		})
-		require.Truef(t, found,
-			"PG-REPO-AMBIENT-TX-01 coverage guard: no *_repo.go or *_store.go file found "+
-				"in package pattern %q — coverage zeroed out; "+
-				"check for package rename or import-path drift",
-			pattern)
-	}
-}
-
 // fixtureViolation is a (ruleID_prefix, line) pair identifying one expected
 // RED fixture diagnostic. The ruleID_prefix matches the start of Diagnostic.Message
 // ("R1:", "R2:", "R3:"). Line is the 1-based source line from the fixture file
@@ -739,29 +892,57 @@ type fixtureViolation struct {
 // test because the set sizes must match AND every actual entry must be in the
 // expected set.
 var expectedFixtureViolations = []fixtureViolation{
-	// R1: badR1Repo — struct field pool *pgxpool.Pool at line 88 of fixture.go
-	{"R1:", 88},
-	// R2: badR2NonNew — non-New* func with *pgxpool.Pool param, func name at line 93
-	{"R2:", 93},
-	// R2: NewBadR2NoWrap — New* func without newPGExecutor call, func name at line 99
-	{"R2:", 99},
-	// R3: badR3PoolDirect — r.db.pool direct access at line 117
-	{"R3:", 117},
-	// R3: badR3ExecDirect — r.db.ExecDirect outside allowlist at line 123
-	{"R3:", 123},
+	// R1: badR1Repo — struct field pool *pgxpool.Pool type position at line 114
+	{"R1:", 114},
+	// R2: badR2NonNew — non-New* func with *pgxpool.Pool param, func name at line 119
+	{"R2:", 119},
+	// R2: NewBadR2NoWrap — New* func without newPGExecutor call, func name at line 125
+	{"R2:", 125},
+	// R3: badR3PoolDirect — r.db.pool direct access selector at line 143
+	{"R3:", 143},
+	// R3: badR3ExecDirect — r.db.ExecDirect call without sibling marker at line 149
+	{"R3:", 149},
+	// F1 RED (PR #917 round-2):
+	// R3: badR3MarkerInNestedClosure — outer ExecDirect, marker in nested closure at line 175
+	{"R3:", 175},
+	// R3: badR3MarkerOuterExecInNestedClosure — inner ExecDirect, marker in outer scope at line 188
+	{"R3:", 188},
+	// F2 RED (PR #917 round-2):
+	// R3: badR3ApprovedConstIdent — marker reason is const ident (not BasicLit), at line 199
+	{"R3:", 199},
+	// R3: badR3ApprovedConcat — marker reason is "a"+"b" BinaryExpr at line 207
+	{"R3:", 207},
+	// R3: badR3ApprovedEmpty — marker reason is "" (fails kebab regex) at line 215
+	{"R3:", 215},
+	// R3: badR3ApprovedPlaceholder — marker reason is "todo" (placeholder) at line 224
+	{"R3:", 224},
 }
 
-// TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches all five
+// TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches all eleven
 // RED violations in internal/pgrepoambienttxfixture:
 //
 //   - 1 R1: badR1Repo holds *pgxpool.Pool (not named pgExecutor)
 //   - 1 R2: badR2NonNew is a non-New* function with *pgxpool.Pool param
 //   - 1 R2: NewBadR2NoWrap is a New* function with *pgxpool.Pool param but no newPGExecutor call
 //   - 1 R3: badR3PoolDirect accesses r.db.pool directly
-//   - 1 R3: badR3ExecDirect calls r.db.ExecDirect outside the allowlist
+//   - 1 R3: badR3ExecDirect calls r.db.ExecDirect without sibling pgrepoapproved.ApprovedExecDirect marker
+//
+// F1 scope-bounded marker checks (PR #917 round-2):
+//
+//   - 1 R3: badR3MarkerInNestedClosure — outer ExecDirect, marker in nested closure
+//   - 1 R3: badR3MarkerOuterExecInNestedClosure — outer marker, inner ExecDirect in closure
+//
+// F2 reason form-uniqueness checks (PR #917 round-2):
+//
+//   - 1 R3: badR3ApprovedConstIdent — marker reason is *ast.Ident, not BasicLit
+//   - 1 R3: badR3ApprovedConcat — marker reason is "a"+"b" *ast.BinaryExpr
+//   - 1 R3: badR3ApprovedEmpty — marker reason "" fails kebab regex (len ≥ 2)
+//   - 1 R3: badR3ApprovedPlaceholder — marker reason "todo" matches placeholder regex
 //
 // GREEN cases (pgExecutor field, goodNewFoo→newPGExecutor, goodExecMethod using
-// r.db.Exec) must produce zero diagnostics.
+// r.db.Exec, goodApprovedSingleExecDirect with marker+1 ExecDirect,
+// goodApprovedMultiExecDirect with 1 marker+2 ExecDirect calls) must produce
+// zero diagnostics.
 //
 // The assertion is an exact-set match on (ruleID_prefix, line) pairs from
 // expectedFixtureViolations. This prevents a masked substitution where losing
@@ -867,12 +1048,14 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		t.Skip("skipping SelfCheck in -short mode")
 	}
 
+	packages := discoverPGAdapterPackages(t)
+
 	// BS-1 reverse check: no embedded/anonymous struct field in any production
 	// package should transitively expose a *pgxpool.Pool outside pgExecutor.
 	// R1 only scans direct fields; this check verifies the accepted limitation
 	// does not silently hide a real violation in existing production code.
 	var bs1Violations []string
-	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
+	_ = RunTyped(t, TypedOpts{}, packages, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -932,7 +1115,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// This is strictly broader than the former AssignStmt-only scan and matches the
 	// godoc claim "asserts no function-value assignment from newPGExecutor".
 	var bs3Violations []string
-	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
+	_ = RunTyped(t, TypedOpts{}, packages, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -956,7 +1139,8 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 
 	// BS-5 reverse check: after Bundle funnel collapse (PR #595), no struct
 	// in cells/accesscore (outside the internal/ tree, intentionally NOT in
-	// pgRepoPackagePatterns) may carry *pgxpool.Pool as a field. NewPGBundle
+	// the discovered PG adapter set since cells/accesscore itself does not
+	// declare pgExecutor) may carry *pgxpool.Pool as a field. NewPGBundle
 	// accepts *pgxpool.Pool as a function parameter to derive repos/setupLock,
 	// but PGBundle itself stores only derived primitives — never the pool.
 	bs5Patterns := []string{"github.com/ghbvf/gocell/cells/accesscore"}
@@ -993,7 +1177,8 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		"BS-5 self-check: no struct in cells/accesscore (outside the internal/ tree) "+
 			"may carry *pgxpool.Pool as a field — PGBundle must hold only derived "+
 			"primitives (userRepo/roleRepo/setupLock/txRunner). If a new struct "+
-			"legitimately needs to hold the pool, add it to pgRepoPackagePatterns instead.")
+			"legitimately needs to hold the pool, declare a package-local pgExecutor "+
+			"in that package so discovery auto-includes it.")
 
 	// BS-6 reverse check: ExecDirect must not appear as a method value (i.e., used
 	// as a value rather than directly called) in any production file. A method-value
@@ -1013,7 +1198,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// Check all files (not just _repo/_store) in the production packages to be
 	// conservative about the blind spot boundary.
 	var bs6Violations []string
-	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
+	_ = RunTyped(t, TypedOpts{}, packages, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -1039,7 +1224,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	// production repo/store file. An assignment like `p := s.db.pool` would let
 	// the caller bypass R3's pool-access detection on the subsequent p.Exec call.
 	var bs7Violations []string
-	_ = RunTyped(t, TypedOpts{}, pgRepoPackagePatterns, func(p *Pass) []Diagnostic {
+	_ = RunTyped(t, TypedOpts{}, packages, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -1072,6 +1257,156 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	})
 	assert.Empty(t, bs7Violations,
 		"BS-7 self-check: pgExecutor.pool must not be assigned to a local variable in production")
+
+	// BS-8 reverse check: pgrepoapproved.ApprovedExecDirect markers must only
+	// appear in FuncDecl bodies that themselves contain a sibling
+	// pgExecutor.ExecDirect call. A spurious marker in any other body is a
+	// review violation — it documents an ADR-approved bypass that never
+	// happens, which decays the audit trail.
+	var bs8Violations []string
+	_ = RunTyped(t, TypedOpts{}, packages, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		pkgPath := ""
+		if p.Pkg != nil {
+			pkgPath = p.Pkg.Path()
+		}
+		for _, file := range p.Files {
+			if !p.IsFileInScope(file) {
+				continue
+			}
+			rel := p.Rel(file)
+			// Visit every approval scope (FuncDecl body + every nested FuncLit
+			// body); for each scope holding a marker, require a same-scope
+			// pgExecutor.ExecDirect call. This mirrors the F1 scope-bound
+			// fix in scanR3UsagePoints — marker and ExecDirect must co-locate
+			// in the SAME approval scope, so spurious-marker detection must
+			// also be scope-bounded.
+			visitScope := func(body *ast.BlockStmt, label string, pos token.Pos) {
+				if body == nil {
+					return
+				}
+				if !bodyHasApprovedExecDirectMarker(body, p.TypesInfo) {
+					return
+				}
+				if !bodyCallsPGExecutorExecDirect(body, p.TypesInfo, pkgPath) {
+					bs8Violations = append(bs8Violations, fmt.Sprintf(
+						"%s:%d: %s has pgrepoapproved.ApprovedExecDirect marker but "+
+							"no pgExecutor.ExecDirect call in same approval scope — marker is "+
+							"a spurious audit-trail entry; remove it or add the corresponding "+
+							"ExecDirect call",
+						rel, p.Fset.Position(pos).Line, label,
+					))
+				}
+			}
+			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				visitScope(fn.Body, "func "+fn.Name.Name, fn.Pos())
+				EachInSubtree[ast.FuncLit](fn.Body, func(fl *ast.FuncLit) {
+					visitScope(fl.Body, "nested closure in "+fn.Name.Name, fl.Pos())
+				})
+			})
+		}
+		return nil
+	})
+	assert.Empty(t, bs8Violations,
+		"BS-8 self-check: pgrepoapproved.ApprovedExecDirect marker must only co-locate with "+
+			"an actual pgExecutor.ExecDirect call in the SAME approval scope (FuncDecl/FuncLit body)")
+}
+
+// bodyCallsPGExecutorExecDirect reports whether body contains a CallExpr
+// `<x>.ExecDirect(...)` whose receiver `<x>` resolves via *types.Info.Types to
+// the package-local pgExecutor named type. Scope-bounded: walk stops at nested
+// FuncLit boundaries so the marker/ExecDirect co-location check mirrors the
+// per-scope approval semantics of scanR3ExecDirect.
+func bodyCallsPGExecutorExecDirect(body *ast.BlockStmt, info *types.Info, pkgPath string) bool {
+	found := false
+	inspectStopAtFuncLit(body, func(n ast.Node) {
+		if found {
+			return
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != execDirectName {
+			return
+		}
+		if isPgExecutorType(sel.X, info, pkgPath) {
+			found = true
+		}
+	})
+	return found
+}
+
+// TestPGRepoAmbientTx_DiscoveryCoverage asserts the auto-discovery returns the
+// expected set of PG adapter packages. Failure mode is a clear diff against
+// the named set, replacing the former silent zero-coverage failure mode where
+// a hand-maintained list could drop a package without any visible signal.
+//
+// The expected set is intentionally exhaustive (every currently-known PG
+// adapter package) so that:
+//   - removing pgExecutor from any existing package fails this test loudly
+//   - adding a new PG adapter package requires updating this expected set
+//     (the update is the same act as declaring the package in-scope, but in a
+//     visible diff rather than a silent omission)
+//
+// This is a Hard 范本 "single sanctioned holder" applied to discovery: the
+// discovery signal IS the funnel symbol (pgExecutor type declaration), so any
+// package that the rule must scan and any package whose scope contains
+// pgExecutor are the same set by construction.
+func TestPGRepoAmbientTx_DiscoveryCoverage(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based discovery coverage in -short mode")
+	}
+
+	expected := []string{
+		"github.com/ghbvf/gocell/adapters/postgres",
+		"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres",
+		"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/adapters/postgres",
+	}
+	assert.Equal(t, expectedPGAdapterPackageMin, len(expected),
+		"expectedPGAdapterPackageMin floor constant must equal expected set size; "+
+			"update both if a package is added or removed")
+	got := discoverPGAdapterPackages(t)
+
+	expectedSet := make(map[string]struct{}, len(expected))
+	for _, p := range expected {
+		expectedSet[p] = struct{}{}
+	}
+	gotSet := make(map[string]struct{}, len(got))
+	for _, p := range got {
+		gotSet[p] = struct{}{}
+	}
+	// F4 (PR #917 round-2): collect both sides into sorted slices before
+	// reporting so CI output is deterministic across runs (Go map iteration
+	// is randomized).
+	var missing, extra []string
+	for p := range expectedSet {
+		if _, ok := gotSet[p]; !ok {
+			missing = append(missing, p)
+		}
+	}
+	for p := range gotSet {
+		if _, ok := expectedSet[p]; !ok {
+			extra = append(extra, p)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+	for _, p := range missing {
+		t.Errorf("PG-REPO-AMBIENT-TX-01 DiscoveryCoverage: expected package %q "+
+			"not discovered — was pgExecutor renamed/moved out of package scope?", p)
+	}
+	for _, p := range extra {
+		t.Errorf("PG-REPO-AMBIENT-TX-01 DiscoveryCoverage: discovered new package %q "+
+			"not in expected set — if intentional, add it to expected; "+
+			"if accidental, this package declares pgExecutor unexpectedly; "+
+			"update the 'expected []string' slice in TestPGRepoAmbientTx_DiscoveryCoverage "+
+			"and bump expectedPGAdapterPackageMin to match", p)
+	}
 }
 
 // findNewPGExecutorValueUses returns violations for BS-3: any Ident in the file
