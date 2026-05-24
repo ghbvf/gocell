@@ -38,8 +38,9 @@
 //
 // # Not in this package (deferred, with their consumers)
 //
-//   - SagaDefinition / Step / StepFunc / State / compensation sequencing land
-//     in runtime/saga, where steps are actually executed.
+//   - Definition / Step / StepFunc / CompensateFunc / Registry /
+//     InMemoryRegistry live in this same package (kernel/saga). The
+//     Coordinator engine that executes them lives in runtime/saga.
 //   - RetryPolicy and per-step / overall timeout execution land in
 //     runtime/saga/executor, alongside backoff, jitter, and the sweeper —
 //     following kernel/command, which ships its Timeouts config with the
