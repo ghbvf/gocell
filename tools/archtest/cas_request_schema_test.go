@@ -43,7 +43,7 @@
 //   - query param carrying inline type/minimum/maximum alongside $ref: rejected
 //     — only {$ref, required} keys are allowed on a CAS query param.
 //
-// ref: docs/architecture/*-adr-contracts-shared-cas-mixin-funnel.md; gh #829.
+// ref: docs/architecture/202605241700-adr-contracts-shared-cas-mixin-funnel.md; gh #829.
 package archtest
 
 import (
