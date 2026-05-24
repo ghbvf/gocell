@@ -47,7 +47,14 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 
 新引入的 enforcement：CI smoke job（`pr-check.yml skill-daily-planner-smoke`）= 测试行为，ai-robust §适用范围外，同样不评级。
 
-`apply-gate.sh` 新增的 `conflict_group`（必填 + int ≥ 1 校验）与 `wave_option_id`（已知 option ID 成员校验）runtime invariant guard：这两条是 **bootstrap 期 fail-fast 校验**（shell 脚本在执行前验证 plan.json schema，校验失败 exit 1 阻断后续操作），对应 ai-robust 章程"governance rule — bootstrap 期 fail-fast 校验"载体，评级 **Medium**（runtime guard，依赖运行时执行校验脚本；非 Go type system Hard，无 archtest 静态锁）。
+`apply-gate.sh` 的 `wave_option_id`（已知 option ID 成员校验）runtime invariant guard 是
+**bootstrap 期 fail-fast 校验**（shell 脚本执行前验证 plan.json schema，失败 exit 1 阻断后续），
+对应 ai-robust 章程"governance rule — bootstrap 期 fail-fast 校验"载体，评级 **Medium**
+（runtime guard，依赖运行时执行校验脚本；非 Go type system Hard，无 archtest 静态锁）。
+
+> **Amendment 2026-05-25**：原文此处同时列了 `conflict_group`（必填 + int≥1）guard 为 Medium。
+> 该 guard 已删除——其唯一保护对象 ship `--from-plan` 撤回后，conflict_group 无机器消费者，
+> 校验成为死代码。详见 §Amendment。本段现仅余 `wave_option_id` 一条 Medium guard。
 
 ## 威胁模型
 
@@ -56,7 +63,7 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 | 威胁 | 删除前覆盖 | 删除后覆盖 | 结论 |
 |------|-----------|-----------|------|
 | 同 cap 资源（CI/review 带宽）超载 | CAP COLLISION 压栈（≤3/cap/wave） | wave size 上限（`WAVE_COUNT × WAVE_SIZE`）全局容量兜底 | 接受代价：AI-parallel 吞吐优先，逐-cap 压栈无 AI 对应物；wave 容量是更直接的约束 |
-| 文件冲突导致 worktree 互相阻塞 | 无（CAP COLLISION 是 cap 维度，不是文件维度） | `conflict_group` union-find（C2c）直接覆盖（同组冲突串行） | 替代机制更精确 |
+| 文件冲突导致 worktree 互相阻塞 | 无（CAP COLLISION 是 cap 维度，不是文件维度） | ⚠️ **见 Amendment 2026-05-25**：原拟由 `conflict_group` union-find（C2c）+ ship `--from-plan` 串行消费覆盖；该消费者已撤回，威胁改由"ship 回归单-issue 作用域、不再自动 fan-out 多 worktree"在源头消解 | 补偿见 Amendment |
 | 依赖倒序（下游先 ship，上游还未 done） | 无 | `blocked_by` DAG（C2b）topo sort，blocker.wave ≤ dependent.wave | 新增覆盖 |
 | AI 写入过多 issue 致 review 积压 | CAP COLLISION 间接限速 | wave size 参数（`WAVE_SIZE`）显式控制；用户可调低 | wave size 是更直接的旋钮，无需 cap 维度代理 |
 
@@ -65,9 +72,27 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 ## Out of scope
 
 - C2b blocked-by DAG 的 GraphQL 字段确认（独立实施，同 PR）
-- `conflict_group` 的 apply-gate.sh schema 校验（C2c，同 PR）
+- ~~`conflict_group` 的 apply-gate.sh schema 校验（C2c，同 PR）~~ **RETRACTED**（见 Amendment 2026-05-25：消费者撤回后校验删除）
 - wave size 参数的可配置 UI（已存在，不在本 ADR 范围）
-- ship `--from-plan` 模式（C2d，同 PR）
+- ~~ship `--from-plan` 模式（C2d，同 PR）~~ **RETRACTED**（见 Amendment 2026-05-25：该模式整体撤回）
+
+## Amendment 2026-05-25：ship --from-plan 撤回 + conflict_group 降级 advisory
+
+`ship --from-plan`（C2d，本 ADR 原文随附实施的多-issue 并行调度器）是 `conflict_group`
+唯一的机器消费者。该模式被整体撤回——ship 回退到 d06155090 前的单-issue / free-text
+作用域（只读 issue 作上下文，无 Project v2 调度/写入）；调度职责单独留在 daily-planner。
+
+级联后果与本 ADR 原文的对账（逐项重评，对齐 ai-robust 章程"ADR amendment 落地必查"）：
+
+| 原文条目 | amendment 后状态 | 补偿 / 重写 |
+|---------|-----------------|------------|
+| §AI-robust 评级：`apply-gate.sh` 的 `conflict_group` 必填 + int≥1 runtime guard（Medium） | ❌ 删除 | 该 guard 是保护已撤回消费者的死代码；apply-write 从不写 conflict_group。删除即删除，不留降级 |
+| §威胁模型"文件冲突导致 worktree 互相阻塞"行（原：conflict_group 同组串行覆盖） | ⚠️ 覆盖机制变更 | **不再由 conflict_group 机器串行化覆盖**。补偿：ship 不再从 plan.json 自动 fan-out 多 worktree（并行源头消失），人工一次 ship 一个 issue；conflict_group 降为 brief 显示列，仅供人工"哪些 issue 碰同一批文件"的参考 |
+| §Out of scope "conflict_group apply-gate 校验" / "ship --from-plan 模式" | ✅ 标记 RETRACTED | 见上 Out of scope 删除线 |
+
+`conflict_group` 本身（affected_paths 解析 + STEP 6 union-find + plan.json 字段 + brief
+Group 列）按用户知情决策**保留为 advisory 显示列**。这是经"彻底 / 优雅简洁"四原则自审
+后被标记的已知偏离（consumerless 显示列）——整链删除评估已开 backlog 跟踪，不 silent。
 
 ## Related
 

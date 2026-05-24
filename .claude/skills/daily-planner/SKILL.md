@@ -158,11 +158,10 @@ Agent(
       {WORKDIR}/deps.json          — blocked-by DAG（C2b）：{ "<issue_num>": { "blocked_by": [<int>,...] } }
 
     Tasks:
-      # 两正交轴说明（避免概念混淆）：
+      # 两轴说明（避免概念混淆）：
       # - 拓扑序（wave 编号）= 正确性序：blocker.wave ≤ dependent.wave，确保依赖关系不倒置
-      # - conflict_group = 冲突并行度：同 conflict_group = 共享文件冲突 → 必须串行；
-      #   异 conflict_group = 独立 → 可并行
-      # 两者独立：同 wave 内可有多 conflict_group（并行），同 conflict_group 内也应拓扑安全
+      # - conflict_group = advisory 显示分组：同 conflict_group = 共享文件、异 = 文件独立；
+      #   ship --from-plan 移除后无机器消费者，仅供人工读 brief Group 列（ADR 202605250010）
       1. Read all 5 files
       2. Compute carry-over (if not CARRY_OVER_DISABLED): items.json 中
          iter.iterationId == YESTERDAY_ITERATION_ID AND content.state == "OPEN"
@@ -179,18 +178,18 @@ Agent(
          - 容量 = WAVE_COUNT × WAVE_SIZE；超出 → Unscheduled [capacity overflow]
          - 空输入集（input + carry-over 均 0）→ brief Warnings [EMPTY INPUT SET]，plan=[]
          - placement 守拓扑：blocker.wave ≤ dependent.wave（dependent 顺延到其最晚 blocker 之后）
-      6. conflict_group（C2c）：每 wave 对 affected_paths 前缀重合做 union-find，
-         每连通分量=一组（同组=共享文件冲突 → 串行；跨组=独立 → 可并行）；
-         **无 / 解析失败 affected_paths → wildcard fail-closed**：footprint 未知，与同 wave
-         所有 item union（保守视为冲突于一切）→ 整 wave 落同一 conflict_group（串行），
-         brief 标 [AFFECTED PATHS MISSING — wave serialized]。**绝不视为 singleton 独立组**
-         （未知文件范围当可并行会重造并发文件冲突，与 agent.md STEP 6 一致）。
-         全局唯一 int ≥ 1，(wave 升序, 首次出现) 从 1 分配；set 和 skip 都必须有值。
+      6. conflict_group（C2c，**advisory 显示列**）：每 wave 对 affected_paths 前缀重合做
+         union-find，每连通分量=一组（同组=共享文件；异组=文件独立）；
+         **无 / 解析失败 affected_paths → wildcard**：footprint 未知，与同 wave 所有 item
+         union → 整 wave 落同一 conflict_group，brief 标 [AFFECTED PATHS MISSING — shared
+         footprint]。全局唯一 int ≥ 1，(wave 升序, 首次出现) 从 1 分配。
+         **无机器消费者**——ship --from-plan 移除后该列仅供人工参考（ADR 202605250010），
+         apply-gate 不再校验；缺失也不阻断 apply（续保留与否见 backlog）。
       7. wave_option_id（C3c）：action=="set" 时根据 wave 编号从 WAVE_OPTION_ID_WAVE* 常量取值；
          WAVE_FIELD_ID 为空时置 ""。
       8. Emit brief markdown to STDOUT（详 agent.md §输出格式）
       9. Write plan.json to {PLAN_PATH}（详 agent.md §输出 #2）
-         新增字段：conflict_group (int>=1，set 和 skip 均必填) + wave_option_id (str，action==skip 可为 "")
+         字段：conflict_group (int>=1，advisory 显示列，不再校验) + wave_option_id (str，action==skip 可为 "")
   """
 )
 ```
@@ -265,7 +264,7 @@ bash "$SKILL_DIR/lib/apply-write.sh"
 宿主 LLM 把以下信息综合到对话回应：
 
 1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节 + conflict_group 分组说明）
-2. **Plan 路径**：`$PLAN_PATH`（dry-run 和 apply 模式均输出；`/ship --from-plan=` 消费此路径；**在清理 WORKDIR 前保存**）
+2. **Plan 路径**：`$PLAN_PATH`（dry-run 和 apply 模式均输出，是 apply-gate.sh 的 schema/membership 校验输入；**在清理 WORKDIR 前保存**）
 3. **Audit 行**（仅 apply 模式，由 apply-write.sh 写到 stderr；含 `applied / skipped / failed / wave_applied` 计数）
 4. **Per-item NDJSON 路径**（仅 apply 模式：`$WORKDIR/audit.ndjson`）——每行含 ts/date/mode/action/item_id/prev_iteration_id/target_iteration_id/result，是 partial apply / 还原 old iteration / 重放的真值源
 5. **失败回滚命令清单**（仅 apply 模式有失败项时，由 apply-write.sh 写到 stderr；回滚目标是**已写入**的项，不是失败项）
@@ -280,7 +279,7 @@ bash "$SKILL_DIR/lib/apply-write.sh"
 - **不动 Status / Estimate / labels / issue body / comment / title**
 - 不创建 / 修改 / 关闭 issue
 - 不修改代码、不跑 build/test
-- **Plan.json 来自 agent (LLM) → 当作未经信任的输入**：apply 前两层 gate（schema + membership：item_id ∈ Project items、target == TODAY_ITERATION_ID、action ∈ {set, skip}，conflict_group int≥1（必填），wave_option_id ∈ WAVE_OPTION_IDS），任一违规整体 fail-closed
+- **Plan.json 来自 agent (LLM) → 当作未经信任的输入**：apply 前两层 gate（schema + membership：item_id ∈ Project items、target == TODAY_ITERATION_ID、action ∈ {set, skip}，wave_option_id ∈ WAVE_OPTION_IDS），任一违规整体 fail-closed。conflict_group 是 advisory 显示列（无机器消费者），不在 gate 范围
 - **Wave field fail-closed**：apply 模式下 WAVE_FIELD_ID 为空（字段未配置 / 字段名拼错） → apply-gate.sh fail-fast，零 mutation；详见 `## C3a 前置` 段
 - Apply 失败不自动回滚（输出回滚命令清单交人决策）；**回滚目标 = 已写入项**（partial apply 残留），失败项另列在 retry section
 - **不在本地长期落盘**：brief = stdout，plan.json / audit.ndjson / deps.json = `$WORKDIR/` mktemp 临时；per-item NDJSON 提供 partial apply / 还原 / 重放所需的真值
