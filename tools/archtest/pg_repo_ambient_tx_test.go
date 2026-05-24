@@ -44,7 +44,7 @@
 //
 // # AI-robust grading (Funnel 双向锁评级)
 //
-// 下游 Hard / 上游 Medium (PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01).
+// 下游 Hard / 上游 Medium (Hard terminal state tracked: gh issue #916 PGEXECUTOR-SEAL-INTERFACE-01).
 //
 // 上游 Medium: intra-package compile Hard is unreachable — adapters/postgres
 // repos share the package with pgExecutor; Go package-level visibility means a
@@ -186,6 +186,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -205,6 +206,17 @@ const (
 	expectedPGAdapterPackageMin = 3 // discovery coverage floor; see ADR §3.
 )
 
+// pgAdapterPackagesCache holds the once-computed result of
+// discoverPGAdapterPackages. Three parallel tests (TestPGRepoAmbientTx,
+// TestPGRepoAmbientTx_DiscoveryCoverage, TestPGRepoAmbientTx_SelfCheck) each
+// call discoverPGAdapterPackages; without caching each would execute a full
+// RunTyped/packages.Load sweep. The cached slice is a deduped sorted read-only
+// value — safe for concurrent readers once populated by sync.Once.
+var (
+	pgAdapterPackagesOnce  sync.Once
+	pgAdapterPackagesCache []string
+)
+
 // discoverPGAdapterPackages auto-discovers all production packages that
 // declare a package-local type named pgExecutor. The discovery signal replaces
 // the former hand-maintained pgRepoPackagePatterns list: a package is in
@@ -217,24 +229,32 @@ const (
 // intentionally excluded — they need a separate archtest if/when they want
 // equivalent governance.
 //
+// The result is computed once per test binary execution via sync.Once and
+// cached for concurrent reuse. The returned slice is read-only; callers must
+// not mutate it. Three parallel tests share this cache: TestPGRepoAmbientTx,
+// TestPGRepoAmbientTx_DiscoveryCoverage, and TestPGRepoAmbientTx_SelfCheck.
+//
 // See package godoc §Discovery and ADR
 // docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md.
 func discoverPGAdapterPackages(t *testing.T) []string {
 	t.Helper()
-	root := findModuleRoot(t)
-	var paths []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, prodscan.Patterns(root), func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Scope() == nil {
+	pgAdapterPackagesOnce.Do(func() {
+		root := findModuleRoot(t)
+		var paths []string
+		_ = RunTyped(t, TypedOpts{Tests: false}, prodscan.Patterns(root), func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Scope() == nil {
+				return nil
+			}
+			if p.Pkg.Scope().Lookup(pgExecutorName) == nil {
+				return nil
+			}
+			paths = append(paths, p.Pkg.Path())
 			return nil
-		}
-		if p.Pkg.Scope().Lookup(pgExecutorName) == nil {
-			return nil
-		}
-		paths = append(paths, p.Pkg.Path())
-		return nil
+		})
+		sort.Strings(paths)
+		pgAdapterPackagesCache = paths
 	})
-	sort.Strings(paths)
-	return paths
+	return pgAdapterPackagesCache
 }
 
 // TestPGRepoAmbientTx guards PG-REPO-AMBIENT-TX-01 against the production
@@ -302,6 +322,16 @@ func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 	for _, file := range p.Files {
 		rel := p.Rel(file)
 		base := filepath.Base(rel)
+		// Fixture packages reside under tools/archtest/internal/ and are loaded
+		// via RunTypedFixture (separate test path), never through production
+		// discovery. The tools/archtest/ prefix check is a Soft convention: fixture
+		// packages MUST be placed under tools/archtest/internal/ as documented by
+		// RunTypedFixture and the fixture naming convention; misplacing a fixture
+		// package outside that prefix would cause R1/R2/R3 to apply the
+		// _repo.go/_store.go suffix filter and miss the fixture's intentional
+		// violations. Production packages always start with cells/, adapters/,
+		// examples/, etc., so the prefix boundary is structurally stable but not
+		// mechanically enforced beyond this string check.
 		if !strings.HasPrefix(rel, "tools/archtest/") {
 			if !strings.HasSuffix(base, "_repo.go") && !strings.HasSuffix(base, "_store.go") {
 				continue
@@ -504,6 +534,11 @@ func scanR3PoolAccess(fset *token.FileSet, body *ast.BlockStmt, rel string, info
 // ExecDirect call inside that body. Multiple markers in one body are not
 // rejected (they are harmless documentation), but archtest BS-8 reverse self-
 // check pins that only the sanctioned site holds a marker.
+//
+// Marker order relative to ExecDirect calls is NOT enforced by this check —
+// co-location (same FuncDecl body) is the only structural requirement. By
+// convention the marker is placed before the ExecDirect call for readability,
+// but the archtest passes regardless of order.
 func scanR3ExecDirect(
 	fset *token.FileSet,
 	body *ast.BlockStmt,
@@ -533,7 +568,9 @@ func scanR3ExecDirect(
 			Message: "R3: pgExecutor.ExecDirect call requires sibling " +
 				"pgrepoapproved.ApprovedExecDirect(<const-literal>) marker in the same " +
 				"FuncDecl body to document the ADR-approved bypass of ambient tx; " +
-				"add the marker before the ExecDirect call (see pkg/pgrepoapproved)",
+				"add 'pgrepoapproved.ApprovedExecDirect(\"your-adr-reason\")' before the " +
+				"ExecDirect call; see pkg/pgrepoapproved and ADR " +
+				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
 		})
 	})
 	return diags
@@ -545,6 +582,14 @@ func scanR3ExecDirect(
 // reason arguments (fmt.Sprintf, concatenation, variable references) are
 // rejected so that the marker's audit-trail rationale cannot be hidden behind
 // runtime expressions.
+//
+// Order is not enforced: marker may appear before, after, or between ExecDirect
+// calls — convention is before for readability, but archtest only checks
+// same-body co-location, not relative order.
+//
+// One marker covers all ExecDirect calls in the same body — multiple ExecDirect
+// calls do not require multiple markers. A single ApprovedExecDirect call
+// satisfies the check for all ExecDirect calls in that FuncDecl body.
 func bodyHasApprovedExecDirectMarker(body *ast.BlockStmt, info *types.Info) bool {
 	found := false
 	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
@@ -745,16 +790,16 @@ type fixtureViolation struct {
 // test because the set sizes must match AND every actual entry must be in the
 // expected set.
 var expectedFixtureViolations = []fixtureViolation{
-	// R1: badR1Repo — struct field pool *pgxpool.Pool at line 88 of fixture.go
-	{"R1:", 88},
-	// R2: badR2NonNew — non-New* func with *pgxpool.Pool param, func name at line 93
-	{"R2:", 93},
-	// R2: NewBadR2NoWrap — New* func without newPGExecutor call, func name at line 99
-	{"R2:", 99},
-	// R3: badR3PoolDirect — r.db.pool direct access at line 117
-	{"R3:", 117},
-	// R3: badR3ExecDirect — r.db.ExecDirect without sibling marker at line 123
-	{"R3:", 123},
+	// R1: badR1Repo — struct field pool *pgxpool.Pool type position at line 93 of fixture.go
+	{"R1:", 93},
+	// R2: badR2NonNew — non-New* func with *pgxpool.Pool param, func name at line 98
+	{"R2:", 98},
+	// R2: NewBadR2NoWrap — New* func without newPGExecutor call, func name at line 104
+	{"R2:", 104},
+	// R3: badR3PoolDirect — r.db.pool direct access selector at line 122
+	{"R3:", 122},
+	// R3: badR3ExecDirect — r.db.ExecDirect call without sibling marker at line 128
+	{"R3:", 128},
 }
 
 // TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches all five
@@ -767,7 +812,9 @@ var expectedFixtureViolations = []fixtureViolation{
 //   - 1 R3: badR3ExecDirect calls r.db.ExecDirect without sibling pgrepoapproved.ApprovedExecDirect marker
 //
 // GREEN cases (pgExecutor field, goodNewFoo→newPGExecutor, goodExecMethod using
-// r.db.Exec) must produce zero diagnostics.
+// r.db.Exec, goodApprovedSingleExecDirect with marker+1 ExecDirect,
+// goodApprovedMultiExecDirect with 1 marker+2 ExecDirect calls) must produce
+// zero diagnostics.
 //
 // The assertion is an exact-set match on (ruleID_prefix, line) pairs from
 // expectedFixtureViolations. This prevents a masked substitution where losing
@@ -1174,6 +1221,9 @@ func TestPGRepoAmbientTx_DiscoveryCoverage(t *testing.T) {
 		"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres",
 		"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/adapters/postgres",
 	}
+	assert.Equal(t, expectedPGAdapterPackageMin, len(expected),
+		"expectedPGAdapterPackageMin floor constant must equal expected set size; "+
+			"update both if a package is added or removed")
 	got := discoverPGAdapterPackages(t)
 
 	expectedSet := make(map[string]struct{}, len(expected))
@@ -1194,7 +1244,9 @@ func TestPGRepoAmbientTx_DiscoveryCoverage(t *testing.T) {
 		if _, ok := expectedSet[p]; !ok {
 			t.Errorf("PG-REPO-AMBIENT-TX-01 DiscoveryCoverage: discovered new package %q "+
 				"not in expected set — if intentional, add it to expected; "+
-				"if accidental, this package declares pgExecutor unexpectedly", p)
+				"if accidental, this package declares pgExecutor unexpectedly; "+
+				"update the 'expected []string' slice in TestPGRepoAmbientTx_DiscoveryCoverage "+
+				"and bump expectedPGAdapterPackageMin to match", p)
 		}
 	}
 }

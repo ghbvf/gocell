@@ -19,12 +19,17 @@ package pgrepoapproved
 // bypassing the ambient transaction. archtest PG-REPO-AMBIENT-TX-01 R3(b)
 // rejects non-literal forms (fmt.Sprintf, concatenation, variables).
 //
+// It is not cross-checked against any catalog at build time; it serves as
+// source-level documentation. Reviewers verify the corresponding ADR
+// rationale exists.
+//
+// Note: an empty string "" satisfies the const-literal check but violates
+// review policy; reviewers must reject meaningless reasons.
+//
 // ApprovedExecDirect is purely a source-level marker (no-op at runtime).
 // The archtest enforces that every ExecDirect call from a non-pgExecutor
 // receiver has a sibling ApprovedExecDirect(literal) call in the same
-// FuncDecl body. Adding the marker without the corresponding ADR rationale
-// is a review violation; the marker's reason argument MUST cite an existing
-// ADR section.
+// FuncDecl body.
 //
 // Hard funnel rationale: this is the unique allowlist mechanism for
 // ExecDirect callsites in GoCell production code. The form-uniqueness

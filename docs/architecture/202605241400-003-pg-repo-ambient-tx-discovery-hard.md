@@ -53,7 +53,7 @@ Hard"原则，两处 Soft 必须同 PR 升级。
 **Coverage floor**：`TestPGRepoAmbientTx` 在调用 rule 前断言
 `len(discovered) ≥ 3`，防 discovery signal 被破坏的静默回归。
 `TestPGRepoAmbientTx_DiscoveryCoverage` 进一步断言发现集 == 当前 3 个已知包
-精确集合（diff-friendly 失败模式）。
+精确集合（diff-friendly 失败模式）。`expectedPGAdapterPackageMin` 是固定下限（不随新包自动增大）。`TestPGRepoAmbientTx_DiscoveryCoverage` 的 exact-set match 才是主保护；floor 仅防 `prodscan.Patterns` 被破坏导致 discovery 静默返回空。新增 PG 包时需手动同时更新 `expected` slice 和 `expectedPGAdapterPackageMin`。
 
 ### 轴 B — 下游 R3 allowlist typed marker（Soft → Hard）
 
@@ -123,7 +123,7 @@ type-resolution 逻辑改造），不在本 PR 范围。
   其 `Session` struct 持有 `*pgxpool.Pool`，与 `pgExecutor` 角色对等但命名
   不同。若需等价治理，需独立 ADR + 独立 archtest（命名建议
   `PG-REPO-AMBIENT-TX-02`），不在 #823 ask 范围。本 PR 只 commit 到"该包不
-  在 PG-REPO-AMBIENT-TX-01 范围"这个事实，不强制迁移。
+  在 PG-REPO-AMBIENT-TX-01 范围"这个事实，不强制迁移。**重要：configcore 目前无等价 archtest 治理**；其 `Session`/`DBTX` 的 ambient-tx 安全边界依赖 code review。需要 archtest 覆盖时新开 gh issue 跟踪 `PG-REPO-AMBIENT-TX-02`。
 
 ## Threat Model
 
@@ -136,6 +136,9 @@ type-resolution 逻辑改造），不在本 PR 范围。
 | Marker reason 写成 `fmt.Sprintf` 隐藏审计串 | `bodyHasApprovedExecDirectMarker` 验证 `constant.String` 拒绝 non-constant arg ✓ |
 | 移到不相关 func body 放 marker 制造"看似 approved"的错觉 | BS-8 反向自检：marker 必须与同 body 的 `pgExecutor.ExecDirect` 调用共存 — 孤立 marker 失败 ✓ |
 | 拷贝 `pgrepoapproved` 包到其他位置绕过 funnel | callee 解析锁 `Pkg().Path()` 到精确字符串 `"github.com/ghbvf/gocell/pkg/pgrepoapproved"`，重定向 import 不改 package path ✓ |
+| import 别名绕过 marker callee 识别 | callee 解析锁 `fn.Pkg().Path()`（via *types.Info.Uses），import alias 不改 package path ✓ |
+| build-tag 隔离的条件性 ExecDirect 调用 | RunTyped 用 default build context；如需覆盖须扩展 TypedOpts；当前 production 代码库无 build-tag 隔离 ExecDirect 先例；以 code review 兜底（accepted threat） |
+| ExecDirect 仅 adapters/postgres 当前持有 | accesscore / iotdevice 的 pgExecutor 当前不暴露 ExecDirect 方法；R3(b) 对其当前零 callsite 覆盖；新包加 ExecDirect 时第一次违规由 CI 抓 ✓ |
 
 ## Implementation matrix
 

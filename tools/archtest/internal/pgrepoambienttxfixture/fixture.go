@@ -35,9 +35,12 @@
 //   - badR3ExecDirect: a repo method that calls r.db.ExecDirect outside the
 //     allowlist. Must produce exactly one R3 diagnostic.
 //
-// GREEN control: NewGoodRepo takes *pgxpool.Pool and calls newPGExecutor,
+// GREEN controls: NewGoodRepo takes *pgxpool.Pool and calls newPGExecutor,
 // goodExecMethod uses r.db.Exec (sanctioned), pgExecutor holds pool field.
-// Zero R1/R2/R3 diagnostics from GREEN cases.
+// goodApprovedSingleExecDirect holds a marker + 1 ExecDirect call (R3(b) GREEN).
+// goodApprovedMultiExecDirect holds 1 marker + 2 ExecDirect calls (R3(b) GREEN:
+// one marker covers all ExecDirect calls in the same body).
+// Zero R1/R2/R3 diagnostics from all GREEN cases.
 //
 // Total expected diagnostics: 5 (one R1 + two R2 + two R3).
 package pgrepoambienttxfixture
@@ -46,6 +49,8 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 )
 
 // pgExecutor is the ONE sanctioned struct allowed to hold *pgxpool.Pool.
@@ -121,4 +126,21 @@ func (r badR3Repo) badR3PoolDirect(ctx context.Context) {
 // allowlist. R3 must flag this.
 func (r badR3Repo) badR3ExecDirect(ctx context.Context) {
 	r.db.ExecDirect(ctx, "SELECT 1") // R3 violation: ExecDirect outside allowlist
+}
+
+// goodApprovedSingleExecDirect is a GREEN R3(b) fixture: marker + single
+// ExecDirect in the same body. R3 must NOT flag this — marker presence covers
+// the call.
+func (r goodRepo) goodApprovedSingleExecDirect(ctx context.Context) {
+	pgrepoapproved.ApprovedExecDirect("fixture-green-single")
+	r.db.ExecDirect(ctx, "SELECT 1")
+}
+
+// goodApprovedMultiExecDirect is a GREEN R3(b) fixture: one marker covers
+// multiple ExecDirect calls in the same body. R3 must NOT flag either call —
+// a single marker suffices for all ExecDirect calls within the same FuncDecl.
+func (r goodRepo) goodApprovedMultiExecDirect(ctx context.Context) {
+	pgrepoapproved.ApprovedExecDirect("fixture-green-multi")
+	r.db.ExecDirect(ctx, "SELECT 1")
+	r.db.ExecDirect(ctx, "SELECT 2")
 }

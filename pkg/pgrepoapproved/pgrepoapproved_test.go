@@ -22,6 +22,8 @@ func TestApprovedExecDirect_NoOp(t *testing.T) {
 	cases := []string{
 		"revoke-session-cascade",
 		"some-other-future-reason",
+		// "" satisfies archtest const-literal check, but violates review policy per godoc —
+		// included here to document runtime no-op semantics only
 		"",
 	}
 	for _, reason := range cases {

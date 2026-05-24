@@ -42,6 +42,14 @@ func (e pgExecutor) Query(ctx context.Context, sql string, args ...any) (pgx.Row
 	return e.pool.Query(ctx, sql, args...)
 }
 
+// ExecDirect bypasses the ambient transaction by executing directly on the
+// pool. Callers in *_repo.go / *_store.go MUST place a sibling
+// pgrepoapproved.ApprovedExecDirect("<kebab-case-reason>") marker call in the
+// same FuncDecl body; archtest PG-REPO-AMBIENT-TX-01 R3(b) enforces this.
+// pgExecutor's own methods are exempt.
+//
+// See pkg/pgrepoapproved and ADR
+// docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md.
 func (e pgExecutor) ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return e.pool.Exec(ctx, sql, args...)
 }
