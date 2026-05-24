@@ -63,6 +63,10 @@
 - **本变更已补**：check.go 这 ~17 处的 `Fix` 值（关闭 `gocell check --format=json` 输出 `"fix":""` 的可见契约洞；Fix 文本无损带入 #922）。
 - **archtest 守护 defer #922**：INV-3 的 production scan 与 funnel ban 只覆盖 `./kernel/governance`；让 cmd 构造点也受守护的正确做法是 #922 的 seal——届时 `ValidationResult` 字段 unexported、构造函数导出为唯一路径，cmd 跟随改走构造函数（强制 Fix）。本变更**不**建临时的「cmd 字面量必须有 Fix」cross-package archtest，因 #922 seal 会整体推翻它（避免 throwaway 机制）。#922 body 已含此构造点迁移范围。
 
+### 契约范围：error-only（warning 不携带结构化 Fix，by design）
+
+typed-Fix 契约**仅覆盖 SeverityError**。`newWarning` 无 fix 参数，INV-3 不检查 warning。warning 是 advisory observation——它的 Message 里**可以**含修复建议（如 JOURNEY-STATUS-LIFECYCLE-01 的"advance the board... or revert lifecycle"），那是 incidental 文本，**不是契约**，刻意不拆进 Fix。把 warning 提升为结构化 Fix（`newWarning` 加 fix + INV-3 扩到 warning）会扩 #689 的 error 范围，属另一设计决策，本 ADR 明确**不做**（review 簇 C4/F8，errors-only by design）。
+
 ## Consequences
 
 - 正：fix 指导结构化，UX 更清晰（独立 `fix:` 行 / JSON 字段）；Soft 锚点消除；构造收口便于未来 #922 升 Hard。

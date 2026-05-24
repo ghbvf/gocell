@@ -1,6 +1,9 @@
 package governance
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,10 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAdvisoryHints_Golden locks the canonical text + ID prefix coverage of
-// every long advisory hint. The 55 constants in advisory_hints.go are product
-// value (greppable diagnostic strings); silent rewording would change CLI
-// output that operators have wired into runbooks/grep filters.
+// TestAdvisoryHints_Golden locks the canonical text of every advHint* const in
+// advisory_hints.go (problem + Fix). These are product value (greppable
+// diagnostic strings); silent rewording would change CLI output operators have
+// wired into runbooks/grep filters. The const set is derived from the source
+// AST (advHintConstNames), so coverage is proven complete rather than asserted
+// by a hand-maintained count.
 //
 // Update procedure when intentionally changing a hint:
 //  1. Run `go test ./kernel/governance/... -update` (manually update golden).
@@ -85,7 +90,24 @@ func TestAdvisoryHints_Golden(t *testing.T) {
 		"advHintDOCNAME01CannotScan":             advHintDOCNAME01CannotScan,
 		"advHintDOCNAME01CannotScanFix":          advHintDOCNAME01CannotScanFix,
 	}
-	require.Len(t, hints, 55, "advisory_hints.go must have exactly 55 promoted constants — update this test if the count changes")
+	// Completeness gate (replaces a hand-maintained count): the hints map must
+	// cover EVERY advHint* const declared in advisory_hints.go, and contain no
+	// key without a backing const. Derived from the source AST so adding a new
+	// const without adding it here — or vice versa — fails immediately, instead
+	// of silently slipping past a magic-number length check.
+	declared := advHintConstNames(t)
+	for name := range declared {
+		if _, ok := hints[name]; !ok {
+			t.Errorf("advHint const %q is declared in advisory_hints.go but missing from this "+
+				"test's hints map — add it so its text is golden-locked", name)
+		}
+	}
+	for k := range hints {
+		if _, ok := declared[k]; !ok {
+			t.Errorf("hints map key %q has no matching advHint* const in advisory_hints.go "+
+				"(stale entry?)", k)
+		}
+	}
 
 	keys := make([]string, 0, len(hints))
 	for k := range hints {
@@ -115,4 +137,37 @@ func TestAdvisoryHints_Golden(t *testing.T) {
 		t.Errorf("advisory hints drift detected — diff against golden %s\n--- want ---\n%s\n--- got ---\n%s",
 			goldenPath, wantNorm, gotNorm)
 	}
+}
+
+// advHintConstNames parses advisory_hints.go and returns the set of every
+// package-level const whose name begins with "advHint". This is the single
+// source of truth for TestAdvisoryHints_Golden's completeness gate: the test's
+// hints map must equal this set, so no advHint const can be added (or removed)
+// without the golden test noticing.
+func advHintConstNames(t *testing.T) map[string]struct{} {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "advisory_hints.go", nil, 0)
+	require.NoError(t, err, "parse advisory_hints.go")
+
+	names := map[string]struct{}{}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, n := range vs.Names {
+				if strings.HasPrefix(n.Name, "advHint") {
+					names[n.Name] = struct{}{}
+				}
+			}
+		}
+	}
+	require.NotEmpty(t, names, "advisory_hints.go must declare advHint* consts")
+	return names
 }

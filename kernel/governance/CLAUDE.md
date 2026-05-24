@@ -33,7 +33,7 @@ newErrorAt(codeDOCNAME01, IssueForbidden,
     advHintDOCNAME01LegacyLiteralFix)
 ```
 
-> `msg` 是问题陈述，`fix` 是「怎么改」。两者都可用 `fmt.Sprintf`（插值参数各自分配）。CLI 输出把 `fix` 渲染成独立的 `fix:` 行 / JSON `"fix"` 字段，不再拼进 message。详见 ADR `docs/architecture/202605241730-adr-governance-error-fix-field-funnel.md`。
+> `msg` 是问题陈述，`fix` 是「怎么改」。两者都可用 `fmt.Sprintf`（插值参数各自分配）。CLI 输出把 `fix` 渲染成独立的 `fix:` 行 / JSON `"fix"` 字段，不再拼进 message。typed-Fix 契约 **error-only**：`newWarning` 无 fix（warning 是 advisory，任何建议留在 Message，不是契约，INV-3 不查 warning）。详见 ADR `docs/architecture/202605241730-adr-governance-error-fix-field-funnel.md`。
 
 ## 规则编号体系
 

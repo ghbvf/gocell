@@ -101,6 +101,13 @@ func (l *locator) newError(code RuleCode, typ IssueType, file, field, msg, fix s
 // and carry no fix guidance (the Fix field stays empty) — there is
 // deliberately no fix parameter, so a warning cannot accidentally be checked
 // for one and an error cannot be constructed without one.
+//
+// By-design scope (issue #689): the typed-Fix contract is ERROR-ONLY. INV-3
+// (GOVERNANCE-RULE-ERROR-FIX-FIELD-01) enforces a non-empty Fix only for the
+// error constructors. A warning may still include a remediation suggestion in
+// its Message — that is incidental advisory text, NOT a structured contract,
+// and is intentionally not split into Fix. Promoting warnings to structured
+// Fix would expand #689's scope and is tracked separately if ever wanted.
 func (l *locator) newWarning(code RuleCode, typ IssueType, file, field, msg string) ValidationResult {
 	file = l.resolveFile(file)
 	line, col := l.locate(file, field)

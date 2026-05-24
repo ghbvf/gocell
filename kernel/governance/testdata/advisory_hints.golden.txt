@@ -277,7 +277,7 @@ advHintFMT13MissingPathParamFix
 =====
 add to contract.yaml:
   pathParams:
-    %s:
+    <name>:
       type: string
 -----
 

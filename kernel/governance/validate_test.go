@@ -4042,10 +4042,14 @@ func TestFMT13_HasHowToFixHint(t *testing.T) {
 		"FMT-13 fix must announce the fix hint")
 	assert.Contains(t, fix, "pathParams:",
 		"FMT-13 fix must include the pathParams: key")
-	assert.Contains(t, fix, "userId:",
-		"FMT-13 fix must include the offending placeholder name (userId)")
+	assert.Contains(t, fix, "<name>:",
+		"FMT-13 fix YAML uses a literal <name> placeholder marker (the concrete "+
+			"placeholder name is carried by the Message, keeping the *Fix const argument-free)")
 	assert.Contains(t, fix, "type: string",
 		"FMT-13 fix must include a type: string fallback")
+	// The concrete placeholder name lives in the Message, not the Fix.
+	assert.Contains(t, got[0].Message, "userId",
+		"FMT-13 Message must name the offending placeholder (userId)")
 }
 
 // --- TOPO-07: actor maxConsistencyLevel constraint for consumers ---

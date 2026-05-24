@@ -8,14 +8,15 @@ package governance
 // hint is split into two consts — advHint<RuleID><Suffix> carries the problem
 // statement (the Message) and advHint<RuleID><Suffix>Fix carries the
 // remediation guidance (the Fix field), per GOVERNANCE-RULE-ERROR-FIX-FIELD-01.
-// The *Fix consts are deliberately argument-free (the dynamic values already
-// appear in the problem Message), so call sites pass all their Sprintf args to
-// the Message format and the *Fix const as a plain string.
 //
-// EXCEPTION — advHintFMT13MissingPathParamFix is the ONE *Fix const that
-// contains a %s format verb (for the placeholder name). Its caller MUST use
-// fmt.Sprintf(advHintFMT13MissingPathParamFix, paramName) rather than passing
-// the const directly; all other *Fix consts are plain strings.
+// INVARIANT: every *Fix const is argument-free (contains NO printf format
+// verb). The dynamic values a finding needs already appear in the problem
+// Message, so every *Fix const is passed to its constructor as a plain string,
+// never wrapped in fmt.Sprintf. This is uniform with no exceptions — it removes
+// the "forgot to Sprintf a verb-bearing fix const" trap entirely. Where a fix
+// needs to point at a specific element (e.g. a pathParam name), the YAML
+// snippet uses a literal placeholder marker like <name> and the concrete value
+// is carried by the Message.
 //
 // Multi-line *Fix consts (e.g. advHintFMT13MissingHTTPFix) contain a YAML
 // block with leading "\n  " indentation. When rendered after the "fix:" label
@@ -79,12 +80,13 @@ const (
 		"    successStatus: 200\n" +
 		"    noContent: false"
 
-	// FMT-13: path placeholder has no pathParams declaration. The Fix snippet
-	// embeds the placeholder name (%s) so the copy-pasteable YAML is concrete.
+	// FMT-13: path placeholder has no pathParams declaration. The concrete
+	// placeholder name is carried by the Message (the second %q); the Fix YAML
+	// snippet uses a literal <name> marker so the const stays argument-free.
 	advHintFMT13MissingPathParam    = "http contract %q path placeholder %q has no pathParams declaration"
 	advHintFMT13MissingPathParamFix = "add to contract.yaml:\n" +
 		"  pathParams:\n" +
-		"    %s:\n" +
+		"    <name>:\n" +
 		"      type: string"
 
 	// advHintCCE01TriggerPrefix is the shared lead-in for CCE-01 messages

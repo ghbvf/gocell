@@ -599,7 +599,7 @@ func (v *Validator) validateFMT13PathParams(c *metadata.ContractMeta, h *metadat
 				file,
 				"endpoints.http.pathParams",
 				fmt.Sprintf(advHintFMT13MissingPathParam, c.ID, name),
-				fmt.Sprintf(advHintFMT13MissingPathParamFix, name),
+				advHintFMT13MissingPathParamFix,
 			))
 		}
 	}
