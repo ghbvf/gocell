@@ -22,6 +22,16 @@ Accepted (2026-05-24)
   锚点 entry `"adapters/postgres/refresh_store.go::revokeSessionDetachedAt"`。
   改文件名 / 改函数名 / map key 写错 = 静默失效。
 
+> **2026-05-24 PR #917 round-2 修订**：本 ADR 第一版把 R3(b) 升级形态写为
+> "typed marker funnel：(callee, arg) form-uniqueness Hard"，但实施版本的 arg
+> 检查仅 `tv.Value.Kind() == constant.String`，仍接受 const ident /
+> 常量折叠 `"a"+"b"` / 空串 / 占位符 — 这只是 form-uniqueness 假象，落地评级
+> 实际仍 Soft（"像但不是 const literal"灰区）。同上， marker 检查通过
+> `EachInSubtree` 穿透 `*ast.FuncLit`，nested closure 内的 marker 可批准外层
+> ExecDirect（scope 漂移）。Round-2 修复（见下"轴 B 实现细节"）把 arg 校验改
+> 为 `*ast.BasicLit` + kebab regex + placeholder ban 5-门串行，marker 扫描收
+> 紧到 `inspectStopAtFuncLit` scope-bounded — R3(b) 才真正达到 Hard。
+
 **Soft → Hard 升级动机**：按 `ai-robust.md` "Soft 严禁立项 / 既有 Soft 优先升
 Hard"原则，两处 Soft 必须同 PR 升级。
 
@@ -80,19 +90,28 @@ func (s *PGRefreshStore) revokeSessionDetachedAt(...) error {
 }
 ```
 
-**archtest 形态**：R3(b) 删除 `r3ExecDirectAllowlist` map，改为同 body marker
-presence 检查 — `bodyHasApprovedExecDirectMarker(body, info)`。Marker 形态
-通过 (callee, arg) form-uniqueness 验证：
+**archtest 形态**：R3(b) 删除 `r3ExecDirectAllowlist` map，改为 same-scope
+marker presence 检查 — `bodyHasApprovedExecDirectMarker(body, info)` 用
+`inspectStopAtFuncLit` 把扫描限定到当前 FuncDecl/FuncLit body（不下降到
+nested closure）。`scanR3UsagePoints` 在 FuncDecl 之外递归进入每个 nested
+FuncLit body，treat each as its own approval scope。Marker 5-门 form-uniqueness
+（每门一个 reject 分支，对标 panicregister 6-rule chain）：
 
 1. callee 解析（via `*types.Info.Uses`）到 `*types.Func` 满足
-   `Name() == "ApprovedExecDirect"` AND `Pkg().Path() == "github.com/ghbvf/gocell/pkg/pgrepoapproved"`
-2. 第 1 参数的 `*types.Info.Types` TypeAndValue.Value 是
-   `constant.String`（const literal） — `fmt.Sprintf` / 字符串拼接 / 变量
-   均产生 non-constant 而被拒绝
+   `Name() == "ApprovedExecDirect"` AND
+   `Pkg().Path() == "github.com/ghbvf/gocell/pkg/pgrepoapproved"`
+2. `arg[0]` 必须是 `*ast.BasicLit` AND `Kind == token.STRING`（拒 const
+   identifier / 常量折叠 `"a" + "b"` BinaryExpr / 变量 / `fmt.Sprintf`）
+3. `strconv.Unquote(arg[0])` 必须 match `^[a-z][a-z0-9-]+$`（kebab-case，
+   长度 ≥ 2，首字符小写字母）
+4. 不在占位符集 `^(todo|fixme|tbd|xxx|placeholder|wip)(-|$)`
+5. scope 必须是当前 FuncDecl/FuncLit body — 通过 `inspectStopAtFuncLit` 强制
 
-理由：与 `PANIC-REGISTERED-01` / `panic(panicregister.Approved)` 是相同 Hard
-范本 — "typed marker funnel for unbounded ops"。允许 = "存在 marker"，
-形态唯一性来自 callee 名 + 包路径 + arg 类型，无 "像但不是"的灰区。
+理由：与 `PANIC-REGISTERED-01` 是相同 Hard 范本 — "typed marker funnel for
+unbounded ops"。允许 = "存在严格形态的 marker 在同 scope"，5-门串行消除"像但
+不是 const literal"灰区，scope-bounded 消除 nested-closure 走私 — 任何其他
+形态 archtest 即失败。BS-8 反向自检也升级为 scope-bounded，覆盖 spurious
+marker（marker 存在但同 scope 无 ExecDirect → audit-trail 退化）。
 
 ## Funnel 双向锁评级表
 
@@ -139,6 +158,8 @@ type-resolution 逻辑改造），不在本 PR 范围。
 | import 别名绕过 marker callee 识别 | callee 解析锁 `fn.Pkg().Path()`（via *types.Info.Uses），import alias 不改 package path ✓ |
 | build-tag 隔离的条件性 ExecDirect 调用 | RunTyped 用 default build context；如需覆盖须扩展 TypedOpts；当前 production 代码库无 build-tag 隔离 ExecDirect 先例；以 code review 兜底（accepted threat） |
 | ExecDirect 仅 adapters/postgres 当前持有 | accesscore / iotdevice 的 pgExecutor 当前不暴露 ExecDirect 方法；R3(b) 对其当前零 callsite 覆盖；新包加 ExecDirect 时第一次违规由 CI 抓 ✓ |
+| nested closure 走私 marker / ExecDirect（marker 在内层 closure 批准外层 ExecDirect，或反向） | `bodyHasApprovedExecDirectMarker` / `scanR3ExecDirect` 用 `inspectStopAtFuncLit` 把扫描限定到当前 FuncDecl/FuncLit body；`scanR3UsagePoints` 把每个 nested FuncLit body 视为独立 approval scope；RED fixture `badR3MarkerInNestedClosure` + `badR3MarkerOuterExecInNestedClosure` 守 ✓ |
+| marker reason 退化（const ident / `"a"+"b"` concat / 空串 / 占位符 todo/fixme/…） | arg[0] 必须 `*ast.BasicLit + token.STRING` + kebab regex + placeholder ban 5-门串行（落地对标 panicregister）；RED fixture `badR3ApprovedConstIdent` / `badR3ApprovedConcat` / `badR3ApprovedEmpty` / `badR3ApprovedPlaceholder` 4 个用例守 ✓ |
 
 ## Implementation matrix
 

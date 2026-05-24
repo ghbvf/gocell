@@ -27,22 +27,43 @@
 //
 // R3 — usage-point funnel: same-package repo/store methods must not access
 // pgExecutor's unexported pool field directly nor call pgExecutor.ExecDirect
-// outside the explicit callsite allowlist.
+// without a sibling pgrepoapproved.ApprovedExecDirect(<kebab-case-literal>)
+// marker in the SAME approval scope (FuncDecl/FuncLit body, not nested closure).
 //
 //   - badR3PoolDirect: a repo method that accesses r.db.pool directly.
 //     Must produce exactly one R3 diagnostic.
 //
-//   - badR3ExecDirect: a repo method that calls r.db.ExecDirect outside the
-//     allowlist. Must produce exactly one R3 diagnostic.
+//   - badR3ExecDirect: a repo method that calls r.db.ExecDirect without
+//     any marker. Must produce exactly one R3 diagnostic.
+//
+// F1 scope-bounded marker checks (PR #917 round-2):
+//
+//   - badR3MarkerInNestedClosure: marker in nested FuncLit cannot approve
+//     outer-scope ExecDirect. One R3 diagnostic at the outer call.
+//
+//   - badR3MarkerOuterExecInNestedClosure: outer-scope marker cannot approve
+//     ExecDirect inside a nested FuncLit. One R3 diagnostic at the inner call.
+//
+// F2 reason-form-uniqueness checks (PR #917 round-2):
+//
+//   - badR3ApprovedConstIdent: marker reason is a const identifier (rejected,
+//     must be *ast.BasicLit). One R3 diagnostic.
+//   - badR3ApprovedConcat: marker reason is "a" + "b" BinaryExpr (rejected).
+//     One R3 diagnostic.
+//   - badR3ApprovedEmpty: marker reason is "" (fails kebab regex). One R3.
+//   - badR3ApprovedPlaceholder: marker reason is "todo" (placeholder rejected).
+//     One R3 diagnostic.
 //
 // GREEN controls: NewGoodRepo takes *pgxpool.Pool and calls newPGExecutor,
 // goodExecMethod uses r.db.Exec (sanctioned), pgExecutor holds pool field.
 // goodApprovedSingleExecDirect holds a marker + 1 ExecDirect call (R3(b) GREEN).
 // goodApprovedMultiExecDirect holds 1 marker + 2 ExecDirect calls (R3(b) GREEN:
-// one marker covers all ExecDirect calls in the same body).
+// one marker covers all ExecDirect calls in the same scope).
 // Zero R1/R2/R3 diagnostics from all GREEN cases.
 //
-// Total expected diagnostics: 5 (one R1 + two R2 + two R3).
+// Total expected diagnostics: 11 (one R1 + two R2 + eight R3 — two for
+// pool-direct/ExecDirect-bare + two for F1 nested-closure + four for F2
+// reason form).
 package pgrepoambienttxfixture
 
 import (
@@ -143,4 +164,61 @@ func (r goodRepo) goodApprovedMultiExecDirect(ctx context.Context) {
 	pgrepoapproved.ApprovedExecDirect("fixture-green-multi")
 	r.db.ExecDirect(ctx, "SELECT 1")
 	r.db.ExecDirect(ctx, "SELECT 2")
+}
+
+// badR3MarkerInNestedClosure: marker placed inside a nested FuncLit cannot
+// approve an ExecDirect call in the outer FuncDecl scope. R3 must flag the
+// outer call (the outer scope has no marker after F1 scope-bounded fix).
+// (F1 in PR #917 round-2 review)
+func (r badR3Repo) badR3MarkerInNestedClosure(ctx context.Context) {
+	r.db.ExecDirect(ctx, "OUTER") // R3 violation: outer scope has no marker
+	_ = func() {
+		pgrepoapproved.ApprovedExecDirect("inner-marker-cannot-approve-outer")
+	}
+}
+
+// badR3MarkerOuterExecInNestedClosure: outer-scope marker cannot approve an
+// ExecDirect call inside a nested FuncLit scope. R3 must flag the inner call
+// (the nested closure is its own approval scope and has no marker).
+// (F1 in PR #917 round-2 review)
+func (r badR3Repo) badR3MarkerOuterExecInNestedClosure(ctx context.Context) {
+	pgrepoapproved.ApprovedExecDirect("outer-marker-cannot-approve-inner")
+	_ = func() {
+		r.db.ExecDirect(ctx, "INNER") // R3 violation: closure scope has no marker
+	}
+}
+
+// badR3ApprovedConstIdent: marker reason is a const identifier (not a BasicLit).
+// F2 rule 2 requires *ast.BasicLit + token.STRING; an *ast.Ident is rejected.
+// (F2 in PR #917 round-2 review)
+const fixtureReasonConst = "kebab-from-const"
+
+func (r badR3Repo) badR3ApprovedConstIdent(ctx context.Context) {
+	pgrepoapproved.ApprovedExecDirect(fixtureReasonConst) // F2: not a BasicLit
+	r.db.ExecDirect(ctx, "SELECT 1")                      // R3 violation: marker rejected
+}
+
+// badR3ApprovedConcat: marker reason is "a" + "b" — *ast.BinaryExpr at the AST
+// level, not *ast.BasicLit, so F2 rule 2 rejects it.
+// (F2 in PR #917 round-2 review)
+func (r badR3Repo) badR3ApprovedConcat(ctx context.Context) {
+	pgrepoapproved.ApprovedExecDirect("ab-" + "cd-concat") // F2: BinaryExpr
+	r.db.ExecDirect(ctx, "SELECT 1")                       // R3 violation
+}
+
+// badR3ApprovedEmpty: empty-string reason fails the kebab-case regex (which
+// requires ^[a-z][a-z0-9-]+$ — length ≥ 2, leading lowercase letter).
+// (F2 in PR #917 round-2 review)
+func (r badR3Repo) badR3ApprovedEmpty(ctx context.Context) {
+	pgrepoapproved.ApprovedExecDirect("") // F2: empty fails kebab regex
+	r.db.ExecDirect(ctx, "SELECT 1")      // R3 violation
+}
+
+// badR3ApprovedPlaceholder: placeholder identifier ("todo") is rejected by the
+// placeholder regex (todo/fixme/tbd/xxx/placeholder/wip) — meaningful reason
+// required for audit trail.
+// (F2 in PR #917 round-2 review)
+func (r badR3Repo) badR3ApprovedPlaceholder(ctx context.Context) {
+	pgrepoapproved.ApprovedExecDirect("todo") // F2: placeholder rejected
+	r.db.ExecDirect(ctx, "SELECT 1")          // R3 violation
 }

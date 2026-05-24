@@ -16,15 +16,14 @@ import (
 // behavior (logging, side effects, panic) that would change call-site cost
 // expectations.
 func TestApprovedExecDirect_NoOp(t *testing.T) {
-	// All reasons are equally accepted — the function has no validation of
-	// reason content; that validation lives in the archtest (const-literal
-	// check via TypeAndValue).
+	// At runtime ApprovedExecDirect is a pure no-op — any string is accepted
+	// without inspection. The static reason constraints (BasicLit + kebab regex
+	// + placeholder ban) live in the archtest layer (PG-REPO-AMBIENT-TX-01 R3(b)),
+	// not here. The values below are all valid kebab-case literals so this test
+	// documents only the runtime no-op contract.
 	cases := []string{
 		"revoke-session-cascade",
 		"some-other-future-reason",
-		// "" satisfies archtest const-literal check, but violates review policy per godoc —
-		// included here to document runtime no-op semantics only
-		"",
 	}
 	for _, reason := range cases {
 		pgrepoapproved.ApprovedExecDirect(reason)
