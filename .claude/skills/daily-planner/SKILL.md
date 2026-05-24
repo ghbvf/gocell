@@ -74,30 +74,21 @@ ITERATION_FIELD_ID=$(jq -r '.fields[] | select(.name=="Iteration").id' <<<"$FIEL
 }
 
 # 0.4 Wave single-select field ID + option IDs（C3c）
-# fail-CLOSED：apply 模式下查不到 WAVE_FIELD_ID → 阶段 4 的 apply-gate.sh 会 fail-fast。
-# WAVE_FIELD_ID 非空但 WAVE_OPTION_IDS 为空 = 配置损坏（字段无选项），apply-gate.sh fail-fast。
+# 提取走 lib/resolve-wave-fields.sh（单源；collect-then-first 防 per-element `// ""`
+# 换行污染——裸 `select(.name=="Wave").id // ""` 会为每个非 Wave 字段吐一空行，
+# 污染 WAVE_FIELD_ID 换行后传给 `gh ... --field-id`。同 PR #926 jq-scoping bug，
+# 由 SMOKE_LIVE Part B 暴露；resolve-wave-fields 离线 case 钉死回归。
 # dry-run 模式下 WAVE_FIELD_ID 为空时 agent 仍可出 plan（wave_option_id 字段设 ""）。
-WAVE_FIELD_ID=$(jq -r '.fields[] | select(.name=="Wave").id // ""' <<<"$FIELD_LIST_JSON")
-WAVE_OPTION_IDS=""
-if [[ -n "$WAVE_FIELD_ID" ]]; then
-  # 取 Wave single-select 的所有 option id，逗号分隔
-  WAVE_OPTION_IDS=$(jq -r \
-    '[.fields[] | select(.name=="Wave") | .options[]?.id] | join(",")' \
-    <<<"$FIELD_LIST_JSON")
-  # WAVE_FIELD_ID 有值但 options 为空 = 配置损坏 → apply 模式 fail-fast。
-  if [[ "${APPLY:-}" == "true" && -z "$WAVE_OPTION_IDS" ]]; then
+eval "$(FIELD_LIST_JSON="$FIELD_LIST_JSON" bash .claude/skills/daily-planner/lib/resolve-wave-fields.sh)"
+# fail-CLOSED（仅 apply 模式）：
+#   - WAVE_FIELD_ID 空 → 阶段 4 apply-gate.sh fail-fast
+#   - WAVE_FIELD_ID 非空但 WAVE_OPTION_IDS 空 = 配置损坏（字段无选项）
+#   - 任一 Wave N 名称缺失（option id 空）→ fail-fast（防 UI 重排/缺名静默错位）
+if [[ "${APPLY:-}" == "true" && -n "$WAVE_FIELD_ID" ]]; then
+  if [[ -z "$WAVE_OPTION_IDS" ]]; then
     echo "ERROR: WAVE_OPTION_IDS empty but WAVE_FIELD_ID set; Wave field has no options (config corrupt)" >&2
     exit 1
   fi
-fi
-# wave_number → option_id 映射（按名匹配，防止 UI 重排选项静默错位）
-# apply 模式下若某 Wave N 名称缺失 → apply-gate.sh 会因 wave_option_id 未知而 fail-fast。
-WAVE_OPTION_ID_WAVE1=$(jq -r '.fields[] | select(.name=="Wave") | .options[]? | select(.name=="Wave 1").id // ""' <<<"$FIELD_LIST_JSON")
-WAVE_OPTION_ID_WAVE2=$(jq -r '.fields[] | select(.name=="Wave") | .options[]? | select(.name=="Wave 2").id // ""' <<<"$FIELD_LIST_JSON")
-WAVE_OPTION_ID_WAVE3=$(jq -r '.fields[] | select(.name=="Wave") | .options[]? | select(.name=="Wave 3").id // ""' <<<"$FIELD_LIST_JSON")
-WAVE_OPTION_ID_WAVE4=$(jq -r '.fields[] | select(.name=="Wave") | .options[]? | select(.name=="Wave 4").id // ""' <<<"$FIELD_LIST_JSON")
-# apply 模式下：任一 Wave N 名称缺失（option id 为空）→ fail-fast
-if [[ "${APPLY:-}" == "true" && -n "$WAVE_FIELD_ID" ]]; then
   for _wn in 1 2 3 4; do
     _wvar="WAVE_OPTION_ID_WAVE${_wn}"
     if [[ -z "${!_wvar:-}" ]]; then
@@ -378,7 +369,7 @@ Agent(
          AND (status==null OR status.name != "Done") 的 issue → 加入 carry-over 列表
       3. Score P0/P1 池 per WSJF 简化版（详 agent.md §排序算法）；
          解析每个 issue body 的 "### Affected paths" 段（C2c）作为 affected_paths[]；
-         解析失败 → brief 标 [AFFECTED PATHS MALFORMED] + affected_paths=[]
+         解析失败 / 缺失 → 按 #6 wildcard 处理（不可当作独立可并行）
       4. 拓扑排序（C2b）：消费 deps.json blocked_by 边建 DAG；
          环 → 不阻塞 + brief Warnings [DEP CYCLE]；
          跨 iteration 不可解 → Warnings [DEP CROSS-ITERATION]，dependent 仍可排但标记
@@ -390,7 +381,10 @@ Agent(
          - placement 守拓扑：blocker.wave ≤ dependent.wave（dependent 顺延到其最晚 blocker 之后）
       6. conflict_group（C2c）：每 wave 对 affected_paths 前缀重合做 union-find，
          每连通分量=一组（同组=共享文件冲突 → 串行；跨组=独立 → 可并行）；
-         无 affected_paths → singleton 独立组。
+         **无 / 解析失败 affected_paths → wildcard fail-closed**：footprint 未知，与同 wave
+         所有 item union（保守视为冲突于一切）→ 整 wave 落同一 conflict_group（串行），
+         brief 标 [AFFECTED PATHS MISSING — wave serialized]。**绝不视为 singleton 独立组**
+         （未知文件范围当可并行会重造并发文件冲突，与 agent.md STEP 6 一致）。
          全局唯一 int ≥ 1，(wave 升序, 首次出现) 从 1 分配；set 和 skip 都必须有值。
       7. wave_option_id（C3c）：action=="set" 时根据 wave 编号从 WAVE_OPTION_ID_WAVE* 常量取值；
          WAVE_FIELD_ID 为空时置 ""。

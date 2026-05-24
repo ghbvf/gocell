@@ -228,6 +228,62 @@ assert_gate_fail "A11: missing conflict_group -> conflict_group required" \
 rm -rf "$wd"
 
 # ---------------------------------------------------------------------------
+# Part A: resolve-wave-fields cases (single-line extraction regression)
+# Pins the per-element `// ""` newline-poison bug (same class as PR #926 jq
+# scoping). field-list.json has Wave as the 5th field with 4 named options, so
+# a buggy extraction would prepend empty lines to WAVE_FIELD_ID / option ids.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Part A: resolve-wave-fields.sh ==="
+
+resolve_script="${skill_dir}/lib/resolve-wave-fields.sh"
+[[ -x "$resolve_script" ]] || { echo "MISSING: $resolve_script" >&2; exit 1; }
+
+rwf_out=$(FIELD_LIST_JSON="$(cat "${fixtures_dir}/field-list.json")" bash "$resolve_script")
+# shellcheck disable=SC1090
+eval "$rwf_out"
+
+rwf_ok=1
+check_rwf() {
+  # check_rwf <name> <actual> <expected>; also asserts single clean line (no embedded newline)
+  local name="$1" actual="$2" expected="$3"
+  local nlines
+  nlines=$(printf '%s' "$actual" | grep -c '' || true)   # 1 for single line, >1 if newline-poisoned
+  if [[ "$actual" != "$expected" ]]; then
+    echo "  FAIL [$name]: got [$actual] want [$expected]"; rwf_ok=0
+  elif [[ "$nlines" != "1" ]]; then
+    echo "  FAIL [$name]: value spans $nlines lines (newline-poisoned)"; rwf_ok=0
+  fi
+}
+check_rwf "WAVE_FIELD_ID"   "${WAVE_FIELD_ID:-}"   "PVTSSF_wave"
+check_rwf "WAVE_OPTION_IDS" "${WAVE_OPTION_IDS:-}" "opt_w1,opt_w2,opt_w3,opt_w4"
+for _n in 1 2 3 4; do
+  _vn="WAVE_OPTION_ID_WAVE${_n}"   # indirect ref: vars assigned via eval, avoids SC2153
+  check_rwf "$_vn" "${!_vn:-}" "opt_w${_n}"
+done
+if [[ "$rwf_ok" == "1" ]]; then
+  echo "PASS [RWF: Wave field/option ids resolve to clean single-line values]"
+  pass=$((pass+1))
+else
+  echo "FAIL [RWF: resolve-wave-fields]"
+  fail=$((fail+1))
+fi
+
+# RWF2: no Wave field -> all empty, no error
+rwf2_out=$(FIELD_LIST_JSON='{"fields":[{"id":"PVTF_iter","name":"Iteration"}]}' bash "$resolve_script")
+# shellcheck disable=SC1090
+eval "$rwf2_out"
+if [[ -z "$WAVE_FIELD_ID" && -z "$WAVE_OPTION_IDS" && -z "$WAVE_OPTION_ID_WAVE1" ]]; then
+  echo "PASS [RWF2: no Wave field -> empty vars, no crash]"
+  pass=$((pass+1))
+else
+  echo "FAIL [RWF2: no Wave field -> expected empty, got WAVE_FIELD_ID=[$WAVE_FIELD_ID]]"
+  fail=$((fail+1))
+fi
+# Reset for downstream cases (RWF2 cleared them).
+unset WAVE_FIELD_ID WAVE_OPTION_IDS WAVE_OPTION_ID_WAVE1 WAVE_OPTION_ID_WAVE2 WAVE_OPTION_ID_WAVE3 WAVE_OPTION_ID_WAVE4
+
+# ---------------------------------------------------------------------------
 # Part A: Write cases
 # ---------------------------------------------------------------------------
 echo ""
@@ -513,9 +569,9 @@ else
     }
     echo "INFO: PROJECT_NODE_ID=$PROJECT_NODE_ID ITERATION_FIELD_ID=$ITERATION_FIELD_ID" >&2
 
-    # C3c: Wave field ID
-    WAVE_FIELD_ID=$(gh project field-list 3 --owner ghbvf --format json \
-      | jq -r '.fields[] | select(.name=="Wave").id // ""')
+    # C3c: Wave field ID + option ids — via the single-source resolver (clean single-line).
+    # shellcheck disable=SC1090
+    eval "$(FIELD_LIST_JSON="$(gh project field-list 3 --owner ghbvf --format json)" bash "$resolve_script")"
     echo "INFO: WAVE_FIELD_ID=${WAVE_FIELD_ID:-<not found>}" >&2
 
     # Stage 1: issues + items + iter-config

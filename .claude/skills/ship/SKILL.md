@@ -196,7 +196,7 @@ if ! grep -qiE "scopes:.*\bproject\b" <<<"$AUTH_STATUS"; then
 fi
 ```
 
-**Status 写入流程**：
+**Status 写入流程**（**best-effort**：Status = Project v2 cosmetic lifecycle marker，不是 /ship 真实工作的硬前置。**任何失败一律 WARN 跳过、绝不 `exit`**——worktree / 实现 / PR 都不依赖 Status。这与 daily-planner Iteration 写入的 fail-closed 不同：那是 mutation 安全语义，此处只是状态标记）：
 
 ```bash
 ISSUE_NUMBER=<N>  # 本次实施的 issue 号
@@ -204,59 +204,50 @@ ISSUE_NUMBER=<N>  # 本次实施的 issue 号
 # 动态查 Project node ID + Status field ID + "In progress" option ID
 PROJECT_NODE_ID=$(gh project view 3 --owner ghbvf --format json | jq -r '.id')
 FIELD_LIST_JSON=$(gh project field-list 3 --owner ghbvf --format json)
-STATUS_FIELD_ID=$(jq -r '.fields[] | select(.name=="Status").id' <<<"$FIELD_LIST_JSON")
+STATUS_FIELD_ID=$(jq -r '[.fields[] | select(.name=="Status").id] | first // ""' <<<"$FIELD_LIST_JSON")
 IN_PROGRESS_OPTION_ID=$(jq -r \
-  '.fields[] | select(.name=="Status") | .options[] | select(.name=="In progress") | .id' \
+  '[.fields[] | select(.name=="Status") | .options[] | select(.name=="In progress") | .id] | first // ""' \
   <<<"$FIELD_LIST_JSON")
 
-# fail-CLOSED：Status 是 Project 内建字段；查不到 = 异常，不静默跳过
-[[ -z "$STATUS_FIELD_ID" ]] && {
-  echo "ERROR: Status field not found in Project #3; check Project v2 configuration" >&2; exit 1
-}
-[[ -z "$IN_PROGRESS_OPTION_ID" ]] && {
-  echo "ERROR: 'In progress' option not found in Status field; check Project v2 configuration" >&2; exit 1
-}
-
-# 查 issue 对应的 item id（by content number）
-ITEM_ID=$(gh api graphql -f query='query($proj: ID!, $num: Int!) {
-  node(id: $proj) { ... on ProjectV2 {
-    items(first: 100) { nodes {
-      id
-      content { ... on Issue { number } }
-    }}
-  }}
-}' -f proj="$PROJECT_NODE_ID" -F num="$ISSUE_NUMBER" \
-  --jq ".data.node.items.nodes[] | select(.content.number==$ISSUE_NUMBER) | .id" 2>/dev/null || true)
-
-[[ -z "$ITEM_ID" ]] && {
-  echo "ERROR: issue #$ISSUE_NUMBER not found in Project #3; add it to the project first" >&2; exit 1
-}
-
-# 查当前 Status，仅 Backlog/Ready → In progress；已是 In review 不覆盖
-# fail-CLOSED：查询失败时 WARN + 跳过写入（不写比误覆盖 In review 安全）
-if ! CURRENT_STATUS=$(gh api graphql -f query='query($id: ID!) {
-  node(id: $id) { ... on ProjectV2Item {
-    status: fieldValueByName(name:"Status") {
-      ... on ProjectV2ItemFieldSingleSelectValue { name }
-    }
-  }}
-}' -f id="$ITEM_ID" --jq '.data.node.status.name // ""' 2>&1); then
-  echo "WARN: failed to query current Status for issue #$ISSUE_NUMBER; skipping Status write to avoid overwriting In review" >&2
+# best-effort 守卫：任一前置缺失 → WARN + 跳过整个 Status 写入，/ship 继续。
+if [[ -z "$STATUS_FIELD_ID" || -z "$IN_PROGRESS_OPTION_ID" ]]; then
+  echo "WARN: Status field / 'In progress' option not found in Project #3; skipping Status write (cosmetic, /ship continues)" >&2
 else
-  if [[ "$CURRENT_STATUS" == "In review" ]]; then
+  # 查 issue 对应的 item id（by content number）
+  ITEM_ID=$(gh api graphql -f query='query($proj: ID!, $num: Int!) {
+    node(id: $proj) { ... on ProjectV2 {
+      items(first: 100) { nodes {
+        id
+        content { ... on Issue { number } }
+      }}
+    }}
+  }' -f proj="$PROJECT_NODE_ID" -F num="$ISSUE_NUMBER" \
+    --jq ".data.node.items.nodes[] | select(.content.number==$ISSUE_NUMBER) | .id" 2>/dev/null || true)
+
+  if [[ -z "$ITEM_ID" ]]; then
+    echo "WARN: issue #$ISSUE_NUMBER not in Project #3; skipping Status write (cosmetic, /ship continues)" >&2
+  # 查当前 Status，仅非 In review → In progress；已是 In review 不覆盖。
+  # 查询失败 → WARN + 跳过（不写优于误覆盖 In review）。
+  elif ! CURRENT_STATUS=$(gh api graphql -f query='query($id: ID!) {
+    node(id: $id) { ... on ProjectV2Item {
+      status: fieldValueByName(name:"Status") {
+        ... on ProjectV2ItemFieldSingleSelectValue { name }
+      }
+    }}
+  }' -f id="$ITEM_ID" --jq '.data.node.status.name // ""' 2>&1); then
+    echo "WARN: failed to query current Status for issue #$ISSUE_NUMBER; skipping Status write" >&2
+  elif [[ "$CURRENT_STATUS" == "In review" ]]; then
     echo "INFO: issue #$ISSUE_NUMBER already In review; skipping Status write (In review owned by Project v2 workflow)" >&2
-  else
-    if ! gh api graphql -f query='mutation($proj: ID!, $item: ID!, $field: ID!, $opt: String!) {
+  elif ! gh api graphql -f query='mutation($proj: ID!, $item: ID!, $field: ID!, $opt: String!) {
       updateProjectV2ItemFieldValue(input: {
         projectId: $proj, itemId: $item, fieldId: $field,
         value: { singleSelectOptionId: $opt }
       }) { projectV2Item { id } }
     }' -f proj="$PROJECT_NODE_ID" -f item="$ITEM_ID" \
        -f field="$STATUS_FIELD_ID" -f opt="$IN_PROGRESS_OPTION_ID" 2>&1; then
-      echo "WARN: failed to set Status → In progress for issue #$ISSUE_NUMBER; Status update is cosmetic lifecycle marker, continuing" >&2
-    else
-      echo "INFO: issue #$ISSUE_NUMBER Status → In progress" >&2
-    fi
+    echo "WARN: failed to set Status → In progress for issue #$ISSUE_NUMBER (cosmetic, /ship continues)" >&2
+  else
+    echo "INFO: issue #$ISSUE_NUMBER Status → In progress" >&2
   fi
 fi
 ```
