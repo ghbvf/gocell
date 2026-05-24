@@ -430,30 +430,71 @@ func TestNewProtocol_Error_OnMissingOptions(t *testing.T) {
 	}
 }
 
-// TestWithChainHMAC_CallerSliceZeroedAfterCopy: WithChainHMAC zeroes the
-// caller's key slice after the defensive copy so that HMAC key material
-// does not linger in the caller's allocation. Verifies the clear(key) call
-// in WithChainHMAC body (A-08: HMACKey getter deleted from export surface).
+// TestWithChainHMAC_CallerSliceZeroedAfterCopy verifies the security invariant
+// that WithChainHMAC zeroes the caller's key slice via clear(key) after copy.
+// Removing the clear(key) call in WithChainHMAC body causes the "happy" subtest
+// to fail: each key byte remains non-zero. Replaces TestProtocol_HMACKeyDefensiveCopy
+// (HMACKey getter removed per A-08).
+//
+// Boundary cases (nil / short key) verify the documented fail-fast behavior:
+// WithChainHMAC returns an error before clear() runs, and the caller slice is
+// left untouched — no crash, no silent data alteration.
 func TestWithChainHMAC_CallerSliceZeroedAfterCopy(t *testing.T) {
 	t.Parallel()
-	key := make([]byte, 32)
-	for i := range key {
-		key[i] = byte(i + 1)
-	}
 	ns, _ := ledger.ParseNamespaceID("auditcore")
-	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(key),
-		ledger.WithNamespace(ns),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	if err != nil {
-		t.Fatalf("NewProtocol: %v", err)
+
+	tests := []struct {
+		name       string
+		keyLen     int // -1 → nil key
+		wantErr    bool
+		wantZeroed bool // post-call caller slice all-zero check
+	}{
+		{"happy_32_byte", 32, false, true},
+		{"short_31_byte_rejected", 31, true, false}, // clear() never runs; caller slice untouched
+		{"nil_key_rejected", -1, true, false},       // nil-safe: clear(nil) is no-op
 	}
-	for i, b := range key {
-		if b != 0 {
-			t.Errorf("caller key byte %d not zeroed after WithChainHMAC: got %#x", i, b)
-		}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var key []byte
+			if tt.keyLen >= 0 {
+				key = make([]byte, tt.keyLen)
+				for i := range key {
+					key[i] = byte(i + 1)
+				}
+			}
+			_, err := ledger.NewProtocol(
+				ledger.WithChainHMAC(key),
+				ledger.WithNamespace(ns),
+				ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+				ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+			)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("NewProtocol: expected error for %s, got nil", tt.name)
+				}
+				if tt.keyLen > 0 {
+					// Caller slice should be unchanged (no clear ran)
+					if key[0] == 0 {
+						t.Errorf("caller key unexpectedly zeroed on error path for %s; clear() must only run on success", tt.name)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewProtocol: %v", err)
+			}
+			if tt.wantZeroed {
+				for i, b := range key {
+					if b != 0 {
+						t.Errorf("caller key not zeroed: first non-zero byte at index %d = %#x (additional non-zero bytes suppressed)", i, b)
+						break // C.F2: surface first failure only
+					}
+				}
+			}
+		})
 	}
 }
 
