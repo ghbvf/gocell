@@ -206,6 +206,27 @@ func newL2Harness(t *testing.T) *l2Harness {
 // composition root (SharedDeps + BuildApp + buildAssembly + bootstrap.New).
 func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	t.Helper()
+	h := bootL2Assembly(t, pgOutboxOverride)
+	seedAdmin(t, h.base)
+	return h
+}
+
+// newL2HarnessNoSeed boots the full assembly but SKIPS seedAdmin. Use this
+// when the test itself drives POST /api/v1/access/setup/admin so that the
+// setup path is exercised under a controlled outbox writer (e.g. with a
+// selectiveFailWriter). Calling seedAdmin after boot would be non-idempotent
+// if the test already POSTed setup/admin.
+func newL2HarnessNoSeed(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
+	t.Helper()
+	return bootL2Assembly(t, pgOutboxOverride)
+}
+
+// bootL2Assembly constructs and starts the full PG-backed assembly (accesscore
+// + configcore + auditcore) and waits for /healthz to be ready. It does NOT
+// seed an admin — callers are responsible for calling seedAdmin or driving
+// setup/admin directly.
+func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
+	t.Helper()
 
 	pg := buildPGStores(t)
 	authDeps := buildAuthLayer(t)
@@ -237,7 +258,6 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 	runBootstrap(t, asm, primaryLn, internalLn, eb, authDeps, relayWorker)
 	base := "http://" + primaryLn.Addr().String()
 	waitForHealthz(t, base)
-	seedAdmin(t, base)
 
 	return &l2Harness{
 		pool:         pg.pool,

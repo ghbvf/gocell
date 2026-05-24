@@ -103,6 +103,8 @@ test-integration:
 		./cmd/corebundle/... \
 		./examples/ssobff/... \
 		./cells/accesscore/... \
+		./cells/configcore/... \
+		./cells/auditcore/... \
 		./runtime/bootstrap/... \
 		-count=1 -timeout 15m -v
 

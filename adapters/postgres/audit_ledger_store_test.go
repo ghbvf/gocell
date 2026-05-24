@@ -275,18 +275,22 @@ func TestAuditLedgerStore_AdvisoryLockSerializesAppend(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestAuditLedgerStore_OutboxAtomicityFailureProof (AUDITAPPEND-L2-FAILURE-PROOF-01)
+// TestL2Atomicity_auditcore_RollsBack (AUDITAPPEND-L2-FAILURE-PROOF-01 / L2-OUTBOX-ATOMICITY-COVERAGE-01)
 // ---------------------------------------------------------------------------
 
-// TestAuditLedgerStore_OutboxAtomicityFailureProof proves that when an outbox
-// write fails inside the same transaction as store.Append, the entire
-// transaction rolls back and no audit_entries row is written.
+// TestL2Atomicity_auditcore_RollsBack proves that when an outbox write fails
+// inside the same transaction as store.Append, the entire transaction rolls
+// back and no audit_entries row is written.
+//
+// This test satisfies L2-OUTBOX-ATOMICITY-COVERAGE-01 for the auditcore
+// cell-level L2 unit (cell-level test; shared appender package covers the
+// hybrid consumer path via TestL2Atomicity_appender_{RollsBack,ReplayIdempotent}).
 //
 // Design: the test injects a "fail-injecting outbox writer" that runs inside
 // the same txRunner.RunInTx block. store.Append succeeds within the tx, then
 // the outbox writer deliberately returns an error, causing RunInTx to rollback
 // the whole transaction. We then assert audit_entries has no new rows.
-func TestAuditLedgerStore_OutboxAtomicityFailureProof(t *testing.T) {
+func TestL2Atomicity_auditcore_RollsBack(t *testing.T) {
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
@@ -324,6 +328,18 @@ func TestAuditLedgerStore_OutboxAtomicityFailureProof(t *testing.T) {
 		Scan(&countAfter))
 	assert.Equal(t, countBefore, countAfter,
 		"store.Append must roll back atomically with outbox failure: no new row must persist")
+
+	// Negative control: a successful Append on the same store must persist a
+	// row, proving the rollback assertion above is not vacuous (i.e., Append
+	// genuinely writes a row on the happy path and the store is properly wired).
+	e2 := storetest.NewEntryFixture(t, "atomicity-control-evt", "atomicity.control", "actor", fc.Now())
+	require.NoError(t, store.Append(ctx, e2), "negative control: Append must succeed without outbox failure")
+	var countControl int
+	require.NoError(t, p.DB().QueryRow(ctx,
+		"SELECT count(*) FROM audit_entries WHERE namespace = $1", string(ns)).
+		Scan(&countControl))
+	assert.Equal(t, countAfter+1, countControl,
+		"negative control: successful Append must persist exactly one new audit_entries row")
 }
 
 // ---------------------------------------------------------------------------
