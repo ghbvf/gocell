@@ -16,14 +16,14 @@ var sliceMeta = &metadata.SliceMeta{
 	BelongsToCell:    "ordercell",
 	ConsistencyLevel: "L0",
 	ContractUsages: []metadata.ContractUsage{
-		{Contract: "http.order.projection-rebuild.v1", Role: "serve"},
+		{Contract: "http.order.internal.projection-rebuild.v1", Role: "serve"},
 	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{
 			"unit.orderprojectionrebuild.handler",
 		},
 		Contract: []string{
-			"contract.http.order.projection-rebuild.v1.serve",
+			"contract.http.order.internal.projection-rebuild.v1.serve",
 		},
 	},
 	AllowedFiles: []string{

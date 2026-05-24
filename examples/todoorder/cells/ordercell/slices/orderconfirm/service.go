@@ -124,14 +124,10 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 	// Capture old status before domain transition
 	oldStatus := order.Status
 
-	// Apply domain transition — returns conflict if not pending
+	// Apply domain transition — returns conflict if not pending (fast-path 409).
 	if err := order.Confirm(); err != nil {
 		//nolint:nilerr // typed-envelope: business 409 returned as typed response struct, not via error (cell-patterns)
-		return confirmv1.Confirm409ErrorResponse{
-			Body: *errcode.New(errcode.KindConflict, errcode.ErrConflict,
-				"order-confirm: order cannot be confirmed",
-				errcode.WithDetails(slog.String("orderId", req.ID), slog.String("currentStatus", oldStatus))),
-		}, nil
+		return s.confirm409(req.ID, oldStatus), nil
 	}
 
 	// Build outbox entry before tx (marshal errors should not roll back)
@@ -141,17 +137,16 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 		return nil, err
 	}
 
-	// Atomic: persist status update + emit outbox entry
-	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.UpdateStatus(txCtx, order.ID, domain.StatusConfirmed); err != nil {
-			return fmt.Errorf("order-confirm: update status: %w", err)
+	// Atomic: persist status update (CAS: only if still pending) + emit outbox entry.
+	// The CAS expectedStatus guard catches concurrent Confirm calls that both observed
+	// pending before either committed: the second caller gets KindConflict from the
+	// repo, RunInTx rolls back, and Confirm returns a 409 — no duplicate event emitted.
+	casConflict, txErr := s.runConfirmTx(ctx, order.ID, entry)
+	if txErr != nil {
+		if casConflict {
+			return s.confirm409(req.ID, oldStatus), nil
 		}
-		if err := s.emitter.Emit(txCtx, entry); err != nil {
-			return fmt.Errorf("order-confirm: emit event: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
+		return nil, txErr
 	}
 
 	s.logger.Info("order-confirm: event emitted",
@@ -169,6 +164,39 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 			Status: order.Status,
 		},
 	}), nil
+}
+
+// runConfirmTx executes the transactional CAS update + outbox emit.
+// Returns (casConflict=true, err) when the repo signals KindConflict (concurrent
+// re-entry). Returns (false, err) for any other infrastructure error.
+// Returns (false, nil) on success.
+func (s *Service) runConfirmTx(ctx context.Context, orderID string, entry outbox.Entry) (bool, error) {
+	var casConflict bool
+	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.UpdateStatus(txCtx, orderID, domain.StatusPending, domain.StatusConfirmed); err != nil {
+			var ecErr *errcode.Error
+			if errors.As(err, &ecErr) && ecErr.Kind == errcode.KindConflict {
+				casConflict = true
+				return err // trigger tx rollback
+			}
+			return fmt.Errorf("order-confirm: update status: %w", err)
+		}
+		if err := s.emitter.Emit(txCtx, entry); err != nil {
+			return fmt.Errorf("order-confirm: emit event: %w", err)
+		}
+		return nil
+	})
+	return casConflict, err
+}
+
+// confirm409 constructs the typed 409 response for both the fast-path (domain
+// Confirm() rejected) and the CAS-conflict path (concurrent re-entry).
+func (s *Service) confirm409(orderID, currentStatus string) confirmv1.Confirm409ErrorResponse {
+	return confirmv1.Confirm409ErrorResponse{
+		Body: *errcode.New(errcode.KindConflict, errcode.ErrConflict,
+			"order-confirm: order cannot be confirmed",
+			errcode.WithDetails(slog.String("orderId", orderID), slog.String("currentStatus", currentStatus))),
+	}
 }
 
 func (s *Service) buildStatusChangedEntry(id, oldStatus, newStatus string, changedAt time.Time) (outbox.Entry, error) {

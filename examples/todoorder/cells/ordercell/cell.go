@@ -20,8 +20,8 @@ import (
 	confirmv1 "github.com/ghbvf/gocell/generated/contracts/http/order/confirm/v1"
 	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
+	projectionrebuildv1 "github.com/ghbvf/gocell/generated/contracts/http/order/internalapi/projection-rebuild/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
-	projectionrebuildv1 "github.com/ghbvf/gocell/generated/contracts/http/order/projection-rebuild/v1"
 	projectionsummaryv1 "github.com/ghbvf/gocell/generated/contracts/http/order/projection-summary/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/healthz"
@@ -34,7 +34,7 @@ import (
 
 // allowAllInternalPolicy is the route policy for the internal projection-rebuild
 // endpoint. The caller-cell allowlist guard is auto-injected by auth.Mount
-// because http.order.projection-rebuild.v1 declares non-empty endpoints.clients
+// because http.order.internal.projection-rebuild.v1 declares non-empty endpoints.clients
 // ([ordercell]); the service-token + caller-cell check happens at the transport
 // layer, so this policy adds no JWT role check (internal requests carry a
 // service principal, not a JWT role).

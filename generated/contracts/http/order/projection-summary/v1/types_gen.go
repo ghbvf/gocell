@@ -24,9 +24,9 @@ type Response struct {
 
 // ResponseData is a generated DTO for contract http.order.projection-summary.v1.
 type ResponseData struct {
-	Statuses       []*ResponseDataStatusesItem `json:"statuses,omitempty"`
-	TotalOrders    int64                       `json:"totalOrders,omitempty"`
-	LastAppliedSeq int64                       `json:"lastAppliedSeq,omitempty"`
+	Statuses       []*ResponseDataStatusesItem `json:"statuses"`
+	TotalOrders    int64                       `json:"totalOrders"`
+	LastAppliedSeq int64                       `json:"lastAppliedSeq"`
 }
 
 // ResponseDataStatusesItem is a generated DTO for contract http.order.projection-summary.v1.

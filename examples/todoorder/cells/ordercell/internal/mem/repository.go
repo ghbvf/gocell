@@ -59,9 +59,12 @@ func (r *OrderRepository) GetByID(_ context.Context, id string) (*domain.Order, 
 	return &out, nil
 }
 
-// UpdateStatus updates the status of an existing order.
+// UpdateStatus performs a conditional status transition (compare-and-swap).
+// The update is applied only when the current persisted status equals expectedStatus.
 // Returns ErrOrderNotFound if no order with the given ID exists.
-func (r *OrderRepository) UpdateStatus(_ context.Context, id, newStatus string) error {
+// Returns ErrConflict (KindConflict) if the current status does not match expectedStatus,
+// indicating a concurrent modification won the race and this transition should be rejected.
+func (r *OrderRepository) UpdateStatus(_ context.Context, id, expectedStatus, newStatus string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -70,6 +73,15 @@ func (r *OrderRepository) UpdateStatus(_ context.Context, id, newStatus string) 
 		return errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
 			"order not found",
 			errcode.WithDetails(slog.String("orderId", id)))
+	}
+	if o.Status != expectedStatus {
+		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+			"order status precondition failed",
+			errcode.WithDetails(
+				slog.String("orderId", id),
+				slog.String("expected", expectedStatus),
+				slog.String("actual", o.Status),
+			))
 	}
 	o.Status = newStatus
 	return nil

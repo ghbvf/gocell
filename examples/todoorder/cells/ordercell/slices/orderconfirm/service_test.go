@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // --- test doubles ---
@@ -222,6 +223,60 @@ func TestService_Confirm_EmitFailure_ReturnsError(t *testing.T) {
 	assert.Equal(t, domain.StatusConfirmed, order.Status,
 		"stub has no rollback: status was updated before emit failure; real PG tx would roll this back")
 }
+
+// TestService_Confirm_CASConflict_Returns409_NoEmit verifies that when UpdateStatus
+// returns KindConflict (concurrent re-entry CAS failure), Confirm returns a 409
+// typed response and emits no outbox event.
+//
+// The stubTxRunner executes fn directly (no real DB rollback), so we test the
+// control-flow path: casConflict flag set → typed 409 response returned, no emission.
+func TestService_Confirm_CASConflict_Returns409_NoEmit(t *testing.T) {
+	// Use a fake repo that always returns KindConflict from UpdateStatus.
+	repo := &conflictingUpdateRepo{inner: mem.NewOrderRepository()}
+	orderID := seedOrder(t, repo.inner) // seed directly into inner to bypass fake
+	// Manually copy to fake's id so GetByID works
+	repo.orderID = orderID
+
+	writer := &recordingWriter{}
+	txRunner := &stubTxRunner{}
+	svc := newTestService(t, repo, writer, txRunner)
+
+	resp, err := svc.Confirm(context.Background(), &confirmv1.Request{ID: orderID, Status: domain.StatusConfirmed})
+	require.NoError(t, err, "CAS conflict must be returned as typed struct, not error")
+	require.NotNil(t, resp)
+
+	_, ok := resp.(confirmv1.Confirm409ErrorResponse)
+	require.True(t, ok, "expected Confirm409ErrorResponse for CAS conflict, got %T", resp)
+
+	// No events emitted — CAS failure means tx was rolled back
+	assert.Empty(t, writer.entries, "no event must be emitted on CAS conflict")
+}
+
+// conflictingUpdateRepo wraps mem.OrderRepository and always returns KindConflict
+// from UpdateStatus to simulate a concurrent-confirm CAS failure.
+type conflictingUpdateRepo struct {
+	inner   *mem.OrderRepository
+	orderID string
+}
+
+func (r *conflictingUpdateRepo) Create(ctx context.Context, order *domain.Order) error {
+	return r.inner.Create(ctx, order)
+}
+
+func (r *conflictingUpdateRepo) GetByID(ctx context.Context, id string) (*domain.Order, error) {
+	return r.inner.GetByID(ctx, id)
+}
+
+func (r *conflictingUpdateRepo) List(_ context.Context, _ query.ListParams) ([]*domain.Order, error) {
+	panic("not used in this test")
+}
+
+func (r *conflictingUpdateRepo) UpdateStatus(_ context.Context, id, expectedStatus, newStatus string) error {
+	return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+		"order status precondition failed")
+}
+
+var _ domain.OrderRepository = (*conflictingUpdateRepo)(nil)
 
 // TestNewService_NilDep verifies required-dep nil guard.
 func TestNewService_NilDep(t *testing.T) {

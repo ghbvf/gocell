@@ -6,14 +6,14 @@ belongsToCell: ordercell
 consistencyLevel: L0
 
 contractUsages:
-  - contract: http.order.projection-rebuild.v1
+  - contract: http.order.internal.projection-rebuild.v1
     role: serve
 
 verify:
   unit:
     - unit.orderprojectionrebuild.handler
   contract:
-    - contract.http.order.projection-rebuild.v1.serve
+    - contract.http.order.internal.projection-rebuild.v1.serve
   waivers: []
 
 allowedFiles:

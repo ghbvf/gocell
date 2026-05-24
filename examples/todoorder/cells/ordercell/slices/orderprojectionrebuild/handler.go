@@ -11,7 +11,7 @@ import (
 	"context"
 
 	internalproj "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/orderprojection"
-	projectionrebuild "github.com/ghbvf/gocell/generated/contracts/http/order/projection-rebuild/v1"
+	projectionrebuild "github.com/ghbvf/gocell/generated/contracts/http/order/internalapi/projection-rebuild/v1"
 )
 
 // Compile-time assertion: RebuildAdapter implements the generated Service interface.

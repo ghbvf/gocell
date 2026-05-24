@@ -11,7 +11,7 @@ contracts:
   - event.order-status-changed.v1
   - projection.order.status-summary.v1
   - http.order.projection-summary.v1
-  - http.order.projection-rebuild.v1
+  - http.order.internal.projection-rebuild.v1
 passCriteria:
   - text: "PATCH /api/v1/orders/{id}/status confirms a pending order and publishes event.order-status-changed.v1"
     mode: auto

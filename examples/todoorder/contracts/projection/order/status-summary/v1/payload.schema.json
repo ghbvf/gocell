@@ -29,5 +29,10 @@
     "lastAppliedSeq": {
       "type": "integer"
     }
-  }
+  },
+  "required": [
+    "statuses",
+    "totalOrders",
+    "lastAppliedSeq"
+  ]
 }

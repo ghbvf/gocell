@@ -12,7 +12,7 @@ import (
 
 	internalproj "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/orderprojection"
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
-	projectionrebuild "github.com/ghbvf/gocell/generated/contracts/http/order/projection-rebuild/v1"
+	projectionrebuild "github.com/ghbvf/gocell/generated/contracts/http/order/internalapi/projection-rebuild/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"

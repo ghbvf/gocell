@@ -272,6 +272,116 @@ func TestRebuild_ReportCounts(t *testing.T) {
 	assert.Equal(t, 2, report.StatusesRebuilt) // "pending" + "confirmed"
 }
 
+// makeCreatedEntryPartial builds an order-created outbox entry with specific field
+// values so individual required fields can be zeroed to test validation.
+func makeCreatedEntryPartial(t *testing.T, id, status, item string) outbox.Entry {
+	t.Helper()
+	payload := ordercreated.Payload{ID: id, Item: item, Status: status}
+	b, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return outbox.Entry{ID: "entry-partial-" + id, Payload: b}
+}
+
+// makeStatusChangedEntryPartial builds an order-status-changed outbox entry with
+// specific field values so individual required fields can be zeroed to test validation.
+func makeStatusChangedEntryPartial(t *testing.T, id, oldStatus, newStatus string) outbox.Entry {
+	t.Helper()
+	payload := orderstatuschanged.Payload{ID: id, OldStatus: oldStatus, NewStatus: newStatus}
+	b, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return outbox.Entry{ID: "entry-sc-partial-" + id, Payload: b}
+}
+
+// TestHandleOrderCreated_MissingRequiredFields verifies that order-created payloads
+// with missing required fields are Rejected to DLX without writing to the projection.
+func TestHandleOrderCreated_MissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry outbox.Entry
+	}{
+		{
+			name:  "missing id",
+			entry: makeCreatedEntryPartial(t, "", domain.StatusPending, "widget"),
+		},
+		{
+			name:  "missing status",
+			entry: makeCreatedEntryPartial(t, "order-missing-status", "", "widget"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestService(t)
+			ctx := context.Background()
+
+			result := svc.HandleOrderCreated(ctx, tt.entry)
+
+			assert.Equal(t, outbox.DispositionReject, result.Disposition,
+				"missing required field must Reject to DLX")
+			var pe *outbox.PermanentError
+			assert.True(t, errors.As(result.Err, &pe), "expected PermanentError, got %T", result.Err)
+
+			// projection must remain unmodified
+			summary := svc.Query(ctx)
+			assert.Equal(t, int64(0), summary.TotalOrders,
+				"projection must not be written when required fields are missing")
+			assert.Empty(t, summary.Statuses)
+		})
+	}
+}
+
+// TestHandleOrderStatusChanged_MissingRequiredFields verifies that order-status-changed
+// payloads with missing required fields are Rejected to DLX without writing to the
+// projection or the event log.
+func TestHandleOrderStatusChanged_MissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry outbox.Entry
+	}{
+		{
+			name:  "missing id",
+			entry: makeStatusChangedEntryPartial(t, "", domain.StatusPending, domain.StatusConfirmed),
+		},
+		{
+			name:  "missing oldStatus",
+			entry: makeStatusChangedEntryPartial(t, "order-missing-old", "", domain.StatusConfirmed),
+		},
+		{
+			name:  "missing newStatus",
+			entry: makeStatusChangedEntryPartial(t, "order-missing-new", domain.StatusPending, ""),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestService(t)
+			ctx := context.Background()
+
+			// seed a created order so any accidental apply would show up in the summary
+			svc.HandleOrderCreated(ctx, makeCreatedEntry(t, "seed-order", domain.StatusPending))
+			logLenBefore := func() int {
+				svc.store.mu.RLock()
+				defer svc.store.mu.RUnlock()
+				return len(svc.store.log)
+			}()
+
+			result := svc.HandleOrderStatusChanged(ctx, tt.entry)
+
+			assert.Equal(t, outbox.DispositionReject, result.Disposition,
+				"missing required field must Reject to DLX")
+			var pe *outbox.PermanentError
+			assert.True(t, errors.As(result.Err, &pe), "expected PermanentError, got %T", result.Err)
+
+			// event log must not grow (no new entry appended)
+			svc.store.mu.RLock()
+			logLenAfter := len(svc.store.log)
+			svc.store.mu.RUnlock()
+			assert.Equal(t, logLenBefore, logLenAfter,
+				"event log must not grow when required fields are missing")
+		})
+	}
+}
+
 func TestConcurrency_HandleAndQuery_NoDataRace(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)

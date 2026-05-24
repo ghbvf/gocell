@@ -39,5 +39,10 @@ type OrderRepository interface {
 	Create(ctx context.Context, order *Order) error
 	GetByID(ctx context.Context, id string) (*Order, error)
 	List(ctx context.Context, params query.ListParams) ([]*Order, error)
-	UpdateStatus(ctx context.Context, id, newStatus string) error
+	// UpdateStatus performs a conditional (compare-and-swap) status transition.
+	// The update is applied only when the current persisted status equals
+	// expectedStatus; if the actual status differs, UpdateStatus returns a
+	// KindConflict error to prevent concurrent re-entry (e.g. two concurrent
+	// Confirm calls both observing pending before either commits).
+	UpdateStatus(ctx context.Context, id, expectedStatus, newStatus string) error
 }
