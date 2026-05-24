@@ -10,7 +10,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// TestValidator_NewWarning: newWarning sets SeverityWarning and leaves Fix empty.
+// TestValidator_NewWarning: newWarning sets SeverityWarning and a non-empty Fix
+// (the typed-Fix contract is severity-agnostic — warnings carry structured
+// remediation too).
 func TestValidator_NewWarning(t *testing.T) {
 	src := "id: accesscore\n" + // line 1
 		"type: core\n" // line 2
@@ -23,7 +25,8 @@ func TestValidator_NewWarning(t *testing.T) {
 
 	r := v.newWarning(codeREF01, IssueRefNotFound,
 		"cells/accesscore/cell.yaml", "id",
-		"advisory: cell id unreferenced by any journey")
+		"advisory: cell id unreferenced by any journey",
+		"reference the cell from a journey or remove it if unused")
 
 	assert.Equal(t, codeREF01, r.Code)
 	assert.Equal(t, SeverityWarning, r.Severity)
@@ -31,7 +34,7 @@ func TestValidator_NewWarning(t *testing.T) {
 	assert.Equal(t, "cells/accesscore/cell.yaml", r.File)
 	assert.Equal(t, "id", r.Field)
 	assert.Equal(t, "advisory: cell id unreferenced by any journey", r.Message)
-	assert.Empty(t, r.Fix, "warnings must carry no fix guidance")
+	assert.Equal(t, "reference the cell from a journey or remove it if unused", r.Fix)
 	assert.Equal(t, 1, r.Line)
 	assert.Positive(t, r.Column)
 }

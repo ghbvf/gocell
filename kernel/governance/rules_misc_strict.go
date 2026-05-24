@@ -624,11 +624,10 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 				codeFMT23, IssueForbidden,
 				contractFile(c), "lifecycle",
 				fmt.Sprintf(
-					"contract %q has been deprecated for >90d (since %s);"+
-						" delete the contract and migrate all consumers, or refresh deprecatedAt"+
-						" to today after re-evaluating the deprecation timeline",
+					"contract %q has been deprecated for >90d (since %s)",
 					c.ID, c.DeprecatedAt,
 				),
+				"delete the contract and migrate all consumers, or refresh deprecatedAt to today after re-evaluating the deprecation timeline",
 			))
 		}
 	}

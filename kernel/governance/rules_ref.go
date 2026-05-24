@@ -336,10 +336,10 @@ func (v *Validator) validateREF16() []ValidationResult {
 				assemblyFile(a),
 				"id",
 				fmt.Sprintf(
-					"assembly %q has no generated boundary.yaml at %s/boundary.yaml;"+
-						" run 'gocell generate' to create it",
+					"assembly %q has no generated boundary.yaml at %s/boundary.yaml",
 					a.ID, generatedDir,
 				),
+				"run 'gocell generate' to create the boundary.yaml",
 			))
 		}
 	}

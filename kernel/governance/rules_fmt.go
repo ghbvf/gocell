@@ -791,7 +791,8 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 			codeFMT13, IssueRequired,
 			file,
 			fieldSchemaRefsResponse,
-			fmt.Sprintf("http contract %q with noContent=false should declare schemaRefs.response", c.ID),
+			fmt.Sprintf("http contract %q with noContent=false declares no schemaRefs.response", c.ID),
+			"declare endpoints.http.schemaRefs.response, or set noContent: true if the endpoint returns no body",
 		))
 	}
 
@@ -931,7 +932,8 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 			codeFMT15, IssueInvalid,
 			contractFile(c), fieldSchemaRefsResponse,
 			fmt.Sprintf("response schema for contract %q uses oneOf/anyOf/allOf:"+
-				" FMT-15 cannot verify list constraints; split into single-shape contracts", c.ID),
+				" FMT-15 cannot verify list constraints", c.ID),
+			"split the response into single-shape contracts so FMT-15 can verify the list constraints",
 		)}
 	}
 	if !isListSchema(info) {

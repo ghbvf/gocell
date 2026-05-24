@@ -64,6 +64,7 @@ func (v *Validator) validateADV01() []ValidationResult {
 				journeyFile(j),
 				"id",
 				fmt.Sprintf("journey %q has no entry in status-board.yaml", j.ID),
+				"add an entry for this journey to journeys/status-board.yaml, or remove the journey if it is retired",
 			))
 		}
 	}
@@ -86,6 +87,7 @@ func (v *Validator) validateADV03() []ValidationResult {
 					sliceFile(s),
 					fmt.Sprintf("verify.waivers[%d].contract", i),
 					fmt.Sprintf("waiver for contract %q has no matching contractUsage in slice %q", w.Contract, s.ID),
+					"add a contractUsage for this contract to the slice, or remove the stale waiver entry",
 				))
 			}
 		}
@@ -105,6 +107,7 @@ func (v *Validator) validateADV04() []ValidationResult {
 				"journeys/status-board.yaml",
 				fmt.Sprintf("[%d].journeyId", i),
 				fmt.Sprintf("status-board entry references unknown journey %q", entry.JourneyID),
+				"create the referenced journey under journeys/, or remove this status-board entry",
 			))
 		}
 	}

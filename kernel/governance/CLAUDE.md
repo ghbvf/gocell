@@ -17,9 +17,10 @@ v.newError(
     "add subscribers to endpoints.subscribers or set lifecycle: deprecated", // 修复指导 → Fix 字段
 )
 
-// warning：无 fix
+// warning：fix 同样必填（advisory，但"怎么改"也进 Fix，不留 Message）
 v.newWarning(codeADV01, IssueRefNotFound, journeyFile(j), "id",
-    fmt.Sprintf("journey %q has no entry in status-board.yaml", j.ID))
+    fmt.Sprintf("journey %q has no entry in status-board.yaml", j.ID),
+    "add an entry for this journey to journeys/status-board.yaml, or remove the journey if it is retired")
 
 // scope（跨文件，无单一位置；Line/Column 恒为 0）
 dc.newScopedError(codeDEP02, IssueForbidden, "project", "cells",
@@ -33,7 +34,7 @@ newErrorAt(codeDOCNAME01, IssueForbidden,
     advHintDOCNAME01LegacyLiteralFix)
 ```
 
-> `msg` 是问题陈述，`fix` 是「怎么改」。两者都可用 `fmt.Sprintf`（插值参数各自分配）。CLI 输出把 `fix` 渲染成独立的 `fix:` 行 / JSON `"fix"` 字段，不再拼进 message。typed-Fix 契约 **error-only**：`newWarning` 无 fix（warning 是 advisory，任何建议留在 Message，不是契约，INV-3 不查 warning）。详见 ADR `docs/architecture/202605241730-adr-governance-error-fix-field-funnel.md`。
+> `msg` 是问题陈述，`fix` 是「怎么改」。两者都可用 `fmt.Sprintf`（插值参数各自分配）。CLI 输出把 `fix` 渲染成独立的 `fix:` 行 / JSON `"fix"` 字段，不再拼进 message。typed-Fix 契约 **severity-agnostic**：四个构造函数（含 `newWarning`）全部强制 `fix`，INV-3 对全部检查 fix 非空。severity 只管 blocking(error) vs advisory(warning)，不管"指导是否结构化"——warning 的"怎么改"也进 Fix，不留 Message。详见 ADR `docs/architecture/202605241730-adr-governance-error-fix-field-funnel.md`。
 
 ## 规则编号体系
 

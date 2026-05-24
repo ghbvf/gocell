@@ -821,18 +821,6 @@ func isGovernanceEmitterName(name string) bool {
 	}
 }
 
-// isGovernanceErrorEmitterName reports whether name is one of the three error
-// constructors that take a mandatory fix argument as their last positional
-// parameter. newWarning is excluded — warnings carry no fix.
-func isGovernanceErrorEmitterName(name string) bool {
-	switch name {
-	case "newError", "newScopedError", "newErrorAt":
-		return true
-	default:
-		return false
-	}
-}
-
 // printfVerbRe matches a Go printf format verb (e.g. %s, %q, %02d, %+v, %%).
 var printfVerbRe = regexp.MustCompile(`%[#+\- 0]*[0-9]*(?:\.[0-9]+)?[a-zA-Z%]`)
 
@@ -885,14 +873,15 @@ func astShapeName(expr ast.Expr) string {
 // TestGovernanceRuleErrorFixField verifies INV-3
 // (GOVERNANCE-RULE-ERROR-FIX-FIELD-01): the typed Fix funnel. Two properties:
 //
-//  1. Fix-arg non-empty: every error-constructor call — newError /
-//     newScopedError (locator methods) and newErrorAt (package-level
-//     function) — must pass a resolvable, non-empty remediation string as its
-//     LAST positional argument. The constructor signatures make the fix
-//     parameter mandatory at compile time (arity: choosing the error API means
-//     supplying a fix slot); this archtest closes the residual gap Go cannot
-//     express — that the fix is non-empty. newWarning has no fix parameter and
-//     is not scanned.
+//  1. Fix-arg non-empty: every finding-constructor call — newError /
+//     newWarning / newScopedError (locator methods) and newErrorAt (package-
+//     level function) — must pass a resolvable, non-empty remediation string as
+//     its LAST positional argument. All four signatures make the fix parameter
+//     mandatory at compile time (arity: choosing a constructor means supplying a
+//     fix slot); this archtest closes the residual gap Go cannot express — that
+//     the fix is non-empty. The contract is severity-agnostic: newWarning is
+//     scanned too (a warning's remediation also lives in the typed Fix field,
+//     never as a Message substring).
 //  2. Construction funnel: no raw ValidationResult{} composite literal may
 //     appear in the governance package outside locator.go (the sole
 //     constructor home). All findings flow through the four constructors, so
@@ -987,6 +976,11 @@ func testINV3NegativeFixture(t *testing.T) {
 			shape:   "newScopedError callsite with empty fix argument",
 		},
 		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/warning_empty_fix_red",
+			wantMin: 1,
+			shape:   "newWarning callsite with empty fix argument",
+		},
+		{
 			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/struct_lit_missing_fix_red",
 			wantMin: 1,
 			shape:   "raw ValidationResult{} composite literal (named fields)",
@@ -1045,12 +1039,13 @@ func testINV3ProductionSource(t *testing.T) {
 // file. Shared between production and fixture tests so both exercise identical
 // logic — fixture validates the production path.
 //
-// Path 1 (fix-arg): error-constructor calls — newError / newScopedError
-// (SelectorExpr) and newErrorAt (Ident) — whose LAST positional argument does
-// not resolve to a non-empty string (empty literal, or an unresolvable
-// expression such as a forwarded parameter). resolveStringFragments handles
-// literals, package-scope const idents, + concatenation, and fmt.Sprintf
-// templates. newWarning has no fix and is not scanned.
+// Path 1 (fix-arg): every finding constructor — newError / newWarning /
+// newScopedError (SelectorExpr) and newErrorAt (Ident) — whose LAST positional
+// argument does not resolve to a non-empty string with literal content (empty
+// literal, an unresolvable expression such as a forwarded parameter, or a
+// verb-only fmt.Sprintf template). resolveStringFragments handles literals,
+// package-scope const idents, + concatenation, and fmt.Sprintf templates. The
+// typed-Fix contract is severity-agnostic, so newWarning is scanned too.
 //
 // Path 2 (funnel): any ValidationResult{} composite literal in the governance
 // package outside locator.go (the sole sanctioned constructor home). Findings
@@ -1069,10 +1064,14 @@ func scanFixFieldViolationsInFile(
 ) []string {
 	var violations []string
 
-	// Path 1: error constructors must carry a non-empty fix (last positional arg).
+	// Path 1: every finding constructor — newError / newWarning / newScopedError
+	// (SelectorExpr) and newErrorAt (Ident) — must carry a non-empty fix as its
+	// last positional argument. The typed-Fix contract covers all severities
+	// (severity decides blocking vs advisory, not whether remediation is
+	// structured); newWarning is included.
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		name := governanceEmitterName(call)
-		if !isGovernanceErrorEmitterName(name) || len(call.Args) < 2 {
+		if name == "" || len(call.Args) < 2 {
 			return
 		}
 		fixArg := call.Args[len(call.Args)-1]
@@ -1083,7 +1082,7 @@ func scanFixFieldViolationsInFile(
 		violations = append(violations,
 			relPath+":"+strconv.Itoa(pos.Line)+
 				": "+name+" fix argument is empty, unresolvable, or carries no literal guidance — every "+
-				"error finding must carry remediation text in the typed Fix field "+
+				"finding (error or warning) must carry remediation text in the typed Fix field "+
 				"(GOVERNANCE-RULE-ERROR-FIX-FIELD-01)")
 	})
 

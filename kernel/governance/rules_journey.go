@@ -136,10 +136,10 @@ func (v *Validator) validateJOURNEYSTATUSLIFECYCLE01() []ValidationResult {
 				fmt.Sprintf("[%d].state", i),
 				fmt.Sprintf(
 					"journey %q is lifecycle: active but board state is %q;"+
-						" active journeys should progress toward done;"+
-						" advance the board to done when all passCriteria stabilize, or revert lifecycle to experimental if work has reopened",
+						" active journeys should progress toward done",
 					e.JourneyID, e.State,
 				),
+				"advance the board to done when all passCriteria stabilize, or revert lifecycle to experimental if work has reopened",
 			))
 		}
 	}

@@ -17,11 +17,12 @@
 | 构造函数 | 位置 | severity | fix |
 |---------|------|---------|-----|
 | `newError(code, typ, file, field, msg, fix)` | `*locator` 方法 | Error | 必填 |
-| `newWarning(code, typ, file, field, msg)` | `*locator` 方法 | Warning | 无 |
+| `newWarning(code, typ, file, field, msg, fix)` | `*locator` 方法 | Warning | 必填 |
 | `newScopedError(code, typ, scope, field, msg, fix)` | `*locator` 方法 | Error（跨文件） | 必填 |
 | `newErrorAt(code, typ, file, pos, field, msg, fix)` | **包级函数** | Error（content-scan 位置） | 必填 |
 
-- 选 error 语义 = 调用结构上强制带 `fix` 参数的 API（arity）；选错 = 选错 API 名。
+- **typed-Fix 契约 severity-agnostic**：四个构造函数全部强制 `fix` 位置参数，INV-3 对全部四个（含 `newWarning`）检查 fix 非空。severity 只决定 blocking(error) vs advisory(warning)，不决定"修复指导是否结构化"——warning 的"怎么改"同样进 Fix 字段，不再当 Message 子串。
+- 选构造函数 = 选 severity（typed function choice）；任一都强制带 `fix`，少传编译失败。
 - `newErrorAt` 是包级函数（非 locator 方法）：它不查 yaml.Node 缓存（位置由调用方给），使包级 emit/doc scan helper（无 locator receiver）也能经 funnel 构造，而非裸 `ValidationResult{}` 字面量。
 - 旧 free-`Severity` 三件套 `newResult`/`newResultAt`/`newScopedResult` **删除**，无兼容别名（项目无外部消费方）。
 - 输出：text printer 渲染独立 `fix:` 行，JSON 加 `"fix"` 字段，SARIF 在 message 尾部追加 `; fix: …`（SARIF 无独立 remediation slot）。Message 不再含 `"; fix:"`。
@@ -63,9 +64,11 @@
 - **本变更已补**：check.go 这 ~17 处的 `Fix` 值（关闭 `gocell check --format=json` 输出 `"fix":""` 的可见契约洞；Fix 文本无损带入 #922）。
 - **archtest 守护 defer #922**：INV-3 的 production scan 与 funnel ban 只覆盖 `./kernel/governance`；让 cmd 构造点也受守护的正确做法是 #922 的 seal——届时 `ValidationResult` 字段 unexported、构造函数导出为唯一路径，cmd 跟随改走构造函数（强制 Fix）。本变更**不**建临时的「cmd 字面量必须有 Fix」cross-package archtest，因 #922 seal 会整体推翻它（避免 throwaway 机制）。#922 body 已含此构造点迁移范围。
 
-### 契约范围：error-only（warning 不携带结构化 Fix，by design）
+### 契约范围：所有 finding（error + warning），severity-agnostic
 
-typed-Fix 契约**仅覆盖 SeverityError**。`newWarning` 无 fix 参数，INV-3 不检查 warning。warning 是 advisory observation——它的 Message 里**可以**含修复建议（如 JOURNEY-STATUS-LIFECYCLE-01 的"advance the board... or revert lifecycle"），那是 incidental 文本，**不是契约**，刻意不拆进 Fix。把 warning 提升为结构化 Fix（`newWarning` 加 fix + INV-3 扩到 warning）会扩 #689 的 error 范围，属另一设计决策，本 ADR 明确**不做**（review 簇 C4/F8，errors-only by design）。
+typed-Fix 契约覆盖**全部 severity**。`newWarning` 与三个 error 构造函数一样强制 `fix` 参数，INV-3 对四个构造函数都检查 fix 非空。理由（review 簇 C4/F8 二次确认）：本 ADR 的论点是"修复指导不该当 Message 自由文本子串（不可机器提取、i18n 漂移）"——**这个问题与 severity 无关**。warning 的 JSON 出口一样被工具消费，把指导埋 Message 一样不可提取（实测 8 个 warning 站点全部带修复动作，无一纯观察）。故 warning 的"怎么改"同样进 Fix 字段。severity 只表达 blocking vs advisory，不表达"指导是否结构化"。
+
+> 历史：初版曾按"errors-only by design"裁定 warning 不带结构化 Fix；review 二次确认指出这是把 pragmatic scope 裁剪包装成原则——severity 区分不构成放过 warning 的正当理由，遂改为 severity-agnostic 全覆盖。
 
 ## Consequences
 
