@@ -117,9 +117,11 @@ func NewEntryFixture(t *testing.T, eventID, eventType, actorID string, now time.
 // Run executes the Protocol-driven contract suite against factory. All backends
 // share NewTestProtocol to prove parity on the same protocol decisions.
 //
-// The protocol parameter must match the protocol passed to Factory; it is
-// validated non-nil to catch misconfigured callers at test setup time. The
-// Verify_Tampered* cases previously accepted via this parameter have been
+// The protocol parameter is the same instance the Factory uses internally; the
+// Protocol_HashParity subtest re-computes ComputeHash on appended entries to
+// prove the store's persisted hash matches the protocol's output byte-for-byte
+// (the core single-source contract between Store implementations and Protocol).
+// The Verify_Tampered* cases previously accepted via this parameter have been
 // relocated to mem_store_tamper_test.go (A-05 refactor).
 func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Helper()
@@ -147,6 +149,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_ByFilters", func(t *testing.T) { runQueryByFilters(t, factory) })
 	t.Run("Append_MultiKey_Payload_RoundTrip", func(t *testing.T) { runAppendMultiKeyPayloadRoundTrip(t, factory) })
 	t.Run("Query_Ordering_TimestampDesc_IDAsc", func(t *testing.T) { runQueryOrderingTimestampDescIDAsc(t, factory) })
+	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -558,6 +561,51 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 				"(F-05: both backends must sort timestamp DESC)",
 				i, gotEventID, wantEventID)
 		}
+	}
+}
+
+// runProtocolHashParity verifies that a Store's persisted entry.Hash matches
+// protocol.ComputeHash byte-for-byte. This is the single-source contract
+// between Store implementations and Protocol: both Mem and PG stores must
+// produce identical hashes for identical inputs, otherwise chain continuity
+// breaks when a payload migrates across backends or a Verify spans the cut.
+//
+// Two entries cover both prevHash branches:
+//   - seq 1: prevHash="" (chain root)
+//   - seq 2: prevHash=entry1.Hash (chain link)
+func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Protocol) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	e1 := NewEntryFixture(t, "parity-1", "parity.test", "actor-parity", fc.Now())
+	if err := store.Append(context.Background(), e1); err != nil {
+		t.Fatalf("Append seq 1: %v", err)
+	}
+	e2 := NewEntryFixture(t, "parity-2", "parity.test", "actor-parity", fc.Now())
+	if err := store.Append(context.Background(), e2); err != nil {
+		t.Fatalf("Append seq 2: %v", err)
+	}
+
+	got1, err := store.GetBySeq(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("GetBySeq 1: %v", err)
+	}
+	want1 := protocol.ComputeHash("", got1)
+	if got1.Hash != want1 {
+		t.Errorf("seq 1 hash parity broken: store=%s protocol=%s "+
+			"(Store implementation and Protocol must agree byte-for-byte)",
+			got1.Hash, want1)
+	}
+
+	got2, err := store.GetBySeq(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("GetBySeq 2: %v", err)
+	}
+	want2 := protocol.ComputeHash(got1.Hash, got2)
+	if got2.Hash != want2 {
+		t.Errorf("seq 2 hash parity broken: store=%s protocol=%s "+
+			"(chain link broken — Store does not use Protocol.ComputeHash for prevHash threading)",
+			got2.Hash, want2)
 	}
 }
 

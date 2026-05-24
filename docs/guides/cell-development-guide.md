@@ -140,9 +140,10 @@ Raw infra 类型（`outbox.Publisher`、`outbox.Writer`、`persistence.TxRunner`
 package mycell
 
 import (
+    "github.com/ghbvf/gocell/kernel/cell"
     "github.com/ghbvf/gocell/kernel/outbox"
     "github.com/ghbvf/gocell/kernel/persistence"
-    "github.com/ghbvf/gocell/kernel/cell"
+    "github.com/ghbvf/gocell/pkg/validation"
 )
 
 type MyCell struct {
@@ -163,9 +164,12 @@ func WithOutboxDeps(p outbox.CellPublisher, w outbox.CellWriter) Option {
 
 // WithTxManager 注入 sealed tx 依赖。tx 必须通过 persistence.WrapForCell 在
 // composition root 构造。nil 静默忽略；最终 nil 校验由 validateRequired() 完成。
+// CellTxManager 是 sealed interface（不可作 struct literal 构造），用
+// pkg/validation.IsNilInterface 做 typed-nil 检测（kernel/runtime 单源 helper，
+// 详见 .claude/rules/gocell/runtime-api.md §Option 范式分层 — 累加式 builder option）。
 func WithTxManager(tx persistence.CellTxManager) Option {
     return func(c *MyCell) {
-        if tx == (persistence.CellTxManager{}) {
+        if validation.IsNilInterface(tx) {
             return
         }
         c.txMgr = tx
@@ -176,13 +180,15 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 #### Composition root 对照例
 
 ```go
-// demo / 测试模式 — 用 noop 实现在 composition root 构造 sealed marker
+// demo / 测试模式 — 用 noop 实现在 composition root 构造 sealed marker。
+// DiscardPublisher 用 pointer receiver，故传 &outbox.DiscardPublisher{}；
+// NoopWriter / DemoTxRunner 用 value receiver，可直接传值。
 mycell.New(
     mycell.WithOutboxDeps(
-        outbox.WrapPublisherForCell(outbox.DiscardPublisher{}),
+        outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}),
         outbox.WrapWriterForCell(outbox.NoopWriter{}),
     ),
-    mycell.WithTxManager(persistence.WrapForCell(persistence.DemoTxRunner{})),
+    mycell.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 )
 
 // production 模式 — 用真实 adapter 在 composition root 构造 sealed marker

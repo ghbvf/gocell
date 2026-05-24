@@ -105,7 +105,7 @@ import (
 
 cell, err := mycell.New(
     mycell.WithOutboxDeps(
-        outbox.WrapPublisherForCell(outbox.DiscardPublisher{}),
+        outbox.WrapPublisherForCell(&outbox.DiscardPublisher{}),
         outbox.WrapWriterForCell(outbox.NoopWriter{}),
     ),
     mycell.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
