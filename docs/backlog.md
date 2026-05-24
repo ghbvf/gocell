@@ -35,7 +35,7 @@ CLI 路径**不解析** [`.github/ISSUE_TEMPLATE/backlog.yml`](../.github/ISSUE_
 
 所有维度元数据走 labels（含 Priority）。Projects v2 仅用模板自带 3 个字段（Status / Estimate / Iteration），不加 custom field。
 
-- **Capability**（15，单选）：`cap-01` … `cap-14`、`cap-x-cross`。能力域定义见 [`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md)
+- **Capability**（16，单选）：`cap-01` … `cap-15`、`cap-x-cross`。能力域定义见 [`docs/reviews/capabilities/20260504-engineering-capability-domain-map.md`](reviews/capabilities/20260504-engineering-capability-domain-map.md)
 - **Flag**（4，单选）：
   | Label | 含义 |
   |---|---|
