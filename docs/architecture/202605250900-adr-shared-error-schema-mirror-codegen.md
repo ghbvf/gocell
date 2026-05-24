@@ -89,7 +89,7 @@ CAS ADR（`202605241700` §Out of scope）明确 `contracts/shared/` 是「mixin
 | 上游（禁止外部写副本） | A1 reverse-enum archtest：全量扫 repo，未声明副本即 CI 红；JSON 文件无 Go 类型系统阻拦，最高只能到 archtest | **Medium** |
 | 下游（`Headerless` 逃生口限制） | A2 caller-allowlist archtest：`WriteOptions{Headerless: true}` 复合字面量只允许在 `sharedschema` 包，类型信息确认，无灰区形态 | **Medium** |
 
-整体评级：**Medium + Medium**（composite Medium）。两格均开 gh issue `#<TBD-rogue-hardening>` 跟踪 Hard 化路径。
+整体评级：**Medium + Medium**（composite Medium）。两格均开 gh issue `#954` 跟踪 Hard 化路径。
 
 ### 为何不能评 Hard
 
@@ -97,15 +97,15 @@ CAS ADR（`202605241700` §Out of scope）明确 `contracts/shared/` 是「mixin
 
 本 funnel**不在 ai-robust.md 的 Hard 范本目录新增条目**——它落入现有「codegen funnel + golden」范本的弱化变体，符号清单 / archtest ID 活在 `tools/archtest/shared_schema_mirror_test.go` 的 package godoc。
 
-Hard 化方向（gh issue `#<TBD-rogue-hardening>` 跟踪）：
+Hard 化方向（gh issue `#954` 跟踪）：
 1. 上游：引入 codegen generate-time 自检，在 `gocell generate shared-schema` 执行后立即 `gocell verify codegen-shared-schema` 并 fail-fast；或把 mirror 文件置入 `generated/` 子目录（`governance.IsGoCellGenerated` 只检 header，子目录不解决）。
 2. 下游：将 `Headerless` 从 `WriteOptions` 导出字段改为 unexported + 私有构造函数，使包外无法构造带 `Headerless=true` 的 `WriteOptions`，Go 类型系统阻拦（Hard）。
 
 ## Out of scope
 
 - **消除 mirror**：两个 reader 的 allowlist 结构决定了物理副本是必需的，不存在通过消除副本来升 Hard 的路径；Hard 化只能走「reader allowlist 重构允许跨 root `$ref`」，成本极高，故意不取。
-- **manifest 化 `hack/verify-schema-policy.sh` 全部 strict 行**：该脚本目前单列若干 strict 校验目标，其中 error envelope mirror 的 strict 性现由字节恒等 canonical 传递继承（见本 ADR §Consequences）；将脚本全部 strict 目标 manifest 化（结构化声明，archtest 守护）作为 backlog 追踪（issue 占位 `#<TBD-policy-manifest>`）。
-- **synth fixtures 分叉**：`tools/codegen/contractgen/testdata/synth/` 下有 3 份故意手工内容发散的 `error-response-v1.schema.json`，是 contractgen 行为测试用的 fixture——它们是有意不对齐 canonical 的 carve-out，已登记在 archtest `SHARED-SCHEMA-MIRROR-FUNNEL-01` 的 `synthCarveOutPrefix` 排除集，不纳入本 funnel 管辖。
+- **manifest 化 `hack/verify-schema-policy.sh` 全部 strict 行**：该脚本目前单列若干 strict 校验目标，其中 error envelope mirror 的 strict 性现由字节恒等 canonical 传递继承（见本 ADR §Consequences）；将脚本全部 strict 目标 manifest 化（结构化声明，archtest 守护）作为 backlog 追踪（issue 占位 `#955`）。
+- **synth fixtures 分叉**：`tools/codegen/contractgen/testdata/synth/` 下有 3 份故意手工内容发散的 `error-response-v1.schema.json`，是 contractgen 行为测试用的 fixture——它们是有意不对齐 canonical 的 carve-out。A1 reverse-enum 用 `ModuleScope` 扫描（scanner 拒绝 `ModuleScope + IncludeTestdata`），`testdata/` 树天然排除在 A1 扫描之外，synth fixtures 与 `tests/contracttest/testdata/` 的声明 mirror 都不在 A1 扫描范围；后者的字节恒等由 `sharedschema.Verify`（verify gate）守护。
 
 ## Consequences
 
@@ -139,8 +139,8 @@ Hard 化方向（gh issue `#<TBD-rogue-hardening>` 跟踪）：
 ## Related
 
 - gh issue #677（本变更）
-- gh issue `#<TBD-rogue-hardening>`（上游 Hard 化 + Headerless seal 跟踪，主 agent 回填）
-- gh issue `#<TBD-policy-manifest>`（verify-schema-policy.sh manifest 化跟踪，主 agent 回填）
+- gh issue `#954`（上游 Hard 化 + Headerless seal 跟踪，主 agent 回填）
+- gh issue `#955`（verify-schema-policy.sh manifest 化跟踪，主 agent 回填）
 - archtest `SHARED-SCHEMA-MIRROR-FUNNEL-01`（`tools/archtest/shared_schema_mirror_test.go`）
 - `tools/codegen/sharedschema/` 包 godoc（符号清单、Mirrors 变量文档）
 - ADR `docs/architecture/202605241700-adr-contracts-shared-cas-mixin-funnel.md`（CAS mixin，同命名空间对照）

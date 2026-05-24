@@ -24,12 +24,12 @@
 //
 //   - Upstream: Medium — this A1 reverse-enum archtest detects new copies at
 //     CI time; the Go type system cannot prevent creating a JSON file.
-//     gh issue #<TBD-rogue-hardening> tracks Hard-ening this side (e.g. via a
+//     gh issue #954 tracks Hard-ening this side (e.g. via a
 //     codegen funnel that verifies at generate-time, not only at verify-time).
 //
 //   - Downstream: Medium — A2 caller-allowlist (archtest) restricts Headerless
 //     usage; the WriteOptions struct field is exported so it cannot be sealed at
-//     compile time. Same gh issue #<TBD-rogue-hardening> tracks upgrading to a
+//     compile time. Same gh issue #954 tracks upgrading to a
 //     typed-funnel construction pattern that seals the escape-hatch.
 //
 // Blind-spot inventory (per ai-robust.md §"工具选定后强制盲区自检"):

@@ -14,12 +14,12 @@
 //   - Upstream: Medium — the A1 reverse-enum archtest
 //     (SHARED-SCHEMA-MIRROR-FUNNEL-01) detects new rogue copies at CI time;
 //     the Go type system cannot prevent creating a JSON file.
-//     gh issue #<TBD-rogue-hardening> tracks Hard-ening this side.
+//     gh issue #954 tracks Hard-ening this side.
 //
 //   - Downstream: Medium — the A2 caller-allowlist archtest restricts
 //     Headerless usage to this package; the WriteOptions struct field is
 //     exported so it cannot be sealed at compile time.
-//     Same gh issue #<TBD-rogue-hardening> tracks upgrading to a
+//     Same gh issue #954 tracks upgrading to a
 //     typed-funnel construction pattern that seals the escape-hatch.
 //
 //   - The [codegen.Write] Headerless escape-hatch caller-allowlist is Hard
@@ -34,7 +34,7 @@
 //
 // archtest ID: SHARED-SCHEMA-MIRROR-FUNNEL-01
 // ADR ref: docs/architecture/202605250900-adr-shared-error-schema-mirror-codegen.md
-// Hard-ening tracking: gh issue #<TBD-rogue-hardening>
+// Hard-ening tracking: gh issue #954
 package sharedschema
 
 import (
