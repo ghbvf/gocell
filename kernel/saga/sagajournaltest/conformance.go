@@ -189,8 +189,14 @@ func findClaimed(t *testing.T, claimed []journal.ClaimedInstance, id idutil.Safe
 	return journal.ClaimedInstance{}
 }
 
-// shortLease is a convenience constant for lease durations used in fencing tests.
-const shortLease = 10 * time.Second
+// Lease durations used across the conformance suite, extracted to package-level
+// consts per TEST-TIME-LITERAL-01.
+const (
+	shortLease    = 10 * time.Second // standard claim lease for fencing tests
+	originalLease = 5 * time.Second  // initial lease before a Heartbeat extension
+	extendedLease = 60 * time.Second // lease length after a Heartbeat extension
+	wellPastLease = shortLease * 10  // advance the clock well past any lease window
+)
 
 // appendStep appends a step event under the given lease and fails on error,
 // returning the assigned version. The kind parameter controls the event kind so
@@ -858,9 +864,6 @@ func conformHeartbeatExtendsLease(t *testing.T, factory Factory) {
 	j, clk, cleanup := factory(t)
 	defer cleanup()
 
-	const originalLease = 5 * time.Second
-	const extendedLease = 60 * time.Second
-
 	inst := NewInstanceFixture(t, "inst-hb-extend", clk.Now())
 	mustEnqueue(t, j, inst)
 	claimed, _, err := j.ClaimPending(context.Background(), 10, originalLease)
@@ -1184,7 +1187,7 @@ func conformTerminalNotReclaimed(t *testing.T, factory Factory) {
 	}
 
 	// Advance clock so any lease window is well past.
-	clk.Advance(shortLease * 10)
+	clk.Advance(wellPastLease)
 
 	for range 3 {
 		c2, _, err2 := j.ClaimPending(context.Background(), 10, shortLease)

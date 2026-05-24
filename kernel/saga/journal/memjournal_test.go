@@ -14,6 +14,13 @@ import (
 // epoch is the fixed start time used across MemJournal tests.
 var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
+// Lease durations for MemJournal tests, extracted to package-level consts per
+// TEST-TIME-LITERAL-01.
+const (
+	testLeaseDur = 30 * time.Second // standard claim lease
+	expiryLease  = 5 * time.Second  // short lease for expiry / reclaim tests
+)
+
 // newMemFactory returns a sagajournaltest.Factory backed by a MemJournal and a
 // deterministic FakeClock. The SAME clock instance is passed to NewMemJournal
 // and returned to the suite, so tests can advance time to expire leases.
@@ -60,7 +67,7 @@ func TestLoad_DefensiveCopy(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	claimed, _, err := j.ClaimPending(context.Background(), 10, 30*time.Second)
+	claimed, _, err := j.ClaimPending(context.Background(), 10, testLeaseDur)
 	if err != nil || len(claimed) == 0 {
 		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
 	}
@@ -114,8 +121,7 @@ func TestClaimPending_DefensiveCopy(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	const leaseDuration = 5 * time.Second
-	claimed, _, err := j.ClaimPending(context.Background(), 10, leaseDuration)
+	claimed, _, err := j.ClaimPending(context.Background(), 10, expiryLease)
 	if err != nil || len(claimed) == 0 {
 		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
 	}
@@ -124,8 +130,8 @@ func TestClaimPending_DefensiveCopy(t *testing.T) {
 	claimed[0].Instance.CurrentStep = 999
 
 	// Let the lease expire and reclaim.
-	clk.Advance(leaseDuration + time.Second)
-	reClaimed, _, err := j.ClaimPending(context.Background(), 10, leaseDuration)
+	clk.Advance(expiryLease + time.Second)
+	reClaimed, _, err := j.ClaimPending(context.Background(), 10, expiryLease)
 	if err != nil || len(reClaimed) == 0 {
 		t.Fatalf("ClaimPending (reclaim): err=%v len=%d", err, len(reClaimed))
 	}
@@ -149,7 +155,7 @@ func TestAppend_NilPayload(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	claimed, _, err := j.ClaimPending(context.Background(), 10, 30*time.Second)
+	claimed, _, err := j.ClaimPending(context.Background(), 10, testLeaseDur)
 	if err != nil || len(claimed) == 0 {
 		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
 	}
@@ -200,7 +206,7 @@ func TestHeartbeat_UnknownInstance(t *testing.T) {
 		t.Fatalf("NewMemJournal: %v", err)
 	}
 
-	ok, err := j.Heartbeat(context.Background(), "does-not-exist", "any-lease", 30*time.Second)
+	ok, err := j.Heartbeat(context.Background(), "does-not-exist", "any-lease", testLeaseDur)
 	if err != nil {
 		t.Fatalf("Heartbeat on unknown instance returned error: %v", err)
 	}
