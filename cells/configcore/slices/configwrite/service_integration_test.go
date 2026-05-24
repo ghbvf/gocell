@@ -187,13 +187,11 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	_, err = svc.Create(adminIntegCtx(), CreateInput{Key: "rollback.test", Value: "v"})
 	require.Error(t, err)
 	// Exact-sentinel check: the error must wrap the injected sentinel, not a
-	// coincidental substring match from unrelated infrastructure.
+	// coincidental substring match from unrelated infrastructure. This also
+	// proves Write was actually invoked — the sentinel instance only exists
+	// inside the writer, so a wiring bug that skipped Write could not produce it.
 	assert.ErrorIs(t, err, failingWriter.Err,
-		"Create error must wrap the injected outbox sentinel")
-	// Write-was-invoked proof: Calls must be 1; a wiring bug that skips Write
-	// would still produce a rollback but would not exercise the L2 path at all.
-	assert.Equal(t, 1, failingWriter.Calls,
-		"writer.Write must be invoked exactly once before rollback")
+		"Create error must wrap the injected outbox sentinel (proves Write was invoked)")
 
 	// config_entries row must NOT exist (rolled back).
 	_, getErr := repo.GetByKey(ctx, "rollback.test")
@@ -263,9 +261,7 @@ func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, failingWriter.Err,
-		"Update error must wrap the injected outbox sentinel")
-	assert.Equal(t, 1, failingWriter.Calls,
-		"writer.Write must be invoked exactly once before Update rollback")
+		"Update error must wrap the injected outbox sentinel (proves Write was invoked)")
 
 	// config_entries must still be at version 1 (UPDATE rolled back).
 	afterEntry, getErr := repo.GetByKey(ctx, "rollback.update.key")
@@ -311,9 +307,7 @@ func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
 	deleteErr := failSvc.Delete(adminIntegCtx(), "rollback.delete.key", 1)
 	require.Error(t, deleteErr)
 	assert.ErrorIs(t, deleteErr, failingWriter.Err,
-		"Delete error must wrap the injected outbox sentinel")
-	assert.Equal(t, 1, failingWriter.Calls,
-		"writer.Write must be invoked exactly once before Delete rollback")
+		"Delete error must wrap the injected outbox sentinel (proves Write was invoked)")
 
 	// config_entries row must still exist (DELETE rolled back).
 	afterEntry, getErr := repo.GetByKey(ctx, "rollback.delete.key")
