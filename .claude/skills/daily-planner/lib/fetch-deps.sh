@@ -20,6 +20,9 @@ DEP_FETCH_FAILED=false
 issue_count_for_deps=$(jq 'length' "$WORKDIR/issues.json")
 if [[ "$issue_count_for_deps" -gt 0 ]]; then
   while IFS= read -r inum; do
+    # Per-issue stderr capture inside $WORKDIR (700-perm tmp), unique name —
+    # avoids fixed /tmp/deps-err-$inum collisions across concurrent runs.
+    _err_file=$(mktemp "$WORKDIR/deps-err-XXXXXX")
     if ! blocked_raw=$(gh api graphql \
         -f query='query($num: Int!) {
           repository(owner:"ghbvf", name:"gocell") {
@@ -27,12 +30,14 @@ if [[ "$issue_count_for_deps" -gt 0 ]]; then
               blockedBy(first: 20) { nodes { number } }
             }
           }
-        }' -F num="$inum" 2>/tmp/deps-err-"$inum"); then
+        }' -F num="$inum" 2>"$_err_file"); then
       echo "WARN: blocked-by query failed for issue #$inum (transient?); detail:" >&2
-      sed 's/^/  /' /tmp/deps-err-"$inum" >&2
+      sed 's/^/  /' "$_err_file" >&2
+      rm -f "$_err_file"
       DEP_FETCH_FAILED=true
       continue
     fi
+    rm -f "$_err_file"
     blocked_nums=$(echo "$blocked_raw" | jq '[.data.repository.issue.blockedBy.nodes[].number]')
     if [[ "$(echo "$blocked_nums" | jq 'length')" -gt 0 ]]; then
       DEPS_JSON=$(echo "$DEPS_JSON" | jq --arg n "$inum" --argjson b "$blocked_nums" \

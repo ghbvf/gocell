@@ -39,8 +39,10 @@ if [[ -z "$TODAY_ITERATION_ID" ]]; then
     echo "WARN: [ACTION REQUIRED] today iteration for $DATE not found in Iteration field." >&2
     echo "WARN: [DRY-RUN] planning aborted — TODAY_ITERATION_ID is required to score wave layout." >&2
     echo "WARN: re-run with --apply to create today's iteration option and proceed." >&2
-    echo 'export DP_ABORT_DRYRUN=true'
-    echo 'export TODAY_ITERATION_ID='
+    # printf %q for consistency with the success-path emit below (single source of
+    # quoting style); values are literal here but the form stays uniform.
+    printf 'export DP_ABORT_DRYRUN=%q\n' "true"
+    printf 'export TODAY_ITERATION_ID=%q\n' ""
     exit 0
   fi
 

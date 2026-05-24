@@ -15,6 +15,8 @@
 # Output: eval-able `export VAR=value` lines on stdout (printf %q quoted):
 #   PROJECT_NODE_ID ITERATION_FIELD_ID FIELD_LIST_JSON
 #   DATE DOW IS_WEEKEND WAVE_COUNT WAVE_SIZE
+# FIELD_LIST_JSON carries arbitrary GitHub-API JSON (field names are owner-controlled);
+# `printf %q` fully bash-quotes it so the caller's `eval "$(...)"` is injection-safe.
 #
 # Exit non-zero (errors to stderr) on: not logged in / missing project scope /
 #   unresolved project|iteration id / --weekend + --weekday both set.
@@ -33,9 +35,11 @@ if ! grep -qiE "scopes:.*\bproject\b" <<<"$AUTH_STATUS"; then
 fi
 
 # 0.2 Project node + Iteration field ID
-PROJECT_NODE_ID=$(gh project view 3 --owner ghbvf --format json | jq -r '.id')
+# `// empty` so a missing key yields "" (caught by -z below) rather than the
+# literal string "null" that `jq -r .id` prints for absent keys (which passes -z).
+PROJECT_NODE_ID=$(gh project view 3 --owner ghbvf --format json | jq -r '.id // empty')
 FIELD_LIST_JSON=$(gh project field-list 3 --owner ghbvf --format json)
-ITERATION_FIELD_ID=$(jq -r '.fields[] | select(.name=="Iteration").id' <<<"$FIELD_LIST_JSON")
+ITERATION_FIELD_ID=$(jq -r '[.fields[] | select(.name=="Iteration").id] | first // empty' <<<"$FIELD_LIST_JSON")
 [[ -z "$PROJECT_NODE_ID" || -z "$ITERATION_FIELD_ID" ]] && {
   echo "ERROR: failed to resolve PROJECT_NODE_ID or ITERATION_FIELD_ID" >&2
   exit 1

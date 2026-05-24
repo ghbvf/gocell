@@ -172,6 +172,9 @@ for item in items.json:
 - 已在 today iteration（skip apply）: N
 - 待 apply: N
 - conflict groups: N（全 plan 唯一 int 范围 1..M；advisory 显示分组，同组=共享文件、异组=文件独立；无机器消费者）
+
+> Group 列说明：数字 = 受影响文件前缀重合分组（advisory）。同号 issue 触碰同一批文件，
+> 异号互不重叠。仅供人工参考，**无自动串/并行约束**（ship --from-plan 已移除）。
 ```
 
 Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人工确认]` 等。Group 列标注 `conflict_group` int 值（advisory）：同 int 的 issue 共享文件、不同 int 的 issue 文件独立——仅供人工参考，无机器消费者驱动串/并行。

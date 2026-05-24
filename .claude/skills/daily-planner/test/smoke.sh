@@ -220,6 +220,16 @@ assert_gate_pass "A11: missing conflict_group -> exit 0 (advisory, not validated
   "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
 rm -rf "$wd"
 
+# A12: conflict_group present but NON-INTEGER ("not-an-int") -> still PASSES gate.
+# Reverse of the deleted A5 (which asserted the old int-validation FAILED on this
+# fixture). Proves the guard removal is complete: a value that previously hard-failed
+# the gate now passes (apply-write never reads conflict_group). All other fields valid.
+wd=$(make_gate_workdir "plan-bad-parallel-group.json")
+assert_gate_pass "A12: non-int conflict_group -> exit 0 (guard removed, advisory)" \
+  "WORKDIR=$wd" "TODAY_ITERATION_ID=ITER_TODAY" "YESTERDAY_ITERATION_ID=ITER_YESTERDAY" \
+  "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
+rm -rf "$wd"
+
 # ---------------------------------------------------------------------------
 # Part A: resolve-wave-fields cases (single-line extraction regression)
 # Pins the per-element `// ""` newline-poison bug (same class as PR #926 jq
@@ -318,11 +328,15 @@ case "${1:-} ${2:-}" in
     fi
     if [[ -s "$_il" ]]; then cat "$_il"; else echo "[]"; fi ;;
   "api graphql")
-    if [[ "$all" == *"blockedBy"* ]]; then cat "${GH_STUB_GRAPHQL_DEPS:-/dev/null}"
+    # Routing is first-match-wins. Order matters: the iteration-create MUTATION
+    # body contains "configuration", so it MUST be matched (updateProjectV2Field)
+    # before the iter-config READ branch (ProjectV2IterationField/configuration),
+    # otherwise the mutation would be mis-routed to the read response.
+    if [[ "$all" == *"updateProjectV2Field"* ]]; then cat "${GH_STUB_GRAPHQL_ITERUPDATE:-/dev/null}"
+    elif [[ "$all" == *"blockedBy"* ]]; then cat "${GH_STUB_GRAPHQL_DEPS:-/dev/null}"
     elif [[ "$all" == *"subIssuesSummary"* ]]; then echo "{}"
-    elif [[ "$all" == *"ProjectV2IterationField"* || "$all" == *"configuration"* ]]; then cat "${GH_STUB_GRAPHQL_ITERCFG:-/dev/null}"
     elif [[ "$all" == *"items(first"* ]]; then cat "${GH_STUB_GRAPHQL_ITEMS:-/dev/null}"
-    elif [[ "$all" == *"updateProjectV2Field"* ]]; then cat "${GH_STUB_GRAPHQL_ITERUPDATE:-/dev/null}"
+    elif [[ "$all" == *"ProjectV2IterationField"* || "$all" == *"configuration"* ]]; then cat "${GH_STUB_GRAPHQL_ITERCFG:-/dev/null}"
     else echo "{}"; fi ;;
   *) echo "stage-stub: unexpected gh $all" >&2; exit 1 ;;
 esac
@@ -339,10 +353,11 @@ else
   out=$(env "DATE=2026-05-23" "GH_STUB_FIELD_LIST=${fixtures_dir}/field-list.json" \
         "PATH=${stage_stub_dir}:${PATH}" bash "$resolve_constants_script" 2>/dev/null) || out=""
   if [[ "$out" == *"IS_WEEKEND=true"* && "$out" == *"WAVE_COUNT=4"* \
-        && "$out" == *"ITERATION_FIELD_ID=PVTF_iteration"* ]]; then
-    echo "PASS [PC-RC1: Saturday -> weekend, 4 waves, iteration field resolved]"; pass=$((pass+1))
+        && "$out" == *"ITERATION_FIELD_ID=PVTF_iteration"* \
+        && "$out" == *"PROJECT_NODE_ID=PNI_STUB"* ]]; then
+    echo "PASS [PC-RC1: Saturday -> weekend, 4 waves, project node + iteration field resolved]"; pass=$((pass+1))
   else
-    echo "FAIL [PC-RC1: expected IS_WEEKEND=true/WAVE_COUNT=4/ITERATION_FIELD_ID=PVTF_iteration; got: $out]"; fail=$((fail+1))
+    echo "FAIL [PC-RC1: expected IS_WEEKEND=true/WAVE_COUNT=4/ITERATION_FIELD_ID=PVTF_iteration/PROJECT_NODE_ID=PNI_STUB; got: $out]"; fail=$((fail+1))
   fi
 fi
 
@@ -421,8 +436,39 @@ else
   rm -rf "$ei_wd"
 fi
 
-# --- fetch-data.sh: issue dedup merge (gh-stubbed) ---
-# PC-FD1: P0 and P1 lists share issue #101 -> issues.json deduped by number
+# PC-EI4: APPLY=true + DATE absent from iter-config -> ensure-iteration creates the
+# iteration via updateProjectV2Field mutation (gh-stubbed) and re-resolves the new id.
+# Guards that the apply-only mutation path emits TODAY_ITERATION_ID from the mutation
+# response. (The stub routes updateProjectV2Field BEFORE the configuration read branch.)
+if [[ ! -x "$ensure_iteration_script" ]]; then
+  echo "FAIL [PC-EI4: ensure-iteration.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  ei_wd=$(mktemp -d); cp "${fixtures_dir}/iter-config.json" "$ei_wd/iter-config.json"
+  # mutation response carrying the newly-created iteration for 2026-05-26
+  cat > "$ei_wd/iter-update.json" <<'EIUPD'
+{"data":{"updateProjectV2Field":{"projectV2Field":{"configuration":{"iterations":[
+  {"id":"ITER_YESTERDAY","title":"2026-05-23","startDate":"2026-05-23","duration":1},
+  {"id":"ITER_TODAY","title":"2026-05-24","startDate":"2026-05-24","duration":1},
+  {"id":"ITER_CREATED","title":"Iteration 3","startDate":"2026-05-26","duration":1}
+]}}}}}
+EIUPD
+  out=$(env "WORKDIR=$ei_wd" "DATE=2026-05-26" "APPLY=true" "ITERATION_FIELD_ID=PVTF_iteration" \
+        "GH_STUB_GRAPHQL_ITERUPDATE=$ei_wd/iter-update.json" \
+        "PATH=${stage_stub_dir}:${PATH}" bash "$ensure_iteration_script" 2>/dev/null) || out=""
+  if [[ "$out" == *"TODAY_ITERATION_ID=ITER_CREATED"* ]]; then
+    echo "PASS [PC-EI4: apply mode creates missing iteration via mutation]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-EI4: expected TODAY_ITERATION_ID=ITER_CREATED; got: $out]"; fail=$((fail+1))
+  fi
+  rm -rf "$ei_wd"
+fi
+
+# --- fetch-data.sh: issue dedup merge + items paginate unpack (gh-stubbed) ---
+# PC-FD1: P0 and P1 lists share issue #101 -> issues.json deduped by number;
+# items graphql page (paginate-wrapped) -> items.json unpacked via jq -s '[...nodes[]]'.
+# NOTE: GH_STUB_GRAPHQL_ITEMS uses items-graphql-page.json (raw paginate response
+# shape {data.user.projectV2.items.nodes[]}), NOT the flat items.json fixture — the
+# latter is the POST-jq shape that apply-gate consumes, not the gh-response shape.
 if [[ ! -x "$fetch_data_script" ]]; then
   echo "FAIL [PC-FD1: fetch-data.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
 else
@@ -433,13 +479,15 @@ else
       "GH_STUB_FIELD_LIST=${fixtures_dir}/field-list.json" \
       "GH_STUB_ISSUES_P0=$fd_wd/p0.json" "GH_STUB_ISSUES_P1=$fd_wd/p1.json" \
       "GH_STUB_ISSUES_MISSING=/dev/null" \
-      "GH_STUB_GRAPHQL_ITEMS=${fixtures_dir}/items.json" \
+      "GH_STUB_GRAPHQL_ITEMS=${fixtures_dir}/items-graphql-page.json" \
       "GH_STUB_GRAPHQL_ITERCFG=${fixtures_dir}/iter-config.json" \
       "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_data_script" >/dev/null 2>&1 || true
-  if [[ -f "$fd_wd/issues.json" ]] && [[ "$(jq 'length' "$fd_wd/issues.json" 2>/dev/null)" == "3" ]]; then
-    echo "PASS [PC-FD1: issues merged + deduped by number (3 unique)]"; pass=$((pass+1))
+  fd_issues=$(jq 'length' "$fd_wd/issues.json" 2>/dev/null || echo missing)
+  fd_items=$(jq 'length' "$fd_wd/items.json" 2>/dev/null || echo missing)
+  if [[ "$fd_issues" == "3" && "$fd_items" == "4" ]]; then
+    echo "PASS [PC-FD1: issues deduped (3 unique) + items paginate-unpacked (4 nodes)]"; pass=$((pass+1))
   else
-    echo "FAIL [PC-FD1: expected 3 unique issues; got $(jq 'length' "$fd_wd/issues.json" 2>/dev/null || echo missing)]"; fail=$((fail+1))
+    echo "FAIL [PC-FD1: expected issues=3 items=4; got issues=$fd_issues items=$fd_items]"; fail=$((fail+1))
   fi
   rm -rf "$fd_wd"
 fi
@@ -461,6 +509,26 @@ else
     echo "FAIL [PC-FDEP1: expected deps.json {102:{blocked_by:[101]}}; got $(cat "$fdep_wd/deps.json" 2>/dev/null || echo missing)]"; fail=$((fail+1))
   fi
   rm -rf "$fdep_wd"
+fi
+
+# PC-FDEP2: blocked-by query fails (transient) -> loud WARN + deps.json={} (NOT silent);
+# script still exits 0. Points GH_STUB_GRAPHQL_DEPS at a missing file so the stub's
+# `cat` fails -> gh stub exits non-zero -> fetch-deps takes the DEP_FETCH_FAILED path.
+if [[ ! -x "$fetch_deps_script" ]]; then
+  echo "FAIL [PC-FDEP2: fetch-deps.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  fdep2_wd=$(mktemp -d)
+  echo '[{"number":102,"title":"b"}]' > "$fdep2_wd/issues.json"
+  fdep2_err=$(env "WORKDIR=$fdep2_wd" "GH_STUB_GRAPHQL_DEPS=$fdep2_wd/nonexistent.json" \
+      "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_deps_script" 2>&1 >/dev/null) && fdep2_rc=0 || fdep2_rc=$?
+  fdep2_deps=$(cat "$fdep2_wd/deps.json" 2>/dev/null || echo missing)
+  if [[ "${fdep2_rc:-0}" -eq 0 && "$fdep2_deps" == "{}" \
+        && "$fdep2_err" == *"[DEP DATA UNAVAILABLE]"* ]]; then
+    echo "PASS [PC-FDEP2: transient failure -> loud WARN + deps.json={} (no silent)]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-FDEP2: expected rc0 + deps={} + [DEP DATA UNAVAILABLE]; rc=${fdep2_rc:-0} deps=$fdep2_deps]"; fail=$((fail+1))
+  fi
+  rm -rf "$fdep2_wd"
 fi
 
 # ---------------------------------------------------------------------------
@@ -726,8 +794,11 @@ else
 
   live_wd=$(mktemp -d -t daily-planner-smoke.XXXXXX)
   chmod 700 "$live_wd"
+  # Cumulative trap: keep cleaning the Part A stub dirs (registered earlier) AND
+  # live_wd. A bare `trap "rm -rf '$live_wd'"` would OVERWRITE the earlier trap and
+  # leak stub_dir / stage_stub_dir if the script dies during/after Part B.
   # shellcheck disable=SC2064
-  trap "rm -rf '${live_wd}'" EXIT
+  trap "rm -rf '${stub_dir}' '${stage_stub_dir}' '${live_wd}'" EXIT
 
   live_rc=0
   (

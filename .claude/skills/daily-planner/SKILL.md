@@ -69,6 +69,8 @@ eval "$(FIELD_LIST_JSON="$FIELD_LIST_JSON" bash .claude/skills/daily-planner/lib
 #   - WAVE_FIELD_ID 空 → 阶段 4 apply-gate.sh fail-fast
 #   - WAVE_FIELD_ID 非空但 WAVE_OPTION_IDS 空 = 配置损坏（字段无选项）
 #   - 任一 Wave N 名称缺失（option id 空）→ fail-fast（防 UI 重排/缺名静默错位）
+# 注：即使 weekday（WAVE_COUNT=2，只用 Wave 1/2）也校验全 4 个 option——
+# 字段存在却缺任一 Wave 名 = Project v2 配置损坏，与当日 wave 数无关，应一律 fail-fast。
 if [[ "${APPLY:-}" == "true" && -n "$WAVE_FIELD_ID" ]]; then
   if [[ -z "$WAVE_OPTION_IDS" ]]; then
     echo "ERROR: WAVE_OPTION_IDS empty but WAVE_FIELD_ID set; Wave field has no options (config corrupt)" >&2
@@ -116,6 +118,7 @@ WORKDIR="$WORKDIR" bash .claude/skills/daily-planner/lib/fetch-deps.sh
 # 打印 would-create 摘要 + emit DP_ABORT_DRYRUN=true 让调用方停止。
 eval "$(WORKDIR="$WORKDIR" DATE="$DATE" APPLY="${APPLY:-}" ITERATION_FIELD_ID="$ITERATION_FIELD_ID" \
   bash .claude/skills/daily-planner/lib/ensure-iteration.sh)"
+# exit 0（非 1）是有意的：dry-run 缺 iteration 是正常终止（DP_ABORT_DRYRUN 信号），不是错误。
 [[ "${DP_ABORT_DRYRUN:-}" == "true" ]] && exit 0
 ```
 
@@ -296,7 +299,9 @@ Project v2 #3（owner `ghbvf`）Wave 字段配置状态：
 | **Wave 字段**（single-select） | ✅ 已建 | options：Wave 1 / Wave 2 / Wave 3 / Wave 4 |
 | `Item added to project` workflow | ✅ 已开 | target Status = Backlog |
 | `Pull request merged` workflow | ✅ 已开 | target Status = Done |
-| `Pull request linked to issue` workflow | ✅ 已开 | target Status = In review（由 PR body `Closes #N` link 自动触发）|
+| `Pull request linked to issue` workflow | ✅ 已开 | target Status = In review（GitHub workflow 自动，由 PR body `Closes #N` link 触发；非 skill 写入）|
+
+> 三个 Status 转换全部由 Project v2 内建 workflow 自动驱动；daily-planner 与 ship 均不写 Status 字段（ship 已回退为单-issue 作用域，不再写 In progress）。
 
 字段 ID 由阶段 0 动态查询（`gh project field-list`），不硬编。`WAVE_FIELD_ID` 为空时 apply-gate.sh fail-fast，提示 `ERROR: Wave field missing; Wave single-select field not found in Project #3; see SKILL.md §C3a`。
 
