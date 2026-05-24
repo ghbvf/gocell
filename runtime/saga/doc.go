@@ -22,4 +22,30 @@
 //   - RepoReady probe registration: Coordinator satisfies healthz.RepoProber;
 //     cell-side registration deferred to PR-09 (tracked in follow-up issue).
 //   - Enqueuer interface split: deferred until a real producer ships.
+//
+// # Coordinator lifecycle
+//
+// NewCoordinator validates required deps (journal/txRunner/outboxEmit/registry
+// non-nil; clock panics if nil via clock.MustHaveClock). Start launches two
+// goroutines:
+//   - tickLoop: calls ClaimPending each PollInterval, drives each claimed
+//     instance through one step (Run outside tx, Append + Emit + AfterCommit
+//     Kick inside tx).
+//   - heartbeatLoop: extends leases on actively-driven instances.
+//
+// Stop is idempotent. Ready() returns a channel closed once Start transitions
+// to running. RepoReady delegates to journal.RepoReady so the wrapping cell
+// (PR-09) can register it via cellgen-emitted RegisterRepoReady.
+//
+// # Step.Run is the only StepFunc callsite
+//
+// Inside this package, saga.StepFunc is invoked exclusively from safeRun (a
+// recover-guarded helper). safeRun is called BEFORE txRunner.RunInTx, so user
+// code never executes with a database transaction held open. This invariant is
+// locked by the SAGA-STEP-RUN-OUTSIDE-TX-01 archtest.
+//
+// # Coordinator is the single sanctioned Journal holder
+//
+// Coordinator is the only struct in this package that holds a journal.Journal
+// field. Locked by SAGA-JOURNAL-HOLDER-SEAL-01 archtest.
 package saga
