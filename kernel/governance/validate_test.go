@@ -4037,15 +4037,15 @@ func TestFMT13_HasHowToFixHint(t *testing.T) {
 	got := findByCode(val.validateFMT13(), "FMT-13")
 	require.Len(t, got, 1, "expected one FMT-13 finding")
 
-	msg := got[0].Message
-	assert.Contains(t, msg, "add to contract.yaml:",
-		"FMT-13 message must announce the fix hint inline")
-	assert.Contains(t, msg, "pathParams:",
-		"FMT-13 hint must include the pathParams: key")
-	assert.Contains(t, msg, "userId:",
-		"FMT-13 hint must include the offending placeholder name (userId)")
-	assert.Contains(t, msg, "type: string",
-		"FMT-13 hint must include a type: string fallback")
+	fix := got[0].Fix
+	assert.Contains(t, fix, "add to contract.yaml:",
+		"FMT-13 fix must announce the fix hint")
+	assert.Contains(t, fix, "pathParams:",
+		"FMT-13 fix must include the pathParams: key")
+	assert.Contains(t, fix, "userId:",
+		"FMT-13 fix must include the offending placeholder name (userId)")
+	assert.Contains(t, fix, "type: string",
+		"FMT-13 fix must include a type: string fallback")
 }
 
 // --- TOPO-07: actor maxConsistencyLevel constraint for consumers ---
@@ -4858,7 +4858,7 @@ func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueInvalid, got[0].IssueType)
 	assert.Contains(t, got[0].Message, "banana")
-	assert.Contains(t, got[0].Message, "use demo for examples/tests", "durabilityModeHintSuffix must appear in OUTGUARD-01 message")
+	assert.Contains(t, got[0].Fix, "use demo for examples/tests", "durabilityModeHintSuffix must appear in OUTGUARD-01 fix")
 }
 
 // TestOUTGUARD01_InvalidDurabilityMode_L0L1 covers the L0/L1 branch: the field

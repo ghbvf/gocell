@@ -105,15 +105,15 @@ func (v *Validator) checkKebabDir(dir, id, file, kind string) []ValidationResult
 	if dir == "" || !strings.Contains(dir, "-") {
 		return nil
 	}
-	return []ValidationResult{v.newResult(
-		codeFMT16, SeverityError, IssueInvalid,
+	return []ValidationResult{v.newError(
+		codeFMT16, IssueInvalid,
 		file,
 		"id",
 		fmt.Sprintf(
-			"%s %q uses kebab-case directory %q; kebab-case %s directories are disallowed in strict mode"+
-				"; fix: rename the directory to %q",
-			kind, id, dir, kind, strings.ReplaceAll(dir, "-", ""),
+			"%s %q uses kebab-case directory %q; kebab-case %s directories are disallowed in strict mode",
+			kind, id, dir, kind,
 		),
+		fmt.Sprintf("rename the directory to %q", strings.ReplaceAll(dir, "-", "")),
 	)}
 }
 
@@ -141,15 +141,15 @@ func (v *Validator) validateFMT17() []ValidationResult {
 		normalized := strings.TrimSuffix(first, "**")
 		normalized = strings.TrimSuffix(normalized, "*")
 		if !strings.HasPrefix(normalized, expected) && normalized != expected {
-			results = append(results, v.newResult(
-				codeFMT17, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeFMT17, IssueMismatch,
 				sliceFile(s),
 				"allowedFiles[0]",
 				fmt.Sprintf(
-					"slice %q allowedFiles first entry %q does not match slice directory %q (want prefix %q)"+
-						"; fix: set allowedFiles[0] to %q (or a glob rooted at it)",
-					s.ID, first, s.Dir, expected, expected,
+					"slice %q allowedFiles first entry %q does not match slice directory %q (want prefix %q)",
+					s.ID, first, s.Dir, expected,
 				),
+				fmt.Sprintf("set allowedFiles[0] to %q (or a glob rooted at it)", expected),
 			))
 		}
 	}
@@ -179,14 +179,15 @@ func (v *Validator) validateFMTC1() []ValidationResult {
 		if metadata.MatchCellID(c.ID) {
 			continue
 		}
-		results = append(results, v.newResult(
-			codeFMTC1, SeverityError, IssueInvalid,
+		results = append(results, v.newError(
+			codeFMTC1, IssueInvalid,
 			cellFile(c),
 			"id",
 			fmt.Sprintf(
-				"cell id %q does not match %s; fix: use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
+				"cell id %q does not match %s",
 				c.ID, metadata.CellIDPattern,
 			),
+			"use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
 		))
 	}
 	return results
@@ -214,15 +215,15 @@ func (v *Validator) validateFMTA1() []ValidationResult {
 		if metadata.MatchAssemblyID(a.ID) {
 			continue
 		}
-		results = append(results, v.newResult(
-			codeFMTA1, SeverityError, IssueInvalid,
+		results = append(results, v.newError(
+			codeFMTA1, IssueInvalid,
 			assemblyFile(a),
 			"id",
 			fmt.Sprintf(
-				"assembly id %q does not match %s;"+
-					" fix: rename to use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
+				"assembly id %q does not match %s",
 				a.ID, metadata.AssemblyIDPattern,
 			),
+			"rename to use lowercase ASCII letters + digits, ≥2 chars, starting with a letter",
 		))
 	}
 	return results
@@ -275,12 +276,11 @@ func (v *Validator) validateFMTRequestStrictContract(c *metadata.ContractMeta) [
 func (v *Validator) validateFMTRequestStrictRef(c *metadata.ContractMeta, ref metadata.ContractSchemaRef) []ValidationResult {
 	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, ref)
 	if resolveErr != nil {
-		return []ValidationResult{v.newResult(
-			codeFMT20, SeverityError, IssueInvalid,
+		return []ValidationResult{v.newError(
+			codeFMT20, IssueInvalid,
 			contractFile(c), ref.Field,
-			fmt.Sprintf("contract %q schema %q failed to resolve: %v;"+
-				" fix: ensure the schema path is correct and the file exists relative to the contract dir",
-				c.ID, ref.Ref, resolveErr),
+			fmt.Sprintf("contract %q schema %q failed to resolve: %v", c.ID, ref.Ref, resolveErr),
+			"ensure the schema path is correct and the file exists relative to the contract dir",
 		)}
 	}
 	missing, err := scanSchemaForStrictMissing(resolved.AbsPath)
@@ -290,12 +290,11 @@ func (v *Validator) validateFMTRequestStrictRef(c *metadata.ContractMeta, ref me
 			return nil
 		}
 		// Parse/IO errors are definitive FMT-20 violations (fail-closed).
-		return []ValidationResult{v.newResult(
-			codeFMT20, SeverityError, IssueInvalid,
+		return []ValidationResult{v.newError(
+			codeFMT20, IssueInvalid,
 			resolved.ProjectRel, "$",
-			fmt.Sprintf("contract %q schema %q failed to parse: %v;"+
-				" fix: ensure the schema file is well-formed JSON Schema (Draft 2020-12)",
-				c.ID, ref.Ref, err),
+			fmt.Sprintf("contract %q schema %q failed to parse: %v", c.ID, ref.Ref, err),
+			"ensure the schema file is well-formed JSON Schema (Draft 2020-12)",
 		)}
 	}
 	return v.fmt20MissingSchemaResults(c, resolved.ProjectRel, missing)
@@ -304,13 +303,12 @@ func (v *Validator) validateFMTRequestStrictRef(c *metadata.ContractMeta, ref me
 func (v *Validator) fmt20MissingSchemaResults(c *metadata.ContractMeta, rel string, missing []string) []ValidationResult {
 	results := make([]ValidationResult, 0, len(missing))
 	for _, loc := range missing {
-		results = append(results, v.newResult(
-			codeFMT20, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeFMT20, IssueRequired,
 			rel, loc,
-			fmt.Sprintf("contract %q request schema must declare additionalProperties:false at %s"+
-				" (strict per FMT-20 / ADR-202605031600);"+
-				" fix: add \"additionalProperties\": false to the object at %s",
-				c.ID, loc, loc),
+			fmt.Sprintf("contract %q request schema must declare additionalProperties:false at %s "+
+				"(strict per FMT-20 / ADR-202605031600)", c.ID, loc),
+			fmt.Sprintf("add \"additionalProperties\": false to the object at %s", loc),
 		))
 	}
 	return results
@@ -533,23 +531,21 @@ func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
 		}
 		if lastIdx < 0 {
 			// No "contracts" segment anywhere → definite mismatch.
-			results = append(results, v.newResult(
-				codeFMT21, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeFMT21, IssueMismatch,
 				contractFile(c), "id",
-				fmt.Sprintf("contract %q dir %q does not match derived %q;"+
-					" fix: move the contract under %q or update the contract id to match its directory layout",
-					c.ID, c.Dir, derived, derived),
+				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
+				fmt.Sprintf("move the contract under %q or update the contract id to match its directory layout", derived),
 			))
 			continue
 		}
 		actualSuffix := filepath.Join(parts[lastIdx:]...) // "contracts/http/auth/login/v1"
 		if actualSuffix != derived {
-			results = append(results, v.newResult(
-				codeFMT21, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeFMT21, IssueMismatch,
 				contractFile(c), "id",
-				fmt.Sprintf("contract %q dir %q does not match derived %q;"+
-					" fix: align directory layout to %q (or update the contract id segments to match the dir)",
-					c.ID, c.Dir, derived, derived),
+				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
+				fmt.Sprintf("align directory layout to %q (or update the contract id segments to match the dir)", derived),
 			))
 		}
 	}
@@ -573,15 +569,15 @@ func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
 	var results []ValidationResult
 	for i, e := range v.project.StatusBoard {
 		if !validStatusBoardStates[e.State] {
-			results = append(results, v.newResult(
-				codeFMT22, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeFMT22, IssueInvalid,
 				"journeys/status-board.yaml",
 				fmt.Sprintf("[%d].state", i),
 				fmt.Sprintf(
-					"status-board entry %q state %q must be one of {todo, doing, done};"+
-						" fix: set state to todo, doing, or done",
+					"status-board entry %q state %q must be one of {todo, doing, done}",
 					e.JourneyID, e.State,
 				),
+				"set state to todo, doing, or done",
 			))
 		}
 	}
@@ -605,33 +601,31 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 			continue
 		}
 		if c.DeprecatedAt == "" {
-			results = append(results, v.newResult(
-				codeFMT23, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeFMT23, IssueRequired,
 				contractFile(c), "deprecatedAt",
-				fmt.Sprintf("contract %q is deprecated but missing deprecatedAt;"+
-					" fix: add deprecatedAt: YYYY-MM-DD to contract.yaml (the day deprecation started)",
-					c.ID),
+				fmt.Sprintf("contract %q is deprecated but missing deprecatedAt", c.ID),
+				"add deprecatedAt: YYYY-MM-DD to contract.yaml (the day deprecation started)",
 			))
 			continue
 		}
 		ts, err := time.ParseInLocation("2006-01-02", c.DeprecatedAt, time.UTC)
 		if err != nil {
-			results = append(results, v.newResult(
-				codeFMT23, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeFMT23, IssueInvalid,
 				contractFile(c), "deprecatedAt",
-				fmt.Sprintf("contract %q deprecatedAt %q is not YYYY-MM-DD;"+
-					" fix: reformat deprecatedAt as a four-digit-year ISO date (e.g. 2026-05-13)",
-					c.ID, c.DeprecatedAt),
+				fmt.Sprintf("contract %q deprecatedAt %q is not YYYY-MM-DD", c.ID, c.DeprecatedAt),
+				"reformat deprecatedAt as a four-digit-year ISO date (e.g. 2026-05-13)",
 			))
 			continue
 		}
 		if now.UTC().Sub(ts) > defaultDeprecationGracePeriod {
-			results = append(results, v.newResult(
-				codeFMT23, SeverityWarning, IssueForbidden,
+			results = append(results, v.newWarning(
+				codeFMT23, IssueForbidden,
 				contractFile(c), "lifecycle",
 				fmt.Sprintf(
 					"contract %q has been deprecated for >90d (since %s);"+
-						" fix: delete the contract and migrate all consumers, or refresh deprecatedAt"+
+						" delete the contract and migrate all consumers, or refresh deprecatedAt"+
 						" to today after re-evaluating the deprecation timeline",
 					c.ID, c.DeprecatedAt,
 				),
@@ -724,23 +718,21 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 	}
 	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, ref)
 	if resolveErr != nil {
-		return []ValidationResult{v.newResult(
-			codeFMT25, SeverityError, IssueInvalid,
+		return []ValidationResult{v.newError(
+			codeFMT25, IssueInvalid,
 			contractFile(c), ref.Field,
-			fmt.Sprintf("contract %q request schema %q failed to resolve: %v;"+
-				" fix: ensure schemaRefs.request points at an existing schema file under the contract dir",
-				c.ID, c.SchemaRefs.Request, resolveErr),
+			fmt.Sprintf("contract %q request schema %q failed to resolve: %v", c.ID, c.SchemaRefs.Request, resolveErr),
+			"ensure schemaRefs.request points at an existing schema file under the contract dir",
 		)}
 	}
 	missing, err := scanSchemaForInputConstraints(resolved.AbsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []ValidationResult{v.newResult(
-				codeFMT25, SeverityError, IssueRefNotFound,
+			return []ValidationResult{v.newError(
+				codeFMT25, IssueRefNotFound,
 				contractFile(c), ref.Field,
-				fmt.Sprintf("contract %q request schema points to missing file %q;"+
-					" fix: create the schema file at the referenced path or correct schemaRefs.request",
-					c.ID, c.SchemaRefs.Request),
+				fmt.Sprintf("contract %q request schema points to missing file %q", c.ID, c.SchemaRefs.Request),
+				"create the schema file at the referenced path or correct schemaRefs.request",
 			)}
 		}
 		field := "$"
@@ -748,12 +740,11 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 		if errors.As(err, &walkErr) {
 			field = walkErr.path
 		}
-		return []ValidationResult{v.newResult(
-			codeFMT25, SeverityError, IssueInvalid,
+		return []ValidationResult{v.newError(
+			codeFMT25, IssueInvalid,
 			resolved.ProjectRel, field,
-			fmt.Sprintf("contract %q request schema %q failed to parse: %v;"+
-				" fix: ensure the schema is well-formed JSON Schema and all $ref targets resolve locally",
-				c.ID, c.SchemaRefs.Request, err),
+			fmt.Sprintf("contract %q request schema %q failed to parse: %v", c.ID, c.SchemaRefs.Request, err),
+			"ensure the schema is well-formed JSON Schema and all $ref targets resolve locally",
 		)}
 	}
 	var results []ValidationResult
@@ -763,21 +754,20 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 			issueType = IssueRequired
 		}
 		if viol.relMin != "" {
-			results = append(results, v.newResult(
-				codeFMT25, SeverityError, issueType,
+			results = append(results, v.newError(
+				codeFMT25, issueType,
 				resolved.ProjectRel, viol.location,
-				fmt.Sprintf("contract %q request schema field %s has %s > %s;"+
-					" fix: ensure %s <= %s on the schema node at %s",
-					c.ID, viol.location, viol.relMin, viol.relMax, viol.relMin, viol.relMax, viol.location),
+				fmt.Sprintf("contract %q request schema field %s has %s > %s",
+					c.ID, viol.location, viol.relMin, viol.relMax),
+				fmt.Sprintf("ensure %s <= %s on the schema node at %s", viol.relMin, viol.relMax, viol.location),
 			))
 			continue
 		}
-		results = append(results, v.newResult(
-			codeFMT25, SeverityError, issueType,
+		results = append(results, v.newError(
+			codeFMT25, issueType,
 			resolved.ProjectRel, viol.location,
-			fmt.Sprintf("contract %q request schema field %s missing %s;"+
-				" fix: declare %s on the schema node at %s",
-				c.ID, viol.location, viol.missing, viol.missing, viol.location),
+			fmt.Sprintf("contract %q request schema field %s missing %s", c.ID, viol.location, viol.missing),
+			fmt.Sprintf("declare %s on the schema node at %s", viol.missing, viol.location),
 		))
 	}
 	return results
@@ -1111,12 +1101,11 @@ func (v *Validator) emitMissingFacets(
 			continue
 		}
 		field := fieldBase + "." + f.name
-		results = append(results, v.newResult(
-			codeFMT25, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeFMT25, IssueRequired,
 			contractFile(c), field,
-			fmt.Sprintf("contract %q %s missing %s;"+
-				" fix: declare %s on %s in contract.yaml (defends against unbounded inputs)",
-				c.ID, fieldBase, f.name, f.name, fieldBase),
+			fmt.Sprintf("contract %q %s missing %s", c.ID, fieldBase, f.name),
+			fmt.Sprintf("declare %s on %s in contract.yaml (defends against unbounded inputs)", f.name, fieldBase),
 		))
 	}
 	return results
@@ -1128,11 +1117,10 @@ func (v *Validator) emitInvalidParamRelation(
 	if min == nil || max == nil || *min <= *max {
 		return nil
 	}
-	return []ValidationResult{v.newResult(
-		codeFMT25, SeverityError, IssueInvalid,
+	return []ValidationResult{v.newError(
+		codeFMT25, IssueInvalid,
 		contractFile(c), fieldBase,
-		fmt.Sprintf("contract %q %s has %s > %s;"+
-			" fix: ensure %s <= %s on %s in contract.yaml",
-			c.ID, fieldBase, minName, maxName, minName, maxName, fieldBase),
+		fmt.Sprintf("contract %q %s has %s > %s", c.ID, fieldBase, minName, maxName),
+		fmt.Sprintf("ensure %s <= %s on %s in contract.yaml", minName, maxName, fieldBase),
 	)}
 }

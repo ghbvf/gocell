@@ -8,6 +8,7 @@
       "scope": "",
       "field": "名称",
       "message": "包含 \"引号\" 和 换行\n以及 emoji 🚀",
+      "fix": "",
       "line": 1,
       "column": 1
     }

@@ -1,14 +1,17 @@
 // Package struct_lit_missing_fix_red is a testdata fixture for INV-3
-// (GOVERNANCE-RULE-ERROR-MESSAGE-FIX-SUFFIX-01) negative case.
+// (GOVERNANCE-RULE-ERROR-FIX-FIELD-01) negative case — the construction-funnel
+// scan path.
 //
-// Shape tested: ValidationResult{Severity: SeverityError, Message: <no fix anchor>}
-// Expected: 1 violation from the CompositeLit scan path.
+// Shape tested: a raw ValidationResult{} composite literal with named fields.
+// Such literals are forbidden outside locator.go because they bypass the
+// newError / newWarning / newErrorAt / newScopedError funnel (and thus the
+// mandatory typed Fix). Expected: 1 violation from the funnel scan path.
 package struct_lit_missing_fix_red
 
 import gov "github.com/ghbvf/gocell/kernel/governance"
 
-// violateStructLit constructs a ValidationResult with SeverityError but a
-// message that lacks the required "; fix:" anchor.
+// violateStructLit constructs a raw ValidationResult composite literal — the
+// forbidden bypass shape.
 func violateStructLit() gov.ValidationResult {
 	return gov.ValidationResult{
 		Severity: gov.SeverityError,

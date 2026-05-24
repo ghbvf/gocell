@@ -78,15 +78,15 @@ func (v *Validator) validateJOURNEYCONTRACTEXISTENCE01() []ValidationResult {
 		if referenced[c.ID] {
 			continue
 		}
-		results = append(results, v.newResult(
-			codeJOURNEYCONTRACTEXISTENCE01, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeJOURNEYCONTRACTEXISTENCE01, IssueRequired,
 			contractFile(c), "id",
 			fmt.Sprintf(
 				"active platform contract %q is not referenced by any journey.contracts[];"+
-					" every active contract must appear in at least one journey/J-*.yaml contracts[];"+
-					" fix: add %q to an existing journey contracts[] or change contract lifecycle to experimental/deprecated",
-				c.ID, c.ID,
+					" every active contract must appear in at least one journey/J-*.yaml contracts[]",
+				c.ID,
 			),
+			fmt.Sprintf("add %q to an existing journey contracts[] or change contract lifecycle to experimental/deprecated", c.ID),
 		))
 	}
 	return results
@@ -115,29 +115,29 @@ func (v *Validator) validateJOURNEYSTATUSLIFECYCLE01() []ValidationResult {
 			continue // FMT-22 covers invalid state enum
 		}
 		if !allowed[j.Lifecycle] {
-			results = append(results, v.newResult(
-				codeJOURNEYSTATUSLIFECYCLE01, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeJOURNEYSTATUSLIFECYCLE01, IssueMismatch,
 				"journeys/status-board.yaml",
 				fmt.Sprintf("[%d].state", i),
 				fmt.Sprintf(
 					"status-board entry for %q has state %q but journey lifecycle is %q;"+
-						" allowed lifecycles for state %q: %s;"+
-						" fix: align journey lifecycle in journeys/%s.yaml or update board state to match",
+						" allowed lifecycles for state %q: %s",
 					e.JourneyID, e.State, j.Lifecycle, e.State,
-					sortedAllowedLifecycles(allowed), e.JourneyID,
+					sortedAllowedLifecycles(allowed),
 				),
+				fmt.Sprintf("align journey lifecycle in journeys/%s.yaml or update board state to match", e.JourneyID),
 			))
 			continue
 		}
 		if j.Lifecycle == "active" && e.State == "doing" {
-			results = append(results, v.newResult(
-				codeJOURNEYSTATUSLIFECYCLE01, SeverityWarning, IssueMismatch,
+			results = append(results, v.newWarning(
+				codeJOURNEYSTATUSLIFECYCLE01, IssueMismatch,
 				"journeys/status-board.yaml",
 				fmt.Sprintf("[%d].state", i),
 				fmt.Sprintf(
 					"journey %q is lifecycle: active but board state is %q;"+
 						" active journeys should progress toward done;"+
-						" fix: advance the board to done when all passCriteria stabilize, or revert lifecycle to experimental if work has reopened",
+						" advance the board to done when all passCriteria stabilize, or revert lifecycle to experimental if work has reopened",
 					e.JourneyID, e.State,
 				),
 			))

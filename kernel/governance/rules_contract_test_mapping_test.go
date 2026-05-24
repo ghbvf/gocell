@@ -40,10 +40,9 @@ func TestCONTRACTENDPOINTTESTMAPPING01_MissingServe(t *testing.T) {
 	assert.Equal(t, IssueRequired, r.IssueType)
 	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml", r.File)
 	assert.Equal(t, "id", r.Field)
-	assert.True(t, strings.Contains(r.Message, "; fix:"),
-		"SeverityError messages must include `; fix:` anchor; got: %s", r.Message)
-	assert.True(t, strings.Contains(r.Message, "contract.http.auth.login.v1.serve"),
-		"error message must include the expected verify.contract entry; got: %s", r.Message)
+	assert.NotEmpty(t, r.Fix, "SeverityError findings must have a non-empty Fix field")
+	assert.True(t, strings.Contains(r.Fix, "contract.http.auth.login.v1.serve"),
+		"fix guidance must include the expected verify.contract entry; got: %s", r.Fix)
 }
 
 func TestCONTRACTENDPOINTTESTMAPPING01_ExamplesExempt(t *testing.T) {
@@ -109,7 +108,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeMissingContract(t *testing.T) {
 		if r.IssueType == IssueRefNotFound &&
 			strings.Contains(r.Message, "http.does.not.exist.v1") &&
 			strings.Contains(r.Message, "does not exist") &&
-			strings.Contains(r.Message, "; fix:") {
+			r.Fix != "" {
 			assert.Equal(t, SeverityError, r.Severity)
 			assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", r.File)
 			found = true
@@ -142,7 +141,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonHTTPContract(t *testing.T) {
 		if r.IssueType == IssueMismatch &&
 			strings.Contains(r.Message, eventID) &&
 			strings.Contains(r.Message, `kind is "event"`) &&
-			strings.Contains(r.Message, "; fix:") {
+			r.Fix != "" {
 			assert.Equal(t, SeverityError, r.Severity)
 			found = true
 			break
@@ -166,7 +165,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonActiveContract(t *testing.T)
 		if r.IssueType == IssueMismatch &&
 			strings.Contains(r.Message, "http.auth.login.v1") &&
 			strings.Contains(r.Message, `lifecycle is "deprecated"`) &&
-			strings.Contains(r.Message, "; fix:") {
+			r.Fix != "" {
 			assert.Equal(t, SeverityError, r.Severity)
 			found = true
 			break
@@ -202,7 +201,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesContract(t *testing.T) 
 		if r.IssueType == IssueForbidden &&
 			strings.Contains(r.Message, exampleID) &&
 			strings.Contains(r.Message, "examples/") &&
-			strings.Contains(r.Message, "; fix:") {
+			r.Fix != "" {
 			assert.Equal(t, SeverityError, r.Severity)
 			found = true
 			break

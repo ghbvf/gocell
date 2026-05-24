@@ -2,13 +2,16 @@
 //
 //   - INVARIANT: GOVERNANCE-RULES-REGISTRATION-GUARD-01
 //   - INVARIANT: GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01
-//   - INVARIANT: GOVERNANCE-RULE-ERROR-MESSAGE-FIX-SUFFIX-01
+//   - INVARIANT: GOVERNANCE-RULE-ERROR-FIX-FIELD-01
 //
 // G-13 elevates governance rule registration from a hand-edited slice to an
 // archtest-guarded contract. The three invariants together catch:
 //   - forgotten registration (a new validate* method that never runs);
 //   - drift between rule code literals and the rulecodes.go single source;
-//   - error rules that emit diagnostics without an actionable "; fix:" clause.
+//   - error findings emitted without remediation guidance in the typed Fix
+//     field, or built via a raw ValidationResult{} literal that bypasses the
+//     newError / newWarning / newErrorAt / newScopedError constructor funnel
+//     (#689 upgrade from the former "; fix:" Message-substring convention).
 //
 // ref: G-13 (governance rule registration archtest)
 //
@@ -18,7 +21,7 @@
 // loads across sub-tests in the same go test binary invocation. Measured
 // locally (2026-05-16): TestGovernanceRulesRegistrationGuard ≈3s,
 // TestGovernanceRuleCodeConstSingleSource ≈5s,
-// TestGovernanceRuleErrorMessageFixSuffix ≈7s, all < 15s slowgate threshold.
+// TestGovernanceRuleErrorFixField ≈7s, all < 15s slowgate threshold.
 // No fixture consolidation needed.
 package archtest
 
@@ -43,9 +46,6 @@ import (
 // governancePkgPath is the import path of the package whose rules() and
 // strictRules() slices we enumerate.
 const governancePkgPath = "github.com/ghbvf/gocell/kernel/governance"
-
-// fixAnchor is the literal substring every SeverityError message must carry.
-const fixAnchor = "; fix:"
 
 // ruleCodesFile is the base name of the single-source file for RuleCode consts.
 const ruleCodesFile = "rulecodes.go"
@@ -582,15 +582,8 @@ func scanINV2ViolationsInFile(
 	var violations []string
 
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
-			return
-		}
-		name := sel.Sel.Name
-		if name != "newResult" && name != "newScopedResult" && name != "newResultAt" {
-			return
-		}
-		if len(call.Args) == 0 {
+		name := governanceEmitterName(call)
+		if name == "" || len(call.Args) == 0 {
 			return
 		}
 		codeArg := call.Args[0]
@@ -793,6 +786,52 @@ func collectRuleCodeConsts(pkg *governancePackage) map[*types.Const]struct{} {
 // kernel/governance.ValidationResult (either via explicit named type or
 // inferred from context — the latter is not detected here; callers rely on
 // the explicit type path for the production check).
+// governanceEmitterName returns the governance ValidationResult-constructor
+// name a CallExpr targets, or "" if the call is not a constructor. The four
+// constructors are the single funnel through which all findings are built
+// (see kernel/governance/emitter_invariant.go):
+//   - newError / newWarning / newScopedError — *locator methods (SelectorExpr)
+//   - newErrorAt — package-level function (Ident), used by receiver-less scan
+//     helpers; it never consults the yaml.Node cache.
+//
+// Matching is by name within the single-package governance scan, where these
+// names are governance-internal. INV-2 uses every name (code-arg const check);
+// INV-3 uses only the error constructors (fix-arg non-empty check).
+func governanceEmitterName(call *ast.CallExpr) string {
+	switch fn := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		if fn.Sel != nil && isGovernanceEmitterName(fn.Sel.Name) {
+			return fn.Sel.Name
+		}
+	case *ast.Ident:
+		if isGovernanceEmitterName(fn.Name) {
+			return fn.Name
+		}
+	}
+	return ""
+}
+
+func isGovernanceEmitterName(name string) bool {
+	switch name {
+	case "newError", "newWarning", "newScopedError", "newErrorAt":
+		return true
+	default:
+		return false
+	}
+}
+
+// isGovernanceErrorEmitterName reports whether name is one of the three error
+// constructors that take a mandatory fix argument as their last positional
+// parameter. newWarning is excluded — warnings carry no fix.
+func isGovernanceErrorEmitterName(name string) bool {
+	switch name {
+	case "newError", "newScopedError", "newErrorAt":
+		return true
+	default:
+		return false
+	}
+}
+
 func isValidationResultCompositeLit(cl *ast.CompositeLit, info *types.Info, pkgPath string) bool {
 	if info == nil {
 		return false
@@ -828,106 +867,113 @@ func astShapeName(expr ast.Expr) string {
 	}
 }
 
-// TestGovernanceRuleErrorMessageFixSuffix verifies INV-3: every
-// newResult / newScopedResult / newResultAt call with second positional
-// argument SeverityError must produce a message string containing the
-// literal substring "; fix:". The message is the last positional argument
-// (index len-1 in the call's Args slice).
+// TestGovernanceRuleErrorFixField verifies INV-3
+// (GOVERNANCE-RULE-ERROR-FIX-FIELD-01): the typed Fix funnel. Two properties:
 //
-// This test also scans ValidationResult{} CompositeLits for Severity:
-// SeverityError + Message field without "; fix:" anchor — catching the
-// struct-literal construction path (e.g. docNamingResult was a package-level
-// function constructing ValidationResult directly; after INV-2 Hard upgrade
-// it delegates to newResultAt, but future regressions would be caught here).
+//  1. Fix-arg non-empty: every error-constructor call — newError /
+//     newScopedError (locator methods) and newErrorAt (package-level
+//     function) — must pass a resolvable, non-empty remediation string as its
+//     LAST positional argument. The constructor signatures make the fix
+//     parameter mandatory at compile time (arity: choosing the error API means
+//     supplying a fix slot); this archtest closes the residual gap Go cannot
+//     express — that the fix is non-empty. newWarning has no fix parameter and
+//     is not scanned.
+//  2. Construction funnel: no raw ValidationResult{} composite literal may
+//     appear in the governance package outside locator.go (the sole
+//     constructor home). All findings flow through the four constructors, so
+//     an error result structurally cannot be built without a fix, and the fix
+//     lives in a typed field rather than a "; fix:" Message substring.
 //
-// Resolution covers:
-//   - basic string literals;
-//   - fmt.Sprintf(format, ...): the format-template (1st arg) is resolved;
-//   - package-scope const idents (advHintXxx, codeXxx, etc.);
-//   - + concatenation: fragments are joined before substring search, so the
-//     anchor is detected even when it spans the + operator.
+// Replaces the pre-#689 INV-3 (GOVERNANCE-RULE-ERROR-MESSAGE-FIX-SUFFIX-01),
+// which scanned Message for the literal "; fix:" anchor — a Soft string
+// convention. Fix-arg resolution reuses resolveStringFragments (string
+// literals, package-scope const idents, + concatenation, fmt.Sprintf
+// templates), so a fix built as fmt.Sprintf("set %s...", x) resolves to its
+// non-empty template exactly as the old Message scan did.
 //
-// The 2nd positional argument (SeverityError) is matched via go/types
-// object identity, not AST name match, so a local variable shadow named
-// SeverityError cannot fool the check.
-func TestGovernanceRuleErrorMessageFixSuffix(t *testing.T) {
-	t.Run("negative_fixture_struct_literal_caught", testINV3NegativeFixture)
+// AI-robust grading (Funnel 双向锁): downstream Hard (fix-arg arity,
+// compile-time) + downstream Medium (fix non-empty — archtest, because Go
+// cannot type a non-empty string; "typed marker funnel for unbounded ops"
+// ceiling) + upstream Medium (the raw-composite ban is package-internal: all
+// rules live in package governance, so Go visibility cannot compile-reject an
+// in-package literal). Upstream Hard-isation — sealing ValidationResult into a
+// subpackage with unexported fields so in-package literal construction is
+// cross-package-unexpressible — is tracked by gh issue #922 (a separate
+// result-type-encapsulation effort, ~700 field-read sites; orthogonal to the
+// fix-guidance funnel). This Medium-upstream + Hard-downstream transitional
+// form is the sanctioned shape per .claude/rules/gocell/ai-robust.md, mirroring
+// observability's SPAN-SETATTR-REDACT-01 / #851.
+//
+// Blind-spot self-check (AST forms outside the chosen tools' declared scope):
+//   - A constructor invoked via a value/func variable rather than a direct
+//     SelectorExpr/Ident callee (e.g. `f := v.newError; f(...)`) would evade
+//     governanceEmitterName. governance has no such indirection; the reverse
+//     self-check is the production scan staying green AND the negative fixtures
+//     using direct calls.
+//   - A ValidationResult built by reflection or returned from a non-governance
+//     helper would evade isValidationResultCompositeLit (type-gated to
+//     governance.ValidationResult). No such path exists in governance.
+func TestGovernanceRuleErrorFixField(t *testing.T) {
+	t.Run("negative_fixtures_caught", testINV3NegativeFixture)
 	t.Run("production_source_all_pass", testINV3ProductionSource)
 }
 
-// testINV3NegativeFixture proves INV-3 scanning is genuinely active for all
-// three bypass shapes. Each shape is exercised via a testdata fixture package
-// that imports kernel/governance and triggers the exact scan path used by
-// testINV3ProductionSource — single-source logic, fixture validates production.
+// testINV3NegativeFixture proves both scan paths are genuinely active. Each
+// shape is exercised via a testdata fixture package whose AST triggers the
+// exact logic used by testINV3ProductionSource — single-source, fixture
+// validates production.
 //
-// Shape 1 (struct_lit_missing_fix_red): ValidationResult{Severity: SeverityError,
+// Fix-arg path:
+//   - empty_fix_red: newError(..., "") — empty fix literal.
+//   - unresolvable_fix_red: newErrorAt(..., fixParam) — fix forwarded from a
+//     parameter, unresolvable to a const string.
 //
-//	Message: "no fix anchor"} — CompositeLit scan path.
-//
-// Shape 2 (forwarded_param_red): newResultAt(gov.SeverityError, msg) where msg
-//
-//	is a function parameter ident — after removing the helper-forwarding skip,
-//	the CallExpr scan path must flag this.
-//
-// Shape 3 (literal_missing_fix_red): newResultAt(gov.SeverityError, "no fix")
-//
-//	where the message is a plain literal lacking "; fix:".
+// Funnel path (raw ValidationResult{} composite outside locator.go):
+//   - struct_lit_missing_fix_red / composite_lit_no_message_red /
+//     composite_lit_positional_red — any raw composite, named or positional.
 func testINV3NegativeFixture(t *testing.T) {
-	// Fixture sub-directories and the expected violation count for each shape.
 	cases := []struct {
 		pattern string
 		wantMin int
 		shape   string
 	}{
 		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/empty_fix_red",
+			wantMin: 1,
+			shape:   "newError callsite with empty fix argument",
+		},
+		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/unresolvable_fix_red",
+			wantMin: 1,
+			shape:   "newErrorAt callsite with unresolvable (forwarded-param) fix argument",
+		},
+		{
 			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/struct_lit_missing_fix_red",
 			wantMin: 1,
-			shape:   "struct literal with SeverityError missing '; fix:'",
-		},
-		{
-			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/forwarded_param_red",
-			wantMin: 1,
-			shape:   "newResultAt callsite with non-const ident message (forwarded param)",
-		},
-		{
-			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/literal_missing_fix_red",
-			wantMin: 1,
-			shape:   "newResultAt callsite with string literal missing '; fix:'",
+			shape:   "raw ValidationResult{} composite literal (named fields)",
 		},
 		{
 			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/composite_lit_no_message_red",
 			wantMin: 1,
-			shape:   "ValidationResult{SeverityError} omits Message: field",
+			shape:   "raw ValidationResult{} composite literal (no Message field)",
 		},
 		{
 			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/composite_lit_positional_red",
 			wantMin: 1,
-			shape:   "ValidationResult literal uses positional fields with SeverityError",
+			shape:   "raw ValidationResult{} composite literal (positional fields)",
 		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.shape, func(t *testing.T) {
-			// Load the fixture package. NeedDeps ensures kernel/governance is
-			// loaded as a transitive dependency so isSeverityErrorArg can compare
-			// *types.Const identity across the shared dependency graph.
 			var violations []string
 			RunTyped(t, TypedOpts{Tests: false}, []string{tc.pattern},
 				func(p *Pass) []Diagnostic {
-					// Find SeverityError from the governance package in the
-					// transitive *types.Package graph.
-					govSeverityErrorConst := lookupSeverityErrorConstFromTypesGraph(p, governancePkgPath)
-					if govSeverityErrorConst == nil {
-						t.Errorf("SeverityError not found in transitive deps for fixture %s", tc.pattern)
-						return nil
-					}
-
 					consts := collectPackageStringConsts(p.Pkg.Scope())
 					for _, file := range p.Files {
-						relPath := p.Rel(file)
 						violations = append(violations,
-							scanINV3ViolationsInFile(file, p.Fset, p.TypesInfo, consts, govSeverityErrorConst, relPath, governancePkgPath)...)
+							scanFixFieldViolationsInFile(file, p.Fset, p.TypesInfo, consts, p.Rel(file), governancePkgPath)...)
 					}
 					return nil
 				})
@@ -940,171 +986,84 @@ func testINV3NegativeFixture(t *testing.T) {
 }
 
 // testINV3ProductionSource verifies the production kernel/governance package
-// has no SeverityError rules missing the "; fix:" anchor.
-//
-// Iteration uses gp.files — the type-checked AST files whose node pointers
-// match gp.info.Uses entries — so isSeverityErrorArg can resolve *ast.Ident
-// nodes via the same TypesInfo that produced the AST. Pass guarantees
-// Files/TypesInfo/Fset are same-source by driver construction.
+// passes both INV-3 properties: every error-constructor call carries a
+// non-empty fix, and no raw ValidationResult{} literal exists outside locator.go.
 func testINV3ProductionSource(t *testing.T) {
 	root := findModuleRoot(t)
 	pkg := loadGovernancePackage(t, root)
 	consts := collectPackageStringConsts(pkg.scope)
-	severityErrorConst := lookupSeverityErrorConst(t, pkg.scope)
 
 	var violations []string
 	for _, file := range pkg.files {
 		violations = append(violations,
-			scanINV3ViolationsInFile(file, pkg.fset, pkg.info, consts, severityErrorConst, pkg.fileRel(file), governancePkgPath)...)
+			scanFixFieldViolationsInFile(file, pkg.fset, pkg.info, consts, pkg.fileRel(file), governancePkgPath)...)
 	}
 	sort.Strings(violations)
 	assert.Empty(t, violations)
 }
 
-// scanINV3ViolationsInFile reports all INV-3 violations in a single AST file.
-// It is shared between testINV3ProductionSource and testINV3NegativeFixture so
-// both exercise identical scan logic — fixture validates the production path.
+// scanFixFieldViolationsInFile reports all INV-3 violations in a single AST
+// file. Shared between production and fixture tests so both exercise identical
+// logic — fixture validates the production path.
 //
-// Two scan paths:
-//  1. CallExpr: method calls named newResult / newScopedResult / newResultAt
-//     where Args[1] is SeverityError and the last arg is a message that either
-//     cannot be resolved or does not contain the "; fix:" anchor. Any
-//     unresolvable message expression (including non-const ident function
-//     parameters used for helper-forwarding) is treated as a violation —
-//     there is no skip for forwarded params. Hard funnel form uniqueness:
-//     SeverityError construction must use a resolvable fix-anchor string.
-//  2. CompositeLit: ValidationResult{Severity: SeverityError, Message: …}
-//     where the message cannot be resolved to a string containing "; fix:".
+// Path 1 (fix-arg): error-constructor calls — newError / newScopedError
+// (SelectorExpr) and newErrorAt (Ident) — whose LAST positional argument does
+// not resolve to a non-empty string (empty literal, or an unresolvable
+// expression such as a forwarded parameter). resolveStringFragments handles
+// literals, package-scope const idents, + concatenation, and fmt.Sprintf
+// templates. newWarning has no fix and is not scanned.
 //
-// pkgPath is the import path used to recognize ValidationResult composite
-// literals as belonging to the governance package (production: governancePkgPath;
-// fixture: the testdata package's own path for struct lits it declares).
-func scanINV3ViolationsInFile(
+// Path 2 (funnel): any ValidationResult{} composite literal in the governance
+// package outside locator.go (the sole sanctioned constructor home). Findings
+// everywhere else must call newError / newWarning / newErrorAt / newScopedError;
+// relPath's base name gates the locator.go exemption.
+//
+// pkgPath recognizes ValidationResult composites as governance-owned
+// (production and fixtures both reference governance.ValidationResult).
+func scanFixFieldViolationsInFile(
 	file *ast.File,
 	fset *token.FileSet,
 	info *types.Info,
 	consts map[string]string,
-	severityErrorConst *types.Const,
 	relPath string,
 	pkgPath string,
 ) []string {
 	var violations []string
 
-	// Scan newResult / newScopedResult / newResultAt CallExprs.
+	// Path 1: error constructors must carry a non-empty fix (last positional arg).
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
+		name := governanceEmitterName(call)
+		if !isGovernanceErrorEmitterName(name) || len(call.Args) < 2 {
 			return
 		}
-		name := sel.Sel.Name
-		if name != "newResult" && name != "newScopedResult" && name != "newResultAt" {
+		fixArg := call.Args[len(call.Args)-1]
+		if strings.Join(resolveStringFragments(fixArg, consts, info), "") != "" {
 			return
 		}
-		if len(call.Args) < 2 {
-			return
-		}
-		if !isSeverityErrorArg(call.Args[1], info, severityErrorConst) {
-			return
-		}
-		// Message is the last arg (index len-1).
-		msgArg := call.Args[len(call.Args)-1]
-		// Hard funnel: any unresolvable message expression — including a
-		// non-const ident used for helper-forwarding — is a violation.
-		// Wrappers that forward a `message string` parameter are forbidden;
-		// every SeverityError call site must carry its own resolvable fix anchor.
-		if messageContainsFixAnchor(msgArg, consts, info) {
-			return
-		}
-		pos := fset.Position(msgArg.Pos())
+		pos := fset.Position(fixArg.Pos())
 		violations = append(violations,
 			relPath+":"+strconv.Itoa(pos.Line)+
-				": SeverityError message missing \"; fix:\" anchor — every error rule must guide the remediation")
+				": "+name+" fix argument is empty or unresolvable — every error finding must "+
+				"carry remediation guidance in the typed Fix field (GOVERNANCE-RULE-ERROR-FIX-FIELD-01)")
 	})
 
-	// Also scan ValidationResult{} CompositeLits.
+	// Path 2: construction funnel — no raw ValidationResult{} literals outside locator.go.
+	if filepath.Base(relPath) == "locator.go" {
+		return violations
+	}
 	scanner.EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
 		if !isValidationResultCompositeLit(cl, info, pkgPath) {
 			return
 		}
-		// Positional ban — even when Severity / Message are present
-		// positionally, the KeyValueExpr loop below would not see them and
-		// the SeverityError fix-anchor rule would silently skip the literal.
-		// The anchor check requires named fields. Count-comparison avoids
-		// the for-range + type-assert form banned by SCANNER-FRAMEWORK-USAGE-01.
-		keyValueCount := 0
-		scanner.EachInChildren[ast.KeyValueExpr](cl, func(_ *ast.KeyValueExpr) {
-			keyValueCount++
-		})
-		if len(cl.Elts) > 0 && keyValueCount != len(cl.Elts) {
-			pos := fset.Position(cl.Pos())
-			violations = append(violations,
-				relPath+":"+strconv.Itoa(pos.Line)+
-					": ValidationResult literal must use named fields (Severity:/Message:/...) — "+
-					"positional element forbidden because it lets the SeverityError fix-anchor check be skipped")
-			return
-		}
-		var hasSeverityError bool
-		var hasMessageKey bool
-		var msgExpr ast.Expr
-		scanner.EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
-			key, ok := kv.Key.(*ast.Ident)
-			if !ok {
-				return
-			}
-			switch key.Name {
-			case "Severity":
-				if isSeverityErrorArg(kv.Value, info, severityErrorConst) {
-					hasSeverityError = true
-				}
-			case "Message":
-				hasMessageKey = true
-				msgExpr = kv.Value
-			}
-		})
-		if !hasSeverityError {
-			return
-		}
-		// SeverityError without an explicit Message: field — the legacy
-		// check returned early; the completeness gate now emits a violation
-		// because a missing Message can never carry the "; fix:" anchor.
-		if !hasMessageKey {
-			pos := fset.Position(cl.Pos())
-			violations = append(violations,
-				relPath+":"+strconv.Itoa(pos.Line)+
-					": ValidationResult{Severity: SeverityError} omits Message: field — every error "+
-					"result must declare a Message containing the \"; fix:\" anchor")
-			return
-		}
-		if messageContainsFixAnchor(msgExpr, consts, info) {
-			return
-		}
-		pos := fset.Position(msgExpr.Pos())
+		pos := fset.Position(cl.Pos())
 		violations = append(violations,
 			relPath+":"+strconv.Itoa(pos.Line)+
-				": ValidationResult{Severity: SeverityError} missing \"; fix:\" anchor in Message")
+				": raw ValidationResult{} literal is forbidden outside locator.go — construct findings "+
+				"via newError / newWarning / newErrorAt / newScopedError so the typed Fix funnel "+
+				"cannot be bypassed (GOVERNANCE-RULE-ERROR-FIX-FIELD-01)")
 	})
 
 	return violations
-}
-
-// lookupSeverityErrorConstFromTypesGraph finds the SeverityError const in the
-// kernel/governance package by traversing the *types.Package import graph from
-// p.Pkg. Since all packages in a single RunTyped invocation share the same
-// *token.FileSet, the returned *types.Const's position is resolvable via p.Fset.
-func lookupSeverityErrorConstFromTypesGraph(p *Pass, govPkgPath string) *types.Const {
-	govPkg := findTypesPackageByPath(p.Pkg, govPkgPath)
-	if govPkg == nil {
-		return nil
-	}
-	obj := govPkg.Scope().Lookup("SeverityError")
-	if obj == nil {
-		return nil
-	}
-	c, ok := obj.(*types.Const)
-	if !ok {
-		return nil
-	}
-	return c
 }
 
 // findTypesPackageByPath performs a depth-first search through pkg's
@@ -1140,51 +1099,6 @@ func findTypesPackageByPath(pkg *types.Package, importPath string) *types.Packag
 		return nil
 	}
 	return search(pkg)
-}
-
-// lookupSeverityErrorConst resolves the package-scope SeverityError const
-// via go/types so isSeverityErrorArg can compare *types.Const identity
-// rather than the AST name (which a local variable shadow could defeat).
-func lookupSeverityErrorConst(t *testing.T, scope *types.Scope) *types.Const {
-	t.Helper()
-	obj := scope.Lookup("SeverityError")
-	require.NotNil(t, obj, "kernel/governance must declare SeverityError const")
-	c, ok := obj.(*types.Const)
-	require.True(t, ok, "SeverityError must be a const")
-	return c
-}
-
-// isSeverityErrorArg reports whether expr resolves to the package-scope
-// SeverityError constant. Resolution uses go/types' Uses map so the check
-// is shadow-proof — a local variable named SeverityError that aliases a
-// different value cannot fool the comparison.
-func isSeverityErrorArg(expr ast.Expr, info *types.Info, want *types.Const) bool {
-	var ident *ast.Ident
-	switch e := expr.(type) {
-	case *ast.Ident:
-		ident = e
-	case *ast.SelectorExpr:
-		ident = e.Sel
-	default:
-		return false
-	}
-	if ident == nil {
-		return false
-	}
-	c, ok := info.Uses[ident].(*types.Const)
-	if !ok {
-		return false
-	}
-	return c == want
-}
-
-// messageContainsFixAnchor returns true when expr resolves (with the support
-// of pkg-scope consts) to a string that contains the "; fix:" anchor. The
-// fragments are concatenated before the substring search so the anchor is
-// detected even when it spans a `+` operator (e.g. `"...;" + " fix: ..."`).
-func messageContainsFixAnchor(expr ast.Expr, consts map[string]string, info *types.Info) bool {
-	joined := strings.Join(resolveStringFragments(expr, consts, info), "")
-	return strings.Contains(joined, fixAnchor)
 }
 
 // resolveStringFragments returns every string fragment that contributes to
@@ -1291,8 +1205,9 @@ func loadGovernancePackage(t *testing.T, root string) *governancePackage {
 	return gp
 }
 
-// TestFindTypesPackageByPath validates findTypesPackageByPath and
-// lookupSeverityErrorConstFromTypesGraph with table-driven sub-tests.
+// TestFindTypesPackageByPath validates findTypesPackageByPath (used by INV-2's
+// composite-lit fixture loader to resolve governance.ValidationResult's
+// *types.Package) with table-driven sub-tests.
 //
 // The kernel/governance package is a known transitive dependency of the
 // governance fixtures, so loadGovernancePackage's typed pkg provides a
@@ -1302,10 +1217,6 @@ func loadGovernancePackage(t *testing.T, root string) *governancePackage {
 //	(a) known path "github.com/ghbvf/gocell/kernel/governance" — DFS must find non-nil.
 //	(b) non-existent path "github.com/ghbvf/gocell/does/not/exist" — must return nil.
 //	(c) nil pkg input — must safely return nil without panic.
-//
-// lookupSeverityErrorConstFromTypesGraph is exercised via a minimal Pass
-// constructed from the governance package load; it must find SeverityError
-// in the transitive graph.
 func TestFindTypesPackageByPath(t *testing.T) {
 	root := findModuleRoot(t)
 	gp := loadGovernancePackage(t, root)
@@ -1335,29 +1246,6 @@ func TestFindTypesPackageByPath(t *testing.T) {
 		got := findTypesPackageByPath(nil, governancePkgPath)
 		assert.Nil(t, got, "findTypesPackageByPath must return nil safely for nil input")
 	})
-}
-
-// TestLookupSeverityErrorConstFromTypesGraph validates that
-// lookupSeverityErrorConstFromTypesGraph finds SeverityError via the
-// transitive *types.Package graph exposed through the Pass.
-//
-// The kernel/governance package declares SeverityError as a const; any Pass
-// that loads a package importing kernel/governance must be able to find it.
-// We load kernel/governance directly so p.Pkg IS the governance package,
-// making the DFS find it in the first step (no traversal needed).
-func TestLookupSeverityErrorConstFromTypesGraph(t *testing.T) {
-	RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/governance"},
-		func(p *Pass) []Diagnostic {
-			got := lookupSeverityErrorConstFromTypesGraph(p, governancePkgPath)
-			if got == nil {
-				t.Errorf("lookupSeverityErrorConstFromTypesGraph: SeverityError not found in transitive graph for kernel/governance load")
-				return nil
-			}
-			if got.Name() != "SeverityError" {
-				t.Errorf("lookupSeverityErrorConstFromTypesGraph: got const name %q, want %q", got.Name(), "SeverityError")
-			}
-			return nil
-		})
 }
 
 // collectPackageStringConsts walks scope's names and returns a map from

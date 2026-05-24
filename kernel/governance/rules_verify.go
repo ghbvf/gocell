@@ -47,15 +47,15 @@ func (v *Validator) validateSliceVERIFY01(s *metadata.SliceMeta) []ValidationRes
 	for i, cu := range s.ContractUsages {
 		verifyKey := fmt.Sprintf("contract.%s.%s", cu.Contract, cu.Role)
 		if !verifySet[verifyKey] && !waiverSet[cu.Contract] {
-			results = append(results, v.newResult(
-				codeVERIFY01, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeVERIFY01, IssueRequired,
 				sliceFile(s),
 				fmt.Sprintf("contractUsages[%d]", i),
 				fmt.Sprintf(
-					"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver;"+
-						" fix: add verify.contract entry or create a waiver in the slice",
+					"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
 					cu.Contract, cu.Role, s.ID,
 				),
+				"add verify.contract entry or create a waiver in the slice",
 			))
 		}
 	}
@@ -98,55 +98,60 @@ func (v *Validator) validateVERIFY02() []ValidationResult {
 func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.WaiverMeta) []ValidationResult {
 	var results []ValidationResult
 	if w.Contract == "" {
-		results = append(results, v.newResult(
-			codeVERIFY02, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeVERIFY02, IssueRequired,
 			file,
 			fmt.Sprintf("verify.waivers[%d].contract", i),
-			"waiver.contract is required; fix: add a contract field to this waiver entry",
+			"waiver.contract is required",
+			"add a contract field to this waiver entry",
 		))
 	}
 	if w.Owner == "" {
-		results = append(results, v.newResult(
-			codeVERIFY02, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeVERIFY02, IssueRequired,
 			file,
 			fmt.Sprintf("verify.waivers[%d].owner", i),
-			fmt.Sprintf("waiver.owner is required for contract %q; fix: add an owner field to this waiver entry", w.Contract),
+			fmt.Sprintf("waiver.owner is required for contract %q", w.Contract),
+			"add an owner field to this waiver entry",
 		))
 	}
 	if w.Reason == "" {
-		results = append(results, v.newResult(
-			codeVERIFY02, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeVERIFY02, IssueRequired,
 			file,
 			fmt.Sprintf("verify.waivers[%d].reason", i),
-			fmt.Sprintf("waiver.reason is required for contract %q; fix: add a reason field to this waiver entry", w.Contract),
+			fmt.Sprintf("waiver.reason is required for contract %q", w.Contract),
+			"add a reason field to this waiver entry",
 		))
 	}
 	if w.ExpiresAt == "" {
-		results = append(results, v.newResult(
-			codeVERIFY02, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeVERIFY02, IssueRequired,
 			file,
 			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
-			fmt.Sprintf("waiver.expiresAt is required for contract %q; fix: add an expiresAt field (YYYY-MM-DD) to this waiver entry", w.Contract),
+			fmt.Sprintf("waiver.expiresAt is required for contract %q", w.Contract),
+			"add an expiresAt field (YYYY-MM-DD) to this waiver entry",
 		))
 		return results
 	}
 	t, err := time.Parse("2006-01-02", w.ExpiresAt)
 	if err != nil {
-		results = append(results, v.newResult(
-			codeVERIFY02, SeverityError, IssueInvalid,
+		results = append(results, v.newError(
+			codeVERIFY02, IssueInvalid,
 			file,
 			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
-			fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD); fix: use a YYYY-MM-DD formatted date", w.ExpiresAt),
+			fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD)", w.ExpiresAt),
+			"use a YYYY-MM-DD formatted date",
 		))
 		return results
 	}
 	if t.Before(v.clk.Now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
-		results = append(results, v.newResult(
-			codeVERIFY02, SeverityError, IssueInvalid,
+		results = append(results, v.newError(
+			codeVERIFY02, IssueInvalid,
 			file,
 			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
-			fmt.Sprintf("waiver for contract %q expired on %s;"+
-				" fix: extend the waiver expiresAt or add a proper verify.contract entry", w.Contract, w.ExpiresAt),
+			fmt.Sprintf("waiver for contract %q expired on %s", w.Contract, w.ExpiresAt),
+			"extend the waiver expiresAt or add a proper verify.contract entry",
 		))
 	}
 	return results
@@ -166,15 +171,15 @@ func (v *Validator) validateVERIFY03() []ValidationResult {
 				continue // FMT-03 covers invalid levels
 			}
 			if targetLevel != cellvocab.L0 {
-				results = append(results, v.newResult(
-					codeVERIFY03, SeverityError, IssueMismatch,
+				results = append(results, v.newError(
+					codeVERIFY03, IssueMismatch,
 					cellFile(c),
 					fmt.Sprintf("l0Dependencies[%d].cell", i),
 					fmt.Sprintf(
-						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0);"+
-							" fix: only L0 cells may be listed in l0Dependencies",
+						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
 						c.ID, dep.Cell, target.ConsistencyLevel,
 					),
+					"only L0 cells may be listed in l0Dependencies",
 				))
 			}
 		}
@@ -201,15 +206,15 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 			continue
 		}
 		if !v.hasProviderSlice(c.ID, providerID) {
-			results = append(results, v.newResult(
-				codeVERIFY04, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeVERIFY04, IssueRequired,
 				contractFile(c),
 				"lifecycle",
 				fmt.Sprintf(
-					"active contract %q has no provider-role slice in cell %q;"+
-						" fix: create a slice in the provider cell with a provider contractUsage for this contract",
+					"active contract %q has no provider-role slice in cell %q",
 					c.ID, providerID,
 				),
+				"create a slice in the provider cell with a provider contractUsage for this contract",
 			))
 		}
 	}
@@ -247,26 +252,28 @@ func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResul
 	var results []ValidationResult
 	parts := strings.SplitN(ref, ".", 3)
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		results = append(results, v.newResult(
-			codeVERIFY05, SeverityError, IssueInvalid,
+		results = append(results, v.newError(
+			codeVERIFY05, IssueInvalid,
 			file,
 			field,
 			fmt.Sprintf(
-				"ref %q must have at least 3 non-empty dot-separated segments; fix: use format {prefix}.{scope}.{suffix}", ref,
+				"ref %q must have at least 3 non-empty dot-separated segments", ref,
 			),
+			"use format {prefix}.{scope}.{suffix}",
 		))
 		return results
 	}
 
 	prefix := parts[0]
 	if !validRefPrefixes[prefix] {
-		results = append(results, v.newResult(
-			codeVERIFY05, SeverityError, IssueInvalid,
+		results = append(results, v.newError(
+			codeVERIFY05, IssueInvalid,
 			file,
 			field,
 			fmt.Sprintf(
-				"ref %q has unknown prefix %q; expected journey, smoke, unit, or contract; fix: use one of the allowed prefixes", ref, prefix,
+				"ref %q has unknown prefix %q; expected journey, smoke, unit, or contract", ref, prefix,
 			),
+			"use one of the allowed prefixes",
 		))
 		return results
 	}
@@ -275,13 +282,14 @@ func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResul
 	if prefix == "smoke" {
 		cellID := parts[1]
 		if _, ok := v.project.Cells[cellID]; !ok {
-			results = append(results, v.newResult(
-				codeVERIFY05, SeverityError, IssueRefNotFound,
+			results = append(results, v.newError(
+				codeVERIFY05, IssueRefNotFound,
 				file,
 				field,
 				fmt.Sprintf(
-					"smoke ref %q references non-existent cell %q; fix: use an existing cell id as the second segment", ref, cellID,
+					"smoke ref %q references non-existent cell %q", ref, cellID,
 				),
+				"use an existing cell id as the second segment",
 			))
 		}
 	}
@@ -371,12 +379,12 @@ func (v *Validator) validateVERIFY06Journey(ctx context.Context, j *metadata.Jou
 		results = append(results, v.validateVERIFY06CheckRef(ctx, j, i, pc)...)
 	}
 	if autoCount == 0 {
-		results = append(results, v.newResult(
-			codeVERIFY06, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeVERIFY06, IssueRequired,
 			journeyFile(j),
 			"passCriteria",
-			fmt.Sprintf("active journey %q must declare at least one auto passCriteria entry with checkRef;"+
-				" fix: add a passCriteria entry with mode: auto and a checkRef pointing to a test target", j.ID),
+			fmt.Sprintf("active journey %q must declare at least one auto passCriteria entry with checkRef", j.ID),
+			"add a passCriteria entry with mode: auto and a checkRef pointing to a test target",
 		))
 	}
 	return results
@@ -390,12 +398,12 @@ func (v *Validator) validateVERIFY06CheckRef(
 ) []ValidationResult {
 	scope, err := verify.JourneyRefScope(pc.CheckRef)
 	if err != nil || scope != j.ID {
-		return []ValidationResult{v.newResult(
-			codeVERIFY06, SeverityError, IssueMismatch,
+		return []ValidationResult{v.newError(
+			codeVERIFY06, IssueMismatch,
 			journeyFile(j),
 			fmt.Sprintf(fieldCritCheckRefTmpl, i),
-			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey;"+
-				" fix: use a checkRef in the format journey.{journeyID}.{suffix}", j.ID, pc.CheckRef),
+			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey", j.ID, pc.CheckRef),
+			"use a checkRef in the format journey.{journeyID}.{suffix}",
 		)}
 	}
 	if v.verifyJourneyRef == nil {
@@ -409,11 +417,11 @@ func (v *Validator) validateVERIFY06CheckRef(
 	if tr.Passed && len(errs) == 0 && !tr.ZeroMatch && !tr.SkippedOnly {
 		return nil
 	}
-	return []ValidationResult{v.newResult(
-		codeVERIFY06, SeverityError, IssueRefNotFound,
+	return []ValidationResult{v.newError(
+		codeVERIFY06, IssueRefNotFound,
 		journeyFile(j),
 		fmt.Sprintf(fieldCritCheckRefTmpl, i),
-		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target;"+
-			" fix: ensure the referenced test package exists and has non-skipped matching tests", j.ID, pc.CheckRef),
+		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target", j.ID, pc.CheckRef),
+		"ensure the referenced test package exists and has non-skipped matching tests",
 	)}
 }

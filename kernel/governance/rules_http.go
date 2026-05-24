@@ -173,10 +173,11 @@ func (v *Validator) checkResponseAlignmentForContract(
 	handlerCodes, err := extractHandlerStatusCodesForContract(handlerFile, c.ID, cache)
 	if err != nil {
 		if errors.Is(err, errCorrelationMissing) {
-			return []ValidationResult{v.newResult(
-				codeCH04, SeverityError, IssueRequired,
+			return []ValidationResult{v.newError(
+				codeCH04, IssueRequired,
 				c.File, fieldHTTPPath,
 				fmt.Sprintf(advHintCH04CorrelationFailed, c.ID, handlerFile),
+				advHintCH04CorrelationFailedFix,
 			)}
 		}
 		slog.Debug("CH-04: failed to parse handler AST",
@@ -219,11 +220,11 @@ func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 func buildAlignmentFindings(v *Validator, c *metadata.ContractMeta, observed, declared map[int]struct{}) []ValidationResult {
 	var results []ValidationResult
 	for _, status := range diffStatuses(observed, declared) {
-		results = append(results, v.newResult(
-			codeCH04, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeCH04, IssueRequired,
 			c.File, fmt.Sprintf(fieldHTTPResponsesFmt, status),
-			fmt.Sprintf("%s: handler returns %d but contract does not declare it;"+
-				" fix: add responses[%d] to the contract or remove the handler return path", c.ID, status, status),
+			fmt.Sprintf("%s: handler returns %d but contract does not declare it", c.ID, status),
+			fmt.Sprintf("add responses[%d] to the contract or remove the handler return path", status),
 		))
 	}
 	return results
@@ -836,19 +837,21 @@ func (v *Validator) checkPathParamUUIDForContract(
 
 	fnName, ok := ph.contractToFuncs[c.ID]
 	if !ok {
-		return []ValidationResult{v.newResult(
-			codeCH05, SeverityError, IssueRequired,
+		return []ValidationResult{v.newError(
+			codeCH05, IssueRequired,
 			c.File, fieldHTTPPath,
 			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
+			advHintCH05CorrelationFailedFix,
 		)}
 	}
 
 	body, ok := ph.funcBodies[fnName]
 	if !ok {
-		return []ValidationResult{v.newResult(
-			codeCH05, SeverityError, IssueRequired,
+		return []ValidationResult{v.newError(
+			codeCH05, IssueRequired,
 			c.File, fieldHTTPPath,
 			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
+			advHintCH05CorrelationFailedFix,
 		)}
 	}
 
@@ -863,10 +866,11 @@ func buildPathParamFindings(
 	var results []ValidationResult
 	for _, paramName := range uuidParams {
 		if _, ok := parsed[paramName]; !ok {
-			results = append(results, v.newResult(
-				codeCH05, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeCH05, IssueRequired,
 				c.File, fmt.Sprintf("endpoints.http.pathParams.%s", paramName),
 				fmt.Sprintf(advHintCH05MissingParseCall, c.ID, paramName, paramName),
+				advHintCH05MissingParseCallFix,
 			))
 		}
 	}
@@ -1007,20 +1011,20 @@ func (v *Validator) checkTypedEnvelopeForContract(
 
 	var results []ValidationResult
 	for _, status := range diffStatuses(declared, implemented) {
-		results = append(results, v.newResult(
-			codeCH06, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeCH06, IssueRequired,
 			c.File, fmt.Sprintf(fieldHTTPResponsesFmt, status),
-			fmt.Sprintf("%s: contract declares status %d but generated types_gen.go has no matching typed"+
-				" response struct; fix: run `gocell generate contract --all` to regenerate typed response structs", c.ID, status),
+			fmt.Sprintf("%s: contract declares status %d but generated types_gen.go has no matching typed response struct", c.ID, status),
+			"run `gocell generate contract --all` to regenerate typed response structs",
 		))
 	}
 	for _, status := range diffStatuses(implemented, declared) {
-		results = append(results, v.newResult(
-			codeCH06, SeverityError, IssueRequired,
+		results = append(results, v.newError(
+			codeCH06, IssueRequired,
 			c.File, fmt.Sprintf(fieldHTTPResponsesFmt, status),
-			fmt.Sprintf("%s: generated types_gen.go has typed response struct for status %d but contract.yaml"+
-				" does not declare it (orphan struct); fix: add responses[%d] to contract.yaml or rerun `gocell generate contract --all`",
-				c.ID, status, status),
+			fmt.Sprintf("%s: generated types_gen.go has typed response struct for status %d "+
+				"but contract.yaml does not declare it (orphan struct)", c.ID, status),
+			fmt.Sprintf("add responses[%d] to contract.yaml or rerun `gocell generate contract --all`", status),
 		))
 	}
 	return results

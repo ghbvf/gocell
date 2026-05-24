@@ -66,9 +66,9 @@ func TestValidator_Locate_Fallbacks(t *testing.T) {
 	assert.Zero(t, col)
 }
 
-// TestValidator_NewResult_AutoFillsLocation: newResult constructs a
+// TestValidator_NewError_AutoFillsLocation: newError constructs a
 // ValidationResult and auto-populates Line/Column from the stored Node.
-func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
+func TestValidator_NewError_AutoFillsLocation(t *testing.T) {
 	src := "id: accesscore\n" + // line 1
 		"contractUsages:\n" + // line 2
 		"  - contract: http.a.v1\n" + // line 3
@@ -82,9 +82,9 @@ func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
 	prepareNode(t, pm, "cells/x/slices/s/slice.yaml", src)
 	v := NewValidator(pm, "", clock.Real())
 
-	r := v.newResult(codeREF02, SeverityError, IssueRefNotFound,
+	r := v.newError(codeREF02, IssueRefNotFound,
 		"cells/x/slices/s/slice.yaml", "contractUsages[1].contract",
-		"references non-existent contract")
+		"references non-existent contract", "declare the referenced contract or fix the id")
 
 	assert.Equal(t, codeREF02, r.Code)
 	assert.Equal(t, SeverityError, r.Severity)
@@ -92,19 +92,20 @@ func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
 	assert.Equal(t, "cells/x/slices/s/slice.yaml", r.File)
 	assert.Equal(t, "contractUsages[1].contract", r.Field)
 	assert.Equal(t, "references non-existent contract", r.Message)
+	assert.Equal(t, "declare the referenced contract or fix the id", r.Fix)
 	assert.Equal(t, 5, r.Line, "line should match contractUsages[1].contract")
 	assert.Positive(t, r.Column)
 }
 
-// TestValidator_NewResult_UnknownLocation: when the path cannot be located,
+// TestValidator_NewError_UnknownLocation: when the path cannot be located,
 // the result is still valid but Line/Column remain zero.
-func TestValidator_NewResult_UnknownLocation(t *testing.T) {
+func TestValidator_NewError_UnknownLocation(t *testing.T) {
 	pm := &metadata.ProjectMeta{Cells: map[string]*metadata.CellMeta{}}
 	v := NewValidator(pm, "", clock.Real())
 
-	r := v.newResult(codeREF01, SeverityError, IssueRefNotFound,
+	r := v.newError(codeREF01, IssueRefNotFound,
 		"cells/x/slice.yaml", "belongsToCell",
-		"slice references non-existent cell")
+		"slice references non-existent cell", "create the cell or fix belongsToCell")
 
 	assert.Equal(t, codeREF01, r.Code)
 	assert.Zero(t, r.Line)
@@ -122,10 +123,10 @@ func TestValidationResult_PositionFields(t *testing.T) {
 	assert.Equal(t, 7, r.Column)
 }
 
-// TestDependencyChecker_NewResult_AutoFillsLocation mirrors the Validator
+// TestDependencyChecker_NewError_AutoFillsLocation mirrors the Validator
 // test to confirm DependencyChecker gets the same location enrichment via
 // the embedded locator.
-func TestDependencyChecker_NewResult_AutoFillsLocation(t *testing.T) {
+func TestDependencyChecker_NewError_AutoFillsLocation(t *testing.T) {
 	src := "id: s\n" + // line 1
 		"belongsToCell: ghost\n" + // line 2 — the field we'll locate
 		"contractUsages: []\n" // line 3
@@ -136,9 +137,9 @@ func TestDependencyChecker_NewResult_AutoFillsLocation(t *testing.T) {
 	prepareNode(t, pm, "cells/x/slices/s/slice.yaml", src)
 	dc := NewDependencyChecker(pm)
 
-	r := dc.newResult(codeDEP01, SeverityError, IssueMismatch,
+	r := dc.newError(codeDEP01, IssueMismatch,
 		"cells/x/slices/s/slice.yaml", "belongsToCell",
-		"slice belongsToCell mismatch")
+		"slice belongsToCell mismatch", "align belongsToCell with the cell that owns this slice")
 
 	assert.Equal(t, 2, r.Line)
 	assert.Positive(t, r.Column)

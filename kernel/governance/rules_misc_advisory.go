@@ -59,8 +59,8 @@ func (v *Validator) validateADV01() []ValidationResult {
 			continue
 		}
 		if !sbJourneys[j.ID] {
-			results = append(results, v.newResult(
-				codeADV01, SeverityWarning, IssueRefNotFound,
+			results = append(results, v.newWarning(
+				codeADV01, IssueRefNotFound,
 				journeyFile(j),
 				"id",
 				fmt.Sprintf("journey %q has no entry in status-board.yaml", j.ID),
@@ -81,8 +81,8 @@ func (v *Validator) validateADV03() []ValidationResult {
 		}
 		for i, w := range s.Verify.Waivers {
 			if w.Contract != "" && !usedContracts[w.Contract] {
-				results = append(results, v.newResult(
-					codeADV03, SeverityWarning, IssueRefNotFound,
+				results = append(results, v.newWarning(
+					codeADV03, IssueRefNotFound,
 					sliceFile(s),
 					fmt.Sprintf("verify.waivers[%d].contract", i),
 					fmt.Sprintf("waiver for contract %q has no matching contractUsage in slice %q", w.Contract, s.ID),
@@ -100,8 +100,8 @@ func (v *Validator) validateADV04() []ValidationResult {
 	var results []ValidationResult
 	for i, entry := range v.project.StatusBoard {
 		if _, ok := v.project.Journeys[entry.JourneyID]; !ok {
-			results = append(results, v.newResult(
-				codeADV04, SeverityWarning, IssueRefNotFound,
+			results = append(results, v.newWarning(
+				codeADV04, IssueRefNotFound,
 				"journeys/status-board.yaml",
 				fmt.Sprintf("[%d].journeyId", i),
 				fmt.Sprintf("status-board entry references unknown journey %q", entry.JourneyID),
@@ -130,11 +130,12 @@ func (v *Validator) validateADV05() []ValidationResult {
 			continue
 		}
 		if len(c.Endpoints.Subscribers) == 0 {
-			results = append(results, v.newResult(
-				codeADV05, SeverityError, IssueForbidden,
+			results = append(results, v.newError(
+				codeADV05, IssueForbidden,
 				contractFile(c),
 				"endpoints.subscribers",
 				fmt.Sprintf(advHintADV05EmptySubscribers, c.ID),
+				advHintADV05EmptySubscribersFix,
 			))
 		}
 	}
@@ -232,11 +233,12 @@ func (v *Validator) adv06ContractToSlice(cellSubscribes map[string]map[string]bo
 			if cellSubscribes[subscriber][c.ID] {
 				continue
 			}
-			results = append(results, v.newResult(
-				codeADV06, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeADV06, IssueMismatch,
 				contractFile(c),
 				fmt.Sprintf("endpoints.subscribers[%d]", i),
 				fmt.Sprintf(advHintADV06ContractToSlice, c.ID, subscriber, subscriber, c.ID, subscriber, subscriber, subscriber),
+				advHintADV06ContractToSliceFix,
 			))
 		}
 	}
@@ -259,11 +261,12 @@ func (v *Validator) adv06SliceToContract() []ValidationResult {
 			if cellMatchesConsumer(c.Endpoints.Subscribers, s.BelongsToCell) {
 				continue
 			}
-			results = append(results, v.newResult(
-				codeADV06, SeverityError, IssueMismatch,
+			results = append(results, v.newError(
+				codeADV06, IssueMismatch,
 				sliceFile(s),
 				fmt.Sprintf("contractUsages[%d].contract", i),
 				fmt.Sprintf(advHintADV06SliceToContract, s.ID, cu.Contract, s.BelongsToCell, s.BelongsToCell),
+				advHintADV06SliceToContractFix,
 			))
 		}
 	}
@@ -295,46 +298,43 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 			// L0/L1 may omit durabilityMode (advisory only);
 			// only validate value when explicitly set.
 			if c.DurabilityMode != "" && !isValidDurabilityMode(c.DurabilityMode) {
-				results = append(results, v.newResult(
-					codeOUTGUARD01, SeverityError, IssueInvalid,
+				results = append(results, v.newError(
+					codeOUTGUARD01, IssueInvalid,
 					cellFile(c),
 					"durabilityMode",
 					fmt.Sprintf(
-						"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
-							"fix: set durabilityMode to demo or durable in the cell.yaml "+
-							durabilityModeHintSuffix,
+						"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"",
 						c.ID, c.DurabilityMode,
 					),
+					"set durabilityMode to demo or durable in the cell.yaml "+durabilityModeHintSuffix,
 				))
 			}
 			continue
 		}
 		if c.DurabilityMode == "" {
-			results = append(results, v.newResult(
-				codeOUTGUARD01, SeverityError, IssueRequired,
+			results = append(results, v.newError(
+				codeOUTGUARD01, IssueRequired,
 				cellFile(c),
 				"durabilityMode",
 				fmt.Sprintf(
 					"cell %q declares %s consistency but has no durabilityMode; "+
-						"L2+ cells must declare durabilityMode: demo or durable; "+
-						"fix: add durabilityMode: demo or durabilityMode: durable to the cell.yaml "+
-						durabilityModeHintSuffix,
+						"L2+ cells must declare durabilityMode: demo or durable",
 					c.ID, c.ConsistencyLevel,
 				),
+				"add durabilityMode: demo or durabilityMode: durable to the cell.yaml "+durabilityModeHintSuffix,
 			))
 			continue
 		}
 		if !isValidDurabilityMode(c.DurabilityMode) {
-			results = append(results, v.newResult(
-				codeOUTGUARD01, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeOUTGUARD01, IssueInvalid,
 				cellFile(c),
 				"durabilityMode",
 				fmt.Sprintf(
-					"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"; "+
-						"fix: set durabilityMode to demo or durable in the cell.yaml "+
-						durabilityModeHintSuffix,
+					"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"",
 					c.ID, c.DurabilityMode,
 				),
+				"set durabilityMode to demo or durable in the cell.yaml "+durabilityModeHintSuffix,
 			))
 		}
 	}
@@ -395,16 +395,16 @@ func (v *Validator) validateSliceConsistencyContractUsages() []ValidationResult 
 		// reach this point without a parser — report an error so they don't
 		// silently bypass the publish lower-bound check.
 		if s.ConsistencyLevel == "" {
-			results = append(results, v.newResult(
-				codeSLICECONSISTENCY02, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeSLICECONSISTENCY02, IssueInvalid,
 				sliceFile(s),
 				"consistencyLevel",
 				fmt.Sprintf(
 					"slice %q has role=publish but consistencyLevel is empty; "+
-						"in-memory ProjectMeta must declare consistencyLevel for governance check; "+
-						"fix: set consistencyLevel to L2|L3|L4",
+						"in-memory ProjectMeta must declare consistencyLevel for governance check",
 					s.ID,
 				),
+				"set consistencyLevel to L2|L3|L4",
 			))
 			continue
 		}
@@ -414,16 +414,16 @@ func (v *Validator) validateSliceConsistencyContractUsages() []ValidationResult 
 			continue
 		}
 		if level < cellvocab.L2 {
-			results = append(results, v.newResult(
-				codeSLICECONSISTENCY02, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeSLICECONSISTENCY02, IssueInvalid,
 				sliceFile(s),
 				"consistencyLevel",
 				fmt.Sprintf(
 					"slice %q declares contractUsages with role=publish but consistencyLevel=%q; "+
-						"publishing events requires the L2 OutboxFact invariant (transactional outbox); "+
-						"fix: raise consistencyLevel to L2|L3|L4",
+						"publishing events requires the L2 OutboxFact invariant (transactional outbox)",
 					s.ID, s.ConsistencyLevel,
 				),
+				"raise consistencyLevel to L2|L3|L4",
 			))
 		}
 	}
@@ -465,14 +465,15 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 		}
 		sliceLevel, err := cellvocab.ParseLevel(s.ConsistencyLevel)
 		if err != nil {
-			results = append(results, v.newResult(
-				codeSLICECONSISTENCY01, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeSLICECONSISTENCY01, IssueInvalid,
 				sliceFile(s),
 				"consistencyLevel",
 				fmt.Sprintf(
-					"slice %q declares consistencyLevel %q which is not valid (must be L0-L4); fix: set consistencyLevel to L0, L1, L2, L3, or L4",
+					"slice %q declares consistencyLevel %q which is not valid (must be L0-L4)",
 					s.ID, s.ConsistencyLevel,
 				),
+				"set consistencyLevel to L0, L1, L2, L3, or L4",
 			))
 			continue
 		}
@@ -487,15 +488,16 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 			continue
 		}
 		if sliceLevel > cellLevel {
-			results = append(results, v.newResult(
-				codeSLICECONSISTENCY01, SeverityError, IssueInvalid,
+			results = append(results, v.newError(
+				codeSLICECONSISTENCY01, IssueInvalid,
 				sliceFile(s),
 				"consistencyLevel",
 				fmt.Sprintf(
 					"slice %q declares consistencyLevel %q which is stronger than parent cell %q (%q); "+
-						"a slice can downgrade but not upgrade; fix: set slice consistencyLevel to the cell's level or lower",
+						"a slice can downgrade but not upgrade",
 					s.ID, s.ConsistencyLevel, parentCell.ID, parentCell.ConsistencyLevel,
 				),
+				"set slice consistencyLevel to the cell's level or lower",
 			))
 		}
 	}
@@ -548,9 +550,10 @@ func (v *Validator) validateFMT19() []ValidationResult {
 			return nil
 		}
 		return []ValidationResult{
-			v.newResult(codeFMT19, SeverityError, IssueInvalid,
+			v.newError(codeFMT19, IssueInvalid,
 				"kernel/wrapper/", "",
-				fmt.Sprintf("FMT-19: failed to read kernel/wrapper/: %v; fix: ensure the kernel/wrapper directory exists", err)),
+				fmt.Sprintf("FMT-19: failed to read kernel/wrapper/: %v", err),
+				"ensure the kernel/wrapper directory exists"),
 		}
 	}
 
@@ -576,9 +579,10 @@ func shouldScanWrapperFile(entry os.DirEntry) bool {
 func (v *Validator) scanWrapperPackageStateFile(fset *token.FileSet, path string) []ValidationResult {
 	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
-		return []ValidationResult{v.newResult(codeFMT19, SeverityError, IssueInvalid,
+		return []ValidationResult{v.newError(codeFMT19, IssueInvalid,
 			path, "",
-			fmt.Sprintf("FMT-19: failed to parse %s: %v; fix: fix the Go syntax error in this file", path, err))}
+			fmt.Sprintf("FMT-19: failed to parse %s: %v", path, err),
+			"fix the Go syntax error in this file")}
 	}
 
 	var out []ValidationResult
@@ -594,12 +598,12 @@ func (v *Validator) scanWrapperPackageStateFile(fset *token.FileSet, path string
 			}
 			if reason, forbidden := classifyWrapperVarSpec(vs); forbidden {
 				nameList := formatVarSpecNames(vs)
-				out = append(out, v.newResult(codeFMT19, SeverityError, IssueInvalid,
+				out = append(out, v.newError(codeFMT19, IssueInvalid,
 					path, "",
 					fmt.Sprintf("FMT-19: %s:%d forbids package-level var %s — %s "+
-						"(kernel/wrapper must stay stateless: round-4 constructor-injection invariant); "+
-						"fix: remove the mutable package-level variable and pass state via constructor",
-						path, fset.Position(vs.Pos()).Line, nameList, reason)))
+						"(kernel/wrapper must stay stateless: round-4 constructor-injection invariant)",
+						path, fset.Position(vs.Pos()).Line, nameList, reason),
+					"remove the mutable package-level variable and pass state via constructor"))
 			}
 		}
 	}
@@ -748,11 +752,12 @@ func (v *Validator) validateDOCNAME01() []ValidationResult {
 	for _, rel := range targets {
 		data, err := v.readFile(filepath.Join(v.root, filepath.FromSlash(rel)))
 		if err != nil {
-			results = append(results, v.newResultAt(
-				codeDOCNAME01, SeverityError, IssueInvalid,
+			results = append(results, newErrorAt(
+				codeDOCNAME01, IssueInvalid,
 				rel, metadata.Position{},
 				"content",
 				fmt.Sprintf(advHintDOCNAME01CannotReadDoc, err),
+				advHintDOCNAME01CannotReadDocFix,
 			))
 			continue
 		}
@@ -765,54 +770,60 @@ func (v *Validator) loadDocNamingGuard() (docNamingGuardConfig, bool, []Validati
 	var cfg docNamingGuardConfig
 	data, err := v.readFile(filepath.Join(v.root, filepath.FromSlash(docNamingGuardRelPath)))
 	if errors.Is(err, os.ErrNotExist) {
-		return cfg, false, []ValidationResult{v.newResultAt(
-			codeDOCNAME01, SeverityError, IssueRequired,
+		return cfg, false, []ValidationResult{newErrorAt(
+			codeDOCNAME01, IssueRequired,
 			docNamingGuardRelPath, metadata.Position{},
 			"",
 			advHintDOCNAME01GuardRequired,
+			advHintDOCNAME01GuardRequiredFix,
 		)}
 	}
 	if err != nil {
-		return cfg, false, []ValidationResult{v.newResultAt(
-			codeDOCNAME01, SeverityError, IssueInvalid,
+		return cfg, false, []ValidationResult{newErrorAt(
+			codeDOCNAME01, IssueInvalid,
 			docNamingGuardRelPath, metadata.Position{},
 			"",
 			fmt.Sprintf(advHintDOCNAME01CannotReadGuard, err),
+			advHintDOCNAME01CannotReadGuardFix,
 		)}
 	}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return cfg, false, []ValidationResult{v.newResultAt(
-			codeDOCNAME01, SeverityError, IssueInvalid,
+		return cfg, false, []ValidationResult{newErrorAt(
+			codeDOCNAME01, IssueInvalid,
 			docNamingGuardRelPath, metadata.Position{},
 			"",
 			fmt.Sprintf(advHintDOCNAME01CannotParseGuard, err),
+			advHintDOCNAME01CannotParseGuardFix,
 		)}
 	}
 
 	var results []ValidationResult
 	if len(cfg.Include) == 0 {
-		results = append(results, v.newResultAt(
-			codeDOCNAME01, SeverityError, IssueRequired,
+		results = append(results, newErrorAt(
+			codeDOCNAME01, IssueRequired,
 			docNamingGuardRelPath, metadata.Position{},
 			"include",
 			advHintDOCNAME01MissingInclude,
+			advHintDOCNAME01MissingIncludeFix,
 		))
 	}
 	if len(cfg.Replacements) == 0 {
-		results = append(results, v.newResultAt(
-			codeDOCNAME01, SeverityError, IssueRequired,
+		results = append(results, newErrorAt(
+			codeDOCNAME01, IssueRequired,
 			docNamingGuardRelPath, metadata.Position{},
 			"replacements",
 			advHintDOCNAME01MissingReplacements,
+			advHintDOCNAME01MissingReplacementsFix,
 		))
 	}
 	for i, repl := range cfg.Replacements {
 		if repl.Literal == "" || repl.Replacement == "" {
-			results = append(results, v.newResultAt(
-				codeDOCNAME01, SeverityError, IssueRequired,
+			results = append(results, newErrorAt(
+				codeDOCNAME01, IssueRequired,
 				docNamingGuardRelPath, metadata.Position{},
 				fmt.Sprintf("replacements[%d]", i),
 				advHintDOCNAME01InvalidReplacement,
+				advHintDOCNAME01InvalidReplacementFix,
 			))
 		}
 	}
@@ -873,22 +884,24 @@ func (v *Validator) walkDocNamingInclude(include string, exclude []string, seen 
 	if err == nil {
 		return nil
 	}
-	return []ValidationResult{v.newResultAt(
-		codeDOCNAME01, SeverityError, IssueInvalid,
+	return []ValidationResult{newErrorAt(
+		codeDOCNAME01, IssueInvalid,
 		baseRel, metadata.Position{},
 		"",
 		fmt.Sprintf(advHintDOCNAME01CannotWalk, include, err),
+		advHintDOCNAME01CannotWalkFix,
 	)}
 }
 
 func (v *Validator) globDocNamingInclude(include string, exclude []string, seen map[string]struct{}) []ValidationResult {
 	matches, err := filepath.Glob(filepath.Join(v.root, filepath.FromSlash(include)))
 	if err != nil {
-		return []ValidationResult{v.newResultAt(
-			codeDOCNAME01, SeverityError, IssueInvalid,
+		return []ValidationResult{newErrorAt(
+			codeDOCNAME01, IssueInvalid,
 			docNamingGuardRelPath, metadata.Position{},
 			"include",
 			fmt.Sprintf(advHintDOCNAME01InvalidPattern, include, err),
+			advHintDOCNAME01InvalidPatternFix,
 		)}
 	}
 	for _, match := range matches {
@@ -924,21 +937,23 @@ func (v *Validator) scanDocNamingLiterals(file, content string, replacements []d
 		line := sc.Text()
 		for _, repl := range replacements {
 			for col := findDocLiteral(line, repl.Literal, 0); col >= 0; col = findDocLiteral(line, repl.Literal, col+len(repl.Literal)) {
-				results = append(results, v.newResultAt(
-					codeDOCNAME01, SeverityError, IssueForbidden,
+				results = append(results, newErrorAt(
+					codeDOCNAME01, IssueForbidden,
 					file, metadata.Position{Line: lineNo, Column: col + 1},
 					"content",
 					fmt.Sprintf(advHintDOCNAME01LegacyLiteral, repl.Literal, repl.Replacement),
+					advHintDOCNAME01LegacyLiteralFix,
 				))
 			}
 		}
 	}
 	if err := sc.Err(); err != nil {
-		results = append(results, v.newResultAt(
-			codeDOCNAME01, SeverityError, IssueInvalid,
+		results = append(results, newErrorAt(
+			codeDOCNAME01, IssueInvalid,
 			file, metadata.Position{},
 			"content",
 			fmt.Sprintf(advHintDOCNAME01CannotScan, err),
+			advHintDOCNAME01CannotScanFix,
 		))
 	}
 	return results

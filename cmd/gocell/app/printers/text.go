@@ -141,9 +141,11 @@ func (p *TextPrinter) PrintFailFast(results []governance.ValidationResult) error
 //	[CODE] first line of message (field: <field>)
 //	  rest of the message verbatim
 //	  ...
+//	       fix: <remediation guidance>
 //	       at <file>[:<line>[:<col>]]
 //
-// Field is omitted entirely when empty. The anchor line is omitted when
+// Field is omitted entirely when empty. The "fix:" line is rendered only for
+// error findings (warnings carry no Fix). The anchor line is omitted when
 // neither File nor Scope is set.
 func (p *TextPrinter) writeOne(tw *textWriter, r governance.ValidationResult) {
 	firstLine, rest, multiline := strings.Cut(r.Message, "\n")
@@ -157,6 +159,13 @@ func (p *TextPrinter) writeOne(tw *textWriter, r governance.ValidationResult) {
 		// fragment keeps its native indentation. Trailing blank line is
 		// preserved by the final "\n".
 		tw.writelnf("%s\n", rest)
+	}
+
+	// Fix is the typed remediation guidance (error findings only; empty for
+	// warnings). Render it on its own line, aligned with the location anchor,
+	// rather than re-concatenating into Message.
+	if r.Fix != "" {
+		tw.writelnf("         fix: %s\n", r.Fix)
 	}
 
 	switch {

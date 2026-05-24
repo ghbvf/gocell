@@ -55,6 +55,15 @@ type ValidationResult struct {
 	Scope     string // virtual scope name; empty when File is set
 	Field     string // field path within YAML, e.g. "contractUsages[0].role"
 	Message   string
+	// Fix is the remediation guidance for an error finding ("how to make this
+	// rule pass"). It is REQUIRED for SeverityError results and empty for
+	// SeverityWarning. Splitting Fix out of Message replaces the old "; fix:"
+	// Message-substring convention (INV-3 Soft anchor) with a typed field:
+	// error results are constructed exclusively through newError / newErrorAt /
+	// newScopedError, each of which takes fix as a mandatory positional
+	// argument (GOVERNANCE-RULE-ERROR-FIX-FIELD-01). Renderers surface it as a
+	// distinct "fix:" line / JSON field, never re-concatenated into Message.
+	Fix string
 	// Line and Column locate the offending value inside File. They are 1-based
 	// (matching yaml.v3) and zero when the position is unknown — e.g. the
 	// ProjectMeta was constructed without FileNodes, or the field path cannot

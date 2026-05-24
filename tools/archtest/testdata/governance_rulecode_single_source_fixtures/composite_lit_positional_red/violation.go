@@ -24,7 +24,8 @@ func violatePositional() gov.ValidationResult {
 		"fixture.yaml",
 		"",
 		"field.path",
-		"no fix anchor",
+		"problem statement",
+		"",
 		0,
 		0,
 	}
