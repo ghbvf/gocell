@@ -13,7 +13,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -240,40 +239,6 @@ func (m *MemStore) Verify(_ context.Context, fromSeq, toSeq int64) (valid bool, 
 // kernel/healthz.RepoProber.
 func (m *MemStore) RepoReady(_ context.Context) error {
 	return nil
-}
-
-// MustTamperEntryHash directly modifies the Hash field of the stored entry at
-// the given seq_no (1-indexed). Used only by storetest for negative Verify cases.
-//
-// This method is intentionally exported from the test-only MemStore so that
-// storetest can construct tampered-chain scenarios without coupling the test
-// infrastructure to the concrete store type outside this package. The Must*
-// prefix follows PANIC-REGISTERED-01: panicking on an out-of-range seq_no is a
-// B-class assertion (programming error in the test caller).
-func (m *MemStore) MustTamperEntryHash(seq int64, newHash string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	idx := seq - 1
-	if int(idx) < 0 || int(idx) >= len(m.entries) {
-		panic(panicregister.Approved("audit-mem-tamper-hash-out-of-range",
-			errcode.Assertion("MustTamperEntryHash: seq %d out of range [1, %d]", seq, len(m.entries))))
-	}
-	m.entries[idx].Hash = newHash
-}
-
-// MustTamperEntryPrevHash directly modifies the PrevHash field of the stored
-// entry at the given seq_no (1-indexed). Used only by storetest for negative
-// Verify cases. The Must* prefix follows PANIC-REGISTERED-01: panicking on an
-// out-of-range seq_no is a B-class assertion (programming error in the test caller).
-func (m *MemStore) MustTamperEntryPrevHash(seq int64, newPrevHash string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	idx := seq - 1
-	if int(idx) < 0 || int(idx) >= len(m.entries) {
-		panic(panicregister.Approved("audit-mem-tamper-prev-hash-out-of-range",
-			errcode.Assertion("MustTamperEntryPrevHash: seq %d out of range [1, %d]", seq, len(m.entries))))
-	}
-	m.entries[idx].PrevHash = newPrevHash
 }
 
 // validatePayloadJSON checks that payload is a valid JSON object or null.

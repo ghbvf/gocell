@@ -289,8 +289,8 @@ system 表达"function name 必须有 receiver"。
 | `pkgErrcode` | `MustValidateDetailsKinds` | assertion guard | details kind 合法性，pkg-level var init |
 | `pkgAppender` | `MustNewSpec` | codegen funnel | sealed 白名单 funnel，pkg-level var init |
 | `pkgWebsocketHub` | `MustValidateHubConfig` | 内部 validator | `NewHub` 内部调用，不暴露为跨包 callee |
-| `runtime/audit/ledger` | `MustTamperEntryHash` | (c) test fixture method on MemStore | test-only method 暴露在 production package 供 storetest 合规测试（负向 Verify 用例）注入篡改；不能移到 `_test.go`，因为 `storetest` 子包在 suite runtime 消费该方法 |
-| `runtime/audit/ledger` | `MustTamperEntryPrevHash` | (c) test fixture method on MemStore | 同上，`MustTamperEntryHash` 的配套方法，用于篡改 prev_hash 构造 chain-break 测试向量 |
+| ~~`runtime/audit/ledger`~~ | ~~`MustTamperEntryHash`~~ | ~~(c) test fixture method on MemStore~~ | **REMOVED (A-05 refactor)**: relocated to `ledger/mem_store_tamper_test.go` as unexported `tamperEntryHash`; negative Verify tests moved from `storetest/suite.go` to same-package `_test.go`; carve-out entry deleted from archtest `allowedMustDecls`. |
+| ~~`runtime/audit/ledger`~~ | ~~`MustTamperEntryPrevHash`~~ | ~~(c) test fixture method on MemStore~~ | **REMOVED (A-05 refactor)**: same as above; unexported `tamperEntryPrevHash` in `_test.go`. |
 
 Test fixture 包路径前缀（`testFixturePkgPrefixes` slice，这些路径下不扫描）：
 

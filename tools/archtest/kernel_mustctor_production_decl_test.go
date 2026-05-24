@@ -117,13 +117,6 @@ var allowedMustDecls = map[string]map[string]struct{}{
 	"runtime/websocket": {
 		"MustValidateHubConfig": {},
 	},
-	// (c) test fixture method on test-only MemStore — exposed for storetest
-	// conformance suite (negative Verify cases). Cannot move to _test.go
-	// because storetest sub-package consumes these methods at suite runtime.
-	"runtime/audit/ledger": {
-		"MustTamperEntryHash":     {},
-		"MustTamperEntryPrevHash": {},
-	},
 }
 
 // testFixturePkgPrefixes are package path prefixes (module-relative) that are
