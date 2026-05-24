@@ -19,6 +19,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/worker"
@@ -1195,6 +1196,10 @@ func connectionStateMessage(state ConnectionPhase) string {
 // — the "rabbitmq_ready" probe is exposed automatically.
 var _ lifecycle.ManagedResource = (*Connection)(nil)
 
+// ProbeReady is the ops-contract name for the RabbitMQ readiness probe.
+// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
+const ProbeReady healthz.ReadyProbeName = "rabbitmq_ready"
+
 // Checkers returns the rabbitmq_ready probe for /readyz integration.
 //
 // The probe wraps Health(ctx) which honors ctx (early cancel) and reads the
@@ -1210,7 +1215,7 @@ var _ lifecycle.ManagedResource = (*Connection)(nil)
 // ref: adapters/vault/transit_provider.go::Checkers — sibling adapter pattern.
 func (c *Connection) Checkers() map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		"rabbitmq_ready": c.Health,
+		string(ProbeReady): c.Health,
 	}
 }
 

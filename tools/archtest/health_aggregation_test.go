@@ -20,19 +20,13 @@ package archtest
 
 import (
 	"go/ast"
-	"go/constant"
-	"go/token"
 	"go/types"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // typeMethodSet collects every exported method (own + promoted) on every
@@ -227,83 +221,11 @@ func TestHealthAggregation_FixtureRegression(t *testing.T) {
 		"Bad declares only Checkers() — must remain flagged as missing Worker/Close")
 }
 
-var adapterReadyProbeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*_ready$`)
-
-// adapterCheckerNameViolationsFromPass scans all files in a Pass for Checkers()
-// methods on exported receiver types and validates each probe name.
-func adapterCheckerNameViolationsFromPass(fset *token.FileSet, files []*ast.File, info *types.Info, rel string) []string {
-	var violations []string
-	for _, file := range files {
-		scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-			if fn.Name.Name != "Checkers" || fn.Recv == nil || len(fn.Recv.List) == 0 {
-				return
-			}
-			recv := scanner.ReceiverTypeName(fn.Recv.List[0].Type)
-			if recv == "" || !ast.IsExported(recv) {
-				return
-			}
-			for _, name := range checkerNamesFromFuncPass(fset, info, fn) {
-				if !adapterReadyProbeNamePattern.MatchString(name) {
-					violations = append(violations, rel+"."+recv+" Checkers probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
-				}
-			}
-		})
-	}
-	return violations
-}
-
-func checkerNamesFromFuncPass(_ *token.FileSet, info *types.Info, fn *ast.FuncDecl) []string {
-	var names []string
-	scanner.EachInSubtree[ast.KeyValueExpr](fn.Body, func(kv *ast.KeyValueExpr) {
-		tv, ok := info.Types[kv.Key]
-		if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
-			return
-		}
-		names = append(names, constant.StringVal(tv.Value))
-	})
-	scanner.EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "HealthToCheckers" || len(call.Args) == 0 {
-			return
-		}
-		obj, ok := info.Uses[sel.Sel].(*types.Func)
-		if !ok || !strings.HasSuffix(obj.Pkg().Path(), "adapters/adapterutil") {
-			return
-		}
-		name, ok := constStringValue(info, call.Args[0])
-		if !ok {
-			return
-		}
-		names = append(names, name)
-	})
-	return names
-}
-
-// healthCheckerCallNameViolationsFromPass scans all files in a Pass for
-// WithHealthChecker call sites and validates each probe name.
-func healthCheckerCallNameViolationsFromPass(_ *token.FileSet, files []*ast.File, info *types.Info, rel string) []string {
-	var violations []string
-	for _, file := range files {
-		scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			if selectorName(call.Fun) != "WithHealthChecker" || len(call.Args) == 0 {
-				return
-			}
-			name, ok := constStringValue(info, call.Args[0])
-			if !ok {
-				return
-			}
-			if !adapterReadyProbeNamePattern.MatchString(name) {
-				violations = append(violations, rel+" bootstrap.WithHealthChecker probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
-			}
-		})
-	}
-	return violations
-}
-
-func constStringValue(info *types.Info, expr ast.Expr) (string, bool) {
-	tv, ok := info.Types[expr]
-	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
-		return "", false
-	}
-	return constant.StringVal(tv.Value), true
-}
+// Adapter/runtime ready-probe NAME validation (snake_case + _ready, single
+// source) moved to the Hard funnel OPS-CONTRACT-STRING-FUNNEL-01
+// (ops_contract_string_funnel_test.go). The Soft regex scanners that lived here
+// — adapterCheckerNameViolationsFromPass / checkerNamesFromFuncPass /
+// healthCheckerCallNameViolationsFromPass — were removed (no parallel
+// Soft+Hard). The bootstrap.WithHealthChecker scan had no production callsite
+// (vacuous); naming for any future composition-root WithHealthChecker call is
+// the composition root's responsibility.

@@ -30,7 +30,7 @@
 // through healthz.NewProbe / bootstrap.WithHealthChecker (config_watcher,
 // outbox_failopen_rate_<cell>, …) and runtime/outbox.Relay budget keys
 // (outbox-relay-poll/-reclaim/-cleanup, hyphenated and non-_ready). Cell-level
-// repo probes (cells/*/healthz_gen.go ProbeRepoReady) are codegen-funnelled
+// repo probes (cells/*/healthz_gen.go ProbeRepoReady) are codegen-funneled
 // separately via RegisterRepoReady and are not touched here.
 //
 // Tool: RunTypedProduction (Pass-Driver) for production; RunTyped over testdata
@@ -54,7 +54,7 @@
 //     sanctioned_set_covers_all_checkers meta-check loads production, discovers
 //     every Checkers() returning a map[string]func with a _ready-shaped string
 //     LITERAL key, and asserts that package is in the sanctioned set — so a new
-//     bare-literal probe author fails loudly until it is funnelled.
+//     bare-literal probe author fails loudly until it is funneled.
 //  5. Shadowing the builtin `string` identifier inside a sanctioned Checkers
 //     (so string(x) is not the conversion). Non-fixturable; compensation:
 //     shadowing a predeclared identifier is independently caught by go vet /
@@ -127,7 +127,7 @@ func goldenReadyProbeNames() []string {
 func TestOpsContractStringFunnel(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath := readModulePath(t, root)
-	healthzPkgPath := modPath + "/kernel/healthz"
+	// healthzPkgPath is the package const declared in readyz_probe_naming_test.go.
 
 	var goldenEntries []string
 
@@ -390,7 +390,7 @@ func testOpsContractSanctionedSetCoverage(t *testing.T, modPath string) {
 	})
 	sort.Strings(violations)
 	assert.Empty(t, violations,
-		"a new ready-probe author must be added to readyProbeSanctionedPkgs and funnelled through a ReadyProbeName const")
+		"a new ready-probe author must be added to readyProbeSanctionedPkgs and funneled through a ReadyProbeName const")
 }
 
 // testOpsContractBareLiteralKeyFixture proves construction_funnel flags

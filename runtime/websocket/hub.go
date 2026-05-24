@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -836,6 +837,10 @@ func (h *Hub) ConnCount() int {
 // lifecycle.ManagedResource implementation
 // ---------------------------------------------------------------------------
 
+// ProbeReady is the ops-contract name for the websocket hub readiness probe.
+// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
+const ProbeReady healthz.ReadyProbeName = "websocket_hub_ready"
+
 // Checkers implements lifecycle.ManagedResource. It returns a single probe
 // "websocket_hub_ready" that reports nil (healthy) only when the Hub is in
 // the running state. Any other state (idle/stopping/stopped) returns
@@ -847,7 +852,7 @@ func (h *Hub) ConnCount() int {
 // ref: adapters/rabbitmq/connection.go Checkers — probe name + pre-allocated error pattern.
 func (h *Hub) Checkers() map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		"websocket_hub_ready": func(_ context.Context) error {
+		string(ProbeReady): func(_ context.Context) error {
 			if h.state.Load() == stateRunning {
 				return nil
 			}

@@ -12,6 +12,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -673,13 +674,17 @@ func (c *Client) Health(ctx context.Context) error {
 	return nil
 }
 
+// ProbeReady is the ops-contract name for the Redis readiness probe.
+// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
+const ProbeReady healthz.ReadyProbeName = "redis_ready"
+
 // Checkers returns the named health probe for /readyz. The single entry
-// "redis_ready" wraps Health with adapterutil.DefaultProbeTimeout so a slow
+// redis_ready wraps Health with adapterutil.DefaultProbeTimeout so a slow
 // ping does not hold the readyz response indefinitely.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
 func (c *Client) Checkers() map[string]func(context.Context) error {
-	return adapterutil.HealthToCheckers("redis_ready", c.Health, adapterutil.DefaultProbeTimeout)
+	return adapterutil.HealthToCheckers(ProbeReady, c.Health, adapterutil.DefaultProbeTimeout)
 }
 
 // Worker returns nil — the Redis client has no background goroutine.

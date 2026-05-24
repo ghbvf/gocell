@@ -39,12 +39,12 @@
 //     a future one would escape this rule. Compensation: NewProbe is the single
 //     constructor, so any such site is grep-visible and reviewable.
 //  2. Adapter checker-name shapes that do NOT go through healthz.NewProbe —
-//     adapterutil.HealthToCheckers(name, …) arguments, map-literal keys
-//     ("postgres_ready": fn), and consts like ReadyProbeName="s3_ready". These
-//     are a separate naming surface; all current values are snake_case+_ready
-//     by inspection. Compensation: their names flow into the aggregator via
-//     WithHealthChecker and are reviewed at the adapter; a future widening to
-//     scan HealthToCheckers args is tracked if drift appears.
+//     adapterutil.HealthToCheckers(name, …) arguments and Checkers() map-literal
+//     keys — are now CLOSED by the Hard funnel OPS-CONTRACT-STRING-FUNNEL-01
+//     (ops_contract_string_funnel_test.go): every such name must resolve to a
+//     healthz.ReadyProbeName-typed const declared at a sanctioned adapter
+//     package, frozen by a golden inventory. This rule (READYZ-PROBE-NAMING-01)
+//     retains only the NewProbe hyphen-check for framework/cellgen probe names.
 //
 // Reverse self-check:
 //   - TestReadyzProbeNaming_RedHyphen — fixture package (build tag
