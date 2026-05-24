@@ -256,9 +256,12 @@ jobs:
           go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
           awk '
             /coverage: \[no statements\]/ { next }
-            /outboxtest/ { next }
-            /celltest/ { next }
-            /commandtest/ { next }
+            # Test-support helper packages (Go *test convention: authtest,
+            # celltest, commandtest, outboxtest) carry fixtures / Must* wrappers,
+            # not production logic — exempt from the kernel 90% floor. Match the
+            # path segment generically (not a per-package enumeration) so that
+            # extracting a new *test helper never silently re-breaks this gate.
+            /\/[a-z]+test/ { next }
             /coverage:/ {
               cov = $0
               sub(/^.*coverage: /, "", cov)
