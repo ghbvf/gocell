@@ -108,6 +108,24 @@ type modulesContext struct {
 	AssemblyID string
 	SourcePath string   // path to the assembly.yaml that drove generation (asm.File)
 	Modules    []string // CellModule struct names, in cells.yaml order
+	// Capabilities are runtime/cap.Capability const names (e.g.
+	// "CapabilityPostgres"), derived from assembly.yaml `capabilities`. When
+	// non-empty the template emits generatedCapabilities() + the cap import;
+	// empty leaves the file byte-identical to the pre-capabilities form so
+	// assemblies that declare no capabilities are unaffected.
+	Capabilities []string
+}
+
+// capabilityConstNames maps assembly.yaml `capabilities` enum values to their
+// runtime/cap.Capability const identifiers. The enum is closed and mirrored by
+// assembly.schema.json + runtime/cap.Capability; an unknown value here means
+// the schema enum and this map drifted — GenerateModulesGen fails rather than
+// emit an undefined const (the schema validation in gocell validate is the
+// primary upstream gate).
+var capabilityConstNames = map[string]string{
+	"postgres": "CapabilityPostgres",
+	"redis":    "CapabilityRedis",
+	"rabbitmq": "CapabilityRabbitMQ",
 }
 
 // AssemblyScaffoldSpec drives Generator.PlanAssemblyScaffold (K#09 SCAFFOLD-ONE-CMD).
@@ -236,10 +254,22 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 		modules = append(modules, cm.GoStructName.String()+"Module")
 	}
 
+	capConsts := make([]string, 0, len(asm.Capabilities))
+	for _, c := range asm.Capabilities {
+		name, ok := capabilityConstNames[c]
+		if !ok {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"assembly declares an unknown capability",
+				errcode.WithInternal(fmt.Sprintf("assembly=%q capability=%q", assemblyID, c)))
+		}
+		capConsts = append(capConsts, name)
+	}
+
 	ctx := modulesContext{
-		AssemblyID: assemblyID,
-		SourcePath: asm.File,
-		Modules:    modules,
+		AssemblyID:   assemblyID,
+		SourcePath:   asm.File,
+		Modules:      modules,
+		Capabilities: capConsts,
 	}
 	return g.executeTemplate("modules_gen.go.tpl", ctx)
 }
