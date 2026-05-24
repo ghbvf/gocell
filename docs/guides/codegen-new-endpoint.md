@@ -159,6 +159,35 @@ reg.RouteGroup(cell.RouteGroup{
 })
 ```
 
+### Composition root injection (cells that use outbox)
+
+When a cell depends on outbox or a transaction manager, the **composition root**
+(`cmd/myapp/main.go`) is responsible for wrapping raw infra types into the
+sealed marker types before passing them to the cell constructor. Cell-side
+`With*` Option signatures accept only sealed marker types — not raw infra —
+so passing raw values is a compile-time error.
+
+```go
+// cmd/myapp/main.go — wrap raw infra before passing to cell
+mycell.New(
+    mycell.WithOutboxDeps(
+        outbox.WrapPublisherForCell(eb),       // raw outbox.Publisher → CellPublisher
+        outbox.WrapWriterForCell(nw),          // raw outbox.Writer   → CellWriter
+    ),
+    mycell.WithTxManager(persistence.WrapForCell(tx)), // raw TxRunner → CellTxManager
+)
+```
+
+The sealed marker types (`outbox.CellPublisher`, `outbox.CellWriter`,
+`persistence.CellTxManager`) carry an unexported method that makes them
+unimplementable outside their defining package. This is the
+**AI-HARD type-system funnel** — constructing a fake value to satisfy the
+interface is a compile error, not a convention.
+
+ref: [`docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md`](../architecture/202605101900-adr-cell-raw-infra-sealed-marker.md)
+
+See also: [`docs/guides/why-sealed-marker.md`](why-sealed-marker.md)
+
 ## Step 5: Update slice.yaml
 
 Add the contract usage to `cells/myapp/slices/widgetcreate/slice.yaml`:
@@ -204,3 +233,4 @@ takes a standard `outbox.EntryHandler` — no custom interface to implement.
 | Wrong `contractUsages` role | `gocell validate` ADV-06 fail | Set `role: serve` for HTTP server, `role: subscribe` for event subscriber |
 | `return nil, err` for business 4xx | Generated handler falls through to `httputil.WriteError` 5xx path; business error loses its intended status code | Return typed struct: `return createg.Create404ErrorResponse{Body: *errcode.New(...)}, nil` |
 | Missing `responses:` block in contract.yaml | CH-06 governance silently passes (empty set × empty set = true), but the generated typed envelope contains only the success status struct — the adapter has no typed struct to express business errors | Any POST/PUT/DELETE endpoint must declare at least `400` and `500` in `responses:` |
+| 把 raw `outbox.Publisher` 传入 `WithOutboxDeps` | `cannot use ... as outbox.CellPublisher value ... missing method sealedCellPublisher` | composition root 调用 `outbox.WrapPublisherForCell(p)` 包装后再传 |

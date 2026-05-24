@@ -23,6 +23,7 @@ import (
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
 // role-name literal will be migrated to permission-based authz when that work lands.
+// Deferred (S43, tracked by gh issue #914 — PERMISSION-BASED-AUTHZ-01).
 func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
 	p, ok := auth.FromContext(ctx)

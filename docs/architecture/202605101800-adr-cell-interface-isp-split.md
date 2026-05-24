@@ -1,5 +1,7 @@
 # ADR: Cell Interface ISP Split + Raw-Infra Closure
 
+> 面向：framework 内部贡献者。框架使用者请先看 [`docs/guides/cell-interface-isp.md`](../guides/cell-interface-isp.md)。
+
 > Status: Accepted
 > Date: 2026-05-10
 > ref: docs/plans/202605011500-029-master-roadmap.md #13 PR-A22

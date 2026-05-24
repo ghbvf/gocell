@@ -1,5 +1,7 @@
 # ADR: Cell Raw-Infra Sealed Marker（升级 CELL-RAW-DEPS-01 为 AI-HARD type-system 强制）
 
+> 面向：framework 内部贡献者。框架使用者请先看 [`docs/guides/why-sealed-marker.md`](../guides/why-sealed-marker.md)。
+
 > Status: Accepted
 > Date: 2026-05-10
 > Amends: docs/architecture/202605101800-adr-cell-interface-isp-split.md §D6

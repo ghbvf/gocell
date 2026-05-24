@@ -98,7 +98,6 @@ Examples by module:
 - `kernel/outbox/entry_id.go` — `outbox-entry-id-init`
 - `kernel/wrapper/{consumer,handler}.go` — `wrapper-consumer-init`, `wrapper-handler-init`
 - `pkg/errcode/errcode.go` — `errcode-redact-attr-self`, `errcode-redact-message-self`
-- `runtime/audit/ledger/mem_store.go` — `audit-mem-tamper-hash-out-of-range`, `audit-mem-tamper-prev-hash-out-of-range`
 - `runtime/auth/{keys,principal,provider,route}.go` — `auth-test-rsa-keypair`, `auth-test-keyset`, `auth-principal-context-missing`, `auth-test-hmac-keyring`, `auth-route-mount`
 - `runtime/distlock/locker.go` — `distlock-init`
 - `runtime/http/{health,middleware/cookie_session,middleware/circuit_breaker,router}` — `health-checker-register`, `cookie-session-init`, `circuit-breaker-init`, `router-init`
