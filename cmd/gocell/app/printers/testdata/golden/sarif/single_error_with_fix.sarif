@@ -26,7 +26,7 @@
           "ruleId": "FMT-13",
           "level": "error",
           "message": {
-            "text": "HTTP contract \"x\" must declare endpoints.http (field: endpoints.http); fix: add endpoints.http to contract.yaml with method/path/successStatus"
+            "text": "HTTP contract \"x\" must declare endpoints.http (field: endpoints.http)"
           },
           "locations": [
             {
@@ -41,7 +41,10 @@
                 }
               }
             }
-          ]
+          ],
+          "properties": {
+            "fix": "add endpoints.http to contract.yaml with method/path/successStatus"
+          }
         }
       ],
       "originalUriBaseIds": {

@@ -41,7 +41,10 @@
                 }
               }
             }
-          ]
+          ],
+          "properties": {
+            "fix": "修复：使用 ASCII 名称，避免 emoji 🚀 与 <特殊> 字符 & \"引号\"\n第二行建议"
+          }
         }
       ],
       "originalUriBaseIds": {

@@ -84,11 +84,20 @@ type sarifRuleProperties struct {
 	IssueType string `json:"issueType,omitempty"`
 }
 
+// sarifResultProperties carries result-level advisory metadata that does not
+// fit into the fixed SARIF 2.1.0 result schema. Stored in the property bag
+// (SARIF 2.1.0 §3.8) so viewers that understand it can surface the data
+// without polluting message.text.
+type sarifResultProperties struct {
+	Fix string `json:"fix,omitempty"`
+}
+
 type sarifResult struct {
-	RuleID    string          `json:"ruleId"`
-	Level     string          `json:"level"`
-	Message   sarifMessage    `json:"message"`
-	Locations []sarifLocation `json:"locations,omitempty"`
+	RuleID     string                 `json:"ruleId"`
+	Level      string                 `json:"level"`
+	Message    sarifMessage           `json:"message"`
+	Locations  []sarifLocation        `json:"locations,omitempty"`
+	Properties *sarifResultProperties `json:"properties,omitempty"`
 }
 
 type sarifMessage struct {
@@ -193,12 +202,17 @@ func buildSARIFRules(sorted []governance.ValidationResult) []sarifRule {
 // toSARIFResult converts one ValidationResult to a SARIF result. Field is
 // folded into the message text so SARIF viewers always show it; if the
 // result is scope-only, locations[] is omitted and the scope name lands in
-// the message prefix to keep it visible.
+// the message prefix to keep it visible. Fix guidance, when present, is
+// stored in result.properties.fix (SARIF 2.1.0 §3.8 property bag) rather
+// than appended to message.text, keeping message.text clean and unambiguous.
 func toSARIFResult(r governance.ValidationResult) sarifResult {
 	res := sarifResult{
 		RuleID:  string(r.Code),
 		Level:   severityToSARIFLevel(r.Severity),
 		Message: sarifMessage{Text: composeSARIFMessage(r)},
+	}
+	if r.Fix != "" {
+		res.Properties = &sarifResultProperties{Fix: r.Fix}
 	}
 	if r.File != "" {
 		loc := sarifLocation{
@@ -227,14 +241,15 @@ func toSARIFResult(r governance.ValidationResult) sarifResult {
 	return res
 }
 
-// composeSARIFMessage renders the message text shown in viewers. Scope-only
-// findings prefix the scope name (e.g. "[scope: project] circular ...") so
-// the context isn't lost when locations[] is omitted; field is appended
-// inside parens so it tracks alongside the message for both file and
-// scope-anchored results. SARIF 2.1.0 has a structured fixes[] slot for
-// automated FILE edits, not advisory text, so the typed Fix guidance is
-// appended to message.text as a "; fix: " suffix for viewer visibility —
-// sourced from the typed Fix field, joined here at the printer layer.
+// composeSARIFMessage renders the message text shown in SARIF viewers.
+// Scope-only findings prefix the scope name (e.g. "[scope: project] circular
+// ...") so the context isn't lost when locations[] is omitted; field is
+// appended inside parens so it tracks alongside the message for both file and
+// scope-anchored results.
+//
+// Fix guidance is NOT appended here: it is stored in result.properties.fix
+// (SARIF 2.1.0 §3.8 property bag) by toSARIFResult, keeping message.text
+// as the single unambiguous human-readable description.
 func composeSARIFMessage(r governance.ValidationResult) string {
 	msg := r.Message
 	if r.File == "" && r.Scope != "" {
@@ -242,9 +257,6 @@ func composeSARIFMessage(r governance.ValidationResult) string {
 	}
 	if r.Field != "" {
 		msg += fmt.Sprintf(" (field: %s)", r.Field)
-	}
-	if r.Fix != "" {
-		msg += fmt.Sprintf("; fix: %s", r.Fix)
 	}
 	return msg
 }

@@ -144,9 +144,9 @@ func (p *TextPrinter) PrintFailFast(results []governance.ValidationResult) error
 //	       fix: <remediation guidance>
 //	       at <file>[:<line>[:<col>]]
 //
-// Field is omitted entirely when empty. The "fix:" line is rendered only for
-// error findings (warnings carry no Fix). The anchor line is omitted when
-// neither File nor Scope is set.
+// Field is omitted entirely when empty. The "fix:" line is rendered whenever
+// Fix is non-empty, regardless of severity (errors and warnings are treated
+// equally). The anchor line is omitted when neither File nor Scope is set.
 func (p *TextPrinter) writeOne(tw *textWriter, r governance.ValidationResult) {
 	firstLine, rest, multiline := strings.Cut(r.Message, "\n")
 	header := firstLine

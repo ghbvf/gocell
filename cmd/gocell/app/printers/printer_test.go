@@ -280,6 +280,7 @@ var goldenCases = []struct {
 				Column:   1,
 				Field:    "名称",
 				Message:  "包含 \"引号\" 和 换行\n以及 emoji 🚀",
+				Fix:      "修复：使用 ASCII 名称，避免 emoji 🚀 与 <特殊> 字符 & \"引号\"\n第二行建议",
 			},
 		},
 	},
@@ -687,6 +688,64 @@ func TestSARIF_NormalizeArtifactURI(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestSARIF_FixInProperties verifies that a non-empty Fix field is rendered
+// into result.properties.fix (SARIF 2.1.0 §3.8 property bag) and is NOT
+// appended to message.text as a "; fix: " suffix. This is the single-source
+// contract: Fix lives exclusively in the structured properties channel.
+func TestSARIF_FixInProperties(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:     "FMT-13",
+			Severity: governance.SeverityError,
+			File:     "contracts/x/contract.yaml",
+			Line:     1,
+			Message:  "HTTP contract must declare endpoints.http",
+			Fix:      "add endpoints.http with method/path/successStatus",
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(results))
+
+	var parsed sarifLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed.Runs[0].Results, 1)
+
+	result := parsed.Runs[0].Results[0]
+
+	// Fix must appear in properties.fix — not in message.text.
+	require.NotNil(t, result.Properties,
+		"result.properties must be present when Fix is non-empty")
+	assert.Equal(t, "add endpoints.http with method/path/successStatus",
+		result.Properties.Fix,
+		"result.properties.fix must equal the Fix field value")
+
+	// message.text must NOT contain the "; fix: " suffix.
+	assert.NotContains(t, result.Message.Text, "; fix:",
+		"message.text must not carry the fix suffix — fix is in properties.fix only")
+}
+
+// TestSARIF_EmptyFix_NoProperties verifies that when Fix is empty, the
+// properties field is omitted from the SARIF result (omitempty).
+func TestSARIF_EmptyFix_NoProperties(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:     "REF-01",
+			Severity: governance.SeverityError,
+			File:     "cells/x/cell.yaml",
+			Line:     1,
+			Message:  "no fix here",
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(results))
+
+	var parsed sarifLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed.Runs[0].Results, 1)
+	assert.Nil(t, parsed.Runs[0].Results[0].Properties,
+		"result.properties must be absent when Fix is empty")
 }
 
 // TestSARIF_OriginalUriBaseIDsAlwaysPresent verifies that the SRCROOT base ID
