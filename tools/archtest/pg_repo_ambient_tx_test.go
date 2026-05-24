@@ -22,11 +22,13 @@
 //     pgExecutor field must NOT (a) access <x>.pool directly (where <x>
 //     resolves to pgExecutor type via *types.Info) nor (b) call
 //     <x>.ExecDirect(...) without a sibling pgrepoapproved.ApprovedExecDirect
-//     (const-literal-reason) marker call in the same FuncDecl body. The marker
-//     is a typed funnel from pkg/pgrepoapproved; (callee, arg) form-uniqueness
-//     plus same-body co-location pin the allowed bypass to its source location.
-//     Currently exactly one production callsite holds a marker:
-//     adapters/postgres/refresh_store.go::revokeSessionDetachedAt
+//     marker in the SAME approval scope (FuncDecl body OR nested FuncLit body
+//     — closures are independent scopes). The marker is a typed funnel from
+//     pkg/pgrepoapproved; 5-门 form-uniqueness (callee resolves to the funnel,
+//     arg[0] is *ast.BasicLit + token.STRING + kebab-case regex + non-
+//     placeholder) plus same-scope co-location pin the allowed bypass to its
+//     source location. Currently exactly one production callsite holds a
+//     marker: adapters/postgres/refresh_store.go::revokeSessionDetachedAt
 //     (the intentional independent-commit cascade-revoke compensation path).
 //
 // # Discovery
@@ -88,12 +90,15 @@
 //     (a) For pool access: any SelectorExpr `<x>.pool` where <x> resolves to
 //     pgExecutor and `.pool` is accessed from outside pgExecutor's own methods.
 //     (b) For ExecDirect calls: any CallExpr `<x>.ExecDirect(...)` where <x>
-//     resolves to pgExecutor, unless the same FuncDecl body contains a sibling
-//     CallExpr to pkg/pgrepoapproved.ApprovedExecDirect whose first argument is
-//     a string-typed constant (const literal). Callee identity and arg
-//     constness are both verified via *types.Info; no string anchors / no
-//     hand-maintained map. Exempted: pgExecutor's own methods (they
-//     legitimately use e.pool / call ExecDirect on self); newPGExecutor
+//     resolves to pgExecutor, unless the SAME approval scope (FuncDecl body
+//     OR enclosing FuncLit body — not nested closure) contains a sibling
+//     CallExpr to pkg/pgrepoapproved.ApprovedExecDirect whose first argument
+//     is a kebab-case BasicLit (regex ^[a-z][a-z0-9-]+$, not a placeholder
+//     identifier). Callee identity is verified via *types.Info.Uses; arg form
+//     is verified via *ast.BasicLit + token.STRING + strconv.Unquote + regex.
+//     No string anchors / no hand-maintained map. Exempted: pgExecutor's own
+//     methods (they legitimately use e.pool / call ExecDirect on self);
+//     newPGExecutor
 //     constructor.
 //
 // # RED fixtures
@@ -587,25 +592,24 @@ func scanR3PoolAccess(fset *token.FileSet, body *ast.BlockStmt, rel string, info
 }
 
 // scanR3ExecDirect flags CallExpr `<x>.ExecDirect(...)` where <x> resolves to
-// pgExecutor, unless the same FuncDecl body contains a sibling
-// pgrepoapproved.ApprovedExecDirect(literal) marker call. Marker form is
-// verified via (callee, arg) form-uniqueness:
+// pgExecutor, unless the SAME approval scope (the body argument — a FuncDecl
+// body OR a nested FuncLit body, depending on how scanR3UsagePoints invoked
+// this) contains a sibling pgrepoapproved.ApprovedExecDirect marker call.
+// Walk is scope-bounded via inspectStopAtFuncLit: nested FuncLit bodies are
+// NOT descended into here; scanR3UsagePoints visits each FuncLit body as its
+// own independent approval scope. See bodyHasApprovedExecDirectMarker for the
+// 5-门 marker form chain (callee identity + BasicLit + token.STRING +
+// kebab-case regex + non-placeholder).
 //
-//  1. callee resolves via *types.Info.Uses to the *types.Func for
-//     ApprovedExecDirect in pkg/pgrepoapproved (name + pkg path match);
-//  2. first argument's static type-and-value resolves via *types.Info.Types
-//     to a string constant (const literal) — fmt.Sprintf / concatenation /
-//     variables yield non-constant TypeAndValue and are rejected.
+// One marker satisfies the check for every ExecDirect call in the same scope.
+// Multiple markers in one scope are allowed (harmless redundancy); BS-8
+// reverse self-check separately pins that a marker only co-locates with an
+// actual ExecDirect call (spurious-marker detection).
 //
-// The marker is checked once per FuncDecl body; the same marker covers every
-// ExecDirect call inside that body. Multiple markers in one body are not
-// rejected (they are harmless documentation), but archtest BS-8 reverse self-
-// check pins that only the sanctioned site holds a marker.
-//
-// Marker order relative to ExecDirect calls is NOT enforced by this check —
-// co-location (same FuncDecl body) is the only structural requirement. By
-// convention the marker is placed before the ExecDirect call for readability,
-// but the archtest passes regardless of order.
+// Marker order relative to ExecDirect calls is NOT enforced — co-location
+// (same approval scope) is the only structural requirement. By convention
+// the marker is placed before the ExecDirect call for readability, but the
+// archtest passes regardless of order.
 func scanR3ExecDirect(
 	fset *token.FileSet,
 	body *ast.BlockStmt,
@@ -899,19 +903,19 @@ var expectedFixtureViolations = []fixtureViolation{
 	// R3: badR3ExecDirect — r.db.ExecDirect call without sibling marker at line 149
 	{"R3:", 149},
 	// F1 RED (PR #917 round-2):
-	// R3: badR3MarkerInNestedClosure — outer ExecDirect, marker in nested closure at line 174
-	{"R3:", 174},
-	// R3: badR3MarkerOuterExecInNestedClosure — inner ExecDirect, marker in outer scope at line 187
-	{"R3:", 187},
+	// R3: badR3MarkerInNestedClosure — outer ExecDirect, marker in nested closure at line 175
+	{"R3:", 175},
+	// R3: badR3MarkerOuterExecInNestedClosure — inner ExecDirect, marker in outer scope at line 188
+	{"R3:", 188},
 	// F2 RED (PR #917 round-2):
-	// R3: badR3ApprovedConstIdent — marker reason is const ident (not BasicLit), at line 198
-	{"R3:", 198},
-	// R3: badR3ApprovedConcat — marker reason is "a"+"b" BinaryExpr at line 206
-	{"R3:", 206},
-	// R3: badR3ApprovedEmpty — marker reason is "" (fails kebab regex) at line 214
-	{"R3:", 214},
-	// R3: badR3ApprovedPlaceholder — marker reason is "todo" (placeholder) at line 223
-	{"R3:", 223},
+	// R3: badR3ApprovedConstIdent — marker reason is const ident (not BasicLit), at line 199
+	{"R3:", 199},
+	// R3: badR3ApprovedConcat — marker reason is "a"+"b" BinaryExpr at line 207
+	{"R3:", 207},
+	// R3: badR3ApprovedEmpty — marker reason is "" (fails kebab regex) at line 215
+	{"R3:", 215},
+	// R3: badR3ApprovedPlaceholder — marker reason is "todo" (placeholder) at line 224
+	{"R3:", 224},
 }
 
 // TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches all eleven

@@ -150,16 +150,17 @@ func (r badR3Repo) badR3ExecDirect(ctx context.Context) {
 }
 
 // goodApprovedSingleExecDirect is a GREEN R3(b) fixture: marker + single
-// ExecDirect in the same body. R3 must NOT flag this — marker presence covers
-// the call.
+// ExecDirect in the same approval scope (FuncDecl body, no nesting). R3
+// must NOT flag this — marker presence covers the call.
 func (r goodRepo) goodApprovedSingleExecDirect(ctx context.Context) {
 	pgrepoapproved.ApprovedExecDirect("fixture-green-single")
 	r.db.ExecDirect(ctx, "SELECT 1")
 }
 
 // goodApprovedMultiExecDirect is a GREEN R3(b) fixture: one marker covers
-// multiple ExecDirect calls in the same body. R3 must NOT flag either call —
-// a single marker suffices for all ExecDirect calls within the same FuncDecl.
+// multiple ExecDirect calls in the same approval scope. R3 must NOT flag
+// either call — a single marker suffices for all ExecDirect calls within
+// the same FuncDecl/FuncLit body.
 func (r goodRepo) goodApprovedMultiExecDirect(ctx context.Context) {
 	pgrepoapproved.ApprovedExecDirect("fixture-green-multi")
 	r.db.ExecDirect(ctx, "SELECT 1")

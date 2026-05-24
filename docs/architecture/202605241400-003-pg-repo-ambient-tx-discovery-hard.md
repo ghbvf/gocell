@@ -152,7 +152,7 @@ type-resolution 逻辑改造），不在本 PR 范围。
 | 新 PG 适配包发明新 funnel（如 configcore Session） | 本 archtest 不覆盖；约定 + code-review + new-pattern-requires-ADR 兜底（不是回归 — 升级前也不覆盖） |
 | Refactor 把 pgExecutor 改名 / 移出包 scope | `TestPGRepoAmbientTx_DiscoveryCoverage` exact-set match 失败 + `TestPGRepoAmbientTx` 的 coverage floor (≥3) 兜底 ✓ |
 | 新 ExecDirect callsite 漏加 marker | R3(b) 同 body marker presence 检查失败 ✓ |
-| Marker reason 写成 `fmt.Sprintf` 隐藏审计串 | `bodyHasApprovedExecDirectMarker` 验证 `constant.String` 拒绝 non-constant arg ✓ |
+| Marker reason 写成 `fmt.Sprintf` / 变量 / 函数返回值隐藏审计串 | `bodyHasApprovedExecDirectMarker` 要求 arg[0] 为 `*ast.BasicLit + token.STRING`；non-literal 表达式 AST 节点不是 BasicLit → 拒绝 ✓（与"const ident / 常量折叠"威胁同源，见下文专行）|
 | 移到不相关 func body 放 marker 制造"看似 approved"的错觉 | BS-8 反向自检：marker 必须与同 body 的 `pgExecutor.ExecDirect` 调用共存 — 孤立 marker 失败 ✓ |
 | 拷贝 `pgrepoapproved` 包到其他位置绕过 funnel | callee 解析锁 `Pkg().Path()` 到精确字符串 `"github.com/ghbvf/gocell/pkg/pgrepoapproved"`，重定向 import 不改 package path ✓ |
 | import 别名绕过 marker callee 识别 | callee 解析锁 `fn.Pkg().Path()`（via *types.Info.Uses），import alias 不改 package path ✓ |
