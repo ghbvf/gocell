@@ -499,11 +499,7 @@ func TestReconnectLoop_PermanentAndRecovery(t *testing.T) {
 	}, testtime.D2s, testtime.D1ms)
 
 	phase.Store(1)
-	originalMock.mu.Lock()
-	closeNotifyCh := originalMock.notifyCloseCh
-	originalMock.isClosed = true
-	originalMock.mu.Unlock()
-	closeNotifyCh <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+	originalMock.triggerBrokerClose()
 
 	// Permanent classification must surface — Health returns ErrAdapterAMQPConnectPermanent.
 	testwait.External(t, "amqp-permanent-err-set", func() bool {
