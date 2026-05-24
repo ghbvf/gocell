@@ -234,48 +234,47 @@ func l2EnumerateUnits(t *testing.T, root string) []l2Unit {
 	return units
 }
 
+// l2SliceKey is the composite global identity for an L2 slice. Two cells can
+// declare a same-named slice dir (e.g. cells/a/slices/foo and cells/b/slices/foo),
+// so the bare basename is NOT a unique key — keying typed infos by it would let
+// one cell's slice silently overwrite the other's. cellID/sliceDir is unique
+// (mirrors K8s namespace/name identity; bare basename is never a global id).
+func l2SliceKey(cellID, sliceDir string) string {
+	return cellID + "/" + sliceDir
+}
+
 // l2ResolveSliceInfos uses RunTypedProduction to resolve Service type + hybrid
-// flag for every L2 slice unit. Returns a map from sliceDir → l2SliceInfo.
+// flag for every L2 slice unit. Returns a map from l2SliceKey(cellID,sliceDir)
+// → l2SliceInfo (composite key avoids cross-cell same-name collisions).
 func l2ResolveSliceInfos(t *testing.T, root string, units []l2Unit) map[string]l2SliceInfo {
 	t.Helper()
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "%s: read module path", ruleL2AtomicityCoverage)
 
-	// Build set of L2 slice pkg import paths we care about.
-	// Each slice lives at cells/<cellID>/slices/<sliceDir>.
-	type wantEntry struct {
-		sliceDir  string
-		importPkg string
-	}
-	var wantSlices []wantEntry
+	// wantMap maps each L2 slice's import path → its composite identity key.
+	// Each slice lives at cells/<cellID>/slices/<sliceDir>; the import path is
+	// globally unique, and we record results under the composite key so two
+	// cells with a same-named slice dir cannot collide.
+	wantMap := make(map[string]string)
 	for _, u := range units {
 		if u.kind != l2UnitSlice {
 			continue
 		}
 		importPath := modPath + "/cells/" + u.cellID + "/slices/" + u.sliceDir
-		wantSlices = append(wantSlices, wantEntry{
-			sliceDir:  u.sliceDir,
-			importPkg: importPath,
-		})
-	}
-	// Build lookup map: importPath → sliceDir
-	wantMap := make(map[string]string, len(wantSlices))
-	for _, w := range wantSlices {
-		wantMap[w.importPkg] = w.sliceDir
+		wantMap[importPath] = l2SliceKey(u.cellID, u.sliceDir)
 	}
 
-	infos := make(map[string]l2SliceInfo, len(wantSlices))
+	infos := make(map[string]l2SliceInfo, len(wantMap))
 
 	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
-		sliceDir, ok := wantMap[p.Pkg.Path()]
+		key, ok := wantMap[p.Pkg.Path()]
 		if !ok {
 			return nil
 		}
-		info := l2ResolveServiceInfo(p.Pkg, modPath)
-		infos[sliceDir] = info
+		infos[key] = l2ResolveServiceInfo(p.Pkg, modPath)
 		return nil
 	})
 
@@ -383,7 +382,7 @@ func l2BuildExpectedNames(units []l2Unit, sliceInfos map[string]l2SliceInfo) map
 			expected["TestL2Atomicity_"+u.cellID+"_RollsBack"] = struct{}{}
 
 		case l2UnitSlice:
-			info, ok := sliceInfos[u.sliceDir]
+			info, ok := sliceInfos[l2SliceKey(u.cellID, u.sliceDir)]
 			if !ok {
 				// Typed resolution missed this slice; fall back to sliceDir.
 				expected["TestL2Atomicity_"+u.sliceDir+"_RollsBack"] = struct{}{}
@@ -505,7 +504,7 @@ func TestL2OutboxAtomicityCoverage_ServiceLookupTotal(t *testing.T) {
 		if u.kind != l2UnitSlice {
 			continue
 		}
-		info, found := infos[u.sliceDir]
+		info, found := infos[l2SliceKey(u.cellID, u.sliceDir)]
 		if !found || !info.serviceFound {
 			missing = append(missing, u.cellID+"/"+u.sliceDir)
 		}
@@ -540,7 +539,8 @@ func TestL2OutboxAtomicityCoverage_AliasFoldsToSinglePackage(t *testing.T) {
 	}
 
 	for _, sliceDir := range auditappendSlices {
-		info, found := infos[sliceDir]
+		// All four auditappend* slices live under the auditcore cell.
+		info, found := infos[l2SliceKey("auditcore", sliceDir)]
 		if !found {
 			t.Errorf("%s AliasFoldsToSinglePackage: slice %s not found in typed infos",
 				ruleL2AtomicityCoverage, sliceDir)

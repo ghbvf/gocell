@@ -111,6 +111,12 @@ archtest 将期望名集合与实际 `go/ast` FuncDecl 精确名 match，任何�
 
 **Enforcement 运行位置（nightly，非 PR-time）**：`L2-OUTBOX-ATOMICITY-COVERAGE-01` 由 `archtest-nightly.yml`（16-shard）执行；**不**纳入 PR-time `hack/verify-archtest-invariants.sh`。后者由 ADR `202605120000` §Amendment 2026-05-23 §D8 冻结为 4 类核心运行时 invariant（clock / duration / testtime / panic），扩充该集合需另行 amend 该 ADR，不在本 PR 范围。本 coverage gate 选择 nightly 的理由：(1) 它守护的是 integration 测试的**存在性**，而被守护的测试本身 `//go:build integration` 依赖 Docker、只在 CI integration 分片实跑，PR-time 无法验证其真实通过；(2) `RunTypedProduction` 全量 typed-load 成本与 nightly 预算更匹配。新 L2 单元漏测试 → 当晚 nightly 红 + 本地 `make verify` 即时红。若未来需 PR-time 即时阻断，走 ADR `202605120000` §D8 amendment 把本 ID 加入冻结集（届时按 §"ADR amendment 落地必查"逐行重评威胁矩阵）。
 
+**Gate 粒度 = per-unit（非 per-mutation）**：本 archtest 对每个 L2 slice 强制**一个** canonical `TestL2Atomicity_<pkg>_RollsBack`（hybrid 另加 `_ReplayIdempotent`），对齐 issue #876 的明文粒度「按 `consistencyLevel: L2` 枚举所有 L2 单元」。同一 slice 的多条 outbox mutation 路径（如 configwrite 的 Create/Update/Delete、configpublish 的 Publish/Rollback）各自的 `*_RollsBack_<Mutation>` 测试是**有意保留的 defense-in-depth，不在本 gate 的 Hard 期望集内**——删除它们不会触发 archtest 红。这是**已知且文档化**的边界，不是隐式 false-green：
+
+- per-unit gate 已完整满足 #876 的 Hard 验收（每个 L2 单元必须有原子性证明）。
+- per-mutation Hard 强制是 #876 之上的增强；其唯一 AI-robust 正解是从 Service「调 `RunInTx` 的 exported emitting method」typed 派生期望名（避免手列 suffix 这一 Medium 倒退）。该派生对 identitymanage（6 个 emitting method）等多 mutation slice 会显著扩展 E2E 测试面，且 `sessionlogin.IssueForUser` 等非-HTTP internal 路径无法经 E2E harness 驱动——实为 Cx4，与本 PR 体量不成比例。
+- 故按 `feedback_pr_scope_carveouts_must_backlog` 登记为独立 backlog（cap-14 / type-test / pri-p2）跟踪 per-mutation typed 派生升级，不在本 PR 内做、也不以手列 suffix 临时打补丁。
+
 ---
 
 ## 威胁矩阵
