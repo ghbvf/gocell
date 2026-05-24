@@ -69,6 +69,12 @@ package archtest
 //     the real-source reverse self-check TestMemTxLockOwnership01_FixturePattern
 //     (mem_tx_lock_ownership_red_fixture_test.go) asserting exactly the three RED
 //     sites are reported and the sanctioned sites are not.
+//   - W2 field-name anchors ("held" on memTxToken, "mu" on Store): a rename of
+//     memTxToken.held would make isHeldHoldsCall silently miss (false-negative).
+//     Compiler-defended, no standalone self-check needed: every tok.held.Holds(…)
+//     call site in user_repo.go / role_repo.go (via txHoldsLock) breaks to compile
+//     on rename, so it is a build error before archtest runs. (txlock.Held.mu is
+//     additionally reflect-frozen by TestHeldSealFrozen.)
 
 import (
 	"fmt"
@@ -225,6 +231,13 @@ func isHeldHoldsCall(e ast.Expr, tok, recv string) bool {
 // tree flattens to exactly two conjuncts — a nil-guard on tok and the Holds call
 // on tok.held with arg &<recv>.mu. Order-independent; receiver/token names are
 // taken from the source, not hard-coded.
+//
+// Form, not semantics, is pinned (intentional, to block silent regression of a
+// security invariant): a refactor producing MORE than one single-value return —
+// e.g. an early-return guard `if tok == nil { return false }; return …` — trips
+// this check even though it is semantically equivalent. The one-liner is the
+// canonical form; weakening it (dropping the Holds conjunct, adding a third
+// conjunct) must be a deliberate edit that also updates this rule.
 func txHoldsLockFormOK(fd *ast.FuncDecl) (ok bool, why string) {
 	recv := receiverVarName(fd)
 	if recv == "" {
@@ -366,6 +379,9 @@ func memProductionScan(t *testing.T) []Diagnostic {
 	memPkgPath := modPath + "/" + memPkgRel
 
 	var diags []Diagnostic
+	// Load mem/... (not just mem) so the typed resolver has the txlock sub-package
+	// in the loaded set — isTxlockAcquireCall → ResolvePackageRef needs it. The
+	// p.Pkg.Path() filter then restricts the scan to the mem package itself.
 	RunTyped(t, TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != memPkgPath {
@@ -445,9 +461,11 @@ func TestMemTxLockOwnership01_FindsSanctionedSites(t *testing.T) {
 			return nil
 		})
 
-	require.Positivef(t, acquireInRunLocked,
-		"%s precision: expected a txlock.Acquire call inside (memTxRunner).runLocked; "+
-			"matcher may be stale", ruleMemTxLockOwnership01)
+	require.Equalf(t, 1, acquireInRunLocked,
+		"%s precision: expected exactly 1 txlock.Acquire call inside (memTxRunner).runLocked, "+
+			"got %d — 0 means the matcher is stale; >1 means a second Acquire (a "+
+			"re-entrant double-lock deadlock bug) that W1 would not catch (it only flags "+
+			"Acquire OUTSIDE runLocked)", ruleMemTxLockOwnership01, acquireInRunLocked)
 	require.Truef(t, litSites[memTxSiteRunLocked],
 		"%s precision: expected a memTxToken literal inside (memTxRunner).runLocked",
 		ruleMemTxLockOwnership01)
@@ -481,6 +499,10 @@ func assertMemTreeDoesNotImport(t *testing.T, pkg string) {
 	scope := DirsScope(root, []string{memPkgRel, memPkgRel + "/internal/txlock"})
 
 	var offenders []string
+	// Bare Run (not RunTyped): a direct import-path string match suffices for
+	// stdlib "reflect"/"unsafe" — they have no alias form in ImportSpec.Path.Value
+	// and the threat is a direct import within mem/txlock, not a transitive one.
+	// RunTyped would load the full type graph for no benefit.
 	Run(t, scope, func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			for _, imp := range file.Imports {

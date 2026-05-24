@@ -22,7 +22,6 @@ import (
 // false-negative drift (detector goes blind) and false-positive drift
 // (detector flags the sanctioned sites).
 func TestMemTxLockOwnership01_FixturePattern(t *testing.T) {
-	t.Parallel()
 	root := findModuleRoot(t)
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")

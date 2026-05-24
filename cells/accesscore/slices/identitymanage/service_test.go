@@ -43,10 +43,10 @@ func adminCtxForService() context.Context {
 var minimalStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 // simpleTxRunner is a test-only pass-through TxRunner. It injects the mem-tx
-// token via mem.WithTxContext (holdsLock=false) so GetByIDForUpdate /
+// token via mem.WithTxContext (zero witness) so GetByIDForUpdate /
 // GetByUsernameForUpdate take the in-tx code path on a mem.Store repository.
 //
-// Since PR fix/238 holdsLock=false does NOT bypass store.mu: every repo
+// Since PR fix/238 a zero witness does NOT bypass store.mu: every repo
 // method still takes its per-call lock, so this runner is race-safe even
 // under concurrent goroutines (no more "concurrent map writes"). It does
 // NOT provide cross-method atomicity (GetByID→…→UpdatePassword are
@@ -999,10 +999,10 @@ func TestChangePassword_StalePasswordVersion_ReturnsConflict(t *testing.T) {
 // docs/architecture/202605171846-adr-mem-tx-lock-ownership.md).
 //
 // It deliberately wires simpleTxRunner — a foreign TxRunner that injects
-// mem.WithTxContext (holdsLock=false), the exact shape that, under the old
+// mem.WithTxContext (a zero witness), the exact shape that, under the old
 // bool sentinel, made repo methods skip locking with no lock held and
 // produced `fatal error: concurrent map writes` (the PR #552 CI flake). With
-// the typed *memTxToken, holdsLock=false forces every repo method onto its
+// the sealed lock-witness, a zero witness forces every repo method onto its
 // per-call store.mu, so 8 goroutines mutating the same user can never race
 // the maps.
 //

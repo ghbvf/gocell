@@ -16,7 +16,7 @@ package identitymanage
 //
 // Design: 50 goroutines concurrently call ChangePassword and Lock on the same
 // user. The in-memory store uses sync.Mutex (per-call lock on all methods);
-// holdsLock=true token is only injectable by store-bound TxRunner (see
+// a held-witness token is only mintable by the store-bound TxRunner (see
 // ADR 202605171846-adr-mem-tx-lock-ownership.md). All operations are
 // race-safe. Post-run assertions verify:
 // (Future upgrade MEM-STORE-RWMUTEX-READ-CONCURRENCY: defer RWMutex hot-path.)
@@ -74,7 +74,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 	// Use the store-bound TxRunner so the whole ChangePassword closure runs
 	// under store.mu (cross-method atomicity), which this test's epoch /
 	// revocation terminal assertions require. Since PR fix/238 simpleTxRunner
-	// is itself race-SAFE (holdsLock=false → per-call lock; no more concurrent
+	// is itself race-SAFE (no witness → per-call lock; no more concurrent
 	// map writes) but only Store.TxRunner() gives cross-method atomicity. See
 	// ADR docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
 	svc, err := NewService(userRepo, inv, slog.Default(),
@@ -160,7 +160,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 // that after concurrent ChangePassword calls, authz_epoch is positive (each
 // successful ChangePassword increments by exactly 1 via the funnel).
 //
-// This test uses Store.TxRunner() (store-bound, holdsLock=true), which holds
+// This test uses Store.TxRunner() (store-bound, held witness), which holds
 // store.mu for the entire transaction closure and serializes cross-method
 // operations atomically. That whole-closure atomicity is required here because
 // the epoch-positive terminal assertion needs every increment to be fully

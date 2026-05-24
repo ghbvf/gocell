@@ -42,9 +42,9 @@ import (
 )
 
 // durableTxRunner is a test-only TxRunner that simulates a non-noop (real) tx
-// context. It injects the mem-tx token via mem.WithTxContext (holdsLock=false)
+// context. It injects the mem-tx token via mem.WithTxContext (zero witness)
 // so GetByUsernameForUpdate / GetByIDForUpdate take the in-tx code path on
-// mem.Store. holdsLock=false keeps per-call locking (race-safe, no
+// mem.Store. The zero witness keeps per-call locking (race-safe, no
 // cross-method atomicity) since PR fix/238 — ADR
 // docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
 type durableTxRunner struct{}

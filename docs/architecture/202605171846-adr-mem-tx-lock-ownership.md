@@ -196,13 +196,16 @@ ref: golang/go database/sql (explicit Tx ownership; non-reentrant Mutex rational
 | **包内** edit 在 runLocked 外 mint 持锁 token | ⚠️ 无防护 | ⚠️→Medium archtest（bool 仍可在包内赋值） | ✅✅ **编译不可表达** | `txlock.Held.mu` 不导出 + 无 Acquire 无 witness（下游 Hard 升级；W1/W2/R1 archtest 仅守纪律漂移） |
 | 构造 token 后 reflect/unsafe 改持锁字段 | ⚠️ — | ✅ 反向自检（mem 禁 reflect/unsafe） | ✅ 反向自检（扩至 txlock 包） | mem + txlock 两包禁 import reflect/unsafe（archtest） |
 | ctx 携带的 witness 被用来**解锁**（liveness） | n/a | ⚠️ token 含可解锁句柄（理论） | ✅ 不可表达 | `Held` 无 Release 方法；unlock 闭包留 runLocked 本地（type system） |
+| after-commit hook 闭包捕获 inner ctx（含 witness），在锁释放后调 repo → stale-skip 锁 | ⚠️ 同属性（bool 亦不随释放过期） | ⚠️ 同属性 | ⚠️ 同属性（**当前不可利用**） | accesscore 零 `RegisterAfterCommit`；框架用 outer ctx drain hooks；gh issue #972 跟踪 accesscore 引入 hook 时的静态守卫 |
 | 跨 store token 混用（A 的 token 让 B 跳锁） | ⚠️ bool 无 store 维度 | ✅ 拒绝（`tok.store == s`） | ✅ 拒绝（不变） | `Held.Holds(&s.mu)` mutex 指针身份（取代 store 字段比较） |
 | RunInTx 跨方法原子性丢失（PG FOR UPDATE 等价） | ✅ 持锁全程 | ✅ 不变 | ✅ 不变 | 持 witness 跳 per-call 锁，闭包持锁 |
 | 单 goroutine fake 测试退化 | ✅ | ✅ 不变 | ✅ 不变 | per-call 锁串行天然原子（无并发） |
 
-无格子从 ✅ 回退到 ⚠️/❌：#945 把第 3 行 ⚠️/Medium 升为 ✅✅（编译 Hard），并新增第 5
-行（witness 解锁 liveness 隐患）由「`Held` 无 Release」结构性消除——两处皆为 verdict
-改善，非回退。
+无格子从 ✅ 回退到 ⚠️/❌：#945 把第 3 行 ⚠️/Medium 升为 ✅✅（编译 Hard），第 5 行
+（witness 解锁 liveness）由「`Held` 无 Release」结构性消除。第 6 行（hook 闭包捕获 inner
+ctx）是 witness 与原 bool 共有的 proof-不随释放过期属性，**当前不可利用**（accesscore 无
+after-commit hook 调用，框架 drain 路径用无 witness 的 outer ctx），由 gh issue #972 跟踪
+未来 accesscore 引入 hook 时需补的静态守卫——属诚实登记的残留 ⚠️，非本 PR 引入的回退。
 
 ## contract-fanout 回灌（5 载体）
 

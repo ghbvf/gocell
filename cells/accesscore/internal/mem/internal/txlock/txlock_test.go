@@ -55,6 +55,19 @@ func TestZeroHeldHoldsNothing(t *testing.T) {
 	}
 }
 
+// TestNonZeroHeldHoldsNil covers the `h.mu != nil && mu == nil` branch: a real
+// witness asked whether it holds the nil mutex must report false (no spurious
+// match, no nil deref).
+func TestNonZeroHeldHoldsNil(t *testing.T) {
+	var mu sync.Mutex
+	held, unlock := Acquire(&mu)
+	defer unlock()
+
+	if held.Holds(nil) {
+		t.Error("non-zero Held Holds(nil) = true, want false")
+	}
+}
+
 // TestHeldSealFrozen is the MEM-TX-LOCK-OWNERSHIP-01 W3 seal regression guard
 // (reflect field-set freeze, mirroring FixtureOpts in tools/archtest/pass_test.go).
 // The Hard property — no package can forge a lock-holding Held — rests on the
