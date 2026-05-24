@@ -49,38 +49,23 @@ disable-model-invocation: true
 
 ## 阶段 0：常量动态查询 + token scope fail-fast + 模式探测
 
+所有确定性 shell 收口 `lib/*.sh`（单源 + smoke 覆盖）；本文件只保留一行调用 + Agent/AskUserQuestion 伪代码。
+
 ```bash
 set -euo pipefail
 
-# 0.1 Token scope。先区分未登录 vs 缺 scope（gh auth status 失败 → 未登录；
-# 成功但 grep 不到 → 缺 scope）。grep 用宽松正则，跨 gh 版本健壮。
-if ! AUTH_STATUS=$(gh auth status 2>&1); then
-  echo "ERROR: gh auth status failed; run: gh auth login" >&2
-  echo "$AUTH_STATUS" >&2
-  exit 1
-fi
-if ! grep -qiE "scopes:.*\bproject\b" <<<"$AUTH_STATUS"; then
-  echo "ERROR: token missing 'project' scope; run: gh auth refresh -s project" >&2
-  exit 1
-fi
+# 0.1-0.3 token scope fail-fast + Project node / Iteration field ID + date/weekend
+# 模式 → lib/resolve-constants.sh（单源；emit eval-able exports，含 FIELD_LIST_JSON）。
+# FORCE_*/DATE 经 env 透传（host LLM 按 argument parsing convention 设置）。
+eval "$(DATE="${DATE:-}" FORCE_WEEKEND="${FORCE_WEEKEND:-}" FORCE_WEEKDAY="${FORCE_WEEKDAY:-}" \
+  bash .claude/skills/daily-planner/lib/resolve-constants.sh)"
 
-# 0.2 Project node + Iteration field ID
-PROJECT_NODE_ID=$(gh project view 3 --owner ghbvf --format json | jq -r '.id')
-FIELD_LIST_JSON=$(gh project field-list 3 --owner ghbvf --format json)
-ITERATION_FIELD_ID=$(jq -r '.fields[] | select(.name=="Iteration").id' <<<"$FIELD_LIST_JSON")
-[[ -z "$PROJECT_NODE_ID" || -z "$ITERATION_FIELD_ID" ]] && {
-  echo "ERROR: failed to resolve PROJECT_NODE_ID or ITERATION_FIELD_ID" >&2
-  exit 1
-}
-
-# 0.4 Wave single-select field ID + option IDs（C3c）
-# 提取走 lib/resolve-wave-fields.sh（单源；collect-then-first 防 per-element `// ""`
-# 换行污染——裸 `select(.name=="Wave").id // ""` 会为每个非 Wave 字段吐一空行，
-# 污染 WAVE_FIELD_ID 换行后传给 `gh ... --field-id`。同 PR #926 jq-scoping bug，
-# 由 SMOKE_LIVE Part B 暴露；resolve-wave-fields 离线 case 钉死回归。
-# dry-run 模式下 WAVE_FIELD_ID 为空时 agent 仍可出 plan（wave_option_id 字段设 ""）。
+# 0.4 Wave field ID + per-wave option IDs（C3c）→ lib/resolve-wave-fields.sh
+# （单源；collect-then-first 防 per-element `// ""` 换行污染 WAVE_FIELD_ID，同 PR #926
+# jq-scoping bug；resolve-wave-fields 离线 case 钉死回归）。
 eval "$(FIELD_LIST_JSON="$FIELD_LIST_JSON" bash .claude/skills/daily-planner/lib/resolve-wave-fields.sh)"
-# fail-CLOSED（仅 apply 模式）：
+
+# 0.5 Wave fail-CLOSED（仅 apply 模式；读上方已 resolve 的 WAVE_* env）：
 #   - WAVE_FIELD_ID 空 → 阶段 4 apply-gate.sh fail-fast
 #   - WAVE_FIELD_ID 非空但 WAVE_OPTION_IDS 空 = 配置损坏（字段无选项）
 #   - 任一 Wave N 名称缺失（option id 空）→ fail-fast（防 UI 重排/缺名静默错位）
@@ -97,24 +82,6 @@ if [[ "${APPLY:-}" == "true" && -n "$WAVE_FIELD_ID" ]]; then
     fi
   done
 fi
-
-# 0.3 日期 + 模式（weekday/weekend）。python3 用 sys.argv 传 $DATE 防 shell 注入
-DATE="${DATE:-$(date +%Y-%m-%d)}"
-DOW=$(python3 -c 'import sys,datetime; print(datetime.date.fromisoformat(sys.argv[1]).isoweekday())' "$DATE")
-
-# --weekend / --weekday 互斥（同传 fail-fast 不静默吞错）
-if [[ "${FORCE_WEEKEND:-}" == "true" && "${FORCE_WEEKDAY:-}" == "true" ]]; then
-  echo "ERROR: --weekend and --weekday are mutually exclusive" >&2
-  exit 1
-fi
-if [[ "${FORCE_WEEKEND:-}" == "true" ]]; then IS_WEEKEND=true
-elif [[ "${FORCE_WEEKDAY:-}" == "true" ]]; then IS_WEEKEND=false
-elif [[ "$DOW" -ge 6 ]]; then IS_WEEKEND=true
-else IS_WEEKEND=false
-fi
-
-WAVE_SIZE=5  # 固定，Miller's Law
-WAVE_COUNT=$([[ "$IS_WEEKEND" == "true" ]] && echo 4 || echo 2)
 ```
 
 ## 阶段 1：拉取数据
@@ -123,200 +90,33 @@ WAVE_COUNT=$([[ "$IS_WEEKEND" == "true" ]] && echo 4 || echo 2)
 WORKDIR="$(mktemp -d -t daily-planner.XXXXXX)"
 chmod 700 "$WORKDIR"
 
-# 1.1 输入集：pri-missing 哨兵 + P0 + P1 (默认) + 可选 P2/P3。
-# pri-missing 是 backlog workflow 自动打的哨兵 (CLAUDE.md "新 backlog 条目")，
-# 漏标 priority 的 issue 不能被排期忽略；按 score 公式它有最高权重 (110)。
-# GitHub label search 是 AND 语义，需逐 label 拉。
-PRI_LABELS=(pri-missing pri-p0 pri-p1)
-[[ "${INCLUDE_P2:-}" == "true" ]] && PRI_LABELS+=(pri-p2)
-[[ "${INCLUDE_P3:-}" == "true" ]] && PRI_LABELS+=(pri-p3)
-
-echo "[]" > "$WORKDIR/issues.json"
-for pri_label in "${PRI_LABELS[@]}"; do
-  gh issue list --repo ghbvf/gocell --label backlog --label "$pri_label" \
-    --state open --json number,title,labels,createdAt,body,url --limit 200 \
-    > "$WORKDIR/issues-$pri_label.json"
-  jq -s '(.[0] + .[1]) | unique_by(.number)' \
-    "$WORKDIR/issues.json" "$WORKDIR/issues-$pri_label.json" \
-    > "$WORKDIR/issues.tmp" && mv "$WORKDIR/issues.tmp" "$WORKDIR/issues.json"
-done
-echo "INFO: input set = $(jq 'length' "$WORKDIR/issues.json") issues (priorities: ${PRI_LABELS[*]})" >&2
-
-# 1.2 Project v2 items（用 GraphQL paginated，因为 gh project item-list 不返回 iteration value 和 issue.state）
-# 输出 NDJSON 多页，jq -s 合并所有页的 nodes
-gh api graphql --paginate -f query='
-query($endCursor: String) {
-  user(login:"ghbvf"){ projectV2(number:3){
-    items(first:100, after:$endCursor) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        content { ... on Issue { number state title } }
-        iter: fieldValueByName(name:"Iteration") {
-          ... on ProjectV2ItemFieldIterationValue { iterationId title startDate }
-        }
-        status: fieldValueByName(name:"Status") {
-          ... on ProjectV2ItemFieldSingleSelectValue { name }
-        }
-        estimate: fieldValueByName(name:"Estimate") {
-          ... on ProjectV2ItemFieldSingleSelectValue { name }
-        }
-      }
-    }
-  }}
-}' | jq -s '[.[].data.user.projectV2.items.nodes[]]' > "$WORKDIR/items.json"
-echo "INFO: $(jq 'length' "$WORKDIR/items.json") Project v2 items loaded" >&2
-
-# 1.3 Iteration 配置（拿当前所有 iteration option）
-gh api graphql -f query='query {
-  user(login:"ghbvf"){ projectV2(number:3){
-    field(name:"Iteration"){ ... on ProjectV2IterationField {
-      configuration { duration startDay iterations { id title startDate duration } }
-    }}
-  }}
-}' > "$WORKDIR/iter-config.json"
-
-# 1.4 Sub-issue 关系（GraphQL 原生）
-# GraphQL-Features header 是 preview API；账号 / repo 未启用时会返回 errors。
-# 失败显式 WARN，不静默吞错（保留降级 `{}`，让 agent 当作"无 sub-issue 数据"运行）。
-if ! gh api graphql -H "GraphQL-Features: sub_issues" -f query='query {
-  repository(owner:"ghbvf",name:"gocell"){
-    issues(first:100, labels:["bundle-parent"], states:OPEN){
-      nodes {
-        number title state
-        subIssuesSummary { total completed percentCompleted }
-        subIssues(first:50){ nodes { number title state } }
-      }
-    }
-  }
-}' > "$WORKDIR/sub-issues.json" 2>"$WORKDIR/sub-issues.err"; then
-  echo "WARN: sub-issue GraphQL query failed; sub-issue data unavailable for this run" >&2
-  echo "WARN: gh stderr:" >&2
-  sed 's/^/  /' "$WORKDIR/sub-issues.err" >&2
-  echo '{}' > "$WORKDIR/sub-issues.json"
-fi
+# 1.1-1.4 backlog issues（pri-missing + P0 + P1 默认；P2/P3 视 flag）+ Project v2
+# items + iteration 配置 + sub-issue 关系 → lib/fetch-data.sh（单源；issues 逐 label
+# 拉后 unique_by(.number) 合并；sub-issues preview API 失败 loud WARN + 降级 {}）。
+INCLUDE_P2="${INCLUDE_P2:-}" INCLUDE_P3="${INCLUDE_P3:-}" WORKDIR="$WORKDIR" \
+  bash .claude/skills/daily-planner/lib/fetch-data.sh
 ```
 
 ## 阶段 1.5：拉取 blocked-by 依赖 DAG
 
 ```bash
-# 1.5 Native blocked-by 边（C2b）→ $WORKDIR/deps.json
-# GraphQL 字段 `blockedBy(first: N)` 是正式 API（无 preview header 需求，
-# 2026-05-25 live introspection 实测于 ghbvf/gocell 账号确认）。
-# schema：{ "<issue_number_string>": { "blocked_by": [<int>, ...] }, ... }
-# 仅含有入边的 issue；空图 = {}。
-# 降级策略：仅真·瞬态 API 错误才降级，loud WARN + [DEP DATA UNAVAILABLE] 标记，
-# **禁止 silent {}**（区别于 sub-issues 的静默 fallback）。
-DEPS_JSON="{}"
-DEP_FETCH_FAILED=false
-issue_count_for_deps=$(jq 'length' "$WORKDIR/issues.json")
-if [[ "$issue_count_for_deps" -gt 0 ]]; then
-  while IFS= read -r inum; do
-    if ! blocked_raw=$(gh api graphql \
-        -f query='query($num: Int!) {
-          repository(owner:"ghbvf", name:"gocell") {
-            issue(number: $num) {
-              blockedBy(first: 20) { nodes { number } }
-            }
-          }
-        }' -F num="$inum" 2>/tmp/deps-err-"$inum"); then
-      echo "WARN: blocked-by query failed for issue #$inum (transient?); detail:" >&2
-      sed 's/^/  /' /tmp/deps-err-"$inum" >&2
-      DEP_FETCH_FAILED=true
-      continue
-    fi
-    blocked_nums=$(echo "$blocked_raw" | jq '[.data.repository.issue.blockedBy.nodes[].number]')
-    if [[ "$(echo "$blocked_nums" | jq 'length')" -gt 0 ]]; then
-      DEPS_JSON=$(echo "$DEPS_JSON" | jq --arg n "$inum" --argjson b "$blocked_nums" \
-        '. + {($n): {"blocked_by": $b}}')
-    fi
-  done < <(jq -r '.[].number' "$WORKDIR/issues.json")
-fi
-if $DEP_FETCH_FAILED; then
-  echo "WARN: one or more blocked-by queries failed; deps.json may be incomplete [DEP DATA UNAVAILABLE]" >&2
-fi
-echo "$DEPS_JSON" > "$WORKDIR/deps.json"
-if $DEP_FETCH_FAILED; then
-  echo "INFO: [INCOMPLETE] deps.json: $(jq 'keys | length' "$WORKDIR/deps.json") issues with blockers (one or more queries failed; see WARN above)" >&2
-else
-  echo "INFO: deps.json: $(jq 'keys | length' "$WORKDIR/deps.json") issues with blockers" >&2
-fi
+# 1.5 Native blocked-by 边（C2b）→ lib/fetch-deps.sh（单源；写 $WORKDIR/deps.json，
+# schema { "<issue_num>": { "blocked_by": [<int>,...] } }，仅含有入边的 issue）。
+# 降级策略：仅真·瞬态 API 错误才降级，loud WARN + [DEP DATA UNAVAILABLE]，禁 silent {}。
+WORKDIR="$WORKDIR" bash .claude/skills/daily-planner/lib/fetch-deps.sh
 ```
 
 ## 阶段 2：确保 today iteration 存在
 
 ```bash
-# 2.1 推断 $DATE 对应的 iteration option
-# jq 在 select() 内嵌套 pipe 后 . 会被覆盖为子表达式中间值；用 `as $it` 把当前
-# iteration 对象绑定为变量，确保算术子表达式仍能引用其 startDate / duration
-TODAY_ITERATION_ID=$(jq -r --arg d "$DATE" '
-  .data.user.projectV2.field.configuration.iterations[]
-  | . as $it
-  | select($it.startDate <= $d
-           and ($d < ((($it.startDate | strptime("%Y-%m-%d") | mktime) + ($it.duration * 86400))
-                       | strftime("%Y-%m-%d")))).id
-' "$WORKDIR/iter-config.json")
-
-# 2.2 缺失则用 GraphQL mutation append 一个 1-day iteration option 覆盖 $DATE。
-# **写入 Project v2 是 apply-only**——dry-run 不得执行 updateProjectV2Field（mutation
-# 会真实改 field configuration）；缺 iteration 时 dry-run 给出 would-create 摘要并退出。
-if [[ -z "$TODAY_ITERATION_ID" ]]; then
-  if [[ "${APPLY:-}" != "true" ]]; then
-    echo "WARN: [ACTION REQUIRED] today iteration for $DATE not found in Iteration field." >&2
-    echo "WARN: [DRY-RUN] planning aborted — TODAY_ITERATION_ID is required to score wave layout." >&2
-    echo "WARN: re-run with --apply to create today's iteration option and proceed." >&2
-    exit 0
-  fi
-
-  EXISTING=$(jq -c '.data.user.projectV2.field.configuration.iterations | map({title, startDate, duration})' "$WORKDIR/iter-config.json")
-  NEW_TITLE="Iteration $(jq 'length + 1' <<<"$EXISTING")"  # 命名仅展示用，实际唯一 ID 由 GitHub 生成
-  ALL_ITERS=$(jq -c --arg title "$NEW_TITLE" --arg d "$DATE" \
-               '. + [{title: $title, startDate: $d, duration: 1}]' <<<"$EXISTING")
-
-  # iterationConfiguration.startDate / .duration 是 field-level "cycle 起点 / 周期" 配置，
-  # iterations 数组每项 startDate / duration 才决定每个 option 的 daily 边界。
-  # 用 EXISTING 第一项的 startDate / duration 作 cycle 锚点（保持已有配置不变；
-  # 实际新增的 option 在 iterations 数组最后一项）。
-  # 类型名 ProjectV2Iteration 是 INPUT_OBJECT（GraphQL 2026-05-24 introspection 实测）。
-  # `-F` 大写才把 value 当 raw JSON/array 传入；`-f` 小写是 string 字面量（数组场景必 fail）。
-  gh api graphql -f query='
-    mutation($fid: ID!, $start: Date!, $dur: Int!, $iters: [ProjectV2Iteration!]!) {
-      updateProjectV2Field(input: {
-        fieldId: $fid,
-        iterationConfiguration: { startDate: $start, duration: $dur, iterations: $iters }
-      }) { projectV2Field { ... on ProjectV2IterationField {
-        configuration { iterations { id title startDate duration } }
-      }}}
-    }' \
-    -f fid="$ITERATION_FIELD_ID" \
-    -f start="$(jq -r '.[0].startDate' <<<"$ALL_ITERS")" \
-    -F dur="$(jq -r '.[0].duration' <<<"$ALL_ITERS")" \
-    -F iters="$ALL_ITERS" \
-    > "$WORKDIR/iter-config-after.json"
-
-  TODAY_ITERATION_ID=$(jq -r --arg d "$DATE" '
-    .data.updateProjectV2Field.projectV2Field.configuration.iterations[]
-    | . as $it | select($it.startDate == $d).id
-  ' "$WORKDIR/iter-config-after.json")
-  [[ -z "$TODAY_ITERATION_ID" ]] && {
-    echo "ERROR: failed to create iteration for $DATE" >&2
-    exit 1
-  }
-  echo "INFO: created new daily iteration for $DATE -> $TODAY_ITERATION_ID" >&2
-fi
-
-# 2.3 推断昨日 iteration ID（carry-over 源）。python3 用 sys.argv 传 $DATE 防注入
-YESTERDAY=$(python3 -c 'import sys,datetime; print(datetime.date.fromisoformat(sys.argv[1]) - datetime.timedelta(days=1))' "$DATE")
-YESTERDAY_ITERATION_ID=$(jq -r --arg d "$YESTERDAY" '
-  .data.user.projectV2.field.configuration.iterations[]
-  | . as $it
-  | select($it.startDate == $d).id
-' "$WORKDIR/iter-config.json")
-CARRY_OVER_DISABLED=false
-if [[ -z "$YESTERDAY_ITERATION_ID" ]]; then
-  CARRY_OVER_DISABLED=true
-  echo "WARN: yesterday iteration not found ($YESTERDAY); carry-over disabled" >&2
-fi
+# 2.1-2.3 推断 today iteration（缺失：dry-run abort / apply-only append 1-day option）
+# + 推断昨日 iteration（carry-over 源）→ lib/ensure-iteration.sh（单源；emit eval-able
+# exports TODAY_ITERATION_ID / YESTERDAY_ITERATION_ID / CARRY_OVER_DISABLED）。
+# **写入 Project v2 是 apply-only**：dry-run 路径零 mutation；缺 iteration 时 dry-run
+# 打印 would-create 摘要 + emit DP_ABORT_DRYRUN=true 让调用方停止。
+eval "$(WORKDIR="$WORKDIR" DATE="$DATE" APPLY="${APPLY:-}" ITERATION_FIELD_ID="$ITERATION_FIELD_ID" \
+  bash .claude/skills/daily-planner/lib/ensure-iteration.sh)"
+[[ "${DP_ABORT_DRYRUN:-}" == "true" ]] && exit 0
 ```
 
 ## 阶段 3：派发 daily-planner agent 评分排序

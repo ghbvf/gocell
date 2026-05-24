@@ -309,11 +309,14 @@ case "${1:-} ${2:-}" in
   "project field-list")
     cat "${GH_STUB_FIELD_LIST:?GH_STUB_FIELD_LIST required}" ;;
   "issue list")
-    # route by pri label present in args
-    if [[ "$all" == *"pri-p0"* ]]; then cat "${GH_STUB_ISSUES_P0:-/dev/null}"
-    elif [[ "$all" == *"pri-p1"* ]]; then cat "${GH_STUB_ISSUES_P1:-/dev/null}"
-    elif [[ "$all" == *"pri-missing"* ]]; then cat "${GH_STUB_ISSUES_MISSING:-/dev/null}"
-    else echo "[]"; fi ;;
+    # route by pri label present in args. Real gh always emits a JSON array
+    # (at least []); emit [] when the configured fixture is unset/empty.
+    _il=""
+    if [[ "$all" == *"pri-p0"* ]]; then _il="${GH_STUB_ISSUES_P0:-}"
+    elif [[ "$all" == *"pri-p1"* ]]; then _il="${GH_STUB_ISSUES_P1:-}"
+    elif [[ "$all" == *"pri-missing"* ]]; then _il="${GH_STUB_ISSUES_MISSING:-}"
+    fi
+    if [[ -s "$_il" ]]; then cat "$_il"; else echo "[]"; fi ;;
   "api graphql")
     if [[ "$all" == *"blockedBy"* ]]; then cat "${GH_STUB_GRAPHQL_DEPS:-/dev/null}"
     elif [[ "$all" == *"subIssuesSummary"* ]]; then echo "{}"
@@ -731,99 +734,27 @@ else
     cd "$repo_root"
     set -euo pipefail
 
-    # Stage 0: token scope + project ID + iteration field ID
-    if ! AUTH_STATUS=$(gh auth status 2>&1); then
-      echo "ERROR: gh auth status failed" >&2; exit 1
-    fi
-    if ! echo "$AUTH_STATUS" | grep -qiE "scopes:.*\bproject\b"; then
-      echo "ERROR: token missing 'project' scope" >&2; exit 1
-    fi
-    PROJECT_NODE_ID=$(gh project view 3 --owner ghbvf --format json | jq -r '.id')
-    ITERATION_FIELD_ID=$(gh project field-list 3 --owner ghbvf --format json \
-      | jq -r '.fields[] | select(.name=="Iteration").id')
-    [[ -z "$PROJECT_NODE_ID" || -z "$ITERATION_FIELD_ID" ]] && {
-      echo "ERROR: failed to resolve PROJECT_NODE_ID or ITERATION_FIELD_ID" >&2; exit 1
-    }
-    echo "INFO: PROJECT_NODE_ID=$PROJECT_NODE_ID ITERATION_FIELD_ID=$ITERATION_FIELD_ID" >&2
+    # Part B now drives the SAME lib/ scripts SKILL.md stage 0-1.5 uses (single
+    # source — no re-implementation). Read-only: resolve-constants + fetch-data +
+    # fetch-deps make zero mutations (ensure-iteration is apply-only and skipped).
+    lib="${skill_dir}/lib"
 
-    # C3c: Wave field ID + option ids — via the single-source resolver (clean single-line).
+    # Stage 0: token scope + project/iteration IDs + date/mode
     # shellcheck disable=SC1090
-    eval "$(FIELD_LIST_JSON="$(gh project field-list 3 --owner ghbvf --format json)" bash "$resolve_script")"
+    eval "$(DATE="${DATE:-}" bash "$lib/resolve-constants.sh")"
+    echo "INFO: PROJECT_NODE_ID=$PROJECT_NODE_ID ITERATION_FIELD_ID=$ITERATION_FIELD_ID IS_WEEKEND=$IS_WEEKEND" >&2
+    # shellcheck disable=SC1090
+    eval "$(FIELD_LIST_JSON="$FIELD_LIST_JSON" bash "$lib/resolve-wave-fields.sh")"
     echo "INFO: WAVE_FIELD_ID=${WAVE_FIELD_ID:-<not found>}" >&2
 
-    # Stage 1: issues + items + iter-config
-    DP_DATE="${DATE:-$(date +%Y-%m-%d)}"
-    echo "[]" > "$live_wd/issues.json"
-    gh issue list --repo ghbvf/gocell --label backlog --label pri-p0 \
-      --state open --json number,title,labels,createdAt,body,url --limit 50 \
-      > "$live_wd/issues-p0.json" 2>/dev/null || echo "[]" > "$live_wd/issues-p0.json"
-    jq -s '(.[0] + .[1]) | unique_by(.number)' \
-      "$live_wd/issues.json" "$live_wd/issues-p0.json" \
-      > "$live_wd/issues.tmp" && mv "$live_wd/issues.tmp" "$live_wd/issues.json"
-    echo "INFO: input issues: $(jq 'length' "$live_wd/issues.json")" >&2
+    # Stage 1: issues + items + iter-config + sub-issues
+    WORKDIR="$live_wd" bash "$lib/fetch-data.sh"
+    echo "INFO: input issues: $(jq 'length' "$live_wd/issues.json") items: $(jq 'length' "$live_wd/items.json")" >&2
 
-    # shellcheck disable=SC2016
-    gh api graphql --paginate -f query='
-    query($endCursor: String) {
-      user(login:"ghbvf"){ projectV2(number:3){
-        items(first:100, after:$endCursor) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
-            id
-            content { ... on Issue { number state title } }
-            iter: fieldValueByName(name:"Iteration") {
-              ... on ProjectV2ItemFieldIterationValue { iterationId title startDate }
-            }
-            status: fieldValueByName(name:"Status") {
-              ... on ProjectV2ItemFieldSingleSelectValue { name }
-            }
-          }
-        }
-      }}
-    }' | jq -s '[.[].data.user.projectV2.items.nodes[]]' > "$live_wd/items.json"
-    echo "INFO: items loaded: $(jq 'length' "$live_wd/items.json")" >&2
-
-    gh api graphql -f query='query {
-      user(login:"ghbvf"){ projectV2(number:3){
-        field(name:"Iteration"){ ... on ProjectV2IterationField {
-          configuration { duration startDay iterations { id title startDate duration } }
-        }}
-      }}
-    }' > "$live_wd/iter-config.json"
-    echo "INFO: iter-config loaded (date=$DP_DATE)" >&2
-
-    # Stage 1.5: deps.json (blocked-by DAG via native GraphQL)
-    # NOTE: Part B is an offline-simplified verification of stage 0-2 + 1.5
-    # connectivity. It does NOT replicate the loud WARN + [DEP DATA UNAVAILABLE]
-    # behavior of SKILL.md stage 1.5 on transient errors. Failures here silently
-    # fall back to empty blocked list to avoid CI noise when the GraphQL
-    # blockedBy field is unavailable in this account. Live stage 1.5 uses the
-    # full WARN path.
-    echo "INFO: fetching blocked-by DAG for input issues..." >&2
-    echo "{}" > "$live_wd/deps.json"
-    issue_count=$(jq 'length' "$live_wd/issues.json")
-    if [[ "$issue_count" -gt 0 ]]; then
-      deps_result="{}"
-      while IFS= read -r num; do
-        # shellcheck disable=SC2016
-        blocked=$(gh api graphql \
-          -f query='query($num: Int!) {
-            repository(owner:"ghbvf", name:"gocell") {
-              issue(number: $num) {
-                blockedBy(first: 20) { nodes { number } }
-              }
-            }
-          }' -F num="$num" 2>/dev/null \
-          | jq '[.data.repository.issue.blockedBy.nodes[].number]' || echo "[]")
-        if [[ "$(echo "$blocked" | jq 'length')" -gt 0 ]]; then
-          deps_result=$(echo "$deps_result" | jq --arg n "$num" --argjson b "$blocked" \
-            '. + {($n): {"blocked_by": $b}}')
-        fi
-      done < <(jq -r '.[].number' "$live_wd/issues.json")
-      echo "$deps_result" > "$live_wd/deps.json"
-    fi
+    # Stage 1.5: blocked-by DAG (loud-WARN degrade path lives in the lib script)
+    WORKDIR="$live_wd" bash "$lib/fetch-deps.sh"
     echo "INFO: deps.json = $(cat "$live_wd/deps.json")" >&2
-    echo "INFO: Part B stage 0-2 + 1.5 dry-run complete (zero mutations)" >&2
+    echo "INFO: Part B stage 0-1.5 dry-run complete via lib/ scripts (zero mutations)" >&2
   ) || live_rc=$?
 
   if [[ $live_rc -eq 0 ]]; then
