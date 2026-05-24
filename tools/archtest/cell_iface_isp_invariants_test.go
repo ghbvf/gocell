@@ -25,6 +25,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -76,7 +77,7 @@ func TestCellIfaceISP01_CellComposesFourSubInterfaces(t *testing.T) {
 	sort.Strings(want)
 	gotSorted := append([]string(nil), got...)
 	sort.Strings(gotSorted)
-	if !equalStringSlices(gotSorted, want) {
+	if !slices.Equal(gotSorted, want) {
 		t.Errorf("CELL-IFACE-ISP-COMPOSITE-01: Cell embedded sub-interfaces = %v, want exactly %v",
 			gotSorted, want)
 	}
@@ -102,7 +103,7 @@ func TestCellIfaceISP02_SubInterfaceMethodSets(t *testing.T) {
 			want := append([]string(nil), expectedSubInterfaceMethods[name]...)
 			sort.Strings(want)
 
-			if !equalStringSlices(gotMethods, want) {
+			if !slices.Equal(gotMethods, want) {
 				t.Errorf("CELL-IFACE-ISP-METHODSETS-01: %s methods = %v, want exactly %v",
 					name, gotMethods, want)
 			}
@@ -286,19 +287,6 @@ func targetsBaseCellNilPtr(values []ast.Expr) bool {
 		return false
 	}
 	return ident.Name == "BaseCell"
-}
-
-// equalStringSlices compares two sorted string slices for exact equality.
-func equalStringSlices(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // expectedMethodSetsSHA256 freezes the (sub-interface → method-set) contract
