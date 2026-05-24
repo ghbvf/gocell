@@ -14,13 +14,15 @@ import (
 // packages may not call reg.Healthz() directly (HEALTHZ-TYPED-REGISTER-01).
 //
 // Behavior:
-//   - bare-nil or typed-nil emitter → no-op (validation.IsNilInterface, the
-//     kernel/runtime single-source typed-nil helper). Guarding before the type
+//   - bare-nil or typed-nil emitter → no-op (pkg/validation.IsNilInterface, the
+//     project-wide single-source typed-nil helper). Guarding before the type
 //     assertion is what makes a typed-nil *DirectEmitter safe — calling Probes()
 //     on it would panic.
 //   - emitter that is not a healthz.ProbeSet → no-op (e.g. WriterEmitter).
 //   - emitter that is a ProbeSet → each Probe is registered; the first
-//     Aggregator.Register error (e.g. healthz.ErrDuplicateProbe) is returned.
+//     Aggregator.Register error (e.g. healthz.ErrDuplicateProbe) is returned and
+//     terminates the loop — already-registered probes are NOT deregistered
+//     (fail-fast; bootstrap drainProbes treats a duplicate as a startup error).
 //
 // This helper forwards ps.Probes() as-is and does NOT construct probe names:
 // emitter probe names ("outbox_failopen_rate_<cell>") stay bare strings owned by
@@ -30,9 +32,9 @@ import (
 // AI-robust rating: the funnel inherits the existing healthz registration funnel
 // — downstream Medium (HEALTHZ-TYPED-REGISTER-01 keeps cells/ off reg.Healthz();
 // HEALTHZ-WRITE-01/A2 caller allowlist now covers kernel/), upstream Medium
-// (caller allowlist, not type-system-sealed). The upstream Hard upgrade is
-// HEALTHZ-HOLDER-SEAL-01 (seal the Aggregator interface), tracked separately and
-// orthogonal to this dedup.
+// (caller allowlist, not type-system-sealed). The upstream Hard upgrade is to
+// seal the Aggregator interface, tracked as HEALTHZ-HOLDER-SEAL-01 (gh issue
+// #893, cap-13 §13.1) — orthogonal to this dedup.
 func RegisterEmitterHealthProbes(reg Registrar, emitter outbox.Emitter) error {
 	if validation.IsNilInterface(emitter) {
 		return nil

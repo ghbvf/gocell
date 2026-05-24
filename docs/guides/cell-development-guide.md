@@ -115,6 +115,13 @@ func NewMyCell(opts ...Option) *MyCell {
 func (c *MyCell) initInternal(ctx context.Context, reg cell.Registrar) error {
     // 用户钩子：cell_gen.go 的 Init 已自动调用 BaseCell.Init + drain RouteGroup/Subscribe markers；
     // 业务侧的依赖装配（DB、客户端、worker 启动等）写在这里。
+
+    // 健康探针注册走两个 typed funnel（禁止直接 reg.Healthz()，HEALTHZ-TYPED-REGISTER-01）：
+    // - cell repo readiness：cellgen 生成的 RegisterRepoReady(reg, c.store)（healthz_gen.go 产物）
+    // - emitter fail-open probe：cell 持有 outbox.Emitter 时调共享 kernel funnel
+    if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {
+        return err
+    }
     return nil
 }
 ```
@@ -122,6 +129,10 @@ func (c *MyCell) initInternal(ctx context.Context, reg cell.Registrar) error {
 `cell_gen.go::Init` 会自动调 `c.BaseCell.Init(ctx, reg) → c.initInternal(ctx, reg)`，并按
 `cell.go` 中的 `// +cell:listener` / `// +slice:route` / `// +slice:subscribe` markers
 生成 RouteGroup/Subscribe 注册代码（参考 `cells/configcore/cell_gen.go`）。
+
+> 健康探针只能经 typed funnel 注册：cell repo probe 走 cellgen `RegisterRepoReady`，emitter
+> probe 走 `cell.RegisterEmitterHealthProbes(reg, emitter)`（内部做 `healthz.ProbeSet` 断言 +
+> typed-nil 守卫，非 ProbeSet / nil emitter 自动 no-op）。详见 `.claude/rules/gocell/observability.md`。
 
 ### 4. Outbox 注入：sealed marker 模式
 

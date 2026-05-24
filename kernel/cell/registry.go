@@ -519,9 +519,10 @@ func (r *RegistryRecorder) registerProbe(p healthz.Probe) error {
 }
 
 // recorderProbeSink adapts a RegistryRecorder to the healthz.Aggregator
-// interface so the cellgen-generated RegisterRepoReady / RegisterEmitterProbes
-// helpers (which call reg.Healthz().Register(...)) accumulate into the
-// recorder's snapshot rather than a live aggregator. It is write-only:
+// interface so the typed funnels — the cellgen RegisterRepoReady helper and
+// the kernel cell.RegisterEmitterHealthProbes funnel (which call
+// reg.Healthz().Register(...)) — accumulate into the recorder's snapshot
+// rather than a live aggregator. It is write-only:
 // Deregister mutates the accumulator; Evaluate is a documented no-op.
 type recorderProbeSink struct {
 	rec *RegistryRecorder

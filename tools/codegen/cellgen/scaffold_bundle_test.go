@@ -85,6 +85,26 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 		}
 	}
 
+	// Verify the mandatory internal/ arch-layer doc.go stubs carry the correct
+	// package clause + cellID in the godoc (not just exist) — locks the
+	// planInternalArchLayers output, not merely directory presence.
+	for pkg := range map[string]struct{}{"ports": {}, "mem": {}} {
+		docPath := filepath.Join(dir, "cells", "myhttpcell", "internal", pkg, "doc.go")
+		doc, err := os.ReadFile(docPath) //nolint:gosec // tempdir test fixture
+		if err != nil {
+			t.Fatalf("read internal/%s/doc.go: %v", pkg, err)
+		}
+		if !strings.HasPrefix(string(doc), "// Package "+pkg+" ") {
+			t.Errorf("internal/%s/doc.go must start with `// Package %s `; got:\n%s", pkg, pkg, string(doc))
+		}
+		if !strings.Contains(string(doc), "\npackage "+pkg+"\n") {
+			t.Errorf("internal/%s/doc.go must declare `package %s`; got:\n%s", pkg, pkg, string(doc))
+		}
+		if !strings.Contains(string(doc), "myhttpcell") {
+			t.Errorf("internal/%s/doc.go godoc should mention the cellID; got:\n%s", pkg, string(doc))
+		}
+	}
+
 	// Verify contract.yaml does NOT carry an explicit `codegen:` line —
 	// K#09 funnel: parser defaults Codegen to true so the field is redundant.
 	// INVARIANT: SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL

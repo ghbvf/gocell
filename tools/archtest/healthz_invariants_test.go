@@ -133,10 +133,10 @@ var healthzRegisterExactPaths = map[string]bool{
 	// kernel/cell/healthz.go: the sanctioned emitter-probe funnel
 	// cell.RegisterEmitterHealthProbes — the sole kernel/ caller of
 	// healthz.Aggregator.Register. Cells route emitter probes through this
-	// helper instead of a per-cell cellgen-generated RegisterEmitterProbes;
+	// helper (the former per-cell cellgen RegisterEmitterProbes is removed);
 	// cell-repo probes still go through cellgen RegisterRepoReady in
 	// cells/<cell>/healthz_gen.go. Upstream-Hard upgrade for the whole funnel:
-	// HEALTHZ-HOLDER-SEAL-01 (seal the Aggregator interface), tracked separately.
+	// seal the Aggregator interface — HEALTHZ-HOLDER-SEAL-01 (gh issue #893).
 	"kernel/cell/healthz.go": true,
 }
 
@@ -328,7 +328,7 @@ func scanHealthzA2(fset *token.FileSet, file *ast.File, rel string, info *types.
 				Message: fmt.Sprintf(
 					"healthz.Aggregator.Register called from non-allowlisted file %s:%d; "+
 						"allowed callers: runtime/bootstrap/{phases_lifecycle,phases_events,bootstrap_phases}.go, "+
-						"runtime/observability/healthz/aggregator.go, cells/<cell>/healthz_gen.go, "+
+						"runtime/observability/healthz/{aggregator,healthztest/conformance}.go, cells/<cell>/healthz_gen.go, "+
 						"kernel/cell/healthz.go, *_test.go "+
 						"(HEALTHZ-WRITE-01/A2)",
 					rel, line,
@@ -896,7 +896,11 @@ func TestHealthzInvariants_ReverseBlindSpot_NoLocalRegisterWrapper(t *testing.T)
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
-			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
+			// kernel/ is in scope to mirror TestHealthzWrite01/A2 (which now scans
+			// kernel/): a future un-allowlisted kernel/ Register-wrapper must also
+			// be caught here. kernel/cell/healthz.go is skipped via isAllowedA2Caller.
+			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/kernel/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/runtime/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cmd/") &&

@@ -35,10 +35,11 @@ func probe(name string) healthz.Probe {
 func TestRegisterEmitterHealthProbes(t *testing.T) {
 	t.Parallel()
 
+	// Success / no-op paths only; the Register-error path is covered by
+	// TestRegisterEmitterHealthProbes_RegisterErrorPropagates below.
 	tests := []struct {
 		name       string
 		emitter    func() outbox.Emitter
-		wantErr    bool
 		wantProbes []string
 	}{
 		{
@@ -57,6 +58,13 @@ func TestRegisterEmitterHealthProbes(t *testing.T) {
 		{
 			name:       "non-ProbeSet emitter registers nothing",
 			emitter:    func() outbox.Emitter { return plainEmitter{} },
+			wantProbes: nil,
+		},
+		{
+			name: "ProbeSet emitter with zero probes registers nothing",
+			emitter: func() outbox.Emitter {
+				return &probeEmitter{probes: nil}
+			},
 			wantProbes: nil,
 		},
 		{
@@ -79,11 +87,7 @@ func TestRegisterEmitterHealthProbes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			reg := newRecorder()
-			err := RegisterEmitterHealthProbes(reg, tt.emitter())
-			if tt.wantErr && err == nil {
-				t.Fatalf("expected error, got nil")
-			}
-			if !tt.wantErr && err != nil {
+			if err := RegisterEmitterHealthProbes(reg, tt.emitter()); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			got := reg.Snapshot().Probes
