@@ -56,7 +56,7 @@ func TestOrderCell_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, rec))
-	assert.Len(t, c.OwnedSlices(), 2, "should have 2 slices (order-create, order-query)")
+	assert.Len(t, c.OwnedSlices(), 5, "expected 5 owned slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -73,7 +73,7 @@ func TestOrderCell_Metadata(t *testing.T) {
 	c := newTestCell()
 	assert.Equal(t, "ordercell", c.ID())
 	assert.Equal(t, cellvocab.CellTypeCore, c.Type())
-	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
+	assert.Equal(t, cellvocab.L3, c.ConsistencyLevel())
 }
 
 func TestOrderCell_Startup(t *testing.T) {
@@ -103,7 +103,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 				WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 				WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 			},
-			wantSlices: 2,
+			wantSlices: 5,
 		},
 		{
 			name: "with explicit repo + NoopWriter + NoopTxRunner",
@@ -112,7 +112,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 				WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 				WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 			},
-			wantSlices: 2,
+			wantSlices: 5,
 		},
 	}
 
@@ -305,6 +305,48 @@ func TestOrderCell_RouteCreateOrder(t *testing.T) {
 
 func TestJOrdercreateHttpCreate(t *testing.T) {
 	TestOrderCell_RouteCreateOrder(t)
+}
+
+// TestOrderCell_RouteConfirmOrder drives the orderconfirm slice end-to-end over
+// the router: create a pending order, then PATCH it to confirmed. This does not
+// depend on event delivery (the projection is updated only when events are
+// delivered, which demo-mode NoopWriter skips), so it is a valid auto journey
+// criterion for the confirm command path.
+func TestOrderCell_RouteConfirmOrder(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Create a pending order first.
+	createRec := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(`{"item":"confirmable"}`))
+	createReq = createReq.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	createReq.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code)
+
+	var createResp struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&createResp))
+	orderID := createResp.Data.ID
+	require.NotEmpty(t, orderID, "response should contain data.id")
+
+	// PATCH the order to confirmed.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/orders/"+orderID+"/status", strings.NewReader(`{"status":"confirmed"}`))
+	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"PATCH /api/v1/orders/{id}/status should return 200 for a pending order")
+}
+
+// TestJOrderprojectionHttpConfirm is the auto checkRef for J-orderprojection
+// passCriteria journey.J-orderprojection.http-confirm (VERIFY-06).
+func TestJOrderprojectionHttpConfirm(t *testing.T) {
+	TestOrderCell_RouteConfirmOrder(t)
 }
 
 func TestOrderCell_RouteListOrders(t *testing.T) {

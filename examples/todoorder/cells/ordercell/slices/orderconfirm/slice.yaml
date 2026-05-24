@@ -1,0 +1,17 @@
+id: orderconfirm
+belongsToCell: ordercell
+consistencyLevel: L2
+contractUsages:
+  - contract: http.order.confirm.v1
+    role: serve
+  - contract: event.order-status-changed.v1
+    role: publish
+verify:
+  unit:
+    - unit.orderconfirm.service
+  contract:
+    - contract.http.order.confirm.v1.serve
+    - contract.event.order-status-changed.v1.publish
+
+allowedFiles:
+  - examples/todoorder/cells/ordercell/slices/orderconfirm/**

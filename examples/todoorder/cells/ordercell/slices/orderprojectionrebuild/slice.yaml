@@ -1,0 +1,20 @@
+id: orderprojectionrebuild
+belongsToCell: ordercell
+# L0 LocalOnly: rebuild is a pure in-memory replay (reads local event log,
+# rewrites local projection maps). No DB transaction, no event publish,
+# no cross-cell call. SLICE-CONSISTENCY-01: L0 ≤ cell(L3) ✓
+consistencyLevel: L0
+
+contractUsages:
+  - contract: http.order.internal.projection-rebuild.v1
+    role: serve
+
+verify:
+  unit:
+    - unit.orderprojectionrebuild.handler
+  contract:
+    - contract.http.order.internal.projection-rebuild.v1.serve
+  waivers: []
+
+allowedFiles:
+  - examples/todoorder/cells/ordercell/slices/orderprojectionrebuild/**

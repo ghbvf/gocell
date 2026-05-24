@@ -31,7 +31,7 @@ func validProject() *metadata.ProjectMeta {
 			"accesscore": {
 				ID:               "accesscore",
 				Type:             "core",
-				ConsistencyLevel: "L2",
+				ConsistencyLevel: "L3",
 				DurabilityMode:   "durable",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
@@ -160,7 +160,7 @@ func validProject() *metadata.ProjectMeta {
 				ID:               "projection.session.active.v1",
 				Kind:             "projection",
 				OwnerCell:        "accesscore",
-				ConsistencyLevel: "L1",
+				ConsistencyLevel: "L3",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
 					Provider: "accesscore",
@@ -197,7 +197,7 @@ func validProject() *metadata.ProjectMeta {
 			"corebundle": {
 				ID:                  "corebundle",
 				Cells:               []string{"accesscore", "auditcore", "sharedcrypto"},
-				MaxConsistencyLevel: "L2", // derived: max of L2, L2, L0
+				MaxConsistencyLevel: "L3", // derived: max of L3, L2, L0
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Build: metadata.BuildMeta{
 					Entrypoint:     "cmd/corebundle/main.go",

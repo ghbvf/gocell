@@ -7,15 +7,22 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
+	orderconfirm "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderconfirm"
 	ordercreate "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/ordercreate"
+	orderprojection "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderprojection"
+	orderprojectionrebuild "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderprojectionrebuild"
 	orderquery "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderquery"
+	confirmv1 "github.com/ghbvf/gocell/generated/contracts/http/order/confirm/v1"
 	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
+	projectionrebuildv1 "github.com/ghbvf/gocell/generated/contracts/http/order/internalapi/projection-rebuild/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
+	projectionsummaryv1 "github.com/ghbvf/gocell/generated/contracts/http/order/projection-summary/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -23,6 +30,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// allowAllInternalPolicy is the route policy for the internal projection-rebuild
+// endpoint. The caller-cell allowlist guard is auto-injected by auth.Mount
+// because http.order.internal.projection-rebuild.v1 declares non-empty endpoints.clients
+// ([ordercell]); the service-token + caller-cell check happens at the transport
+// layer, so this policy adds no JWT role check (internal requests carry a
+// service principal, not a JWT role).
+var allowAllInternalPolicy auth.Policy = func(*http.Request) error { return nil }
 
 // Role constants re-exported from internal/dto for use by the assembly root
 // (main.go). The internal package is not importable from outside the
@@ -86,6 +101,7 @@ func WithLogger(l *slog.Logger) Option {
 
 // OrderCell is the ordercell Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
+// +cell:listener:ref=cell.InternalListener,prefix=/internal/v1
 type OrderCell struct {
 	*cell.BaseCell
 	repo     domain.OrderRepository
@@ -108,6 +124,19 @@ type OrderCell struct {
 
 	// +slice:route:slice=orderquery,subPath=/orders
 	listHandler *listv1.Handler
+
+	// +slice:route:slice=orderconfirm,subPath=/orders
+	confirmHandler *confirmv1.Handler
+
+	// +slice:route:slice=orderprojection,subPath=/orders
+	projectionSummaryHandler *projectionsummaryv1.Handler
+
+	// +slice:route:slice=orderprojectionrebuild,listener=cell.InternalListener,subPath=/orders
+	projectionRebuildHandler *projectionrebuildv1.Handler
+
+	// +slice:subscribe:slice=orderprojection,topic=event.order-created.v1,handler=HandleOrderCreated,group=ordercell
+	// +slice:subscribe:slice=orderprojection,topic=event.order-status-changed.v1,handler=HandleOrderStatusChanged,group=ordercell
+	projectionSvc *orderprojection.Service
 }
 
 // NewOrderCell creates a new OrderCell with the given options.
@@ -193,6 +222,41 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	c.getHandler = getv1.NewHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
 	c.listHandler = listv1.NewHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderquery.SliceMetadata()))
+
+	// order-confirm slice (L2 OutboxFact) — PATCH status to confirmed, publishes
+	// event.order-status-changed.v1 through the same emitter+txRunner sink as
+	// order-create.
+	confirmSvc, err := orderconfirm.NewService(c.repo, c.logger,
+		orderconfirm.WithEmitter(c.emitter),
+		orderconfirm.WithTxManager(c.txRunner),
+	)
+	if err != nil {
+		return fmt.Errorf("orderconfirm: %w", err)
+	}
+	c.confirmHandler = confirmv1.NewHandler(confirmSvc, auth.AnyRole(dto.RoleCustomer))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderconfirm.SliceMetadata()))
+
+	// order-projection slice (L3 WorkflowEventual) — subscribes to order-created
+	// and order-status-changed, maintains an in-memory status-grouped read model
+	// (projection.order.status-summary.v1), serves the summary query, and exposes
+	// a business-level rebuild on the internal listener. The subscription wiring
+	// is emitted into cell_gen.go from the +slice:subscribe markers above.
+	projSvc, err := orderprojection.NewService(orderprojection.WithLogger(c.logger))
+	if err != nil {
+		return fmt.Errorf("orderprojection: %w", err)
+	}
+	c.projectionSvc = projSvc
+	c.projectionSummaryHandler = projectionsummaryv1.NewHandler(
+		orderprojection.NewSummaryAdapter(projSvc), auth.AnyRole(dto.RoleCustomer))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderprojection.SliceMetadata()))
+
+	// order-projection-rebuild slice (internal control-plane) — POST
+	// /internal/v1/orders/projection/rebuild, kept separate from the public
+	// projection slice per FMT-33 (public/internal trust-boundary segregation).
+	// It shares the projection store via the injected *orderprojection.Service.
+	c.projectionRebuildHandler = projectionrebuildv1.NewHandler(
+		orderprojectionrebuild.NewRebuildAdapter(projSvc), allowAllInternalPolicy)
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderprojectionrebuild.SliceMetadata()))
 
 	return nil
 }

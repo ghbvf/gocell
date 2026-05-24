@@ -1,0 +1,12 @@
+id: projection.order.status-summary.v1
+kind: projection
+ownerCell: ordercell
+consistencyLevel: L3
+lifecycle: active
+replayable: true
+endpoints:
+  provider: ordercell
+  readers:
+    - edge-bff
+schemaRefs:
+  payload: payload.schema.json

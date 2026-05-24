@@ -489,6 +489,75 @@ func orderConcurrentReaderN(t *testing.T, ctx context.Context, repo *OrderReposi
 	}
 }
 
+// TestOrderRepository_UpdateStatus_CAS exercises the conditional compare-and-swap
+// semantics of UpdateStatus: it must succeed when expectedStatus matches and return
+// KindConflict when expectedStatus does not match.
+func TestOrderRepository_UpdateStatus_CAS(t *testing.T) {
+	tests := []struct {
+		name           string
+		initialStatus  string
+		expectedStatus string
+		newStatus      string
+		wantErr        bool
+		wantKind       errcode.Kind
+	}{
+		{
+			name:           "success: expected matches actual",
+			initialStatus:  domain.StatusPending,
+			expectedStatus: domain.StatusPending,
+			newStatus:      domain.StatusConfirmed,
+			wantErr:        false,
+		},
+		{
+			name:           "conflict: expected does not match actual",
+			initialStatus:  domain.StatusConfirmed,
+			expectedStatus: domain.StatusPending,
+			newStatus:      domain.StatusConfirmed,
+			wantErr:        true,
+			wantKind:       errcode.KindConflict,
+		},
+		{
+			name:           "not found: order does not exist",
+			initialStatus:  "", // won't be created
+			expectedStatus: domain.StatusPending,
+			newStatus:      domain.StatusConfirmed,
+			wantErr:        true,
+			wantKind:       errcode.KindNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := NewOrderRepository()
+			ctx := context.Background()
+
+			orderID := "ord-cas-test"
+			if tt.initialStatus != "" {
+				err := repo.Create(ctx, &domain.Order{
+					ID:     orderID,
+					Item:   "widget",
+					Status: tt.initialStatus,
+				})
+				require.NoError(t, err)
+			}
+
+			err := repo.UpdateStatus(ctx, orderID, tt.expectedStatus, tt.newStatus)
+			if tt.wantErr {
+				require.Error(t, err)
+				var ecErr *errcode.Error
+				require.ErrorAs(t, err, &ecErr)
+				assert.Equal(t, tt.wantKind, ecErr.Kind,
+					"expected kind %v, got %v", tt.wantKind, ecErr.Kind)
+			} else {
+				require.NoError(t, err)
+				got, err := repo.GetByID(ctx, orderID)
+				require.NoError(t, err)
+				assert.Equal(t, tt.newStatus, got.Status)
+			}
+		})
+	}
+}
+
 func TestOrderRepository_ConcurrentCreateAndList(t *testing.T) {
 	repo := NewOrderRepository()
 	ctx := context.Background()

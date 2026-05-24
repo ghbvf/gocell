@@ -1,0 +1,22 @@
+id: J-orderprojection
+goal: "Confirm an order, observe the L3 status-summary read model update via async event consumption, then rebuild the projection from the in-memory event log"
+lifecycle: active
+owner:
+  team: examples
+  role: order-owner
+cells:
+  - ordercell
+contracts:
+  - http.order.confirm.v1
+  - event.order-status-changed.v1
+  - projection.order.status-summary.v1
+  - http.order.projection-summary.v1
+  - http.order.internal.projection-rebuild.v1
+passCriteria:
+  - text: "PATCH /api/v1/orders/{id}/status confirms a pending order and publishes event.order-status-changed.v1"
+    mode: auto
+    checkRef: journey.J-orderprojection.http-confirm
+  - text: "GET /api/v1/orders/projection/summary reflects the confirmed order in the status-grouped read model after L3 async consumption (eventual; demo mode delivers in-process best-effort)"
+    mode: manual
+  - text: "POST /internal/v1/orders/projection/rebuild (service-token, caller-cell=ordercell) replays the in-memory event log and reproduces a byte-identical summary (rebuild idempotence)"
+    mode: manual

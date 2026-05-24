@@ -1,0 +1,37 @@
+id: http.order.confirm.v1
+kind: http
+ownerCell: ordercell
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.order-status-changed.v1
+endpoints:
+  server: ordercell
+  clients:
+    - edge-bff
+  http:
+    method: PATCH
+    path: /api/v1/orders/{id}/status
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 256
+    successStatus: 200
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — invalid request body"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — order with given id does not exist"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — order is not in a state that allows confirmation"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

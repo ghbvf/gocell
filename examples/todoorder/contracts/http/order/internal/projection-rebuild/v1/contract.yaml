@@ -1,0 +1,28 @@
+id: http.order.internal.projection-rebuild.v1
+kind: http
+ownerCell: ordercell
+consistencyLevel: L3
+lifecycle: active
+endpoints:
+  server: ordercell
+  clients:
+    - ordercell
+  http:
+    method: POST
+    path: /internal/v1/orders/projection/rebuild
+    successStatus: 200
+    noContent: false
+    auth:
+      responses:
+        - 401
+        - 403
+    responses:
+      400:
+        description: "Bad request — malformed JSON body or oversized payload"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

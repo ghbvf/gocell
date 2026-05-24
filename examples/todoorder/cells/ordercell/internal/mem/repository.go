@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
@@ -33,7 +34,8 @@ func (r *OrderRepository) Create(_ context.Context, order *domain.Order) error {
 
 	if _, exists := r.orders[order.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("order %q already exists", order.ID))
+			"order already exists",
+			errcode.WithDetails(slog.String("orderId", order.ID)))
 	}
 	// Store a copy to avoid external mutation.
 	stored := *order
@@ -49,11 +51,40 @@ func (r *OrderRepository) GetByID(_ context.Context, id string) (*domain.Order, 
 	o, ok := r.orders[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
-			fmt.Sprintf("order %q not found", id))
+			"order not found",
+			errcode.WithDetails(slog.String("orderId", id)))
 	}
 	// Return a copy.
 	out := *o
 	return &out, nil
+}
+
+// UpdateStatus performs a conditional status transition (compare-and-swap).
+// The update is applied only when the current persisted status equals expectedStatus.
+// Returns ErrOrderNotFound if no order with the given ID exists.
+// Returns ErrConflict (KindConflict) if the current status does not match expectedStatus,
+// indicating a concurrent modification won the race and this transition should be rejected.
+func (r *OrderRepository) UpdateStatus(_ context.Context, id, expectedStatus, newStatus string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	o, ok := r.orders[id]
+	if !ok {
+		return errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
+			"order not found",
+			errcode.WithDetails(slog.String("orderId", id)))
+	}
+	if o.Status != expectedStatus {
+		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+			"order status precondition failed",
+			errcode.WithDetails(
+				slog.String("orderId", id),
+				slog.String("expected", expectedStatus),
+				slog.String("actual", o.Status),
+			))
+	}
+	o.Status = newStatus
+	return nil
 }
 
 // List returns orders sorted and paginated according to params.

@@ -132,6 +132,10 @@ func goldenRuleIDs() []string {
 		// OUTGUARD — outbox durability (rules_misc_advisory.go)
 		"OUTGUARD-01",
 
+		// PROJECTION-CONSISTENCY — projection contract must be >= L3
+		// (rules_projection_consistency.go)
+		"PROJECTION-CONSISTENCY-01",
+
 		// REF — reference integrity (rules_ref.go for REF-01..11, 13..17;
 		// REF-12 was relocated to rules_fmt.go in PR-FUNNEL-03 because it is
 		// I/O-flavored — pairs with FMT cluster's disk-format rules).

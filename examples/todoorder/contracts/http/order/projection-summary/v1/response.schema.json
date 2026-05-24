@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.order.projection-summary.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "statuses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer"
+              },
+              "orderIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "totalOrders": {
+          "type": "integer"
+        },
+        "lastAppliedSeq": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "statuses",
+        "totalOrders",
+        "lastAppliedSeq"
+      ]
+    }
+  },
+  "required": [
+    "data"
+  ]
+}

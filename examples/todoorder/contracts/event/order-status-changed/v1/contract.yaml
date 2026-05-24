@@ -1,0 +1,14 @@
+id: event.order-status-changed.v1
+kind: event
+ownerCell: ordercell
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: ordercell
+  subscribers: [ordercell, example-order-platform]
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: true
+idempotencyKey: eventId
+deliverySemantics: at-least-once

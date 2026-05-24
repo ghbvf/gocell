@@ -447,3 +447,61 @@ func TestContractSchemaAuthBoolMatrix(t *testing.T) {
 		})
 	})
 }
+
+// TestProjectionConsistencyLevelSchemaEnum verifies the PROJECTION-CONSISTENCY-01
+// schema gate: the contract.schema.json projection if/then block restricts
+// consistencyLevel to ["L3","L4"].
+//
+// AI-robust evaluation: schema enum is a documentation + test-layer constraint;
+// the metadata parser does not run jsonschema.Validate at load time, so the
+// validate-time governance rule PROJECTION-CONSISTENCY-01 is the real enforcement
+// (Medium). This test covers the YAML-parsed path; the governance rule covers
+// in-memory fixtures that bypass the parser.
+//
+// INVARIANT: PROJECTION-CONSISTENCY-01 (schema enum gate, Medium — parser does not validate at load time).
+func TestProjectionConsistencyLevelSchemaEnum(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	projectionBase := func(level string) string {
+		return `{
+			"id": "projection.test.summary.v1",
+			"kind": "projection",
+			"ownerCell": "testcell",
+			"consistencyLevel": "` + level + `",
+			"lifecycle": "active",
+			"replayable": true,
+			"endpoints": {
+				"provider": "testcell",
+				"readers": ["edge-bff"]
+			}
+		}`
+	}
+
+	tests := []struct {
+		name        string
+		level       string
+		expectValid bool
+	}{
+		{"L3 accepted", "L3", true},
+		{"L4 accepted", "L4", true},
+		{"L2 rejected", "L2", false},
+		{"L1 rejected", "L1", false},
+		{"L0 rejected", "L0", false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var doc any
+			require.NoError(t, json.Unmarshal([]byte(projectionBase(tc.level)), &doc))
+			err := schema.Validate(doc)
+			if tc.expectValid && err != nil {
+				t.Errorf("schema rejected valid projection with %s: %v", tc.level, err)
+			}
+			if !tc.expectValid && err == nil {
+				t.Errorf("schema accepted invalid projection with %s (expected reject per enum L3|L4)", tc.level)
+			}
+		})
+	}
+}

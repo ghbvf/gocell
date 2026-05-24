@@ -154,4 +154,10 @@ const (
 	// reverse coverage check. Inverse direction of the ADV-06 subscribe-role check:
 	// ADV-06 checks event contracts; this rule checks HTTP contracts.
 	codeCONTRACTENDPOINTTESTMAPPING01 RuleCode = "CONTRACT-ENDPOINT-TEST-MAPPING-01"
+
+	// PROJECTION-CONSISTENCY-01 — projection contract → minimum consistencyLevel L3.
+	// Enforces that kind=projection contracts declare WorkflowEventual (L3) or
+	// DeviceLatent (L4); L0/L1/L2 are semantically invalid for a read-model
+	// projection that depends on cross-cell eventual consistency.
+	codePROJECTIONCONSISTENCY01 RuleCode = "PROJECTION-CONSISTENCY-01"
 )
