@@ -54,6 +54,8 @@ Check the application logs — you should see `event.order.created consumed`.
 
 For full configuration options (production hardening, real-mode adapters, multi-pod), see `examples/todoorder/README.md`.
 
+For a full local Docker stack (PostgreSQL + Redis + corebundle), see [Local Docker Deploy guide](docs/ops/local-docker-deploy.md).
+
 ## Core Concepts
 
 ```
