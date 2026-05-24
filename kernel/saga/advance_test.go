@@ -10,7 +10,9 @@ import (
 )
 
 // instanceInState builds an Instance advanced into the given non-terminal
-// source state via the real state machine (no direct Status mutation).
+// source state via the real state machine (no direct Status mutation). Terminal
+// states have no legal inbound edge, so they are unreachable here and trip
+// t.Fatalf; tests needing a terminal source set inst.Status directly.
 func instanceInState(t *testing.T, s Status) Instance {
 	t.Helper()
 	inst := NewInstance("inst-1", "def-1", testBase)
@@ -81,7 +83,7 @@ func TestAdvanceSaga_FromTerminalAlwaysIllegal(t *testing.T) {
 				inst := NewInstance("inst-1", "def-1", testBase)
 				inst.Status = from // test-only direct set to reach a terminal source
 				err := AdvanceSaga(&inst, to, testBase.Add(testtime.D10s))
-				require.Error(t, err)
+				requireValidationError(t, err)
 				assert.Equal(t, from, inst.Status)
 			})
 		}
@@ -139,6 +141,14 @@ func TestAdvanceSaga_CompensatingToFailed(t *testing.T) {
 	require.NotNil(t, inst.CompletedAt)
 }
 
+func TestAdvanceSaga_AllowsEqualTimestamp(t *testing.T) {
+	t.Parallel()
+	inst := instanceInState(t, StatusRunning) // UpdatedAt = testBase+1s
+	// now == previous UpdatedAt is non-strict-monotonic and must be allowed.
+	require.NoError(t, AdvanceSaga(&inst, StatusSucceeded, testBase.Add(testtime.D1s)))
+	assert.Equal(t, StatusSucceeded, inst.Status)
+}
+
 func TestAdvanceStep(t *testing.T) {
 	t.Parallel()
 	t.Run("running increments cursor", func(t *testing.T) {
@@ -149,6 +159,33 @@ func TestAdvanceStep(t *testing.T) {
 		assert.Equal(t, 1, inst.CurrentStep)
 		require.NotNil(t, inst.UpdatedAt)
 		assert.Equal(t, now, *inst.UpdatedAt)
+	})
+	t.Run("advances through every non-final step then rejects the last", func(t *testing.T) {
+		t.Parallel()
+		inst := instanceInState(t, StatusRunning) // 3 steps: indices 0,1,2
+		require.NoError(t, AdvanceStep(&inst, 3, testBase.Add(testtime.D5s)))
+		assert.Equal(t, 1, inst.CurrentStep)
+		require.NoError(t, AdvanceStep(&inst, 3, testBase.Add(testtime.D7s)))
+		assert.Equal(t, 2, inst.CurrentStep) // last index reached
+		// past the last step: Coordinator must use AdvanceSaga(Running→Succeeded)
+		err := AdvanceStep(&inst, 3, testBase.Add(testtime.D10s))
+		requireValidationError(t, err)
+		assert.Equal(t, 2, inst.CurrentStep)
+	})
+	t.Run("allows now equal to previous UpdatedAt", func(t *testing.T) {
+		t.Parallel()
+		inst := instanceInState(t, StatusRunning) // UpdatedAt = testBase+1s
+		require.NoError(t, AdvanceStep(&inst, 3, testBase.Add(testtime.D1s)))
+		assert.Equal(t, 1, inst.CurrentStep)
+	})
+	t.Run("rejects non-positive stepCount", func(t *testing.T) {
+		t.Parallel()
+		for _, sc := range []int{0, -1} {
+			inst := instanceInState(t, StatusRunning)
+			err := AdvanceStep(&inst, sc, testBase.Add(testtime.D5s))
+			requireValidationError(t, err)
+			assert.Equal(t, 0, inst.CurrentStep)
+		}
 	})
 	t.Run("rejects when not running", func(t *testing.T) {
 		t.Parallel()

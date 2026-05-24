@@ -15,10 +15,11 @@
 //	   │           │           └──────► Failed            (compensation itself failed)
 //	   │           └──► Failed                            (failed before any step committed)
 //	   │
-//	   └──► Failed                                        (rejected while queued)
+//	   └──► Failed | Expired                              (rejected / expired while queued)
 //
-//	Expired is reachable from every non-terminal state: the overall timeout
-//	(owned by the Coordinator) is orthogonal to step progress.
+//	Expired is reachable from every non-terminal state (Pending, Running,
+//	Compensating): the overall timeout (owned by the Coordinator) is orthogonal
+//	to step progress.
 //
 // Pending:      created, no step has run.
 // Running:      executing steps forward; CurrentStep advances via AdvanceStep.
@@ -44,6 +45,10 @@
 //     following kernel/command, which ships its Timeouts config with the
 //     sweeper that consumes it, never ahead of it.
 //   - The durable append-only Journal lands in kernel/saga/journal.
+//   - Instance.LogValue (slog.LogValuer for redacted logging) lands in
+//     runtime/saga together with the State payload it needs to redact; PR-01's
+//     Instance carries only IDs / status / timestamps (no sensitive fields),
+//     so the default slog reflection is safe in the interim.
 //
 // This skeleton declares only what its own state machine exercises: there are
 // no config fields awaiting a future executor.

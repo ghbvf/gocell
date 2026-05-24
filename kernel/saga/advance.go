@@ -39,8 +39,12 @@ func AdvanceSaga(inst *Instance, to Status, now time.Time) error {
 // stepCount is the total number of steps in the definition (the Coordinator
 // passes def.Len()); this keeps AdvanceStep self-contained and free of any
 // dependency on the SagaDefinition type. Fail-closed: rejects when the saga is
-// not Running, when advancing would exceed the last step (CurrentStep+1 >=
-// stepCount), or on clock regression.
+// not Running, when stepCount is not positive, when advancing would exceed the
+// last step (CurrentStep+1 >= stepCount), or on clock regression.
+//
+// AdvanceStep is NOT used for the final step: once CurrentStep+1 would reach
+// stepCount, the Coordinator instead transitions Running → Succeeded via
+// AdvanceSaga.
 func AdvanceStep(inst *Instance, stepCount int, now time.Time) error {
 	if inst == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "saga: nil Instance")
@@ -49,6 +53,11 @@ func AdvanceStep(inst *Instance, stepCount int, now time.Time) error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga: AdvanceStep requires Running status",
 			errcode.WithInternal(fmt.Sprintf("status=%s", inst.Status)))
+	}
+	if stepCount <= 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga: AdvanceStep requires positive stepCount",
+			errcode.WithInternal(fmt.Sprintf("stepCount=%d", stepCount)))
 	}
 	if inst.CurrentStep+1 >= stepCount {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -66,6 +75,9 @@ func AdvanceStep(inst *Instance, stepCount int, now time.Time) error {
 
 // guardMonotonic rejects a now that runs backwards relative to the instance's
 // known timestamps, preventing clock-skew from producing non-monotonic history.
+// Equality is allowed (non-strict monotonicity): now == StartedAt or
+// now == UpdatedAt passes, because same-instant transitions are legal and the
+// Journal (PR-02) orders events by sequence, not by timestamp uniqueness.
 func guardMonotonic(inst *Instance, now time.Time) error {
 	if now.Before(inst.StartedAt) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
