@@ -45,6 +45,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/types"
 	"maps"
 	"os"
 	"path/filepath"
@@ -388,6 +389,15 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 		"RunTyped":           true,
 		"RunTypedProduction": true,
 		"RunTypedDir":        true,
+		// runTypedWithRoot is the UNEXPORTED shared impl behind RunTyped /
+		// RunTypedDir / RunTypedFixture. A business *_test.go in package
+		// archtest can call it directly with the fixture tag — sidestepping
+		// the FixtureOpts-has-no-Tags compile lock — so it must be enumerated
+		// here (#944). ResolvePackageRef resolves the same-package bare-Ident
+		// callee to (archtestPkgPath, "runTypedWithRoot"); covered by Form E
+		// in passfunnel_inpkg_redfixture.go (cross-package fixtures cannot
+		// reference the unexported symbol).
+		"runTypedWithRoot": true,
 	},
 	typesevalPkgPath: {
 		"SharedResolver":         true,
@@ -437,28 +447,38 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //     Tags field; `RunTypedFixture(t, FixtureOpts{Tags: ...}, ...)` is a
 //     compile error (type system, not archtest-bound).
 //   - Upstream / archtest-bound Hard: this rule rejects any loader-call +
-//     arg-resolves-to-archtest_fixture pair regardless of arg shape.
+//     arg-resolves-to-archtest_fixture pair regardless of arg shape,
+//     including the same-package unexported runTypedWithRoot callee and the
+//     same-file var-indirection arg shape (#944).
 //
 // Together: business archtest cannot express "load a fixture package
 // (or any package with the fixture build tag activated)" via any
 // reachable AST path — the only legitimate route is RunTypedFixture,
-// whose body injects the tag inside the framework using archtest.
-// FixtureBuildTag (the typed-reference single source).
+// whose body injects the tag inside the framework.
+//
+// # Closed by #944
+//
+//   - Same-file var-indirection: `var tagSet = []string{FixtureBuildTag};
+//     RunTyped(.., TypedOpts{Tags: tagSet}, ..)`. collectFixtureTagBoundObjects
+//     records, file-scoped, every types.Object bound (single `:=` / `=` /
+//     `var`) to a slice literal carrying a fixture-tag-resolving element; the
+//     Ident walker then reports a loader-arg Ident that resolves to such an
+//     object. Covered by Form F (passfunnelfixture/redfixture.go) with two
+//     GREEN-parity negatives (non-fixture var → loader, fixture tag →
+//     non-LOADER_SET callee) under an exact-count lock.
+//   - Same-package unexported runTypedWithRoot: now in fixtureTagLoaderSet.
+//     Covered by Form E (passfunnel_inpkg_redfixture.go, in-package because the
+//     symbol is unexported). Note also: the cross-package selector form
+//     (`pkg.FixtureBuildTag` fed to a loader) is type-system-Hard, not
+//     archtest-bound — FixtureBuildTag is unexported (#944), so it is a compile
+//     error outside package archtest.
 //
 // # Blind spots (accepted, same grade as PASS-FUNNEL-LOADPACKAGES-01)
 //
-//   - Tags-arg via *ast.Ident binding to a same-file var (not const):
-//     `var tagSet = []string{FixtureBuildTag}; RunTyped(.., TypedOpts{
-//     Tags: tagSet}, ..)`. The detector ast.Inspect-walks the
-//     CompositeLit "[]string{FixtureBuildTag}" *inside the var decl* —
-//     if the var decl is in the same file, the FixtureBuildTag
-//     SelectorExpr appears as a top-level Expr in the file and is
-//     visited; however, that walk is **not** scoped to a loader CallExpr,
-//     so the detector does NOT fire there. Within the loader CallExpr,
-//     the arg is just an *ast.Ident (the var name), which
-//     EvaluateConstString does not resolve (only const Idents resolve).
-//     Workaround: review-bound. Same accept grade as cross-func var
-//     escape in diagsLoadPackages / diagsResolveHelpers.
+//   - Multi-RHS positional binding (`a, t := x, []string{FixtureBuildTag}`):
+//     collectFixtureTagBoundObjects recognizes single-binding shape only.
+//     Same narrow accepted sub-gap as taggroup BS-4. Inter-procedural Hard
+//     upgrade tracked via gh issue (see ADR 202605141519 §#944).
 //   - Cross-func var escape: a var assigned in one function and read in
 //     another, or a closure capture, falls outside the AST walk's reach.
 //     Same accept as the sister rules' identical Blind spot.
@@ -480,19 +500,24 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //
 // # Per-form fixture coverage (TestPassFunnel_FixtureCoverage)
 //
-// internal/passfunnelfixture/redfixture.go's fixtureTagBypassRedForms
-// exercises all four EvaluateConstString-resolvable arg shapes against
-// typeseval.SharedResolver (one LOADER_SET callee; the rule predicate
+// Cross-package forms in internal/passfunnelfixture/redfixture.go exercise the
+// EvaluateConstString-resolvable arg shapes plus the var-indirection shape
+// against typeseval.SharedResolver (one LOADER_SET callee; the rule predicate
 // is callee-shape-agnostic across the set):
 //
 //   - Form A — BasicLit "archtest_fixture" direct
 //   - Form B — same-pkg const Ident (localFixtureTag)
 //   - Form C — BinaryExpr "archtest" + "_fixture"
 //   - Form D — cross-pkg SelectorExpr archtest.FixtureBuildTag
+//   - Form F — same-file var bound to a fixture-tag slice (var-indirection)
 //
-// TestPassFunnel_FixtureCoverage asserts each form produces ≥1
-// diagnostic independently (per-form trip-wire); removing any single
-// form's fixture line fails exactly that form's assertion.
+// Form E (same-package unexported runTypedWithRoot) lives in-package
+// (passfunnel_inpkg_redfixture.go) and is asserted via a dedicated
+// package-archtest load. TestPassFunnel_FixtureCoverage asserts each form
+// produces a diagnostic independently (per-form trip-wire) AND an exact-count
+// lock over the cross-package forms so the two GREEN-parity negatives are
+// load-bearing; removing any single form's fixture line fails exactly that
+// form's assertion.
 //
 // # Exempt
 //
@@ -505,6 +530,11 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 	info := tgt.pkg.TypesInfo
 	fset := tgt.pkg.Fset
 	var diags []scanner.Diagnostic
+	// Var-indirection closure (#944): collect same-file objects bound to a
+	// slice literal carrying a fixture-tag-resolving element, so a loader arg
+	// that is a plain *ast.Ident (the var name) is still caught. Mirrors
+	// collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_test.go.
+	boundObjs := collectFixtureTagBoundObjects(info, tgt.file)
 	// Position-based dedup: a single arg expression may contain nested Exprs
 	// that all resolve to the same const value (e.g. BinaryExpr "X"+"Y" plus
 	// each child Ident if both are typed const), producing multiple
@@ -542,10 +572,11 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 		}
 		// EvaluateConstString admits any ast.Expr but a single typed Walker N
 		// must be a concrete *S (the EachInSubtree generic constraint forbids
-		// interface N like *ast.Expr). The four shapes below correspond to
-		// the four EvaluateConstString resolution paths covered by
-		// fixtureTagBypassRedForms (Forms A / B / C / D); enumerating them
-		// explicitly mirrors the fixture's per-form anchor structure.
+		// interface N like *ast.Expr). The shapes below correspond to the
+		// EvaluateConstString resolution paths covered by fixtureTagBypassRedForms
+		// (Forms A / B / C / D) plus the var-indirection path (Form F) handled
+		// in the Ident walker via boundObjs; enumerating them explicitly mirrors
+		// the fixture's per-form anchor structure.
 		for _, arg := range call.Args {
 			scanner.EachInSubtree[ast.BasicLit](arg, func(lit *ast.BasicLit) {
 				if v, ok := typeseval.EvaluateConstString(info, lit); ok && v == fixtureTagSentinelValue {
@@ -555,6 +586,14 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 			scanner.EachInSubtree[ast.Ident](arg, func(id *ast.Ident) {
 				if v, ok := typeseval.EvaluateConstString(info, id); ok && v == fixtureTagSentinelValue {
 					report(id)
+					return
+				}
+				// Form F (#944): the ident is not const-resolvable but references
+				// a same-file var bound to a fixture-tag slice literal.
+				if obj := taggroupObjectOf(info, id); obj != nil {
+					if _, bound := boundObjs[obj]; bound {
+						report(id)
+					}
 				}
 			})
 			scanner.EachInSubtree[ast.SelectorExpr](arg, func(sel *ast.SelectorExpr) {
@@ -570,6 +609,86 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 		}
 	})
 	return diags
+}
+
+// exprCarriesFixtureTag reports whether expr's subtree contains any
+// EvaluateConstString-resolvable node equal to "archtest_fixture" (covering the
+// same BasicLit / Ident / SelectorExpr / BinaryExpr lattice as the per-arg
+// detector). Used by collectFixtureTagBoundObjects to decide whether a binding's
+// RHS carries the fixture tag.
+func exprCarriesFixtureTag(info *types.Info, expr ast.Expr) bool {
+	found := false
+	scanner.EachInSubtree[ast.BasicLit](expr, func(lit *ast.BasicLit) {
+		if v, ok := typeseval.EvaluateConstString(info, lit); ok && v == fixtureTagSentinelValue {
+			found = true
+		}
+	})
+	scanner.EachInSubtree[ast.Ident](expr, func(id *ast.Ident) {
+		if v, ok := typeseval.EvaluateConstString(info, id); ok && v == fixtureTagSentinelValue {
+			found = true
+		}
+	})
+	scanner.EachInSubtree[ast.SelectorExpr](expr, func(sel *ast.SelectorExpr) {
+		if v, ok := typeseval.EvaluateConstString(info, sel); ok && v == fixtureTagSentinelValue {
+			found = true
+		}
+	})
+	scanner.EachInSubtree[ast.BinaryExpr](expr, func(bin *ast.BinaryExpr) {
+		if v, ok := typeseval.EvaluateConstString(info, bin); ok && v == fixtureTagSentinelValue {
+			found = true
+		}
+	})
+	return found
+}
+
+// collectFixtureTagBoundObjects returns the set of types.Object bound — anywhere
+// in file via a single `:=` / `=` / `var` — to an expression whose subtree
+// carries the fixture tag (e.g. `var tags = []string{FixtureBuildTag}`). This
+// closes the var-indirection Blind spot of PASS-FUNNEL-FIXTURE-TAG-01 (#944): at
+// a loader call site the Tags arg is then a plain *ast.Ident the const evaluator
+// cannot resolve, so diagsFixtureTagBypass traces the binding object instead.
+//
+// Scope is file-level (the realistic copy template declares the binding in the
+// same file as the loader call) and single-binding only (LHS/RHS length 1),
+// mirroring collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_test.go.
+// A const ValueSpec that carries the literal is also collected here, but that is
+// redundant-not-harmful: a const-ident arg is always reported via the const path
+// first (the Ident walker returns before the bound-object check), so the const
+// branch of boundObjs is never the deciding factor. Multi-RHS positional binding
+// (`a, t := x, []string{FixtureBuildTag}`) is the same narrow accepted sub-gap
+// as taggroup BS-4; cross-func / cross-file escape is the same accepted Blind
+// spot as the sibling rules. Inter-procedural Hard upgrade tracked via gh issue
+// (see package godoc / ADR 202605141519 §#944).
+func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.Object]struct{} {
+	out := make(map[types.Object]struct{})
+	bindIdent := func(id *ast.Ident) {
+		if id == nil || id.Name == "_" {
+			return
+		}
+		if obj := taggroupObjectOf(info, id); obj != nil {
+			out[obj] = struct{}{}
+		}
+	}
+	scanner.EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
+		if len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return
+		}
+		if !exprCarriesFixtureTag(info, as.Rhs[0]) {
+			return
+		}
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			bindIdent(id)
+		}
+	})
+	scanner.EachInSubtree[ast.ValueSpec](file, func(vs *ast.ValueSpec) {
+		if len(vs.Names) != 1 || len(vs.Values) != 1 {
+			return
+		}
+		if exprCarriesFixtureTag(info, vs.Values[0]) {
+			bindIdent(vs.Names[0])
+		}
+	})
+	return out
 }
 
 // TestPassFunnelResolve01 — PASS-FUNNEL-RESOLVE-01.
