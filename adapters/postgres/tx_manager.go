@@ -82,6 +82,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	// true only here (the nested savepoint path never installs), so hooks fire
 	// once after the durable commit below, not on savepoint RELEASE.
 	txCtx, drainAfterCommit := persistence.WithAfterCommitRegistry(txCtx)
+	afterCommitMark := persistence.AfterCommitMark(txCtx)
 
 	// Panic recovery — rollback and re-panic.
 	// Use context.WithoutCancel so rollback succeeds even if ctx is already canceled
@@ -89,6 +90,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	// leaving the transaction open until connection pool idle timeout.
 	defer func() {
 		if r := recover(); r != nil {
+			persistence.TruncateAfterCommitTo(txCtx, afterCommitMark) // rolled-back scope: drop its hooks
 			rbErr := tx.Rollback(context.WithoutCancel(ctx))
 			if rbErr != nil {
 				slog.Error("postgres: rollback after panic failed",
@@ -102,6 +104,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 
 	retErr = fn(txCtx)
 	if retErr != nil {
+		persistence.TruncateAfterCommitTo(txCtx, afterCommitMark) // rolled-back scope: drop its hooks
 		if rbErr := tx.Rollback(context.WithoutCancel(ctx)); rbErr != nil {
 			slog.Error("postgres: rollback failed",
 				slog.String("original_error", redaction.RedactError(retErr).Error()),
@@ -130,11 +133,16 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	}
 
 	nestedCtx := withSavepointDepth(ctx, depth+1)
+	// Checkpoint the ambient after-commit registry: a savepoint rollback must
+	// discard hooks this nested scope registers, even if the caller swallows the
+	// error and the outermost tx commits.
+	afterCommitMark := persistence.AfterCommitMark(nestedCtx)
 
 	// Panic recovery — rollback savepoint and re-panic.
 	// Use context.WithoutCancel so savepoint rollback succeeds even if ctx is canceled.
 	defer func() {
 		if r := recover(); r != nil {
+			persistence.TruncateAfterCommitTo(nestedCtx, afterCommitMark)
 			_, rbErr := tx.Exec(context.WithoutCancel(ctx), fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", spName))
 			if rbErr != nil {
 				slog.Error("postgres: rollback savepoint after panic failed",
@@ -149,6 +157,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 
 	retErr = fn(nestedCtx)
 	if retErr != nil {
+		persistence.TruncateAfterCommitTo(nestedCtx, afterCommitMark)
 		if _, rbErr := tx.Exec(context.WithoutCancel(ctx), fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", spName)); rbErr != nil {
 			slog.Error("postgres: rollback savepoint failed",
 				slog.String("savepoint", spName),

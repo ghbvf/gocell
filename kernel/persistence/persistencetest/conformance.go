@@ -17,6 +17,7 @@ package persistencetest
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -64,6 +65,56 @@ func RunAfterCommitConformance(t *testing.T, runner persistence.TxRunner) {
 		}
 		if fired {
 			t.Error("after-commit hook fired on a rolled-back tx; want no fire")
+		}
+	})
+}
+
+// RunAfterCommitNestedConformance asserts the scope-discard semantics of nested
+// RunInTx (the outermost-only drain plus per-scope rollback): a hook registered
+// in a nested RunInTx whose fn ERRORS is discarded even when the outer fn
+// swallows that error and commits — the nested unit of work (and the premise of
+// its after-commit side effect) did not commit.
+//
+// Only runners that support nesting call this: pass-through runners (demo / noop
+// / example) and postgres (savepoints). The mem runner holds a non-reentrant
+// lock for fn's duration and cannot nest, so it is exempt.
+func RunAfterCommitNestedConformance(t *testing.T, runner persistence.TxRunner) {
+	t.Helper()
+
+	t.Run("nested_success_fires_both_in_order", func(t *testing.T) {
+		var order []string
+		err := runner.RunInTx(context.Background(), func(outer context.Context) error {
+			persistence.RegisterAfterCommit(outer, func(context.Context) { order = append(order, "outer") })
+			return runner.RunInTx(outer, func(inner context.Context) error {
+				persistence.RegisterAfterCommit(inner, func(context.Context) { order = append(order, "inner") })
+				return nil
+			})
+		})
+		if err != nil {
+			t.Fatalf("nested success returned error: %v", err)
+		}
+		if !slices.Equal(order, []string{"outer", "inner"}) {
+			t.Errorf("nested success fire order = %v, want [outer inner]", order)
+		}
+	})
+
+	t.Run("nested_error_discards_inner_scope", func(t *testing.T) {
+		var fired []string
+		err := runner.RunInTx(context.Background(), func(outer context.Context) error {
+			persistence.RegisterAfterCommit(outer, func(context.Context) { fired = append(fired, "outer") })
+			// The inner unit fails and is rolled back; the outer swallows the
+			// error and commits successfully.
+			_ = runner.RunInTx(outer, func(inner context.Context) error {
+				persistence.RegisterAfterCommit(inner, func(context.Context) { fired = append(fired, "inner") })
+				return errors.New("nested unit failed")
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("outer returned error: %v", err)
+		}
+		if !slices.Equal(fired, []string{"outer"}) {
+			t.Errorf("after nested rollback fired = %v, want [outer] (inner scope discarded)", fired)
 		}
 	})
 }

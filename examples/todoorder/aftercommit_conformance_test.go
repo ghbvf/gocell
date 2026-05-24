@@ -11,3 +11,9 @@ import (
 func TestDemoTxRunner_AfterCommitConformance(t *testing.T) {
 	persistencetest.RunAfterCommitConformance(t, demoTxRunner{})
 }
+
+// TestDemoTxRunner_AfterCommitNestedConformance covers the scope-discard
+// semantics for nested RunInTx (success fires both; error discards inner scope).
+func TestDemoTxRunner_AfterCommitNestedConformance(t *testing.T) {
+	persistencetest.RunAfterCommitNestedConformance(t, demoTxRunner{})
+}

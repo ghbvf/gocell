@@ -80,6 +80,8 @@ const (
 var afterCommitDrainFns = map[string]bool{
 	"WithAfterCommitRegistry": true,
 	"RunAfterCommitHooks":     true,
+	"AfterCommitMark":         true,
+	"TruncateAfterCommitTo":   true,
 }
 
 // afterCommitBannedReceivers maps "<pkgpath>.<TypeName>" → display label for

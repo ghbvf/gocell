@@ -39,3 +39,10 @@ func TestDemoTxRunner_AfterCommit_NestedFiresOnceAfterOutermost(t *testing.T) {
 	require.Equal(t, []string{"outer", "inner"}, order,
 		"both hooks fire exactly once, after the outermost commit, in registration order")
 }
+
+// TestDemoTxRunner_AfterCommitNestedConformance covers the scope-discard
+// semantics (nested success fires both; nested error discards the inner scope's
+// hooks even when the outer swallows the error and commits).
+func TestDemoTxRunner_AfterCommitNestedConformance(t *testing.T) {
+	persistencetest.RunAfterCommitNestedConformance(t, outbox.DemoTxRunner{})
+}

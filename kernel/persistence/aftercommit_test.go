@@ -132,6 +132,38 @@ func TestRunAfterCommitHooks_SecondDrainIsNoop(t *testing.T) {
 	assert.Equal(t, 1, n, "hooks fire exactly once; a second drain is a no-op")
 }
 
+func TestAfterCommitMark_TruncateDiscardsLaterHooks(t *testing.T) {
+	ctx, _ := WithAfterCommitRegistry(context.Background())
+	var fired []int
+	RegisterAfterCommit(ctx, func(context.Context) { fired = append(fired, 0) }) // parent scope
+
+	mark := AfterCommitMark(ctx)
+	require.Equal(t, 1, mark, "mark reflects hooks registered so far")
+
+	RegisterAfterCommit(ctx, func(context.Context) { fired = append(fired, 1) }) // child scope
+	RegisterAfterCommit(ctx, func(context.Context) { fired = append(fired, 2) }) // child scope
+	TruncateAfterCommitTo(ctx, mark)                                             // child scope rolled back
+
+	RunAfterCommitHooks(ctx)
+	assert.Equal(t, []int{0}, fired, "only the pre-mark (parent) hook survives truncation")
+}
+
+func TestAfterCommitMark_NoRegistryIsZeroAndTruncateNoop(t *testing.T) {
+	bare := context.Background()
+	assert.Zero(t, AfterCommitMark(bare))
+	require.NotPanics(t, func() { TruncateAfterCommitTo(bare, 0) })
+}
+
+func TestTruncateAfterCommitTo_OutOfRangeIsNoop(t *testing.T) {
+	ctx, _ := WithAfterCommitRegistry(context.Background())
+	fired := 0
+	RegisterAfterCommit(ctx, func(context.Context) { fired++ })
+	TruncateAfterCommitTo(ctx, 5)  // mark > len → ignored
+	TruncateAfterCommitTo(ctx, -1) // negative → ignored
+	RunAfterCommitHooks(ctx)
+	assert.Equal(t, 1, fired, "out-of-range marks do not corrupt the registry")
+}
+
 func TestRunAfterCommitHooks_PanicLoggedAtWarn(t *testing.T) {
 	var buf bytes.Buffer
 	// Capture at Warn so the test fails if the panic log is dropped to a lower

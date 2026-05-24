@@ -36,7 +36,9 @@ type NoopTxRunner struct{ Calls int }
 func (s *NoopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	s.Calls++
 	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
+	mark := persistence.AfterCommitMark(ctx)
 	if err := fn(ctx); err != nil {
+		persistence.TruncateAfterCommitTo(ctx, mark) // discard this scope's hooks
 		return err
 	}
 	if drainAfterCommit {

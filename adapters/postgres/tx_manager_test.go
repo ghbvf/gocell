@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -121,6 +122,32 @@ func TestRunInTx_Savepoint_DoesNotDrainAfterCommit(t *testing.T) {
 	// drain it after its real Commit.
 	persistence.RunAfterCommitHooks(ctx)
 	assert.True(t, fired, "outer drain fires the hook registered inside the savepoint")
+}
+
+// TestRunInTx_Savepoint_RollbackDiscardsHooks verifies that a savepoint rollback
+// (nested fn error) discards hooks registered inside that scope, so an outer
+// scope that swallows the error and drains does not fire them.
+func TestRunInTx_Savepoint_RollbackDiscardsHooks(t *testing.T) {
+	mock := &mockTx{}
+	ctx := CtxWithTx(context.Background(), mock)
+	ctx = withSavepointDepth(ctx, 0)
+	ctx, top := persistence.WithAfterCommitRegistry(ctx)
+	require.True(t, top)
+
+	tm := &TxManager{pool: nil}
+
+	nestedFired := false
+	sentinel := errors.New("nested unit failed")
+	err := tm.RunInTx(ctx, func(inner context.Context) error {
+		persistence.RegisterAfterCommit(inner, func(context.Context) { nestedFired = true })
+		return sentinel
+	})
+	require.ErrorIs(t, err, sentinel)
+	assert.Equal(t, "ROLLBACK TO SAVEPOINT sp_0", mock.execCalls[len(mock.execCalls)-1])
+
+	// Outer swallows the error and drains: the rolled-back scope's hook must be gone.
+	persistence.RunAfterCommitHooks(ctx)
+	assert.False(t, nestedFired, "savepoint rollback must discard the nested scope's after-commit hooks")
 }
 
 func TestRunInTx_Savepoint_ExecSequence(t *testing.T) {

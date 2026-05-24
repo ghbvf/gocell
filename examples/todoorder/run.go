@@ -36,7 +36,9 @@ type demoTxRunner struct{}
 
 func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
+	mark := persistence.AfterCommitMark(ctx)
 	if err := fn(ctx); err != nil {
+		persistence.TruncateAfterCommitTo(ctx, mark) // discard this scope's hooks
 		return err
 	}
 	if drainAfterCommit {

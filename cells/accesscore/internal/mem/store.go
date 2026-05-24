@@ -124,7 +124,9 @@ type memTxRunner struct{ s *Store }
 // returns true for this store, so they skip locking to avoid a deadlock).
 func (r memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
+	mark := persistence.AfterCommitMark(ctx)
 	if err := r.runLocked(ctx, fn); err != nil {
+		persistence.TruncateAfterCommitTo(ctx, mark) // discard this scope's hooks
 		return err
 	}
 	if drainAfterCommit {

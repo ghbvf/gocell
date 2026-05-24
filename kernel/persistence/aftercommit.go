@@ -82,6 +82,35 @@ func RegisterAfterCommit(ctx context.Context, hook AfterCommitHook) {
 	reg.hooks = append(reg.hooks, hook)
 }
 
+// AfterCommitMark returns the number of hooks currently in the ambient registry
+// — a checkpoint a RunInTx scope captures before running its fn so it can
+// discard exactly the hooks fn registers if fn fails (see TruncateAfterCommitTo).
+// Returns 0 when no registry is present.
+func AfterCommitMark(ctx context.Context) int {
+	reg, ok := ctx.Value(afterCommitRegistryKey{}).(*afterCommitRegistry)
+	if !ok || reg == nil {
+		return 0
+	}
+	return len(reg.hooks)
+}
+
+// TruncateAfterCommitTo discards every hook registered after mark — the hooks of
+// a RunInTx scope whose fn returned an error or panicked. The scope's unit of
+// work was rolled back (a PG savepoint, or simply not committed), so the premise
+// of its after-commit side effects no longer holds and they must not fire even
+// if an enclosing scope swallows the error and commits.
+//
+// Sole callers are TxRunner implementations on their fn-failure path (archtest
+// AFTERCOMMIT-HOOK-PURE-TRANSIENT-01/A3 caller allowlist). A no-op when no
+// registry is present or mark is out of [0, len].
+func TruncateAfterCommitTo(ctx context.Context, mark int) {
+	reg, ok := ctx.Value(afterCommitRegistryKey{}).(*afterCommitRegistry)
+	if !ok || reg == nil || mark < 0 || mark > len(reg.hooks) {
+		return
+	}
+	reg.hooks = reg.hooks[:mark]
+}
+
 // WithAfterCommitRegistry installs a fresh after-commit registry into ctx
 // unless one is already present (a nested RunInTx). The bool reports whether
 // THIS call installed the registry: only the outermost installer is
