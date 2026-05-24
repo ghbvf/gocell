@@ -25,7 +25,6 @@ Project v2 字段 ID 由 skill 阶段 0 用 `gh` 命令动态查询后注入 pro
 PROJECT_NODE_ID, ITERATION_FIELD_ID,
 TODAY_ITERATION_ID, YESTERDAY_ITERATION_ID（可能空）,
 DATE, IS_WEEKEND, WAVE_COUNT (2|4), WAVE_SIZE=5,
-TODAY_ITERATION_ID, YESTERDAY_ITERATION_ID (可能空),
 CARRY_OVER_DISABLED (true 时 brief Warnings 必加 [CARRY-OVER DISABLED]),
 MODE (apply|dry-run),
 WAVE_FIELD_ID（可能空，C3c），wave→wave_option_id 映射（阶段 0 注入）

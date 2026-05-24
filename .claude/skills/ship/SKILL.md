@@ -1,7 +1,7 @@
 ---
 name: ship
 description: "全流程实施：探索→计划→worktree→TDD→实施→PR→review→/fix Cx1/Cx2→人工确认。L1(跳过探索,1 reviewer)/L2(单agent探索,1 reviewer)/L3(默认,三agent探索,按diff行数1/2/3/6 reviewer自动)"
-argument-hint: "[--level=L1|L2|L3] [--from-plan=<path>] <#issue-number 或任务描述>"
+argument-hint: "[--level=L1|L2|L3] (<#issue-number 或任务描述> | --from-plan=<path>)"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
@@ -11,7 +11,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 剥离 `--level=` 和 `--from-plan=` flag 后，剩余参数匹配 `^#?[0-9]+$` 时视为 issue 号，先 `gh issue view <N> --json title,body,labels,state`（`dangerouslyDisableSandbox: true`）拉取作为任务上下文；后续阶段以 issue title/body 替代自由文本任务描述，阶段 6 PR body 追加 `Closes #<N>`。`state != "OPEN"`（CLOSED / MERGED 等）或 `gh issue view` 失败均用 AskUserQuestion 让用户裁定是否继续。
 
-`--from-plan=<path>` 与 positional issue 号参数**互斥**——同时给出时用 AskUserQuestion 让用户裁定使用哪个。`--from-plan` 触发"plan-driven 模式"，见阶段 0.5。
+**`--from-plan=<path>` 与 positional issue 号参数互斥，不能同时传。** 同时给出时用 AskUserQuestion 让用户裁定使用哪个。`--from-plan` 触发"plan-driven 模式"，见阶段 0.5。
 
 ## 等级
 
@@ -41,6 +41,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 本阶段仅在传入 `--from-plan=<path>` 时执行；传入 issue 号时跳过，直接进阶段 1。
 
+> `<path>` 来自 `/daily-planner --apply` 输出的 `PLAN_PATH`（daily-planner 阶段 5 会在终端显式输出该路径）。
+
 ```bash
 # 读取 plan.json（daily-planner 产出）
 PLAN_PATH="<path>"   # --from-plan 的值
@@ -66,13 +68,30 @@ for group_id in $(echo "$groups" | jq -r '.[]'); do
       break
     fi
   done
-  if ! $group_done; then
+  if $group_done; then
+    echo "INFO: group $group_id 已完成（PR 全 MERGED/CLOSED），跳过" >&2
+  else
     echo "INFO: 启动 group $group_id（issues: $group_issues）" >&2
     # 对 group 内每个 issue 并行起 /ship #N 流程（复用下方 issue-number 路径）
     # 组内 >4 个 issue → 子批，每批 ≤4 并行
     break
   fi
 done
+# 若所有 group 均已完成（循环未 break），提示用户
+all_complete=true
+for group_id in $(echo "$groups" | jq -r '.[]'); do
+  group_issues=$(echo "$entries" | jq -r --argjson g "$group_id" '[.[] | select(.parallel_group==$g) | .issue_number] | .[]')
+  for n in $group_issues; do
+    pr_state=$(gh pr list --repo ghbvf/gocell --search "#$n" --json state -q '.[0].state // "NONE"' 2>/dev/null || echo "NONE")
+    if [[ "$pr_state" != "MERGED" && "$pr_state" != "CLOSED" ]]; then
+      all_complete=false
+      break 2
+    fi
+  done
+done
+if $all_complete; then
+  echo "INFO: 全部 parallel_group 已完成，无新 group 可启动" >&2
+fi
 ```
 
 **幂等重跑**：每次 `/ship --from-plan=<path>` 调用只启动第一个未完成的 group；人工 review/merge 本组 PR 后，重跑 `/ship --from-plan=<path>` 继续下一 group。状态从 PR 派生，无本地持久化。
@@ -188,25 +207,28 @@ ITEM_ID=$(gh api graphql -f query='query($proj: ID!, $num: Int!) {
 }
 
 # 查当前 Status，仅 Backlog/Ready → In progress；已是 In review 不覆盖
-CURRENT_STATUS=$(gh api graphql -f query='query($id: ID!) {
+# fail-CLOSED：查询失败时 WARN + 跳过写入（不写比误覆盖 In review 安全）
+if ! CURRENT_STATUS=$(gh api graphql -f query='query($id: ID!) {
   node(id: $id) { ... on ProjectV2Item {
     status: fieldValueByName(name:"Status") {
       ... on ProjectV2ItemFieldSingleSelectValue { name }
     }
   }}
-}' -f id="$ITEM_ID" --jq '.data.node.status.name // ""' 2>/dev/null || true)
-
-if [[ "$CURRENT_STATUS" == "In review" ]]; then
-  echo "INFO: issue #$ISSUE_NUMBER already In review; skipping Status write (In review owned by Project v2 workflow)" >&2
+}' -f id="$ITEM_ID" --jq '.data.node.status.name // ""' 2>&1); then
+  echo "WARN: failed to query current Status for issue #$ISSUE_NUMBER; skipping Status write to avoid overwriting In review" >&2
 else
-  gh api graphql -f query='mutation($proj: ID!, $item: ID!, $field: ID!, $opt: String!) {
-    updateProjectV2ItemFieldValue(input: {
-      projectId: $proj, itemId: $item, fieldId: $field,
-      value: { singleSelectOptionId: $opt }
-    }) { projectV2Item { id } }
-  }' -f proj="$PROJECT_NODE_ID" -f item="$ITEM_ID" \
-     -f field="$STATUS_FIELD_ID" -f opt="$IN_PROGRESS_OPTION_ID"
-  echo "INFO: issue #$ISSUE_NUMBER Status → In progress" >&2
+  if [[ "$CURRENT_STATUS" == "In review" ]]; then
+    echo "INFO: issue #$ISSUE_NUMBER already In review; skipping Status write (In review owned by Project v2 workflow)" >&2
+  else
+    gh api graphql -f query='mutation($proj: ID!, $item: ID!, $field: ID!, $opt: String!) {
+      updateProjectV2ItemFieldValue(input: {
+        projectId: $proj, itemId: $item, fieldId: $field,
+        value: { singleSelectOptionId: $opt }
+      }) { projectV2Item { id } }
+    }' -f proj="$PROJECT_NODE_ID" -f item="$ITEM_ID" \
+       -f field="$STATUS_FIELD_ID" -f opt="$IN_PROGRESS_OPTION_ID"
+    echo "INFO: issue #$ISSUE_NUMBER Status → In progress" >&2
+  fi
 fi
 ```
 

@@ -30,8 +30,21 @@
 ```bash
 # daily-planner（离线 Part A，无需 gh auth）
 bash .claude/skills/daily-planner/test/smoke.sh
+```
 
-# 输出示例
+**通过判定标准**：
+
+- 退出码 0 = 通过（所有 case pass）
+- 退出码 1 = 失败（至少一个 case fail）
+- 最后一行输出包含计数摘要，格式为：
+
+```
+# Summary: N pass, 0 fail
+```
+
+其中 `0 fail` 是通过的必要条件。示例（12 个 case 全部通过）：
+
+```
 # Summary: 12 pass, 0 fail
 ```
 

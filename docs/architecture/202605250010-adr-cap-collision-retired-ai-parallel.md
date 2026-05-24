@@ -47,6 +47,8 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 
 新引入的 enforcement：CI smoke job（`pr-check.yml skill-daily-planner-smoke`）= 测试行为，ai-robust §适用范围外，同样不评级。
 
+`apply-gate.sh` 新增的 `parallel_group`（int ≥ 1 校验）与 `wave_option_id`（已知 option ID 成员校验）runtime invariant guard：这两条是 **bootstrap 期 fail-fast 校验**（shell 脚本在执行前验证 plan.json schema，校验失败 exit 1 阻断后续操作），对应 ai-robust 章程"governance rule — bootstrap 期 fail-fast 校验"载体，评级 **Medium**（runtime guard，依赖运行时执行校验脚本；非 Go type system Hard，无 archtest 静态锁）。
+
 ## 威胁模型
 
 删除 CAP COLLISION 后各风险的覆盖情况：
