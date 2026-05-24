@@ -74,6 +74,10 @@ func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
 		}
 	}()
 
+	// Subscriber keeps a real clock: the FakeClock only needs to gate the
+	// connection-level reconnect backoff. The subscriber clock drives the
+	// graceful-drain timer, which this scenario never enters (the propagation
+	// path is consumeLoop→awaitReconnect→WaitConnected, no subscriber timer).
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange: "test.terminal.dlx",
 		Clock:       clock.Real(),

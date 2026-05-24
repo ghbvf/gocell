@@ -862,6 +862,12 @@ func (c *Connection) handleReconnectError(err error, attempt int) {
 // handling): on wake, callers re-read permanentErr under RLock and, finding
 // it non-nil, return it. permanentErr is cleared by markRecovered when a
 // later dial succeeds.
+//
+// INVARIANT: must close-and-replace the connected channel on EVERY permanent
+// dial cycle, not once-only. A WaitConnected caller that read the channel after
+// a prior swap is parked on a still-open channel and relies on this cycle's
+// close to be woken. Making it once-only would re-introduce a lost-wakeup; the
+// guard is TestWaitConnected_WokenAcrossPermanentChannelSwaps (see #930).
 func (c *Connection) markPermanent(cause error, sanitizedErr string) {
 	c.mu.Lock()
 	c.permanentErr = errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnectPermanent,
