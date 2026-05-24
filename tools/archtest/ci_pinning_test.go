@@ -272,32 +272,78 @@ updates:
 	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))
 }
 
+// TestDependabotCoversCIAndGolangCILintToleratesUnmodeledFields locks the
+// guard's tolerant-evolution contract: dependabot.yml legitimately carries
+// orchestration fields the guard does not assert on — ignore (with full
+// dependency-name/versions/update-types), open-pull-requests-limit, labels.
+// The validator must check only the coverage invariant (root github-actions
+// covers golangci + root gomod) and stay tolerant of schema growth, matching
+// the other validators in this file (validateGeneratedArtifactGates /
+// validateCodegenJobStructure). A strict KnownFields(true) decode here would
+// red on every new dependabot field while adding nothing to the assertion —
+// that fragility caused #925. This test prevents a "helpful" reintroduction
+// of strict decode.
+func TestDependabotCoversCIAndGolangCILintToleratesUnmodeledFields(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      golangci-lint:
+        patterns:
+          - "golangci/golangci-lint-action"
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "mvdan.cc/gofumpt"
+        versions:
+          - "0.10.0"
+        update-types:
+          - "version-update:semver-minor"
+    groups:
+      go-other:
+        patterns:
+          - "*"
+`)
+	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))
+}
+
+// dependabotConfig models only the fields validateDependabotCoversCIAndGolangCILint
+// asserts on. The decode is intentionally tolerant (no KnownFields(true)):
+// dependabot.yml legitimately grows orchestration fields (ignore /
+// open-pull-requests-limit / labels / reviewers / …) that the coverage guard
+// does not care about, and strict decode would red on each one while adding
+// nothing to the assertion (a typo in a field the guard *does* read collapses
+// it to its zero value, so the pattern match fails and the guard reds anyway).
+// Matches the tolerant decode in validateGeneratedArtifactGates /
+// validateCodegenJobStructure. See #925.
 type dependabotConfig struct {
-	Version int                `yaml:"version"`
 	Updates []dependabotUpdate `yaml:"updates"`
 }
 
 type dependabotUpdate struct {
 	PackageEcosystem string                     `yaml:"package-ecosystem"`
 	Directory        string                     `yaml:"directory"`
-	Schedule         dependabotSchedule         `yaml:"schedule"`
 	Groups           map[string]dependabotGroup `yaml:"groups"`
 }
 
-type dependabotSchedule struct {
-	Interval string `yaml:"interval"`
-}
-
 type dependabotGroup struct {
-	Patterns        []string `yaml:"patterns"`
-	ExcludePatterns []string `yaml:"exclude-patterns"`
+	Patterns []string `yaml:"patterns"`
 }
 
 func validateDependabotCoversCIAndGolangCILint(body []byte) error {
 	var cfg dependabotConfig
-	dec := yaml.NewDecoder(bytes.NewReader(body))
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
+	if err := yaml.Unmarshal(body, &cfg); err != nil {
 		return fmt.Errorf("parse dependabot.yml: %w", err)
 	}
 
