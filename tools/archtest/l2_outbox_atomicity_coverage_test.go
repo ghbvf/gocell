@@ -372,6 +372,14 @@ func l2IsNamedFrom(t types.Type, pkgPath, typeName string) bool {
 }
 
 // l2BuildExpectedNames constructs the complete deduplicated expected-name set.
+//
+// Granularity is per-UNIT: one canonical TestL2Atomicity_<pkg>_RollsBack per L2
+// slice (+ _ReplayIdempotent for hybrid), matching issue #876's stated scope.
+// A slice's individual outbox-mutation paths (e.g. configwrite Create/Update/
+// Delete) are NOT separately required here — their *_RollsBack_<Mutation> tests
+// are intentional defense-in-depth, documented in the ADR as outside this gate.
+// per-mutation Hard derivation (from RunInTx-emitting Service methods) is tracked
+// in backlog #957; do NOT hand-list mutation suffixes here (Medium regression).
 func l2BuildExpectedNames(units []l2Unit, sliceInfos map[string]l2SliceInfo) map[string]struct{} {
 	expected := make(map[string]struct{})
 

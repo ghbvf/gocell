@@ -115,7 +115,7 @@ archtest 将期望名集合与实际 `go/ast` FuncDecl 精确名 match，任何�
 
 - per-unit gate 已完整满足 #876 的 Hard 验收（每个 L2 单元必须有原子性证明）。
 - per-mutation Hard 强制是 #876 之上的增强；其唯一 AI-robust 正解是从 Service「调 `RunInTx` 的 exported emitting method」typed 派生期望名（避免手列 suffix 这一 Medium 倒退）。该派生对 identitymanage（6 个 emitting method）等多 mutation slice 会显著扩展 E2E 测试面，且 `sessionlogin.IssueForUser` 等非-HTTP internal 路径无法经 E2E harness 驱动——实为 Cx4，与本 PR 体量不成比例。
-- 故按 `feedback_pr_scope_carveouts_must_backlog` 登记为独立 backlog（cap-14 / type-test / pri-p2）跟踪 per-mutation typed 派生升级，不在本 PR 内做、也不以手列 suffix 临时打补丁。
+- 故按 `feedback_pr_scope_carveouts_must_backlog` 登记为独立 backlog **#957**（cap-14 / type-test / pri-p2）跟踪 per-mutation typed 派生升级，不在本 PR 内做、也不以手列 suffix 临时打补丁。
 
 ---
 
