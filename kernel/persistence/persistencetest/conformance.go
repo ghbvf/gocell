@@ -8,14 +8,16 @@
 // contract-fanout.md 载体 2+3): the RunInTx contract now requires installing an
 // after-commit registry and draining it after the outermost commit. A new
 // TxRunner that forgets to wire this fails the suite.
+//
+// Assertions use the standard library only — kernel/ packages are isolated from
+// testify by depguard, matching the sibling kernel conformance suites
+// (kernel/outbox/outboxtest, kernel/command/commandtest).
 package persistencetest
 
 import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
@@ -37,11 +39,17 @@ func RunAfterCommitConformance(t *testing.T, runner persistence.TxRunner) {
 		fired := 0
 		err := runner.RunInTx(context.Background(), func(ctx context.Context) error {
 			persistence.RegisterAfterCommit(ctx, func(context.Context) { fired++ })
-			require.Zero(t, fired, "hook must not run inline within the tx body")
+			if fired != 0 {
+				t.Errorf("hook ran inline within the tx body; got fired=%d, want 0", fired)
+			}
 			return nil
 		})
-		require.NoError(t, err)
-		require.Equal(t, 1, fired, "hook fires exactly once after a successful commit")
+		if err != nil {
+			t.Fatalf("RunInTx returned error on success path: %v", err)
+		}
+		if fired != 1 {
+			t.Errorf("after-commit hook fired %d times, want exactly 1", fired)
+		}
 	})
 
 	t.Run("skips_hook_when_fn_errors", func(t *testing.T) {
@@ -51,7 +59,11 @@ func RunAfterCommitConformance(t *testing.T, runner persistence.TxRunner) {
 			persistence.RegisterAfterCommit(ctx, func(context.Context) { fired = true })
 			return sentinel
 		})
-		require.ErrorIs(t, err, sentinel)
-		require.False(t, fired, "hook must not fire when the tx is rolled back")
+		if !errors.Is(err, sentinel) {
+			t.Errorf("RunInTx error = %v, want sentinel %v", err, sentinel)
+		}
+		if fired {
+			t.Error("after-commit hook fired on a rolled-back tx; want no fire")
+		}
 	})
 }
