@@ -43,7 +43,8 @@
 //   - Reflection-based construction: out of scope, treated as theoretical.
 //
 // Carve-outs (allowlisted, backlog #890: migrate to pgclone): cmd/corebundle,
-// tests/integration, examples/iotdevice, cells/accesscore/slices/identitymanage —
+// tests/integration/outbox_fullchain_test.go (exact file — l2atomicity migrated
+// to pgclone in #598), examples/iotdevice, cells/accesscore/slices/identitymanage —
 // each has a distinct container need (full-app e2e harness / independent
 // migration set / full-chain). They are NOT the adapters/postgres bottleneck.
 // Per ai-robust.md §Funnel 双向锁评级, this Medium-upstream transition form is
@@ -73,10 +74,13 @@ const pgTestcontainerModulePath = "github.com/testcontainers/testcontainers-go/m
 var pgTestcontainerFunnelAllowlist = []string{
 	"tests/testutil/pgclone/", // the sanctioned holder
 	// Backlog #890: migrate these to pgclone. Each has a distinct container need:
-	"cmd/corebundle/",                         // full-app e2e + outbox wiring harness
-	"tests/integration/",                      // backlog #890: only outbox_fullchain_test.go now — l2atomicity migrated to pgclone (#598)
-	"examples/iotdevice/",                     // example with its own PG migration set
-	"cells/accesscore/slices/identitymanage/", // single-service PG adapter test
+	"cmd/corebundle/", // full-app e2e + outbox wiring harness
+	// Exact file, not the tests/integration/ tree: l2atomicity migrated to
+	// pgclone (#598), leaving outbox_fullchain_test.go as the sole direct caller.
+	// A new per-test container anywhere else under tests/integration/ now fails.
+	"tests/integration/outbox_fullchain_test.go", // backlog #890: full-chain harness
+	"examples/iotdevice/",                        // example with its own PG migration set
+	"cells/accesscore/slices/identitymanage/",    // single-service PG adapter test
 }
 
 // TestPG_TESTCONTAINER_FUNNEL_01 fails if any file outside the allowlist calls
@@ -90,6 +94,21 @@ func TestPG_TESTCONTAINER_FUNNEL_01(t *testing.T) {
 	assert.Empty(t, findings,
 		"tcpostgres.Run must appear only in tests/testutil/pgclone (or the backlogged carve-outs); "+
 			"use pgclone.CloneDSN/EmptyDSN (or pgshare.NewPerTestPool) instead of starting a per-test container")
+}
+
+// TestPG_TESTCONTAINER_FUNNEL_01_AllowlistBoundary pins the #598 narrowing: the
+// tests/integration carve-out is the exact outbox_fullchain_test.go file, not
+// the whole tree. It guards against (a) a typo in the exact path that would stop
+// matching the real caller, and (b) re-widening the entry back to a directory
+// prefix that would silently re-admit l2atomicity or any future sibling.
+func TestPG_TESTCONTAINER_FUNNEL_01_AllowlistBoundary(t *testing.T) {
+	t.Parallel()
+	assert.True(t, pgFunnelAllowed("tests/integration/outbox_fullchain_test.go"),
+		"the sole full-chain caller must stay allowlisted")
+	assert.False(t, pgFunnelAllowed("tests/integration/l2atomicity/harness_test.go"),
+		"l2atomicity migrated to pgclone (#598); it must not be re-admitted by a tree-wide prefix")
+	assert.False(t, pgFunnelAllowed("tests/integration/some_new_test.go"),
+		"a new tests/integration file must not be allowlisted by a tree-wide prefix")
 }
 
 func collectPGTestcontainerRunFindings(t *testing.T, root string) []string {

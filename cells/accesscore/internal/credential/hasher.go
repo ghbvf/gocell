@@ -14,9 +14,18 @@
 //     bcrypt.MinCost so the ~1.5s/hash (cost 12 under -race) does not dominate
 //     unit/integration suites.
 //
-// Hasher is an interface backed by an unexported impl, so external packages
-// cannot construct a zero-cost hasher; a missing dependency is a nil interface
-// caught by the standard validateRequired() funnel (REQUIRED-DEP-NIL-GUARD-01).
+// Hasher is a sealed interface: the unexported isCredentialHasher marker means
+// bcryptHasher is its only possible implementation. External packages can
+// neither construct one nor supply a foreign (plaintext / zero-cost) hasher
+// through accesscore.WithPasswordHasher — that bypass is unexpressible at the
+// type level (AI-robust Hard). A missing dependency is a nil interface caught
+// by the standard validateRequired() funnel (REQUIRED-DEP-NIL-GUARD-01).
+//
+// The seal closes only the foreign-implementation vector. The remaining
+// weak-cost vector — production code calling the exported NewTestHasher with a
+// low cost — is not a type-level concern and stays guarded by
+// BCRYPT-COST-FUNNEL-01 rule A2's caller allowlist (upstream Medium; Hard-ization
+// tracked by backlog #901). Do not claim the seal makes the whole funnel Hard.
 //
 // ref: go-gitea/gitea modules/auth/password/hash/bcrypt.go — cost as a hasher
 // field chosen at construction; ory/kratos hash/hasher_bcrypt.go — production
@@ -31,12 +40,16 @@ import "golang.org/x/crypto/bcrypt"
 const ProductionCost = 12
 
 // Hasher hashes a plaintext password. Implementations are obtained from
-// NewProductionHasher / NewTestHasher; the cost is bound at construction.
+// NewProductionHasher / NewTestHasher; the cost is bound at construction. The
+// interface is sealed (isCredentialHasher) — see the package doc.
 type Hasher interface {
 	// Hash returns the bcrypt hash of password as a string suitable for storage
 	// in User.PasswordHash. The error is bcrypt's, unwrapped — callers add their
 	// own context.
 	Hash(password []byte) (string, error)
+	// isCredentialHasher seals the interface to this package: only bcryptHasher
+	// implements it, so no external (weak / plaintext) Hasher can be wired in.
+	isCredentialHasher()
 }
 
 // bcryptHasher is the only Hasher implementation. Unexported so external
@@ -53,6 +66,8 @@ func NewProductionHasher() Hasher { return bcryptHasher{cost: ProductionCost} }
 // to keep wall-time low. BCRYPT-COST-FUNNEL-01 rule A2 restricts callers to
 // test code.
 func NewTestHasher(cost int) Hasher { return bcryptHasher{cost: cost} }
+
+func (bcryptHasher) isCredentialHasher() {}
 
 func (h bcryptHasher) Hash(password []byte) (string, error) {
 	b, err := bcrypt.GenerateFromPassword(password, h.cost)

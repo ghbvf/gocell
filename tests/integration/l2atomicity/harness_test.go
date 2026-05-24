@@ -385,7 +385,7 @@ func buildCells(
 		accesscore.WithBootstrapAuth(a.bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 		// Low-cost hasher so seedAdmin + login don't pay bcrypt cost-12 per test.
-		accesscore.WithPasswordHasher(accesscoretest.MinCostPasswordHasher()),
+		accesscoretest.MinCostPasswordHasherOption(),
 	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),

@@ -87,7 +87,7 @@ const (
 // accesscoretest is the sanctioned bridge letting external test packages (e.g.
 // tests/integration harnesses, which cannot import the internal credential
 // package under Go's internal rule) obtain a low-cost hasher via
-// accesscoretest.MinCostPasswordHasher(). That accesscoretest is imported ONLY
+// accesscoretest.MinCostPasswordHasherOption(). That accesscoretest is imported ONLY
 // by tests is a convention, not a compiler-enforced barrier — this is the
 // upstream-Medium edge of the funnel (A1/A2 downstream are Hard). The
 // Hard-ization path is a generic "test-support packages imported only by
