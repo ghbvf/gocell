@@ -33,11 +33,11 @@ L4  领域应用 Domain Application               本文 §4（基于 examples/�
 
 ---
 
-## 1. 能力单元（14 项）
+## 1. 能力单元（15 项）
 
 每条目结构：能力名 + 公理对应 + 主要包组合 + 对外接口 / 契约。能力单元是「可独立交付价值的最小技术封装」——拆得更小就失去意义，合得更大就破坏关注点分离。
 
-### 1.A 框架公理能力（7 项，对应 A1-A4）
+### 1.A 框架公理能力（8 项，对应 A1-A4）
 
 | # | 能力 | 公理 | 包组合 | 对外接口 / 契约 |
 |---|---|---|---|---|
@@ -48,6 +48,7 @@ L4  领域应用 Domain Application               本文 §4（基于 examples/�
 | 7 | **事务性事件发布（Outbox Producer）** | A3 | `kernel/outbox` + `runtime/outbox` + `adapters/postgres` | `outbox.Writer.Write(ctx, Entry{Topic,Payload,IdempotencyKey})` 同事务原子写 |
 | 8 | **异步事件消费（Subscriber + Claimer）** | A3 | `kernel/{outbox,idempotency}` + `runtime/eventrouter` + `adapters/{redis,rabbitmq}` | `outbox.Subscriber` + 两阶段 `Claim/Commit/Release` + `HandleResult.Disposition`（Ack/Requeue/Reject） |
 | 12 | **启停编排（Bootstrap）** | A2 | `runtime/bootstrap` + `runtime/shutdown` | `bootstrap.Boot(ctx, opts)` 串 phase 0–10 + LIFO teardown + readiness flip |
+| 15 | **Saga/Workflow 编排（L3）** | A3 | `kernel/saga` + `kernel/saga/journal` + `runtime/saga`（Coordinator，PR-03+）+ `adapters/postgres/saga`（PR-04） | append-only `journal.Journal`（Enqueue/Append/ClaimPending/Heartbeat/MarkTerminal）+ `saga.Status` L3 状态机 + 9-kind 事件溯源（含终态 kind + CompensationStarted）+ lease-fenced Coordinator（PR-03+ 运行时在建）|
 
 ### 1.B 支撑能力（7 项）
 
@@ -62,6 +63,8 @@ L4  领域应用 Domain Application               本文 §4（基于 examples/�
 | 14 | **代码生成与治理工具链** | `tools/{archtest,codegen,depgraph,e2egate,metricschema,generatedverify}` + `cmd/gocell` 8 子命令 | `gocell {validate,scaffold,generate,check,verify,graph,export,dispatch}` + `cellgen` / `contractgen`（K#04/06）|
 
 > 说明：能力 14 仅在编译期 / CI 期消费，不进生产二进制（runtime 不 link `tools/*`）。
+>
+> 说明：能力 15（Saga/Workflow 编排）是 004 capability-gap 缺口 2 / 005 roadmap W6 正在补齐的 L3 运行时能力。kernel 词汇（`kernel/saga` 状态机 + `kernel/saga/journal` append-only Journal）已落地（PR-01/02，plan `docs/plans/202605230231-046-saga-l3-workflow-implementation-plan.md`）；`runtime/saga` Coordinator、leader-elect、executor、PG store、contractgen `kind:saga` 在 PR-03–PR-09 在建（gh epic + 子 issue 跟踪）。
 
 ---
 
