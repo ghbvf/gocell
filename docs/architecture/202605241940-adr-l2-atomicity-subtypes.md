@@ -6,7 +6,7 @@ Accepted (2026-05-24)
 
 ## Implementation
 
-PR 在分支 `062-l2-atomicity-coverage`（TBD）
+PR #950（分支 `062-l2-atomicity-coverage`）
 
 ## Closes
 
@@ -108,6 +108,8 @@ archtest 将期望名集合与实际 `go/ast` FuncDecl 精确名 match，任何�
 **`_BodyAssertsRollback` 为何不升 Hard**：判定"函数体是否真的断言了 rollback 语义"等价于判定函数语义等价性，属 Go 静态分析不可判定（undecidable）范围；不存在低成本且正确的 Hard 路径。该 Medium 项是实际语义边界，非技术债务，不开 backlog 追踪，文档注明即可。
 
 形态参照 `.claude/rules/gocell/ai-robust.md` §"Hard 范本目录"中的"codegen funnel + golden"（metadata-driven 枚举 + 代码 SoR 派生）与"string-typed concept funnel"（类型信息精确解析代替字符串启发式）的近亲组合。
+
+**Enforcement 运行位置（nightly，非 PR-time）**：`L2-OUTBOX-ATOMICITY-COVERAGE-01` 由 `archtest-nightly.yml`（16-shard）执行；**不**纳入 PR-time `hack/verify-archtest-invariants.sh`。后者由 ADR `202605120000` §Amendment 2026-05-23 §D8 冻结为 4 类核心运行时 invariant（clock / duration / testtime / panic），扩充该集合需另行 amend 该 ADR，不在本 PR 范围。本 coverage gate 选择 nightly 的理由：(1) 它守护的是 integration 测试的**存在性**，而被守护的测试本身 `//go:build integration` 依赖 Docker、只在 CI integration 分片实跑，PR-time 无法验证其真实通过；(2) `RunTypedProduction` 全量 typed-load 成本与 nightly 预算更匹配。新 L2 单元漏测试 → 当晚 nightly 红 + 本地 `make verify` 即时红。若未来需 PR-time 即时阻断，走 ADR `202605120000` §D8 amendment 把本 ID 加入冻结集（届时按 §"ADR amendment 落地必查"逐行重评威胁矩阵）。
 
 ---
 

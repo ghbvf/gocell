@@ -52,13 +52,22 @@
 //     downstream AST scan uses DirsScope+IncludeTests.
 //   - types.Unalias: Go 1.22+; must be applied before (*types.Named) assert.
 //   - Blind spot B1 (Medium): service.go Service type renamed away from
-//     "Service" → ServiceLookupTotal self-check catches this.
+//     "Service", OR Service present but non-Named / nil defining pkg → all
+//     such degraded resolutions set serviceFound=false and are caught by
+//     TestL2OutboxAtomicityCoverage_ServiceLookupTotal.
 //   - Blind spot B2 (Medium): auditappend* de-aliases (removes `type Service
-//     = appender.Service`) → AliasFoldsToSinglePackage self-check catches.
-//   - Blind spot B3 (Hard, via DetectsMissingName): matcher fails-open →
-//     synthetic non-existent name self-check proves it fails-closed.
-//   - Blind spot B4 (Medium, BodyAssertsRollback): body content is semantic
-//     best-effort; documented as inherent-Medium.
+//     = appender.Service`) → TestL2OutboxAtomicityCoverage_AliasFoldsToSinglePackage.
+//   - Blind spot B3 (Hard, via TestL2OutboxAtomicityCoverage_DetectsMissingName):
+//     matcher fails-open → synthetic non-existent name proves it fails-closed.
+//   - Blind spot B4 (Medium, TestL2OutboxAtomicityCoverage_BodyAssertsRollback):
+//     "does the body truly assert rollback" is semantic-equivalence (undecidable,
+//     Rice's theorem) — no sound low-cost Hard path exists, so this stays Medium
+//     by nature (NOT deferred tech debt; no backlog issue). Scans idents AND
+//     string-literal messages for rollback-specific vocabulary.
+//   - Blind spot B5 (Medium): if typed resolution misses a slice entirely
+//     (package load failure), l2BuildExpectedNames falls back to the sliceDir
+//     string for the expected name; ServiceLookupTotal surfaces the miss as a
+//     visible failure rather than silently degrading.
 //
 // ref: seed_role_iface_test.go (alias detection form precedent)
 // ref: assembly_invariants_test.go (YAML + typed multi-phase structure)
@@ -106,8 +115,9 @@ type l2Unit struct {
 
 // l2SliceInfo records typed resolution for one L2 slice package.
 type l2SliceInfo struct {
-	defPkgName string // package name of the defining (Unalias'd) type
-	isHybrid   bool   // Service has HandleEvent method matching the L2 hybrid signature
+	defPkgName   string // package name of the defining (Unalias'd) type
+	isHybrid     bool   // Service has HandleEvent method matching the L2 hybrid signature
+	serviceFound bool   // true ONLY when Service resolved fully (obj→Named→defPkg); false on any fallback
 }
 
 // TestL2OutboxAtomicityCoverage is the primary enforcement test.
@@ -294,8 +304,9 @@ func l2ResolveServiceInfo(pkg *types.Package, modPath string) l2SliceInfo {
 
 	isHybrid := l2ServiceIsHybrid(named, modPath)
 	return l2SliceInfo{
-		defPkgName: defPkg.Name(),
-		isHybrid:   isHybrid,
+		defPkgName:   defPkg.Name(),
+		isHybrid:     isHybrid,
+		serviceFound: true, // full resolution: obj → Named → defPkg all succeeded
 	}
 }
 
@@ -475,8 +486,11 @@ func l2MatchName(name string, testFuncs map[string]l2TestFuncInfo) bool {
 // silently without this guard.
 //
 // AI-robust: Medium (archtest-bound; a rename makes it fail visibly).
-// Blind spot: Service present but of wrong kind (e.g. func) — rare, caught by
-// l2ResolveServiceInfo fallback and subsequent RED in the main test.
+// Checks info.serviceFound (set true ONLY on the full obj→Named→defPkg path),
+// not defPkgName != "" — the fallback returns also set a non-empty pkg.Name(),
+// so a "Service present but non-Named / nil defPkg / absent" degradation would
+// pass a defPkgName check while silently bypassing the typed-derivation Hard
+// guarantee. serviceFound closes that blind spot.
 func TestL2OutboxAtomicityCoverage_ServiceLookupTotal(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -492,7 +506,7 @@ func TestL2OutboxAtomicityCoverage_ServiceLookupTotal(t *testing.T) {
 			continue
 		}
 		info, found := infos[u.sliceDir]
-		if !found || info.defPkgName == "" {
+		if !found || !info.serviceFound {
 			missing = append(missing, u.cellID+"/"+u.sliceDir)
 		}
 	}
@@ -637,17 +651,29 @@ func l2AssertBodyHasAssertion(t *testing.T, name string, fd *ast.FuncDecl, rel s
 			hasAssertion = true
 		}
 	})
-	// Check for rollback-shaped identifiers.
+	// Check for rollback-specific vocabulary in BOTH identifiers and
+	// string-literal assertion messages. The rollback intent in these tests
+	// lives predominantly in assert/require message strings ("MUST NOT persist",
+	// "rolled back") rather than identifiers, so scanning ast.BasicLit is what
+	// gives this check signal beyond hasAssertion. Generic tokens (equal/count)
+	// are deliberately excluded: nearly every test references assert.Equal or a
+	// count helper, so including them would collapse hasRollbackShape into
+	// hasAssertion (the trivially-true degenerate the reviewer flagged).
+	isRollbackToken := func(s string) bool {
+		s = strings.ToLower(s)
+		return strings.Contains(s, "rollback") || strings.Contains(s, "roll back") ||
+			strings.Contains(s, "persist") || strings.Contains(s, "unchanged") ||
+			strings.Contains(s, "notexist") || strings.Contains(s, "notfound") ||
+			strings.Contains(s, "must not")
+	}
 	hasRollbackShape := false
 	EachInSubtree[ast.Ident](fd.Body, func(id *ast.Ident) {
-		if hasRollbackShape {
-			return
+		if !hasRollbackShape && isRollbackToken(id.Name) {
+			hasRollbackShape = true
 		}
-		name := strings.ToLower(id.Name)
-		if strings.Contains(name, "rollback") || strings.Contains(name, "zero") ||
-			strings.Contains(name, "notexist") || strings.Contains(name, "notfound") ||
-			strings.Contains(name, "empty") || strings.Contains(name, "count") ||
-			strings.Contains(name, "equal") {
+	})
+	EachInSubtree[ast.BasicLit](fd.Body, func(lit *ast.BasicLit) {
+		if !hasRollbackShape && lit.Kind == token.STRING && isRollbackToken(lit.Value) {
 			hasRollbackShape = true
 		}
 	})
@@ -659,7 +685,8 @@ func l2AssertBodyHasAssertion(t *testing.T, name string, fd *ast.FuncDecl, rel s
 	}
 	if !hasRollbackShape {
 		t.Errorf("%s BodyAssertsRollback: %s:%s has no rollback-shaped assertion "+
-			"(count/equal/notexist/rollback reference; Medium — best-effort)",
+			"(rollback/persist/unchanged/must-not reference in ident or message; "+
+			"Medium — best-effort)",
 			ruleL2AtomicityCoverage, rel, name)
 	}
 }
