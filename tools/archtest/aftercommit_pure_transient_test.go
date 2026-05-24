@@ -35,7 +35,7 @@
 //	   Medium upstream (no type-level seal: the five runners span
 //	   cells+examples+adapters+kernel, so there is no shared internal/ boundary to
 //	   make the call unrepresentable elsewhere). Upstream Hard-seal tracked in
-//	   docs/backlog.md (AFTERCOMMIT-DRAIN-CALLER-SEAL).
+//	   gh issue #920 (AFTERCOMMIT-DRAIN-CALLER-SEAL).
 //
 // Blind spots (ai-robust 强制反向自检; each has a reverse self-test below):
 //
