@@ -32,8 +32,43 @@
             "type": "string",
             "description": "The role this slice plays in the contract.",
             "enum": ["serve", "call", "publish", "subscribe", "handle", "invoke", "provide", "read"]
+          },
+          "handler": {
+            "type": "string",
+            "description": "Consumer handler method name on the slice's service struct. REQUIRED for role=subscribe, forbidden otherwise."
+          },
+          "group": {
+            "type": "string",
+            "description": "Broker consumer group for role=subscribe. Optional; defaults to the owning cell ID when empty. Forbidden for non-subscribe roles."
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "role": { "const": "subscribe" } },
+              "required": ["role"]
+            },
+            "then": {
+              "required": ["handler"]
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "properties": { "role": { "const": "subscribe" } },
+                "required": ["role"]
+              }
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  { "required": ["handler"] },
+                  { "required": ["group"] }
+                ]
+              }
+            }
+          }
+        ]
       }
     },
     "verify": {

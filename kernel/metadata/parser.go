@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -88,6 +89,8 @@ func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
 	}
 
 	applyAssemblyDerivations(pm)
+	deriveEventSubscribers(pm)
+	deriveSubscribeVerifyContract(pm)
 
 	return pm, nil
 }
@@ -521,4 +524,78 @@ func contractYAMLHasKey(node *yaml.Node, key string) bool {
 		}
 	}
 	return false
+}
+
+// deriveEventSubscribers adds slices' owning cell IDs to the Subscribers list of
+// any event contract they subscribe to via contractUsages[role=subscribe]. The
+// result is the union of what contract.yaml already declares and what slice.yaml
+// derives — deduped and sorted alphabetically — so the derivation is additive
+// and idempotent.
+//
+// Skip conditions (no error — other governance rules handle them):
+//   - contract not found in pm.Contracts
+//   - contract.Kind != "event"
+func deriveEventSubscribers(pm *ProjectMeta) {
+	for _, sl := range pm.Slices {
+		for _, cu := range sl.ContractUsages {
+			if cu.Role != "subscribe" {
+				continue
+			}
+			c, ok := pm.Contracts[cu.Contract]
+			if !ok || c.Kind != "event" {
+				continue
+			}
+			c.Endpoints.Subscribers = dedupSorted(append(c.Endpoints.Subscribers, sl.BelongsToCell))
+		}
+	}
+}
+
+// deriveSubscribeVerifyContract appends "contract.<id>.subscribe" to
+// slice.Verify.Contract for every contractUsage with role=subscribe.
+// The result is the union of what slice.yaml already declares and the derived
+// entries — deduped, preserving first-occurrence order.
+func deriveSubscribeVerifyContract(pm *ProjectMeta) {
+	for _, sl := range pm.Slices {
+		for _, cu := range sl.ContractUsages {
+			if cu.Role != "subscribe" {
+				continue
+			}
+			entry := "contract." + cu.Contract + ".subscribe"
+			sl.Verify.Contract = dedupPreserveOrder(append(sl.Verify.Contract, entry))
+		}
+	}
+}
+
+// dedupSorted returns a new sorted slice with duplicate strings removed.
+func dedupSorted(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// dedupPreserveOrder returns a new slice with duplicate strings removed,
+// keeping the first occurrence of each value.
+func dedupPreserveOrder(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
 }

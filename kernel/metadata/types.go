@@ -145,6 +145,13 @@ func (s *SliceMeta) Clone() *SliceMeta {
 type ContractUsage struct {
 	Contract string `yaml:"contract"`
 	Role     string `yaml:"role"` // serve|call|publish|subscribe|handle|invoke|provide|read
+	// Handler is the consumer handler method name on the slice's service/consumer
+	// struct field; REQUIRED for role=subscribe, forbidden otherwise. Single source
+	// for the reg.Subscribe handler expression that cellgen emits.
+	Handler string `yaml:"handler,omitempty"`
+	// Group is the broker consumer group for role=subscribe; optional, defaults to
+	// the owning cell ID when empty. Forbidden for non-subscribe roles.
+	Group string `yaml:"group,omitempty"`
 }
 
 // SliceVerifyMeta holds verification requirements for a Slice.

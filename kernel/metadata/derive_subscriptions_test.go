@@ -16,9 +16,9 @@ import (
 
 func TestContractUsage_HandlerAndGroupUnmarshal(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantCU    ContractUsage
+		name   string
+		input  string
+		wantCU ContractUsage
 	}{
 		{
 			name: "subscribe with handler and group",
