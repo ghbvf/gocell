@@ -17,7 +17,6 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditquery"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -275,11 +274,10 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registrar) error 
 //     always satisfies RepoProber — MemStore returns nil (always ready),
 //     PG-backed store issues a Tail query against the relation.
 func (c *AuditCore) registerHealthProbes(reg cell.Registrar) error {
-	// Register emitter health probes (fail-open rate checker).
-	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
-		if err := RegisterEmitterProbes(reg, hc); err != nil {
-			return err
-		}
+	// Register emitter health probes (fail-open rate checker) via the shared
+	// kernel funnel.
+	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {
+		return err
 	}
 	// Register ledger store readiness probe via the cellgen-generated typed funnel.
 	// ledger.Store satisfies healthz.RepoProber (RepoReady method).

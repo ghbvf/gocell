@@ -19,7 +19,6 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -83,11 +82,10 @@ func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registrar) error
 
 	// Route groups and subscriptions removed: cell_gen.go owns Init and renders them.
 
-	// Register health probes (emitter fail-open rate checker).
-	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
-		if err := RegisterEmitterProbes(reg, hc); err != nil {
-			return err
-		}
+	// Register health probes (emitter fail-open rate checker) via the shared
+	// kernel funnel.
+	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {
+		return err
 	}
 
 	// Register the differentiated config repo readiness probe via the

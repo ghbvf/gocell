@@ -123,8 +123,9 @@ type Registrar interface {
 	// at registration time.
 	//
 	// WARNING: cells/ code must NOT call reg.Healthz().Register(...) directly.
-	// All probe registration must go through the cellgen-generated typed helpers
-	// (RegisterRepoReady, RegisterEmitterProbes) in cells/<cell>/healthz_gen.go.
+	// All probe registration must go through the typed funnels: the cellgen
+	// RegisterRepoReady helper in cells/<cell>/healthz_gen.go (cell-repo probes)
+	// and the shared kernel cell.RegisterEmitterHealthProbes (emitter probes).
 	// Direct Register calls from hand-written cell code are blocked by archtest
 	// HEALTHZ-TYPED-REGISTER-01. This restriction does not apply to
 	// runtime/bootstrap or runtime/observability/healthz/healthztest.

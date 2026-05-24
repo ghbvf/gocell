@@ -24,8 +24,12 @@
 //
 //   - runtime/bootstrap/bootstrap_phases.go (registerHealthChecker helper)
 //
-//   - cells/<cell>/healthz_gen.go (typed helpers RegisterRepoReady, RegisterEmitterProbes)
-//     plus any test files (*_test.go). Any other Register callsite fails CI.
+//   - cells/<cell>/healthz_gen.go (cellgen typed helper RegisterRepoReady)
+//     plus any test files (*_test.go).
+//
+//   - kernel/cell/healthz.go (cell.RegisterEmitterHealthProbes — the single
+//     emitter-probe funnel shared by all cells). Any other Register callsite
+//     fails CI.
 //
 //   - A3 (upstream Medium → backlog HEALTHZ-HOLDER-SEAL-01): structs holding
 //     a healthz.Aggregator interface-typed field are restricted to:
@@ -53,7 +57,9 @@
 //	     the method Healthz on kernel/cell.Registrar receiver
 //	  2. healthz_gen.go must contain the cellgen DO NOT EDIT marker line
 //	This ensures hand-written cell code (cell_init.go, handler.go, etc.) routes
-//	through the typed RegisterRepoReady / RegisterEmitterProbes helpers.
+//	through the typed cellgen RegisterRepoReady helper (cell-repo probes) and the
+//	kernel cell.RegisterEmitterHealthProbes funnel (emitter probes) — never
+//	reg.Healthz() directly.
 //
 // # Tool blind spots (forms RunTyped / *types.Info cannot see)
 //
@@ -124,6 +130,14 @@ var healthzRegisterExactPaths = map[string]bool{
 	"runtime/bootstrap/phases_lifecycle.go":                    true,
 	"runtime/bootstrap/phases_events.go":                       true,
 	"runtime/bootstrap/bootstrap_phases.go":                    true,
+	// kernel/cell/healthz.go: the sanctioned emitter-probe funnel
+	// cell.RegisterEmitterHealthProbes — the sole kernel/ caller of
+	// healthz.Aggregator.Register. Cells route emitter probes through this
+	// helper instead of a per-cell cellgen-generated RegisterEmitterProbes;
+	// cell-repo probes still go through cellgen RegisterRepoReady in
+	// cells/<cell>/healthz_gen.go. Upstream-Hard upgrade for the whole funnel:
+	// HEALTHZ-HOLDER-SEAL-01 (seal the Aggregator interface), tracked separately.
+	"kernel/cell/healthz.go": true,
 }
 
 // A3 allowlist: (pkg path, type name) pairs allowed to hold a healthz.Aggregator field.
@@ -314,7 +328,8 @@ func scanHealthzA2(fset *token.FileSet, file *ast.File, rel string, info *types.
 				Message: fmt.Sprintf(
 					"healthz.Aggregator.Register called from non-allowlisted file %s:%d; "+
 						"allowed callers: runtime/bootstrap/{phases_lifecycle,phases_events,bootstrap_phases}.go, "+
-						"runtime/observability/healthz/aggregator.go, cells/<cell>/healthz_gen.go, *_test.go "+
+						"runtime/observability/healthz/aggregator.go, cells/<cell>/healthz_gen.go, "+
+						"kernel/cell/healthz.go, *_test.go "+
 						"(HEALTHZ-WRITE-01/A2)",
 					rel, line,
 				),
@@ -464,7 +479,7 @@ func scanHealthzTypedRegister01(fset *token.FileSet, file *ast.File, rel string,
 				Message: fmt.Sprintf(
 					"reg.Healthz() called from %s (basename %q) — only cellgen-generated "+
 						"healthz_gen.go may call Healthz() directly; use the typed "+
-						"RegisterRepoReady / RegisterEmitterProbes helpers "+
+						"cellgen RegisterRepoReady helper or kernel cell.RegisterEmitterHealthProbes "+
 						"(HEALTHZ-TYPED-REGISTER-01)",
 					rel, base,
 				),
@@ -530,8 +545,15 @@ func TestHealthzWrite01(t *testing.T) {
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
-			// A1/A2/A3 scan scope: cells/ + adapters/ + runtime/ + cmd/ + examples/
-			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
+			// A1/A2/A3 scan scope: kernel/ + cells/ + adapters/ + runtime/ + cmd/ + examples/.
+			// kernel/ is in scope so the sanctioned emitter-probe funnel
+			// kernel/cell.RegisterEmitterHealthProbes (the only kernel/ caller of
+			// healthz.Aggregator.Register) is covered by the A2 caller allowlist —
+			// closing the prior kernel/ A2 blind spot. A1 (no kernel /healthz HTTP
+			// registration) and A3 (no kernel struct holds an Aggregator field —
+			// Registrar.Healthz() is an interface method, not a struct field) stay clean.
+			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/kernel/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/runtime/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cmd/") &&
@@ -763,7 +785,7 @@ func TestHealthzInvariants_ReverseBlindSpot_NoLocalHealthzWrapper(t *testing.T) 
 							Line: line,
 							Message: fmt.Sprintf(
 								"function %q in %s calls reg.Healthz() outside healthz_gen.go — "+
-									"use RegisterRepoReady / RegisterEmitterProbes (blind spot B2, "+
+									"use RegisterRepoReady / cell.RegisterEmitterHealthProbes (blind spot B2, "+
 									"HEALTHZ-TYPED-REGISTER-01)",
 								fn.Name.Name, rel,
 							),
