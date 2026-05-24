@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -327,7 +328,7 @@ func scanSchemaForStrictMissing(absPath string) ([]string, error) {
 	}
 	var schema map[string]any
 	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil, fmt.Errorf("invalid JSON schema %s: %w", absPath, err)
+		return nil, fmt.Errorf(invalidJSONSchemaMsgFmt, absPath, err)
 	}
 	var missing []string
 	walkSchemaObject(schema, "$", &missing)
@@ -839,7 +840,7 @@ func scanSchemaForInputConstraints(absPath, projectRoot string) ([]inputConstrai
 	}
 	var schema map[string]any
 	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil, fmt.Errorf("invalid JSON schema %s: %w", absPath, err)
+		return nil, fmt.Errorf(invalidJSONSchemaMsgFmt, absPath, err)
 	}
 	inlined, err := inlineCrossFileSchemaRefs(schema, filepath.Dir(absPath), projectRoot, map[string]bool{})
 	if err != nil {
@@ -921,6 +922,20 @@ func isCrossFileSchemaRef(ref string) bool {
 		!strings.HasPrefix(ref, "https://")
 }
 
+// invalidJSONSchemaMsgFmt is the shared fmt.Errorf format for an unparseable
+// JSON schema file (main request schema or a cross-file $ref target).
+const invalidJSONSchemaMsgFmt = "invalid JSON schema %s: %w"
+
+// isAbsoluteSchemaRef reports whether a forward-slash $ref is absolute on ANY
+// OS: a leading "/" (POSIX, via path.IsAbs) or a Windows drive/UNC root (via
+// filepath.IsAbs after FromSlash). Contract $refs are forward-slash by
+// convention, so "/etc/passwd" must be detected as absolute regardless of the
+// host OS — filepath.IsAbs alone returns false for "/x" on Windows, which let an
+// absolute ref slip past on windows-latest.
+func isAbsoluteSchemaRef(ref string) bool {
+	return path.IsAbs(ref) || filepath.IsAbs(filepath.FromSlash(ref))
+}
+
 // resolveCrossFileSchemaRef reads the referenced file (guarded within
 // projectRoot) and returns its fully-inlined content.
 func resolveCrossFileSchemaRef(ref, dir, projectRoot string, seen map[string]bool) (any, error) {
@@ -929,7 +944,7 @@ func resolveCrossFileSchemaRef(ref, dir, projectRoot string, seen map[string]boo
 	// filepath.Join("/a/b", "/etc/passwd") == "/etc/passwd"), so we must check
 	// before joining. This mirrors the contractgen bundler behavior
 	// (tools/codegen/contractgen/refbundle.go::validateRefString).
-	if filepath.IsAbs(filepath.FromSlash(ref)) {
+	if isAbsoluteSchemaRef(ref) {
 		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref %q must be relative", ref)}
 	}
 	targetAbs := filepath.Clean(filepath.Join(dir, filepath.FromSlash(ref)))
@@ -948,7 +963,7 @@ func resolveCrossFileSchemaRef(ref, dir, projectRoot string, seen map[string]boo
 	}
 	var target any
 	if err := json.Unmarshal(raw, &target); err != nil {
-		return nil, fmt.Errorf("invalid JSON schema %s: %w", targetAbs, err)
+		return nil, fmt.Errorf(invalidJSONSchemaMsgFmt, targetAbs, err)
 	}
 	seen[targetAbs] = true
 	resolved, err := inlineCrossFileSchemaRefs(target, filepath.Dir(targetAbs), projectRoot, seen)

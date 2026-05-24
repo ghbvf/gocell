@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -170,11 +171,16 @@ func loadAndStripRef(rootDir, currentFile, refStr string, visited map[string]str
 }
 
 // validateRefString rejects $ref values that are absolute URLs or absolute paths.
+//
+// Absolute-path detection is cross-platform: contract $refs are forward-slash by
+// convention, so a leading "/" must be rejected on every OS. path.IsAbs catches
+// POSIX-style "/x" (filepath.IsAbs returns false for it on Windows), and
+// filepath.IsAbs catches a Windows drive/UNC root.
 func validateRefString(refStr, currentFile string) error {
 	if strings.HasPrefix(refStr, "http://") || strings.HasPrefix(refStr, "https://") {
 		return fmt.Errorf("refbundle: $ref absolute URL not supported %q in %s", refStr, currentFile)
 	}
-	if filepath.IsAbs(refStr) {
+	if path.IsAbs(refStr) || filepath.IsAbs(filepath.FromSlash(refStr)) {
 		return fmt.Errorf("refbundle: $ref absolute path not supported %q in %s", refStr, currentFile)
 	}
 	return nil
