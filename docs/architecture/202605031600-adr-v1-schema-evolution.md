@@ -144,20 +144,39 @@ same pattern. State-carrying event payloads remain lenient (no
 
 ### 5. Error envelope — exception, stays strict
 
-`contracts/shared/errors/error-response-v1.schema.json` (and its 2
-`examples/*/contracts/shared/errors/` mirrors) keep
-`additionalProperties: false` at the top level and on the nested error
-object. The error envelope is emitted by the framework, has a stable shape,
-and is not in scope for the v1-evolution policy. The `details` sub-object
-is a strict array of `{key,value}` entries; each `value` is limited to JSON
-scalar types (`string`, `number`, `boolean`). Free-form object/array/null
-context is intentionally rejected and must be modeled as separate scalar
-details or kept in server-side internal diagnostics.
+> **Amendment 2026-05-25** (issue #677 / ADR `docs/architecture/202605250900-adr-shared-error-schema-mirror-codegen.md`):
+> Mirror 的 strict 性现由「字节恒等 canonical」经 codegen funnel 传递继承。
+> `contracts/shared/errors/error-response-v1.schema.json` 是唯一手写源；
+> 3 个副本（`examples/iotdevice`、`examples/todoorder`、`tests/contracttest/testdata`
+> 下各一份）由 `gocell generate shared-schema` 派生并由 `gocell verify codegen-shared-schema`
+> 字节 diff 守护。`hack/verify-schema-policy.sh` 不再单列 example mirror 的 strict 行；
+> strict 性由 canonical 单源传递，只需校验 canonical。
 
-The schema files retain `additionalProperties: false` at the file level;
-they are no longer enforced by FMT-20 (it only scans request schemas), but
+`contracts/shared/errors/error-response-v1.schema.json` is the single
+canonical source for the shared error envelope schema. The error envelope is
+emitted by the framework, has a stable shape, and is not in scope for the
+v1-evolution policy. `additionalProperties: false` is retained at the top
+level and on the nested error object.
+
+The `details` sub-object is a strict array of `{key,value}` entries; each
+`value` is limited to JSON scalar types (`string`, `number`, `boolean`).
+Free-form object/array/null context is intentionally rejected and must be
+modeled as separate scalar details or kept in server-side internal diagnostics.
+
+The canonical schema retains `additionalProperties: false` at the file level;
+it is no longer enforced by FMT-20 (which only scans request schemas), but
 the JSON Schema validator at runtime continues to honor the in-file
 declaration.
+
+Three mirror copies exist in separate `contractsRoot` trees
+(`examples/iotdevice/`, `examples/todoorder/`, `tests/contracttest/testdata/`)
+because the two physical schema readers in those trees
+(`tests/contracttest/contracttest.go:385` `compileSchemaFile` allow-list and
+`tools/codegen/contractgen/builder.go:119` `os.ReadFile`) cannot resolve
+`$ref` paths that escape their respective `contractsRoot`. These mirrors are
+**not independent enforcement targets** — their strict content is guaranteed
+by byte-identity with the canonical file, enforced by the codegen funnel
+described in ADR `docs/architecture/202605250900-adr-shared-error-schema-mirror-codegen.md`.
 
 ## Consequences
 
@@ -197,3 +216,4 @@ declaration.
 - `.claude/rules/gocell/api-versioning.md`
 - `docs/plans/202604272358-2-2-ci-batch2-k8s-verify.md` PR-CI-3
 - `docs/plans/202605011500-029-master-roadmap.md` Track G #G5
+- ADR `docs/architecture/202605250900-adr-shared-error-schema-mirror-codegen.md` (§5 amendment，#677)

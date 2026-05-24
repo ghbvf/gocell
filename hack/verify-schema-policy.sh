@@ -7,9 +7,11 @@
 #   lenient   — response / event payload / headers (also examples/* mirrors):
 #               MUST NOT declare `additionalProperties: false` anywhere
 #               (allows v1 to grow optional fields without breaking clients).
-#   strict    — error envelope (contracts/shared/errors/error-response-v1.schema.json
-#               + example mirrors): MUST declare `additionalProperties: false`
-#               at top level (the envelope shape is stable).
+#   strict    — error envelope (contracts/shared/errors/error-response-v1.schema.json):
+#               MUST declare `additionalProperties: false` at top level (the
+#               envelope shape is stable). Example mirrors derive their strict
+#               property via codegen (verify-codegen-shared-schema gate), so
+#               only the canonical source is checked here.
 #   metaonly  — metadata-only event payloads (currently event.config.*):
 #               MUST declare `unevaluatedProperties: false` so a buggy producer
 #               adding a state-bearing field (e.g. `value`) is rejected by
@@ -51,10 +53,13 @@ fi
 
 # Policy targets: "<policy> <root> <filename-glob>".
 # Order matters only for human-readable output; all targets are independently
-# checked. Examples/* mirrors are listed explicitly to keep this file the
-# single source of truth for "where does each policy apply" — the grep-based
-# predecessor inferred this implicitly via PAIRS, which proved fragile when a
-# new examples/* subtree was added without updating the script.
+# checked. Examples/* lenient targets are listed explicitly to keep this file
+# the single source of truth for "where does each policy apply" — the
+# grep-based predecessor inferred this implicitly via PAIRS, which proved
+# fragile when a new examples/* subtree was added without updating the script.
+# Note: error envelope mirrors (examples/*/contracts/shared/errors) are NOT
+# listed here for strict checking — their strict property is inherited via
+# codegen (verify-codegen-shared-schema gate enforces byte-identical copies).
 TARGETS=(
     # lenient: response / event payload / headers
     "lenient   contracts/http                                    response.schema.json"
@@ -67,11 +72,11 @@ TARGETS=(
     "lenient   examples/todoorder/contracts/http                 response.schema.json"
     "lenient   examples/todoorder/contracts/event                payload.schema.json"
     "lenient   examples/todoorder/contracts/event                headers.schema.json"
-    # strict: error envelope (top-level + nested error object both required —
-    # checked via recursive jq below; declared in error-response-v1.schema.json)
+    # strict: error envelope canonical source only (top-level + nested error
+    # object both required — checked via recursive jq below). Example mirrors
+    # are not listed: their strictness is guaranteed by the codegen
+    # verify-codegen-shared-schema gate (byte-identical to this canonical).
     "strict    contracts/shared/errors                           error-response-v1.schema.json"
-    "strict    examples/iotdevice/contracts/shared/errors        error-response-v1.schema.json"
-    "strict    examples/todoorder/contracts/shared/errors        error-response-v1.schema.json"
     # metaonly: metadata-only event payloads — whitelist via unevaluatedProperties
     "metaonly  contracts/event/config/entry-upserted/v1          payload.schema.json"
     "metaonly  contracts/event/config/entry-deleted/v1           payload.schema.json"

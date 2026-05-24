@@ -1,7 +1,6 @@
 package contracttest
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -122,21 +121,3 @@ func TestSharedErrorSchema_InvalidSamples(t *testing.T) {
 	}
 }
 
-func TestSharedErrorSchema_CopiesInSync(t *testing.T) {
-	root := contractTestProjectRoot(t)
-	canonicalPath := sharedErrorSchemaPath(t)
-	canonical, err := os.ReadFile(filepath.Clean(canonicalPath))
-	require.NoError(t, err)
-
-	for _, rel := range []string{
-		"examples/iotdevice/contracts/shared/errors/error-response-v1.schema.json",
-		"examples/todoorder/contracts/shared/errors/error-response-v1.schema.json",
-		"tests/contracttest/testdata/contracts/shared/errors/error-response-v1.schema.json",
-	} {
-		t.Run(rel, func(t *testing.T) {
-			got, err := os.ReadFile(filepath.Clean(filepath.Join(root, rel)))
-			require.NoError(t, err)
-			assert.True(t, bytes.Equal(canonical, got), "%s must match canonical shared error schema", rel)
-		})
-	}
-}

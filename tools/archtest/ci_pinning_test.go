@@ -680,6 +680,7 @@ var codegenStepNames = []string{
 	"Verify cell codegen (K#04)",
 	"Verify contract codegen (K#06)",
 	"Verify assembly codegen (K#10)",
+	"Verify shared-schema codegen",
 }
 
 // TestVerifyCodegenJobIsIndependent asserts:
