@@ -169,26 +169,62 @@ backlog 池 → 每日工作焦点调度由 `/daily-planner` skill + `daily-plan
 # dry-run（默认）：在对话窗输出 brief，不写 Project v2
 /daily-planner
 
-# apply：把当日选中 issue 写入 today iteration
+# apply：把当日选中 issue（含昨日 carry-over）写入 today iteration
 /daily-planner --apply
 
-# 指定日期（按 1-day iteration 推断目标 option，缺失则自动新建）
-/daily-planner --date=2026-05-25
+# 指定日期（按 1-day iteration 推断；缺失自动新建）
 /daily-planner --apply --date=2026-05-25
 
-# 当日 ∑Cx 容量覆盖（默认 4）
-/daily-planner --apply --capacity=6
+# 容量覆盖（默认 30 工作日 / 60 周末）
+/daily-planner --apply --capacity=40
+
+# 强制周末模式（出差/补班等场景）
+/daily-planner --apply --weekend
+/daily-planner --apply --weekday
+
+# 扩输入集（默认仅 P0/P1；P2 是 follow-up / P3 是 nice-to-have，平时不进每日排期）
+/daily-planner --apply --include-p2
+/daily-planner --apply --include-p2 --include-p3
 ```
+
+### 输入集（默认 P0+P1）
+
+daily-planner 默认只把 `label:backlog AND (label:pri-p0 OR label:pri-p1)` 的 issue 纳入排期。理由：
+
+- P0 是 incident-driven 红线（详 `backlog/20260520/RERATING-RUBRIC.md`），有就必排
+- P1 是当季交付项，是日常 wave 的主力
+- P2 默认是 review follow-up / 技术债登记，不阻塞主线 → 通过 `--include-p2` 显式纳入
+- P3 是 nice-to-have / 长尾，平时不进每日排期 → 通过 `--include-p3` 显式纳入
+
+实测（2026-05-24）：P0=0 / P1=31 / P2=63 / P3=145；默认 31 个候选完全够支撑 10-20 个/天的 wave 调度。
+
+### Wave 模型
+
+| 模式 | wave_count | wave_size | 当日 issue 上限 | ∑Cx 软警告 |
+|------|------------|-----------|--------------|-----------|
+| 工作日 | 2 | 5 | 10 | 30 |
+| 周末 | 4 | 5 | 20 | 60 |
+
+- **wave_size=5** 对齐 Miller's Law 认知槽（5-7 chunk）
+- **wave_count × 5** 是硬上限；超出 → Unscheduled `[wave overflow]`
+- **∑Cx ≤ CAPACITY** 是软警告；超出 → brief Warnings `[CAPACITY EXCEEDED]`，不阻塞
+- **周末检测** `date +%u >= 6`（自动）；`--weekend` / `--weekday` flag 显式覆盖
+
+### Carry-over（昨日未完成 → 今日）
+
+skill 拉昨日 iteration 的 items；满足 `issue.state == OPEN AND Project Status != Done` 的 issue **优先占 Wave 1 头部**（按原 WSJF score 排序）：
+
+- carry-over > 5 → 顺延 Wave 2 头部（**不退** Unscheduled）
+- 连续 ≥3 天未完成 → Warnings 标 `[STUCK day:N]`（只警告仍 carry，由人决策是否拆分 / 降 priority）
+- 已完成判断用 OR 语义（覆盖手动改 Status=Done 但 issue 未 close 的脱节场景）
+- **不写 audit comment**（保持 agent 对 issue 完全只读；历史回溯靠对话窗 brief + git log + Project v2 activity feed）
 
 ### Daily Iteration 自动管理
 
-Project v2 的 Iteration 字段配置为 **1-day duration**（duration=1, startDay=1，每个 option 覆盖 1 天）。daily-planner 自动管理 iteration option 集合：
+Project v2 的 Iteration 字段配置为 **1-day duration**（duration=1, startDay=1）。daily-planner 自动管理 option 集合：
 
-- 启动时检查 `$DATE` 是否落在已有 iteration option 上
-- 缺失则用 GraphQL `updateProjectV2Field.iterationConfiguration`（append-only）追加一个 1-day iteration option 覆盖 `$DATE`
-- 历史 iteration option 保留不动（form audit trail：哪天排了哪些 issue 永远可在 Project UI 回溯）
-
-历史回溯：在 Project v2 UI 按 Iteration group by，每个 1-day iteration 列出当日纳入的 issue。daily brief 的文本本体不持久化（每次 `/daily-planner` 重生成），但 Project v2 的"哪些 issue 在哪天入队"是持久真值。
+- 启动检查 `$DATE` 是否落在已有 option；缺失则用 GraphQL `updateProjectV2Field.iterationConfiguration` append-only 追加 1-day option
+- 历史 option 保留不动；carry-over 的 move 语义（iteration field 是 single-select，写入今日时昨日视图自动失去 item）是 GitHub Iteration 字段固有行为
 
 ### 排序算法（简化 WSJF）
 
@@ -196,28 +232,23 @@ Project v2 的 Iteration 字段配置为 **1-day duration**（duration=1, startD
 score = pri_weight × flag_multiplier
   pri_weight:        P0=100 / P1=50 / P2=20 / P3=5 / pri-missing=110（强制首位）
   flag_multiplier:   hard=3 / planned=2 / cond(trigger 满足)=1.5 / cond(pending)=0.3 / soft=1
-  容量过滤:          当日 ∑Cx ≤ CAPACITY（默认 4；Cx1=1 / Cx2=2 / Cx3=3 / Cx4=4），超出落 Unscheduled
-                    可通过 `--capacity=N` 覆盖默认值
 ```
 
-异常处理：`pri-missing` 强制首位 + `[NEEDS PRIORITY]`；缺 cap/flag/type 任一 → `[MISSING LABEL]`；`cap-x-cross` label → `[需人工确认]`（跨域需人评估）；同 cap 已 ≥3 入队 → 后续 `[CAP COLLISION]` 退到 Unscheduled；`bundle-parent` 父 issue 排除（仅处理子 issue）。
+Estimate **不入分数**，作 ∑Cx 软警告基准（Cx1=1 / Cx2=2 / Cx3=3 / Cx4=4）。
+
+异常处理：`pri-missing` 强制首位 + `[NEEDS PRIORITY]`；缺 cap/flag/type 任一 → `[MISSING LABEL]` 不入队；`cap-x-cross` label → `[需人工确认]` 不入队；同 cap 已 ≥3 入队 → 后续 `[CAP COLLISION]` 退 Unscheduled；`bundle-parent` 父 issue（仍 OPEN）→ carry-over（子全 close 不自动闭父，让人手 close）。
 
 ### 写入边界
 
 | 字段 | daily-planner |
 |------|---------------|
-| Iteration field **value**（item 行的 iteration 设置）| **可写**（仅 apply 模式）|
+| Iteration field **value**（item 行的 iteration 设置）| **可写**（仅 apply 模式；carry-over move + 新入队 set）|
 | Iteration field **configuration**（追加 1-day iteration option）| **可写**（append-only，缺失目标日期 option 时自动追加）|
 | Status / Estimate / labels（含 pri/cap/flag/type）| 只读 |
-| issue body / title / comment | 不动 |
+| issue body / title / **comment** | **不动**（含 carry-over audit comment 也不写）|
 
-误写 Iteration value 影响半径 = 当日 brief 噪音 + Project v2 视图多出一条；apply 失败 skill 输出回滚命令清单（**逐条审查后执行**，不要批量复制粘贴，避免二次破坏）。Iteration configuration 是 append-only，不会删除历史 option，无数据丢失风险。
+误写 Iteration value 影响半径 = 当日 brief 噪音 + Project v2 视图多出一条；apply 失败 skill 输出回滚命令清单（**逐条审查后执行**，不要批量复制粘贴）。Iteration configuration 是 append-only，无数据丢失风险。
 
 ### Token scope
 
-| Scope | dry-run | --apply |
-|-------|---------|---------|
-| 仅 `repo`（云沙箱常见）| ✓ 降级"只读 brief"模式（只用 label 维度排序）| ✗ 报错退出，提示 `gh auth refresh -s project` |
-| `repo` + `project`（本地常见）| ✓ 完整模式（读 Project v2 字段，不写）| ✓ 完整模式（写 Iteration value + 必要时追加 option）|
-
-token scope 检测用宽松正则 `grep -qiE "scopes:.*\bproject\b"`，跨 gh 版本健壮（不依赖单引号风格）。
+token 必须有 `project` scope（detection: `grep -qiE "scopes:.*\bproject\b"`）。无则 fail-fast 退出（不再提供"仅 repo"降级模式——daily-planner 不在云沙箱跑）。本地缺则 `gh auth refresh -s project`。
