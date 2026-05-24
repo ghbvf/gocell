@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
@@ -587,6 +588,9 @@ func (s *PGRefreshStore) RevokeSessionDetached(ctx context.Context, sessionID st
 }
 
 func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID string, revokedAt time.Time) error {
+	// ADR-approved ExecDirect callsite (PG-REPO-AMBIENT-TX-01 R3(b) marker).
+	// See ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md.
+	pgrepoapproved.ApprovedExecDirect("revoke-session-cascade")
 	// Detach from the caller's cancellation context: a security/compensation
 	// revoke MUST persist even when the HTTP request is canceled or times out.
 	// The detached context gets a bounded 5-second deadline so the write does
@@ -594,7 +598,6 @@ func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID 
 	// path so the revoke commits on its own connection regardless of the outer
 	// RunInTx outcome.
 	// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
-	// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
 	cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
 	defer cancelCascade()
 	_, err := s.db.ExecDirect(cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
