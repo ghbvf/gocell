@@ -20,8 +20,13 @@ type ContractGenSpec struct {
 	DTOs []DTOSpec
 	// Endpoint is non-nil when Kind == "http". Its type is the unexported
 	// httpEndpointSpec (sealed): no out-of-package code can construct a non-nil
-	// Endpoint, so a hand-built (FMT-34-unvalidated) HTTP spec cannot drive
-	// handler.tmpl from another package. See httpEndpointSpec's godoc.
+	// Endpoint. The whole ContractGenSpec is also never handed to another
+	// package as a mutable value — its sole constructor buildContractSpec and
+	// every render wrapper are package-private (only Generate /
+	// RenderContractArtifacts are exported, and those return rendered []byte,
+	// never the spec). So neither constructing nor mutating an
+	// FMT-34-unvalidated Endpoint to drive handler.tmpl is expressible from
+	// another package. See httpEndpointSpec's godoc.
 	Endpoint *httpEndpointSpec
 	// Event is non-nil when Kind == "event".
 	Event *EventEndpointSpec
@@ -83,7 +88,7 @@ type DTOSpec struct {
 	// Fields lists the struct fields in source-declared order.
 	Fields []DTOField
 	// Nested holds intermediate nested-object types discovered during schema
-	// traversal. Callers of BuildContractSpec see an empty slice — the builder
+	// traversal. Callers of buildContractSpec see an empty slice — the builder
 	// promotes nested types to ContractGenSpec.DTOs and clears this field.
 	Nested []DTOSpec
 }
@@ -119,12 +124,23 @@ type DTOField struct {
 // The type is unexported on purpose (sealed): its sole constructor is
 // buildHTTPEndpointSpec, which runs validateAuthOnInternalPath (the FMT-34
 // upstream guard) unconditionally. Because ContractGenSpec.Endpoint is
-// *httpEndpointSpec, no out-of-package code can build a non-nil Endpoint and
-// drive handler.tmpl with an FMT-34-unvalidated spec — the cross-package
-// bypass is not expressible. Fields stay exported because text/template reads
-// them via reflection. The intra-package "sole constructor / sole caller"
-// and the cross-generator emit-uniqueness invariants are locked by archtest
-// CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01.
+// *httpEndpointSpec, no out-of-package code can build a non-nil Endpoint.
+//
+// Fields stay exported because text/template reads them via reflection, so a
+// holder of a *httpEndpointSpec could otherwise mutate Path / AuthPublic /
+// Clients after construction (after FMT-34 already ran) and drive handler.tmpl
+// with the mutated, unvalidated spec. That mutation path is closed not by the
+// field visibility but by the holder being unreachable cross-package: the spec
+// is produced only by the package-private buildContractSpec and consumed only
+// by the package-private render wrappers; the exported surface (Generate /
+// RenderContractArtifacts) returns rendered []byte and never the spec. So
+// neither construction nor post-construction mutation of an
+// FMT-34-unvalidated Endpoint is expressible from another package.
+//
+// The intra-package "sole constructor / sole caller", the cross-generator
+// emit-uniqueness, and the "no exported API leaks the mutable spec" invariants
+// are locked by archtest CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01
+// (A1b / A2 / A3 / A4 respectively).
 type httpEndpointSpec struct {
 	// Method is the HTTP method in upper-case, e.g. "POST".
 	Method string

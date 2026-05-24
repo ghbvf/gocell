@@ -1470,11 +1470,14 @@ func (v *Validator) validateFMT33() []ValidationResult {
 //	upstream Hard: tools/codegen/contractgen/builder.go::validateAuthOnInternalPath,
 //	               called unconditionally inside buildHTTPEndpointSpec. The "sole
 //	               HTTP codegen entry" premise is enforced — not grep-asserted — by
-//	               the sealed (unexported) httpEndpointSpec type (cross-package
-//	               bypass not expressible) + archtest
+//	               the sealed (unexported) httpEndpointSpec type AND the
+//	               package-private build/render surface: no out-of-package code
+//	               can construct a non-nil Endpoint (A1a) nor obtain a mutable
+//	               spec to flip Path/AuthPublic/Clients after FMT-34 ran (A4) —
+//	               cross-package bypass not expressible. Locked by archtest
 //	               CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 (intra-package sole
 //	               constructor/caller + http.Handler emit-uniqueness across
-//	               tools/codegen/**).
+//	               tools/codegen/** + no exported spec leak).
 //	downstream:    this rule (Medium — receiver-type + RuleCode const + fix suffix archtest)
 //
 // Orthogonal to FMT-26 (two-bypass mutex, path-agnostic) and

@@ -4,7 +4,7 @@
 //
 // # Pipeline
 //
-// BuildContractSpec parses the contract metadata + schemaRefs into a
+// buildContractSpec parses the contract metadata + schemaRefs into a
 // *ContractGenSpec (spec.go); the spec is then handed to one or more
 // templates registered in templates/ via render.go. Each output file lives
 // under generated/contracts/<segments>/ where the segments mirror the

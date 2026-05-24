@@ -16,14 +16,14 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 )
 
-// BuildContractSpec projects a single contract.yaml + its schemaRefs into a
+// buildContractSpec projects a single contract.yaml + its schemaRefs into a
 // ContractGenSpec. Returns error when:
 //   - contract not found in project
 //   - Codegen flag is false
 //   - schemaRef parsing fails
 //   - kind=http but http endpoint missing
 //   - kind=event but payload schemaRef missing
-func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
+func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen build: project is nil")
 	}
@@ -67,7 +67,7 @@ func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		}
 	case "command", "projection":
 		// These kinds are in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but do
-		// not yet have dedicated generators. BuildContractSpec accepts them so that
+		// not yet have dedicated generators. buildContractSpec accepts them so that
 		// generateOneContract can emit types_gen.go + iface_gen.go (shared scaffolding)
 		// without hard-failing. No spec/handler/subscription file is emitted.
 		// When a full generator is added, add the corresponding case here.

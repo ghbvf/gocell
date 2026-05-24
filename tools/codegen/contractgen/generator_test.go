@@ -79,7 +79,7 @@ func synthEventFixture(t *testing.T) string {
 
 // setupHTTPMinimalRoot copies the synth_http_minimal fixture into a fresh
 // t.TempDir(), adds a go.mod, parses it, and returns (root, project).
-// Schema paths in the ProjectMeta are relative to root, so BuildContractSpec
+// Schema paths in the ProjectMeta are relative to root, so buildContractSpec
 // and codegen.Write both use the same root. Generated files land in
 // root/generated/... and do not pollute committed testdata.
 func setupHTTPMinimalRoot(t *testing.T) (string, *metadata.ProjectMeta) {
@@ -433,10 +433,10 @@ func TestGenerate_EmptyRoot(t *testing.T) {
 	}
 }
 
-// TestGenerate_BuildSpecError verifies that BuildContractSpec errors propagate.
+// TestGenerate_BuildSpecError verifies that buildContractSpec errors propagate.
 func TestGenerate_BuildSpecError(t *testing.T) {
 	t.Parallel()
-	// kind=event with missing payload schemaRef will fail BuildContractSpec.
+	// kind=event with missing payload schemaRef will fail buildContractSpec.
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"event.broken.v1": {
@@ -449,7 +449,7 @@ func TestGenerate_BuildSpecError(t *testing.T) {
 	}
 	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}})
 	if err == nil {
-		t.Fatal("expected error propagated from BuildContractSpec")
+		t.Fatal("expected error propagated from buildContractSpec")
 	}
 }
 
@@ -715,9 +715,9 @@ func TestGenerate_PackageNameKeywordSanitize(t *testing.T) {
 	root, p := setupKeywordConflictRoot(t)
 
 	// Verify the package name is "configdelete" and not the keyword "delete".
-	spec, err := BuildContractSpec(root, p, "http.config.delete.v1")
+	spec, err := buildContractSpec(root, p, "http.config.delete.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.PackageName != "configdelete" {
 		t.Errorf("PackageName = %q, want configdelete", spec.PackageName)

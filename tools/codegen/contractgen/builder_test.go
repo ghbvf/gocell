@@ -475,10 +475,10 @@ func TestBuildQueryParams_BoundaryValues(t *testing.T) {
 	}
 }
 
-// --- BuildContractSpec tests ---
+// --- buildContractSpec tests ---
 
 // TestBuildContractSpec_CommandKind_Skips documents the graceful-skip path for
-// kind=command (and kind=projection): BuildContractSpec returns a valid spec with
+// kind=command (and kind=projection): buildContractSpec returns a valid spec with
 // no error and no HTTP/event-specific fields populated. generateOneContract will
 // only emit types_gen.go + iface_gen.go for these kinds.
 func TestBuildContractSpec_CommandKind_Skips(t *testing.T) {
@@ -493,9 +493,9 @@ func TestBuildContractSpec_CommandKind_Skips(t *testing.T) {
 			},
 		},
 	}
-	spec, err := BuildContractSpec("", p, "command.device.provision.v1")
+	spec, err := buildContractSpec("", p, "command.device.provision.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec should not error for kind=command, got: %v", err)
+		t.Fatalf("buildContractSpec should not error for kind=command, got: %v", err)
 	}
 	if spec == nil {
 		t.Fatal("expected non-nil spec")
@@ -526,9 +526,9 @@ func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
 			},
 		},
 	}
-	spec, err := BuildContractSpec("", p, "projection.device.inventory.v1")
+	spec, err := buildContractSpec("", p, "projection.device.inventory.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec should not error for kind=projection, got: %v", err)
+		t.Fatalf("buildContractSpec should not error for kind=projection, got: %v", err)
 	}
 	if spec == nil {
 		t.Fatal("expected non-nil spec")
@@ -604,7 +604,7 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_Event_TopicAndHandlerMethod verifies that BuildContractSpec
+// TestBuildContractSpec_Event_TopicAndHandlerMethod verifies that buildContractSpec
 // correctly populates the EventEndpointSpec.Topic and HandlerMethod fields for an
 // event contract. Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU,
 // HandlerMethod is "Handle" + PascalCase(domainLastSegment).
@@ -612,9 +612,9 @@ func TestBuildContractSpec_Event_TopicAndHandlerMethod(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
-	spec, err := BuildContractSpec(root, p, "event.item-created.v1")
+	spec, err := buildContractSpec(root, p, "event.item-created.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.Event == nil {
 		t.Fatal("expected Event spec to be populated for kind=event")
@@ -673,9 +673,9 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
 		File: "contracts/http/auth/setup/admin/v1/contract.yaml",
 	}
 
-	spec, err := BuildContractSpec(root, p, bootstrapContractID)
+	spec, err := buildContractSpec(root, p, bootstrapContractID)
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.Endpoint == nil {
 		t.Fatal("expected Endpoint spec to be populated for kind=http")
@@ -1199,7 +1199,7 @@ func TestCollectAndValidateStatuses(t *testing.T) {
 
 // TestContractIDToKebab verifies that contractIDToKebab converts contract IDs to
 // kebab-case by replacing all dots with dashes. The function is the single source
-// used by BuildContractSpec to pre-compute all panicregister.Approved reason literals.
+// used by buildContractSpec to pre-compute all panicregister.Approved reason literals.
 func TestContractIDToKebab(t *testing.T) {
 	cases := []struct {
 		name string
