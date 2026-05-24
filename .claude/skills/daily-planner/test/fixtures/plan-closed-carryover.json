@@ -1,0 +1,28 @@
+[
+  {
+    "item_id": "PVTI_ITEM_CLOSED",
+    "issue_number": 200,
+    "issue_title": "Closed Issue 200",
+    "wave": 1,
+    "current_iteration_id": "ITER_YESTERDAY",
+    "target_iteration_id": "ITER_TODAY",
+    "action": "set",
+    "carry_over": true,
+    "score": 9.0,
+    "parallel_group": 1,
+    "wave_option_id": "OPT_WAVE1"
+  },
+  {
+    "item_id": "PVTI_ITEM_DONE",
+    "issue_number": 201,
+    "issue_title": "Done Issue 201",
+    "wave": 1,
+    "current_iteration_id": "ITER_YESTERDAY",
+    "target_iteration_id": "ITER_TODAY",
+    "action": "set",
+    "carry_over": true,
+    "score": 8.0,
+    "parallel_group": 2,
+    "wave_option_id": "OPT_WAVE1"
+  }
+]

@@ -75,6 +75,7 @@ ITERATION_FIELD_ID=$(jq -r '.fields[] | select(.name=="Iteration").id' <<<"$FIEL
 
 # 0.4 Wave single-select field ID + option IDs（C3c）
 # fail-CLOSED：apply 模式下查不到 WAVE_FIELD_ID → 阶段 4 的 apply-gate.sh 会 fail-fast。
+# WAVE_FIELD_ID 非空但 WAVE_OPTION_IDS 为空 = 配置损坏（字段无选项），apply-gate.sh fail-fast。
 # dry-run 模式下 WAVE_FIELD_ID 为空时 agent 仍可出 plan（wave_option_id 字段设 ""）。
 WAVE_FIELD_ID=$(jq -r '.fields[] | select(.name=="Wave").id // ""' <<<"$FIELD_LIST_JSON")
 WAVE_OPTION_IDS=""
@@ -83,6 +84,11 @@ if [[ -n "$WAVE_FIELD_ID" ]]; then
   WAVE_OPTION_IDS=$(jq -r \
     '[.fields[] | select(.name=="Wave") | .options[]?.id] | join(",")' \
     <<<"$FIELD_LIST_JSON")
+  # WAVE_FIELD_ID 有值但 options 为空 = 配置损坏 → apply 模式 fail-fast。
+  if [[ "${APPLY:-}" == "true" && -z "$WAVE_OPTION_IDS" ]]; then
+    echo "ERROR: WAVE_OPTION_IDS empty but WAVE_FIELD_ID set; Wave field has no options (config corrupt)" >&2
+    exit 1
+  fi
 fi
 # wave_number → option_id 映射（agent 用；顺序 = Wave 1/2/3/4 按 options 数组顺序）
 WAVE_OPTION_ID_WAVE1=$(jq -r '.fields[] | select(.name=="Wave") | .options[0]?.id // ""' <<<"$FIELD_LIST_JSON")
@@ -228,7 +234,11 @@ if $DEP_FETCH_FAILED; then
   echo "WARN: one or more blocked-by queries failed; deps.json may be incomplete [DEP DATA UNAVAILABLE]" >&2
 fi
 echo "$DEPS_JSON" > "$WORKDIR/deps.json"
-echo "INFO: deps.json: $(jq 'keys | length' "$WORKDIR/deps.json") issues with blockers" >&2
+if $DEP_FETCH_FAILED; then
+  echo "INFO: [INCOMPLETE] deps.json: $(jq 'keys | length' "$WORKDIR/deps.json") issues with blockers (one or more queries failed; see WARN above)" >&2
+else
+  echo "INFO: deps.json: $(jq 'keys | length' "$WORKDIR/deps.json") issues with blockers" >&2
+fi
 ```
 
 ## 阶段 2：确保 today iteration 存在
@@ -250,9 +260,9 @@ TODAY_ITERATION_ID=$(jq -r --arg d "$DATE" '
 # 会真实改 field configuration）；缺 iteration 时 dry-run 给出 would-create 摘要并退出。
 if [[ -z "$TODAY_ITERATION_ID" ]]; then
   if [[ "${APPLY:-}" != "true" ]]; then
-    echo "INFO: [DRY-RUN] today iteration for $DATE missing; --apply would append a 1-day option to Iteration field." >&2
-    echo "INFO: [DRY-RUN] no Project v2 mutation executed; planning aborted (need TODAY_ITERATION_ID to score wave layout)." >&2
-    echo "INFO: re-run with --apply to create today's iteration option and proceed." >&2
+    echo "WARN: [ACTION REQUIRED] today iteration for $DATE not found in Iteration field." >&2
+    echo "WARN: [DRY-RUN] planning aborted — TODAY_ITERATION_ID is required to score wave layout." >&2
+    echo "WARN: re-run with --apply to create today's iteration option and proceed." >&2
     exit 0
   fi
 
@@ -346,6 +356,10 @@ Agent(
       {WORKDIR}/deps.json          — blocked-by DAG（C2b）：{ "<issue_num>": { "blocked_by": [<int>,...] } }
 
     Tasks:
+      # 两正交轴说明（避免概念混淆）：
+      # - 拓扑序（wave 编号）= 正确性序：blocker.wave ≤ dependent.wave，确保依赖关系不倒置
+      # - parallel_group = 执行并行度：同 wave 内、affected_paths 无重叠的 issue 可并行工作
+      # 两者独立：同 wave 内可有多 parallel_group（并行），同 parallel_group 内也应拓扑安全
       1. Read all 5 files
       2. Compute carry-over (if not CARRY_OVER_DISABLED): items.json 中
          iter.iterationId == YESTERDAY_ITERATION_ID AND content.state == "OPEN"
@@ -389,7 +403,11 @@ if APPLY == "true":
   else:
     answer = AskUserQuestion(
       question="plan.json 已生成（共 {len(plan)} 条）。是否立即写入 Project v2？",
-      options=["Yes — 立即写入", "No — 退出，不写入", "Show plan.json — 查看后决策"]
+      options=[
+        "Yes — 立即写入（执行阶段 4，无法撤销；失败时输出回滚命令清单）",
+        "No — 退出，不写入（零 mutation，可稍后重新 --apply）",
+        "Show plan.json — 先查看完整计划再决策"
+      ]
     )
     if answer == "Yes":
       # 继续阶段 4（同 $WORKDIR，无 drift）
@@ -400,7 +418,14 @@ if APPLY == "true":
     elif answer starts with "Show":
       # 宿主 LLM 用 Read 展示 $WORKDIR/plan.json 全文
       Read(PLAN_PATH)
-      # 然后回问（loop），直到 Yes 或 No
+      # 再次回问，直到 Yes 或 No（loop，每次重新展示上面两个选项）
+      answer = AskUserQuestion(
+        question="已显示 plan.json（共 {len(plan)} 条）。确认写入还是退出？",
+        options=[
+          "Yes — 立即写入",
+          "No — 退出，不写入"
+        ]
+      )
 ```
 
 ## 阶段 4：Apply 分支（仅 `--apply`）
@@ -408,6 +433,7 @@ if APPLY == "true":
 ```bash
 [[ "${APPLY:-}" != "true" ]] && {
   echo "INFO: dry-run 模式，跳过 Project v2 写入。加 --apply 真写。" >&2
+  echo "INFO: plan.json 路径: $PLAN_PATH（可用 Read 或 cat 查看 agent 计划）" >&2
   exit 0
 }
 # 所有校验与写入逻辑在 lib/ 脚本中（单源，零平行副本）。
@@ -424,11 +450,12 @@ bash "$SKILL_DIR/lib/apply-write.sh"
 宿主 LLM 把以下信息综合到对话回应：
 
 1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节 + parallel_group 分组说明）
-2. **Audit 行**（仅 apply 模式，由 apply-write.sh 写到 stderr）
-3. **Per-item NDJSON 路径**（仅 apply 模式：`$WORKDIR/audit.ndjson`）——每行含 ts/date/mode/action/item_id/prev_iteration_id/target_iteration_id/result，是 partial apply / 还原 old iteration / 重放的真值源
-4. **失败回滚命令清单**（仅 apply 模式有失败项时，由 apply-write.sh 写到 stderr；回滚目标是**已写入**的项，不是失败项）
-5. **Wave 写入情况**（仅 apply 模式）：已写入 Wave 字段的项数（apply-write.sh 写 Wave 时 WARN 失败会标注）
-6. **WORKDIR 清理提示**：`rm -rf $WORKDIR`（保留供 apply 失败后追溯 + per-item audit；用户审查后手动清）
+2. **Plan 路径**：`$PLAN_PATH`（dry-run 和 apply 模式均输出；`/ship --from-plan=` 消费此路径；**在清理 WORKDIR 前保存**）
+3. **Audit 行**（仅 apply 模式，由 apply-write.sh 写到 stderr；含 `applied / skipped / failed / wave_applied` 计数）
+4. **Per-item NDJSON 路径**（仅 apply 模式：`$WORKDIR/audit.ndjson`）——每行含 ts/date/mode/action/item_id/prev_iteration_id/target_iteration_id/result，是 partial apply / 还原 old iteration / 重放的真值源
+5. **失败回滚命令清单**（仅 apply 模式有失败项时，由 apply-write.sh 写到 stderr；回滚目标是**已写入**的项，不是失败项）
+6. **Wave 写入情况**（仅 apply 模式）：Audit 汇总行的 `wave_applied=N` 字段（Wave 写失败时 audit.ndjson 含 `result=wave_failed` 行 + stderr WARN）
+7. **WORKDIR 清理提示**：`rm -rf $WORKDIR`（保留供 apply 失败后追溯 + per-item audit；用户审查后手动清）
 
 ## 约束
 
@@ -457,4 +484,12 @@ Project v2 #3（owner `ghbvf`）Wave 字段配置状态：
 | `Pull request merged` workflow | ✅ 已开 | target Status = Done |
 | `Pull request linked to issue` workflow | ✅ 已开 | target Status = In review（/ship 不写 In review，交此 workflow）|
 
-字段 ID 由阶段 0 动态查询（`gh project field-list`），不硬编。`WAVE_FIELD_ID` 为空时 apply-gate.sh fail-fast，提示 `ERROR: Wave field missing; complete C3a config`。
+字段 ID 由阶段 0 动态查询（`gh project field-list`），不硬编。`WAVE_FIELD_ID` 为空时 apply-gate.sh fail-fast，提示 `ERROR: Wave field missing; Wave single-select field not found in Project #3; see SKILL.md §C3a`。
+
+**若 Wave 字段尚未配置，在 Project v2 UI 建字段步骤：**
+
+1. 打开 `https://github.com/users/ghbvf/projects/3`
+2. 点右上角 `+`（Add field）→ 选 **Single select**
+3. 字段名填 `Wave`（大小写必须完全一致）
+4. 依次添加 4 个选项：`Wave 1`、`Wave 2`、`Wave 3`、`Wave 4`（顺序即 wave_number 的映射顺序）
+5. 保存后重新运行 `/daily-planner --apply`，阶段 0 会自动拉取新字段 ID

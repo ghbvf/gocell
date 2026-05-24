@@ -31,8 +31,9 @@ write_script="${skill_dir}/lib/apply-write.sh"
 stub_dir=$(mktemp -d)
 trap 'rm -rf "$stub_dir"' EXIT
 
-# gh stub: records item-edit calls to GH_STUB_LOG; returns exit 1 for
-# item id matching GH_STUB_FAIL_ITEM (write-side failure simulation).
+# gh stub: records item-edit calls to GH_STUB_LOG; returns exit 1 for:
+#   - item id matching GH_STUB_FAIL_ITEM (write-side item failure simulation)
+#   - field id matching GH_STUB_FAIL_FIELD_ID (per-field failure, e.g. Wave field)
 cat > "${stub_dir}/gh" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -43,18 +44,28 @@ case "${1:-}" in
         # record all args after "item-edit"
         shift 2
         echo "item-edit $*" >> "${GH_STUB_LOG:?GH_STUB_LOG required}"
-        # simulate failure for a specific item
+        # simulate failure for a specific item id
         args=("$@")
+        _item_id=""
+        _field_id=""
         i=0
         while [[ $i -lt ${#args[@]} ]]; do
           if [[ "${args[$i]}" == "--id" ]]; then
             next=$((i+1))
-            if [[ "${args[$next]:-}" == "${GH_STUB_FAIL_ITEM:-__none__}" ]]; then
-              exit 1
-            fi
+            _item_id="${args[$next]:-}"
+          fi
+          if [[ "${args[$i]}" == "--field-id" ]]; then
+            next=$((i+1))
+            _field_id="${args[$next]:-}"
           fi
           i=$((i+1))
         done
+        if [[ -n "${GH_STUB_FAIL_ITEM:-}" && "$_item_id" == "${GH_STUB_FAIL_ITEM}" ]]; then
+          exit 1
+        fi
+        if [[ -n "${GH_STUB_FAIL_FIELD_ID:-}" && "$_field_id" == "${GH_STUB_FAIL_FIELD_ID}" ]]; then
+          exit 1
+        fi
         ;;
       *) echo "stub: unexpected gh project $*" >&2; exit 1 ;;
     esac
@@ -71,13 +82,15 @@ fail=0
 # Gate test helpers
 # ---------------------------------------------------------------------------
 make_gate_workdir() {
+  # make_gate_workdir <plan_fixture> [items_fixture]
   local plan_fixture="$1"
+  local items_fixture="${2:-items.json}"
   local wd
   wd=$(mktemp -d)
-  cp "${fixtures_dir}/issues.json"      "$wd/issues.json"
-  cp "${fixtures_dir}/items.json"       "$wd/items.json"
-  cp "${fixtures_dir}/iter-config.json" "$wd/iter-config.json"
-  cp "${fixtures_dir}/${plan_fixture}"  "$wd/plan.json"
+  cp "${fixtures_dir}/issues.json"           "$wd/issues.json"
+  cp "${fixtures_dir}/${items_fixture}"      "$wd/items.json"
+  cp "${fixtures_dir}/iter-config.json"      "$wd/iter-config.json"
+  cp "${fixtures_dir}/${plan_fixture}"       "$wd/plan.json"
   echo "$wd"
 }
 
@@ -187,6 +200,25 @@ assert_gate_pass "A8: skip action with empty wave_option_id -> exit 0" \
   "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
 rm -rf "$wd"
 
+# A9: WAVE_FIELD_ID set but WAVE_OPTION_IDS empty -> config corrupt fail-fast
+wd=$(make_gate_workdir "plan-clean.json")
+assert_gate_fail "A9: WAVE_FIELD_ID set but WAVE_OPTION_IDS empty -> config corrupt" \
+  "WAVE_OPTION_IDS empty but WAVE_FIELD_ID set" \
+  "WORKDIR=$wd" "TODAY_ITERATION_ID=ITER_TODAY" "YESTERDAY_ITERATION_ID=ITER_YESTERDAY" \
+  "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS="
+rm -rf "$wd"
+
+# A10: CLOSED/Done carry-over items are NOT in the allowed set -> "not in allowed set" + rc==1
+# Uses items-with-closed.json which has PVTI_ITEM_CLOSED (state=CLOSED) and
+# PVTI_ITEM_DONE (status=Done) both with iter.iterationId=ITER_YESTERDAY.
+# The plan tries to carry these over; gate must reject them.
+wd=$(make_gate_workdir "plan-closed-carryover.json" "items-with-closed.json")
+assert_gate_fail "A10: CLOSED/Done carry-over not in allowed set -> rc==1" \
+  "not in allowed set" \
+  "WORKDIR=$wd" "TODAY_ITERATION_ID=ITER_TODAY" "YESTERDAY_ITERATION_ID=ITER_YESTERDAY" \
+  "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
+rm -rf "$wd"
+
 # ---------------------------------------------------------------------------
 # Part A: Write cases
 # ---------------------------------------------------------------------------
@@ -194,7 +226,11 @@ echo ""
 echo "=== Part A: apply-write.sh ==="
 
 run_write() {
+  # run_write <wd> <fail_item> <gh_log> <stderr_out> [fail_field_id]
+  # Returns exit code via $RUN_WRITE_RC (caller must reset to 0 before calling).
   local wd="$1" fail_item="$2" gh_log="$3" stderr_out="$4"
+  local _fail_field_id="${5:-}"
+  RUN_WRITE_RC=0
   env \
     "WORKDIR=$wd" \
     "TODAY_ITERATION_ID=ITER_TODAY" \
@@ -206,8 +242,9 @@ run_write() {
     "IS_WEEKEND=false" \
     "GH_STUB_LOG=$gh_log" \
     "GH_STUB_FAIL_ITEM=${fail_item}" \
+    "GH_STUB_FAIL_FIELD_ID=${_fail_field_id}" \
     "PATH=${stub_dir}:${PATH}" \
-    bash "$write_script" >/dev/null 2>"$stderr_out" || true
+    bash "$write_script" >/dev/null 2>"$stderr_out" || RUN_WRITE_RC=$?
 }
 
 validate_audit_fields() {
@@ -231,16 +268,21 @@ validate_audit_fields() {
   $ok
 }
 
-# W1: clean plan -> audit fields OK + iteration + wave calls made
+# W1: clean plan -> rc==0 + audit fields OK + iteration + wave calls made
 wd_w1=$(mktemp -d)
 cp "${fixtures_dir}/issues.json" "${fixtures_dir}/items.json" \
    "${fixtures_dir}/iter-config.json" "$wd_w1/"
 cp "${fixtures_dir}/plan-clean.json" "$wd_w1/plan.json"
 gh_log_w1=$(mktemp)
 stderr_w1=$(mktemp)
-run_write "$wd_w1" "" "$gh_log_w1" "$stderr_w1"
+RUN_WRITE_RC=0; run_write "$wd_w1" "" "$gh_log_w1" "$stderr_w1"
+rc_w1=$RUN_WRITE_RC
 gh_calls_w1=$(cat "$gh_log_w1"); rm -f "$gh_log_w1" "$stderr_w1"
 w1_ok=true
+if [[ $rc_w1 -ne 0 ]]; then
+  echo "FAIL [W1] expected rc==0, got rc=$rc_w1"
+  w1_ok=false
+fi
 if ! validate_audit_fields "W1" "$wd_w1/audit.ndjson"; then w1_ok=false; fi
 if [[ "$gh_calls_w1" != *"--field-id IFIELD_123 --iteration-id ITER_TODAY"* ]]; then
   echo "FAIL [W1] gh missing iteration call; got: $gh_calls_w1"
@@ -254,20 +296,33 @@ if $w1_ok; then echo "PASS [W1: clean plan writes iteration + wave]"; pass=$((pa
 else fail=$((fail+1)); fi
 rm -rf "$wd_w1"
 
-# W2: partial failure -> rollback applied item + retry failed item
-# PVTI_ITEM_101 (prev=ITER_TODAY) succeeds -> rollback uses --iteration-id ITER_TODAY
-# PVTI_ITEM_102 fails -> appears in retry (failed items) section
+# W2: partial failure -> rc==0 + rollback applies to already-written item (PVTI_ITEM_101)
+# with specific --id and --iteration-id + retry section for PVTI_ITEM_102.
+# PVTI_ITEM_101 (prev=ITER_TODAY) succeeds -> rollback section contains:
+#   "# --- rollback commands" marker
+#   "--id PVTI_ITEM_101 ... --iteration-id ITER_TODAY"
+# PVTI_ITEM_102 fails -> "failed items" section contains PVTI_ITEM_102
 wd_w2=$(mktemp -d)
 cp "${fixtures_dir}/issues.json" "${fixtures_dir}/items.json" \
    "${fixtures_dir}/iter-config.json" "$wd_w2/"
 cp "${fixtures_dir}/plan-clean.json" "$wd_w2/plan.json"
 gh_log_w2=$(mktemp)
 stderr_w2=$(mktemp)
-run_write "$wd_w2" "PVTI_ITEM_102" "$gh_log_w2" "$stderr_w2"
+RUN_WRITE_RC=0; run_write "$wd_w2" "PVTI_ITEM_102" "$gh_log_w2" "$stderr_w2"
+rc_w2=$RUN_WRITE_RC
 stderr_content_w2=$(cat "$stderr_w2"); rm -f "$gh_log_w2" "$stderr_w2"
 w2_ok=true
-if [[ "$stderr_content_w2" != *"--iteration-id ITER_TODAY"* ]]; then
-  echo "FAIL [W2] rollback missing --iteration-id ITER_TODAY"
+if [[ $rc_w2 -ne 0 ]]; then
+  echo "FAIL [W2] expected rc==0, got rc=$rc_w2"
+  w2_ok=false
+fi
+if [[ "$stderr_content_w2" != *"# --- rollback commands"* ]]; then
+  echo "FAIL [W2] rollback marker '# --- rollback commands' not found"
+  echo "  stderr: $stderr_content_w2"
+  w2_ok=false
+fi
+if [[ "$stderr_content_w2" != *"--id PVTI_ITEM_101"*"--iteration-id ITER_TODAY"* ]]; then
+  echo "FAIL [W2] rollback missing '--id PVTI_ITEM_101 ... --iteration-id ITER_TODAY'"
   echo "  stderr: $stderr_content_w2"
   w2_ok=false
 fi
@@ -275,11 +330,15 @@ if [[ "$stderr_content_w2" != *"failed items"* ]]; then
   echo "FAIL [W2] missing 'failed items' section"
   w2_ok=false
 fi
+if [[ "$stderr_content_w2" != *"PVTI_ITEM_102"* ]]; then
+  echo "FAIL [W2] PVTI_ITEM_102 not in failed/retry section"
+  w2_ok=false
+fi
 if $w2_ok; then echo "PASS [W2: partial fail -> rollback applied + retry failed]"; pass=$((pass+1))
 else fail=$((fail+1)); fi
 rm -rf "$wd_w2"
 
-# W3: empty prev_iteration_id -> rollback uses --clear
+# W3: empty prev_iteration_id -> rc==0 + rollback uses --clear
 # Two items: first has null current (succeeds), second fails -> rollback of first shows --clear
 wd_w3=$(mktemp -d)
 cp "${fixtures_dir}/issues.json" "${fixtures_dir}/items.json" \
@@ -316,9 +375,14 @@ cat > "$wd_w3/plan.json" <<'PLANEOF'
 PLANEOF
 gh_log_w3=$(mktemp)
 stderr_w3=$(mktemp)
-run_write "$wd_w3" "PVTI_ITEM_102" "$gh_log_w3" "$stderr_w3"
+RUN_WRITE_RC=0; run_write "$wd_w3" "PVTI_ITEM_102" "$gh_log_w3" "$stderr_w3"
+rc_w3=$RUN_WRITE_RC
 stderr_content_w3=$(cat "$stderr_w3"); rm -f "$gh_log_w3" "$stderr_w3"
 w3_ok=true
+if [[ $rc_w3 -ne 0 ]]; then
+  echo "FAIL [W3] expected rc==0, got rc=$rc_w3"
+  w3_ok=false
+fi
 if [[ "$stderr_content_w3" != *"--clear"* ]]; then
   echo "FAIL [W3] missing --clear in rollback for null prev"
   echo "  stderr: $stderr_content_w3"
@@ -332,17 +396,22 @@ if $w3_ok; then echo "PASS [W3: empty prev -> rollback --clear]"; pass=$((pass+1
 else fail=$((fail+1)); fi
 rm -rf "$wd_w3"
 
-# W4: action==skip -> no gh calls + audit result=skipped
+# W4: action==skip -> rc==0 + no gh calls + audit result=skipped
 wd_w4=$(mktemp -d)
 cp "${fixtures_dir}/issues.json" "${fixtures_dir}/items.json" \
    "${fixtures_dir}/iter-config.json" "$wd_w4/"
 cp "${fixtures_dir}/plan-skip-action.json" "$wd_w4/plan.json"
 gh_log_w4=$(mktemp)
 stderr_w4=$(mktemp)
-run_write "$wd_w4" "" "$gh_log_w4" "$stderr_w4"
+RUN_WRITE_RC=0; run_write "$wd_w4" "" "$gh_log_w4" "$stderr_w4"
+rc_w4=$RUN_WRITE_RC
 w4_gh=$(cat "$gh_log_w4"); rm -f "$gh_log_w4" "$stderr_w4"
 w4_audit=$(cat "$wd_w4/audit.ndjson" 2>/dev/null || true)
 w4_ok=true
+if [[ $rc_w4 -ne 0 ]]; then
+  echo "FAIL [W4] expected rc==0, got rc=$rc_w4"
+  w4_ok=false
+fi
 if [[ -n "$w4_gh" ]]; then
   echo "FAIL [W4] gh was called for skip action: $w4_gh"
   w4_ok=false
@@ -354,6 +423,46 @@ fi
 if $w4_ok; then echo "PASS [W4: skip not written]"; pass=$((pass+1))
 else fail=$((fail+1)); fi
 rm -rf "$wd_w4"
+
+# W5: Wave write fails but Iteration write succeeds -> rc==0 + iteration audit=applied
+#     + stderr contains Wave WARN + wave_failed audit line present
+# GH_STUB_FAIL_FIELD_ID=WFIELD_123 causes Wave item-edit to fail.
+wd_w5=$(mktemp -d)
+cp "${fixtures_dir}/issues.json" "${fixtures_dir}/items.json" \
+   "${fixtures_dir}/iter-config.json" "$wd_w5/"
+cp "${fixtures_dir}/plan-clean.json" "$wd_w5/plan.json"
+gh_log_w5=$(mktemp)
+stderr_w5=$(mktemp)
+RUN_WRITE_RC=0; run_write "$wd_w5" "" "$gh_log_w5" "$stderr_w5" "WFIELD_123"
+rc_w5=$RUN_WRITE_RC
+gh_calls_w5=$(cat "$gh_log_w5")
+stderr_content_w5=$(cat "$stderr_w5"); rm -f "$gh_log_w5" "$stderr_w5"
+w5_audit=$(cat "$wd_w5/audit.ndjson" 2>/dev/null || true)
+w5_ok=true
+if [[ $rc_w5 -ne 0 ]]; then
+  echo "FAIL [W5] expected rc==0 (Wave fail is non-fatal), got rc=$rc_w5"
+  w5_ok=false
+fi
+if [[ "$gh_calls_w5" != *"--field-id IFIELD_123 --iteration-id ITER_TODAY"* ]]; then
+  echo "FAIL [W5] gh missing iteration call; got: $gh_calls_w5"
+  w5_ok=false
+fi
+if [[ "$stderr_content_w5" != *"WARN: Wave field write failed"* ]]; then
+  echo "FAIL [W5] missing Wave WARN in stderr"
+  echo "  stderr: $stderr_content_w5"
+  w5_ok=false
+fi
+if [[ "$w5_audit" != *'"result":"applied"'* ]]; then
+  echo "FAIL [W5] no 'applied' audit line for iteration write"
+  w5_ok=false
+fi
+if [[ "$w5_audit" != *'"result":"wave_failed"'* ]]; then
+  echo "FAIL [W5] no 'wave_failed' audit line"
+  w5_ok=false
+fi
+if $w5_ok; then echo "PASS [W5: Wave fail non-fatal, iteration applied + wave_failed audited]"; pass=$((pass+1))
+else fail=$((fail+1)); fi
+rm -rf "$wd_w5"
 
 # ---------------------------------------------------------------------------
 # Part B: Live read-only (SMOKE_LIVE=1 opt-in)
@@ -441,6 +550,12 @@ else
     echo "INFO: iter-config loaded (date=$DP_DATE)" >&2
 
     # Stage 1.5: deps.json (blocked-by DAG via native GraphQL)
+    # NOTE: Part B is an offline-simplified verification of stage 0-2 + 1.5
+    # connectivity. It does NOT replicate the loud WARN + [DEP DATA UNAVAILABLE]
+    # behavior of SKILL.md stage 1.5 on transient errors. Failures here silently
+    # fall back to empty blocked list to avoid CI noise when the GraphQL
+    # blockedBy field is unavailable in this account. Live stage 1.5 uses the
+    # full WARN path.
     echo "INFO: fetching blocked-by DAG for input issues..." >&2
     echo "{}" > "$live_wd/deps.json"
     issue_count=$(jq 'length' "$live_wd/issues.json")

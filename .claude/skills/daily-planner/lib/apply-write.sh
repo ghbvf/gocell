@@ -33,11 +33,21 @@ AUDIT_NDJSON="$WORKDIR/audit.ndjson"
 # ---------------------------------------------------------------------------
 audit_entry() {
   # $1=action $2=item_id $3=prev_iter $4=target_iter $5=result
-  printf '{"ts":"%s","date":"%s","mode":"%s","action":"%s","item_id":"%s","prev_iteration_id":"%s","target_iteration_id":"%s","result":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    "$DATE" \
-    "$([[ "$IS_WEEKEND" == "true" ]] && echo weekend || echo weekday)" \
-    "$1" "$2" "$3" "$4" "$5" \
+  # Use jq to construct JSON safely — item_id/prev_iter/target_iter come from
+  # LLM-generated plan.json and may contain %, ", \, or other JSON-unsafe chars.
+  local _ts _mode
+  _ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  _mode=$([[ "$IS_WEEKEND" == "true" ]] && echo weekend || echo weekday)
+  jq -cn \
+    --arg ts "$_ts" \
+    --arg date "$DATE" \
+    --arg mode "$_mode" \
+    --arg action "$1" \
+    --arg item_id "$2" \
+    --arg prev_iteration_id "$3" \
+    --arg target_iteration_id "$4" \
+    --arg result "$5" \
+    '{ts:$ts,date:$date,mode:$mode,action:$action,item_id:$item_id,prev_iteration_id:$prev_iteration_id,target_iteration_id:$target_iteration_id,result:$result}' \
     >> "$AUDIT_NDJSON"
 }
 
@@ -46,6 +56,7 @@ audit_entry() {
 # ---------------------------------------------------------------------------
 APPLIED=0
 SKIPPED=0
+WAVE_APPLIED=0
 APPLIED_ITEMS=()
 FAILED_ITEMS=()
 
@@ -62,27 +73,39 @@ while IFS= read -r row; do
     continue
   fi
 
-  # Write Iteration field value
+  # Write Iteration field value; capture stderr to a temp file for diagnosis on failure.
+  _iter_err_file=$(mktemp "/tmp/gh-iter-err-${item_id}.XXXXXX")
   if gh project item-edit \
        --project-id "$PROJECT_NODE_ID" \
        --id "$item_id" \
        --field-id "$ITERATION_FIELD_ID" \
-       --iteration-id "$tgt" >/dev/null; then
+       --iteration-id "$tgt" >/dev/null 2>"$_iter_err_file"; then
+    rm -f "$_iter_err_file"
     APPLIED=$((APPLIED+1))
     APPLIED_ITEMS+=("$item_id|$cur|$tgt")
     audit_entry "$action" "$item_id" "$cur" "$tgt" "applied"
 
     # C3c: Write Wave field value (if WAVE_FIELD_ID set and wave_option_id non-empty)
     if [[ -n "${WAVE_FIELD_ID:-}" && -n "$woi" ]]; then
-      gh project item-edit \
-        --project-id "$PROJECT_NODE_ID" \
-        --id "$item_id" \
-        --field-id "$WAVE_FIELD_ID" \
-        --single-select-option-id "$woi" >/dev/null || {
-          echo "WARN: Wave field write failed for item $item_id (non-fatal)" >&2
-        }
+      _wave_err_file=$(mktemp "/tmp/gh-wave-err-${item_id}.XXXXXX")
+      if gh project item-edit \
+           --project-id "$PROJECT_NODE_ID" \
+           --id "$item_id" \
+           --field-id "$WAVE_FIELD_ID" \
+           --single-select-option-id "$woi" >/dev/null 2>"$_wave_err_file"; then
+        WAVE_APPLIED=$((WAVE_APPLIED+1))
+        rm -f "$_wave_err_file"
+      else
+        _wave_err_summary=$(head -c 200 "$_wave_err_file" | tr '\n' ' ')
+        rm -f "$_wave_err_file"
+        echo "WARN: Wave field write failed for item $item_id (non-fatal): ${_wave_err_summary}" >&2
+        audit_entry "$action" "$item_id" "$cur" "$tgt" "wave_failed"
+      fi
     fi
   else
+    _iter_err_summary=$(head -c 200 "$_iter_err_file" | tr '\n' ' ')
+    rm -f "$_iter_err_file"
+    echo "WARN: Iteration write failed for item $item_id: ${_iter_err_summary}" >&2
     FAILED_ITEMS+=("$item_id|$cur|$tgt")
     audit_entry "$action" "$item_id" "$cur" "$tgt" "failed"
   fi
@@ -99,10 +122,16 @@ if [[ ${#FAILED_ITEMS[@]} -gt 0 ]]; then
     echo "# --- rollback commands for ALREADY-APPLIED items (REVIEW EACH BEFORE EXEC; prev_iter==\"\" means original had no iteration → --clear) ---" >&2
     for entry in "${APPLIED_ITEMS[@]}"; do
       IFS='|' read -r a_item a_prev _ <<<"$entry"
+      # Shell-quote dynamic values so the copy-paste command is safe even if
+      # IDs contain spaces or special characters.
+      _q_proj=$(printf '%q' "$PROJECT_NODE_ID")
+      _q_item=$(printf '%q' "$a_item")
+      _q_field=$(printf '%q' "$ITERATION_FIELD_ID")
       if [[ -z "$a_prev" ]]; then
-        echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $a_item --field-id $ITERATION_FIELD_ID --clear" >&2
+        echo "gh project item-edit --project-id ${_q_proj} --id ${_q_item} --field-id ${_q_field} --clear" >&2
       else
-        echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $a_item --field-id $ITERATION_FIELD_ID --iteration-id $a_prev" >&2
+        _q_prev=$(printf '%q' "$a_prev")
+        echo "gh project item-edit --project-id ${_q_proj} --id ${_q_item} --field-id ${_q_field} --iteration-id ${_q_prev}" >&2
       fi
     done
     echo "# --- end rollback ---" >&2
@@ -111,7 +140,11 @@ if [[ ${#FAILED_ITEMS[@]} -gt 0 ]]; then
   echo "# --- failed items (NOT written; safe to retry) ---" >&2
   for entry in "${FAILED_ITEMS[@]}"; do
     IFS='|' read -r f_item _ f_tgt <<<"$entry"
-    echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $f_item --field-id $ITERATION_FIELD_ID --iteration-id $f_tgt" >&2
+    _q_proj=$(printf '%q' "$PROJECT_NODE_ID")
+    _q_item=$(printf '%q' "$f_item")
+    _q_field=$(printf '%q' "$ITERATION_FIELD_ID")
+    _q_tgt=$(printf '%q' "$f_tgt")
+    echo "gh project item-edit --project-id ${_q_proj} --id ${_q_item} --field-id ${_q_field} --iteration-id ${_q_tgt}" >&2
   done
   echo "# --- end failed ---" >&2
 fi
@@ -121,5 +154,5 @@ fi
 # ---------------------------------------------------------------------------
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 MODE_STR=$([[ "$IS_WEEKEND" == "true" ]] && echo weekend || echo weekday)
-echo "[audit] $TS date=$DATE mode=$MODE_STR applied=$APPLIED skipped=$SKIPPED failed=${#FAILED_ITEMS[@]}" >&2
+echo "[audit] $TS date=$DATE mode=$MODE_STR applied=$APPLIED skipped=$SKIPPED failed=${#FAILED_ITEMS[@]} wave_applied=$WAVE_APPLIED" >&2
 echo "[audit] per-item NDJSON: $AUDIT_NDJSON" >&2

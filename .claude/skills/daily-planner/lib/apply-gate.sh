@@ -18,9 +18,14 @@ set -euo pipefail
 : "${WORKDIR:?WORKDIR required}"
 : "${TODAY_ITERATION_ID:?TODAY_ITERATION_ID required}"
 
-# C3c: Wave field must be configured for apply mode
+# C3c: Wave field must be configured for apply mode.
+# WAVE_FIELD_ID set but WAVE_OPTION_IDS empty = config corrupt (field exists with no options).
 if [[ -z "${WAVE_FIELD_ID:-}" ]]; then
-  echo "ERROR: Wave field missing; complete C3a config" >&2
+  echo "ERROR: Wave field missing; Wave single-select field not found in Project #3; see SKILL.md §C3a" >&2
+  exit 1
+fi
+if [[ -z "${WAVE_OPTION_IDS:-}" ]]; then
+  echo "ERROR: WAVE_OPTION_IDS empty but WAVE_FIELD_ID set; Wave field has no options (config corrupt)" >&2
   exit 1
 fi
 
@@ -101,6 +106,14 @@ while IFS= read -r row; do
   action=$(jq -r '.action' <<<"$row")
   woi=$(jq -r '.wave_option_id // ""' <<<"$row")
 
+  # Format guard: item_id must be a safe identifier (alphanumeric, underscore, hyphen, equals sign).
+  # Reject values containing newlines or other shell-unsafe characters before any grep usage.
+  if [[ ! "$item_id" =~ ^[A-Za-z0-9_=/-]+$ ]]; then
+    echo "ERROR: plan.json item_id contains unsafe characters: $item_id" >&2
+    VIOLATIONS=$((VIOLATIONS+1))
+    continue
+  fi
+
   if ! grep -qxF "$item_id" "$WORKDIR/valid-item-ids.txt"; then
     echo "ERROR: plan.json item_id not in allowed set (input issues ∪ carry-over): $item_id" >&2
     VIOLATIONS=$((VIOLATIONS+1))
@@ -116,9 +129,14 @@ while IFS= read -r row; do
     VIOLATIONS=$((VIOLATIONS+1))
   fi
 
-  # wave_option_id validation: only required for action==set
+  # wave_option_id validation: only required for action==set.
+  # WAVE_OPTION_IDS is guaranteed non-empty at this point (fail-fast above).
   if [[ "$action" == "set" ]]; then
-    if [[ -n "${WAVE_OPTION_IDS:-}" ]] && ! grep -qxF "$woi" "$WAVE_OPT_FILE"; then
+    # Format guard: wave_option_id must be a safe identifier before grep usage.
+    if [[ -n "$woi" && ! "$woi" =~ ^[A-Za-z0-9_=/-]+$ ]]; then
+      echo "ERROR: plan.json wave_option_id contains unsafe characters (item $item_id)" >&2
+      VIOLATIONS=$((VIOLATIONS+1))
+    elif ! grep -qxF "$woi" "$WAVE_OPT_FILE"; then
       echo "ERROR: plan.json wave_option_id unknown: $woi (item $item_id)" >&2
       VIOLATIONS=$((VIOLATIONS+1))
     fi
