@@ -28,6 +28,15 @@ type sharedMetricsDeps struct {
 	EventbusCacheCollector obmetrics.EventbusCacheCollector
 }
 
+// buildSharedMetricsDeps assembles framework-level always-on metric collectors
+// (config events, eventbus cache). Provider-conditional metrics (vault) live
+// in dedicated lazy methods on SharedDeps (e.g. ProvideVaultTransitMetrics)
+// so deployments that don't use the corresponding backend don't pollute their
+// scrape footprint with always-zero series.
+//
+// Failure here is composition-root fatal (LoadSharedDepsFromEnv returns the
+// error and the process exits); no LIFO rollback needed because every
+// constructed sub-resource is in-memory state with no Close contract.
 func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	ps, err := buildPromStack()
 	if err != nil {

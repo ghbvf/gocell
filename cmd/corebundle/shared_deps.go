@@ -2,15 +2,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
-
-	prom "github.com/prometheus/client_golang/prometheus"
+	"sync"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -185,16 +186,40 @@ type SharedDeps struct {
 	// empty when the var is unset (endpoint is disabled gracefully).
 	ProjectRoot string
 
+	// vaultTransitMetricsOnce / vaultTransitMetrics / vaultTransitMetricsErr
+	// implement lazy + once construction for vault-transit metrics.
+	// ProvideVaultTransitMetrics is the SOLE sanctioned construction path —
+	// only the vault-transit branch of buildKeyProvider calls it, so local-aes
+	// deployments never register gocell_vault_* zero-value series. Eager
+	// construction in buildSharedMetricsDeps was incorrect (would pollute
+	// local-aes scrape footprint with always-zero vault metrics).
+	vaultTransitMetricsOnce sync.Once
+	vaultTransitMetrics     *adaptervault.TransitMetrics
+	vaultTransitMetricsErr  error
+
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
+}
 
-	// keyProviderMetricCollectors are the collectors currently registered for
-	// the ConfigCore KeyProvider. ConfigCoreModule.Provide may be called more
-	// than once against the same SharedDeps in tests/rebuild paths; tracking
-	// ownership here lets the module replace provider-bound GaugeFunc collectors
-	// instead of leaving stale closures attached to an older provider instance.
-	keyProviderMetricCollectors []prom.Collector
+// ProvideVaultTransitMetrics lazily constructs and registers the vault-transit
+// metric set on PromStack.registry. Idempotent across repeated calls on the
+// same SharedDeps (sync.Once). Returns the cached error on subsequent calls
+// if the first construction failed.
+//
+// Callers: only the vault-transit branch of buildKeyProvider should invoke
+// this. local-aes / passthrough providers must not call it — that's the entire
+// point of moving from eager to lazy construction.
+func (s *SharedDeps) ProvideVaultTransitMetrics() (*adaptervault.TransitMetrics, error) {
+	s.vaultTransitMetricsOnce.Do(func() {
+		m, err := adaptervault.NewTransitMetrics(s.PromStack.registry)
+		if err != nil {
+			s.vaultTransitMetricsErr = fmt.Errorf("build vault transit metrics: %w", err)
+			return
+		}
+		s.vaultTransitMetrics = m
+	})
+	return s.vaultTransitMetrics, s.vaultTransitMetricsErr
 }
 
 // SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so

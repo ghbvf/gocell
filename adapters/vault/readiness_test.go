@@ -144,6 +144,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 		ctx, unreachableClient, "transit", "gocell-config",
 		vaultadapter.NewStaticTokenAuth(nil, "any-token"),
 		clock.Real(),
+		mustTransitMetrics(t),
 	)
 	if constructErr != nil {
 		// Constructor failing on an unreachable vault is expected; use the working
@@ -258,7 +259,7 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 
 	childVaultClient := vaultadapter.NewVaultAPIClient(childClient)
 	p, err := vaultadapter.NewTransitKeyProvider(ctx, childVaultClient, "transit", "gocell-config",
-		vaultadapter.NewStaticTokenAuth(nil, childToken), clock.Real())
+		vaultadapter.NewStaticTokenAuth(nil, childToken), clock.Real(), mustTransitMetrics(t))
 	require.NoError(t, err, "NewTransitKeyProvider with child token must succeed")
 
 	// Verify the probe works before revocation (confirms the policy grants access).

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
+	prom "github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -249,8 +250,12 @@ func (f *fakeVaultClientWithWriteOverride) Write(ctx context.Context, path strin
 // is non-renewable, so no renewal worker is started.
 func newTestProvider(t *testing.T, fake *fakeVaultClient) *TransitKeyProvider {
 	t.Helper()
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
 	p, err := NewTransitKeyProvider(context.Background(), fake,
-		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real())
+		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics)
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -653,8 +658,12 @@ func TestVaultTransitHandle_KeyIDFromEdkPrefix(t *testing.T) {
 		}, nil
 	}
 
+	metrics2, mErr2 := NewTransitMetrics(prom.NewRegistry())
+	if mErr2 != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr2)
+	}
 	p, err2 := NewTransitKeyProvider(context.Background(), override,
-		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real())
+		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics2)
 	if err2 != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err2)
 	}
@@ -986,8 +995,12 @@ func (f *fakeTokenWatcher) RenewCh() <-chan *vaultapi.RenewOutput {
 // goroutine needed when no TokenRenewer is available.
 func TestTransitKeyProvider_Worker_NilWhenNoRenewal(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
 	p, err := NewTransitKeyProvider(context.Background(), fake,
-		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real())
+		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics)
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -1001,8 +1014,12 @@ func TestTransitKeyProvider_Worker_NilWhenNoRenewal(t *testing.T) {
 // Worker() returns the configured renewal worker when one is set.
 func TestTransitKeyProvider_Worker_NonNilWhenRenewalConfigured(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
 	p, err := NewTransitKeyProvider(context.Background(), fake,
-		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real())
+		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics)
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -1012,47 +1029,6 @@ func TestTransitKeyProvider_Worker_NonNilWhenRenewalConfigured(t *testing.T) {
 
 	if p.Worker() == nil {
 		t.Error("Worker() must return non-nil when renewalWorker is set")
-	}
-}
-
-// TestTransitKeyProvider_RenewalMetrics_NilWhenNoRenewal verifies that
-// RenewalMetrics returns nil when no renewal worker is configured.
-func TestTransitKeyProvider_RenewalMetrics_NilWhenNoRenewal(t *testing.T) {
-	fake := &fakeVaultClient{latestVersion: 1}
-	p, err := NewTransitKeyProvider(context.Background(), fake,
-		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real())
-	if err != nil {
-		t.Fatalf("NewTransitKeyProvider: %v", err)
-	}
-
-	if got := p.RenewalMetrics(); got != nil {
-		t.Errorf("RenewalMetrics() = %v, want nil when no renewal worker configured", got)
-	}
-}
-
-// TestTransitKeyProvider_RenewalMetrics_ReturnsTwoCollectors verifies that
-// RenewalMetrics returns at least two collectors (success, failure) when a
-// renewal worker with counters is configured.
-func TestTransitKeyProvider_RenewalMetrics_ReturnsTwoCollectors(t *testing.T) {
-	fake := &fakeVaultClient{latestVersion: 1}
-	p, err := NewTransitKeyProvider(context.Background(), fake,
-		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real())
-	if err != nil {
-		t.Fatalf("NewTransitKeyProvider: %v", err)
-	}
-
-	successCtr, failureCtr := newRenewalCounters()
-	fw := newFakeTokenWatcher()
-	p.renewalWorker = &tokenRenewalWorker{
-		currentWatcher: fw,
-		renewSuccess:   successCtr,
-		renewFailure:   failureCtr,
-		clock:          clock.Real(),
-	}
-
-	got := p.RenewalMetrics()
-	if len(got) < 2 {
-		t.Errorf("RenewalMetrics() returned %d collectors, want >= 2", len(got))
 	}
 }
 
@@ -1351,8 +1327,12 @@ func TestTokenRenewalWorker_Stop_Idempotent(t *testing.T) {
 // stops the renewal worker when one is configured.
 func TestTransitKeyProvider_Close_StopsRenewalWorker(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
 	p, err := NewTransitKeyProvider(context.Background(), fake,
-		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real())
+		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics)
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -1434,7 +1414,7 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 		t.Fatalf("rotate successes = %d, want %d", got, rotations)
 	}
 
-	if got := p.cachedLatestVersion.Load(); got != int64(1+rotations) {
+	if got := p.metrics.LoadCachedVersion(); got != int64(1+rotations) {
 		t.Fatalf("cached latest version = %d, want %d", got, 1+rotations)
 	}
 }
@@ -1519,12 +1499,17 @@ func TestInitTokenRenewal_LookupFails_ReturnsAuthError(t *testing.T) {
 		lookupErr:       injectedErr,
 	}
 
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
 	p := &TransitKeyProvider{
 		client:     fake,
 		mountPath:  "transit",
 		keyName:    "gocell-config",
 		authMethod: NewStaticTokenAuth(nil, "test-token"),
 		logger:     slog.Default(),
+		metrics:    metrics,
 	}
 	// Pass renewable=true so initTokenRenewal proceeds past the renewable check.
 	err := p.initTokenRenewal(context.Background(), AuthResult{
@@ -1553,12 +1538,17 @@ func TestInitTokenRenewal_NewWatcherFails_ReturnsAuthError(t *testing.T) {
 		newWatcherErr:   injectedErr,
 	}
 
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
 	p := &TransitKeyProvider{
 		client:     fake,
 		mountPath:  "transit",
 		keyName:    "gocell-config",
 		authMethod: NewStaticTokenAuth(nil, "test-token"),
 		logger:     slog.Default(),
+		metrics:    metrics,
 	}
 	err := p.initTokenRenewal(context.Background(), AuthResult{
 		ClientToken:  "test-token",
@@ -1617,15 +1607,108 @@ func (f *fakeAuthMethod) Login(_ context.Context) (AuthResult, error) {
 // New PR-A8 tests: auth method, nil guard, real-mode guard
 // ---------------------------------------------------------------------------
 
-// TestNewTransitKeyProvider_NilAuth_Fails verifies that nil auth is rejected.
+// TestNewTransitKeyProvider_NilAuth_Fails verifies that nil auth is rejected
+// with the programmer-error code (ErrInternal). A wiring defect is not a
+// Vault auth failure; the latter is reserved for actual auth.Login errors.
 func TestNewTransitKeyProvider_NilAuth_Fails(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
-	_, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", nil, clock.Real())
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
+	_, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", nil, clock.Real(), metrics)
 	if err == nil {
 		t.Fatal("expected error for nil AuthMethod, got nil")
 	}
-	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
-		t.Errorf("expected ErrVaultAuthFailed in error chain, got: %v", err)
+	if !errChainHasCode(err, errcode.ErrInternal) {
+		t.Errorf("expected ErrInternal in error chain (wiring defect), got: %v", err)
+	}
+}
+
+// TestNewTransitKeyProvider_NilMetrics_Fails verifies that the metrics
+// constructor parameter is required — a nil *TransitMetrics is a programmer-
+// error (missing wiring call to vault.NewTransitMetrics) and must fail fast
+// with the programmer-error code (ErrInternal), not ErrVaultAuthFailed.
+func TestNewTransitKeyProvider_NilMetrics_Fails(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	_, err := NewTransitKeyProvider(
+		context.Background(), fake, "transit", "gocell-config",
+		NewStaticTokenAuth(nil, "test-token"), clock.Real(), nil,
+	)
+	if err == nil {
+		t.Fatal("expected error for nil *TransitMetrics, got nil")
+	}
+	if !errChainHasCode(err, errcode.ErrInternal) {
+		t.Errorf("expected ErrInternal in error chain (wiring defect), got: %v", err)
+	}
+}
+
+// TestTokenRenewalWorker_AuthHealthyStaysZeroUntilStart is the regression lock
+// for round-2 F2: the false-green window between worker construction and
+// Worker().Start being invoked must report token_auth_healthy=0. Previously
+// initTokenRenewal eagerly set the gauge to 1 when the worker was assembled,
+// producing a false-green signal during the construction-to-Start gap. The
+// transition 0→1 now happens inside tokenRenewalWorker.Start after the
+// nil-watcher check.
+//
+// We exercise tokenRenewalWorker directly (not via NewTransitKeyProvider)
+// because tying together a non-nil watcher + renewer fake without a real
+// Vault container is heavier than the invariant under test warrants.
+func TestTokenRenewalWorker_AuthHealthyStaysZeroUntilStart(t *testing.T) {
+	reg := prom.NewRegistry()
+	metrics, err := NewTransitMetrics(reg)
+	if err != nil {
+		t.Fatalf("NewTransitMetrics: %v", err)
+	}
+	w := &tokenRenewalWorker{
+		clock:          clock.Real(),
+		logger:         slog.Default(),
+		metrics:        metrics,
+		currentWatcher: newFakeTokenWatcher(),
+	}
+	// Worker fully constructed; Start NOT yet invoked.
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 0 {
+		t.Errorf("token_auth_healthy = %v before Start, want 0 "+
+			"(false-green window between construction and Start would mask missing renewal)", got)
+	}
+
+	// Once Start runs (canceled immediately so we don't actually loop),
+	// the gauge must transition to 1 inside Start, after the nil-watcher check.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so Start exits immediately after Set(1).
+	_ = w.Start(ctx)
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 1 {
+		t.Errorf("token_auth_healthy = %v after Start, want 1 (Set(1) belongs in Start, after the nil-watcher check)", got)
+	}
+}
+
+// TestNewTransitKeyProvider_NonRenewable_AuthHealthyStaysZero is the regression
+// lock for the false-green fix in #879. NewTransitMetrics defaults
+// token_auth_healthy=0; non-renewable auth (MethodToken) never starts a worker,
+// so the gauge must remain 0. Previously initTokenRenewal unconditionally set
+// the gauge to 1 even for non-renewable deployments, masking missing renewal.
+func TestNewTransitKeyProvider_NonRenewable_AuthHealthyStaysZero(t *testing.T) {
+	reg := prom.NewRegistry()
+	metrics, err := NewTransitMetrics(reg)
+	if err != nil {
+		t.Fatalf("NewTransitMetrics: %v", err)
+	}
+	fake := &fakeVaultClient{latestVersion: 1}
+	// NewStaticTokenAuth returns Renewable=false, so initTokenRenewal exits
+	// at the !result.Renewable branch and never reaches authHealthy.Set(1).
+	p, err := NewTransitKeyProvider(
+		context.Background(), fake, "transit", "gocell-config",
+		NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics,
+	)
+	if err != nil {
+		t.Fatalf("NewTransitKeyProvider: %v", err)
+	}
+	if p.Renewable() {
+		t.Fatal("test precondition broken: static token must be non-renewable")
+	}
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 0 {
+		t.Errorf("token_auth_healthy = %v after non-renewable construction, want 0 "+
+			"(worker did not start; previous unconditional Set(1) was a false-green bug)", got)
 	}
 }
 
@@ -1637,7 +1720,11 @@ func TestNewTransitKeyProvider_WithFakeAuth(t *testing.T) {
 		method:  MethodAppRole,
 		results: []AuthResult{{ClientToken: "fake-token", Renewable: false}},
 	}
-	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", auth, clock.Real())
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", auth, clock.Real(), metrics)
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider with fakeAuth: %v", err)
 	}
@@ -1658,9 +1745,13 @@ func TestNewTransitKeyProvider_WithFakeAuth(t *testing.T) {
 // (e.g. static VAULT_TOKEN, MethodToken).
 func TestTransitKeyProvider_Renewable_FalseForStaticToken(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
 	p, err := NewTransitKeyProvider(
 		context.Background(), fake, "transit", "gocell-config",
-		NewStaticTokenAuth(nil, "test-token"), clock.Real(),
+		NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics,
 	)
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
@@ -1678,7 +1769,11 @@ func TestTransitKeyProvider_Renewable_TrueForRenewableAuth(t *testing.T) {
 		method:  MethodAppRole,
 		results: []AuthResult{{ClientToken: "fake-token", Renewable: true}},
 	}
-	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", auth, clock.Real())
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", auth, clock.Real(), metrics)
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -1694,7 +1789,11 @@ func TestTransitKeyProvider_Renewable_TrueForRenewableAuth(t *testing.T) {
 // ErrVaultAuthFailed instead of silently using the SDK loopback default.
 func TestNewTransitKeyProviderFromEnv_MissingVaultAddr_Fails(t *testing.T) {
 	setEnv(t, "VAULT_ADDR", "")
-	_, err := NewTransitKeyProviderFromEnv(false, clock.Real())
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
+	_, err := NewTransitKeyProviderFromEnv(false, clock.Real(), metrics)
 	if err == nil {
 		t.Fatal("expected error when VAULT_ADDR is unset, got nil")
 	}
@@ -1728,7 +1827,11 @@ func TestNewTransitKeyProviderFromEnv_RealModeGuardPrecedesVaultIO(t *testing.T)
 		startupTimeoutEnvVar, "2s",
 	)
 
-	_, err := NewTransitKeyProviderFromEnv(true /* realMode */, clock.Real())
+	metrics, mErr := NewTransitMetrics(prom.NewRegistry())
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
+	_, err := NewTransitKeyProviderFromEnv(true /* realMode */, clock.Real(), metrics)
 	if err == nil {
 		t.Fatal("expected error in real mode with VAULT_AUTH_METHOD=token, got nil")
 	}
@@ -1832,7 +1935,11 @@ func TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr(t *testing.T) {
 			t.Setenv("VAULT_ADDR", tc.addr)
 			t.Setenv("VAULT_AUTH_METHOD", "") // unset to ensure auth setup fails fast
 
-			_, err := NewTransitKeyProviderFromEnv(false, clock.Real())
+			tlsMetrics, tlsMErr := NewTransitMetrics(prom.NewRegistry())
+			if tlsMErr != nil {
+				t.Fatalf("NewTransitMetrics: %v", tlsMErr)
+			}
+			_, err := NewTransitKeyProviderFromEnv(false, clock.Real(), tlsMetrics)
 			assertVaultTLSResult(t, tc.addr, err, tc.wantTLSErr)
 		})
 	}

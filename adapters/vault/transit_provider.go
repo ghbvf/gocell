@@ -11,13 +11,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
-	"github.com/prometheus/client_golang/prometheus"
 
-	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/healthz"
@@ -188,11 +185,8 @@ type tokenRenewalWorker struct {
 	authMethod AuthMethod
 	logger     *slog.Logger
 
-	// Prometheus metrics.
-	renewSuccess prometheus.Counter     // gocell_vault_token_renew_success_total
-	renewFailure prometheus.Counter     // gocell_vault_token_renew_failure_total
-	authHealthy  prometheus.Gauge       // gocell_vault_token_auth_healthy (1=healthy, 0=re-authing)
-	loginOutcome *prometheus.CounterVec // gocell_vault_auth_login_total{method,result,reason}
+	// metrics holds all Prometheus collectors for the renewal worker.
+	metrics *TransitMetrics
 
 	// clock is the time source used for backoff sleeps.
 	clock clock.Clock
@@ -232,6 +226,18 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 			"vault-transit: renewal worker started with nil watcher (initTokenRenewal skipped?)")
 	}
 
+	// Transition authHealthy 0→1 here, not in initTokenRenewal: the gauge
+	// must reflect "watcher is actively running" (Start has been invoked by
+	// bootstrap.WithWorkers), not "the worker struct exists but hasn't
+	// started yet". The window between construction and Start may be tens
+	// of milliseconds in production but is meaningful for fail-closed
+	// readiness semantics. ref: kubernetes-sigs/controller-runtime
+	// pkg/manager/runnable_group.Start — readiness flips only when Start
+	// is actually invoked.
+	if w.metrics != nil {
+		w.metrics.authHealthy.Set(1)
+	}
+
 	for {
 		if w.runWatcher(ctx, watcher) {
 			return nil
@@ -261,8 +267,8 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 // Returns (newWatcher, true) once both reauthenticate and buildWatcher succeed,
 // or (nil, false) if ctx was canceled.
 func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) {
-	if w.authHealthy != nil {
-		w.authHealthy.Set(0)
+	if w.metrics != nil {
+		w.metrics.authHealthy.Set(0)
 	}
 	watcherBackoff := reauthBackoffInitial
 	for {
@@ -275,8 +281,8 @@ func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) 
 		}
 		newWatcher, err := w.buildWatcher(ctx)
 		if err == nil {
-			if w.authHealthy != nil {
-				w.authHealthy.Set(1)
+			if w.metrics != nil {
+				w.metrics.authHealthy.Set(1)
 			}
 			return newWatcher, true
 		}
@@ -336,8 +342,8 @@ func (w *tokenRenewalWorker) handleDoneCh(ctx context.Context, err error, ok boo
 		// Channel closed: watcher stopped externally — clean exit.
 		return true
 	}
-	if w.renewFailure != nil {
-		w.renewFailure.Inc()
+	if w.metrics != nil {
+		w.metrics.renewFailure.Inc()
 	}
 	if err != nil {
 		w.logger.WarnContext(ctx, "vault-transit: token renewal watcher stopped with error; will re-authenticate",
@@ -360,8 +366,8 @@ func (w *tokenRenewalWorker) handleRenewCh(ctx context.Context, renewal *vaultap
 	}
 	w.logger.InfoContext(ctx, "vault-transit: token renewed",
 		slog.Int("lease_duration", renewal.Secret.Auth.LeaseDuration))
-	if w.renewSuccess != nil {
-		w.renewSuccess.Inc()
+	if w.metrics != nil {
+		w.metrics.renewSuccess.Inc()
 	}
 	return false
 }
@@ -379,14 +385,14 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 	for {
 		_, err := w.authMethod.Login(ctx)
 		if err == nil {
-			if w.loginOutcome != nil {
-				w.loginOutcome.WithLabelValues(methodStr, "success", reasonNone).Inc()
+			if w.metrics != nil {
+				w.metrics.loginOutcome.WithLabelValues(methodStr, "success", reasonNone).Inc()
 			}
 			return nil
 		}
 		reason := classifyAuthLoginError(err)
-		if w.loginOutcome != nil {
-			w.loginOutcome.WithLabelValues(methodStr, "failure", reason).Inc()
+		if w.metrics != nil {
+			w.metrics.loginOutcome.WithLabelValues(methodStr, "failure", reason).Inc()
 		}
 		w.logger.WarnContext(ctx, "vault-transit: re-authentication failed; will retry",
 			slog.String("method", methodStr),
@@ -653,20 +659,6 @@ type TransitKeyProvider struct {
 	mountPath string
 	keyName   string
 
-	// cachedLatestVersion is the cached transit/keys/{name} latest_version.
-	// Zero means uninitialised or invalidated; readers fall back to a Vault
-	// readLatestVersion call. Rotate() invalidates by storing 0, then refreshes.
-	//
-	// Multi-pod staleness is benign by design:
-	//   - Vault /transit/datakey/plaintext always uses latest_version server-side
-	//     and the keyID returned to callers is parsed from the response, not from
-	//     this cache. Stale cache only affects KeyHandle.ID() returned by Current()
-	//     between a remote rotate and this pod's next Vault round-trip — diagnostic
-	//     surface only.
-	//   - Decrypt validates against the EDK's own version prefix; cache is never
-	//     consulted on the decrypt path.
-	cachedLatestVersion atomic.Int64
-
 	// authMethod stored so renewal worker can re-authenticate.
 	authMethod AuthMethod
 
@@ -682,6 +674,8 @@ type TransitKeyProvider struct {
 	renewalWorker *tokenRenewalWorker
 	logger        *slog.Logger
 	clock         clock.Clock
+	// metrics owns the cache-version atomic; LoadCachedVersion() replaces the per-provider field for the rationale see TransitMetrics doc.
+	metrics *TransitMetrics
 }
 
 // NewTransitKeyProvider creates a TransitKeyProvider with the given VaultClient
@@ -702,12 +696,22 @@ type TransitKeyProvider struct {
 //
 // Returns an error if auth is nil, Login fails, or the key existence check fails.
 func NewTransitKeyProvider(
-	ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod, clk clock.Clock,
+	ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod, clk clock.Clock, metrics *TransitMetrics,
 ) (*TransitKeyProvider, error) {
 	clock.MustHaveClock(clk, "vault.NewTransitKeyProvider")
+	// Required-dependency guards: wiring defects at the composition root, not
+	// Vault auth failures. KindInternal + ErrInternal matches the errcode
+	// convention for programmer-error sites — operators chasing the public
+	// error code see "internal" rather than being misrouted to Vault auth
+	// triage. (Was ErrVaultAuthFailed previously, which conflated wiring
+	// defects with real Vault auth failures.)
 	if auth == nil {
-		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"vault-transit: auth method is required (pass NewStaticTokenAuth in tests)")
+	}
+	if metrics == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"vault-transit: metrics is required (use vault.NewTransitMetrics(reg) and pass it in)")
 	}
 	if mountPath == "" {
 		mountPath = "transit"
@@ -722,6 +726,7 @@ func NewTransitKeyProvider(
 		authMethod: auth,
 		logger:     slog.Default(),
 		clock:      clk,
+		metrics:    metrics,
 	}
 
 	// Perform initial login to acquire token and configure the client.
@@ -737,7 +742,7 @@ func NewTransitKeyProvider(
 	if err != nil {
 		return nil, err
 	}
-	p.cachedLatestVersion.Store(int64(version))
+	p.metrics.StoreCachedVersion(int64(version))
 
 	// Initialize background token renewal if applicable.
 	if err := p.initTokenRenewal(ctx, result); err != nil {
@@ -747,16 +752,20 @@ func NewTransitKeyProvider(
 	return p, nil
 }
 
-// authenticate calls auth.Login and returns the result. On success it records
-// a loginOutcome metric (if the renewal worker is already configured from a
-// prior call — during initial construction the worker is not yet set, so the
-// metric is recorded separately in initTokenRenewal).
+// authenticate calls auth.Login and records the outcome to loginOutcome so
+// startup auth success/failure is visible in gocell_vault_auth_login_total
+// alongside the worker's re-auth attempts. Failures classify the reason via
+// classifyAuthLoginError to keep the label set consistent with the renewal
+// worker's reauthenticate path.
 func (p *TransitKeyProvider) authenticate(ctx context.Context) (AuthResult, error) {
+	methodStr := string(p.authMethod.Method())
 	result, err := p.authMethod.Login(ctx)
 	if err != nil {
+		p.metrics.loginOutcome.WithLabelValues(methodStr, "failure", classifyAuthLoginError(err)).Inc()
 		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: initial authentication failed", err)
 	}
+	p.metrics.loginOutcome.WithLabelValues(methodStr, "success", reasonNone).Inc()
 	return result, nil
 }
 
@@ -782,7 +791,7 @@ func (p *TransitKeyProvider) authenticate(ctx context.Context) (AuthResult, erro
 //
 // ref: hashicorp/vault api/client.go@main — DefaultConfig + NewClient
 // ref: hashicorp/vault api/auth/approle/approle.go — AppRole auth
-func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock) (*TransitKeyProvider, error) {
+func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock, metrics *TransitMetrics) (*TransitKeyProvider, error) {
 	// F-2: VAULT_ADDR is required — fail fast rather than silently defaulting to
 	// the SDK loopback address (https://127.0.0.1:8200), which contradicts docs
 	// that mark VAULT_ADDR as required and hides misconfigurations.
@@ -845,7 +854,7 @@ func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock) (*TransitKeyPr
 	keyName := os.Getenv("GOCELL_VAULT_TRANSIT_KEY")
 
 	client := NewVaultAPIClient(raw)
-	p, err := NewTransitKeyProvider(ctx, client, mountPath, keyName, auth, clk)
+	p, err := NewTransitKeyProvider(ctx, client, mountPath, keyName, auth, clk, metrics)
 	if err != nil {
 		return nil, err
 	}
@@ -868,14 +877,14 @@ func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock) (*TransitKeyPr
 // Lock-free: serves cached latest_version when available, falls back to a
 // Vault read on cache miss / invalidation.
 func (p *TransitKeyProvider) Current(ctx context.Context) (kcrypto.KeyHandle, error) {
-	if v := p.cachedLatestVersion.Load(); v > 0 {
+	if v := p.metrics.LoadCachedVersion(); v > 0 {
 		return p.handleForVersion(int(v)), nil
 	}
 	version, err := p.readLatestVersion(ctx)
 	if err != nil {
 		return nil, err
 	}
-	p.cachedLatestVersion.Store(int64(version))
+	p.metrics.StoreCachedVersion(int64(version))
 	return p.handleForVersion(version), nil
 }
 
@@ -920,13 +929,13 @@ func (p *TransitKeyProvider) Rotate(ctx context.Context) (string, error) {
 			"vault-transit: rotate key", err)
 	}
 
-	p.cachedLatestVersion.Store(0) // invalidate so the refresh below repopulates
+	p.metrics.StoreCachedVersion(0) // invalidate so the refresh below repopulates
 	version, err := p.readLatestVersion(ctx)
 	if err != nil {
 		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderRotateFailed,
 			"vault-transit: read key version after rotate", err)
 	}
-	p.cachedLatestVersion.Store(int64(version))
+	p.metrics.StoreCachedVersion(int64(version))
 
 	return vaultKeyIDPrefix + fmt.Sprintf("v%d", version), nil
 }
@@ -1197,62 +1206,6 @@ func (p *TransitKeyProvider) Checkers() map[string]func(context.Context) error {
 	}
 }
 
-// RenewalMetrics returns the Prometheus collectors for token renewal and
-// auth observability. The composition root must register these with its
-// prometheus.Registerer so that renewal counters appear in /metrics scrapes.
-// Returns nil when no renewal worker is configured (e.g. static token / no TokenRenewer).
-//
-// IMPORTANT: each TransitKeyProvider instance constructs a fresh set of
-// collectors with identical metric names. Callers MUST register these to a
-// dedicated *prometheus.Registry (or a scoped Registerer), NOT to
-// prometheus.DefaultRegisterer — registering two instances' collectors to the
-// same Registerer panics with "duplicate metrics collector registration"
-// (the SDK enforces uniqueness of name+label tuples per Registerer). In tests
-// that construct multiple providers, use prometheus.NewRegistry() per instance
-// or guard with prometheus.WrapRegistererWith() labels.
-func (p *TransitKeyProvider) RenewalMetrics() []prometheus.Collector {
-	if p.renewalWorker == nil {
-		return nil
-	}
-	w := p.renewalWorker
-	collectors := []prometheus.Collector{w.renewSuccess, w.renewFailure}
-	if w.authHealthy != nil {
-		collectors = append(collectors, w.authHealthy)
-	}
-	if w.loginOutcome != nil {
-		collectors = append(collectors, w.loginOutcome)
-	}
-	return collectors
-}
-
-// CacheVersionMetrics returns the Prometheus collector exposing the latest
-// Vault Transit key version cached by this process. The collector is not
-// registered here; composition roots own registry selection and duplicate
-// handling.
-func (p *TransitKeyProvider) CacheVersionMetrics() []prometheus.Collector {
-	return []prometheus.Collector{
-		promadapter.NewGaugeFunc(prometheus.GaugeOpts{
-			Namespace: "gocell",
-			Subsystem: "vault",
-			Name:      "cached_key_version",
-			Help:      "Latest Vault Transit key version cached by this process; 0 means cache miss.",
-			ConstLabels: prometheus.Labels{
-				"mount_path": p.mountPath,
-				"key_name":   p.keyName,
-			},
-		}, func() float64 {
-			return float64(p.cachedLatestVersion.Load())
-		}),
-	}
-}
-
-// Metrics returns all Prometheus collectors exposed by TransitKeyProvider.
-func (p *TransitKeyProvider) Metrics() []prometheus.Collector {
-	collectors := p.CacheVersionMetrics()
-	collectors = append(collectors, p.RenewalMetrics()...)
-	return collectors
-}
-
 // Worker returns the token renewal worker when one has been configured, or nil
 // when the VaultClient does not implement TokenRenewer (e.g. test fakes with
 // static tokens). The bootstrap layer skips WithWorkers registration for nil.
@@ -1294,8 +1247,9 @@ func (p *TransitKeyProvider) Close(ctx context.Context) error {
 // token will expire without notification.
 //
 // Renewable tokens: LookupSelfToken seeds the LifetimeWatcher with accurate TTL.
-// authHealthy is seeded to 1. loginOutcome CounterVec is registered with
-// {method, result, reason} labels.
+// authHealthy stays at 0 here — tokenRenewalWorker.Start flips it to 1 only
+// after the watcher actually begins running (avoids a false-green window
+// between construction and Worker().Start).
 //
 // ref: hashicorp/vault api/lifetime_watcher.go@main — LifetimeWatcher usage pattern
 // ref: external-secrets/external-secrets pkg/provider/vault — ValidateStore (token lookup probe)
@@ -1334,41 +1288,17 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context, result AuthRe
 			"vault-transit: NewLifetimeWatcher returned nil without error")
 	}
 
-	authHealthy := promadapter.NewGauge(prometheus.GaugeOpts{
-		Namespace: "gocell",
-		Subsystem: "vault",
-		Name:      "token_auth_healthy",
-		Help:      "1 when Vault token renewal is healthy; 0 when the background renewer is re-authenticating after a terminal renewal failure.",
-	})
-	authHealthy.Set(1)
-
-	loginOutcome := promadapter.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "gocell",
-		Subsystem: "vault",
-		Name:      "auth_login_total",
-		Help:      "Count of Vault auth Login attempts.",
-	}, []string{"method", "result", "reason"})
-
 	p.renewalWorker = &tokenRenewalWorker{
-		client:     renewer,
-		authMethod: p.authMethod,
-		logger:     p.logger,
-		clock:      p.clock,
-		renewSuccess: promadapter.NewCounter(prometheus.CounterOpts{
-			Namespace: "gocell",
-			Subsystem: "vault",
-			Name:      "token_renew_success_total",
-			Help:      "Number of successful Vault token renewals.",
-		}),
-		renewFailure: promadapter.NewCounter(prometheus.CounterOpts{
-			Namespace: "gocell",
-			Subsystem: "vault",
-			Name:      "token_renew_failure_total",
-			Help:      "Number of Vault token renewal failures.",
-		}),
-		authHealthy:    authHealthy,
-		loginOutcome:   loginOutcome,
+		client:         renewer,
+		authMethod:     p.authMethod,
+		logger:         p.logger,
+		clock:          p.clock,
+		metrics:        p.metrics,
 		currentWatcher: &vaultLifetimeWatcherAdapter{w: raw},
 	}
+	// authHealthy is set to 1 by tokenRenewalWorker.Start when the watcher
+	// actually begins running, NOT here. Construction-time Set(1) would
+	// produce a false-green signal during the window between initTokenRenewal
+	// returning and bootstrap invoking Start.
 	return nil
 }

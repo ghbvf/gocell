@@ -21,7 +21,7 @@ metrics:
         - method
         - result
         - reason
-      file: adapters/vault/transit_provider.go
+      file: adapters/vault/transit_metrics.go
     - name: auth_refresh_gc_duration_seconds
       fqName: gocell_auth_refresh_gc_duration_seconds
       namespace: gocell
@@ -136,13 +136,8 @@ metrics:
       subsystem: vault
       type: gauge
       help: Latest Vault Transit key version cached by this process; 0 means cache miss.
-      labels:
-        - key_name
-        - mount_path
-      constLabels:
-        - key_name
-        - mount_path
-      file: adapters/vault/transit_provider.go
+      labels: []
+      file: adapters/vault/transit_metrics.go
     - name: cell_hook_duration_seconds
       fqName: gocell_cell_hook_duration_seconds
       namespace: gocell
@@ -396,9 +391,9 @@ metrics:
       namespace: gocell
       subsystem: vault
       type: gauge
-      help: 1 when Vault token renewal is healthy; 0 when the background renewer is re-authenticating after a terminal renewal failure.
+      help: 1 when the Vault token renewal worker is healthy; 0 before the worker starts or while re-authenticating after a terminal renewal failure.
       labels: []
-      file: adapters/vault/transit_provider.go
+      file: adapters/vault/transit_metrics.go
     - name: token_renew_failure_total
       fqName: gocell_vault_token_renew_failure_total
       namespace: gocell
@@ -406,7 +401,7 @@ metrics:
       type: counter
       help: Number of Vault token renewal failures.
       labels: []
-      file: adapters/vault/transit_provider.go
+      file: adapters/vault/transit_metrics.go
     - name: token_renew_success_total
       fqName: gocell_vault_token_renew_success_total
       namespace: gocell
@@ -414,4 +409,4 @@ metrics:
       type: counter
       help: Number of successful Vault token renewals.
       labels: []
-      file: adapters/vault/transit_provider.go
+      file: adapters/vault/transit_metrics.go

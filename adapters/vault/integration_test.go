@@ -73,7 +73,7 @@ func newProviderFromEnv(t *testing.T, addr, token string) *vaultadapter.TransitK
 	t.Setenv("GOCELL_VAULT_TRANSIT_MOUNT", "transit")
 	t.Setenv("GOCELL_VAULT_TRANSIT_KEY", "gocell-config")
 
-	p, err := vaultadapter.NewTransitKeyProviderFromEnv(false /* realMode */, clock.Real())
+	p, err := vaultadapter.NewTransitKeyProviderFromEnv(false /* realMode */, clock.Real(), mustTransitMetrics(t))
 	require.NoError(t, err, "NewTransitKeyProviderFromEnv should succeed with running vault")
 	return p
 }
@@ -189,7 +189,7 @@ path "transit/keys/gocell-config/rotate"       { capabilities = ["create","updat
 	t.Setenv("GOCELL_VAULT_TRANSIT_MOUNT", "transit")
 	t.Setenv("GOCELL_VAULT_TRANSIT_KEY", "gocell-config")
 
-	p, err := vaultadapter.NewTransitKeyProviderFromEnv(false /* realMode */, clock.Real())
+	p, err := vaultadapter.NewTransitKeyProviderFromEnv(false /* realMode */, clock.Real(), mustTransitMetrics(t))
 	require.NoError(t, err, "NewTransitKeyProviderFromEnv with AppRole must succeed")
 
 	handle, err := p.Current(ctx)
@@ -223,7 +223,7 @@ func TestNewTransitKeyProviderFromEnv_RealMode_RejectsStaticToken(t *testing.T) 
 	t.Setenv("GOCELL_VAULT_TRANSIT_MOUNT", "transit")
 	t.Setenv("GOCELL_VAULT_TRANSIT_KEY", "gocell-config")
 
-	_, err := vaultadapter.NewTransitKeyProviderFromEnv(true /* realMode */, clock.Real())
+	_, err := vaultadapter.NewTransitKeyProviderFromEnv(true /* realMode */, clock.Real(), mustTransitMetrics(t))
 	require.Error(t, err, "NewTransitKeyProviderFromEnv in real mode with static token must fail")
 
 	var ec *errcode.Error
@@ -435,7 +435,7 @@ func TestTransitEnvelope_VaultNeverSeesBusinessPlaintext(t *testing.T) {
 
 	auth := vaultadapter.NewStaticTokenAuth(rawClient, token)
 	client := vaultadapter.NewVaultAPIClient(rawClient)
-	p, err := vaultadapter.NewTransitKeyProvider(ctx, client, "transit", "gocell-config", auth, clock.Real())
+	p, err := vaultadapter.NewTransitKeyProvider(ctx, client, "transit", "gocell-config", auth, clock.Real(), mustTransitMetrics(t))
 	require.NoError(t, err)
 
 	businessSecret := "very-sensitive-password-123"

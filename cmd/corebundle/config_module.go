@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"slices"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 
@@ -133,7 +131,7 @@ func (m ConfigCoreModule) Provide(
 	baseOpts = append(baseOpts, modResult.CellOptions...) //archtest:allow:clock-injection:via-slice WithClock in baseOpts
 	c := configcore.NewConfigCore(baseOpts...)
 
-	return buildConfigCoreResult(ctx, c, kp, shared, modResult)
+	return buildConfigCoreResult(c, kp, modResult)
 }
 
 // resolveConfigKeyProvider returns m.KeyProviderOverride when set, otherwise
@@ -147,6 +145,7 @@ func resolveConfigKeyProvider(override kcrypto.KeyProvider, shared *SharedDeps) 
 	kp, err := buildKeyProvider(
 		shared.Topology.StorageBackend, shared.Topology.AdapterMode,
 		providerName, masterKey, prevMasterKey, shared.Clock,
+		shared.ProvideVaultTransitMetrics,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configcore key provider: %w", err)
@@ -155,14 +154,11 @@ func resolveConfigKeyProvider(override kcrypto.KeyProvider, shared *SharedDeps) 
 }
 
 // buildConfigCoreResult wires the provisional resources, relay opts, and
-// key-provider managed resource, then registers Vault diagnostics. It is
-// extracted from Provide to keep that function's cognitive complexity within
-// the project limit.
+// key-provider managed resource. It is extracted from Provide to keep that
+// function's cognitive complexity within the project limit.
 func buildConfigCoreResult(
-	ctx context.Context,
 	c cell.Cell,
 	kp kcrypto.KeyProvider,
-	shared *SharedDeps,
 	modResult ConfigCoreModuleResult,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	var opts []bootstrap.Option
@@ -171,18 +167,6 @@ func buildConfigCoreResult(
 	if modResult.PoolResource != nil {
 		opts = append(opts, bootstrap.WithManagedResource(modResult.PoolResource))
 		provisional = append(provisional, modResult.PoolResource)
-	}
-
-	// rollback is only invoked before kpRes append; if reordered, capture provisional through a function arg.
-	rollback := func() {
-		closeProvisional(ctx, provisional)
-	}
-
-	// Register Vault diagnostics when the KeyProvider exposes them.
-	if err := registerKeyProviderMetrics(kp, shared); err != nil {
-		shared.SharedPGPool = nil
-		rollback()
-		return nil, nil, nil, fmt.Errorf("configcore: register key provider metrics: %w", err)
 	}
 
 	// Relay opts: in postgres mode, BootstrapOpts carries WithRelay(relay) which
@@ -204,86 +188,7 @@ func buildConfigCoreResult(
 	return c, opts, provisional, nil
 }
 
-// closeProvisional closes managed resources in LIFO order, logging failures.
-func closeProvisional(ctx context.Context, resources []kernellifecycle.ManagedResource) {
-	for _, v := range slices.Backward(resources) {
-		if closeErr := v.Close(ctx); closeErr != nil {
-			slog.Warn("configcore: provisional rollback close failed",
-				slog.Any("error", closeErr))
-		}
-	}
-}
-
 var _ CellModule = ConfigCoreModule{}
-
-// renewalMetricsProvider is a local interface satisfied by vault.TransitKeyProvider
-// (and any future KeyProvider that exposes Prometheus renewal metrics). Using an
-// interface avoids importing the vault adapter package directly from config_module.go.
-type renewalMetricsProvider interface {
-	RenewalMetrics() []prom.Collector
-}
-
-type keyProviderMetricsProvider interface {
-	Metrics() []prom.Collector
-}
-
-// registerKeyProviderMetrics registers the current KeyProvider's diagnostics.
-// These collectors may close over provider instance state (GaugeFunc), so a
-// repeated Provide against the same SharedDeps must replace the previous owned
-// collector set instead of reusing or silently ignoring duplicates.
-func registerKeyProviderMetrics(kp kcrypto.KeyProvider, shared *SharedDeps) error {
-	return replaceRegisteredCollectors(
-		shared.PromStack.registry,
-		&shared.keyProviderMetricCollectors,
-		keyProviderMetricCollectors(kp),
-		"key provider metric",
-	)
-}
-
-func keyProviderMetricCollectors(kp kcrypto.KeyProvider) []prom.Collector {
-	if mp, ok := kp.(keyProviderMetricsProvider); ok {
-		return mp.Metrics()
-	}
-	rmp, ok := kp.(renewalMetricsProvider)
-	if !ok {
-		return nil
-	}
-	return rmp.RenewalMetrics()
-}
-
-func replaceRegisteredCollectors(reg prom.Registerer, current *[]prom.Collector, next []prom.Collector, label string) error {
-	previous := append([]prom.Collector(nil), (*current)...)
-	unregisterCollectors(reg, previous)
-
-	registered, err := registerCollectorSet(reg, next, label)
-	if err != nil {
-		unregisterCollectors(reg, registered)
-		if _, restoreErr := registerCollectorSet(reg, previous, label+" restore"); restoreErr != nil {
-			return fmt.Errorf("%w (also failed to restore previous collectors: %w)", err, restoreErr)
-		}
-		return err
-	}
-
-	*current = registered
-	return nil
-}
-
-func registerCollectorSet(reg prom.Registerer, collectors []prom.Collector, label string) ([]prom.Collector, error) {
-	registered := make([]prom.Collector, 0, len(collectors))
-	for _, col := range collectors {
-		if err := reg.Register(col); err != nil {
-			return registered, fmt.Errorf("%s: %w", label, err)
-		}
-		registered = append(registered, col)
-	}
-	return registered, nil
-}
-
-func unregisterCollectors(reg prom.Registerer, collectors []prom.Collector) {
-	for _, col := range collectors {
-		reg.Unregister(col)
-	}
-}
 
 // newConfigCoreCASProtocol builds the CAS protocol used by configcore.
 // Extracted from Provide to keep its cognitive complexity below the
