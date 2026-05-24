@@ -33,3 +33,13 @@ updates:
           - "github.com/testcontainers/testcontainers-go*"
           - "go.opentelemetry.io/*"
           - "golang.org/x/*"
+    ignore:
+      # gofumpt 必须锁定在 pinned golangci-lint release 内 vendor 的版本
+      # （golangci-lint v2.11.4 vendors gofumpt v0.9.2）。go.mod 的 gofumpt
+      # 与 golangci-lint 内 vendor 的 gofumpt 版本一旦分裂，producer 侧
+      # （tools/codegen 调用 gofumpt.Source）与 CI formatter gate
+      # （golangci-lint 内 vendor 的同包）会对同一 diff 应用不同格式化规则
+      # → CI 必红 / codegen drift。仅当同步升级 golangci-lint 时才解锁
+      # （见 hack/lib/golangci-lint.sh 的 SYNC 契约）。PR #534 / #910 均因
+      # 自动升级到 v0.10.0 被回滚。
+      - dependency-name: "mvdan.cc/gofumpt"
