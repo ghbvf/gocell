@@ -79,23 +79,27 @@ type Journal interface {
 	// and returns the per-instance version assigned to it (monotonic, starting
 	// at 1). It is lease-fenced: leaseID MUST match the instance's current lease,
 	// otherwise nothing is recorded and a KindConflict error is returned. The
-	// event is validated via Event.ValidateForAppend (KindSagaTerminal is
+	// event is validated via Event.ValidateForAppend (terminal event kinds are
 	// rejected here — terminal status is committed via MarkTerminal). The Event's
 	// Version and CreatedAt are assigned by the Journal; any caller-supplied
 	// values are ignored.
 	//
-	// Append advances the projection's non-terminal Status as a deterministic
-	// function of the event kind, reusing the saga state machine (saga.AdvanceSaga)
-	// so every move is transition-validated:
-	//   - the first forward step event (StepStarted/StepCompleted/StepFailed) on a
-	//     Pending instance moves it Pending → Running;
-	//   - a StepCompensated event on a Running instance moves it Running →
-	//     Compensating (entering the rollback phase);
-	//   - a StepCompensated event on a Pending instance is rejected (a step cannot
-	//     be compensated before the saga has started), surfacing the underlying
-	//     illegal-transition error.
-	// Append never moves the instance to a terminal status — that is MarkTerminal's
-	// sole responsibility. It also does NOT maintain the step cursor
+	// Append advances the projection's non-terminal Status as a deterministic fold
+	// of the event kind, reusing the saga state machine (saga.AdvanceSaga) so every
+	// move is transition-validated and an out-of-phase event is rejected without
+	// mutation:
+	//   - a forward step event (StepStarted/StepCompleted/StepFailed) moves a
+	//     Pending instance to Running; on a Running instance it is a no-op; while
+	//     Compensating it is rejected.
+	//   - KindCompensationStarted moves Running → Compensating (the Coordinator
+	//     appends it when it DECIDES to compensate, BEFORE any compensation runs,
+	//     so a handoff mid-rollback reads Compensating, not Running); from Pending
+	//     it is rejected.
+	//   - KindStepCompensated is legal only while Compensating (status unchanged);
+	//     elsewhere it is rejected.
+	// Terminal event kinds are rejected by ValidateForAppend — terminal status is
+	// committed only via MarkTerminal, which encodes the terminal state in the
+	// event kind. Append also does NOT maintain the step cursor
 	// (Instance.CurrentStep); see ClaimPending.
 	//
 	// An unknown instance returns KindNotFound; a terminal instance (whose lease
@@ -116,7 +120,8 @@ type Journal interface {
 	// claimed instance. When nothing is claimable it returns an empty slice, the
 	// zero LeaseID, and a nil error.
 	//
-	// batchSize MUST be ≥ 1; a non-positive batchSize returns a KindInvalid error.
+	// batchSize and leaseDuration MUST both be positive; a non-positive value
+	// returns a KindInvalid error.
 	//
 	// The returned Instance carries the coordination projection: Status (the
 	// coarse-grained Pending/Running/Compensating lifecycle the Journal maintains)
@@ -131,16 +136,18 @@ type Journal interface {
 	ClaimPending(ctx context.Context, batchSize int, leaseDuration time.Duration) (claimed []ClaimedInstance, leaseID idutil.SafeID, err error)
 
 	// Heartbeat extends the lease on a single claimed instance to
-	// now+leaseDuration. It is lease-fenced: ok is false (with a nil error) when
+	// now+leaseDuration. leaseDuration MUST be > 0; a non-positive value returns a
+	// KindInvalid error. It is lease-fenced: ok is false (with a nil error) when
 	// leaseID no longer owns the instance, signaling the holder to stop driving
 	// it. A never-enqueued instance also returns ok=false (nil error); callers
 	// cannot distinguish it from a stale lease.
 	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
 
 	// MarkTerminal transitions the instance projection to finalStatus and appends
-	// the closing KindSagaTerminal event atomically. finalStatus MUST be a
-	// terminal saga.Status reachable from the current status (validated via
-	// saga.AdvanceSaga). It is lease-fenced: ok is false (with a nil error) when
+	// the matching terminal event (saga_succeeded / saga_failed / saga_compensated
+	// / saga_expired) atomically, so the log alone replays which terminal state was
+	// reached. finalStatus MUST be a terminal saga.Status reachable from the current
+	// status (validated via saga.AdvanceSaga). It is lease-fenced: ok is false (with a nil error) when
 	// leaseID no longer owns the instance. On success the lease is released.
 	// A never-enqueued instance also returns ok=false (nil error); callers
 	// cannot distinguish it from a stale lease.

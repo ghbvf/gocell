@@ -2,6 +2,7 @@ package journal
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -65,5 +66,25 @@ func errNonPositiveBatchSize(batchSize int) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga journal: ClaimPending batchSize must be positive",
 		errcode.WithInternal(fmt.Sprintf("batchSize=%d", batchSize)),
+	)
+}
+
+// errNonPositiveLeaseDuration reports that ClaimPending / Heartbeat received a
+// leaseDuration ≤ 0 (which would mint an immediately-expired or boundary lease).
+func errNonPositiveLeaseDuration(d time.Duration) error {
+	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"saga journal: leaseDuration must be positive",
+		errcode.WithInternal(fmt.Sprintf("leaseDuration=%s", d)),
+	)
+}
+
+// errEventPhase reports that an event kind was appended in a status that does
+// not permit it (e.g. a forward step while Compensating, or KindStepCompensated
+// while not Compensating). The projection is a fold of the event log, so an
+// out-of-phase event would desynchronise status from history.
+func errEventPhase(instanceID idutil.SafeID, kind EventKind, status saga.Status) error {
+	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"saga journal: event kind not allowed in current phase",
+		errcode.WithInternal(fmt.Sprintf("instanceID=%s kind=%s status=%s", instanceID, kind, status)),
 	)
 }

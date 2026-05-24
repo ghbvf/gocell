@@ -46,7 +46,7 @@ func TestMemJournal_Conformance(t *testing.T) {
 // TestNewMemJournal_NilClock verifies that passing a nil Clock panics.
 func TestNewMemJournal_NilClock(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatal("NewMemJournal(nil) did not panic; expected clock guard panic")
 		}
 	}()

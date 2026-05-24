@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
@@ -29,9 +30,13 @@ func TestEventKind_Valid(t *testing.T) {
 		{journal.KindStepCompleted, true},
 		{journal.KindStepFailed, true},
 		{journal.KindStepCompensated, true},
-		{journal.KindSagaTerminal, true},
+		{journal.KindCompensationStarted, true},
+		{journal.KindSagaSucceeded, true},
+		{journal.KindSagaFailed, true},
+		{journal.KindSagaCompensated, true},
+		{journal.KindSagaExpired, true},
 		{journal.EventKind(0), false},
-		{journal.EventKind(6), false},
+		{journal.EventKind(10), false},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -52,7 +57,11 @@ func TestEventKind_String(t *testing.T) {
 		{journal.KindStepCompleted, "step_completed"},
 		{journal.KindStepFailed, "step_failed"},
 		{journal.KindStepCompensated, "step_compensated"},
-		{journal.KindSagaTerminal, "saga_terminal"},
+		{journal.KindCompensationStarted, "compensation_started"},
+		{journal.KindSagaSucceeded, "saga_succeeded"},
+		{journal.KindSagaFailed, "saga_failed"},
+		{journal.KindSagaCompensated, "saga_compensated"},
+		{journal.KindSagaExpired, "saga_expired"},
 		{journal.EventKind(0), "eventkind(0)"},
 		{journal.EventKind(99), "eventkind(99)"},
 	}
@@ -63,6 +72,66 @@ func TestEventKind_String(t *testing.T) {
 			assert.Equal(t, tt.want, tt.k.String())
 		})
 	}
+}
+
+// TestEventKind_IsTerminal verifies that exactly the 4 KindSaga* terminal kinds
+// return true and the 5 non-terminal kinds return false.
+func TestEventKind_IsTerminal(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		k        journal.EventKind
+		terminal bool
+	}{
+		{journal.KindStepStarted, false},
+		{journal.KindStepCompleted, false},
+		{journal.KindStepFailed, false},
+		{journal.KindStepCompensated, false},
+		{journal.KindCompensationStarted, false},
+		{journal.KindSagaSucceeded, true},
+		{journal.KindSagaFailed, true},
+		{journal.KindSagaCompensated, true},
+		{journal.KindSagaExpired, true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.k.String(), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.terminal, tt.k.IsTerminal())
+		})
+	}
+}
+
+// TestTerminalEventKind verifies the TerminalEventKind mapping between terminal
+// saga.Status values and their corresponding EventKind.
+func TestTerminalEventKind(t *testing.T) {
+	t.Parallel()
+
+	// Each terminal status must map to exactly one distinct terminal EventKind.
+	terminalCases := []struct {
+		status   saga.Status
+		wantKind journal.EventKind
+	}{
+		{saga.StatusSucceeded, journal.KindSagaSucceeded},
+		{saga.StatusFailed, journal.KindSagaFailed},
+		{saga.StatusCompensated, journal.KindSagaCompensated},
+		{saga.StatusExpired, journal.KindSagaExpired},
+	}
+	for _, tc := range terminalCases {
+		tc := tc
+		t.Run(tc.status.String(), func(t *testing.T) {
+			t.Parallel()
+			got, ok := journal.TerminalEventKind(tc.status)
+			require.True(t, ok, "TerminalEventKind(%s) must return ok=true", tc.status)
+			assert.Equal(t, tc.wantKind, got)
+		})
+	}
+
+	// A non-terminal status must return ok=false.
+	t.Run("non-terminal/Running", func(t *testing.T) {
+		t.Parallel()
+		_, ok := journal.TerminalEventKind(saga.StatusRunning)
+		assert.False(t, ok, "TerminalEventKind(Running) must return ok=false")
+	})
 }
 
 func TestEvent_ValidateForAppend_StepKinds(t *testing.T) {
@@ -118,24 +187,69 @@ func TestEvent_ValidateForAppend_StepKinds(t *testing.T) {
 	}
 }
 
+// TestEvent_ValidateForAppend_TerminalRejected verifies that all 4 terminal kinds
+// are rejected by ValidateForAppend (they must go through MarkTerminal).
 func TestEvent_ValidateForAppend_TerminalRejected(t *testing.T) {
 	t.Parallel()
-	e := journal.Event{
-		Kind:     journal.KindSagaTerminal,
-		StepName: "",
-		Payload:  nil,
+
+	terminalKinds := []journal.EventKind{
+		journal.KindSagaSucceeded,
+		journal.KindSagaFailed,
+		journal.KindSagaCompensated,
+		journal.KindSagaExpired,
 	}
-	err := e.ValidateForAppend()
-	require.Error(t, err, "KindSagaTerminal must be rejected by ValidateForAppend")
-	var ecErr *errcode.Error
-	assert.True(t, errors.As(err, &ecErr))
+	for _, k := range terminalKinds {
+		k := k
+		t.Run(k.String(), func(t *testing.T) {
+			t.Parallel()
+			e := journal.Event{
+				Kind:     k,
+				StepName: "",
+				Payload:  nil,
+			}
+			err := e.ValidateForAppend()
+			require.Error(t, err, "%s must be rejected by ValidateForAppend", k)
+			var ecErr *errcode.Error
+			assert.True(t, errors.As(err, &ecErr))
+		})
+	}
+}
+
+// TestEvent_ValidateForAppend_CompensationStarted_NoStepName verifies that
+// KindCompensationStarted is allowed WITHOUT a StepName (it is saga-scoped, not
+// step-scoped), and with valid object/null payloads.
+func TestEvent_ValidateForAppend_CompensationStarted_NoStepName(t *testing.T) {
+	t.Parallel()
+
+	validPayloads := []struct {
+		name    string
+		payload []byte
+	}{
+		{"nil", nil},
+		{"empty", []byte{}},
+		{"null", []byte("null")},
+		{"object", []byte(`{"reason":"step-2-failed"}`)},
+	}
+	for _, p := range validPayloads {
+		p := p
+		t.Run(p.name, func(t *testing.T) {
+			t.Parallel()
+			e := journal.Event{
+				Kind:     journal.KindCompensationStarted,
+				StepName: "", // intentionally empty
+				Payload:  p.payload,
+			}
+			assert.NoError(t, e.ValidateForAppend(),
+				"KindCompensationStarted with empty StepName should pass ValidateForAppend")
+		})
+	}
 }
 
 func TestEvent_ValidateForAppend_InvalidKind(t *testing.T) {
 	t.Parallel()
 	tests := []journal.EventKind{
 		journal.EventKind(0),
-		journal.EventKind(6),
+		journal.EventKind(10),
 	}
 	for _, k := range tests {
 		k := k

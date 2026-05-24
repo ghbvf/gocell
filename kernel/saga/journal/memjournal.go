@@ -88,12 +88,10 @@ func (m *MemJournal) Append(_ context.Context, instanceID, leaseID idutil.SafeID
 	}
 
 	// STATUS PROJECTION: advance the instance status as a deterministic function
-	// of the event kind, reusing the saga state machine so every move is
-	// transition-validated. See Journal.Append godoc for the full rule set.
-	if target, needsTransition := m.projectionTarget(row.inst.Status, event.Kind); needsTransition {
-		if err := saga.AdvanceSaga(&row.inst, target, now); err != nil {
-			return 0, err
-		}
+	// of the event kind (fail-closed on an out-of-phase event), reusing the saga
+	// state machine. See Journal.Append godoc for the full rule set.
+	if err := m.applyProjection(row, instanceID, event.Kind, now); err != nil {
+		return 0, err
 	}
 
 	version := m.appendLocked(row, instanceID, Event{
@@ -129,9 +127,12 @@ func (m *MemJournal) Load(_ context.Context, instanceID idutil.SafeID) ([]Event,
 
 // ClaimPending implements Journal.ClaimPending.
 func (m *MemJournal) ClaimPending(_ context.Context, batchSize int, leaseDuration time.Duration) ([]ClaimedInstance, idutil.SafeID, error) {
-	// Fix F: reject non-positive batchSize before taking the lock.
+	// Reject non-positive batchSize / leaseDuration before taking the lock.
 	if batchSize <= 0 {
 		return nil, "", errNonPositiveBatchSize(batchSize)
+	}
+	if leaseDuration <= 0 {
+		return nil, "", errNonPositiveLeaseDuration(leaseDuration)
 	}
 
 	m.mu.Lock()
@@ -198,6 +199,10 @@ func (m *MemJournal) ClaimPending(_ context.Context, batchSize int, leaseDuratio
 
 // Heartbeat implements Journal.Heartbeat.
 func (m *MemJournal) Heartbeat(_ context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (bool, error) {
+	if leaseDuration <= 0 {
+		return false, errNonPositiveLeaseDuration(leaseDuration)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -234,15 +239,23 @@ func (m *MemJournal) MarkTerminal(_ context.Context, instanceID, leaseID idutil.
 		return false, errInvalidTerminalStatus(instanceID, row.inst.Status, finalStatus)
 	}
 
-	// Fix H: remove the redundant saga.Transition call; AdvanceSaga re-validates
-	// the transition and surfaces illegal-transition errors (KindInvalid+ErrValidationFailed).
+	// Map the terminal status to its event kind so the log encodes the final
+	// state (Load alone replays which terminal was reached). IsTerminal() above
+	// guarantees ok; the guard is defensive.
+	termKind, okKind := TerminalEventKind(finalStatus)
+	if !okKind {
+		return false, errInvalidTerminalStatus(instanceID, row.inst.Status, finalStatus)
+	}
+
+	// AdvanceSaga re-validates the transition and surfaces illegal-transition
+	// errors (KindInvalid+ErrValidationFailed).
 	if err := saga.AdvanceSaga(&row.inst, finalStatus, now); err != nil {
 		return false, err
 	}
 
-	// Append the closing KindSagaTerminal event atomically with the status flip.
+	// Append the closing terminal event atomically with the status flip.
 	m.appendLocked(row, instanceID, Event{
-		Kind:      KindSagaTerminal,
+		Kind:      termKind,
 		StepName:  "",
 		Payload:   nil,
 		Version:   0, // filled by appendLocked
@@ -290,24 +303,39 @@ func (m *MemJournal) appendLocked(row *instanceRow, instanceID idutil.SafeID, e 
 	return version
 }
 
-// projectionTarget returns the status the projection should advance to given the
-// current status and the incoming event kind, and whether any transition is needed.
-// The mapping implements the status-projection rules in Journal.Append godoc.
-func (m *MemJournal) projectionTarget(current saga.Status, kind EventKind) (saga.Status, bool) {
-	switch {
-	case current == saga.StatusPending && kind != KindStepCompensated:
-		// First forward step event on a Pending instance: Pending → Running.
-		return saga.StatusRunning, true
-	case current == saga.StatusRunning && kind == KindStepCompensated:
-		// Compensation event on a Running instance: Running → Compensating.
-		return saga.StatusCompensating, true
-	case current == saga.StatusPending && kind == KindStepCompensated:
-		// Compensation on a Pending instance is illegal. Return Compensating as the
-		// target so that AdvanceSaga surfaces the illegal Pending→Compensating
-		// transition error. Fail-closed: the error from AdvanceSaga propagates.
-		return saga.StatusCompensating, true
+// applyProjection advances the instance's non-terminal status as a deterministic
+// function of the appended event kind, reusing the saga state machine. Called
+// under m.mu before the event is recorded; returns an error WITHOUT mutating on
+// an out-of-phase event or illegal transition (fail-closed). Terminal kinds never
+// reach here — ValidateForAppend rejects them (they go through MarkTerminal).
+//
+// Phase rules (the projection is a fold of the event log):
+//   - forward step (Started/Completed/Failed): Pending → Running (starts the
+//     saga); legal-but-no-op while Running; rejected while Compensating.
+//   - KindCompensationStarted: Running → Compensating (AdvanceSaga rejects
+//     Pending→Compensating and a repeated Compensating→Compensating).
+//   - KindStepCompensated: legal only while Compensating; status unchanged.
+func (m *MemJournal) applyProjection(row *instanceRow, instanceID idutil.SafeID, kind EventKind, now time.Time) error {
+	st := row.inst.Status
+	switch kind {
+	case KindStepStarted, KindStepCompleted, KindStepFailed:
+		switch st {
+		case saga.StatusPending:
+			return saga.AdvanceSaga(&row.inst, saga.StatusRunning, now)
+		case saga.StatusRunning:
+			return nil
+		default:
+			return errEventPhase(instanceID, kind, st)
+		}
+	case KindCompensationStarted:
+		return saga.AdvanceSaga(&row.inst, saga.StatusCompensating, now)
+	case KindStepCompensated:
+		if st != saga.StatusCompensating {
+			return errEventPhase(instanceID, kind, st)
+		}
+		return nil
 	default:
-		return 0, false
+		return nil
 	}
 }
 

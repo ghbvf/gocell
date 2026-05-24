@@ -30,6 +30,15 @@ import (
 // to call once and must be deferred by the caller.
 type Factory func(t *testing.T) (j journal.Journal, clk *clockmock.FakeClock, cleanup func())
 
+// Package-level string constants extracted per SonarQube duplication rules.
+const (
+	stepOne         = "step-one"
+	anyLease        = "any-lease"
+	neverEnqueuedID = "never-enqueued-id"
+	fmtLoadErr      = "Load: %v"
+	fmtClaimErr     = "ClaimPending: err=%v len=%d"
+)
+
 // RunConformanceSuite runs the full Journal conformance suite against the
 // supplied factory. Every subtest is registered as a t.Run so individual
 // cases can be filtered with -run.
@@ -61,7 +70,7 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		// 7: Append payload validation.
 		{"Append_InvalidJSONPayload_Rejected", conformAppendInvalidPayload},
 		{"Append_ArrayPayload_Rejected", conformAppendArrayPayload},
-		{"Append_KindSagaTerminal_Rejected", conformAppendTerminalKindRejected},
+		{"Append_KindSagaSucceeded_Rejected", conformAppendTerminalKindRejected},
 		// 8–11: ClaimPending empty / batch cap / second call / contention.
 		{"ClaimPending_EmptyStore_NilSliceZeroLeaseID", conformClaimPendingEmpty},
 		{"ClaimPending_BatchCap", conformClaimPendingBatchCap},
@@ -79,8 +88,8 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"MarkTerminal_RunningToSucceeded", conformMarkTerminalSucceeded},
 		{"MarkTerminal_CompensatingToCompensated", conformCompensationPath},
 		{"MarkTerminal_IllegalTransition_Error", conformMarkTerminalIllegalTransition},
-		// Append status-projection invariant: compensate-before-start rejected.
-		{"Append_CompensateOnPending_Rejected", conformAppendCompensateOnPending},
+		// Append status-projection invariant: StepCompensated outside Compensating rejected.
+		{"Append_StepCompensatedOutsideCompensating_Rejected", conformStepCompensatedOutsideCompensating},
 		// 15: leader handoff — stale leader fenced out while the new one drives on.
 		{"LeaderHandoff_StaleLeaderFencedOut", conformLeaderHandoff},
 		// 17: MarkTerminal fencing.
@@ -106,6 +115,13 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"MarkTerminal_CompensatingToExpired", conformMarkTerminalCompensatingToExpired},
 		{"MarkTerminal_CompensatingToSucceeded_KindInvalid", conformMarkTerminalCompensatingToSucceededIllegal},
 		{"MarkTerminal_RunningToCompensated_KindInvalid", conformMarkTerminalRunningToCompensatedIllegal},
+		// NEW: terminal-event replay, phase-rejection, leader-handoff F2, non-positive lease.
+		{"TerminalEvent_ReplayableStatus", conformTerminalEventReplayableStatus},
+		{"Append_CompensationStarted_OnPending_Rejected", conformAppendCompensationStartedOnPendingRejected},
+		{"Append_ForwardStep_WhileCompensating_Rejected", conformAppendForwardStepWhileCompensatingRejected},
+		{"LeaderHandoff_ReadsCompensatingPhase", conformLeaderHandoffReadsCompensatingPhase},
+		{"ClaimPending_NonPositiveLeaseDuration_KindInvalid", conformClaimPendingNonPositiveLeaseDuration},
+		{"Heartbeat_NonPositiveLeaseDuration_KindInvalid", conformHeartbeatNonPositiveLeaseDuration},
 	}
 
 	for _, tc := range cases {
@@ -206,7 +222,7 @@ func appendStep(t *testing.T, j journal.Journal, id, leaseID idutil.SafeID, kind
 	t.Helper()
 	v, err := j.Append(context.Background(), id, leaseID, journal.Event{
 		Kind:     kind,
-		StepName: "step-one",
+		StepName: stepOne,
 	})
 	if err != nil {
 		t.Fatalf("Append(%s): %v", kind, err)
@@ -214,20 +230,37 @@ func appendStep(t *testing.T, j journal.Journal, id, leaseID idutil.SafeID, kind
 	return v
 }
 
-// loadHasTerminal reports whether the instance's event log contains a
-// KindSagaTerminal event.
+// loadHasTerminal reports whether the instance's event log contains any
+// terminal event kind (as determined by EventKind.IsTerminal).
 func loadHasTerminal(t *testing.T, j journal.Journal, id idutil.SafeID) bool {
 	t.Helper()
 	events, err := j.Load(context.Background(), id)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf(fmtLoadErr, err)
 	}
 	for _, e := range events {
-		if e.Kind == journal.KindSagaTerminal {
+		if e.Kind.IsTerminal() {
 			return true
 		}
 	}
 	return false
+}
+
+// loadTerminalKind returns the terminal EventKind from the instance's event log,
+// or fails if none is found.
+func loadTerminalKind(t *testing.T, j journal.Journal, id idutil.SafeID) journal.EventKind {
+	t.Helper()
+	events, err := j.Load(context.Background(), id)
+	if err != nil {
+		t.Fatalf(fmtLoadErr, err)
+	}
+	for _, e := range events {
+		if e.Kind.IsTerminal() {
+			return e.Kind
+		}
+	}
+	t.Fatalf("no terminal event found in log for instance %s", id)
+	return 0
 }
 
 // claimOne enqueues a fresh Pending instance and claims it, returning its
@@ -238,7 +271,7 @@ func claimOne(t *testing.T, j journal.Journal, clk *clockmock.FakeClock, id stri
 	mustEnqueue(t, j, inst)
 	claimed, _, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimed) == 0 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(fmtClaimErr, err, len(claimed))
 	}
 	return findClaimed(t, claimed, inst.ID)
 }
@@ -272,7 +305,7 @@ func conformLoadNeverEnqueued(t *testing.T, factory Factory) {
 	j, _, cleanup := factory(t)
 	defer cleanup()
 
-	_, err := j.Load(context.Background(), "never-enqueued-id")
+	_, err := j.Load(context.Background(), neverEnqueuedID)
 	if err == nil {
 		t.Fatal("Load of never-enqueued instance should return error, got nil")
 	}
@@ -361,7 +394,7 @@ func conformAppendLoadRoundTrip(t *testing.T, factory Factory) {
 	appendTime := clk.Now()
 	version, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
 		Kind:     journal.KindStepStarted,
-		StepName: "step-one",
+		StepName: stepOne,
 		Payload:  wantPayload,
 	})
 	if err != nil {
@@ -373,7 +406,7 @@ func conformAppendLoadRoundTrip(t *testing.T, factory Factory) {
 
 	events, err := j.Load(context.Background(), inst.ID)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf(fmtLoadErr, err)
 	}
 	if len(events) != 1 {
 		t.Fatalf("Load returned %d events; want 1", len(events))
@@ -385,8 +418,8 @@ func conformAppendLoadRoundTrip(t *testing.T, factory Factory) {
 	if e.Kind != journal.KindStepStarted {
 		t.Errorf("event Kind=%v; want KindStepStarted", e.Kind)
 	}
-	if e.StepName != "step-one" {
-		t.Errorf("event StepName=%q; want %q", e.StepName, "step-one")
+	if e.StepName != stepOne {
+		t.Errorf("event StepName=%q; want %q", e.StepName, stepOne)
 	}
 	if !bytes.Equal(e.Payload, wantPayload) {
 		t.Errorf("event Payload=%q; want %q", e.Payload, wantPayload)
@@ -438,7 +471,7 @@ func conformVersionMonotonicity(t *testing.T, factory Factory) {
 
 	events, err := j.Load(context.Background(), inst.ID)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf(fmtLoadErr, err)
 	}
 	if len(events) != n {
 		t.Fatalf("Load returned %d events; want %d", len(events), n)
@@ -508,7 +541,7 @@ func conformConcurrentAppend(t *testing.T, factory Factory) {
 	// Load and verify event count.
 	events, err := j.Load(context.Background(), inst.ID)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf(fmtLoadErr, err)
 	}
 	if len(events) != G {
 		t.Errorf("Load returned %d events; want %d", len(events), G)
@@ -544,7 +577,7 @@ func conformAppendInvalidPayload(t *testing.T, factory Factory) {
 
 	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
 		Kind:     journal.KindStepStarted,
-		StepName: "step-one",
+		StepName: stepOne,
 		Payload:  []byte(`not-valid-json`),
 	})
 	if err == nil {
@@ -567,7 +600,7 @@ func conformAppendArrayPayload(t *testing.T, factory Factory) {
 
 	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
 		Kind:     journal.KindStepStarted,
-		StepName: "step-one",
+		StepName: stepOne,
 		Payload:  []byte(`[1,2,3]`),
 	})
 	if err == nil {
@@ -578,6 +611,9 @@ func conformAppendArrayPayload(t *testing.T, factory Factory) {
 	}
 }
 
+// conformAppendTerminalKindRejected asserts that Append with a terminal kind
+// (e.g. KindSagaSucceeded) is rejected — terminal events are written only via
+// MarkTerminal.
 func conformAppendTerminalKindRejected(t *testing.T, factory Factory) {
 	t.Helper()
 	j, clk, cleanup := factory(t)
@@ -589,14 +625,14 @@ func conformAppendTerminalKindRejected(t *testing.T, factory Factory) {
 	ci := findClaimed(t, claimed, inst.ID)
 
 	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
-		Kind: journal.KindSagaTerminal,
-		// KindSagaTerminal is non-step kind, so no StepName required.
+		Kind: journal.KindSagaSucceeded,
+		// KindSagaSucceeded is a terminal kind; no StepName required.
 	})
 	if err == nil {
-		t.Fatal("Append with KindSagaTerminal should return error, got nil")
+		t.Fatal("Append with KindSagaSucceeded should return error, got nil")
 	}
 	if !isKindInvalid(err) {
-		t.Errorf("Append with KindSagaTerminal: want KindInvalid error, got %v", err)
+		t.Errorf("Append with KindSagaSucceeded: want KindInvalid error, got %v", err)
 	}
 }
 
@@ -767,7 +803,7 @@ func conformAppendStaleLease(t *testing.T, factory Factory) {
 	// Worker A claims.
 	claimedA, leaseA, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimedA) == 0 {
-		t.Fatalf("ClaimPending (worker A): err=%v len=%d", err, len(claimedA))
+		t.Fatalf(fmtClaimErr, err, len(claimedA))
 	}
 	ciA := findClaimed(t, claimedA, inst.ID)
 	_ = ciA
@@ -778,7 +814,7 @@ func conformAppendStaleLease(t *testing.T, factory Factory) {
 	// Worker B claims the recovered instance with a new lease.
 	claimedB, leaseB, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimedB) == 0 {
-		t.Fatalf("ClaimPending (worker B): err=%v len=%d", err, len(claimedB))
+		t.Fatalf(fmtClaimErr, err, len(claimedB))
 	}
 	if leaseA == leaseB {
 		t.Fatalf("worker A and B leases must differ; both are %q", leaseA)
@@ -787,7 +823,7 @@ func conformAppendStaleLease(t *testing.T, factory Factory) {
 	// Worker A's stale Append must return KindConflict.
 	_, err = j.Append(context.Background(), inst.ID, leaseA, journal.Event{
 		Kind:     journal.KindStepStarted,
-		StepName: "step-one",
+		StepName: stepOne,
 	})
 	if err == nil {
 		t.Fatal("stale Append should return error, got nil")
@@ -800,7 +836,7 @@ func conformAppendStaleLease(t *testing.T, factory Factory) {
 	ciB := findClaimed(t, claimedB, inst.ID)
 	_, err = j.Append(context.Background(), ciB.Instance.ID, ciB.LeaseID, journal.Event{
 		Kind:     journal.KindStepStarted,
-		StepName: "step-one",
+		StepName: stepOne,
 	})
 	if err != nil {
 		t.Fatalf("fresh Append with worker B lease: %v", err)
@@ -820,7 +856,7 @@ func conformHeartbeatWrongLease(t *testing.T, factory Factory) {
 	mustEnqueue(t, j, inst)
 	claimed, _, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimed) == 0 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(fmtClaimErr, err, len(claimed))
 	}
 
 	// Call Heartbeat with a wrong (fabricated) leaseID.
@@ -842,7 +878,7 @@ func conformHeartbeatCorrectLease(t *testing.T, factory Factory) {
 	mustEnqueue(t, j, inst)
 	claimed, _, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimed) == 0 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(fmtClaimErr, err, len(claimed))
 	}
 	ci := findClaimed(t, claimed, inst.ID)
 
@@ -868,7 +904,7 @@ func conformHeartbeatExtendsLease(t *testing.T, factory Factory) {
 	mustEnqueue(t, j, inst)
 	claimed, _, err := j.ClaimPending(context.Background(), 10, originalLease)
 	if err != nil || len(claimed) == 0 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(fmtClaimErr, err, len(claimed))
 	}
 	ci := findClaimed(t, claimed, inst.ID)
 
@@ -901,12 +937,12 @@ func conformHeartbeatExtendsLease(t *testing.T, factory Factory) {
 //
 // The Journal advances the non-terminal projection status as a function of the
 // appended event kind (see Journal.Append godoc): the first forward step event
-// moves Pending→Running, and a StepCompensated event moves Running→Compensating.
+// moves Pending→Running, KindCompensationStarted moves Running→Compensating.
 // MarkTerminal then commits a terminal status legal from the current one. These
 // tests exercise all three reachable happy paths:
 //   - Pending → Failed     (no step events; saga abandoned before starting)
 //   - Running → Succeeded  (after a forward step event)
-//   - Compensating → Compensated (after a forward step + a compensate event)
+//   - Compensating → Compensated (after StepStarted + CompensationStarted + StepCompensated)
 // ---------------------------------------------------------------------------
 
 func conformMarkTerminalHappy(t *testing.T, factory Factory) {
@@ -926,7 +962,7 @@ func conformMarkTerminalHappy(t *testing.T, factory Factory) {
 	}
 
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal did not append a KindSagaTerminal event")
+		t.Error("MarkTerminal did not append a terminal event")
 	}
 
 	// Lease released + terminal: a later ClaimPending (after any lease window
@@ -963,7 +999,7 @@ func conformMarkTerminalSucceeded(t *testing.T, factory Factory) {
 		t.Fatal("MarkTerminal(Running→Succeeded): expected ok=true")
 	}
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Succeeded) did not append a KindSagaTerminal event")
+		t.Error("MarkTerminal(Succeeded) did not append a terminal event")
 	}
 }
 
@@ -976,8 +1012,14 @@ func conformCompensationPath(t *testing.T, factory Factory) {
 
 	ci := claimOne(t, j, clk, "inst-compensated")
 
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)     // Pending → Running
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // Running → Compensating
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind: journal.KindCompensationStarted, // Running → Compensating (no StepName needed)
+	})
+	if err != nil {
+		t.Fatalf("Append(KindCompensationStarted): %v", err)
+	}
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // legal while Compensating
 
 	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensated)
 	if err != nil {
@@ -987,29 +1029,42 @@ func conformCompensationPath(t *testing.T, factory Factory) {
 		t.Fatal("MarkTerminal(Compensating→Compensated): expected ok=true")
 	}
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Compensated) did not append a KindSagaTerminal event")
+		t.Error("MarkTerminal(Compensated) did not append a terminal event")
 	}
 }
 
-// conformAppendCompensateOnPending asserts the status-projection invariant that
-// a StepCompensated event on a still-Pending instance is rejected (a step
-// cannot be compensated before the saga has started — Pending↛Compensating).
-func conformAppendCompensateOnPending(t *testing.T, factory Factory) {
+// conformStepCompensatedOutsideCompensating asserts that KindStepCompensated
+// is rejected unless the saga is already in the Compensating phase.
+func conformStepCompensatedOutsideCompensating(t *testing.T, factory Factory) {
 	t.Helper()
 	j, clk, cleanup := factory(t)
 	defer cleanup()
 
-	ci := claimOne(t, j, clk, "inst-compensate-on-pending")
-
+	// Case 1: Pending — StepCompensated must be rejected.
+	ci := claimOne(t, j, clk, "inst-compensate-outside-compensating-pending")
 	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
 		Kind:     journal.KindStepCompensated,
-		StepName: "step-one",
+		StepName: stepOne,
 	})
 	if err == nil {
 		t.Fatal("Append(StepCompensated) on a Pending instance should be rejected, got nil")
 	}
 	if !isKindInvalid(err) {
 		t.Errorf("Append(StepCompensated) on Pending: want KindInvalid error, got %v", err)
+	}
+
+	// Case 2: Running — StepCompensated must also be rejected.
+	ci2 := claimOne(t, j, clk, "inst-compensate-outside-compensating-running")
+	appendStep(t, j, ci2.Instance.ID, ci2.LeaseID, journal.KindStepStarted) // Pending → Running
+	_, err = j.Append(context.Background(), ci2.Instance.ID, ci2.LeaseID, journal.Event{
+		Kind:     journal.KindStepCompensated,
+		StepName: stepOne,
+	})
+	if err == nil {
+		t.Fatal("Append(StepCompensated) on a Running instance should be rejected, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("Append(StepCompensated) on Running: want KindInvalid error, got %v", err)
 	}
 }
 
@@ -1028,7 +1083,7 @@ func conformLeaderHandoff(t *testing.T, factory Factory) {
 	// Leader A claims and heartbeats.
 	claimedA, leaseA, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimedA) == 0 {
-		t.Fatalf("ClaimPending (A): err=%v len=%d", err, len(claimedA))
+		t.Fatalf(fmtClaimErr, err, len(claimedA))
 	}
 	if okHB, errHB := j.Heartbeat(context.Background(), inst.ID, leaseA, shortLease); errHB != nil || !okHB {
 		t.Fatalf("Heartbeat (A): ok=%v err=%v", okHB, errHB)
@@ -1040,7 +1095,7 @@ func conformLeaderHandoff(t *testing.T, factory Factory) {
 	// Leader B reclaims the same instance with a fresh, different lease.
 	claimedB, leaseB, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimedB) == 0 {
-		t.Fatalf("ClaimPending (B): err=%v len=%d", err, len(claimedB))
+		t.Fatalf(fmtClaimErr, err, len(claimedB))
 	}
 	if leaseA == leaseB {
 		t.Fatalf("handoff: B's lease must differ from A's; both are %q", leaseA)
@@ -1053,7 +1108,7 @@ func conformLeaderHandoff(t *testing.T, factory Factory) {
 	}
 	// A's stale Append is rejected with a conflict.
 	if _, errAp := j.Append(context.Background(), inst.ID, leaseA, journal.Event{
-		Kind: journal.KindStepStarted, StepName: "step-one",
+		Kind: journal.KindStepStarted, StepName: stepOne,
 	}); errAp == nil || !isKindConflict(errAp) {
 		t.Errorf("stale leader A Append: want KindConflict, got %v", errAp)
 	}
@@ -1074,7 +1129,7 @@ func conformMarkTerminalIllegalTransition(t *testing.T, factory Factory) {
 	mustEnqueue(t, j, inst)
 	claimed, _, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimed) == 0 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(fmtClaimErr, err, len(claimed))
 	}
 	ci := findClaimed(t, claimed, inst.ID)
 
@@ -1120,7 +1175,7 @@ func conformMarkTerminalWrongLease(t *testing.T, factory Factory) {
 	mustEnqueue(t, j, inst)
 	claimed, _, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimed) == 0 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(fmtClaimErr, err, len(claimed))
 	}
 
 	// Call MarkTerminal with the wrong leaseID.
@@ -1174,7 +1229,7 @@ func conformTerminalNotReclaimed(t *testing.T, factory Factory) {
 	mustEnqueue(t, j, inst)
 	claimed, _, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil || len(claimed) == 0 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(fmtClaimErr, err, len(claimed))
 	}
 	ci := findClaimed(t, claimed, inst.ID)
 
@@ -1241,7 +1296,7 @@ func conformHeartbeatUnknownInstance(t *testing.T, factory Factory) {
 	j, _, cleanup := factory(t)
 	defer cleanup()
 
-	ok, err := j.Heartbeat(context.Background(), "never-enqueued-id", "any-lease", shortLease)
+	ok, err := j.Heartbeat(context.Background(), neverEnqueuedID, anyLease, shortLease)
 	if err != nil {
 		t.Fatalf("Heartbeat on unknown instance should return nil error, got: %v", err)
 	}
@@ -1257,7 +1312,7 @@ func conformMarkTerminalUnknownInstance(t *testing.T, factory Factory) {
 	j, _, cleanup := factory(t)
 	defer cleanup()
 
-	ok, err := j.MarkTerminal(context.Background(), "never-enqueued-id", "any-lease", saga.StatusFailed)
+	ok, err := j.MarkTerminal(context.Background(), neverEnqueuedID, anyLease, saga.StatusFailed)
 	if err != nil {
 		t.Fatalf("MarkTerminal on unknown instance should return nil error, got: %v", err)
 	}
@@ -1273,9 +1328,9 @@ func conformAppendUnknownInstance(t *testing.T, factory Factory) {
 	j, _, cleanup := factory(t)
 	defer cleanup()
 
-	_, err := j.Append(context.Background(), "never-enqueued-id", "any-lease", journal.Event{
+	_, err := j.Append(context.Background(), neverEnqueuedID, anyLease, journal.Event{
 		Kind:     journal.KindStepStarted,
-		StepName: "step-one",
+		StepName: stepOne,
 	})
 	if err == nil {
 		t.Fatal("Append on unknown instance should return error, got nil")
@@ -1425,7 +1480,7 @@ func conformMarkTerminalRunningToFailed(t *testing.T, factory Factory) {
 		t.Fatal("MarkTerminal(Running→Failed): expected ok=true")
 	}
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Running→Failed) did not append a KindSagaTerminal event")
+		t.Error("MarkTerminal(Running→Failed) did not append a terminal event")
 	}
 }
 
@@ -1446,19 +1501,35 @@ func conformMarkTerminalRunningToExpired(t *testing.T, factory Factory) {
 		t.Fatal("MarkTerminal(Running→Expired): expected ok=true")
 	}
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Running→Expired) did not append a KindSagaTerminal event")
+		t.Error("MarkTerminal(Running→Expired) did not append a terminal event")
 	}
 }
 
+// driveToCompensating is a shared setup helper that drives a newly-claimed
+// instance from Pending through Running to Compensating, returning the
+// ClaimedInstance. Deduplicates the setup portion shared by the
+// Compensating→{Failed,Expired} terminal paths and related tests.
+func driveToCompensating(t *testing.T, j journal.Journal, clk *clockmock.FakeClock, id string) journal.ClaimedInstance {
+	t.Helper()
+	ci := claimOne(t, j, clk, id)
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind: journal.KindCompensationStarted, // Running → Compensating
+	})
+	if err != nil {
+		t.Fatalf("Append(KindCompensationStarted): %v", err)
+	}
+	return ci
+}
+
 // conformMarkTerminalCompensatingToFailed verifies Compensating → Failed is a valid terminal path.
+// Must reach Compensating first via StepStarted + CompensationStarted.
 func conformMarkTerminalCompensatingToFailed(t *testing.T, factory Factory) {
 	t.Helper()
 	j, clk, cleanup := factory(t)
 	defer cleanup()
 
-	ci := claimOne(t, j, clk, "inst-compensating-failed")
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)     // Pending → Running
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // Running → Compensating
+	ci := driveToCompensating(t, j, clk, "inst-compensating-failed")
 
 	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
 	if err != nil {
@@ -1468,19 +1539,18 @@ func conformMarkTerminalCompensatingToFailed(t *testing.T, factory Factory) {
 		t.Fatal("MarkTerminal(Compensating→Failed): expected ok=true")
 	}
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Compensating→Failed) did not append a KindSagaTerminal event")
+		t.Error("MarkTerminal(Compensating→Failed) did not append a terminal event")
 	}
 }
 
 // conformMarkTerminalCompensatingToExpired verifies Compensating → Expired is a valid terminal path.
+// Must reach Compensating first via StepStarted + CompensationStarted.
 func conformMarkTerminalCompensatingToExpired(t *testing.T, factory Factory) {
 	t.Helper()
 	j, clk, cleanup := factory(t)
 	defer cleanup()
 
-	ci := claimOne(t, j, clk, "inst-compensating-expired")
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)     // Pending → Running
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // Running → Compensating
+	ci := driveToCompensating(t, j, clk, "inst-compensating-expired")
 
 	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusExpired)
 	if err != nil {
@@ -1490,7 +1560,7 @@ func conformMarkTerminalCompensatingToExpired(t *testing.T, factory Factory) {
 		t.Fatal("MarkTerminal(Compensating→Expired): expected ok=true")
 	}
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Compensating→Expired) did not append a KindSagaTerminal event")
+		t.Error("MarkTerminal(Compensating→Expired) did not append a terminal event")
 	}
 }
 
@@ -1502,10 +1572,15 @@ func conformMarkTerminalCompensatingToSucceededIllegal(t *testing.T, factory Fac
 	defer cleanup()
 
 	ci := claimOne(t, j, clk, "inst-compensating-succeeded-illegal")
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)     // Pending → Running
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // Running → Compensating
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind: journal.KindCompensationStarted, // Running → Compensating
+	})
+	if err != nil {
+		t.Fatalf("Append(KindCompensationStarted): %v", err)
+	}
 
-	_, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusSucceeded)
+	_, err = j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusSucceeded)
 	if err == nil {
 		t.Fatal("MarkTerminal(Compensating→Succeeded) should return error, got nil")
 	}
@@ -1530,5 +1605,199 @@ func conformMarkTerminalRunningToCompensatedIllegal(t *testing.T, factory Factor
 	}
 	if !isKindInvalid(err) {
 		t.Errorf("MarkTerminal(Running→Compensated): want KindInvalid error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NEW: TerminalEvent_ReplayableStatus
+// ---------------------------------------------------------------------------
+
+// conformTerminalEventReplayableStatus drives two instances to distinct terminal
+// states and verifies that the event log alone encodes which terminal was reached
+// (Load replays the correct distinct terminal kind).
+func conformTerminalEventReplayableStatus(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	// Instance A: Pending → Failed (no step events).
+	ciA := claimOne(t, j, clk, "inst-replay-failed")
+	ok, err := j.MarkTerminal(context.Background(), ciA.Instance.ID, ciA.LeaseID, saga.StatusFailed)
+	if err != nil || !ok {
+		t.Fatalf("MarkTerminal(A, Failed): ok=%v err=%v", ok, err)
+	}
+
+	// Instance B: Pending → Running → Succeeded.
+	ciB := claimOne(t, j, clk, "inst-replay-succeeded")
+	appendStep(t, j, ciB.Instance.ID, ciB.LeaseID, journal.KindStepStarted)
+	ok, err = j.MarkTerminal(context.Background(), ciB.Instance.ID, ciB.LeaseID, saga.StatusSucceeded)
+	if err != nil || !ok {
+		t.Fatalf("MarkTerminal(B, Succeeded): ok=%v err=%v", ok, err)
+	}
+
+	// Load each and assert the distinct terminal kind is present.
+	kindA := loadTerminalKind(t, j, ciA.Instance.ID)
+	if kindA != journal.KindSagaFailed {
+		t.Errorf("instance A: want terminal kind KindSagaFailed, got %s", kindA)
+	}
+	kindB := loadTerminalKind(t, j, ciB.Instance.ID)
+	if kindB != journal.KindSagaSucceeded {
+		t.Errorf("instance B: want terminal kind KindSagaSucceeded, got %s", kindB)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Append_CompensationStarted_OnPending_Rejected
+// ---------------------------------------------------------------------------
+
+// conformAppendCompensationStartedOnPendingRejected asserts that
+// KindCompensationStarted is rejected on a Pending instance
+// (Running→Compensating is the only legal transition).
+func conformAppendCompensationStartedOnPendingRejected(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-compensation-started-on-pending")
+
+	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind: journal.KindCompensationStarted,
+	})
+	if err == nil {
+		t.Fatal("Append(KindCompensationStarted) on a Pending instance should be rejected, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("Append(KindCompensationStarted) on Pending: want KindInvalid error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Append_ForwardStep_WhileCompensating_Rejected
+// ---------------------------------------------------------------------------
+
+// conformAppendForwardStepWhileCompensatingRejected asserts that forward step
+// events (KindStepStarted) are rejected once the saga is in the Compensating
+// phase.
+func conformAppendForwardStepWhileCompensatingRejected(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-forward-step-while-compensating")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind: journal.KindCompensationStarted, // Running → Compensating
+	})
+	if err != nil {
+		t.Fatalf("Append(KindCompensationStarted): %v", err)
+	}
+
+	// Now in Compensating — a forward step must be rejected.
+	_, err = j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind:     journal.KindStepStarted,
+		StepName: stepOne,
+	})
+	if err == nil {
+		t.Fatal("Append(KindStepStarted) while Compensating should be rejected, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("Append(KindStepStarted) while Compensating: want KindInvalid error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NEW: LeaderHandoff_ReadsCompensatingPhase (F2 regression)
+// ---------------------------------------------------------------------------
+
+// conformLeaderHandoffReadsCompensatingPhase is the F2 regression: leader A
+// drives the saga to Compensating, then its lease expires. Leader B reclaims and
+// must observe StatusCompensating (not Running). B then drives to terminal.
+func conformLeaderHandoffReadsCompensatingPhase(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	inst := NewInstanceFixture(t, "inst-handoff-compensating", clk.Now())
+	mustEnqueue(t, j, inst)
+
+	// Leader A claims and drives to Compensating.
+	claimedA, leaseA, err := j.ClaimPending(context.Background(), 10, shortLease)
+	if err != nil || len(claimedA) == 0 {
+		t.Fatalf(fmtClaimErr, err, len(claimedA))
+	}
+	appendStep(t, j, inst.ID, leaseA, journal.KindStepStarted) // Pending → Running
+	_, err = j.Append(context.Background(), inst.ID, leaseA, journal.Event{
+		Kind: journal.KindCompensationStarted, // Running → Compensating
+	})
+	if err != nil {
+		t.Fatalf("Append(KindCompensationStarted): %v", err)
+	}
+
+	// A's lease expires.
+	clk.Advance(shortLease + time.Second)
+
+	// Leader B reclaims. Must see StatusCompensating.
+	claimedB, leaseB, err := j.ClaimPending(context.Background(), 10, shortLease)
+	if err != nil || len(claimedB) == 0 {
+		t.Fatalf(fmtClaimErr, err, len(claimedB))
+	}
+	ciB := findClaimed(t, claimedB, inst.ID)
+	if ciB.Instance.Status != saga.StatusCompensating {
+		t.Errorf("leader B sees status=%s; want StatusCompensating", ciB.Instance.Status)
+	}
+
+	// B drives to terminal (Compensating → Compensated is legal).
+	ok, err := j.MarkTerminal(context.Background(), inst.ID, leaseB, saga.StatusCompensated)
+	if err != nil || !ok {
+		t.Fatalf("leader B MarkTerminal(Compensated): ok=%v err=%v", ok, err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NEW: ClaimPending_NonPositiveLeaseDuration_KindInvalid
+// ---------------------------------------------------------------------------
+
+// conformClaimPendingNonPositiveLeaseDuration verifies that ClaimPending with
+// leaseDuration 0 or negative returns a KindInvalid error.
+func conformClaimPendingNonPositiveLeaseDuration(t *testing.T, factory Factory) {
+	t.Helper()
+	j, _, cleanup := factory(t)
+	defer cleanup()
+
+	for _, d := range []time.Duration{0, -time.Second} {
+		_, _, err := j.ClaimPending(context.Background(), 1, d)
+		if err == nil {
+			t.Fatalf("ClaimPending(leaseDuration=%s) should return error, got nil", d)
+		}
+		if !isKindInvalid(err) {
+			t.Errorf("ClaimPending(leaseDuration=%s): want KindInvalid error, got %v", d, err)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Heartbeat_NonPositiveLeaseDuration_KindInvalid
+// ---------------------------------------------------------------------------
+
+// conformHeartbeatNonPositiveLeaseDuration verifies that Heartbeat with
+// leaseDuration 0 or negative returns (false, KindInvalid error).
+func conformHeartbeatNonPositiveLeaseDuration(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-hb-nonpositive-lease")
+
+	for _, d := range []time.Duration{0, -time.Second} {
+		ok, err := j.Heartbeat(context.Background(), ci.Instance.ID, ci.LeaseID, d)
+		if err == nil {
+			t.Fatalf("Heartbeat(leaseDuration=%s) should return error, got nil", d)
+		}
+		if !isKindInvalid(err) {
+			t.Errorf("Heartbeat(leaseDuration=%s): want KindInvalid error, got %v", d, err)
+		}
+		if ok {
+			t.Errorf("Heartbeat(leaseDuration=%s): want ok=false, got ok=true", d)
+		}
 	}
 }
