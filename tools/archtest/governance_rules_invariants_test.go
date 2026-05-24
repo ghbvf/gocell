@@ -386,11 +386,11 @@ func selectorReceiverIsValidator(sel *ast.SelectorExpr, info *types.Info, valida
 }
 
 // TestGovernanceRuleCodeConstSingleSource verifies INV-2: every
-// newResult / newScopedResult / newResultAt call in kernel/governance (excluding
-// *_test.go and rulecodes.go) must pass a RuleCode-typed constant declared in
-// rulecodes.go as its first argument. Every ValidationResult{} CompositeLit
-// within kernel/governance must use a RuleCode const from rulecodes.go as
-// the Code: field value.
+// newError / newWarning / newScopedError / newErrorAt call in kernel/governance
+// (excluding *_test.go and rulecodes.go) must pass a RuleCode-typed constant
+// declared in rulecodes.go as its first argument. Every ValidationResult{}
+// CompositeLit within kernel/governance must use a RuleCode const from
+// rulecodes.go as the Code: field value.
 //
 // INV-2 Hard upgrade: instead of scanning for string literal patterns (regex),
 // the check uses go/types info.Uses[ident] to verify that each code argument
