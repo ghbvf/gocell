@@ -37,133 +37,64 @@ type Factory func(t *testing.T) (j journal.Journal, clk *clockmock.FakeClock, cl
 func RunConformanceSuite(t *testing.T, factory Factory) {
 	t.Helper()
 
-	// Category 1: Enqueue + Load basic contract.
-	t.Run("Enqueue_ThenLoad_EmptyNonNilSlice", func(t *testing.T) {
-		conformEnqueueThenLoad(t, factory)
-	})
-	t.Run("Load_NeverEnqueued_KindNotFound", func(t *testing.T) {
-		conformLoadNeverEnqueued(t, factory)
-	})
+	// Each case maps a subtest name to its conformance function. The leading
+	// "category" comments track the spec categories the suite covers. Driving
+	// them through a table keeps this registrar short and makes -run filtering
+	// trivial.
+	cases := []struct {
+		name string
+		run  func(*testing.T, Factory)
+	}{
+		// 1: Enqueue + Load basic contract.
+		{"Enqueue_ThenLoad_EmptyNonNilSlice", conformEnqueueThenLoad},
+		{"Load_NeverEnqueued_KindNotFound", conformLoadNeverEnqueued},
+		// 2: Duplicate enqueue.
+		{"Enqueue_DuplicateID_KindConflict", conformEnqueueDuplicate},
+		// 3: Enqueue validation — non-Pending / non-zero-CurrentStep.
+		{"Enqueue_NonPendingInstance_Error", conformEnqueueNonPending},
+		{"Enqueue_NonZeroCurrentStep_Error", conformEnqueueNonZeroStep},
+		// 4: Append + Load round-trip.
+		{"Append_Load_RoundTrip", conformAppendLoadRoundTrip},
+		// 5: Version monotonicity.
+		{"Append_VersionMonotonicity", conformVersionMonotonicity},
+		// 6: Concurrent Append.
+		{"Append_Concurrent_DistinctVersions", conformConcurrentAppend},
+		// 7: Append payload validation.
+		{"Append_InvalidJSONPayload_Rejected", conformAppendInvalidPayload},
+		{"Append_ArrayPayload_Rejected", conformAppendArrayPayload},
+		{"Append_KindSagaTerminal_Rejected", conformAppendTerminalKindRejected},
+		// 8–11: ClaimPending empty / batch cap / second call / contention.
+		{"ClaimPending_EmptyStore_NilSliceZeroLeaseID", conformClaimPendingEmpty},
+		{"ClaimPending_BatchCap", conformClaimPendingBatchCap},
+		{"ClaimPending_SecondCall_DisjointDifferentLeaseID", conformClaimPendingSecondCall},
+		{"ClaimPending_Concurrent_NoDuplicate", conformClaimPendingConcurrent},
+		// 12: Stale-lease reject on Append.
+		{"Append_StaleLease_KindConflict", conformAppendStaleLease},
+		// 13–14: Heartbeat fencing + lease extension.
+		{"Heartbeat_WrongLease_FalseNil", conformHeartbeatWrongLease},
+		{"Heartbeat_CorrectLease_TrueNil", conformHeartbeatCorrectLease},
+		{"Heartbeat_ExtendsLease_DoesNotExpire", conformHeartbeatExtendsLease},
+		// 16: MarkTerminal happy paths (Pending→Failed, Running→Succeeded,
+		// Compensating→Compensated) + illegal-transition rejection.
+		{"MarkTerminal_PendingToFailed_TerminalEventAppended_LeaseReleased", conformMarkTerminalHappy},
+		{"MarkTerminal_RunningToSucceeded", conformMarkTerminalSucceeded},
+		{"MarkTerminal_CompensatingToCompensated", conformCompensationPath},
+		{"MarkTerminal_IllegalTransition_Error", conformMarkTerminalIllegalTransition},
+		// Append status-projection invariant: compensate-before-start rejected.
+		{"Append_CompensateOnPending_Rejected", conformAppendCompensateOnPending},
+		// 15: leader handoff — stale leader fenced out while the new one drives on.
+		{"LeaderHandoff_StaleLeaderFencedOut", conformLeaderHandoff},
+		// 17: MarkTerminal fencing.
+		{"MarkTerminal_WrongLease_FalseNil", conformMarkTerminalWrongLease},
+		// 18: Terminal instance not re-claimable.
+		{"ClaimPending_TerminalInstance_NotReturned", conformTerminalNotReclaimed},
+		// 19: RepoReady delegation.
+		{"RepoReady", conformRepoReady},
+	}
 
-	// Category 2: Duplicate enqueue.
-	t.Run("Enqueue_DuplicateID_KindConflict", func(t *testing.T) {
-		conformEnqueueDuplicate(t, factory)
-	})
-
-	// Category 3: Enqueue validation — non-Pending / non-zero-CurrentStep.
-	t.Run("Enqueue_NonPendingInstance_Error", func(t *testing.T) {
-		conformEnqueueNonPending(t, factory)
-	})
-	t.Run("Enqueue_NonZeroCurrentStep_Error", func(t *testing.T) {
-		conformEnqueueNonZeroStep(t, factory)
-	})
-
-	// Category 4: Append + Load round-trip.
-	t.Run("Append_Load_RoundTrip", func(t *testing.T) {
-		conformAppendLoadRoundTrip(t, factory)
-	})
-
-	// Category 5: Version monotonicity.
-	t.Run("Append_VersionMonotonicity", func(t *testing.T) {
-		conformVersionMonotonicity(t, factory)
-	})
-
-	// Category 6: Concurrent Append.
-	t.Run("Append_Concurrent_DistinctVersions", func(t *testing.T) {
-		conformConcurrentAppend(t, factory)
-	})
-
-	// Category 7: Append payload validation.
-	t.Run("Append_InvalidJSONPayload_Rejected", func(t *testing.T) {
-		conformAppendInvalidPayload(t, factory)
-	})
-	t.Run("Append_ArrayPayload_Rejected", func(t *testing.T) {
-		conformAppendArrayPayload(t, factory)
-	})
-	t.Run("Append_KindSagaTerminal_Rejected", func(t *testing.T) {
-		conformAppendTerminalKindRejected(t, factory)
-	})
-
-	// Category 8: ClaimPending on empty store.
-	t.Run("ClaimPending_EmptyStore_NilSliceZeroLeaseID", func(t *testing.T) {
-		conformClaimPendingEmpty(t, factory)
-	})
-
-	// Category 9: ClaimPending batch cap.
-	t.Run("ClaimPending_BatchCap", func(t *testing.T) {
-		conformClaimPendingBatchCap(t, factory)
-	})
-
-	// Category 10: ClaimPending second call.
-	t.Run("ClaimPending_SecondCall_DisjointDifferentLeaseID", func(t *testing.T) {
-		conformClaimPendingSecondCall(t, factory)
-	})
-
-	// Category 11: ClaimPending contention.
-	t.Run("ClaimPending_Concurrent_NoDuplicate", func(t *testing.T) {
-		conformClaimPendingConcurrent(t, factory)
-	})
-
-	// Category 12: Stale-lease reject on Append.
-	t.Run("Append_StaleLease_KindConflict", func(t *testing.T) {
-		conformAppendStaleLease(t, factory)
-	})
-
-	// Category 13: Heartbeat fencing.
-	t.Run("Heartbeat_WrongLease_FalseNil", func(t *testing.T) {
-		conformHeartbeatWrongLease(t, factory)
-	})
-	t.Run("Heartbeat_CorrectLease_TrueNil", func(t *testing.T) {
-		conformHeartbeatCorrectLease(t, factory)
-	})
-
-	// Category 14: Heartbeat extends lease.
-	t.Run("Heartbeat_ExtendsLease_DoesNotExpire", func(t *testing.T) {
-		conformHeartbeatExtendsLease(t, factory)
-	})
-
-	// Category 16: MarkTerminal happy path + transition validation.
-	// Pending→Failed needs no step events; Running→Succeeded requires a forward
-	// step event first; Compensating→Compensated requires entering compensation.
-	t.Run("MarkTerminal_PendingToFailed_TerminalEventAppended_LeaseReleased", func(t *testing.T) {
-		conformMarkTerminalHappy(t, factory)
-	})
-	t.Run("MarkTerminal_RunningToSucceeded", func(t *testing.T) {
-		conformMarkTerminalSucceeded(t, factory)
-	})
-	t.Run("MarkTerminal_CompensatingToCompensated", func(t *testing.T) {
-		conformCompensationPath(t, factory)
-	})
-	t.Run("MarkTerminal_IllegalTransition_Error", func(t *testing.T) {
-		conformMarkTerminalIllegalTransition(t, factory)
-	})
-
-	// Append status-projection invariant: a step cannot be compensated before
-	// the saga has started (StepCompensated on a Pending instance is rejected).
-	t.Run("Append_CompensateOnPending_Rejected", func(t *testing.T) {
-		conformAppendCompensateOnPending(t, factory)
-	})
-
-	// Category 15: leader handoff — A claims, stops; lease expires; B reclaims
-	// with a fresh lease; A's later fenced ops are rejected while B drives on.
-	t.Run("LeaderHandoff_StaleLeaderFencedOut", func(t *testing.T) {
-		conformLeaderHandoff(t, factory)
-	})
-
-	// Category 17: MarkTerminal fencing.
-	t.Run("MarkTerminal_WrongLease_FalseNil", func(t *testing.T) {
-		conformMarkTerminalWrongLease(t, factory)
-	})
-
-	// Category 18: Terminal not re-claimable.
-	t.Run("ClaimPending_TerminalInstance_NotReturned", func(t *testing.T) {
-		conformTerminalNotReclaimed(t, factory)
-	})
-
-	// Category 19: RepoReady delegation.
-	t.Run("RepoReady", func(t *testing.T) {
-		conformRepoReady(t, factory)
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { tc.run(t, factory) })
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -212,11 +143,11 @@ func mustEnqueue(t *testing.T, j journal.Journal, inst saga.Instance) {
 	}
 }
 
-// mustClaimAll claims batchSize=100 and requires at least minExpected results.
-// Returns (claimed slice, batch leaseID).
-func mustClaimAll(t *testing.T, j journal.Journal, leaseDuration time.Duration) ([]journal.ClaimedInstance, idutil.SafeID) {
+// mustClaimAll claims up to 100 instances with the standard shortLease and
+// returns (claimed slice, batch leaseID), failing the test on error.
+func mustClaimAll(t *testing.T, j journal.Journal) ([]journal.ClaimedInstance, idutil.SafeID) {
 	t.Helper()
-	claimed, leaseID, err := j.ClaimPending(context.Background(), 100, leaseDuration)
+	claimed, leaseID, err := j.ClaimPending(context.Background(), 100, shortLease)
 	if err != nil {
 		t.Fatalf("ClaimPending: %v", err)
 	}
@@ -241,11 +172,11 @@ const shortLease = 10 * time.Second
 // appendStep appends a step event under the given lease and fails on error,
 // returning the assigned version. A KindStepStarted on a freshly-claimed
 // Pending instance moves it into Running (see Journal.Append godoc).
-func appendStep(t *testing.T, j journal.Journal, id, leaseID idutil.SafeID, kind journal.EventKind, step string) int64 {
+func appendStep(t *testing.T, j journal.Journal, id, leaseID idutil.SafeID, kind journal.EventKind) int64 {
 	t.Helper()
 	v, err := j.Append(context.Background(), id, leaseID, journal.Event{
 		Kind:     kind,
-		StepName: idutil.SafeID(step),
+		StepName: "step-one",
 	})
 	if err != nil {
 		t.Fatalf("Append(%s): %v", kind, err)
@@ -387,7 +318,7 @@ func conformAppendLoadRoundTrip(t *testing.T, factory Factory) {
 	inst := NewInstanceFixture(t, "inst-append-rt", clk.Now())
 	mustEnqueue(t, j, inst)
 
-	claimed, leaseID := mustClaimAll(t, j, shortLease)
+	claimed, leaseID := mustClaimAll(t, j)
 	ci := findClaimed(t, claimed, inst.ID)
 
 	wantPayload := []byte(`{"step":"one"}`)
@@ -452,7 +383,7 @@ func conformVersionMonotonicity(t *testing.T, factory Factory) {
 	inst := NewInstanceFixture(t, "inst-monotonic", clk.Now())
 	mustEnqueue(t, j, inst)
 
-	claimed, _ := mustClaimAll(t, j, shortLease)
+	claimed, _ := mustClaimAll(t, j)
 	ci := findClaimed(t, claimed, inst.ID)
 
 	for i := range n {
@@ -504,7 +435,7 @@ func conformConcurrentAppend(t *testing.T, factory Factory) {
 	inst := NewInstanceFixture(t, "inst-concurrent-append", clk.Now())
 	mustEnqueue(t, j, inst)
 
-	claimed, _ := mustClaimAll(t, j, shortLease)
+	claimed, _ := mustClaimAll(t, j)
 	ci := findClaimed(t, claimed, inst.ID)
 
 	versions := make([]int64, G)
@@ -572,7 +503,7 @@ func conformAppendInvalidPayload(t *testing.T, factory Factory) {
 
 	inst := NewInstanceFixture(t, "inst-bad-json", clk.Now())
 	mustEnqueue(t, j, inst)
-	claimed, _ := mustClaimAll(t, j, shortLease)
+	claimed, _ := mustClaimAll(t, j)
 	ci := findClaimed(t, claimed, inst.ID)
 
 	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
@@ -592,7 +523,7 @@ func conformAppendArrayPayload(t *testing.T, factory Factory) {
 
 	inst := NewInstanceFixture(t, "inst-array-payload", clk.Now())
 	mustEnqueue(t, j, inst)
-	claimed, _ := mustClaimAll(t, j, shortLease)
+	claimed, _ := mustClaimAll(t, j)
 	ci := findClaimed(t, claimed, inst.ID)
 
 	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
@@ -612,7 +543,7 @@ func conformAppendTerminalKindRejected(t *testing.T, factory Factory) {
 
 	inst := NewInstanceFixture(t, "inst-terminal-kind", clk.Now())
 	mustEnqueue(t, j, inst)
-	claimed, _ := mustClaimAll(t, j, shortLease)
+	claimed, _ := mustClaimAll(t, j)
 	ci := findClaimed(t, claimed, inst.ID)
 
 	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
@@ -980,7 +911,7 @@ func conformMarkTerminalSucceeded(t *testing.T, factory Factory) {
 	ci := claimOne(t, j, clk, "inst-succeeded")
 
 	// Forward step event moves Pending → Running.
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted, "step-one")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)
 
 	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusSucceeded)
 	if err != nil {
@@ -1003,8 +934,8 @@ func conformCompensationPath(t *testing.T, factory Factory) {
 
 	ci := claimOne(t, j, clk, "inst-compensated")
 
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted, "step-one")     // Pending → Running
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated, "step-one") // Running → Compensating
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)     // Pending → Running
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // Running → Compensating
 
 	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensated)
 	if err != nil {
@@ -1083,7 +1014,7 @@ func conformLeaderHandoff(t *testing.T, factory Factory) {
 	}
 
 	// B drives the instance forward and to a terminal state.
-	appendStep(t, j, inst.ID, leaseB, journal.KindStepStarted, "step-one") // Pending → Running
+	appendStep(t, j, inst.ID, leaseB, journal.KindStepStarted) // Pending → Running
 	if okMT, errMT := j.MarkTerminal(context.Background(), inst.ID, leaseB, saga.StatusSucceeded); errMT != nil || !okMT {
 		t.Fatalf("leader B MarkTerminal(Succeeded): ok=%v err=%v", okMT, errMT)
 	}

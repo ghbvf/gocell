@@ -360,6 +360,10 @@ linters:
           #     directly. These packages are imported only by *_test.go files;
           #     archtest CLOCK-INJECTION-TEST-CALLSITE-01 enforces that.
           #   - **/storetest/ runtime test-helper packages (mirror of testutil)
+          #   - **/sagajournaltest/ kernel saga Journal conformance suite (mirror
+          #     of storetest): a reusable contract suite whose Factory returns a
+          #     concrete *clockmock.FakeClock for lease-expiry control. Imported
+          #     only by *_test.go (kernel mem test + PR-04 PG integration test).
           files:
             - "**/*.go"
             - "!**/*_test.go"
@@ -367,6 +371,7 @@ linters:
             - "!**/kernel/clock/clockmock/**"
             - "!**/testutil/**"
             - "!**/storetest/**"
+            - "!**/sagajournaltest/**"
           deny:
             - pkg: github.com/ghbvf/gocell/kernel/clock/clockmock
               desc: "clockmock is test-only; production code must inject clock.Clock"

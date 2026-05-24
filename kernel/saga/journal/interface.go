@@ -116,7 +116,7 @@ type Journal interface {
 
 	// Heartbeat extends the lease on a single claimed instance to
 	// now+leaseDuration. It is lease-fenced: ok is false (with a nil error) when
-	// leaseID no longer owns the instance, signalling the holder to stop driving
+	// leaseID no longer owns the instance, signaling the holder to stop driving
 	// it.
 	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
 

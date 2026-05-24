@@ -17,5 +17,7 @@ import (
 // Compile-time assertions: MemJournal must satisfy both Journal and
 // healthz.RepoProber. These lines cause a compile error until MemJournal
 // exists — that is the intended RED state.
-var _ journal.Journal = (*journal.MemJournal)(nil)
-var _ healthz.RepoProber = (*journal.MemJournal)(nil)
+var (
+	_ journal.Journal    = (*journal.MemJournal)(nil)
+	_ healthz.RepoProber = (*journal.MemJournal)(nil)
+)

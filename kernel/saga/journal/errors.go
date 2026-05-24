@@ -2,7 +2,7 @@ package journal
 
 import "github.com/ghbvf/gocell/pkg/errcode"
 
-// This file centralises the operation-level errors a Journal implementation
+// This file centralizes the operation-level errors a Journal implementation
 // returns, so the const-literal messages and (kind, code) pairings live in one
 // place rather than being re-typed at each call site (memjournal returns
 // errInstanceNotFound from four methods). Callers discriminate by errcode.Code,
