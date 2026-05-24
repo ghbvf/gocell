@@ -234,6 +234,12 @@ func TestCellEmitter_WrapDelegatesEmit(t *testing.T) {
 
 func TestCellEmitter_SatisfiesEmitter(t *testing.T) {
 	t.Parallel()
+	// WrapEmitterForCell's return type is outbox.CellEmitter, so the full sealed
+	// contract (Emitter + DurabilityReporter + healthz.ProbeSet + sealed marker)
+	// is already compile-enforced at its `return internalCellEmitter{...}` site —
+	// dropping an embedded interface or a forwarding method breaks the build there.
+	// This assertion pins the widening to the base Emitter (mirrors the
+	// Publisher/Writer SatisfiesX tests).
 	var _ outbox.Emitter = outbox.WrapEmitterForCell(&fakeEmitter{})
 }
 

@@ -315,7 +315,7 @@ func newTestService(t *testing.T, now time.Time, seed *domain.User) (*Service, *
 	emitter := &fakeEmitter{}
 	metrics := newFakeMetrics()
 	clk := clockmock.New(now)
-	svc, err := NewService(repo, mut, emitter, clk, WithMetrics(metrics))
+	svc, err := NewService(repo, mut, outbox.WrapEmitterForCell(emitter), clk, WithMetrics(metrics))
 	require.NoError(t, err)
 	return svc, repo, emitter, metrics
 }
@@ -539,11 +539,11 @@ func TestNewService_RejectsNilDeps(t *testing.T) {
 	clk := clockmock.New(now)
 
 	t.Run("nil repo", func(t *testing.T) {
-		_, err := NewService(nil, mut, emitter, clk)
+		_, err := NewService(nil, mut, outbox.WrapEmitterForCell(emitter), clk)
 		assert.Error(t, err)
 	})
 	t.Run("nil mutator", func(t *testing.T) {
-		_, err := NewService(repo, nil, emitter, clk)
+		_, err := NewService(repo, nil, outbox.WrapEmitterForCell(emitter), clk)
 		assert.Error(t, err)
 	})
 	t.Run("nil emitter", func(t *testing.T) {
@@ -551,7 +551,7 @@ func TestNewService_RejectsNilDeps(t *testing.T) {
 		assert.Error(t, err)
 	})
 	t.Run("nil clock", func(t *testing.T) {
-		_, err := NewService(repo, mut, emitter, nil)
+		_, err := NewService(repo, mut, outbox.WrapEmitterForCell(emitter), nil)
 		assert.Error(t, err)
 	})
 }
@@ -607,7 +607,7 @@ func TestService_RecordFailure_EmitFailed_PropagatesError(t *testing.T) {
 
 	fe := &failingEmitter{err: errors.New("broker down")}
 	clk := clockmock.New(now)
-	svc, err := NewService(repo, mut, fe, clk)
+	svc, err := NewService(repo, mut, outbox.WrapEmitterForCell(fe), clk)
 	require.NoError(t, err)
 
 	err = svc.RecordFailure(context.Background(), context.Background(), seed)

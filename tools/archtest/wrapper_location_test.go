@@ -276,6 +276,8 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 		"WrapPublisherForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
 	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"]), 2,
 		"WrapWriterForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
+	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell"]), 2,
+		"WrapEmitterForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
 }
 
 // INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01

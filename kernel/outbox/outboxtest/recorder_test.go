@@ -16,6 +16,22 @@ func TestRecorderImplementsEmitter(t *testing.T) {
 	var _ outbox.Emitter = outboxtest.NewRecorder()
 }
 
+// TestRecorderCellEmitter_RoutesToRecorder verifies the sealed test seam:
+// rec.CellEmitter() returns a non-nil outbox.CellEmitter that still routes Emit
+// to the underlying Recorder (the *Recorder handle stays usable for assertions),
+// and exposes zero probes (Recorder is not a ProbeSet).
+func TestRecorderCellEmitter_RoutesToRecorder(t *testing.T) {
+	r := outboxtest.NewRecorder()
+	ce := r.CellEmitter()
+	require.NotNil(t, ce, "Recorder.CellEmitter must return a non-nil CellEmitter")
+
+	require.NoError(t, ce.Emit(context.Background(), outbox.Entry{ID: "via-cellemitter"}))
+	entries := r.Entries()
+	require.Len(t, entries, 1, "Emit via CellEmitter must route to the underlying Recorder")
+	assert.Equal(t, "via-cellemitter", entries[0].ID)
+	assert.Empty(t, ce.Probes(), "Recorder-backed CellEmitter exposes no probes")
+}
+
 func TestRecorderEmitCapturesEntries(t *testing.T) {
 	r := outboxtest.NewRecorder()
 	ctx := context.Background()

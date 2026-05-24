@@ -79,3 +79,16 @@ func TestDemoCellTxManager_NotNilAndNooper(t *testing.T) {
 	require.True(t, ok, "DemoCellTxManager result must implement Nooper transparently")
 	assert.True(t, n.Noop(), "DemoCellTxManager result must report Noop()==true")
 }
+
+// TestDemoCellEmitter_NotNilAndNonDurable verifies the emitter-leg demo factory
+// (mirror of DemoCellTxManager): returns a non-nil sealed CellEmitter that is
+// non-durable (NoopWriter-backed) so a DurabilityDurable assembly passing it to
+// WithEmitter still fails fast at ResolveCellEmitter rather than silently
+// losing L2 atomicity. Probes() is nil (WriterEmitter exposes no probes).
+func TestDemoCellEmitter_NotNilAndNonDurable(t *testing.T) {
+	t.Parallel()
+	em := outbox.DemoCellEmitter()
+	require.NotNil(t, em, "DemoCellEmitter must return a non-nil CellEmitter")
+	assert.False(t, em.Durable(), "DemoCellEmitter (NoopWriter-backed) must report Durable()==false")
+	assert.Empty(t, em.Probes(), "DemoCellEmitter (WriterEmitter) must expose zero probes")
+}

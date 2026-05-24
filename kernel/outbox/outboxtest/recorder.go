@@ -46,8 +46,11 @@ func NewRecorder() *Recorder { return &Recorder{} }
 // CellEmitter returns the Recorder sealed as an outbox.CellEmitter so it can be
 // passed to a cell/slice public WithEmitter Option (which accepts the sealed
 // marker, not a raw Emitter). The Recorder is still usable for assertions via
-// the original *Recorder handle — wrapping does not consume it. This is the
-// test-emitter analog of outbox.DemoCellEmitter for the asserting case; the
+// the original *Recorder handle — wrapping does not consume it. The returned
+// CellEmitter reports Durable()==false (Recorder is not a DurabilityReporter),
+// so durable-mode (DurabilityDurable) tests must use a real WriterEmitter
+// instead. This is the test-emitter analog of outbox.DemoCellEmitter for the
+// asserting case; the
 // WrapEmitterForCell call is restricted to this file by archtest
 // CELL-RAW-INFRA-WRAPPER-LOCATION-01 (outboxtest is test-only infrastructure,
 // importable from production code is forbidden — see package doc).

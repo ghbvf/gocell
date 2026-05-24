@@ -148,7 +148,7 @@ func newE2EFixture() *e2eFixture {
 	if err != nil {
 		panic("newE2EFixture: mutator setup failed: " + err.Error())
 	}
-	lockoutSvc, err := accountlockout.NewService(userRepo, mut, outbox.NewNoopEmitter(), clock.Real())
+	lockoutSvc, err := accountlockout.NewService(userRepo, mut, outbox.DemoCellEmitter(), clock.Real())
 	if err != nil {
 		panic("newE2EFixture: accountlockout setup failed: " + err.Error())
 	}

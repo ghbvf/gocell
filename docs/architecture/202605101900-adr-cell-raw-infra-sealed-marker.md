@@ -191,7 +191,7 @@ sealed marker 集从 3 扩展为 4：新增 `outbox.CellEmitter`（embed `Emitte
 1. `outbox.ReportDurable` / `ResolveCellEmitter` 断言 `DurabilityReporter` 决定 L2 durable 模式——wrapper 不透传 `Durable()` → 恒 `false` → durable assembly 误判。
 2. `kernel/cell.RegisterEmitterHealthProbes` 断言 `healthz.ProbeSet` 注册 `outbox_failopen_rate_<cell>` probe——wrapper 不透传 `Probes()` → DirectEmitter 的 fail-open probe 丢失。
 
-解法：把这两个接口**写进 `CellEmitter` 契约**（interface embedding），使 `internalCellEmitter` 不实现 `Durable()`/`Probes()` 就**编译不过**——forwarding 从"手写易漏的 Medium 方法"升级为"编译期强制的 Hard"。`Durable()` 委托 `outbox.ReportDurable` 单源化；`Noop()` 仍由 `SEALED-MARKER-NOOP-TRANSPARENCY-01` 守（见下，不进 interface，与 Publisher/Writer 一致）。Publisher/Writer marker 无此下游断言点，故不 embed——CellEmitter 是唯一需要的。
+解法：把这两个接口**写进 `CellEmitter` 契约**（interface embedding）。精确评级分两层：**方法存在性是 Hard**——`internalCellEmitter` 缺 `Durable()` 或 `Probes()` 就不满足 `CellEmitter`，`WrapEmitterForCell` 编译不过（不可表达"漏写 forwarding 方法"）；**forwarding 实现正确性是 Medium**——方法体可被误写成 `return true`/常量而仍编译通过，由 `kernel/outbox/cell_marker_test.go` 的 `TestWrapEmitterForCell_PreservesDurablePassThrough` / `_PreservesProbesPassThrough` unit test 守（与 §"行为覆盖分工"一致）。这比之前"手写易漏的方法（漏写即静默失效，Medium 都不到）"严格一档：漏写从静默失效升级为编译失败。`Durable()` 委托 `outbox.ReportDurable` 单源化；`Noop()` 仍由 `SEALED-MARKER-NOOP-TRANSPARENCY-01` 守（见下，不进 interface，与 Publisher/Writer 一致）。Publisher/Writer marker 无此下游断言点，故不 embed——CellEmitter 是唯一需要的。
 
 ### Wrapper-location allowlist 扩展（2 项）
 

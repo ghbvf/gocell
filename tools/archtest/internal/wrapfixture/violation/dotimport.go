@@ -29,3 +29,10 @@ func CallDotImportWrapPublisher(p Publisher) CellPublisher {
 func CallDotImportWrapWriter(w Writer) CellWriter {
 	return WrapWriterForCell(w)
 }
+
+// CallDotImportWrapEmitter mirrors the publisher case for the emitter leg
+// (PR-A23 / #618) so WrapEmitterForCell dot-import detection has parity with
+// the Publisher/Writer legs.
+func CallDotImportWrapEmitter(e Emitter) CellEmitter {
+	return WrapEmitterForCell(e)
+}

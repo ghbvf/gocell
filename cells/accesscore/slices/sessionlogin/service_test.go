@@ -158,7 +158,7 @@ func newTestLockout(userRepo ports.UserRepository, sessionStore session.Store, r
 	if err != nil {
 		panic("newTestLockout mutator: " + err.Error())
 	}
-	svc, err := accountlockout.NewService(userRepo, mut, outbox.NewNoopEmitter(), clock.Real())
+	svc, err := accountlockout.NewService(userRepo, mut, outbox.DemoCellEmitter(), clock.Real())
 	if err != nil {
 		panic("newTestLockout service: " + err.Error())
 	}
