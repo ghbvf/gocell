@@ -1,6 +1,7 @@
 package depgraph_test
 
 import (
+	"slices"
 	"sort"
 	"testing"
 
@@ -57,7 +58,7 @@ func TestTransitiveImports_DAG(t *testing.T) {
 	gotSlice := mapKeys(got)
 	sort.Strings(gotSlice)
 	sort.Strings(want)
-	if !equalStringSlices(gotSlice, want) {
+	if !slices.Equal(gotSlice, want) {
 		t.Errorf("TransitiveImports(a) = %v, want %v", gotSlice, want)
 	}
 }
@@ -149,7 +150,7 @@ func TestTransitiveImports_FreshCopy(t *testing.T) {
 	second := g.TransitiveImports(synthModClosure + "/a")
 	gotSlice := mapKeys(second)
 	sort.Strings(gotSlice)
-	if !equalStringSlices(gotSlice, snapshot) {
+	if !slices.Equal(gotSlice, snapshot) {
 		t.Errorf("second call returned %v, want %v (mutation of first leaked)", gotSlice, snapshot)
 	}
 	if second["bogus"] {
@@ -241,16 +242,4 @@ func mapKeys(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
-}
-
-func equalStringSlices(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
