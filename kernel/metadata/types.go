@@ -275,9 +275,16 @@ type PassCriterion struct {
 // or examples/{id}/assembly.yaml (example assemblies).
 // See parser.matchAssemblyYAML for the recognized path forms.
 type AssemblyMeta struct {
-	ID                  string    `yaml:"id"`
-	Cells               []string  `yaml:"cells"`
-	Owner               OwnerMeta `yaml:"owner"`
+	ID    string    `yaml:"id"`
+	Cells []string  `yaml:"cells"`
+	Owner OwnerMeta `yaml:"owner"`
+	// Capabilities lists assembly-level shared infrastructure capabilities
+	// (postgres / redis / rabbitmq) provisioned once by the composition root
+	// and injected into consuming cell modules via runtime/cap. The closed
+	// value set is mirrored by runtime/cap.Capability + assembly.schema.json
+	// enum; ParseFS rejects any value outside it (CAPABILITY-PROVIDER-FUNNEL-01
+	// upstream Hard).
+	Capabilities        []string  `yaml:"capabilities,omitempty"`
 	Build               BuildMeta `yaml:"build,omitempty"`
 	MaxConsistencyLevel string    `yaml:"-"` // derived; yaml occurrence rejected by KnownFields
 	Dir                 string    `yaml:"-"` // assembly directory name (parts[1]); set by parser from path, not YAML
