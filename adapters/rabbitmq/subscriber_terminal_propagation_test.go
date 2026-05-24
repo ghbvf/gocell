@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -55,12 +56,17 @@ func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
 		return nil, amqp.ErrSASL
 	}
 
+	// FakeClock on the connection makes reconnect backoff deterministic: the
+	// backoff timer fires only when the test Advances fc, so propagation timing
+	// no longer races a real wall-clock deadline (the #930 flake).
+	fc := clockmock.New(time.Time{})
+
 	conn, err := NewConnection(Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
 		ReconnectBaseDelay:  testtime.D1ms,
 		ReconnectMaxBackoff: testtime.FastPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc), WithConnectionClock(fc))
 	require.NoError(t, err, "initial dial must succeed (phase=0)")
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -93,25 +99,30 @@ func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
 			}))
 	}()
 
-	// Phase 0 → 1: trigger broker-side close → reconnect dial returns ErrSASL
-	// → markPermanent → WaitConnected returns ErrAdapterAMQPConnectPermanent
-	// → awaitReconnect propagates it → Subscribe returns it.
-	phase.Store(1)
-	originalMock.mu.Lock()
-	closeNotifyCh := originalMock.notifyCloseCh
-	originalMock.isClosed = true
-	originalMock.mu.Unlock()
-	closeNotifyCh <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+	// Barrier: wait until the subscriber is consuming (parked in consumeLoop on
+	// <-deliveries). Without this, the broker close can land while subscribeOnce
+	// is still in setup, taking the AcquireChannel terminal path and never
+	// exercising the consumeLoop→awaitReconnect→WaitConnected contract this test
+	// guards (and the path that flaked under CI load).
+	testwait.External(t, "amqp-consumer-parked", func() bool {
+		return originalMock.consumingStarted()
+	}, testtime.D2s, testtime.D1ms)
 
-	select {
-	case subErr := <-subErrCh:
-		require.Error(t, subErr, "Subscribe must return permanent error, not nil")
-		var ecErr *errcode.Error
-		require.True(t, errors.As(subErr, &ecErr),
-			"Subscribe error must wrap *errcode.Error; got %T: %v", subErr, subErr)
-		assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
-			"Subscribe must propagate ErrAdapterAMQPConnectPermanent")
-	case <-time.After(testtime.EventuallyLong):
-		t.Fatal("Subscribe did not return within budget; propagation contract broken")
-	}
+	// Phase 0 → 1: trigger a broker-forced close. triggerBrokerClose closes the
+	// consumer delivery channel (so the parked consumeLoop returns
+	// errSubscriptionLost → awaitReconnect → WaitConnected) and fires NotifyClose
+	// (so the reconnect loop re-dials). The reconnect dial returns ErrSASL →
+	// markPermanent → WaitConnected returns ErrAdapterAMQPConnectPermanent →
+	// awaitReconnect propagates it → Subscribe returns it.
+	phase.Store(1)
+	originalMock.triggerBrokerClose()
+
+	// Drive the reconnect backoff deterministically via fc until Subscribe returns.
+	subErr := advanceFakeReconnectUntil(t, fc, subErrCh)
+	require.Error(t, subErr, "Subscribe must return permanent error, not nil")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(subErr, &ecErr),
+		"Subscribe error must wrap *errcode.Error; got %T: %v", subErr, subErr)
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"Subscribe must propagate ErrAdapterAMQPConnectPermanent")
 }

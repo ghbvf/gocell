@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -123,6 +124,11 @@ type mockChannel struct {
 
 	consumeDeliveries chan amqp.Delivery
 	consumeErr        error
+	consumeCalled     bool
+	// deliveriesOnce guards closeDeliveries: a broker disconnect can reach the
+	// same channel through several paths (pool drain, multi-cycle reconnect,
+	// deferred Subscriber.Close), and double-closing consumeDeliveries would panic.
+	deliveriesOnce sync.Once
 
 	cancelCalled   bool
 	cancelCount    int64
@@ -193,10 +199,24 @@ func (m *mockChannel) PublishWithContext(_ context.Context, exchange, key string
 func (m *mockChannel) Consume(
 	queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table,
 ) (<-chan amqp.Delivery, error) {
+	m.mu.Lock()
 	if m.consumeErr != nil {
-		return nil, m.consumeErr
+		err := m.consumeErr
+		m.mu.Unlock()
+		return nil, err
 	}
+	m.consumeCalled = true
+	m.mu.Unlock()
 	return m.consumeDeliveries, nil
+}
+
+// closeDeliveries closes consumeDeliveries exactly once. Real amqp091-go closes a
+// consumer's delivery channel when the underlying connection drops; the mock must
+// model this so a blocked consumeLoop observes the close (errSubscriptionLost)
+// instead of parking forever. sync.Once makes it safe to call from every broker
+// disconnect path.
+func (m *mockChannel) closeDeliveries() {
+	m.deliveriesOnce.Do(func() { close(m.consumeDeliveries) })
 }
 
 func (m *mockChannel) Cancel(consumer string, noWait bool) error {
@@ -384,6 +404,78 @@ func (m *mockConnection) Close() error {
 	defer m.mu.Unlock()
 	m.isClosed = true
 	return m.closeErr
+}
+
+// brokerForcedClose is the canonical CONNECTION_FORCED error a RabbitMQ broker
+// delivers via NotifyClose when it forcibly drops a client connection (the close
+// behind rabbitmqctl close_all_connections). Recover=true marks it retryable, so
+// the reconnect loop re-dials.
+func brokerForcedClose() *amqp.Error {
+	return &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+}
+
+// triggerBrokerClose models a broker-forced connection loss: it marks the
+// connection closed and delivers the close error to the registered NotifyClose
+// receiver. It is the single canonical broker-disconnect path; tests MUST NOT
+// hand-roll the lock/isClosed/notify steps separately.
+//
+// NOTE (#930 RED): this intentionally does NOT yet close consumer delivery
+// channels. Real amqp091-go closes them on connection drop; omitting it is the
+// historical mock defect that let a blocked consumeLoop park forever — exactly
+// what TestSubscriber_Subscribe_PropagatesPermanentError must catch. The GREEN
+// commit adds the deliveries close. Precondition: NotifyClose already registered
+// (callers barrier on notifyCloseCh != nil first).
+func (m *mockConnection) triggerBrokerClose() {
+	m.mu.Lock()
+	m.isClosed = true
+	notify := m.notifyCloseCh
+	m.mu.Unlock()
+	notify <- brokerForcedClose()
+}
+
+// consumingStarted reports whether any issued channel has had Consume called —
+// i.e. a subscriber has passed subscribeOnce setup and is (about to be) parked in
+// consumeLoop on <-deliveries. Tests barrier on this before triggerBrokerClose so
+// they deterministically exercise the consumeLoop→errSubscriptionLost→
+// awaitReconnect→WaitConnected path rather than racing the AcquireChannel-setup
+// terminal path.
+func (m *mockConnection) consumingStarted() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ch := range m.channels {
+		ch.mu.Lock()
+		started := ch.consumeCalled
+		ch.mu.Unlock()
+		if started {
+			return true
+		}
+	}
+	return false
+}
+
+// advanceFakeReconnectUntil steps fc through reconnect backoff cycles — gated on
+// PendingTimers so it never Advances into an unregistered timer (mirrors
+// runtime/distlock/manager_test.go::waitPendingTimers) — until resultCh produces a
+// value, then returns it. With the connection on a FakeClock the whole reconnect
+// path is deterministic; the EventuallyLong backstop never fires in practice.
+func advanceFakeReconnectUntil[T any](t *testing.T, fc *clockmock.FakeClock, resultCh <-chan T) T {
+	t.Helper()
+	var got T
+	have := false
+	testwait.External(t, "amqp-fake-reconnect-result", func() bool {
+		if fc.PendingTimers() > 0 {
+			fc.Advance(testtime.FastPoll) // ≥ ReconnectMaxBackoff cap: fires the jittered timer this step
+		}
+		select {
+		case got = <-resultCh:
+			have = true
+			return true
+		default:
+			return false
+		}
+	}, testtime.EventuallyLong, testtime.D1ms)
+	require.True(t, have, "fake reconnect did not produce a result within budget")
+	return got
 }
 
 // --- Mock Publisher (for DLQ) ---

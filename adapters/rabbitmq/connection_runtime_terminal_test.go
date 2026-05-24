@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -524,6 +525,85 @@ func TestReconnectLoop_PermanentAndRecovery(t *testing.T) {
 	defer cancel()
 	assert.NoError(t, conn.WaitConnected(ctx),
 		"WaitConnected must return nil after self-heal")
+}
+
+// TestWaitConnected_WokenAcrossPermanentChannelSwaps guards the invariant that a
+// WaitConnected caller parked on the `connected` channel is woken even when it
+// must wait across a markPermanent channel swap.
+//
+// markPermanent runs on EVERY failed permanent dial (connection.go
+// reconnectWithBackoff's `continue` re-enters handleReconnectError each cycle),
+// creating a fresh `connected` channel and closing the previous one. A caller
+// that read the channel AFTER a swap (the fresh, still-open one) relies on the
+// NEXT cycle's markPermanent to close it. If markPermanent were ever changed to
+// fire once-only (skip the swap/close on subsequent permanent dials), such a
+// caller would park forever and this test would time out — converting a latent
+// production lost-wakeup into a hard RED.
+//
+// Deterministic via FakeClock: each reconnect backoff fires only on fc.Advance,
+// so the test drives the permanent cycles itself rather than racing wall-clock.
+func TestWaitConnected_WokenAcrossPermanentChannelSwaps(t *testing.T) {
+	originalMock := newMockConnection()
+
+	var phase atomic.Int32 // 0 = dial succeeds; 1 = ErrSASL (definitive permanent)
+	dialFunc := func(string) (AMQPConnection, error) {
+		if phase.Load() == 0 {
+			return originalMock, nil
+		}
+		return nil, amqp.ErrSASL
+	}
+
+	fc := clockmock.New(time.Time{})
+	conn, err := NewConnection(Config{
+		URL:                 testAMQPURL,
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  testtime.D1ms,
+		ReconnectMaxBackoff: testtime.FastPoll,
+	}, WithDialFunc(dialFunc), WithConnectionClock(fc))
+	require.NoError(t, err)
+	defer func() {
+		if cErr := conn.Close(context.Background()); cErr != nil {
+			t.Logf("conn.Close: %v", cErr)
+		}
+	}()
+
+	testwait.External(t, "amqp-notify-close-registered", func() bool {
+		originalMock.mu.Lock()
+		defer originalMock.mu.Unlock()
+		return originalMock.notifyCloseCh != nil
+	}, testtime.D2s, testtime.D1ms)
+
+	phase.Store(1)
+	originalMock.triggerBrokerClose()
+
+	// Cycle 1: drive one backoff so the first permanent dial runs markPermanent
+	// (sets permErr, swaps the connected channel). Once Health reports the
+	// permanent error, c.connected is the fresh post-swap channel.
+	testwait.External(t, "amqp-permanent-channel-swapped", func() bool {
+		if fc.PendingTimers() > 0 {
+			fc.Advance(testtime.FastPoll)
+		}
+		var ecErr *errcode.Error
+		hErr := conn.Health(context.Background())
+		return hErr != nil && errors.As(hErr, &ecErr) && ecErr.Code == ErrAdapterAMQPConnectPermanent
+	}, testtime.EventuallyLong, testtime.D1ms,
+		"first permanent dial must set permErr and swap the connected channel")
+
+	// Park a WaitConnected caller on the post-swap (fresh, still-open) channel.
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyLong)
+	defer cancel()
+	waitErrCh := make(chan error, 1)
+	go func() { waitErrCh <- conn.WaitConnected(ctx) }()
+
+	// A subsequent markPermanent must close the post-swap channel and wake the
+	// parked caller. Drive fc until WaitConnected returns.
+	waitErr := advanceFakeReconnectUntil(t, fc, waitErrCh)
+	require.Error(t, waitErr, "WaitConnected parked on a post-swap channel must be woken, not hang")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(waitErr, &ecErr),
+		"WaitConnected error must wrap *errcode.Error; got %T: %v", waitErr, waitErr)
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"WaitConnected must return ErrAdapterAMQPConnectPermanent")
 }
 
 // =============================================================================
