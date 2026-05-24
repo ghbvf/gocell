@@ -43,6 +43,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 > `<path>` 来自 `/daily-planner --apply` 输出的 `PLAN_PATH`（daily-planner 阶段 5 会在终端显式输出该路径）。
 
+**conflict_group 语义**：同 `conflict_group` 值的 issue 共享文件冲突，**必须串行**（同组内一次只有一个 issue 在飞，其 closing PR merge 后才起下一个）；**不同 `conflict_group` 值的 issue 可并行**（各组独立队列，横跨所有组合计 ≤4 并发）。
+
 ```bash
 # 读取 plan.json（daily-planner 产出）
 PLAN_PATH="<path>"   # --from-plan 的值
@@ -51,52 +53,76 @@ plan=$(cat "$PLAN_PATH")
 # 过滤：action=="set" 的条目（已知今日 target_iteration_id 由调用方确认）
 entries=$(echo "$plan" | jq '[.[] | select(.action=="set")]')
 
-# 按 parallel_group 升序排列（同 group 并行，不同 group 串行）
-groups=$(echo "$entries" | jq '[.[].parallel_group] | unique | sort')
+# 收集所有 conflict_group，升序排列
+groups=$(echo "$entries" | jq '[.[].conflict_group] | unique | sort')
 
-# 幂等：逐 group 判定完成度（所有 issue 的 PR 均 MERGED/CLOSED = 该 group 完成）
-# 启动第一个"未完成的 group"，起完即结束本次调用
+# issue 完成度判定：通过 closing PR 的 merged/closed 状态判断（稳定语义键）
+# dangerouslyDisableSandbox: true（所有 gh 命令）
+is_issue_done() {
+  local n="$1"
+  # 优先：GraphQL 查 issue 的 closedByPullRequestsReferences（closing PR）
+  local result
+  result=$(gh api graphql -f query='query($owner:String!,$repo:String!,$num:Int!){
+    repository(owner:$owner,name:$repo){
+      issue(number:$num){
+        state
+        closedByPullRequestsReferences(first:5){
+          nodes{ state merged }
+        }
+      }
+    }
+  }' -f owner="ghbvf" -f repo="gocell" -F num="$n" \
+    --jq '
+      .data.repository.issue |
+      if .state == "CLOSED" then "DONE"
+      elif (.closedByPullRequestsReferences.nodes // []) | map(select(.merged==true)) | length > 0 then "DONE"
+      else "OPEN"
+      end
+    ' 2>/dev/null || echo "OPEN")
+  [[ "$result" == "DONE" ]]
+}
+
+# 幂等：对每个 conflict_group，取其"下一个未完成的 issue"（每组至多取 1 个）
+# 横跨所有组合计 ≤4 并行；起完即结束本次调用
+to_start=()
 for group_id in $(echo "$groups" | jq -r '.[]'); do
-  group_issues=$(echo "$entries" | jq -r --argjson g "$group_id" '[.[] | select(.parallel_group==$g) | .issue_number] | .[]')
-  group_done=true
+  group_issues=$(echo "$entries" | jq -r --argjson g "$group_id" \
+    '[.[] | select(.conflict_group==$g) | .issue_number] | .[]')
+  # 检查该组是否有"在飞" PR（已创建但未 merge 的 open PR）
+  group_has_inflight=false
   for n in $group_issues; do
-    # dangerouslyDisableSandbox: true
-    pr_state=$(gh pr list --repo ghbvf/gocell --search "#$n" --json state -q '.[0].state // "NONE"' 2>/dev/null || echo "NONE")
-    # 也尝试 gh pr view --head 匹配
-    if [[ "$pr_state" != "MERGED" && "$pr_state" != "CLOSED" ]]; then
-      group_done=false
+    open_pr=$(gh pr list --repo ghbvf/gocell --state open --search "closes #$n" \
+      --json number -q '.[0].number // ""' 2>/dev/null || true)
+    if [[ -n "$open_pr" ]]; then
+      group_has_inflight=true
+      echo "INFO: conflict_group $group_id 有在飞 PR #$open_pr（issue #$n），跳过本组" >&2
       break
     fi
   done
-  if $group_done; then
-    echo "INFO: group $group_id 已完成（PR 全 MERGED/CLOSED），跳过" >&2
-  else
-    echo "INFO: 启动 group $group_id（issues: $group_issues）" >&2
-    # 对 group 内每个 issue 并行起 /ship #N 流程（复用下方 issue-number 路径）
-    # 组内 >4 个 issue → 子批，每批 ≤4 并行
-    break
-  fi
-done
-# 若所有 group 均已完成（循环未 break），提示用户
-all_complete=true
-for group_id in $(echo "$groups" | jq -r '.[]'); do
-  group_issues=$(echo "$entries" | jq -r --argjson g "$group_id" '[.[] | select(.parallel_group==$g) | .issue_number] | .[]')
+  $group_has_inflight && continue
+
+  # 本组无在飞 PR → 取第一个未完成 issue
   for n in $group_issues; do
-    pr_state=$(gh pr list --repo ghbvf/gocell --search "#$n" --json state -q '.[0].state // "NONE"' 2>/dev/null || echo "NONE")
-    if [[ "$pr_state" != "MERGED" && "$pr_state" != "CLOSED" ]]; then
-      all_complete=false
-      break 2
+    if ! is_issue_done "$n"; then
+      to_start+=("$n")
+      echo "INFO: conflict_group $group_id 下一个 issue: #$n" >&2
+      break
     fi
   done
 done
-if $all_complete; then
-  echo "INFO: 全部 parallel_group 已完成，无新 group 可启动" >&2
+
+if [[ ${#to_start[@]} -eq 0 ]]; then
+  echo "INFO: 全部 conflict_group 已完成或均有在飞 PR，无新 issue 可启动" >&2
+else
+  # 横跨各组合计 ≤4 并行；对 to_start 中每个 issue 并行起 /ship #N 流程
+  echo "INFO: 本次启动 issues: ${to_start[*]}（≤4 并行）" >&2
+  # 对每个 issue 调用 /ship #N（复用下方 issue-number 路径）
 fi
 ```
 
-**幂等重跑**：每次 `/ship --from-plan=<path>` 调用只启动第一个未完成的 group；人工 review/merge 本组 PR 后，重跑 `/ship --from-plan=<path>` 继续下一 group。状态从 PR 派生，无本地持久化。
+**幂等重跑**：每次 `/ship --from-plan=<path>` 调用，对每个"无在飞 PR 且仍有未完成 issue"的 conflict_group，启动其下一个未起 issue（每组取 1 个），横跨各组合计 ≤4 并行。人工 merge 后重跑继续推进。状态从 issue/PR 实时派生，无本地持久化。
 
-**parallel_group 契约**（plan.json 字段）：`parallel_group` 为 `int ≥ 1`，全 plan 全局唯一编号，同 group 可并行，异 group 串行（等上一 group 全 PR MERGED/CLOSED）。跨 wave 不共组。由 daily-planner agent STEP 6 派生（union-find on affected_paths），apply-gate.sh schema 校验该字段。
+**conflict_group 契约**（plan.json 字段）：`conflict_group` 为 `int ≥ 1`，同组 issue 共享文件冲突必须串行（组内队列化），异组 issue 可并行。跨 wave 不共组。由 daily-planner agent STEP 6 派生（union-find on affected_paths），apply-gate.sh schema 校验该字段。
 
 ---
 
@@ -220,14 +246,17 @@ else
   if [[ "$CURRENT_STATUS" == "In review" ]]; then
     echo "INFO: issue #$ISSUE_NUMBER already In review; skipping Status write (In review owned by Project v2 workflow)" >&2
   else
-    gh api graphql -f query='mutation($proj: ID!, $item: ID!, $field: ID!, $opt: String!) {
+    if ! gh api graphql -f query='mutation($proj: ID!, $item: ID!, $field: ID!, $opt: String!) {
       updateProjectV2ItemFieldValue(input: {
         projectId: $proj, itemId: $item, fieldId: $field,
         value: { singleSelectOptionId: $opt }
       }) { projectV2Item { id } }
     }' -f proj="$PROJECT_NODE_ID" -f item="$ITEM_ID" \
-       -f field="$STATUS_FIELD_ID" -f opt="$IN_PROGRESS_OPTION_ID"
-    echo "INFO: issue #$ISSUE_NUMBER Status → In progress" >&2
+       -f field="$STATUS_FIELD_ID" -f opt="$IN_PROGRESS_OPTION_ID" 2>&1; then
+      echo "WARN: failed to set Status → In progress for issue #$ISSUE_NUMBER; Status update is cosmetic lifecycle marker, continuing" >&2
+    else
+      echo "INFO: issue #$ISSUE_NUMBER Status → In progress" >&2
+    fi
   fi
 fi
 ```
@@ -253,12 +282,12 @@ fi
 - 哪些任务无文件交叉且无逻辑依赖 → 可并行启动 developer agent
 - 哪些任务有依赖或改同一文件 → 串行或归入同一 agent
 
-**plan-driven 模式覆盖**：通过 `--from-plan=<path>` 调用时，plan.json 的 `parallel_group` 字段**覆盖**主 agent 自身的文件重合分析——同 `parallel_group` 值的 issue 视为可并行（由 daily-planner agent STEP 6 union-find 已做文件冲突分析），不同 `parallel_group` 值的 issue 串行（等上一 group 全 PR MERGED/CLOSED 后重跑）。非 plan-driven 模式维持原有自主分析。
+**plan-driven 模式覆盖**：通过 `--from-plan=<path>` 调用时，plan.json 的 `conflict_group` 字段**覆盖**主 agent 自身的文件重合分析——同 `conflict_group` 值的 issue 共享文件冲突、必须串行（组内队列化，一次只有一个在飞）；不同 `conflict_group` 值的 issue 可并行（各组独立队列同时推进，横跨各组合计 ≤4 并发）。非 plan-driven 模式维持原有自主分析。
 
 **硬约束**：
 - 同一文件只能分给同一 agent（防写冲突）
 - 有前置依赖的批次必须等上一批全部完成后再启动
-- 并行 developer agent 上限 **4 个**（plan-driven 模式下组内 >4 个 issue → 子批，每批 ≤4 并行）
+- 并行 developer agent 上限 **4 个**（横跨所有 conflict_group 合计不超过 4）
 
 ### 5.1 Sub-agent prompt 自包含要求
 

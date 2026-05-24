@@ -18,7 +18,7 @@ PR #926 落地 daily-planner，调度算法含一条 **CAP COLLISION** heuristic
 
 1. **实施者是 AI**：不存在"认知负荷"这一人类心理模型概念；AI 并发执行多个 worktree 时容量由机器资源和 wave size 决定，不由 cap 分组决定。
 2. **同 cap 不等于文件冲突**：`cap-14`（daily-planner）下的两个 issue 可能修改完全不同的文件，不会相互阻塞。CAP COLLISION 会错误地串行化本可并行的工作。
-3. **文件冲突才是真实约束**：`parallel_group`（C2c）基于 `affected_paths` 前缀重合做 union-find，直接建模文件级冲突。这是 CAP COLLISION 试图近似但精度更低的同一底层约束。
+3. **文件冲突才是真实约束**：`conflict_group`（C2c）基于 `affected_paths` 前缀重合做 union-find，直接建模文件级冲突——同组串行，异组并行。这是 CAP COLLISION 试图近似但精度更低的同一底层约束。
 4. **逐-cap 压栈无 AI 对应物**：多 worktree 场景中没有"cap 维度的 CI/review 带宽"这一共享瓶颈的运维等价物；reviewer 带宽不按 cap 分桶管理。
 
 issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除。
@@ -37,7 +37,7 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 | 轴 | 载体 | 说明 |
 |----|------|------|
 | 拓扑正确性序 | `blocked_by` DAG（C2b）→ STEP 4/5 | 依赖关系决定 wave placement；blocker.wave ≤ dependent.wave |
-| 执行并行分组 | `parallel_group`（C2c）→ STEP 6 | `affected_paths` 前缀重合做 union-find；同组串行，异组可并行 |
+| 执行冲突分组 | `conflict_group`（C2c）→ STEP 6 | `affected_paths` 前缀重合做 union-find；同组冲突串行，异组可并行 |
 
 容量由 `WAVE_COUNT × WAVE_SIZE` 单独 governing，与 cap label 无关。
 
@@ -47,7 +47,7 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 
 新引入的 enforcement：CI smoke job（`pr-check.yml skill-daily-planner-smoke`）= 测试行为，ai-robust §适用范围外，同样不评级。
 
-`apply-gate.sh` 新增的 `parallel_group`（int ≥ 1 校验）与 `wave_option_id`（已知 option ID 成员校验）runtime invariant guard：这两条是 **bootstrap 期 fail-fast 校验**（shell 脚本在执行前验证 plan.json schema，校验失败 exit 1 阻断后续操作），对应 ai-robust 章程"governance rule — bootstrap 期 fail-fast 校验"载体，评级 **Medium**（runtime guard，依赖运行时执行校验脚本；非 Go type system Hard，无 archtest 静态锁）。
+`apply-gate.sh` 新增的 `conflict_group`（必填 + int ≥ 1 校验）与 `wave_option_id`（已知 option ID 成员校验）runtime invariant guard：这两条是 **bootstrap 期 fail-fast 校验**（shell 脚本在执行前验证 plan.json schema，校验失败 exit 1 阻断后续操作），对应 ai-robust 章程"governance rule — bootstrap 期 fail-fast 校验"载体，评级 **Medium**（runtime guard，依赖运行时执行校验脚本；非 Go type system Hard，无 archtest 静态锁）。
 
 ## 威胁模型
 
@@ -56,7 +56,7 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 | 威胁 | 删除前覆盖 | 删除后覆盖 | 结论 |
 |------|-----------|-----------|------|
 | 同 cap 资源（CI/review 带宽）超载 | CAP COLLISION 压栈（≤3/cap/wave） | wave size 上限（`WAVE_COUNT × WAVE_SIZE`）全局容量兜底 | 接受代价：AI-parallel 吞吐优先，逐-cap 压栈无 AI 对应物；wave 容量是更直接的约束 |
-| 文件冲突导致 worktree 互相阻塞 | 无（CAP COLLISION 是 cap 维度，不是文件维度） | `parallel_group` union-find（C2c）直接覆盖 | 替代机制更精确 |
+| 文件冲突导致 worktree 互相阻塞 | 无（CAP COLLISION 是 cap 维度，不是文件维度） | `conflict_group` union-find（C2c）直接覆盖（同组冲突串行） | 替代机制更精确 |
 | 依赖倒序（下游先 ship，上游还未 done） | 无 | `blocked_by` DAG（C2b）topo sort，blocker.wave ≤ dependent.wave | 新增覆盖 |
 | AI 写入过多 issue 致 review 积压 | CAP COLLISION 间接限速 | wave size 参数（`WAVE_SIZE`）显式控制；用户可调低 | wave size 是更直接的旋钮，无需 cap 维度代理 |
 
@@ -65,7 +65,7 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 ## Out of scope
 
 - C2b blocked-by DAG 的 GraphQL 字段确认（独立实施，同 PR）
-- `parallel_group` 的 apply-gate.sh schema 校验（C2c，同 PR）
+- `conflict_group` 的 apply-gate.sh schema 校验（C2c，同 PR）
 - wave size 参数的可配置 UI（已存在，不在本 ADR 范围）
 - ship `--from-plan` 模式（C2d，同 PR）
 

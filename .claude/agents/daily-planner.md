@@ -46,7 +46,7 @@ flag_multiplier:   hard=3 / planned=2 / cond(trigger 满足)=1.5
 
 `容量 = WAVE_COUNT × WAVE_SIZE` = 工作日 10 / 周末 20。
 
-**两正交轴**：拓扑（正确性序，STEP 4/5）约束先后顺序；parallel_group（执行并行，STEP 6）末端派生，指示哪些 issue 可并行执行。容量由 wave size 单独 governing，无 per-cap 阈值。
+**两正交轴**：拓扑（正确性序，STEP 4/5）约束先后顺序；conflict_group（文件冲突集，STEP 6）末端派生——同 conflict_group 表示共享文件冲突、消费端必须串行；不同 conflict_group 表示文件独立、可并行。容量由 wave size 单独 governing，无 per-cap 阈值。
 
 ```
 STEP 1  解析每 issue：score=pri_weight×flag_multiplier（WSJF 不变）；
@@ -68,12 +68,16 @@ STEP 5  wave 填充：Wave1 头=carry-over，后 WSJF desc，容量=WAVE_COUNT×
         新 issue 溢出 → Unscheduled [capacity overflow]；
         carry-over ≥ 全容量 → 新 issue 全 Unscheduled，Warnings [BACKLOG SATURATED]。
 
-STEP 6  parallel_group（wave 内）：每 wave 对 affected_paths 前缀重合做 union-find，
-        每连通分量=一组；无 affected_paths → singleton（可并行）。
+STEP 6  conflict_group（wave 内）：每 wave 对 affected_paths 前缀重合做 union-find，
+        每连通分量=一个 conflict_group（共享文件、必须串行的冲突集）；
+        空 affected_paths（wildcard fail-closed）：footprint 未知 →
+        与同 wave 内所有 item union（冲突于一切）→ 整 wave 落入同一 conflict_group（串行）；
+        brief 对该 item 加 Warning [AFFECTED PATHS MISSING — wave serialized]。
         编号：全 plan 全局唯一 int，(wave 升序, 首次出现) 从 1 分配；
-        同 int=可并行，异 int=串行，跨 wave 不共组。
+        同 conflict_group = 冲突 → 消费端（/ship）必须串行；
+        不同 conflict_group = 独立 → 可并行；跨 wave 不共组。
 
-STEP 7  输出 brief + plan.json，每 entry 含 parallel_group(int) + wave_option_id(str)。
+STEP 7  输出 brief + plan.json，每 entry 含 conflict_group(int) + wave_option_id(str)。
 ```
 
 ## items.json 结构（skill 阶段 1.2 GraphQL paginated 产出）
@@ -121,7 +125,8 @@ for item in items.json:
 | 输入集 + carry-over 全空 | Warnings 注 `[EMPTY INPUT SET]`；brief 显示空 Wave；plan.json = `[]` |
 | blocked_by 成环 | Warnings 注 `[DEP CYCLE]`；涉及 issue 不阻塞，正常排入候选序 |
 | blocked_by 跨 iteration 不可解 | Warnings 注 `[DEP CROSS-ITERATION]`；dependent 仍排入当前候选序并标记 |
-| affected_paths 解析失败 | Warnings 注 `[AFFECTED PATHS MALFORMED]`；该 issue 视为 singleton 可并行 |
+| affected_paths 解析失败 | Warnings 注 `[AFFECTED PATHS MALFORMED]`；该 issue 走 wildcard 语义：与同 wave 所有 item union → 整 wave 串行 |
+| affected_paths 字段缺失 | Warnings 注 `[AFFECTED PATHS MISSING — wave serialized]`；同 wildcard 语义：整 wave 落入同一 conflict_group（串行） |
 
 ## 输出
 
@@ -154,7 +159,8 @@ for item in items.json:
 - [EMPTY INPUT SET] 输入池为空（当输入 + carry-over 全 0）
 - [DEP CYCLE] #N → #M → #N（涉及 issue 编号）
 - [DEP CROSS-ITERATION] #N blocked by #M（M 在其他 iteration）
-- [AFFECTED PATHS MALFORMED] #N（解析失败，视为 singleton）
+- [AFFECTED PATHS MALFORMED] #N（解析失败，wildcard 语义 → wave 串行）
+- [AFFECTED PATHS MISSING — wave serialized] #N（字段缺失，wildcard 语义 → wave 串行）
 - [capacity overflow] N issue 超出容量退 Unscheduled
 - 其他
 
@@ -164,10 +170,10 @@ for item in items.json:
 - carry-over: N
 - 已在 today iteration（skip apply）: N
 - 待 apply: N
-- parallel groups: N（全 plan 唯一 int 范围 1..M）
+- conflict groups: N（全 plan 唯一 int 范围 1..M；同组必须串行，异组可并行）
 ```
 
-Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人工确认]` 等。Group 列标注 `parallel_group` int 值，同 int 的 issue 可并行执行。
+Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人工确认]` 等。Group 列标注 `conflict_group` int 值，同 int 的 issue 共享文件冲突、消费端必须串行；不同 int 的 issue 可并行执行。
 
 ### 2. plan.json 写到 PLAN_PATH
 
@@ -183,7 +189,7 @@ Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人
     "action": "set" | "skip",
     "carry_over": true | false,
     "score": 150.0,
-    "parallel_group": 1,
+    "conflict_group": 1,
     "wave_option_id": "<wave_option_id_from_stage0>"
   }
 ]
@@ -191,7 +197,7 @@ Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人
 
 字段说明：
 - `action="skip"` 由 agent 标注当 `current_iteration_id == TODAY_ITERATION_ID`（客户端幂等，避免冗余 mutation）；`skip` 时 `wave_option_id` 可为 `""`。
-- `parallel_group`：全 plan 全局唯一正整数（≥1），同值 issue 可并行执行，异值串行，跨 wave 不共组。由 STEP 6 union-find 在 wave 内按 affected_paths 前缀重合分组派生，(wave 升序, 首次出现) 从 1 起全局分配。
+- `conflict_group`：全 plan 全局唯一正整数（≥1），每 entry 必填（含 action="skip" 的 entry）。同值 issue 共享文件冲突、消费端（/ship）必须串行；不同值 issue 文件独立、可并行。跨 wave 不共组。由 STEP 6 union-find 在 wave 内按 affected_paths 前缀重合分组派生，(wave 升序, 首次出现) 从 1 起全局分配。空 affected_paths 走 wildcard 语义：与同 wave 所有 item union，整 wave 落入同一 conflict_group。
 - `wave_option_id`：对应 Project v2 Wave 字段的 single-select option id，由 skill 阶段 0 查询后将 wave→option-id 映射注入 prompt，agent 按 entry 的 wave 值填写。`apply-gate.sh` 在 `WAVE_FIELD_ID` 非空时校验该值必须在已知 option id 集合内。
 
 ## 约束
