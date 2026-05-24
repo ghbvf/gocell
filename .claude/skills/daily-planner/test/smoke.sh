@@ -169,14 +169,6 @@ assert_gate_fail "A4: unknown current -> current_iteration_id unknown" \
   "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
 rm -rf "$wd"
 
-# A5: conflict_group not int -> "conflict_group must be int" + rc==1
-wd=$(make_gate_workdir "plan-bad-parallel-group.json")
-assert_gate_fail "A5: bad conflict_group -> conflict_group must be int" \
-  "conflict_group must be int" \
-  "WORKDIR=$wd" "TODAY_ITERATION_ID=ITER_TODAY" "YESTERDAY_ITERATION_ID=ITER_YESTERDAY" \
-  "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
-rm -rf "$wd"
-
 # A6: WAVE_FIELD_ID="" -> "Wave field missing" + rc==1
 wd=$(make_gate_workdir "plan-clean.json")
 assert_gate_fail "A6: WAVE_FIELD_ID empty -> Wave field missing" \
@@ -219,10 +211,11 @@ assert_gate_fail "A10: CLOSED/Done carry-over not in allowed set -> rc==1" \
   "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
 rm -rf "$wd"
 
-# A11: missing conflict_group field -> "conflict_group required" + rc==1
+# A11: conflict_group is advisory (brief display-only, no machine consumer after
+# ship --from-plan removal) -> apply-gate no longer validates it; a plan WITHOUT
+# conflict_group must PASS the gate (all other fields valid).
 wd=$(make_gate_workdir "plan-missing-conflict-group.json")
-assert_gate_fail "A11: missing conflict_group -> conflict_group required" \
-  "conflict_group required" \
+assert_gate_pass "A11: missing conflict_group -> exit 0 (advisory, not validated)" \
   "WORKDIR=$wd" "TODAY_ITERATION_ID=ITER_TODAY" "YESTERDAY_ITERATION_ID=ITER_YESTERDAY" \
   "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
 rm -rf "$wd"
@@ -282,6 +275,190 @@ else
 fi
 # Reset for downstream cases (RWF2 cleared them).
 unset WAVE_FIELD_ID WAVE_OPTION_IDS WAVE_OPTION_ID_WAVE1 WAVE_OPTION_ID_WAVE2 WAVE_OPTION_ID_WAVE3 WAVE_OPTION_ID_WAVE4
+
+# ---------------------------------------------------------------------------
+# Part A: stage 0-2 fetch/setup lib extraction (resolve-constants / fetch-data /
+# fetch-deps / ensure-iteration). These cover the deterministic jq/date logic
+# that used to live inline in SKILL.md stage 0-2 (untested). gh is PATH-stubbed;
+# the pure-inference cases (ensure-iteration when the iteration exists) need no
+# gh at all.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Part A: stage 0-2 lib (resolve-constants / fetch-data / fetch-deps / ensure-iteration) ==="
+
+resolve_constants_script="${skill_dir}/lib/resolve-constants.sh"
+fetch_data_script="${skill_dir}/lib/fetch-data.sh"
+fetch_deps_script="${skill_dir}/lib/fetch-deps.sh"
+ensure_iteration_script="${skill_dir}/lib/ensure-iteration.sh"
+
+# Stage-0-2 gh stub: routes auth/project/issue/graphql by args. Responses are
+# env-configurable so cases inject fixtures. graphql queries are routed by a
+# distinctive substring of the query body.
+stage_stub_dir=$(mktemp -d)
+cat > "${stage_stub_dir}/gh" <<'SSTUB'
+#!/usr/bin/env bash
+set -euo pipefail
+all="$*"
+case "${1:-} ${2:-}" in
+  "auth status")
+    echo "github.com" >&2
+    echo "  - Token scopes: 'project', 'read:org', 'repo'" >&2
+    exit 0 ;;
+  "project view")
+    echo "{\"id\":\"${GH_STUB_PROJECT_ID:-PNI_STUB}\"}" ;;
+  "project field-list")
+    cat "${GH_STUB_FIELD_LIST:?GH_STUB_FIELD_LIST required}" ;;
+  "issue list")
+    # route by pri label present in args
+    if [[ "$all" == *"pri-p0"* ]]; then cat "${GH_STUB_ISSUES_P0:-/dev/null}"
+    elif [[ "$all" == *"pri-p1"* ]]; then cat "${GH_STUB_ISSUES_P1:-/dev/null}"
+    elif [[ "$all" == *"pri-missing"* ]]; then cat "${GH_STUB_ISSUES_MISSING:-/dev/null}"
+    else echo "[]"; fi ;;
+  "api graphql")
+    if [[ "$all" == *"blockedBy"* ]]; then cat "${GH_STUB_GRAPHQL_DEPS:-/dev/null}"
+    elif [[ "$all" == *"subIssuesSummary"* ]]; then echo "{}"
+    elif [[ "$all" == *"ProjectV2IterationField"* || "$all" == *"configuration"* ]]; then cat "${GH_STUB_GRAPHQL_ITERCFG:-/dev/null}"
+    elif [[ "$all" == *"items(first"* ]]; then cat "${GH_STUB_GRAPHQL_ITEMS:-/dev/null}"
+    elif [[ "$all" == *"updateProjectV2Field"* ]]; then cat "${GH_STUB_GRAPHQL_ITERUPDATE:-/dev/null}"
+    else echo "{}"; fi ;;
+  *) echo "stage-stub: unexpected gh $all" >&2; exit 1 ;;
+esac
+SSTUB
+chmod +x "${stage_stub_dir}/gh"
+# extend EXIT trap to also clean stage_stub_dir
+trap 'rm -rf "$stub_dir" "$stage_stub_dir"' EXIT
+
+# --- resolve-constants.sh: date/mode derivation ---
+# PC-RC1: Saturday -> IS_WEEKEND=true, WAVE_COUNT=4
+if [[ ! -x "$resolve_constants_script" ]]; then
+  echo "FAIL [PC-RC1: resolve-constants.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  out=$(env "DATE=2026-05-23" "GH_STUB_FIELD_LIST=${fixtures_dir}/field-list.json" \
+        "PATH=${stage_stub_dir}:${PATH}" bash "$resolve_constants_script" 2>/dev/null) || out=""
+  if [[ "$out" == *"IS_WEEKEND=true"* && "$out" == *"WAVE_COUNT=4"* \
+        && "$out" == *"ITERATION_FIELD_ID=PVTF_iteration"* ]]; then
+    echo "PASS [PC-RC1: Saturday -> weekend, 4 waves, iteration field resolved]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-RC1: expected IS_WEEKEND=true/WAVE_COUNT=4/ITERATION_FIELD_ID=PVTF_iteration; got: $out]"; fail=$((fail+1))
+  fi
+fi
+
+# PC-RC2: Monday -> IS_WEEKEND=false, WAVE_COUNT=2
+if [[ ! -x "$resolve_constants_script" ]]; then
+  echo "FAIL [PC-RC2: resolve-constants.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  out=$(env "DATE=2026-05-25" "GH_STUB_FIELD_LIST=${fixtures_dir}/field-list.json" \
+        "PATH=${stage_stub_dir}:${PATH}" bash "$resolve_constants_script" 2>/dev/null) || out=""
+  if [[ "$out" == *"IS_WEEKEND=false"* && "$out" == *"WAVE_COUNT=2"* ]]; then
+    echo "PASS [PC-RC2: Monday -> weekday, 2 waves]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-RC2: expected IS_WEEKEND=false/WAVE_COUNT=2; got: $out]"; fail=$((fail+1))
+  fi
+fi
+
+# PC-RC3: --weekend + --weekday both -> fail-fast "mutually exclusive"
+if [[ ! -x "$resolve_constants_script" ]]; then
+  echo "FAIL [PC-RC3: resolve-constants.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  rc3_err=$(env "DATE=2026-05-25" "FORCE_WEEKEND=true" "FORCE_WEEKDAY=true" \
+        "GH_STUB_FIELD_LIST=${fixtures_dir}/field-list.json" \
+        "PATH=${stage_stub_dir}:${PATH}" bash "$resolve_constants_script" 2>&1 >/dev/null) && rc3_rc=0 || rc3_rc=$?
+  if [[ "${rc3_rc:-0}" -ne 0 && "$rc3_err" == *"mutually exclusive"* ]]; then
+    echo "PASS [PC-RC3: --weekend + --weekday -> fail-fast]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-RC3: expected non-zero + 'mutually exclusive'; rc=${rc3_rc:-0} err=$rc3_err]"; fail=$((fail+1))
+  fi
+fi
+
+# --- ensure-iteration.sh: iteration inference (pure jq, no gh) ---
+# PC-EI1: DATE matches an existing iteration -> TODAY/YESTERDAY ids + carry-over enabled
+if [[ ! -x "$ensure_iteration_script" ]]; then
+  echo "FAIL [PC-EI1: ensure-iteration.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  ei_wd=$(mktemp -d); cp "${fixtures_dir}/iter-config.json" "$ei_wd/iter-config.json"
+  out=$(env "WORKDIR=$ei_wd" "DATE=2026-05-24" bash "$ensure_iteration_script" 2>/dev/null) || out=""
+  if [[ "$out" == *"TODAY_ITERATION_ID=ITER_TODAY"* \
+        && "$out" == *"YESTERDAY_ITERATION_ID=ITER_YESTERDAY"* \
+        && "$out" == *"CARRY_OVER_DISABLED=false"* ]]; then
+    echo "PASS [PC-EI1: today/yesterday iteration inferred, carry-over enabled]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-EI1: expected ITER_TODAY/ITER_YESTERDAY/CARRY_OVER_DISABLED=false; got: $out]"; fail=$((fail+1))
+  fi
+  rm -rf "$ei_wd"
+fi
+
+# PC-EI2: DATE has no matching iteration + dry-run (APPLY unset) -> abort exit 0, no mutation
+if [[ ! -x "$ensure_iteration_script" ]]; then
+  echo "FAIL [PC-EI2: ensure-iteration.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  ei_wd=$(mktemp -d); cp "${fixtures_dir}/iter-config.json" "$ei_wd/iter-config.json"
+  ei2_err=$(env "WORKDIR=$ei_wd" "DATE=2026-05-22" bash "$ensure_iteration_script" 2>&1 >/dev/null) && ei2_rc=0 || ei2_rc=$?
+  if [[ "${ei2_rc:-0}" -eq 0 && "$ei2_err" == *"DRY-RUN"* ]]; then
+    echo "PASS [PC-EI2: missing iteration + dry-run -> abort exit 0]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-EI2: expected exit 0 + DRY-RUN abort; rc=${ei2_rc:-0} err=$ei2_err]"; fail=$((fail+1))
+  fi
+  rm -rf "$ei_wd"
+fi
+
+# PC-EI3: yesterday iteration absent -> CARRY_OVER_DISABLED=true
+if [[ ! -x "$ensure_iteration_script" ]]; then
+  echo "FAIL [PC-EI3: ensure-iteration.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  ei_wd=$(mktemp -d)
+  # iter-config with only today (no 05-23 yesterday)
+  jq '.data.user.projectV2.field.configuration.iterations |= map(select(.id=="ITER_TODAY"))' \
+    "${fixtures_dir}/iter-config.json" > "$ei_wd/iter-config.json"
+  out=$(env "WORKDIR=$ei_wd" "DATE=2026-05-24" bash "$ensure_iteration_script" 2>/dev/null) || out=""
+  if [[ "$out" == *"CARRY_OVER_DISABLED=true"* ]]; then
+    echo "PASS [PC-EI3: no yesterday iteration -> carry-over disabled]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-EI3: expected CARRY_OVER_DISABLED=true; got: $out]"; fail=$((fail+1))
+  fi
+  rm -rf "$ei_wd"
+fi
+
+# --- fetch-data.sh: issue dedup merge (gh-stubbed) ---
+# PC-FD1: P0 and P1 lists share issue #101 -> issues.json deduped by number
+if [[ ! -x "$fetch_data_script" ]]; then
+  echo "FAIL [PC-FD1: fetch-data.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  fd_wd=$(mktemp -d)
+  echo '[{"number":101,"title":"a"},{"number":102,"title":"b"}]' > "$fd_wd/p0.json"
+  echo '[{"number":101,"title":"a"},{"number":103,"title":"c"}]' > "$fd_wd/p1.json"
+  env "WORKDIR=$fd_wd" \
+      "GH_STUB_FIELD_LIST=${fixtures_dir}/field-list.json" \
+      "GH_STUB_ISSUES_P0=$fd_wd/p0.json" "GH_STUB_ISSUES_P1=$fd_wd/p1.json" \
+      "GH_STUB_ISSUES_MISSING=/dev/null" \
+      "GH_STUB_GRAPHQL_ITEMS=${fixtures_dir}/items.json" \
+      "GH_STUB_GRAPHQL_ITERCFG=${fixtures_dir}/iter-config.json" \
+      "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_data_script" >/dev/null 2>&1 || true
+  if [[ -f "$fd_wd/issues.json" ]] && [[ "$(jq 'length' "$fd_wd/issues.json" 2>/dev/null)" == "3" ]]; then
+    echo "PASS [PC-FD1: issues merged + deduped by number (3 unique)]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-FD1: expected 3 unique issues; got $(jq 'length' "$fd_wd/issues.json" 2>/dev/null || echo missing)]"; fail=$((fail+1))
+  fi
+  rm -rf "$fd_wd"
+fi
+
+# --- fetch-deps.sh: blocked-by DAG assembly (gh-stubbed) ---
+# PC-FDEP1: issue #102 blocked by #101 -> deps.json schema { "102": { "blocked_by": [101] } }
+if [[ ! -x "$fetch_deps_script" ]]; then
+  echo "FAIL [PC-FDEP1: fetch-deps.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
+else
+  fdep_wd=$(mktemp -d)
+  echo '[{"number":102,"title":"b"}]' > "$fdep_wd/issues.json"
+  echo '{"data":{"repository":{"issue":{"blockedBy":{"nodes":[{"number":101}]}}}}}' > "$fdep_wd/dep-resp.json"
+  env "WORKDIR=$fdep_wd" "GH_STUB_GRAPHQL_DEPS=$fdep_wd/dep-resp.json" \
+      "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_deps_script" >/dev/null 2>&1 || true
+  if [[ -f "$fdep_wd/deps.json" ]] \
+     && [[ "$(jq -r '."102".blocked_by[0]' "$fdep_wd/deps.json" 2>/dev/null)" == "101" ]]; then
+    echo "PASS [PC-FDEP1: deps.json blocked-by edge assembled]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-FDEP1: expected deps.json {102:{blocked_by:[101]}}; got $(cat "$fdep_wd/deps.json" 2>/dev/null || echo missing)]"; fail=$((fail+1))
+  fi
+  rm -rf "$fdep_wd"
+fi
 
 # ---------------------------------------------------------------------------
 # Part A: Write cases
