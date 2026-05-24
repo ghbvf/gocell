@@ -4,7 +4,7 @@
 // CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01 negative fixture loaded only when the
 // archtest_fixture build tag is set.
 //
-// 本 fixture 包含 10 个违规的 With* Option 函数（4 基础 + 3 嵌入形式 + 1 纯方法接口
+// 本 fixture 包含 11 个违规的 With* Option 函数（5 基础 + 3 嵌入形式 + 1 纯方法接口
 // + 1 命名本地嵌入 + 1 泛型）。修改本文件请同步更新
 // tools/archtest/cell_public_option_param_test.go 的 expectedRawParamFixtureViolations 常量。
 //
@@ -45,6 +45,10 @@ func WithBadPublisher(pub outbox.Publisher) Option { return func(any) {} }
 
 // WithBadWriter exposes raw outbox.Writer; must use outbox.CellWriter.
 func WithBadWriter(w outbox.Writer) Option { return func(any) {} }
+
+// WithBadEmitter exposes raw outbox.Emitter; must use outbox.CellEmitter
+// (PR-A23 / #618 A.1 — sealed marker extended to the emitter leg).
+func WithBadEmitter(e outbox.Emitter) Option { return func(any) {} }
 
 // AliasedTxRunner exercises the types.Unalias bypass: a Go 1.23+ type alias
 // to a forbidden raw type. Without types.Unalias in the scanner, the

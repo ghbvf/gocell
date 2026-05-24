@@ -289,7 +289,7 @@ func TestResolveCellEmitter(t *testing.T) {
 				Mode:      outbox.DurabilityDemo,
 				Publisher: realPub,
 			},
-			PreResolved: nonDurableEmitter{},
+			PreResolved: outbox.WrapEmitterForCell(nonDurableEmitter{}),
 		})
 		if err == nil {
 			t.Fatal("expected mutual-exclusion error, got nil")
@@ -310,7 +310,7 @@ func TestResolveCellEmitter(t *testing.T) {
 				CellID: "testcell",
 				Mode:   outbox.DurabilityDurable,
 			},
-			PreResolved: nonDurableEmitter{},
+			PreResolved: outbox.WrapEmitterForCell(nonDurableEmitter{}),
 		})
 		if err == nil {
 			t.Fatal("expected durable-mode guard error, got nil")
@@ -331,13 +331,13 @@ func TestResolveCellEmitter(t *testing.T) {
 				CellID: "testcell",
 				Mode:   outbox.DurabilityDurable,
 			},
-			PreResolved: durableEmitter{},
+			PreResolved: outbox.WrapEmitterForCell(durableEmitter{}),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !outcome.Durable {
-			t.Fatal("expected outcome.Durable=true for durableEmitter")
+		if !outcome.Durable() {
+			t.Fatal("expected outcome.Durable()=true for durableEmitter")
 		}
 	})
 
@@ -356,7 +356,7 @@ func TestResolveCellEmitter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if outcome.Durable {
+		if outcome.Durable() {
 			t.Fatal("expected non-durable outcome")
 		}
 		if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
@@ -405,10 +405,10 @@ func TestResolveCellEmitter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if outcome.Emitter == nil {
+		if outcome == nil {
 			t.Fatal("expected non-nil Emitter")
 		}
-		if outcome.Durable {
+		if outcome.Durable() {
 			t.Fatal("expected non-durable DirectEmitter")
 		}
 		if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {

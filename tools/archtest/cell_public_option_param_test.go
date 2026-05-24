@@ -51,7 +51,7 @@ import (
 // expectedRawParamFixtureViolations is the number of CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01
 // violations declared in tools/archtest/internal/rawparamfixture/cell.go.
 // When adding new violation cases to the fixture, update this constant first.
-const expectedRawParamFixtureViolations = 10
+const expectedRawParamFixtureViolations = 11
 
 // rawPublicOptionForbidden is the closed set of raw infra types that public
 // With* Options anywhere in a cell subtree (cells/<x>/**/*.go +
@@ -62,6 +62,7 @@ var rawPublicOptionForbidden = map[string]bool{
 	"github.com/ghbvf/gocell/kernel/persistence.TxRunner": true,
 	"github.com/ghbvf/gocell/kernel/outbox.Publisher":     true,
 	"github.com/ghbvf/gocell/kernel/outbox.Writer":        true,
+	"github.com/ghbvf/gocell/kernel/outbox.Emitter":       true,
 }
 
 type rawPublicOptionViolation struct {
@@ -413,8 +414,8 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 		})
 
 	require.Len(t, violations, expectedRawParamFixtureViolations,
-		"fixture must yield 10 violations: WithBadTxRunner / WithBadPublisher / "+
-			"WithBadWriter / WithAliasedBadTxRunner (4 baseline) + "+
+		"fixture must yield 11 violations: WithBadTxRunner / WithBadPublisher / "+
+			"WithBadWriter / WithBadEmitter / WithAliasedBadTxRunner (5 baseline) + "+
 			"WithBadEmbedPublisher / WithBadEmbedWriter / WithBadEmbedTxRunner "+
 			"(3 inline-interface-embed forms) + WithBadPureMethodIfaceTxRunner "+
 			"(1 pure-method anonymous interface) + "+
@@ -429,6 +430,7 @@ func TestCellRawInfraPublicOptionParam01_ScannerCatchesViolation(t *testing.T) {
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithBadTxRunner"])
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Publisher", got["WithBadPublisher"])
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Writer", got["WithBadWriter"])
+	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Emitter", got["WithBadEmitter"])
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/persistence.TxRunner", got["WithAliasedBadTxRunner"],
 		"types.Unalias must resolve type alias to canonical raw type")
 	assert.Equal(t, "github.com/ghbvf/gocell/kernel/outbox.Publisher", got["WithBadEmbedPublisher"],

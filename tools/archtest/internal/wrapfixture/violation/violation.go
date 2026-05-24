@@ -40,3 +40,10 @@ func CallWrapPublisherForCell(p outbox.Publisher) outbox.CellPublisher {
 func CallWrapWriterForCell(w outbox.Writer) outbox.CellWriter {
 	return outbox.WrapWriterForCell(w)
 }
+
+// CallWrapEmitterForCell mirrors CallWrapForCell for the emitter wrapper
+// (PR-A23 / #618 A.1). Gives the scanner-detection test a negative case for
+// the outbox.WrapEmitterForCell function leg of the wrapper-location invariant.
+func CallWrapEmitterForCell(e outbox.Emitter) outbox.CellEmitter {
+	return outbox.WrapEmitterForCell(e)
+}
