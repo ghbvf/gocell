@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 )
 
 // --- test doubles ---
@@ -150,8 +151,11 @@ func TestService_Confirm_NotFound(t *testing.T) {
 	require.NoError(t, err, "business 4xx must be returned as typed struct, not error")
 	require.NotNil(t, resp)
 
-	_, ok := resp.(confirmv1.Confirm404ErrorResponse)
+	resp404, ok := resp.(confirmv1.Confirm404ErrorResponse)
 	require.True(t, ok, "expected Confirm404ErrorResponse, got %T", resp)
+	// POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTEST-01: every _NotFound test
+	// must assert a typed errcode.Err*NotFound via the errcodetest funnel.
+	errcodetest.AssertCode(t, &resp404.Body, errcode.ErrOrderNotFound)
 
 	// No events emitted
 	assert.Empty(t, writer.entries)
