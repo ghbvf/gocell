@@ -1,4 +1,9 @@
-// INVARIANT: CI-PINNING-WORKFLOW-DIGEST-01: golangci-lint pinned to patch version; all external workflow uses pinned to SHA
+// INVARIANT:
+//   - CI-PINNING-WORKFLOW-DIGEST-01: golangci-lint pinned to patch version; all external workflow uses pinned to SHA
+//   - DEPENDABOT-COVERAGE-GOLANGCI-01: dependabot root github-actions block covers
+//     golangci/golangci-lint-action and a root gomod block is present; the decode is
+//     tolerant of unmodeled orchestration fields (a typo in an asserted field
+//     collapses to its zero value and still reds the guard)
 package archtest
 
 import (
@@ -281,8 +286,16 @@ updates:
 // the other validators in this file (validateGeneratedArtifactGates /
 // validateCodegenJobStructure). A strict KnownFields(true) decode here would
 // red on every new dependabot field while adding nothing to the assertion —
-// that fragility caused #925. This test prevents a "helpful" reintroduction
-// of strict decode.
+// that fragility caused #925 (trigger: #911 added `ignore:`). This test
+// prevents a "helpful" reintroduction of strict decode: with strict decode
+// re-added, the unmodeled fields below (open-pull-requests-limit / labels /
+// ignore + sub-fields) make the decode error and this NoError assertion red.
+//
+// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01.
+//
+// The fixture MUST retain those unmodeled fields — they are the regression
+// trip-wire; shrinking the fixture to only modeled fields would silently
+// turn this test into a tautology that no longer catches strict-decode reentry.
 func TestDependabotCoversCIAndGolangCILintToleratesUnmodeledFields(t *testing.T) {
 	body := []byte(`version: 2
 updates:
@@ -318,6 +331,31 @@ updates:
 	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))
 }
 
+// TestDependabotCoversCIAndGolangCILintRejectsGroupsFieldTypo is the
+// blind-spot self-check for dropping strict decode (#925): a typo in an
+// *asserted* field must still red the guard. Here `groops:` (typo of
+// `groups:`) is tolerantly ignored, leaving Groups empty, so the root
+// github-actions block can no longer cover golangci/golangci-lint-action and
+// the guard reds. This proves tolerant decode stays fail-closed on the fields
+// the guard reads — the safety claim that justified removing KnownFields(true).
+//
+// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01.
+func TestDependabotCoversCIAndGolangCILintRejectsGroupsFieldTypo(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    groops:
+      golangci-lint:
+        patterns:
+          - "golangci/golangci-lint-action"
+  - package-ecosystem: "gomod"
+    directory: "/"
+`)
+	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
+		"a typo in the asserted `groups` field must red the guard, not pass silently")
+}
+
 // dependabotConfig models only the fields validateDependabotCoversCIAndGolangCILint
 // asserts on. The decode is intentionally tolerant (no KnownFields(true)):
 // dependabot.yml legitimately grows orchestration fields (ignore /
@@ -337,6 +375,10 @@ type dependabotUpdate struct {
 	Groups           map[string]dependabotGroup `yaml:"groups"`
 }
 
+// dependabotGroup deliberately models only Patterns. The guard asks whether a
+// group's Patterns contains the required action, never what is excluded, so
+// exclude-patterns is left unmodeled and tolerantly ignored (see the
+// AllowsGroupExclusions fixture).
 type dependabotGroup struct {
 	Patterns []string `yaml:"patterns"`
 }
