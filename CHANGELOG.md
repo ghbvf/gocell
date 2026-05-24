@@ -8,6 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+- **`kernel/cell` decompose — auth + outbox extraction + `Registry`→`Registrar` rename** (`615-g10-kernel-cell-decompose`, PR #900, close #615): the listener-auth and outbox-demo concerns left `kernel/cell` for dedicated packages; the cell registration interface was renamed for intent clarity.
+  - Listener auth plans moved `kernel/cell` → `kernel/auth`: `cell.ListenerAuth` → `auth.ListenerAuth`; `cell.AuthNone` / `AuthJWT` / `AuthJWTFromAssembly` / `AuthMTLS` / `AuthServiceToken` → `auth.*`; constructors `cell.NewAuthJWT` / `NewAuthJWTFromAssembly` / `NewAuthServiceToken` → `auth.NewAuth*`; supporting types `IntentTokenVerifier` / `AssemblyRef` / `HMACKeyring` / `NonceStore` likewise moved to `auth`.
+  - Test-fixture `Must*` helpers moved `kernel/cell/celltest` → `kernel/auth/authtest`: `celltest.MustAuthJWT` / `MustAuthJWTFromAssembly` / `MustAuthServiceToken` → `authtest.Must*`. Production composition roots use the error-first `auth.NewAuth*` directly.
+  - Cell-internal demo tx fallback moved `kernel/cell` → `kernel/outbox`: `cell.DemoCellTxManager()` → `outbox.DemoCellTxManager()`; `cell.DemoTxRunner{}` → `outbox.DemoTxRunner{}`.
+  - `cell.Registry` interface → `cell.Registrar`: `Cell.Init(ctx, reg cell.Registry)` → `Init(ctx, reg cell.Registrar)`. Listener-ref constants (`cell.PrimaryListener` / `InternalListener` / `HealthListener`) are unchanged.
+  - All call sites migrated atomically; no compatibility shim.
+
 - **Cell `With*` Option sealed marker types** (`refactor/549-cell-iface-isp-split`, PR #441): `cells/<x>/cell.go` (platform + examples) public Options no longer accept raw infra types. Composition roots MUST wrap raw infra into sealed markers before injection.
   - Signature changes:
     - `accesscore/auditcore/configcore.WithTxManager(persistence.TxRunner)` → `WithTxManager(persistence.CellTxManager)`
@@ -19,7 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     - `persistence.WrapForCell(txRunner)`
     - `outbox.WrapPublisherForCell(publisher)`
     - `outbox.WrapWriterForCell(writer)`
-  - Cell-internal demo fallback: use `cell.DemoCellTxManager()` (returns sealed `persistence.CellTxManager`); do NOT use `cell.DemoTxRunner{}` directly inside cells (will not compile against the new field types).
+  - Cell-internal demo fallback: use `outbox.DemoCellTxManager()` (returns sealed `persistence.CellTxManager`); do NOT use `outbox.DemoTxRunner{}` directly inside cells (will not compile against the new field types). (Moved from `kernel/cell` to `kernel/outbox` in PR #900.)
   - All 6 composition-root sites + 11 test files migrated atomically; no compatibility shim.
   - **Defense in depth (Hard sealed fields + Medium archtest API surface)** per ai-robust.md §"违反不可表达":
     - **Hard (type system)**: raw infra fields and raw→`CellXxx` assignments are unexpressible at compile time — sealed marker requires the unimplementable `sealedXxx()` method only the wrapper packages provide.

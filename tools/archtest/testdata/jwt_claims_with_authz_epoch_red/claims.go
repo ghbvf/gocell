@@ -7,7 +7,7 @@
 // regressions.
 package fixture
 
-// Claims mirrors the shape of kernel/cell.Claims pre-S4d, when it still
+// Claims mirrors the shape of kernel/auth.Claims pre-S4d, when it still
 // carried the AuthzEpoch field. Re-introducing this field in production
 // regresses ADR-credential §A8 (row-level SoR).
 type Claims struct {

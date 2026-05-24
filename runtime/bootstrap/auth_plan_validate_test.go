@@ -10,12 +10,15 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -34,7 +37,7 @@ func errFull(t *testing.T, err error) string {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // bootstrapWithListener creates a minimal Bootstrap with a single listener.
-func bootstrapWithListener(ref cell.ListenerRef, chain []cell.ListenerAuth, tlsCfg *tls.Config) *Bootstrap {
+func bootstrapWithListener(ref cell.ListenerRef, chain []auth.ListenerAuth, tlsCfg *tls.Config) *Bootstrap {
 	b := &Bootstrap{
 		listenerConfigs: map[cell.ListenerRef]listenerConfig{
 			ref: {
@@ -66,43 +69,43 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		chain   []cell.ListenerAuth
+		chain   []auth.ListenerAuth
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name:    "AcceptsJWTFirst",
-			chain:   []cell.ListenerAuth{celltest.MustAuthJWT(verifier), cell.AuthMTLS{}},
+			chain:   []auth.ListenerAuth{authtest.MustAuthJWT(verifier), auth.AuthMTLS{}},
 			wantErr: false,
 		},
 		{
 			name: "AcceptsJWTFromAssemblyFirst",
-			chain: []cell.ListenerAuth{
-				celltest.MustAuthJWTFromAssembly(asm),
-				celltest.MustAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{}),
+			chain: []auth.ListenerAuth{
+				authtest.MustAuthJWTFromAssembly(asm),
+				authtest.MustAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{}),
 			},
 			wantErr: false,
 		},
 		{
 			name:    "AcceptsJWTAlone",
-			chain:   []cell.ListenerAuth{celltest.MustAuthJWT(verifier)},
+			chain:   []auth.ListenerAuth{authtest.MustAuthJWT(verifier)},
 			wantErr: false,
 		},
 		{
 			name:    "RejectsJWTNotFirst",
-			chain:   []cell.ListenerAuth{cell.AuthMTLS{}, celltest.MustAuthJWT(verifier)},
+			chain:   []auth.ListenerAuth{auth.AuthMTLS{}, authtest.MustAuthJWT(verifier)},
 			wantErr: true,
 			errMsg:  "must be sole/first plan",
 		},
 		{
 			name:    "RejectsDuplicateJWT",
-			chain:   []cell.ListenerAuth{celltest.MustAuthJWT(verifier), celltest.MustAuthJWT(verifier)},
+			chain:   []auth.ListenerAuth{authtest.MustAuthJWT(verifier), authtest.MustAuthJWT(verifier)},
 			wantErr: true,
 			errMsg:  "at most one",
 		},
 		{
 			name:    "AcceptsNoJWT",
-			chain:   []cell.ListenerAuth{cell.AuthMTLS{}},
+			chain:   []auth.ListenerAuth{auth.AuthMTLS{}},
 			wantErr: false,
 		},
 		{
@@ -136,8 +139,8 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 	t.Parallel()
 
-	asmA := assembly.New(assembly.Config{ID: "asm-match-a", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	asmB := assembly.New(assembly.Config{ID: "asm-match-b", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asmA := assembly.New(assembly.Config{ID: "asm-match-a", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asmB := assembly.New(assembly.Config{ID: "asm-match-b", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	t.Run("Match_SameInstance", func(t *testing.T) {
 		t.Parallel()
@@ -145,7 +148,7 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 			WithClock(clock.Real()),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
-				[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asmA)}),
+				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmA)}),
 		)
 		err := b.validateAuthJWTFromAssemblyPlans()
 		require.NoError(t, err)
@@ -157,7 +160,7 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 			WithClock(clock.Real()),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
-				[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asmB)}),
+				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmB)}),
 		)
 		err := b.validateAuthJWTFromAssemblyPlans()
 		require.Error(t, err)
@@ -169,13 +172,13 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 
 	t.Run("Mismatch_SameIDDifferentInstances", func(t *testing.T) {
 		t.Parallel()
-		asmWithID := assembly.New(assembly.Config{ID: "asm-match-same-id", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-		otherWithSameID := assembly.New(assembly.Config{ID: "asm-match-same-id", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+		asmWithID := assembly.New(assembly.Config{ID: "asm-match-same-id", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+		otherWithSameID := assembly.New(assembly.Config{ID: "asm-match-same-id", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 		b := New(
 			WithClock(clock.Real()),
 			WithAssembly(asmWithID),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
-				[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(otherWithSameID)}),
+				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(otherWithSameID)}),
 		)
 
 		err := b.validateAuthJWTFromAssemblyPlans()
@@ -192,7 +195,7 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 		b := &Bootstrap{
 			listenerConfigs: map[cell.ListenerRef]listenerConfig{
 				cell.PrimaryListener: {
-					authChain: []cell.ListenerAuth{cell.AuthMTLS{}},
+					authChain: []auth.ListenerAuth{auth.AuthMTLS{}},
 				},
 			},
 		}
@@ -204,7 +207,7 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 		asm := &applyStubAssemblyRef{id: "valid-no-withassembly"}
 		b := bootstrapWithListener(
 			cell.PrimaryListener,
-			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+			[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			nil,
 		)
 		require.NoError(t, b.validateAuthJWTFromAssemblyPlans())
@@ -219,27 +222,27 @@ func TestValidateAuthJWTFromAssemblyPlans_RejectsConstructorBypass(t *testing.T)
 
 	tests := []struct {
 		name    string
-		plan    cell.AuthJWTFromAssembly
+		plan    auth.AuthJWTFromAssembly
 		wantErr string
 	}{
 		{
 			name:    "zero literal",
-			plan:    cell.AuthJWTFromAssembly{},
+			plan:    auth.AuthJWTFromAssembly{},
 			wantErr: "Assembly must not be nil",
 		},
 		{
 			name:    "nil Assembly literal",
-			plan:    cell.AuthJWTFromAssembly{Assembly: nil},
+			plan:    auth.AuthJWTFromAssembly{Assembly: nil},
 			wantErr: "Assembly must not be nil",
 		},
 		{
 			name:    "typed nil Assembly literal",
-			plan:    cell.AuthJWTFromAssembly{Assembly: typedNil},
+			plan:    auth.AuthJWTFromAssembly{Assembly: typedNil},
 			wantErr: "Assembly must not be nil",
 		},
 		{
 			name:    "real Assembly literal without resolver",
-			plan:    cell.AuthJWTFromAssembly{Assembly: asm},
+			plan:    auth.AuthJWTFromAssembly{Assembly: asm},
 			wantErr: "constructed as a struct literal",
 		},
 	}
@@ -247,7 +250,7 @@ func TestValidateAuthJWTFromAssemblyPlans_RejectsConstructorBypass(t *testing.T)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b := bootstrapWithListener(cell.PrimaryListener, []cell.ListenerAuth{tc.plan}, nil)
+			b := bootstrapWithListener(cell.PrimaryListener, []auth.ListenerAuth{tc.plan}, nil)
 
 			var err error
 			require.NotPanics(t, func() {
@@ -269,7 +272,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 		t.Parallel()
 		b := bootstrapWithListener(
 			cell.InternalListener,
-			[]cell.ListenerAuth{cell.AuthMTLS{}},
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			nil, // no tls.Config
 		)
 		err := b.validateAuthPlanMTLSBindings()
@@ -282,7 +285,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 		t.Parallel()
 		b := bootstrapWithListener(
 			cell.InternalListener,
-			[]cell.ListenerAuth{cell.AuthMTLS{}},
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			&tls.Config{
 				ClientAuth: tls.NoClientCert, // too loose
 				ClientCAs:  x509.NewCertPool(),
@@ -297,7 +300,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 		t.Parallel()
 		b := bootstrapWithListener(
 			cell.InternalListener,
-			[]cell.ListenerAuth{cell.AuthMTLS{}},
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			&tls.Config{
 				ClientAuth: tls.RequireAndVerifyClientCert,
 				ClientCAs:  nil, // missing
@@ -312,7 +315,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 		t.Parallel()
 		b := bootstrapWithListener(
 			cell.InternalListener,
-			[]cell.ListenerAuth{cell.AuthMTLS{}},
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			validMTLSTLSConfig(),
 		)
 		require.NoError(t, b.validateAuthPlanMTLSBindings())
@@ -326,12 +329,12 @@ func TestValidateAuthNoneExclusive(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		chain   []cell.ListenerAuth
+		chain   []auth.ListenerAuth
 		wantErr bool
 	}{
-		{name: "AuthNone alone accepted", chain: []cell.ListenerAuth{cell.AuthNone{}}},
-		{name: "guard alone accepted", chain: []cell.ListenerAuth{cell.AuthMTLS{}}},
-		{name: "AuthNone mixed with guard rejected", chain: []cell.ListenerAuth{cell.AuthNone{}, cell.AuthMTLS{}}, wantErr: true},
+		{name: "AuthNone alone accepted", chain: []auth.ListenerAuth{auth.AuthNone{}}},
+		{name: "guard alone accepted", chain: []auth.ListenerAuth{auth.AuthMTLS{}}},
+		{name: "AuthNone mixed with guard rejected", chain: []auth.ListenerAuth{auth.AuthNone{}, auth.AuthMTLS{}}, wantErr: true},
 	}
 
 	for _, tc := range tests {
@@ -354,24 +357,24 @@ func TestValidateAuthNoneExclusive(t *testing.T) {
 func TestValidateAuthServiceTokenPlans(t *testing.T) {
 	t.Parallel()
 
-	validPlan := celltest.MustAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{})
+	validPlan := authtest.MustAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{})
 
 	tests := []struct {
 		name    string
-		chain   []cell.ListenerAuth
+		chain   []auth.ListenerAuth
 		wantErr string
 	}{
 		{
 			name:  "accepts one service token",
-			chain: []cell.ListenerAuth{validPlan},
+			chain: []auth.ListenerAuth{validPlan},
 		},
 		{
 			name:  "accepts mtls plus one service token",
-			chain: []cell.ListenerAuth{cell.AuthMTLS{}, validPlan},
+			chain: []auth.ListenerAuth{auth.AuthMTLS{}, validPlan},
 		},
 		{
 			name: "rejects duplicate service token",
-			chain: []cell.ListenerAuth{
+			chain: []auth.ListenerAuth{
 				validPlan,
 				validPlan,
 			},
@@ -379,22 +382,22 @@ func TestValidateAuthServiceTokenPlans(t *testing.T) {
 		},
 		{
 			name: "rejects nil nonce store",
-			chain: []cell.ListenerAuth{
-				cell.AuthServiceToken{Store: nil, Ring: &applyStubHMACKeyring{}},
+			chain: []auth.ListenerAuth{
+				auth.AuthServiceToken{Store: nil, Ring: &applyStubHMACKeyring{}},
 			},
 			wantErr: "Store must not be nil",
 		},
 		{
 			name: "rejects nil keyring",
-			chain: []cell.ListenerAuth{
-				cell.AuthServiceToken{Store: &applyStubNonceStore{}, Ring: nil},
+			chain: []auth.ListenerAuth{
+				auth.AuthServiceToken{Store: &applyStubNonceStore{}, Ring: nil},
 			},
 			wantErr: "Ring must not be nil",
 		},
 		{
 			name: "rejects noop nonce store literal",
-			chain: []cell.ListenerAuth{
-				cell.AuthServiceToken{Store: &applyNoopNonceStore{}, Ring: &applyStubHMACKeyring{}},
+			chain: []auth.ListenerAuth{
+				auth.AuthServiceToken{Store: &applyNoopNonceStore{}, Ring: &applyStubHMACKeyring{}},
 			},
 			wantErr: "NonceStoreKindNoop",
 		},
@@ -427,26 +430,26 @@ func TestCheckJWTSingleton(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		chain   []cell.ListenerAuth
+		chain   []auth.ListenerAuth
 		wantErr bool
 		errMsg  string
 	}{
 		{"empty", nil, false, ""},
-		{"jwt_alone", []cell.ListenerAuth{celltest.MustAuthJWT(verifier)}, false, ""},
-		{"jwt_from_assembly_alone", []cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)}, false, ""},
+		{"jwt_alone", []auth.ListenerAuth{authtest.MustAuthJWT(verifier)}, false, ""},
+		{"jwt_from_assembly_alone", []auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, false, ""},
 		{
 			"jwt_not_first",
-			[]cell.ListenerAuth{cell.AuthMTLS{}, celltest.MustAuthJWT(verifier)},
+			[]auth.ListenerAuth{auth.AuthMTLS{}, authtest.MustAuthJWT(verifier)},
 			true, "sole/first",
 		},
 		{
 			"dual_jwt",
-			[]cell.ListenerAuth{celltest.MustAuthJWT(verifier), celltest.MustAuthJWT(verifier)},
+			[]auth.ListenerAuth{authtest.MustAuthJWT(verifier), authtest.MustAuthJWT(verifier)},
 			true, "at most one",
 		},
 		{
 			"jwt_and_jwt_from_assembly",
-			[]cell.ListenerAuth{celltest.MustAuthJWT(verifier), celltest.MustAuthJWTFromAssembly(asm)},
+			[]auth.ListenerAuth{authtest.MustAuthJWT(verifier), authtest.MustAuthJWTFromAssembly(asm)},
 			true, "at most one",
 		},
 	}

@@ -20,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -647,12 +646,12 @@ func classifyForUpdateErr(err error) error {
 	return err
 }
 
-// isNoopTx reports whether r is a demo/noop TxRunner (implements cell.Nooper and
+// isNoopTx reports whether r is a demo/noop TxRunner (implements outbox.Nooper and
 // returns Noop()==true). Used to decide whether explicit session cleanup is
 // needed on failure paths: noop tx has no rollback, so we compensate manually;
 // durable tx rollback handles atomicity.
 func isNoopTx(r persistence.TxRunner) bool {
-	n, ok := r.(cell.Nooper)
+	n, ok := r.(outbox.Nooper)
 	return ok && n.Noop()
 }
 

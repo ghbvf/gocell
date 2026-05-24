@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -30,21 +30,21 @@ const defaultMaxNonceEntries = 100000
 // standard sync.Mutex + map-with-TTL pattern (cf. gorilla/securecookie token store).
 
 // NonceStoreKind classifies a NonceStore implementation for startup validation.
-// It is an alias of cell.NonceStoreKind so that runtime/auth types satisfy
+// It is an alias of kauth.NonceStoreKind so that runtime/auth types satisfy
 // the kernel interface directly without conversion.
-type NonceStoreKind = cell.NonceStoreKind
+type NonceStoreKind = kauth.NonceStoreKind
 
 const (
 	// NonceStoreKindNoop is the explicit disable-replay-check sentinel.
 	// Rejected in adapter mode "real" by cmd/corebundle.SharedDeps.Validate.
-	NonceStoreKindNoop = cell.NonceStoreKindNoop
+	NonceStoreKindNoop = kauth.NonceStoreKindNoop
 	// NonceStoreKindInMemory is the single-process map-backed implementation.
 	// Suitable for single-pod deployments; a shared store is required for
 	// multi-pod replay protection.
-	NonceStoreKindInMemory = cell.NonceStoreKindInMemory
+	NonceStoreKindInMemory = kauth.NonceStoreKindInMemory
 	// NonceStoreKindDistributed is reserved for shared backends (Redis, consul,
 	// etc.). Production multi-pod deployments must use this kind.
-	NonceStoreKindDistributed = cell.NonceStoreKindDistributed
+	NonceStoreKindDistributed = kauth.NonceStoreKindDistributed
 )
 
 // NonceStore tracks nonces for replay prevention. Implementations must be
@@ -57,7 +57,7 @@ const (
 // Control-plane guards in adapter mode "real" must reject NonceStoreKindNoop
 // so replay protection is never silently disabled in production.
 //
-// This interface is identical to cell.NonceStore; runtime/auth types that
+// This interface is identical to kauth.NonceStore; runtime/auth types that
 // implement it automatically satisfy the kernel interface.
 type NonceStore interface {
 	CheckAndMark(ctx context.Context, nonce string) error

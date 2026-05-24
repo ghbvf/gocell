@@ -1,5 +1,4 @@
-// Package cell provides the Cell/Slice runtime and governance primitives.
-package cell
+package outbox
 
 import (
 	"context"
@@ -35,7 +34,7 @@ func (DemoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 // provided a real CellTxManager (publisher-only demo assemblies).
 //
 // The returned value still implements Nooper (via the wrapper's transparent
-// Noop pass-through), so cell.CheckNotNoop rejects it under
+// Noop pass-through), so outbox.CheckNotNoop rejects it under
 // DurabilityDurable — demo fallbacks can never silently slip into a durable
 // assembly.
 //

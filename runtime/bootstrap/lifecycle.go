@@ -27,7 +27,7 @@ var ErrLifecycleAlreadyStarted = errcode.New(errcode.KindInternal, errcode.ErrBo
 
 // ErrDuplicateHookName is returned by Append when a non-empty Hook.Name has
 // already been registered. The single source of truth for duplicate-name
-// detection lives here so that phase3b (cell.Registry.Lifecycle snapshot drain)
+// detection lives here so that phase3b (cell.Registrar.Lifecycle snapshot drain)
 // and WithLifecycle (explicit composition-root Append) share the same guard
 // without having to re-synchronize per-path "seen" maps.
 //

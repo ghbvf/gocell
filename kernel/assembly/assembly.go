@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -63,7 +64,7 @@ const internalCellQuotedFmt = "cell=%q"
 // Config holds assembly-level configuration.
 type Config struct {
 	ID             string
-	DurabilityMode cell.DurabilityMode // Required: Demo or Durable (zero value rejected by CheckNotNoop)
+	DurabilityMode outbox.DurabilityMode // Required: Demo or Durable (zero value rejected by CheckNotNoop)
 
 	// Clock is the time source used for hook-runtime measurement and any
 	// other time-dependent assembly bookkeeping. Required: New panics when
@@ -420,7 +421,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		cfgMap = make(map[string]any)
 	}
 
-	if err := cell.ValidateMode(a.cfg.DurabilityMode); err != nil {
+	if err := outbox.ValidateMode(a.cfg.DurabilityMode); err != nil {
 		a.mu.Lock()
 		a.state = stateStopped
 		a.mu.Unlock()

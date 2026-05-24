@@ -332,7 +332,7 @@ func TestServiceTokenMiddleware_TypedNilRing(t *testing.T) {
 
 // shortKeyringStub returns a sub-MinHMACKeyBytes secret to exercise the
 // defense-in-depth strength check inside ServiceTokenMiddleware (PR269 round-3
-// F5). cell.NewAuthServiceToken would normally reject this at construction
+// F5). auth.NewAuthServiceToken would normally reject this at construction
 // time; this test bypasses that path by calling ServiceTokenMiddleware directly,
 // which is the threat model the wiring-time check defends against.
 type shortKeyringStub struct{}

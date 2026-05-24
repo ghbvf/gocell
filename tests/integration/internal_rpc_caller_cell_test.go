@@ -30,6 +30,9 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -39,7 +42,6 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -202,7 +204,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 
 	asm := assembly.New(assembly.Config{
 		ID:             "caller-cell-test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(ac))
@@ -215,13 +217,13 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		bootstrap.WithListener(
 			cell.PrimaryListener,
 			primaryLn.Addr().String(),
-			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn),
 		),
 		bootstrap.WithListener(
 			cell.InternalListener,
 			internalLn.Addr().String(),
-			[]cell.ListenerAuth{celltest.MustAuthServiceToken(nonceStore, ring)},
+			[]kauth.ListenerAuth{authtest.MustAuthServiceToken(nonceStore, ring)},
 			bootstrap.WithListenerNet(internalLn),
 		),
 		bootstrap.WithPublisher(eb),

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -180,7 +182,7 @@ func TestService_VerifyIntent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newSvcWithUserRepo(t, store, userRepo)
 
-			claims, err := svc.VerifyIntent(context.Background(), tt.token(), auth.TokenIntentAccess)
+			claims, err := svc.VerifyIntent(context.Background(), tt.token(), kauth.TokenIntentAccess)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -224,7 +226,7 @@ func TestService_VerifyIntent_PastSessionExpiresAt_StillValidates(t *testing.T) 
 	// S4d: session has AuthzEpochAtIssue=1; user must match.
 	userRepo := &stubUserRepo{user: mustBuildUser(t, "usr-row-past", 1)}
 	svc := newSvcWithUserRepo(t, store, userRepo)
-	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	claims, err := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.NoError(t, err,
 		"F1: sessionvalidate must NOT reject on session-row ExpiresAt; JWT exp + RevokedAt are the validate gates")
 	assert.Equal(t, "usr-row-past", claims.Subject)
@@ -238,7 +240,7 @@ func TestService_VerifyIntent_NilSessionStore(t *testing.T) {
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-any")
 	require.NoError(t, err)
 
-	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	claims, err := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-1", claims.Subject)
 }
@@ -266,7 +268,7 @@ func TestService_VerifyIntent_DBError_FailsClosed(t *testing.T) {
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-db-fail")
 	require.NoError(t, err)
 
-	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, err, "DB errors must cause verification failure (fail-closed)")
 	assert.Contains(t, err.Error(), "ERR_AUTH_SERVICE_UNAVAILABLE",
 		"session store infra error must surface as 503 ERR_AUTH_SERVICE_UNAVAILABLE")
@@ -280,7 +282,7 @@ func TestService_VerifyIntent_NilSessionStore_NoSid(t *testing.T) {
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour)
 	require.NoError(t, err)
 
-	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	claims, err := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-1", claims.Subject)
 }
@@ -364,7 +366,7 @@ func TestNewService_NilGuards(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		verifier auth.IntentTokenVerifier
+		verifier kauth.IntentTokenVerifier
 		userRepo ports.UserRepository
 	}{
 		{
@@ -513,7 +515,7 @@ func TestEnforce_StaleEpoch_Rejected(t *testing.T) {
 	tok, err := IssueTestToken(testPrivKey, "usr-epoch", nil, time.Hour, "sess-epoch-stale")
 	require.NoError(t, err)
 
-	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, verifyErr)
 	assert.Contains(t, verifyErr.Error(), errMsgAuthFailed,
 		"stale epoch must return uniform auth-failed message")
@@ -541,7 +543,7 @@ func TestEnforce_EqualEpoch_Accepted(t *testing.T) {
 	tok, err := IssueTestToken(testPrivKey, "usr-ep-equal", nil, time.Hour, "sess-epoch-equal")
 	require.NoError(t, err)
 
-	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	claims, err := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-ep-equal", claims.Subject)
 }
@@ -560,7 +562,7 @@ func TestEnforce_InitialEpochCompat(t *testing.T) {
 	tok, err := IssueTestToken(testPrivKey, "usr-ep-initial", nil, time.Hour, "sess-epoch-initial")
 	require.NoError(t, err)
 
-	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.NoError(t, err, "initial epoch=1 session must pass (S4d initial state)")
 }
 
@@ -587,7 +589,7 @@ func TestEnforce_RowEpochAheadOfUser_Rejected(t *testing.T) {
 	tok, err := IssueTestToken(testPrivKey, "usr-ep-high", nil, time.Hour, "sess-epoch-high")
 	require.NoError(t, err)
 
-	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, err, "row epoch ahead of user epoch must be rejected (fail-closed mismatch)")
 	assert.Contains(t, err.Error(), errMsgAuthFailed,
 		"epoch mismatch must return uniform auth-failed message")
@@ -605,7 +607,7 @@ func TestEnforce_SessionInfraError_Returns503(t *testing.T) {
 	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-infra", 0, time.Hour, "sess-infra")
 	require.NoError(t, err)
 
-	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, verifyErr)
 
 	var ec *errcode.Error
@@ -626,7 +628,7 @@ func TestEnforce_UserRepoInfraError_Returns503(t *testing.T) {
 	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-repo-infra", 0, time.Hour, "sess-userrepo-infra")
 	require.NoError(t, err)
 
-	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, verifyErr)
 
 	var ec *errcode.Error
@@ -648,7 +650,7 @@ func TestEnforce_DomainNotFound_Returns401(t *testing.T) {
 	tok, err := IssueTestTokenWithEpoch(testPrivKey, "usr-notfound", 0, time.Hour, "sess-notfound")
 	require.NoError(t, err)
 
-	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, verifyErr)
 
 	var ec *errcode.Error
@@ -714,7 +716,7 @@ func TestEnforce_UniformAuthFailedBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newSvcWithUserRepo(t, store, tt.userRep)
-			_, err := svc.VerifyIntent(context.Background(), tt.tok(), auth.TokenIntentAccess)
+			_, err := svc.VerifyIntent(context.Background(), tt.tok(), kauth.TokenIntentAccess)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), errMsgAuthFailed,
 				"all auth failures must return the uniform body to prevent enumeration")
@@ -785,7 +787,7 @@ func TestEnforce_NonActiveUser_Rejected_P1_3b(t *testing.T) {
 			tok, err := IssueTestToken(testPrivKey, sub, nil, time.Hour, sid)
 			require.NoError(t, err)
 
-			_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+			_, verifyErr := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 			require.Error(t, verifyErr, "non-active user must be rejected even when epoch matches")
 
 			var ec *errcode.Error
@@ -827,7 +829,7 @@ func TestEnforce_ActiveUser_EpochMatch_Allowed_P1_3b_Control(t *testing.T) {
 	tok, err := IssueTestToken(testPrivKey, sub, nil, time.Hour, sid)
 	require.NoError(t, err)
 
-	claims, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	claims, verifyErr := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.NoError(t, verifyErr, "active user with matching epoch must be accepted")
 	assert.Equal(t, sub, claims.Subject)
 }
@@ -891,7 +893,7 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 			tok, err := IssueTestToken(testPrivKey, "usr-log", nil, time.Hour, "sess-log-test")
 			require.NoError(t, err)
 
-			_, _ = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+			_, _ = svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 
 			logOutput := buf.String()
 			require.NotEmpty(t, logOutput, "expected at least one log line")
@@ -952,7 +954,7 @@ func TestEnforce_RevokedSession_UserRepoUnavailable_Returns401_Uniform(t *testin
 		"sess-revoked-userrepo-down")
 	require.NoError(t, err)
 
-	_, verifyErr := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	_, verifyErr := svc.VerifyIntent(context.Background(), tok, kauth.TokenIntentAccess)
 	require.Error(t, verifyErr)
 
 	var ec *errcode.Error

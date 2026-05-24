@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -90,7 +92,7 @@ func TestNonceStore_RedisErrorWrapped(t *testing.T) {
 func TestNonceStore_KindDistributed(t *testing.T) {
 	store := mustNewNonceStoreFromCmdable(t, newMockCmdable())
 
-	assert.Equal(t, auth.NonceStoreKindDistributed, store.Kind())
+	assert.Equal(t, kauth.NonceStoreKindDistributed, store.Kind())
 }
 
 func TestNonceStore_RejectsReplayUnsafeTTL(t *testing.T) {

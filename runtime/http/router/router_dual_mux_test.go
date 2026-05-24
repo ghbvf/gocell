@@ -12,22 +12,23 @@ import (
 	"sync/atomic"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// dualMuxMockVerifier implements auth.IntentTokenVerifier for per-listener tests.
+// dualMuxMockVerifier implements kauth.IntentTokenVerifier for per-listener tests.
 type dualMuxMockVerifier struct {
-	claims auth.Claims
+	claims kauth.Claims
 	err    error
 	called atomic.Int64
 }
 
-func (v *dualMuxMockVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
+func (v *dualMuxMockVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
 	v.called.Add(1)
 	return v.claims, v.err
 }

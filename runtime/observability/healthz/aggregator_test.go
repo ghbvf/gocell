@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	khealthz "github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
 )
@@ -99,7 +99,7 @@ func TestEvaluate_DeadlineExceededProbe(t *testing.T) {
 func TestEvaluate_DegradedSentinelMapsToStatusDegraded(t *testing.T) {
 	agg := NewAggregator(WithClock(clock.Real()))
 	p := khealthz.NewProbe("cache_ready", func(_ context.Context) error {
-		return cell.ErrDegraded
+		return outbox.ErrDegraded
 	})
 	if err := agg.Register(p); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -112,7 +112,7 @@ func TestEvaluate_DegradedSentinelMapsToStatusDegraded(t *testing.T) {
 	if pr.Status != khealthz.StatusDegraded {
 		t.Errorf("probe status = %s, want Degraded", pr.Status)
 	}
-	if !errors.Is(pr.Err, cell.ErrDegraded) {
+	if !errors.Is(pr.Err, outbox.ErrDegraded) {
 		t.Errorf("probe Err should wrap ErrDegraded, got %v", pr.Err)
 	}
 }
@@ -120,7 +120,7 @@ func TestEvaluate_DegradedSentinelMapsToStatusDegraded(t *testing.T) {
 func TestEvaluate_WrappedDegradedSentinel(t *testing.T) {
 	agg := NewAggregator(WithClock(clock.Real()))
 	p := khealthz.NewProbe("cache_ready", func(_ context.Context) error {
-		return errors.Join(errors.New("outer"), cell.ErrDegraded)
+		return errors.Join(errors.New("outer"), outbox.ErrDegraded)
 	})
 	if err := agg.Register(p); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -177,7 +177,7 @@ func TestEvaluate_MultipleProbesAllStatus(t *testing.T) {
 			name: "one_degraded_rest_up",
 			probes: map[string]error{
 				"a_ready": nil,
-				"b_ready": cell.ErrDegraded,
+				"b_ready": outbox.ErrDegraded,
 			},
 			wantOverall: khealthz.StatusDegraded,
 		},
@@ -185,7 +185,7 @@ func TestEvaluate_MultipleProbesAllStatus(t *testing.T) {
 			name: "one_down_one_degraded",
 			probes: map[string]error{
 				"a_ready": errors.New("down"),
-				"b_ready": cell.ErrDegraded,
+				"b_ready": outbox.ErrDegraded,
 			},
 			wantOverall: khealthz.StatusDown,
 		},

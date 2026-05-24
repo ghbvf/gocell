@@ -4,9 +4,10 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/ghbvf/gocell/cells/configcore/slices/configsubscribe"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configwrite"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 )
@@ -51,7 +52,7 @@ func WithWriteLogger(l *slog.Logger) BuildWriteOption {
 // service's clock (Create path).
 //
 // Defaults:
-//   - tx: cell.DemoCellTxManager()
+//   - tx: outbox.DemoCellTxManager()
 //   - emitter: outboxtest.NewRecorder()
 //   - logger: slog.New(slog.DiscardHandler)
 //   - clock: clock.Real()
@@ -72,7 +73,7 @@ func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Ser
 		repo,
 		cfg.logger,
 		cfg.clk,
-		configwrite.WithTxManager(cell.DemoCellTxManager()),
+		configwrite.WithTxManager(outbox.DemoCellTxManager()),
 		configwrite.WithEmitter(rec),
 	)
 	if err != nil {

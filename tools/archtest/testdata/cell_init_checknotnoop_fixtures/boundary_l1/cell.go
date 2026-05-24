@@ -1,11 +1,13 @@
 //go:build archtest_fixture
 
-// Package boundaryl1 models an L1 cell that does not call cell.CheckNotNoop.
+// Package boundaryl1 models an L1 cell that does not call outbox.CheckNotNoop.
 // The CELL-L2-INIT-CHECKNOTNOOP-CALLED-01 archtest only applies to L2+ and
 // must NOT emit a diagnostic for this package.
 package boundaryl1
 
-import "context"
+import (
+	"context"
+)
 
 // BoundaryL1Cell is a fake L1 cell type — Phase A drops it before Phase B
 // scans, so the test passes an empty target list to mirror that behavior.

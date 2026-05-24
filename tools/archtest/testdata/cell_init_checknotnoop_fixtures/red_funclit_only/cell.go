@@ -16,7 +16,7 @@ package redfunclitonly
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // RedFuncLitCell is the fake L2+ cell type. The archtest matches it via
@@ -31,7 +31,7 @@ func (c *RedFuncLitCell) Init(ctx context.Context, reg any) error {
 	// Closure constructed but never executed. Phase B must NOT count this
 	// as a satisfying call.
 	guard := func() error {
-		return cell.CheckNotNoop(cell.DurabilityDemo, "fixture-red_funclit_only")
+		return outbox.CheckNotNoop(outbox.DurabilityDemo, "fixture-red_funclit_only")
 	}
 	_ = guard // captured-but-not-called; pure dead code from Init's perspective
 	return nil

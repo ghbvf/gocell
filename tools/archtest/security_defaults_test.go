@@ -167,7 +167,7 @@ func testSEC02ListenerAuthChainNonNil(t *testing.T, root string) {
 	}
 	assert.Empty(t, violations,
 		"all bootstrap.WithListener calls in cmd/corebundle and examples/**/main.go must pass "+
-			"an explicit non-nil authChain; use cell.AuthNone{} for HealthListener")
+			"an explicit non-nil authChain; use auth.AuthNone{} for HealthListener")
 }
 
 // findWithListenerNilAuthChain parses path and returns line numbers of every
@@ -351,13 +351,13 @@ import (
 )
 
 func main() {
-	chain := []cell.ListenerAuth{cell.AuthNone{}}
+	chain := []auth.ListenerAuth{auth.AuthNone{}}
 	bootstrap.WithListener(cell.InternalListener, ":9090", chain)
 	bootstrap.WithListener(cell.InternalListener, ":9091", insecureInternalAuth())
 }
 
-func insecureInternalAuth() []cell.ListenerAuth {
-	return []cell.ListenerAuth{cell.AuthNone{}}
+func insecureInternalAuth() []auth.ListenerAuth {
+	return []auth.ListenerAuth{auth.AuthNone{}}
 }
 `
 	require.NoError(t, os.WriteFile(path, []byte(src), 0o644))

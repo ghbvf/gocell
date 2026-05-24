@@ -50,7 +50,7 @@ func WithRepository(r domain.OrderRepository) Option {
 // WithOutboxWriter wires the sealed outbox CellWriter for transactional
 // event publishing. ordercell is L2 OutboxFact — the (writer, txRunner)
 // pair is composed into an outbox.Emitter at Init() time via
-// cell.ResolveCellEmitter. Composition roots construct via
+// outbox.ResolveCellEmitter. Composition roots construct via
 // outbox.WrapWriterForCell.
 //
 // ordercell deliberately omits the publisher-only path: it has no
@@ -60,7 +60,7 @@ func WithRepository(r domain.OrderRepository) Option {
 // Accumulative: a nil writer leaves the previously-set value in place.
 // Demo mode: wrap outbox.NoopWriter{} with outbox.WrapWriterForCell, paired
 // with WithTxManager(persistence.WrapForCell(demoTxRunner{})) or
-// cell.DemoCellTxManager().
+// outbox.DemoCellTxManager().
 //
 // AI-HARD per ADR cell-raw-infra-sealed-marker: the option signature
 // rejects raw outbox.Writer at compile time.
@@ -93,7 +93,7 @@ type OrderCell struct {
 	txRunner persistence.CellTxManager
 	emitter  outbox.Emitter
 	// Outbox wiring — writer accumulated via WithOutboxWriter and composed into
-	// emitter at Init() via cell.ResolveCellEmitter. ordercell is L2 OutboxFact:
+	// emitter at Init() via outbox.ResolveCellEmitter. ordercell is L2 OutboxFact:
 	// writer+txRunner is the only supported sink. Sealed marker types prevent
 	// any cell.go public Option from accepting raw outbox.Writer at compile
 	// time (ADR cell-raw-infra-sealed-marker §D1).
@@ -134,7 +134,7 @@ func NewOrderCell(opts ...Option) *OrderCell {
 // vault) at init time need it; ordercell currently does not.
 //
 //nolint:unparam // ctx is a contract parameter; unused here, used by other cells
-func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
+func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error {
 	durabilityMode := reg.DurabilityMode()
 
 	if err := c.resolveOutboxDeps(durabilityMode); err != nil {
@@ -172,7 +172,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	// with a key that ships in the source tree.
 	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
 	if c.cursorCodec == nil {
-		if durabilityMode == cell.DurabilityDurable {
+		if durabilityMode == outbox.DurabilityDurable {
 			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 				"ordercell durable mode requires a cursor codec; "+
 					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
@@ -189,7 +189,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 
 	// order-query slice
 	querySvc, err := orderquery.NewService(c.repo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(durabilityMode == cell.DurabilityDemo))
+		query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("order-query: %w", err)
 	}
@@ -200,14 +200,14 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	return nil
 }
 
-// resolveOutboxDeps delegates to cell.ResolveCellEmitter — the same path
+// resolveOutboxDeps delegates to outbox.ResolveCellEmitter — the same path
 // platform cells (accesscore/auditcore/configcore) use. ordercell only
 // supports the writer+txRunner sink (L2 OutboxFact).
 // After this call, pendingOutboxWriter is cleared and c.emitter is the
 // composed sink.
-func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
-	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-		EmitterConfig: cell.EmitterConfig{
+func (c *OrderCell) resolveOutboxDeps(mode outbox.DurabilityMode) error {
+	outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
 			CellID:       "ordercell",
 			Mode:         mode,
 			OutboxWriter: c.pendingOutboxWriter,

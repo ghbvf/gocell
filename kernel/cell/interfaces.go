@@ -55,10 +55,10 @@ type CellIdentity interface {
 // Consumers: Assembly orchestrator (kernel/cell.Assembly), bootstrap phases,
 // lifecycle test harnesses.
 type CellLifecycle interface {
-	// Init registers cell capabilities via the provided Registry; called once
+	// Init registers cell capabilities via the provided Registrar; called once
 	// before Start. Init failure aborts assembly start without invoking Stop.
 	// Init may validate config, build in-memory state, and register slices.
-	Init(ctx context.Context, reg Registry) error
+	Init(ctx context.Context, reg Registrar) error
 	// Start brings the cell to a running state. Returns nil only when the cell
 	// is fully ready to serve traffic. Canceling ctx must abort startup.
 	// Resources acquired here must be released by the matching Stop call.

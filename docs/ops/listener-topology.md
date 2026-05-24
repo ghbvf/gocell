@@ -1,7 +1,7 @@
 # GoCell Three-Listener Topology and Deployment (PR-A14b / PR262)
 
 GoCell runs three independent HTTP listeners. Each listener has a dedicated
-stdlib `*http.ServeMux` root and a typed `[]cell.ListenerAuth` chain — no
+stdlib `*http.ServeMux` root and a typed `[]auth.ListenerAuth` chain — no
 route leaks between ports, no string-based auth dispatch.
 
 ## Topology Diagram
@@ -195,7 +195,7 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
                 return auth.Mount(mux, auth.Route{
                     Contract: specGetResource, // wrapper.ContractSpec — Method+Path+Kind=http
                     Handler:  http.HandlerFunc(c.handleGet),
-                    Policy:   auth.Authenticated(), // route-level auth.Policy — distinct from listener-level cell.ListenerAuth
+                    Policy:   auth.Authenticated(), // route-level auth.Policy — distinct from listener-level auth.ListenerAuth
                 })
             },
         },
@@ -246,7 +246,7 @@ The framework enforces one Hard invariant for the `/internal/v1/*` listener. Eve
 
 | # | Invariant | Violation | Enforcement |
 |---|-----------|-----------|-------------|
-| 1 | The internal listener MUST mount `cell.AuthServiceToken` (HMAC 4-part token + nonce); the caller-cell allowlist is enforced by `ContractSpec.Clients`. The primary listener mounts JWT. | Any in-cluster client can reach `/internal/v1/*` without authentication. | archtest `SEC-FAIL-CLOSED-06` (rejects `InternalListener` with `cell.AuthNone{}` chain **or** literal `nil` chain) + governance `FMT-31` (`contract.yaml endpoints.clients` non-empty for `/internal/v1/*`) + `auth.Mount` auto-injects `RequireCallerCell` when `Contract.Clients` is non-empty. |
+| 1 | The internal listener MUST mount `auth.AuthServiceToken` (HMAC 4-part token + nonce); the caller-cell allowlist is enforced by `ContractSpec.Clients`. The primary listener mounts JWT. | Any in-cluster client can reach `/internal/v1/*` without authentication. | archtest `SEC-FAIL-CLOSED-06` (rejects `InternalListener` with `auth.AuthNone{}` chain **or** literal `nil` chain) + governance `FMT-31` (`contract.yaml endpoints.clients` non-empty for `/internal/v1/*`) + `auth.Mount` auto-injects `RequireCallerCell` when `Contract.Clients` is non-empty. |
 
 This is the **only fail-closed boundary** the framework enforces for `/internal/v1/*` traffic. LB mapping, the internal-listener bind address, and NetworkPolicy are deployment-side defense-in-depth (see [Deployment Recommendations](#deployment-recommendations)); none of them are code-side enforcement mechanisms — Kubernetes resources do not live in this repository (LB), and corebundle does not reject non-loopback `GOCELL_HTTP_INTERNAL_ADDR` values (internal bind). The AI-robust charter (`.claude/rules/gocell/ai-robust.md` §"AI-robust 三档分级") prohibits filing such Soft conventions in the invariant table; they appear as recommendations instead.
 

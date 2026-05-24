@@ -10,6 +10,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 )
 
@@ -19,7 +21,7 @@ import (
 type listenerConfig struct {
 	ref       cell.ListenerRef
 	addr      string
-	authChain []cell.ListenerAuth // authentication plan chain; nil means no auth (AuthNone behavior)
+	authChain []auth.ListenerAuth // authentication plan chain; nil means no auth (AuthNone behavior)
 	net       net.Listener        // optional: pre-bound listener for tests
 	tls       *tls.Config         // optional: TLS termination config
 	shutGrace time.Duration       // optional: overrides global shutdownTimeout
@@ -64,7 +66,7 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 // is no group-level override (PR269 round-3: cells needing a different scheme
 // must declare their routes on a different listener). Listener auth is explicit:
 // a nil or empty chain is a phase0 error. Pass
-// []cell.ListenerAuth{cell.AuthNone{}} for a deliberate no-auth listener
+// []auth.ListenerAuth{auth.AuthNone{}} for a deliberate no-auth listener
 // (e.g. HealthListener behind a Kubernetes probe path). Route-specific policy
 // and exemptions still live on auth.Mount.
 //
@@ -79,7 +81,7 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 //
 // See docs/ops/listener-topology.md for the deployment topology, threat boundaries,
 // and single-listener migration guide that consume these declarations.
-func WithListener(ref cell.ListenerRef, addr string, authChain []cell.ListenerAuth, opts ...ListenerOption) Option {
+func WithListener(ref cell.ListenerRef, addr string, authChain []auth.ListenerAuth, opts ...ListenerOption) Option {
 	return func(b *Bootstrap) {
 		if b.listenerConfigs == nil {
 			b.listenerConfigs = make(map[cell.ListenerRef]listenerConfig)

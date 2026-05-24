@@ -13,7 +13,7 @@ package bootstrap
 import (
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/auth"
 )
 
 // describeAuthChain returns a human-readable summary of a ListenerAuth chain
@@ -27,7 +27,7 @@ import (
 //	[AuthNone{}]                          → "none"
 //	[AuthJWT{}]                           → "jwt"
 //	[AuthMTLS{}, AuthServiceToken{}]      → "mtls+service-token"
-func describeAuthChain(chain []cell.ListenerAuth) string {
+func describeAuthChain(chain []auth.ListenerAuth) string {
 	if len(chain) == 0 {
 		return "none"
 	}
@@ -50,10 +50,10 @@ func describeAuthChain(chain []cell.ListenerAuth) string {
 // (and combinations thereof).
 //
 // This replaces the old isAuthFlavoredPolicy string-match helper.
-func chainProtectsRoutes(chain []cell.ListenerAuth) bool {
+func chainProtectsRoutes(chain []auth.ListenerAuth) bool {
 	for _, p := range chain {
 		switch p.(type) {
-		case cell.AuthJWT, cell.AuthJWTFromAssembly, cell.AuthMTLS, cell.AuthServiceToken:
+		case auth.AuthJWT, auth.AuthJWTFromAssembly, auth.AuthMTLS, auth.AuthServiceToken:
 			return true
 		}
 	}
@@ -61,9 +61,9 @@ func chainProtectsRoutes(chain []cell.ListenerAuth) bool {
 }
 
 // chainContainsAuthMTLS reports whether any plan in the chain is AuthMTLS.
-func chainContainsAuthMTLS(chain []cell.ListenerAuth) bool {
+func chainContainsAuthMTLS(chain []auth.ListenerAuth) bool {
 	for _, p := range chain {
-		if _, ok := p.(cell.AuthMTLS); ok {
+		if _, ok := p.(auth.AuthMTLS); ok {
 			return true
 		}
 	}
@@ -75,9 +75,9 @@ func chainContainsAuthMTLS(chain []cell.ListenerAuth) bool {
 // excluded: internal routes use caller_cell allowlist via contract.clients
 // (enforced by auth.RequireCallerCell). AuthMTLS may be layered with
 // service-token, but mTLS alone does not currently establish caller identity.
-func chainContainsInternalGuard(chain []cell.ListenerAuth) bool {
+func chainContainsInternalGuard(chain []auth.ListenerAuth) bool {
 	for _, p := range chain {
-		if _, ok := p.(cell.AuthServiceToken); ok {
+		if _, ok := p.(auth.AuthServiceToken); ok {
 			return true
 		}
 	}
@@ -88,9 +88,9 @@ func chainContainsInternalGuard(chain []cell.ListenerAuth) bool {
 // entry, distinguishing a deliberate AuthNone{} from a nil/empty chain omission.
 // Used by the OPS-07 non-loopback Warn log to help operators distinguish
 // "intentionally no auth" from "forgot to wire auth".
-func explicitAuthNone(chain []cell.ListenerAuth) bool {
+func explicitAuthNone(chain []auth.ListenerAuth) bool {
 	for _, p := range chain {
-		if _, ok := p.(cell.AuthNone); ok {
+		if _, ok := p.(auth.AuthNone); ok {
 			return true
 		}
 	}

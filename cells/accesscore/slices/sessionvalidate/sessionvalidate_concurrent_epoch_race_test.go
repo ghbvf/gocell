@@ -30,13 +30,14 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -97,7 +98,7 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 		preWG.Add(1)
 		go func() {
 			defer preWG.Done()
-			_, vErr := svc.VerifyIntent(context.Background(), tokenStr, auth.TokenIntentAccess)
+			_, vErr := svc.VerifyIntent(context.Background(), tokenStr, kauth.TokenIntentAccess)
 			if vErr == nil {
 				preBumpPass.Add(1)
 				return
@@ -126,7 +127,7 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 			postValidatorsReady.Done()
 			<-bumpDone
 
-			_, vErr := svc.VerifyIntent(context.Background(), tokenStr, auth.TokenIntentAccess)
+			_, vErr := svc.VerifyIntent(context.Background(), tokenStr, kauth.TokenIntentAccess)
 			if vErr != nil {
 				postBumpFail.Add(1)
 			} else {

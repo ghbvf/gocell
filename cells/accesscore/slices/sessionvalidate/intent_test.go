@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -31,7 +33,7 @@ func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {
 	refreshTok, err := IssueLegacyRefreshJWT(priv, "usr-attacker", time.Hour)
 	require.NoError(t, err)
 
-	_, err = svc.VerifyIntent(context.Background(), refreshTok, auth.TokenIntentAccess)
+	_, err = svc.VerifyIntent(context.Background(), refreshTok, kauth.TokenIntentAccess)
 	require.Error(t, err, "refresh-intent token must be rejected by sessionvalidate")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN",
 		"intent mismatch maps to generic invalid-token code in response")
@@ -48,12 +50,12 @@ func TestService_VerifyIntent_AcceptsAccessIntentToken(t *testing.T) {
 	svc, err := NewService(verifier, nil, &stubUserRepo{}, slog.Default())
 	require.NoError(t, err)
 
-	accessTok, err := IssueTestTokenWithIntent(priv, auth.TokenIntentAccess,
+	accessTok, err := IssueTestTokenWithIntent(priv, kauth.TokenIntentAccess,
 		"usr-legit", []string{"user"}, time.Hour)
 	require.NoError(t, err)
 
-	claims, err := svc.VerifyIntent(context.Background(), accessTok, auth.TokenIntentAccess)
+	claims, err := svc.VerifyIntent(context.Background(), accessTok, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-legit", claims.Subject)
-	assert.Equal(t, auth.TokenIntentAccess, claims.TokenUse)
+	assert.Equal(t, kauth.TokenIntentAccess, claims.TokenUse)
 }

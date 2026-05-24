@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -74,11 +74,11 @@ const ServiceTokenClockSkew = 30 * time.Second
 // plus the accepted future clock skew.
 const ServiceTokenNonceTTL = ServiceTokenMaxAge + ServiceTokenClockSkew
 
-// MinHMACKeyBytes aliases cell.MinHMACKeyBytes so runtime/auth and kernel/cell
+// MinHMACKeyBytes aliases kauth.MinHMACKeyBytes so runtime/auth and kernel/cell
 // share a single canonical strength threshold (NIST SP 800-107: HMAC-SHA-256
 // requires ≥256-bit keys). Kept as a const for callers that reference the
 // runtime/auth namespace; the source of truth lives in kernel/cell.
-const MinHMACKeyBytes = cell.MinHMACKeyBytes
+const MinHMACKeyBytes = kauth.MinHMACKeyBytes
 
 // serviceTokenConfig holds per-middleware options.
 type serviceTokenConfig struct {
@@ -218,14 +218,14 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 // Principal construction is fully delegated to NewServiceTokenAuthenticator
 // so that the service identity shape is defined in a single place.
 //
-// ring accepts cell.HMACKeyring (the kernel interface); *HMACKeyRing satisfies
+// ring accepts kauth.HMACKeyring (the kernel interface); *HMACKeyRing satisfies
 // it structurally and remains the canonical production implementation.
 //
 // Misconfiguration paths (nil ring, sub-strength HMAC, missing/Noop NonceStore,
 // authenticator build failure) return an error middleware that serves 500 on every
 // request. All misconfiguration paths share the same errorMiddlewareInternal helper
 // so the 500 behavior is consistent and observable via the "internal" metric label.
-func ServiceTokenMiddleware(ring cell.HMACKeyring, clk clock.Clock, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
+func ServiceTokenMiddleware(ring kauth.HMACKeyring, clk clock.Clock, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
 	clock.MustHaveClock(clk, "auth.ServiceTokenMiddleware")
 	cfg := serviceTokenConfig{
 		clk:    clk,
@@ -239,7 +239,7 @@ func ServiceTokenMiddleware(ring cell.HMACKeyring, clk clock.Clock, opts ...Serv
 		return errorMiddlewareInternal(cfg, "service token middleware called with nil key ring")
 	}
 
-	// Defense-in-depth strength check (PR269 round-3 F5): cell.NewAuthServiceToken
+	// Defense-in-depth strength check (PR269 round-3 F5): auth.NewAuthServiceToken
 	// already enforces MinHMACKeyBytes at construction time, but ServiceTokenMiddleware
 	// is also reachable via direct call paths (tests, custom wiring) that bypass
 	// the kernel constructor. Reject sub-strength rings here so no path leaks a
@@ -462,7 +462,7 @@ func classifyServiceTokenVerifyError(err error) string {
 
 // verifyServiceTokenMAC checks whether the provided MAC is valid for message
 // under any of the secrets in the key ring.
-func verifyServiceTokenMAC(ring cell.HMACKeyring, message string, providedMAC []byte) bool {
+func verifyServiceTokenMAC(ring kauth.HMACKeyring, message string, providedMAC []byte) bool {
 	for _, secret := range ring.Secrets() {
 		mac := hmac.New(sha256.New, secret)
 		_, _ = mac.Write([]byte(message))

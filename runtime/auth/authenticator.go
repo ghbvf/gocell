@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -136,7 +136,7 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 //     InMemoryNonceStore (NewInMemoryNonceStore(ServiceTokenNonceTTL)).
 //
 // This aligns runtime/auth construction with the existing reject-Noop guards in
-// kernel/cell.NewAuthServiceToken, runtime/bootstrap.auth_plan_validate, and
+// kernel/auth.NewAuthServiceToken, runtime/bootstrap.auth_plan_validate, and
 // cmd/corebundle.SharedDeps.Validate — all four layers fail-closed.
 //
 // Outcomes (when construction succeeds):
@@ -147,7 +147,7 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 //
 // ref: HashiCorp Vault server fail-closed defaults (no Noop-equivalent path).
 // ref: kubernetes/apiserver pkg/authentication — typed (Authenticator, error).
-func NewServiceTokenAuthenticator(ring cell.HMACKeyring, clk clock.Clock, opts ...ServiceTokenOption) (Authenticator, error) {
+func NewServiceTokenAuthenticator(ring kauth.HMACKeyring, clk clock.Clock, opts ...ServiceTokenOption) (Authenticator, error) {
 	clock.MustHaveClock(clk, "auth.NewServiceTokenAuthenticator")
 	cfg := serviceTokenConfig{clk: clk}
 	for _, o := range opts {
@@ -210,7 +210,7 @@ func NewServiceTokenAuthenticator(ring cell.HMACKeyring, clk clock.Clock, opts .
 // HTTP status code).
 //
 // This helper is intentionally package-private.
-func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg serviceTokenConfig, r *http.Request) (string, error) {
+func verifyServiceTokenPayload(ring kauth.HMACKeyring, payload string, cfg serviceTokenConfig, r *http.Request) (string, error) {
 	parts := strings.SplitN(payload, ":", 4)
 	switch len(parts) {
 	case 2:

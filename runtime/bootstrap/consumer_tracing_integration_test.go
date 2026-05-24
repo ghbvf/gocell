@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -96,7 +98,7 @@ type consumerSpyCell struct {
 	calls chan outbox.Entry
 }
 
-func (c *consumerSpyCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *consumerSpyCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -129,7 +131,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	asm := assembly.New(assembly.Config{ID: "consumer-trace-int", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "consumer-trace-int", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(cellImpl))
 
 	primaryLn := newLocalListener(t)
@@ -139,8 +141,8 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 		WithPublisher(bus),
 		WithConsumerBase(newTestConsumerBase(t)),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithTracer(spyTracer),
 	)
 

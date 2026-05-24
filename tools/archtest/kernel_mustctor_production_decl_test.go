@@ -139,6 +139,7 @@ var allowedMustDecls = map[string]map[string]struct{}{
 var testFixturePkgPrefixes = []string{
 	"tests/contracttest",
 	"pkg/testutil",
+	"kernel/auth/authtest",
 	"runtime/auth/authtest",
 	"runtime/auth/keystest",
 	"runtime/audit/ledger/storetest",
@@ -245,7 +246,7 @@ func TestKernelMustCtorCarveOutLogic(t *testing.T) {
 		{"runtime/websocket", "MustValidateHubConfig", true, "runtime/websocket.MustValidateHubConfig — internal validator"},
 		// NOT allow-listed: removed by B2-K-02
 		{"kernel/wrapper", "MustHTTPHandler", false, "kernel/wrapper.MustHTTPHandler — must be removed"},
-		{"kernel/cell", "MustNewAuthJWT", false, "kernel/cell.MustNewAuthJWT — must be removed"},
+		{"kernel/auth", "MustNewAuthJWT", false, "kernel/auth.MustNewAuthJWT — must be removed"},
 		{"runtime/auth/session", "MustNewProtocol", false, "runtime/auth/session.MustNewProtocol — must be removed"},
 		{"runtime/http/router", "MustNew", false, "runtime/http/router.MustNew — must be removed"},
 		{"adapters/websocket", "MustUpgradeHandler", false, "adapters/websocket.MustUpgradeHandler — must be removed"},

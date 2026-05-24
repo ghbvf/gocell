@@ -19,7 +19,7 @@
 //   - Real service implementations (configwrite.NewService, configsubscribe.NewService).
 //   - An in-memory repository (backed by the mem package — always zero-latency,
 //     no external dependencies).
-//   - kernel/cell.DemoCellTxManager() as a pass-through TxRunner.
+//   - kernel/outbox.DemoCellTxManager() as a pass-through TxRunner.
 //   - kernel/outbox/outboxtest.NewRecorder() as the event emitter.
 //
 // # Relationship to internal/testutil

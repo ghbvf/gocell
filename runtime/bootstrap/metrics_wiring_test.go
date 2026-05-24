@@ -88,7 +88,7 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 	b := New(WithClock(clock.Real()), WithMetricsProvider(spy))
 
 	// Mirror bootstrap.Run's default-assembly construction exactly.
-	cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo, Clock: b.clock}
+	cfg := assembly.Config{ID: "default", DurabilityMode: kerneloutbox.DurabilityDemo, Clock: b.clock}
 	if b.metricsProvider != nil {
 		cfg.MetricsProvider = b.metricsProvider
 	}
@@ -110,7 +110,7 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 // Config should not regress into nil or panic.
 func TestBootstrap_DefaultAssembly_NoProviderUsesNop(t *testing.T) {
 	b := New(WithClock(clock.Real()))
-	cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo, Clock: b.clock}
+	cfg := assembly.Config{ID: "default", DurabilityMode: kerneloutbox.DurabilityDemo, Clock: b.clock}
 	if b.metricsProvider != nil {
 		cfg.MetricsProvider = b.metricsProvider
 	}
@@ -138,7 +138,7 @@ func TestAssembly_FailedStartDrainsDispatcher(t *testing.T) {
 	})}
 	asm := assembly.New(assembly.Config{
 		ID:             "t-fail",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: kerneloutbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(failing))

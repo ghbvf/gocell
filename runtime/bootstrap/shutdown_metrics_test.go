@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -202,12 +205,12 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error
 func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "sm-phase", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "sm-phase", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
@@ -239,12 +242,12 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "sm-dur", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "sm-dur", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
@@ -276,12 +279,12 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "sm-ok", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "sm-ok", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
@@ -340,7 +343,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	ln := newLocalListener(t)
 	sw := newSlowWorker()
 
-	asm := assembly.New(assembly.Config{ID: "timeout-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "timeout-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	// Short timeout so the test completes fast; the slowWorker's Stop will
 	// block just long enough for shutCtx to expire.
@@ -348,8 +351,8 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(shutdownTimeout),
 		WithMetricsProvider(p),
 		WithWorkers(sw),
@@ -415,15 +418,15 @@ func (w *failingTeardownWorker) Stop(_ context.Context) error {
 func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "teardown-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "teardown-err", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	failWorker := &failingTeardownWorker{stopErr: fmt.Errorf("simulated teardown failure")}
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 		WithWorkers(failWorker),
@@ -450,7 +453,7 @@ func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "signal-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "signal-err", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	// Worker returns an error shortly after Start — triggers phase9 signal
 	// with a non-nil err, then phase10 teardown runs cleanly.
@@ -459,8 +462,8 @@ func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 		WithWorkers(errWorker),
@@ -507,12 +510,12 @@ func (w *erroringWorker) Stop(_ context.Context) error { return nil }
 // normally when no metrics provider is configured (NopProvider default).
 func TestShutdownMetrics_DisabledWithoutProvider(t *testing.T) {
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "nop-sm", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "nop-sm", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D3s),
 		// No WithMetricsProvider — defaults to NopProvider.
 	)

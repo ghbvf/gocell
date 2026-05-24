@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"sort"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -24,12 +26,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
-// cell.AuthProvider is the kernel-defined interface for auth provider cells.
+// kauth.AuthProvider is the kernel-defined interface for auth provider cells.
 // Bootstrap uses it instead of a private interface to eliminate the two-definition
 // redundancy (G — Architecture A1). Any cell whose TokenVerifier() returns a
-// non-nil auth.IntentTokenVerifier automatically satisfies cell.AuthProvider
-// because auth.IntentTokenVerifier and cell.IntentTokenVerifier are structurally
-// identical (auth.TokenIntent = cell.TokenIntent; auth.Claims = cell.Claims).
+// non-nil kauth.IntentTokenVerifier automatically satisfies kauth.AuthProvider
+// because kauth.IntentTokenVerifier and kauth.IntentTokenVerifier are structurally
+// identical (kauth.TokenIntent = kauth.TokenIntent; kauth.Claims = kauth.Claims).
 
 // applyListenerAuthChain applies all plans in chain to a listener, returning:
 //   - mws:        non-JWT middleware functions to install on the listener mux.
@@ -39,21 +41,21 @@ import (
 //     means this branch is theoretically unreachable).
 func (b *Bootstrap) applyListenerAuthChain(
 	ref cell.ListenerRef,
-	chain []cell.ListenerAuth,
+	chain []kauth.ListenerAuth,
 ) (mws []func(http.Handler) http.Handler, routerOpts []router.Option, describe string, err error) {
 	for _, plan := range chain {
 		switch p := plan.(type) {
-		case cell.AuthNone:
+		case kauth.AuthNone:
 			// no-op
 
-		case cell.AuthJWT:
+		case kauth.AuthJWT:
 			authOpts, aerr := b.buildAuthRouterOptions(p.Verifier)
 			if aerr != nil {
 				return nil, nil, "", aerr
 			}
 			routerOpts = append(routerOpts, authOpts...)
 
-		case cell.AuthJWTFromAssembly:
+		case kauth.AuthJWTFromAssembly:
 			v := p.ResolvedVerifier()
 			if v == nil {
 				// phase4 must have run before phase5; this is a programmer error.
@@ -67,10 +69,10 @@ func (b *Bootstrap) applyListenerAuthChain(
 			}
 			routerOpts = append(routerOpts, authOpts...)
 
-		case cell.AuthMTLS:
+		case kauth.AuthMTLS:
 			mws = append(mws, mtlsMiddleware())
 
-		case cell.AuthServiceToken:
+		case kauth.AuthServiceToken:
 			mws = append(mws, auth.ServiceTokenMiddleware(
 				p.Ring,
 				b.clock,
@@ -96,7 +98,7 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 	for _, ref := range refs {
 		cfg := b.listenerConfigs[ref]
 		for _, plan := range cfg.authChain {
-			p, ok := plan.(cell.AuthJWTFromAssembly)
+			p, ok := plan.(kauth.AuthJWTFromAssembly)
 			if !ok {
 				continue
 			}
@@ -121,24 +123,24 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 // cell. Errors on zero, multiple, or nil verifiers.
 //
 // Moved from policy_jwt_from_assembly.go; kept bootstrap-private.
-func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVerifier, error) {
+func discoverAuthVerifierFromAssembly(asm kauth.AssemblyRef) (kauth.IntentTokenVerifier, error) {
 	if validation.IsNilInterface(asm) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"bootstrap: AuthJWTFromAssembly.Assembly is nil; use cell.NewAuthJWTFromAssembly(asm)")
+			"bootstrap: AuthJWTFromAssembly.Assembly is nil; use kauth.NewAuthJWTFromAssembly(asm)")
 	}
 	var (
-		found   auth.IntentTokenVerifier
+		found   kauth.IntentTokenVerifier
 		foundID string
 	)
 	for _, id := range asm.CellIDs() {
 		// asm.Cell returns nil for unknown IDs; the AuthProvider type
 		// assertion then yields ok=false and the cell is skipped.
-		ap, ok := asm.Cell(id).(cell.AuthProvider)
+		ap, ok := asm.Cell(id).(kauth.AuthProvider)
 		if !ok {
 			continue
 		}
-		// cell.AuthProvider.TokenVerifier() returns cell.IntentTokenVerifier.
-		// auth.IntentTokenVerifier is a Go type alias of cell.IntentTokenVerifier
+		// kauth.AuthProvider.TokenVerifier() returns kauth.IntentTokenVerifier.
+		// kauth.IntentTokenVerifier is a Go type alias of kauth.IntentTokenVerifier
 		// (runtime/auth/auth.go:56, F6), so the assignment is direct with no
 		// runtime conversion needed. validation.IsNilInterface catches both
 		// untyped nil and typed-nil verifiers (e.g. `var v *MyVerifier`)
@@ -151,7 +153,7 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 		}
 		if found != nil {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"bootstrap: multiple authProvider cells discovered; keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
+				"bootstrap: multiple authProvider cells discovered; keep only one or supply the verifier explicitly via kauth.NewAuthJWT(verifier)",
 				errcode.WithInternal(fmt.Sprintf("first_cell=%q second_cell=%q", foundID, id)))
 		}
 		found = v
@@ -160,8 +162,8 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 	if found == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"bootstrap: AuthJWTFromAssembly found no authProvider cell in the assembly; "+
-				"register a cell implementing cell.AuthProvider whose TokenVerifier() returns a non-nil auth.IntentTokenVerifier, "+
-				"or wire the verifier explicitly via cell.NewAuthJWT(verifier)")
+				"register a cell implementing kauth.AuthProvider whose TokenVerifier() returns a non-nil kauth.IntentTokenVerifier, "+
+				"or wire the verifier explicitly via kauth.NewAuthJWT(verifier)")
 	}
 	return found, nil
 }

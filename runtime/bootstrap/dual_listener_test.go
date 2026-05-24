@@ -17,12 +17,15 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -91,7 +94,7 @@ func newDualListenerCell(onPublic, onInternal func(http.ResponseWriter, *http.Re
 	}
 }
 
-func (c *dualListenerCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *dualListenerCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -121,13 +124,13 @@ func (c *dualListenerCell) Init(ctx context.Context, reg cell.Registry) error {
 	return nil
 }
 
-func testInternalAuthChain(t *testing.T) ([]cell.ListenerAuth, *auth.HMACKeyRing) {
+func testInternalAuthChain(t *testing.T) ([]kauth.ListenerAuth, *auth.HMACKeyRing) {
 	t.Helper()
 	ring, err := auth.NewHMACKeyRing([]byte("test-service-token-secret-32-bytes"), nil)
 	require.NoError(t, err)
 	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	return []cell.ListenerAuth{celltest.MustAuthServiceToken(store, ring)}, ring
+	return []kauth.ListenerAuth{authtest.MustAuthServiceToken(store, ring)}, ring
 }
 
 func getWithServiceToken(t *testing.T, rawURL string, ring *auth.HMACKeyRing) *http.Response {
@@ -163,14 +166,14 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		},
 	)
-	asm := assembly.New(assembly.Config{ID: "dual-primary-404", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "dual-primary-404", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -266,14 +269,14 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		},
 	)
-	asm := assembly.New(assembly.Config{ID: "dual-nojwt-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "dual-nojwt-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -325,7 +328,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 // PR-A14b: duplicate address detection is no longer a phase0 check — it
 // surfaces as an OS-level EADDRINUSE error when the second socket is bound.
 func TestDualListener_EqualAddrsBindFails(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "equal-addr-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "equal-addr-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	// Pre-bind primary to ensure port is held; use the same port for internal.
 	primaryLn := newLocalListener(t)
 	collidingAddr := primaryLn.Addr().String()
@@ -333,8 +336,8 @@ func TestDualListener_EqualAddrsBindFails(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, collidingAddr, []cell.ListenerAuth{cell.AuthNone{}}), // collides with primary
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, collidingAddr, []kauth.ListenerAuth{kauth.AuthNone{}}), // collides with primary
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -351,12 +354,12 @@ func TestDualListener_Phase0RejectsEmptyAddr(t *testing.T) {
 		name string
 		l    Option
 	}{
-		{"empty_primary", WithListener(cell.PrimaryListener, "", []cell.ListenerAuth{cell.AuthNone{}})},
-		{"empty_internal", WithListener(cell.InternalListener, "", []cell.ListenerAuth{cell.AuthNone{}})},
+		{"empty_primary", WithListener(cell.PrimaryListener, "", []kauth.ListenerAuth{kauth.AuthNone{}})},
+		{"empty_internal", WithListener(cell.InternalListener, "", []kauth.ListenerAuth{kauth.AuthNone{}})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "empty-addr-" + tc.name, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+			asm := assembly.New(assembly.Config{ID: "empty-addr-" + tc.name, DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 			b := New(WithClock(clock.Real()), WithAssembly(asm), tc.l)
 
 			ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
@@ -385,13 +388,13 @@ func TestDualListener_InternalBindFailure_ClosesOwnedPrimary(t *testing.T) {
 	callerLn := newLocalListener(t)
 	collidingAddr := callerLn.Addr().String()
 
-	asm := assembly.New(assembly.Config{ID: "bind-fail-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "bind-fail-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, callerLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(callerLn)),
-		WithListener(cell.InternalListener, collidingAddr, []cell.ListenerAuth{cell.AuthNone{}}), // guaranteed to collide
+		WithListener(cell.PrimaryListener, callerLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(callerLn)),
+		WithListener(cell.InternalListener, collidingAddr, []kauth.ListenerAuth{kauth.AuthNone{}}), // guaranteed to collide
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -431,14 +434,14 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "shutdown-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "shutdown-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -498,16 +501,16 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "triple-shutdown-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "triple-shutdown-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
-		WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(healthLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -569,17 +572,17 @@ func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
 	collidingAddr := collideLn.Addr().String()
 	// collideLn stays open so bootstrap's primary bind collides with EADDRINUSE.
 
-	asm := assembly.New(assembly.Config{ID: "triple-mid-bind-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "triple-mid-bind-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		// Health and internal bind first (alphabetical listener ref order) and
 		// must be released when primary fails.
-		WithListener(cell.HealthListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		// Primary: colliding address → EADDRINUSE.
-		WithListener(cell.PrimaryListener, collidingAddr, []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.PrimaryListener, collidingAddr, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -638,15 +641,15 @@ func TestDualListener_BootstrapOwnedPrimary_InternalBindFails(t *testing.T) {
 	// Keep collideLn open so the port stays reserved; bootstrap's internal
 	// bind will fail with EADDRINUSE on this port.
 
-	asm := assembly.New(assembly.Config{ID: "bootstrap-owned-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "bootstrap-owned-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		// Primary: bootstrap-owned socket (no WithListenerNet); will bind :0 → success.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		// Internal: same colliding address → EADDRINUSE.
-		WithListener(cell.InternalListener, collidingAddr, []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.InternalListener, collidingAddr, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -669,7 +672,7 @@ type duplicateMetaCell struct {
 	*cell.BaseCell
 }
 
-func (c *duplicateMetaCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *duplicateMetaCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -698,7 +701,7 @@ func (c *duplicateMetaCell) Init(ctx context.Context, reg cell.Registry) error {
 // returns an error when the same (method, path) pair is mounted twice on the
 // primary listener — protecting configuration cleanliness (FinalizeAuth invariant).
 func TestDualListener_FinalizeAuth_DuplicateMeta_Errors(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "dup-meta-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "dup-meta-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := &duplicateMetaCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-meta-cell", Type: "core"}),
 	}
@@ -708,7 +711,7 @@ func TestDualListener_FinalizeAuth_DuplicateMeta_Errors(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -890,14 +893,14 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "race-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "race-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		// noCloseRaceShutdownBudget is now a defense-in-depth ceiling: with
 		// noCloseRaceHTTPClient disabling keep-alive and phase10 stage 3
@@ -965,14 +968,14 @@ func TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure(t *testing.T) {
 	holdLn := newLocalListener(t)
 	collidingAddr := holdLn.Addr().String()
 
-	asm := assembly.New(assembly.Config{ID: "owned-sibling-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "owned-sibling-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		// bootstrap-owned; should succeed then be released
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithListener(cell.InternalListener, collidingAddr, []cell.ListenerAuth{cell.AuthNone{}}), // collides
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.InternalListener, collidingAddr, []kauth.ListenerAuth{kauth.AuthNone{}}), // collides
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -993,7 +996,7 @@ type middlewareOrderCell struct {
 	order *[]string
 }
 
-func (c *middlewareOrderCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *middlewareOrderCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -1034,14 +1037,14 @@ func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "mw-order-cell", Type: "core"}),
 		order:    &order,
 	}
-	asm := assembly.New(assembly.Config{ID: "mw-order-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "mw-order-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 
 	primaryLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -1090,14 +1093,14 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "auth-wiring-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "auth-wiring-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -1148,14 +1151,14 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "goroutine-baseline-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "goroutine-baseline-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
@@ -1219,8 +1222,8 @@ func TestPhase0_DuplicateListenerRefs(t *testing.T) {
 	// Two identical WithListener calls for the same ref — phase0 must reject duplicates.
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithListener(cell.PrimaryListener, "127.0.0.1:1", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:1", []kauth.ListenerAuth{kauth.AuthNone{}}),
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
@@ -1232,7 +1235,7 @@ func TestPhase0_DuplicateListenerRefs(t *testing.T) {
 func TestPhase0_MetricsRequiresHealthListener(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithHealthRoutes(WithMetricsHandler(http.NewServeMux())),
 	)
 	err := b.phase0ValidateOptions()

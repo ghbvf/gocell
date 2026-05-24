@@ -853,7 +853,7 @@ func TestSubscriptionMountCallsRegistrySubscribe(t *testing.T) {
 	}
 	got := string(content)
 
-	if !strings.Contains(got, "func (s *Subscription) Mount(reg cell.Registry) error {") {
+	if !strings.Contains(got, "func (s *Subscription) Mount(reg cell.Registrar) error {") {
 		t.Errorf("expected Mount method signature, not found in:\n%s", got)
 	}
 	// K#07: cellID is the 4th positional parameter (HARD contract).
@@ -970,7 +970,7 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 			if !strings.Contains(string(content), "func NewSubscription(") {
 				t.Errorf("subscription_gen.go missing NewSubscription:\n%s", content)
 			}
-			if !strings.Contains(string(content), "func (s *Subscription) Mount(reg cell.Registry) error") {
+			if !strings.Contains(string(content), "func (s *Subscription) Mount(reg cell.Registrar) error") {
 				t.Errorf("subscription_gen.go missing Mount:\n%s", content)
 			}
 		}

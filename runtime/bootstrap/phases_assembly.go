@@ -295,7 +295,7 @@ func samePubSubIdentity(pub outbox.Publisher, sub outbox.Subscriber) bool {
 func (b *Bootstrap) phase3InitAssembly(ctx context.Context, s *phaseState) error {
 	asm := b.assemblyCore
 	if asm == nil {
-		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo, Clock: b.clock}
+		cfg := assembly.Config{ID: "default", DurabilityMode: outbox.DurabilityDemo, Clock: b.clock}
 		if b.metricsProvider != nil {
 			cfg.MetricsProvider = b.metricsProvider
 		}
@@ -423,7 +423,7 @@ func syncObservedGeneration(cfg config.Config) {
 }
 
 // notifyCellsConfigChanged notifies all cells that registered OnConfigReload
-// callbacks (via cell.Registry.OnConfigReload) about a config change.
+// callbacks (via cell.Registrar.OnConfigReload) about a config change.
 // Returns true only when every callback applied the change successfully.
 func (b *Bootstrap) notifyCellsConfigChanged(
 	ctx context.Context,

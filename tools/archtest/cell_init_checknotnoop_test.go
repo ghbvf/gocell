@@ -4,7 +4,7 @@
 //
 // Every cell whose cell.yaml declares consistencyLevel >= "L2" MUST have its
 // `(*GoStructName).Init` method body — or a transitive callee defined in the
-// same Go package — invoke `kernel/cell.CheckNotNoop` at least once. Missing
+// same Go package — invoke `kernel/outbox.CheckNotNoop` at least once. Missing
 // the call means a future durable-mode wiring mistake (noop publisher / noop
 // writer / DemoCellTxManager left in place) will pass through Init silently;
 // CheckNotNoop is the runtime guard that turns such mistakes into Init-time
@@ -43,7 +43,7 @@
 //	inside unexecuted FuncLit closures (F1 fix; equivalent to
 //	inspector.Nodes returning proceed=false at FuncLit). A target
 //	satisfies the rule if any visited CallExpr resolves via *types.Info
-//	to `kernel/cell.CheckNotNoop`. Diagnostics reference the cell.yaml
+//	to `kernel/outbox.CheckNotNoop`. Diagnostics reference the cell.yaml
 //	path; the does-not-call branch also embeds the Init Go file:line.
 //
 // # Blind-spot inventory
@@ -52,11 +52,11 @@
 // scanner does NOT detect; each is paired with a reverse-self-check test in
 // this file asserting the shape does not appear in current production AST:
 //
-//  1. `reflect.ValueOf(cell.CheckNotNoop).Call(...)`. Reflective dispatch
+//  1. `reflect.ValueOf(outbox.CheckNotNoop).Call(...)`. Reflective dispatch
 //     hides the callee from *types.Info. Reverse check:
 //     TestNoReflectCheckNotNoopInProduction.
 //
-//  2. `//go:linkname` aliasing `kernel/cell.CheckNotNoop` under another name.
+//  2. `//go:linkname` aliasing `kernel/outbox.CheckNotNoop` under another name.
 //     ACKNOWLEDGED RESIDUAL RISK — no enforcement. A string-anchor probe
 //     was rejected per ai-robust.md §Review checklist ("Soft 新引入直接
 //     reject"); `//go:linkname` is a compiler directive that produces no
@@ -64,7 +64,7 @@
 //     directives are vanishingly rare in production Go code; this blind-
 //     spot is accepted as documented residual risk.
 //
-//  3. `go func() { cell.CheckNotNoop(...) }()` — async dispatch from the
+//  3. `go func() { outbox.CheckNotNoop(...) }()` — async dispatch from the
 //     Init reachable set. The call is statically reachable but not part of
 //     the synchronous Init contract (runtime may not have executed before
 //     Init returns). Reverse check: TestNoAsyncCheckNotNoopInProduction.
@@ -99,10 +99,10 @@ import (
 const cellInitCheckNotNoopRuleID = "CELL-L2-INIT-CHECKNOTNOOP-CALLED-01"
 
 // kernelCellCheckNotNoopFullName is the fully-qualified callee name produced
-// by `(*types.Func).FullName()` for `kernel/cell.CheckNotNoop`. Used as the
+// by `(*types.Func).FullName()` for `kernel/outbox.CheckNotNoop`. Used as the
 // equality probe in Phase B's BFS — string match on FullName is rename-safe
 // across packages and import aliases (handled by *types.Info.Uses lookup).
-const kernelCellCheckNotNoopFullName = "github.com/ghbvf/gocell/kernel/cell.CheckNotNoop"
+const kernelCellCheckNotNoopFullName = "github.com/ghbvf/gocell/kernel/outbox.CheckNotNoop"
 
 // l2TargetCell captures the minimal data Phase A collects from cell.yaml to
 // drive Phase B's production scan.
@@ -424,7 +424,7 @@ func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic 
 			Line: 1,
 			Message: "L2+ cell " + target.cellID +
 				": missing Init method on *" + target.goStructName +
-				" — every L2+ cell needs an Init that calls kernel/cell.CheckNotNoop",
+				" — every L2+ cell needs an Init that calls kernel/outbox.CheckNotNoop",
 		}}
 	}
 	if !initReachesCheckNotNoop(p, initFn) {
@@ -435,7 +435,7 @@ func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic 
 			Line: 1,
 			Message: "L2+ cell " + target.cellID +
 				": Init (same-package callees of *" + target.goStructName +
-				".Init) does not call kernel/cell.CheckNotNoop;" +
+				".Init) does not call kernel/outbox.CheckNotNoop;" +
 				" add the call in Init or in a hand-written same-package hook" +
 				" (e.g. initInternal) to guard durable-mode wiring [Init at " +
 				initSite + "]",
@@ -500,7 +500,7 @@ func initFuncDecl(p *Pass, goStructName string) *ast.FuncDecl {
 
 // initReachesCheckNotNoop returns true if init (or any same-package function
 // transitively called from init's body) contains a CallExpr that resolves via
-// *types.Info to kernel/cell.CheckNotNoop **outside any nested FuncLit**.
+// *types.Info to kernel/outbox.CheckNotNoop **outside any nested FuncLit**.
 // The BFS is bounded by visiting each function declaration in the same
 // package at most once.
 //
@@ -684,7 +684,7 @@ func fixtureModPath(t *testing.T) string {
 // TestCellInitCheckNotNoop_RedL2Missing — RED fixture: a fake L2 cell whose
 // Init body (and same-package transitive callees) never invoke CheckNotNoop.
 // Phase B must emit exactly one diagnostic whose message identifies the
-// "does not call kernel/cell.CheckNotNoop" branch (F5 round-2 fix:
+// "does not call kernel/outbox.CheckNotNoop" branch (F5 round-2 fix:
 // substring assertion distinguishes this branch from the "missing Init"
 // branch — see TestCellInitCheckNotNoop_RedMissingInit).
 func TestCellInitCheckNotNoop_RedL2Missing(t *testing.T) {
@@ -696,7 +696,7 @@ func TestCellInitCheckNotNoop_RedL2Missing(t *testing.T) {
 		})
 	require.Len(t, diags, 1,
 		"red_l2_missing fixture: expected one diagnostic, got %d (%+v)", len(diags), diags)
-	require.Contains(t, diags[0].Message, "does not call kernel/cell.CheckNotNoop",
+	require.Contains(t, diags[0].Message, "does not call kernel/outbox.CheckNotNoop",
 		"red_l2_missing: diagnostic must identify the does-not-call branch, got %q", diags[0].Message)
 }
 
@@ -715,7 +715,7 @@ func TestCellInitCheckNotNoop_RedCrossPkg(t *testing.T) {
 		})
 	require.Len(t, diags, 1,
 		"red_cross_pkg fixture: expected one diagnostic, got %d (%+v)", len(diags), diags)
-	require.Contains(t, diags[0].Message, "does not call kernel/cell.CheckNotNoop",
+	require.Contains(t, diags[0].Message, "does not call kernel/outbox.CheckNotNoop",
 		"red_cross_pkg: diagnostic must identify the does-not-call branch, got %q", diags[0].Message)
 }
 
@@ -756,7 +756,7 @@ func TestCellInitCheckNotNoop_RedFuncLitOnly(t *testing.T) {
 		})
 	require.Len(t, diags, 1,
 		"red_funclit_only fixture: expected one diagnostic, got %d (%+v)", len(diags), diags)
-	require.Contains(t, diags[0].Message, "does not call kernel/cell.CheckNotNoop",
+	require.Contains(t, diags[0].Message, "does not call kernel/outbox.CheckNotNoop",
 		"red_funclit_only: diagnostic must identify the does-not-call branch, got %q", diags[0].Message)
 }
 
@@ -820,7 +820,7 @@ func TestCellInitCheckNotNoop_BoundaryTransitive(t *testing.T) {
 // -------------------------------------------------------------------------
 
 // TestNoReflectCheckNotNoopInProduction asserts that no production *.go file
-// invokes kernel/cell.CheckNotNoop via reflect.ValueOf(...).Call(...) — a
+// invokes kernel/outbox.CheckNotNoop via reflect.ValueOf(...).Call(...) — a
 // shape that hides the callee from the Phase B BFS's *types.Info resolver.
 // Blind-spot #1 from the file-level inventory. The check uses types-aware
 // callee resolution (Medium-grade: *types.Info.Uses on the reflect.ValueOf
@@ -846,7 +846,7 @@ func TestNoReflectCheckNotNoopInProduction(t *testing.T) {
 				out = append(out, Diagnostic{
 					Rel:  rel,
 					Line: pos.Line,
-					Message: "reflect.ValueOf invocation references kernel/cell.CheckNotNoop" +
+					Message: "reflect.ValueOf invocation references kernel/outbox.CheckNotNoop" +
 						" — this shape evades CELL-L2-INIT-CHECKNOTNOOP-CALLED-01's *types.Info" +
 						" BFS; call CheckNotNoop directly from the cell's Init or same-package hook",
 				})
@@ -878,7 +878,7 @@ func isReflectValueOfCall(p *Pass, call *ast.CallExpr) bool {
 }
 
 // argSubtreeReferencesCheckNotNoop reports whether any Ident within args
-// resolves to kernel/cell.CheckNotNoop via *types.Info.Uses, **excluding**
+// resolves to kernel/outbox.CheckNotNoop via *types.Info.Uses, **excluding**
 // Idents that fall inside a nested FuncLit body (F1 fix: a closure passed
 // as argument to reflect.ValueOf which itself happens to contain a
 // CheckNotNoop reference should not be flagged unless reflect.ValueOf's
@@ -918,7 +918,7 @@ func argSubtreeReferencesCheckNotNoop(p *Pass, args []ast.Expr) bool {
 
 // TestNoAsyncCheckNotNoopInProduction asserts that no `go func(){...}()`
 // statement anywhere in an L2+ cell package contains a CallExpr that resolves
-// to kernel/cell.CheckNotNoop. Blind-spot #3 from the file-level inventory.
+// to kernel/outbox.CheckNotNoop. Blind-spot #3 from the file-level inventory.
 //
 // Scope honesty: the check scans EVERY GoStmt in the cell package, not just
 // those statically reachable from Init's same-package callee set. This is
@@ -986,7 +986,7 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 
 // goStmtCallsCheckNotNoop reports whether the goroutine body (or any
 // expression in the go-stmt call chain) contains a CallExpr resolving to
-// kernel/cell.CheckNotNoop.
+// kernel/outbox.CheckNotNoop.
 func goStmtCallsCheckNotNoop(p *Pass, gostmt *ast.GoStmt) bool {
 	hit := false
 	EachInSubtree[ast.CallExpr](gostmt, func(call *ast.CallExpr) {

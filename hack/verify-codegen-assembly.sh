@@ -19,14 +19,9 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${ROOT}"
-
-# shellcheck source=hack/lib/gocell-bin.sh
-source "${ROOT}/hack/lib/gocell-bin.sh"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 if [[ $# -eq 0 ]]; then
-  gocell::cli verify codegen-assembly --local=false
-  exit $?
+  exec go run ./cmd/gocell verify codegen-assembly --local=false
 fi
-gocell::cli verify codegen-assembly "$@"
+exec go run ./cmd/gocell verify codegen-assembly "$@"

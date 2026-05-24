@@ -63,7 +63,7 @@ type wrapperViolation struct {
 //     delegates main.go to the codegen entrypoint)
 //   - kernel/persistence/cell_marker.go and kernel/outbox/cell_marker.go
 //     (the wrapper definitions themselves)
-//   - kernel/cell/demo_tx_runner.go (DemoCellTxManager factory; the only
+//   - kernel/outbox/demo_tx_runner.go (DemoCellTxManager factory; the only
 //     kernel-internal helper that wraps a known noop fallback for cells —
 //     keeps cells/* free of any wrap call site)
 //   - cells/accesscore/{mem,postgres}/bundle.go (cell-owned Bundle factories;
@@ -84,7 +84,7 @@ func isWrapperCallerAllowed(rel string) bool {
 	switch rel {
 	case "kernel/persistence/cell_marker.go",
 		"kernel/outbox/cell_marker.go",
-		"kernel/cell/demo_tx_runner.go",
+		"kernel/outbox/demo_tx_runner.go",
 		"cells/accesscore/mem/bundle.go",
 		"cells/accesscore/postgres/bundle.go":
 		return true
@@ -167,7 +167,7 @@ func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
 // impossible.
 func allowlistDescription() string {
 	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
-		"kernel/{persistence,outbox}/cell_marker.go | kernel/cell/demo_tx_runner.go | " +
+		"kernel/{persistence,outbox}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
 		"cells/accesscore/{mem,postgres}/bundle.go"
 }
 
@@ -265,7 +265,7 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 //
 // TestCellRawInfraWrapperLocation01_RejectsKernelCellSibling verifies that
 // a wrap call from a kernel/cell sibling file (any file except the single
-// allowlisted kernel/cell/demo_tx_runner.go) is caught as a violation.
+// allowlisted kernel/outbox/demo_tx_runner.go) is caught as a violation.
 //
 // This exercises the allowlist boundary: demo_tx_runner.go is the ONLY
 // kernel/cell file allowed to call WrapForCell. A hypothetical sibling file

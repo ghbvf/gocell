@@ -3,7 +3,7 @@
 // SEALED-MARKER-NOOP-TRANSPARENCY-01 — every internalCell* concrete type in
 // kernel/{persistence,outbox}/cell_marker.go must declare a `Noop() bool`
 // method. Without this method the sealed wrapper hides the inner Nooper
-// signal from cell.CheckNotNoop / mode_resolver.isNooperDep, letting durable
+// signal from outbox.CheckNotNoop / mode_resolver.isNooperDep, letting durable
 // assemblies silently accept demo runners/publishers/writers.
 //
 // AI-robust 评级：Medium (AST receiver-type scan — type-aware on method
@@ -53,7 +53,7 @@ var sealedMarkerFiles = []struct {
 // TestSealedMarkerNoopTransparency01 asserts that every `internalCell*`
 // concrete type declared in the sealed marker files has a `Noop() bool`
 // method. This prevents a refactor from silently removing the Noop
-// pass-through and breaking cell.CheckNotNoop's durable-mode rejection.
+// pass-through and breaking outbox.CheckNotNoop's durable-mode rejection.
 func TestSealedMarkerNoopTransparency01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -115,7 +115,7 @@ func TestSealedMarkerNoopTransparency01(t *testing.T) {
 			for typeName, hasNoop := range internalTypes {
 				if !hasNoop {
 					t.Errorf("SEALED-MARKER-NOOP-TRANSPARENCY-01: %s in %s missing Noop() bool method — "+
-						"sealed wrapper must expose inner Nooper signal for cell.CheckNotNoop / isNooperDep",
+						"sealed wrapper must expose inner Nooper signal for outbox.CheckNotNoop / isNooperDep",
 						typeName, entry.rel)
 				}
 			}

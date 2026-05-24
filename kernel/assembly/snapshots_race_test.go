@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -27,7 +29,7 @@ import (
 func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "race-snapshots",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 
@@ -47,7 +49,7 @@ func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID: "blocking", Type: "core", ConsistencyLevel: "L0",
 		}),
-		onInit: func(_ cell.Registry) error {
+		onInit: func(_ cell.Registrar) error {
 			<-initGate
 			return nil
 		},
@@ -119,7 +121,7 @@ func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
 func TestAssembly_StartInternalSnapshotsMap_RaceDetector(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "race-snapshots-internal",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 
@@ -149,7 +151,7 @@ func registerGatedInitCell(t *testing.T, a *CoreAssembly, initGate <-chan struct
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID: "gated", Type: "core", ConsistencyLevel: "L0",
 		}),
-		onInit: func(_ cell.Registry) error {
+		onInit: func(_ cell.Registrar) error {
 			close(enteredInit)
 			<-initGate
 			return nil
@@ -166,7 +168,7 @@ func registerSlowInitCells(t *testing.T, a *CoreAssembly, count int) {
 			BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 				ID: id, Type: "core", ConsistencyLevel: "L0",
 			}),
-			onInit: func(_ cell.Registry) error {
+			onInit: func(_ cell.Registrar) error {
 				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep yield between Init completions to widen the race window against internal readers
 				return nil
 			},
@@ -232,7 +234,7 @@ func waitForReaders(ready <-chan struct{}, readers int) {
 func TestAssembly_ConcurrentStartStop_RaceDetector(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "race-startstop",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
 	registeredIDs := registerConcurrentRaceCells(t, a, 3)

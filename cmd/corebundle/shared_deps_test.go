@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -229,7 +231,7 @@ func TestSharedDeps_Validate_RealMultiPodInMemoryNonceStore_LogsWarnAndErrors(t 
 	assert.Contains(t, out, "in-memory nonce store rejected")
 	assert.Contains(t, out, "multi-pod")
 	assert.Contains(t, out, "nonce_store_kind")
-	assert.Contains(t, out, string(auth.NonceStoreKindInMemory))
+	assert.Contains(t, out, string(kauth.NonceStoreKindInMemory))
 	assert.Contains(t, out, "GOCELL_SINGLE_POD=1")
 }
 
@@ -258,8 +260,8 @@ func TestLoadSharedDepsFromEnv_RealModeAllowsDefaultLoopbackHealthWithLocalOnlyW
 
 type validateDistributedNonceStore struct{}
 
-func (validateDistributedNonceStore) Kind() auth.NonceStoreKind {
-	return auth.NonceStoreKindDistributed
+func (validateDistributedNonceStore) Kind() kauth.NonceStoreKind {
+	return kauth.NonceStoreKindDistributed
 }
 
 func (validateDistributedNonceStore) CheckAndMark(context.Context, string) error {

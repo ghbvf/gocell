@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/coder/websocket"
 
 	"github.com/stretchr/testify/assert"
@@ -130,7 +133,7 @@ func TestRouterClientErrorLogSamplingOption(t *testing.T) {
 func TestHealthEndpoints(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router.
 	// They are registered directly on the router, not via WithHealthHandler.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -380,7 +383,7 @@ func TestMountRouteGroup_CellAttribution_StaticPathBeatsGenericTemplate(t *testi
 
 func TestMountRouteGroup_CellAttribution_AuthReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1"}}
+	verifier := &routerTestVerifier{claims: kauth.Claims{Subject: "user-1"}}
 	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithAuthMiddleware(verifier))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
@@ -1164,7 +1167,7 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no rate limiter configured. Physical isolation guarantees bypass — the primary
 	// router (with the rejecting rate limiter) never even sees /healthz requests.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1200,7 +1203,7 @@ func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no circuit breaker configured. Physical isolation guarantees bypass — the
 	// primary router (with the open circuit breaker) never sees /readyz requests.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1276,21 +1279,21 @@ func TestMetrics_Records429And503(t *testing.T) {
 
 // routerTestVerifier is a minimal IntentTokenVerifier for router integration tests.
 type routerTestVerifier struct {
-	claims auth.Claims
+	claims kauth.Claims
 	err    error
 }
 
-func (v *routerTestVerifier) Verify(_ context.Context, _ string) (auth.Claims, error) {
+func (v *routerTestVerifier) Verify(_ context.Context, _ string) (kauth.Claims, error) {
 	return v.claims, v.err
 }
 
-func (v *routerTestVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
+func (v *routerTestVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
 	return v.claims, v.err
 }
 
 func TestWithAuthMiddleware_ProtectedRoute_NoToken_Returns401(t *testing.T) {
 	verifier := &routerTestVerifier{
-		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
 	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1311,7 +1314,7 @@ func TestWithAuthMiddleware_ProtectedRoute_NoToken_Returns401(t *testing.T) {
 
 func TestWithAuthMiddleware_ProtectedRoute_ValidToken_Returns200(t *testing.T) {
 	verifier := &routerTestVerifier{
-		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
 	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 
@@ -1361,7 +1364,7 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no auth middleware. Physical isolation guarantees bypass — the primary router
 	// (with auth middleware that would reject all requests) never sees /healthz.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1486,7 +1489,7 @@ func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
 
 func TestDeclareAuth_AuthBypass(t *testing.T) {
 	// F3: public routes declared via mustMountRoute(Public:true) bypass JWT check.
-	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
+	verifier := &routerTestVerifier{claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
 	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 
 	var reached bool
@@ -1618,7 +1621,7 @@ func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 
 func TestDeclareAuth_ProtectedStillRequiresAuth(t *testing.T) {
 	// F3: only declared public routes bypass auth; others still require a token.
-	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
+	verifier := &routerTestVerifier{claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
 	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 
 	mustMountRoute(r, auth.Route{
@@ -1815,7 +1818,7 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 	// POST /api/v1/auth/login is the only public endpoint.
 	// GET requests to the same path must still require auth.
 	verifier := &routerTestVerifier{
-		claims: auth.Claims{Subject: "user-1"},
+		claims: kauth.Claims{Subject: "user-1"},
 	}
 	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 
@@ -1948,7 +1951,7 @@ func TestRouter_RejectPath_RouteLabelConsistent(t *testing.T) {
 	defer slog.SetDefault(original)
 
 	verifier := &routerTestVerifier{
-		claims: auth.Claims{Subject: "user-1"},
+		claims: kauth.Claims{Subject: "user-1"},
 	}
 	r := mustNew(
 		WithRouterClock(clock.Real()),

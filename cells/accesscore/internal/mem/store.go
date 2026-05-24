@@ -136,7 +136,7 @@ func (r memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error
 //
 // TxRunner is the source of the Store-paired TxRunner that delivers full
 // FOR-UPDATE-until-commit serialization. Wiring a different TxRunner (e.g.
-// cell.DemoTxRunner, or a PG tx manager in corebundle's mixed-topology e2e)
+// outbox.DemoTxRunner, or a PG tx manager in corebundle's mixed-topology e2e)
 // is still functional — every repo method then takes store.mu per call —
 // but the cross-statement serialization guarantee then holds only on the
 // Store-TxRunner path. mem never hard-fails on the pairing (#501).
@@ -196,7 +196,7 @@ func (s *Store) RoleRepository() *RoleRepository {
 //
 //	persistence.WrapForCell(store.TxRunner())
 //
-// Using any other TxRunner (including cell.DemoTxRunner or a fake that injects
+// Using any other TxRunner (including outbox.DemoTxRunner or a fake that injects
 // the sentinel without holding store.mu) does not break safety — repo methods
 // fall back to per-call locking — but it forfeits cross-method serialization.
 // As a visible consequence, ChangePassword may then return

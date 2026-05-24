@@ -1,6 +1,6 @@
-package cell
+package auth
 
-// auth_types.go — kernel/cell narrow interfaces for auth plan dependencies.
+// auth_types.go — kernel/auth narrow interfaces for auth plan dependencies.
 //
 // These interfaces mirror the signatures of runtime/auth concrete types so that
 // AuthPlan structs (AuthJWT, AuthServiceToken, etc.) can hold their dependencies

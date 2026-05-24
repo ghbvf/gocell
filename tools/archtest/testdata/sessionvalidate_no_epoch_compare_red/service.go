@@ -8,6 +8,8 @@ package sessionvalidate_no_epoch_compare_red
 import (
 	"context"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -26,14 +28,14 @@ type stubUser struct {
 // enforceSessionState is the target function. This RED variant references
 // AuthzEpoch and calls GetByID but uses > instead of != — the epoch-inequality
 // archtest must detect the wrong operator and report a violation.
-func (s *stubService) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
+func (s *stubService) enforceSessionState(ctx context.Context, claims kauth.Claims) (kauth.Claims, error) {
 	user, err := s.userRepo.GetByID(ctx, claims.Subject)
 	if err != nil {
-		return auth.Claims{}, err
+		return kauth.Claims{}, err
 	}
 	// BUG: uses > instead of !=; archtest must flag this as a violation.
 	if user.AuthzEpoch > claims.AuthzEpoch {
-		return auth.Claims{}, nil
+		return kauth.Claims{}, nil
 	}
 	return claims, nil
 }

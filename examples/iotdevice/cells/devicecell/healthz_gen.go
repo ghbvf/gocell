@@ -18,7 +18,7 @@ const ProbeRepoReady = "devicecell_repo_ready"
 // cell-level repository readiness probe on the given Registry. This is the
 // sole sanctioned entry point — handwritten cell code must NOT call
 // reg.Healthz() directly (locked by HEALTHZ-TYPED-REGISTER-01).
-func RegisterRepoReady(reg cell.Registry, p healthz.RepoProber) error {
+func RegisterRepoReady(reg cell.Registrar, p healthz.RepoProber) error {
 	return reg.Healthz().Register(healthz.NewProbe(ProbeRepoReady, p.RepoReady))
 }
 
@@ -29,7 +29,7 @@ func RegisterRepoReady(reg cell.Registry, p healthz.RepoProber) error {
 // Both bare-nil and typed-nil ProbeSet interface values are silently ignored
 // via pkg/validation.IsNilInterface (the kernel/ + runtime/ single-source
 // typed-nil helper — see .claude/rules/gocell/runtime-api.md).
-func RegisterEmitterProbes(reg cell.Registry, ps healthz.ProbeSet) error {
+func RegisterEmitterProbes(reg cell.Registrar, ps healthz.ProbeSet) error {
 	if validation.IsNilInterface(ps) {
 		return nil
 	}

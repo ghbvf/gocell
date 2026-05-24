@@ -66,7 +66,7 @@ func WithEmitter(e outbox.Emitter) Option {
 // CellWriter). Composition roots construct each via
 // outbox.WrapPublisherForCell / outbox.WrapWriterForCell. The framework
 // composes them into an outbox.Emitter at Init() time via
-// cell.ResolveCellEmitter.
+// outbox.ResolveCellEmitter.
 //
 // Accumulative: a nil argument leaves the previously-set value in place;
 // multiple calls combine their non-nil arguments. Does NOT clear previous

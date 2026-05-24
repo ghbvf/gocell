@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -97,7 +99,7 @@ type lcCell struct {
 	hooks []cell.LifecycleHook
 }
 
-func (c *lcCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *lcCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -114,7 +116,7 @@ type plainCellForLC struct{ cell.BaseCell }
 // started, populating cellSnapshots. The assembly is stopped on test cleanup.
 func buildAsmStarted(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
-	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	for _, c := range cells {
 		require.NoErrorf(t, asm.Register(c), "buildAsmStarted: registering cell %q", c.ID())
 	}

@@ -21,6 +21,8 @@ import (
 	"path"
 	"strings"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -212,12 +214,12 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // verification; FinalizeAuth compiles them into the router's auth predicates.
 //
 // In the per-listener model this option is most commonly used for the
-// PrimaryListener router. InternalListener routers use cell.NewAuthServiceToken
-// or cell.AuthMTLS{} at the listener level, not this option.
+// PrimaryListener router. InternalListener routers use auth.NewAuthServiceToken
+// or auth.AuthMTLS{} at the listener level, not this option.
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
-func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
+func WithAuthMiddleware(verifier kauth.IntentTokenVerifier) Option {
 	return func(r *Router) {
 		if validation.IsNilInterface(verifier) {
 			r.authVerifierNil = true
@@ -319,7 +321,7 @@ func WithEarlyResponder(predicate func(*http.Request) bool, handler http.Handler
 // Intended for routers that intentionally serve auth-declared routes without
 // a JWT verifier — typically the HealthListener (whose framework probes use
 // auth.Mount with Public:true) and the InternalListener (which gates traffic
-// with cell.AuthMTLS{} or cell.NewAuthServiceToken instead of JWT). Without this opt-out the
+// with auth.AuthMTLS{} or auth.NewAuthServiceToken instead of JWT). Without this opt-out the
 // router emits a Warn at every production startup, drowning operators in
 // alert noise. R2-11.
 func WithSuppressNoAuthVerifierWarn() Option {
@@ -390,7 +392,7 @@ type Router struct {
 	rateLimiterNil              bool
 	circuitBreaker              middleware.Allower
 	circuitBreakerNil           bool
-	authVerifier                auth.IntentTokenVerifier
+	authVerifier                kauth.IntentTokenVerifier
 	authVerifierNil             bool
 	authMetrics                 *auth.AuthMetrics
 	securityHeadersOpts         []middleware.SecurityHeadersOption
@@ -1031,7 +1033,7 @@ func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	if len(p.publicEntries) > 0 {
 		slog.Warn("router: Public:true routes declared on a listener with no JWT middleware; "+
 			"Public:true is a JWT exemption flag and has no effect without an auth verifier — "+
-			"use cell.NewAuthJWTFromAssembly(asm) as authChain in bootstrap.WithListener to install JWT auth",
+			"use auth.NewAuthJWTFromAssembly(asm) as authChain in bootstrap.WithListener to install JWT auth",
 			slog.String("listener", r.ref.String()),
 			slog.Int("public_routes", len(p.publicEntries)))
 	}

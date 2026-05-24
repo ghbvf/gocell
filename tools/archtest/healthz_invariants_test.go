@@ -50,7 +50,7 @@
 //	cells/ packages may NOT call Registry.Healthz() outside cellgen-generated
 //	healthz_gen.go files. Detection:
 //	  1. caller file basename must be "healthz_gen.go" for any call to
-//	     the method Healthz on kernel/cell.Registry receiver
+//	     the method Healthz on kernel/cell.Registrar receiver
 //	  2. healthz_gen.go must contain the cellgen DO NOT EDIT marker line
 //	This ensures hand-written cell code (cell_init.go, handler.go, etc.) routes
 //	through the typed RegisterRepoReady / RegisterEmitterProbes helpers.
@@ -396,7 +396,7 @@ func scanHealthzA3(fset *token.FileSet, file *ast.File, rel string, info *types.
 // ─── HEALTHZ-TYPED-REGISTER-01 detection ──────────────────────────────────────
 
 // isRegistryHealthzCall reports whether call is a Healthz() method call on a
-// kernel/cell.Registry receiver.
+// kernel/cell.Registrar receiver.
 func isRegistryHealthzCall(call *ast.CallExpr, info *types.Info) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != "Healthz" {

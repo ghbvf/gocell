@@ -208,7 +208,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 // RunInTx boundary established by Refresh. With a real PG TxRunner
 // (postgres.TxManager), refresh-store calls participate in the outer
 // transaction via savepoint nesting and roll back together on abort; with
-// a no-op TxRunner (cell.DemoTxRunner) the closure executes directly without
+// a no-op TxRunner (outbox.DemoTxRunner) the closure executes directly without
 // TX semantics. Cascade-revoke calls intentionally bypass the outer TX
 // through RevokeSessionDetached (PR#395 detached-context invariant).
 //

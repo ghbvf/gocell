@@ -165,7 +165,7 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 // opted-in cell (GoStructName != "") that has a cell_gen.go, the cell
 // package must also declare:
 //
-//	func (c *<GoStructName>) initInternal(ctx context.Context, reg cell.Registry) error
+//	func (c *<GoStructName>) initInternal(ctx context.Context, reg cell.Registrar) error
 func TestCodegenInitInternal01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -969,7 +969,7 @@ func checkInitInternalHook(t *testing.T, root, dirRel, structName string) []stri
 	if !found && len(violations) == 0 {
 		violations = append(violations, fmt.Sprintf(
 			"cell %q (struct *%s) is missing required initInternal hook; "+
-				"implement func (c *%s) initInternal(ctx context.Context, reg cell.Registry) error in cell.go",
+				"implement func (c *%s) initInternal(ctx context.Context, reg cell.Registrar) error in cell.go",
 			filepath.Base(dirRel), structName, structName,
 		))
 	}
@@ -996,7 +996,7 @@ func initInternalSignatureViolation(fd *ast.FuncDecl, structName, path string) s
 	if params == nil || params.NumFields() != 2 {
 		return fmt.Sprintf(
 			"%s: func (c *%s) initInternal has wrong parameter count (want 2, got %d); "+
-				"expected (ctx context.Context, reg cell.Registry)",
+				"expected (ctx context.Context, reg cell.Registrar)",
 			path, structName, params.NumFields(),
 		)
 	}
@@ -1021,9 +1021,9 @@ func initInternalSignatureViolation(fd *ast.FuncDecl, structName, path string) s
 	}
 
 	p1 := exprString(params.List[1].Type)
-	if !strings.Contains(p1, "Registry") {
+	if !strings.Contains(p1, "Registrar") {
 		return fmt.Sprintf(
-			"%s: func (c *%s) initInternal param[1] type = %q, want cell.Registry",
+			"%s: func (c *%s) initInternal param[1] type = %q, want cell.Registrar",
 			path, structName, p1,
 		)
 	}

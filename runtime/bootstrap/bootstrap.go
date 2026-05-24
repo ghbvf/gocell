@@ -222,13 +222,13 @@ func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 	}
 	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
 	// slices are behaviorally identical to nil — both produce an
-	// unauthenticated listener — so requiring `[]cell.ListenerAuth{cell.AuthNone{}}`
+	// unauthenticated listener — so requiring `[]auth.ListenerAuth{auth.AuthNone{}}`
 	// for genuinely public listeners (HealthListener on a loopback probe path)
 	// keeps the explicit no-auth marker visible to grep, archtest SEC-02, and
 	// future reviewers.
 	if len(cfg.authChain) == 0 {
 		return errcode.New(errcode.KindInternal, errcode.ErrListenerAuthChainMissing,
-			"bootstrap: listener requires non-empty authChain (use []cell.ListenerAuth{cell.AuthNone{}} for no-auth listeners)",
+			"bootstrap: listener requires non-empty authChain (use []auth.ListenerAuth{auth.AuthNone{}} for no-auth listeners)",
 			errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
 	}
 	if cfg.net == nil && cfg.addr == "" {

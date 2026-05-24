@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -118,13 +120,13 @@ func defaultRuntimeOptions(
 	// ref: go-kratos/kratos app.go — per-server option pattern.
 	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	if shared.PrimaryHTTPAddr != "" {
-		primaryAuth, err := cell.NewAuthJWTFromAssembly(asm)
+		primaryAuth, err := auth.NewAuthJWTFromAssembly(asm)
 		if err != nil {
 			return nil, fmt.Errorf("primary listener auth: %w", err)
 		}
 		opts = append(opts, bootstrap.WithListener(
 			cell.PrimaryListener, shared.PrimaryHTTPAddr,
-			[]cell.ListenerAuth{primaryAuth},
+			[]auth.ListenerAuth{primaryAuth},
 		))
 	}
 	internalChain, err := buildInternalAuthChain(shared.InternalGuard)
@@ -133,7 +135,7 @@ func defaultRuntimeOptions(
 	}
 	opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalChain))
 	if shared.HealthHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []cell.ListenerAuth{cell.AuthNone{}}))
+		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []auth.ListenerAuth{auth.AuthNone{}}))
 	}
 	opts = append(opts, devtoolsOption(shared))
 	return opts, nil
@@ -147,10 +149,10 @@ func defaultRuntimeOptions(
 //
 // See docs/ops/listener-topology.md for the deployment topology, threat boundaries,
 // and single-listener migration guide that frame this auth-chain composition.
-func buildInternalAuthChain(guard *internalGuard) ([]cell.ListenerAuth, error) {
-	plan, err := cell.NewAuthServiceToken(guard.NonceStore(), guard.ring)
+func buildInternalAuthChain(guard *internalGuard) ([]auth.ListenerAuth, error) {
+	plan, err := auth.NewAuthServiceToken(guard.NonceStore(), guard.ring)
 	if err != nil {
 		return nil, fmt.Errorf("build internal auth chain: %w", err)
 	}
-	return []cell.ListenerAuth{plan}, nil
+	return []auth.ListenerAuth{plan}, nil
 }

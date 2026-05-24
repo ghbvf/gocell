@@ -86,7 +86,7 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 	return err
 }
 
-// noopTxRunner is a pass-through TxRunner that implements cell.Nooper (Noop()==true),
+// noopTxRunner is a pass-through TxRunner that implements outbox.Nooper (Noop()==true),
 // signaling to the service that no real transaction is available (demo/test mode).
 // The service uses isNoopTx to decide whether to run explicit session cleanup on failure.
 // It injects the mem-tx sentinel so GetByUsernameForUpdate succeeds in the non-PG path.
@@ -192,7 +192,7 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 }
 
 // TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns verifies
-// that when a Nooper TxRunner (cell.Nooper.Noop()==true) is in use and outbox.Emit fails,
+// that when a Nooper TxRunner (outbox.Nooper.Noop()==true) is in use and outbox.Emit fails,
 // cleanupIssuedSession IS called to compensate the already-written session via Revoke.
 // This is the mirror case of the durable-tx test above.
 func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
@@ -201,7 +201,7 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
-	// noopTxRunner implements cell.Nooper (Noop()==true) → isNoopTx returns true,
+	// noopTxRunner implements outbox.Nooper (Noop()==true) → isNoopTx returns true,
 	// so the service runs explicit session cleanup on emit failure.
 	refreshStore := &cleanupRefreshStoreSpy{Store: newOutboxRefreshStore()}
 	svc := mustNewService(userRepo, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default(),

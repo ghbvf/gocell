@@ -10,7 +10,7 @@ package archtest
 // literal, and the struct-tag JSON key). The rule has four production-side
 // prongs plus two RED fixtures:
 //
-//  1. `kernel/cell.Claims` (declared in kernel/cell/auth_types.go) must NOT
+//  1. `kernel/auth.Claims` (declared in kernel/auth/auth_types.go) must NOT
 //     contain a field named `AuthzEpoch`. Catches regression at the source
 //     of truth.
 //
@@ -24,7 +24,7 @@ package archtest
 //     blocks any literal map write like `m["authz_epoch"] = ...` and any
 //     log line referencing the dead claim name.
 //
-//  3b. kernel/cell/auth_types.go must contain NO struct field whose JSON
+//  3b. kernel/auth/auth_types.go must contain NO struct field whose JSON
 //      tag key equals "authz_epoch". This closes the bypass form:
 //      `Epoch int64 \`json:"authz_epoch"\`` has field name "Epoch" (missed
 //      by prong 1) and its tag BasicLit.Value is the full raw string
@@ -58,7 +58,7 @@ package archtest
 //   - dynamically-constructed struct tags (reflect.StructTag at runtime)
 //     are AST-invisible. Asserted absent by
 //     TestJWTClaimsNoAuthzEpoch_BlindSpot_DynamicStructTag.
-//   - cell.Claims is a type alias from runtime/auth.Claims (per godoc).
+//   - auth.Claims is a type alias from runtime/auth.Claims (per godoc).
 //     The single source of truth is kernel/cell — checking that struct is
 //     sufficient.
 
@@ -78,7 +78,7 @@ import (
 const (
 	authzEpochClaimKey             = "authz_epoch"
 	authzEpochFieldName            = "AuthzEpoch"
-	authzEpochClaimsFile           = "kernel/cell/auth_types.go"
+	authzEpochClaimsFile           = "kernel/auth/auth_types.go"
 	authzEpochClaimsType           = "Claims"
 	authzEpochStdMapVar            = "standardClaims"
 	authzEpochStdMapFile           = "runtime/auth/jwt.go"
@@ -176,7 +176,7 @@ func TestJWTClaimsNoAuthzEpoch_MintPathNoLiteral(t *testing.T) {
 }
 
 // TestJWTClaimsNoAuthzEpoch_ClaimsStructNoTagKey (prong 3b) — scans every
-// struct field in kernel/cell/auth_types.go and asserts that no field carries
+// struct field in kernel/auth/auth_types.go and asserts that no field carries
 // a JSON tag whose key is "authz_epoch".
 //
 // This closes the bypass form that prong 1 and the old prong 3 miss:

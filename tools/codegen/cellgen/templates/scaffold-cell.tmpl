@@ -39,7 +39,7 @@ func New{{.StructName}}() *{{.StructName}} {
 // after BaseCell.Init and before mounting generated route groups.
 //
 //nolint:unparam // ctx is part of the K#04 initInternal contract
-func (c *{{.StructName}}) initInternal(ctx context.Context, reg cell.Registry) error {
+func (c *{{.StructName}}) initInternal(ctx context.Context, reg cell.Registrar) error {
 	// TODO: construct services and handlers, c.AddSlice(...), register
 	// health probes via reg.Health, lifecycle hooks via reg.Lifecycle.
 	return nil

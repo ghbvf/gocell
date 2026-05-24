@@ -9,11 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -118,7 +120,7 @@ func buildBootstrapWithFakeKeyProvider(
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
 		primaryLn.Addr().String(),
-		[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+		[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
@@ -151,7 +153,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 	healthOpt := bootstrap.WithListener(
 		cell.HealthListener, healthLn.Addr().String(),
-		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
+		[]auth.ListenerAuth{auth.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
 	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		healthOpt)
@@ -239,7 +241,7 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 	healthLn2 := newCorebundleLocalListener(t)
 	healthOpt2 := bootstrap.WithListener(
 		cell.HealthListener, healthLn2.Addr().String(),
-		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn2))
+		[]auth.ListenerAuth{auth.AuthNone{}}, bootstrap.WithListenerNet(healthLn2))
 	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		healthOpt2)

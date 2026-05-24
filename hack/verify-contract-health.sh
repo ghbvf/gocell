@@ -4,10 +4,6 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "${ROOT}"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# shellcheck source=hack/lib/gocell-bin.sh
-source "${ROOT}/hack/lib/gocell-bin.sh"
-
-gocell::cli check contract-health
+go run ./cmd/gocell check contract-health

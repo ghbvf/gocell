@@ -19,7 +19,7 @@ import (
 // effective-admin invariant and serializing concurrent first-admin
 // provisioning via store.mu (PR #595 fix — previously this helper omitted
 // WithTxManager and integration tests silently fell back to
-// cell.DemoCellTxManager after Provisioner.mu was deleted).
+// outbox.DemoCellTxManager after Provisioner.mu was deleted).
 //
 // PG-mode integration tests use accesspg.NewBundle directly and do not
 // call this helper.

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -50,7 +52,7 @@ func issueToken(subject string, rolesCSV string, ttl time.Duration) (string, err
 	if err != nil {
 		return "", fmt.Errorf("create JWT issuer: %w", err)
 	}
-	return issuer.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
+	return issuer.Issue(kauth.TokenIntentAccess, subject, auth.IssueOptions{
 		Roles:    parseRoles(rolesCSV),
 		Audience: []string{audience},
 	})

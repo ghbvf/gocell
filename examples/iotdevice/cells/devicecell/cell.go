@@ -189,7 +189,7 @@ func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 // adapts the publisher to a direct emitter for event publishing.
 //
 //nolint:unparam // ctx is part of the K#04 initInternal contract; unused here, used by other cells (configcore)
-func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registry) error {
+func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registrar) error {
 	durabilityMode := reg.DurabilityMode()
 
 	// Clock must be injected via WithClock before Init.
@@ -207,7 +207,7 @@ func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registry) error 
 }
 
 // initDeps validates and resolves publisher, emitter, and cursor codec.
-func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
+func (c *DeviceCell) initDeps(durabilityMode outbox.DurabilityMode) error {
 	// DeviceRepository is required in every mode. Demo callers MUST wire
 	// mem.NewDeviceRepository() explicitly via WithDeviceRepository — the
 	// cell never falls back silently. This matches "no soft fallback":
@@ -234,7 +234,7 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 	// fail-open here because this example path has no transactional outbox.
 	// The request succeeds once persistence succeeds; publish misses are
 	// operational follow-up, not create failure.
-	if err := cell.CheckNotNoop(durabilityMode, "devicecell", c.publisher); err != nil {
+	if err := outbox.CheckNotNoop(durabilityMode, "devicecell", c.publisher); err != nil {
 		return err
 	}
 	builtEmitter, err := c.buildEmitter()
@@ -249,7 +249,7 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 	// with a key that ships in the source tree.
 	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
 	if c.cursorCodec == nil {
-		if durabilityMode == cell.DurabilityDurable {
+		if durabilityMode == outbox.DurabilityDurable {
 			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 				"devicecell durable mode requires a cursor codec; "+
 					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
@@ -267,7 +267,7 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 }
 
 // initSlices constructs all 4 device slices and the command sweeper.
-func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
+func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	// device-register slice
 	registerSvc, err := deviceregister.NewService(
 		c.deviceRepo, c.logger,
@@ -291,7 +291,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 				"RegisterCommandQueue(postgres.NewCommandQueue(...)) for durable mode")
 	}
 	cmdQueue := c.commandQueue
-	runMode := query.RunModeForDemo(durabilityMode == cell.DurabilityDemo)
+	runMode := query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
 	// Public slice service: sliceName "devicecommand" for observability labels.
 	pubSvc, err := devicecmd.NewService(
 		cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
@@ -344,7 +344,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 
 	// device-list slice
 	listSvc, err := devicelist.NewService(c.deviceRepo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(durabilityMode == cell.DurabilityDemo))
+		query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("device-list: %w", err)
 	}
@@ -354,7 +354,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 }
 
 // registerHealthAndLifecycle registers health probes and the sweeper lifecycle hook.
-func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registry) error {
+func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registrar) error {
 	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
 		if err := RegisterEmitterProbes(reg, hc); err != nil {
 			return err

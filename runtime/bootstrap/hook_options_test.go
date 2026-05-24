@@ -4,11 +4,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 )
@@ -19,7 +20,7 @@ func TestValidateAssemblyClockAlignment_SameClock(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	asm := assembly.New(assembly.Config{
 		ID:             "test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clk,
 	})
 	b := &Bootstrap{
@@ -37,7 +38,7 @@ func TestValidateAssemblyClockAlignment_DifferentClocks(t *testing.T) {
 	clkAssembly := clockmock.New(time.Now())
 	asm := assembly.New(assembly.Config{
 		ID:             "test",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		Clock:          clkAssembly,
 	})
 	b := &Bootstrap{

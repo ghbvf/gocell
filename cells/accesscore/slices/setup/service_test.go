@@ -554,7 +554,7 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 // Problem: the mem-mode composition root in cmd/corebundle/access_module.go
 // previously did NOT wire accesscore.WithTxManager(persistence.WrapForCell(
 // userMemStore.TxRunner())).  Cell.Init fell through to the
-// cell.DemoCellTxManager fallback, whose RunInTx is a no-op pass-through.
+// outbox.DemoCellTxManager fallback, whose RunInTx is a no-op pass-through.
 // Two concurrent CreateAdmin calls both passed the CountByRole==0 fast-path
 // check before either committed, producing two admins (TOCTOU; S4.0 violated).
 //

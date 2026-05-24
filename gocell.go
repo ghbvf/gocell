@@ -3,11 +3,11 @@ package gocell
 
 import (
 	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // NewAssembly creates a new CoreAssembly with the given identifier.
 func NewAssembly(id string) *assembly.CoreAssembly {
-	return assembly.New(assembly.Config{ID: id, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	return assembly.New(assembly.Config{ID: id, DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 }

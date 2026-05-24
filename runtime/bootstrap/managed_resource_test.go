@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -87,8 +89,8 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 	ln := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -134,8 +136,8 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 	ln := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -186,8 +188,8 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 	ln := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 		WithManagedResource(res3),
@@ -246,8 +248,8 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 	ln := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -279,8 +281,8 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 	ln := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 	)
@@ -365,8 +367,8 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 	ln := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -457,7 +459,7 @@ func (s *managedResourceFailingStore) ClaimPending(ctx context.Context, batchSiz
 func TestWithRelay_RegistersCheckers(t *testing.T) {
 	ln := newLocalListener(t)
 
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: koutbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	relay := newManagedResourceTestRelay()
@@ -465,8 +467,8 @@ func TestWithRelay_RegistersCheckers(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -508,7 +510,7 @@ func TestWithRelay_RegistersCheckers(t *testing.T) {
 // The relay is registered via WithRelay → relayAdapter.
 func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-trip", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-trip", DurabilityMode: koutbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	store := &managedResourceFailingStore{FakeStore: outboxtest.NewFakeStore()}
@@ -535,8 +537,8 @@ func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -608,7 +610,7 @@ func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 // checker. The relay is registered via WithRelay → relayAdapter.
 func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-disabled", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-disabled", DurabilityMode: koutbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	// Poll budget disabled (=0), others enabled.
@@ -633,8 +635,8 @@ func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(testtime.D2s),
 		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -873,8 +875,8 @@ func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 	ln := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		// pgRes registered FIRST (simulating ConfigCoreModule.Provide).
 		WithManagedResource(pgRes),
 		// worker registered SECOND (simulating a later consumer module / WithWorkers).

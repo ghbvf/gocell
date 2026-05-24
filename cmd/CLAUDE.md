@@ -42,30 +42,36 @@ bootstrap.New(opts...).Run(ctx)
 
 ## Listener 配置
 
+> 自 PR #615（G-10）后，`auth.AuthPlan` / `auth.ListenerAuth` / `auth.NewAuth*` 等
+> 符号来自 `github.com/ghbvf/gocell/kernel/auth`（不是 `kernel/cell`）。当同一文件
+> 还 import `runtime/auth` 时，把 kernel/auth 别名为 `kauth`：
+> `kauth "github.com/ghbvf/gocell/kernel/auth"`。`cell.PrimaryListener` 等 listener
+> 引用保留在 `kernel/cell`。
+
 ```go
 // B2-K-02: composition root 改 error-first；MustNew* 已删除
 // Primary：公开 API + JWT（phase4 自动发现 verifier）
-jwtAuth, err := cell.NewAuthJWTFromAssembly(asm)
+jwtAuth, err := auth.NewAuthJWTFromAssembly(asm)
 if err != nil {
     return nil, fmt.Errorf("NewAuthJWTFromAssembly: %w", err)
 }
 bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr,
-    []cell.ListenerAuth{jwtAuth})
+    []auth.ListenerAuth{jwtAuth})
 
 // Internal：控制平面 + ServiceToken（HMAC-SHA256 + replay guard）
-svcTokenAuth, err := cell.NewAuthServiceToken(guard.NonceStore(), guard.Ring())
+svcTokenAuth, err := auth.NewAuthServiceToken(guard.NonceStore(), guard.Ring())
 if err != nil {
     return nil, fmt.Errorf("NewAuthServiceToken: %w", err)
 }
 bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr,
-    []cell.ListenerAuth{svcTokenAuth})
+    []auth.ListenerAuth{svcTokenAuth})
 
 // Health：/healthz /readyz /metrics，显式无认证
 bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,
-    []cell.ListenerAuth{cell.AuthNone{}})
+    []auth.ListenerAuth{auth.AuthNone{}})
 ```
 
-`authChain` 必须非 nil；显式无认证用 `cell.AuthNone{}`，传 nil 在 phase0 fail-fast。
+`authChain` 必须非 nil；显式无认证用 `auth.AuthNone{}`，传 nil 在 phase0 fail-fast。
 
 ## CellModule 接口
 

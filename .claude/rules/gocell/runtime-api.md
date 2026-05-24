@@ -8,6 +8,21 @@ paths:
 
 # Runtime API
 
+> **Auth package path (post PR #615, G-10)**: 所有 `auth.AuthPlan` / `auth.ListenerAuth` /
+> `auth.AuthJWT` / `auth.AuthNone{}` / `auth.AuthMTLS{}` / `auth.AuthServiceToken` 及
+> `auth.NewAuthJWT` / `auth.NewAuthJWTFromAssembly` / `auth.NewAuthServiceToken` 都来自
+> `github.com/ghbvf/gocell/kernel/auth`（不是 `kernel/cell`）。当同一个文件还
+> import `runtime/auth` 时，把 kernel/auth 别名为 `kauth`：
+> ```go
+> import (
+>     kauth "github.com/ghbvf/gocell/kernel/auth"
+>     "github.com/ghbvf/gocell/runtime/auth"  // runtime side (Mount, ServiceTokenMiddleware, ...)
+> )
+> ```
+> `cell.Registrar` 仍在 `kernel/cell`，是 `Cell.Init(ctx, reg)` 的参数类型（PR #615
+> 之前叫 `cell.Registry`）。`cell.PrimaryListener` / `cell.InternalListener` /
+> `cell.HealthListener` 也留在 `kernel/cell`。下面所有示例按此约定。
+
 ## Auth 路由声明 + 三 listener + RouteGroup (PR-A14b / PR262)
 
 每个 Cell 在 `Init(ctx, reg)` 中通过 `reg.RouteGroup(...)` 声明路由组。
@@ -37,7 +52,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 }
 
 // Cell.Init — PR-A14b 声明式路由组（PR-MODE-6 错误链路贯通），通过 reg.RouteGroup 注册
-func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
+func (c *AccessCore) Init(ctx context.Context, reg cell.Registrar) error {
     if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }
@@ -71,32 +86,32 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
     return nil
 }
 
-// composition root — WithListener(ref, addr, authChain []cell.ListenerAuth, ...ListenerOption)
+// composition root — WithListener(ref, addr, authChain []auth.ListenerAuth, ...ListenerOption)
 // JWT auth lives on the listener auth chain; there is no separate WithAuthMiddleware /
 // WithAuthDiscovery option (PR262: typed AuthPlan replaces cell.Policy).
 //
-// AuthPlan 构造函数（PR-MODE-6）是 error-first：`cell.NewAuthJWT(v) (AuthJWT, error)`。
+// AuthPlan 构造函数（PR-MODE-6）是 error-first：`auth.NewAuthJWT(v) (AuthJWT, error)`。
 // B2-K-02 已删除 Must* 变体；composition root 改 error-first + 上浮 error。
-jwtAuth, err := cell.NewAuthJWTFromAssembly(asm)
+jwtAuth, err := auth.NewAuthJWTFromAssembly(asm)
 if err != nil {
     return nil, fmt.Errorf("NewAuthJWTFromAssembly: %w", err)
 }
-svcTokenAuth, err := cell.NewAuthServiceToken(nonceStore, ring)
+svcTokenAuth, err := auth.NewAuthServiceToken(nonceStore, ring)
 if err != nil {
     return nil, fmt.Errorf("NewAuthServiceToken: %w", err)
 }
 bootstrap.New(
     bootstrap.WithAssembly(asm),
     bootstrap.WithListener(cell.PrimaryListener, ":8080",
-        []cell.ListenerAuth{jwtAuth}),
+        []auth.ListenerAuth{jwtAuth}),
     bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
-        []cell.ListenerAuth{svcTokenAuth}),
+        []auth.ListenerAuth{svcTokenAuth}),
     bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091",
-        []cell.ListenerAuth{cell.AuthNone{}}),
+        []auth.ListenerAuth{auth.AuthNone{}}),
 )
 ```
 
-**SEC-FAIL-CLOSED**：`authChain` 必须非 nil（PR-MODE-1）。HealthListener 的「无认证」由 loopback 隔离 + 显式 `cell.AuthNone{}` 共同表达；隐式 nil 在 phase0 fail-fast，错误码 `ERR_LISTENER_AUTH_CHAIN_MISSING`。
+**SEC-FAIL-CLOSED**：`authChain` 必须非 nil（PR-MODE-1）。HealthListener 的「无认证」由 loopback 隔离 + 显式 `auth.AuthNone{}` 共同表达；隐式 nil 在 phase0 fail-fast，错误码 `ERR_LISTENER_AUTH_CHAIN_MISSING`。
 
 **PR-MODE-1 新增 sentinel 对照表**：
 
@@ -116,30 +131,30 @@ bootstrap.New(
 
 ### bootstrap.WithListener 认证链 (PR262)
 
-`WithListener(ref, addr, authChain []cell.ListenerAuth, opts...)` 的第三参数是一个
-**sealed interface slice**。每个元素实现 `cell.ListenerAuth`（marker method `listenerAuthOK()`）。
+`WithListener(ref, addr, authChain []auth.ListenerAuth, opts...)` 的第三参数是一个
+**sealed interface slice**。每个元素实现 `auth.ListenerAuth`（marker method `listenerAuthOK()`）。
 **`authChain` 必须显式声明（SEC-FAIL-CLOSED，PR-MODE-1）**：传 nil 在 phase0 fail-fast；显式无认证使用
-`[]cell.ListenerAuth{cell.AuthNone{}}`。
+`[]auth.ListenerAuth{auth.AuthNone{}}`。
 
 | 构造函数 | 说明 | 典型 listener |
 |---------|------|--------------|
-| `cell.NewAuthJWT(v) (AuthJWT, error)` | JWT 验证（直接注入 IntentTokenVerifier）。error-first；`Must*` 变体已删除（B2-K-02，ADR `202605171800`）。 | PrimaryListener |
-| `cell.NewAuthJWTFromAssembly(asm) (..., error)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
-| `cell.NewAuthServiceToken(...) (..., error)` | HMAC-SHA256 service token | InternalListener |
-| `cell.AuthMTLS{}` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
-| `cell.AuthNone{}` | 显式无验证（HealthListener loopback 隔离场景；nil 已被 phase0 拒绝） | HealthListener（loopback 隔离） |
+| `auth.NewAuthJWT(v) (AuthJWT, error)` | JWT 验证（直接注入 IntentTokenVerifier）。error-first；`Must*` 变体已删除（B2-K-02，ADR `202605171800`）。 | PrimaryListener |
+| `auth.NewAuthJWTFromAssembly(asm) (..., error)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
+| `auth.NewAuthServiceToken(...) (..., error)` | HMAC-SHA256 service token | InternalListener |
+| `auth.AuthMTLS{}` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
+| `auth.AuthNone{}` | 显式无验证（HealthListener loopback 隔离场景；nil 已被 phase0 拒绝） | HealthListener（loopback 隔离） |
 
 **多 plan chain 示例**：
 
 ```go
 // mTLS + service-token 双层守护（外层 transport 证书验证 + 内层 HMAC token 防重放）
-svcTokenAuth, err := cell.NewAuthServiceToken(nonceStore, ring)
+svcTokenAuth, err := auth.NewAuthServiceToken(nonceStore, ring)
 if err != nil {
     return nil, fmt.Errorf("NewAuthServiceToken: %w", err)
 }
 bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
-    []cell.ListenerAuth{
-        cell.AuthMTLS{},   // 外层：peer cert presence check
+    []auth.ListenerAuth{
+        auth.AuthMTLS{},   // 外层：peer cert presence check
         svcTokenAuth,      // 内层：HMAC-SHA256 + replay guard
     },
     bootstrap.WithListenerTLS(tlsCfg), // ClientAuth=RequireAndVerifyClientCert + ClientCAs required
@@ -173,18 +188,18 @@ token 直接 plumb 到 `runtime/http/health.Handler.SetVerboseToken`；不匹配
 ```go
 const WebhookListener cell.ListenerRef = "webhook"
 
-jwtAuth, err := cell.NewAuthJWTFromAssembly(asm)
+jwtAuth, err := auth.NewAuthJWTFromAssembly(asm)
 if err != nil {
     return nil, fmt.Errorf("NewAuthJWTFromAssembly: %w", err)
 }
-svcTokenAuth, err := cell.NewAuthServiceToken(store, ring)
+svcTokenAuth, err := auth.NewAuthServiceToken(store, ring)
 if err != nil {
     return nil, fmt.Errorf("NewAuthServiceToken: %w", err)
 }
 bootstrap.WithListener(cell.PrimaryListener, ":8080",
-    []cell.ListenerAuth{jwtAuth})
+    []auth.ListenerAuth{jwtAuth})
 bootstrap.WithListener(WebhookListener, ":8090",
-    []cell.ListenerAuth{svcTokenAuth})
+    []auth.ListenerAuth{svcTokenAuth})
 ```
 
 历史 `cell.GroupAuth` 接口、`cell.AuthVerboseToken` 类型、`bootstrap.WithLivezAuth/WithReadyzAuth/WithMetricsAuth` options 均已删除。`AUTH-PLAN-04 (LAYER-09)` archtest 仍禁止 cells 直接构造 AuthPlan（composition root 责任）。
@@ -204,7 +219,7 @@ bootstrap.WithListener(WebhookListener, ":8090",
 
 Bootstrap 为每个声明的 listener 构建独立的 `*router.Router`（内含独立 `*http.ServeMux`）：
 
-- **primary**：挂 `/api/v1/*` 业务路由；JWT AuthMiddleware（来自 `[]cell.ListenerAuth` 中的 AuthJWT/AuthJWTFromAssembly）。primary listener 显式 404 所有 `/internal/v1/*` 请求，实现端口级物理隔离。
+- **primary**：挂 `/api/v1/*` 业务路由；JWT AuthMiddleware（来自 `[]auth.ListenerAuth` 中的 AuthJWT/AuthJWTFromAssembly）。primary listener 显式 404 所有 `/internal/v1/*` 请求，实现端口级物理隔离。
 - **internal**：仅挂 `/internal/v1/*` 路由；AuthServiceToken / AuthMTLS 策略，无 JWT 中间件。
 - **health**：仅挂 `/healthz` `/readyz` `/metrics`；框架自动注册，Cell 不声明此 listener。
 
@@ -237,7 +252,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - 路由级 Policy 存在时，Listener 认证链中间件在路由层之前运行（链中间件先于路由 handler）
 - `Public: true` 不能与路由级 `Policy` 同时设置（FinalizeAuth fail-fast）
 - `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义
-- JWT 单一路径（PR262 / PR-MODE-6）：`cell.NewAuthJWT(v)` 直接注入（error-first；`Must*` 已删除，ADR `202605171800`）；`cell.NewAuthJWTFromAssembly(asm)` phase4 时通过 `AuthJWTFromAssembly.Validate()` 从 `authProvider` Cell 发现 verifier。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。Verifier 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher，零样板。
+- JWT 单一路径（PR262 / PR-MODE-6）：`auth.NewAuthJWT(v)` 直接注入（error-first；`Must*` 已删除，ADR `202605171800`）；`auth.NewAuthJWTFromAssembly(asm)` 走两阶段——phase0 `runtime/bootstrap/auth_plan_validate.go::validateAuthJWTFromAssemblyPlans` 校验 assembly 实例同一性（拒结构体字面量 / nil / wrapper / 拷贝），phase4 `auth_plan_apply.go` 遍历 `assembly.CellIDs()` 找到唯一实现 `AuthProvider` 的 Cell 并通过 `AuthJWTFromAssembly.SetResolved(verifier)` 注入。运行期 `router.WithAuthMiddleware` 通过 `plan.ResolvedVerifier()` 读取，搭配 FinalizeAuth 编译的 Public/PasswordResetExempt matcher。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。
 - `/internal/v1/*` 路由（`IsInternal()` 为 true）必须挂在 InternalListener；非 internal 路径不得挂在 InternalListener（FinalizeAuth 双向 fail-fast 校验）。
 
 ### 规则
@@ -249,7 +264,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - CORS OPTIONS：当前无 CORS middleware；如需公开 OPTIONS 请显式 `auth.Mount` + `Public: true`
 - 禁止在 `cmd/*` / `examples/*/main.go` 硬编码业务路径字面量（`grep '"POST /api/v1/"'` 必须为空）
 - Cell 禁止直接 import `runtime/http/router`；通过 `cell.RouteMux` / `cell.RouteGroup` 声明路由（LAYER-07）
-- Cell 禁止构造 AuthPlan 值（`cell.NewAuthJWT` / `cell.NewAuthServiceToken` 等所有变体；`Must*` 已删除，ADR `202605171800`）；认证计划由 composition root（`cmd/`）组装后通过 `WithListener` 注入（LAYER-09 / AUTH-PLAN-04）
+- Cell 禁止构造 AuthPlan 值（`auth.NewAuthJWT` / `auth.NewAuthServiceToken` 等所有变体；`Must*` 已删除，ADR `202605171800`）；认证计划由 composition root（`cmd/`）组装后通过 `WithListener` 注入（LAYER-09 / AUTH-PLAN-04）
 
 ### Internal endpoint caller-cell allowlist (A5)
 
@@ -280,4 +295,5 @@ ref: kubernetes-sigs/controller-runtime pkg/manager/manager.go — 强依赖 fai
 ref: go-kratos/kratos app.go — 弱依赖 substitute（builder noop 同源范式）。
 ref: ADR `docs/architecture/202605171800-adr-kernel-mustctor-removal.md` — Must* 删除与
 error-first 改造（B2-K-02）；composition root 的 `cell.MustNewAuth*` 已删除，统一改用
-error-first `cell.NewAuth*`。
+error-first `auth.NewAuth*`（PR #615 G-10 之后符号位于 `kernel/auth`；与
+`runtime/auth` 同导入时使用 `kauth` 别名）。

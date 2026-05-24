@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -66,12 +68,17 @@ var (
 
 func TestHookTimeout_DefaultApplied(t *testing.T) {
 	// Config with HookTimeout=0 should use DefaultHookTimeout.
-	a := newTestAssembly(t, Config{ID: "timeout-default", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{ID: "timeout-default", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	assert.Equal(t, DefaultHookTimeout, a.cfg.HookTimeout)
 }
 
 func TestHookTimeout_CustomValue(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "timeout-custom", DurabilityMode: cell.DurabilityDemo, HookTimeout: testtime.D5s, Clock: clock.Real()})
+	a := newTestAssembly(t, Config{
+		ID:             "timeout-custom",
+		DurabilityMode: outbox.DurabilityDemo,
+		HookTimeout:    testtime.D5s,
+		Clock:          clock.Real(),
+	})
 	assert.Equal(t, testtime.D5s, a.cfg.HookTimeout)
 }
 
@@ -79,7 +86,7 @@ func TestHookTimeout_NegativeDisables(t *testing.T) {
 	// Negative value must pass through untouched so the hook inherits parent ctx.
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-neg",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    disableHookTimeout,
 		Clock:          clock.Real(),
 	})
@@ -91,7 +98,7 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 	// Tight 20ms deadline so the test runs fast.
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-bs",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 		Clock:          clock.Real(),
@@ -121,7 +128,7 @@ func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 	obs := &captureObserver{}
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-as",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 		Clock:          clock.Real(),
@@ -198,7 +205,7 @@ func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
 	dc := newDeadlineCheckCell("D")
 	a := newTestAssembly(t, Config{
 		ID:             "no-deadline",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    disableHookTimeout,
 		Clock:          clock.Real(),
 	})
@@ -214,7 +221,7 @@ func TestHookTimeout_PositiveAppliesDeadline_BehaviourContract(t *testing.T) {
 	dc := newDeadlineCheckCell("D")
 	a := newTestAssembly(t, Config{
 		ID:             "with-deadline",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D5s,
 		Clock:          clock.Real(),
 	})
@@ -229,7 +236,7 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 	obs := &captureObserver{}
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-wrapped",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 		Clock:          clock.Real(),
@@ -258,7 +265,7 @@ func TestHookTimeout_StopPhaseTimeoutContinues(t *testing.T) {
 	obs := &captureObserver{}
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-stop",
-		DurabilityMode: cell.DurabilityDemo,
+		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 		Clock:          clock.Real(),

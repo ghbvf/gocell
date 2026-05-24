@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// NonceStore implements auth.NonceStore using Redis SET NX EX semantics.
+// NonceStore implements kauth.NonceStore using Redis SET NX EX semantics.
 // It is safe for multi-pod service-token replay protection because every
 // first-use claim is coordinated by Redis.
 //
@@ -24,7 +26,7 @@ type NonceStore struct {
 	ttl time.Duration
 }
 
-var _ auth.NonceStore = (*NonceStore)(nil)
+var _ kauth.NonceStore = (*NonceStore)(nil)
 
 // NewNonceStore creates a Redis-backed service-token nonce store.
 //
@@ -70,8 +72,8 @@ func newNonceStoreFromCmdable(rdb cmdable, ns KeyNamespace, ttl time.Duration) (
 
 // Kind reports that this store is distributed and safe for multi-pod replay
 // protection when Redis itself is available.
-func (*NonceStore) Kind() auth.NonceStoreKind {
-	return auth.NonceStoreKindDistributed
+func (*NonceStore) Kind() kauth.NonceStoreKind {
+	return kauth.NonceStoreKindDistributed
 }
 
 // CheckAndMark records nonce if it has not been seen within the TTL window.

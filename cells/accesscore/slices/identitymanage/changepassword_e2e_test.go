@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/stretchr/testify/assert"
@@ -246,7 +248,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 		"Login must return PasswordResetRequired=true for bootstrap user")
 
 	// Verify JWT claim.
-	loginClaims, err := e2eVerifier.VerifyIntent(context.Background(), loginPair.AccessToken, auth.TokenIntentAccess)
+	loginClaims, err := e2eVerifier.VerifyIntent(context.Background(), loginPair.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.True(t, loginClaims.PasswordResetRequired,
 		"access token must carry password_reset_required=true claim after bootstrap login")
@@ -322,7 +324,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 	assert.False(t, cpResp.Data.PasswordResetRequired, "PasswordResetRequired must be false after password change")
 
 	// --- Step 5: Verify new token JWT claim ---
-	newClaims, err := e2eVerifier.VerifyIntent(context.Background(), cpResp.Data.AccessToken, auth.TokenIntentAccess)
+	newClaims, err := e2eVerifier.VerifyIntent(context.Background(), cpResp.Data.AccessToken, kauth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.False(t, newClaims.PasswordResetRequired,
 		"new access token JWT claim must be false after ChangePassword")

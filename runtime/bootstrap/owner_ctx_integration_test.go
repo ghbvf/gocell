@@ -34,6 +34,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
@@ -84,8 +86,8 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 
 		b := New(
 			WithClock(clock.Real()),
-			WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-			WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
+			WithListener(cell.PrimaryListener, addr, []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+			WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
 			WithShutdownTimeout(testtime.D3s),
 			WithLifecycle(func(lc Lifecycle) {
 				_ = lc.Append(Hook{
@@ -193,8 +195,8 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 
 		b := New(
 			WithClock(clock.Real()),
-			WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-			WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
+			WithListener(cell.PrimaryListener, addr, []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+			WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
 			WithShutdownTimeout(testtime.D3s),
 			WithLifecycle(func(lc Lifecycle) {
 				hook := sl.Hook()

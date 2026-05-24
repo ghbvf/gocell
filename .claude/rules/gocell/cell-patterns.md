@@ -83,7 +83,7 @@ type MyCell struct {
     txMgr            persistence.CellTxManager
 }
 
-func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
     // validation.IsNilInterface is fail-safe vs bare `== nil`: sealed wrappers
     // collapse typed-nil at WrapPublisherForCell (PR 441 F1), so `== nil`
     // suffices today, but using IsNilInterface here matches the kernel/runtime
@@ -120,7 +120,7 @@ Wrapper 函数**仅允许**在以下位置调用（archtest `CELL-RAW-INFRA-WRAP
 - `examples/<demo>/main.go` / `examples/<demo>/app.go` / `examples/<demo>/run.go`（example composition root；run.go is the hand-written half of the K#10 main+run split, see cmd/corebundle pattern）
 - `*_test.go` 任意路径（测试构造 fake）
 - `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go`（marker 定义本身）
-- `kernel/cell/demo_tx_runner.go`（`DemoCellTxManager()` 工厂）
+- `kernel/outbox/demo_tx_runner.go`（`DemoCellTxManager()` 工厂）
 
 **Hard 防线（type system）**：cells/* 持 sealed 字段 + With\* 接 sealed 参数，raw infra 在 compile 期不可入 cell。`Wrap*ForCell` 用 `validation.IsNilInterface` 拒 typed-nil，避免 typed-nil 包成非 nil sealed 值绕过 `Init()` 与 `cell.CheckNotNoop`（PR 441 F1 修复）。
 

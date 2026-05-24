@@ -16,6 +16,9 @@ import (
 	"testing"
 	"time"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/auth/authtest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -27,7 +30,6 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -266,7 +268,7 @@ func newL2HarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer) *l2Har
 	// DurabilityDemo only describes the assembly construction mode; the
 	// relay above is the durable bridge between PG outbox_entries and the
 	// in-process eventbus.
-	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -353,7 +355,7 @@ func buildPGStores(t *testing.T) *pgStores {
 // the accesscore cell.
 type authLayer struct {
 	ring        *auth.HMACKeyRing
-	nonceStore  auth.NonceStore
+	nonceStore  kauth.NonceStore
 	jwtIssuer   *auth.JWTIssuer
 	jwtVerifier *auth.JWTVerifier
 	bootstrapMW func(http.Handler) http.Handler
@@ -476,10 +478,10 @@ func runBootstrap(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(),
-			[]cell.ListenerAuth{celltest.MustAuthJWTFromAssembly(asm)},
+			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
-			[]cell.ListenerAuth{celltest.MustAuthServiceToken(a.nonceStore, a.ring)},
+			[]kauth.ListenerAuth{authtest.MustAuthServiceToken(a.nonceStore, a.ring)},
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),

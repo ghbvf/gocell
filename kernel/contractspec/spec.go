@@ -11,7 +11,7 @@ import (
 // ContractSpec is the runtime descriptor for one contract endpoint.
 // It is consumed by:
 //   - runtime/auth.Mount (HTTP route binding)
-//   - runtime/eventbus / kernel/cell.Registry.Subscribe (event subscription)
+//   - runtime/eventbus / kernel/cell.Registrar.Subscribe (event subscription)
 //   - tracing span attributes (gocell.contract.id / kind / transport)
 //
 // The zero value is invalid — callers must populate ID / Kind / Transport

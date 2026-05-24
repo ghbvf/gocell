@@ -81,7 +81,7 @@ func WithMetricsHandler(h http.Handler) HealthRouteGroupOption {
 //
 // Note: verbose-token is a disclosure gate, not an authentication scheme — it
 // only controls whether the verbose body is rendered. Listener-level auth
-// (cell.NewAuthJWTFromAssembly, cell.NewAuthServiceToken, etc.) is orthogonal.
+// (kauth.NewAuthJWTFromAssembly, kauth.NewAuthServiceToken, etc.) is orthogonal.
 //
 // Empty token leaves the gate disabled — verbose requests then render plain
 // body unless WithReadyzVerboseDisabled is set.

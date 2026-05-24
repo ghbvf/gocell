@@ -32,7 +32,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
-// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// resolveEmitter delegates to outbox.ResolveCellEmitter (mutual exclusion +
 // WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
 // warn).
 //
@@ -46,13 +46,13 @@ import (
 // c.txRunner is still propagated to slice services in initSlices.
 //
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
-func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
+func (c *AccessCore) resolveEmitter(mode outbox.DurabilityMode) error {
 	txRunnerForEmitter := c.txRunner
 	if c.pendingOutboxWriter == nil {
 		txRunnerForEmitter = nil
 	}
-	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
-		EmitterConfig: cell.EmitterConfig{
+	outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "accesscore",
 			Mode:              mode,
 			Publisher:         c.pendingOutboxPub,
@@ -77,7 +77,7 @@ func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 
 // initValidate performs fail-fast validation of required dependencies before
 // constructing slices. Extracted from Init to reduce cognitive complexity.
-func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
+func (c *AccessCore) initValidate(durabilityMode outbox.DurabilityMode) error {
 	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
 	}
@@ -88,7 +88,7 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 		return err
 	}
 	if c.cursorCodec == nil {
-		if durabilityMode == cell.DurabilityDurable {
+		if durabilityMode == outbox.DurabilityDurable {
 			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 				"accesscore durable mode requires a cursor codec; "+
 					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
@@ -101,19 +101,19 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 		c.cursorCodec = codec
 		c.logger.Warn("accesscore: using default cursor codec (demo mode)")
 	}
-	c.rbacRunMode = query.RunModeForDemo(durabilityMode == cell.DurabilityDemo)
+	c.rbacRunMode = query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
 	// resolveEmitter (called above) enforces the (OutboxWriter, TxRunner)
 	// pairing invariant using the original c.txRunner; only after it
 	// succeeds do we install the demoTxRunner fallback so slice constructors
 	// see a non-nil TxRunner.
 	if c.txRunner == nil {
-		c.logger.Warn("accesscore: using cell.DemoCellTxManager (demo mode)",
+		c.logger.Warn("accesscore: using outbox.DemoCellTxManager (demo mode)",
 			slog.String("durability_mode", durabilityMode.String()))
-		c.txRunner = cell.DemoCellTxManager()
+		c.txRunner = outbox.DemoCellTxManager()
 	}
 	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode
 	// so that assemblies that forget to wire a real TxRunner fail at Init() time.
-	if err := cell.CheckNotNoop(durabilityMode, "accesscore", c.txRunner); err != nil {
+	if err := outbox.CheckNotNoop(durabilityMode, "accesscore", c.txRunner); err != nil {
 		return err
 	}
 	return nil
@@ -365,7 +365,7 @@ func (c *AccessCore) initSlices() error {
 // `cell.MustNewBaseSliceFromMeta(rbacassign.SliceMetadata())` reads
 // `consistencyLevel: L2` from the codegen literal, independent of runtime mode.
 //
-// Runtime emit fidelity depends on cell.ResolveCellEmitter's output:
+// Runtime emit fidelity depends on outbox.ResolveCellEmitter's output:
 //   - durable mode (publisher + writer + txRunner) → WriterEmitter writes a row
 //     in the outbox table; the row + role write co-commit, providing real L2
 //     atomicity end-to-end.
@@ -394,7 +394,7 @@ func (c *AccessCore) initRbacAssign() error {
 // convention, not a transitional shim.
 //
 //nolint:unparam // ctx is part of the K#04 initInternal contract; unused here, used by other cells (devicecell)
-func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error {
+func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registrar) error {
 	clock.MustHaveClock(c.clk, "accesscore.initInternal")
 
 	durabilityMode := reg.DurabilityMode()
@@ -415,7 +415,7 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error 
 }
 
 // registerHealthAndLifecycle registers health probes and lifecycle hooks into reg.
-func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) error {
+func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registrar) error {
 	// session.Store satisfies healthz.RepoProber via its RepoReady method.
 	// RegisterRepoReady is the cellgen-generated typed funnel.
 	if err := RegisterRepoReady(reg, c.sessionStore); err != nil {

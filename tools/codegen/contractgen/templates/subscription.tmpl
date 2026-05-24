@@ -35,7 +35,7 @@ func NewSubscription(handler outbox.EntryHandler, consumerGroup, cellID, sliceID
 }
 
 // Mount registers the subscription with the cell registry.
-func (s *Subscription) Mount(reg cell.Registry) error {
+func (s *Subscription) Mount(reg cell.Registrar) error {
 	return reg.Subscribe(spec, s.handler, s.consumerGroup, s.cellID,
 		cell.WithSubscriptionSliceID(s.sliceID))
 }

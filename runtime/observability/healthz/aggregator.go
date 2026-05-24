@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -183,7 +183,7 @@ func (a *aggregator) Evaluate(ctx context.Context) healthz.Snapshot {
 // Classification rules (matching runtime/http/health.runOneProbe logic):
 //   - err == nil                                   → StatusUp
 //   - errors.Is(ctx.Err()|err, DeadlineExceeded)   → StatusDown (timeout)
-//   - errors.Is(err, cell.ErrDegraded)             → StatusDegraded (fail-open)
+//   - errors.Is(err, outbox.ErrDegraded)             → StatusDegraded (fail-open)
 //   - any other non-nil error                      → StatusDown
 func (a *aggregator) runOneProbe(ctx context.Context, p healthz.Probe) (pr healthz.ProbeResult) {
 	pr.Name = p.Name()
@@ -207,7 +207,7 @@ func (a *aggregator) runOneProbe(ctx context.Context, p healthz.Probe) (pr healt
 	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded):
 		pr.Status = healthz.StatusDown
 		pr.Err = fmt.Errorf("probe did not return within deadline %s (ctx: %w)", a.deadline, err)
-	case errors.Is(err, cell.ErrDegraded):
+	case errors.Is(err, outbox.ErrDegraded):
 		pr.Status = healthz.StatusDegraded
 		pr.Err = err
 	default:

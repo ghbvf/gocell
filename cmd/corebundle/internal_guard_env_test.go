@@ -12,12 +12,13 @@ import (
 	"log/slog"
 	"testing"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // captureSlogWarnLines installs a JSON slog handler capturing Warn-and-above
@@ -152,7 +153,7 @@ func TestInternalGuardFromEnv_WarnLogging_TableDriven(t *testing.T) {
 				require.NotNil(t, guard, "real_with_secret: guard must not be nil")
 				ns := guard.NonceStore()
 				require.NotNil(t, ns, "real_with_secret: NonceStore must not be nil")
-				assert.NotEqual(t, auth.NonceStoreKindNoop, ns.Kind(),
+				assert.NotEqual(t, kauth.NonceStoreKindNoop, ns.Kind(),
 					"real_with_secret: NonceStore must not be noop in adapter mode real")
 			}
 		})

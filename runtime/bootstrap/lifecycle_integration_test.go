@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -68,8 +70,8 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
 		WithShutdownTimeout(testtime.D3s),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -149,7 +151,7 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 	integLn := newIntegrationListener(t)
 	b := New(
 		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, integLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(integLn)),
+		WithListener(cell.PrimaryListener, integLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(integLn)),
 		WithShutdownTimeout(testtime.D3s),
 		WithLifecycle(func(lc Lifecycle) {
 			// Hook A: succeeds; its OnStop must run during rollback.

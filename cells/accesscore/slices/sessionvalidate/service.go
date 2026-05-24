@@ -1,5 +1,5 @@
 // Package sessionvalidate implements the session-validate slice: verifies
-// access tokens and returns Claims. Implements runtime/auth.IntentTokenVerifier.
+// access tokens and returns Claims. Implements runtime/kauth.IntentTokenVerifier.
 package sessionvalidate
 
 import (
@@ -7,10 +7,11 @@ import (
 	"errors"
 	"log/slog"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -22,14 +23,14 @@ const errMsgAuthFailed = "invalid or expired authentication token"
 // dependency (session store or user repo) is temporarily unreachable.
 const errMsgServiceUnavailable = "authentication service unavailable"
 
-// Compile-time check: Service satisfies runtime/auth.IntentTokenVerifier so it
+// Compile-time check: Service satisfies runtime/kauth.IntentTokenVerifier so it
 // can be plugged into AuthMiddleware (which now demands intent-aware verifiers
 // by signature).
-var _ auth.IntentTokenVerifier = (*Service)(nil)
+var _ kauth.IntentTokenVerifier = (*Service)(nil)
 
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
-	verifier     auth.IntentTokenVerifier `gocell:"required" gocellErr:"session-validate: IntentTokenVerifier required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	verifier     kauth.IntentTokenVerifier `gocell:"required" gocellErr:"session-validate: IntentTokenVerifier required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	sessionStore session.Store
 	userRepo     ports.UserRepository `gocell:"required" gocellErr:"session-validate: UserRepository required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger       *slog.Logger
@@ -42,7 +43,7 @@ type Service struct {
 // skipped (demo / integration-test mode). If non-nil, it is used to verify
 // session liveness before accepting a token.
 func NewService(
-	verifier auth.IntentTokenVerifier,
+	verifier kauth.IntentTokenVerifier,
 	sessionStore session.Store,
 	userRepo ports.UserRepository,
 	logger *slog.Logger,
@@ -62,15 +63,15 @@ func NewService(
 // endpoint), so any expected intent other than TokenIntentAccess is rejected
 // as ErrAuthInvalidTokenIntent. Callers needing refresh-token validation must
 // use the underlying JWTVerifier directly (see sessionrefresh).
-func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected auth.TokenIntent) (auth.Claims, error) {
-	if expected != auth.TokenIntentAccess {
+func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected kauth.TokenIntent) (kauth.Claims, error) {
+	if expected != kauth.TokenIntentAccess {
 		s.logger.Warn("session-validate: unsupported intent",
 			slog.String("expected", string(expected)))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, errMsgAuthFailed)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, errMsgAuthFailed)
 	}
 	claims, err := s.verifyJWTWithIntent(ctx, tokenStr)
 	if err != nil {
-		return auth.Claims{}, err
+		return kauth.Claims{}, err
 	}
 	if s.sessionStore == nil {
 		return claims, nil
@@ -85,8 +86,8 @@ func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected au
 // (KindUnavailable) propagate unchanged so the auth middleware can surface
 // them as 503 — wrapping them as 401 here would mask outages as credential
 // failures and pollute SLO buckets (Finding #2 PR #490 second review).
-func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (auth.Claims, error) {
-	claims, err := s.verifier.VerifyIntent(ctx, tokenStr, auth.TokenIntentAccess)
+func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (kauth.Claims, error) {
+	claims, err := s.verifier.VerifyIntent(ctx, tokenStr, kauth.TokenIntentAccess)
 	if err != nil {
 		s.logger.Warn("session-validate: JWT verification failed",
 			slog.Any("error", err))
@@ -94,9 +95,9 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 		if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
 			// Verifier already classified as infra (key provider outage).
 			// Propagate so middleware emits 503; do NOT downgrade to 401.
-			return auth.Claims{}, err
+			return kauth.Claims{}, err
 		}
-		return auth.Claims{}, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
+		return kauth.Claims{}, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
 	}
 	return claims, nil
 }
@@ -139,12 +140,12 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 // (matching-epoch-but-non-active). Uniform 401 (ErrAuthInvalidToken) is
 // returned for all CanAuthenticate failures — same envelope as revoked-session
 // and epoch-mismatch paths.
-func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
+func (s *Service) enforceSessionState(ctx context.Context, claims kauth.Claims) (kauth.Claims, error) {
 	sid := claims.SessionID
 	if sid == "" {
 		s.logger.Warn("session-validate: token missing sid",
 			slog.String("subject", claims.Subject))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
 	// 1) Session row exists.
@@ -155,11 +156,11 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 				slog.String("sid", sid),
 				slog.String("subject", claims.Subject),
 				slog.Any("error", err))
-			return auth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+			return kauth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
 				errMsgServiceUnavailable, err)
 		}
 		s.logSessionLookupError(sid, claims.Subject, err)
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
 	// 2) Session-state inline check — **must run before userRepo.GetByID**.
@@ -170,7 +171,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 		s.logger.Warn("session-validate: session revoked",
 			slog.String("subject", claims.Subject),
 			slog.String("sid", sid))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
 	// 3) Defense-in-depth: confirm the live session row owner matches the JWT
@@ -184,7 +185,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("sid", sid),
 			slog.String("claim_subject", claims.Subject),
 			slog.String("session_subject", view.SubjectID))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
 	// 4) User lookup. Session is confirmed not-revoked at this point.
@@ -194,13 +195,13 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			s.logger.Error("session-validate: user repo unavailable",
 				slog.String("subject", claims.Subject),
 				slog.Any("error", err))
-			return auth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
+			return kauth.Claims{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable,
 				errMsgServiceUnavailable, err)
 		}
 		// Domain not-found: subject deleted or never existed → uniform 401.
 		s.logger.Warn("session-validate: subject not found",
 			slog.String("subject", claims.Subject))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
 	// 5) User-bound credentialauthority funnel: baseline (CanAuthenticate)
@@ -211,7 +212,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject),
 			slog.String("sid", sid),
 			slog.Any("error", assertErr))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
 	// 6) Epoch invariant: user.authz_epoch must exactly match the epoch
@@ -226,7 +227,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject),
 			slog.Int64("user_epoch", user.AuthzEpoch()),
 			slog.Int64("row_epoch", view.AuthzEpochAtIssue))
-		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return kauth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 
 	return claims, nil

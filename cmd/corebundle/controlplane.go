@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -23,7 +25,7 @@ import (
 // to project out exactly what they need.
 type internalGuard struct {
 	ring       *auth.HMACKeyRing
-	nonceStore auth.NonceStore
+	nonceStore kauth.NonceStore
 	mw         func(http.Handler) http.Handler
 }
 
@@ -33,7 +35,7 @@ func (g *internalGuard) Middleware() func(http.Handler) http.Handler { return g.
 
 // NonceStore exposes the backing replay-defense store. Startup validation
 // inspects Kind() to reject NonceStoreKindNoop in adapter mode "real".
-func (g *internalGuard) NonceStore() auth.NonceStore { return g.nonceStore }
+func (g *internalGuard) NonceStore() kauth.NonceStore { return g.nonceStore }
 
 // internalGuardFromEnv builds an internalGuard for /internal/v1/* from
 // GOCELL_SERVICE_SECRET (and optionally GOCELL_SERVICE_SECRET_PREVIOUS).
@@ -52,7 +54,7 @@ func (g *internalGuard) NonceStore() auth.NonceStore { return g.nonceStore }
 // ref: Kubernetes kube-apiserver service-account verification — require key
 // material before installing an authentication guard.
 // ref: gorilla/securecookie — replay protection defaults on, not opt-in.
-func internalGuardFromEnv(adapterMode string, store auth.NonceStore, clk clock.Clock) (*internalGuard, error) {
+func internalGuardFromEnv(adapterMode string, store kauth.NonceStore, clk clock.Clock) (*internalGuard, error) {
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
