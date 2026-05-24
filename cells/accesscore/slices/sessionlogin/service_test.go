@@ -580,7 +580,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 
 	emitter := &countingEmitter{}
 	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		testIssuer, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
@@ -649,7 +649,7 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	)
 	require.NoError(t, err)
 	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(), testIssuer,
-		slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
@@ -670,7 +670,7 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 
 	emitter := &countingEmitter{}
 	svc := mustNewService(userRepo, sessionStore, roleRepo, newTestRefreshStore(),
-		testIssuer, slog.Default(), WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		testIssuer, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)

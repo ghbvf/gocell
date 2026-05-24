@@ -43,6 +43,18 @@ type Recorder struct {
 // NewRecorder returns an empty Recorder.
 func NewRecorder() *Recorder { return &Recorder{} }
 
+// CellEmitter returns the Recorder sealed as an outbox.CellEmitter so it can be
+// passed to a cell/slice public WithEmitter Option (which accepts the sealed
+// marker, not a raw Emitter). The Recorder is still usable for assertions via
+// the original *Recorder handle — wrapping does not consume it. This is the
+// test-emitter analog of outbox.DemoCellEmitter for the asserting case; the
+// WrapEmitterForCell call is restricted to this file by archtest
+// CELL-RAW-INFRA-WRAPPER-LOCATION-01 (outboxtest is test-only infrastructure,
+// importable from production code is forbidden — see package doc).
+func (r *Recorder) CellEmitter() outbox.CellEmitter {
+	return outbox.WrapEmitterForCell(r)
+}
+
 // Emit captures entry. Always returns nil — Recorder does not simulate
 // emit-time failures; tests that need fail-injection should compose a custom
 // outbox.Emitter that wraps Recorder.

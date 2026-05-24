@@ -28,6 +28,7 @@ PR 441 review 暴露这条 archtest 仍可被多类形态绕过：
 - `persistence.CellTxManager interface { TxRunner; sealedCellTxManager() }`
 - `outbox.CellPublisher interface { Publisher; sealedCellPublisher() }`
 - `outbox.CellWriter interface { Writer; sealedCellWriter() }`
+- `outbox.CellEmitter interface { Emitter; DurabilityReporter; healthz.ProbeSet; sealedCellEmitter() }`（PR-A23 / #618 新增；额外 embed `DurabilityReporter`/`healthz.ProbeSet` 的理由见末尾 **Amendment 2026-05-25**）
 
 `sealedXxx()` 是 unexported method，使外部包无法实现 sealed interface；唯一实现是 kernel 包内 `internalCellTxManager` 等结构体，通过 `WrapForCell` / `WrapPublisherForCell` / `WrapWriterForCell` 工厂构造。
 
@@ -39,7 +40,12 @@ func WithTxManager(tx persistence.CellTxManager) Option { ... }
 func WithOutboxDeps(pub outbox.CellPublisher, w outbox.CellWriter) Option { ... }
 ```
 
-AI 写 `WithFoo(tx persistence.TxRunner) Option` 在 cell.go 中**函数声明本身合法编译**——type system 仅在 `WithFoo` 实现把 `tx` 写入 cell 的 sealed 字段（如 `c.txMgr = tx`）时才拒绝赋值（缺 sealed marker method）。声明形态本身的拦截由 D2 archtest `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` 完成（这正是 D2 是**必需**的 Medium 双重防线、不是 belt-and-suspenders 的根因——type system 单独无法穷尽所有"暴露 raw infra"的签名形态）。
+sealed marker 的 type-system 强制点是 **raw→sealed 转换表达式**，对 AI 而言分两层、而非笼统的"写 WithFoo 在 cell.go 编译期被拒"：
+
+- **第一层——定义可编译，但落字段不可表达**：AI 写 `func WithFoo(tx persistence.TxRunner) Option` 的**函数声明本身合法编译**（Go 允许形参是任意类型）。但该 option 要真正把 `tx` 落进 cell 的 sealed 字段（`c.txMgr persistence.CellTxManager`）就必须 `c.txMgr = tx`——raw `TxRunner` 缺 `sealedCellTxManager()` marker method，**这条赋值编译失败**。于是"接 raw 又能落字段"的 WithFoo 在 type system 上不可表达（要么不落字段=废 option，要么落字段=编译红）。
+- **第二层——规范形态下调用 site 被拒**：规范签名 `func WithFoo(tx persistence.CellTxManager) Option` 下，composition root 写 `accesscore.WithFoo(rawTxRunner)` 在**调用 site 因 raw→sealed 形参转换缺 marker method 而被编译拒绝**，必须先 `persistence.WrapForCell(rawTxRunner)`（wrap 调用点再被 `CELL-RAW-INFRA-WRAPPER-LOCATION-01` 限定到 composition root）。
+
+两层都不依赖 archtest（纯 type system）。但**纯签名透传形态**——如 `func WithBad(p interface{ outbox.Publisher }) Option` 这类只把 raw 透传给内部 service、不落 sealed 字段的声明——type system 无法穷尽，由 D2 archtest `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` 兜底（这正是 D2 是**必需**的 Medium 双重防线、不是 belt-and-suspenders 的根因）。
 
 D1 的 Hard 部分（type system 编译期不可达）覆盖：cell 字段类型 + composition root `accesscore.WithFoo(rawTxRunner)` 把 raw → CellTxManager 的赋值表达式。整个链条上 cells/* 不可能"持有 raw TxRunner 然后调 service.NewXxx"——cells/* 只持有 sealed CellTxManager（embed TxRunner，可直接传给 service）。wrap call site 进一步被 archtest D2 第二条规则 `CELL-RAW-INFRA-WRAPPER-LOCATION-01` 限定到 composition root。
 
@@ -152,7 +158,7 @@ B. **kernel/cell** 暴露 `DemoCellTxManager() persistence.CellTxManager` 工厂
 ## Consequences
 
 正面：
-- **Hard 主防线（type system）**：AI 提交 cell.go 公开 With\* Option 字段类型为 raw infra（`persistence.TxRunner` / `outbox.{Publisher,Writer}`）在 compile 期被拒；composition root 把 raw infra 直接传给接 sealed type 的 Option 也在 compile 期被拒。type alias 命中 `types.Unalias` 由 archtest 拦（D2），不在 type system 主防线内。
+- **Hard 主防线（type system）**：AI 提交 cell 子树公开 With\* Option 字段类型为 raw infra（`persistence.TxRunner` / `outbox.{Publisher,Writer,Emitter}`）在 compile 期被拒；composition root 把 raw infra 直接传给接 sealed type 的 Option 也在 compile 期被拒。type alias 命中 `types.Unalias` 由 archtest 拦（D2），不在 type system 主防线内。
 - **Medium 双重防线（archtest type-aware）**：inline interface embedding（`func WithBad(p interface{ outbox.Publisher })`）与 dot-import wrap call（`import . "kernel/persistence"; WrapForCell(p)`）这两类签名形态 type system 单独无法根除，由 D2 两条 archtest（`CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` + `CELL-RAW-INFRA-WRAPPER-LOCATION-01`）补足，构成必需的 Medium 双重防线（不是 dead weight）。
 - archtest 文件总行数减少：`cell_raw_deps_test.go` (~470 行) + `rawdepfixture` 删除，新增 sealed marker 实现 (`cell_marker.go` × 2) + 两条新 archtest (~250 行) + 两个 fixture 包 (~100 行)，净减少 ~120 行；语义覆盖反而更宽（type alias / inline-embed / dot-import / wrapper struct 形态）
 - ai-robust.md §载体决策原则"funnel + codegen → type system → archtest 平铺"分层落地范本：D1 走 type system Hard，D2 走 archtest Medium，分工清晰
@@ -172,11 +178,48 @@ B. **kernel/cell** 暴露 `DemoCellTxManager() persistence.CellTxManager` 工厂
 
 **AI-robust 评级影响**：减法（删除有效 enforcement → 无评级）。语义由 sealed marker Hard（字段层）+ `CELL-RAW-INFRA-PUBLIC-OPTION-PARAM-01` Medium（签名层）双重防线完整覆盖。
 
+## Amendment 2026-05-25 (PR-A23 / #618)
+
+### 变更
+
+sealed marker 集从 3 扩展为 4：新增 `outbox.CellEmitter`（embed `Emitter`），收口 cell/slice 公开 `WithEmitter` Option 的最后一个 raw infra 暴露面。全 cell 子树 **14 个** `WithEmitter`（3 cell + 8 平台 slice + 3 example slice：deviceregister / ordercreate / orderconfirm）+ 对应 `emitter` 字段从 raw `outbox.Emitter` 迁移到 `outbox.CellEmitter`，与 Amendment 2026-05-12 全子树 sealing `WithTxManager` 同构。`outbox.WrapEmitterForCell(e Emitter) CellEmitter` 是唯一构造入口。
+
+### CellEmitter 为何额外 embed DurabilityReporter + healthz.ProbeSet（与 Publisher/Writer marker 的关键差异）
+
+`internalCellEmitter struct{ Emitter }` 只 embed `Emitter` 接口 → 只 promote `Emit`。而 emitter 在下游有两个 richer-interface 断言点，被 sealed wrapper 隐藏会**静默破坏正确性**：
+
+1. `outbox.ReportDurable` / `ResolveCellEmitter` 断言 `DurabilityReporter` 决定 L2 durable 模式——wrapper 不透传 `Durable()` → 恒 `false` → durable assembly 误判。
+2. `kernel/cell.RegisterEmitterHealthProbes` 断言 `healthz.ProbeSet` 注册 `outbox_failopen_rate_<cell>` probe——wrapper 不透传 `Probes()` → DirectEmitter 的 fail-open probe 丢失。
+
+解法：把这两个接口**写进 `CellEmitter` 契约**（interface embedding），使 `internalCellEmitter` 不实现 `Durable()`/`Probes()` 就**编译不过**——forwarding 从"手写易漏的 Medium 方法"升级为"编译期强制的 Hard"。`Durable()` 委托 `outbox.ReportDurable` 单源化；`Noop()` 仍由 `SEALED-MARKER-NOOP-TRANSPARENCY-01` 守（见下，不进 interface，与 Publisher/Writer 一致）。Publisher/Writer marker 无此下游断言点，故不 embed——CellEmitter 是唯一需要的。
+
+### Wrapper-location allowlist 扩展（2 项）
+
+`CELL-RAW-INFRA-WRAPPER-LOCATION-01` allowlist 新增两处 `WrapEmitterForCell` 合法调用点（性质同已在册的 `demo_tx_runner.go`）：
+
+- `kernel/outbox/mode_resolver.go`：`ResolveCellEmitter` 把 kernel 现 build 的 `DirectEmitter`/`WriterEmitter`（WithOutboxDeps 路径）wrap 成 sealed `CellEmitter`，使 cell 统一持 `CellEmitter` 字段。其返回类型由 `(EmitterOutcome, error)` 改为 `(CellEmitter, error)`，durability 经 `emitter.Durable()` 单源查询（删 `EmitterOutcome` 平行结构在 cell 路径的使用）。
+- `kernel/outbox/outboxtest/recorder.go`：`(*Recorder).CellEmitter()` test seam——outboxtest 是禁止生产 import 的测试基建，wrap recorder 供 cell/slice 测试 builder（非 `_test.go` 的 `*coretest/builders.go` 不能直调 `WrapEmitterForCell`）。配套新增 `outbox.DemoCellEmitter()`（noop 版，mirror `DemoCellTxManager()`）。
+
+### A.7 — SEALED-MARKER-NOOP-TRANSPARENCY-01 升级 Medium → Hard
+
+`tools/archtest/sealed_marker_noop_transparency_test.go` 从手工 `sealedMarkerFiles` 文件清单改为 `RunTyped(./kernel/...)` + `pass.Pkg.Scope().Names()` 自动发现 `internalCell*` struct，断言每个有 `Noop() bool`。去掉了"新 sealed marker 文件漏登记则静默跳过"的 Soft 维护点。残留 convention：发现 keys on `internalCell` 前缀；全名无关发现（按 sealed*() marker method）是进一步 Hard 化方向，本 PR 未做。
+
+### 威胁矩阵 / Consequences 一致性
+
+本 ADR 无 §威胁矩阵（无需逐行重评）。§Consequences 正面第 1 条 raw infra 列表已同步含 `outbox.Emitter`；§D1 sealed type 列表已含 `CellEmitter`。amendment 与原文无矛盾段落（CellEmitter 是对 D1 通用模式的实例扩展，非改写）。
+
+### A.3（已 done，不在本 PR 改动）
+
+`CELL-PUBLIC-OPTION-NAMED-IFACE-EMBED-01`（`canonicalFromType` 的 `*types.Named.Underlying().(*types.Interface)` walk）此前已落地，#618 子条 A.3 随本束关闭。
+
 ## ref
 
-- `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go` — sealed marker 实现
-- `kernel/outbox/demo_tx_runner.go` — `DemoCellTxManager()` factory
+- `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go` — sealed marker 实现（含 `CellEmitter` + `internalCellEmitter` 的 Noop/Durable/Probes 透传）
+- `kernel/outbox/demo_tx_runner.go` — `DemoCellTxManager()` / `DemoCellEmitter()` factory
+- `kernel/outbox/mode_resolver.go` — `ResolveCellEmitter`（返回 sealed `CellEmitter`）
+- `kernel/outbox/outboxtest/recorder.go` — `(*Recorder).CellEmitter()` test seam
 - `tools/archtest/wrapper_location_test.go` — `CELL-RAW-INFRA-WRAPPER-LOCATION-01`
+- `tools/archtest/sealed_marker_noop_transparency_test.go` — `SEALED-MARKER-NOOP-TRANSPARENCY-01`（typed auto-discovery）
 - `tools/archtest/internal/wrapfixture/violation/violation.go` — negative fixture
 - `.claude/rules/gocell/ai-robust.md` §AI-robust 三档分级 / §载体决策原则 / §Soft → Hard 改造方向
 - 业界 ref: Go std `database/sql.Scanner` interface (sealed-by-method 范式) / Go std `internal` package + sealed interface 复合（`net/http.RoundTripper` 风格）

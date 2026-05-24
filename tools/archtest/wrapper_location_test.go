@@ -9,7 +9,7 @@
 // + examples/<demo>/run.go) or *_test.go, plus the kernel-internal resolution
 // funnel kernel/outbox/mode_resolver.go (ResolveCellEmitter wraps the
 // kernel-built DirectEmitter/WriterEmitter into a sealed CellEmitter — the
-// analogue of demo_tx_runner.go for the emitter leg). Any other
+// analog of demo_tx_runner.go for the emitter leg). Any other
 // caller — most importantly a cell package — risks recreating the bypass
 // that the sealed marker (kernel/persistence.CellTxManager,
 // kernel/outbox.CellPublisher / CellWriter / CellEmitter) eliminated.
@@ -73,7 +73,11 @@ type wrapperViolation struct {
 //   - kernel/outbox/mode_resolver.go (ResolveCellEmitter resolution funnel;
 //     wraps the kernel-built DirectEmitter/WriterEmitter into a sealed
 //     CellEmitter so cells store CellEmitter uniformly — the emitter-leg
-//     analogue of demo_tx_runner.go; cells/* never call WrapEmitterForCell)
+//     analog of demo_tx_runner.go; cells/* never call WrapEmitterForCell)
+//   - kernel/outbox/outboxtest/recorder.go (Recorder.CellEmitter test seam;
+//     outboxtest is test-only infrastructure that production code may not
+//     import, so wrapping a Recorder into a sealed CellEmitter here keeps
+//     cell/slice test builders off any direct WrapEmitterForCell call)
 //   - cells/accesscore/{mem,postgres}/bundle.go (cell-owned Bundle factories;
 //     ACCESSCORE-BUNDLE-FUNNEL-01 funnel — single sanctioned holder of the
 //     (UserRepo, RoleRepo, SetupLock, TxRunner) quadruple per backend.
@@ -94,6 +98,7 @@ func isWrapperCallerAllowed(rel string) bool {
 		"kernel/outbox/cell_marker.go",
 		"kernel/outbox/demo_tx_runner.go",
 		"kernel/outbox/mode_resolver.go",
+		"kernel/outbox/outboxtest/recorder.go",
 		"cells/accesscore/mem/bundle.go",
 		"cells/accesscore/postgres/bundle.go":
 		return true
@@ -177,7 +182,8 @@ func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
 func allowlistDescription() string {
 	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
 		"kernel/{persistence,outbox}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
-		"kernel/outbox/mode_resolver.go | cells/accesscore/{mem,postgres}/bundle.go"
+		"kernel/outbox/mode_resolver.go | kernel/outbox/outboxtest/recorder.go | " +
+		"cells/accesscore/{mem,postgres}/bundle.go"
 }
 
 // wrapperFunctionsList renders the allowed wrapper function set as a

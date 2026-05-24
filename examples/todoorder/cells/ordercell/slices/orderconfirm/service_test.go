@@ -36,11 +36,11 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 
 var _ outbox.Writer = (*recordingWriter)(nil)
 
-func mustEmitter(t testing.TB, w outbox.Writer) outbox.Emitter {
+func mustEmitter(t testing.TB, w outbox.Writer) outbox.CellEmitter {
 	t.Helper()
 	emitter, err := outbox.NewWriterEmitter(w)
 	require.NoError(t, err)
-	return emitter
+	return outbox.WrapEmitterForCell(emitter)
 }
 
 type stubTxRunner struct {
@@ -290,14 +290,14 @@ func TestNewService_NilDep(t *testing.T) {
 		{
 			name:     "nil repo",
 			repo:     nil,
-			opts:     []Option{WithEmitter(mustEmitter(t, outbox.NoopWriter{})), WithTxManager(persistence.WrapForCell(&stubTxRunner{}))},
+			opts:     []Option{WithEmitter(outbox.DemoCellEmitter()), WithTxManager(persistence.WrapForCell(&stubTxRunner{}))},
 			wantCode: errcode.ErrCellInvalidConfig,
 			wantMsg:  "repo required",
 		},
 		{
 			name:     "nil txRunner",
 			repo:     mem.NewOrderRepository(),
-			opts:     []Option{WithEmitter(mustEmitter(t, outbox.NoopWriter{}))},
+			opts:     []Option{WithEmitter(outbox.DemoCellEmitter())},
 			wantCode: errcode.ErrCellInvalidConfig,
 			wantMsg:  "TxRunner required",
 		},

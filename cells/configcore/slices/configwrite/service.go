@@ -24,7 +24,7 @@ import (
 type Option func(*Service)
 
 // WithEmitter sets the event emitter.
-func WithEmitter(e outbox.Emitter) Option {
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -47,7 +47,7 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 type Service struct {
 	repo     ports.ConfigRepository    `gocell:"required"`
 	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"configwrite: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter  outbox.Emitter
+	emitter  outbox.CellEmitter
 	logger   *slog.Logger
 	clock    clock.Clock
 }
@@ -60,7 +60,7 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Cloc
 	clock.MustHaveClock(clk, "configwrite.NewService")
 	s := &Service{
 		repo:    repo,
-		emitter: outbox.NewNoopEmitter(),
+		emitter: outbox.DemoCellEmitter(),
 		logger:  logger,
 		clock:   clk,
 	}

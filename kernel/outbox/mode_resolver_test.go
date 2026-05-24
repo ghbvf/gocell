@@ -350,7 +350,7 @@ func TestResolveCellEmitter(t *testing.T) {
 				Mode:   outbox.DurabilityDemo,
 				Logger: logger,
 			},
-			PreResolved:      nonDurableEmitter{},
+			PreResolved:      outbox.WrapEmitterForCell(nonDurableEmitter{}),
 			ConsistencyLevel: cellvocab.L2,
 		})
 		if err != nil {
@@ -376,7 +376,7 @@ func TestResolveCellEmitter(t *testing.T) {
 				Mode:   outbox.DurabilityDemo,
 				Logger: logger,
 			},
-			PreResolved:      nonDurableEmitter{},
+			PreResolved:      outbox.WrapEmitterForCell(nonDurableEmitter{}),
 			ConsistencyLevel: cellvocab.L1,
 		})
 		if err != nil {

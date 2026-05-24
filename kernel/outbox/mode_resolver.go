@@ -159,10 +159,11 @@ func isNooperDep(dep any) bool {
 // the Cell's consistency level (for the cellvocab.L2 non-durable Warn).
 type CellEmitterInputs struct {
 	EmitterConfig
-	// PreResolved is the emitter set directly via Cell.WithEmitter(e).
-	// When non-nil, ResolveCellEmitter skips ResolveEmitter and validates that
-	// durable mode requires a durable PreResolved (ReportDurable==true).
-	PreResolved Emitter
+	// PreResolved is the sealed emitter set directly via Cell.WithEmitter(e)
+	// (wrapped at the composition root via WrapEmitterForCell). When non-nil,
+	// ResolveCellEmitter skips ResolveEmitter and validates that durable mode
+	// requires a durable PreResolved (PreResolved.Durable()==true).
+	PreResolved CellEmitter
 	// ConsistencyLevel is the owning Cell's consistency level; used to decide
 	// whether the cellvocab.L2 non-durable Warn log fires.
 	ConsistencyLevel cellvocab.Level
@@ -180,37 +181,43 @@ type CellEmitterInputs struct {
 //     level is cellvocab.L2 or higher, emit a Warn explaining the degraded atomicity
 //     guarantee. The log carries cell, consistency_level, durability_mode.
 //
-// Callers read outcome.Durable from the return value for any
-// composition-root decision that depends on the resolved durability mode.
+// Returns a sealed CellEmitter: the PreResolved emitter is already sealed, and
+// the WithOutboxDeps path wraps the kernel-built emitter via WrapEmitterForCell
+// so cells store CellEmitter uniformly. Callers read the resolved durability
+// via the returned emitter's Durable() for any composition-root decision.
 //
 // ref: outbox.ResolveEmitter — the primitive this wraps.
-func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
+func ResolveCellEmitter(in CellEmitterInputs) (CellEmitter, error) {
 	hasEmitter := in.PreResolved != nil
 	hasPending := in.Publisher != nil || in.OutboxWriter != nil
 	if hasEmitter && hasPending {
-		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one",
 			errcode.WithInternal(fmt.Sprintf(internalCellPlainFmt, in.CellID)))
 	}
 
-	var outcome EmitterOutcome
+	var (
+		emitter CellEmitter
+		durable bool
+	)
 	if hasEmitter {
-		durable := ReportDurable(in.PreResolved)
+		durable = in.PreResolved.Durable()
 		if in.Mode == DurabilityDurable && !durable {
-			return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 				"WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter",
 				errcode.WithInternal(fmt.Sprintf(internalCellPlainFmt, in.CellID)))
 		}
-		outcome = EmitterOutcome{Emitter: in.PreResolved, Durable: durable}
+		emitter = in.PreResolved
 	} else {
 		resolved, err := ResolveEmitter(in.EmitterConfig)
 		if err != nil {
-			return EmitterOutcome{}, err
+			return nil, err
 		}
-		outcome = resolved
+		emitter = WrapEmitterForCell(resolved.Emitter)
+		durable = resolved.Durable
 	}
 
-	if !outcome.Durable && in.ConsistencyLevel >= cellvocab.L2 {
+	if !durable && in.ConsistencyLevel >= cellvocab.L2 {
 		logger := in.Logger
 		if logger == nil {
 			logger = slog.Default()
@@ -220,5 +227,5 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 			slog.Int("consistency_level", int(in.ConsistencyLevel)),
 			slog.String("durability_mode", in.Mode.String()))
 	}
-	return outcome, nil
+	return emitter, nil
 }

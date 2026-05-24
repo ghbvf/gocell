@@ -83,19 +83,19 @@ func withRoleRepository(r ports.RoleRepository) Option {
 	return func(c *AccessCore) { c.roleRepo = r }
 }
 
-// WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
+// WithEmitter injects a pre-composed outbox.CellEmitter directly into the Cell.
 // Preferred path for tests and for composition roots that have already built
-// an Emitter (e.g. outbox.NewNoopEmitter(), a custom wrapper, or a fake that
-// records outbox entries for assertions).
+// a CellEmitter (e.g. outbox.DemoCellEmitter(), a recorder via
+// outboxtest.Recorder.CellEmitter(), or a wrapped emitter via
+// outbox.WrapEmitterForCell).
 //
 // Mutually exclusive with WithOutboxDeps — setting both causes Init() to
 // fail fast with ErrCellInvalidConfig. Durability for L2 slice upgrades is
-// derived from outbox.ReportDurable(emitter); Emitter implementations that
-// do not expose DurabilityReporter are treated as non-durable.
+// derived from the emitter's Durable() method.
 //
 // ref: kubernetes/client-go rest.RESTClientFor — factory composes the typed
 // client; resulting struct does not retain raw config fields.
-func WithEmitter(e outbox.Emitter) Option {
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(c *AccessCore) { c.emitter = e }
 }
 
@@ -309,7 +309,7 @@ type AccessCore struct {
 	// Sealed marker types prevent any cell.go public Option from accepting
 	// raw outbox.Publisher / outbox.Writer at compile time (ADR
 	// cell-raw-infra-sealed-marker §D1).
-	emitter             outbox.Emitter
+	emitter             outbox.CellEmitter
 	pendingOutboxPub    outbox.CellPublisher
 	pendingOutboxWriter outbox.CellWriter
 

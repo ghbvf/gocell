@@ -173,7 +173,7 @@ func BuildIdentityManageService(
 		cfg.fixture.bundle.UserRepository(),
 		rawInv,
 		cfg.logger,
-		identitymanage.WithEmitter(rec),
+		identitymanage.WithEmitter(rec.CellEmitter()),
 		identitymanage.WithTxManager(cfg.fixture.TxRunner()),
 		identitymanage.WithClock(cfg.clock),
 		identitymanage.WithTokenIssuer(cfg.issuer),

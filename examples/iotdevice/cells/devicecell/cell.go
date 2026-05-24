@@ -114,7 +114,7 @@ type DeviceCell struct {
 	*cell.BaseCell
 	deviceRepo        domain.DeviceRepository
 	publisher         outbox.CellPublisher
-	emitter           outbox.Emitter // set during initInternal; retained for Probes
+	emitter           outbox.CellEmitter // set during initInternal; retained for Probes
 	cursorCodec       *query.CursorCodec
 	logger            *slog.Logger
 	metricsProvider   metrics.Provider
@@ -162,20 +162,34 @@ func NewDeviceCell(opts ...Option) *DeviceCell {
 	return c
 }
 
-// buildEmitter creates a DirectEmitter using the cell's publisher and metrics
-// provider. Falls back to metrics.NopProvider{} when no provider is injected.
-// Extracted from Init to keep Init's cognitive complexity within the ≤15 limit.
+// buildCellEmitter routes emitter construction through ResolveCellEmitter so
+// the result is a sealed CellEmitter. devicecell is L4 DeviceLatent and uses
+// a publisher-only (DirectEmitter) path in all modes — there is no outbox
+// writer or txRunner (KG-07 decision). DurabilityDemo is passed explicitly so
+// ResolveCellEmitter takes the publisher-preferred branch regardless of assembly
+// durability mode; the durable publisher guard (CheckNotNoop) is enforced by
+// the caller (initDeps) before this function is reached.
 //
-// L4 DeviceLatent: DirectPublishFailOpen is intentional — command persistence
-// succeeds independently of event publish; missed events are operational
-// follow-up, not request failures. Platform L1/L2 cells use FailClosed for
-// audit/compliance integrity. ref: ADR 202605101800 §D6 + KG-07 decision.
-func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
+// DirectPublishFailOpen is intentional — command persistence succeeds
+// independently of event publish; missed events are operational follow-up, not
+// request failures. ref: ADR 202605101800 §D6 + KG-07 decision.
+func (c *DeviceCell) buildCellEmitter() (outbox.CellEmitter, error) {
 	mp := c.metricsProvider
 	if mp == nil {
 		mp = metrics.NopProvider{}
 	}
-	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, c.clk, "devicecell", outbox.WithLogger(c.logger))
+	return outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
+			CellID:            "devicecell",
+			Mode:              outbox.DurabilityDemo,
+			Publisher:         c.publisher,
+			DirectPublishMode: outbox.DirectPublishFailOpen,
+			MetricsProvider:   mp,
+			Clock:             c.clk,
+			Logger:            c.logger,
+		},
+		ConsistencyLevel: c.ConsistencyLevel(),
+	})
 }
 
 // initInternal is the K#04 codegen escape hatch: business init that cannot
@@ -237,7 +251,7 @@ func (c *DeviceCell) initDeps(durabilityMode outbox.DurabilityMode) error {
 	if err := outbox.CheckNotNoop(durabilityMode, "devicecell", c.publisher); err != nil {
 		return err
 	}
-	builtEmitter, err := c.buildEmitter()
+	builtEmitter, err := c.buildCellEmitter()
 	if err != nil {
 		return err
 	}

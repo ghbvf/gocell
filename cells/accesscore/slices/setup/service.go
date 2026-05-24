@@ -43,8 +43,9 @@ const (
 // Option configures a Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter. Defaults to a Noop emitter.
-func WithEmitter(e outbox.Emitter) Option {
+// WithEmitter sets the event emitter. Accepts a sealed outbox.CellEmitter;
+// typed-nil inputs are silently ignored (builder-option semantics).
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -105,7 +106,7 @@ type Service struct {
 	provisioner *adminprovision.Provisioner `gocell:"required" gocellErr:"setup: provisioner is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger      *slog.Logger                `gocell:"required" gocellErr:"setup: logger is required"`
 	txRunner    persistence.CellTxManager   `gocell:"required" gocellErr:"setup: TxRunner required; use WithTxManager"`
-	emitter     outbox.Emitter
+	emitter     outbox.CellEmitter
 	// setupLock is the REQUIRED serialization primitive for the admin-provisioning
 	// path. CreateAdmin acquires it inside RunInTx before calling
 	// provisioner.Ensure. PG mode uses pg_advisory_xact_lock (cross-pod);
@@ -126,7 +127,7 @@ type Service struct {
 func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
 		provisioner: provisioner,
-		emitter:     outbox.NewNoopEmitter(),
+		emitter:     outbox.DemoCellEmitter(),
 		logger:      logger,
 		hasher:      credential.NewProductionHasher(),
 	}

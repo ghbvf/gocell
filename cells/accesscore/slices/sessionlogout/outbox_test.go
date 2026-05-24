@@ -37,7 +37,7 @@ func TestService_WithEmitter(t *testing.T) {
 	store := testutil.RealSessionRepo(t)
 	ow := &stubOutboxWriter{}
 	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))),
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	seedSession(store, "sess-1", "usr-1")
@@ -64,7 +64,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
 	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(tx)))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(tx)))
 
 	seedSession(store, "sess-1", "usr-1")
 

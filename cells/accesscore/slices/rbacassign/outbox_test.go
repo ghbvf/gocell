@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 
 	"github.com/stretchr/testify/assert"
@@ -60,7 +61,7 @@ func newDurableTestService(t testing.TB, ow *testutil.RecordingWriter, tx *stubT
 	})
 	sessionStore := &trackingSessionStore{Store: testutil.RealSessionRepo(t)}
 	svc := mustNewService(t, store.RoleRepository(), store.UserRepository(), sessionStore, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))),
 		WithTxManager(persistence.WrapForCell(tx)),
 	)
 	return svc, store, sessionStore

@@ -65,18 +65,17 @@ func WithLedgerStore(s ledger.Store) Option {
 	}
 }
 
-// WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
+// WithEmitter injects a pre-composed outbox.CellEmitter directly into the Cell.
 // Preferred path for tests and for composition roots that have already built
 // an Emitter.
 //
 // Mutually exclusive with WithOutboxDeps — setting both causes Init() to
 // fail fast with ErrCellInvalidConfig. Durability for L2 slice decisions is
-// derived from outbox.ReportDurable(emitter); emitters that do not implement
-// DurabilityReporter are treated as non-durable.
+// derived from the injected emitter's Durable() method (DurabilityReporter).
 //
 // ref: kubernetes/client-go rest.RESTClientFor — factory composes the typed
 // client; resulting struct does not retain raw config fields.
-func WithEmitter(e outbox.Emitter) Option {
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(c *AuditCore) { c.emitter = e }
 }
 
@@ -149,7 +148,7 @@ type AuditCore struct {
 	// types prevent any cell.go public Option from accepting raw
 	// outbox.Publisher / outbox.Writer at compile time (ADR
 	// cell-raw-infra-sealed-marker §D1).
-	emitter             outbox.Emitter
+	emitter             outbox.CellEmitter
 	pendingOutboxPub    outbox.CellPublisher
 	pendingOutboxWriter outbox.CellWriter
 
@@ -331,7 +330,7 @@ func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
 // per-entry via outbox.Entry.FailurePolicy, and archtest
 // OUTBOX-TOPIC-FAILOPEN-01 bans it for audit.* topics.
 func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
-	outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "auditcore",
 			Mode:              mode,
@@ -349,7 +348,7 @@ func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
 	if err != nil {
 		return err
 	}
-	c.emitter = outcome.Emitter
+	c.emitter = resolved
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
 	return nil

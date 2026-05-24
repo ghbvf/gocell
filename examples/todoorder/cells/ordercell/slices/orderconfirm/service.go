@@ -47,8 +47,9 @@ func toStatusChangedEvent(id, oldStatus, newStatus string, changedAt time.Time) 
 // Option configures the order-confirm Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter.
-func WithEmitter(e outbox.Emitter) Option {
+// WithEmitter sets the event emitter. Accepts outbox.CellEmitter (sealed
+// marker); callers in _test.go may use outbox.WrapEmitterForCell(e).
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -69,7 +70,7 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 type Service struct {
 	repo     domain.OrderRepository    `gocell:"required"`
 	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"orderconfirm: TxRunner required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter  outbox.Emitter
+	emitter  outbox.CellEmitter
 	logger   *slog.Logger
 }
 
@@ -78,7 +79,7 @@ type Service struct {
 func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
 		repo:    repo,
-		emitter: outbox.NewNoopEmitter(),
+		emitter: outbox.DemoCellEmitter(),
 		logger:  logger,
 	}
 	for _, o := range opts {

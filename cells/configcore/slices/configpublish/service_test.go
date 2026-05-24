@@ -63,7 +63,8 @@ func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *test
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	return svc, repo, writer
 }
@@ -195,7 +196,7 @@ func TestService_Publish_PublisherError_Propagates(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker unavailable")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default())),
+		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default()))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
@@ -211,7 +212,8 @@ func TestService_Publish_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	mustSeedEntry(repo, "app.name", "value")
 
@@ -224,13 +226,15 @@ func TestService_Rollback_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	mustSeedEntry(repo, "app.name", "v1")
 	// Publish first (use a working writer), then swap to failing writer for rollback.
 	goodWriter := &testutil.RecordingWriter{}
 	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	_, err = svcGood.Publish(adminSvcCtx(), "app.name")
 	require.NoError(t, err)
@@ -259,7 +263,7 @@ func TestPublishVersion_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(tx)))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	mustSeedEntry(repo, "app.name", "value")
@@ -383,7 +387,7 @@ func TestService_Publish_FailClosed_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default())),
+		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default()))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
@@ -405,7 +409,7 @@ func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
 	svc, err := NewService(repo, logger, clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen, logger)),
+		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen, logger))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
@@ -424,7 +428,7 @@ func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default())),
+		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default()))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
@@ -451,7 +455,7 @@ func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
 	svc, err := NewService(repo, logger, clock.Real(),
-		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen, logger)),
+		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen, logger))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 

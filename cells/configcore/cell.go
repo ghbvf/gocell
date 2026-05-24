@@ -47,7 +47,7 @@ func WithFlagRepository(r ports.FlagRepository) Option {
 	return func(c *ConfigCore) { c.flagRepo = r }
 }
 
-// WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
+// WithEmitter injects a pre-composed outbox.CellEmitter directly into the Cell.
 // Preferred path for tests and for composition roots that have already built
 // an Emitter.
 //
@@ -58,7 +58,7 @@ func WithFlagRepository(r ports.FlagRepository) Option {
 //
 // ref: kubernetes/client-go rest.RESTClientFor — factory composes the typed
 // client; resulting struct does not retain raw config fields.
-func WithEmitter(e outbox.Emitter) Option {
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(c *ConfigCore) { c.emitter = e }
 }
 
@@ -184,7 +184,7 @@ type ConfigCore struct {
 	// mutually exclusive paths). Sealed marker types prevent any cell.go
 	// public Option from accepting raw outbox.Publisher / outbox.Writer at
 	// compile time (ADR cell-raw-infra-sealed-marker §D1).
-	emitter             outbox.Emitter
+	emitter             outbox.CellEmitter
 	pendingOutboxPub    outbox.CellPublisher
 	pendingOutboxWriter outbox.CellWriter
 

@@ -78,7 +78,7 @@ func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTra
 
 	svc, err := NewService(
 		repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, outboxWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
@@ -234,7 +234,7 @@ func TestL2Atomicity_configpublish_RollsBack(t *testing.T) {
 	}
 	svcFail, err := NewService(
 		bundle.repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(bundle.txMgr)),
 	)
 	require.NoError(t, err)
@@ -297,7 +297,7 @@ func TestL2Atomicity_configpublish_RollsBack_Publish(t *testing.T) {
 	}
 	svcFail, err := NewService(
 		bundle.repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(bundle.txMgr)),
 	)
 	require.NoError(t, err)

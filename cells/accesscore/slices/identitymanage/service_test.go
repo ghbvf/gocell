@@ -1286,7 +1286,7 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionRepo, refreshStore), slog.Default(),
-		WithEmitter(emitter), WithTokenIssuer(&stubTokenIssuer{}), WithClock(clock.Real()),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTokenIssuer(&stubTokenIssuer{}), WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 
@@ -1694,7 +1694,7 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 
 	sessionStore := testutil.RealSessionRepo(t)
 	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, failRefresh), logger,
-		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 
@@ -1738,7 +1738,8 @@ func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 	emitSessionStore := testutil.RealSessionRepo(t)
 	emitRefreshStore := newIdentityRefreshStore()
 	svc2, err := NewService(emitUserRepo, newInvalidator(t, emitUserRepo, emitSessionStore, emitRefreshStore), slog.Default(),
-		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(cap)), WithTokenIssuer(minimalStubIssuer),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 	// Create user in svc2's own repo.
 	user2, err := svc2.Create(adminCtxForService(), CreateInput{Username: user.Username + "2", Email: "lp2@e.t", Password: "hash"})
@@ -1766,7 +1767,8 @@ func TestService_Update_EmitsTypedPayload(t *testing.T) {
 	updateSessionStore := testutil.RealSessionRepo(t)
 	updateRefreshStore := newIdentityRefreshStore()
 	svc, err := NewService(updateUserRepo, newInvalidator(t, updateUserRepo, updateSessionStore, updateRefreshStore), slog.Default(),
-		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(cap)), WithTokenIssuer(minimalStubIssuer),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "upd-payload", Email: "up@e.t", Password: "hash"})
@@ -1794,7 +1796,8 @@ func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 	delSessionStore := testutil.RealSessionRepo(t)
 	delRefreshStore := newIdentityRefreshStore()
 	svc, err := NewService(delUserRepo, newInvalidator(t, delUserRepo, delSessionStore, delRefreshStore), slog.Default(),
-		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(cap)), WithTokenIssuer(minimalStubIssuer),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "del-payload", Email: "dp@e.t", Password: "hash"})
@@ -1820,7 +1823,8 @@ func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
 	unlockSessionStore := testutil.RealSessionRepo(t)
 	unlockRefreshStore := newIdentityRefreshStore()
 	svc, err := NewService(unlockUserRepo, newInvalidator(t, unlockUserRepo, unlockSessionStore, unlockRefreshStore), slog.Default(),
-		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(cap)), WithTokenIssuer(minimalStubIssuer),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "unl-payload", Email: "ulp@e.t", Password: "hash"})
@@ -1959,7 +1963,7 @@ func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 	pubSessionStore := testutil.RealSessionRepo(t)
 	pubRefreshStore := newIdentityRefreshStore()
 	svc, err := NewService(userRepo, newInvalidator(t, userRepo, pubSessionStore, pubRefreshStore), logger,
-		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 

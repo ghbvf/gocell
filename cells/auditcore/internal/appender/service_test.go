@@ -310,7 +310,7 @@ func TestService_HandleEvent_Happy(t *testing.T) {
 	require.NoError(t, err)
 	rec := &recordingEmitter{}
 	spec := newSpec(t, "auditappendsession", appender.ActorAcceptUserFallback)
-	svc := newService(t, spec, store, p, appender.WithEmitter(rec))
+	svc := newService(t, spec, store, p, appender.WithEmitter(outbox.WrapEmitterForCell(rec)))
 
 	entry := outbox.Entry{
 		ID:        "evt-happy",

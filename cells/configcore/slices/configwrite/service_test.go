@@ -46,7 +46,8 @@ func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *test
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	return svc, repo, writer
 }
@@ -206,7 +207,8 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v"})
@@ -218,14 +220,16 @@ func TestService_Update_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	goodWriter := &testutil.RecordingWriter{}
 	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	_, err = svcGood.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
 
 	failWriter := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
 	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2", ExpectedVersion: 1})
@@ -237,14 +241,16 @@ func TestService_Delete_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	goodWriter := &testutil.RecordingWriter{}
 	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	_, err = svcGood.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
 
 	failWriter := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
+		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
 	err = svc.Delete(adminSvcCtx(), "k", 1)
@@ -279,7 +285,7 @@ func TestCreate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(tx)))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v"})
@@ -295,7 +301,7 @@ func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(tx)))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	// Seed via direct repo insert (bypasses service tx counter).
@@ -317,7 +323,7 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(tx)))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	// Seed via direct repo insert (bypasses service tx counter).
@@ -343,7 +349,7 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
 	entry, err := svc.Create(adminSvcCtx(), CreateInput{Key: "pub-err", Value: "v"})

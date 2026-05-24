@@ -54,3 +54,19 @@ func (DemoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 func DemoCellTxManager() persistence.CellTxManager {
 	return persistence.WrapForCell(DemoTxRunner{})
 }
+
+// DemoCellEmitter returns a sealed CellEmitter backed by NewNoopEmitter (a
+// NoopWriter-backed WriterEmitter). It is the emitter-leg analog of
+// DemoCellTxManager: composition roots and test builders that previously
+// passed a raw outbox.NewNoopEmitter() to a cell/slice WithEmitter now pass
+// DemoCellEmitter() so the public Option accepts the sealed CellEmitter.
+//
+// The wrapped emitter is non-durable (Durable()==false via NoopWriter), so a
+// durable assembly that forgets a real emitter still surfaces the error at
+// ResolveCellEmitter rather than silently losing L2 atomicity.
+//
+// The wrap call is restricted to this file by archtest
+// CELL-RAW-INFRA-WRAPPER-LOCATION-01.
+func DemoCellEmitter() CellEmitter {
+	return WrapEmitterForCell(NewNoopEmitter())
+}

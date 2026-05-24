@@ -181,7 +181,7 @@ func TestService_WithEmitter(t *testing.T) {
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
 	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
@@ -216,7 +216,7 @@ func TestService_Lock_WithOutbox(t *testing.T) {
 	lockSessionStore := testutil.RealSessionRepo(t)
 	lockRefreshStore := newIdentityRefreshStore()
 	svc, err := NewService(lockUserRepo, newInvalidator(t, lockUserRepo, lockSessionStore, lockRefreshStore), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
@@ -265,7 +265,7 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 	createSessionStore := testutil.RealSessionRepo(t)
 	createRefreshStore := newIdentityRefreshStore()
 	svc, err := NewService(createUserRepo, newInvalidator(t, createUserRepo, createSessionStore, createRefreshStore), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
@@ -283,7 +283,8 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	createRefreshStore := newIdentityRefreshStore()
 	svcCreate, err := NewService(repo, newInvalidator(t, repo, createSessionStore, createRefreshStore),
 		slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &stubOutboxWriter{})), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, &stubOutboxWriter{}))),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 	user, err := svcCreate.Create(adminCtxForService(), CreateInput{
@@ -297,7 +298,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	lockRefreshStore := newIdentityRefreshStore()
 	svcLock, err := NewService(repo, newInvalidator(t, repo, lockSessionStore, lockRefreshStore),
 		slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
