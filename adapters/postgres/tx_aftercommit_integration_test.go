@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -38,12 +39,16 @@ func TestTxManager_AfterCommitFiresAfterDurableCommit(t *testing.T) {
 	t.Run("hook_sees_durable_row", func(t *testing.T) {
 		var countAtHook int
 		err := txm.RunInTx(ctx, func(txCtx context.Context) error {
-			if _, e := pool.DB().Exec(txCtx, "INSERT INTO ac_test (name) VALUES ($1)", "durable"); e != nil {
+			// Insert through the TRANSACTION (not the raw pool): the row is
+			// uncommitted until RunInTx commits. The hook reads via pool.DB()
+			// (a separate connection) so it observes the row only if the hook
+			// fires after the durable commit — that is the ordering under test.
+			tx, ok := persistence.TxFromContext[pgx.Tx](txCtx)
+			require.True(t, ok, "tx must be in context")
+			if _, e := tx.Exec(txCtx, "INSERT INTO ac_test (name) VALUES ($1)", "durable"); e != nil {
 				return e
 			}
 			persistence.RegisterAfterCommit(txCtx, func(hookCtx context.Context) {
-				// Reads via the pool (its own connection), so it only sees the
-				// row if the tx is already committed.
 				_ = pool.DB().QueryRow(hookCtx,
 					"SELECT count(*) FROM ac_test WHERE name = $1", "durable").Scan(&countAtHook)
 			})
