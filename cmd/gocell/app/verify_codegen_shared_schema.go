@@ -36,6 +36,6 @@ func verifyCodegenSharedSchema(_ context.Context, args []string) error {
 		writeDriftFixHint("shared-schema")
 		return fmt.Errorf(driftErrorTemplate, len(drift), "shared-schema")
 	}
-	fmt.Printf("Generated shared-schema OK.\n")
+	fmt.Printf("shared-schema mirrors in sync.\n")
 	return nil
 }

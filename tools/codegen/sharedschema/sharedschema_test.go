@@ -198,9 +198,9 @@ func TestVerify(t *testing.T) {
 		if len(drifted) != 1 {
 			t.Fatalf("Verify expected 1 drifted, got %d: %v", len(drifted), drifted)
 		}
-		// The reported path should be the dest-relative path (not including root).
-		// Accept both slash styles.
-		want := filepath.Join(filepath.FromSlash(tamperedDR), filepath.FromSlash(canonicalKey))
+		// The reported path should be the dest-relative path (not including root),
+		// always in slash form (Verify returns filepath.ToSlash paths).
+		want := filepath.ToSlash(filepath.Join(filepath.FromSlash(tamperedDR), filepath.FromSlash(canonicalKey)))
 		if drifted[0] != want {
 			t.Errorf("drifted[0] = %q, want %q", drifted[0], want)
 		}
@@ -230,7 +230,8 @@ func TestVerify(t *testing.T) {
 		if len(drifted) != 1 {
 			t.Fatalf("Verify expected 1 drifted (missing file), got %d: %v", len(drifted), drifted)
 		}
-		want := filepath.Join(filepath.FromSlash(deletedDR), filepath.FromSlash(canonicalKey))
+		// Verify returns filepath.ToSlash paths; construct want in the same form.
+		want := filepath.ToSlash(filepath.Join(filepath.FromSlash(deletedDR), filepath.FromSlash(canonicalKey)))
 		if drifted[0] != want {
 			t.Errorf("drifted[0] = %q, want %q", drifted[0], want)
 		}

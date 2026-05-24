@@ -228,6 +228,9 @@ func TestWrite_Headerless(t *testing.T) {
 		// wantFileUnchanged asserts the file on disk was NOT modified after Write.
 		// Only meaningful when setup creates a file first.
 		wantFileUnchanged bool
+		// wantFileNotExist asserts the file was NOT created on disk after Write.
+		// Used for DryRun cases where no setup file exists.
+		wantFileNotExist bool
 	}{
 		{
 			name: "Headerless=true overwrites existing non-generated JSON file",
@@ -319,6 +322,21 @@ func TestWrite_Headerless(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:  "Headerless=true DryRun=true on non-existent file returns ActionWouldWrite without creating file",
+			setup: nil, // destination file intentionally absent
+			opts: func(dir, path string) codegen.WriteOptions {
+				return codegen.WriteOptions{
+					Path:       path,
+					Content:    []byte(newJSONContent),
+					RepoRoot:   dir,
+					Headerless: true,
+					DryRun:     true,
+				}
+			},
+			wantAction:       codegen.ActionWouldWrite,
+			wantFileNotExist: true,
+		},
+		{
 			name:  "Headerless=true with path escaping RepoRoot returns error",
 			setup: nil,
 			opts: func(dir, path string) codegen.WriteOptions {
@@ -377,6 +395,11 @@ func TestWrite_Headerless(t *testing.T) {
 				if !bytes.Equal(got, beforeContent) {
 					t.Errorf("Verify=true must not write file; content changed from %q to %q",
 						string(beforeContent), string(got))
+				}
+			}
+			if tc.wantFileNotExist {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Errorf("DryRun must not create file; os.Stat err = %v", err)
 				}
 			}
 		})

@@ -22,10 +22,6 @@
 //     Same gh issue #954 tracks upgrading to a
 //     typed-funnel construction pattern that seals the escape-hatch.
 //
-//   - The [codegen.Write] Headerless escape-hatch caller-allowlist is Hard
-//     (archtest SHARED-SCHEMA-MIRROR-FUNNEL-01 A2 rejects any callsite
-//     outside this package).
-//
 // # Symbols
 //
 //   - [Mirrors]   — manifest: canonical path → []destination root prefixes

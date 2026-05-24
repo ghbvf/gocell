@@ -50,6 +50,12 @@
 //     workflow job: covered by ci_pinning_test.go codegenStepNames (the step
 //     name was added there as part of this PR's TDD RED wave).
 //
+//   - ④ Headerless set via field assignment (var o codegen.WriteOptions;
+//     o.Headerless = true) rather than a composite literal: NOT caught by A2
+//     (which scans CompositeLit only). Accepted Medium-tier gap — closing it
+//     needs sealing Headerless (unexport + private ctor), tracked by gh issue
+//     #954. Documented here so the blind-spot inventory is honest.
+//
 // Carve-out:
 //
 //	A1 scans with ModuleScope, which excludes every testdata/ tree (the
@@ -103,7 +109,7 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 	// Build the allowed set:
 	//   1. The canonical file itself.
 	//   2. Each declared mirror: destRoot + "/" + canonicalRel.
-	canonicalRel := schemaCanonicalRel()
+	canonicalRel := schemaCanonicalRel(t)
 	allowed := make(map[string]bool)
 	allowed[canonicalRel] = true
 	for canonPath, destRoots := range sharedschema.Mirrors {
@@ -230,12 +236,13 @@ func TestSharedSchemaMirror_SubsetHelper_CatchesRogue(t *testing.T) {
 // sharedschema.Mirrors' key rather than hard-coded here to preserve single-
 // source semantics: if the canonical path ever moves, only sharedschema.Mirrors
 // needs updating.
-func schemaCanonicalRel() string {
+func schemaCanonicalRel(t *testing.T) string {
+	t.Helper()
 	for k := range sharedschema.Mirrors {
 		return k
 	}
-	// Fallback: Mirrors is empty (Wave 2 not yet deployed). Use the known path.
-	return "contracts/shared/errors/error-response-v1.schema.json"
+	t.Fatal("sharedschema.Mirrors is empty; cannot determine canonical path")
+	return "" // unreachable; satisfies the compiler
 }
 
 // subsetViolations returns every element of found that is NOT present in
