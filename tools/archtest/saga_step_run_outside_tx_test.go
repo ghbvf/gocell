@@ -38,8 +38,8 @@
 //	   different Go type to the callee, making A1's TypeOf check miss the call.
 //	   Mitigated by: B1 reverse self-test scans all non-test .go files in
 //	   runtime/saga/ for any TypeSpec whose underlying is a reference to saga.StepFunc.
-//	   Rated Soft (string-anchor scan); tracked for Hard upgrade via struct-tag
-//	   encoding in a later PR.
+//	   Rated Soft (string-anchor scan); tracked for Hard upgrade via typed
+//	   StepFunc alias detection in gh issue #979.
 //
 //	B2 (undocumented runtime blind spot) — A2's EachInSubtree walks the closure
 //	   literal syntactically passed to RunInTx. A pattern
@@ -48,7 +48,8 @@
 //	   would have safeRun inside wrapper, not directly in the RunInTx closure —
 //	   A2 would miss it. Mitigated by: file scope (coordinator.go only) +
 //	   Coordinator single-authority pattern means no wrapper helpers exist today.
-//	   Tracked as Medium → Hard upgrade in a new gh issue after PR-03.
+//	   A2 helper-function transitivity (safeRun callsite chase) tracked in
+//	   gh issue #980 (shared call-graph technique with SAGA-STEP-COMPENSATE-PURE-01 B1).
 //
 // ref: tools/archtest/span_setattr_redact_test.go (callsite-uniqueness pattern)
 // ref: tools/archtest/aftercommit_pure_transient_test.go (parent-node negative)

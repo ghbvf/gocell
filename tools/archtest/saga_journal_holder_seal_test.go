@@ -12,7 +12,9 @@
 // locking catches PR-04/05/06 regressions immediately. AI-robust evaluation:
 // upstream Medium (archtest A1 typed-aware scan locks holder-struct identity
 // within package), downstream N/A (field-shape invariant, not a callsite
-// invariant — no caller allowlist needed).
+// invariant — no caller allowlist needed). Upstream Hard upgrade path (seal
+// journal.Journal so non-Coordinator struct field is compile-time
+// inexpressible) tracked in gh issue #981.
 //
 // # Blind-spot reverse self-test
 //

@@ -32,9 +32,13 @@
 //     Typed AST: forbidden-call detection uses TypesInfo.TypeOf(sel.X), NOT a
 //     string match on method or type names. A function whose receiver resolves
 //     to a banned type is flagged regardless of import alias.
-//     AI-robust: Hard upstream (CompensateFunc slot identified by declared
-//     type, not name) / Hard downstream (forbidden call set identified by
-//     types.Implements + exact pkg path, not string match).
+//     AI-robust: Hard primary path (CompensateFunc slot identified by declared
+//     type, not name; forbidden call set identified by types.Implements + exact
+//     pkg path, not string match) + Medium fallback (when TypesInfo.TypeOf
+//     returns nil for a CompositeLit key value, detection falls back to the
+//     struct field name string match against sagaCompensateFieldName; this
+//     partial-Soft path is accepted under the Hard primary but tracked for
+//     removal in gh issue #980).
 //
 //   - B1 [TestSagaStepCompensatePure_BlindSpot_B1_BodyStatementCount]
 //     A CompensateFunc body may delegate to a package-private helper func
@@ -51,9 +55,10 @@
 //	     the B1 body-count discipline and the structural guarantee that
 //	     Compensate receives no tx in its context (Coordinator strips tx from
 //	     the ctx it hands to Compensate). Transitivity via call-graph
-//	     reachability is deferred — tracked for upgrade to Hard.
-//	     gh issue: package-internal helper transitivity for CompensateFunc
+//	     reachability is deferred — tracked in gh issue #980
 //	     (SAGA-STEP-COMPENSATE-PURE-01 B1 → Hard via call-graph, PR-08+).
+//	     Same call-graph technique also covers the A1 fallback path
+//	     (TypesInfo partial-fail → string-anchor) tracked under the same issue.
 //
 // Reverse self-tests:
 //

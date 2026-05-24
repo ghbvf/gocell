@@ -113,12 +113,13 @@ var readyProbeValueShape = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*_re
 // is the funnel boundary (HealthToCheckers's body does the sole string(name)
 // conversion), not a probe-authoring site.
 var readyProbeSanctionedPkgs = map[string]struct{}{
+	"adapters/oidc":     {},
 	"adapters/postgres": {},
+	"adapters/rabbitmq": {},
 	"adapters/redis":    {},
 	"adapters/s3":       {},
-	"adapters/rabbitmq": {},
 	"adapters/vault":    {},
-	"adapters/oidc":     {},
+	"runtime/saga":      {},
 	"runtime/websocket": {},
 }
 
@@ -137,6 +138,7 @@ func goldenReadyProbeNames() []string {
 		"adapters/redis.ProbeReady=redis_ready",
 		"adapters/s3.ProbeReady=s3_ready",
 		"adapters/vault.ProbeReady=vault_transit_ready",
+		"runtime/saga.ProbeCoordinatorReady=saga_coordinator_ready",
 		"runtime/websocket.ProbeReady=websocket_hub_ready",
 	}
 }

@@ -359,6 +359,8 @@ PR-10 ────────────────────────�
 |---|---|
 | 1 探索（3 并行） | (a) 复用 `tools/archtest` Hard 范本（typed function call / single sanctioned holder）；(b) 测试策略：archtest 自带反向 self-test；(c) 边界：codegen 派生 vs 业务手写的边界 |
 | 2 计划 | 新增 archtest：（i）`SAGA-CONSTRUCTOR-NIL-GUARD-01`：所有 `runtime/saga.NewXxx` 必须有 `if x == nil { return nil, err }` 顶层校验（Hard 范本第 N 条 "Service 构造模式 fail-fast on nil"）；（ii）`SAGA-STEP-COMPENSATE-PURE-01`：Compensate 函数体不能调任何 `*sql.Tx` / `pgx.*` / 写 outbox（**Compensate 必须纯反向**——D5）；（iii）`SAGA-JOURNAL-HOLDER-SEAL-01`：`runtime/saga.Coordinator` 是唯一持有 `kernel/saga/journal.Journal` 字段的 struct（single sanctioned holder）；（iv）`SAGA-CELL-LEVEL-L3-DECLARE-01`：cell.yaml `consistencyLevel: L3` ↔ 至少一个 slice `contractUsages` 含 `role: orchestrate`（governance rule） |
+
+> Note: 3 of these 4 archtests (SAGA-STEP-RUN-OUTSIDE-TX-01, SAGA-JOURNAL-HOLDER-SEAL-01, SAGA-STEP-COMPENSATE-PURE-01) were pulled forward to PR-03 (#977) since the lockable type surface materializes there. PR-08 now owns only SAGA-CONSTRUCTOR-NIL-GUARD-01 + SAGA-CELL-LEVEL-L3-DECLARE-01.
 | 3 worktree | `worktrees/067-saga-archtest` |
 | 4 TDD | 反向 self-test：故意写违反每条规则的 fixture，archtest 必须 FAIL |
 | 5 实施 | 4 个 archtest + 1 governance rule（TOPO-SAGA-L3-DECLARE） |
