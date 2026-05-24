@@ -332,9 +332,12 @@ jq -e '
 # "LLM 排计划，bash 守真实 mutation"。
 jq -r --slurpfile issues "$WORKDIR/issues.json" --arg yid "${YESTERDAY_ITERATION_ID:-}" '
   ($issues[0] | map(.number)) as $inputNums |
-  .[] | select(
-    # (a) Project item linked to an input backlog issue
-    (.content.number != null and ($inputNums | index(.content.number) != null))
+  .[] | .content.number as $cn | select(
+    # (a) Project item linked to an input backlog issue.
+    # NOTE: `index()` 内的 `.` 被解析为 index() 的输入（即 $inputNums 数组），
+    # 不是外层 item；必须先把 .content.number 绑到 $cn，否则 jq 会去做
+    # `$inputNums.content.number`，触发 "Cannot index array with string content"
+    ($cn != null and ($inputNums | index($cn)) != null)
     or
     # (b) carry-over: yesterday iter + OPEN + not Done
     ($yid != "" and .iter.iterationId == $yid
