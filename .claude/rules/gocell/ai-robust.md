@@ -50,17 +50,15 @@
 - 名字 convention → sealed interface / receiver type 识别
 - hand-crafted fixture → real source AST capture
 
-**Hard 范本目录**（形态原则；选错形态即非 Hard。落地实例在对应 archtest package godoc，本表不复制）：
+**Hard 范本目录（封闭集）**——下列是达到 Hard 的机制形态范本，**不是已落地 funnel 的登记表**。新建一个落入现有范本的 funnel **不在此新增条目**：它的符号清单 / archtest ID / ADR ref 活在该 archtest 的 package godoc（对齐本文件开头自述"落地实例与符号清单活在代码 godoc，规则文件不复制也不指向"）。仅当出现现有范本都描述不了的**全新 Go 级机制形态**才扩本目录，新条目必须是抽象形态描述，**禁止以单个 deployment 命名**——按落地物命名（"JSON-wire-decode" / "metrics instrument" / "service required deps" 这类）会把本表退化成登记表，一律收编回所属范本。
 
 - **typed function choice** — 一个 API 承担多语义时拆成多个 typed function，使"选错语义 = 选错 API 名"成为编译期或 fixture 可检测层级，而非埋在参数里的运行时分支。
-- **typed marker funnel for unbounded ops** — `any` 类型操作（panic、空接口入参）全部过单一 typed-marker 构造函数；Hard 来自 (callee, arg) form-uniqueness——任何其他形态 archtest 即失败，不存在"像但不是"的灰区。enforcement 是 archtest-bound 而非编译期，但形态唯一性已是 Go 该规则形状可达的最高档。
-- **string-typed concept funnel** — 字符串承载独立语义（rule code / error code / event topic）时：`type FooCode string` 类型化签名收口 + 值集中声明 + 构造比较点用类型信息解析实参到声明集。
+- **typed marker funnel for unbounded ops** — `any` 类型操作（panic、空接口入参、测试侧 wall-clock 轮询等）全部过单一 typed-marker 构造函数；Hard 来自 (callee, arg) form-uniqueness——任何其他形态 archtest 即失败，不存在"像但不是"的灰区。enforcement 是 archtest-bound 而非编译期，但形态唯一性已是 Go 该规则形状可达的最高档。
+- **string-typed concept funnel** — 字符串承载独立语义（rule code / error code / event topic / wire 字段）时：`type FooCode string` 类型化签名收口 + 值集中声明 + 构造比较点用类型信息解析实参到声明集。
 - **input-struct field exclusion** — framework 收口的横切字段（build tag / 加载 mode）从公开 input struct 删除，使"业务自传"在 type system 上编译不可表达。只锁字面量值不锁 callee 是反模式（同 PR 新 const 即新绕过路径），必须 (callee resolve 到 loader 集) AND (arg 求值到禁止值集) 双锁，并同 PR 补 meta-archtest 锁 façade 旁路，否则只是 funnel 内 Hard / funnel 外 Soft。
 - **single sanctioned holder** — 仅一个 struct 可持有某 raw 基建字段时，用类型信息解析字段类型 + 断言宿主 struct 名 = 唯一许可名，无需 hand-maintained allowlist。包级可见性使包内绕过不可阻挡（上游 Medium）；闭环上游需 seal interface + 私有构造使包外不可表达跳过。
-- **JSON-wire-decode struct sealing** — wire envelope 通过 encoding/json 解码时，把 envelope 结构体 unexport，公开 `Marshal/Unmarshal` 签名只过领域类型 / `[]byte`，使包外构造或 unmarshal-target 至 envelope 类型在编译期不可表达（Hard 上游）；下游字段类型化复用 string-typed concept funnel。**任意名 re-export（alias / 同字段集 re-shape）是闭环必查点**——exact-name lookup 不足以拦住重新可构造路径。
-- **typed function call for test-side wall-clock polling** — 测试侧同步轮询等待收口到单一 typed entry（配 channel-blocking 的 deterministic 变体）；上游同 PR ban 第三方断言库（testify）的 `Eventually*` surface（prefix predicate + indirect-ref 全形态覆盖），下游对 (callee, arg) 做 form-uniqueness。双向 Hard（archtest-bound）。
-- **typed function funnel for metrics instrument construction** — 双环 funnel：内环把 Prometheus client / OTel meter 的同步 instrument 构造收口到 `internal/` wrap 包，Go `internal/` 闭包使外部 import 编译期不可表达（双向 Hard）；外环对 adapter-external caller 暴露 passthrough wrapper，上游用 caller-by-file allowlist（Medium——Go 无 friend-package、function 不可 seal，已登记 Hard 化路径 = caller 迁移到 kernel `metrics.Provider`），下游对 callee 做 form-uniqueness（Hard）。observable / callback 类 instrument 因无法同步收口显式排除。
-- **codegen funnel for service struct required deps** — service struct 字段 `gocell:"required"` tag 为单源 → codegen 生成 `validateRequired()` → `NewService` 在 options loop 后调用一次。上游 regenerate-and-diff 字节级锁防手改 / 漂移 / stale（Hard），下游锁 callsite 唯一性 + ban 手写 nil guard（Hard）。双向 Hard 闭环。
+- **sealed construction** — 让"包外构造该类型"在 Go 可见性层面编译不可表达：unexported envelope struct（包外不可构造、不可作 unmarshal target）或 `internal/` wrap 包（包外不可 import），公开 surface 只过领域类型 / `[]byte`。**任意名 re-export（alias / 同字段集 re-shape）是闭环必查点**——exact-name lookup 不足以拦住重新可构造路径。
+- **codegen funnel + golden** — 见 §载体决策原则 #1：schema / marker / struct tag 单源 → 派生执行体 → regenerate-and-diff 字节级锁（上游 Hard）+ callsite 唯一性 / ban 手写等价 guard（下游 Hard）。
 
 ## archtest 文件命名
 
@@ -74,12 +72,12 @@ archtest CI 入口、本地触发方式（`make verify` / `hack/verify-archtest.
 
 涉及"新增/修改约束 enforcement 机制"的 finding 必须显式给 AI-robust 评级：
 
-- **Hard**：保留，记录范本
-- **Medium**：保留；若有低成本升 Hard 的路径，开 follow-up
+- **Hard**：保留；符号清单 / archtest ID / ADR ref 写进该 archtest 的 package godoc，**不写入本文件**；仅当属现有范本描述不了的全新机制形态，才更新 §Hard 范本目录
+- **Medium**：保留；若有低成本升 Hard 的路径，用 gh issue 跟踪，入口见 `docs/backlog.md`
 - **Soft**：
   - 新引入 → 直接 reject，要求改 ≥ Medium
   - 既有 Soft 的补丁 → 优先讨论"升级到 Hard/Medium"，而非在 Soft 层打补丁
-  - 允许暂留时，必须同步登记 backlog 升级条目（不能 silent carryover）
+  - 允许暂留时，必须同步开 gh issue 跟踪升级，入口见 `docs/backlog.md`；不能 silent carryover
 
 ### Funnel 双向锁评级
 
@@ -88,7 +86,7 @@ archtest CI 入口、本地触发方式（`make verify` / `hack/verify-archtest.
 - **下游 Hard**：禁止某 method 在 funnel 外被调（caller allowlist，由 archtest 锁定调用点身份）。
 - **上游 Hard**：保证某 callsite **必然**经过 funnel——典型形态 = sealed interface + 字段私有化（包外不可表达跳过）。
 
-Soft 上游 + Hard 下游不算闭环 funnel，按 Soft 处理。允许 Medium 上游（archtest caller allowlist）+ Hard 下游的过渡形态，但**必须同步登记 backlog 显式 Hard 化任务**，并在 funnel 自身的 godoc / 测试注释中点名 backlog 条目，让审查者能直接追到升级路径。
+Soft 上游 + Hard 下游不算闭环 funnel，按 Soft 处理。允许 Medium 上游（archtest caller allowlist）+ Hard 下游的过渡形态，但**必须同步开 gh issue 跟踪显式 Hard 化任务**，入口见 `docs/backlog.md`；并在 funnel 自身的 godoc / 测试注释中点名该 issue 号，让审查者能直接追到升级路径。
 
 ### ADR amendment 落地必查
 
