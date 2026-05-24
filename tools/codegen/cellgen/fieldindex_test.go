@@ -192,27 +192,22 @@ func TestBuildCellSpec_SubscribeHandlerMissingInCU(t *testing.T) {
 
 // TestBuildCellSpec_BundleSubscribesNotConsumed verifies that bundle.Subscribes
 // is no longer consumed by BuildCellSpec — subscriptions come only from slice CUs.
-// A bundle with Subscribes entries must NOT produce any subscriptions when the
-// corresponding slice CU has no subscribe entries.
+// A slice with no subscribe CUs must produce no subscriptions (single-source
+// verification: subscriptions come exclusively from slice.yaml contractUsages).
 func TestBuildCellSpec_BundleSubscribesNotConsumed(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	// Slice has no subscribe CUs.
+	// Slice has no subscribe CUs — no subscriptions should be produced.
 	slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
-	// Bundle still has a Subscribes entry (old marker-based path).
-	bundle := markergen.WireBundle{
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: "barSvc", Handler: "HandleBar", Group: "demo"},
-		},
-	}
+	bundle := markergen.WireBundle{}
 
 	spec, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
 	if len(spec.Subscriptions) != 0 {
-		t.Errorf("bundle.Subscribes should be ignored; got %d subscriptions", len(spec.Subscriptions))
+		t.Errorf("slice with no subscribe CUs should produce 0 subscriptions; got %d", len(spec.Subscriptions))
 	}
 }
 

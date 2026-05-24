@@ -140,7 +140,19 @@ func generateOneCell(
 	opts Options,
 	res *Result,
 ) error {
-	spec, err := BuildCellSpec(project, cell.ID, bundle)
+	// Build fieldIndex from cell.go so BuildCellSpec can resolve
+	// "sliceID → cell struct field name" for subscription HandlerExpr generation.
+	// When cell.go is absent the index is empty — cells without subscriptions
+	// produce no subscriptions; cells with subscribe CUs will surface a
+	// descriptive error from BuildCellSpec.
+	cellGoPath := filepath.Join(root, filepath.Dir(cell.File), "cell.go")
+	fieldIndex, idxErr := IndexCellStructFields(cellGoPath)
+	if idxErr != nil {
+		// cell.go absent is acceptable (empty index); other errors bubble up.
+		fieldIndex = nil
+	}
+
+	spec, err := BuildCellSpec(project, cell.ID, bundle, fieldIndex)
 	if err != nil {
 		return err
 	}
@@ -170,7 +182,7 @@ func generateOneCell(
 	}
 
 	for _, sid := range slicesForCellSorted(project, cell.ID) {
-		sliceSpec, err := BuildSliceSpec(project, cell.ID, sid, bundle)
+		sliceSpec, err := BuildSliceSpec(project, cell.ID, sid)
 		if err != nil {
 			return err
 		}
@@ -233,9 +245,17 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	}
 	bundle := bundles[cellID]
 
+	// Build fieldIndex from cell.go so BuildCellSpec can resolve
+	// "sliceID → cell struct field name" for subscription HandlerExpr generation.
+	cellGoPath := filepath.Join(root, filepath.Dir(cell.File), "cell.go")
+	fieldIndex, idxErr := IndexCellStructFields(cellGoPath)
+	if idxErr != nil {
+		fieldIndex = nil
+	}
+
 	var out []CellArtifact
 
-	cellSpec, err := BuildCellSpec(project, cellID, bundle)
+	cellSpec, err := BuildCellSpec(project, cellID, bundle, fieldIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +311,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	out = append(out, CellArtifact{Kind: "healthz-gen", RelPath: healthzRel, Content: healthzContent})
 
 	for _, sid := range slicesForCellSorted(project, cellID) {
-		sliceSpec, err := BuildSliceSpec(project, cellID, sid, bundle)
+		sliceSpec, err := BuildSliceSpec(project, cellID, sid)
 		if err != nil {
 			return nil, err
 		}

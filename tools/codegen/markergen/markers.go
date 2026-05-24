@@ -1,6 +1,13 @@
 // Package markergen scans cell.go marker comments (// +cell:listener,
-// // +slice:route, // +slice:subscribe) and projects them into a per-cell
-// WireBundle that drives cellgen wire generation.
+// // +slice:route) and projects them into a per-cell WireBundle that drives
+// cellgen wire generation.
+//
+// Event subscriptions are no longer sourced from cell.go markers — they are
+// read from slice.yaml contractUsages[role=subscribe] by cellgen directly
+// (subscribe single-source flip, K05 W3). The slice:subscribe marker kind is
+// removed from knownMarkers; any existing cell.go that still contains
+// // +slice:subscribe: will produce an "unknown marker" error from Merge,
+// prompting migration to slice.yaml.
 //
 // CellMeta does NOT carry Listeners — wire is single-sourced in markers,
 // projected into WireBundle, and consumed by cellgen + governance. This
@@ -9,7 +16,7 @@
 // ref: kubernetes-sigs/controller-tools pkg/markers/parse.go
 //
 //	(splitMarker formal grammar adopted; Registry/Definition abstraction NOT
-//	adopted — GoCell has a closed set of 3 marker kinds, switch dispatch
+//	adopted — GoCell has a closed set of 2 marker kinds, switch dispatch
 //	is sufficient and ~350 lines lighter than the controller-tools model)
 //
 // ref: kubernetes-sigs/controller-tools pkg/markers/collect.go
@@ -18,10 +25,11 @@
 package markergen
 
 // WireBundle aggregates per-cell wire facts derived from cell.go marker comments.
+// Subscribe entries are no longer carried here — subscriptions are derived from
+// slice.yaml contractUsages[role=subscribe] by cellgen (K05 single-source flip).
 type WireBundle struct {
-	Listeners  []ListenerSpec
-	Routes     []RouteSpec
-	Subscribes []SubscribeSpec
+	Listeners []ListenerSpec
+	Routes    []RouteSpec
 }
 
 // ListenerSpec mirrors a `// +cell:listener:ref=...,prefix=...` marker
@@ -44,17 +52,4 @@ type RouteSpec struct {
 	SubPath      string
 	Method       string
 	HandlerField string
-}
-
-// SubscribeSpec mirrors a
-// `// +slice:subscribe:slice=...,topic=...,handler=...,group=...` marker
-// declared on a service/consumer field. SliceField is auto-derived from the
-// AST field name — cellgen renders `c.<SliceField>.<Handler>` as the
-// reg.Subscribe handler expression.
-type SubscribeSpec struct {
-	Slice      string
-	Topic      string
-	Handler    string
-	Group      string
-	SliceField string
 }

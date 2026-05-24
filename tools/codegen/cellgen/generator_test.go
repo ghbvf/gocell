@@ -413,10 +413,28 @@ func TestProjectFilteredToCell_UnknownCellReturnsEmpty(t *testing.T) {
 
 // initSyntheticRepo creates a tmp directory with a minimal project layout
 // (cells/demo/) but no cell_gen.go. Used by Generate-flow tests.
+// A minimal cell.go is written so IndexCellStructFields can resolve
+// "alpha → alphaHandler" for the subscribe CU in the synthetic project.
+// A go.mod is written so readModulePath succeeds when subscriptions exist.
 func initSyntheticRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "cells", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cellGo := filepath.Join(root, "cells", "demo", "cell.go")
+	cellGoContent := `package demo
+
+// Cell struct for synthetic test — provides alphaHandler field mapping.
+type Demo struct {
+	alphaHandler *alpha.Service
+}
+`
+	if err := os.WriteFile(cellGo, []byte(cellGoContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goMod := filepath.Join(root, "go.mod")
+	if err := os.WriteFile(goMod, []byte("module github.com/ghbvf/gocell\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root

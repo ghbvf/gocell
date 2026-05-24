@@ -15,8 +15,9 @@ import (
 
 // TestBuildCellWireSummaries_NoCellGo verifies that a project where no cell
 // has a cell.go returns a non-error result. Merge produces an empty WireBundle
-// for cells without cell.go; DeriveCellWireSummaries emits one summary per
-// bundle entry with empty Listeners/Routes/Subscribes.
+// for cells without cell.go; Listeners/Routes are empty (marker-sourced).
+// Subscribes are still populated from slice.yaml contractUsages[role=subscribe]
+// (single-source flip, issue #856) — they do not require cell.go.
 func TestBuildCellWireSummaries_NoCellGo(t *testing.T) {
 	root := buildWireSummaryFixture(t)
 
@@ -28,7 +29,9 @@ func TestBuildCellWireSummaries_NoCellGo(t *testing.T) {
 	assert.Equal(t, "wirecell", summaries[0].CellID)
 	assert.Empty(t, summaries[0].Listeners)
 	assert.Empty(t, summaries[0].Routes)
-	assert.Empty(t, summaries[0].Subscribes)
+	// fixture slice.yaml has one subscribe CU: event.wire.topic.v1
+	require.Len(t, summaries[0].Subscribes, 1)
+	assert.Equal(t, "event.wire.topic.v1", summaries[0].Subscribes[0].Topic)
 }
 
 // TestBuildCellWireSummaries_WithMarkers verifies that a cell with a valid
@@ -79,26 +82,45 @@ func TestBuildCellWireSummaries_NilProject(t *testing.T) {
 }
 
 // TestBuildCellWireSummaries_TypeConversion verifies the field-by-field
-// conversion from markergen.WireBundle → metadata.CellWireSummary. The
-// listener marker is placed on the type declaration; route/subscribe markers
-// require named struct fields per the markergen grammar.
+// conversion from markergen.WireBundle + project metadata → metadata.CellWireSummary.
+// The listener marker is placed on the type declaration; route markers require
+// named struct fields per the markergen grammar. Subscribes are now derived from
+// slice.yaml contractUsages[role=subscribe] (single-source flip, issue #856).
 func TestBuildCellWireSummaries_TypeConversion(t *testing.T) {
 	root := buildWireSummaryFixture(t)
 
 	cellDir := filepath.Join(root, "cells", "wirecell")
-	// listener marker on the type; route+subscribe markers on named struct fields.
+	// listener marker on the type; route marker on a named struct field.
+	// subscribe is no longer a marker — it comes from slice.yaml contractUsages.
 	cellGoContent := `package wirecell
 
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type WireCell struct {
 	// +slice:route:slice=wireslice,subPath=/sessions,method=RegisterRoutes,listener=cell.PrimaryListener
 	CreateHandler struct{}
-
-	// +slice:subscribe:slice=wireslice,topic=my.topic.v1,handler=HandleEvent,group=cg-wirecell-event
-	EventSub struct{}
 }
 `
 	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.go"), []byte(cellGoContent), 0o600))
+
+	// Update slice.yaml to include handler and group on the subscribe CU.
+	sliceDir := filepath.Join(cellDir, "slices", "wireslice")
+	sliceYAML := `id: wireslice
+belongsToCell: wirecell
+consistencyLevel: L1
+contractUsages:
+  - contract: http.wire.api.v1
+    role: serve
+  - contract: event.wire.topic.v1
+    role: subscribe
+    handler: HandleEvent
+    group: cg-wirecell-event
+verify:
+  unit: []
+  contract: []
+allowedFiles:
+  - "*.go"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "slice.yaml"), []byte(sliceYAML), 0o600))
 
 	pm := buildWireSummaryProjectMeta(t, root)
 	summaries, err := wiresummary.BuildCellWireSummaries(root, pm)
@@ -117,9 +139,10 @@ type WireCell struct {
 	assert.Equal(t, "/sessions", s.Routes[0].SubPath)
 	assert.Equal(t, "RegisterRoutes", s.Routes[0].Method)
 
+	// Subscribes derived from slice.yaml contractUsages[role=subscribe].
 	require.Len(t, s.Subscribes, 1)
 	assert.Equal(t, "wireslice", s.Subscribes[0].Slice)
-	assert.Equal(t, "my.topic.v1", s.Subscribes[0].Topic)
+	assert.Equal(t, "event.wire.topic.v1", s.Subscribes[0].Topic)
 	assert.Equal(t, "HandleEvent", s.Subscribes[0].Handler)
 	assert.Equal(t, "cg-wirecell-event", s.Subscribes[0].Group)
 }
