@@ -242,6 +242,17 @@ func New() *MyCell {
 func (c *MyCell) initInternal(ctx context.Context, reg cell.Registrar) error {
     return nil
 }
+
+// Compile-time assertion: MyCell satisfies all four ISP sub-interfaces.
+// Forgetting a method pinpoints the missing sub-interface (e.g.,
+// "missing method Stop" surfaces as "does not implement CellLifecycle").
+// ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md §D3
+var (
+    _ cell.CellIdentity  = (*MyCell)(nil)
+    _ cell.CellLifecycle = (*MyCell)(nil)
+    _ cell.CellStatus    = (*MyCell)(nil)
+    _ cell.CellInventory = (*MyCell)(nil)
+)
 ```
 
 The `+cell:listener` / `+slice:route` markers tell `cellgen` how to emit `cell_gen.go::Init`, which calls `BaseCell.Init`, then `c.initInternal`, then registers each route group + slice. Re-run `gocell generate cell --all` after changing markers.
@@ -298,6 +309,13 @@ go build ./cmd/myapp && ./myapp
 curl http://localhost:8080/api/v1/hello
 # {"message":"hello from mycell"}
 ```
+
+### Further Reading
+
+- [`docs/guides/cell-interface-isp.md`](docs/guides/cell-interface-isp.md) — 为什么拆四个子接口（CellIdentity / CellLifecycle / CellStatus / CellInventory）
+- [`docs/guides/why-sealed-marker.md`](docs/guides/why-sealed-marker.md) — outbox / persistence 注入：sealed marker 模式
+- [`docs/architecture/202605101800-adr-cell-interface-isp-split.md`](docs/architecture/202605101800-adr-cell-interface-isp-split.md) — ADR: Cell interface ISP split
+- [`docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md`](docs/architecture/202605101900-adr-cell-raw-infra-sealed-marker.md) — ADR: Cell raw infra sealed marker
 
 ## Scaffold（K#09）
 
