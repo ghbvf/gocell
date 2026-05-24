@@ -87,6 +87,8 @@ Option 签名直接接受了 `persistence.TxRunner` / `outbox.Publisher` / `outb
 类型（或其 inline interface embedding 形态）。修法是将该 Option 参数类型改为
 对应的 sealed marker 类型。
 
+> 快速修复：见 [§三场景标准写法](#三场景标准写法)
+
 ## 三场景标准写法
 
 ### Demo 模式（in-process，无 broker / 无 DB）
@@ -106,12 +108,12 @@ cell, err := mycell.New(
         outbox.WrapPublisherForCell(outbox.DiscardPublisher{}),
         outbox.WrapWriterForCell(outbox.NoopWriter{}),
     ),
-    mycell.WithTxManager(persistence.WrapForCell(persistence.DemoTxRunner{})),
+    mycell.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 )
 ```
 
 `outbox.DiscardPublisher{}` 丢弃所有发布调用（不报错）；`outbox.NoopWriter{}` 同理。
-`persistence.DemoTxRunner{}` 提供无 DB 的事务语义（调用成功但不持久化）。
+`outbox.DemoTxRunner{}` 提供无 DB 的事务语义（调用成功但不持久化）。
 这三个类型均实现 `Noop() bool` 接口，`cell.CheckNotNoop` 在 `Init()` 时会记录
 warn 日志提示当前运行在 demo 模式——这是预期行为。
 
@@ -158,9 +160,11 @@ import (
 )
 
 func TestMyCell_Init(t *testing.T) {
-    fakePub := &outbox.FakePublisher{} // 或任意实现 outbox.Publisher 的 testdouble
+    // 测试可以用 outbox.DiscardPublisher{} / outbox.NoopWriter{} 作为最小 testdouble；
+    // 或者构造任意实现 outbox.Publisher / outbox.Writer 接口的私有类型。
+    fakePub := &outbox.DiscardPublisher{} // 实现 outbox.Publisher
     fakeWriter := outbox.NoopWriter{}
-    fakeTx := persistence.DemoTxRunner{}
+    fakeTx := outbox.DemoTxRunner{}
 
     c, err := mycell.New(
         mycell.WithOutboxDeps(
