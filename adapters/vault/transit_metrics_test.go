@@ -72,6 +72,47 @@ func TestNewTransitMetrics_DuplicateRegistrationFails(t *testing.T) {
 	}
 }
 
+// TestNewTransitMetrics_PartialRegistrationRollsBack verifies the rollback
+// branch of NewTransitMetrics: when the Nth collector (N>1) fails, every
+// previously-registered collector must be Unregister'd so the registry is
+// restored to its pre-call state. Without this, a later retry — or a second
+// caller — would see stale half-registered collectors and the registry would
+// leak the failed-call's first (N-1) collectors.
+//
+// Strategy: pre-register a counter conflicting with the 2nd collector
+// (token_renew_failure_total). NewTransitMetrics will register #1 (success),
+// fail on #2 (conflict), roll back #1. Verify by attempting to standalone-
+// register the #1 collector — if rollback worked, it succeeds; if rollback
+// is broken, the registry still holds #1 and the standalone Register fails.
+func TestNewTransitMetrics_PartialRegistrationRollsBack(t *testing.T) {
+	reg := prom.NewRegistry()
+	conflict := prom.NewCounter(prom.CounterOpts{
+		Namespace: "gocell",
+		Subsystem: "vault",
+		Name:      "token_renew_failure_total", // 2nd in NewTransitMetrics's collector slice
+		Help:      "pre-registered conflict to force NewTransitMetrics to fail at position N>1",
+	})
+	if err := reg.Register(conflict); err != nil {
+		t.Fatalf("pre-register conflict: %v", err)
+	}
+
+	if _, err := NewTransitMetrics(reg); err == nil {
+		t.Fatal("NewTransitMetrics: want error from 2nd-collector conflict, got nil")
+	}
+
+	// If rollback worked, the 1st collector (token_renew_success_total) was
+	// unregistered. Re-register it standalone — must succeed.
+	standalone := prom.NewCounter(prom.CounterOpts{
+		Namespace: "gocell",
+		Subsystem: "vault",
+		Name:      "token_renew_success_total",
+		Help:      "Number of successful Vault token renewals.",
+	})
+	if err := reg.Register(standalone); err != nil {
+		t.Fatalf("rollback failed: token_renew_success_total still registered after NewTransitMetrics rollback: %v", err)
+	}
+}
+
 func TestTransitMetrics_StoreCachedVersion_GaugeReflectsValue(t *testing.T) {
 	reg := prom.NewRegistry()
 	m, err := NewTransitMetrics(reg)

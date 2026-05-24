@@ -9,7 +9,6 @@ import (
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -27,17 +26,17 @@ type sharedMetricsDeps struct {
 	PromStack              promStack
 	ConfigEventCollector   obmetrics.ConfigEventCollector
 	EventbusCacheCollector obmetrics.EventbusCacheCollector
-	VaultTransitMetrics    *adaptervault.TransitMetrics
 }
 
-// buildSharedMetricsDeps assembles the per-process metric set. Failure here
-// is composition-root fatal (the parent caller, LoadSharedDepsFromEnv, returns
-// the error and the process exits), so no LIFO rollback is needed — every
-// constructed sub-resource holds only in-memory state (promStack wraps a
-// *prom.Registry value; collectors register on it but the registry itself has
-// no Close). The contrast with buildSharedReplayDeps is intentional: that
-// function owns a Redis client whose connection pool requires explicit close
-// on partial failure, whereas no resource here outlives the process exit.
+// buildSharedMetricsDeps assembles framework-level always-on metric collectors
+// (config events, eventbus cache). Provider-conditional metrics (vault) live
+// in dedicated lazy methods on SharedDeps (e.g. ProvideVaultTransitMetrics)
+// so deployments that don't use the corresponding backend don't pollute their
+// scrape footprint with always-zero series.
+//
+// Failure here is composition-root fatal (LoadSharedDepsFromEnv returns the
+// error and the process exits); no LIFO rollback needed because every
+// constructed sub-resource is in-memory state with no Close contract.
 func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	ps, err := buildPromStack()
 	if err != nil {
@@ -51,15 +50,10 @@ func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	if err != nil {
 		return sharedMetricsDeps{}, fmt.Errorf("build eventbus cache metrics collector: %w", err)
 	}
-	vtm, err := adaptervault.NewTransitMetrics(ps.registry)
-	if err != nil {
-		return sharedMetricsDeps{}, fmt.Errorf("build vault transit metrics: %w", err)
-	}
 	return sharedMetricsDeps{
 		PromStack:              ps,
 		ConfigEventCollector:   configEventCollector,
 		EventbusCacheCollector: eventbusCacheCollector,
-		VaultTransitMetrics:    vtm,
 	}, nil
 }
 

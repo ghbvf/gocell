@@ -1643,6 +1643,45 @@ func TestNewTransitKeyProvider_NilMetrics_Fails(t *testing.T) {
 	}
 }
 
+// TestTokenRenewalWorker_AuthHealthyStaysZeroUntilStart is the regression lock
+// for round-2 F2: the false-green window between worker construction and
+// Worker().Start being invoked must report token_auth_healthy=0. Previously
+// initTokenRenewal eagerly set the gauge to 1 when the worker was assembled,
+// producing a false-green signal during the construction-to-Start gap. The
+// transition 0→1 now happens inside tokenRenewalWorker.Start after the
+// nil-watcher check.
+//
+// We exercise tokenRenewalWorker directly (not via NewTransitKeyProvider)
+// because tying together a non-nil watcher + renewer fake without a real
+// Vault container is heavier than the invariant under test warrants.
+func TestTokenRenewalWorker_AuthHealthyStaysZeroUntilStart(t *testing.T) {
+	reg := prom.NewRegistry()
+	metrics, err := NewTransitMetrics(reg)
+	if err != nil {
+		t.Fatalf("NewTransitMetrics: %v", err)
+	}
+	w := &tokenRenewalWorker{
+		clock:          clock.Real(),
+		logger:         slog.Default(),
+		metrics:        metrics,
+		currentWatcher: newFakeTokenWatcher(),
+	}
+	// Worker fully constructed; Start NOT yet invoked.
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 0 {
+		t.Errorf("token_auth_healthy = %v before Start, want 0 "+
+			"(false-green window between construction and Start would mask missing renewal)", got)
+	}
+
+	// Once Start runs (canceled immediately so we don't actually loop),
+	// the gauge must transition to 1 inside Start, after the nil-watcher check.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so Start exits immediately after Set(1).
+	_ = w.Start(ctx)
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 1 {
+		t.Errorf("token_auth_healthy = %v after Start, want 1 (Set(1) belongs in Start, after the nil-watcher check)", got)
+	}
+}
+
 // TestNewTransitKeyProvider_NonRenewable_AuthHealthyStaysZero is the regression
 // lock for the false-green fix in #879. NewTransitMetrics defaults
 // token_auth_healthy=0; non-renewable auth (MethodToken) never starts a worker,

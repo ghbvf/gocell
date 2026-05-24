@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
@@ -184,14 +186,40 @@ type SharedDeps struct {
 	// empty when the var is unset (endpoint is disabled gracefully).
 	ProjectRoot string
 
-	// VaultTransitMetrics is the long-lived TransitMetrics set registered with PromStack.registry;
-	// shared across every TransitKeyProvider built against this SharedDeps so counters keep
-	// accumulating across re-Provide.
-	VaultTransitMetrics *adaptervault.TransitMetrics
+	// vaultTransitMetricsOnce / vaultTransitMetrics / vaultTransitMetricsErr
+	// implement lazy + once construction for vault-transit metrics.
+	// ProvideVaultTransitMetrics is the SOLE sanctioned construction path —
+	// only the vault-transit branch of buildKeyProvider calls it, so local-aes
+	// deployments never register gocell_vault_* zero-value series. Eager
+	// construction in buildSharedMetricsDeps was incorrect (would pollute
+	// local-aes scrape footprint with always-zero vault metrics).
+	vaultTransitMetricsOnce sync.Once
+	vaultTransitMetrics     *adaptervault.TransitMetrics
+	vaultTransitMetricsErr  error
 
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
+}
+
+// ProvideVaultTransitMetrics lazily constructs and registers the vault-transit
+// metric set on PromStack.registry. Idempotent across repeated calls on the
+// same SharedDeps (sync.Once). Returns the cached error on subsequent calls
+// if the first construction failed.
+//
+// Callers: only the vault-transit branch of buildKeyProvider should invoke
+// this. local-aes / passthrough providers must not call it — that's the entire
+// point of moving from eager to lazy construction.
+func (s *SharedDeps) ProvideVaultTransitMetrics() (*adaptervault.TransitMetrics, error) {
+	s.vaultTransitMetricsOnce.Do(func() {
+		m, err := adaptervault.NewTransitMetrics(s.PromStack.registry)
+		if err != nil {
+			s.vaultTransitMetricsErr = fmt.Errorf("build vault transit metrics: %w", err)
+			return
+		}
+		s.vaultTransitMetrics = m
+	})
+	return s.vaultTransitMetrics, s.vaultTransitMetricsErr
 }
 
 // SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so
@@ -279,7 +307,6 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		EventBus:               eb,
 		ConfigEventCollector:   metricsDeps.ConfigEventCollector,
 		EventbusCacheCollector: metricsDeps.EventbusCacheCollector,
-		VaultTransitMetrics:    metricsDeps.VaultTransitMetrics,
 		RedisClient:            replay.RedisClient,
 		ConsumerClaimer:        replay.ConsumerClaimer,
 		ConsumerClaimerKind:    replay.ConsumerClaimerKind,

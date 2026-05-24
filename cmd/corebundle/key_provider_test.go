@@ -118,7 +118,8 @@ func TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast(t *testing.T) {
 	vtm, err := adaptervault.NewTransitMetrics(prom.NewRegistry())
 	require.NoError(t, err, "NewTransitMetrics must succeed against a fresh registry")
 
-	kp, err := buildKeyProvider("postgres", "dev", "vault-transit", "", "", clock.Real(), vtm)
+	kp, err := buildKeyProvider("postgres", "dev", "vault-transit", "", "", clock.Real(),
+		func() (*adaptervault.TransitMetrics, error) { return vtm, nil })
 	require.Error(t, err, "vault-transit with unreachable VAULT_ADDR must fail startup")
 	assert.Nil(t, kp)
 	assert.Contains(t, err.Error(), "vault-transit",

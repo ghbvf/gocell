@@ -226,6 +226,18 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 			"vault-transit: renewal worker started with nil watcher (initTokenRenewal skipped?)")
 	}
 
+	// Transition authHealthy 0→1 here, not in initTokenRenewal: the gauge
+	// must reflect "watcher is actively running" (Start has been invoked by
+	// bootstrap.WithWorkers), not "the worker struct exists but hasn't
+	// started yet". The window between construction and Start may be tens
+	// of milliseconds in production but is meaningful for fail-closed
+	// readiness semantics. ref: kubernetes-sigs/controller-runtime
+	// pkg/manager/runnable_group.Start — readiness flips only when Start
+	// is actually invoked.
+	if w.metrics != nil {
+		w.metrics.authHealthy.Set(1)
+	}
+
 	for {
 		if w.runWatcher(ctx, watcher) {
 			return nil
@@ -1283,6 +1295,9 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context, result AuthRe
 		metrics:        p.metrics,
 		currentWatcher: &vaultLifetimeWatcherAdapter{w: raw},
 	}
-	p.metrics.authHealthy.Set(1)
+	// authHealthy is set to 1 by tokenRenewalWorker.Start when the watcher
+	// actually begins running, NOT here. Construction-time Set(1) would
+	// produce a false-green signal during the window between initTokenRenewal
+	// returning and bootstrap invoking Start.
 	return nil
 }

@@ -36,9 +36,14 @@ import (
 // ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
 // EncryptionConfig in an active storage path is a startup error, not a warning.
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
+// vaultMetricsFactory lazily provides the vault-transit metric set. Only the
+// vault-transit branch invokes it, so local-aes / no-key deployments never
+// register gocell_vault_* series. Typically wired to SharedDeps.ProvideVaultTransitMetrics.
+type vaultMetricsFactory func() (*adaptervault.TransitMetrics, error)
+
 func buildKeyProvider(
 	storageBackend, adapterMode, providerName, masterKey, prevMasterKey string, clk clock.Clock,
-	metrics *adaptervault.TransitMetrics,
+	vaultMetrics vaultMetricsFactory,
 ) (kcrypto.KeyProvider, error) {
 	if providerName == "" {
 		if storageBackend == "postgres" {
@@ -53,36 +58,54 @@ func buildKeyProvider(
 	}
 	switch providerName {
 	case "local-aes":
-		// Normalize hex to lowercase before demo-key check: hex.DecodeString is
-		// case-insensitive, so "0123ABCD..." and "0123abcd..." produce identical
-		// key material. Comparing at string level without normalization would let
-		// an uppercase variant of a known demo key slip through.
-		if err := rejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY", []byte(strings.ToLower(masterKey))); err != nil {
-			return nil, err
-		}
-		if prevMasterKey != "" {
-			if err := rejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", []byte(strings.ToLower(prevMasterKey))); err != nil {
-				return nil, err
-			}
-		}
-		kp, err := crypto.NewLocalAESKeyProviderFromKeys(masterKey, prevMasterKey)
-		if err != nil {
-			return nil, fmt.Errorf("local-aes key provider: %w", err)
-		}
-		slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
-		return kp, nil
+		return buildLocalAESKeyProvider(adapterMode, masterKey, prevMasterKey)
 	case "vault-transit":
-		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode), clk, metrics)
-		if err != nil {
-			return nil, fmt.Errorf("vault-transit key provider: %w", err)
-		}
-		slog.Info("configcore: key provider initialized", slog.String("provider", "vault-transit"))
-		return kp, nil
+		return buildVaultTransitKeyProvider(adapterMode, clk, vaultMetrics)
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown GOCELL_CONFIGCORE_KEY_PROVIDER; known values: \"local-aes\", \"vault-transit\"",
 			errcode.WithDetails(slog.String("provider", providerName)))
 	}
+}
+
+// buildLocalAESKeyProvider constructs the local-aes KeyProvider. Extracted from
+// buildKeyProvider to keep that function's cognitive complexity under the lint
+// ceiling (gocognit > 15).
+func buildLocalAESKeyProvider(adapterMode, masterKey, prevMasterKey string) (kcrypto.KeyProvider, error) {
+	// Normalize hex to lowercase before demo-key check: hex.DecodeString is
+	// case-insensitive, so "0123ABCD..." and "0123abcd..." produce identical
+	// key material. Comparing at string level without normalization would let
+	// an uppercase variant of a known demo key slip through.
+	if err := rejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY", []byte(strings.ToLower(masterKey))); err != nil {
+		return nil, err
+	}
+	if prevMasterKey != "" {
+		if err := rejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", []byte(strings.ToLower(prevMasterKey))); err != nil {
+			return nil, err
+		}
+	}
+	kp, err := crypto.NewLocalAESKeyProviderFromKeys(masterKey, prevMasterKey)
+	if err != nil {
+		return nil, fmt.Errorf("local-aes key provider: %w", err)
+	}
+	slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
+	return kp, nil
+}
+
+// buildVaultTransitKeyProvider constructs the vault-transit KeyProvider via
+// the lazy metrics factory. Extracted from buildKeyProvider for the same
+// cognitive-complexity reason.
+func buildVaultTransitKeyProvider(adapterMode string, clk clock.Clock, vaultMetrics vaultMetricsFactory) (kcrypto.KeyProvider, error) {
+	metrics, err := vaultMetrics()
+	if err != nil {
+		return nil, err
+	}
+	kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode), clk, metrics)
+	if err != nil {
+		return nil, fmt.Errorf("vault-transit key provider: %w", err)
+	}
+	slog.Info("configcore: key provider initialized", slog.String("provider", "vault-transit"))
+	return kp, nil
 }
 
 // keyProviderToTransformer wraps a KeyProvider in a ValueTransformer.

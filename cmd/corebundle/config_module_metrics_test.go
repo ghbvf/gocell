@@ -24,12 +24,11 @@ func TestConfigCoreModule_Provide_ReplacesKeyProviderMetricsOnRepeatedProvide(t 
 	shared := newValidatedSharedDeps(t, bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"})
 	ctx := context.Background()
 
-	// Populate VaultTransitMetrics on shared so the vault-transit path (if taken)
-	// and the metrics scrape below work correctly. This mirrors what
-	// buildSharedMetricsDeps does at boot.
-	vtm, err := adaptervault.NewTransitMetrics(shared.PromStack.registry)
-	require.NoError(t, err, "NewTransitMetrics must succeed against a fresh registry")
-	shared.VaultTransitMetrics = vtm
+	// Drive the lazy funnel — this is the only sanctioned construction path.
+	// In production only the vault-transit branch of buildKeyProvider invokes
+	// it; tests that need the metric set can call it directly.
+	vtm, err := shared.ProvideVaultTransitMetrics()
+	require.NoError(t, err, "ProvideVaultTransitMetrics must succeed against a fresh registry")
 
 	// First Provide — uses a plain fakeKeyProvider (no Metrics method; metrics are
 	// now owned by SharedDeps, not by the provider).
@@ -39,7 +38,7 @@ func TestConfigCoreModule_Provide_ReplacesKeyProviderMetricsOnRepeatedProvide(t 
 	require.NoError(t, err)
 
 	// Drive the cached-version atomic through the public funnel.
-	shared.VaultTransitMetrics.StoreCachedVersion(1)
+	vtm.StoreCachedVersion(1)
 	assertCachedKeyVersionFromRegistry(t, shared.PromStack.registry, 1)
 
 	// Second Provide — must not double-register any vault metric and must not
@@ -53,8 +52,12 @@ func TestConfigCoreModule_Provide_ReplacesKeyProviderMetricsOnRepeatedProvide(t 
 	// the gauge that backs it.
 	assertCachedKeyVersionFromRegistry(t, shared.PromStack.registry, 1)
 
-	// Advance to 2 to confirm the gauge is still live and writable.
-	shared.VaultTransitMetrics.StoreCachedVersion(2)
+	// Advance to 2 to confirm the gauge is still live and writable. Reuse the
+	// once-cached metric pointer (ProvideVaultTransitMetrics is idempotent).
+	vtm2, err := shared.ProvideVaultTransitMetrics()
+	require.NoError(t, err)
+	require.Same(t, vtm, vtm2, "ProvideVaultTransitMetrics must return the same pointer (sync.Once)")
+	vtm2.StoreCachedVersion(2)
 	assertCachedKeyVersionFromRegistry(t, shared.PromStack.registry, 2)
 }
 
@@ -73,12 +76,14 @@ func assertCachedKeyVersionFromRegistry(t *testing.T, registry *prom.Registry, v
 }
 
 // TestConfigCoreModule_Provide_FailsFastOnTransitMetricsRegistrationConflict
-// verifies that buildSharedMetricsDeps fails fast when a conflicting vault
-// transit metric is already registered in the Prometheus registry, rather than
-// silently succeeding with a stale collector.
+// verifies that the lazy SharedDeps.ProvideVaultTransitMetrics path surfaces a
+// registration conflict as a hard error rather than silently succeeding with a
+// stale collector.
 //
-// Since TransitMetrics are registered eagerly in buildSharedMetricsDeps (before
-// any Provide call), the conflict surface is buildSharedMetricsDeps itself.
+// TransitMetrics construction is now lazy (only the vault-transit branch of
+// buildKeyProvider invokes it via ProvideVaultTransitMetrics), so the failure
+// surface is the lazy helper itself. NewTransitMetrics is the underlying
+// constructor — exercising it directly mirrors what the lazy path delegates to.
 func TestConfigCoreModule_Provide_FailsFastOnTransitMetricsRegistrationConflict(t *testing.T) {
 	// Pre-register a collector that conflicts with one of the vault transit
 	// metrics. gocell_vault_token_renew_success_total is the first collector
@@ -92,10 +97,6 @@ func TestConfigCoreModule_Provide_FailsFastOnTransitMetricsRegistrationConflict(
 	})
 	require.NoError(t, reg.Register(conflicting), "pre-registration of conflicting metric must succeed")
 
-	// buildSharedMetricsDeps uses buildPromStack() which constructs a fresh
-	// isolated registry internally. We can't inject our pre-fouled registry into
-	// buildSharedMetricsDeps directly, so we test NewTransitMetrics directly — the
-	// same call that buildSharedMetricsDeps delegates to — against the fouled reg.
 	_, err := adaptervault.NewTransitMetrics(reg)
 	require.Error(t, err, "NewTransitMetrics must fail when a conflicting collector is already registered")
 	assert.Contains(t, err.Error(), "vault", "error must identify the vault metric domain")

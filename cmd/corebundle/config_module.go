@@ -145,7 +145,7 @@ func resolveConfigKeyProvider(override kcrypto.KeyProvider, shared *SharedDeps) 
 	kp, err := buildKeyProvider(
 		shared.Topology.StorageBackend, shared.Topology.AdapterMode,
 		providerName, masterKey, prevMasterKey, shared.Clock,
-		shared.VaultTransitMetrics,
+		shared.ProvideVaultTransitMetrics,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configcore key provider: %w", err)
