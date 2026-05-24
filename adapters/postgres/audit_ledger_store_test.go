@@ -275,18 +275,22 @@ func TestAuditLedgerStore_AdvisoryLockSerializesAppend(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestAuditLedgerStore_OutboxAtomicityFailureProof (AUDITAPPEND-L2-FAILURE-PROOF-01)
+// TestL2Atomicity_auditcore_RollsBack (AUDITAPPEND-L2-FAILURE-PROOF-01 / L2-OUTBOX-ATOMICITY-COVERAGE-01)
 // ---------------------------------------------------------------------------
 
-// TestAuditLedgerStore_OutboxAtomicityFailureProof proves that when an outbox
-// write fails inside the same transaction as store.Append, the entire
-// transaction rolls back and no audit_entries row is written.
+// TestL2Atomicity_auditcore_RollsBack proves that when an outbox write fails
+// inside the same transaction as store.Append, the entire transaction rolls
+// back and no audit_entries row is written.
+//
+// This test satisfies L2-OUTBOX-ATOMICITY-COVERAGE-01 for the auditcore
+// cell-level L2 unit (cell-level test; shared appender package covers the
+// hybrid consumer path via TestL2Atomicity_appender_{RollsBack,ReplayIdempotent}).
 //
 // Design: the test injects a "fail-injecting outbox writer" that runs inside
 // the same txRunner.RunInTx block. store.Append succeeds within the tx, then
 // the outbox writer deliberately returns an error, causing RunInTx to rollback
 // the whole transaction. We then assert audit_entries has no new rows.
-func TestAuditLedgerStore_OutboxAtomicityFailureProof(t *testing.T) {
+func TestL2Atomicity_auditcore_RollsBack(t *testing.T) {
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
