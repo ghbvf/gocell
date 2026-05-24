@@ -24,6 +24,9 @@ import (
 //   - Otherwise every node whose only key is `"$ref"` is replaced in-place by the
 //     referenced file's content, with top-level $ keys and "title" stripped so they
 //     do not pollute the embedding context.
+//   - Same-document refs (`"$ref": "#/..."`) are left UNCHANGED: they are JSON
+//     Pointers into the bundled document, which santhosh-tekuri resolves natively
+//     at compile time — they must not be treated as file paths.
 //   - $ref values that are absolute URLs (http:// / https://) or absolute file paths
 //     are rejected.
 //   - $ref values that resolve outside rootDir are rejected (path-traversal guard).
@@ -75,6 +78,16 @@ func resolveObject(rootDir, currentFile string, obj map[string]any, visited map[
 	refStr, ok := ref.(string)
 	if !ok {
 		return nil, fmt.Errorf("refbundle: $ref must be a string in %s", currentFile)
+	}
+	// Same-document JSON Pointer ($ref: "#/...") is NOT a file reference: the
+	// embedded schema is compiled by santhosh-tekuri, which resolves
+	// same-document fragments natively against the bundled root (the schema's
+	// own $defs etc. are preserved). Leave the node untouched — no file IO, no
+	// error. Only external-file refs need inlining (santhosh-tekuri cannot load
+	// them from the mem:/// base URI). ref: JSON Schema 2020-12 §"$ref" /
+	// OpenAPI components — "#..." is a fragment, not a path.
+	if strings.HasPrefix(refStr, "#") {
+		return obj, nil
 	}
 	return loadAndStripRef(rootDir, currentFile, refStr, visited)
 }

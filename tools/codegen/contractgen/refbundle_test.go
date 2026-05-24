@@ -269,6 +269,56 @@ func TestBundleSchemaRefs(t *testing.T) {
 		}
 	})
 
+	t.Run("same_document_ref_preserved", func(t *testing.T) {
+		// A same-document JSON Pointer ($ref: "#/$defs/...") is NOT a file
+		// reference — santhosh-tekuri resolves it natively against the bundled
+		// root. The bundler must leave it intact (no file IO, no error) and the
+		// $defs block must survive so the runtime validator can resolve it.
+		root := t.TempDir()
+
+		reqContent := `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "expectedVersion": { "$ref": "#/$defs/Version" }
+  },
+  "required": ["expectedVersion"],
+  "additionalProperties": false,
+  "$defs": {
+    "Version": { "type": "integer", "minimum": 1, "maximum": 99999 }
+  }
+}`
+		reqPath := filepath.Join(root, "req", "request.schema.json")
+		if err := os.MkdirAll(filepath.Dir(reqPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(reqPath, []byte(reqContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		out, err := bundleSchemaRefs(root, reqPath, []byte(reqContent))
+		if err != nil {
+			t.Fatalf("bundleSchemaRefs must not error on same-document $ref: %v", err)
+		}
+
+		// The "#/$defs/Version" ref must be preserved (not inlined, not read as a file).
+		if !strings.Contains(string(out), `"#/$defs/Version"`) {
+			t.Errorf("same-document $ref must be preserved in output, got: %s", out)
+		}
+		// The $defs block must survive for runtime resolution.
+		var doc map[string]any
+		if err := json.Unmarshal(out, &doc); err != nil {
+			t.Fatalf("output is not valid JSON: %v", err)
+		}
+		if _, ok := doc["$defs"].(map[string]any); !ok {
+			t.Errorf("$defs block must survive bundling, got: %s", out)
+		}
+		// santhosh-tekuri must compile it (same-document ref resolves at runtime).
+		if _, vErr := schemavalidate.NewValidator(out); vErr != nil {
+			t.Errorf("schema with preserved same-document $ref fails to compile: %v", vErr)
+		}
+	})
+
 	t.Run("nested_ref_inlined", func(t *testing.T) {
 		root := t.TempDir()
 

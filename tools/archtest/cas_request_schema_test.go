@@ -48,6 +48,9 @@
 //     the body walk recurses every "properties" object, not just the top level.
 //   - query param carrying inline type/minimum/maximum alongside $ref: rejected
 //     — only {$ref, required} keys are allowed on a CAS query param.
+//   - non-object expectedVersion form (boolean JSON Schema `expectedVersion: true`):
+//     detected by KEY presence (not map type-assertion) and flagged as not-a-$ref,
+//     so it cannot silently escape the funnel.
 //
 // ref: docs/architecture/202605241700-adr-contracts-shared-cas-mixin-funnel.md; gh #829.
 package archtest
@@ -110,12 +113,18 @@ func assertCASMixinShape(t *testing.T, root string) {
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: mixin %s is not valid JSON", casMixinRel)
 	assert.Equal(t, "integer", mixin.Type,
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: mixin type must be integer")
+	// Lock the canonical CAS range EXACTLY (not just minimum≥1 / maximum-present):
+	// the mixin is the single source, so a silent typo here (e.g. minimum:0 weakens
+	// the v≥1 guard, maximum:9 breaks legitimate version 10+) must fail CI. Changing
+	// the CAS range is a deliberate contract change that must update this assertion.
 	require.NotNil(t, mixin.Minimum,
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: mixin minimum must be set")
-	assert.GreaterOrEqual(t, *mixin.Minimum, 1.0,
-		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: mixin minimum must be ≥ 1")
+	assert.Equal(t, 1.0, *mixin.Minimum,
+		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: mixin minimum must be exactly 1")
 	require.NotNil(t, mixin.Maximum,
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: mixin maximum must be set")
+	assert.Equal(t, 99999.0, *mixin.Maximum,
+		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: mixin maximum must be exactly 99999")
 }
 
 // scanBodyExpectedVersionFunnel walks every request.schema.json under contracts/
@@ -196,7 +205,12 @@ func findExpectedVersionInProperties(node any) []expectedVersionHit {
 		return out
 	}
 	if props, ok := obj["properties"].(map[string]any); ok {
-		if ev, ok := props[casFieldName].(map[string]any); ok {
+		if rawEV, present := props[casFieldName]; present {
+			// Detect by KEY presence, not by map type-assertion: a non-object
+			// form (e.g. boolean schema `expectedVersion: true`) must NOT be
+			// silently skipped — it bypasses the $ref funnel otherwise. A nil
+			// field flows into checkCanonicalRefOnly as "must be a $ref".
+			ev, _ := rawEV.(map[string]any)
 			out = append(out, expectedVersionHit{field: ev, inRequired: stringInList(obj["required"], casFieldName)})
 		}
 	}
@@ -219,8 +233,15 @@ func queryExpectedVersion(t *testing.T, relPath string, raw []byte) (map[string]
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &doc),
 		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s is not valid YAML", relPath)
-	ev, ok := doc.Endpoints.HTTP.QueryParams[casFieldName].(map[string]any)
-	return ev, ok
+	// Detect by KEY presence, not map type-assertion: a non-object form must not
+	// silently escape the funnel. A nil field flows into checkCanonicalRefOnly
+	// as "must be a $ref".
+	rawEV, present := doc.Endpoints.HTTP.QueryParams[casFieldName]
+	if !present {
+		return nil, false
+	}
+	ev, _ := rawEV.(map[string]any)
+	return ev, true
 }
 
 // dirRequestSchemaHasExpectedVersion reports whether the contract dir's
@@ -406,6 +427,27 @@ func TestCASBlindSpotReverseAssertions(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("expected violation mentioning 'type', got: %v", violations)
+		}
+	})
+
+	// Blind spot 5: a non-object expectedVersion form (boolean JSON Schema
+	// `expectedVersion: true`) must NOT silently escape the funnel. The scan
+	// must detect it by key presence and flag it as not-a-$ref.
+	t.Run("non-object-expectedVersion-not-skipped", func(t *testing.T) {
+		t.Parallel()
+		doc := map[string]any{
+			"properties": map[string]any{
+				casFieldName: true, // boolean schema form — must be caught, not skipped
+			},
+			"required": []any{casFieldName},
+		}
+		hits := findExpectedVersionInProperties(doc)
+		if len(hits) != 1 {
+			t.Fatalf("expected boolean-form expectedVersion to be detected (1 hit), got %d", len(hits))
+		}
+		violations := checkCanonicalRefOnly(hits[0].field, canonical, nil)
+		if len(violations) == 0 {
+			t.Error("expected boolean-form expectedVersion to be flagged as non-$ref, got none")
 		}
 	})
 }
