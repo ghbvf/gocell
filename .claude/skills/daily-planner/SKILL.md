@@ -296,7 +296,7 @@ Project v2 #3（owner `ghbvf`）Wave 字段配置状态：
 | **Wave 字段**（single-select） | ✅ 已建 | options：Wave 1 / Wave 2 / Wave 3 / Wave 4 |
 | `Item added to project` workflow | ✅ 已开 | target Status = Backlog |
 | `Pull request merged` workflow | ✅ 已开 | target Status = Done |
-| `Pull request linked to issue` workflow | ✅ 已开 | target Status = In review（/ship 不写 In review，交此 workflow）|
+| `Pull request linked to issue` workflow | ✅ 已开 | target Status = In review（由 PR body `Closes #N` link 自动触发）|
 
 字段 ID 由阶段 0 动态查询（`gh project field-list`），不硬编。`WAVE_FIELD_ID` 为空时 apply-gate.sh fail-fast，提示 `ERROR: Wave field missing; Wave single-select field not found in Project #3; see SKILL.md §C3a`。
 

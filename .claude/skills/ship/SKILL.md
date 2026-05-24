@@ -1,7 +1,7 @@
 ---
 name: ship
 description: "全流程实施：探索→计划→worktree→TDD→实施→PR→review→/fix Cx1/Cx2→人工确认。L1(跳过探索,1 reviewer)/L2(单agent探索,1 reviewer)/L3(默认,三agent探索,按diff行数1/2/3/6 reviewer自动)"
-argument-hint: "[--level=L1|L2|L3] (<#issue-number 或任务描述> | --from-plan=<path>)"
+argument-hint: "[--level=L1|L2|L3] <#issue-number 或任务描述>"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
@@ -9,9 +9,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 默认 L3（三 agent 探索 + 详细计划 + 与用户确认 + 按 diff 行数自动 1/2/3/6 reviewer，见阶段 7）。
 
-剥离 `--level=` 和 `--from-plan=` flag 后，剩余参数匹配 `^#?[0-9]+$` 时视为 issue 号，先 `gh issue view <N> --json title,body,labels,state`（`dangerouslyDisableSandbox: true`）拉取作为任务上下文；后续阶段以 issue title/body 替代自由文本任务描述，阶段 6 PR body 追加 `Closes #<N>`。`state != "OPEN"`（CLOSED / MERGED 等）或 `gh issue view` 失败均用 AskUserQuestion 让用户裁定是否继续。
-
-**`--from-plan=<path>` 与 positional issue 号参数互斥，不能同时传。** 同时给出时用 AskUserQuestion 让用户裁定使用哪个。`--from-plan` 触发"plan-driven 模式"，见阶段 0.5。
+剥离 `--level=` flag 后，剩余参数匹配 `^#?[0-9]+$` 时视为 issue 号，先 `gh issue view <N> --json title,body,labels,state`（`dangerouslyDisableSandbox: true`）拉取作为任务上下文；后续阶段以 issue title/body 替代自由文本任务描述，阶段 6 PR body 追加 `Closes #<N>`。`state != "OPEN"`（CLOSED / MERGED 等）或 `gh issue view` 失败均用 AskUserQuestion 让用户裁定是否继续。
 
 ## 等级
 
@@ -20,109 +18,6 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 | L1 | 不探索 | 不需要 | 1-2 并行 | 1 reviewer |
 | L2 | 1 explorer | 展示给用户 | 1-2 并行 | 1 reviewer |
 | L3（默认） | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 1/2/3/6 reviewer（按 diff 行数自动，见阶段 7） |
-
----
-
-## C3a 前置：Project v2 配置（已完成）
-
-/ship 的 Status 写入依赖 Project v2（owner `ghbvf`，project number `3`）的内建 Status 字段（single-select，已存在）。Workflow 配置状态：
-- **Wave 字段**：已建好（single-select，options Wave 1/2/3/4）——daily-planner 负责写入。
-- **Status workflow**：
-  - `Item added to project` → Backlog（自动）
-  - `Pull request linked to issue`（`Closes #N`）→ In review（自动，由 PR body `Closes` link 触发）
-  - `Pull request merged` → Done（自动）
-- **/ship 在阶段 3 显式写 In progress**；In review 交 Project v2 内建 workflow，/ship 不写。
-
-详见 daily-planner SKILL.md §C3a。
-
----
-
-## 阶段 0.5：plan-driven 模式（仅 `--from-plan=<path>`）
-
-本阶段仅在传入 `--from-plan=<path>` 时执行；传入 issue 号时跳过，直接进阶段 1。
-
-> `<path>` 来自 `/daily-planner --apply` 输出的 `PLAN_PATH`（daily-planner 阶段 5 会在终端显式输出该路径）。
-
-**conflict_group 语义**：同 `conflict_group` 值的 issue 共享文件冲突，**必须串行**（同组内一次只有一个 issue 在飞，其 closing PR merge 后才起下一个）；**不同 `conflict_group` 值的 issue 可并行**（各组独立队列，横跨所有组合计 ≤4 并发）。
-
-```bash
-# 读取 plan.json（daily-planner 产出）
-PLAN_PATH="<path>"   # --from-plan 的值
-plan=$(cat "$PLAN_PATH")
-
-# 过滤：action=="set" 的条目（已知今日 target_iteration_id 由调用方确认）
-entries=$(echo "$plan" | jq '[.[] | select(.action=="set")]')
-
-# 收集所有 conflict_group，升序排列
-groups=$(echo "$entries" | jq '[.[].conflict_group] | unique | sort')
-
-# issue 完成度判定：通过 closing PR 的 merged/closed 状态判断（稳定语义键）
-# dangerouslyDisableSandbox: true（所有 gh 命令）
-is_issue_done() {
-  local n="$1"
-  # 优先：GraphQL 查 issue 的 closedByPullRequestsReferences（closing PR）
-  local result
-  result=$(gh api graphql -f query='query($owner:String!,$repo:String!,$num:Int!){
-    repository(owner:$owner,name:$repo){
-      issue(number:$num){
-        state
-        closedByPullRequestsReferences(first:5){
-          nodes{ state merged }
-        }
-      }
-    }
-  }' -f owner="ghbvf" -f repo="gocell" -F num="$n" \
-    --jq '
-      .data.repository.issue |
-      if .state == "CLOSED" then "DONE"
-      elif (.closedByPullRequestsReferences.nodes // []) | map(select(.merged==true)) | length > 0 then "DONE"
-      else "OPEN"
-      end
-    ' 2>/dev/null || echo "OPEN")
-  [[ "$result" == "DONE" ]]
-}
-
-# 幂等：对每个 conflict_group，取其"下一个未完成的 issue"（每组至多取 1 个）
-# 横跨所有组合计 ≤4 并行；起完即结束本次调用
-to_start=()
-for group_id in $(echo "$groups" | jq -r '.[]'); do
-  group_issues=$(echo "$entries" | jq -r --argjson g "$group_id" \
-    '[.[] | select(.conflict_group==$g) | .issue_number] | .[]')
-  # 检查该组是否有"在飞" PR（已创建但未 merge 的 open PR）
-  group_has_inflight=false
-  for n in $group_issues; do
-    open_pr=$(gh pr list --repo ghbvf/gocell --state open --search "closes #$n" \
-      --json number -q '.[0].number // ""' 2>/dev/null || true)
-    if [[ -n "$open_pr" ]]; then
-      group_has_inflight=true
-      echo "INFO: conflict_group $group_id 有在飞 PR #$open_pr（issue #$n），跳过本组" >&2
-      break
-    fi
-  done
-  $group_has_inflight && continue
-
-  # 本组无在飞 PR → 取第一个未完成 issue
-  for n in $group_issues; do
-    if ! is_issue_done "$n"; then
-      to_start+=("$n")
-      echo "INFO: conflict_group $group_id 下一个 issue: #$n" >&2
-      break
-    fi
-  done
-done
-
-if [[ ${#to_start[@]} -eq 0 ]]; then
-  echo "INFO: 全部 conflict_group 已完成或均有在飞 PR，无新 issue 可启动" >&2
-else
-  # 横跨各组合计 ≤4 并行；对 to_start 中每个 issue 并行起 /ship #N 流程
-  echo "INFO: 本次启动 issues: ${to_start[*]}（≤4 并行）" >&2
-  # 对每个 issue 调用 /ship #N（复用下方 issue-number 路径）
-fi
-```
-
-**幂等重跑**：每次 `/ship --from-plan=<path>` 调用，对每个"无在飞 PR 且仍有未完成 issue"的 conflict_group，启动其下一个未起 issue（每组取 1 个），横跨各组合计 ≤4 并行。人工 merge 后重跑继续推进。状态从 issue/PR 实时派生，无本地持久化。
-
-**conflict_group 契约**（plan.json 字段）：`conflict_group` 为 `int ≥ 1`，同组 issue 共享文件冲突必须串行（组内队列化），异组 issue 可并行。跨 wave 不共组。由 daily-planner agent STEP 6 派生（union-find on affected_paths），apply-gate.sh schema 校验该字段。
 
 ---
 
@@ -180,83 +75,6 @@ git worktree add worktrees/<NNN-short-name> -b <branch-name> origin/develop
 
 编号：Fix 200-299 / Feature 001-199 / Refactor 500-599，扫描 `worktrees/` + `git branch -a` 取最大 +1。
 
-### 3.1 Project v2 Status → In progress（issue/plan 模式）
-
-worktree 建好后，若本次调用携带 issue 号（单 issue 模式或 --from-plan fan-out 的单条），将对应 Project item 的 Status 写为 `In progress`。free-text /ship（无 issue 号）跳过此步骤（N/A，非降级）。
-
-**preflight**（同 daily-planner 风格，fail-fast）：
-
-```bash
-# dangerouslyDisableSandbox: true（所有 gh 命令）
-if ! AUTH_STATUS=$(gh auth status 2>&1); then
-  echo "ERROR: gh auth status failed; run: gh auth login" >&2; exit 1
-fi
-if ! grep -qiE "scopes:.*\bproject\b" <<<"$AUTH_STATUS"; then
-  echo "ERROR: token missing 'project' scope; run: gh auth refresh -s project" >&2; exit 1
-fi
-```
-
-**Status 写入流程**（**best-effort**：Status = Project v2 cosmetic lifecycle marker，不是 /ship 真实工作的硬前置。**任何失败一律 WARN 跳过、绝不 `exit`**——worktree / 实现 / PR 都不依赖 Status。这与 daily-planner Iteration 写入的 fail-closed 不同：那是 mutation 安全语义，此处只是状态标记）：
-
-```bash
-ISSUE_NUMBER=<N>  # 本次实施的 issue 号
-
-# 动态查 Project node ID + Status field ID + "In progress" option ID
-PROJECT_NODE_ID=$(gh project view 3 --owner ghbvf --format json | jq -r '.id')
-FIELD_LIST_JSON=$(gh project field-list 3 --owner ghbvf --format json)
-STATUS_FIELD_ID=$(jq -r '[.fields[] | select(.name=="Status").id] | first // ""' <<<"$FIELD_LIST_JSON")
-IN_PROGRESS_OPTION_ID=$(jq -r \
-  '[.fields[] | select(.name=="Status") | .options[] | select(.name=="In progress") | .id] | first // ""' \
-  <<<"$FIELD_LIST_JSON")
-
-# best-effort 守卫：任一前置缺失 → WARN + 跳过整个 Status 写入，/ship 继续。
-if [[ -z "$STATUS_FIELD_ID" || -z "$IN_PROGRESS_OPTION_ID" ]]; then
-  echo "WARN: Status field / 'In progress' option not found in Project #3; skipping Status write (cosmetic, /ship continues)" >&2
-else
-  # 查 issue 对应的 item id（by content number）
-  ITEM_ID=$(gh api graphql -f query='query($proj: ID!, $num: Int!) {
-    node(id: $proj) { ... on ProjectV2 {
-      items(first: 100) { nodes {
-        id
-        content { ... on Issue { number } }
-      }}
-    }}
-  }' -f proj="$PROJECT_NODE_ID" -F num="$ISSUE_NUMBER" \
-    --jq ".data.node.items.nodes[] | select(.content.number==$ISSUE_NUMBER) | .id" 2>/dev/null || true)
-
-  if [[ -z "$ITEM_ID" ]]; then
-    echo "WARN: issue #$ISSUE_NUMBER not in Project #3; skipping Status write (cosmetic, /ship continues)" >&2
-  # 查当前 Status，仅非 In review → In progress；已是 In review 不覆盖。
-  # 查询失败 → WARN + 跳过（不写优于误覆盖 In review）。
-  elif ! CURRENT_STATUS=$(gh api graphql -f query='query($id: ID!) {
-    node(id: $id) { ... on ProjectV2Item {
-      status: fieldValueByName(name:"Status") {
-        ... on ProjectV2ItemFieldSingleSelectValue { name }
-      }
-    }}
-  }' -f id="$ITEM_ID" --jq '.data.node.status.name // ""' 2>&1); then
-    echo "WARN: failed to query current Status for issue #$ISSUE_NUMBER; skipping Status write" >&2
-  elif [[ "$CURRENT_STATUS" == "In review" ]]; then
-    echo "INFO: issue #$ISSUE_NUMBER already In review; skipping Status write (In review owned by Project v2 workflow)" >&2
-  elif ! gh api graphql -f query='mutation($proj: ID!, $item: ID!, $field: ID!, $opt: String!) {
-      updateProjectV2ItemFieldValue(input: {
-        projectId: $proj, itemId: $item, fieldId: $field,
-        value: { singleSelectOptionId: $opt }
-      }) { projectV2Item { id } }
-    }' -f proj="$PROJECT_NODE_ID" -f item="$ITEM_ID" \
-       -f field="$STATUS_FIELD_ID" -f opt="$IN_PROGRESS_OPTION_ID" 2>&1; then
-    echo "WARN: failed to set Status → In progress for issue #$ISSUE_NUMBER (cosmetic, /ship continues)" >&2
-  else
-    echo "INFO: issue #$ISSUE_NUMBER Status → In progress" >&2
-  fi
-fi
-```
-
-**边界说明**：
-- `In progress` 写入仅针对 Backlog / Ready / 其他非 In review 状态；In review 不覆盖（round-2 fix / codex review 留 In review）。
-- In review 转换由 `Pull request linked to issue` 内建 workflow 负责（PR body `Closes #N` 触发）。
-- /ship 不写 In review，不写 Done（Done 由 PR merged workflow 写）。
-
 ---
 
 ## 阶段 4：TDD — 先写测试
@@ -273,12 +91,10 @@ fi
 - 哪些任务无文件交叉且无逻辑依赖 → 可并行启动 developer agent
 - 哪些任务有依赖或改同一文件 → 串行或归入同一 agent
 
-**plan-driven 模式覆盖**：通过 `--from-plan=<path>` 调用时，plan.json 的 `conflict_group` 字段**覆盖**主 agent 自身的文件重合分析——同 `conflict_group` 值的 issue 共享文件冲突、必须串行（组内队列化，一次只有一个在飞）；不同 `conflict_group` 值的 issue 可并行（各组独立队列同时推进，横跨各组合计 ≤4 并发）。非 plan-driven 模式维持原有自主分析。
-
 **硬约束**：
 - 同一文件只能分给同一 agent（防写冲突）
 - 有前置依赖的批次必须等上一批全部完成后再启动
-- 并行 developer agent 上限 **4 个**（横跨所有 conflict_group 合计不超过 4）
+- 并行 developer agent 上限 **4 个**
 
 ### 5.1 Sub-agent prompt 自包含要求
 
