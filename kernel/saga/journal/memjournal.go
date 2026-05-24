@@ -58,7 +58,7 @@ func (m *MemJournal) Enqueue(_ context.Context, instance saga.Instance) error {
 	defer m.mu.Unlock()
 
 	if _, exists := m.instances[instance.ID]; exists {
-		return errDuplicateInstance()
+		return errDuplicateInstance(instance.ID)
 	}
 	if err := instance.ValidateNew(); err != nil {
 		return err
@@ -75,12 +75,12 @@ func (m *MemJournal) Append(_ context.Context, instanceID, leaseID idutil.SafeID
 
 	row, ok := m.instances[instanceID]
 	if !ok {
-		return 0, errInstanceNotFound()
+		return 0, errInstanceNotFound(instanceID)
 	}
 
 	now := m.clock.Now()
 	if !m.fenced(row, leaseID, now) {
-		return 0, errStaleLease()
+		return 0, errStaleLease(instanceID, leaseID)
 	}
 
 	if err := event.ValidateForAppend(); err != nil {
@@ -112,7 +112,7 @@ func (m *MemJournal) Load(_ context.Context, instanceID idutil.SafeID) ([]Event,
 	defer m.mu.Unlock()
 
 	if _, ok := m.instances[instanceID]; !ok {
-		return nil, errInstanceNotFound()
+		return nil, errInstanceNotFound(instanceID)
 	}
 
 	src := m.events[instanceID]
@@ -129,16 +129,17 @@ func (m *MemJournal) Load(_ context.Context, instanceID idutil.SafeID) ([]Event,
 
 // ClaimPending implements Journal.ClaimPending.
 func (m *MemJournal) ClaimPending(_ context.Context, batchSize int, leaseDuration time.Duration) ([]ClaimedInstance, idutil.SafeID, error) {
-	now := m.clock.Now()
-
-	s, err := idutil.NewUUID()
-	if err != nil {
-		return nil, "", err
+	// Fix F: reject non-positive batchSize before taking the lock.
+	if batchSize <= 0 {
+		return nil, "", errNonPositiveBatchSize(batchSize)
 	}
-	leaseID := idutil.SafeID(s)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Fix C: read clock inside the lock so now and projection reads/writes are
+	// atomic under FakeClock concurrent Advance.
+	now := m.clock.Now()
 
 	// Collect claimable candidates: non-terminal AND (unleased OR expired lease).
 	type candidate struct {
@@ -166,7 +167,7 @@ func (m *MemJournal) ClaimPending(_ context.Context, batchSize int, leaseDuratio
 		return si.Before(sj)
 	})
 
-	if batchSize > 0 && len(candidates) > batchSize {
+	if len(candidates) > batchSize {
 		candidates = candidates[:batchSize]
 	}
 
@@ -174,12 +175,21 @@ func (m *MemJournal) ClaimPending(_ context.Context, batchSize int, leaseDuratio
 		return nil, "", nil
 	}
 
+	// Fix I: mint UUID only when there is ≥1 candidate to lease.
+	s, err := idutil.NewUUID()
+	if err != nil {
+		return nil, "", err
+	}
+	leaseID := idutil.SafeID(s)
+
 	claimed := make([]ClaimedInstance, 0, len(candidates))
 	for _, c := range candidates {
 		c.row.leaseID = leaseID
 		c.row.leaseExpiresAt = now.Add(leaseDuration)
 		claimed = append(claimed, ClaimedInstance{
-			Instance: c.row.inst, // copy of the struct value
+			// Fix B: deep-copy *time.Time pointer fields so caller mutations
+			// cannot corrupt journal projection through shared pointers.
+			Instance: cloneInstance(c.row.inst),
 			LeaseID:  leaseID,
 		})
 	}
@@ -221,12 +231,11 @@ func (m *MemJournal) MarkTerminal(_ context.Context, instanceID, leaseID idutil.
 	}
 
 	if !finalStatus.IsTerminal() {
-		return false, errInvalidTerminalStatus()
-	}
-	if err := saga.Transition(row.inst.Status, finalStatus); err != nil {
-		return false, errInvalidTerminalStatus()
+		return false, errInvalidTerminalStatus(instanceID, row.inst.Status, finalStatus)
 	}
 
+	// Fix H: remove the redundant saga.Transition call; AdvanceSaga re-validates
+	// the transition and surfaces illegal-transition errors (KindInvalid+ErrValidationFailed).
 	if err := saga.AdvanceSaga(&row.inst, finalStatus, now); err != nil {
 		return false, err
 	}
@@ -300,4 +309,19 @@ func (m *MemJournal) projectionTarget(current saga.Status, kind EventKind) (saga
 	default:
 		return 0, false
 	}
+}
+
+// cloneInstance deep-copies the pointer fields of a saga.Instance so a returned
+// projection cannot be mutated through shared *time.Time pointers.
+func cloneInstance(in saga.Instance) saga.Instance {
+	out := in
+	if in.UpdatedAt != nil {
+		t := *in.UpdatedAt
+		out.UpdatedAt = &t
+	}
+	if in.CompletedAt != nil {
+		t := *in.CompletedAt
+		out.CompletedAt = &t
+	}
+	return out
 }

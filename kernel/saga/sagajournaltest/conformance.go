@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/saga"
@@ -90,6 +89,23 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"ClaimPending_TerminalInstance_NotReturned", conformTerminalNotReclaimed},
 		// 19: RepoReady delegation.
 		{"RepoReady", conformRepoReady},
+		// Fix E: unknown-instance semantics.
+		{"Heartbeat_UnknownInstance_FalseNil", conformHeartbeatUnknownInstance},
+		{"MarkTerminal_UnknownInstance_FalseNil", conformMarkTerminalUnknownInstance},
+		{"Append_UnknownInstance_KindNotFound", conformAppendUnknownInstance},
+		// Fix B: isolated copy of ClaimedInstance.
+		{"ClaimedInstance_IsolatedCopy", conformClaimedInstanceIsolatedCopy},
+		// Fix F: non-positive batchSize.
+		{"ClaimPending_NonPositiveBatchSize_KindInvalid", conformClaimPendingNonPositiveBatchSize},
+		// Fix G: step-kind projection paths.
+		{"Append_KindStepCompleted_PendingToRunning", conformAppendStepCompletedPendingToRunning},
+		{"Append_KindStepFailed_PendingToRunning", conformAppendStepFailedPendingToRunning},
+		{"MarkTerminal_RunningToFailed", conformMarkTerminalRunningToFailed},
+		{"MarkTerminal_RunningToExpired", conformMarkTerminalRunningToExpired},
+		{"MarkTerminal_CompensatingToFailed", conformMarkTerminalCompensatingToFailed},
+		{"MarkTerminal_CompensatingToExpired", conformMarkTerminalCompensatingToExpired},
+		{"MarkTerminal_CompensatingToSucceeded_KindInvalid", conformMarkTerminalCompensatingToSucceededIllegal},
+		{"MarkTerminal_RunningToCompensated_KindInvalid", conformMarkTerminalRunningToCompensatedIllegal},
 	}
 
 	for _, tc := range cases {
@@ -103,6 +119,7 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 
 // NewInstanceFixture creates a saga.Instance in Pending status using
 // saga.NewInstance. id is used as both the instance ID and the definition ID.
+// The DefinitionID is set to id+"-def".
 func NewInstanceFixture(t *testing.T, id string, now time.Time) saga.Instance {
 	t.Helper()
 	return saga.NewInstance(idutil.SafeID(id), idutil.SafeID(id+"-def"), now)
@@ -133,6 +150,12 @@ func isKindConflict(err error) bool {
 func isKindNotFound(err error) bool {
 	var ec *errcode.Error
 	return errors.As(err, &ec) && ec.Kind == errcode.KindNotFound
+}
+
+// isKindInvalid reports whether err carries KindInvalid.
+func isKindInvalid(err error) bool {
+	var ec *errcode.Error
+	return errors.As(err, &ec) && ec.Kind == errcode.KindInvalid
 }
 
 // mustEnqueue calls Enqueue and fails the test on error.
@@ -170,8 +193,9 @@ func findClaimed(t *testing.T, claimed []journal.ClaimedInstance, id idutil.Safe
 const shortLease = 10 * time.Second
 
 // appendStep appends a step event under the given lease and fails on error,
-// returning the assigned version. A KindStepStarted on a freshly-claimed
-// Pending instance moves it into Running (see Journal.Append godoc).
+// returning the assigned version. The kind parameter controls the event kind so
+// callers can exercise different status-projection paths (KindStepStarted,
+// KindStepCompleted, KindStepFailed, KindStepCompensated, etc.).
 func appendStep(t *testing.T, j journal.Journal, id, leaseID idutil.SafeID, kind journal.EventKind) int64 {
 	t.Helper()
 	v, err := j.Append(context.Background(), id, leaseID, journal.Event{
@@ -290,6 +314,9 @@ func conformEnqueueNonPending(t *testing.T, factory Factory) {
 	if err == nil {
 		t.Fatal("Enqueue of non-Pending instance should return error, got nil")
 	}
+	if !isKindInvalid(err) {
+		t.Errorf("Enqueue of non-Pending instance: want KindInvalid error, got %v", err)
+	}
 }
 
 func conformEnqueueNonZeroStep(t *testing.T, factory Factory) {
@@ -303,6 +330,9 @@ func conformEnqueueNonZeroStep(t *testing.T, factory Factory) {
 	err := j.Enqueue(context.Background(), inst)
 	if err == nil {
 		t.Fatal("Enqueue of instance with CurrentStep!=0 should return error, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("Enqueue of non-zero CurrentStep: want KindInvalid error, got %v", err)
 	}
 }
 
@@ -514,6 +544,9 @@ func conformAppendInvalidPayload(t *testing.T, factory Factory) {
 	if err == nil {
 		t.Fatal("Append with invalid JSON payload should return error, got nil")
 	}
+	if !isKindInvalid(err) {
+		t.Errorf("Append with invalid JSON payload: want KindInvalid error, got %v", err)
+	}
 }
 
 func conformAppendArrayPayload(t *testing.T, factory Factory) {
@@ -534,6 +567,9 @@ func conformAppendArrayPayload(t *testing.T, factory Factory) {
 	if err == nil {
 		t.Fatal("Append with array JSON payload should return error, got nil")
 	}
+	if !isKindInvalid(err) {
+		t.Errorf("Append with array JSON payload: want KindInvalid error, got %v", err)
+	}
 }
 
 func conformAppendTerminalKindRejected(t *testing.T, factory Factory) {
@@ -552,6 +588,9 @@ func conformAppendTerminalKindRejected(t *testing.T, factory Factory) {
 	})
 	if err == nil {
 		t.Fatal("Append with KindSagaTerminal should return error, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("Append with KindSagaTerminal: want KindInvalid error, got %v", err)
 	}
 }
 
@@ -966,6 +1005,9 @@ func conformAppendCompensateOnPending(t *testing.T, factory Factory) {
 	if err == nil {
 		t.Fatal("Append(StepCompensated) on a Pending instance should be rejected, got nil")
 	}
+	if !isKindInvalid(err) {
+		t.Errorf("Append(StepCompensated) on Pending: want KindInvalid error, got %v", err)
+	}
 }
 
 // conformLeaderHandoff is the full category-15 scenario: leader A claims and
@@ -1039,17 +1081,26 @@ func conformMarkTerminalIllegalTransition(t *testing.T, factory Factory) {
 	if err == nil {
 		t.Fatal("MarkTerminal(Pending→Succeeded) should return error, got nil")
 	}
+	if !isKindInvalid(err) {
+		t.Errorf("MarkTerminal(Pending→Succeeded): want KindInvalid error, got %v", err)
+	}
 
 	// Pending → Compensated is also illegal.
 	_, err = j.MarkTerminal(context.Background(), inst.ID, ci.LeaseID, saga.StatusCompensated)
 	if err == nil {
 		t.Fatal("MarkTerminal(Pending→Compensated) should return error, got nil")
 	}
+	if !isKindInvalid(err) {
+		t.Errorf("MarkTerminal(Pending→Compensated): want KindInvalid error, got %v", err)
+	}
 
 	// StatusRunning is not terminal at all.
 	_, err = j.MarkTerminal(context.Background(), inst.ID, ci.LeaseID, saga.StatusRunning)
 	if err == nil {
 		t.Fatal("MarkTerminal with non-terminal finalStatus should return error, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("MarkTerminal(non-terminal): want KindInvalid error, got %v", err)
 	}
 }
 
@@ -1156,16 +1207,325 @@ func conformRepoReady(t *testing.T, factory Factory) {
 	t.Helper()
 	j, _, cleanup := factory(t)
 	defer cleanup()
-
-	// The Journal must implement healthz.RepoProber for this delegation to work.
 	prober, ok := j.(healthz.RepoProber)
 	if !ok {
-		t.Skip("Journal does not implement healthz.RepoProber; skipping RepoReady conformance")
+		t.Fatal("Journal must implement healthz.RepoProber")
 	}
+	t.Run("healthy", func(t *testing.T) {
+		if err := prober.RepoReady(context.Background()); err != nil {
+			t.Fatalf("RepoReady on healthy journal = %v, want nil", err)
+		}
+	})
+	// In-memory implementations have no differentiated failure domain; the PR-04
+	// PG store will extend this with a schema-broken case. Recorded as a skipped
+	// subtest for coverage visibility. This mirrors the shape of
+	// celltest.RunRepoReadinessConformance WITHOUT importing it (CELLTEST-B
+	// forbids kernel/ importing kernel/cell/celltest).
+	t.Run("schema-broken", func(t *testing.T) {
+		t.Skip("in-memory implementation has no differentiated failure domain")
+	})
+}
 
-	// Delegate to the single-source RepoProber conformance harness.
-	// Pass nil as broken: in-memory implementations have no differentiated
-	// failure domain and the harness will record a skipped sub-test. PR-04
-	// will supply a non-nil broken prober for the SQL-backed implementation.
-	celltest.RunRepoReadinessConformance(t, "saga journal", prober, nil)
+// ---------------------------------------------------------------------------
+// Fix E — unknown-instance semantics
+// ---------------------------------------------------------------------------
+
+// conformHeartbeatUnknownInstance verifies that Heartbeat on a never-enqueued
+// instance returns (false, nil) — callers cannot distinguish this from a stale
+// lease (by interface contract).
+func conformHeartbeatUnknownInstance(t *testing.T, factory Factory) {
+	t.Helper()
+	j, _, cleanup := factory(t)
+	defer cleanup()
+
+	ok, err := j.Heartbeat(context.Background(), "never-enqueued-id", "any-lease", shortLease)
+	if err != nil {
+		t.Fatalf("Heartbeat on unknown instance should return nil error, got: %v", err)
+	}
+	if ok {
+		t.Error("Heartbeat on unknown instance should return ok=false, got ok=true")
+	}
+}
+
+// conformMarkTerminalUnknownInstance verifies that MarkTerminal on a never-enqueued
+// instance returns (false, nil).
+func conformMarkTerminalUnknownInstance(t *testing.T, factory Factory) {
+	t.Helper()
+	j, _, cleanup := factory(t)
+	defer cleanup()
+
+	ok, err := j.MarkTerminal(context.Background(), "never-enqueued-id", "any-lease", saga.StatusFailed)
+	if err != nil {
+		t.Fatalf("MarkTerminal on unknown instance should return nil error, got: %v", err)
+	}
+	if ok {
+		t.Error("MarkTerminal on unknown instance should return ok=false, got ok=true")
+	}
+}
+
+// conformAppendUnknownInstance verifies that Append on a never-enqueued instance
+// returns a KindNotFound error.
+func conformAppendUnknownInstance(t *testing.T, factory Factory) {
+	t.Helper()
+	j, _, cleanup := factory(t)
+	defer cleanup()
+
+	_, err := j.Append(context.Background(), "never-enqueued-id", "any-lease", journal.Event{
+		Kind:     journal.KindStepStarted,
+		StepName: "step-one",
+	})
+	if err == nil {
+		t.Fatal("Append on unknown instance should return error, got nil")
+	}
+	if !isKindNotFound(err) {
+		t.Errorf("Append on unknown instance: want KindNotFound error, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix B — isolated copy of ClaimedInstance
+// ---------------------------------------------------------------------------
+
+// conformClaimedInstanceIsolatedCopy verifies that the *time.Time pointer fields
+// returned in a ClaimedInstance are deep-copied (not shared with journal
+// internals). Writing through a returned pointer must not affect subsequent
+// claim results.
+func conformClaimedInstanceIsolatedCopy(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-isolated-copy")
+
+	// The UpdatedAt pointer in the claimed instance should be nil for a freshly
+	// Pending instance (no updates yet); but CompletedAt is definitely nil.
+	// To exercise cloneInstance we advance the clock and do an Append to get a
+	// non-nil UpdatedAt, then reclaim.
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)
+
+	// Let the first lease expire and reclaim so we get a fresh ClaimedInstance
+	// with a potentially non-nil UpdatedAt (after projection advance).
+	clk.Advance(shortLease + time.Second)
+	claimed2, _, err := j.ClaimPending(context.Background(), 10, shortLease)
+	if err != nil {
+		t.Fatalf("re-ClaimPending: %v", err)
+	}
+	ci2 := findClaimed(t, claimed2, ci.Instance.ID)
+
+	// If UpdatedAt is non-nil, write through it and verify a second claim still
+	// gets a different pointer (isolated copy).
+	if ci2.Instance.UpdatedAt != nil {
+		poison := time.Unix(0, 1)
+		*ci2.Instance.UpdatedAt = poison // mutate returned copy
+
+		// Reclaim (after expiry) and check UpdatedAt is not poisoned.
+		clk.Advance(shortLease + time.Second)
+		claimed3, _, err := j.ClaimPending(context.Background(), 10, shortLease)
+		if err != nil {
+			t.Fatalf("re-ClaimPending after poison: %v", err)
+		}
+		ci3 := findClaimed(t, claimed3, ci.Instance.ID)
+		if ci3.Instance.UpdatedAt != nil && ci3.Instance.UpdatedAt.Equal(poison) {
+			t.Error("ClaimedInstance.UpdatedAt pointer was shared with journal state (not deep-copied)")
+		}
+		// Pointers must be distinct objects.
+		if ci2.Instance.UpdatedAt == ci3.Instance.UpdatedAt {
+			t.Error("ClaimedInstance.UpdatedAt from two different claims must not share the same pointer")
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix F — non-positive batchSize
+// ---------------------------------------------------------------------------
+
+// conformClaimPendingNonPositiveBatchSize verifies that batchSize 0 and -1 both
+// return a KindInvalid error.
+func conformClaimPendingNonPositiveBatchSize(t *testing.T, factory Factory) {
+	t.Helper()
+	j, _, cleanup := factory(t)
+	defer cleanup()
+
+	for _, batchSize := range []int{0, -1} {
+		_, _, err := j.ClaimPending(context.Background(), batchSize, shortLease)
+		if err == nil {
+			t.Fatalf("ClaimPending(batchSize=%d) should return error, got nil", batchSize)
+		}
+		if !isKindInvalid(err) {
+			t.Errorf("ClaimPending(batchSize=%d): want KindInvalid error, got %v", batchSize, err)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix G — step-kind projection + terminal-transition coverage
+// ---------------------------------------------------------------------------
+
+// conformAppendStepCompletedPendingToRunning verifies that KindStepCompleted on
+// a Pending instance advances the projection to Running (same as KindStepStarted).
+func conformAppendStepCompletedPendingToRunning(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-completed-pending-running")
+
+	// KindStepCompleted on Pending should advance to Running (non-compensated forward step).
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompleted)
+
+	// Now MarkTerminal(Succeeded) should work from Running.
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusSucceeded)
+	if err != nil {
+		t.Fatalf("MarkTerminal(Running→Succeeded) after KindStepCompleted: %v", err)
+	}
+	if !ok {
+		t.Fatal("MarkTerminal(Running→Succeeded) after KindStepCompleted: expected ok=true")
+	}
+}
+
+// conformAppendStepFailedPendingToRunning verifies that KindStepFailed on a
+// Pending instance advances the projection to Running.
+func conformAppendStepFailedPendingToRunning(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-failed-pending-running")
+
+	// KindStepFailed on Pending should advance to Running.
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepFailed)
+
+	// MarkTerminal(Failed) from Running is legal.
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	if err != nil {
+		t.Fatalf("MarkTerminal(Running→Failed) after KindStepFailed: %v", err)
+	}
+	if !ok {
+		t.Fatal("MarkTerminal(Running→Failed) after KindStepFailed: expected ok=true")
+	}
+}
+
+// conformMarkTerminalRunningToFailed verifies Running → Failed is a valid terminal path.
+func conformMarkTerminalRunningToFailed(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-running-failed")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	if err != nil {
+		t.Fatalf("MarkTerminal(Running→Failed): %v", err)
+	}
+	if !ok {
+		t.Fatal("MarkTerminal(Running→Failed): expected ok=true")
+	}
+	if !loadHasTerminal(t, j, ci.Instance.ID) {
+		t.Error("MarkTerminal(Running→Failed) did not append a KindSagaTerminal event")
+	}
+}
+
+// conformMarkTerminalRunningToExpired verifies Running → Expired is a valid terminal path.
+func conformMarkTerminalRunningToExpired(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-running-expired")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusExpired)
+	if err != nil {
+		t.Fatalf("MarkTerminal(Running→Expired): %v", err)
+	}
+	if !ok {
+		t.Fatal("MarkTerminal(Running→Expired): expected ok=true")
+	}
+	if !loadHasTerminal(t, j, ci.Instance.ID) {
+		t.Error("MarkTerminal(Running→Expired) did not append a KindSagaTerminal event")
+	}
+}
+
+// conformMarkTerminalCompensatingToFailed verifies Compensating → Failed is a valid terminal path.
+func conformMarkTerminalCompensatingToFailed(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-compensating-failed")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)     // Pending → Running
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // Running → Compensating
+
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	if err != nil {
+		t.Fatalf("MarkTerminal(Compensating→Failed): %v", err)
+	}
+	if !ok {
+		t.Fatal("MarkTerminal(Compensating→Failed): expected ok=true")
+	}
+	if !loadHasTerminal(t, j, ci.Instance.ID) {
+		t.Error("MarkTerminal(Compensating→Failed) did not append a KindSagaTerminal event")
+	}
+}
+
+// conformMarkTerminalCompensatingToExpired verifies Compensating → Expired is a valid terminal path.
+func conformMarkTerminalCompensatingToExpired(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-compensating-expired")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)     // Pending → Running
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // Running → Compensating
+
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusExpired)
+	if err != nil {
+		t.Fatalf("MarkTerminal(Compensating→Expired): %v", err)
+	}
+	if !ok {
+		t.Fatal("MarkTerminal(Compensating→Expired): expected ok=true")
+	}
+	if !loadHasTerminal(t, j, ci.Instance.ID) {
+		t.Error("MarkTerminal(Compensating→Expired) did not append a KindSagaTerminal event")
+	}
+}
+
+// conformMarkTerminalCompensatingToSucceededIllegal verifies that
+// Compensating → Succeeded is an illegal transition (returns KindInvalid).
+func conformMarkTerminalCompensatingToSucceededIllegal(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-compensating-succeeded-illegal")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)     // Pending → Running
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // Running → Compensating
+
+	_, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusSucceeded)
+	if err == nil {
+		t.Fatal("MarkTerminal(Compensating→Succeeded) should return error, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("MarkTerminal(Compensating→Succeeded): want KindInvalid error, got %v", err)
+	}
+}
+
+// conformMarkTerminalRunningToCompensatedIllegal verifies that
+// Running → Compensated is an illegal transition (returns KindInvalid).
+func conformMarkTerminalRunningToCompensatedIllegal(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := claimOne(t, j, clk, "inst-running-compensated-illegal")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+
+	_, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensated)
+	if err == nil {
+		t.Fatal("MarkTerminal(Running→Compensated) should return error, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("MarkTerminal(Running→Compensated): want KindInvalid error, got %v", err)
+	}
 }

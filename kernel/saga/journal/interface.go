@@ -15,6 +15,9 @@ import (
 // expiry or superseded by a newer claim — every fenced operation presenting
 // this LeaseID becomes a no-op (Heartbeat/MarkTerminal return ok=false) or a
 // conflict error (Append).
+//
+// Tip: pass ci.Instance.ID as instanceID and ci.LeaseID as leaseID to the
+// fenced mutators (both are idutil.SafeID; order matters).
 type ClaimedInstance struct {
 	Instance saga.Instance
 	LeaseID  idutil.SafeID
@@ -57,9 +60,9 @@ type ClaimedInstance struct {
 //
 // Only runtime/saga.Coordinator is intended to hold a Journal field (the
 // SAGA-JOURNAL-HOLDER-SEAL-01 archtest in PR-08 enforces this once the
-// Coordinator exists). Enqueue is the producer-facing entry point; the
-// possibility of splitting a narrower producer interface is deferred until the
-// Coordinator and a real producer exist (PR-03).
+// Coordinator exists; tracked in gh issue #956). Enqueue is the producer-facing
+// entry point; the possibility of splitting a narrower producer interface is
+// deferred until the Coordinator and a real producer exist (PR-03).
 type Journal interface {
 	// Enqueue enrolls a new saga instance for orchestration. The instance MUST
 	// pass saga.Instance.ValidateNew (Pending, CurrentStep 0, no timestamps
@@ -67,6 +70,9 @@ type Journal interface {
 	// current version 0 and no lease, and writes no event (events describe step
 	// execution, which has not begun). Re-enqueuing an existing ID returns a
 	// KindConflict error.
+	//
+	// Load after Enqueue returns an empty, non-nil slice (see Load); a consumer
+	// detects a not-yet-started instance by the empty event log.
 	Enqueue(ctx context.Context, instance saga.Instance) error
 
 	// Append durably records one Event for the instance under the holder's lease
@@ -91,6 +97,10 @@ type Journal interface {
 	// Append never moves the instance to a terminal status — that is MarkTerminal's
 	// sole responsibility. It also does NOT maintain the step cursor
 	// (Instance.CurrentStep); see ClaimPending.
+	//
+	// An unknown instance returns KindNotFound; a terminal instance (whose lease
+	// was released by MarkTerminal) returns KindConflict — callers needing to
+	// distinguish "expired lease" from "already terminal" must consult Load.
 	Append(ctx context.Context, instanceID, leaseID idutil.SafeID, event Event) (version int64, err error)
 
 	// Load returns the full ordered event history for an instance (version
@@ -106,30 +116,43 @@ type Journal interface {
 	// claimed instance. When nothing is claimable it returns an empty slice, the
 	// zero LeaseID, and a nil error.
 	//
+	// batchSize MUST be ≥ 1; a non-positive batchSize returns a KindInvalid error.
+	//
 	// The returned Instance carries the coordination projection: Status (the
 	// coarse-grained Pending/Running/Compensating lifecycle the Journal maintains)
 	// and lease, but NOT the fine-grained step cursor — Instance.CurrentStep is
 	// not advanced by the Journal (it would require the definition's step count,
 	// which the Journal does not hold) and remains 0. A caller resuming an
 	// instance reconstructs the exact cursor by folding the event log from Load.
+	//
+	// Instance.Status is the current projection value (maintained by
+	// Append/MarkTerminal) and is guaranteed up-to-date; callers MAY trust it
+	// directly while still folding Load for the exact step cursor.
 	ClaimPending(ctx context.Context, batchSize int, leaseDuration time.Duration) (claimed []ClaimedInstance, leaseID idutil.SafeID, err error)
 
 	// Heartbeat extends the lease on a single claimed instance to
 	// now+leaseDuration. It is lease-fenced: ok is false (with a nil error) when
 	// leaseID no longer owns the instance, signaling the holder to stop driving
-	// it.
+	// it. A never-enqueued instance also returns ok=false (nil error); callers
+	// cannot distinguish it from a stale lease.
 	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
 
 	// MarkTerminal transitions the instance projection to finalStatus and appends
 	// the closing KindSagaTerminal event atomically. finalStatus MUST be a
 	// terminal saga.Status reachable from the current status (validated via
-	// saga.Transition). It is lease-fenced: ok is false (with a nil error) when
+	// saga.AdvanceSaga). It is lease-fenced: ok is false (with a nil error) when
 	// leaseID no longer owns the instance. On success the lease is released.
+	// A never-enqueued instance also returns ok=false (nil error); callers
+	// cannot distinguish it from a stale lease.
 	MarkTerminal(ctx context.Context, instanceID, leaseID idutil.SafeID, finalStatus saga.Status) (ok bool, err error)
 
 	// RepoReady is a differentiated readiness check (kernel/healthz.RepoProber):
 	// SQL-backed implementations exercise the saga_instances relation directly so
 	// schema/migration drift surfaces independently of a pool-level ping;
 	// in-memory implementations return nil.
+	//
+	// Probe registration (name + cellgen path) is the responsibility of the
+	// Coordinator cell that holds the Journal (PR-03); a Journal implementation
+	// only provides the RepoProber method and does not self-register.
 	RepoReady(ctx context.Context) error
 }
