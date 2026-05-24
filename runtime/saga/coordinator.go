@@ -54,6 +54,12 @@ const (
 	defaultCoordLeaseDuration     = 30 * time.Second
 	defaultCoordHeartbeatInterval = 10 * time.Second // = LeaseDuration / 3
 	defaultCoordEmptyClaimBackoff = defaultCoordPollInterval
+
+	// minLeaseToHeartbeatRatio is the minimum factor by which LeaseDuration must
+	// exceed HeartbeatInterval (LeaseDuration > HeartbeatInterval * ratio), so
+	// at least one heartbeat fires before lease expiry. Extracted from the
+	// inline literal per PROD-DURATION-CONST-01.
+	minLeaseToHeartbeatRatio = 2
 )
 
 // Config holds tunable parameters for the Coordinator engine. Zero values are
@@ -111,7 +117,7 @@ func (c Config) Validate() error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.EmptyClaimBackoff must be positive")
 	}
-	if c.HeartbeatInterval*2 >= c.LeaseDuration {
+	if c.HeartbeatInterval*minLeaseToHeartbeatRatio >= c.LeaseDuration {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.HeartbeatInterval*2 must be < LeaseDuration")
 	}

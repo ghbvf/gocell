@@ -5,13 +5,18 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+const (
+	testDefTimeout      = testtime.D30s
+	testNegativeTimeout = -testtime.D1s
 )
 
 // noopStepFunc is a minimal valid StepFunc used in table tests.
@@ -78,7 +83,7 @@ func TestDefinition_Validate(t *testing.T) {
 							},
 						},
 					},
-					Timeout: 30 * time.Second,
+					Timeout: testDefTimeout,
 				}
 			},
 		},
@@ -187,7 +192,7 @@ func TestDefinition_Validate(t *testing.T) {
 				return &Definition{
 					ID: idutil.SafeID("saga-neg-step-to"),
 					Steps: []Step{
-						{Name: idutil.SafeID("s1"), Run: noopStepFunc, Timeout: -1 * time.Second},
+						{Name: idutil.SafeID("s1"), Run: noopStepFunc, Timeout: testNegativeTimeout},
 					},
 				}
 			},
@@ -200,7 +205,7 @@ func TestDefinition_Validate(t *testing.T) {
 				return &Definition{
 					ID:      idutil.SafeID("saga-neg-def-to"),
 					Steps:   []Step{{Name: idutil.SafeID("s1"), Run: noopStepFunc}},
-					Timeout: -1 * time.Second,
+					Timeout: testNegativeTimeout,
 				}
 			},
 			wantErr:  true,
