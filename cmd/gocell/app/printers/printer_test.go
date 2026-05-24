@@ -318,6 +318,26 @@ var goldenCases = []struct {
 			},
 		},
 	},
+	{
+		// Multi-line Fix (FMT-13-style copy-pasteable YAML block). Locks how
+		// each format renders a Fix containing embedded newlines: text prints
+		// the first line after "fix: " with continuation lines verbatim; JSON
+		// encodes the \n inside the "fix" string; SARIF appends the whole block
+		// to message.text. Without this case the multi-line Fix path is unlocked
+		// (production advHintFMT13MissingHTTPFix is multi-line).
+		name: "error_with_multiline_fix",
+		results: []governance.ValidationResult{
+			{
+				Code:     "FMT-13",
+				Severity: governance.SeverityError,
+				File:     "contracts/http/x/v1/contract.yaml",
+				Line:     3,
+				Field:    "endpoints.http",
+				Message:  "HTTP contract \"x\" must declare endpoints.http",
+				Fix:      "add endpoints.http to contract.yaml:\n  http:\n    method: GET\n    path: /api/v1/...\n    successStatus: 200",
+			},
+		},
+	},
 }
 
 // TestGolden_Text fans the golden corpus through TextPrinter and compares to

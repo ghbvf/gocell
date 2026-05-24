@@ -32,6 +32,7 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -832,6 +833,20 @@ func isGovernanceErrorEmitterName(name string) bool {
 	}
 }
 
+// printfVerbRe matches a Go printf format verb (e.g. %s, %q, %02d, %+v, %%).
+var printfVerbRe = regexp.MustCompile(`%[#+\- 0]*[0-9]*(?:\.[0-9]+)?[a-zA-Z%]`)
+
+// fixHasLiteralContent reports whether a resolved fix string carries actual
+// remediation text — at least one non-whitespace rune that is not part of a
+// printf verb. This closes the fmt.Sprintf("%s", fixParam) bypass: that
+// template resolves to "%s", which is non-empty yet carries no guidance (the
+// real value is a runtime parameter the static scan cannot see), so stripping
+// the verb leaves nothing. A legitimate interpolated fix such as
+// "set %q to draft" survives — the literal words remain after verb stripping.
+func fixHasLiteralContent(resolved string) bool {
+	return strings.TrimSpace(printfVerbRe.ReplaceAllString(resolved, "")) != ""
+}
+
 func isValidationResultCompositeLit(cl *ast.CompositeLit, info *types.Info, pkgPath string) bool {
 	if info == nil {
 		return false
@@ -920,8 +935,18 @@ func astShapeName(expr ast.Expr) string {
 //     extra callers as needing a fix arg), not a false negative — the funnel's
 //     correctness and security are unaffected. The composite-ban (Path 2) is
 //     type-gated via isValidationResultCompositeLit and is immune to name
-//     collisions. This matches INV-2's pre-existing name-match level for
-//     governanceEmitterName.
+//     collisions. This matches INV-2's pre-existing name-match level.
+//     Type-resolution (binding the callee to governance's *locator method /
+//     package newErrorAt via go/types) is deliberately NOT used: the negative
+//     fixtures define their OWN fake newError / newErrorAt / newScopedError
+//     methods (the production constructors are unexported, so fixtures cannot
+//     reference them), and a type-resolution gate would reject those fakes and
+//     collapse all negative-path coverage. Name-matching is therefore a
+//     requirement of the fixture-based red-test design, not an oversight.
+//   - fmt.Sprintf("%s", fixParam) — a fix arg whose template is only format
+//     verbs with no literal text — is caught by fixHasLiteralContent (the
+//     resolved template loses all guidance after verb stripping), so the
+//     "non-empty template" check cannot be satisfied by a contentless template.
 func TestGovernanceRuleErrorFixField(t *testing.T) {
 	t.Run("negative_fixtures_caught", testINV3NegativeFixture)
 	t.Run("production_source_all_pass", testINV3ProductionSource)
@@ -955,6 +980,11 @@ func testINV3NegativeFixture(t *testing.T) {
 			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/unresolvable_fix_red",
 			wantMin: 1,
 			shape:   "newErrorAt callsite with unresolvable (forwarded-param) fix argument",
+		},
+		{
+			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/scoped_empty_fix_red",
+			wantMin: 1,
+			shape:   "newScopedError callsite with empty fix argument",
 		},
 		{
 			pattern: "./tools/archtest/testdata/governance_fix_anchor_fixtures/struct_lit_missing_fix_red",
@@ -1046,14 +1076,15 @@ func scanFixFieldViolationsInFile(
 			return
 		}
 		fixArg := call.Args[len(call.Args)-1]
-		if strings.Join(resolveStringFragments(fixArg, consts, info), "") != "" {
+		if fixHasLiteralContent(strings.Join(resolveStringFragments(fixArg, consts, info), "")) {
 			return
 		}
 		pos := fset.Position(fixArg.Pos())
 		violations = append(violations,
 			relPath+":"+strconv.Itoa(pos.Line)+
-				": "+name+" fix argument is empty or unresolvable — every error finding must "+
-				"carry remediation guidance in the typed Fix field (GOVERNANCE-RULE-ERROR-FIX-FIELD-01)")
+				": "+name+" fix argument is empty, unresolvable, or carries no literal guidance — every "+
+				"error finding must carry remediation text in the typed Fix field "+
+				"(GOVERNANCE-RULE-ERROR-FIX-FIELD-01)")
 	})
 
 	// Path 2: construction funnel — no raw ValidationResult{} literals outside locator.go.

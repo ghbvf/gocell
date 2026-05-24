@@ -39,6 +39,11 @@
 
 该「Medium 上游 + Hard 下游 + gh issue」是 `.claude/rules/gocell/ai-robust.md` §Funnel 双向锁明文许可的过渡形态，对齐既有终态先例 observability `SPAN-SETATTR-REDACT-01` / #851（package-internal Medium + gh issue）。立项门槛 ≥ Medium 满足——本变更**删除**了旧 Soft（Message 子串扫描），新立项机制全部 ≥ Medium，无 Soft。
 
+### Enforcement 通道（哪条检查在哪跑，不夸大）
+
+- **下游 Hard（fix 参数 arity）= 编译期，PR-gated**：`newError`/`newErrorAt`/`newScopedError` 的 `fix` 是必填位置参数，少传即 `go build` 失败——PR CI 的 `build-test` lane 直接拦截。这是 PR-time 强制的。
+- **fix 非空 + 裸字面量 ban（两条 archtest，Medium）= nightly + 本地 `make verify`**：`GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 与全部 governance INV-1/INV-2 一样，**不在** PR-time `hack/verify-archtest-invariants.sh` 白名单（该白名单按 CPU/RSS 预算只含 clock/duration/time-literal/panic 四类核心）；由 `archtest-nightly.yml` + 开发者本地 `make verify` 兜底。这是 governance invariant 的既有 posture，非本规则特例；本 ADR 不单独把 INV-3 提到 PR-time（要提须连同 INV-1/2 一起评预算，属另一决策）。
+
 ## 威胁模型（INV-3 此前无 ADR，故为首次成文，非 amendment 重评）
 
 | 威胁 | 覆盖 |
@@ -48,9 +53,18 @@
 | code 用非 const（漂移） | INV-2 `...CODE-CONST-SINGLE-SOURCE-01`（不变，构造函数名同步更新） |
 | 新增非 locator receiver 冒充 emitter | `emitter_invariant.go` 受体 type-identity gate（Hard）；包级 emitter 仅 `newErrorAt`，signature-gated（无 name anchor） |
 | 构造函数经 value/func 变量间接调用绕过扫描 | governance 无此间接；archtest godoc 列盲区 + production scan 绿 + 负向 fixture 用直调反向自检 |
+| `fmt.Sprintf("%s", fixParam)` 模板无字面内容绕过非空检查 | `fixHasLiteralContent` 剥离 printf verb 后须有字面文本，纯 verb 模板判空 |
+| **导出类型在 governance 外被构造（跨包）** | **见下「跨包构造缺口」——本变更补 Fix 值，archtest 守护由 #922 seal 统一** |
+
+### 跨包构造缺口（C1，已知，#922 跟踪）
+
+`governance.ValidationResult` 是**导出类型**，除 governance rule pipeline 外，`cmd/gocell/app/check.go` 也直接构造它（~17 处 `SeverityError` 裸字面量，check 命令的 contract-health / slice-coverage 诊断）。构造函数 `newError` 等是 unexported `*locator` 方法，cmd 无法调用，故 cmd 只能用裸字面量。
+
+- **本变更已补**：check.go 这 ~17 处的 `Fix` 值（关闭 `gocell check --format=json` 输出 `"fix":""` 的可见契约洞；Fix 文本无损带入 #922）。
+- **archtest 守护 defer #922**：INV-3 的 production scan 与 funnel ban 只覆盖 `./kernel/governance`；让 cmd 构造点也受守护的正确做法是 #922 的 seal——届时 `ValidationResult` 字段 unexported、构造函数导出为唯一路径，cmd 跟随改走构造函数（强制 Fix）。本变更**不**建临时的「cmd 字面量必须有 Fix」cross-package archtest，因 #922 seal 会整体推翻它（避免 throwaway 机制）。#922 body 已含此构造点迁移范围。
 
 ## Consequences
 
 - 正：fix 指导结构化，UX 更清晰（独立 `fix:` 行 / JSON 字段）；Soft 锚点消除；构造收口便于未来 #922 升 Hard。
-- 负：上游仍 Medium（#922 跟踪）；`newErrorAt` 是包级函数，与三个 locator 方法形态不一（已在 godoc + `emitter_invariant.go` 说明：因其不依赖 yaml 缓存，供无 receiver 的 scan helper 使用）。
+- 负：上游仍 Medium（#922 跟踪）；`newErrorAt` 是包级函数，与三个 locator 方法形态不一（已在 godoc + `emitter_invariant.go` 说明：因其不依赖 yaml 缓存，供无 receiver 的 scan helper 使用）；governance 外的 `ValidationResult` 构造（cmd/gocell/app）Fix 值已补但**无 archtest 守护**，待 #922 seal 统一（见上「跨包构造缺口」）。
 - 中性：CLI text/JSON/SARIF 输出形态变化（项目无外部消费方，无兼容负担）。

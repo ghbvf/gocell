@@ -116,7 +116,8 @@ func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []
 // "skip" filter for direction B, silently passing dangling references,
 // role/lifecycle drift, and platform-slice-serving-examples-contract cases
 // (review F4); the per-check helpers below were extracted to keep cognitive
-// complexity ≤ 15 per CLAUDE.md while preserving distinct ; fix: clauses.
+// complexity ≤ 15 per CLAUDE.md while preserving each check's distinct fix
+// guidance (the newError fix argument).
 func (v *Validator) ctmSliceToContract() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {

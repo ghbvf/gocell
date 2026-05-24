@@ -1,0 +1,11 @@
+ERRORS (1):
+  [FMT-13] HTTP contract "x" must declare endpoints.http (field: endpoints.http)
+         fix: add endpoints.http to contract.yaml:
+  http:
+    method: GET
+    path: /api/v1/...
+    successStatus: 200
+         at contracts/http/x/v1/contract.yaml:3
+
+
+Validation complete: 1 error(s), 0 warning(s)
