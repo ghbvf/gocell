@@ -560,9 +560,8 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 }
 
 // TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates verifies the
-// authHealthy gauge: starts at 1 (set via metrics.authHealthy.Set(1)), drops
-// to 0 on DoneCh, and stays 0 (because ctx is canceled during re-auth before
-// success).
+// authHealthy gauge state machine: Start flips it 0→1, DoneCh drops it back
+// to 0, and it stays 0 because ctx is canceled during re-auth before success.
 func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	reg7 := prom.NewRegistry()
@@ -570,8 +569,8 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	if mErr7 != nil {
 		t.Fatalf("NewTransitMetrics: %v", mErr7)
 	}
-	// Simulate the post-initTokenRenewal state where authHealthy is set to 1.
-	metrics7.authHealthy.Set(1)
+	// Note: NewTransitMetrics leaves authHealthy at 0; Start (below) is the
+	// path that flips it to 1 after the nil-watcher guard.
 
 	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "always fails")
 	fakeAuth := &fakeAuthMethod{
@@ -593,10 +592,12 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 		done <- w.Start(ctx)
 	}()
 
-	// Initial value should be 1 (set before Start).
-	if got := testutil.ToFloat64(metrics7.authHealthy); got != 1 {
-		t.Errorf("initial authHealthy = %v, want 1", got)
-	}
+	// Wait for Start to enter its loop and flip authHealthy 0→1 (round-2 fix:
+	// Set(1) now lives inside Start after the nil-watcher guard, not in
+	// initTokenRenewal). Without this wait we'd race against goroutine scheduling.
+	testwait.External(t, "vault-readiness-set", func() bool {
+		return testutil.ToFloat64(metrics7.authHealthy) == 1
+	}, testtime.D2s, time.Millisecond, "Start must flip authHealthy 0→1 after nil-watcher guard")
 
 	// Trigger re-auth.
 	fw.doneCh <- nil

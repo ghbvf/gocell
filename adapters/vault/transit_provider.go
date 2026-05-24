@@ -1247,8 +1247,9 @@ func (p *TransitKeyProvider) Close(ctx context.Context) error {
 // token will expire without notification.
 //
 // Renewable tokens: LookupSelfToken seeds the LifetimeWatcher with accurate TTL.
-// authHealthy is seeded to 1. loginOutcome CounterVec is registered with
-// {method, result, reason} labels.
+// authHealthy stays at 0 here — tokenRenewalWorker.Start flips it to 1 only
+// after the watcher actually begins running (avoids a false-green window
+// between construction and Worker().Start).
 //
 // ref: hashicorp/vault api/lifetime_watcher.go@main — LifetimeWatcher usage pattern
 // ref: external-secrets/external-secrets pkg/provider/vault — ValidateStore (token lookup probe)
