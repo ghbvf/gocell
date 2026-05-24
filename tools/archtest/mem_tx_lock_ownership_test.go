@@ -341,3 +341,21 @@ func assertMemPkgDoesNotImport(t *testing.T, pkg string) {
 			"AST construction-site funnel); offenders: %v",
 		ruleMemTxLockOwnership01, memPkgRel, pkg, offenders)
 }
+
+// scanMemTxLockWitness is the shared witness-funnel detector (Wave 2 sealed
+// lock-witness model). It runs over a single package Pass — production
+// (cells/accesscore/internal/mem) and the memtxlockfixture reverse self-check
+// alike — and reports:
+//
+//	W1: txlock.Acquire called outside (memTxRunner).runLocked.
+//	W2: (*Store).txHoldsLock return not of the exact form
+//	    `tok != nil && tok.held.Holds(&s.mu)`.
+//	R1: memTxToken composite literal outside runLocked / WithTxContext.
+//
+// STUB (Wave 1 RED): returns nil so the reverse self-check
+// (TestMemTxLockOwnership01_FixturePattern) fails until Wave 2 implements the
+// scan. Wave 2 replaces this body and rewires TestMemTxLockOwnership01.
+func scanMemTxLockWitness(p *Pass) []Diagnostic {
+	_ = p
+	return nil
+}
