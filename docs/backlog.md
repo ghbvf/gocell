@@ -65,7 +65,7 @@ CLI 路径**不解析** [`.github/ISSUE_TEMPLATE/backlog.yml`](../.github/ISSUE_
 |---|---|---|---|
 | Status | single-select | `Backlog` / `Ready` / `In progress` / `In review` / `Done` | 进度状态（人控，daily-planner 不写）|
 | Estimate | single-select | `Cx1` / `Cx2` / `Cx3` / `Cx4` | context 复杂度，rerating 时改 |
-| Iteration | iteration | 14-day sprint（详见 §"Daily planning"）| sprint planning，daily-planner 写入 |
+| Iteration | iteration | **1-day duration**（详见 §"Daily planning"）| 每日焦点队列，daily-planner 自动新建 + 写入 |
 | Parent issue | built-in | 自动派生（GitHub 原生 sub-issue API）| 大型任务父子关系展示 |
 | Sub-issues progress | built-in | 自动派生（子 issue close 比例）| 父 issue 完成度进度条 |
 
@@ -161,31 +161,34 @@ Project UI 仍可作为筛选/排序入口（按 label group），但写入面�
 
 backlog 池 → 每日工作焦点调度由 `/daily-planner` skill + `daily-planner` agent 承载。详见 `.claude/agents/daily-planner.md` 与 `.claude/skills/daily-planner/SKILL.md`。
 
+**真值源**：Project v2 Iteration 字段（每个 1-day option = 一天的焦点队列）+ 对话窗 brief markdown 输出。**不在本地长期归档**任何 daily brief 或 audit log。
+
 ### 用法
 
 ```bash
-# dry-run（默认）：输出 brief，不写 Project v2
+# dry-run（默认）：在对话窗输出 brief，不写 Project v2
 /daily-planner
 
-# apply：把当日选中 issue 写入 current sprint Iteration
+# apply：把当日选中 issue 写入 today iteration
 /daily-planner --apply
 
-# 指定日期（按 sprint 推断目标 iteration）
+# 指定日期（按 1-day iteration 推断目标 option，缺失则自动新建）
 /daily-planner --date=2026-05-25
 /daily-planner --apply --date=2026-05-25
+
+# 当日 ∑Cx 容量覆盖（默认 4）
+/daily-planner --apply --capacity=6
 ```
 
-输出：
-- Brief markdown 落盘 `~/.local/share/gocell-daily/YYYY-MM-DD.md`
-- Apply 模式额外写 audit log 到 `.claude/logs/daily-planner-YYYYMMDD.jsonl`（已被 .gitignore）
+### Daily Iteration 自动管理
 
-### Sprint vs Daily 语义
+Project v2 的 Iteration 字段配置为 **1-day duration**（duration=1, startDay=1，每个 option 覆盖 1 天）。daily-planner 自动管理 iteration option 集合：
 
-GitHub Project v2 的 Iteration 字段是 **14-day sprint**（不是 1 天）。daily-planner 写入语义：
+- 启动时检查 `$DATE` 是否落在已有 iteration option 上
+- 缺失则用 GraphQL `updateProjectV2Field.iterationConfiguration`（append-only）追加一个 1-day iteration option 覆盖 `$DATE`
+- 历史 iteration option 保留不动（form audit trail：哪天排了哪些 issue 永远可在 Project UI 回溯）
 
-- **当日 brief 中选中的 issue → 加入 current sprint Iteration**（如果还没加），让 sprint 视图反映"已被纳入近期焦点"
-- **每日焦点队列**只活在本地 brief（按日期分文件归档），不在 Project v2 上为每天单独建 iteration
-- Sprint 切换日（每 14 天）`TARGET_ITERATION_ID` 自动指向新 sprint，无需手工切配置；管理员需提前在 Project v2 UI 加好后续 iteration（当前已配 Iteration 1-5 覆盖至 2026-07-29）
+历史回溯：在 Project v2 UI 按 Iteration group by，每个 1-day iteration 列出当日纳入的 issue。daily brief 的文本本体不持久化（每次 `/daily-planner` 重生成），但 Project v2 的"哪些 issue 在哪天入队"是持久真值。
 
 ### 排序算法（简化 WSJF）
 
@@ -193,24 +196,28 @@ GitHub Project v2 的 Iteration 字段是 **14-day sprint**（不是 1 天）。
 score = pri_weight × flag_multiplier
   pri_weight:        P0=100 / P1=50 / P2=20 / P3=5 / pri-missing=110（强制首位）
   flag_multiplier:   hard=3 / planned=2 / cond(trigger 满足)=1.5 / cond(pending)=0.3 / soft=1
-  容量过滤:          当日 ∑Cx ≤ 4（Cx1=1 / Cx2=2 / Cx3=3 / Cx4=4），超出落 Unscheduled
+  容量过滤:          当日 ∑Cx ≤ CAPACITY（默认 4；Cx1=1 / Cx2=2 / Cx3=3 / Cx4=4），超出落 Unscheduled
+                    可通过 `--capacity=N` 覆盖默认值
 ```
 
-异常处理：`pri-missing` 强制首位 + `[NEEDS PRIORITY]`；缺 cap/flag/type 标 `[MISSING LABEL]`；body 含 `tools/archtest/` 或 `kernel/` 或 `contracts/` 标 `[需人工确认]`；同 cap 已 ≥3 入队 → 后续 `[CAP COLLISION]` 退到 Unscheduled；`bundle-parent` 父 issue 排除（仅处理子 issue）。
+异常处理：`pri-missing` 强制首位 + `[NEEDS PRIORITY]`；缺 cap/flag/type 任一 → `[MISSING LABEL]`；`cap-x-cross` label → `[需人工确认]`（跨域需人评估）；同 cap 已 ≥3 入队 → 后续 `[CAP COLLISION]` 退到 Unscheduled；`bundle-parent` 父 issue 排除（仅处理子 issue）。
 
-### 写入边界（agent 只动 Iteration）
+### 写入边界
 
 | 字段 | daily-planner |
 |------|---------------|
-| Iteration | **可写**（apply 模式）|
-| Status / Estimate / labels（含 pri/cap/flag/type） | 只读 |
+| Iteration field **value**（item 行的 iteration 设置）| **可写**（仅 apply 模式）|
+| Iteration field **configuration**（追加 1-day iteration option）| **可写**（append-only，缺失目标日期 option 时自动追加）|
+| Status / Estimate / labels（含 pri/cap/flag/type）| 只读 |
 | issue body / title / comment | 不动 |
 
-误写 Iteration 影响半径 = 当日 brief 噪音 + 当前 sprint 视图多出一条，**无数据丢失**——可手动在 Project UI 清字段恢复，或 skill 回滚命令清单（apply 失败时输出到 stderr，需人工执行避免二次破坏）。
+误写 Iteration value 影响半径 = 当日 brief 噪音 + Project v2 视图多出一条；apply 失败 skill 输出回滚命令清单（**逐条审查后执行**，不要批量复制粘贴，避免二次破坏）。Iteration configuration 是 append-only，不会删除历史 option，无数据丢失风险。
 
 ### Token scope
 
 | Scope | dry-run | --apply |
 |-------|---------|---------|
 | 仅 `repo`（云沙箱常见）| ✓ 降级"只读 brief"模式（只用 label 维度排序）| ✗ 报错退出，提示 `gh auth refresh -s project` |
-| `repo` + `project`（本地常见）| ✓ 完整模式（读 Project v2 字段，不写）| ✓ 完整模式（写 Iteration）|
+| `repo` + `project`（本地常见）| ✓ 完整模式（读 Project v2 字段，不写）| ✓ 完整模式（写 Iteration value + 必要时追加 option）|
+
+token scope 检测用宽松正则 `grep -qiE "scopes:.*\bproject\b"`，跨 gh 版本健壮（不依赖单引号风格）。
