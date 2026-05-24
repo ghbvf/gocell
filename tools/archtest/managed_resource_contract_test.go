@@ -86,7 +86,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/vault.Method":                    "value-object: auth method enum",
 	"adapters/vault.SecretIDProvider":          "interface: secret-id source, not a resource",
 	"adapters/vault.TokenRenewer":              "interface: optional renewal capability, not a resource",
-	"adapters/vault.TransitMetrics":            "subresource-not-owner: Prometheus collector set registered into caller-owned registry; no Close/Worker/readiness contract",
+	"adapters/vault.TransitMetrics":            "subresource-not-owner: collector set on caller-owned registry; no Close/Worker/readiness",
 	"adapters/vault.VaultClient":               "interface: Vault API subset, not an owner type",
 	"adapters/websocket.Conn":                  "subresource-not-owner: individual accepted connection lifecycle is handler-owned",
 	"adapters/websocket.UpgradeConfig":         "config: construction input value",
