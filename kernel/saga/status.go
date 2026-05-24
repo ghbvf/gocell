@@ -2,8 +2,8 @@ package saga
 
 import (
 	"fmt"
-	"slices"
 
+	"github.com/ghbvf/gocell/kernel/fsm"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -98,20 +98,13 @@ var statusTransitions = map[Status][]Status{
 
 // CanTransitionTo reports whether s can transition to target.
 func (s Status) CanTransitionTo(target Status) bool {
-	return slices.Contains(statusTransitions[s], target)
+	return fsm.CanTransition(statusTransitions, s, target)
 }
 
-// ValidTransitions returns the set of states reachable from s.
-// Returns nil for terminal states. The returned slice is a defensive copy;
-// mutating it does not affect the internal transition table.
+// ValidTransitions returns the set of states reachable from s, as a defensive
+// copy. Returns nil for terminal states.
 func (s Status) ValidTransitions() []Status {
-	targets := statusTransitions[s]
-	if len(targets) == 0 {
-		return nil
-	}
-	out := make([]Status, len(targets))
-	copy(out, targets)
-	return out
+	return fsm.AllowedTargets(statusTransitions, s)
 }
 
 // Transition validates a state transition from → to and returns an error if
