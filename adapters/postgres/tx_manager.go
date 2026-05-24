@@ -78,6 +78,10 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 
 	txCtx := CtxWithTx(ctx, tx)
 	txCtx = withSavepointDepth(txCtx, 0)
+	// Install the after-commit registry on the outermost tx. drainAfterCommit is
+	// true only here (the nested savepoint path never installs), so hooks fire
+	// once after the durable commit below, not on savepoint RELEASE.
+	txCtx, drainAfterCommit := persistence.WithAfterCommitRegistry(txCtx)
 
 	// Panic recovery — rollback and re-panic.
 	// Use context.WithoutCancel so rollback succeeds even if ctx is already canceled
@@ -109,6 +113,9 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 
 	if err := tx.Commit(ctx); err != nil {
 		return classifyPGError(err, ErrAdapterPGConnect, "commit tx")
+	}
+	if drainAfterCommit {
+		persistence.RunAfterCommitHooks(txCtx)
 	}
 	return nil
 }

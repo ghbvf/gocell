@@ -35,7 +35,14 @@ import (
 type demoTxRunner struct{}
 
 func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
+	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
+	if err := fn(ctx); err != nil {
+		return err
+	}
+	if drainAfterCommit {
+		persistence.RunAfterCommitHooks(ctx)
+	}
+	return nil
 }
 
 // runTodoorder is the hand-written runtime helper for the todoorder assembly.

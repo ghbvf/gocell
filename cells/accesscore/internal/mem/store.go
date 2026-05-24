@@ -125,7 +125,14 @@ type memTxRunner struct{ s *Store }
 func (r memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
-	return fn(context.WithValue(ctx, memTxKey{}, &memTxToken{store: r.s, holdsLock: true}))
+	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
+	if err := fn(context.WithValue(ctx, memTxKey{}, &memTxToken{store: r.s, holdsLock: true})); err != nil {
+		return err
+	}
+	if drainAfterCommit {
+		persistence.RunAfterCommitHooks(ctx)
+	}
+	return nil
 }
 
 // Store is the shared backing for an in-memory accesscore deployment. The
