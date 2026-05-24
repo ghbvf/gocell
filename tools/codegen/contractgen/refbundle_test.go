@@ -201,6 +201,74 @@ func TestBundleSchemaRefs(t *testing.T) {
 		}
 	})
 
+	t.Run("sibling_keys_dropped_on_ref_node", func(t *testing.T) {
+		// A $ref node that carries sibling keys alongside "$ref" (e.g. a
+		// "description" annotation) must be REPLACED wholesale by the resolved
+		// target — the sibling keys are NOT merged into the output. This matches
+		// the assertCanonicalRefOnly archtest rule: "no extra keys alongside $ref".
+		root := t.TempDir()
+
+		mixinContent := `{"type":"integer","minimum":1,"maximum":99999}`
+		mixinPath := filepath.Join(root, "shared", "version.json")
+		if err := os.MkdirAll(filepath.Dir(mixinPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(mixinPath, []byte(mixinContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		// The $ref node carries a sibling "description" key — intentionally
+		// non-canonical to document that sibling is dropped on replacement.
+		reqContent := `{
+  "type": "object",
+  "properties": {
+    "expectedVersion": { "$ref": "../shared/version.json", "description": "x" }
+  },
+  "additionalProperties": false
+}`
+		reqPath := filepath.Join(root, "req", "request.schema.json")
+		if err := os.MkdirAll(filepath.Dir(reqPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(reqPath, []byte(reqContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		out, err := bundleSchemaRefs(root, reqPath, []byte(reqContent))
+		if err != nil {
+			t.Fatalf("bundleSchemaRefs: %v", err)
+		}
+
+		var doc map[string]any
+		if err := json.Unmarshal(out, &doc); err != nil {
+			t.Fatalf("output is not valid JSON: %v", err)
+		}
+		props, ok := doc["properties"].(map[string]any)
+		if !ok {
+			t.Fatal("output has no properties object")
+		}
+		ev, ok := props["expectedVersion"].(map[string]any)
+		if !ok {
+			t.Fatal("expectedVersion property not found in output")
+		}
+
+		// The resolved node must carry the mixin's fields.
+		if ev["type"] != "integer" {
+			t.Errorf("expectedVersion.type = %v, want integer", ev["type"])
+		}
+
+		// The sibling "description" from the $ref node must NOT appear —
+		// the node was replaced, not merged.
+		if _, present := ev["description"]; present {
+			t.Errorf("sibling 'description' key must be dropped when $ref node is replaced, but it is present: %v", ev["description"])
+		}
+
+		// No $ref must remain in the output.
+		if strings.Contains(string(out), `"$ref"`) {
+			t.Errorf("output still contains $ref: %s", out)
+		}
+	})
+
 	t.Run("nested_ref_inlined", func(t *testing.T) {
 		root := t.TempDir()
 

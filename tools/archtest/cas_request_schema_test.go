@@ -32,8 +32,14 @@
 // clients surface ERR_VERSION_CONFLICT; "is a CAS contract" is DERIVED from the
 // presence of the expectedVersion field, not from a maintained list.
 //
-// AI-robust blind-spot self-check (forms outside the assertions above, each with
-// a reverse assertion below):
+// $ref relative-path depth examples (count ".." segments from the contract dir
+// to contracts/shared/cas/v1/):
+//
+//	contracts/http/config/{action}/v1/ → ../../../../shared/cas/v1/expected_version.schema.json  (4× ..)
+//	contracts/http/flags/{action}/v1/ → ../../../../../shared/cas/v1/expected_version.schema.json (5× ..)
+//
+// AI-robust blind-spot self-check (forms outside the assertions above); each
+// has a dedicated reverse-assertion test in TestCASBlindSpotReverseAssertions:
 //   - $ref with extra sibling keys (draft-2020-12 $ref+siblings): rejected —
 //     the property/param map must contain ONLY the sanctioned keys.
 //   - $ref pointing at a non-canonical path: rejected — exact-string match to
@@ -233,22 +239,40 @@ func dirRequestSchemaHasExpectedVersion(t *testing.T, root, dir string) bool {
 	return len(findExpectedVersionInProperties(doc)) > 0
 }
 
-// assertCanonicalRefOnly asserts m == {"$ref": canonical} plus the allowed extra keys.
-func assertCanonicalRefOnly(t *testing.T, relPath, where string, m map[string]any, canonical string, allowedExtra ...string) {
-	t.Helper()
+// checkCanonicalRefOnly is the pure predicate behind assertCanonicalRefOnly.
+// It returns a slice of violation strings (empty = valid). allowedExtra is the
+// set of keys permitted alongside "$ref" (e.g. {"required": true} for query params).
+func checkCanonicalRefOnly(m map[string]any, canonical string, allowedExtra map[string]bool) []string {
+	var violations []string
 	ref, ok := m["$ref"].(string)
-	require.True(t, ok,
-		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s %s must be a $ref to the shared mixin (inline definition banned)", relPath, where)
-	assert.Equal(t, canonical, ref,
-		"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s %s $ref must point at the canonical mixin", relPath, where)
-
+	if !ok {
+		violations = append(violations, "must be a $ref to the shared mixin (inline definition banned)")
+		return violations
+	}
+	if ref != canonical {
+		violations = append(violations, "\"$ref\" must point at the canonical mixin (got "+ref+")")
+	}
 	allowed := map[string]bool{"$ref": true}
-	for _, k := range allowedExtra {
+	for k := range allowedExtra {
 		allowed[k] = true
 	}
 	for k := range m {
-		assert.True(t, allowed[k],
-			"CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s %s carries disallowed inline key %q alongside $ref", relPath, where, k)
+		if !allowed[k] {
+			violations = append(violations, "carries disallowed inline key \""+k+"\" alongside $ref")
+		}
+	}
+	return violations
+}
+
+// assertCanonicalRefOnly asserts m == {"$ref": canonical} plus the allowed extra keys.
+func assertCanonicalRefOnly(t *testing.T, relPath, where string, m map[string]any, canonical string, allowedExtra ...string) {
+	t.Helper()
+	extra := map[string]bool{}
+	for _, k := range allowedExtra {
+		extra[k] = true
+	}
+	for _, v := range checkCanonicalRefOnly(m, canonical, extra) {
+		t.Errorf("CAS-CONTRACT-EXPECTED-VERSION-SCHEMA-01: %s %s: %s", relPath, where, v)
 	}
 }
 
@@ -276,15 +300,112 @@ func walkContractFiles(t *testing.T, root, base string, fn func(relPath string, 
 }
 
 // stringInList reports whether want is in a YAML/JSON []any of strings.
+// Comparison is case-sensitive: JSON Schema required[] member names are
+// CASE-SENSITIVE wire field names.
 func stringInList(v any, want string) bool {
 	list, ok := v.([]any)
 	if !ok {
 		return false
 	}
 	for _, item := range list {
-		if s, ok := item.(string); ok && strings.EqualFold(s, want) {
+		if s, ok := item.(string); ok && s == want {
 			return true
 		}
 	}
 	return false
+}
+
+// TestCASBlindSpotReverseAssertions contains dedicated reverse self-check tests
+// for the four AI-robust blind spots listed in the package godoc. Each subtest
+// constructs a synthetic bad input, feeds it to the pure helper, and asserts
+// the helper REJECTS it — proving the funnel catches that blind-spot form.
+// No real contract files are used.
+func TestCASBlindSpotReverseAssertions(t *testing.T) {
+	t.Parallel()
+	const canonical = "../../../../shared/cas/v1/expected_version.schema.json"
+
+	// Blind spot 1: $ref with an extra sibling key (draft-2020-12 $ref+siblings).
+	// checkCanonicalRefOnly with no allowedExtra must flag the extra key.
+	t.Run("ref-with-extra-sibling-key-rejected", func(t *testing.T) {
+		t.Parallel()
+		m := map[string]any{
+			"$ref":        canonical,
+			"description": "should not be here",
+		}
+		violations := checkCanonicalRefOnly(m, canonical, nil)
+		if len(violations) == 0 {
+			t.Error("expected violation for extra sibling key 'description', got none")
+		}
+		found := false
+		for _, v := range violations {
+			if strings.Contains(v, "description") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected violation mentioning 'description', got: %v", violations)
+		}
+	})
+
+	// Blind spot 2: $ref pointing at a non-canonical path.
+	// checkCanonicalRefOnly must flag a mismatched $ref value.
+	t.Run("ref-wrong-path-rejected", func(t *testing.T) {
+		t.Parallel()
+		m := map[string]any{
+			"$ref": "../../wrong/path/expected_version.schema.json",
+		}
+		violations := checkCanonicalRefOnly(m, canonical, nil)
+		if len(violations) == 0 {
+			t.Error("expected violation for wrong $ref path, got none")
+		}
+	})
+
+	// Blind spot 3: nested expectedVersion inside a nested object's properties.
+	// findExpectedVersionInProperties must recurse and find it.
+	t.Run("nested-expected-version-found", func(t *testing.T) {
+		t.Parallel()
+		// Simulate: { properties: { foo: { properties: { expectedVersion: {$ref: canonical} },
+		//                                   required: ["expectedVersion"] } } }
+		inner := map[string]any{
+			"properties": map[string]any{
+				casFieldName: map[string]any{"$ref": canonical},
+			},
+			"required": []any{casFieldName},
+		}
+		doc := map[string]any{
+			"properties": map[string]any{
+				"foo": inner,
+			},
+		}
+		hits := findExpectedVersionInProperties(doc)
+		if len(hits) == 0 {
+			t.Error("expected findExpectedVersionInProperties to find nested expectedVersion, got none")
+		}
+	})
+
+	// Blind spot 4: query param carrying inline type alongside $ref (only {$ref,
+	// required} are sanctioned for CAS query params). checkCanonicalRefOnly with
+	// allowedExtra={"required"} must flag "type".
+	t.Run("query-inline-type-alongside-ref-rejected", func(t *testing.T) {
+		t.Parallel()
+		m := map[string]any{
+			"$ref":     canonical,
+			"type":     "integer",
+			"required": true,
+		}
+		allowed := map[string]bool{"required": true}
+		violations := checkCanonicalRefOnly(m, canonical, allowed)
+		if len(violations) == 0 {
+			t.Error("expected violation for inline 'type' key alongside $ref, got none")
+		}
+		found := false
+		for _, v := range violations {
+			if strings.Contains(v, "type") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected violation mentioning 'type', got: %v", violations)
+		}
+	})
 }

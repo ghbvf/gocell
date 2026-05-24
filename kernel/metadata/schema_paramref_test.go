@@ -234,6 +234,46 @@ endpoints:
 	require.Error(t, err, "parse should fail for path-escaping $ref")
 }
 
+// TestParamRefInvalidJSONMixin asserts that a mixin file that exists but
+// contains malformed JSON causes ParseFS/ResolveParamRef to return a parse
+// error (errcode "param $ref file is not valid JSON").
+func TestParamRefInvalidJSONMixin(t *testing.T) {
+	contractYAML := `id: http.test.delete.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: testcell
+  clients:
+    - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/test/{key}
+    pathParams:
+      key:
+        type: string
+        minLength: 1
+        maxLength: 256
+    queryParams:
+      expectedVersion:
+        $ref: "../../../../shared/cas/v1/expected_version.schema.json"
+        required: true
+    successStatus: 204
+    noContent: true
+`
+	// Mixin exists but contains malformed JSON.
+	fsys := contractWithParamRefFS(contractYAML, map[string][]byte{
+		"contracts/shared/cas/v1/expected_version.schema.json": []byte(`{ "type": "integer", INVALID }`),
+	})
+	_, err := NewParser("").ParseFS(fsys)
+	require.Error(t, err, "parse should fail when mixin JSON is malformed")
+	// Error() surfaces InternalMessage (param/ref) + cause (JSON parse error).
+	// Both confirm the error originated from malformed mixin JSON.
+	assert.Contains(t, err.Error(), "expectedVersion", "error should identify the param name")
+	assert.Contains(t, err.Error(), "invalid character", "error should include the JSON parse cause")
+}
+
 // TestParamRefUnchangedWhenAbsent asserts that a param without $ref is
 // loaded identically to before — the resolver is a no-op for such params.
 func TestParamRefUnchangedWhenAbsent(t *testing.T) {

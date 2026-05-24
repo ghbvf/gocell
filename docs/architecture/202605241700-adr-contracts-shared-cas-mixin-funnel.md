@@ -58,6 +58,14 @@ contract 文件域无 Go 类型系统，跨层不能共享 tools/ 代码，故�
 governance FMT-25 `inlineCrossFileSchemaRefs`（新，否则 `scanSchemaForInputConstraints` 报
 "non-local $ref not supported"）。这是分层架构的必要代价，非可消除的重复。
 
+**新增第四个跨文件 `$ref` 解析者的 checklist**（如 fixture generator / scenario test）：
+
+1. root-guard：拒绝绝对路径 `$ref` + `IsWithinRoot`/`fs.ValidPath`/allow-list 守护（三者择一，按所在层的 IO）。
+2. 拒绝 `http(s)://` 绝对 URL。
+3. cycle guard（visited set，DFS-scoped）。
+4. missing-file 错误包成本层的领域错误类型（不要裸 `*os.PathError` 泄漏给上层误判），点名缺失的是 `$ref` target 而非引用者。
+5. 同 PR 更新本 ADR。
+
 ## AI-robust 评级
 
 - **value 单源 = Hard**：CAS 约束只有 1 份定义；codegen flatten/bundle（body）+ parser 回填（query）
@@ -94,6 +102,8 @@ governance FMT-25 `inlineCrossFileSchemaRefs`（新，否则 `scanSchemaForInput
 - examples/ 下契约无 `expectedVersion`（已 grep 确认），不在扫描误报范围
 - DB 层 CAS（`config_entries.version` 乐观锁）由独立 migration 治理，与 wire 契约 mixin 无关
 - 其他 wire 字段（pageSize / eventId 等）有各自的 archtest baseline，不纳入本 mixin
+- `contracts/shared/` 是 mixin-only 命名空间（跨 kind 共享 schema 片段，如 errors / cas）；CLAUDE.md 的
+  `{kind}` 枚举（http / event / command / projection）针对契约本体，`shared` 不是一个 kind，不与之冲突
 
 ## Related
 

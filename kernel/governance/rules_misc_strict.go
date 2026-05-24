@@ -868,6 +868,10 @@ func scanSchemaForInputConstraints(absPath, projectRoot string) ([]inputConstrai
 // type/minimum/maximum. Same-file refs ("#/...") and absolute URLs are left
 // untouched. dir is the directory of the file currently being walked; projectRoot
 // bounds the path-traversal guard; seen breaks cross-file cycles by absolute path.
+//
+// The passed node (when a map) is mutated in place. Callers must pass a
+// freshly-unmarshalled map, not a shared or cached map, to avoid corrupting
+// other consumers.
 func inlineCrossFileSchemaRefs(node any, dir, projectRoot string, seen map[string]bool) (any, error) {
 	switch n := node.(type) {
 	case map[string]any:
@@ -880,7 +884,8 @@ func inlineCrossFileSchemaRefs(node any, dir, projectRoot string, seen map[strin
 }
 
 // inlineRefsInMap replaces a cross-file $ref map with its referenced content, or
-// recurses into each child value.
+// recurses into each child value. It mutates n in place for non-$ref maps;
+// callers must pass a freshly-unmarshalled map, not a shared or cached one.
 func inlineRefsInMap(n map[string]any, dir, projectRoot string, seen map[string]bool) (any, error) {
 	if ref, ok := n["$ref"].(string); ok && isCrossFileSchemaRef(ref) {
 		return resolveCrossFileSchemaRef(ref, dir, projectRoot, seen)
@@ -919,6 +924,14 @@ func isCrossFileSchemaRef(ref string) bool {
 // resolveCrossFileSchemaRef reads the referenced file (guarded within
 // projectRoot) and returns its fully-inlined content.
 func resolveCrossFileSchemaRef(ref, dir, projectRoot string, seen map[string]bool) (any, error) {
+	// Reject absolute-path $ref values before any path join. filepath.Join drops
+	// the base directory when the second argument is absolute (e.g.
+	// filepath.Join("/a/b", "/etc/passwd") == "/etc/passwd"), so we must check
+	// before joining. This mirrors the contractgen bundler behavior
+	// (tools/codegen/contractgen/refbundle.go::validateRefString).
+	if filepath.IsAbs(filepath.FromSlash(ref)) {
+		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref %q must be relative", ref)}
+	}
 	targetAbs := filepath.Clean(filepath.Join(dir, filepath.FromSlash(ref)))
 	if projectRoot != "" && !IsWithinRoot(projectRoot, targetAbs) {
 		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref %q escapes project root", ref)}
@@ -928,7 +941,10 @@ func resolveCrossFileSchemaRef(ref, dir, projectRoot string, seen map[string]boo
 	}
 	raw, err := os.ReadFile(filepath.Clean(targetAbs))
 	if err != nil {
-		return nil, err
+		// Wrap as schemaWalkError so the caller's os.IsNotExist branch does not
+		// mis-attribute the missing file to the main schema. The walkErr branch
+		// (~line 746) surfaces the $ref path in the field + message instead.
+		return nil, &schemaWalkError{path: ref, msg: fmt.Sprintf("cross-file $ref target %q not found: %v", targetAbs, err)}
 	}
 	var target any
 	if err := json.Unmarshal(raw, &target); err != nil {

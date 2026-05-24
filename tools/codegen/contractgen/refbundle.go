@@ -123,6 +123,11 @@ func loadAndStripRef(rootDir, currentFile, refStr string, visited map[string]str
 	if _, seen := visited[targetAbs]; seen {
 		return nil, fmt.Errorf("refbundle: circular $ref detected: %s", targetAbs)
 	}
+	// visited is DFS-stack-scoped, not a permanent seen-set: we mark the file
+	// before recursing and remove it via defer when the DFS subtree unwinds.
+	// This means the same file CAN be $ref'd from multiple independent parents
+	// (DAG sharing is allowed) while still detecting cycles on the active DFS
+	// path (a file cannot directly or transitively reference itself).
 	visited[targetAbs] = struct{}{}
 	defer delete(visited, targetAbs)
 

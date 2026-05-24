@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"path"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -95,6 +96,7 @@ func ResolveParamRef(
 			errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"param $ref target not found or unreadable",
 			err,
+			errcode.WithDetails(slog.String("param", paramName), slog.String("ref", param.Ref)),
 			errcode.WithInternal(fmt.Sprintf("param=%q ref=%q dir=%q", paramName, param.Ref, contractDir)),
 		)
 	}
