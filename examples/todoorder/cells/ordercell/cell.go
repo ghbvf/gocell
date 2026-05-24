@@ -17,7 +17,6 @@ import (
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -141,12 +140,10 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 		return err
 	}
 
-	// Register emitter health probes (fail-open rate checker) via the
-	// cellgen-generated typed funnel.
-	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
-		if err := RegisterEmitterProbes(reg, hc); err != nil {
-			return err
-		}
+	// Register emitter health probes (fail-open rate checker) via the shared
+	// kernel funnel.
+	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {
+		return err
 	}
 
 	// Default to in-memory repository if none injected.

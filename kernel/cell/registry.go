@@ -123,8 +123,9 @@ type Registrar interface {
 	// at registration time.
 	//
 	// WARNING: cells/ code must NOT call reg.Healthz().Register(...) directly.
-	// All probe registration must go through the cellgen-generated typed helpers
-	// (RegisterRepoReady, RegisterEmitterProbes) in cells/<cell>/healthz_gen.go.
+	// All probe registration must go through the typed funnels: the cellgen
+	// RegisterRepoReady helper in cells/<cell>/healthz_gen.go (cell-repo probes)
+	// and the shared kernel cell.RegisterEmitterHealthProbes (emitter probes).
 	// Direct Register calls from hand-written cell code are blocked by archtest
 	// HEALTHZ-TYPED-REGISTER-01. This restriction does not apply to
 	// runtime/bootstrap or runtime/observability/healthz/healthztest.
@@ -518,9 +519,10 @@ func (r *RegistryRecorder) registerProbe(p healthz.Probe) error {
 }
 
 // recorderProbeSink adapts a RegistryRecorder to the healthz.Aggregator
-// interface so the cellgen-generated RegisterRepoReady / RegisterEmitterProbes
-// helpers (which call reg.Healthz().Register(...)) accumulate into the
-// recorder's snapshot rather than a live aggregator. It is write-only:
+// interface so the typed funnels — the cellgen RegisterRepoReady helper and
+// the kernel cell.RegisterEmitterHealthProbes funnel (which call
+// reg.Healthz().Register(...)) — accumulate into the recorder's snapshot
+// rather than a live aggregator. It is write-only:
 // Deregister mutates the accumulator; Evaluate is a documented no-op.
 type recorderProbeSink struct {
 	rec *RegistryRecorder

@@ -355,10 +355,8 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 
 // registerHealthAndLifecycle registers health probes and the sweeper lifecycle hook.
 func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registrar) error {
-	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
-		if err := RegisterEmitterProbes(reg, hc); err != nil {
-			return err
-		}
+	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {
+		return err
 	}
 	// Cell-level repo readiness probes (observability.md §"Cell 级别 Repo Readiness Probe").
 	// M1 cellgen emits exactly one RegisterRepoReady helper per cell (the cell's

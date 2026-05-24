@@ -23,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -423,10 +422,8 @@ func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registrar) error {
 	if err := RegisterRepoReady(reg, c.sessionStore); err != nil {
 		return err
 	}
-	if hc, ok := c.emitter.(healthz.ProbeSet); ok {
-		if err := RegisterEmitterProbes(reg, hc); err != nil {
-			return err
-		}
+	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {
+		return err
 	}
 	if c.refreshGCEnabled {
 		reg.Lifecycle(c.refreshGCHook())

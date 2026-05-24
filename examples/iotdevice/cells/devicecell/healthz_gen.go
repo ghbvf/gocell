@@ -6,7 +6,6 @@ package devicecell
 import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // ProbeRepoReady is the canonical readiness probe name for the devicecell cell's
@@ -18,25 +17,10 @@ const ProbeRepoReady = "devicecell_repo_ready"
 // cell-level repository readiness probe on the given Registry. This is the
 // sole sanctioned entry point — handwritten cell code must NOT call
 // reg.Healthz() directly (locked by HEALTHZ-TYPED-REGISTER-01).
+//
+// Emitter health probes are NOT generated per-cell: they go through the shared
+// kernel funnel cell.RegisterEmitterHealthProbes(reg, emitter), which handles
+// the healthz.ProbeSet assertion and typed-nil guard in one place.
 func RegisterRepoReady(reg cell.Registrar, p healthz.RepoProber) error {
 	return reg.Healthz().Register(healthz.NewProbe(ProbeRepoReady, p.RepoReady))
-}
-
-// RegisterEmitterProbes registers all probes exposed by a healthz.ProbeSet
-// (typically outbox.DirectEmitter) on the given Registry. This is the sole
-// sanctioned entry point for emitter probes — handwritten cell code must NOT
-// call reg.Healthz() directly (locked by HEALTHZ-TYPED-REGISTER-01).
-// Both bare-nil and typed-nil ProbeSet interface values are silently ignored
-// via pkg/validation.IsNilInterface (the kernel/ + runtime/ single-source
-// typed-nil helper — see .claude/rules/gocell/runtime-api.md).
-func RegisterEmitterProbes(reg cell.Registrar, ps healthz.ProbeSet) error {
-	if validation.IsNilInterface(ps) {
-		return nil
-	}
-	for _, p := range ps.Probes() {
-		if err := reg.Healthz().Register(p); err != nil {
-			return err
-		}
-	}
-	return nil
 }

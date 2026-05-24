@@ -242,10 +242,63 @@ func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: bundle plan failed", err)
 	}
 
-	return []pathsafe.PlannedFile{
+	plan := []pathsafe.PlannedFile{
 		{AbsPath: filepath.Join(absDir, "cell.go"), Content: cellGoContent},
 		{AbsPath: filepath.Join(absDir, "cell.yaml"), Content: cellYAMLContent},
-	}, nil
+	}
+
+	archLayers, err := planInternalArchLayers(realRoot, spec.CellID.String())
+	if err != nil {
+		return nil, err
+	}
+	return append(plan, archLayers...), nil
+}
+
+// mandatoryInternalLayers are the two internal/ architecture layers every
+// scaffolded cell starts with: ports (inward-facing interfaces) and mem
+// (in-memory implementations for demo/test). Optional layers (domain / dto /
+// events / adapters / testutil) are NOT scaffolded — they grow on demand (see
+// .claude/rules/gocell/cell-patterns.md "internal/ 子包布局"). Seeding one
+// doc.go starter per layer mirrors go-kratos/kratos-layout (one starter file
+// per architecture layer); empty dirs are avoided because git does not track
+// them and go-zero/goctl likewise never emits empty directories.
+//
+// ref: go-kratos/kratos-layout internal/{biz,data}.go; zeromicro/go-zero
+// tools/goctl/rpc/generator/mkdir.go (every emitted dir holds a file).
+var mandatoryInternalLayers = []struct{ pkg, summary string }{
+	{"ports", "defines the repository and service interfaces for the %s cell.\n//\n" +
+		"// Adapters (mem here, plus on-demand postgres/etc.) depend inward on these\n" +
+		"// interfaces; the cell wires a concrete implementation at construction time."},
+	{"mem", "provides in-memory implementations of the %s cell's ports interfaces,\n" +
+		"// used by demo mode and tests. Production adapters are added on demand under\n" +
+		"// internal/adapters/."},
+}
+
+// planInternalArchLayers renders the doc.go stub for each mandatory internal/
+// architecture layer and returns them as PlannedFiles (written via the same
+// pathsafe.WritePlannedFiles funnel as the rest of the bundle, per
+// SCAFFOLD-WRITE-FUNNEL-01).
+func planInternalArchLayers(realRoot, cellID string) ([]pathsafe.PlannedFile, error) {
+	items := make([]pathsafe.PlannedFile, 0, len(mandatoryInternalLayers))
+	for _, l := range mandatoryInternalLayers {
+		targetDir := filepath.Join("cells", cellID, "internal", l.pkg)
+		absDir, err := pathsafe.ContainPath(realRoot, targetDir)
+		if err != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"scaffold cell: internal layer path failed", err)
+		}
+		src := fmt.Sprintf("// Package %s %s\npackage %s\n", l.pkg, fmt.Sprintf(l.summary, cellID), l.pkg)
+		formatted, err := codegen.FormatGoSource("", []byte(src))
+		if err != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"scaffold cell: format internal layer doc.go failed", err)
+		}
+		items = append(items, pathsafe.PlannedFile{
+			AbsPath: filepath.Join(absDir, "doc.go"),
+			Content: formatted,
+		})
+	}
+	return items, nil
 }
 
 // resolveBundleVariants picks the contract variants to scaffold from the

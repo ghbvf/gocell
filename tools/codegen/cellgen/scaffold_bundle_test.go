@@ -68,6 +68,9 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 	wantFiles := []string{
 		"cells/myhttpcell/cell.yaml",
 		"cells/myhttpcell/cell.go",
+		// Mandatory internal/ architecture layers (ports + mem) seeded for every cell.
+		"cells/myhttpcell/internal/ports/doc.go",
+		"cells/myhttpcell/internal/mem/doc.go",
 		"cells/myhttpcell/slices/myhttpcellexample/slice.yaml",
 		"cells/myhttpcell/slices/myhttpcellexample/service.go",
 		"cells/myhttpcell/slices/myhttpcellexample/service_test.go",
@@ -79,6 +82,26 @@ func TestScaffoldCellBundle_HTTP(t *testing.T) {
 		full := filepath.Join(dir, rel)
 		if _, err := os.Stat(full); err != nil {
 			t.Errorf("bundle missing %s: %v", rel, err)
+		}
+	}
+
+	// Verify the mandatory internal/ arch-layer doc.go stubs carry the correct
+	// package clause + cellID in the godoc (not just exist) — locks the
+	// planInternalArchLayers output, not merely directory presence.
+	for pkg := range map[string]struct{}{"ports": {}, "mem": {}} {
+		docPath := filepath.Join(dir, "cells", "myhttpcell", "internal", pkg, "doc.go")
+		doc, err := os.ReadFile(docPath) //nolint:gosec // tempdir test fixture
+		if err != nil {
+			t.Fatalf("read internal/%s/doc.go: %v", pkg, err)
+		}
+		if !strings.HasPrefix(string(doc), "// Package "+pkg+" ") {
+			t.Errorf("internal/%s/doc.go must start with `// Package %s `; got:\n%s", pkg, pkg, string(doc))
+		}
+		if !strings.Contains(string(doc), "\npackage "+pkg+"\n") {
+			t.Errorf("internal/%s/doc.go must declare `package %s`; got:\n%s", pkg, pkg, string(doc))
+		}
+		if !strings.Contains(string(doc), "myhttpcell") {
+			t.Errorf("internal/%s/doc.go godoc should mention the cellID; got:\n%s", pkg, string(doc))
 		}
 	}
 
@@ -121,6 +144,8 @@ func TestScaffoldCellBundle_Events(t *testing.T) {
 	wantFiles := []string{
 		"cells/myevtcell/cell.yaml",
 		"cells/myevtcell/cell.go",
+		"cells/myevtcell/internal/ports/doc.go",
+		"cells/myevtcell/internal/mem/doc.go",
 		"cells/myevtcell/slices/myevtcellexample/slice.yaml",
 		"cells/myevtcell/slices/myevtcellexample/service.go",
 		"cells/myevtcell/slices/myevtcellexample/service_test.go",

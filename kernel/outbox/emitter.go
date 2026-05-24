@@ -247,8 +247,8 @@ var _ Emitter = (*DirectEmitter)(nil)
 // "soft failure, do not evict" from "hard failure, drain traffic".
 var ErrDegraded = errcode.New(errcode.KindUnavailable, errcode.ErrOutboxDegraded, "degraded")
 
-// Probes returns a []healthz.Probe slice for cells to register via
-// RegisterEmitterProbes (cellgen-generated). The probe name is scoped by cellID
+// Probes returns a []healthz.Probe slice for cells to register via the shared
+// kernel funnel cell.RegisterEmitterHealthProbes. The probe name is scoped by cellID
 // to avoid collisions when multiple cells own a DirectEmitter (each /readyz
 // checker name MUST be globally unique).
 //

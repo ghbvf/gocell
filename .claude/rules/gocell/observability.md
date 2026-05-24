@@ -89,7 +89,7 @@ ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sib
 - Adapter readiness probe 使用 stable snake_case，并以后缀 `_ready` 表示依赖可用性，例如 `rabbitmq_ready`、`vault_transit_ready`。
 - 一个 adapter 只有单一外部依赖时，禁止同时暴露多个同义 ready probe；多角色 worker 可用 `component-role` 拆分不同失败域。
 - probe 名是运维契约；改名必须同步 dashboard / alert / 文档。
-- Adapter probe 名是 `kernel/healthz.ReadyProbeName` typed-string funnel：各 adapter 声明 typed const（如 `postgres.ProbeReady`），构造点（Checkers map key 走 `string(<const>)`、`adapterutil.HealthToCheckers` 首参收 typed）只能引用声明的 const，裸字面量在静态分析层不可表达。archtest `OPS-CONTRACT-STRING-FUNNEL-01` 双向锁（下游构造解析 + 上游声明站点锁）+ golden inventory；符号清单活在该 archtest 的 package godoc。框架 probe（`config_watcher` / `outbox_failopen_rate_<cell>`）走 `NewProbe` / `WithHealthChecker` 的裸 `string`，由 `READYZ-PROBE-NAMING-01` 守 hyphen；cell repo probe 由 cellgen `RegisterRepoReady` funnel。
+- Adapter probe 名是 `kernel/healthz.ReadyProbeName` typed-string funnel：各 adapter 声明 typed const（如 `postgres.ProbeReady`），构造点（Checkers map key 走 `string(<const>)`、`adapterutil.HealthToCheckers` 首参收 typed）只能引用声明的 const，裸字面量在静态分析层不可表达。archtest `OPS-CONTRACT-STRING-FUNNEL-01` 双向锁（下游构造解析 + 上游声明站点锁）+ golden inventory；符号清单活在该 archtest 的 package godoc。框架 probe（`config_watcher` / `outbox_failopen_rate_<cell>`）走 `NewProbe` / `WithHealthChecker` 的裸 `string`，由 `READYZ-PROBE-NAMING-01` 守 hyphen。注册路径分两个 typed funnel：emitter probe（`outbox_failopen_rate_<cell>`）经 kernel `cell.RegisterEmitterHealthProbes(reg, emitter)` 共享 funnel（内部做 `healthz.ProbeSet` 断言 + typed-nil 守卫，删 per-cell 重复，不改 probe 名分类）；cell repo probe 由 cellgen `RegisterRepoReady` funnel。
 
 ### Cell 级别 Repo Readiness Probe
 
@@ -104,6 +104,8 @@ ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sib
 **为何不与 `postgres_ready` 合并**：pool 级 `postgres_ready`（`adapters/postgres.*Pool` 注册，bare `Ping`）只覆盖连接活性；cell-level repo probe 执行各 cell 自己关系表上的代表性查询，能捕获 schema/migration 漂移、表级权限丢失、缺失表等 pool Ping 检测不到的失败模式——失败域不同，非同义重复，不在"禁止暴露多个同义 ready probe"范围内。
 
 **注册方式约束**：cell-level repo readiness probe **必须**通过 cellgen 生成的 `<cellpkg>.RegisterRepoReady(reg, prober)` 有类型 funnel 注册（`healthz_gen.go` 生成产物）；禁止直接调用 `reg.Healthz()` 注册 repo probe，也禁止以匿名 duck-type 形式绕过（accesscore 曾因此产生一个永远不触发的死代码 probe，已在 PR-REPO-READYZ 修复）。enforcement：archtest `HEALTHZ-WRITE-01`（A2 caller allowlist 锁 Register callsites）+ `HEALTHZ-TYPED-REGISTER-01`（锁 cells/ 包内 `reg.Healthz()` 调用必须在 `healthz_gen.go` 内）；`kernel/cell/celltest.RunRepoReadinessConformance` 提供 real-failure-injection 合规测试（healthy → nil；PG 表删除 → non-nil；mem → skip）。
+
+emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：cell 不再各自生成 `RegisterEmitterProbes`，而是统一调 kernel `cell.RegisterEmitterHealthProbes(reg, c.emitter)`（内含 `healthz.ProbeSet` 断言 + `validation.IsNilInterface` 守卫）。该 funnel 是 `HEALTHZ-WRITE-01/A2` allowlist 的唯一 kernel/ caller（A2 scan scope 含 kernel/）。AI-robust 评级：下游 Medium（`HEALTHZ-TYPED-REGISTER-01` 锁 cells/ 不直调 `reg.Healthz()`）+ 上游 Medium（A2 caller allowlist），共享既有 healthz funnel 的 Hard-upgrade 路径 `HEALTHZ-HOLDER-SEAL-01`（seal `Aggregator` interface）。
 
 ## HTTP Metrics `cell` Label
 

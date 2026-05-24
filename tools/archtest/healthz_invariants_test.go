@@ -24,8 +24,12 @@
 //
 //   - runtime/bootstrap/bootstrap_phases.go (registerHealthChecker helper)
 //
-//   - cells/<cell>/healthz_gen.go (typed helpers RegisterRepoReady, RegisterEmitterProbes)
-//     plus any test files (*_test.go). Any other Register callsite fails CI.
+//   - cells/<cell>/healthz_gen.go (cellgen typed helper RegisterRepoReady)
+//     plus any test files (*_test.go).
+//
+//   - kernel/cell/healthz.go (cell.RegisterEmitterHealthProbes — the single
+//     emitter-probe funnel shared by all cells). Any other Register callsite
+//     fails CI.
 //
 //   - A3 (upstream Medium → backlog HEALTHZ-HOLDER-SEAL-01): structs holding
 //     a healthz.Aggregator interface-typed field are restricted to:
@@ -53,7 +57,9 @@
 //	     the method Healthz on kernel/cell.Registrar receiver
 //	  2. healthz_gen.go must contain the cellgen DO NOT EDIT marker line
 //	This ensures hand-written cell code (cell_init.go, handler.go, etc.) routes
-//	through the typed RegisterRepoReady / RegisterEmitterProbes helpers.
+//	through the typed cellgen RegisterRepoReady helper (cell-repo probes) and the
+//	kernel cell.RegisterEmitterHealthProbes funnel (emitter probes) — never
+//	reg.Healthz() directly.
 //
 // # Tool blind spots (forms RunTyped / *types.Info cannot see)
 //
@@ -124,6 +130,14 @@ var healthzRegisterExactPaths = map[string]bool{
 	"runtime/bootstrap/phases_lifecycle.go":                    true,
 	"runtime/bootstrap/phases_events.go":                       true,
 	"runtime/bootstrap/bootstrap_phases.go":                    true,
+	// kernel/cell/healthz.go: the sanctioned emitter-probe funnel
+	// cell.RegisterEmitterHealthProbes — the sole kernel/ caller of
+	// healthz.Aggregator.Register. Cells route emitter probes through this
+	// helper (the former per-cell cellgen RegisterEmitterProbes is removed);
+	// cell-repo probes still go through cellgen RegisterRepoReady in
+	// cells/<cell>/healthz_gen.go. Upstream-Hard upgrade for the whole funnel:
+	// seal the Aggregator interface — HEALTHZ-HOLDER-SEAL-01 (gh issue #893).
+	"kernel/cell/healthz.go": true,
 }
 
 // A3 allowlist: (pkg path, type name) pairs allowed to hold a healthz.Aggregator field.
@@ -269,17 +283,41 @@ func isAggregatorRegisterCall(call *ast.CallExpr, info *types.Info) bool {
 	return fn.Pkg() != nil && fn.Pkg().Path() == healthzAggPkgPath && fn.Name() == "Register"
 }
 
-// isAllowedA2Caller reports whether a Register call from the given relative
-// file path is in the allowlist.
-func isAllowedA2Caller(rel string) bool {
+// isCellgenHealthzGenPath reports whether rel has the exact path shape of a
+// cellgen-generated healthz_gen.go, i.e. cells/<cell>/healthz_gen.go or
+// examples/<demo>/cells/<cell>/healthz_gen.go. A bare basename match
+// (filepath.Base == "healthz_gen.go") is intentionally NOT used: once A2's scan
+// scope includes kernel/, a hand-written kernel/foo/healthz_gen.go (or any other
+// non-cell path) would otherwise be allowlisted by filename alone, bypassing the
+// Register callsite guard. Mirrors golangci-lint depguard's path-glob scoping
+// rather than basename-wide exemption.
+func isCellgenHealthzGenPath(rel string) bool {
+	segs := strings.Split(filepath.ToSlash(rel), "/")
+	if len(segs) == 0 || segs[len(segs)-1] != "healthz_gen.go" {
+		return false
+	}
+	switch {
+	case len(segs) == 3 && segs[0] == "cells":
+		return true // cells/<cell>/healthz_gen.go
+	case len(segs) == 5 && segs[0] == "examples" && segs[2] == "cells":
+		return true // examples/<demo>/cells/<cell>/healthz_gen.go
+	default:
+		return false
+	}
+}
+
+// isAllowedA2Caller reports whether a Register call from the given file is in the
+// allowlist. absPath is the on-disk path of rel; it is read to confirm the
+// cellgen DO NOT EDIT marker for the healthz_gen.go funnel (a hand-written file
+// at a valid path shape but without the marker is NOT exempt).
+func isAllowedA2Caller(rel, absPath string) bool {
 	slash := filepath.ToSlash(rel)
-	// Exact path match
+	// Exact path match (marker-independent: these are non-generated sanctioned callers).
 	if healthzRegisterExactPaths[slash] {
 		return true
 	}
-	// basename match: any cells/<cell>/healthz_gen.go (including inside
-	// examples/) is allowed — cellgen output is the sanctioned funnel.
-	if filepath.Base(rel) == "healthz_gen.go" {
+	// cellgen funnel: exact path shape AND the cellgen marker must both hold.
+	if isCellgenHealthzGenPath(rel) && fileHasCellgenMarker(absPath) {
 		return true
 	}
 	// Test files are always allowed
@@ -290,11 +328,11 @@ func isAllowedA2Caller(rel string) bool {
 }
 
 // scanHealthzA2 walks file for Aggregator.Register calls outside the allowlist.
-func scanHealthzA2(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+func scanHealthzA2(fset *token.FileSet, file *ast.File, rel, absPath string, info *types.Info) []Diagnostic {
 	if info == nil {
 		return nil
 	}
-	if isAllowedA2Caller(rel) {
+	if isAllowedA2Caller(rel, absPath) {
 		return nil
 	}
 	var out []Diagnostic
@@ -314,7 +352,8 @@ func scanHealthzA2(fset *token.FileSet, file *ast.File, rel string, info *types.
 				Message: fmt.Sprintf(
 					"healthz.Aggregator.Register called from non-allowlisted file %s:%d; "+
 						"allowed callers: runtime/bootstrap/{phases_lifecycle,phases_events,bootstrap_phases}.go, "+
-						"runtime/observability/healthz/aggregator.go, cells/<cell>/healthz_gen.go, *_test.go "+
+						"runtime/observability/healthz/{aggregator,healthztest/conformance}.go, cells/<cell>/healthz_gen.go, "+
+						"kernel/cell/healthz.go, *_test.go "+
 						"(HEALTHZ-WRITE-01/A2)",
 					rel, line,
 				),
@@ -464,7 +503,7 @@ func scanHealthzTypedRegister01(fset *token.FileSet, file *ast.File, rel string,
 				Message: fmt.Sprintf(
 					"reg.Healthz() called from %s (basename %q) — only cellgen-generated "+
 						"healthz_gen.go may call Healthz() directly; use the typed "+
-						"RegisterRepoReady / RegisterEmitterProbes helpers "+
+						"cellgen RegisterRepoReady helper or kernel cell.RegisterEmitterHealthProbes "+
 						"(HEALTHZ-TYPED-REGISTER-01)",
 					rel, base,
 				),
@@ -530,8 +569,15 @@ func TestHealthzWrite01(t *testing.T) {
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
-			// A1/A2/A3 scan scope: cells/ + adapters/ + runtime/ + cmd/ + examples/
-			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
+			// A1/A2/A3 scan scope: kernel/ + cells/ + adapters/ + runtime/ + cmd/ + examples/.
+			// kernel/ is in scope so the sanctioned emitter-probe funnel
+			// kernel/cell.RegisterEmitterHealthProbes (the only kernel/ caller of
+			// healthz.Aggregator.Register) is covered by the A2 caller allowlist —
+			// closing the prior kernel/ A2 blind spot. A1 (no kernel /healthz HTTP
+			// registration) and A3 (no kernel struct holds an Aggregator field —
+			// Registrar.Healthz() is an interface method, not a struct field) stay clean.
+			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/kernel/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/runtime/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cmd/") &&
@@ -543,8 +589,9 @@ func TestHealthzWrite01(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
+				absPath := filepath.Join(root, rel)
 				a1Diags = append(a1Diags, scanHealthzA1(p.Fset, f, rel, p.TypesInfo)...)
-				a2Diags = append(a2Diags, scanHealthzA2(p.Fset, f, rel, p.TypesInfo)...)
+				a2Diags = append(a2Diags, scanHealthzA2(p.Fset, f, rel, absPath, p.TypesInfo)...)
 				a3Diags = append(a3Diags, scanHealthzA3(p.Fset, f, rel, p.TypesInfo, p.Pkg)...)
 			}
 			return nil
@@ -631,7 +678,7 @@ func TestHealthzInvariants_ReverseFixture(t *testing.T) {
 				absPath := filepath.Join(fixtureDir, rel)
 
 				a1Diags = append(a1Diags, scanHealthzA1(p.Fset, f, rel, p.TypesInfo)...)
-				a2Diags = append(a2Diags, scanHealthzA2(p.Fset, f, rel, p.TypesInfo)...)
+				a2Diags = append(a2Diags, scanHealthzA2(p.Fset, f, rel, absPath, p.TypesInfo)...)
 				a3Diags = append(a3Diags, scanHealthzA3(p.Fset, f, rel, p.TypesInfo, p.Pkg)...)
 				typedRegDiags = append(typedRegDiags, scanHealthzTypedRegister01(p.Fset, f, rel, p.TypesInfo, absPath)...)
 			}
@@ -763,7 +810,7 @@ func TestHealthzInvariants_ReverseBlindSpot_NoLocalHealthzWrapper(t *testing.T) 
 							Line: line,
 							Message: fmt.Sprintf(
 								"function %q in %s calls reg.Healthz() outside healthz_gen.go — "+
-									"use RegisterRepoReady / RegisterEmitterProbes (blind spot B2, "+
+									"use RegisterRepoReady / cell.RegisterEmitterHealthProbes (blind spot B2, "+
 									"HEALTHZ-TYPED-REGISTER-01)",
 								fn.Name.Name, rel,
 							),
@@ -867,14 +914,19 @@ func TestHealthzInvariants_ReverseBlindSpot_NoLocalRegisterWrapper(t *testing.T)
 
 	var diags []Diagnostic
 
+	root := findModuleRoot(t)
 	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		prodscan.PatternsExtended(findModuleRoot(t)),
+		prodscan.PatternsExtended(root),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
 			}
 			pkgPath := p.Pkg.Path()
-			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
+			// kernel/ is in scope to mirror TestHealthzWrite01/A2 (which now scans
+			// kernel/): a future un-allowlisted kernel/ Register-wrapper must also
+			// be caught here. kernel/cell/healthz.go is skipped via isAllowedA2Caller.
+			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/kernel/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/runtime/") &&
 				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cmd/") &&
@@ -887,7 +939,7 @@ func TestHealthzInvariants_ReverseBlindSpot_NoLocalRegisterWrapper(t *testing.T)
 					continue
 				}
 				// Skip known-allowlisted files.
-				if isAllowedA2Caller(rel) {
+				if isAllowedA2Caller(rel, filepath.Join(root, rel)) {
 					continue
 				}
 				// Look for functions containing "Register" in their name that also
@@ -920,4 +972,51 @@ func TestHealthzInvariants_ReverseBlindSpot_NoLocalRegisterWrapper(t *testing.T)
 		})
 
 	assert.Empty(t, diags, "blind spot B-A2 self-check failed")
+}
+
+// TestHealthzInvariants_ReverseBlindSpot_NoBasenameBypass (blind spot B-A2b)
+// guards the A2 allowlist against the basename-wide exemption that the kernel/
+// scan-scope extension would otherwise re-open: a file named healthz_gen.go at a
+// non-cell path, or a cell-path healthz_gen.go lacking the cellgen marker, must
+// NOT be allowlisted. Exercises isAllowedA2Caller directly with synthetic
+// rel/absPath pairs (cellgen marker presence is toggled via two temp files).
+func TestHealthzInvariants_ReverseBlindSpot_NoBasenameBypass(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	withMarker := filepath.Join(dir, "withmarker.go")
+	if err := os.WriteFile(withMarker, []byte(cellgenMarkerLine+"\npackage x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noMarker := filepath.Join(dir, "nomarker.go")
+	if err := os.WriteFile(noMarker, []byte("package x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		rel  string
+		abs  string
+		want bool
+	}{
+		{"cells cell healthz_gen with marker", "cells/accesscore/healthz_gen.go", withMarker, true},
+		{"examples demo cell healthz_gen with marker", "examples/todoorder/cells/ordercell/healthz_gen.go", withMarker, true},
+		{"kernel-path healthz_gen even with marker is NOT exempt", "kernel/foo/healthz_gen.go", withMarker, false},
+		{"runtime-path healthz_gen is NOT exempt", "runtime/foo/healthz_gen.go", withMarker, false},
+		{"cell-path healthz_gen WITHOUT marker is NOT exempt", "cells/foo/healthz_gen.go", noMarker, false},
+		{"deeper cell-path healthz_gen is NOT exempt", "cells/foo/internal/healthz_gen.go", withMarker, false},
+		{"non-gen cell file is NOT exempt", "cells/foo/cell_init.go", withMarker, false},
+		{"exact-path kernel/cell/healthz.go is exempt (marker-independent)", "kernel/cell/healthz.go", noMarker, true},
+		{"test file is exempt", "kernel/foo/something_test.go", noMarker, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isAllowedA2Caller(tt.rel, tt.abs); got != tt.want {
+				t.Errorf("isAllowedA2Caller(%q) = %v, want %v (HEALTHZ-WRITE-01/A2 basename-bypass guard)",
+					tt.rel, got, tt.want)
+			}
+		})
+	}
 }

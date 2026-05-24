@@ -68,9 +68,10 @@ func (b *Bootstrap) phase3bDrainLifecycleHooks(s *phaseState) error {
 // populated. Two probe sources:
 //
 //  1. Cell-level probes — accumulated into each cell's RegistrySnapshot.Probes
-//     when the cellgen-generated <cellpkg>.RegisterRepoReady /
-//     RegisterEmitterProbes helpers call reg.Healthz().Register(...) during
-//     Init. The recorder is a pure accumulator (it holds no live aggregator);
+//     when the typed funnels — the cellgen <cellpkg>.RegisterRepoReady helper
+//     and the shared kernel cell.RegisterEmitterHealthProbes — call
+//     reg.Healthz().Register(...) during Init. The recorder is a pure
+//     accumulator (it holds no live aggregator);
 //     bootstrap owns the only runtime aggregator and drains the snapshot onto
 //     it here — exactly mirroring how RouteGroups / Subscriptions /
 //     LifecycleHooks are drained from the snapshot.
@@ -105,7 +106,8 @@ func (b *Bootstrap) drainProbes(s *phaseState) error {
 
 // drainCellProbes registers each cell's RegistrySnapshot.Probes onto
 // b.healthAggregator in cell-registration order. Probes were accumulated by
-// the cellgen RegisterRepoReady / RegisterEmitterProbes helpers during Init.
+// the cellgen RegisterRepoReady helper and the kernel
+// cell.RegisterEmitterHealthProbes funnel during Init.
 // Duplicate probe names (within or across cells) fail-fast via the
 // aggregator's first-wins healthz.ErrDuplicateProbe.
 func (b *Bootstrap) drainCellProbes(s *phaseState) error {

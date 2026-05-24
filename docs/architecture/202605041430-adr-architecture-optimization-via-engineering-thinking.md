@@ -265,7 +265,7 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 - 默认实现: `runtime/observability/healthz/` — in-memory aggregator + conformance harness
 - HTTP transport: `runtime/http/health/Handler` 重构为读 Aggregator.Evaluate 的 thin layer
 - Bootstrap: `bootstrap.WithHealthAggregator(agg)` option + phase5 drain（取代旧 3 个 register*HealthCheckers 函数）
-- Codegen: `tools/codegen/cellgen` 出 `cells/<cell>/healthz_gen.go`（typed RegisterRepoReady + RegisterEmitterProbes）
+- Codegen: `tools/codegen/cellgen` 出 `cells/<cell>/healthz_gen.go`（typed RegisterRepoReady；emitter probes 改经 kernel `cell.RegisterEmitterHealthProbes` 共享 funnel — amended #613，删除 per-cell 生成的 RegisterEmitterProbes）
 - 3 cells (accesscore/auditcore/configcore) 迁移完成；examples/iotdevice/devicecell 迁移完成；adapters (postgres/redis/rabbitmq/s3) 实现 Probe 接口
 - archtest: `HEALTHZ-WRITE-01` + `HEALTHZ-TYPED-REGISTER-01` 双向锁 funnel
 
@@ -287,7 +287,8 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 | `runtime/bootstrap/phases_lifecycle.go` | drainProbes — cell-probe drain (drainCellProbes: RegistrySnapshot.Probes → aggregator) + framework probe drain |
 | `runtime/bootstrap/phases_events.go` | registerHealthChecker — event router probe |
 | `runtime/bootstrap/bootstrap_phases.go` | registerHealthChecker helper |
-| `cells/<cell>/healthz_gen.go` | cellgen 出的 typed helper（RegisterRepoReady / RegisterEmitterProbes） |
+| `cells/<cell>/healthz_gen.go` | cellgen 出的 typed helper（RegisterRepoReady — cell-repo probe） |
+| `kernel/cell/healthz.go` | `cell.RegisterEmitterHealthProbes` — emitter probe 共享 funnel（amended #613；A2 scan scope 同 PR 扩到 kernel/ 闭 kernel 盲区） |
 | `*_test.go` (in healthz/healthtest packages) | 单元测试 |
 
 **K8s 校准表 P-A1/P-A2/P-A3 行重评**（per ADR amendment 落地必查）：
