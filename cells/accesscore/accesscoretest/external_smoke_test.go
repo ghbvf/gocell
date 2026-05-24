@@ -31,6 +31,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/accesscoretest"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -126,6 +127,13 @@ func TestExternalImportSurface_NoInternalTypes(t *testing.T) {
 	if cfgSvc == nil {
 		t.Fatal("BuildConfigReceiveService returned nil")
 	}
+
+	// Compile-time pin: the password-hasher bridge returns the fully public
+	// accesscore.Option, never the internal credential.Hasher. A regression to an
+	// internal return type would require importing cells/accesscore/internal/* —
+	// which Go rejects from this external _test package, breaking compilation.
+	//nolint:staticcheck // QF1011: typed gate against internal-type leak
+	var _ accesscore.Option = accesscoretest.MinCostPasswordHasherOption()
 
 	// Confirm runtime/auth (public package) sentinel symbols still resolve;
 	// these are only here so this file's imports stay non-trivial.

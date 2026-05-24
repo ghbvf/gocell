@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credential"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
@@ -88,6 +89,11 @@ func newService(
 		// satisfy NewService's mandatory check. Tests that need to observe
 		// Acquire calls override with recordingSetupLock via extraOpts.
 		setup.WithSetupLock(noopSetupLock{}),
+		// Low-cost hasher so the suite is not dominated by bcrypt cost-12
+		// (~1.5s/hash under -race). Tests that assert bcrypt actually ran (e.g.
+		// the fast-path-skip timing test) override via extraOpts with
+		// credential.NewProductionHasher().
+		setup.WithPasswordHasher(credential.NewTestHasher(bcrypt.MinCost)),
 	}
 	if w != nil {
 		opts = append(opts, setup.WithEmitter(testoutbox.MustEmitter(t, w)))
@@ -481,72 +487,19 @@ func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
 
 // --- New in S-5: concurrent, bcrypt-skip, rollback ------------------------
 
-// TestService_CreateAdmin_Concurrent_OnlyOneSucceeds verifies the
-// OutcomeRaceSkipped → ErrSetupAlreadyInitialized path under 10 concurrent
-// goroutines. newService injects a fixed UUID generator (always returns the
-// same ID), so the second-onward goroutines that reach UserRepo.Create get
-// ErrAuthUserDuplicate from the UUID collision; createAdminUser then recounts
-// admins (recount > 0) and returns OutcomeRaceSkipped, which CreateAdmin
-// surfaces as ErrSetupAlreadyInitialized. mem.Store's per-call store.mu
-// protects map safety; the noopTxRunner means no transactional serialization in
-// this test — the race-skip path is driven purely by the duplicate-UUID
-// detection in adminprovision.Provisioner.
-func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
-	store := mem.NewStore(clock.Real())
-	userRepo := store.UserRepository()
-	roleRepo := store.RoleRepository()
-	svc := newService(t, userRepo, roleRepo, &stubWriter{})
-
-	const workers = 10
-	type result struct {
-		out *setup.CreateAdminOutput
-		err error
-	}
-	results := make(chan result, workers)
-
-	var start sync.WaitGroup
-	start.Add(1)
-	var done sync.WaitGroup
-	done.Add(workers)
-	for i := range workers {
-		go func() {
-			defer done.Done()
-			start.Wait()
-			out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
-				Username: "root" + strconv.Itoa(i),
-				Email:    "root" + strconv.Itoa(i) + "@local",
-				Password: "SecretPass!23",
-			})
-			results <- result{out: out, err: err}
-		}()
-	}
-	start.Done()
-	done.Wait()
-	close(results)
-
-	successes := 0
-	retires := 0
-	for r := range results {
-		switch {
-		case r.err == nil && r.out != nil:
-			successes++
-		case r.err != nil:
-			var ec *errcode.Error
-			if errors.As(r.err, &ec) && ec.Code == errcode.ErrSetupAlreadyInitialized {
-				retires++
-			} else {
-				t.Fatalf("unexpected error: %v", r.err)
-			}
-		}
-	}
-	assert.Equal(t, 1, successes, "exactly one caller must create the admin")
-	assert.Equal(t, workers-1, retires, "all other callers must see retired")
-
-	// Final authoritative count is 1.
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
-	require.NoError(t, err)
-	assert.Equal(t, 1, cnt)
-}
+// (Removed: TestService_CreateAdmin_Concurrent_OnlyOneSucceeds.) That test used
+// a noopTxRunner + fixed UUID and documented a "UUID-collision race-skip" path,
+// but the mem UserRepository keys uniqueness on username/email — NOT on ID — so
+// the fixed UUID never collided and the race-skip path was never exercised. It
+// passed only because bcrypt cost-12 timing let the first goroutine finish its
+// whole Ensure (incl. role assignment) before the others reached their internal
+// Status check; under the low-cost test hasher that timing margin vanishes and
+// multiple admins are created. The real concurrent exactly-one guarantee comes
+// from serialization (setupLock / store-paired TxRunner), which is covered by
+// TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin below; the
+// deleted test added no coverage beyond that. The genuinely-rare
+// OutcomeRaceSkipped path (PK collision under PG) is tracked for a real test in
+// backlog #903.
 
 // TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin is the
 // concurrency regression guard for PR #595 / B2-PROVISIONER-MUTEX-REVIEW.
@@ -570,10 +523,11 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 //   - Assert the final admin count is exactly 1.
 //   - Run with -race to catch data races.
 //
-// NOTE: the existing TestService_CreateAdmin_Concurrent_OnlyOneSucceeds test
-// above uses noopTxRunner and relies on the UUID-collision path inside
-// adminprovision to prevent duplicates — it does NOT test the TOCTOU window.
-// This test exercises the mutex-serialization path directly.
+// This test exercises the mutex-serialization path directly: the store-paired
+// TxRunner holds store.mu across the whole CreateAdmin closure, so the
+// CountByRole check, user write, and role assignment are serialized. That
+// serialization — not any UUID-collision detection — is what guarantees
+// exactly-one under concurrency (see the removal note above).
 func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing.T) {
 	store := mem.NewStore(clock.Real())
 	userRepo := store.UserRepository()
@@ -593,6 +547,7 @@ func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing
 		// so that concurrent first-admin setup requests are serialized.
 		setup.WithTxManager(persistence.WrapForCell(store.TxRunner())),
 		setup.WithSetupLock(noopSetupLock{}),
+		setup.WithPasswordHasher(credential.NewTestHasher(bcrypt.MinCost)),
 	)
 	require.NoError(t, err)
 
@@ -655,7 +610,11 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 	userRepo := store.UserRepository()
 	roleRepo := store.RoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
-	svc := newService(t, userRepo, roleRepo, &stubWriter{})
+	// Production-cost hasher on purpose: this test proves the 410 fast-path
+	// short-circuits hashing by asserting elapsed < SlowPoll. With a low-cost
+	// hasher even an un-skipped hash would beat the ceiling, defeating the test.
+	svc := newService(t, userRepo, roleRepo, &stubWriter{},
+		setup.WithPasswordHasher(credential.NewProductionHasher()))
 
 	start := time.Now()
 	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
@@ -668,8 +627,8 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code)
-	// bcrypt at domain.BcryptCost (=12) takes ~200-2000ms on commodity hardware.
-	// 100ms is a generous ceiling — if bcrypt ran, we'd blow past this.
+	// bcrypt at credential.ProductionCost (=12) takes ~200-2000ms on commodity
+	// hardware. 100ms is a generous ceiling — if bcrypt ran, we'd blow past this.
 	assert.Less(t, elapsed, testtime.SlowPoll,
 		"410 fast-path must not call bcrypt")
 }

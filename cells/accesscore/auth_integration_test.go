@@ -62,7 +62,7 @@ import (
 // dominant per-call cost in the integration suite (~hundreds of ms); a cached
 // hash collapses N-case parallel runs to one hash computation.
 var seedAdminPasswordHash = sync.OnceValue(func() string {
-	hash, err := bcrypt.GenerateFromPassword([]byte(testPassword), domain.BcryptCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.MinCost)
 	if err != nil {
 		panic(err)
 	}

@@ -9,13 +9,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// BcryptCost is the shared bcrypt work factor for password hashing across
-// the accesscore cell. All password hashing call sites (seed admin, user
-// creation) MUST use this constant for consistency.
-//
-// ref: Ory Kratos BcryptDefaultCost=12; OWASP 2023 minimum recommendation.
-const BcryptCost = 12
-
 // UserStatus represents the account state of a user.
 type UserStatus string
 

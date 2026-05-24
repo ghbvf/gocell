@@ -863,8 +863,9 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	reg := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, reg))
 
-	// Seed a user.
-	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
+	// Seed a user (fixture hash at MinCost — seeded directly into the repo,
+	// bypassing the cell hasher; cost is irrelevant to the login flow under test).
+	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.MinCost)
 	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-e2e"
@@ -950,8 +951,9 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	reg := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	require.NoError(t, c.Init(ctx, reg))
 
-	// Seed a user.
-	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
+	// Seed a user (fixture hash at MinCost — seeded directly into the repo,
+	// bypassing the cell hasher; cost is irrelevant to the login flow under test).
+	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.MinCost)
 	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-refresh"
@@ -1033,7 +1035,10 @@ func seedAdminUser(
 	username, password string,
 ) *domain.User {
 	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), domain.BcryptCost)
+	// Fixture hash at MinCost: this seeds a precondition admin directly into the
+	// repo (bypassing the cell's hasher), so cost is irrelevant to what's under
+	// test; MinCost keeps the fixture fast.
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	require.NoError(t, err)
 
 	user, err := domain.NewUser(username, username+"@gocell.local", string(hash), time.Now())
@@ -1091,10 +1096,10 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "usr-admin-prefill", user.ID)
 
-	// Password is hashed at the shared BcryptCost.
+	// Password hash is a valid bcrypt hash at the fixture's cost.
 	hashCost, err := bcrypt.Cost([]byte(user.PasswordHash))
 	require.NoError(t, err)
-	assert.Equal(t, domain.BcryptCost, hashCost)
+	assert.Equal(t, bcrypt.MinCost, hashCost)
 
 	// Role assigned.
 	roles, err := roleRepo.GetByUserID(ctx, user.ID)

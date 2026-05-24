@@ -60,8 +60,9 @@ type setupTestAllowAllLimiter struct{}
 func (setupTestAllowAllLimiter) Allow(string) bool { return true }
 
 // setupHTTPClient uses a longer timeout than the shared testHTTPClient because
-// bcrypt at domain.BcryptCost=12 takes ~1-2s per password hash, which exceeds
-// the 2s client-default when the CPU is contended by parallel test packages.
+// bcrypt at credential.ProductionCost=12 takes ~1-2s per password hash, which
+// exceeds the 2s client-default when the CPU is contended by parallel test
+// packages.
 var setupHTTPClient = &http.Client{Timeout: testtime.SelectAsyncSettle}
 
 // TestSetupEndpoints_FirstRunFlow boots a real assembly (accesscore+configcore+auditcore)

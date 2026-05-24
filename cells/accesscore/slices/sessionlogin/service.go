@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/accountlockout"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credential"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -47,10 +48,13 @@ type passwordComparer func(hash, password []byte) error
 // Comparing against it normalises timing so callers cannot distinguish "user not
 // found" from "wrong password" via response latency.
 //
-// The hash is generated at domain.BcryptCost (=12) — identical to the cost used
-// for real user passwords. Using a lower cost (e.g. bcrypt.MinCost=4) would make
-// the "user not found" path ~256x faster than the "wrong password" path, exposing
-// a statistical timing oracle that can enumerate valid usernames.
+// The hash is generated at credential.ProductionCost (=12) — identical to the
+// cost used for real user passwords. Using a lower cost (e.g. bcrypt.MinCost=4)
+// would make the "user not found" path ~256x faster than the "wrong password"
+// path, exposing a statistical timing oracle that can enumerate valid usernames.
+// This is package-init (no injected hasher available), so it goes through
+// credential.NewProductionHasher() directly — the bcrypt call stays inside the
+// credential funnel (BCRYPT-COST-FUNNEL-01 A1).
 //
 // The input is crypto/rand bytes, not a fixed literal: the dummy input value is
 // irrelevant (it must only never equal a real password — random guarantees
@@ -62,12 +66,12 @@ var dummyBcryptHash = func() []byte {
 		panic(panicregister.Approved("sessionlogin-dummy-hash-seed",
 			errcode.Assertion("sessionlogin: failed to seed dummyBcryptHash: %v", err)))
 	}
-	h, err := bcrypt.GenerateFromPassword(seed, domain.BcryptCost)
+	h, err := credential.NewProductionHasher().Hash(seed)
 	if err != nil {
 		panic(panicregister.Approved("sessionlogin-dummy-hash-init",
 			errcode.Assertion("sessionlogin: failed to pre-compute dummyBcryptHash: %v", err)))
 	}
-	return h
+	return []byte(h)
 }()
 
 // Option configures a session-login Service.

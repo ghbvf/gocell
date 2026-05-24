@@ -18,9 +18,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credential"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -86,6 +85,21 @@ func WithSetupLock(lock ports.SetupLockAcquirer) Option {
 	}
 }
 
+// WithPasswordHasher overrides the password hasher (default
+// credential.NewProductionHasher(), cost 12). Unit tests wire
+// credential.NewTestHasher(bcrypt.MinCost) for speed. BCRYPT-COST-FUNNEL-01
+// guards that production never reaches the low-cost door. Bare/typed-nil inputs
+// are silently ignored (builder-option semantics) so the production default
+// survives.
+func WithPasswordHasher(h credential.Hasher) Option {
+	return func(s *Service) {
+		if validation.IsNilInterface(h) {
+			return
+		}
+		s.hasher = h
+	}
+}
+
 // Service implements the setup slice's business logic.
 type Service struct {
 	provisioner *adminprovision.Provisioner `gocell:"required" gocellErr:"setup: provisioner is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
@@ -98,6 +112,13 @@ type Service struct {
 	// memstore mode uses accesscore.NoopSetupLock{} because memTxRunner.RunInTx
 	// already serializes goroutines via store.mu. NewService rejects nil.
 	setupLock ports.SetupLockAcquirer `gocell:"required" gocellErr:"setup: setupLock required; use WithSetupLock — PG callers wire accesspg.NewBundle(pool, txm, clk).SetupLock(), memstore callers wire accesscore.NoopSetupLock{}"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	// hasher is the password hasher. Optional, but its default is a SAFE
+	// full-strength default — credential.NewProductionHasher() (cost 12) — not a
+	// degraded one like emitter's noop; production is correct without explicit
+	// wiring. Tests override via WithPasswordHasher(credential.NewTestHasher(
+	// bcrypt.MinCost)) for speed. A bare/typed-nil override is ignored, so the
+	// default can never be downgraded to nil.
+	hasher credential.Hasher
 }
 
 // NewService constructs a Service. provisioner is required; passing nil returns
@@ -107,6 +128,7 @@ func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, op
 		provisioner: provisioner,
 		emitter:     outbox.NewNoopEmitter(),
 		logger:      logger,
+		hasher:      credential.NewProductionHasher(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -165,10 +187,11 @@ type CreateAdminOutput struct {
 // gap as it matches the identitymanage.Create pattern (service.go:128-139).
 //
 // Security: bcrypt runs AFTER the Status fast-path so a flood of POSTs after
-// admin exists returns 410 in ~milliseconds without CPU burn. bcrypt cost=12
-// is only paid on the single winning request (plus same-process concurrent
-// race-losers serialized by memTxRunner.RunInTx holding store.mu in memstore
-// mode, or by pg_advisory_xact_lock in PG mode).
+// admin exists returns 410 in ~milliseconds without CPU burn. The hash cost
+// (credential.ProductionCost in production) is only paid on the single winning
+// request (plus same-process concurrent race-losers serialized by
+// memTxRunner.RunInTx holding store.mu in memstore mode, or by
+// pg_advisory_xact_lock in PG mode).
 func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*CreateAdminOutput, error) {
 	if err := validateCreateAdminInput(in); err != nil {
 		return nil, err
@@ -184,7 +207,7 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 		return nil, setupRetiredError()
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), domain.BcryptCost)
+	hash, err := s.hasher.Hash([]byte(in.Password))
 	if err != nil {
 		return nil, fmt.Errorf("setup: hash password: %w", err)
 	}
@@ -200,7 +223,7 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 		if err := s.setupLock.Acquire(txCtx); err != nil {
 			return fmt.Errorf("setup: acquire setup lock: %w", err)
 		}
-		user, err := s.provisionAndMaybeEmit(txCtx, in, hash)
+		user, err := s.provisionAndMaybeEmit(txCtx, in, []byte(hash))
 		if err != nil {
 			return err
 		}
