@@ -68,6 +68,7 @@ generate:
 	go run ./cmd/gocell generate cell --all
 	go run ./cmd/gocell generate contract --all
 	go run ./cmd/gocell generate required-deps --all
+	go run ./cmd/gocell generate shared-schema --all
 	go generate ./cmd/corebundle/
 
 cover:

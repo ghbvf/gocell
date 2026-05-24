@@ -96,6 +96,15 @@ var verifySubcommands = []subcommand[func(ctx context.Context, args []string) er
 		},
 		run: runVerifyCodegenAssembly,
 	},
+	{
+		name: "codegen-shared-schema",
+		help: []string{
+			"Verify mirror copies of error-response-v1.schema.json are",
+			"byte-identical to the canonical source. In-process diff,",
+			"no sandbox needed.",
+		},
+		run: verifyCodegenSharedSchema,
+	},
 }
 
 // runVerify dispatches `gocell verify <type>` through the
