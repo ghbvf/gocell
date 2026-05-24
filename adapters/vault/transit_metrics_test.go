@@ -176,11 +176,8 @@ func scrapeCounter(t *testing.T, reg *prom.Registry, name string) float64 {
 }
 
 // scrapeGauge returns the value of a single-sample Gauge / GaugeFunc family
-// by metric name. Helper kept general (rather than hardcoded to the vault
-// cached-key-version metric) so future per-metric tests can reuse it; the
-// `unparam` lint warning about the name parameter is intentional and waived.
-//
-//nolint:unparam // helper is reusable across vault metric tests; keep name parameter for call-site clarity.
+// by metric name. Shared with transit_provider_test.go and
+// transit_renewal_metrics_test.go.
 func scrapeGauge(t *testing.T, reg *prom.Registry, name string) float64 {
 	t.Helper()
 	families, err := reg.Gather()

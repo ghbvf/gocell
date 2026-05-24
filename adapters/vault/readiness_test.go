@@ -10,7 +10,6 @@ import (
 	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
-	prom "github.com/prometheus/client_golang/prometheus"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,16 +19,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
-
-// mustReadinessTransitMetrics constructs *TransitMetrics on a fresh registry
-// for readiness integration tests; each TransitKeyProvider constructor needs
-// its own collector set to avoid duplicate registration.
-func mustReadinessTransitMetrics(t *testing.T) *vaultadapter.TransitMetrics {
-	t.Helper()
-	m, err := vaultadapter.NewTransitMetrics(prom.NewRegistry())
-	require.NoError(t, err, "NewTransitMetrics on fresh registry must succeed")
-	return m
-}
 
 const vaultReadinessCtxTimeout = 600 * time.Millisecond
 
@@ -155,7 +144,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 		ctx, unreachableClient, "transit", "gocell-config",
 		vaultadapter.NewStaticTokenAuth(nil, "any-token"),
 		clock.Real(),
-		mustReadinessTransitMetrics(t),
+		mustTransitMetrics(t),
 	)
 	if constructErr != nil {
 		// Constructor failing on an unreachable vault is expected; use the working
@@ -270,7 +259,7 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 
 	childVaultClient := vaultadapter.NewVaultAPIClient(childClient)
 	p, err := vaultadapter.NewTransitKeyProvider(ctx, childVaultClient, "transit", "gocell-config",
-		vaultadapter.NewStaticTokenAuth(nil, childToken), clock.Real(), mustReadinessTransitMetrics(t))
+		vaultadapter.NewStaticTokenAuth(nil, childToken), clock.Real(), mustTransitMetrics(t))
 	require.NoError(t, err, "NewTransitKeyProvider with child token must succeed")
 
 	// Verify the probe works before revocation (confirms the policy grants access).

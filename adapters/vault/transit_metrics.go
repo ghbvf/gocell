@@ -23,12 +23,12 @@ package vault
 //     kernel/observability/metrics.Provider).
 
 import (
-	"fmt"
 	"sync/atomic"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 
 	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TransitMetrics owns every Prometheus collector exposed by the Vault transit
@@ -38,12 +38,18 @@ import (
 //
 // Concurrency: all fields are safe for concurrent read/write from worker
 // goroutines (Counter / Gauge / CounterVec are sync; cachedVersion is atomic).
+//
+// Single-mount invariant: cached_key_version exposes the active provider's
+// cache value with no labels (one process owns one Vault Transit mount + key
+// today). Multi-key support would need a GaugeVec keyed by mount_path /
+// key_name; that's an explicit schema bump, not an implicit migration.
 type TransitMetrics struct {
-	renewSuccess  prom.Counter
-	renewFailure  prom.Counter
-	authHealthy   prom.Gauge
-	loginOutcome  *prom.CounterVec
-	cachedVersion atomic.Int64
+	renewSuccess       prom.Counter
+	renewFailure       prom.Counter
+	authHealthy        prom.Gauge
+	loginOutcome       *prom.CounterVec
+	cachedVersionGauge prom.GaugeFunc // captured for inspection / future Unregister; reads cachedVersion
+	cachedVersion      atomic.Int64
 }
 
 // NewTransitMetrics constructs and registers all five vault-transit collectors
@@ -87,19 +93,29 @@ func NewTransitMetrics(reg prom.Registerer) (*TransitMetrics, error) {
 			Help:      "Count of Vault auth Login attempts.",
 		}, []string{"method", "result", "reason"}),
 	}
-	cachedVersionGauge := promadapter.NewGaugeFunc(prom.GaugeOpts{
+	m.cachedVersionGauge = promadapter.NewGaugeFunc(prom.GaugeOpts{
 		Namespace: "gocell",
 		Subsystem: "vault",
 		Name:      "cached_key_version",
 		Help:      "Latest Vault Transit key version cached by this process; 0 means cache miss.",
 	}, func() float64 { return float64(m.cachedVersion.Load()) })
 
-	for _, c := range []prom.Collector{
-		m.renewSuccess, m.renewFailure, m.authHealthy, m.loginOutcome, cachedVersionGauge,
-	} {
+	collectors := []prom.Collector{
+		m.renewSuccess, m.renewFailure, m.authHealthy, m.loginOutcome, m.cachedVersionGauge,
+	}
+	registered := make([]prom.Collector, 0, len(collectors))
+	for _, c := range collectors {
 		if err := reg.Register(c); err != nil {
-			return nil, fmt.Errorf("vault: register transit metric: %w", err)
+			// Roll back the partial registration so the registry is restored to
+			// its pre-call state — otherwise a later retry (or a second caller)
+			// sees stale half-registered collectors.
+			for _, prior := range registered {
+				reg.Unregister(prior)
+			}
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+				"vault: register transit metric", err)
 		}
+		registered = append(registered, c)
 	}
 	return m, nil
 }

@@ -18,7 +18,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   renewal worker starts successfully. Previously it was unconditionally set to 1
   during initTokenRenewal, which produced a false-green signal for non-renewable
   token deployments (no worker, gauge=1). Alerts that assumed "gauge stays at 1
-  unless degraded" must be reviewed.
+  unless degraded" must be reviewed: replace simple `== 0` threshold rules with
+  either an absent-metric rule (for static-token deployments where the gauge is
+  permanently 0) or a stabilisation window such as
+  `gocell_vault_token_auth_healthy == 0 unless on() (time() - process_start_time_seconds < 60)`
+  to suppress the brief startup window between `NewTransitMetrics` and worker start.
+
+- **`gocell_vault_auth_login_total` now records initial Login** (PR for #879):
+  `TransitKeyProvider.authenticate` (called once at construction) now increments
+  `auth_login_total{method,result,reason}` on success and failure. Previously only
+  the renewal worker's re-auth loop recorded outcomes, so startup auth success was
+  invisible. Dashboards counting auth attempts will see one additional sample per
+  process startup.
+
+- **Removed `TransitKeyProvider.Metrics()` / `RenewalMetrics()` / `CacheVersionMetrics()` accessor methods** (PR for #879):
+  metric ownership moved to `*vault.TransitMetrics` passed into `NewTransitKeyProvider`
+  / `NewTransitKeyProviderFromEnv` as a required positional parameter. Callers that
+  previously fetched collectors via the provider must now hold and inspect the
+  `*TransitMetrics` they constructed via `vault.NewTransitMetrics(reg)`. The
+  composition-root `cmd/corebundle` wires this through `SharedDeps.VaultTransitMetrics`
+  (eagerly constructed in `buildSharedMetricsDeps`); the corresponding helper
+  functions `replaceRegisteredCollectors` / `registerKeyProviderMetrics` /
+  `keyProviderMetricCollectors` and the interfaces `renewalMetricsProvider` /
+  `keyProviderMetricsProvider` were removed.
 
 - **`kernel/cell` decompose — auth + outbox extraction + `Registry`→`Registrar` rename** (`615-g10-kernel-cell-decompose`, PR #900, close #615): the listener-auth and outbox-demo concerns left `kernel/cell` for dedicated packages; the cell registration interface was renamed for intent clarity.
   - Listener auth plans moved `kernel/cell` → `kernel/auth`: `cell.ListenerAuth` → `auth.ListenerAuth`; `cell.AuthNone` / `AuthJWT` / `AuthJWTFromAssembly` / `AuthMTLS` / `AuthServiceToken` → `auth.*`; constructors `cell.NewAuthJWT` / `NewAuthJWTFromAssembly` / `NewAuthServiceToken` → `auth.NewAuth*`; supporting types `IntentTokenVerifier` / `AssemblyRef` / `HMACKeyring` / `NonceStore` likewise moved to `auth`.

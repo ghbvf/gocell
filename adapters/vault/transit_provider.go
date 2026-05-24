@@ -734,16 +734,20 @@ func NewTransitKeyProvider(
 	return p, nil
 }
 
-// authenticate calls auth.Login and returns the result. On success it records
-// a loginOutcome metric (if the renewal worker is already configured from a
-// prior call — during initial construction the worker is not yet set, so the
-// metric is recorded separately in initTokenRenewal).
+// authenticate calls auth.Login and records the outcome to loginOutcome so
+// startup auth success/failure is visible in gocell_vault_auth_login_total
+// alongside the worker's re-auth attempts. Failures classify the reason via
+// classifyAuthLoginError to keep the label set consistent with the renewal
+// worker's reauthenticate path.
 func (p *TransitKeyProvider) authenticate(ctx context.Context) (AuthResult, error) {
+	methodStr := string(p.authMethod.Method())
 	result, err := p.authMethod.Login(ctx)
 	if err != nil {
+		p.metrics.loginOutcome.WithLabelValues(methodStr, "failure", classifyAuthLoginError(err)).Inc()
 		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: initial authentication failed", err)
 	}
+	p.metrics.loginOutcome.WithLabelValues(methodStr, "success", reasonNone).Inc()
 	return result, nil
 }
 

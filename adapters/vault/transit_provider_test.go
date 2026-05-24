@@ -1623,6 +1623,53 @@ func TestNewTransitKeyProvider_NilAuth_Fails(t *testing.T) {
 	}
 }
 
+// TestNewTransitKeyProvider_NilMetrics_Fails verifies that the metrics
+// constructor parameter is required — a nil *TransitMetrics is a programmer-
+// error (missing wiring call to vault.NewTransitMetrics) and must fail fast.
+func TestNewTransitKeyProvider_NilMetrics_Fails(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	_, err := NewTransitKeyProvider(
+		context.Background(), fake, "transit", "gocell-config",
+		NewStaticTokenAuth(nil, "test-token"), clock.Real(), nil,
+	)
+	if err == nil {
+		t.Fatal("expected error for nil *TransitMetrics, got nil")
+	}
+	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
+		t.Errorf("expected ErrVaultAuthFailed in error chain, got: %v", err)
+	}
+}
+
+// TestNewTransitKeyProvider_NonRenewable_AuthHealthyStaysZero is the regression
+// lock for the false-green fix in #879. NewTransitMetrics defaults
+// token_auth_healthy=0; non-renewable auth (MethodToken) never starts a worker,
+// so the gauge must remain 0. Previously initTokenRenewal unconditionally set
+// the gauge to 1 even for non-renewable deployments, masking missing renewal.
+func TestNewTransitKeyProvider_NonRenewable_AuthHealthyStaysZero(t *testing.T) {
+	reg := prom.NewRegistry()
+	metrics, err := NewTransitMetrics(reg)
+	if err != nil {
+		t.Fatalf("NewTransitMetrics: %v", err)
+	}
+	fake := &fakeVaultClient{latestVersion: 1}
+	// NewStaticTokenAuth returns Renewable=false, so initTokenRenewal exits
+	// at the !result.Renewable branch and never reaches authHealthy.Set(1).
+	p, err := NewTransitKeyProvider(
+		context.Background(), fake, "transit", "gocell-config",
+		NewStaticTokenAuth(nil, "test-token"), clock.Real(), metrics,
+	)
+	if err != nil {
+		t.Fatalf("NewTransitKeyProvider: %v", err)
+	}
+	if p.Renewable() {
+		t.Fatal("test precondition broken: static token must be non-renewable")
+	}
+	if got := scrapeGauge(t, reg, "gocell_vault_token_auth_healthy"); got != 0 {
+		t.Errorf("token_auth_healthy = %v after non-renewable construction, want 0 "+
+			"(worker did not start; previous unconditional Set(1) was a false-green bug)", got)
+	}
+}
+
 // TestNewTransitKeyProvider_WithFakeAuth verifies that a non-nil fakeAuthMethod
 // allows construction (the fake Login succeeds, no renewal worker is started).
 func TestNewTransitKeyProvider_WithFakeAuth(t *testing.T) {

@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	vaultapi "github.com/hashicorp/vault/api"
-	prom "github.com/prometheus/client_golang/prometheus"
 	vaultcontainer "github.com/testcontainers/testcontainers-go/modules/vault"
 
 	"github.com/stretchr/testify/assert"
@@ -26,16 +25,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
-
-// mustTransitMetrics constructs a *TransitMetrics against a fresh Prometheus
-// registry — integration tests cannot share registries (collector duplicate
-// registration) so each constructor needs its own metric set.
-func mustTransitMetrics(t *testing.T) *vaultadapter.TransitMetrics {
-	t.Helper()
-	m, err := vaultadapter.NewTransitMetrics(prom.NewRegistry())
-	require.NoError(t, err, "NewTransitMetrics on fresh registry must succeed")
-	return m
-}
 
 // startVaultContainer starts a Vault dev-mode container for integration tests.
 // The transit secret engine is enabled and the key "gocell-config" is created

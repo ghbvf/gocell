@@ -30,6 +30,14 @@ type sharedMetricsDeps struct {
 	VaultTransitMetrics    *adaptervault.TransitMetrics
 }
 
+// buildSharedMetricsDeps assembles the per-process metric set. Failure here
+// is composition-root fatal (the parent caller, LoadSharedDepsFromEnv, returns
+// the error and the process exits), so no LIFO rollback is needed — every
+// constructed sub-resource holds only in-memory state (promStack wraps a
+// *prom.Registry value; collectors register on it but the registry itself has
+// no Close). The contrast with buildSharedReplayDeps is intentional: that
+// function owns a Redis client whose connection pool requires explicit close
+// on partial failure, whereas no resource here outlives the process exit.
 func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	ps, err := buildPromStack()
 	if err != nil {
