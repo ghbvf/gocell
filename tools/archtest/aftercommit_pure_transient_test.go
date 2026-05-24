@@ -104,10 +104,11 @@ var afterCommitDrainCallerAllowlist = map[string]bool{
 }
 
 // resolvePkgFuncCall resolves a package-level function call (Selector form
-// pkg.Fn(...)) to its declaring package path and name. Returns ok=false for
-// method calls (non-nil receiver), local unqualified calls, or non-func selectors.
+// pkg.Fn(...), including a generic instantiation pkg.Fn[T](...)) to its
+// declaring package path and name. Returns ok=false for method calls (non-nil
+// receiver), local unqualified calls, or non-func selectors.
 func resolvePkgFuncCall(info *types.Info, call *ast.CallExpr) (pkgPath, name string, ok bool) {
-	sel, isSel := call.Fun.(*ast.SelectorExpr)
+	sel, isSel := unwrapGenericCallee(call.Fun).(*ast.SelectorExpr)
 	if !isSel {
 		return "", "", false
 	}
@@ -121,22 +122,114 @@ func resolvePkgFuncCall(info *types.Info, call *ast.CallExpr) (pkgPath, name str
 	return fn.Pkg().Path(), fn.Name(), true
 }
 
-// bannedReceiverLabel reports the display label when sel.X has a static type in
-// afterCommitBannedReceivers (deref'ing one pointer level for *sql.Tx).
-func bannedReceiverLabel(info *types.Info, sel *ast.SelectorExpr) (string, bool) {
+// unwrapGenericCallee strips a generic instantiation (Fn[T] / Fn[T1,T2]) to the
+// underlying callee expression, so a generic function such as
+// persistence.TxFromContext[pgx.Tx] resolves to its SelectorExpr rather than the
+// enclosing *ast.IndexExpr / *ast.IndexListExpr (the F4 generic-callee blind spot).
+func unwrapGenericCallee(fun ast.Expr) ast.Expr {
+	switch f := fun.(type) {
+	case *ast.IndexExpr:
+		return f.X
+	case *ast.IndexListExpr:
+		return f.X
+	default:
+		return fun
+	}
+}
+
+// bannedReceiver pairs a resolved banned interface with its display label.
+type bannedReceiver struct {
+	label string
+	iface *types.Interface
+}
+
+// resolveBannedReceivers resolves the banned *interface* receiver types
+// (pgx.Tx, outbox.Writer) from pkg's transitive import closure, once per Pass.
+// *database/sql.Tx is a concrete struct and is matched by exact name, not here.
+func resolveBannedReceivers(pkg *types.Package) []bannedReceiver {
+	var out []bannedReceiver
+	for _, b := range []struct{ path, name, label string }{
+		{"github.com/jackc/pgx/v5", "Tx", "pgx.Tx"},
+		{"github.com/ghbvf/gocell/kernel/outbox", "Writer", "outbox.Writer"},
+	} {
+		if iface := lookupInterface(pkg, b.path, b.name); iface != nil {
+			out = append(out, bannedReceiver{label: b.label, iface: iface})
+		}
+	}
+	return out
+}
+
+func lookupInterface(root *types.Package, path, name string) *types.Interface {
+	pkg := findImportedPackage(root, path)
+	if pkg == nil {
+		return nil
+	}
+	obj := pkg.Scope().Lookup(name)
+	if obj == nil {
+		return nil
+	}
+	iface, _ := obj.Type().Underlying().(*types.Interface)
+	return iface
+}
+
+func findImportedPackage(root *types.Package, path string) *types.Package {
+	seen := map[string]bool{}
+	var walk func(*types.Package) *types.Package
+	walk = func(p *types.Package) *types.Package {
+		if p.Path() == path {
+			return p
+		}
+		if seen[p.Path()] {
+			return nil
+		}
+		seen[p.Path()] = true
+		for _, imp := range p.Imports() {
+			if found := walk(imp); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	return walk(root)
+}
+
+// bannedReceiverLabel reports the display label when sel.X's static type is a
+// banned receiver: the concrete *database/sql.Tx (exact name, one pointer deref)
+// OR any type that implements a banned interface (pgx.Tx / outbox.Writer) —
+// types.Implements, so sealed wrappers (outbox.CellWriter) and other
+// implementers are caught, not just the exact named interface.
+func bannedReceiverLabel(info *types.Info, sel *ast.SelectorExpr, ifaces []bannedReceiver) (string, bool) {
 	t := info.TypeOf(sel.X)
 	if t == nil {
 		return "", false
 	}
-	if ptr, isPtr := t.(*types.Pointer); isPtr {
-		t = ptr.Elem()
+	// 1. Exact concrete match (deref one pointer level for *sql.Tx).
+	nt := t
+	if ptr, isPtr := nt.(*types.Pointer); isPtr {
+		nt = ptr.Elem()
 	}
-	named, isNamed := t.(*types.Named)
-	if !isNamed || named.Obj() == nil || named.Obj().Pkg() == nil {
-		return "", false
+	if named, isNamed := nt.(*types.Named); isNamed && named.Obj() != nil && named.Obj().Pkg() != nil {
+		if label, ok := afterCommitBannedReceivers[named.Obj().Pkg().Path()+"."+named.Obj().Name()]; ok {
+			return label, true
+		}
 	}
-	label, ok := afterCommitBannedReceivers[named.Obj().Pkg().Path()+"."+named.Obj().Name()]
-	return label, ok
+	// 2. Implements a banned interface (value or pointer receiver).
+	for _, b := range ifaces {
+		if implementsBannedIface(t, b.iface) {
+			return b.label, true
+		}
+	}
+	return "", false
+}
+
+func implementsBannedIface(t types.Type, iface *types.Interface) bool {
+	if types.Implements(t, iface) {
+		return true
+	}
+	if _, isPtr := t.(*types.Pointer); !isPtr {
+		return types.Implements(types.NewPointer(t), iface)
+	}
+	return false
 }
 
 // packageFuncDecls maps unexported package-level func name → its FuncDecl across
@@ -155,7 +248,7 @@ func packageFuncDecls(p *Pass) map[string]*ast.FuncDecl {
 
 // helperTouchesBannedReceiver reports whether ident refers to a same-package
 // func whose body (one level) calls a banned-receiver method.
-func helperTouchesBannedReceiver(p *Pass, ident *ast.Ident, localFuncs map[string]*ast.FuncDecl) (string, bool) {
+func helperTouchesBannedReceiver(p *Pass, ident *ast.Ident, localFuncs map[string]*ast.FuncDecl, ifaces []bannedReceiver) (string, bool) {
 	fn, ok := p.TypesInfo.Uses[ident].(*types.Func)
 	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != p.Pkg.Path() {
 		return "", false
@@ -167,7 +260,7 @@ func helperTouchesBannedReceiver(p *Pass, ident *ast.Ident, localFuncs map[strin
 	var label string
 	EachInSubtree[ast.CallExpr](decl.Body, func(c *ast.CallExpr) {
 		if sel, isSel := c.Fun.(*ast.SelectorExpr); isSel {
-			if l, banned := bannedReceiverLabel(p.TypesInfo, sel); banned {
+			if l, banned := bannedReceiverLabel(p.TypesInfo, sel, ifaces); banned {
 				label = l
 			}
 		}
@@ -180,7 +273,7 @@ func afterCommitDiag(p *Pass, node ast.Node, rel, msg string) Diagnostic {
 }
 
 // scanRegisterAfterCommitHooks implements A1 + A2 over one file.
-func scanRegisterAfterCommitHooks(p *Pass, file *ast.File, localFuncs map[string]*ast.FuncDecl) []Diagnostic {
+func scanRegisterAfterCommitHooks(p *Pass, file *ast.File, localFuncs map[string]*ast.FuncDecl, ifaces []bannedReceiver) []Diagnostic {
 	info := p.TypesInfo
 	rel := p.Rel(file)
 	var out []Diagnostic
@@ -196,25 +289,27 @@ func scanRegisterAfterCommitHooks(p *Pass, file *ast.File, localFuncs map[string
 					"named funcs and method values defeat body inspection"))
 			return
 		}
-		out = append(out, scanHookBodyTransient(p, rel, lit, localFuncs)...)
+		out = append(out, scanHookBodyTransient(p, rel, lit, localFuncs, ifaces)...)
 	})
 	return out
 }
 
 // scanHookBodyTransient implements A2 over one hook literal body.
-func scanHookBodyTransient(p *Pass, rel string, lit *ast.FuncLit, localFuncs map[string]*ast.FuncDecl) []Diagnostic {
+func scanHookBodyTransient(
+	p *Pass, rel string, lit *ast.FuncLit, localFuncs map[string]*ast.FuncDecl, ifaces []bannedReceiver,
+) []Diagnostic {
 	info := p.TypesInfo
 	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](lit.Body, func(call *ast.CallExpr) {
 		switch fun := call.Fun.(type) {
 		case *ast.SelectorExpr:
-			if label, banned := bannedReceiverLabel(info, fun); banned {
+			if label, banned := bannedReceiverLabel(info, fun, ifaces); banned {
 				out = append(out, afterCommitDiag(p, fun, rel,
 					afterCommitRuleID+"-A2: after-commit hook must be transient; it calls a method on "+
 						label+" (persistent side effects belong in the tx body)"))
 			}
 		case *ast.Ident:
-			if label, viaHelper := helperTouchesBannedReceiver(p, fun, localFuncs); viaHelper {
+			if label, viaHelper := helperTouchesBannedReceiver(p, fun, localFuncs, ifaces); viaHelper {
 				out = append(out, afterCommitDiag(p, fun, rel,
 					afterCommitRuleID+"-A2: after-commit hook calls local helper "+fun.Name+
 						" that touches a "+label+" (one-level heuristic; Medium)"))
@@ -258,6 +353,7 @@ func TestAfterCommitHookPureTransient_A1A2_Fixtures(t *testing.T) {
 		"red_tx_exec",
 		"red_outbox_write",
 		"red_local_helper",
+		"red_cellwriter",
 	} {
 		fix := fix
 		t.Run("fixture_"+fix, func(t *testing.T) {
@@ -268,9 +364,10 @@ func TestAfterCommitHookPureTransient_A1A2_Fixtures(t *testing.T) {
 					return nil
 				}
 				localFuncs := packageFuncDecls(p)
+				ifaces := resolveBannedReceivers(p.Pkg)
 				var out []Diagnostic
 				for _, file := range p.Files {
-					out = append(out, scanRegisterAfterCommitHooks(p, file, localFuncs)...)
+					out = append(out, scanRegisterAfterCommitHooks(p, file, localFuncs, ifaces)...)
 				}
 				return out
 			})
@@ -288,9 +385,10 @@ func TestAfterCommitHookPureTransient_A1A2_Production(t *testing.T) {
 			return nil
 		}
 		localFuncs := packageFuncDecls(p)
+		ifaces := resolveBannedReceivers(p.Pkg)
 		var out []Diagnostic
 		for _, file := range p.Files {
-			out = append(out, scanRegisterAfterCommitHooks(p, file, localFuncs)...)
+			out = append(out, scanRegisterAfterCommitHooks(p, file, localFuncs, ifaces)...)
 		}
 		return out
 	})
@@ -342,22 +440,49 @@ func TestAfterCommitHookPureTransient_BlindSpots_NoEscapeInProduction(t *testing
 		}
 		var out []Diagnostic
 		for _, file := range p.Files {
-			rel := p.Rel(file)
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				pkgPath, name, ok := resolvePkgFuncCall(p.TypesInfo, call)
-				if !ok || pkgPath != persistencePkgPath || name != registerAfterCommitFn || len(call.Args) < 2 {
-					return
-				}
-				lit, isLit := call.Args[1].(*ast.FuncLit)
-				if !isLit {
-					return
-				}
-				out = append(out, scanHookBodyEscapes(p, rel, lit)...)
-			})
+			out = append(out, scanRegisterAfterCommitEscapes(p, file)...)
 		}
 		return out
 	})
 	Report(t, afterCommitRuleID+"-BLINDSPOT", diags)
+}
+
+// TestAfterCommitHookPureTransient_Escapes_Fixture asserts the B2/B3 escape scan
+// (incl. the F4 generic-callee unwrap) flags a hook reaching for the committed
+// tx via persistence.TxFromContext[pgx.Tx].
+func TestAfterCommitHookPureTransient_Escapes_Fixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := afterCommitFixturePattern("red_txfromcontext")
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var out []Diagnostic
+		for _, file := range p.Files {
+			out = append(out, scanRegisterAfterCommitEscapes(p, file)...)
+		}
+		return out
+	})
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// scanRegisterAfterCommitEscapes runs the B2/B3 escape scan over every
+// RegisterAfterCommit func-literal hook in file.
+func scanRegisterAfterCommitEscapes(p *Pass, file *ast.File) []Diagnostic {
+	rel := p.Rel(file)
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		pkgPath, name, ok := resolvePkgFuncCall(p.TypesInfo, call)
+		if !ok || pkgPath != persistencePkgPath || name != registerAfterCommitFn || len(call.Args) < 2 {
+			return
+		}
+		lit, isLit := call.Args[1].(*ast.FuncLit)
+		if !isLit {
+			return
+		}
+		out = append(out, scanHookBodyEscapes(p, rel, lit)...)
+	})
+	return out
 }
 
 // scanHookBodyEscapes flags B2 (persistence.TxFromContext) and B3

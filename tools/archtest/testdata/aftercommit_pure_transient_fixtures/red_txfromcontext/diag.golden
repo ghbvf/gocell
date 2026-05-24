@@ -1,0 +1,1 @@
+tools/archtest/testdata/aftercommit_pure_transient_fixtures/red_txfromcontext/register.go:19: AFTERCOMMIT-HOOK-PURE-TRANSIENT-01-B2: after-commit hook must not call persistence.TxFromContext to reach the committed tx

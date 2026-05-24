@@ -1,0 +1,1 @@
+tools/archtest/testdata/aftercommit_pure_transient_fixtures/red_cellwriter/register.go:18: AFTERCOMMIT-HOOK-PURE-TRANSIENT-01-A2: after-commit hook must be transient; it calls a method on outbox.Writer (persistent side effects belong in the tx body)
