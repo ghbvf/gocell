@@ -124,10 +124,10 @@ func postRoleEndpoint(t *testing.T, h *l2Harness, action, userID, roleID string)
 }
 
 // ---------------------------------------------------------------------------
-// TestL2_RbacAssign_OutboxWriteFailure_RollsBack (RBACASSIGN-L2-PG-ATOMICITY-01)
+// TestL2Atomicity_rbacassign_RollsBack (L2-OUTBOX-ATOMICITY-COVERAGE-01)
 // ---------------------------------------------------------------------------
 
-// TestL2_RbacAssign_OutboxWriteFailure_RollsBack proves that when the outbox
+// TestL2Atomicity_rbacassign_RollsBack proves that when the outbox
 // writer fails inside rbacassign.Service.Assign's transaction, the domain
 // write (role_assignments INSERT via PGRoleRepo.AssignToUser) rolls back
 // atomically and no row persists.
@@ -142,7 +142,7 @@ func postRoleEndpoint(t *testing.T, h *l2Harness, action, userID, roleID string)
 //
 // ref: adapters/postgres/audit_ledger_store_test.go:335-392
 // ref: Transactional Outbox Pattern (Microservices Patterns, Chris Richardson)
-func TestL2_RbacAssign_OutboxWriteFailure_RollsBack(t *testing.T) {
+func TestL2Atomicity_rbacassign_RollsBack(t *testing.T) {
 	sw := newSelectiveFailWriter(adapterpg.NewOutboxWriter(clock.Real()))
 	h := newL2HarnessWithWriter(t, sw)
 	ctx := context.Background()

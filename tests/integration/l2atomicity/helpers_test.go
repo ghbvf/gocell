@@ -462,6 +462,54 @@ func countLiveRefreshTokensForSubject(t *testing.T, h *l2Harness, subjectID stri
 	return n
 }
 
+// userCountByUsername returns the count of users rows matching username.
+// Used by identitymanage atomicity tests to confirm the domain write did
+// not persist after an outbox-write failure rolls back the transaction.
+func userCountByUsername(t *testing.T, h *l2Harness, username string) int {
+	t.Helper()
+	var n int
+	err := h.pool.DB().QueryRow(context.Background(),
+		`SELECT count(*) FROM users WHERE username = $1`, username).Scan(&n)
+	require.NoError(t, err)
+	return n
+}
+
+// httpLogoutStatus calls DELETE /api/v1/access/sessions/{sessionID} with the
+// given bearer token and returns the HTTP status code. Unlike httpLogout it
+// does NOT assert the status, so failure-injection tests can call this when
+// the server is expected to return 500.
+func httpLogoutStatus(t *testing.T, base, accessToken, sessionID string) int {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodDelete, base+"/api/v1/access/sessions/"+sessionID, nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// httpCreateUserStatus POSTs /api/v1/access/users with an admin bearer token
+// and returns the HTTP status code without asserting it. Unlike httpCreateUser
+// it tolerates non-201 responses, so failure-injection tests can call this
+// when the server is expected to return 500.
+func httpCreateUserStatus(t *testing.T, base, adminAccessToken, username, email, password string) int {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
+		"username": username,
+		"email":    email,
+		"password": password,
+	})
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/access/users", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminAccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
 // assignRole calls POST /internal/v1/access/roles/assign with a service token
 // signed for the "accesscore" caller cell. The "accesscore" callerCell literal
 // is required by the SVCTOKEN-CALLER-CELL-REQUIRED-01 archtest: every
