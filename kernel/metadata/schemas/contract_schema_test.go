@@ -458,7 +458,7 @@ func TestContractSchemaAuthBoolMatrix(t *testing.T) {
 // (Medium). This test covers the YAML-parsed path; the governance rule covers
 // in-memory fixtures that bypass the parser.
 //
-// INVARIANT: PROJECTION-CONSISTENCY-01 (schema enum gate, Medium — parser does not validate at load time)
+// INVARIANT: PROJECTION-CONSISTENCY-01 (schema enum gate, Medium — parser does not validate at load time).
 func TestProjectionConsistencyLevelSchemaEnum(t *testing.T) {
 	schema := compileContractSchemaForTest(t)
 

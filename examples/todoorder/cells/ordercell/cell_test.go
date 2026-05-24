@@ -307,6 +307,48 @@ func TestJOrdercreateHttpCreate(t *testing.T) {
 	TestOrderCell_RouteCreateOrder(t)
 }
 
+// TestOrderCell_RouteConfirmOrder drives the orderconfirm slice end-to-end over
+// the router: create a pending order, then PATCH it to confirmed. This does not
+// depend on event delivery (the projection is updated only when events are
+// delivered, which demo-mode NoopWriter skips), so it is a valid auto journey
+// criterion for the confirm command path.
+func TestOrderCell_RouteConfirmOrder(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Create a pending order first.
+	createRec := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(`{"item":"confirmable"}`))
+	createReq = createReq.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	createReq.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(createRec, createReq)
+	require.Equal(t, http.StatusCreated, createRec.Code)
+
+	var createResp struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&createResp))
+	orderID := createResp.Data.ID
+	require.NotEmpty(t, orderID, "response should contain data.id")
+
+	// PATCH the order to confirmed.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/orders/"+orderID+"/status", strings.NewReader(`{"status":"confirmed"}`))
+	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"PATCH /api/v1/orders/{id}/status should return 200 for a pending order")
+}
+
+// TestJOrderprojectionHttpConfirm is the auto checkRef for J-orderprojection
+// passCriteria journey.J-orderprojection.http-confirm (VERIFY-06).
+func TestJOrderprojectionHttpConfirm(t *testing.T) {
+	TestOrderCell_RouteConfirmOrder(t)
+}
+
 func TestOrderCell_RouteListOrders(t *testing.T) {
 	r := initCellWithRouter(t)
 

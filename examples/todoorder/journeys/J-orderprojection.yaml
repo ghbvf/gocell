@@ -14,7 +14,8 @@ contracts:
   - http.order.projection-rebuild.v1
 passCriteria:
   - text: "PATCH /api/v1/orders/{id}/status confirms a pending order and publishes event.order-status-changed.v1"
-    mode: manual
+    mode: auto
+    checkRef: journey.J-orderprojection.http-confirm
   - text: "GET /api/v1/orders/projection/summary reflects the confirmed order in the status-grouped read model after L3 async consumption (eventual; demo mode delivers in-process best-effort)"
     mode: manual
   - text: "POST /internal/v1/orders/projection/rebuild (service-token, caller-cell=ordercell) replays the in-memory event log and reproduces a byte-identical summary (rebuild idempotence)"
