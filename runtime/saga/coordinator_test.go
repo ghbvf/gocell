@@ -14,6 +14,16 @@ import (
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+// File-local duration consts for values not present in testtime.
+const (
+	// testHeartbeatValid is a heartbeat interval that satisfies
+	// HeartbeatInterval*2 < LeaseDuration (9*2=18 < 30).
+	testHeartbeatValid = 9 * time.Second
+	// testNegativeDuration is used to test that negative PollInterval is rejected.
+	testNegativeDuration = -testtime.D1ms
 )
 
 // ---------------------------------------------------------------------------
@@ -97,19 +107,19 @@ func noopStep(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.PollInterval != 200*time.Millisecond {
+	if cfg.PollInterval != testtime.D200ms {
 		t.Errorf("PollInterval = %v, want 200ms", cfg.PollInterval)
 	}
 	if cfg.ClaimBatchSize != 16 {
 		t.Errorf("ClaimBatchSize = %d, want 16", cfg.ClaimBatchSize)
 	}
-	if cfg.LeaseDuration != 30*time.Second {
+	if cfg.LeaseDuration != testtime.D30s {
 		t.Errorf("LeaseDuration = %v, want 30s", cfg.LeaseDuration)
 	}
-	if cfg.HeartbeatInterval != 10*time.Second {
+	if cfg.HeartbeatInterval != testtime.D10s {
 		t.Errorf("HeartbeatInterval = %v, want 10s", cfg.HeartbeatInterval)
 	}
-	if cfg.EmptyClaimBackoff != 200*time.Millisecond {
+	if cfg.EmptyClaimBackoff != testtime.D200ms {
 		t.Errorf("EmptyClaimBackoff = %v, want 200ms", cfg.EmptyClaimBackoff)
 	}
 }
@@ -136,63 +146,63 @@ func TestConfig_Validate(t *testing.T) {
 			cfg: Config{
 				PollInterval:      0,
 				ClaimBatchSize:    16,
-				LeaseDuration:     30 * time.Second,
-				HeartbeatInterval: 10 * time.Second,
-				EmptyClaimBackoff: 200 * time.Millisecond,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
+				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
 		{
 			name: "negative PollInterval",
 			cfg: Config{
-				PollInterval:      -1 * time.Millisecond,
+				PollInterval:      testNegativeDuration,
 				ClaimBatchSize:    16,
-				LeaseDuration:     30 * time.Second,
-				HeartbeatInterval: 10 * time.Second,
-				EmptyClaimBackoff: 200 * time.Millisecond,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
+				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
 		{
 			name: "zero ClaimBatchSize",
 			cfg: Config{
-				PollInterval:      200 * time.Millisecond,
+				PollInterval:      testtime.D200ms,
 				ClaimBatchSize:    0,
-				LeaseDuration:     30 * time.Second,
-				HeartbeatInterval: 10 * time.Second,
-				EmptyClaimBackoff: 200 * time.Millisecond,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
+				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
 		{
 			name: "zero LeaseDuration",
 			cfg: Config{
-				PollInterval:      200 * time.Millisecond,
+				PollInterval:      testtime.D200ms,
 				ClaimBatchSize:    16,
 				LeaseDuration:     0,
-				HeartbeatInterval: 10 * time.Second,
-				EmptyClaimBackoff: 200 * time.Millisecond,
+				HeartbeatInterval: testtime.D10s,
+				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
 		{
 			name: "zero HeartbeatInterval",
 			cfg: Config{
-				PollInterval:      200 * time.Millisecond,
+				PollInterval:      testtime.D200ms,
 				ClaimBatchSize:    16,
-				LeaseDuration:     30 * time.Second,
+				LeaseDuration:     testtime.D30s,
 				HeartbeatInterval: 0,
-				EmptyClaimBackoff: 200 * time.Millisecond,
+				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
 		{
 			name: "zero EmptyClaimBackoff",
 			cfg: Config{
-				PollInterval:      200 * time.Millisecond,
+				PollInterval:      testtime.D200ms,
 				ClaimBatchSize:    16,
-				LeaseDuration:     30 * time.Second,
-				HeartbeatInterval: 10 * time.Second,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
 				EmptyClaimBackoff: 0,
 			},
 			wantErr: true,
@@ -200,33 +210,33 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "HeartbeatInterval*2 == LeaseDuration",
 			cfg: Config{
-				PollInterval:      200 * time.Millisecond,
+				PollInterval:      testtime.D200ms,
 				ClaimBatchSize:    16,
-				LeaseDuration:     20 * time.Second,
-				HeartbeatInterval: 10 * time.Second, // 10*2 == 20 → invalid
-				EmptyClaimBackoff: 200 * time.Millisecond,
+				LeaseDuration:     testtime.D20s,
+				HeartbeatInterval: testtime.D10s, // 10*2 == 20 → invalid
+				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
 		{
 			name: "HeartbeatInterval*2 > LeaseDuration",
 			cfg: Config{
-				PollInterval:      200 * time.Millisecond,
+				PollInterval:      testtime.D200ms,
 				ClaimBatchSize:    16,
-				LeaseDuration:     15 * time.Second,
-				HeartbeatInterval: 10 * time.Second, // 10*2 > 15 → invalid
-				EmptyClaimBackoff: 200 * time.Millisecond,
+				LeaseDuration:     testtime.D15s,
+				HeartbeatInterval: testtime.D10s, // 10*2 > 15 → invalid
+				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: true,
 		},
 		{
 			name: "HeartbeatInterval*2 < LeaseDuration OK",
 			cfg: Config{
-				PollInterval:      200 * time.Millisecond,
+				PollInterval:      testtime.D200ms,
 				ClaimBatchSize:    16,
-				LeaseDuration:     30 * time.Second,
-				HeartbeatInterval: 9 * time.Second, // 9*2 < 30 → valid
-				EmptyClaimBackoff: 200 * time.Millisecond,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testHeartbeatValid, // 9*2 < 30 → valid
+				EmptyClaimBackoff: testtime.D200ms,
 			},
 			wantErr: false,
 		},
@@ -459,7 +469,7 @@ func TestStartStop_Idempotency(t *testing.T) {
 	clk := newFakeClock()
 	c := mustCoordinator(t, clk)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D200ms)
 	defer cancel()
 
 	// Start in background.
@@ -484,7 +494,7 @@ func TestStartStop_Idempotency(t *testing.T) {
 	}
 
 	// Stop.
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D500ms)
 	defer stopCancel()
 	if err := c.Stop(stopCtx); err != nil {
 		t.Errorf("first Stop() error: %v", err)
@@ -498,7 +508,7 @@ func TestStartStop_Idempotency(t *testing.T) {
 	// Wait for Start to return (ctx expired or we stopped).
 	select {
 	case <-startErr:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("Start goroutine did not return")
 	}
 }
@@ -512,7 +522,7 @@ func TestStartStop_LifecycleCAS(t *testing.T) {
 	c := mustCoordinator(t, clk)
 
 	// First run: Start → running → Stop → stopped.
-	run1Ctx, run1Cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	run1Ctx, run1Cancel := context.WithTimeout(context.Background(), testtime.D200ms)
 	defer run1Cancel()
 
 	startErr := make(chan error, 1)
@@ -524,19 +534,19 @@ func TestStartStop_LifecycleCAS(t *testing.T) {
 		t.Fatal("timed out waiting for Ready() on first run")
 	}
 
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D500ms)
 	defer stopCancel()
 	if err := c.Stop(stopCtx); err != nil {
 		t.Fatalf("Stop() run1: %v", err)
 	}
 	select {
 	case <-startErr:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("Start goroutine did not return after Stop")
 	}
 
 	// Second run: Start again → should succeed.
-	run2Ctx, run2Cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	run2Ctx, run2Cancel := context.WithTimeout(context.Background(), testtime.D200ms)
 	defer run2Cancel()
 
 	startErr2 := make(chan error, 1)
@@ -548,14 +558,14 @@ func TestStartStop_LifecycleCAS(t *testing.T) {
 		t.Fatal("timed out waiting for Ready() on second run")
 	}
 
-	stopCtx2, stopCancel2 := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	stopCtx2, stopCancel2 := context.WithTimeout(context.Background(), testtime.D500ms)
 	defer stopCancel2()
 	if err := c.Stop(stopCtx2); err != nil {
 		t.Fatalf("Stop() run2: %v", err)
 	}
 	select {
 	case <-startErr2:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("Start goroutine 2 did not return after Stop")
 	}
 }
@@ -568,7 +578,7 @@ func TestStart_Ready_Channel_Closes_After_State_Running(t *testing.T) {
 	clk := newFakeClock()
 	c := mustCoordinator(t, clk)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D300ms)
 	defer cancel()
 
 	go func() { _ = c.Start(ctx) }()

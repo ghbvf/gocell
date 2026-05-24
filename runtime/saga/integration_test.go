@@ -18,6 +18,14 @@ import (
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+// File-local duration consts for values not present in testtime.
+const (
+	// testLeaseAdvance is used in TestIntegration_ResumeAfterRestart to advance
+	// the clock past the 60s lease expiry so coordinator 2 can re-claim.
+	testLeaseAdvance = 65 * time.Second
 )
 
 // ---------------------------------------------------------------------------
@@ -68,11 +76,11 @@ func newTestHarness(t *testing.T, defs ...*ksaga.Definition) *testHarness {
 	disp := &recordingDispatcher{}
 
 	cfg := Config{
-		PollInterval:      10 * time.Millisecond, // fast tick for clock-driven tests
+		PollInterval:      testtime.D10ms, // fast tick for clock-driven tests
 		ClaimBatchSize:    16,
-		LeaseDuration:     60 * time.Second,
-		HeartbeatInterval: 20 * time.Second,
-		EmptyClaimBackoff: 10 * time.Millisecond,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	c, err := NewCoordinator(j, tx, em, reg, clk,
@@ -114,12 +122,12 @@ const testPollInterval = 10 * time.Millisecond
 func tickOnceAndWait(t *testing.T, clk *clockmock.FakeClock, cond func() bool) {
 	t.Helper()
 	clk.Advance(testPollInterval)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testtime.D2s)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatal("tickOnceAndWait: condition not met within 2s")
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(testtime.D2ms)
 	}
 }
 
@@ -138,7 +146,7 @@ func startCoord(t *testing.T, c *Coordinator) context.CancelFunc {
 	// Wait until the coordinator's ready channel is closed.
 	select {
 	case <-c.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("coordinator did not become ready within 2s")
 	}
 
@@ -147,24 +155,24 @@ func startCoord(t *testing.T, c *Coordinator) context.CancelFunc {
 	// there is a brief window where no tickers are registered yet. Without
 	// this wait, a subsequent clk.Advance would not fire any ticker.
 	clk := c.clock.(*clockmock.FakeClock)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testtime.D2s)
 	for clk.PendingTickers() < 2 {
 		if time.Now().After(deadline) {
 			t.Fatal("coordinator tickers did not register within 2s")
 		}
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(testtime.D1ms)
 	}
 
 	t.Cleanup(func() {
 		cancel()
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
 		defer stopCancel()
 		if err := c.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 			t.Errorf("cleanup Stop: %v", err)
 		}
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(testtime.D3s):
 			t.Error("coordinator goroutine did not exit within 3s after Stop")
 		}
 	})
@@ -246,7 +254,7 @@ func TestIntegration_HappyPath1Step(t *testing.T) {
 	}
 
 	// Status == Succeeded: ClaimPending returns empty (terminal instance excluded).
-	claimed, _, err := h.j.ClaimPending(context.Background(), 16, 30*time.Second)
+	claimed, _, err := h.j.ClaimPending(context.Background(), 16, testtime.D30s)
 	if err != nil {
 		t.Fatalf("ClaimPending: %v", err)
 	}
@@ -320,7 +328,7 @@ func TestIntegration_StepRunError(t *testing.T) {
 	}
 
 	// Instance is terminal; ClaimPending returns nothing.
-	claimed, _, err := h.j.ClaimPending(context.Background(), 16, 30*time.Second)
+	claimed, _, err := h.j.ClaimPending(context.Background(), 16, testtime.D30s)
 	if err != nil {
 		t.Fatalf("ClaimPending: %v", err)
 	}
@@ -416,7 +424,7 @@ func TestIntegration_TotalSagaTimeout(t *testing.T) {
 
 	def := &ksaga.Definition{
 		ID:      defID,
-		Timeout: 10 * time.Millisecond,
+		Timeout: testtime.D10ms,
 		Steps: []ksaga.Step{
 			{
 				Name: "step1",
@@ -441,10 +449,10 @@ func TestIntegration_TotalSagaTimeout(t *testing.T) {
 	// fires the ticker (multiple intervals coalesce to 1 tick on the channel).
 	// The tickLoop goroutine will claim the instance, see elapsed > Timeout,
 	// and immediately call markTerminal(Expired).
-	h.clk.Advance(1 * time.Hour)
+	h.clk.Advance(testtime.D1h)
 
 	// Poll for the Expired terminal event (real-time loop; goroutine needs CPU).
-	expiredDeadline := time.Now().Add(2 * time.Second)
+	expiredDeadline := time.Now().Add(testtime.D2s)
 	var evs []journal.Event
 	var evErr error
 	for {
@@ -455,7 +463,7 @@ func TestIntegration_TotalSagaTimeout(t *testing.T) {
 		if time.Now().After(expiredDeadline) {
 			t.Fatal("instance was not marked Expired within 2s after 1h clock advance")
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(testtime.D2ms)
 	}
 
 	_ = evErr // checked in loop above
@@ -506,14 +514,14 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 
 	// Use a short LeaseDuration so we can advance the clock meaningfully.
 	// HeartbeatInterval must satisfy HeartbeatInterval*2 < LeaseDuration.
-	leaseDuration := 300 * time.Millisecond
-	heartbeatInterval := 100 * time.Millisecond
+	leaseDuration := testtime.D300ms
+	heartbeatInterval := testtime.D100ms
 	cfg := Config{
-		PollInterval:      10 * time.Millisecond,
+		PollInterval:      testtime.D10ms,
 		ClaimBatchSize:    16,
 		LeaseDuration:     leaseDuration,
 		HeartbeatInterval: heartbeatInterval,
-		EmptyClaimBackoff: 10 * time.Millisecond,
+		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -541,17 +549,17 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 	go func() { startDone <- c.Start(ctx) }()
 	select {
 	case <-c.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("coordinator did not become ready")
 	}
 
 	// Wait for tickLoop + heartbeatLoop to register their tickers.
-	tickerDeadline := time.Now().Add(2 * time.Second)
+	tickerDeadline := time.Now().Add(testtime.D2s)
 	for clk.PendingTickers() < 2 {
 		if time.Now().After(tickerDeadline) {
 			t.Fatal("coordinator tickers did not register within 2s")
 		}
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(testtime.D1ms)
 	}
 
 	// Wait for the instance to be claimed (tickLoop fires).
@@ -567,10 +575,11 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 
 	// Advance by LeaseDuration/2 twice with heartbeat ticks in between.
 	// The heartbeatLoop should re-extend the lease each time.
+	// leaseDuration == testtime.D300ms; half is testtime.D150ms.
 	for i := 0; i < 2; i++ {
-		clk.Advance(leaseDuration / 2)
+		clk.Advance(testtime.D150ms)
 		// Let heartbeatLoop tick.
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(testtime.D20ms)
 
 		// Verify instance is still NOT re-claimable (lease is held and active).
 		claimed, _, err := j.ClaimPending(context.Background(), 16, leaseDuration)
@@ -588,14 +597,14 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 
 	// Stop the coordinator.
 	cancel()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
 	defer stopCancel()
 	if err := c.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 		t.Errorf("Stop: %v", err)
 	}
 	select {
 	case <-startDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Error("coordinator goroutine did not exit")
 	}
 
@@ -634,11 +643,11 @@ func TestIntegration_ClaimContention(t *testing.T) {
 	reg, _ := ksaga.NewInMemoryRegistry(def)
 
 	cfg := Config{
-		PollInterval:      10 * time.Millisecond,
+		PollInterval:      testtime.D10ms,
 		ClaimBatchSize:    1, // each coordinator claims at most 1 instance
-		LeaseDuration:     60 * time.Second,
-		HeartbeatInterval: 20 * time.Second,
-		EmptyClaimBackoff: 10 * time.Millisecond,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	disp1 := &recordingDispatcher{}
@@ -675,23 +684,23 @@ func TestIntegration_ClaimContention(t *testing.T) {
 
 	select {
 	case <-c1.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("c1 not ready")
 	}
 	select {
 	case <-c2.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("c2 not ready")
 	}
 
 	// Wait for both coordinators' tickers to register (4 tickers: 2 per coordinator).
 	{
-		dl := time.Now().Add(2 * time.Second)
+		dl := time.Now().Add(testtime.D2s)
 		for clk.PendingTickers() < 4 {
 			if time.Now().After(dl) {
 				t.Fatal("coordinators' tickers did not register within 2s")
 			}
-			time.Sleep(1 * time.Millisecond)
+			time.Sleep(testtime.D1ms)
 		}
 	}
 
@@ -707,18 +716,18 @@ func TestIntegration_ClaimContention(t *testing.T) {
 	// Stop both coordinators.
 	cancel1()
 	cancel2()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
 	defer stopCancel()
 	_ = c1.Stop(stopCtx)
 	_ = c2.Stop(stopCtx)
 	select {
 	case <-done1:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Error("c1 goroutine did not exit")
 	}
 	select {
 	case <-done2:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Error("c2 goroutine did not exit")
 	}
 
@@ -776,11 +785,11 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	reg, _ := ksaga.NewInMemoryRegistry(def)
 
 	cfg := Config{
-		PollInterval:      10 * time.Millisecond,
+		PollInterval:      testtime.D10ms,
 		ClaimBatchSize:    16,
-		LeaseDuration:     60 * time.Second,
-		HeartbeatInterval: 20 * time.Second,
-		EmptyClaimBackoff: 10 * time.Millisecond,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	// First coordinator: drive step 1 only.
@@ -802,18 +811,18 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	go func() { done1 <- c1.Start(ctx1) }()
 	select {
 	case <-c1.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("c1 not ready")
 	}
 
 	// Wait for c1's tickers to register before advancing the clock.
 	{
-		dl := time.Now().Add(2 * time.Second)
+		dl := time.Now().Add(testtime.D2s)
 		for clk.PendingTickers() < 2 {
 			if time.Now().After(dl) {
 				t.Fatal("c1 tickers did not register within 2s")
 			}
-			time.Sleep(1 * time.Millisecond)
+			time.Sleep(testtime.D1ms)
 		}
 	}
 
@@ -827,14 +836,14 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 
 	// Stop coordinator 1 before step 2 can run.
 	cancel1()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
 	defer stopCancel()
 	if err := c1.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 		t.Errorf("c1 Stop: %v", err)
 	}
 	select {
 	case <-done1:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Error("c1 goroutine did not exit")
 	}
 
@@ -853,36 +862,36 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	go func() { done2 <- c2.Start(ctx2) }()
 	select {
 	case <-c2.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("c2 not ready")
 	}
 	defer func() {
 		cancel2()
-		stopCtx2, stopCancel2 := context.WithTimeout(context.Background(), 3*time.Second)
+		stopCtx2, stopCancel2 := context.WithTimeout(context.Background(), testtime.D3s)
 		defer stopCancel2()
 		_ = c2.Stop(stopCtx2)
 		select {
 		case <-done2:
-		case <-time.After(3 * time.Second):
+		case <-time.After(testtime.D3s):
 			t.Error("c2 goroutine did not exit")
 		}
 	}()
 
 	// Wait for c2's tickers to register before advancing the clock.
 	{
-		dl := time.Now().Add(2 * time.Second)
+		dl := time.Now().Add(testtime.D2s)
 		for clk.PendingTickers() < 2 {
 			if time.Now().After(dl) {
 				t.Fatal("c2 tickers did not register within 2s")
 			}
-			time.Sleep(1 * time.Millisecond)
+			time.Sleep(testtime.D1ms)
 		}
 	}
 
 	// Advance clock to let coordinator 2 claim and drive step 2; wait for terminal.
 	// The lease from c1 has expired (c1 stopped, clock not advanced much yet), so
 	// c2 can re-claim. Advance past LeaseDuration to ensure re-claimability.
-	clk.Advance(65 * time.Second) // past the 60s lease expiry
+	clk.Advance(testLeaseAdvance) // past the 60s lease expiry
 
 	tickOnceAndWait(t, clk, func() bool {
 		evs, err := j.Load(context.Background(), inst.ID)
@@ -944,11 +953,11 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	}
 
 	cfg := Config{
-		PollInterval:      10 * time.Millisecond,
+		PollInterval:      testtime.D10ms,
 		ClaimBatchSize:    16,
-		LeaseDuration:     60 * time.Second,
-		HeartbeatInterval: 20 * time.Second,
-		EmptyClaimBackoff: 10 * time.Millisecond,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+		EmptyClaimBackoff: testtime.D10ms,
 	}
 
 	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -973,17 +982,17 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	go func() { done <- c.Start(ctx) }()
 	select {
 	case <-c.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("coordinator not ready")
 	}
 
 	// Wait for tickers to be registered with the FakeClock.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testtime.D2s)
 	for clk.PendingTickers() < 2 {
 		if time.Now().After(deadline) {
 			t.Fatal("coordinator tickers did not register within 2s")
 		}
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(testtime.D1ms)
 	}
 
 	// Advance clock to trigger the tick. safeRun recovers the panic, returns
@@ -1014,7 +1023,7 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	}
 
 	// Instance is terminal; ClaimPending returns nothing.
-	claimed, _, err := j.ClaimPending(context.Background(), 16, 30*time.Second)
+	claimed, _, err := j.ClaimPending(context.Background(), 16, testtime.D30s)
 	if err != nil {
 		t.Fatalf("ClaimPending: %v", err)
 	}
@@ -1029,14 +1038,14 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 
 	// Stop the coordinator cleanly.
 	cancel()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
 	defer stopCancel()
 	if err := c.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
 		t.Errorf("Stop: %v", err)
 	}
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Error("coordinator goroutine did not exit")
 	}
 
