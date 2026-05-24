@@ -479,7 +479,7 @@ var fixtureTagLoaderSet = map[string]map[string]bool{
 //   - Multi-RHS positional binding (`a, t := x, []string{fixtureBuildTag}`):
 //     collectFixtureTagBoundObjects recognizes single-binding shape only.
 //     Same narrow accepted sub-gap as taggroup BS-4. Inter-procedural Hard
-//     upgrade tracked via gh issue (see ADR 202605141519 §#944).
+//     upgrade tracked via gh issue #973 (see ADR 202605141519 §#944).
 //   - Cross-func var escape: a var assigned in one function and read in
 //     another, or a closure capture, falls outside the AST walk's reach.
 //     Same accept as the sister rules' identical Blind spot.
@@ -661,7 +661,7 @@ func exprCarriesFixtureTag(info *types.Info, expr ast.Expr) bool {
 // branch of boundObjs is never the deciding factor. Multi-RHS positional binding
 // (`a, t := x, []string{fixtureBuildTag}`) is the same narrow accepted sub-gap
 // as taggroup BS-4; cross-func / cross-file escape is the same accepted Blind
-// spot as the sibling rules. Inter-procedural Hard upgrade tracked via gh issue
+// spot as the sibling rules. Inter-procedural Hard upgrade tracked via gh issue #973
 // (see package godoc / ADR 202605141519 §#944).
 func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.Object]struct{} {
 	out := make(map[types.Object]struct{})

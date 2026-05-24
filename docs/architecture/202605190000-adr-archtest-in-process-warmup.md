@@ -37,7 +37,7 @@ Accepted (2026-05-19)
 
 把 `for tagGroup := range KnownNonDefaultTags() { RunTyped(...) }` 替换为两次 RunTyped：
 1. `RunTyped(t, TypedOpts{}, patterns, scan)` — tags=nil 覆盖默认 build + 反向 directive 文件
-2. `RunTyped(t, TypedOpts{Tags: archtest.ProductionFlatTags()}, patterns, scan)` — 覆盖所有正向 tag 激活文件 union
+2. `RunTyped(t, TypedOpts{Tags: archtest.FlatNonDefaultTags()}, patterns, scan)` — 覆盖所有正向 tag 激活文件 union（#944 起 `FlatNonDefaultTags()` 已不含 fixture tag，原 `ProductionFlatTags()` band-aid 已删，二者合一）
 
 共享 seen map dedup（文件集有重合，dedup 保证 violations 唯一）。N=7 → 2，RSS 峰值从 N×全模块 → 单次峰值（GC 可在两次 Load 间释放中间体）。
 
