@@ -1,0 +1,1 @@
+tools/archtest/testdata/aftercommit_pure_transient_fixtures/red_non_literal/register.go:17: AFTERCOMMIT-HOOK-PURE-TRANSIENT-01-A1: RegisterAfterCommit hook must be a func literal at the call site; named funcs and method values defeat body inspection

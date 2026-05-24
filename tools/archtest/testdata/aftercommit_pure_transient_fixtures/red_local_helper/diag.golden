@@ -1,0 +1,1 @@
+tools/archtest/testdata/aftercommit_pure_transient_fixtures/red_local_helper/register.go:23: AFTERCOMMIT-HOOK-PURE-TRANSIENT-01-A2: after-commit hook calls local helper touchTx that touches a pgx.Tx (one-level heuristic; Medium)
