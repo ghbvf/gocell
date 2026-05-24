@@ -430,15 +430,18 @@ func TestNewProtocol_Error_OnMissingOptions(t *testing.T) {
 	}
 }
 
-// TestProtocol_HMACKeyDefensiveCopy: HMACKey() returns a defensive copy.
-func TestProtocol_HMACKeyDefensiveCopy(t *testing.T) {
+// TestWithChainHMAC_CallerSliceZeroedAfterCopy: WithChainHMAC zeroes the
+// caller's key slice after the defensive copy so that HMAC key material
+// does not linger in the caller's allocation. Verifies the clear(key) call
+// in WithChainHMAC body (A-08: HMACKey getter deleted from export surface).
+func TestWithChainHMAC_CallerSliceZeroedAfterCopy(t *testing.T) {
 	t.Parallel()
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
 	ns, _ := ledger.ParseNamespaceID("auditcore")
-	p, err := ledger.NewProtocol(
+	_, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(key),
 		ledger.WithNamespace(ns),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
@@ -447,15 +450,10 @@ func TestProtocol_HMACKeyDefensiveCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProtocol: %v", err)
 	}
-	got := p.HMACKey()
-	if len(got) != len(key) {
-		t.Fatalf("HMACKey length: got %d, want %d", len(got), len(key))
-	}
-	// Mutate the returned copy.
-	got[0] = 0xFF
-	again := p.HMACKey()
-	if again[0] == 0xFF {
-		t.Error("HMACKey() must return a defensive copy; caller mutation leaked into protocol")
+	for i, b := range key {
+		if b != 0 {
+			t.Errorf("caller key byte %d not zeroed after WithChainHMAC: got %#x", i, b)
+		}
 	}
 }
 

@@ -120,22 +120,12 @@ func ParseNamespaceID(s string) (NamespaceID, error) {
 // Protocol bundles the protocol decisions that govern an audit ledger.
 //
 // Fields are required (NewProtocol fail-fasts on missing values) and are
-// immutable after construction. Accessor methods return defensive copies
-// where applicable.
+// immutable after construction.
 type Protocol struct {
 	hmacKey         []byte
 	namespace       NamespaceID
 	restartRecovery RestartRecoveryMode
 	idempotency     IdempotencyMode
-}
-
-// HMACKey returns a defensive copy of the configured HMAC key.
-// The returned slice must not be used for logging or error messages —
-// HMAC key bytes are secret material.
-func (p *Protocol) HMACKey() []byte {
-	out := make([]byte, len(p.hmacKey))
-	copy(out, p.hmacKey)
-	return out
 }
 
 // Namespace returns the configured namespace identifier.
