@@ -4,6 +4,44 @@
 > Date: 2026-05-17
 > Implementation: 238-mem-tx-lock-ownership
 > Source plan: /Users/shengming/.claude/plans/https-github-com-ghbvf-gocell-actions-ru-smooth-pumpkin.md
+> Amendment: 2026-05-25 (#945) — sealed lock-witness (bool→token Medium funnel
+> upgraded to compile-impossible Hard). The Decisions, threat matrix, and Hard
+> 范本 below are rewritten to the witness model; the Context / L3 root cause
+> records the original bool flake unchanged (accurate history).
+
+## Amendment 2026-05-25 (#945): sealed lock-witness
+
+The 238 design (D1 below, as rewritten) replaced the bool sentinel with a typed
+`*memTxToken{store, holdsLock bool}`. That made *out-of-package* forgery
+compile-impossible (Hard) but left the **in-package** "mint a holdsLock=true
+token outside RunInTx" residue to a **Medium archtest** (old D3 R1/R2) — the
+`holdsLock` bool was still assignable by any code inside package mem.
+
+PR #558 review (issue #945) flagged that the old archtest only checked the
+token literal's *lexical scope*, not its field values, so a future
+`WithTxContext{holdsLock: true}` edit would pass. Rather than patch the Medium
+archtest to pin the bool value, #945 **deletes the bool** and encodes
+lock-ownership as an un-forgeable witness:
+
+- New package `cells/accesscore/internal/mem/internal/txlock` (double-`internal/`
+  → importable only by the mem tree). `txlock.Held` has a single unexported
+  `*sync.Mutex` field; `Acquire(mu) (Held, unlock func())` is the sole way to
+  obtain a Held whose `Holds(&mu)` is true, and it `Lock()`s mu first.
+- `memTxToken` drops `holdsLock bool` AND `store *Store` (the witness's mutex
+  identity subsumes store binding), carrying only `held txlock.Held`.
+- `runLocked` mints the witness (`held, unlock := txlock.Acquire(&r.s.mu)`);
+  `WithTxContext` mints a zero-witness token; `txHoldsLock` returns
+  `tok != nil && tok.held.Holds(&s.mu)`.
+
+Result: "in a tx context AND holding the lock" is **compile-impossible even
+inside package mem** — no code can construct a held witness without calling
+Acquire (which locks). The downstream half moves from runtime-AND-check to
+type-system-Hard. The archtest (`MEM-TX-LOCK-OWNERSHIP-01`, rewritten D3) is
+demoted to a Medium **regression layer** over that Hard core (W1 Acquire site /
+W2 txHoldsLock form / R1 token literal scope); the old R2b `.holdsLock` selector
+funnel is deleted (no bool field exists). `Held` additionally has **no Release
+method** (unlock is a separate closure kept local to runLocked), so a
+ctx-carried witness cannot release the lock either.
 
 ## Context
 
@@ -37,57 +75,78 @@ goroutine 测试即让 repo 方法误判跳锁、无锁并发写 map → fatal�
 
 ## Decisions
 
-### D1. ctx sentinel：bool → 私有 typed `*memTxToken`
+### D1. ctx sentinel：bool → 私有 typed `*memTxToken`（持 sealed witness，#945）
 
-`memTxKey{}` 的 value 类型由 `bool` 改为**包内私有** `*memTxToken`：
+`memTxKey{}` 的 value 类型由 `bool` 改为**包内私有** `*memTxToken`，token 持一个
+**不可伪造的 `txlock.Held` witness**（非 bool、非 store 指针）：
 
 ```go
+// cells/accesscore/internal/mem/internal/txlock（双 internal/，仅 mem 树可 import）
+type Held struct{ mu *sync.Mutex }                       // 唯一字段 unexported
+func Acquire(mu *sync.Mutex) (held Held, unlock func())  // 唯一铸造点，先 Lock()
+func (h Held) Holds(mu *sync.Mutex) bool                 // 指针身份比较（无 Release 方法）
+
+// cells/accesscore/internal/mem
 type memTxToken struct {
-    store     *Store // 哪个 Store 的锁；跨 store 不得跳锁
-    holdsLock bool   // 注入者当前是否在调用 goroutine 上持有 store.mu
+    held txlock.Held // 零值 holds nothing；mutex 身份即 store 绑定（不需 store 字段）
 }
 ```
 
-- `memTxRunner.RunInTx`：`mu.Lock()` 后注入 `&memTxToken{store: r.s, holdsLock: true}`。
-- `WithTxContext`：注入 `&memTxToken{holdsLock: false}`（签名不变）。
-- 删除 `isInMemTx`；新增 `func (s *Store) txHoldsLock(ctx) bool` =
-  `tok != nil && tok.holdsLock && tok.store == s`。
-- 18 处 repo guard（user_repo ×7 / role_repo ×11）
-  `if !isInMemTx(ctx)` → `if !r.store.txHoldsLock(ctx)`。
+- `memTxRunner.runLocked`（`RunInTx` 的 body）：`held, unlock := txlock.Acquire(&r.s.mu); defer unlock()`
+  后注入 `&memTxToken{held: held}`。
+- `WithTxContext`：注入 `&memTxToken{}`（零 witness，签名不变）。
+- `func (s *Store) txHoldsLock(ctx) bool` = `tok != nil && tok.held.Holds(&s.mu)`。
+- 18 处 repo guard 不变（`if !r.store.txHoldsLock(ctx)`；`txHoldsLock` 契约不变，
+  仅内部由 witness 判定取代 bool）。
 
-效果：`holdsLock=false`（WithTxContext / 6 fake）→ 任何 repo 方法走 per-call
-`store.mu.Lock()`，并发写 map **不可能**发生。`holdsLock=true`（仅 RunInTx，
-且 store 身份匹配）→ 跳 per-call 锁，整闭包持锁，跨方法原子性不变（等价 PG
-SELECT FOR UPDATE-until-commit）。`sync.Mutex` 不可重入约束不变。
+效果：零 witness（WithTxContext / fake）→ `Holds` 报 false → 任何 repo 方法走
+per-call `store.mu.Lock()`，并发写 map **不可能**。持 witness（仅 runLocked，且
+mutex 身份匹配）→ 跳 per-call 锁，整闭包持锁，跨方法原子性不变（等价 PG SELECT
+FOR UPDATE-until-commit）。跨 store 由 mutex 指针身份保证（A 的 witness `Holds(&B.mu)`
+为 false），故 `store *Store` 字段删除（冗余）。`sync.Mutex` 不可重入约束不变。
 
-### D2. AI-robust 评级：Hard（type system + 私有字段封装），funnel 双向锁
+### D2. AI-robust 评级：Hard（type system + sealed witness），funnel 双向锁
 
-- **上游 Hard**：`memTxToken` 与 `holdsLock` 均不导出。构造 `holdsLock=true`
-  token 的唯一 callsite 是包内 `memTxRunner.RunInTx`（私有 struct，刚
-  `mu.Lock()`）。`WithTxContext` 公开 API 硬编码 `holdsLock:false`。包外
-  任何代码（含测试 fake）**无 API 表面**可表达「在 tx 且持锁」——Go 编译器
-  即 gate。
-- **下游 Hard**：跳 per-call 锁的能力仅当 `txHoldsLock` 返回 true；该函数
-  AND 校验 `holdsLock && store==s`。
+- **上游 Hard**：`txlock.Held` 唯一字段 `mu` 不导出 → 包外（含 package mem）无法
+  `txlock.Held{mu:…}` 构造；持锁 witness 的唯一来源是 `txlock.Acquire`（真 Lock）。
+  `memTxToken` 与 `held` 字段亦不导出。包外任何代码无 API 表面可表达「在 tx 且
+  持锁」——Go 编译器即 gate。
+- **下游 Hard**（#945 由 runtime-AND-check 升级为 type-system）：跳 per-call 锁仅当
+  `tok.held.Holds(&s.mu)`，而能让 `Holds` 为 true 的 witness 编译期不可伪造——
+  即便在 package mem 内部，无 Acquire（真持锁）就拿不到。`Held` 无 `Release` 方法，
+  ctx 携带的 witness 连解锁都不能（unlock 闭包留在 runLocked 本地）。
 
-闭环成立（对照 ai-robust.md §Funnel 双向锁：下游 Hard + 上游 Hard）。
+闭环成立且**双侧 Hard 由类型系统承载**（对照 ai-robust.md §Funnel 双向锁）。
+原 238 设计下游靠 `txHoldsLock` 的 `holdsLock && store==s` runtime AND 校验
+（Hard 但 runtime）；#945 witness 使该校验退化为 mutex 身份比较，伪造在编译期即
+不可达。
 
-### D3. archtest `MEM-TX-LOCK-OWNERSHIP-01`（Medium 双重防线）
+### D3. archtest `MEM-TX-LOCK-OWNERSHIP-01`（Medium 回归层）
 
-type system 是 Hard 主线；archtest 闭包包内残留风险（未来包内 edit 在别处
-mint holdsLock=true）：R1 = `memTxToken` 复合字面量只许在
-`(memTxRunner).RunInTx` / `WithTxContext`；R2 = 禁 `new(memTxToken)` + 禁
-`.holdsLock` 赋值 LHS。盲区（reflect/unsafe 字段写）由反向自检测试关闭；
-companion-index 精度测试防 vacuous-pass。文件
-`tools/archtest/mem_tx_lock_ownership_test.go`。
+type system（D2 witness seal）是 Hard 主线；archtest 退为 **Medium 回归层**，
+守 witness funnel 的纪律漂移：
 
-R2b accessor 以「FuncDecl 名 `txHoldsLock` + receiver `*Store`」识别（`receiverTypeName`
-是字符串比对 helper，Soft 字符串锚点），并由反向自检
-`TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor`（companion-index）防
-vacuous-pass。因此 R2b 评级为 **Medium**（非 Soft）：两部分字符串锚点匹配 +
-companion-index 防空集。威胁矩阵第 3 行「包内未来 edit 在 RunInTx 外 mint
-holdsLock=true ✅」维持成立——F-A（receiver 校验）与 F-B（反向自检）已在同
-PR 落地。
+- **W1**：`txlock.Acquire` 只许在 `(memTxRunner).runLocked` 内调用（witness 唯一
+  铸造点；按 func 名 `Acquire` + 包路径后缀 `/txlock` typed 解析）。
+- **W2**：`(*Store).txHoldsLock` return 形态 pin 为 `tok != nil && tok.held.Holds(&s.mu)`
+  （扁平化 `&&` 树，恰好 2 合取项：nil-guard + `tok.held.Holds(&<recv>.mu)`）。这把
+  下游 runtime 检查的形态钉死，防 silent regression（如丢 `.Holds` 合取项）。
+- **R1**：`memTxToken` 复合字面量（typed 匹配当前包 `*types.Named`）只许在
+  `runLocked` / `WithTxContext`。
+
+旧 R2b（`.holdsLock` selector funnel）**删除**——无 bool 字段。旧 R2a（禁
+`new(memTxToken)`）亦无必要：零 witness token 无害（`Holds` false），且 `held`
+不可被赋值为持锁 witness。`Held` 字段集冻结（恰好 1 个 unexported `*sync.Mutex`）
+由 `internal/txlock/txlock_test.go::TestHeldSealFrozen` reflect 守（tools/archtest
+不能 import 双 internal 的 txlock，故 seal freeze 活在 txlock 包自身，镜像
+`FixtureOpts` freeze 范式）。盲区（reflect/unsafe 写 `Held.mu`）由 mem + txlock
+两包禁 import reflect/unsafe 的反向自检关闭；vacuous-pass 由 companion-index
+`TestMemTxLockOwnership01_FindsSanctionedSites` + real-source 反向自检
+`TestMemTxLockOwnership01_FixturePattern`（`internal/memtxlockfixture`）防。
+
+const-fold note：#945 原提案拟用 go/types 常量折叠 pin `holdsLock` bool 值；witness
+删除该 bool，无值可折叠、无 bool-const 替换盲区，故 const-fold 取消（typed 模式仍
+用于解析 memTxToken 类型与 Acquire 包）。
 
 ### D4. 被删测试改为活体回归（不删除）
 
@@ -125,19 +184,25 @@ ref: kubernetes/client-go tools/cache/thread_safe_store.go (RWMutex, *Locked con
 ref: golang/go database/sql (explicit Tx ownership; non-reentrant Mutex rationale)
 ```
 
-## 威胁矩阵
+## 威胁矩阵（#945 witness 逐行重评）
 
-| 威胁 | 改造前 | 改造后 | 机制 |
-|------|--------|--------|------|
-| sentinel 在场 + 不持锁 → 并发写 map（本 flake） | ❌ fatal（偶发，调度运气） | ✅ 消除 | holdsLock=false → 强制 per-call 锁 |
-| 包外 fake 伪造「在 tx 且持锁」 | ❌ bool 任意可注入 | ✅ 不可表达 | memTxToken/holdsLock 不导出，编译器 gate（上游 Hard） |
-| 包内未来 edit 在 RunInTx 外 mint holdsLock=true | ⚠️ 无防护 | ✅ archtest 拦截 | MEM-TX-LOCK-OWNERSHIP-01 R1/R2（Medium） |
-| 构造 token 后 reflect/unsafe 改 holdsLock | ⚠️ — | ✅ 反向自检 | mem 包禁 import reflect/unsafe（archtest） |
-| 跨 store token 混用（A 的 token 让 B 跳锁） | ⚠️ bool 无 store 维度 | ✅ 拒绝 | txHoldsLock 校验 `tok.store == s` |
-| RunInTx 跨方法原子性丢失（PG FOR UPDATE 等价） | ✅ 持锁全程 | ✅ 不变 | holdsLock=true 跳 per-call 锁，闭包持锁 |
-| 单 goroutine fake 测试退化 | ✅ | ✅ 不变 | per-call 锁串行天然原子（无并发） |
+「改造后」= 238 token 设计；「#945 后」= sealed witness。三栏对照便于逐行验证
+无 verdict 回退。
 
-无格子从 ✅ 变 ⚠️/❌。
+| 威胁 | 改造前 | 改造后（238 token） | #945 后（witness） | 机制（#945） |
+|------|--------|--------------------|--------------------|------|
+| sentinel 在场 + 不持锁 → 并发写 map（本 flake） | ❌ fatal（偶发） | ✅ 消除（runtime） | ✅ 消除（不变） | 零 witness → `Holds` false → 强制 per-call 锁 |
+| 包外 fake 伪造「在 tx 且持锁」 | ❌ bool 任意可注入 | ✅ 不可表达 | ✅ 不可表达（不变） | `Held`/`memTxToken`/字段不导出，编译器 gate（上游 Hard） |
+| **包内** edit 在 runLocked 外 mint 持锁 token | ⚠️ 无防护 | ⚠️→Medium archtest（bool 仍可在包内赋值） | ✅✅ **编译不可表达** | `txlock.Held.mu` 不导出 + 无 Acquire 无 witness（下游 Hard 升级；W1/W2/R1 archtest 仅守纪律漂移） |
+| 构造 token 后 reflect/unsafe 改持锁字段 | ⚠️ — | ✅ 反向自检（mem 禁 reflect/unsafe） | ✅ 反向自检（扩至 txlock 包） | mem + txlock 两包禁 import reflect/unsafe（archtest） |
+| ctx 携带的 witness 被用来**解锁**（liveness） | n/a | ⚠️ token 含可解锁句柄（理论） | ✅ 不可表达 | `Held` 无 Release 方法；unlock 闭包留 runLocked 本地（type system） |
+| 跨 store token 混用（A 的 token 让 B 跳锁） | ⚠️ bool 无 store 维度 | ✅ 拒绝（`tok.store == s`） | ✅ 拒绝（不变） | `Held.Holds(&s.mu)` mutex 指针身份（取代 store 字段比较） |
+| RunInTx 跨方法原子性丢失（PG FOR UPDATE 等价） | ✅ 持锁全程 | ✅ 不变 | ✅ 不变 | 持 witness 跳 per-call 锁，闭包持锁 |
+| 单 goroutine fake 测试退化 | ✅ | ✅ 不变 | ✅ 不变 | per-call 锁串行天然原子（无并发） |
+
+无格子从 ✅ 回退到 ⚠️/❌：#945 把第 3 行 ⚠️/Medium 升为 ✅✅（编译 Hard），并新增第 5
+行（witness 解锁 liveness 隐患）由「`Held` 无 Release」结构性消除——两处皆为 verdict
+改善，非回退。
 
 ## contract-fanout 回灌（5 载体）
 
@@ -151,12 +216,15 @@ ref: golang/go database/sql (explicit Tx ownership; non-reentrant Mutex rational
 
 ## Rollback
 
-回退 store.go（token→bool）+ 18 处 guard + 删 archtest。flake 复现（已知
+回退 store.go（witness→token→bool）+ 删 txlock 包 + 删 archtest。flake 复现（已知
 `-race -count` 必现），不建议。
 
 ## Hard 范本登记
 
-「unexported typed token + unexported ownership 字段，唯一 true-构造点为
-持锁入口」——context-carried 资源所有权真值的 Hard funnel 范本（上游
-type-system Hard + 下游 txHoldsLock AND 校验 + Medium archtest 包内残留闭包）。
-对标 ent `*Tx` / GORM ConnPool type assertion。
+#945 后落入 ai-robust.md §Hard 范本「**sealed construction**」+「**single sanctioned
+holder**」：context-carried 锁所有权真值经 `internal/` 子包 + unexported 字段 + 私有
+构造（`Acquire` 真持锁）使「在 tx 且持锁」**编译不可表达，即便在 owning 包内**——比
+238 的「unexported typed token + runtime AND 校验」更强（下游从 runtime-Hard 升为
+type-system-Hard）。capability/proof 分离（`Held` 只证不解锁，unlock 闭包另返）对标
+`context.WithCancel`。范本本身已在 ai-robust.md 封闭集内，本条仅登记落地实例，不扩目录。
+对标 ent `*Tx` / GORM ConnPool type assertion / context.WithCancel。

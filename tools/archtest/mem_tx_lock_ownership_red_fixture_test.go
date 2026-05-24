@@ -9,7 +9,7 @@ import (
 
 // TestMemTxLockOwnership01_FixturePattern is the MEM-TX-LOCK-OWNERSHIP-01
 // reverse self-check (ai-robust.md §"工具选定后强制盲区自检"): a real,
-// build-tag-gated package (internal/memtxlockfixture) modelling the sealed
+// build-tag-gated package (internal/memtxlockfixture) modeling the sealed
 // lock-witness funnel. The detector scanMemTxLockWitness MUST report exactly
 // the three RED sites and MUST NOT flag the clean ones:
 //
@@ -52,9 +52,13 @@ func TestMemTxLockOwnership01_FixturePattern(t *testing.T) {
 	for _, d := range diags {
 		joined += d.Message + "\n"
 	}
-	assert.Contains(t, joined, "leakAcquire", "W1: Acquire-outside-runLocked must be reported")
-	assert.Contains(t, joined, "txHoldsLock", "W2: weakened txHoldsLock form must be reported")
-	assert.Contains(t, joined, "leakToken", "R1: memTxToken literal outside sites must be reported")
-	assert.NotContains(t, joined, "runLocked", "runLocked is the sanctioned Acquire + literal site")
-	assert.NotContains(t, joined, "WithTxContext", "WithTxContext literal is sanctioned")
+	// Each diagnostic names its enclosing function as "in <fn>"; assert the
+	// three RED sites are reported there and the sanctioned sites are not
+	// (the messages reference runLocked / WithTxContext as the *allowed* sites,
+	// so match on the "in <fn>" enclosing-function marker, not bare names).
+	assert.Contains(t, joined, "in leakAcquire", "W1: Acquire-outside-runLocked must be reported")
+	assert.Contains(t, joined, "in txHoldsLock", "W2: weakened txHoldsLock form must be reported")
+	assert.Contains(t, joined, "in leakToken", "R1: memTxToken literal outside sites must be reported")
+	assert.NotContains(t, joined, "in runLocked", "runLocked is the sanctioned Acquire + literal site")
+	assert.NotContains(t, joined, "in WithTxContext", "WithTxContext literal is sanctioned")
 }

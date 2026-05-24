@@ -11,21 +11,14 @@ package txlock
 
 import "sync"
 
-// Held mirrors the production Held: a *sync.Mutex behind an unexported field,
-// un-forgeable outside this package.
+// Held mirrors the production read-only proof: a *sync.Mutex behind an
+// unexported field, un-forgeable outside this package, with no Release method.
 type Held struct{ mu *sync.Mutex }
 
-// Acquire is the witness mint (mirrors production).
-func Acquire(mu *sync.Mutex) Held {
+// Acquire is the witness mint (mirrors production: proof + unlock closure).
+func Acquire(mu *sync.Mutex) (held Held, unlock func()) {
 	mu.Lock()
-	return Held{mu: mu}
-}
-
-// Release unlocks the witnessed mutex.
-func (h Held) Release() {
-	if h.mu != nil {
-		h.mu.Unlock()
-	}
+	return Held{mu: mu}, mu.Unlock
 }
 
 // Holds reports whether h witnesses mu (pointer identity).

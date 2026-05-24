@@ -2,68 +2,79 @@ package archtest
 
 // INVARIANT: MEM-TX-LOCK-OWNERSHIP-01
 //
-// mem_tx_lock_ownership_test.go is the Medium double-line defense for the mem
-// tx lock-ownership funnel (ADR
-// docs/architecture/202605171846-adr-mem-tx-lock-ownership.md). The Hard line
-// is the Go type system itself: cells/accesscore/internal/mem.memTxToken and
-// its holdsLock field are unexported, so no code outside package mem can
-// construct a holdsLock=true token (compiler-enforced — the upstream half of
-// the funnel). This archtest closes the in-package residue: a future edit
-// inside package mem must not mint a holdsLock=true token anywhere except
-// memTxRunner.RunInTx (which has just called store.mu.Lock()), nor mutate the
-// holdsLock field after construction, nor bypass the composite-literal form.
+// mem_tx_lock_ownership_test.go guards the regression surface of the mem tx
+// lock-ownership funnel after the sealed lock-witness rework (#945; ADR
+// docs/architecture/202605171846-adr-mem-tx-lock-ownership.md). The threat is
+// "sentinel present but no lock": a tx-context token authorizing a repository
+// method to skip its per-call store.mu lock when the lock is NOT held →
+// concurrent map writes (the PR #558 flake).
 //
-// Rule R1 — construction-site lock:
+// That threat is now compile-impossible — the Hard core lives in the type
+// system, not in this archtest:
 //
-//	every *ast.CompositeLit of type memTxToken in a non-test .go file under
-//	cells/accesscore/internal/mem MUST be lexically inside one of exactly two
-//	FuncDecls:
-//	  - func (memTxRunner) RunInTx   (the only holdsLock=true site)
-//	  - func WithTxContext           (the only holdsLock=false site)
-//	A memTxToken composite literal anywhere else (another method, a helper, a
-//	package-level var) is a violation.
+//   - Upstream Hard: cells/accesscore/internal/mem/internal/txlock.Held's sole
+//     field is unexported, so no package (not even mem) can write txlock.Held{…}
+//     with a real mutex. The only way to obtain a Held whose Holds(&store.mu) is
+//     true is txlock.Acquire(&store.mu), which Lock()s the mutex.
+//   - Downstream Hard: a memTxToken carries that Held; txHoldsLock authorizes a
+//     lock-skip only when tok.held.Holds(&s.mu). "In a tx context yet not holding
+//     the lock" is inexpressible without having locked. The Held also has NO
+//     Release method (Acquire returns a separate unlock closure kept local to
+//     runLocked), so a ctx-carried witness cannot even release the lock.
 //
-// Rule R2 — blind-spot closure (post-construction mutation / non-literal
-// construction):
+// This file is the Medium regression layer over that Hard core. It runs the
+// shared detector scanMemTxLockWitness over package mem (typed, via RunTyped)
+// and reports:
 //
-//	R2a: `new(memTxToken)` is banned (pointer-to-zero then field-set bypasses
-//	the composite-literal funnel).
-//	R2b: every `x.holdsLock` SelectorExpr (read OR write) must sit inside
-//	(*Store).txHoldsLock — the sole legitimate accessor. The two construction
-//	sites set holdsLock via composite-literal Ident keys (not SelectorExpr),
-//	so R2b does not touch them; R1 funnels construction. Combined, "build a
-//	token then flip holdsLock" / "read holdsLock to fork logic elsewhere" is
-//	inexpressible without tripping the rule.
+//	W1 — txlock.Acquire is called only inside (memTxRunner).runLocked, the sole
+//	     sanctioned witness-mint site (matched by func name "Acquire" + package
+//	     path suffix "/txlock", resolved typed via ResolvePackageRef).
+//	W2 — (*Store).txHoldsLock returns exactly `tok != nil && tok.held.Holds(&s.mu)`
+//	     (flatten the && tree; exactly two conjuncts: a nil-guard and the Holds
+//	     call on tok.held with arg &<recv>.mu). Dropping the Holds conjunct, adding
+//	     a third conjunct, or weakening the call shape fails — this pins the
+//	     downstream-Hard runtime check against silent regression.
+//	R1 — every memTxToken composite literal (typed match: *types.Named "memTxToken"
+//	     in the package under scan) sits inside runLocked or WithTxContext.
 //
-// Blind spots of the chosen tool (pure AST CompositeLit/CallExpr/AssignStmt
-// scan) and their handling — required by .claude/rules/gocell/ai-robust.md:
+// The seal itself (txlock.Held field-set: exactly one unexported *sync.Mutex
+// field) is frozen by reflect in the txlock package's own test
+// (TestHeldSealFrozen in internal/txlock/txlock_test.go) — tools/archtest cannot
+// import the double-internal txlock package, so the freeze lives where Held is
+// defined, mirroring the FixtureOpts freeze in pass_test.go.
 //
-//   - reflect-based field mutation (reflect.Value.SetBool on holdsLock):
-//     out of scope of an AST literal scan. Closed by
-//     TestMemTxLockOwnership01_NoReflectInMemPkg asserting package mem
-//     (non-test) does not import "reflect" at all (true today; a reverse
-//     self-check, not the primary rule).
-//   - unsafe pointer field write: same class; package mem does not import
-//     "unsafe" — asserted by the same reverse self-check
-//     (TestMemTxLockOwnership01_NoUnsafeInMemPkg).
-//   - vacuous-pass risk (matcher silently matching nothing): closed by
-//     TestMemTxLockOwnership01_FindsExactlyTheTwoSites companion-index
-//     precision test — it asserts the scan finds the two real construction
-//     sites by name, so a regression that stops detecting memTxToken literals
-//     fails loudly instead of passing empty.
-//   - R2b accessor identified by FuncDecl name "txHoldsLock" + receiver type
-//     name "Store" — both are Soft string anchors (receiverTypeName is a
-//     string-comparison helper). Mitigated by (a) receiver type check added in
-//     F-A (symmetric with allowedTokenFunc), and (b) the companion-index
-//     reverse self-check TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor
-//     asserting the accessor FuncDecl is non-empty and contains at least one
-//     "holdsLock" SelectorExpr, preventing vacuous-pass when the function is
-//     renamed or its body is emptied. Rating: Medium (string-anchor, two-part
-//     match, companion-index guard).
+// Note on "const-fold": #945 originally proposed pinning a holdsLock bool field
+// value via go/types constant folding. The witness rework deletes that bool
+// (there is no value left to fold and no bool-const substitution blind spot);
+// R1 now pins only construction SITE, while W1/W2 + the type-system seal carry
+// the lock-ownership truth.
+//
+// AI-robust rating (modifies an enforcement mechanism + reworks runtime design):
+//   - Upstream Hard / Downstream Hard — type system (txlock.Held seal; Held has
+//     no Release). This archtest is NOT the primary defense.
+//   - This file (W1/W2/R1) = Medium regression layer: string anchors
+//     ("Acquire"/"txlock"/"runLocked"/"WithTxContext"/"txHoldsLock"/"held"/"mu")
+//     + AST form-uniqueness. No gh issue to "Hard-ify" — the funnel is already
+//     Hard via the seal; W1/W2/R1 only catch funnel-discipline drift.
+//
+// Tool blind spots (pure-AST/typed scan) + their reverse self-checks, per
+// ai-robust.md §"工具选定后强制盲区自检":
+//   - reflect.Value.Set / unsafe pointer write on txlock.Held.mu would forge a
+//     witness: closed by NoReflectInMemPkg / NoUnsafeInMemPkg asserting neither
+//     package mem nor package txlock imports "reflect"/"unsafe".
+//   - vacuous-pass (matcher silently matches nothing): closed by
+//     FindsSanctionedSites asserting the scan actually finds the runLocked
+//     Acquire site, both memTxToken literal sites, and the txHoldsLock accessor.
+//   - detector correctness (false-negative / false-positive drift): closed by
+//     the real-source reverse self-check TestMemTxLockOwnership01_FixturePattern
+//     (mem_tx_lock_ownership_red_fixture_test.go) asserting exactly the three RED
+//     sites are reported and the sanctioned sites are not.
 
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
+	"go/types"
 	"strings"
 	"testing"
 
@@ -75,255 +86,399 @@ const ruleMemTxLockOwnership01 = "MEM-TX-LOCK-OWNERSHIP-01"
 
 const memPkgRel = "cells/accesscore/internal/mem"
 
-// memTxTokenTypeName is the unexported struct whose construction this rule
-// funnels. Same-package AST ident match is sufficient (no cross-package type
-// resolution): the type is unexported, so the identifier memTxToken inside
-// package mem can only denote this type.
+// memTxTokenTypeName is the unexported witness-bearing token whose construction
+// site this rule funnels (R1).
 const memTxTokenTypeName = "memTxToken"
 
-// isMemTxTokenLit reports whether cl constructs a memTxToken value, covering
-// both `memTxToken{…}` and `&memTxToken{…}` (the unary & wraps the same
-// CompositeLit node, so only the lit's Type matters).
-func isMemTxTokenLit(cl *ast.CompositeLit) bool {
-	id, ok := cl.Type.(*ast.Ident)
-	return ok && id.Name == memTxTokenTypeName
+const (
+	// memTxSiteRunLocked is the holds-witness mint site: (memTxRunner).runLocked
+	// is the only function allowed to call txlock.Acquire (W1) and the holds-lock
+	// memTxToken construction site (R1).
+	memTxSiteRunLocked = "runLocked"
+	// memTxSiteWithTxContext is the no-witness site: WithTxContext constructs a
+	// zero-witness memTxToken (R1) and never calls Acquire.
+	memTxSiteWithTxContext = "WithTxContext"
+)
+
+// memTxTokenSiteKind reports whether fd is one of the two sanctioned memTxToken
+// construction sites: func (memTxRunner) runLocked, or func WithTxContext.
+func memTxTokenSiteKind(fd *ast.FuncDecl) (site string, ok bool) {
+	switch fd.Name.Name {
+	case memTxSiteRunLocked:
+		// must be a method on memTxRunner (value or pointer receiver).
+		if fd.Recv != nil && receiverTypeName(fd) == "memTxRunner" {
+			return memTxSiteRunLocked, true
+		}
+	case memTxSiteWithTxContext:
+		if fd.Recv == nil {
+			return memTxSiteWithTxContext, true
+		}
+	}
+	return "", false
 }
 
-// allowedTokenFunc reports whether fd is one of the two legitimate
-// construction sites: func (memTxRunner) RunInTx, or func WithTxContext.
-func allowedTokenFunc(fd *ast.FuncDecl) bool {
-	switch fd.Name.Name {
-	case "RunInTx":
-		// must be a method on memTxRunner (value or pointer receiver).
-		// receiverTypeName is the shared archtest helper (pg_repo_ambient_tx).
-		return fd.Recv != nil && receiverTypeName(fd) == "memTxRunner"
-	case "WithTxContext":
-		return fd.Recv == nil
-	default:
+// receiverVarName returns the receiver variable name of fd (the `s` in
+// `func (s *Store) …`), or "" when there is no named receiver.
+func receiverVarName(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 || len(fd.Recv.List[0].Names) == 0 {
+		return ""
+	}
+	return fd.Recv.List[0].Names[0].Name
+}
+
+// isMemTxTokenLitTyped reports whether cl constructs a memTxToken value declared
+// in the package under scan, covering both `memTxToken{…}` and `&memTxToken{…}`.
+// Typed match against *types.Named (immune to local shadowing); the package
+// identity check lets the same detector run over production mem and the
+// fixture's own memTxToken alike.
+func isMemTxTokenLitTyped(info *types.Info, pkg *types.Package, cl *ast.CompositeLit) bool {
+	if info == nil || pkg == nil || cl == nil || cl.Type == nil {
 		return false
 	}
+	t := info.TypeOf(cl.Type)
+	if t == nil {
+		return false
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj != nil && obj.Name() == memTxTokenTypeName &&
+		obj.Pkg() != nil && obj.Pkg().Path() == pkg.Path()
 }
 
-// TestMemTxLockOwnership01 enforces R1 + R2 over the mem package.
+// isTxlockAcquireCall reports whether sel is a reference to func Acquire in a
+// package whose import path ends in "/txlock" (production
+// …/mem/internal/txlock or the fixture mirror …/memtxlockfixture/txlock).
+func isTxlockAcquireCall(info *types.Info, sel *ast.SelectorExpr) bool {
+	if sel.Sel == nil || sel.Sel.Name != "Acquire" {
+		return false
+	}
+	pkgPath, name, ok := ResolvePackageRef(info, sel)
+	return ok && name == "Acquire" && strings.HasSuffix(pkgPath, "/txlock")
+}
+
+// flattenLAND splits a left-associative `a && b && c` tree into its leaf
+// conjuncts. A non-&& expression returns itself as a single leaf.
+func flattenLAND(e ast.Expr) []ast.Expr {
+	be, ok := e.(*ast.BinaryExpr)
+	if !ok || be.Op != token.LAND {
+		return []ast.Expr{e}
+	}
+	return append(flattenLAND(be.X), flattenLAND(be.Y)...)
+}
+
+// nilGuardVar returns the non-nil operand identifier name of an `x != nil`
+// BinaryExpr (either order), or ("", false) for any other shape.
+func nilGuardVar(e ast.Expr) (name string, ok bool) {
+	be, ok := e.(*ast.BinaryExpr)
+	if !ok || be.Op != token.NEQ {
+		return "", false
+	}
+	x, xIsIdent := be.X.(*ast.Ident)
+	y, yIsIdent := be.Y.(*ast.Ident)
+	if !xIsIdent || !yIsIdent {
+		return "", false
+	}
+	switch {
+	case y.Name == "nil":
+		return x.Name, true
+	case x.Name == "nil":
+		return y.Name, true
+	default:
+		return "", false
+	}
+}
+
+// isHeldHoldsCall reports whether e is exactly `<tok>.held.Holds(&<recv>.mu)`.
+func isHeldHoldsCall(e ast.Expr, tok, recv string) bool {
+	ce, ok := e.(*ast.CallExpr)
+	if !ok || len(ce.Args) != 1 {
+		return false
+	}
+	holds, ok := ce.Fun.(*ast.SelectorExpr) // <…>.Holds
+	if !ok || holds.Sel.Name != "Holds" {
+		return false
+	}
+	heldSel, ok := holds.X.(*ast.SelectorExpr) // <tok>.held
+	if !ok || heldSel.Sel.Name != "held" {
+		return false
+	}
+	if id, ok := heldSel.X.(*ast.Ident); !ok || id.Name != tok {
+		return false
+	}
+	addr, ok := ce.Args[0].(*ast.UnaryExpr) // &<recv>.mu
+	if !ok || addr.Op != token.AND {
+		return false
+	}
+	muSel, ok := addr.X.(*ast.SelectorExpr)
+	if !ok || muSel.Sel.Name != "mu" {
+		return false
+	}
+	id, ok := muSel.X.(*ast.Ident)
+	return ok && id.Name == recv
+}
+
+// txHoldsLockFormOK pins the (*Store).txHoldsLock return to exactly
+// `tok != nil && tok.held.Holds(&s.mu)`: a single single-value return whose &&
+// tree flattens to exactly two conjuncts — a nil-guard on tok and the Holds call
+// on tok.held with arg &<recv>.mu. Order-independent; receiver/token names are
+// taken from the source, not hard-coded.
+func txHoldsLockFormOK(fd *ast.FuncDecl) (ok bool, why string) {
+	recv := receiverVarName(fd)
+	if recv == "" {
+		return false, "no named receiver"
+	}
+	var rets []*ast.ReturnStmt
+	EachInSubtree[ast.ReturnStmt](fd, func(rs *ast.ReturnStmt) {
+		if len(rs.Results) == 1 {
+			rets = append(rets, rs)
+		}
+	})
+	if len(rets) != 1 {
+		return false, fmt.Sprintf("expected exactly 1 single-value return, got %d", len(rets))
+	}
+	conj := flattenLAND(rets[0].Results[0])
+	if len(conj) != 2 {
+		return false, fmt.Sprintf("expected exactly 2 && conjuncts, got %d", len(conj))
+	}
+	var tok string
+	var sawNil bool
+	for _, c := range conj {
+		if v, ok := nilGuardVar(c); ok {
+			tok, sawNil = v, true
+		}
+	}
+	if !sawNil {
+		return false, "missing `tok != nil` nil-guard conjunct"
+	}
+	for _, c := range conj {
+		if isHeldHoldsCall(c, tok, recv) {
+			return true, ""
+		}
+	}
+	return false, fmt.Sprintf("missing `%s.held.Holds(&%s.mu)` conjunct", tok, recv)
+}
+
+// scanMemTxLockWitness is the shared witness-funnel detector. It runs over a
+// single package Pass — production (cells/accesscore/internal/mem) and the
+// memtxlockfixture reverse self-check alike — and reports W1 / W2 / R1 (see the
+// file INVARIANT block). Requires a typed Pass; returns nil for a bare-AST Pass.
+func scanMemTxLockWitness(p *Pass) []Diagnostic {
+	if p.TypesInfo == nil || p.Pkg == nil {
+		return nil
+	}
+	var ds []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		report := func(node ast.Node, msg string) {
+			ds = append(ds, Diagnostic{
+				Rel:     rel,
+				Line:    p.Fset.Position(node.Pos()).Line,
+				Message: msg,
+			})
+		}
+
+		// Record sanctioned construction-site spans.
+		type span struct {
+			kind   string
+			lo, hi token.Pos
+		}
+		var sites []span
+		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			if fd.Body == nil {
+				return
+			}
+			if kind, ok := memTxTokenSiteKind(fd); ok {
+				sites = append(sites, span{kind, fd.Pos(), fd.End()})
+			}
+		})
+		within := func(n ast.Node, kinds ...string) bool {
+			for _, s := range sites {
+				if n.Pos() < s.lo || n.End() > s.hi {
+					continue
+				}
+				for _, k := range kinds {
+					if s.kind == k {
+						return true
+					}
+				}
+			}
+			return false
+		}
+
+		// W1: txlock.Acquire only inside (memTxRunner).runLocked.
+		EachInSubtree[ast.CallExpr](file, func(ce *ast.CallExpr) {
+			sel, ok := ce.Fun.(*ast.SelectorExpr)
+			if !ok || !isTxlockAcquireCall(p.TypesInfo, sel) {
+				return
+			}
+			if within(ce, memTxSiteRunLocked) {
+				return
+			}
+			report(ce, fmt.Sprintf(
+				"txlock.Acquire in %s, outside the sole sanctioned runLocked "+
+					"witness-mint site (%s W1)",
+				enclosingFuncName(file, ce.Pos()), ruleMemTxLockOwnership01))
+		})
+
+		// R1: memTxToken composite literal only inside a sanctioned site.
+		EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
+			if !isMemTxTokenLitTyped(p.TypesInfo, p.Pkg, cl) {
+				return
+			}
+			if within(cl, memTxSiteRunLocked, memTxSiteWithTxContext) {
+				return
+			}
+			report(cl, fmt.Sprintf(
+				"memTxToken composite literal in %s, outside runLocked / "+
+					"WithTxContext (%s R1)",
+				enclosingFuncName(file, cl.Pos()), ruleMemTxLockOwnership01))
+		})
+
+		// W2: (*Store).txHoldsLock return form.
+		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			if fd.Body == nil || fd.Name.Name != "txHoldsLock" {
+				return
+			}
+			if fd.Recv == nil || receiverTypeName(fd) != "Store" {
+				return
+			}
+			if ok, why := txHoldsLockFormOK(fd); !ok {
+				report(fd, fmt.Sprintf(
+					"weakened (*Store).txHoldsLock in %s: %s — must be "+
+						"`tok != nil && tok.held.Holds(&s.mu)` (%s W2)",
+					enclosingFuncName(file, fd.Pos()), why, ruleMemTxLockOwnership01))
+			}
+		})
+	}
+	return ds
+}
+
+// memProductionScan runs scanMemTxLockWitness over the production mem package
+// only (skipping the txlock sub-package and any other loaded package).
+func memProductionScan(t *testing.T) []Diagnostic {
+	t.Helper()
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+	memPkgPath := modPath + "/" + memPkgRel
+
+	var diags []Diagnostic
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != memPkgPath {
+				return nil
+			}
+			diags = append(diags, scanMemTxLockWitness(p)...)
+			return nil
+		})
+	return diags
+}
+
+// TestMemTxLockOwnership01 enforces W1 + W2 + R1 over the production mem package.
 func TestMemTxLockOwnership01(t *testing.T) {
-	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{memPkgRel})
+	diags := memProductionScan(t)
 
-	type violation struct {
-		file, detail string
-		line         int
+	var lines []string
+	for _, d := range diags {
+		lines = append(lines, fmt.Sprintf("  %s:%d  %s", d.Rel, d.Line, d.Message))
 	}
-	var violations []violation
-
-	// DirsScope without IncludeTests() excludes *_test.go.
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			// Record the Pos/End spans of the two allowed funcs.
-			type span struct{ lo, hi ast.Node }
-			var allowed []span
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fd.Body != nil && allowedTokenFunc(fd) {
-					allowed = append(allowed, span{fd, fd})
-				}
-			})
-			inAllowed := func(n ast.Node) bool {
-				for _, s := range allowed {
-					if n.Pos() >= s.lo.Pos() && n.End() <= s.hi.End() {
-						return true
-					}
-				}
-				return false
-			}
-
-			// R1: every memTxToken composite literal must sit inside an
-			// allowed func.
-			EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
-				if !isMemTxTokenLit(cl) {
-					return
-				}
-				if inAllowed(cl) {
-					return
-				}
-				pos := p.Fset.Position(cl.Pos())
-				violations = append(violations, violation{
-					file:   p.Rel(file),
-					line:   pos.Line,
-					detail: "memTxToken composite literal outside (memTxRunner).RunInTx / WithTxContext (R1)",
-				})
-			})
-
-			// R2a: ban new(memTxToken).
-			EachInSubtree[ast.CallExpr](file, func(ce *ast.CallExpr) {
-				id, ok := ce.Fun.(*ast.Ident)
-				if !ok || id.Name != "new" || len(ce.Args) != 1 {
-					return
-				}
-				arg, ok := ce.Args[0].(*ast.Ident)
-				if !ok || arg.Name != memTxTokenTypeName {
-					return
-				}
-				pos := p.Fset.Position(ce.Pos())
-				violations = append(violations, violation{
-					file:   p.Rel(file),
-					line:   pos.Line,
-					detail: "new(memTxToken) banned; construct via the composite-literal funnel (R2a)",
-				})
-			})
-
-			// R2b: every `x.holdsLock` selector (read OR write) must sit inside
-			// (*Store).txHoldsLock — the sole legitimate field accessor. The
-			// two construction sites use composite-literal Ident keys
-			// (KeyValueExpr.Key), NOT SelectorExpr, so they are not matched
-			// here; R1 already funnels construction. Funneling all selector
-			// access to txHoldsLock makes "build then flip / read elsewhere"
-			// uniformly catchable with a single-node walk (no []ast.Expr
-			// for-range — SCANNER-FRAMEWORK-USAGE-01 compliant).
-			//
-			// Receiver check: the accessor must have receiver *Store (value or
-			// pointer), symmetric with allowedTokenFunc's receiver check for
-			// RunInTx. This prevents a same-named function on a different type
-			// from being falsely accepted as the allowed accessor.
-			var accessor []ast.Node
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fd.Body != nil && fd.Name.Name == "txHoldsLock" &&
-					fd.Recv != nil && receiverTypeName(fd) == "Store" {
-					accessor = append(accessor, fd)
-				}
-			})
-			inAccessor := func(n ast.Node) bool {
-				for _, a := range accessor {
-					if n.Pos() >= a.Pos() && n.End() <= a.End() {
-						return true
-					}
-				}
-				return false
-			}
-			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-				if sel.Sel.Name != "holdsLock" || inAccessor(sel) {
-					return
-				}
-				pos := p.Fset.Position(sel.Pos())
-				violations = append(violations, violation{
-					file:   p.Rel(file),
-					line:   pos.Line,
-					detail: ".holdsLock accessed outside (*Store).txHoldsLock (R2b)",
-				})
-			})
-		}
-		return nil
-	})
-
-	var violationLines []string
-	for _, v := range violations {
-		violationLines = append(violationLines, fmt.Sprintf("  %s:%d  %s", v.file, v.line, v.detail))
-	}
-	assert.Empty(t, violationLines,
-		"%s: %d violation(s) — memTxToken (holdsLock truth token) may only be constructed in "+
-			"(memTxRunner).RunInTx / WithTxContext and never post-mutated; see ADR "+
+	assert.Empty(t, lines,
+		"%s: %d violation(s) — the witness funnel (txlock.Acquire only in "+
+			"runLocked; txHoldsLock pins tok.held.Holds; memTxToken only in "+
+			"runLocked/WithTxContext) is broken; see ADR "+
 			"202605171846-adr-mem-tx-lock-ownership.md:\n%s",
-		ruleMemTxLockOwnership01, len(violationLines), strings.Join(violationLines, "\n"))
+		ruleMemTxLockOwnership01, len(lines), strings.Join(lines, "\n"))
 }
 
-// TestMemTxLockOwnership01_FindsExactlyTheTwoSites is the companion-index
-// precision test (anti-vacuous-pass): it asserts the scan actually sees a
-// memTxToken composite literal inside BOTH RunInTx and WithTxContext. If a
-// refactor renames the type or moves construction such that the matcher stops
-// firing, this fails loudly instead of the primary rule passing empty.
-func TestMemTxLockOwnership01_FindsExactlyTheTwoSites(t *testing.T) {
+// TestMemTxLockOwnership01_FindsSanctionedSites is the companion-index
+// precision test (anti-vacuous-pass): it asserts the scan actually sees the
+// witness funnel's anchors in production — the runLocked txlock.Acquire site,
+// a memTxToken literal inside BOTH runLocked and WithTxContext, and the
+// (*Store).txHoldsLock accessor. If a refactor renames the type / functions or
+// moves construction so the matchers stop firing, this fails loudly instead of
+// the primary rule passing empty.
+func TestMemTxLockOwnership01_FindsSanctionedSites(t *testing.T) {
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{memPkgRel})
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+	memPkgPath := modPath + "/" + memPkgRel
 
-	sites := map[string]bool{} // func name -> saw memTxToken lit inside
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fd.Body == nil || !allowedTokenFunc(fd) {
-					return
-				}
-				EachInSubtree[ast.CompositeLit](fd, func(cl *ast.CompositeLit) {
-					if isMemTxTokenLit(cl) {
-						sites[fd.Name.Name] = true
+	var acquireInRunLocked, txHoldsLockAccessors int
+	litSites := map[string]bool{} // site kind -> saw memTxToken literal inside
+
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./" + memPkgRel + "/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != memPkgPath {
+				return nil
+			}
+			for _, file := range p.Files {
+				EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+					if fd.Body == nil {
+						return
+					}
+					if fd.Name.Name == "txHoldsLock" && fd.Recv != nil &&
+						receiverTypeName(fd) == "Store" {
+						txHoldsLockAccessors++
+					}
+					kind, isSite := memTxTokenSiteKind(fd)
+					if !isSite {
+						return
+					}
+					EachInSubtree[ast.CompositeLit](fd, func(cl *ast.CompositeLit) {
+						if isMemTxTokenLitTyped(p.TypesInfo, p.Pkg, cl) {
+							litSites[kind] = true
+						}
+					})
+					if kind == memTxSiteRunLocked {
+						EachInSubtree[ast.CallExpr](fd, func(ce *ast.CallExpr) {
+							if sel, ok := ce.Fun.(*ast.SelectorExpr); ok &&
+								isTxlockAcquireCall(p.TypesInfo, sel) {
+								acquireInRunLocked++
+							}
+						})
 					}
 				})
-			})
-		}
-		return nil
-	})
+			}
+			return nil
+		})
 
-	require.Truef(t, sites["RunInTx"],
-		"%s precision: expected a memTxToken literal inside (memTxRunner).RunInTx; "+
+	require.Positivef(t, acquireInRunLocked,
+		"%s precision: expected a txlock.Acquire call inside (memTxRunner).runLocked; "+
 			"matcher may be stale", ruleMemTxLockOwnership01)
-	require.Truef(t, sites["WithTxContext"],
-		"%s precision: expected a memTxToken literal inside WithTxContext; "+
-			"matcher may be stale", ruleMemTxLockOwnership01)
-}
-
-// TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor is the companion-index
-// reverse self-check for R2b: it asserts that the scan actually finds a
-// FuncDecl named "txHoldsLock" with receiver *Store in the mem package AND
-// that function body contains at least one "holdsLock" SelectorExpr. If the
-// accessor is renamed or its body emptied, this fails loudly instead of R2b
-// passing vacuously (no accessor found → everything outside the empty set
-// passes trivially).
-//
-// Medium rating: receiver identification uses string anchors
-// (receiverTypeName == "Store"), per ai-robust.md §"Funnel 双向锁评级"
-// this is an allowed Medium upstream.
-func TestMemTxLockOwnership01_R2bFindsHoldsLockAccessor(t *testing.T) {
-	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{memPkgRel})
-
-	var accessorCount int
-	var holdsLockSelCount int
-
-	Run(t, scope, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fd.Body == nil || fd.Name.Name != "txHoldsLock" {
-					return
-				}
-				if fd.Recv == nil || receiverTypeName(fd) != "Store" {
-					return
-				}
-				accessorCount++
-				EachInSubtree[ast.SelectorExpr](fd, func(sel *ast.SelectorExpr) {
-					if sel.Sel.Name == "holdsLock" {
-						holdsLockSelCount++
-					}
-				})
-			})
-		}
-		return nil
-	})
-
-	require.Equalf(t, 1, accessorCount,
-		"%s R2b companion-index: expected exactly 1 FuncDecl named txHoldsLock with "+
-			"receiver *Store in %s; got %d — matcher may be stale after rename or "+
-			"a second same-named accessor was added (false-negative risk)",
-		ruleMemTxLockOwnership01, memPkgRel, accessorCount)
-	require.Positivef(t, holdsLockSelCount,
-		"%s R2b companion-index: expected at least one .holdsLock SelectorExpr "+
-			"inside (*Store).txHoldsLock; body may be empty or renamed",
+	require.Truef(t, litSites[memTxSiteRunLocked],
+		"%s precision: expected a memTxToken literal inside (memTxRunner).runLocked",
 		ruleMemTxLockOwnership01)
+	require.Truef(t, litSites[memTxSiteWithTxContext],
+		"%s precision: expected a memTxToken literal inside WithTxContext",
+		ruleMemTxLockOwnership01)
+	require.Equalf(t, 1, txHoldsLockAccessors,
+		"%s precision: expected exactly 1 (*Store).txHoldsLock accessor in %s, got %d",
+		ruleMemTxLockOwnership01, memPkgRel, txHoldsLockAccessors)
 }
 
-// TestMemTxLockOwnership01_NoReflectInMemPkg closes the reflect blind spot:
-// an AST literal scan cannot see reflect.Value.SetBool mutation of holdsLock.
-// Package mem does not (and must not) import "reflect"; assert it absent.
+// TestMemTxLockOwnership01_NoReflectInMemPkg closes the reflect blind spot: an
+// AST/typed scan cannot see reflect-based mutation of txlock.Held.mu (which
+// would forge a witness). Neither package mem nor package txlock imports
+// "reflect"; assert it absent.
 func TestMemTxLockOwnership01_NoReflectInMemPkg(t *testing.T) {
-	assertMemPkgDoesNotImport(t, "reflect")
+	assertMemTreeDoesNotImport(t, "reflect")
 }
 
 // TestMemTxLockOwnership01_NoUnsafeInMemPkg closes the unsafe blind spot
-// (unsafe-pointer field write). Package mem must not import "unsafe".
+// (unsafe-pointer write to txlock.Held.mu). Neither package must import "unsafe".
 func TestMemTxLockOwnership01_NoUnsafeInMemPkg(t *testing.T) {
-	assertMemPkgDoesNotImport(t, "unsafe")
+	assertMemTreeDoesNotImport(t, "unsafe")
 }
 
-func assertMemPkgDoesNotImport(t *testing.T, pkg string) {
+// assertMemTreeDoesNotImport asserts that neither the mem package nor its
+// internal/txlock seal package imports pkg (a witness-forge channel).
+func assertMemTreeDoesNotImport(t *testing.T, pkg string) {
 	t.Helper()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{memPkgRel})
+	scope := DirsScope(root, []string{memPkgRel, memPkgRel + "/internal/txlock"})
 
 	var offenders []string
 	Run(t, scope, func(p *Pass) []Diagnostic {
@@ -337,25 +492,7 @@ func assertMemPkgDoesNotImport(t *testing.T, pkg string) {
 		return nil
 	})
 	assert.Emptyf(t, offenders,
-		"%s blind-spot guard: package %s must not import %q (would defeat the "+
-			"AST construction-site funnel); offenders: %v",
-		ruleMemTxLockOwnership01, memPkgRel, pkg, offenders)
-}
-
-// scanMemTxLockWitness is the shared witness-funnel detector (Wave 2 sealed
-// lock-witness model). It runs over a single package Pass — production
-// (cells/accesscore/internal/mem) and the memtxlockfixture reverse self-check
-// alike — and reports:
-//
-//	W1: txlock.Acquire called outside (memTxRunner).runLocked.
-//	W2: (*Store).txHoldsLock return not of the exact form
-//	    `tok != nil && tok.held.Holds(&s.mu)`.
-//	R1: memTxToken composite literal outside runLocked / WithTxContext.
-//
-// STUB (Wave 1 RED): returns nil so the reverse self-check
-// (TestMemTxLockOwnership01_FixturePattern) fails until Wave 2 implements the
-// scan. Wave 2 replaces this body and rewires TestMemTxLockOwnership01.
-func scanMemTxLockWitness(p *Pass) []Diagnostic {
-	_ = p
-	return nil
+		"%s blind-spot guard: mem tree must not import %q (would defeat the "+
+			"sealed-witness funnel by forging txlock.Held.mu); offenders: %v",
+		ruleMemTxLockOwnership01, pkg, offenders)
 }

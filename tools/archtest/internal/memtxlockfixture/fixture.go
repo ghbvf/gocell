@@ -39,8 +39,8 @@ type memTxRunner struct{ s *Store }
 // runLocked is the sole sanctioned holds-lock site: Acquire here is CLEAN, and
 // the memTxToken literal carrying the witness is CLEAN.
 func (r memTxRunner) runLocked(ctx context.Context, fn func(context.Context) error) error {
-	held := txlock.Acquire(&r.s.mu) // CLEAN: Acquire inside runLocked
-	defer held.Release()
+	held, unlock := txlock.Acquire(&r.s.mu) // CLEAN: Acquire inside runLocked
+	defer unlock()
 	return fn(context.WithValue(ctx, memTxKey{}, &memTxToken{held: held})) // CLEAN literal
 }
 
@@ -57,8 +57,9 @@ func (s *Store) txHoldsLock(ctx context.Context) bool {
 }
 
 // leakAcquire RED (W1): mints a holds-lock witness outside runLocked.
-func leakAcquire(s *Store) txlock.Held {
-	return txlock.Acquire(&s.mu) // RED W1: Acquire outside runLocked
+func leakAcquire(s *Store) {
+	_, unlock := txlock.Acquire(&s.mu) // RED W1: Acquire outside runLocked
+	unlock()
 }
 
 // leakToken RED (R1): constructs a memTxToken outside the two sanctioned sites.
