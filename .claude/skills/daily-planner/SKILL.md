@@ -98,8 +98,11 @@ WAVE_COUNT=$([[ "$IS_WEEKEND" == "true" ]] && echo 4 || echo 2)
 WORKDIR="$(mktemp -d -t daily-planner.XXXXXX)"
 chmod 700 "$WORKDIR"
 
-# 1.1 输入集：P0 + P1 (默认) + 可选 P2/P3。GitHub label search 是 AND 语义，需逐 label 拉
-PRI_LABELS=(pri-p0 pri-p1)
+# 1.1 输入集：pri-missing 哨兵 + P0 + P1 (默认) + 可选 P2/P3。
+# pri-missing 是 backlog workflow 自动打的哨兵 (CLAUDE.md "新 backlog 条目")，
+# 漏标 priority 的 issue 不能被排期忽略；按 score 公式它有最高权重 (110)。
+# GitHub label search 是 AND 语义，需逐 label 拉。
+PRI_LABELS=(pri-missing pri-p0 pri-p1)
 [[ "${INCLUDE_P2:-}" == "true" ]] && PRI_LABELS+=(pri-p2)
 [[ "${INCLUDE_P3:-}" == "true" ]] && PRI_LABELS+=(pri-p3)
 
@@ -149,7 +152,9 @@ gh api graphql -f query='query {
 }' > "$WORKDIR/iter-config.json"
 
 # 1.4 Sub-issue 关系（GraphQL 原生）
-gh api graphql -H "GraphQL-Features: sub_issues" -f query='query {
+# GraphQL-Features header 是 preview API；账号 / repo 未启用时会返回 errors。
+# 失败显式 WARN，不静默吞错（保留降级 `{}`，让 agent 当作"无 sub-issue 数据"运行）。
+if ! gh api graphql -H "GraphQL-Features: sub_issues" -f query='query {
   repository(owner:"ghbvf",name:"gocell"){
     issues(first:100, labels:["bundle-parent"], states:OPEN){
       nodes {
@@ -159,7 +164,12 @@ gh api graphql -H "GraphQL-Features: sub_issues" -f query='query {
       }
     }
   }
-}' > "$WORKDIR/sub-issues.json" 2>/dev/null || echo '{}' > "$WORKDIR/sub-issues.json"
+}' > "$WORKDIR/sub-issues.json" 2>"$WORKDIR/sub-issues.err"; then
+  echo "WARN: sub-issue GraphQL query failed; sub-issue data unavailable for this run" >&2
+  echo "WARN: gh stderr:" >&2
+  sed 's/^/  /' "$WORKDIR/sub-issues.err" >&2
+  echo '{}' > "$WORKDIR/sub-issues.json"
+fi
 ```
 
 ## 阶段 2：确保 today iteration 存在
@@ -176,8 +186,17 @@ TODAY_ITERATION_ID=$(jq -r --arg d "$DATE" '
                        | strftime("%Y-%m-%d")))).id
 ' "$WORKDIR/iter-config.json")
 
-# 2.2 缺失则用 GraphQL mutation append 一个 1-day iteration option 覆盖 $DATE
+# 2.2 缺失则用 GraphQL mutation append 一个 1-day iteration option 覆盖 $DATE。
+# **写入 Project v2 是 apply-only**——dry-run 不得执行 updateProjectV2Field（mutation
+# 会真实改 field configuration）；缺 iteration 时 dry-run 给出 would-create 摘要并退出。
 if [[ -z "$TODAY_ITERATION_ID" ]]; then
+  if [[ "${APPLY:-}" != "true" ]]; then
+    echo "INFO: [DRY-RUN] today iteration for $DATE missing; --apply would append a 1-day option to Iteration field." >&2
+    echo "INFO: [DRY-RUN] no Project v2 mutation executed; planning aborted (need TODAY_ITERATION_ID to score wave layout)." >&2
+    echo "INFO: re-run with --apply to create today's iteration option and proceed." >&2
+    exit 0
+  fi
+
   EXISTING=$(jq -c '.data.user.projectV2.field.configuration.iterations | map({title, startDate, duration})' "$WORKDIR/iter-config.json")
   NEW_TITLE="Iteration $(jq 'length + 1' <<<"$EXISTING")"  # 命名仅展示用，实际唯一 ID 由 GitHub 生成
   ALL_ITERS=$(jq -c --arg title "$NEW_TITLE" --arg d "$DATE" \
@@ -280,22 +299,77 @@ Agent(
 ## 阶段 4：Apply 分支（仅 `--apply`）
 
 ```bash
-[[ "$APPLY" != "true" ]] && {
+[[ "${APPLY:-}" != "true" ]] && {
   echo "INFO: dry-run 模式，跳过 Project v2 写入。加 --apply 真写。" >&2
   exit 0
 }
 
-# 4.1 plan.json schema 校验
+# 4.1 plan.json 校验。两层 gate：
+#   (a) schema：类型 + action 取值集
+#   (b) membership：item_id ∈ items.json；target_iteration_id == TODAY_ITERATION_ID；
+#       current_iteration_id（若非空）∈ iter-config.json 的 iteration IDs
+# 校验失败 fail-closed：plan.json 是 agent (LLM) 生成的，必须当作未经信任的输入对待，
+# 防止"未在候选集中的 item / 非 TODAY 的 target iteration / 未知 action"被直接写真值。
 jq -e '
   (type == "array") and
-  all(.[]; (.item_id | type == "string") and (.target_iteration_id | type == "string") and (.action | type == "string"))
+  all(.[];
+    (.item_id | type == "string") and
+    (.target_iteration_id | type == "string") and
+    (.action | type == "string") and
+    (.action == "set" or .action == "skip")
+  )
 ' "$WORKDIR/plan.json" > /dev/null || {
-  echo "ERROR: plan.json schema invalid" >&2
+  echo "ERROR: plan.json schema invalid (type / action enum)" >&2
   exit 1
 }
 
-# 4.2 逐项写入（agent 已用 action="skip" 标注幂等项）
-APPLIED=0; SKIPPED=0; FAILED_ITEMS=()
+# 候选 item_id 集 (Project v2 已有 items)；候选 iteration_id 集 (field configuration)
+jq -r '.[].id' "$WORKDIR/items.json" | sort -u > "$WORKDIR/valid-item-ids.txt"
+jq -r '.data.user.projectV2.field.configuration.iterations[].id' \
+  "$WORKDIR/iter-config.json" | sort -u > "$WORKDIR/valid-iter-ids.txt"
+# 2.2 新建的 today iteration 也合法；merge 进去。
+echo "$TODAY_ITERATION_ID" >> "$WORKDIR/valid-iter-ids.txt"
+sort -u "$WORKDIR/valid-iter-ids.txt" -o "$WORKDIR/valid-iter-ids.txt"
+
+VIOLATIONS=0
+while read -r row; do
+  item_id=$(jq -r '.item_id' <<<"$row")
+  tgt=$(jq -r '.target_iteration_id' <<<"$row")
+  cur=$(jq -r '.current_iteration_id // ""' <<<"$row")
+
+  if ! grep -qxF "$item_id" "$WORKDIR/valid-item-ids.txt"; then
+    echo "ERROR: plan.json item_id not in Project v2 items: $item_id" >&2
+    VIOLATIONS=$((VIOLATIONS+1))
+  fi
+  if [[ "$tgt" != "$TODAY_ITERATION_ID" ]]; then
+    echo "ERROR: plan.json target_iteration_id != TODAY_ITERATION_ID ($tgt vs $TODAY_ITERATION_ID) for item $item_id" >&2
+    VIOLATIONS=$((VIOLATIONS+1))
+  fi
+  if [[ -n "$cur" ]] && ! grep -qxF "$cur" "$WORKDIR/valid-iter-ids.txt"; then
+    echo "ERROR: plan.json current_iteration_id unknown: $cur (item $item_id)" >&2
+    VIOLATIONS=$((VIOLATIONS+1))
+  fi
+done < <(jq -c '.[]' "$WORKDIR/plan.json")
+[[ $VIOLATIONS -gt 0 ]] && {
+  echo "ERROR: $VIOLATIONS plan.json membership violation(s); refusing to apply" >&2
+  exit 1
+}
+
+# 4.2 逐项写入（agent 已用 action="skip" 标注幂等项）。
+# APPLIED_ITEMS 跟踪"实际写入成功"的项（item_id|prev_iter|new_iter），供 4.3 回滚清单使用——
+# partial apply 失败时，操作员真正需要回滚的是**已经写入**的项，而不是失败项（失败项未写）。
+# 同步把每条 action 落地为 NDJSON 一行（4.4 持久化 per-item audit），用于失败追溯
+# / 还原 old iteration / 重放 ——单行聚合 audit 信息不足以重建上下文。
+APPLIED=0; SKIPPED=0; APPLIED_ITEMS=(); FAILED_ITEMS=()
+AUDIT_NDJSON="$WORKDIR/audit.ndjson"
+: > "$AUDIT_NDJSON"
+audit_entry() {
+  # $1=action $2=item_id $3=prev_iter $4=target_iter $5=result
+  printf '{"ts":"%s","date":"%s","mode":"%s","action":"%s","item_id":"%s","prev_iteration_id":"%s","target_iteration_id":"%s","result":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$DATE" "$([[ "$IS_WEEKEND" == "true" ]] && echo weekend || echo weekday)" \
+    "$1" "$2" "$3" "$4" "$5" >> "$AUDIT_NDJSON"
+}
+
 while read -r row; do
   action=$(jq -r '.action' <<<"$row")
   item_id=$(jq -r '.item_id' <<<"$row")
@@ -304,6 +378,7 @@ while read -r row; do
 
   if [[ "$action" == "skip" ]]; then
     SKIPPED=$((SKIPPED+1))
+    audit_entry "$action" "$item_id" "$cur" "$tgt" "skipped"
     continue
   fi
 
@@ -311,30 +386,45 @@ while read -r row; do
        --project-id "$PROJECT_NODE_ID" --id "$item_id" \
        --field-id "$ITERATION_FIELD_ID" --iteration-id "$tgt" >/dev/null; then
     APPLIED=$((APPLIED+1))
+    APPLIED_ITEMS+=("$item_id|$cur|$tgt")
+    audit_entry "$action" "$item_id" "$cur" "$tgt" "applied"
   else
     FAILED_ITEMS+=("$item_id|$cur|$tgt")
+    audit_entry "$action" "$item_id" "$cur" "$tgt" "failed"
   fi
 done < <(jq -c '.[]' "$WORKDIR/plan.json")
 
-# 4.3 生成回滚命令清单（实际值展开，避免占位符被 shell 误解析为重定向）
+# 4.3 生成回滚命令清单（实际值展开，避免占位符被 shell 误解析为重定向）。
+# 范围 = APPLIED_ITEMS（partial apply 失败时已写入的项），不是 FAILED_ITEMS。
+# 失败项未写入 Project v2，不需要回滚；失败项另列在 retry section 供操作员决策重试。
 if [[ ${#FAILED_ITEMS[@]} -gt 0 ]]; then
   echo "" >&2
-  echo "# --- rollback commands (REVIEW EACH BEFORE EXEC; cur_iter==\"\" 表示失败项原本无 iteration) ---" >&2
+  echo "# --- partial apply detected: ${#APPLIED_ITEMS[@]} applied / ${#FAILED_ITEMS[@]} failed ---" >&2
+  if [[ ${#APPLIED_ITEMS[@]} -gt 0 ]]; then
+    echo "# --- rollback commands for ALREADY-APPLIED items (REVIEW EACH BEFORE EXEC; prev_iter==\"\" 表示原本无 iteration) ---" >&2
+    for entry in "${APPLIED_ITEMS[@]}"; do
+      IFS='|' read -r a_item a_prev _ <<<"$entry"
+      if [[ -z "$a_prev" ]]; then
+        echo "# $a_item: original had no iteration; rollback = clear field value via UI (gh project item-edit lacks --clear-iteration)" >&2
+      else
+        echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $a_item --field-id $ITERATION_FIELD_ID --iteration-id $a_prev" >&2
+      fi
+    done
+    echo "# --- end rollback ---" >&2
+  fi
+  echo "# --- failed items (NOT written; safe to retry) ---" >&2
   for entry in "${FAILED_ITEMS[@]}"; do
-    IFS='|' read -r f_item f_cur _ <<<"$entry"
-    if [[ -z "$f_cur" ]]; then
-      echo "# $f_item: original had no iteration; rollback = clear field value (use gh project item-edit --clear iteration in UI)" >&2
-    else
-      echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $f_item --field-id $ITERATION_FIELD_ID --iteration-id $f_cur" >&2
-    fi
+    IFS='|' read -r f_item _ f_tgt <<<"$entry"
+    echo "gh project item-edit --project-id $PROJECT_NODE_ID --id $f_item --field-id $ITERATION_FIELD_ID --iteration-id $f_tgt" >&2
   done
-  echo "# --- end rollback ---" >&2
+  echo "# --- end failed ---" >&2
 fi
 
-# 4.4 Audit 行
+# 4.4 Audit：聚合行 + per-item NDJSON 路径
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 MODE_STR=$([[ "$IS_WEEKEND" == "true" ]] && echo weekend || echo weekday)
 echo "[audit] $TS date=$DATE mode=$MODE_STR wave_count=$WAVE_COUNT applied=$APPLIED skipped=$SKIPPED failed=${#FAILED_ITEMS[@]}" >&2
+echo "[audit] per-item NDJSON: $AUDIT_NDJSON (one line per plan row with prev/target iteration + result)" >&2
 ```
 
 ## 阶段 5：报告
@@ -343,17 +433,19 @@ echo "[audit] $TS date=$DATE mode=$MODE_STR wave_count=$WAVE_COUNT applied=$APPL
 
 1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节）
 2. **Audit 行**（仅 apply 模式，由 4.4 写到 stderr）
-3. **失败回滚命令清单**（仅 apply 模式有失败项时，由 4.3 写到 stderr，已是真实可执行命令）
-4. **WORKDIR 清理提示**：`rm -rf $WORKDIR`（保留供 apply 失败后追溯；用户审查后手动清）
+3. **Per-item NDJSON 路径**（仅 apply 模式，由 4.4 写到 stderr：`$WORKDIR/audit.ndjson`）——每行含 ts/date/mode/action/item_id/prev_iteration_id/target_iteration_id/result，是 partial apply / 还原 old iteration / 重放的真值源
+4. **失败回滚命令清单**（仅 apply 模式有失败项时，由 4.3 写到 stderr，已是真实可执行命令；回滚目标是**已写入**的项，不是失败项）
+5. **WORKDIR 清理提示**：`rm -rf $WORKDIR`（保留供 apply 失败后追溯 + per-item audit；用户审查后手动清）
 
 ## 约束
 
 - 所有 `gh` 命令 `dangerouslyDisableSandbox: true`
-- **默认 dry-run；`--apply` 必须显式 opt-in**
+- **默认 dry-run；`--apply` 必须显式 opt-in**——所有 Project v2 mutation（含 `updateProjectV2Field` field-configuration append、`gh project item-edit` field-value 写入）必须在 `APPLY=true` 分支内；dry-run 路径零 mutation
 - 只写 Project v2 Iteration field value + Iteration field configuration（append-only 追加 daily option）；**不动 Status / Estimate / labels / issue body / comment / title**
 - 不创建 / 修改 / 关闭 issue
 - 不修改代码、不跑 build/test
-- Apply 失败不自动回滚（输出回滚命令清单交人决策）
-- **不在本地长期落盘**：brief = stdout，plan.json = `$WORKDIR/` mktemp 临时
+- **Plan.json 来自 agent (LLM) → 当作未经信任的输入**：apply 前两层 gate（schema + membership：item_id ∈ Project items、target == TODAY_ITERATION_ID、action ∈ {set, skip}），任一违规整体 fail-closed
+- Apply 失败不自动回滚（输出回滚命令清单交人决策）；**回滚目标 = 已写入项**（partial apply 残留），失败项另列在 retry section
+- **不在本地长期落盘**：brief = stdout，plan.json / audit.ndjson = `$WORKDIR/` mktemp 临时；per-item NDJSON 提供 partial apply / 还原 / 重放所需的真值
 - 字段 ID 每次启动从 `gh` 查询，不硬编（避免 Project v2 迁移后双源漂移）
 - token 无 `project` scope → fail-fast 退出（无云沙箱降级）
