@@ -53,7 +53,6 @@ const (
 	defaultCoordClaimBatchSize    = 16
 	defaultCoordLeaseDuration     = 30 * time.Second
 	defaultCoordHeartbeatInterval = 10 * time.Second // = LeaseDuration / 3
-	defaultCoordEmptyClaimBackoff = defaultCoordPollInterval
 
 	// minLeaseToHeartbeatRatio is the minimum factor by which LeaseDuration must
 	// exceed HeartbeatInterval (LeaseDuration > HeartbeatInterval * ratio), so
@@ -77,10 +76,6 @@ type Config struct {
 	// Default 10s (= LeaseDuration/3). Must satisfy HeartbeatInterval*2 <
 	// LeaseDuration so at least one heartbeat can fire before expiry.
 	HeartbeatInterval time.Duration
-	// EmptyClaimBackoff is the additional sleep inside tickLoop when
-	// ClaimPending returns zero instances (avoids busy-polling). Default =
-	// PollInterval.
-	EmptyClaimBackoff time.Duration
 }
 
 // DefaultConfig returns a Config with documented defaults.
@@ -90,7 +85,6 @@ func DefaultConfig() Config {
 		ClaimBatchSize:    defaultCoordClaimBatchSize,
 		LeaseDuration:     defaultCoordLeaseDuration,
 		HeartbeatInterval: defaultCoordHeartbeatInterval,
-		EmptyClaimBackoff: defaultCoordEmptyClaimBackoff,
 	}
 }
 
@@ -112,10 +106,6 @@ func (c Config) Validate() error {
 	if c.HeartbeatInterval <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.HeartbeatInterval must be positive")
-	}
-	if c.EmptyClaimBackoff <= 0 {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"saga coordinator: Config.EmptyClaimBackoff must be positive")
 	}
 	if c.HeartbeatInterval*minLeaseToHeartbeatRatio >= c.LeaseDuration {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -240,7 +230,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	c.state.Store(int32(coordRunning))
 	close(c.readyCh)
 
-	c.logger.Warn("saga coordinator: started in UNSAFE single-process mode (no leader-elect)",
+	c.logger.WarnContext(ctx, "saga coordinator: started in UNSAFE single-process mode (no leader-elect)",
 		slog.String("mode", UnsafeModeLabel))
 
 	defer func() {
@@ -300,7 +290,7 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 
 	select {
 	case <-done:
-		c.logger.Info("saga coordinator: stopped")
+		c.logger.InfoContext(ctx, "saga coordinator: stopped")
 		return nil
 	case <-ctx.Done():
 		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrConflict,
@@ -336,14 +326,16 @@ func (c *Coordinator) tickLoop(ctx context.Context) {
 			return
 		case <-ticker.C():
 			if err := c.tickOnce(ctx); err != nil {
-				c.logger.WarnContext(ctx, "saga: tick failed", slog.Any("error", err))
+				c.logger.WarnContext(ctx, "saga: tick failed",
+					slog.Int("batch_size", c.cfg.ClaimBatchSize),
+					slog.Any("error", err))
 			}
 		}
 	}
 }
 
 func (c *Coordinator) tickOnce(ctx context.Context) error {
-	claimed, leaseID, err := c.journal.ClaimPending(ctx, c.cfg.ClaimBatchSize, c.cfg.LeaseDuration)
+	claimed, _, err := c.journal.ClaimPending(ctx, c.cfg.ClaimBatchSize, c.cfg.LeaseDuration)
 	if err != nil {
 		return fmt.Errorf("ClaimPending: %w", err)
 	}
@@ -351,10 +343,15 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		return nil
 	}
 	for _, ci := range claimed {
-		c.activeLeases.Store(ci.Instance.ID, leaseID)
-		if err := c.driveOne(ctx, ci, leaseID); err != nil {
+		// Use ci.LeaseID (per-instance fencing token) exclusively; the batch-level
+		// leaseID from ClaimPending is discarded. PG Journal (PR-04) mints
+		// per-instance tokens; using the batch token would break CAS fencing.
+		c.activeLeases.Store(ci.Instance.ID, ci.LeaseID)
+		if err := c.driveOne(ctx, ci); err != nil {
 			c.logger.WarnContext(ctx, "saga: drive failed",
 				slog.String("instance_id", string(ci.Instance.ID)),
+				slog.String("definition_id", string(ci.Instance.DefinitionID)),
+				slog.String("lease_id", string(ci.LeaseID)),
 				slog.Any("error", err))
 		}
 		c.activeLeases.Delete(ci.Instance.ID)
@@ -366,16 +363,16 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 // driveOne — core step execution
 // ---------------------------------------------------------------------------
 
-func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance, leaseID idutil.SafeID) error {
+func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) error {
 	// 1. Lookup definition; missing → MarkTerminal Failed.
 	def, ok := c.registry.Lookup(ci.Instance.DefinitionID)
 	if !ok {
-		return c.markTerminal(ctx, ci.Instance.ID, leaseID, ksaga.StatusFailed)
+		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusFailed)
 	}
 
 	// 2. Total timeout check: elapsed > def.Timeout → MarkTerminal Expired.
 	if def.Timeout > 0 && c.clock.Now().Sub(ci.Instance.StartedAt) > def.Timeout {
-		return c.markTerminal(ctx, ci.Instance.ID, leaseID, ksaga.StatusExpired)
+		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusExpired)
 	}
 
 	// 3. Replay events → compute cursor + prevState.
@@ -387,23 +384,22 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance, 
 	if foldErr != nil {
 		c.logger.WarnContext(ctx, "saga: fold failed, marking terminal",
 			slog.String("instance_id", string(ci.Instance.ID)),
+			slog.String("definition_id", string(ci.Instance.DefinitionID)),
 			slog.Any("error", foldErr))
-		return c.markTerminal(ctx, ci.Instance.ID, leaseID, ksaga.StatusFailed)
+		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusFailed)
 	}
 	if cursor >= def.Len() {
-		return c.markTerminal(ctx, ci.Instance.ID, leaseID, ksaga.StatusSucceeded)
+		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusSucceeded)
 	}
 
 	// 4. Run step OUTSIDE tx. safeRun recovers panics.
-	// safeRun MUST be the only callsite of StepFunc inside this package
-	// (locked by SAGA-STEP-RUN-OUTSIDE-TX-01 archtest shipped in PR-08).
 	nextStep := def.Steps[cursor]
 	newState, runErr := safeRun(ctx, nextStep.Run, &ci.Instance, prevState)
 
 	// 5. Open short tx: Append + (maybe) Emit + RegisterAfterCommit.
 	isLastStep := cursor == def.Len()-1
 	return c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := c.commitStep(txCtx, ci.Instance.ID, leaseID, def.ID, nextStep, newState, runErr, isLastStep); err != nil {
+		if err := c.commitStep(txCtx, ci.Instance.ID, ci.LeaseID, def.ID, nextStep, newState, runErr, isLastStep); err != nil {
 			return err
 		}
 		persistence.RegisterAfterCommit(txCtx, func(hookCtx context.Context) {
@@ -525,6 +521,7 @@ func (c *Coordinator) markTerminal(ctx context.Context, id, leaseID idutil.SafeI
 	if !ok {
 		c.logger.WarnContext(ctx, "saga: MarkTerminal reported stale lease (ok=false)",
 			slog.String("instance_id", string(id)),
+			slog.String("lease_id", string(leaseID)),
 			slog.String("final_status", finalStatus.String()))
 	}
 	return nil
@@ -593,6 +590,9 @@ type StepCompletedEvent struct {
 }
 
 // stepCompletedTopic returns the outbox topic for a step-completed event.
+// Topic names are per-definition; Definition.ID is static Go code, not a
+// runtime UUID, so codegen consumers (PR-07 contractgen) can compute the
+// topic at compile time from the same definition ID constant.
 func stepCompletedTopic(defID idutil.SafeID) string {
 	return fmt.Sprintf("saga.%s.step_completed", defID)
 }

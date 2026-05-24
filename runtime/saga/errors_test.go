@@ -57,8 +57,10 @@ func TestErrFoldEventMismatch(t *testing.T) {
 		t.Errorf("Code = %v, want ErrInternal", ec.Code)
 	}
 
-	// Verify instanceId and reason details.
-	var gotInstanceID, gotReason bool
+	// Verify instanceId is present in Details.
+	// reason is stored in WithInternal (server-side only, not in Details) per
+	// the KindInternal three-layer rule (error-handling.md).
+	var gotInstanceID bool
 	for _, attr := range ec.Details {
 		if attr.Key == "instanceId" && attr.Value.Kind() == slog.KindString {
 			gotInstanceID = true
@@ -66,17 +68,11 @@ func TestErrFoldEventMismatch(t *testing.T) {
 				t.Errorf("instanceId detail = %q, want %q", attr.Value.String(), string(id))
 			}
 		}
-		if attr.Key == "reason" && attr.Value.Kind() == slog.KindString {
-			gotReason = true
-			if attr.Value.String() != reason {
-				t.Errorf("reason detail = %q, want %q", attr.Value.String(), reason)
-			}
+		if attr.Key == "reason" {
+			t.Errorf("reason must not be in Details (must be in WithInternal); got attr %v", attr)
 		}
 	}
 	if !gotInstanceID {
 		t.Error("expected Details to contain instanceId attr")
-	}
-	if !gotReason {
-		t.Error("expected Details to contain reason attr")
 	}
 }

@@ -20,8 +20,24 @@
 // # Carry-over from PR-02 (#952)
 //
 //   - RepoReady probe registration: Coordinator satisfies healthz.RepoProber;
-//     cell-side registration deferred to PR-09 (tracked in follow-up issue).
+//     cell-side registration deferred to PR-09 (tracked in #978).
 //   - Enqueuer interface split: deferred until a real producer ships.
+//
+// Note: The `saga_coordinator_ready` probe is NOT registered with any cell in
+// PR-03; it becomes reachable via `/readyz` only after PR-09 wires it through
+// cellgen's `RegisterRepoReady`.
+//
+// # PR-03 deferred scope
+//
+//   - Compensate execution: deferred to PR-06.
+//   - Retry policy (per-step backoff): deferred to PR-06.
+//   - Leader-elect (distlock): deferred to PR-05.
+//   - Per-step parallelism: deferred to PR-06+ (tracked in #983).
+//   - Coordinator-level Start API for producers (typed producer facade):
+//     deferred to PR-07/PR-09.
+//   - Metrics emission (tick / heartbeat / drive counters) deferred to a
+//     future PR. PR-03's slog Warn logs provide minimal observability until
+//     then.
 //
 // # Coordinator lifecycle
 //
@@ -37,6 +53,10 @@
 // to running. RepoReady delegates to journal.RepoReady so the wrapping cell
 // (PR-09) can register it via cellgen-emitted RegisterRepoReady.
 //
+// tickLoop processes claimed instances sequentially within one tick. If
+// Step.Run has high latency, set ClaimBatchSize=1 to keep ticks short and
+// lease heartbeats timely. Per-step parallelism is tracked in #983.
+//
 // # Step.Run is the only StepFunc callsite
 //
 // Inside this package, saga.StepFunc is invoked exclusively from safeRun (a
@@ -48,4 +68,8 @@
 //
 // Coordinator is the only struct in this package that holds a journal.Journal
 // field. Locked by SAGA-JOURNAL-HOLDER-SEAL-01 archtest.
+//
+// ref: dtm dtmsvr/cron.go (CronTransOnce structure)
+// ref: temporalio sdk-go internal_task_pollers.go
+// ref: ThreeDotsLabs/watermill message/router.go
 package saga

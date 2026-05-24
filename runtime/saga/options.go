@@ -1,16 +1,20 @@
 package saga
 
-import "log/slog"
+import (
+	"log/slog"
+
+	"github.com/ghbvf/gocell/pkg/validation"
+)
 
 // Option configures a Coordinator.
 type Option func(*Coordinator)
 
-// WithDispatcher sets the post-commit kick target. A nil or typed-nil d is
-// silently ignored; the Coordinator falls back to NoopDispatcher (set in
+// WithDispatcher sets the post-commit kick target. Both bare-nil and typed-nil
+// are silently ignored; the Coordinator falls back to NoopDispatcher (set in
 // NewCoordinator). Must be called before Start.
 func WithDispatcher(d Dispatcher) Option {
 	return func(c *Coordinator) {
-		if d != nil {
+		if !validation.IsNilInterface(d) {
 			c.dispatcher = d
 		}
 	}
