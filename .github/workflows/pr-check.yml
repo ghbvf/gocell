@@ -30,3 +30,49 @@ jobs:
       run-os-smoke: true
       run-examples-smoke: true
     secrets: inherit   # needed for any secrets the reusable workflow may access
+
+  # Path-filtered smoke job: only runs when this PR touches daily-planner skill files.
+  # Runs Part A (offline, no gh auth, no secrets) of the smoke test — fail-closed.
+  # True gate: if smoke exits non-zero the job fails and the PR is blocked.
+  # The checkbox in pull_request_template.md is a human reminder only; this CI job
+  # is the machine-enforced equivalent.
+  skill-daily-planner-smoke:
+    name: skill / daily-planner smoke (Part A, offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changed files
+        id: filter
+        run: |
+          # Determine whether this PR touches daily-planner skill or agent files.
+          # Uses three-way merge-base diff so force-pushed branches are handled
+          # correctly (comparing against the actual fork point, not HEAD~1).
+          # Fail-closed: if fetch or diff fails, default relevant=true so smoke
+          # is never silently skipped.
+          relevant=true
+          if git fetch origin "$GITHUB_BASE_REF" --depth=50 2>/dev/null; then
+            merge_base=$(git merge-base "origin/${GITHUB_BASE_REF}" HEAD 2>/dev/null) || merge_base=""
+            if [ -n "$merge_base" ]; then
+              changed=$(git diff --name-only "$merge_base" HEAD 2>/dev/null) || changed=""
+              if [ -n "$changed" ]; then
+                if echo "$changed" | grep -qE '^\.claude/skills/daily-planner/|^\.claude/agents/daily-planner\.md'; then
+                  relevant=true
+                else
+                  relevant=false
+                fi
+              fi
+              # If changed is empty (no diff), keep relevant=false only when we
+              # successfully computed a diff (empty diff = no daily-planner changes).
+              # The outer `relevant=true` default covers fetch/merge-base failures.
+            fi
+          fi
+          echo "relevant=${relevant}" >> "$GITHUB_OUTPUT"
+
+      - name: Run daily-planner smoke (Part A)
+        if: steps.filter.outputs.relevant == 'true'
+        run: bash .claude/skills/daily-planner/test/smoke.sh
+
+      - name: Skip (no daily-planner changes)
+        if: steps.filter.outputs.relevant != 'true'
+        run: echo "No .claude/skills/daily-planner/** or .claude/agents/daily-planner.md changes detected — smoke skipped."

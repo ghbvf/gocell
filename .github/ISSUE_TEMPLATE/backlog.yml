@@ -66,6 +66,21 @@ body:
     validations:
       required: false
 
+  - type: textarea
+    id: affected-paths
+    attributes:
+      label: Affected paths
+      description: >
+        gocell 路径前缀 list（每行一个）。供 daily-planner 做 wave 内冲突分组（conflict_group）：
+        路径前缀有重合的 issue 分进同一 conflict_group（串行），无重合的异组可并行。
+        留空 = footprint 未知 → 保守处理（与全 wave 视为冲突、串行），不假定独立。
+        打算被并行调度的条目应填写以解锁并行。
+      placeholder: |
+        .claude/skills/daily-planner/
+        .github/workflows/
+    validations:
+      required: false
+
   - type: input
     id: source
     attributes:

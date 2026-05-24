@@ -1,0 +1,29 @@
+[
+  {
+    "_comment": "WRITE-TEST FIXTURE: action=set with current_iteration_id==target intentionally exercises the write path (tests gh call, audit NDJSON fields, Wave write). In production the agent would emit action=skip when current==today; this fixture is write-test-only and does NOT represent valid agent output for carry-over skipping.",
+    "item_id": "PVTI_ITEM_101",
+    "issue_number": 101,
+    "issue_title": "Issue 101",
+    "wave": 1,
+    "current_iteration_id": "ITER_TODAY",
+    "target_iteration_id": "ITER_TODAY",
+    "action": "set",
+    "carry_over": false,
+    "score": 9.5,
+    "conflict_group": 1,
+    "wave_option_id": "OPT_WAVE1"
+  },
+  {
+    "item_id": "PVTI_ITEM_102",
+    "issue_number": 102,
+    "issue_title": "Issue 102",
+    "wave": 1,
+    "current_iteration_id": "ITER_YESTERDAY",
+    "target_iteration_id": "ITER_TODAY",
+    "action": "set",
+    "carry_over": true,
+    "score": 8.0,
+    "conflict_group": 2,
+    "wave_option_id": "OPT_WAVE1"
+  }
+]

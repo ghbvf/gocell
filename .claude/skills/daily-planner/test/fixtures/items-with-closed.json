@@ -1,0 +1,44 @@
+[
+  {
+    "id": "PVTI_ITEM_101",
+    "content": {"number": 101, "state": "OPEN", "title": "Issue 101"},
+    "iter": {"iterationId": "ITER_TODAY", "title": "2026-05-24", "startDate": "2026-05-24"},
+    "status": {"name": "In Progress"},
+    "estimate": null
+  },
+  {
+    "id": "PVTI_ITEM_102",
+    "content": {"number": 102, "state": "OPEN", "title": "Issue 102"},
+    "iter": {"iterationId": "ITER_YESTERDAY", "title": "2026-05-23", "startDate": "2026-05-23"},
+    "status": null,
+    "estimate": null
+  },
+  {
+    "id": "PVTI_ITEM_103",
+    "content": {"number": 103, "state": "OPEN", "title": "Issue 103"},
+    "iter": null,
+    "status": null,
+    "estimate": null
+  },
+  {
+    "id": "PVTI_ITEM_ROGUE",
+    "content": {"number": 999, "state": "OPEN", "title": "Rogue Issue"},
+    "iter": null,
+    "status": null,
+    "estimate": null
+  },
+  {
+    "id": "PVTI_ITEM_CLOSED",
+    "content": {"number": 200, "state": "CLOSED", "title": "Closed Issue 200"},
+    "iter": {"iterationId": "ITER_YESTERDAY", "title": "2026-05-23", "startDate": "2026-05-23"},
+    "status": null,
+    "estimate": null
+  },
+  {
+    "id": "PVTI_ITEM_DONE",
+    "content": {"number": 201, "state": "OPEN", "title": "Done Issue 201"},
+    "iter": {"iterationId": "ITER_YESTERDAY", "title": "2026-05-23", "startDate": "2026-05-23"},
+    "status": {"name": "Done"},
+    "estimate": null
+  }
+]

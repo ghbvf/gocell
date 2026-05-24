@@ -25,9 +25,9 @@ Project v2 字段 ID 由 skill 阶段 0 用 `gh` 命令动态查询后注入 pro
 PROJECT_NODE_ID, ITERATION_FIELD_ID,
 TODAY_ITERATION_ID, YESTERDAY_ITERATION_ID（可能空）,
 DATE, IS_WEEKEND, WAVE_COUNT (2|4), WAVE_SIZE=5,
-TODAY_ITERATION_ID, YESTERDAY_ITERATION_ID (可能空),
 CARRY_OVER_DISABLED (true 时 brief Warnings 必加 [CARRY-OVER DISABLED]),
-MODE (apply|dry-run)
+MODE (apply|dry-run),
+WAVE_FIELD_ID（可能空，C3c），wave→wave_option_id 映射（阶段 0 注入）
 （容量 = WAVE_COUNT × WAVE_SIZE）
 ```
 
@@ -42,18 +42,43 @@ flag_multiplier:   hard=3 / planned=2 / cond(trigger 满足)=1.5
                    cond(pending)=0.3 / soft=1
 ```
 
-## Wave 调度规则
+## 调度算法（STEP 1-7）
 
 `容量 = WAVE_COUNT × WAVE_SIZE` = 工作日 10 / 周末 20。
 
-**填充顺序**（硬规则）：
+**两正交轴**：拓扑（正确性序，STEP 4/5）约束先后顺序；conflict_group（文件冲突集，STEP 6）末端派生——同 conflict_group 表示共享文件冲突、消费端必须串行；不同 conflict_group 表示文件独立、可并行。容量由 wave size 单独 governing，无 per-cap 阈值。
 
-1. **Carry-over 优先 Wave 1 头部**：昨日 iteration 内 `issue.state == "OPEN"` AND `Project v2 Status != "Done"` 的 issue 按**原 WSJF score** 排入 Wave 1。
-   - 若 carry-over > WAVE_SIZE → 溢出顺延 Wave 2 头部（不退 Unscheduled）
-   - 若 carry-over ≥ WAVE_COUNT × WAVE_SIZE → 新 issue 全部入 Unscheduled，brief Warnings 标 `[BACKLOG SATURATED]`
-2. **新 P0/P1（默认输入集）** 按 WSJF 降序填 Wave 1 剩余 slot
-3. **Wave 2+** 填新 issue 剩余项；周末 Wave 3/4 同理
-4. **超容量的新 issue** → Unscheduled，标注 reason `[capacity overflow]`
+```
+STEP 1  解析每 issue：score=pri_weight×flag_multiplier（WSJF 不变）；
+        affected_paths[] 从 body "### Affected paths"（解析失败→brief Warnings [AFFECTED PATHS MALFORMED]）；
+        blockers[] 从 deps.json 的 blocked_by。
+
+STEP 2  carry-over 集（不变）：昨日 iter + OPEN + not Done → Wave 1 头部。
+
+STEP 3  候选序 = carry-over(WSJF desc) ++ 新 issue(WSJF desc)。
+
+STEP 4  拓扑排序（wave 填充前）：in-scope blocked_by 建 DAG。
+        环 → 不阻塞 + Warnings [DEP CYCLE]（降级，不崩）；
+        跨 iteration 不可解 → Warnings [DEP CROSS-ITERATION]，dependent 仍可排但标记。
+
+STEP 5  wave 填充：Wave1 头=carry-over，后 WSJF desc，容量=WAVE_COUNT×WAVE_SIZE；
+        placement 守拓扑：blocker.wave ≤ dependent.wave
+        （dependent 顺延到其最晚 blocker 之后，最小化）；
+        carry-over 不退 Unscheduled；
+        新 issue 溢出 → Unscheduled [capacity overflow]；
+        carry-over ≥ 全容量 → 新 issue 全 Unscheduled，Warnings [BACKLOG SATURATED]。
+
+STEP 6  conflict_group（wave 内）：每 wave 对 affected_paths 前缀重合做 union-find，
+        每连通分量=一个 conflict_group（共享文件、必须串行的冲突集）；
+        空 affected_paths（wildcard fail-closed）：footprint 未知 →
+        与同 wave 内所有 item union（冲突于一切）→ 整 wave 落入同一 conflict_group（串行）；
+        brief 对该 item 加 Warning [AFFECTED PATHS MISSING — wave serialized]。
+        编号：全 plan 全局唯一 int，(wave 升序, 首次出现) 从 1 分配；
+        同 conflict_group = 冲突 → 消费端（/ship）必须串行；
+        不同 conflict_group = 独立 → 可并行；跨 wave 不共组。
+
+STEP 7  输出 brief + plan.json，每 entry 含 conflict_group(int) + wave_option_id(str)。
+```
 
 ## items.json 结构（skill 阶段 1.2 GraphQL paginated 产出）
 
@@ -94,11 +119,14 @@ for item in items.json:
 | `pri-missing` label | 排首位 + `[NEEDS PRIORITY]` |
 | 缺 cap-* / flag-* / type-* 任一 | 标 `[MISSING LABEL: cap]` / `[MISSING LABEL: flag]` / `[MISSING LABEL: type]`（多缺合并 `[MISSING LABEL: cap,flag]`），**不**入队列 |
 | `cap-x-cross` label | 标 `[需人工确认]`，**不**自动入队 |
-| 同 cap 已有 ≥3 入队 | 后续同 cap 项 `[CAP COLLISION]` 退 Unscheduled |
 | `bundle-parent` 父 issue 仍 OPEN | carry-over（子全 close 后父仍 open → 视为未完成，让人手 close 父） |
 | sub-issue（GitHub 原生 sub-issue API） | 正常打分；brief 注 `(parent #N)`。markdown body task list 形态**不**识别（升级到原生 sub-issue 才能被追踪） |
 | YESTERDAY_ITERATION_ID 为空 | carry-over 跳过 + Warnings 注 `[CARRY-OVER DISABLED] yesterday iteration not found` |
 | 输入集 + carry-over 全空 | Warnings 注 `[EMPTY INPUT SET]`；brief 显示空 Wave；plan.json = `[]` |
+| blocked_by 成环 | Warnings 注 `[DEP CYCLE]`；涉及 issue 不阻塞，正常排入候选序 |
+| blocked_by 跨 iteration 不可解 | Warnings 注 `[DEP CROSS-ITERATION]`；dependent 仍排入当前候选序并标记 |
+| affected_paths 解析失败 | Warnings 注 `[AFFECTED PATHS MALFORMED]`；该 issue 走 wildcard 语义：与同 wave 所有 item union → 整 wave 串行 |
+| affected_paths 字段缺失 | Warnings 注 `[AFFECTED PATHS MISSING — wave serialized]`；同 wildcard 语义：整 wave 落入同一 conflict_group（串行） |
 
 ## 输出
 
@@ -110,15 +138,15 @@ for item in items.json:
 ## Today's Plan — YYYY-MM-DD (Weekday/Weekend, wave_count=N)
 
 ## Wave 1
-| Rank | Issue | Title | pri | flag | cap | Cx | Score | Notes |
-|------|-------|-------|-----|------|-----|----|----|-------|
+| Rank | Issue | Title | pri | flag | cap | Cx | Score | Group | Notes |
+|------|-------|-------|-----|------|-----|----|----|-------|-------|
 
 ## Wave 2
-（表同上）
+（表同上，含 Group 列）
 
 （周末展开 Wave 3 / Wave 4）
 
-## Unscheduled (wave overflow / collision / 需人工确认 / missing label)
+## Unscheduled (wave overflow / 需人工确认 / missing label)
 | Issue | Title | Reason |
 
 ## Capability Distribution
@@ -129,6 +157,11 @@ for item in items.json:
 - [BACKLOG SATURATED] carry-over 占满所有容量，新 issue 全退 Unscheduled
 - [CARRY-OVER DISABLED] yesterday iteration not found（当 CARRY_OVER_DISABLED=true）
 - [EMPTY INPUT SET] 输入池为空（当输入 + carry-over 全 0）
+- [DEP CYCLE] #N → #M → #N（涉及 issue 编号）
+- [DEP CROSS-ITERATION] #N blocked by #M（M 在其他 iteration）
+- [AFFECTED PATHS MALFORMED] #N（解析失败，wildcard 语义 → wave 串行）
+- [AFFECTED PATHS MISSING — wave serialized] #N（字段缺失，wildcard 语义 → wave 串行）
+- [capacity overflow] N issue 超出容量退 Unscheduled
 - 其他
 
 ## Plan Summary
@@ -137,9 +170,10 @@ for item in items.json:
 - carry-over: N
 - 已在 today iteration（skip apply）: N
 - 待 apply: N
+- conflict groups: N（全 plan 唯一 int 范围 1..M；同组必须串行，异组可并行）
 ```
 
-Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人工确认]` 等。
+Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人工确认]` 等。Group 列标注 `conflict_group` int 值，同 int 的 issue 共享文件冲突、消费端必须串行；不同 int 的 issue 可并行执行。
 
 ### 2. plan.json 写到 PLAN_PATH
 
@@ -154,12 +188,17 @@ Notes 列标注：`[carry-over]` / `(parent #N)` / `[NEEDS PRIORITY]` / `[需人
     "target_iteration_id": "<TODAY_ITERATION_ID>",
     "action": "set" | "skip",
     "carry_over": true | false,
-    "score": 150.0
+    "score": 150.0,
+    "conflict_group": 1,
+    "wave_option_id": "<wave_option_id_from_stage0>"
   }
 ]
 ```
 
-`action="skip"` 由 agent 标注当 `current_iteration_id == TODAY_ITERATION_ID`（客户端幂等，避免冗余 mutation）。
+字段说明：
+- `action="skip"` 由 agent 标注当 `current_iteration_id == TODAY_ITERATION_ID`（客户端幂等，避免冗余 mutation）；`skip` 时 `wave_option_id` 可为 `""`。
+- `conflict_group`：全 plan 全局唯一正整数（≥1），每 entry 必填（含 action="skip" 的 entry）。同值 issue 共享文件冲突、消费端（/ship）必须串行；不同值 issue 文件独立、可并行。跨 wave 不共组。由 STEP 6 union-find 在 wave 内按 affected_paths 前缀重合分组派生，(wave 升序, 首次出现) 从 1 起全局分配。空 affected_paths 走 wildcard 语义：与同 wave 所有 item union，整 wave 落入同一 conflict_group。
+- `wave_option_id`：对应 Project v2 Wave 字段的 single-select option id，由 skill 阶段 0 查询后将 wave→option-id 映射注入 prompt，agent 按 entry 的 wave 值填写。`apply-gate.sh` 在 `WAVE_FIELD_ID` 非空时校验该值必须在已知 option id 集合内。
 
 ## 约束
 
