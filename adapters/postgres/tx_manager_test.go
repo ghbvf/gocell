@@ -94,6 +94,35 @@ func TestNewTxManager(t *testing.T) {
 	require.NotNil(t, tm)
 }
 
+// TestRunInTx_Savepoint_DoesNotDrainAfterCommit verifies the savepoint
+// (nested) path never drains after-commit hooks: only the outermost top-level
+// commit fires them, so a savepoint RELEASE must leave hooks pending. Uses a
+// mockTx so no real pool is needed.
+func TestRunInTx_Savepoint_DoesNotDrainAfterCommit(t *testing.T) {
+	mock := &mockTx{}
+	ctx := CtxWithTx(context.Background(), mock)
+	ctx = withSavepointDepth(ctx, 0)
+	// Simulate an outer top-level RunInTx having installed the registry.
+	ctx, top := persistence.WithAfterCommitRegistry(ctx)
+	require.True(t, top)
+
+	tm := &TxManager{pool: nil} // savepoint path never touches the pool
+
+	fired := false
+	err := tm.RunInTx(ctx, func(inner context.Context) error {
+		persistence.RegisterAfterCommit(inner, func(context.Context) { fired = true })
+		return nil
+	})
+	require.NoError(t, err)
+	assert.False(t, fired,
+		"savepoint RELEASE must not drain after-commit hooks; only the outermost commit does")
+
+	// The hook is still pending in the outer registry — the outer RunInTx would
+	// drain it after its real Commit.
+	persistence.RunAfterCommitHooks(ctx)
+	assert.True(t, fired, "outer drain fires the hook registered inside the savepoint")
+}
+
 func TestRunInTx_Savepoint_ExecSequence(t *testing.T) {
 	// Simulate a nested call: context already has a tx.
 	mock := &mockTx{}
