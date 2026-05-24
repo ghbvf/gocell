@@ -18,8 +18,16 @@ type ContractGenSpec struct {
 	// DTOs holds the flattened list of Go struct definitions (nested types
 	// expanded to top-level entries). Template iterates this slice directly.
 	DTOs []DTOSpec
-	// Endpoint is non-nil when Kind == "http".
-	Endpoint *HTTPEndpointSpec
+	// Endpoint is non-nil when Kind == "http". Its type is the unexported
+	// httpEndpointSpec (sealed): no out-of-package code can construct a non-nil
+	// Endpoint. The whole ContractGenSpec is also never handed to another
+	// package as a mutable value — its sole constructor buildContractSpec and
+	// every render wrapper are package-private (only Generate /
+	// RenderContractArtifacts are exported, and those return rendered []byte,
+	// never the spec). So neither constructing nor mutating an
+	// FMT-34-unvalidated Endpoint to drive handler.tmpl is expressible from
+	// another package. See httpEndpointSpec's godoc.
+	Endpoint *httpEndpointSpec
 	// Event is non-nil when Kind == "event".
 	Event *EventEndpointSpec
 	// RequestSchemaJSON is the raw JSON content of the request schema file,
@@ -80,7 +88,7 @@ type DTOSpec struct {
 	// Fields lists the struct fields in source-declared order.
 	Fields []DTOField
 	// Nested holds intermediate nested-object types discovered during schema
-	// traversal. Callers of BuildContractSpec see an empty slice — the builder
+	// traversal. Callers of buildContractSpec see an empty slice — the builder
 	// promotes nested types to ContractGenSpec.DTOs and clears this field.
 	Nested []DTOSpec
 }
@@ -111,8 +119,29 @@ type DTOField struct {
 	Maximum *int64
 }
 
-// HTTPEndpointSpec holds HTTP-specific endpoint information.
-type HTTPEndpointSpec struct {
+// httpEndpointSpec holds HTTP-specific endpoint information.
+//
+// The type is unexported on purpose (sealed): its sole constructor is
+// buildHTTPEndpointSpec, which runs validateAuthOnInternalPath (the FMT-34
+// upstream guard) unconditionally. Because ContractGenSpec.Endpoint is
+// *httpEndpointSpec, no out-of-package code can build a non-nil Endpoint.
+//
+// Fields stay exported because text/template reads them via reflection, so a
+// holder of a *httpEndpointSpec could otherwise mutate Path / AuthPublic /
+// Clients after construction (after FMT-34 already ran) and drive handler.tmpl
+// with the mutated, unvalidated spec. That mutation path is closed not by the
+// field visibility but by the holder being unreachable cross-package: the spec
+// is produced only by the package-private buildContractSpec and consumed only
+// by the package-private render wrappers; the exported surface (Generate /
+// RenderContractArtifacts) returns rendered []byte and never the spec. So
+// neither construction nor post-construction mutation of an
+// FMT-34-unvalidated Endpoint is expressible from another package.
+//
+// The intra-package "sole constructor / sole caller", the cross-generator
+// emit-uniqueness, and the "no exported API leaks the mutable spec" invariants
+// are locked by archtest CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01
+// (A1b / A2 / A3 / A4 respectively).
+type httpEndpointSpec struct {
 	// Method is the HTTP method in upper-case, e.g. "POST".
 	Method string
 	// Path is the full URL path including chi-style placeholders, e.g. "/api/v1/orders/{id}".
@@ -186,7 +215,7 @@ type HTTPEndpointSpec struct {
 // pagination pattern. It is implemented as a method (not a field) so handler
 // templates can keep their existing `{{- if .Endpoint.IsPagination}}` form
 // while builder-side state moves to the structured *PaginationShape value.
-func (e *HTTPEndpointSpec) IsPagination() bool {
+func (e *httpEndpointSpec) IsPagination() bool {
 	return e != nil && e.Pagination != nil
 }
 

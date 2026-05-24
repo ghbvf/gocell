@@ -11,7 +11,75 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/tools/codegen"
 )
+
+// renderTypes / renderIface / renderHandler / renderSpec / renderSubscription
+// are test-only wrappers over codegen.Render for one contractgen artifact.
+// Production rendering goes through Generate / RenderContractArtifacts
+// (generator.go), which call codegen.Render directly; these helpers let the
+// per-template unit + golden tests render a single artifact in isolation and
+// exercise the kind-gating guards. Filename is fixed to "/dev/null" (rendering
+// to memory — goimports path-aware import resolution disabled), matching the
+// committed goldens.
+func renderTypes(spec *ContractGenSpec) ([]byte, error) {
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "types.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render types: %w", err)
+	}
+	return b, nil
+}
+
+func renderIface(spec *ContractGenSpec) ([]byte, error) {
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "iface.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render iface: %w", err)
+	}
+	return b, nil
+}
+
+func renderHandler(spec *ContractGenSpec) ([]byte, error) {
+	if spec.Kind != "http" {
+		return nil, fmt.Errorf("contractgen render handler: contract %q is kind=%q, not http", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "handler.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render handler: %w", err)
+	}
+	return b, nil
+}
+
+func renderSpec(spec *ContractGenSpec) ([]byte, error) {
+	if spec.Kind != "event" {
+		return nil, fmt.Errorf("contractgen render spec: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "spec.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render spec: %w", err)
+	}
+	return b, nil
+}
+
+func renderSubscription(spec *ContractGenSpec) ([]byte, error) {
+	if spec.Kind != "event" {
+		return nil, fmt.Errorf("contractgen render subscription: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "subscription.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render subscription: %w", err)
+	}
+	return b, nil
+}
 
 // update flag: run with -update to regenerate golden files.
 var updateGolden = flag.Bool("update", false, "update golden files")
@@ -40,7 +108,7 @@ func repoRoot(t *testing.T) string {
 // goldenDir is the path to the golden files relative to the package.
 const goldenDir = "testdata/golden"
 
-// TestBuildContractSpec_HTTP_OrderCreate tests BuildContractSpec for the
+// TestBuildContractSpec_HTTP_OrderCreate tests buildContractSpec for the
 // todoorder ordercreate HTTP contract (POST, body, no path/query params).
 func TestBuildContractSpec_HTTP_OrderCreate(t *testing.T) {
 	root := repoRoot(t)
@@ -48,9 +116,9 @@ func TestBuildContractSpec_HTTP_OrderCreate(t *testing.T) {
 	// Set codegen=true for this contract.
 	p.Contracts["http.order.create.v1"].Codegen = true
 
-	spec, err := BuildContractSpec(root, p, "http.order.create.v1")
+	spec, err := buildContractSpec(root, p, "http.order.create.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.Kind != "http" {
 		t.Errorf("Kind = %q, want http", spec.Kind)
@@ -88,9 +156,9 @@ func TestBuildContractSpec_HTTP_OrderGet(t *testing.T) {
 	p := loadTodoorderProject(t, root)
 	p.Contracts["http.order.get.v1"].Codegen = true
 
-	spec, err := BuildContractSpec(root, p, "http.order.get.v1")
+	spec, err := buildContractSpec(root, p, "http.order.get.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.Endpoint.Method != "GET" {
 		t.Errorf("Method = %q, want GET", spec.Endpoint.Method)
@@ -123,9 +191,9 @@ func TestBuildContractSpec_HTTP_OrderList(t *testing.T) {
 	p := loadTodoorderProject(t, root)
 	p.Contracts["http.order.list.v1"].Codegen = true
 
-	spec, err := BuildContractSpec(root, p, "http.order.list.v1")
+	spec, err := buildContractSpec(root, p, "http.order.list.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.Endpoint.HandlerMethod != "List" {
 		t.Errorf("HandlerMethod = %q, want List", spec.Endpoint.HandlerMethod)
@@ -163,9 +231,9 @@ func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
 	p := loadTodoorderProject(t, root)
 	p.Contracts["event.order-created.v1"].Codegen = true
 
-	spec, err := BuildContractSpec(root, p, "event.order-created.v1")
+	spec, err := buildContractSpec(root, p, "event.order-created.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.Kind != "event" {
 		t.Errorf("Kind = %q, want event", spec.Kind)
@@ -198,7 +266,7 @@ func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
 func TestBuildContractSpec_ContractNotFound(t *testing.T) {
 	root := repoRoot(t)
 	p := loadTodoorderProject(t, root)
-	_, err := BuildContractSpec(root, p, "http.does.not.exist.v1")
+	_, err := buildContractSpec(root, p, "http.does.not.exist.v1")
 	if err == nil {
 		t.Fatal("expected error for missing contract")
 	}
@@ -220,7 +288,7 @@ func TestBuildContractSpec_CodegenFalse(t *testing.T) {
 		},
 	}
 	root := findRepoRoot()
-	_, err := BuildContractSpec(root, p, "http.synth.nocodegen.v1")
+	_, err := buildContractSpec(root, p, "http.synth.nocodegen.v1")
 	if err == nil {
 		t.Fatal("expected error for codegen=false")
 	}
@@ -242,7 +310,7 @@ func TestBuildContractSpec_MissingHTTPEndpoint(t *testing.T) {
 		},
 	}
 	root := findRepoRoot()
-	_, err := BuildContractSpec(root, p, "http.foo.bar.v1")
+	_, err := buildContractSpec(root, p, "http.foo.bar.v1")
 	if err == nil {
 		t.Fatal("expected error for missing http endpoint")
 	}
@@ -261,7 +329,7 @@ func TestBuildContractSpec_MissingPayloadRef(t *testing.T) {
 		},
 	}
 	root := findRepoRoot()
-	_, err := BuildContractSpec(root, p, "event.foo.bar.v1")
+	_, err := buildContractSpec(root, p, "event.foo.bar.v1")
 	if err == nil {
 		t.Fatal("expected error for missing payload schemaRef")
 	}
@@ -281,9 +349,9 @@ func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 		},
 	}
 	root := findRepoRoot()
-	spec, err := BuildContractSpec(root, p, "command.foo.bar.v1")
+	spec, err := buildContractSpec(root, p, "command.foo.bar.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec should not error for kind=command (graceful skip), got: %v", err)
+		t.Fatalf("buildContractSpec should not error for kind=command (graceful skip), got: %v", err)
 	}
 	if spec == nil || spec.Kind != "command" {
 		t.Errorf("expected spec with Kind=command, got: %v", spec)
@@ -310,7 +378,7 @@ func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
 		},
 	}
 	root := findRepoRoot()
-	_, err := BuildContractSpec(root, p, "workflow.foo.bar.v1")
+	_, err := buildContractSpec(root, p, "workflow.foo.bar.v1")
 	if err == nil {
 		t.Fatal("expected error for truly unsupported kind")
 	}
@@ -318,7 +386,7 @@ func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
 
 // --- Golden file tests ---
 
-// TestRender_Golden runs BuildContractSpec + render for the 4 real todoorder
+// TestRender_Golden runs buildContractSpec + render for the 4 real todoorder
 // contracts and compares the output to golden files.
 // Run with -update to regenerate golden files.
 func TestRender_Golden(t *testing.T) {
@@ -346,9 +414,9 @@ func TestRender_Golden(t *testing.T) {
 			contract.Codegen = true
 			defer func() { contract.Codegen = false }()
 
-			spec, err := BuildContractSpec(root, p, tc.contractID)
+			spec, err := buildContractSpec(root, p, tc.contractID)
 			if err != nil {
-				t.Fatalf("BuildContractSpec(%q): %v", tc.contractID, err)
+				t.Fatalf("buildContractSpec(%q): %v", tc.contractID, err)
 			}
 
 			for _, outFile := range tc.outputs {
@@ -388,9 +456,9 @@ func TestRender_Golden_Synth_HTTPMinimal(t *testing.T) {
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
 	for _, outFile := range outputs {
 		t.Run(outFile, func(t *testing.T) {
-			spec, err := BuildContractSpec(absTestDir, p, "http.order.ping.v1")
+			spec, err := buildContractSpec(absTestDir, p, "http.order.ping.v1")
 			if err != nil {
-				t.Fatalf("BuildContractSpec: %v", err)
+				t.Fatalf("buildContractSpec: %v", err)
 			}
 			content := renderFile(t, spec, outFile)
 			goldenFile := goldenFilePath("synth_http_minimal", outFile)
@@ -425,9 +493,9 @@ func TestRender_Golden_Synth_HTTPFull(t *testing.T) {
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
 	for _, outFile := range outputs {
 		t.Run(outFile, func(t *testing.T) {
-			spec, err := BuildContractSpec(absTestDir, p, "http.item.details.v1")
+			spec, err := buildContractSpec(absTestDir, p, "http.item.details.v1")
 			if err != nil {
-				t.Fatalf("BuildContractSpec: %v", err)
+				t.Fatalf("buildContractSpec: %v", err)
 			}
 			content := renderFile(t, spec, outFile)
 			goldenFile := goldenFilePath("synth_http_full", outFile)
@@ -484,9 +552,9 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 			if contract == nil {
 				t.Fatalf("%s not found in synth fixture", tc.contractID)
 			}
-			spec, err := BuildContractSpec(absTestDir, p, tc.contractID)
+			spec, err := buildContractSpec(absTestDir, p, tc.contractID)
 			if err != nil {
-				t.Fatalf("BuildContractSpec: %v", err)
+				t.Fatalf("buildContractSpec: %v", err)
 			}
 			for _, outFile := range outputs {
 				t.Run(outFile, func(t *testing.T) {
@@ -525,9 +593,9 @@ func TestRender_Golden_Synth_Event(t *testing.T) {
 	outputs := []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"}
 	for _, outFile := range outputs {
 		t.Run(outFile, func(t *testing.T) {
-			spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+			spec, err := buildContractSpec(absTestDir, p, "event.item-created.v1")
 			if err != nil {
-				t.Fatalf("BuildContractSpec: %v", err)
+				t.Fatalf("buildContractSpec: %v", err)
 			}
 			content := renderFile(t, spec, outFile)
 			goldenFile := goldenFilePath("synth_event", outFile)
@@ -581,15 +649,15 @@ func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
 	)
 	switch outFile {
 	case "types_gen.go":
-		content, err = RenderTypes(spec, "/dev/null")
+		content, err = renderTypes(spec)
 	case "iface_gen.go":
-		content, err = RenderIface(spec, "/dev/null")
+		content, err = renderIface(spec)
 	case "handler_gen.go":
-		content, err = RenderHandler(spec, "/dev/null")
+		content, err = renderHandler(spec)
 	case "spec_gen.go":
-		content, err = RenderSpec(spec, "/dev/null")
+		content, err = renderSpec(spec)
 	case "subscription_gen.go":
-		content, err = RenderSubscription(spec, "/dev/null")
+		content, err = renderSubscription(spec)
 	default:
 		t.Fatalf("unknown output file: %s", outFile)
 	}
@@ -674,9 +742,9 @@ func TestRender_Golden_Synth_KeywordConflict(t *testing.T) {
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
 	for _, outFile := range outputs {
 		t.Run(outFile, func(t *testing.T) {
-			spec, err := BuildContractSpec(absTestDir, p, "http.config.delete.v1")
+			spec, err := buildContractSpec(absTestDir, p, "http.config.delete.v1")
 			if err != nil {
-				t.Fatalf("BuildContractSpec: %v", err)
+				t.Fatalf("buildContractSpec: %v", err)
 			}
 			// Verify keyword sanitization.
 			if spec.PackageName != "configdelete" {
@@ -694,7 +762,7 @@ func TestRender_Golden_Synth_KeywordConflict(t *testing.T) {
 	}
 }
 
-// --- A.9: BuildContractSpec integration tests using synth fixtures ---
+// --- A.9: buildContractSpec integration tests using synth fixtures ---
 
 // TestBuildContractSpec_HTTP uses the synth_http_full fixture to verify
 // Endpoint.Method, SuccessCode, path params, and DTOs.
@@ -710,9 +778,9 @@ func TestBuildContractSpec_HTTP(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	spec, err := BuildContractSpec(absTestDir, p, "http.item.details.v1")
+	spec, err := buildContractSpec(absTestDir, p, "http.item.details.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.Endpoint == nil {
 		t.Fatal("Endpoint is nil")
@@ -754,9 +822,9 @@ func TestBuildContractSpec_Event(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+	spec, err := buildContractSpec(absTestDir, p, "event.item-created.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 	if spec.Event == nil {
 		t.Fatal("Event is nil")
@@ -808,14 +876,14 @@ func TestSpecGenIsPackagePrivate(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+	spec, err := buildContractSpec(absTestDir, p, "event.item-created.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 
-	content, err := RenderSpec(spec, "/dev/null")
+	content, err := renderSpec(spec)
 	if err != nil {
-		t.Fatalf("RenderSpec: %v", err)
+		t.Fatalf("renderSpec: %v", err)
 	}
 	got := string(content)
 
@@ -842,14 +910,14 @@ func TestSubscriptionMountCallsRegistrySubscribe(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+	spec, err := buildContractSpec(absTestDir, p, "event.item-created.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 
-	content, err := RenderSubscription(spec, "/dev/null")
+	content, err := renderSubscription(spec)
 	if err != nil {
-		t.Fatalf("RenderSubscription: %v", err)
+		t.Fatalf("renderSubscription: %v", err)
 	}
 	got := string(content)
 
@@ -883,14 +951,14 @@ func TestNewSubscriptionFourArgSignature(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+	spec, err := buildContractSpec(absTestDir, p, "event.item-created.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 
-	content, err := RenderSubscription(spec, "/dev/null")
+	content, err := renderSubscription(spec)
 	if err != nil {
-		t.Fatalf("RenderSubscription: %v", err)
+		t.Fatalf("renderSubscription: %v", err)
 	}
 	got := string(content)
 
@@ -906,7 +974,7 @@ func TestNewSubscriptionFourArgSignature(t *testing.T) {
 	}
 }
 
-// TestRenderSpec_RejectsHTTPContract verifies that RenderSpec returns an error
+// TestRenderSpec_RejectsHTTPContract verifies that renderSpec returns an error
 // when the contract is kind=http.
 func TestRenderSpec_RejectsHTTPContract(t *testing.T) {
 	t.Parallel()
@@ -914,22 +982,22 @@ func TestRenderSpec_RejectsHTTPContract(t *testing.T) {
 	p := loadTodoorderProject(t, root)
 	p.Contracts["http.order.create.v1"].Codegen = true
 
-	spec, err := BuildContractSpec(root, p, "http.order.create.v1")
+	spec, err := buildContractSpec(root, p, "http.order.create.v1")
 	if err != nil {
-		t.Fatalf("BuildContractSpec: %v", err)
+		t.Fatalf("buildContractSpec: %v", err)
 	}
 
-	_, err = RenderSpec(spec, "/dev/null")
+	_, err = renderSpec(spec)
 	if err == nil {
-		t.Fatal("RenderSpec should reject kind=http contract")
+		t.Fatal("renderSpec should reject kind=http contract")
 	}
 	if !strings.Contains(err.Error(), "not event") {
 		t.Errorf("error should mention 'not event', got: %v", err)
 	}
 
-	_, err = RenderSubscription(spec, "/dev/null")
+	_, err = renderSubscription(spec)
 	if err == nil {
-		t.Fatal("RenderSubscription should reject kind=http contract")
+		t.Fatal("renderSubscription should reject kind=http contract")
 	}
 	if !strings.Contains(err.Error(), "not event") {
 		t.Errorf("error should mention 'not event', got: %v", err)
@@ -993,28 +1061,28 @@ func TestNeedsStrconv(t *testing.T) {
 	}{
 		{"nil spec", nil, false},
 		{"nil endpoint", &ContractGenSpec{}, false},
-		{"non-pagination string-only", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"non-pagination string-only", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			QueryParams: []ParamSpec{{Name: "name", GoType: "string"}},
 		}}, false},
-		{"non-pagination int64", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"non-pagination int64", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			QueryParams: []ParamSpec{{Name: "page", GoType: "int64"}},
 		}}, true},
-		{"pagination no extras", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"pagination no extras", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			Pagination: &PaginationShape{HasCursor: true, HasLimit: true},
 		}}, false},
-		{"pagination with int64 extra", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"pagination with int64 extra", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			Pagination: &PaginationShape{
 				HasCursor: true, HasLimit: true,
 				ExtraQueryParams: []ParamSpec{{Name: "since", GoType: "int64"}},
 			},
 		}}, true},
-		{"pagination with bool extra", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"pagination with bool extra", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			Pagination: &PaginationShape{
 				HasCursor: true, HasLimit: true,
 				ExtraQueryParams: []ParamSpec{{Name: "active", GoType: "bool"}},
 			},
 		}}, true},
-		{"pagination with string-only extras", &ContractGenSpec{Endpoint: &HTTPEndpointSpec{
+		{"pagination with string-only extras", &ContractGenSpec{Endpoint: &httpEndpointSpec{
 			Pagination: &PaginationShape{
 				HasCursor: true, HasLimit: true,
 				ExtraQueryParams: []ParamSpec{{Name: "tag", GoType: "string"}},

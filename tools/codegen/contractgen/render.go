@@ -2,7 +2,6 @@ package contractgen
 
 import (
 	"embed"
-	"fmt"
 	"strconv"
 	"text/template"
 
@@ -23,7 +22,7 @@ var templates = func() *template.Template {
 		// Used to embed the request schema JSON constant safely.
 		"quoteGoString": strconv.Quote,
 		// hasPathParams reports whether the endpoint has path parameters.
-		"hasPathParams": func(ep *HTTPEndpointSpec) bool {
+		"hasPathParams": func(ep *httpEndpointSpec) bool {
 			return ep != nil && len(ep.PathParams) > 0
 		},
 		// hasQueryNumeric reports whether any query param requires strconv parsing.
@@ -115,86 +114,8 @@ func needsStrconv(spec *ContractGenSpec) bool {
 	return false
 }
 
-// RenderTypes renders types_gen.go content for the given spec.
-// Returns formatted, goimports-processed bytes.
-func RenderTypes(spec *ContractGenSpec, filename string) ([]byte, error) {
-	b, err := codegen.Render(codegen.RenderOptions{
-		TemplateName: "types.tmpl",
-		Templates:    templates,
-		Data:         spec,
-		Filename:     filename,
-	})
-	if err != nil {
-		return b, fmt.Errorf("contractgen render types: %w", err)
-	}
-	return b, nil
-}
-
-// RenderIface renders iface_gen.go content for the given spec.
-// Returns formatted, goimports-processed bytes.
-func RenderIface(spec *ContractGenSpec, filename string) ([]byte, error) {
-	b, err := codegen.Render(codegen.RenderOptions{
-		TemplateName: "iface.tmpl",
-		Templates:    templates,
-		Data:         spec,
-		Filename:     filename,
-	})
-	if err != nil {
-		return b, fmt.Errorf("contractgen render iface: %w", err)
-	}
-	return b, nil
-}
-
-// RenderHandler renders handler_gen.go content for the given spec.
-// Only valid for kind=http metadata. Returns an error for event metadata.
-func RenderHandler(spec *ContractGenSpec, filename string) ([]byte, error) {
-	if spec.Kind != "http" {
-		return nil, fmt.Errorf("contractgen render handler: contract %q is kind=%q, not http", spec.ContractID, spec.Kind)
-	}
-	b, err := codegen.Render(codegen.RenderOptions{
-		TemplateName: "handler.tmpl",
-		Templates:    templates,
-		Data:         spec,
-		Filename:     filename,
-	})
-	if err != nil {
-		return b, fmt.Errorf("contractgen render handler: %w", err)
-	}
-	return b, nil
-}
-
-// RenderSpec renders spec_gen.go content for the given spec.
-// Only valid for kind=event contracts. Returns an error for non-event contracts.
-func RenderSpec(spec *ContractGenSpec, filename string) ([]byte, error) {
-	if spec.Kind != "event" {
-		return nil, fmt.Errorf("contractgen render spec: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
-	}
-	b, err := codegen.Render(codegen.RenderOptions{
-		TemplateName: "spec.tmpl",
-		Templates:    templates,
-		Data:         spec,
-		Filename:     filename,
-	})
-	if err != nil {
-		return b, fmt.Errorf("contractgen render spec: %w", err)
-	}
-	return b, nil
-}
-
-// RenderSubscription renders subscription_gen.go content for the given spec.
-// Only valid for kind=event contracts. Returns an error for non-event contracts.
-func RenderSubscription(spec *ContractGenSpec, filename string) ([]byte, error) {
-	if spec.Kind != "event" {
-		return nil, fmt.Errorf("contractgen render subscription: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
-	}
-	b, err := codegen.Render(codegen.RenderOptions{
-		TemplateName: "subscription.tmpl",
-		Templates:    templates,
-		Data:         spec,
-		Filename:     filename,
-	})
-	if err != nil {
-		return b, fmt.Errorf("contractgen render subscription: %w", err)
-	}
-	return b, nil
-}
+// Per-template rendering for production goes through Generate /
+// RenderContractArtifacts (generator.go), which call codegen.Render directly.
+// The per-artifact render wrappers used to live here but were only ever called
+// from tests; they now live in render_test.go as test helpers (their sole
+// remaining use), so render.go carries no test-only surface.

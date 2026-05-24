@@ -51,7 +51,7 @@ type CodegenArtifact struct {
 	Content []byte
 }
 
-// Generate orchestrates BuildContractSpec → render → write for one or all
+// Generate orchestrates buildContractSpec → render → write for one or all
 // opted-in metadata.
 // root is the repository root (absolute path; from which go.mod is read for
 // module path).
@@ -98,7 +98,7 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		return fmt.Errorf("contract %q: id contains illegal path characters", contractID)
 	}
 
-	spec, err := BuildContractSpec(root, p, contractID)
+	spec, err := buildContractSpec(root, p, contractID)
 	if err != nil {
 		// B.6: wrap error with contract ID context.
 		return fmt.Errorf("contract %q: %w", contractID, err)
@@ -208,7 +208,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 		return nil, nil
 	}
 
-	spec, err := BuildContractSpec(root, p, contractID)
+	spec, err := buildContractSpec(root, p, contractID)
 	if err != nil {
 		return nil, err
 	}

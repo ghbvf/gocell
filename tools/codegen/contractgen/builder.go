@@ -16,14 +16,14 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 )
 
-// BuildContractSpec projects a single contract.yaml + its schemaRefs into a
+// buildContractSpec projects a single contract.yaml + its schemaRefs into a
 // ContractGenSpec. Returns error when:
 //   - contract not found in project
 //   - Codegen flag is false
 //   - schemaRef parsing fails
 //   - kind=http but http endpoint missing
 //   - kind=event but payload schemaRef missing
-func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
+func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen build: project is nil")
 	}
@@ -67,7 +67,7 @@ func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		}
 	case "command", "projection":
 		// These kinds are in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but do
-		// not yet have dedicated generators. BuildContractSpec accepts them so that
+		// not yet have dedicated generators. buildContractSpec accepts them so that
 		// generateOneContract can emit types_gen.go + iface_gen.go (shared scaffolding)
 		// without hard-failing. No spec/handler/subscription file is emitted.
 		// When a full generator is added, add the corresponding case here.
@@ -213,7 +213,14 @@ func hasDTONamed(dtos []DTOSpec, name string) bool {
 	return false
 }
 
-// buildHTTPEndpointSpec constructs the HTTPEndpointSpec including pagination detection.
+// buildHTTPEndpointSpec is the SOLE constructor of the sealed httpEndpointSpec
+// and the FMT-34 funnel entry (it calls validateAuthOnInternalPath). It is
+// called only from buildHTTPSpec, which assigns the result to
+// ContractGenSpec.Endpoint. The "sole constructor / sole caller" invariant is
+// locked by archtest CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 (A1b); the
+// cross-package bypass is sealed by httpEndpointSpec being unexported.
+//
+// It constructs the httpEndpointSpec including pagination detection.
 // HasBody is true only when the HTTP method is POST/PUT/PATCH AND the contract declares
 // a schemaRefs.request — POST/PATCH endpoints that accept only path params (no request
 // body schema) must not call DecodeJSONStrict (an empty body would be rejected).
@@ -222,7 +229,7 @@ func buildHTTPEndpointSpec(
 	contract *metadata.ContractMeta,
 	http *metadata.HTTPTransportMeta,
 	pathParams, queryParams []ParamSpec,
-) (*HTTPEndpointSpec, error) {
+) (*httpEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
 	methodHasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
 	hasBody := methodHasBody && contract.SchemaRefs.Request != ""
@@ -249,7 +256,7 @@ func buildHTTPEndpointSpec(
 		return nil, err
 	}
 
-	spec := &HTTPEndpointSpec{
+	spec := &httpEndpointSpec{
 		Method:                  http.Method,
 		Path:                    http.Path,
 		SuccessCode:             http.SuccessStatus,
@@ -309,7 +316,11 @@ func validateAuthServiceOwned(contractID string, auth metadata.HTTPAuthMeta) err
 // FMT-34 (kernel/governance/rules_fmt.go::validateFMT34 is the downstream
 // Medium half). validateAuthOnInternalPath is called unconditionally inside
 // buildHTTPEndpointSpec — the sole production HTTP codegen entry — so any
-// HTTP contract generation path triggers this funnel automatically.
+// HTTP contract generation path triggers this funnel automatically. That
+// "sole entry" premise is no longer grep-only: it is enforced by the sealed
+// (unexported) httpEndpointSpec type plus archtest
+// CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 (sole constructor/caller +
+// http.Handler emit-uniqueness across tools/codegen/**).
 //
 // Uses metadata.IsInternalHTTPPath as the single oracle for the /internal/v1
 // predicate (shared with governance + runtime), preventing prefix-string
@@ -380,7 +391,7 @@ func validateAuthClientsOnly(
 // Any non-cursor/non-limit query params land in ExtraQueryParams so the
 // handler template can route them through per-param parsing while
 // cursor/limit always go through pkg/httputil.ParsePageParams.
-func detectPagination(spec *HTTPEndpointSpec) error {
+func detectPagination(spec *httpEndpointSpec) error {
 	hasCursor, hasLimit := false, false
 	var extras []ParamSpec
 	for _, q := range spec.QueryParams {
