@@ -156,3 +156,11 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 MODE_STR=$([[ "$IS_WEEKEND" == "true" ]] && echo weekend || echo weekday)
 echo "[audit] $TS date=$DATE mode=$MODE_STR applied=$APPLIED skipped=$SKIPPED failed=${#FAILED_ITEMS[@]} wave_applied=$WAVE_APPLIED" >&2
 echo "[audit] per-item NDJSON: $AUDIT_NDJSON" >&2
+
+# C2: any mutation failure (Iteration write or Wave write) → exit non-zero so
+# automation can detect partial apply. Wave-only failures (wave_failed) also
+# count as non-zero because the apply was not fully clean.
+WAVE_FAILED_COUNT=$(grep -c '"result":"wave_failed"' "$AUDIT_NDJSON" 2>/dev/null || true)
+if [[ ${#FAILED_ITEMS[@]} -gt 0 || "${WAVE_FAILED_COUNT:-0}" -gt 0 ]]; then
+  exit 1
+fi

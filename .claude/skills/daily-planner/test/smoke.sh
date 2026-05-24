@@ -169,10 +169,10 @@ assert_gate_fail "A4: unknown current -> current_iteration_id unknown" \
   "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
 rm -rf "$wd"
 
-# A5: parallel_group not int -> "parallel_group must be int" + rc==1
+# A5: conflict_group not int -> "conflict_group must be int" + rc==1
 wd=$(make_gate_workdir "plan-bad-parallel-group.json")
-assert_gate_fail "A5: bad parallel_group -> parallel_group must be int" \
-  "parallel_group must be int" \
+assert_gate_fail "A5: bad conflict_group -> conflict_group must be int" \
+  "conflict_group must be int" \
   "WORKDIR=$wd" "TODAY_ITERATION_ID=ITER_TODAY" "YESTERDAY_ITERATION_ID=ITER_YESTERDAY" \
   "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
 rm -rf "$wd"
@@ -215,6 +215,14 @@ rm -rf "$wd"
 wd=$(make_gate_workdir "plan-closed-carryover.json" "items-with-closed.json")
 assert_gate_fail "A10: CLOSED/Done carry-over not in allowed set -> rc==1" \
   "not in allowed set" \
+  "WORKDIR=$wd" "TODAY_ITERATION_ID=ITER_TODAY" "YESTERDAY_ITERATION_ID=ITER_YESTERDAY" \
+  "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
+rm -rf "$wd"
+
+# A11: missing conflict_group field -> "conflict_group required" + rc==1
+wd=$(make_gate_workdir "plan-missing-conflict-group.json")
+assert_gate_fail "A11: missing conflict_group -> conflict_group required" \
+  "conflict_group required" \
   "WORKDIR=$wd" "TODAY_ITERATION_ID=ITER_TODAY" "YESTERDAY_ITERATION_ID=ITER_YESTERDAY" \
   "WAVE_FIELD_ID=WFIELD_123" "WAVE_OPTION_IDS=OPT_WAVE1,OPT_WAVE2,OPT_WAVE3,OPT_WAVE4"
 rm -rf "$wd"
@@ -296,8 +304,9 @@ if $w1_ok; then echo "PASS [W1: clean plan writes iteration + wave]"; pass=$((pa
 else fail=$((fail+1)); fi
 rm -rf "$wd_w1"
 
-# W2: partial failure -> rc==0 + rollback applies to already-written item (PVTI_ITEM_101)
-# with specific --id and --iteration-id + retry section for PVTI_ITEM_102.
+# W2: partial failure -> rc==1 (C2: any mutation failure exits non-zero) + rollback applies
+# to already-written item (PVTI_ITEM_101) with specific --id and --iteration-id + retry
+# section for PVTI_ITEM_102.
 # PVTI_ITEM_101 (prev=ITER_TODAY) succeeds -> rollback section contains:
 #   "# --- rollback commands" marker
 #   "--id PVTI_ITEM_101 ... --iteration-id ITER_TODAY"
@@ -312,8 +321,8 @@ RUN_WRITE_RC=0; run_write "$wd_w2" "PVTI_ITEM_102" "$gh_log_w2" "$stderr_w2"
 rc_w2=$RUN_WRITE_RC
 stderr_content_w2=$(cat "$stderr_w2"); rm -f "$gh_log_w2" "$stderr_w2"
 w2_ok=true
-if [[ $rc_w2 -ne 0 ]]; then
-  echo "FAIL [W2] expected rc==0, got rc=$rc_w2"
+if [[ $rc_w2 -ne 1 ]]; then
+  echo "FAIL [W2] expected rc==1 (partial failure), got rc=$rc_w2"
   w2_ok=false
 fi
 if [[ "$stderr_content_w2" != *"# --- rollback commands"* ]]; then
@@ -334,11 +343,11 @@ if [[ "$stderr_content_w2" != *"PVTI_ITEM_102"* ]]; then
   echo "FAIL [W2] PVTI_ITEM_102 not in failed/retry section"
   w2_ok=false
 fi
-if $w2_ok; then echo "PASS [W2: partial fail -> rollback applied + retry failed]"; pass=$((pass+1))
+if $w2_ok; then echo "PASS [W2: partial fail -> rc==1 + rollback applied + retry failed]"; pass=$((pass+1))
 else fail=$((fail+1)); fi
 rm -rf "$wd_w2"
 
-# W3: empty prev_iteration_id -> rc==0 + rollback uses --clear
+# W3: empty prev_iteration_id -> rc==1 (partial fail) + rollback uses --clear
 # Two items: first has null current (succeeds), second fails -> rollback of first shows --clear
 wd_w3=$(mktemp -d)
 cp "${fixtures_dir}/issues.json" "${fixtures_dir}/items.json" \
@@ -355,7 +364,7 @@ cat > "$wd_w3/plan.json" <<'PLANEOF'
     "action": "set",
     "carry_over": false,
     "score": 9.5,
-    "parallel_group": 1,
+    "conflict_group": 1,
     "wave_option_id": "OPT_WAVE1"
   },
   {
@@ -368,7 +377,7 @@ cat > "$wd_w3/plan.json" <<'PLANEOF'
     "action": "set",
     "carry_over": true,
     "score": 8.0,
-    "parallel_group": 2,
+    "conflict_group": 2,
     "wave_option_id": "OPT_WAVE1"
   }
 ]
@@ -379,8 +388,8 @@ RUN_WRITE_RC=0; run_write "$wd_w3" "PVTI_ITEM_102" "$gh_log_w3" "$stderr_w3"
 rc_w3=$RUN_WRITE_RC
 stderr_content_w3=$(cat "$stderr_w3"); rm -f "$gh_log_w3" "$stderr_w3"
 w3_ok=true
-if [[ $rc_w3 -ne 0 ]]; then
-  echo "FAIL [W3] expected rc==0, got rc=$rc_w3"
+if [[ $rc_w3 -ne 1 ]]; then
+  echo "FAIL [W3] expected rc==1 (partial failure), got rc=$rc_w3"
   w3_ok=false
 fi
 if [[ "$stderr_content_w3" != *"--clear"* ]]; then
@@ -392,7 +401,7 @@ if [[ "$stderr_content_w3" != *"PVTI_ITEM_102"* ]]; then
   echo "FAIL [W3] PVTI_ITEM_102 not in retry section"
   w3_ok=false
 fi
-if $w3_ok; then echo "PASS [W3: empty prev -> rollback --clear]"; pass=$((pass+1))
+if $w3_ok; then echo "PASS [W3: empty prev -> rc==1 + rollback --clear]"; pass=$((pass+1))
 else fail=$((fail+1)); fi
 rm -rf "$wd_w3"
 
@@ -424,8 +433,9 @@ if $w4_ok; then echo "PASS [W4: skip not written]"; pass=$((pass+1))
 else fail=$((fail+1)); fi
 rm -rf "$wd_w4"
 
-# W5: Wave write fails but Iteration write succeeds -> rc==0 + iteration audit=applied
-#     + stderr contains Wave WARN + wave_failed audit line present
+# W5: Wave write fails but Iteration write succeeds -> rc==1 (C2: wave_failed counts as
+#     non-zero) + iteration audit=applied + stderr contains Wave WARN + wave_failed audit
+#     line present.
 # GH_STUB_FAIL_FIELD_ID=WFIELD_123 causes Wave item-edit to fail.
 wd_w5=$(mktemp -d)
 cp "${fixtures_dir}/issues.json" "${fixtures_dir}/items.json" \
@@ -439,8 +449,8 @@ gh_calls_w5=$(cat "$gh_log_w5")
 stderr_content_w5=$(cat "$stderr_w5"); rm -f "$gh_log_w5" "$stderr_w5"
 w5_audit=$(cat "$wd_w5/audit.ndjson" 2>/dev/null || true)
 w5_ok=true
-if [[ $rc_w5 -ne 0 ]]; then
-  echo "FAIL [W5] expected rc==0 (Wave fail is non-fatal), got rc=$rc_w5"
+if [[ $rc_w5 -ne 1 ]]; then
+  echo "FAIL [W5] expected rc==1 (wave_failed exits non-zero per C2), got rc=$rc_w5"
   w5_ok=false
 fi
 if [[ "$gh_calls_w5" != *"--field-id IFIELD_123 --iteration-id ITER_TODAY"* ]]; then
@@ -460,7 +470,7 @@ if [[ "$w5_audit" != *'"result":"wave_failed"'* ]]; then
   echo "FAIL [W5] no 'wave_failed' audit line"
   w5_ok=false
 fi
-if $w5_ok; then echo "PASS [W5: Wave fail non-fatal, iteration applied + wave_failed audited]"; pass=$((pass+1))
+if $w5_ok; then echo "PASS [W5: Wave fail -> rc==1 + iteration applied + wave_failed audited]"; pass=$((pass+1))
 else fail=$((fail+1)); fi
 rm -rf "$wd_w5"
 
@@ -598,7 +608,7 @@ fi
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
-echo "Summary: ${pass} pass, ${fail} fail"
+echo "# Summary: ${pass} pass, ${fail} fail"
 if [[ $fail -gt 0 ]]; then
   exit 1
 fi

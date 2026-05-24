@@ -50,15 +50,18 @@ if ! jq -e '
   exit 1
 fi
 
-# Validate parallel_group: if present, must be an integer >= 1
+# Validate conflict_group: required on every entry, must be an integer >= 1
 SCHEMA_VIOLATIONS=0
 while IFS= read -r row; do
   item_id=$(jq -r '.item_id' <<<"$row")
-  pg=$(jq -r '.parallel_group // "null"' <<<"$row")
-  if [[ "$pg" != "null" ]]; then
+  cg=$(jq -r '.conflict_group // "null"' <<<"$row")
+  if [[ "$cg" == "null" ]]; then
+    echo "ERROR: plan.json schema invalid (conflict_group required, must be int >= 1) for item $item_id" >&2
+    SCHEMA_VIOLATIONS=$((SCHEMA_VIOLATIONS+1))
+  else
     # Must be a JSON number (integer) >= 1
-    if ! jq -e '(.parallel_group | type == "number") and (.parallel_group >= 1) and (.parallel_group == (.parallel_group | floor))' <<<"$row" > /dev/null 2>&1; then
-      echo "ERROR: plan.json schema invalid (parallel_group must be int >= 1)" >&2
+    if ! jq -e '(.conflict_group | type == "number") and (.conflict_group >= 1) and (.conflict_group == (.conflict_group | floor))' <<<"$row" > /dev/null 2>&1; then
+      echo "ERROR: plan.json schema invalid (conflict_group must be int >= 1) for item $item_id" >&2
       SCHEMA_VIOLATIONS=$((SCHEMA_VIOLATIONS+1))
     fi
   fi

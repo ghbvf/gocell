@@ -90,11 +90,22 @@ if [[ -n "$WAVE_FIELD_ID" ]]; then
     exit 1
   fi
 fi
-# wave_number → option_id 映射（agent 用；顺序 = Wave 1/2/3/4 按 options 数组顺序）
-WAVE_OPTION_ID_WAVE1=$(jq -r '.fields[] | select(.name=="Wave") | .options[0]?.id // ""' <<<"$FIELD_LIST_JSON")
-WAVE_OPTION_ID_WAVE2=$(jq -r '.fields[] | select(.name=="Wave") | .options[1]?.id // ""' <<<"$FIELD_LIST_JSON")
-WAVE_OPTION_ID_WAVE3=$(jq -r '.fields[] | select(.name=="Wave") | .options[2]?.id // ""' <<<"$FIELD_LIST_JSON")
-WAVE_OPTION_ID_WAVE4=$(jq -r '.fields[] | select(.name=="Wave") | .options[3]?.id // ""' <<<"$FIELD_LIST_JSON")
+# wave_number → option_id 映射（按名匹配，防止 UI 重排选项静默错位）
+# apply 模式下若某 Wave N 名称缺失 → apply-gate.sh 会因 wave_option_id 未知而 fail-fast。
+WAVE_OPTION_ID_WAVE1=$(jq -r '.fields[] | select(.name=="Wave") | .options[]? | select(.name=="Wave 1").id // ""' <<<"$FIELD_LIST_JSON")
+WAVE_OPTION_ID_WAVE2=$(jq -r '.fields[] | select(.name=="Wave") | .options[]? | select(.name=="Wave 2").id // ""' <<<"$FIELD_LIST_JSON")
+WAVE_OPTION_ID_WAVE3=$(jq -r '.fields[] | select(.name=="Wave") | .options[]? | select(.name=="Wave 3").id // ""' <<<"$FIELD_LIST_JSON")
+WAVE_OPTION_ID_WAVE4=$(jq -r '.fields[] | select(.name=="Wave") | .options[]? | select(.name=="Wave 4").id // ""' <<<"$FIELD_LIST_JSON")
+# apply 模式下：任一 Wave N 名称缺失（option id 为空）→ fail-fast
+if [[ "${APPLY:-}" == "true" && -n "$WAVE_FIELD_ID" ]]; then
+  for _wn in 1 2 3 4; do
+    _wvar="WAVE_OPTION_ID_WAVE${_wn}"
+    if [[ -z "${!_wvar:-}" ]]; then
+      echo "ERROR: Wave option \"Wave ${_wn}\" not found in Project #3 Wave field options" >&2
+      exit 1
+    fi
+  done
+fi
 
 # 0.3 日期 + 模式（weekday/weekend）。python3 用 sys.argv 传 $DATE 防 shell 注入
 DATE="${DATE:-$(date +%Y-%m-%d)}"
@@ -327,7 +338,7 @@ tool。每个 `{VAR}` 都必须能在 bash 上下文中找到对应变量。
 PLAN_PATH="$WORKDIR/plan.json"
 
 Agent(
-  description: "Score backlog + carry-over + wave grouping + parallel_group + wave_option_id",
+  description: "Score backlog + carry-over + wave grouping + conflict_group + wave_option_id",
   subagent_type: "daily-planner",
   prompt: f"""
     Constants:
@@ -343,10 +354,10 @@ Agent(
       MODE = {"apply" if APPLY else "dry-run"}
       WAVE_FIELD_ID = {WAVE_FIELD_ID}                    # Wave single-select field ID（空=字段未配置）
       WAVE_OPTION_IDS = {WAVE_OPTION_IDS}                # 逗号分隔已知 wave option id
-      WAVE_OPTION_ID_WAVE1 = {WAVE_OPTION_ID_WAVE1}      # Wave 1 option id
-      WAVE_OPTION_ID_WAVE2 = {WAVE_OPTION_ID_WAVE2}      # Wave 2 option id
-      WAVE_OPTION_ID_WAVE3 = {WAVE_OPTION_ID_WAVE3}      # Wave 3 option id
-      WAVE_OPTION_ID_WAVE4 = {WAVE_OPTION_ID_WAVE4}      # Wave 4 option id
+      WAVE_OPTION_ID_WAVE1 = {WAVE_OPTION_ID_WAVE1}      # Wave 1 option id（按名 "Wave 1" 匹配）
+      WAVE_OPTION_ID_WAVE2 = {WAVE_OPTION_ID_WAVE2}      # Wave 2 option id（按名 "Wave 2" 匹配）
+      WAVE_OPTION_ID_WAVE3 = {WAVE_OPTION_ID_WAVE3}      # Wave 3 option id（按名 "Wave 3" 匹配）
+      WAVE_OPTION_ID_WAVE4 = {WAVE_OPTION_ID_WAVE4}      # Wave 4 option id（按名 "Wave 4" 匹配）
 
     Data files (Read these):
       {WORKDIR}/issues.json        — backlog 池 (P0/P1 默认；P2/P3 视 flag)
@@ -358,8 +369,9 @@ Agent(
     Tasks:
       # 两正交轴说明（避免概念混淆）：
       # - 拓扑序（wave 编号）= 正确性序：blocker.wave ≤ dependent.wave，确保依赖关系不倒置
-      # - parallel_group = 执行并行度：同 wave 内、affected_paths 无重叠的 issue 可并行工作
-      # 两者独立：同 wave 内可有多 parallel_group（并行），同 parallel_group 内也应拓扑安全
+      # - conflict_group = 冲突并行度：同 conflict_group = 共享文件冲突 → 必须串行；
+      #   异 conflict_group = 独立 → 可并行
+      # 两者独立：同 wave 内可有多 conflict_group（并行），同 conflict_group 内也应拓扑安全
       1. Read all 5 files
       2. Compute carry-over (if not CARRY_OVER_DISABLED): items.json 中
          iter.iterationId == YESTERDAY_ITERATION_ID AND content.state == "OPEN"
@@ -376,14 +388,15 @@ Agent(
          - 容量 = WAVE_COUNT × WAVE_SIZE；超出 → Unscheduled [capacity overflow]
          - 空输入集（input + carry-over 均 0）→ brief Warnings [EMPTY INPUT SET]，plan=[]
          - placement 守拓扑：blocker.wave ≤ dependent.wave（dependent 顺延到其最晚 blocker 之后）
-      6. parallel_group（C2c）：每 wave 对 affected_paths 前缀重合做 union-find，
-         每连通分量=一组；无 affected_paths → singleton 可并行。
-         全局唯一 int，(wave 升序, 首次出现) 从 1 分配。
+      6. conflict_group（C2c）：每 wave 对 affected_paths 前缀重合做 union-find，
+         每连通分量=一组（同组=共享文件冲突 → 串行；跨组=独立 → 可并行）；
+         无 affected_paths → singleton 独立组。
+         全局唯一 int ≥ 1，(wave 升序, 首次出现) 从 1 分配；set 和 skip 都必须有值。
       7. wave_option_id（C3c）：action=="set" 时根据 wave 编号从 WAVE_OPTION_ID_WAVE* 常量取值；
          WAVE_FIELD_ID 为空时置 ""。
       8. Emit brief markdown to STDOUT（详 agent.md §输出格式）
       9. Write plan.json to {PLAN_PATH}（详 agent.md §输出 #2）
-         新增字段：parallel_group (int>=1) + wave_option_id (str，action==skip 可为 "")
+         新增字段：conflict_group (int>=1，set 和 skip 均必填) + wave_option_id (str，action==skip 可为 "")
   """
 )
 ```
@@ -393,39 +406,47 @@ Agent(
 apply 模式下，agent 出 plan.json 后、执行写入前，宿主 LLM 用 `AskUserQuestion` 向用户确认。
 dry-run 不执行此阶段（无 mutation，无需确认）。
 
+**设计原则：default-deny**（对标 Terraform `apply` 仅 explicit approve 才写入）。
+proceed 默认 false；**唯一进入阶段 4 的路径是用户显式回答 Yes**。
+No / Show 后非 Yes / 任何歧义 → 零写入，exit 0。
+
 ```
 # 伪代码：宿主 LLM 逻辑（非 bash）
 if APPLY == "true":
   plan = read_json(PLAN_PATH)
   if len(plan) == 0:
-    # 空 plan，无需确认，直接跳阶段 4
+    # 空 plan，无需确认，直接跳阶段 4（无实际 mutation）
     pass
   else:
-    answer = AskUserQuestion(
-      question="plan.json 已生成（共 {len(plan)} 条）。是否立即写入 Project v2？",
-      options=[
-        "Yes — 立即写入（执行阶段 4，无法撤销；失败时输出回滚命令清单）",
-        "No — 退出，不写入（零 mutation，可稍后重新 --apply）",
-        "Show plan.json — 先查看完整计划再决策"
-      ]
-    )
-    if answer == "Yes":
-      # 继续阶段 4（同 $WORKDIR，无 drift）
-      pass
-    elif answer == "No":
-      echo "INFO: 用户取消，退出，零 mutation。" >&2
-      exit 0
-    elif answer starts with "Show":
-      # 宿主 LLM 用 Read 展示 $WORKDIR/plan.json 全文
-      Read(PLAN_PATH)
-      # 再次回问，直到 Yes 或 No（loop，每次重新展示上面两个选项）
+    proceed = false  # default-deny
+    while true:
       answer = AskUserQuestion(
-        question="已显示 plan.json（共 {len(plan)} 条）。确认写入还是退出？",
+        question="plan.json 已生成（共 {len(plan)} 条）。是否立即写入 Project v2？",
         options=[
-          "Yes — 立即写入",
-          "No — 退出，不写入"
+          "Yes — 立即写入（执行阶段 4，无法撤销；失败时输出回滚命令清单）",
+          "No — 退出，不写入（零 mutation，可稍后重新 --apply）",
+          "Show plan.json — 先查看完整计划再决策"
         ]
       )
+      if answer == "Yes":
+        proceed = true
+        break
+      elif answer == "No":
+        # fail-closed：不写入，零 mutation
+        echo "INFO: 用户取消，退出，零 mutation。" >&2
+        exit 0
+      elif answer starts with "Show":
+        # 展示完整 plan.json，然后继续循环重新问
+        Read(PLAN_PATH)
+        # 循环后再次展示三选项，不自动进入阶段 4
+        continue
+      else:
+        # 任何歧义回答 → 零写入，fail-closed
+        echo "INFO: 回答不明确，退出，零 mutation。" >&2
+        exit 0
+    # 循环结束后：只有 proceed=true 才进入阶段 4
+    if not proceed:
+      exit 0
 ```
 
 ## 阶段 4：Apply 分支（仅 `--apply`）
@@ -449,7 +470,7 @@ bash "$SKILL_DIR/lib/apply-write.sh"
 
 宿主 LLM 把以下信息综合到对话回应：
 
-1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节 + parallel_group 分组说明）
+1. **Brief**（阶段 3 agent stdout 全文，含 Wave N 章节 + conflict_group 分组说明）
 2. **Plan 路径**：`$PLAN_PATH`（dry-run 和 apply 模式均输出；`/ship --from-plan=` 消费此路径；**在清理 WORKDIR 前保存**）
 3. **Audit 行**（仅 apply 模式，由 apply-write.sh 写到 stderr；含 `applied / skipped / failed / wave_applied` 计数）
 4. **Per-item NDJSON 路径**（仅 apply 模式：`$WORKDIR/audit.ndjson`）——每行含 ts/date/mode/action/item_id/prev_iteration_id/target_iteration_id/result，是 partial apply / 还原 old iteration / 重放的真值源
@@ -465,7 +486,7 @@ bash "$SKILL_DIR/lib/apply-write.sh"
 - **不动 Status / Estimate / labels / issue body / comment / title**
 - 不创建 / 修改 / 关闭 issue
 - 不修改代码、不跑 build/test
-- **Plan.json 来自 agent (LLM) → 当作未经信任的输入**：apply 前两层 gate（schema + membership：item_id ∈ Project items、target == TODAY_ITERATION_ID、action ∈ {set, skip}，parallel_group int≥1，wave_option_id ∈ WAVE_OPTION_IDS），任一违规整体 fail-closed
+- **Plan.json 来自 agent (LLM) → 当作未经信任的输入**：apply 前两层 gate（schema + membership：item_id ∈ Project items、target == TODAY_ITERATION_ID、action ∈ {set, skip}，conflict_group int≥1（必填），wave_option_id ∈ WAVE_OPTION_IDS），任一违规整体 fail-closed
 - **Wave field fail-closed**：apply 模式下 WAVE_FIELD_ID 为空（字段未配置 / 字段名拼错） → apply-gate.sh fail-fast，零 mutation；详见 `## C3a 前置` 段
 - Apply 失败不自动回滚（输出回滚命令清单交人决策）；**回滚目标 = 已写入项**（partial apply 残留），失败项另列在 retry section
 - **不在本地长期落盘**：brief = stdout，plan.json / audit.ndjson / deps.json = `$WORKDIR/` mktemp 临时；per-item NDJSON 提供 partial apply / 还原 / 重放所需的真值

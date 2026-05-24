@@ -9,7 +9,7 @@
     "action": "set",
     "carry_over": true,
     "score": 9.0,
-    "parallel_group": 1,
+    "conflict_group": 1,
     "wave_option_id": "OPT_WAVE1"
   },
   {
@@ -22,7 +22,7 @@
     "action": "set",
     "carry_over": true,
     "score": 8.0,
-    "parallel_group": 2,
+    "conflict_group": 2,
     "wave_option_id": "OPT_WAVE1"
   }
 ]

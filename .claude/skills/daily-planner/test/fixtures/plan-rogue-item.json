@@ -9,7 +9,7 @@
     "action": "set",
     "carry_over": false,
     "score": 5.0,
-    "parallel_group": 1,
+    "conflict_group": 1,
     "wave_option_id": "OPT_WAVE1"
   }
 ]
