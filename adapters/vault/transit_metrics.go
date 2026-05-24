@@ -77,7 +77,8 @@ func NewTransitMetrics(reg prom.Registerer) (*TransitMetrics, error) {
 			Namespace: "gocell",
 			Subsystem: "vault",
 			Name:      "token_auth_healthy",
-			Help:      "1 when the Vault token renewal worker is healthy; 0 before the worker starts or while re-authenticating after a terminal renewal failure.",
+			Help: "1 when the Vault token renewal worker is healthy; 0 before the worker starts " +
+				"or while re-authenticating after a terminal renewal failure.",
 		}),
 		loginOutcome: promadapter.NewCounterVec(prom.CounterOpts{
 			Namespace: "gocell",

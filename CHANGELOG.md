@@ -8,6 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+- **`gocell_vault_cached_key_version` removes `mount_path` and `key_name` ConstLabels** (PR for #879):
+  single-process single-key deployment has label cardinality 1; the labels carried no
+  information. Dashboards / alerts referencing `mount_path` or `key_name` matchers on
+  this metric must drop them.
+
+- **`gocell_vault_token_auth_healthy` semantics fix** (PR for #879):
+  the gauge now defaults to 0 at construction and transitions to 1 only after the
+  renewal worker starts successfully. Previously it was unconditionally set to 1
+  during initTokenRenewal, which produced a false-green signal for non-renewable
+  token deployments (no worker, gauge=1). Alerts that assumed "gauge stays at 1
+  unless degraded" must be reviewed.
+
 - **`kernel/cell` decompose — auth + outbox extraction + `Registry`→`Registrar` rename** (`615-g10-kernel-cell-decompose`, PR #900, close #615): the listener-auth and outbox-demo concerns left `kernel/cell` for dedicated packages; the cell registration interface was renamed for intent clarity.
   - Listener auth plans moved `kernel/cell` → `kernel/auth`: `cell.ListenerAuth` → `auth.ListenerAuth`; `cell.AuthNone` / `AuthJWT` / `AuthJWTFromAssembly` / `AuthMTLS` / `AuthServiceToken` → `auth.*`; constructors `cell.NewAuthJWT` / `NewAuthJWTFromAssembly` / `NewAuthServiceToken` → `auth.NewAuth*`; supporting types `IntentTokenVerifier` / `AssemblyRef` / `HMACKeyring` / `NonceStore` likewise moved to `auth`.
   - Test-fixture `Must*` helpers moved `kernel/cell/celltest` → `kernel/auth/authtest`: `celltest.MustAuthJWT` / `MustAuthJWTFromAssembly` / `MustAuthServiceToken` → `authtest.Must*`. Production composition roots use the error-first `auth.NewAuth*` directly.

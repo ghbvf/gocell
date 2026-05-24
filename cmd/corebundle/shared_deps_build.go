@@ -9,6 +9,7 @@ import (
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -26,6 +27,7 @@ type sharedMetricsDeps struct {
 	PromStack              promStack
 	ConfigEventCollector   obmetrics.ConfigEventCollector
 	EventbusCacheCollector obmetrics.EventbusCacheCollector
+	VaultTransitMetrics    *adaptervault.TransitMetrics
 }
 
 func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
@@ -41,10 +43,15 @@ func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	if err != nil {
 		return sharedMetricsDeps{}, fmt.Errorf("build eventbus cache metrics collector: %w", err)
 	}
+	vtm, err := adaptervault.NewTransitMetrics(ps.registry)
+	if err != nil {
+		return sharedMetricsDeps{}, fmt.Errorf("build vault transit metrics: %w", err)
+	}
 	return sharedMetricsDeps{
 		PromStack:              ps,
 		ConfigEventCollector:   configEventCollector,
 		EventbusCacheCollector: eventbusCacheCollector,
+		VaultTransitMetrics:    vtm,
 	}, nil
 }
 

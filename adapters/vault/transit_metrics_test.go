@@ -21,7 +21,7 @@ func TestNewTransitMetrics_RegistersAllCollectors(t *testing.T) {
 	}
 
 	// Seed loginOutcome so its CounterVec family appears in Gather() (CounterVec
-	// families are absent until at least one labelled child is observed).
+	// families are absent until at least one labeled child is observed).
 	m.loginOutcome.WithLabelValues("token", "success", "none").Add(0)
 
 	families, err := reg.Gather()
@@ -124,7 +124,7 @@ func TestTransitMetrics_CountersAccumulateAcrossProviderReplacement(t *testing.T
 	m.StoreCachedVersion(5)
 
 	// "Replace provider" — nothing happens at the registry level; the new
-	// provider simply receives the same *TransitMetrics pointer. Modelled by
+	// provider simply receives the same *TransitMetrics pointer. Modeled by
 	// continuing to drive the same metric set.
 	m.renewSuccess.Inc()
 	m.renewSuccess.Inc()
@@ -175,7 +175,12 @@ func scrapeCounter(t *testing.T, reg *prom.Registry, name string) float64 {
 	return 0
 }
 
-// scrapeGauge returns the value of a single-sample Gauge / GaugeFunc family.
+// scrapeGauge returns the value of a single-sample Gauge / GaugeFunc family
+// by metric name. Helper kept general (rather than hardcoded to the vault
+// cached-key-version metric) so future per-metric tests can reuse it; the
+// `unparam` lint warning about the name parameter is intentional and waived.
+//
+//nolint:unparam // helper is reusable across vault metric tests; keep name parameter for call-site clarity.
 func scrapeGauge(t *testing.T, reg *prom.Registry, name string) float64 {
 	t.Helper()
 	families, err := reg.Gather()
@@ -197,7 +202,7 @@ func scrapeGauge(t *testing.T, reg *prom.Registry, name string) float64 {
 }
 
 // scrapeCounterVec returns the value of a CounterVec sample matching the given
-// label set exactly. Used by tests that need to inspect labelled counters
+// label set exactly. Used by tests that need to inspect labeled counters
 // without depending on textfile format helpers.
 func scrapeCounterVec(t *testing.T, reg *prom.Registry, name string, labels map[string]string) float64 {
 	t.Helper()

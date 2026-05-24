@@ -20,7 +20,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
-	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -175,20 +174,19 @@ func TestDoReauth_SucceedsAfterNFailures(t *testing.T) {
 		failErr:      watcherErr,
 	}
 
-	authHealthy := promadapter.NewGauge(prometheus.GaugeOpts{
-		Namespace: "gocell",
-		Subsystem: "vault",
-		Name:      "token_auth_healthy_doauth_nth_test",
-		Help:      "Test gauge.",
-	})
-	authHealthy.Set(0)
+	reg := prometheus.NewRegistry()
+	metrics, mErr := NewTransitMetrics(reg)
+	if mErr != nil {
+		t.Fatalf("NewTransitMetrics: %v", mErr)
+	}
+	// authHealthy starts at 0 by default; the test verifies doReauth restores it to 1.
 
 	w := &tokenRenewalWorker{
-		client:      renewer,
-		authMethod:  fakeAuth,
-		logger:      slog.Default(),
-		authHealthy: authHealthy,
-		clock:       clock.Real(),
+		client:     renewer,
+		authMethod: fakeAuth,
+		logger:     slog.Default(),
+		metrics:    metrics,
+		clock:      clock.Real(),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.SelectAsyncSettle)
@@ -202,7 +200,7 @@ func TestDoReauth_SucceedsAfterNFailures(t *testing.T) {
 		t.Fatal("doReauth must return non-nil watcher on success")
 	}
 	// authHealthy must be restored to 1 after success.
-	if got := testutil.ToFloat64(authHealthy); got != 1 {
+	if got := testutil.ToFloat64(metrics.authHealthy); got != 1 {
 		t.Errorf("authHealthy after doReauth success = %v, want 1", got)
 	}
 	callMu.Lock()

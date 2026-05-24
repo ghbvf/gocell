@@ -362,15 +362,41 @@ const adapterPromPkg = "github.com/ghbvf/gocell/adapters/prometheus"
 //
 // Adding a new public symbol to adapters/prometheus is locked by
 // TestMetricsFunnel_SymbolSentinel (extended to cover this package).
+//
+// # Vault single-file scope (PR #879)
+//
+// The four vault instrument constructors (NewCounter, NewCounterVec, NewGauge,
+// NewGaugeFunc) are pinned to adapters/vault/transit_metrics.go — the dedicated
+// metric construction module extracted by issue #879. No other file in the vault
+// subtree may call these; the per-symbol single-file scope is the funnel form
+// enforced here.
+//
+// # Funnel grade for the vault entries
+//
+// Upstream (Medium): caller identity is checked by file path against this
+// hand-maintained allowlist. Go has no friend-file mechanism, so
+// archtest-bound file-path matching is the highest tier reachable for
+// file-level funnels in the Go type system.
+//
+// Downstream (Hard): callee resolved via *types.Info to (pkgPath, name);
+// form-uniqueness on (callee-pkg, callee-name) via ResolvePackageRef — alias
+// and dot-import collapse to the same resolved key, so there is no
+// "looks-like-but-isn't" gray zone.
+//
+// Hard upstream upgrade: tracked in gh issue #885 — vault migrates
+// loginOutcome and the remaining bare instrument calls to
+// kernel/observability/metrics.Provider, which seals the outer-ring funnel
+// surface entirely. Once #885 lands, these four entries and the public
+// NewCounter/NewCounterVec/NewGauge/NewGaugeFunc exports are deleted.
 var adapterPromCallerAllowlist = map[string]map[string]struct{}{
 	"RegisterOrReuseCounter": {"cmd/corebundle/config_module.go": {}},
-	"NewCounter":             {"adapters/vault/transit_provider.go": {}},
+	"NewCounter":             {"adapters/vault/transit_metrics.go": {}},
 	// NewCounterVec is a labeled-metric carve-out pending removal (issue #885):
 	// vault's loginOutcome migrates to metrics.Provider.CounterVec, after which
 	// this entry and the public NewCounterVec are deleted. Do NOT add callers.
-	"NewCounterVec": {"adapters/vault/transit_provider.go": {}},
-	"NewGauge":      {"adapters/vault/transit_provider.go": {}},
-	"NewGaugeFunc":  {"adapters/vault/transit_provider.go": {}},
+	"NewCounterVec": {"adapters/vault/transit_metrics.go": {}},
+	"NewGauge":      {"adapters/vault/transit_metrics.go": {}},
+	"NewGaugeFunc":  {"adapters/vault/transit_metrics.go": {}},
 }
 
 // adapterPromAllowedNewRegisterExports is the complete set of New*/Register*

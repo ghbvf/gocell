@@ -7,10 +7,9 @@ import (
 	"os"
 	"strings"
 
-	prom "github.com/prometheus/client_golang/prometheus"
-
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -185,16 +184,14 @@ type SharedDeps struct {
 	// empty when the var is unset (endpoint is disabled gracefully).
 	ProjectRoot string
 
+	// VaultTransitMetrics is the long-lived TransitMetrics set registered with PromStack.registry;
+	// shared across every TransitKeyProvider built against this SharedDeps so counters keep
+	// accumulating across re-Provide.
+	VaultTransitMetrics *adaptervault.TransitMetrics
+
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
-
-	// keyProviderMetricCollectors are the collectors currently registered for
-	// the ConfigCore KeyProvider. ConfigCoreModule.Provide may be called more
-	// than once against the same SharedDeps in tests/rebuild paths; tracking
-	// ownership here lets the module replace provider-bound GaugeFunc collectors
-	// instead of leaving stale closures attached to an older provider instance.
-	keyProviderMetricCollectors []prom.Collector
 }
 
 // SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so
@@ -282,6 +279,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		EventBus:               eb,
 		ConfigEventCollector:   metricsDeps.ConfigEventCollector,
 		EventbusCacheCollector: metricsDeps.EventbusCacheCollector,
+		VaultTransitMetrics:    metricsDeps.VaultTransitMetrics,
 		RedisClient:            replay.RedisClient,
 		ConsumerClaimer:        replay.ConsumerClaimer,
 		ConsumerClaimerKind:    replay.ConsumerClaimerKind,

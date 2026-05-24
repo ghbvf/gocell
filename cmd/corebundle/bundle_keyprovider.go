@@ -38,6 +38,7 @@ import (
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
 func buildKeyProvider(
 	storageBackend, adapterMode, providerName, masterKey, prevMasterKey string, clk clock.Clock,
+	metrics *adaptervault.TransitMetrics,
 ) (kcrypto.KeyProvider, error) {
 	if providerName == "" {
 		if storageBackend == "postgres" {
@@ -71,7 +72,7 @@ func buildKeyProvider(
 		slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
 		return kp, nil
 	case "vault-transit":
-		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode), clk)
+		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode), clk, metrics)
 		if err != nil {
 			return nil, fmt.Errorf("vault-transit key provider: %w", err)
 		}
