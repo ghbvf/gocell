@@ -90,7 +90,6 @@ func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
 
 	applyAssemblyDerivations(pm)
 	deriveEventSubscribers(pm)
-	deriveSubscribeVerifyContract(pm)
 
 	return pm, nil
 }
@@ -550,22 +549,6 @@ func deriveEventSubscribers(pm *ProjectMeta) {
 	}
 }
 
-// deriveSubscribeVerifyContract appends "contract.<id>.subscribe" to
-// slice.Verify.Contract for every contractUsage with role=subscribe.
-// The result is the union of what slice.yaml already declares and the derived
-// entries — deduped, preserving first-occurrence order.
-func deriveSubscribeVerifyContract(pm *ProjectMeta) {
-	for _, sl := range pm.Slices {
-		for _, cu := range sl.ContractUsages {
-			if cu.Role != "subscribe" {
-				continue
-			}
-			entry := "contract." + cu.Contract + ".subscribe"
-			sl.Verify.Contract = dedupPreserveOrder(append(sl.Verify.Contract, entry))
-		}
-	}
-}
-
 // dedupSorted returns a new sorted slice with duplicate strings removed.
 func dedupSorted(in []string) []string {
 	if len(in) == 0 {
@@ -580,22 +563,5 @@ func dedupSorted(in []string) []string {
 		}
 	}
 	sort.Strings(out)
-	return out
-}
-
-// dedupPreserveOrder returns a new slice with duplicate strings removed,
-// keeping the first occurrence of each value.
-func dedupPreserveOrder(in []string) []string {
-	if len(in) == 0 {
-		return in
-	}
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if _, ok := seen[s]; !ok {
-			seen[s] = struct{}{}
-			out = append(out, s)
-		}
-	}
 	return out
 }
