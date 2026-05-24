@@ -35,9 +35,10 @@
 // Blind-spot inventory (per ai-robust.md §"工具选定后强制盲区自检"):
 //
 //   - ① Rogue 4th mirror (a new copy added without declaring it in
-//     sharedschema.Mirrors): covered by A1 — subsetViolations helper detects
-//     the path not in the allowed set.
+//     sharedschema.Mirrors) in a production / example tree: covered by A1 —
+//     subsetViolations helper detects the path not in the allowed set.
 //     Validated by TestSharedSchemaMirror_SubsetHelper_CatchesRogue.
+//     (A copy under a testdata/ tree is out of A1's scan scope — see Carve-out.)
 //
 //   - ② Headerless escape-hatch misused in a package other than sharedschema
 //     (a caller sets Headerless: true to bypass the header guard on an
@@ -51,13 +52,16 @@
 //
 // Carve-out:
 //
-//	tools/codegen/contractgen/testdata/synth/ contains three intentional
-//	divergent copies of error-response-v1.schema.json (one per synthetic
-//	fixture scenario). These are deliberate fixtures testing contractgen
-//	behaviour with hand-crafted schema content — they must NOT be declared
-//	as mirrors and must be excluded from the A1 reverse-enum scan.
-//	Registered here as the sole carve-out; any additional divergent copy
-//	under testdata/synth/ must be added explicitly to synthCarveOutPrefix.
+//	A1 scans with ModuleScope, which excludes every testdata/ tree (the
+//	scanner deliberately rejects ModuleScope + IncludeTestdata). Two classes of
+//	copy therefore fall outside the A1 scan by construction:
+//	  - tools/codegen/contractgen/testdata/synth/ holds intentionally divergent
+//	    (snake_case) copies of error-response-v1.schema.json used as contractgen
+//	    fixtures; they are NOT mirrors and must not appear in sharedschema.Mirrors.
+//	  - tests/contracttest/testdata/.../error-response-v1.schema.json is a
+//	    declared mirror, but it lives under testdata/; its byte-equality with the
+//	    canonical source is enforced by sharedschema.Verify (the verify gate),
+//	    not by A1.
 //
 // ref: ai-robust.md §"Funnel 双向锁评级" (Medium upstream + Medium downstream →
 // Medium composite; open gh issue for Hard-ening)
@@ -66,7 +70,6 @@ package archtest
 import (
 	"go/ast"
 	"go/types"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -79,28 +82,19 @@ import (
 // schemaFileName is the well-known filename for the shared error envelope schema.
 const schemaFileName = "error-response-v1.schema.json"
 
-// synthCarveOutPrefix is the repo-relative slash-path prefix for intentionally
-// divergent copies of schemaFileName that live inside contractgen synth fixtures.
-// These are NOT mirrors and must not appear in sharedschema.Mirrors; they are
-// excluded from the A1 reverse-enum scan.
-const synthCarveOutPrefix = "tools/codegen/contractgen/testdata/synth/"
-
-// TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1 (reverse-enum) walks the entire repo
-// and asserts every error-response-v1.schema.json is either:
+// TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1 (reverse-enum) scans the module's
+// non-testdata trees and asserts every error-response-v1.schema.json is either:
 //   - the canonical file declared in sharedschema.Mirrors' key, or
-//   - a declared mirror destination (destRoot + "/" + canonicalRel), or
-//   - under the synthCarveOutPrefix carve-out (contractgen synth fixtures).
+//   - a declared mirror destination (destRoot + "/" + canonicalRel).
 //
-// Any path outside these sets is an unauthorized copy that must either be
-// declared in sharedschema.Mirrors or deleted.
+// Any other path is an unauthorized copy that must either be declared in
+// sharedschema.Mirrors or deleted. testdata/ trees are out of scope (see the
+// package Carve-out note).
 //
-// Tool choice (ai-robust.md §载体决策原则): metadata / file scan → os.ReadDir
-// recursive walk (not Go AST, not EachContentFile whose suffix filter still
-// applies, but a direct filesystem walk is needed to visit non-Go files).
-// filepath.WalkDir is approved for non-*_test.go usages; this file IS a test
-// file so we use a hand-rolled recursive helper to avoid the
-// SCANNER-FRAMEWORK-USAGE-01 ban on filepath.WalkDir in archtest *_test.go
-// files. The recursive helper is tested independently in
+// Tool choice (ai-robust.md §载体决策原则): non-Go file scan → scanner
+// EachContentFile over a ModuleScope. SCANNER-FRAMEWORK-USAGE-01 bans raw
+// os.ReadDir / filepath.WalkDir in archtest *_test.go files. The pure subset
+// predicate is tested independently in
 // TestSharedSchemaMirror_SubsetHelper_CatchesRogue.
 func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 	t.Parallel()
@@ -118,30 +112,30 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 		}
 	}
 
-	// Walk the repo from root, excluding worktrees/ (peer worktrees are
-	// independent Git trees, not part of this module) and the synth carve-out.
-	found := findSchemaFiles(t, root)
-
-	// Convert absolute paths to module-relative slash paths for comparison.
+	// Scan the module for every error-response schema file.
+	// SCANNER-FRAMEWORK-USAGE-01: archtest *_test.go must iterate non-Go files
+	// via EachContentFile, not os.ReadDir / filepath.WalkDir.
+	//
+	// ModuleScope excludes testdata/ trees (the scanner deliberately rejects
+	// ModuleScope + IncludeTestdata). That drops BOTH the contractgen synth
+	// fixtures (tools/codegen/contractgen/testdata/synth/, intentionally
+	// snake_case-divergent) AND the declared contracttest testdata mirror — the
+	// latter is covered by sharedschema.Verify instead. A1's role is to catch a
+	// rogue *undeclared* copy in production / example trees, which is the real
+	// drift surface.
 	var foundRel []string
-	for _, abs := range found {
-		rel, err := filepath.Rel(root, abs)
-		require.NoError(t, err, "rel path from root")
-		rel = filepath.ToSlash(rel)
-		// Apply worktrees/ exclusion (belt-and-suspenders: findSchemaFiles
-		// already skips worktrees but double-check).
-		if strings.HasPrefix(rel, "worktrees/") {
-			continue
+	EachContentFile(t, ModuleScope(root), []string{".json"}, func(_ *testing.T, fc ContentContext) {
+		if filepath.Base(fc.Rel) != schemaFileName {
+			return
 		}
-		// Apply synth carve-out.
-		if strings.HasPrefix(rel, synthCarveOutPrefix) {
-			continue
+		rel := filepath.ToSlash(fc.Rel)
+		if strings.HasPrefix(rel, "worktrees/") {
+			return // peer worktrees are independent git trees (matters only when run from the main repo)
 		}
 		foundRel = append(foundRel, rel)
-	}
+	})
 
-	violations := subsetViolations(foundRel, allowed)
-	for _, v := range violations {
+	for _, v := range subsetViolations(foundRel, allowed) {
 		t.Errorf("SHARED-SCHEMA-MIRROR-FUNNEL-01 A1: unauthorized copy of %s at %q —"+
 			" either declare it in sharedschema.Mirrors or delete it", schemaFileName, v)
 	}
@@ -185,9 +179,10 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2(t *testing.T) {
 				}
 				pos := p.Fset.Position(lit.Pos())
 				ds = append(ds, Diagnostic{
-					Rel:     rel,
-					Line:    pos.Line,
-					Message: "forbidden: codegen.WriteOptions{Headerless: true} outside tools/codegen/sharedschema — Headerless is reserved for the shared-schema mirror funnel",
+					Rel:  rel,
+					Line: pos.Line,
+					Message: "forbidden: codegen.WriteOptions{Headerless: true} outside " +
+						"tools/codegen/sharedschema — Headerless is reserved for the shared-schema mirror funnel",
 				})
 			})
 		}
@@ -205,7 +200,7 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2(t *testing.T) {
 func TestSharedSchemaMirror_SubsetHelper_CatchesRogue(t *testing.T) {
 	t.Parallel()
 	allowed := map[string]bool{
-		"contracts/shared/errors/error-response-v1.schema.json":          true,
+		"contracts/shared/errors/error-response-v1.schema.json":                    true,
 		"examples/iotdevice/contracts/shared/errors/error-response-v1.schema.json": true,
 	}
 	found := []string{
@@ -257,48 +252,6 @@ func subsetViolations(found []string, allowed map[string]bool) []string {
 	return bad
 }
 
-// findSchemaFiles recursively lists all files named schemaFileName under root,
-// excluding the "worktrees" top-level directory. It avoids filepath.WalkDir
-// (banned in archtest *_test.go by SCANNER-FRAMEWORK-USAGE-01) by using
-// os.ReadDir with manual recursion.
-func findSchemaFiles(t *testing.T, root string) []string {
-	t.Helper()
-	var results []string
-	walkDirForSchema(t, root, root, &results)
-	return results
-}
-
-func walkDirForSchema(t *testing.T, root, dir string, out *[]string) {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		// Unreadable dirs (e.g. broken symlinks in node_modules) are skipped
-		// silently to avoid flaky failures on developer machines.
-		return
-	}
-	for _, e := range entries {
-		name := e.Name()
-		// Skip hidden dirs and well-known noise dirs.
-		if name == ".git" || name == "vendor" || name == "node_modules" {
-			continue
-		}
-		// Skip worktrees at the top level (peer worktrees are independent Git
-		// trees; their schemas are not part of this module).
-		absEntry := filepath.Join(dir, name)
-		if rel, relErr := filepath.Rel(root, absEntry); relErr == nil {
-			topSeg := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
-			if topSeg == "worktrees" {
-				continue
-			}
-		}
-		if e.IsDir() {
-			walkDirForSchema(t, root, absEntry, out)
-		} else if name == schemaFileName {
-			*out = append(*out, absEntry)
-		}
-	}
-}
-
 // isWriteOptionsType returns true when expr resolves to codegen.WriteOptions
 // from the given writeOptsPkgPath.
 func isWriteOptionsType(info *types.Info, expr ast.Expr, writeOptsPkgPath string) bool {
@@ -321,22 +274,19 @@ func isWriteOptionsType(info *types.Info, expr ast.Expr, writeOptsPkgPath string
 }
 
 // hasHeaderlessTrue returns true when the CompositeLit contains a key-value
-// element `Headerless: true`.
+// element `Headerless: true`. SCANNER-FRAMEWORK-USAGE-01: direct-child AST
+// iteration goes through EachInChildren, not a for-range over lit.Elts.
 func hasHeaderlessTrue(lit *ast.CompositeLit) bool {
-	for _, elt := range lit.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
+	var found bool
+	EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
 		ident, ok := kv.Key.(*ast.Ident)
 		if !ok || ident.Name != "Headerless" {
-			continue
+			return
 		}
-		// Check that the value is the boolean literal `true`.
-		ident2, ok := kv.Value.(*ast.Ident)
-		if ok && ident2.Name == "true" {
-			return true
+		// Value must be the boolean literal `true`.
+		if v, ok := kv.Value.(*ast.Ident); ok && v.Name == "true" {
+			found = true
 		}
-	}
-	return false
+	})
+	return found
 }

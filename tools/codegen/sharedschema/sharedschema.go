@@ -78,12 +78,9 @@ func Generate(root string, dryRun bool) (written []string, err error) {
 		if readErr != nil {
 			return readErr
 		}
-		// Create parent directories so codegen.Write finds a valid parent even
-		// in DryRun mode (where pathsafe.WriteFileForce is not called).
-		parentDir := filepath.Dir(destAbs)
-		if mkErr := os.MkdirAll(parentDir, dirMode); mkErr != nil {
-			return fmt.Errorf("sharedschema: mkdir %s: %w", parentDir, mkErr)
-		}
+		// codegen.Write → pathsafe.WriteFileForce creates the destination's
+		// parent directories via the platform secure-mkdir funnel; no separate
+		// os.MkdirAll here (SCAFFOLD-WRITE-FUNNEL-01 bans direct os.MkdirAll).
 		res, writeErr := codegen.Write(codegen.WriteOptions{
 			Path:       destAbs,
 			Content:    canonical,
@@ -135,11 +132,6 @@ func Verify(root string) (drifted []string, err error) {
 	sort.Strings(drifted)
 	return drifted, nil
 }
-
-// dirMode is the directory permission used by Generate when creating parent
-// directories for mirror destinations.  Matches pathsafe.defaultDirMode
-// (0o755) so generated output trees are consistent with other codegen paths.
-const dirMode = os.FileMode(0o755)
 
 // readCanonical reads the canonical schema bytes from root/canonicalRel.
 // The path is constructed from the manifest key, which is a static string

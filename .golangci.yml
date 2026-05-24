@@ -640,13 +640,6 @@ linters:
           - gocognit
           - cyclop
           - dupl
-      # stringXbytes: test assertions commonly use string(b) == string(c) for
-      # readability; the byte-equality form bytes.Equal is equivalent but
-      # test-assertion style is a readability choice, not a performance path.
-      - path: _test\.go
-        linters:
-          - gocritic
-        text: "stringXbytes"
       - path: ^testdata/
         linters:
           - gosec

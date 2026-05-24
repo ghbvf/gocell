@@ -120,4 +120,3 @@ func TestSharedErrorSchema_InvalidSamples(t *testing.T) {
 		})
 	}
 }
-

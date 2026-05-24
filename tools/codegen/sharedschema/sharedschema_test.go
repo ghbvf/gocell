@@ -1,6 +1,7 @@
 package sharedschema_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
@@ -97,8 +98,8 @@ func TestGenerate(t *testing.T) {
 				t.Errorf("dest file missing or unreadable %s: %v", p, err)
 				continue
 			}
-			if string(got) != string(canonicalContent) {
-				t.Errorf("dest %s content = %q, want %q", p, string(got), string(canonicalContent))
+			if !bytes.Equal(got, canonicalContent) {
+				t.Errorf("dest %s content = %q, want %q", p, got, canonicalContent)
 			}
 			// Verify MkdirAll worked: parent directory exists
 			if _, statErr := os.Stat(filepath.Dir(p)); statErr != nil {
