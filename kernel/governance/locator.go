@@ -37,7 +37,7 @@ func parentFieldPath(p string) string {
 
 // locator provides position-enriched ValidationResult construction. It is
 // embedded into Validator and DependencyChecker so both share a single
-// implementation of locate/newResult — one copy, not two.
+// implementation of locate/newError/newWarning/newScopedError — one copy, not two.
 //
 // The embedded form also promotes the `project` field, which is why existing
 // rule code continues to read `v.project.Cells` / `dc.project.Slices` without
@@ -55,7 +55,7 @@ type locator struct {
 // an ancestor that does exist, so callers anchor at the closest concrete
 // parent instead of (0, 0). Returns (0, 0) only when the file is unknown
 // or no part of the path resolves at all.
-// Rules should prefer newResult, which wraps this call.
+// Rules should prefer newError / newWarning / newScopedError, which wrap this call.
 func (l *locator) locate(file, field string) (line, col int) {
 	if file == "" || field == "" {
 		return 0, 0
@@ -128,6 +128,8 @@ func (l *locator) newWarning(code RuleCode, typ IssueType, file, field, msg stri
 // (positions are supplied by the caller), so the package-level emit/doc scan
 // helpers that have no locator receiver can construct error findings through
 // the same funnel instead of raw ValidationResult{} literals.
+//
+// Example: newErrorAt(codeDOCNAME01, IssueInvalid, rel, metadata.Position{}, "include", msg, fix).
 func newErrorAt(
 	code RuleCode, typ IssueType,
 	file string, pos metadata.Position, field, msg, fix string,

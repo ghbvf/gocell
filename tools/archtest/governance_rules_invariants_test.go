@@ -564,7 +564,7 @@ func testINV2ProductionSource(t *testing.T) {
 // exercise identical scan logic — fixture validates the production path.
 //
 // Two scan paths:
-//  1. CallExpr: newResult / newScopedResult / newResultAt with code arg
+//  1. CallExpr: newError / newWarning / newScopedError / newErrorAt with code arg
 //     shape != Ident or not resolving to a RuleCode const in rulecodes.go.
 //  2. CompositeLit: ValidationResult{} literal with any of:
 //     (a) positional element (non-KeyValueExpr) — every field must be named;
@@ -913,6 +913,15 @@ func astShapeName(expr ast.Expr) string {
 //   - A ValidationResult built by reflection or returned from a non-governance
 //     helper would evade isValidationResultCompositeLit (type-gated to
 //     governance.ValidationResult). No such path exists in governance.
+//   - governanceEmitterName matches emitter calls by NAME (not type-resolution)
+//     within the single-package governance scan. A same-package helper
+//     coincidentally named newError / newWarning / newScopedError / newErrorAt
+//     that is NOT the locator constructor would be a FALSE POSITIVE (over-report
+//     extra callers as needing a fix arg), not a false negative — the funnel's
+//     correctness and security are unaffected. The composite-ban (Path 2) is
+//     type-gated via isValidationResultCompositeLit and is immune to name
+//     collisions. This matches INV-2's pre-existing name-match level for
+//     governanceEmitterName.
 func TestGovernanceRuleErrorFixField(t *testing.T) {
 	t.Run("negative_fixtures_caught", testINV3NegativeFixture)
 	t.Run("production_source_all_pass", testINV3ProductionSource)
@@ -1060,7 +1069,8 @@ func scanFixFieldViolationsInFile(
 			relPath+":"+strconv.Itoa(pos.Line)+
 				": raw ValidationResult{} literal is forbidden outside locator.go — construct findings "+
 				"via newError / newWarning / newErrorAt / newScopedError so the typed Fix funnel "+
-				"cannot be bypassed (GOVERNANCE-RULE-ERROR-FIX-FIELD-01)")
+				"cannot be bypassed (GOVERNANCE-RULE-ERROR-FIX-FIELD-01); "+
+				"choose: newError(file-anchored) / newScopedError(cross-file) / newErrorAt(content-scan position)")
 	})
 
 	return violations

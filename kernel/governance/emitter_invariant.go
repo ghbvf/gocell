@@ -41,6 +41,12 @@ package governance
 // is structural in Go and cannot be selectively blocked at the method-set
 // layer. types.Identical on the named type is the correct primitive.
 //
+// Note on INV-3 (GOVERNANCE-RULE-ERROR-FIX-FIELD-01): the type-identity
+// receiver gate documented above governs INV-1 (BFS reachability). INV-3's
+// emitter identification is name-based within the package (see archtest
+// TestGovernanceRuleErrorFixField godoc); name matches there are
+// false-positive-only, not false-negative.
+//
 // AI-robust: Hard. Threat model coverage:
 //
 //  1. AI adds emitter shape on a new non-locator receiver inside the

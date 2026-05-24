@@ -10,9 +10,17 @@ package governance
 // remediation guidance (the Fix field), per GOVERNANCE-RULE-ERROR-FIX-FIELD-01.
 // The *Fix consts are deliberately argument-free (the dynamic values already
 // appear in the problem Message), so call sites pass all their Sprintf args to
-// the Message format and the *Fix const as a plain string. The lone exception
-// is advHintFMT13MissingPathParamFix, whose copy-pasteable YAML snippet embeds
-// the placeholder name.
+// the Message format and the *Fix const as a plain string.
+//
+// EXCEPTION — advHintFMT13MissingPathParamFix is the ONE *Fix const that
+// contains a %s format verb (for the placeholder name). Its caller MUST use
+// fmt.Sprintf(advHintFMT13MissingPathParamFix, paramName) rather than passing
+// the const directly; all other *Fix consts are plain strings.
+//
+// Multi-line *Fix consts (e.g. advHintFMT13MissingHTTPFix) contain a YAML
+// block with leading "\n  " indentation. When rendered after the "fix:" label
+// they appear inline; embed leading \n  indentation in the const itself if
+// alignment of the YAML block matters.
 //
 // Constant promotion criteria — promote a literal string into this file when:
 //   (a) it is referenced ≥ 3 times, OR

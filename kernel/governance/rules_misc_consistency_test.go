@@ -237,6 +237,9 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseB(t *testing.T) {
 	if got[0].Severity != SeverityError {
 		t.Errorf("case B: expected SeverityError, got %s", got[0].Severity)
 	}
+	if got[0].Fix == "" {
+		t.Errorf("case B: SeverityError findings must carry Fix guidance")
+	}
 }
 
 // TestCONTRACTCONSISTENCYEMIT01_CaseC: L2 contract + no triggers → required error.
@@ -256,6 +259,9 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseC(t *testing.T) {
 	}
 	if !strings.Contains(got[0].Message, "must declare non-empty triggers") {
 		t.Errorf("case C: expected 'must declare non-empty triggers' in message, got: %s", got[0].Message)
+	}
+	if got[0].Fix == "" {
+		t.Errorf("case C: SeverityError findings must carry Fix guidance")
 	}
 }
 

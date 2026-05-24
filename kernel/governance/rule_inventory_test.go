@@ -28,7 +28,8 @@ import (
 // Edges:
 //   - <recvName>.<methodName> selector / call → enqueue same-receiver method
 //   - freeFunc(...) call → enqueue free function (e.g. docNamingResult)
-//   - <recvName>.newResult / newScopedResult call → extract first arg as ID
+//   - .<emitter>() call resolving (via the *locator-receiver type-identity gate,
+//     or the package-level newErrorAt signature gate) → extract first arg as ID
 //   - ValidationResult{Code: ...} composite literal → extract Code value
 //
 // ID arg resolution is fail-fast: only string literals and package-level
@@ -431,8 +432,9 @@ func collectBFSRoots(funcIdx map[funcKey]*ast.FuncDecl) []funcKey {
 
 // walkRule performs the BFS step for one node. ast.Inspect walks the
 // function body, simultaneously enqueuing newly-discovered methods / free
-// functions and collecting rule IDs emitted via newResult, newScopedResult,
-// or ValidationResult composite literals.
+// functions and collecting rule IDs emitted via .<emitter>() call resolving
+// (via the *locator-receiver type-identity gate, or the package-level newErrorAt
+// signature gate), or ValidationResult composite literals.
 //
 // bfsContext bundles the immutable inputs and mutable state of one BFS
 // run so individual visit-helpers don't need to thread eight or more

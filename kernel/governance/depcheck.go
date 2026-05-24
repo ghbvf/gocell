@@ -63,8 +63,8 @@ func rawGraphToGraph(raw map[string]map[string]bool) Graph {
 }
 
 // DependencyChecker validates structural dependencies between cells. It
-// embeds locator so locate/newResult and the project field are shared with
-// Validator via a single implementation.
+// embeds locator so locate + the typed constructors and the project field are
+// shared with Validator via a single implementation.
 type DependencyChecker struct {
 	locator
 	cells     *registry.CellRegistry

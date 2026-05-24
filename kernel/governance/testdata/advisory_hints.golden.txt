@@ -3,9 +3,19 @@ advHintADV05EmptySubscribers
 event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml
 -----
 
+advHintADV05EmptySubscribersFix
+=====
+add subscribers to endpoints.subscribers or set lifecycle: deprecated
+-----
+
 advHintADV06ContractToSlice
 =====
 event contract %q lists cell %q as subscriber, but no slice in %q declares contractUsage{contract: %q, role: subscribe}; add this contractUsage to a slice in %q (e.g. cells/%s/slices/<slice>/slice.yaml) or remove %q from endpoints.subscribers
+-----
+
+advHintADV06ContractToSliceFix
+=====
+add the subscribe contractUsage to a slice or remove the cell from endpoints.subscribers
 -----
 
 advHintADV06SliceToContract
@@ -13,9 +23,49 @@ advHintADV06SliceToContract
 slice %q declares contractUsage{contract: %q, role: subscribe}, but the contract's endpoints.subscribers does not list cell %q; add %q to the contract's endpoints.subscribers or remove the subscribe contractUsage from this slice
 -----
 
+advHintADV06SliceToContractFix
+=====
+add the cell to endpoints.subscribers in the contract or remove the subscribe contractUsage
+-----
+
+advHintCCE01DynamicTopicEmit
+=====
+dynamic topic in emit not allowed; topic must be string literal or named constant at %s:%d:%d
+-----
+
+advHintCCE01DynamicTopicEmitFix
+=====
+replace the dynamic topic expression with a string literal or a package-scope string constant
+-----
+
+advHintCCE01DynamicTopicHelper
+=====
+dynamic topic in helper emit not allowed; topic argument must resolve to a string literal or named constant at %s:%d:%d
+-----
+
+advHintCCE01DynamicTopicHelperFix
+=====
+replace the dynamic topic expression with a string literal or a package-scope string constant
+-----
+
+advHintCCE01DynamicTopicReceiver
+=====
+dynamic topic in receiver emit not allowed; EventType must resolve to a string literal or named constant at %s:%d:%d
+-----
+
+advHintCCE01DynamicTopicReceiverFix
+=====
+replace the dynamic EventType expression with a string literal or a package-scope string constant
+-----
+
 advHintCCE01OwnerMismatch
 =====
 contract %q declares trigger %q but event contract owner/publisher must both be %s
+-----
+
+advHintCCE01OwnerMismatchFix
+=====
+set ownerCell and endpoints.publisher on the event contract to the trigger contract's owner cell
 -----
 
 advHintCCE01ReverseEmit
@@ -23,9 +73,19 @@ advHintCCE01ReverseEmit
 service emits topic %q in serving slice %s/%s but no HTTP contract served by that slice declares it in triggers
 -----
 
+advHintCCE01ReverseEmitFix
+=====
+add the emitted topic to the slice's HTTP contract triggers or remove the emit if it is dead code
+-----
+
 advHintCCE01SliceNotPublish
 =====
 contract %q declares trigger %q but serving slice %s/%s does not declare role: publish for that event contract
+-----
+
+advHintCCE01SliceNotPublishFix
+=====
+add contractUsages: {contract: <event id>, role: publish} to the serving slice's slice.yaml
 -----
 
 advHintCCE01TriggerNotEmitted
@@ -33,9 +93,24 @@ advHintCCE01TriggerNotEmitted
 contract %q declares trigger %q but no non-test Go file under %s emits it via outbox.Emit or *.Emitter.Emit; serving slice %s/%s must emit the trigger topic as a string literal or named constant
 -----
 
+advHintCCE01TriggerNotEmittedFix
+=====
+add an outbox.Emit (or Emitter.Emit) call publishing the trigger topic in the slice's handler
+-----
+
 advHintCCE01TriggerNotEvent
 =====
 contract %q declares trigger %q but referenced contract kind=%s; triggers must reference kind:event contracts
+-----
+
+advHintCCE01TriggerNotEventFix
+=====
+change the trigger to point at an existing kind:event contract id
+-----
+
+advHintCCE01TriggerPrefix
+=====
+contract %q declares trigger %q
 -----
 
 advHintCH04CorrelationFailed
@@ -43,9 +118,19 @@ advHintCH04CorrelationFailed
 CH-04: contract %s served by handler file %s — auth.Mount correlation failed; cannot reliably extract handler status codes. Required: handler file must register routes via `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern with a resolvable spec var or inline ContractSpec literal
 -----
 
+advHintCH04CorrelationFailedFix
+=====
+ensure routes are registered via auth.Mount with a resolvable contract spec
+-----
+
 advHintCH05CorrelationFailed
 =====
 CH-05: contract %s with `pathParams.{name}.format: uuid` — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function. Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern
+-----
+
+advHintCH05CorrelationFailedFix
+=====
+register routes via auth.Mount with a resolvable contract spec
 -----
 
 advHintCH05MissingParseCall
@@ -53,13 +138,146 @@ advHintCH05MissingParseCall
 %s: pathParam %q has format:uuid but handler does not call httputil.ParseUUIDPathParam(w, r, %q)
 -----
 
+advHintCH05MissingParseCallFix
+=====
+add httputil.ParseUUIDPathParam call in the handler
+-----
+
+advHintDOCNAME01CannotParseGuard
+=====
+cannot parse document naming guard: %v
+-----
+
+advHintDOCNAME01CannotParseGuardFix
+=====
+ensure the guard file at docs/architecture/naming-guard.yaml is valid YAML
+-----
+
+advHintDOCNAME01CannotReadDoc
+=====
+cannot read active document: %v
+-----
+
+advHintDOCNAME01CannotReadDocFix
+=====
+ensure the file exists and is readable
+-----
+
+advHintDOCNAME01CannotReadGuard
+=====
+cannot read document naming guard: %v
+-----
+
+advHintDOCNAME01CannotReadGuardFix
+=====
+ensure the guard file at docs/architecture/naming-guard.yaml is readable
+-----
+
+advHintDOCNAME01CannotScan
+=====
+cannot scan active document: %v
+-----
+
+advHintDOCNAME01CannotScanFix
+=====
+ensure the file is valid UTF-8 text
+-----
+
+advHintDOCNAME01CannotWalk
+=====
+cannot walk document naming include %q: %v
+-----
+
+advHintDOCNAME01CannotWalkFix
+=====
+ensure the include path exists and is readable
+-----
+
+advHintDOCNAME01GuardRequired
+=====
+document naming guard is required for strict validation
+-----
+
+advHintDOCNAME01GuardRequiredFix
+=====
+create the guard file at docs/architecture/naming-guard.yaml with include, exclude, and replacements fields
+-----
+
+advHintDOCNAME01InvalidPattern
+=====
+invalid document naming include pattern %q: %v
+-----
+
+advHintDOCNAME01InvalidPatternFix
+=====
+correct the glob pattern in the include list
+-----
+
+advHintDOCNAME01InvalidReplacement
+=====
+document naming guard replacement requires literal and replacement
+-----
+
+advHintDOCNAME01InvalidReplacementFix
+=====
+ensure every replacements entry has both literal and replacement fields
+-----
+
+advHintDOCNAME01LegacyLiteral
+=====
+active document contains legacy literal %q; use %q
+-----
+
+advHintDOCNAME01LegacyLiteralFix
+=====
+replace the legacy literal with the approved replacement
+-----
+
+advHintDOCNAME01MissingInclude
+=====
+document naming guard must declare at least one include pattern
+-----
+
+advHintDOCNAME01MissingIncludeFix
+=====
+add an include list to docs/architecture/naming-guard.yaml
+-----
+
+advHintDOCNAME01MissingReplacements
+=====
+document naming guard must declare at least one replacement
+-----
+
+advHintDOCNAME01MissingReplacementsFix
+=====
+add a replacements list to docs/architecture/naming-guard.yaml
+-----
+
 advHintFMT13MissingHTTP
 =====
 HTTP contract %q must declare endpoints.http
 -----
 
+advHintFMT13MissingHTTPFix
+=====
+add endpoints.http to contract.yaml:
+  http:
+    method: GET                # GET|POST|PUT|PATCH|DELETE
+    path: /api/v1/...
+    successStatus: 200
+    noContent: false
+-----
+
 advHintFMT13MissingPathParam
 =====
 http contract %q path placeholder %q has no pathParams declaration
+-----
+
+advHintFMT13MissingPathParamFix
+=====
+add to contract.yaml:
+  pathParams:
+    %s:
+      type: string
 -----
 

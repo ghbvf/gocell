@@ -21,8 +21,16 @@ v.newError(
 v.newWarning(codeADV01, IssueRefNotFound, journeyFile(j), "id",
     fmt.Sprintf("journey %q has no entry in status-board.yaml", j.ID))
 
-// scope（跨文件，无单一位置）：newScopedError(code, typ, scope, field, msg, fix)
-// content-scan 位置（调用方提供 Line/Column）：newErrorAt(code, typ, file, pos, field, msg, fix)
+// scope（跨文件，无单一位置；Line/Column 恒为 0）
+dc.newScopedError(codeDEP02, IssueForbidden, "project", "cells",
+    fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
+    "remove the dependency cycle by restructuring cell contracts")
+
+// content-scan 位置（调用方提供 Line/Column；包级函数，无 receiver）
+newErrorAt(codeDOCNAME01, IssueForbidden,
+    file, metadata.Position{Line: lineNo, Column: col + 1}, "content",
+    fmt.Sprintf(advHintDOCNAME01LegacyLiteral, repl.Literal, repl.Replacement),
+    advHintDOCNAME01LegacyLiteralFix)
 ```
 
 > `msg` 是问题陈述，`fix` 是「怎么改」。两者都可用 `fmt.Sprintf`（插值参数各自分配）。CLI 输出把 `fix` 渲染成独立的 `fix:` 行 / JSON `"fix"` 字段，不再拼进 message。详见 ADR `docs/architecture/202605241730-adr-governance-error-fix-field-funnel.md`。

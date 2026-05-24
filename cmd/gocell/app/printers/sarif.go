@@ -231,10 +231,10 @@ func toSARIFResult(r governance.ValidationResult) sarifResult {
 // findings prefix the scope name (e.g. "[scope: project] circular ...") so
 // the context isn't lost when locations[] is omitted; field is appended
 // inside parens so it tracks alongside the message for both file and
-// scope-anchored results. SARIF has no dedicated remediation slot, so the
-// typed Fix guidance (error findings only) is appended with a "; fix: "
-// separator to keep it visible in viewers — equivalent to where it lived
-// before Fix was split out of Message.
+// scope-anchored results. SARIF 2.1.0 has a structured fixes[] slot for
+// automated FILE edits, not advisory text, so the typed Fix guidance is
+// appended to message.text as a "; fix: " suffix for viewer visibility —
+// sourced from the typed Fix field, joined here at the printer layer.
 func composeSARIFMessage(r governance.ValidationResult) string {
 	msg := r.Message
 	if r.File == "" && r.Scope != "" {

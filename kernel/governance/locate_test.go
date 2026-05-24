@@ -10,6 +10,81 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+// TestValidator_NewWarning: newWarning sets SeverityWarning and leaves Fix empty.
+func TestValidator_NewWarning(t *testing.T) {
+	src := "id: accesscore\n" + // line 1
+		"type: core\n" // line 2
+
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{},
+	}
+	prepareNode(t, pm, "cells/accesscore/cell.yaml", src)
+	v := NewValidator(pm, "", clock.Real())
+
+	r := v.newWarning(codeREF01, IssueRefNotFound,
+		"cells/accesscore/cell.yaml", "id",
+		"advisory: cell id unreferenced by any journey")
+
+	assert.Equal(t, codeREF01, r.Code)
+	assert.Equal(t, SeverityWarning, r.Severity)
+	assert.Equal(t, IssueRefNotFound, r.IssueType)
+	assert.Equal(t, "cells/accesscore/cell.yaml", r.File)
+	assert.Equal(t, "id", r.Field)
+	assert.Equal(t, "advisory: cell id unreferenced by any journey", r.Message)
+	assert.Empty(t, r.Fix, "warnings must carry no fix guidance")
+	assert.Equal(t, 1, r.Line)
+	assert.Positive(t, r.Column)
+}
+
+// TestValidator_NewScopedError: newScopedError sets SeverityError, non-empty Scope,
+// non-empty Fix, and zero Line/Column (scoped = no single file position).
+func TestValidator_NewScopedError(t *testing.T) {
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{},
+	}
+	v := NewValidator(pm, "", clock.Real())
+
+	r := v.newScopedError(codeDEP01, IssueMismatch,
+		"project", "cells",
+		"circular dependency detected: a -> b -> a",
+		"remove the dependency cycle by restructuring cell contracts")
+
+	assert.Equal(t, codeDEP01, r.Code)
+	assert.Equal(t, SeverityError, r.Severity)
+	assert.Equal(t, IssueMismatch, r.IssueType)
+	assert.NotEmpty(t, r.Scope, "scoped error must have a non-empty Scope")
+	assert.Equal(t, "project", r.Scope)
+	assert.Equal(t, "cells", r.Field)
+	assert.Equal(t, "circular dependency detected: a -> b -> a", r.Message)
+	assert.NotEmpty(t, r.Fix, "SeverityError findings must carry Fix guidance")
+	assert.Equal(t, "remove the dependency cycle by restructuring cell contracts", r.Fix)
+	assert.Zero(t, r.Line, "scoped error has no single file position")
+	assert.Zero(t, r.Column, "scoped error has no single file position")
+}
+
+// TestNewErrorAt: newErrorAt (package-level func, no receiver) sets SeverityError
+// and propagates Line/Column from the supplied metadata.Position.
+func TestNewErrorAt(t *testing.T) {
+	pos := metadata.Position{Line: 42, Column: 7}
+
+	r := newErrorAt(codeREF01, IssueForbidden,
+		"contracts/http/foo/v1/contract.yaml", pos,
+		"content",
+		"active document contains legacy literal",
+		"replace the legacy literal with the approved replacement")
+
+	assert.Equal(t, codeREF01, r.Code)
+	assert.Equal(t, SeverityError, r.Severity)
+	assert.Equal(t, IssueForbidden, r.IssueType)
+	assert.Equal(t, "contracts/http/foo/v1/contract.yaml", r.File)
+	assert.Equal(t, "content", r.Field)
+	assert.Equal(t, "active document contains legacy literal", r.Message)
+	assert.NotEmpty(t, r.Fix, "SeverityError findings must carry Fix guidance")
+	assert.Equal(t, "replace the legacy literal with the approved replacement", r.Fix)
+	assert.Equal(t, 42, r.Line, "Line must come from supplied Position")
+	assert.Equal(t, 7, r.Column, "Column must come from supplied Position")
+}
+
 // prepareNode is a test helper that stores a YAML source as a file node
 // on the ProjectMeta via the public PrepareFileNode method.
 func prepareNode(t *testing.T, pm *metadata.ProjectMeta, file, src string) {

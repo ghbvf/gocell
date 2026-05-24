@@ -300,6 +300,24 @@ var goldenCases = []struct {
 			},
 		},
 	},
+	{
+		// Exercises the non-empty Fix rendering path: text writes a
+		// "fix: <guidance>" line; JSON emits a non-empty "fix" field;
+		// SARIF appends "; fix: <guidance>" to message.text.
+		name: "single_error_with_fix",
+		results: []governance.ValidationResult{
+			{
+				Code:     "FMT-13",
+				Severity: governance.SeverityError,
+				File:     "contracts/http/x/v1/contract.yaml",
+				Line:     3,
+				Column:   5,
+				Field:    "endpoints.http",
+				Message:  "HTTP contract \"x\" must declare endpoints.http",
+				Fix:      "add endpoints.http to contract.yaml with method/path/successStatus",
+			},
+		},
+	},
 }
 
 // TestGolden_Text fans the golden corpus through TextPrinter and compares to
@@ -530,7 +548,9 @@ func TestText_PreservesInputOrderWithinSeverity(t *testing.T) {
 // when a message contains \n (e.g. FMT-13's copy-pasteable YAML hint),
 // the (field: ...) suffix lands on the first line only. Subsequent
 // lines render verbatim so the embedded snippet stays copy-pasteable
-// without trailing field info corrupting it.
+// without trailing field info corrupting it. A non-empty Fix is included
+// to verify that the "fix:" line appears AFTER all message lines and
+// BEFORE the "at" anchor line.
 func TestText_MultilineMessage_FieldOnFirstLineOnly(t *testing.T) {
 	results := []governance.ValidationResult{
 		{
@@ -539,6 +559,7 @@ func TestText_MultilineMessage_FieldOnFirstLineOnly(t *testing.T) {
 			File:     "contracts/x/contract.yaml",
 			Field:    "endpoints.http.pathParams",
 			Message:  "placeholder \"id\" has no pathParams declaration; add to contract.yaml:\n  pathParams:\n    id:\n      type: string",
+			Fix:      "declare pathParams.id with type: string",
 		},
 	}
 	var buf bytes.Buffer
@@ -552,6 +573,15 @@ func TestText_MultilineMessage_FieldOnFirstLineOnly(t *testing.T) {
 		"YAML hint lines must render verbatim, no (field: ...) appended after them")
 	assert.NotContains(t, out, "type: string (field:",
 		"field suffix must NOT trail the multi-line YAML hint")
+
+	// Fix line ordering: must appear after all message lines and before the "at" anchor.
+	fixIdx := strings.Index(out, "fix: declare pathParams.id")
+	atIdx := strings.Index(out, "at contracts/x/contract.yaml")
+	typeIdx := strings.Index(out, "type: string")
+	require.NotEqual(t, -1, fixIdx, "fix: line must be present in output")
+	require.NotEqual(t, -1, atIdx, "at anchor line must be present")
+	assert.Greater(t, fixIdx, typeIdx, "fix: line must appear AFTER the last message line")
+	assert.Less(t, fixIdx, atIdx, "fix: line must appear BEFORE the at anchor")
 }
 
 // TestJSON_DoesNotEscapeHTMLChars locks SetEscapeHTML(false): messages with

@@ -1,0 +1,20 @@
+{
+  "issues": [
+    {
+      "code": "FMT-13",
+      "severity": "error",
+      "issueType": "",
+      "file": "contracts/http/x/v1/contract.yaml",
+      "scope": "",
+      "field": "endpoints.http",
+      "message": "HTTP contract \"x\" must declare endpoints.http",
+      "fix": "add endpoints.http to contract.yaml with method/path/successStatus",
+      "line": 3,
+      "column": 5
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}

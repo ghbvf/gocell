@@ -74,8 +74,9 @@ type ValidationResult struct {
 }
 
 // Validator runs all validation rules against a parsed project. It embeds
-// locator to share locate/newResult with DependencyChecker and to promote
-// the project field so existing rule code keeps using v.project.* directly.
+// locator to share locate + the typed constructors (newError/newWarning/newScopedError)
+// with DependencyChecker and to promote the project field so existing rule code
+// keeps using v.project.* directly.
 type Validator struct {
 	locator
 	root             string                            // project root for file existence checks

@@ -649,8 +649,9 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 //   - Min > Max relation fault: `relMin` and `relMax` carry the facet
 //     names (e.g. minLength / maxLength); `missing` is empty. The
 //     producer (appendSchemaBoundRelationViolation) sets issueType to
-//     IssueInvalid; the FMT-25 emission site builds the full message
-//     inline (necessary for archtest INV-3 to resolve `; fix:`).
+//     IssueInvalid; the FMT-25 emission site calls newError with an explicit
+//     fix argument (INV-3 GOVERNANCE-RULE-ERROR-FIX-FIELD-01 checks the fix
+//     arg, not a Message substring).
 type inputConstraintViolation struct {
 	location  string // JSON pointer or full metadata field path.
 	missing   string // "minLength" | "maxLength" | "minimum" | "maximum" — empty for relation faults.
