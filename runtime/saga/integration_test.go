@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // File-local duration consts for values not present in testtime.
@@ -122,13 +123,7 @@ const testPollInterval = 10 * time.Millisecond
 func tickOnceAndWait(t *testing.T, clk *clockmock.FakeClock, cond func() bool) {
 	t.Helper()
 	clk.Advance(testPollInterval)
-	deadline := time.Now().Add(testtime.D2s)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatal("tickOnceAndWait: condition not met within 2s")
-		}
-		time.Sleep(testtime.D2ms)
-	}
+	testwait.External(t, "tick-effect-observed", cond, testtime.D2s, testtime.D2ms)
 }
 
 // startCoord starts the coordinator in a background goroutine and registers
@@ -155,13 +150,9 @@ func startCoord(t *testing.T, c *Coordinator) context.CancelFunc {
 	// there is a brief window where no tickers are registered yet. Without
 	// this wait, a subsequent clk.Advance would not fire any ticker.
 	clk := c.clock.(*clockmock.FakeClock)
-	deadline := time.Now().Add(testtime.D2s)
-	for clk.PendingTickers() < 2 {
-		if time.Now().After(deadline) {
-			t.Fatal("coordinator tickers did not register within 2s")
-		}
-		time.Sleep(testtime.D1ms)
-	}
+	testwait.External(t, "coordinator-tickers-registered",
+		func() bool { return clk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
 
 	t.Cleanup(func() {
 		cancel()
@@ -452,21 +443,15 @@ func TestIntegration_TotalSagaTimeout(t *testing.T) {
 	h.clk.Advance(testtime.D1h)
 
 	// Poll for the Expired terminal event (real-time loop; goroutine needs CPU).
-	expiredDeadline := time.Now().Add(testtime.D2s)
 	var evs []journal.Event
-	var evErr error
-	for {
-		evs, evErr = h.j.Load(context.Background(), inst.ID)
-		if evErr == nil && len(evs) > 0 && evs[len(evs)-1].Kind == journal.KindSagaExpired {
-			break
-		}
-		if time.Now().After(expiredDeadline) {
-			t.Fatal("instance was not marked Expired within 2s after 1h clock advance")
-		}
-		time.Sleep(testtime.D2ms)
-	}
+	testwait.External(t, "saga-expired-event-written",
+		func() bool {
+			var err error
+			evs, err = h.j.Load(context.Background(), inst.ID)
+			return err == nil && len(evs) > 0 && evs[len(evs)-1].Kind == journal.KindSagaExpired
+		},
+		testtime.D2s, testtime.D2ms)
 
-	_ = evErr // checked in loop above
 	last := evs[len(evs)-1]
 	if last.Kind != journal.KindSagaExpired {
 		t.Errorf("last event = %s, want saga_expired", last.Kind)
@@ -554,13 +539,9 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 	}
 
 	// Wait for tickLoop + heartbeatLoop to register their tickers.
-	tickerDeadline := time.Now().Add(testtime.D2s)
-	for clk.PendingTickers() < 2 {
-		if time.Now().After(tickerDeadline) {
-			t.Fatal("coordinator tickers did not register within 2s")
-		}
-		time.Sleep(testtime.D1ms)
-	}
+	testwait.External(t, "coordinator-tickers-registered",
+		func() bool { return clk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
 
 	// Wait for the instance to be claimed (tickLoop fires).
 	tickOnceAndWait(t, clk, func() bool {
@@ -579,7 +560,7 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		clk.Advance(testtime.D150ms)
 		// Let heartbeatLoop tick.
-		time.Sleep(testtime.D20ms)
+		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep negative-test: heartbeat fired; no observable event, absence verified next
 
 		// Verify instance is still NOT re-claimable (lease is held and active).
 		claimed, _, err := j.ClaimPending(context.Background(), 16, leaseDuration)
@@ -694,15 +675,9 @@ func TestIntegration_ClaimContention(t *testing.T) {
 	}
 
 	// Wait for both coordinators' tickers to register (4 tickers: 2 per coordinator).
-	{
-		dl := time.Now().Add(testtime.D2s)
-		for clk.PendingTickers() < 4 {
-			if time.Now().After(dl) {
-				t.Fatal("coordinators' tickers did not register within 2s")
-			}
-			time.Sleep(testtime.D1ms)
-		}
-	}
+	testwait.External(t, "both-coordinator-tickers-registered",
+		func() bool { return clk.PendingTickers() >= 4 },
+		testtime.D2s, testtime.D1ms)
 
 	// Advance clock to trigger one tick; wait for instance to become terminal.
 	tickOnceAndWait(t, clk, func() bool {
@@ -816,15 +791,9 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	}
 
 	// Wait for c1's tickers to register before advancing the clock.
-	{
-		dl := time.Now().Add(testtime.D2s)
-		for clk.PendingTickers() < 2 {
-			if time.Now().After(dl) {
-				t.Fatal("c1 tickers did not register within 2s")
-			}
-			time.Sleep(testtime.D1ms)
-		}
-	}
+	testwait.External(t, "c1-tickers-registered",
+		func() bool { return clk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
 
 	// Advance clock to trigger a tick; wait for step 1 to be committed
 	// (journal has StepCompleted v1 but NOT SagaSucceeded yet — it's a 2-step saga).
@@ -878,15 +847,9 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	}()
 
 	// Wait for c2's tickers to register before advancing the clock.
-	{
-		dl := time.Now().Add(testtime.D2s)
-		for clk.PendingTickers() < 2 {
-			if time.Now().After(dl) {
-				t.Fatal("c2 tickers did not register within 2s")
-			}
-			time.Sleep(testtime.D1ms)
-		}
-	}
+	testwait.External(t, "c2-tickers-registered",
+		func() bool { return clk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
 
 	// Advance clock to let coordinator 2 claim and drive step 2; wait for terminal.
 	// The lease from c1 has expired (c1 stopped, clock not advanced much yet), so
@@ -987,13 +950,9 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	}
 
 	// Wait for tickers to be registered with the FakeClock.
-	deadline := time.Now().Add(testtime.D2s)
-	for clk.PendingTickers() < 2 {
-		if time.Now().After(deadline) {
-			t.Fatal("coordinator tickers did not register within 2s")
-		}
-		time.Sleep(testtime.D1ms)
-	}
+	testwait.External(t, "coordinator-tickers-registered",
+		func() bool { return clk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
 
 	// Advance clock to trigger the tick. safeRun recovers the panic, returns
 	// (nil, err). driveOne opens the tx via RunInTx → commitStepFailed →
