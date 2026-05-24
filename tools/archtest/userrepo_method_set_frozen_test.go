@@ -34,6 +34,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -97,7 +98,7 @@ func TestUserRepoMethodSetFrozen(t *testing.T) {
 	}
 	sort.Strings(wantNames)
 
-	if !equalStringSlices(gotNames, wantNames) {
+	if !slices.Equal(gotNames, wantNames) {
 		t.Errorf("USERREPO-METHOD-SET-FROZEN-01: method names = %v, want exactly %v",
 			gotNames, wantNames)
 		return
@@ -137,7 +138,7 @@ func TestUserRepoMethodSetFrozen_BlindSpotReverseSelfTest(t *testing.T) {
 	}
 	sort.Strings(want)
 
-	if equalStringSlices(siblingMethods, want) {
+	if slices.Equal(siblingMethods, want) {
 		t.Errorf("USERREPO-METHOD-SET-FROZEN-01 blind-spot reverse self-test: "+
 			"RoleRepository has the same method set as expectedUserRepoMethodSignatures (%v); "+
 			"loadInterfaceType cannot distinguish UserRepository from RoleRepository — "+

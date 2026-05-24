@@ -59,6 +59,7 @@ import (
 	"go/token"
 	"go/types"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -271,7 +272,7 @@ func TestCodegenBuildHTTPEndpointSpecSoleCaller_A2_HandlerEmitTemplateUniqueness
 	sort.Strings(emitFiles)
 
 	want := []string{codegenHandlerTmplRel}
-	if !equalStringSlices(emitFiles, want) {
+	if !slices.Equal(emitFiles, want) {
 		t.Errorf("CODEGEN-BUILDHTTPENDPOINTSPEC-SOLE-CALLER-01 (A2): files emitting an http.Handler "+
 			"(ServeHTTP method) under tools/codegen/** = %v; want exactly %v. A new HTTP-handler-emitting "+
 			"generator path must route through buildHTTPEndpointSpec (contractgen handler.tmpl), not a "+
