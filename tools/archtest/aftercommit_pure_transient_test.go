@@ -138,12 +138,11 @@ func bannedReceiverLabel(info *types.Info, sel *ast.SelectorExpr) (string, bool)
 func packageFuncDecls(p *Pass) map[string]*ast.FuncDecl {
 	decls := map[string]*ast.FuncDecl{}
 	for _, f := range p.Files {
-		for _, d := range f.Decls {
-			fd, ok := d.(*ast.FuncDecl)
-			if ok && fd.Recv == nil && fd.Body != nil {
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if fd.Recv == nil && fd.Body != nil {
 				decls[fd.Name.Name] = fd
 			}
-		}
+		})
 	}
 	return decls
 }
