@@ -51,7 +51,7 @@ func TestBuildCellSpec_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 		},
 	}
 
-	spec, err := BuildCellSpec(p, "demo", bundle)
+	spec, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBuildCellSpec_GroupsTwoSlicesUnderSameSubPath(t *testing.T) {
 		},
 	}
 
-	spec, err := BuildCellSpec(p, "demo", bundle)
+	spec, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestBuildCellSpec_TwoListenersDeterministicOrder(t *testing.T) {
 		},
 	}
 
-	spec, err := BuildCellSpec(p, "demo", bundle)
+	spec, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestBuildCellSpec_EmptySubPathMountsDirectlyOnPrefix(t *testing.T) {
 		Routes:    []markergen.RouteSpec{{Slice: "alpha", Listener: "cell.InternalListener", SubPath: "", HandlerField: "adminH"}},
 	}
 
-	spec, err := BuildCellSpec(p, "demo", bundle)
+	spec, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
@@ -154,57 +154,9 @@ func TestBuildCellSpec_EmptySubPathMountsDirectlyOnPrefix(t *testing.T) {
 	}
 }
 
-func TestBuildCellSpec_SubscribesProduceSpecVarsAndExpr(t *testing.T) {
-	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-	contract := &metadata.ContractMeta{ID: "event.foo.bar.v1", Kind: "event"}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
-	bundle := markergen.WireBundle{
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: "barSvc", Handler: "HandleBar", Group: "demo"},
-		},
-	}
-
-	spec, err := BuildCellSpec(p, "demo", bundle)
-	if err != nil {
-		t.Fatalf("BuildCellSpec: %v", err)
-	}
-	if len(spec.Subscriptions) != 1 {
-		t.Fatalf("Subscriptions len = %d", len(spec.Subscriptions))
-	}
-	sub := spec.Subscriptions[0]
-	if sub.HandlerExpr != "c.barSvc.HandleBar" {
-		t.Errorf("HandlerExpr = %q", sub.HandlerExpr)
-	}
-	if sub.SliceID != "subs" {
-		t.Errorf("SliceID = %q", sub.SliceID)
-	}
-}
-
-func TestBuildCellSpec_ConsumerGroupOverride(t *testing.T) {
-	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
-	bundle := markergen.WireBundle{
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: "barSvc", Handler: "HandleBar", Group: "demo-fanout"},
-		},
-	}
-
-	spec, err := BuildCellSpec(p, "demo", bundle)
-	if err != nil {
-		t.Fatalf("BuildCellSpec: %v", err)
-	}
-	if spec.Subscriptions[0].ConsumerGroup != "demo-fanout" {
-		t.Errorf("ConsumerGroup override lost: got %q", spec.Subscriptions[0].ConsumerGroup)
-	}
-}
-
 func TestBuildCellSpec_NilProjectFails(t *testing.T) {
 	t.Parallel()
-	if _, err := BuildCellSpec(nil, "x", markergen.WireBundle{}); err == nil {
+	if _, err := BuildCellSpec(nil, "x", markergen.WireBundle{}, nil); err == nil {
 		t.Fatal("expected error for nil project")
 	}
 }
@@ -212,7 +164,7 @@ func TestBuildCellSpec_NilProjectFails(t *testing.T) {
 func TestBuildCellSpec_UnknownCellFails(t *testing.T) {
 	t.Parallel()
 	p := fixtureProject(nil, nil, nil)
-	_, err := BuildCellSpec(p, "ghost", markergen.WireBundle{})
+	_, err := BuildCellSpec(p, "ghost", markergen.WireBundle{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not-found error, got %v", err)
 	}
@@ -222,7 +174,7 @@ func TestBuildCellSpec_MissingGoStructNameFails(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml"}
 	p := fixtureProject(cell, nil, nil)
-	_, err := BuildCellSpec(p, "demo", markergen.WireBundle{})
+	_, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "goStructName") {
 		t.Fatalf("expected goStructName error, got %v", err)
 	}
@@ -238,7 +190,7 @@ func TestBuildCellSpec_DuplicateListenerFails(t *testing.T) {
 			{Ref: "cell.PrimaryListener", Prefix: "/api/v2"},
 		},
 	}
-	_, err := BuildCellSpec(p, "demo", bundle)
+	_, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err == nil || !strings.Contains(err.Error(), "twice") {
 		t.Fatalf("expected duplicate-listener error, got %v", err)
 	}
@@ -255,39 +207,45 @@ func TestBuildCellSpec_RouteMountUndeclaredListenerFails(t *testing.T) {
 			{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/", HandlerField: "h"},
 		},
 	}
-	_, err := BuildCellSpec(p, "demo", bundle)
+	_, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err == nil || !strings.Contains(err.Error(), "undeclared listener") {
 		t.Fatalf("expected undeclared-listener error, got %v", err)
 	}
 }
 
+// TestBuildCellSpec_UnknownContractFails verifies that a subscribe CU
+// referencing an unknown contract is rejected.
 func TestBuildCellSpec_UnknownContractFails(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
-	bundle := markergen.WireBundle{
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "subs", Topic: "ghost.event.v1", SliceField: "x", Handler: "Y", Group: "demo"},
+	slc := &metadata.SliceMeta{
+		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "ghost.event.v1", Role: "subscribe", Handler: "HandleGhost"},
 		},
 	}
-	_, err := BuildCellSpec(p, "demo", bundle)
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil) // no contracts declared
+	fieldIndex := map[string]string{"subs": "subsSvc"}
+	_, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, fieldIndex)
 	if err == nil || !strings.Contains(err.Error(), "unknown contract") {
 		t.Fatalf("expected unknown-contract error, got %v", err)
 	}
 }
 
+// TestBuildCellSpec_NonEventContractRejected verifies that a subscribe CU
+// targeting a non-event contract kind is rejected.
 func TestBuildCellSpec_NonEventContractRejected(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "http.users.v1", Kind: "http"}})
-	bundle := markergen.WireBundle{
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "subs", Topic: "http.users.v1", SliceField: "x", Handler: "Y", Group: "demo"},
+	slc := &metadata.SliceMeta{
+		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "http.users.v1", Role: "subscribe", Handler: "HandleHTTP"},
 		},
 	}
-	_, err := BuildCellSpec(p, "demo", bundle)
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "http.users.v1", Kind: "http"}})
+	fieldIndex := map[string]string{"subs": "subsSvc"}
+	_, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, fieldIndex)
 	if err == nil || !strings.Contains(err.Error(), "non-event") {
 		t.Fatalf("expected non-event-contract error, got %v", err)
 	}
@@ -304,7 +262,7 @@ func TestBuildCellSpec_NoListenersWithRouteMountFails(t *testing.T) {
 			{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/x", HandlerField: "h"},
 		},
 	}
-	_, err := BuildCellSpec(p, "demo", bundle)
+	_, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err == nil || !strings.Contains(err.Error(), "undeclared listener") {
 		t.Fatalf("expected undeclared-listener error, got %v", err)
 	}
@@ -327,7 +285,7 @@ func TestBuildSliceSpec_NoSubscribesStillEmitsMeta(t *testing.T) {
 	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 
-	spec, err := BuildSliceSpec(p, "demo", "alpha", markergen.WireBundle{})
+	spec, err := BuildSliceSpec(p, "demo", "alpha")
 	if err != nil {
 		t.Fatalf("BuildSliceSpec: %v", err)
 	}
@@ -354,19 +312,22 @@ func TestBuildSliceSpec_NoSubscribesStillEmitsMeta(t *testing.T) {
 	// is absent — that is the correct, compact representation.
 }
 
+// TestBuildSliceSpec_SubscribesProduceHandlerInterface verifies that a slice
+// with subscribe CUs produces a SliceGenSpec with handlers derived from
+// ContractUsages[role=subscribe].Handler entries.
 func TestBuildSliceSpec_SubscribesProduceHandlerInterface(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
-	bundle := markergen.WireBundle{
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "subs", Topic: "event.b.v1", SliceField: "svc", Handler: "HandleB", Group: "demo"},
-			{Slice: "subs", Topic: "event.a.v1", SliceField: "svc", Handler: "HandleA", Group: "demo"},
+	slc := &metadata.SliceMeta{
+		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "event.b.v1", Role: "subscribe", Handler: "HandleB"},
+			{Contract: "event.a.v1", Role: "subscribe", Handler: "HandleA"},
 		},
 	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 
-	spec, err := BuildSliceSpec(p, "demo", "subs", bundle)
+	spec, err := BuildSliceSpec(p, "demo", "subs")
 	if err != nil {
 		t.Fatalf("BuildSliceSpec: %v", err)
 	}
@@ -384,37 +345,9 @@ func TestBuildSliceSpec_SubscribesProduceHandlerInterface(t *testing.T) {
 func TestBuildSliceSpec_SliceNotFoundFails(t *testing.T) {
 	t.Parallel()
 	p := fixtureProject(nil, nil, nil)
-	_, err := BuildSliceSpec(p, "x", "y", markergen.WireBundle{})
+	_, err := BuildSliceSpec(p, "x", "y")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not-found error, got %v", err)
-	}
-}
-
-// TestBuildCellSpec_ConsumerGroupEmptyFallsBackToCellID verifies IMP-3:
-// when the subscribe marker omits group, BuildCellSpec leaves the
-// SubscriptionGenSpec.ConsumerGroup empty and the template uses
-// CellGenSpec.ConsumerGroupDefault (which is the cell ID). The empty-value
-// path is the common case and must remain explicitly tested.
-func TestBuildCellSpec_ConsumerGroupEmptyFallsBackToCellID(t *testing.T) {
-	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
-	bundle := markergen.WireBundle{
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: "barSvc", Handler: "HandleBar", Group: ""},
-		},
-	}
-
-	spec, err := BuildCellSpec(p, "demo", bundle)
-	if err != nil {
-		t.Fatalf("BuildCellSpec: %v", err)
-	}
-	if spec.ConsumerGroupDefault != "demo" {
-		t.Errorf("ConsumerGroupDefault = %q, want %q (cell ID)", spec.ConsumerGroupDefault, "demo")
-	}
-	if len(spec.Subscriptions) != 1 || spec.Subscriptions[0].ConsumerGroup != "" {
-		t.Errorf("expected SubscriptionGenSpec.ConsumerGroup to remain empty (template falls back); got %+v", spec.Subscriptions)
 	}
 }
 
@@ -435,7 +368,7 @@ func TestBuildCellSpec_ListenerRefRejectsTypo(t *testing.T) {
 		bundle := markergen.WireBundle{
 			Listeners: []markergen.ListenerSpec{{Ref: ref, Prefix: "/api/v1"}},
 		}
-		_, err := BuildCellSpec(p, "demo", bundle)
+		_, err := BuildCellSpec(p, "demo", bundle, nil)
 		if err == nil || !strings.Contains(err.Error(), "must match") {
 			t.Errorf("BuildCellSpec with listener ref %q should error; got %v", ref, err)
 		}
@@ -443,25 +376,26 @@ func TestBuildCellSpec_ListenerRefRejectsTypo(t *testing.T) {
 }
 
 // TestBuildCellSpec_TransportAlwaysAMQP verifies that the transport field in
-// SubscriptionGenSpec is always "amqp" (bundle-derived subscribes do not carry
+// SubscriptionGenSpec is always "amqp" (slice CU-derived subscribes do not carry
 // a transport field; AMQP is the only supported transport in GoCell for now).
 func TestBuildCellSpec_TransportAlwaysAMQP(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
+	slc := &metadata.SliceMeta{
+		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "event.foo.created.v1", Role: "subscribe", Handler: "HandleFooCreated"},
+			{Contract: "event.bar.updated.v1", Role: "subscribe", Handler: "HandleBarUpdated"},
+		},
+	}
 	contracts := []*metadata.ContractMeta{
 		{ID: "event.foo.created.v1", Kind: "event"},
 		{ID: "event.bar.updated.v1", Kind: "event"},
 	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, contracts)
-	bundle := markergen.WireBundle{
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "subs", Topic: "event.foo.created.v1", SliceField: "fooSvc", Handler: "HandleFooCreated", Group: "demo"},
-			{Slice: "subs", Topic: "event.bar.updated.v1", SliceField: "barSvc", Handler: "HandleBarUpdated", Group: "demo"},
-		},
-	}
+	fieldIndex := map[string]string{"subs": "subsSvc"}
 
-	spec, err := BuildCellSpec(p, "demo", bundle)
+	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, fieldIndex)
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
@@ -497,7 +431,7 @@ func TestBuildCellSpec_RouteMethodInvalidIdentRejected(t *testing.T) {
 				{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/x", HandlerField: "alphaH", Method: method},
 			},
 		}
-		_, err := BuildCellSpec(p, "demo", bundle)
+		_, err := BuildCellSpec(p, "demo", bundle, nil)
 		if err == nil || !strings.Contains(err.Error(), "Method") {
 			t.Errorf("BuildCellSpec with Method=%q should error with 'Method'; got %v", method, err)
 		}
@@ -518,7 +452,7 @@ func TestBuildCellSpec_RouteMethodEmptyAccepted(t *testing.T) {
 			{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/x", HandlerField: "alphaH", Method: ""},
 		},
 	}
-	_, err := BuildCellSpec(p, "demo", bundle)
+	_, err := BuildCellSpec(p, "demo", bundle, nil)
 	if err != nil {
 		t.Fatalf("empty Method should be accepted; BuildCellSpec: %v", err)
 	}
@@ -543,90 +477,9 @@ func TestBuildCellSpec_RouteHandlerFieldInvalidRejected(t *testing.T) {
 				{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/x", HandlerField: field},
 			},
 		}
-		_, err := BuildCellSpec(p, "demo", bundle)
+		_, err := BuildCellSpec(p, "demo", bundle, nil)
 		if err == nil || !strings.Contains(err.Error(), "HandlerField") {
 			t.Errorf("BuildCellSpec with HandlerField=%q should error with 'HandlerField'; got %v", field, err)
-		}
-	}
-}
-
-// TestBuildCellSpec_SubscribeHandlerInvalidRejected verifies K05-02: a
-// Handler in a subscribe spec that is not an exported Go identifier is rejected
-// so the rendered `c.<SliceField>.<Handler>` always compiles.
-func TestBuildCellSpec_SubscribeHandlerInvalidRejected(t *testing.T) {
-	t.Parallel()
-	cases := []string{
-		"handleEvent", // lowercase first letter
-		"123Handle",   // digit-leading
-		"Handle-Bar",  // dash
-		"",            // empty
-	}
-	for _, handler := range cases {
-		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-		slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
-		bundle := markergen.WireBundle{
-			Subscribes: []markergen.SubscribeSpec{
-				{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: "barSvc", Handler: handler, Group: "demo"},
-			},
-		}
-		_, err := BuildCellSpec(p, "demo", bundle)
-		if err == nil || !strings.Contains(err.Error(), "Handler") {
-			t.Errorf("BuildCellSpec with Handler=%q should error with 'Handler'; got %v", handler, err)
-		}
-	}
-}
-
-// TestBuildCellSpec_SubscribeSliceFieldInvalidRejected verifies K05-02: a
-// SliceField that is not a valid Go identifier is rejected defensively.
-func TestBuildCellSpec_SubscribeSliceFieldInvalidRejected(t *testing.T) {
-	t.Parallel()
-	cases := []string{
-		"123svc",  // digit-leading
-		"bad-svc", // dash
-		"",        // empty
-	}
-	for _, field := range cases {
-		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-		slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
-		bundle := markergen.WireBundle{
-			Subscribes: []markergen.SubscribeSpec{
-				{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: field, Handler: "HandleBar", Group: "demo"},
-			},
-		}
-		_, err := BuildCellSpec(p, "demo", bundle)
-		if err == nil || !strings.Contains(err.Error(), "SliceField") {
-			t.Errorf("BuildCellSpec with SliceField=%q should error with 'SliceField'; got %v", field, err)
-		}
-	}
-}
-
-// TestBuildCellSpec_SubscribeValidExportedIdentAccepted verifies K05-02:
-// well-formed exported identifiers pass validation without error.
-func TestBuildCellSpec_SubscribeValidExportedIdentAccepted(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		handler    string
-		sliceField string
-	}{
-		{"HandleBar", "barSvc"},
-		{"HandleOrderCreated", "orderSvc"},
-		{"H", "s"},                    // minimal valid
-		{"Handle_Event", "svc_field"}, // underscores valid
-	}
-	for _, tc := range cases {
-		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-		slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
-		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
-		bundle := markergen.WireBundle{
-			Subscribes: []markergen.SubscribeSpec{
-				{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: tc.sliceField, Handler: tc.handler, Group: "demo"},
-			},
-		}
-		_, err := BuildCellSpec(p, "demo", bundle)
-		if err != nil {
-			t.Errorf("BuildCellSpec with Handler=%q SliceField=%q should be accepted; got %v", tc.handler, tc.sliceField, err)
 		}
 	}
 }
@@ -650,7 +503,7 @@ func TestBuildCellSpec_RenderedMetaLiteralPopulated(t *testing.T) {
 	}
 	p := fixtureProject(cell, nil, nil)
 
-	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{})
+	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, nil)
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}

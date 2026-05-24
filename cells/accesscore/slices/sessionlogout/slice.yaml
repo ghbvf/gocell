@@ -8,8 +8,12 @@ contractUsages:
     role: publish
   - contract: event.role.assigned.v1
     role: subscribe
+    handler: HandleRoleChanged
+    group: accesscore-rbac-session-sync
   - contract: event.role.revoked.v1
     role: subscribe
+    handler: HandleRoleChanged
+    group: accesscore-rbac-session-sync
 verify:
   unit:
     - unit.sessionlogout.service

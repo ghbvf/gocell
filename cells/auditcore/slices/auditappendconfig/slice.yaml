@@ -6,12 +6,16 @@ contractUsages:
     role: publish
   - contract: event.config.entry-upserted.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.config.entry-deleted.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.config.version-published.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.config.rollback.v1
     role: subscribe
+    handler: HandleEvent
 verify:
   unit:
     - unit.auditappendconfig.service

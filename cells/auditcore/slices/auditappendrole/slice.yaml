@@ -6,8 +6,10 @@ contractUsages:
     role: publish
   - contract: event.role.assigned.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.role.revoked.v1
     role: subscribe
+    handler: HandleEvent
 verify:
   unit:
     - unit.auditappendrole.service

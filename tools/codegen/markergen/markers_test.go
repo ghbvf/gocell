@@ -223,12 +223,11 @@ func TestParseSubscribe(t *testing.T) {
 
 func TestBuildBundle_Dispatch(t *testing.T) {
 	t.Parallel()
-	t.Run("all three marker types round-trip", func(t *testing.T) {
+	t.Run("two marker types round-trip (subscribe removed from markergen)", func(t *testing.T) {
 		t.Parallel()
 		markers := []collectedMarker{
 			makeMarker("cell:listener", "ref=cell.PrimaryListener,prefix=/api/v1"),
 			makeFieldMarker("slice:route", "slice=ordercreate,subPath=/orders", "CreateHandler"),
-			makeFieldMarker("slice:subscribe", "slice=sub,topic=t,handler=H,group=g", "SubField"),
 		}
 		bundle, errs := buildBundle(markers)
 		if len(errs) != 0 {
@@ -239,9 +238,6 @@ func TestBuildBundle_Dispatch(t *testing.T) {
 		}
 		if len(bundle.Routes) != 1 || bundle.Routes[0].Slice != "ordercreate" {
 			t.Errorf("routes=%v", bundle.Routes)
-		}
-		if len(bundle.Subscribes) != 1 || bundle.Subscribes[0].Topic != "t" {
-			t.Errorf("subscribes=%v", bundle.Subscribes)
 		}
 	})
 
@@ -287,6 +283,28 @@ func TestBuildBundle_Dispatch(t *testing.T) {
 			t.Errorf("expected empty bundle on errors")
 		}
 	})
+}
+
+// ---- slice:subscribe is now unknown (K05 W3 single-source flip) ---------------
+
+// TestBuildBundle_SubscribeMarkerIsNowUnknown verifies that after the
+// subscribe single-source flip, the slice:subscribe marker is no longer
+// in knownMarkers and dispatch produces an "unknown marker" error.
+func TestBuildBundle_SubscribeMarkerIsNowUnknown(t *testing.T) {
+	t.Parallel()
+	markers := []collectedMarker{
+		makeFieldMarker("slice:subscribe", "slice=sub,topic=t,handler=H,group=g", "SubField"),
+	}
+	_, errs := buildBundle(markers)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error for unknown slice:subscribe marker, got %d: %v", len(errs), errs)
+	}
+	if !strings.Contains(errs[0].Error(), "unknown marker") {
+		t.Errorf("expected 'unknown marker' in error, got %q", errs[0].Error())
+	}
+	if !strings.Contains(errs[0].Error(), "slice:subscribe") {
+		t.Errorf("expected 'slice:subscribe' named in error, got %q", errs[0].Error())
+	}
 }
 
 // ---- K05-04 target level enforcement tests ----------------------------------
@@ -381,28 +399,34 @@ func TestDispatchMarker_TargetEnforcement(t *testing.T) {
 		}
 	})
 
-	t.Run("slice:subscribe on type declaration is rejected", func(t *testing.T) {
+	t.Run("slice:subscribe is now unknown regardless of target level (type)", func(t *testing.T) {
 		t.Parallel()
 		m := makeMarker("slice:subscribe", "slice=s,topic=t,handler=H,group=g")
 		var bundle WireBundle
 		err := dispatchMarker(m, &bundle)
 		if err == nil {
-			t.Fatal("expected error for slice:subscribe on type, got nil")
+			t.Fatal("expected error for slice:subscribe (now unknown marker), got nil")
 		}
-		if !strings.Contains(err.Error(), "slice:subscribe marker must be on a named struct field") {
-			t.Errorf("unexpected error message: %v", err)
+		if !strings.Contains(err.Error(), "unknown marker") {
+			t.Errorf("expected 'unknown marker', got: %v", err)
 		}
 	})
 
-	t.Run("slice:subscribe on named field is accepted", func(t *testing.T) {
+	t.Run("slice:subscribe is now unknown regardless of target level (field)", func(t *testing.T) {
 		t.Parallel()
 		m := makeFieldMarker("slice:subscribe", "slice=s,topic=t,handler=H,group=g", "SubField")
 		var bundle WireBundle
-		if err := dispatchMarker(m, &bundle); err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		err := dispatchMarker(m, &bundle)
+		if err == nil {
+			t.Fatal("expected error for slice:subscribe on field (now unknown marker), got nil")
 		}
-		if len(bundle.Subscribes) != 1 {
-			t.Errorf("expected 1 subscribe, got %d", len(bundle.Subscribes))
+		if !strings.Contains(err.Error(), "unknown marker") {
+			t.Errorf("expected 'unknown marker', got: %v", err)
+		}
+		// WireBundle no longer has a Subscribes field (removed in single-source flip).
+		// The only assertion needed is that the error correctly names the marker.
+		if !strings.Contains(err.Error(), "slice:subscribe") {
+			t.Errorf("expected 'slice:subscribe' in error, got: %v", err)
 		}
 	})
 }

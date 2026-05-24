@@ -5,8 +5,10 @@ consistencyLevel: L3
 contractUsages:
   - contract: event.order-created.v1
     role: subscribe
+    handler: HandleOrderCreated
   - contract: event.order-status-changed.v1
     role: subscribe
+    handler: HandleOrderStatusChanged
   - contract: projection.order.status-summary.v1
     role: provide
   - contract: http.order.projection-summary.v1
