@@ -1002,39 +1002,35 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 			scannerImportBanCount, wantImportBanCount)
 	}
 
-	// PASS-FUNNEL-FIXTURE-TAG-01 per-form coverage: the fixture function
-	// fixtureTagBypassRedForms exercises all 4 EvaluateConstString-resolvable
-	// arg shapes (Form A literal / B same-pkg const Ident / C BinaryExpr
-	// concat / D cross-pkg SelectorExpr archtest.FixtureBuildTag) inside
-	// typeseval.SharedResolver calls. The detector must emit one diagnostic
-	// per form (4 total). The per-form trip-wire below asserts each form
-	// independently — removing any single fixture call line fails exactly
-	// that form's assertion, not just the aggregate count.
+	// PASS-FUNNEL-FIXTURE-TAG-01 per-form coverage. Cross-package fixture forms
+	// (redfixture.go, package passfunnelfixture) fed to typeseval.SharedResolver:
+	//   - Form A — BasicLit "archtest_fixture" direct
+	//   - Form B — same-pkg const Ident (localFixtureTag)
+	//   - Form C — BinaryExpr "archtest" + "_fixture"
+	//   - Form D — cross-pkg SelectorExpr archtest.FixtureBuildTag
+	//   - Form F — same-file var bound to a fixture-tag slice (var-indirection)
+	// plus two GREEN-parity negatives (non-fixture-tag var to a loader; fixture
+	// tag to a non-LOADER_SET callee) that MUST produce zero diagnostics. The
+	// same-package Form E (unexported runTypedWithRoot) is asserted separately
+	// below via a dedicated package-archtest load (Form E cannot live in the
+	// cross-package fixture — runTypedWithRoot is unexported).
 	//
 	// Form identification uses the diagnostic Line number to look up the
-	// fixture source line. The fixture is the only file in the load that
-	// can produce diagsFixtureTagBypass hits (no other RED form exists
-	// elsewhere in the fixture sub-packages, and pass_funnel_test.go +
-	// pass_test.go themselves are in passFunnelPermanentExempt — though
-	// the per-form assertion below scopes by file rel to redfixture.go
-	// for explicitness).
+	// fixture source line (anchor comment + 1), so assertions stay stable under
+	// unrelated edits that shift line numbers.
 	const redfixtureRel = "tools/archtest/internal/passfunnelfixture/redfixture.go"
+	crossPkgForms := []string{"A", "B", "C", "D", "F"}
 	var fixtureTagDiags []scanner.Diagnostic
 	for _, tgt := range fixtureTargets {
 		fixtureTagDiags = append(fixtureTagDiags, diagsFixtureTagBypass(tgt)...)
 	}
 	if len(fixtureTagDiags) == 0 {
 		t.Errorf("PASS-FUNNEL-FIXTURE-TAG-01 detector found 0 diagnostics on red fixture; " +
-			"detector likely regressed or fixtureTagBypassRedForms removed from redfixture.go")
+			"detector likely regressed or fixture forms removed from redfixture.go")
 		return
 	}
-	// Look up the source-line numbers of the 4 form anchors in redfixture.go
-	// so the per-form assertions key off the actual file, not hard-coded line
-	// numbers (which drift on unrelated edits). The anchor comments " Form A "
-	// / " Form B " / " Form C " / " Form D " each precede their respective
-	// SharedResolver call by exactly one line.
-	formAnchorLines := lookupFixtureFormAnchorLines(t, fixtureTargets, redfixtureRel)
-	for _, form := range []string{"A", "B", "C", "D"} {
+	formAnchorLines := lookupFixtureFormAnchorLines(t, fixtureTargets, redfixtureRel, crossPkgForms)
+	for _, form := range crossPkgForms {
 		anchorLine, ok := formAnchorLines[form]
 		if !ok {
 			t.Errorf("PASS-FUNNEL-FIXTURE-TAG-01 form-anchor lookup: comment "+
@@ -1042,7 +1038,7 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 				form, redfixtureRel)
 			continue
 		}
-		// The SharedResolver call site is on anchorLine+1 (the line immediately
+		// The loader call site is on anchorLine+1 (the line immediately
 		// following the form anchor comment).
 		callLine := anchorLine + 1
 		found := false
@@ -1059,19 +1055,109 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 				form, callLine, redfixtureRel)
 		}
 	}
+	// Exact-count lock: the cross-package fixture has exactly len(crossPkgForms)
+	// RED loader call sites; the two GREEN-parity negatives (non-fixture-tag var
+	// to a loader; fixture tag to a non-LOADER_SET callee) MUST add zero. A
+	// drift (over-detection on a parity line, or a new RED form without updating
+	// this count) fails here — making the GREEN negatives load-bearing.
+	wantFixtureTagCount := len(crossPkgForms)
+	if got := len(fixtureTagDiags); got != wantFixtureTagCount {
+		t.Errorf("PASS-FUNNEL-FIXTURE-TAG-01 cross-package diagnostics = %d, want %d "+
+			"(forms %v each trip once; GREEN-parity negatives must add 0) — "+
+			"over-detection regression or fixture form set changed",
+			got, wantFixtureTagCount, crossPkgForms)
+	}
+
+	// PASS-FUNNEL-FIXTURE-TAG-01 same-package vector (Form E): the unexported
+	// runTypedWithRoot is reachable from a business *_test.go in package
+	// archtest. The cross-package passfunnelfixture cannot reference it, so the
+	// fixture lives in-package (passfunnel_inpkg_redfixture.go, archtest_fixture
+	// tag) and is loaded via a dedicated package-archtest load. Non-test package
+	// archtest is small (Pass framework only — rules live in *_test.go), so this
+	// cold load is cheap.
+	{
+		const inPkgRel = "tools/archtest/passfunnel_inpkg_redfixture.go"
+		inPkgResolver, err := typeseval.SharedResolver(
+			root, false, []string{"archtest_fixture"}, "./tools/archtest",
+		)
+		if err != nil {
+			t.Fatalf("typeseval.SharedResolver (in-package Form E): %v", err)
+		}
+		var inPkgTargets []passFunnelTarget
+		for _, pkg := range inPkgResolver.Packages() {
+			if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil {
+				continue
+			}
+			for _, file := range pkg.Syntax {
+				rel := pkgFileRel(root, pkg, file)
+				if rel != inPkgRel {
+					continue
+				}
+				inPkgTargets = append(inPkgTargets, passFunnelTarget{rel: rel, file: file, pkg: pkg})
+			}
+		}
+		if len(inPkgTargets) == 0 {
+			t.Fatalf("in-package Form E fixture %s not loaded — archtest_fixture "+
+				"build tag missing or file absent", inPkgRel)
+		}
+		var formEDiags []scanner.Diagnostic
+		for _, tgt := range inPkgTargets {
+			formEDiags = append(formEDiags, diagsFixtureTagBypass(tgt)...)
+		}
+		formEAnchors := lookupFixtureFormAnchorLines(t, inPkgTargets, inPkgRel, []string{"E"})
+		anchorLine, ok := formEAnchors["E"]
+		if !ok {
+			t.Fatalf("PASS-FUNNEL-FIXTURE-TAG-01 Form E anchor ' Form E ' not found in %s", inPkgRel)
+		}
+		callLine := anchorLine + 1
+		found := false
+		for _, d := range formEDiags {
+			if d.Rel == inPkgRel && d.Line == callLine {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("PASS-FUNNEL-FIXTURE-TAG-01 Form E (line %d in %s) produced 0 "+
+				"diagnostics; runTypedWithRoot not in fixtureTagLoaderSet OR the "+
+				"fixture line was removed", callLine, inPkgRel)
+		}
+	}
+}
+
+// TestFlatNonDefaultTagsExcludesFixtureTag locks sub-1 of #944: the generic
+// build-tag union must NOT carry the fixture build tag. After #944 removed
+// {"archtest_fixture"} from typeseval.KnownNonDefaultTags, FlatNonDefaultTags()
+// — and thus every business RunTyped(Tags: FlatNonDefaultTags()) scan — no
+// longer activates fixture-tagged code; the only sanctioned fixture loader is
+// RunTypedFixture. Re-adding the tag to KnownNonDefaultTags reopens the
+// FlatNonDefaultTags() bypass (a function-call-result tag the detector cannot
+// const-resolve) and fails this assertion.
+func TestFlatNonDefaultTagsExcludesFixtureTag(t *testing.T) {
+	t.Parallel()
+	for _, tag := range FlatNonDefaultTags() {
+		if tag == FixtureBuildTag {
+			t.Fatalf("FlatNonDefaultTags() must not contain the fixture build tag %q: "+
+				"it was removed from KnownNonDefaultTags in #944 so module-wide scans "+
+				"never load fixture-tagged code. The only sanctioned fixture loader is "+
+				"RunTypedFixture; re-adding the tag reopens the FlatNonDefaultTags bypass.",
+				FixtureBuildTag)
+		}
+	}
 }
 
 // lookupFixtureFormAnchorLines walks the fixture file's CommentGroups and
-// records the line number of each " Form A " / " Form B " / " Form C " /
-// " Form D " marker comment. The per-form coverage assertion in
-// TestPassFunnel_FixtureCoverage uses these line numbers to key the detector
-// hits off the actual source-positioned fixture lines (anchor + 1), so the
-// assertion remains stable under unrelated fixture edits that shift line
-// numbers but preserve the comment-anchored call structure.
+// records the line number of each " Form <X> " marker comment (for the forms
+// passed in). The per-form coverage assertion in TestPassFunnel_FixtureCoverage
+// uses these line numbers to key the detector hits off the actual
+// source-positioned fixture lines (anchor + 1), so the assertion remains stable
+// under unrelated fixture edits that shift line numbers but preserve the
+// comment-anchored call structure.
 func lookupFixtureFormAnchorLines(
 	t *testing.T,
 	fixtureTargets []passFunnelTarget,
 	relPath string,
+	forms []string,
 ) map[string]int {
 	t.Helper()
 	out := make(map[string]int)
@@ -1082,7 +1168,7 @@ func lookupFixtureFormAnchorLines(
 		for _, group := range tgt.file.Comments {
 			for _, c := range group.List {
 				text := c.Text
-				for _, form := range []string{"A", "B", "C", "D"} {
+				for _, form := range forms {
 					if strings.Contains(text, "Form "+form+" ") {
 						out[form] = tgt.pkg.Fset.Position(c.Pos()).Line
 					}

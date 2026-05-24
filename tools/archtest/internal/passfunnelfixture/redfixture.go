@@ -170,3 +170,35 @@ func fixtureTagBypassRedForms() {
 	// Form D — cross-pkg SelectorExpr to exported const (archtest.FixtureBuildTag).
 	_, _ = typeseval.SharedResolver("/dummy", false, []string{archtest.FixtureBuildTag}, "x")
 }
+
+// fixtureTagSlice exercises Form F: a same-file var bound to a []string
+// composite literal carrying a fixture-tag-resolving element (localFixtureTag).
+// At the loader call site the arg is a plain *ast.Ident (the var name), which
+// EvaluateConstString does NOT resolve — the detector must trace the binding
+// (collectFixtureTagBoundObjects) to catch this var-indirection form. See
+// pass_funnel_test.go diagsFixtureTagBypass Blind-spot closure for #944.
+var fixtureTagSlice = []string{localFixtureTag}
+
+// nonFixtureTagSlice is the GREEN-parity negative for Form F: a var bound to a
+// non-fixture tag. Feeding it to a loader must NOT trip the detector — the
+// bound-object collector only records slices whose elements EvaluateConstString
+// to "archtest_fixture".
+var nonFixtureTagSlice = []string{"integration"}
+
+// containsTagStub is a non-LOADER_SET callee used by the GREEN-parity negative
+// below: passing the fixture tag to a function that is NOT a loader must NOT
+// trip the detector (the (callee, arg) pair disambiguates legitimate identity
+// use from bypass).
+func containsTagStub(tag string) bool { return tag == localFixtureTag }
+
+// fixtureTagBypassVarFormAndParity exercises the var-binding bypass (Form F)
+// plus the two GREEN-parity negatives that must produce ZERO diagnostics.
+// Never invoked; *ast.CallExpr + *types.Info source only.
+func fixtureTagBypassVarFormAndParity() {
+	// Form F — same-file var bound to a fixture-tag slice fed to a loader.
+	_, _ = typeseval.SharedResolver("/dummy", false, fixtureTagSlice, "x")
+	// GREEN-parity 1 — non-fixture tag var fed to a loader: MUST NOT trip.
+	_, _ = typeseval.SharedResolver("/dummy", false, nonFixtureTagSlice, "x")
+	// GREEN-parity 2 — fixture tag fed to a non-LOADER_SET callee: MUST NOT trip.
+	_ = containsTagStub(localFixtureTag)
+}
