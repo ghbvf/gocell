@@ -64,10 +64,13 @@
 //     so a new bare-constant probe author fails loudly until it is funneled. The
 //     HealthToCheckers-arg branch is scanned package-wide (not only inside
 //     Checkers), so a probe authored from a helper method does not escape.
-//  5. Shadowing the builtin `string` identifier inside a sanctioned Checkers
-//     (so string(x) is not the conversion). Non-fixturable; compensation:
-//     shadowing a predeclared identifier is independently caught by go vet /
-//     golangci and is absurd in production adapters.
+//  5. Shadowing the builtin `string` identifier so string(x) is a call, not a
+//     conversion. unwrapStringConversion type-verifies the conversion via
+//     info.Types[Fun].IsType()+Identical(string), so a shadowed `string`
+//     (a value, not a type) is rejected and the key is flagged — this does NOT
+//     depend on the predeclared linter. Doubly unexpressible in practice:
+//     shadowing `string` makes the map[string]func Checkers signature itself
+//     uncompilable, so no compilable fixture can exhibit it.
 package archtest
 
 import (
@@ -208,6 +211,7 @@ func TestOpsContractStringFunnel(t *testing.T) {
 	t.Run("blind_spot_bare_literal_key", testOpsContractBareLiteralKeyFixture)
 	t.Run("blind_spot_local_var_key", testOpsContractLocalVarKeyFixture)
 	t.Run("blind_spot_declaration_bypass", testOpsContractDeclBypassFixture)
+	t.Run("blind_spot_healthtocheckers_bypass", testOpsContractHealthToCheckersBypassFixture)
 }
 
 // collectReadyProbeNameConsts returns the package-scope *types.Const objects in
@@ -329,8 +333,11 @@ func scanReadyProbeConstructionViolations(
 // the inner Ident resolves via info.Uses to a *types.Const in declared.
 // Fail-closed: nil info or any non-const resolution returns false.
 func probeNameExprResolves(expr ast.Expr, info *types.Info, declared map[*types.Const]struct{}) bool {
-	ident, ok := unwrapStringConversion(expr).(*ast.Ident)
-	if !ok || info == nil {
+	if info == nil {
+		return false
+	}
+	ident, ok := unwrapStringConversion(expr, info).(*ast.Ident)
+	if !ok {
 		return false
 	}
 	obj, ok := info.Uses[ident]
@@ -345,16 +352,21 @@ func probeNameExprResolves(expr ast.Expr, info *types.Info, declared map[*types.
 	return found
 }
 
-// unwrapStringConversion returns the inner expression of a string(x) conversion;
-// otherwise it returns expr unchanged. It only unwraps a CallExpr whose Fun is
-// the bare identifier "string" with exactly one argument.
-func unwrapStringConversion(expr ast.Expr) ast.Expr {
+// unwrapStringConversion returns the inner expression of a genuine builtin
+// string(x) conversion; otherwise it returns expr unchanged. The conversion is
+// verified through go/types — info.Types[Fun].IsType() and the target type is
+// identical to the predeclared string — rather than by matching the bare
+// identifier name. A function or variable that shadows the predeclared `string`
+// identifier therefore is NOT treated as a conversion (its Fun is a value, not a
+// type), closing the name-only shadow gap without relying on the predeclared
+// linter being enabled.
+func unwrapStringConversion(expr ast.Expr, info *types.Info) ast.Expr {
 	call, ok := expr.(*ast.CallExpr)
-	if !ok || len(call.Args) != 1 {
+	if !ok || len(call.Args) != 1 || info == nil {
 		return expr
 	}
-	fun, ok := call.Fun.(*ast.Ident)
-	if !ok || fun.Name != "string" {
+	tv, ok := info.Types[call.Fun]
+	if !ok || !tv.IsType() || !types.Identical(tv.Type, types.Typ[types.String]) {
 		return expr
 	}
 	return call.Args[0]
@@ -388,13 +400,38 @@ func isHealthToCheckersCall(call *ast.CallExpr, info *types.Info) bool {
 	return ok && name == "HealthToCheckers" && strings.HasSuffix(pkgPath, "adapters/adapterutil")
 }
 
+// nonSanctionedHealthToCheckersViolations flags every adapterutil.HealthToCheckers
+// call in file: the helper always authors a probe name, so any caller must be a
+// sanctioned package (where the construction funnel resolves its arg to a
+// ReadyProbeName const). Callers are passed pkgRel only for the message; the
+// sanctioned-package gate is applied by the caller. Shared between the
+// sanctioned_set_covers meta-check and the healthtocheckers_bypass_red fixture.
+func nonSanctionedHealthToCheckersViolations(file *ast.File, info *types.Info, pkgRel string) []string {
+	var v []string
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isHealthToCheckersCall(call, info) {
+			return
+		}
+		v = append(v, pkgRel+" calls adapterutil.HealthToCheckers but is not in"+
+			" readyProbeSanctionedPkgs; add the package so its probe name is funneled"+
+			" through a ReadyProbeName const")
+	})
+	return v
+}
+
 // testOpsContractSanctionedSetCoverage is the upstream-Hard compensation
-// (blind spot #4): any production Checkers() returning a map[string]func with a
-// _ready-shaped string-CONSTANT key (BasicLit, const ident, or BinaryExpr
-// concat — folded via EvaluateConstString) must live in a sanctioned package,
-// so a new bare-literal probe author fails loud until funneled. A runtime
-// (non-constant) key folds to ("", false) and is left to the construction
-// funnel inside sanctioned packages.
+// (blind spot #4): a non-sanctioned production package must not author a
+// readiness probe, via EITHER of the two construction surfaces —
+//   - a Checkers() map[string]func with a _ready-shaped string CONSTANT key
+//     (BasicLit, const ident, or BinaryExpr concat — folded via
+//     EvaluateConstString); or
+//   - any adapterutil.HealthToCheckers call (which always authors a probe and
+//     returns the map directly, so it leaves no composite-lit key to fold).
+//
+// Either form in a non-sanctioned package fails loud until that package is added
+// to readyProbeSanctionedPkgs (where the construction funnel then resolves the
+// name to a ReadyProbeName const). A runtime (non-constant) Checkers key folds
+// to ("", false) and is left to the construction funnel inside sanctioned pkgs.
 func testOpsContractSanctionedSetCoverage(t *testing.T, modPath string) {
 	var violations []string
 	RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
@@ -406,6 +443,11 @@ func testOpsContractSanctionedSetCoverage(t *testing.T, modPath string) {
 			return nil
 		}
 		for _, f := range p.Files {
+			// HealthToCheckers caller surface (closes the F1 bypass: a
+			// non-sanctioned Checkers returning HealthToCheckers(...) has no
+			// composite-lit key for the loop below to catch).
+			violations = append(violations, nonSanctionedHealthToCheckersViolations(f, p.TypesInfo, pkgRel)...)
+
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || fn.Name.Name != "Checkers" || fn.Body == nil {
 					return
@@ -513,4 +555,25 @@ func testOpsContractDeclBypassFixture(t *testing.T) {
 	})
 	assert.NotEmpty(t, diags,
 		"readyProbeDeclarationSiteViolations must flag a ReadyProbeName const declared outside the sanctioned package set")
+}
+
+// testOpsContractHealthToCheckersBypassFixture proves the meta-check flags a
+// non-sanctioned package that authors a probe via adapterutil.HealthToCheckers
+// (F1). It drives the same nonSanctionedHealthToCheckersViolations helper the
+// sanctioned_set_covers meta-check uses, so the F1 fix is a real regression
+// barrier.
+func testOpsContractHealthToCheckersBypassFixture(t *testing.T) {
+	const pattern = "./tools/archtest/testdata/ops_contract_string_funnel_fixtures/healthtocheckers_bypass_red"
+	var violations []string
+	RunTyped(t, TypedOpts{Tests: false}, []string{pattern}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
+		}
+		for _, f := range p.Files {
+			violations = append(violations, nonSanctionedHealthToCheckersViolations(f, p.TypesInfo, p.Pkg.Path())...)
+		}
+		return nil
+	})
+	assert.NotEmpty(t, violations,
+		"a non-sanctioned package calling adapterutil.HealthToCheckers must be flagged by the meta-check")
 }

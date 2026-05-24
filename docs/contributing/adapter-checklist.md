@@ -107,11 +107,23 @@ Common reference points for adapters:
 Every adapter that wraps a long-lived external connection or key provider must
 implement `kernel/lifecycle.ManagedResource`:
 
+The readiness-probe name is a typed ops contract: declare it as a
+`kernel/healthz.ReadyProbeName` const and reference that const at the
+construction site. Bare string literals are rejected by archtest
+OPS-CONTRACT-STRING-FUNNEL-01 (see its package godoc + ADR
+`docs/architecture/202605241600-adr-ready-probe-name-typed-funnel.md` §8 for the
+three-step new-probe checklist: declare const → add package to
+`readyProbeSanctionedPkgs` → add to `goldenReadyProbeNames()`).
+
 ```go
-func (p *MyAdapter) Checkers() map[string]func() error {
-    return map[string]func() error{
-        "my_adapter_ready": func() error {
-            ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+// ProbeReady is the snake_case + _ready ops-contract name, funneled by
+// OPS-CONTRACT-STRING-FUNNEL-01.
+const ProbeReady healthz.ReadyProbeName = "my_adapter_ready"
+
+func (p *MyAdapter) Checkers() map[string]func(context.Context) error {
+    return map[string]func(context.Context) error{
+        string(ProbeReady): func(ctx context.Context) error {
+            ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
             defer cancel()
             // Probe the actual business path (not sys/health or a ping endpoint).
             // A business-path probe covers auth, routing, and resource availability.
@@ -125,6 +137,15 @@ func (p *MyAdapter) Close(ctx context.Context) error { ... }
 
 // Compile-time assertion.
 var _ lifecycle.ManagedResource = (*MyAdapter)(nil)
+```
+
+For the common single-probe case, prefer the helper (it applies the inner
+deadline and the conversion at the funnel boundary):
+
+```go
+func (p *MyAdapter) Checkers() map[string]func(context.Context) error {
+    return adapterutil.HealthToCheckers(ProbeReady, p.Health, adapterutil.DefaultProbeTimeout)
+}
 ```
 
 Probe selection rule: use the minimum API call that verifies the adapter's

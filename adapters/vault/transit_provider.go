@@ -1156,7 +1156,12 @@ func validVaultKeyVersion(version string) bool {
 var _ lifecycle.ManagedResource = (*TransitKeyProvider)(nil)
 
 // transitReadinessTimeout is the per-probe context deadline for vault_transit_ready.
-// 3 seconds is sufficient for LAN Vault deployments.
+// 3 seconds is sufficient for LAN Vault deployments. Intentionally tighter than
+// adapterutil.DefaultProbeTimeout (5s): a transit/keys/{name} metadata read is a
+// single fast round-trip, so a slow Vault should mark the probe down quickly
+// rather than hold /readyz near the aggregator deadline. This is why the Checkers
+// map is built directly here instead of via adapterutil.HealthToCheckers (which
+// would apply the 5s default).
 const transitReadinessTimeout = 3 * time.Second
 
 // ProbeReady is the ops-contract name for the Vault transit readiness probe.
