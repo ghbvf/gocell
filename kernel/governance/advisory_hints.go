@@ -39,7 +39,8 @@ const (
 	advHintADV05EmptySubscribers = "event contract %q is active but has no subscribers;" +
 		" add a subscribing slice (contractUsages[role=subscribe] in slice.yaml)," +
 		" add an external actorSubscribers entry, or set lifecycle: deprecated"
-	advHintADV05EmptySubscribersFix = "declare contractUsages[role=subscribe] in a slice.yaml, add an actorSubscribers entry, or set lifecycle: deprecated"
+	advHintADV05EmptySubscribersFix = "declare contractUsages[role=subscribe] in a slice.yaml," +
+		" add an actorSubscribers entry, or set lifecycle: deprecated"
 
 	// CH-04: auth.Mount correlation failed; cannot extract handler status codes.
 	advHintCH04CorrelationFailed = "CH-04: contract %s served by handler file %s" +

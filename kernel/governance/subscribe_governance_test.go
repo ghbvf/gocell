@@ -43,8 +43,7 @@ func eventContractWithActorSubs(id string, actorSubs []string) *metadata.Contrac
 func TestREF18_RegisteredExternalActor_Passes(t *testing.T) {
 	project := minimalGovernanceProject()
 	project.Actors = []metadata.ActorMeta{{ID: "external-audit-sink"}}
-	project.Contracts["event.audit.appended.v1"] =
-		eventContractWithActorSubs("event.audit.appended.v1", []string{"external-audit-sink"})
+	project.Contracts["event.audit.appended.v1"] = eventContractWithActorSubs("event.audit.appended.v1", []string{"external-audit-sink"})
 
 	results := NewValidator(project, "", clock.Real()).validateREF18()
 	assertNoCode(t, results, codeREF18)
@@ -55,8 +54,7 @@ func TestREF18_RegisteredExternalActor_Passes(t *testing.T) {
 func TestREF18_CellID_Rejected(t *testing.T) {
 	project := minimalGovernanceProject()
 	project.Cells["accesscore"] = &metadata.CellMeta{ID: "accesscore"}
-	project.Contracts["event.session.created.v1"] =
-		eventContractWithActorSubs("event.session.created.v1", []string{"accesscore"})
+	project.Contracts["event.session.created.v1"] = eventContractWithActorSubs("event.session.created.v1", []string{"accesscore"})
 
 	results := NewValidator(project, "", clock.Real()).validateREF18()
 	assertResultsContainCode(t, results, codeREF18, "actorSubscribers[0]")
@@ -65,8 +63,7 @@ func TestREF18_CellID_Rejected(t *testing.T) {
 // TestREF18_Wildcard_Rejected verifies a "*" wildcard in actorSubscribers is rejected.
 func TestREF18_Wildcard_Rejected(t *testing.T) {
 	project := minimalGovernanceProject()
-	project.Contracts["event.user.created.v1"] =
-		eventContractWithActorSubs("event.user.created.v1", []string{"*"})
+	project.Contracts["event.user.created.v1"] = eventContractWithActorSubs("event.user.created.v1", []string{"*"})
 
 	results := NewValidator(project, "", clock.Real()).validateREF18()
 	assertResultsContainCode(t, results, codeREF18, "actorSubscribers[0]")
@@ -76,8 +73,7 @@ func TestREF18_Wildcard_Rejected(t *testing.T) {
 // is neither a cell nor a registered actor is rejected as a dangling reference.
 func TestREF18_UnregisteredActor_Rejected(t *testing.T) {
 	project := minimalGovernanceProject()
-	project.Contracts["event.user.created.v1"] =
-		eventContractWithActorSubs("event.user.created.v1", []string{"ghost-system"})
+	project.Contracts["event.user.created.v1"] = eventContractWithActorSubs("event.user.created.v1", []string{"ghost-system"})
 
 	results := NewValidator(project, "", clock.Real()).validateREF18()
 	assertResultsContainCode(t, results, codeREF18, "actorSubscribers[0]")
