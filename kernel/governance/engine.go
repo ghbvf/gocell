@@ -84,6 +84,14 @@ const (
 // finding itself is the distance; a continuous metric is only meaningful for an
 // orderable gap (days/counts). A Metric returning (0, true) is valid: ok=true
 // means the metric is applicable even at zero distance (e.g. deadline is today).
+//
+// The metric is a REPOSITORY-LEVEL distance (ADR P-C3 "仓库 metric"): it is
+// evaluated once per run and stamp() attaches the same value to every finding the
+// rule emits — it is not a per-finding measure. For a rule whose findings are
+// heterogeneous (e.g. FMT-23 emits overdue warnings AND missing/malformed-date
+// errors), the Metric must scope itself to the subset it meaningfully describes
+// and return ok=false otherwise, so the value is not attached to unrelated
+// findings (see fmt23DeprecationDaysRemaining, which counts only overdue contracts).
 type Metric func(v *Validator) (float64, bool)
 
 // Rule is one governance rule expressed as data: classification metadata plus a

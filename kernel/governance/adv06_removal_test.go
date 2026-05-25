@@ -56,7 +56,9 @@ func TestADV05_EmptySubscribers_NoActors(t *testing.T) {
 
 	v := NewValidator(project, "", clock.Real())
 	results := v.validateADV05()
-	assertResultsContainCode(t, results, codeADV05, "endpoints.subscribers")
+	// Field anchors at the locatable lifecycle field, not the derived
+	// endpoints.subscribers (which carries no YAML position).
+	assertResultsContainCode(t, results, codeADV05, "lifecycle")
 }
 
 // TestADV05_ActorSubscribers_PopulatesSubscribers asserts ADV-05 passes when

@@ -595,18 +595,23 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 }
 
 // fmt23DeprecationDaysRemaining is the FMT-23 distance metric (ADR §M3 P-C3):
-// the grace days remaining for the deprecated contract closest to (or past) the
-// cleanup deadline — negative when the worst offender is already overdue. It is
-// a repository-level time-distance, the time-based counterpart to ADV-05's
-// count-distance. ok is false when no deprecated contract carries a parseable
-// deprecatedAt (the rule then emits only required/format errors, which carry no
-// meaningful days-remaining distance).
+// the (negative) grace days remaining for the most-overdue deprecated contract —
+// i.e. how many days past the cleanup deadline the worst offender is. It is a
+// repository-level time-distance (the time-based counterpart to ADV-05's
+// count-distance), counted ONLY over contracts that are actually past the grace
+// period (remaining < 0) — exactly the set FMT-23 emits a stale warning for.
+//
+// Scoping to overdue contracts keeps the value meaningful: a deprecated contract
+// still inside its grace window, or one whose only fault is a missing/malformed
+// deprecatedAt (which FMT-23 reports as a required/format error, not a stale
+// warning), carries no days-overdue distance. ok is false when no contract is
+// overdue, so the metric is not stamped onto those non-stale findings.
 func (v *Validator) fmt23DeprecationDaysRemaining() (float64, bool) {
 	const hoursPerDay = 24
 	graceDays := defaultDeprecationGracePeriod.Hours() / hoursPerDay
 	now := v.clk.Now().UTC()
-	minRemaining := math.Inf(1)
-	found := false
+	worst := math.Inf(1)
+	overdue := false
 	for _, c := range v.project.Contracts {
 		if c.Lifecycle != "deprecated" || c.DeprecatedAt == "" {
 			continue
@@ -616,15 +621,18 @@ func (v *Validator) fmt23DeprecationDaysRemaining() (float64, bool) {
 			continue
 		}
 		remaining := graceDays - now.Sub(ts).Hours()/hoursPerDay
-		if remaining < minRemaining {
-			minRemaining = remaining
+		if remaining >= 0 {
+			continue // still within the grace window — FMT-23 does not fire
 		}
-		found = true
+		if remaining < worst {
+			worst = remaining
+		}
+		overdue = true
 	}
-	if !found {
+	if !overdue {
 		return 0, false
 	}
-	return minRemaining, true
+	return worst, true
 }
 
 // --- FMT-25 (input constraint enforcement) ---

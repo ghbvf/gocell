@@ -26,12 +26,16 @@ func (v *Validator) sortedContracts() []*metadata.ContractMeta {
 }
 
 // CheckHealth runs all PhaseHealth rules (CH-01 through CH-06) against the
-// project loaded into v and returns the combined findings.
-// It is the single entry point for `gocell check contract-health`.
-func (v *Validator) CheckHealth(ctx context.Context) []ValidationResult {
-	rules := rulesForPhases(PhaseHealth)
-	results, _ := v.run(ctx, rules, false)
-	return results
+// project loaded into v and returns the combined findings. It is the single
+// entry point for `gocell check contract-health`.
+//
+// The error return mirrors run(): it is non-nil only when ctx is canceled
+// mid-run, carrying the partial findings so the caller can distinguish a clean
+// run from an interrupted one. Callers must propagate it rather than discard it,
+// so a signal-aware ctx (Ctrl-C during a slow handler-file scan) actually stops
+// the check.
+func (v *Validator) CheckHealth(ctx context.Context) ([]ValidationResult, error) {
+	return v.run(ctx, rulesForPhases(PhaseHealth), false)
 }
 
 // checkCH01 verifies that every contract declares an ownerCell.

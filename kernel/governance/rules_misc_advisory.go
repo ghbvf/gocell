@@ -133,10 +133,17 @@ func (v *Validator) validateADV05() []ValidationResult {
 			continue
 		}
 		if len(c.Endpoints.Subscribers) == 0 {
+			// Field anchors at lifecycle, a real contract.yaml field that locates:
+			// endpoints.subscribers is a DERIVED field (yaml:"-", hand-write
+			// forbidden), so pointing there yields no position and misleads the
+			// user toward a field they cannot edit. The remediation (add a
+			// subscribing slice / actorSubscribers / deprecate) lives in the
+			// message + fix; lifecycle is the locatable anchor (and the deprecate
+			// path's target).
 			results = append(results, v.newWarning(
 				codeADV05, IssueForbidden,
 				contractFile(c),
-				"endpoints.subscribers",
+				"lifecycle",
 				fmt.Sprintf(advHintADV05EmptySubscribers, c.ID),
 				advHintADV05EmptySubscribersFix,
 			))

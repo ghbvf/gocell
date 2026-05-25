@@ -2,6 +2,7 @@ package governance
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -89,6 +90,17 @@ func TestFMT23DeprecationDaysRemaining(t *testing.T) {
 		})
 		_, ok := v.fmt23DeprecationDaysRemaining()
 		assert.False(t, ok)
+	})
+
+	t.Run("deprecated but within grace window → not applicable (overdue-only)", func(t *testing.T) {
+		// 1 day ago — far inside the 90-day grace window, so not overdue and not
+		// counted. 89-day margin keeps this robust against wall-clock edges.
+		recent := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+		v := metricValidator(map[string]*metadata.ContractMeta{
+			"recent": deprecated("recent", recent),
+		})
+		_, ok := v.fmt23DeprecationDaysRemaining()
+		assert.False(t, ok, "a contract still inside the grace window is not overdue → metric not applicable")
 	})
 
 	t.Run("ancient deprecation → overdue, days remaining strongly negative", func(t *testing.T) {
