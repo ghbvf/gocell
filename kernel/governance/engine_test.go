@@ -29,20 +29,39 @@ func (v *Validator) scopedFindings(code RuleCode, n int) []ValidationResult {
 	return out
 }
 
-// TestRuleStamp covers the engine's only post-processing: stamping Next on every
-// finding and attaching the evaluated Metric (nil when absent or inapplicable).
+// TestResolveNext covers the per-finding disposition derivation: severity
+// default (error→block, warning→advisory) with an explicit override winning.
+func TestResolveNext(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, NextBlock, resolveNext("", SeverityError))
+	assert.Equal(t, NextAdvisory, resolveNext("", SeverityWarning))
+	assert.Equal(t, NextAutofix, resolveNext(NextAutofix, SeverityError))
+	assert.Equal(t, NextSuggest, resolveNext(NextSuggest, SeverityWarning))
+}
+
+// TestRuleStamp covers the engine's only post-processing: deriving each
+// finding's Next from its severity (Rule.Next overriding) and attaching the
+// evaluated Metric (nil when absent or inapplicable).
 func TestRuleStamp(t *testing.T) {
 	t.Parallel()
 	v := newTestValidator(t)
-	base := Rule{Code: codeADV05, Phase: PhaseBase, Next: NextAdvisory}
+	base := Rule{Code: codeADV05, Phase: PhaseBase}
 
-	t.Run("stamps Next on all findings", func(t *testing.T) {
-		got := base.stamp(v, v.scopedFindings(codeADV05, 3))
-		require.Len(t, got, 3)
-		for _, r := range got {
-			assert.Equal(t, NextAdvisory, r.Next)
-			assert.Nil(t, r.Metric)
-		}
+	t.Run("Next derived per finding from severity", func(t *testing.T) {
+		got := base.stamp(v, []ValidationResult{
+			v.newScopedError(codeADV05, IssueForbidden, "project", "f", "m", "fix"), // error
+			v.newWarning(codeADV05, IssueForbidden, "", "f", "m", "fix"),            // warning
+		})
+		require.Len(t, got, 2)
+		assert.Equal(t, NextBlock, got[0].Next)    // error → block
+		assert.Equal(t, NextAdvisory, got[1].Next) // warning → advisory
+		assert.Nil(t, got[0].Metric)
+	})
+	t.Run("explicit Next overrides the severity default", func(t *testing.T) {
+		r := Rule{Code: codeADV05, Next: NextSuggest}
+		got := r.stamp(v, v.scopedFindings(codeADV05, 1)) // error finding
+		require.Len(t, got, 1)
+		assert.Equal(t, NextSuggest, got[0].Next) // override beats the block default
 	})
 	t.Run("applicable metric → value on every finding", func(t *testing.T) {
 		r := base
@@ -72,21 +91,23 @@ func TestRunCollectsFindings(t *testing.T) {
 	v := newTestValidator(t)
 	rules := []Rule{
 		{
-			Code: codeREF01, Next: NextBlock,
+			Code:   codeREF01,
 			Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01, 1) },
 		},
 		{
-			Code: codeADV01, Next: NextAdvisory,
-			Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeADV01, 2) },
+			Code: codeADV01,
+			Detect: func(vv *Validator) []ValidationResult {
+				return []ValidationResult{vv.newWarning(codeADV01, IssueRefNotFound, "", "b", "2", "y")}
+			},
 		},
 	}
 	got, err := v.run(context.Background(), rules, false)
 	require.NoError(t, err)
-	require.Len(t, got, 3)
+	require.Len(t, got, 2)
 	assert.Equal(t, codeREF01, got[0].Code)
-	assert.Equal(t, NextBlock, got[0].Next)
+	assert.Equal(t, NextBlock, got[0].Next) // error finding → block
 	assert.Equal(t, codeADV01, got[1].Code)
-	assert.Equal(t, NextAdvisory, got[2].Next)
+	assert.Equal(t, NextAdvisory, got[1].Next) // warning finding → advisory
 }
 
 // TestRunFailFast verifies failFast bails at the first SeverityError but a
@@ -95,17 +116,17 @@ func TestRunFailFast(t *testing.T) {
 	t.Parallel()
 	v := newTestValidator(t)
 	warnFirst := Rule{
-		Code: codeADV01, Next: NextAdvisory,
+		Code: codeADV01,
 		Detect: func(vv *Validator) []ValidationResult {
 			return []ValidationResult{vv.newWarning(codeADV01, IssueRefNotFound, "", "w", "warn", "f")}
 		},
 	}
 	errRule := Rule{
-		Code: codeREF01, Next: NextBlock,
+		Code:   codeREF01,
 		Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01, 1) },
 	}
 	never := Rule{
-		Code: codeREF02, Next: NextBlock,
+		Code: codeREF02,
 		Detect: func(*Validator) []ValidationResult {
 			t.Error("rule after first error must not run in fail-fast mode")
 			return nil

@@ -320,7 +320,8 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
 - `kernel/governance/engine.go`：唯一执行体（`Validator.run` 单循环迭代 `allRules`）
 - `kernel/governance/rules_registry.go`：`allRules []Rule` 单一规则注册表（载体见下方 amendment）
 - `Rule` 承载分类元数据：`Phase`（Base/Strict/Dep/Health，取代 base/strict 两套规则集）+
-  `Next`（next-action 五级）+ 可选 `Metric`（距离函数）+ 编译期检查的 `Detect` 函数值
+  可选 `Next`（next-action 五级覆盖；默认由每条 finding 的 severity 派生 error→block / warning→advisory，
+  使混合 severity 规则的 warning 不会被误标 block）+ 可选 `Metric`（距离函数）+ 编译期检查的 `Detect` 函数值
 - `next-action` 类型：autofix / suggest / advisory / block / escalate
 - 规则带可选 `metric`（距离函数：deprecation 剩余天数 / 覆盖率 / finding 数），不只是 bool
 - 修 ADV-05 SeverityError 错分（一行：`newError` → `newWarning` + `Next: advisory`）

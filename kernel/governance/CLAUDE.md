@@ -79,13 +79,15 @@ func (v *Validator) validateADV05() []ValidationResult {
 
 新规则：写 detect 方法 → 在 `rules_registry.go` 的 `allRules` 加一个 `Rule{}` 条目 →
 在 `rule_inventory_test.go` 的 `goldenRuleIDs()` 加它的 code（`TestAllRulesMatchGolden` 锁集合 + 唯一性）。
-`Next` 取 `NextBlock`（error）或 `NextAdvisory`（warning）；`Metric` 仅在规则有真实距离时声明，否则省略（nil）。
+`Next` **不用填**——engine 按每条 finding 的 severity 派生（error→block / warning→advisory），
+只有非默认 M5 处置（autofix/suggest/escalate）才显式覆盖。`Metric` 仅在规则有真实距离时声明，否则省略（nil）。
 
 ```go
 var allRules = []Rule{
     // ... 已有规则 ...
     {
-        Code: codeADV05, Phase: PhaseBase, Next: NextAdvisory,
+        Code:   codeADV05,
+        Phase:  PhaseBase,
         Metric: (*Validator).adv05DeadEventCount, // 可选：有距离的规则才声明
         Detect: (*Validator).validateADV05,        // 方法表达式，编译期检查存在
     },
@@ -95,6 +97,8 @@ var allRules = []Rule{
 `Phase` 决定何时运行：`PhaseBase`（`gocell validate`）/ `PhaseStrict`（`--strict`）/
 `PhaseDep`（依赖图）/ `PhaseHealth`（`gocell check`）。ctx-bound 规则（仅 VERIFY-06）的 `Detect`
 是读 `v.runCtx` 的闭包。`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁「detect 方法必在 allRules 登记」。
+混合 severity 的规则（如 JOURNEY-STATUS-LIFECYCLE-01 / FMT-23 同时发 error 与 warning）靠 per-finding
+派生各自正确标 next，不会出现 warning 被标 block。
 
 ## 测试写法
 

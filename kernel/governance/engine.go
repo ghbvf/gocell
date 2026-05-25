@@ -87,8 +87,13 @@ type Metric func(v *Validator) (float64, bool)
 // findings (built via the locator constructors); the engine stamps Next/Metric.
 // See package doc for the open-source analogs this mirrors.
 type Rule struct {
-	Code   RuleCode
-	Phase  Phase
+	Code  RuleCode
+	Phase Phase
+	// Next is an OPTIONAL disposition override. When unset (""), the engine
+	// derives each finding's Next from its Severity (error→block, warning→
+	// advisory) — see resolveNext. Set it only for a non-default M5 disposition
+	// (autofix / suggest / escalate); no rule declares one yet, so it is "" for
+	// all current rules and the disposition is severity-derived per finding.
 	Next   NextAction
 	Metric Metric // optional; nil when the rule has no continuous distance
 	Detect func(v *Validator) []ValidationResult
@@ -118,8 +123,11 @@ func (v *Validator) run(ctx context.Context, rules []Rule, failFast bool) ([]Val
 }
 
 // stamp applies the rule's M3 metadata (Next, Metric) to each finding the rule
-// produced. Metric is evaluated once per run (project state is constant across a
-// single run) and attached only when applicable.
+// produced. Next is resolved per finding from its Severity (see resolveNext) so
+// a rule that emits both error and warning findings (e.g. JOURNEY-STATUS-
+// LIFECYCLE-01, FMT-23) labels each correctly; Rule.Next overrides only for
+// non-default dispositions. Metric is evaluated once per run (project state is
+// constant across a single run) and attached only when applicable.
 func (r Rule) stamp(v *Validator, found []ValidationResult) []ValidationResult {
 	var metric *float64
 	if r.Metric != nil {
@@ -128,10 +136,26 @@ func (r Rule) stamp(v *Validator, found []ValidationResult) []ValidationResult {
 		}
 	}
 	for i := range found {
-		found[i].Next = r.Next
+		found[i].Next = resolveNext(r.Next, found[i].Severity)
 		found[i].Metric = metric
 	}
 	return found
+}
+
+// resolveNext returns the explicit Rule.Next override when set, otherwise the
+// severity default: SeverityError → NextBlock, SeverityWarning → NextAdvisory.
+// Deriving from severity (rather than a hand-set per-rule value) keeps a warning
+// from ever being labeled "block" and removes the per-rule classification error
+// surface; the explicit override is reserved for the M5 dispositions
+// (autofix / suggest / escalate), which no rule declares yet.
+func resolveNext(override NextAction, sev Severity) NextAction {
+	if override != "" {
+		return override
+	}
+	if sev == SeverityWarning {
+		return NextAdvisory
+	}
+	return NextBlock
 }
 
 // rulesForPhases returns the subset of allRules whose Phase is in the given set,
