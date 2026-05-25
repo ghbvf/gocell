@@ -81,7 +81,7 @@ func (w *contractRecordingWriter) Write(_ context.Context, e outbox.Entry) error
 type contractTxRunner struct{}
 
 func (contractTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(mem.WithTxContext(ctx))
+	return fn(ctx)
 }
 
 var _ persistence.TxRunner = contractTxRunner{}

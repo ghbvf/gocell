@@ -28,12 +28,12 @@ const (
 // # Lock contract
 //
 // Methods on UserRepository follow the single-lock rule (see store.go package
-// godoc). Each method checks r.store.txHoldsLock(ctx):
+// godoc). Each method checks r.store.inLiveTx(ctx):
 //
-//   - txHoldsLock==true: store.mu is already held by memTxRunner.RunInTx on
-//     the calling goroutine — do NOT acquire store.mu (sync.Mutex is not
-//     reentrant; re-acquiring would deadlock).
-//   - txHoldsLock==false (no token / WithTxContext / foreign store): acquire
+//   - inLiveTx==true: store.mu is already held by memTxRunner.RunInTx on
+//     the calling goroutine (a live lease is in ctx) — do NOT acquire store.mu
+//     (sync.Mutex is not reentrant; re-acquiring would deadlock).
+//   - inLiveTx==false (no lease / dead lease / foreign store): acquire
 //     store.mu for the duration of this method call.
 //
 // ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) follow the same
@@ -50,7 +50,7 @@ type UserRepository struct {
 // Create persists a new User. Safe to call both inside and outside a RunInTx
 // closure; see UserRepository lock contract.
 func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -74,7 +74,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 // GetByID returns the User with the given ID. Safe to call both inside and
 // outside a RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -91,7 +91,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 // GetByUsername returns the User with the given username. Safe to call both
 // inside and outside a RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -133,7 +133,7 @@ func (r *UserRepository) UpdateProfile(
 	name, email *domain.NonEmpty,
 	now time.Time,
 ) (*domain.User, error) {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -213,7 +213,7 @@ func (r *UserRepository) UpdateLockState(
 	status domain.UserStatus,
 	now time.Time,
 ) error {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -286,7 +286,7 @@ func (r *UserRepository) UpdatePasswordResetFlag(
 	required bool,
 	now time.Time,
 ) error {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -415,7 +415,7 @@ func (r *UserRepository) UpdatePassword(
 	resetRequired bool,
 	expectedPV int64,
 ) (int64, error) {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -462,7 +462,7 @@ func (r *UserRepository) UpdatePassword(
 //
 // Returns ErrAuthUserNotFound when no user matches userID.
 func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int64, error) {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -514,7 +514,7 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int
 // UpdateLockoutFields, then may call ApplyInTx(LockUser) which goes through
 // a separate Update path).
 func (r *UserRepository) UpdateLockoutFields(ctx context.Context, user *domain.User) error {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}
@@ -535,7 +535,7 @@ func (r *UserRepository) UpdateLockoutFields(ctx context.Context, user *domain.U
 // Delete removes the User with the given ID. Safe to call both inside and
 // outside a RunInTx closure; see UserRepository lock contract.
 func (r *UserRepository) Delete(ctx context.Context, id string) error {
-	if !r.store.txHoldsLock(ctx) {
+	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
 	}

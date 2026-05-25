@@ -16,58 +16,79 @@
 // NewStore to make the shared-state choice explicit and prevent accidental
 // dual-store wiring that would silently lose cross-repo atomicity.
 //
-// # Single-lock rule (R1) with lock-ownership truth (PR fix/238)
+// # Single-lock rule with a self-invalidating lock-ownership lease (#945, #972)
 //
 // store.mu is the sole synchronization primitive for all map state. There are
 // exactly two lock-acquisition sites:
 //
-//  1. memTxRunner.RunInTx — acquires store.mu for the entire transaction
-//     closure. This gives all tx-path operations serialized, atomic access
-//     equivalent to PG SELECT FOR UPDATE held until commit.
+//  1. memTxRunner.runLocked (the body of RunInTx) — acquires store.mu for the
+//     entire transaction closure via txlock.Acquire(&store.mu). This gives all
+//     tx-path operations serialized, atomic access equivalent to PG SELECT FOR
+//     UPDATE held until commit.
 //
 //  2. Individual repository methods called OUTSIDE a held lock — each acquires
 //     store.mu for its own read or write, then releases it before returning.
 //
-// The tx sentinel in ctx is a typed *memTxToken, NOT a bool. Only RunInTx —
-// which has *just called store.mu.Lock() — injects a token with
-// holdsLock=true bound to its own *Store. Repository methods skip their
-// per-call lock acquisition ONLY when Store.txHoldsLock(ctx) proves that THIS
-// store's mutex is genuinely held on the calling goroutine:
+// The ctx carries a txlock.Lease value (see internal/txlock), NOT a bool and NOT
+// a wrapper struct. Only runLocked — which has just called
+// txlock.Acquire(&store.mu) — injects a live lease. Repository methods skip their
+// per-call lock acquisition ONLY when Store.inLiveTx(ctx) reports the lease is
+// live AND bound to THIS store's mutex:
 //
-//   - holdsLock==true && token.store==s : RunInTx holds store.mu for the
-//     whole closure → skip the per-call lock (sync.Mutex is not reentrant;
+//   - inLiveTx true (lease live, lease.mu == &store.mu) : runLocked holds store.mu
+//     for the whole closure → skip the per-call lock (sync.Mutex is not reentrant;
 //     re-acquiring would deadlock).
-//   - otherwise (no token / holdsLock==false / foreign store) : acquire
-//     store.mu per call.
+//   - otherwise (no lease / dead lease / foreign store's mutex) : acquire store.mu
+//     per call.
 //
-// Why a typed token, not a bool: the previous bool sentinel could not
-// distinguish "RunInTx holds the lock" from "WithTxContext injected the
-// sentinel but holds no lock". A non-locking TxRunner fake injecting the bool
-// made repo methods skip locking with no lock actually held → concurrent map
-// writes under multi-goroutine load (fatal error: concurrent map writes; the
-// flake fixed by PR fix/238). With holdsLock as an unexported field whose
-// only true-construction site is memTxRunner.RunInTx in this file (which
-// really holds the lock), "in a tx context yet not holding the lock, so skip
-// locking" is no longer expressible by any code outside package mem.
-// WithTxContext yields holdsLock=false, so its callers always take the
-// per-call lock and can never race the maps — at the cost of no cross-method
-// atomicity (single-goroutine test helpers do not need it; real cross-method
-// atomicity requires Store.TxRunner()). This aligns with ent (*Tx in
+// Two AI-robust axes, both carried by the sealed txlock package (not archtest):
+//
+//   - Forge (upstream Hard): txlock.Lease's fields are unexported, so the ONLY
+//     way to obtain a lease whose Live(&store.mu) is true is
+//     txlock.Acquire(&store.mu), which actually Lock()s the mutex. "In a tx
+//     context yet not holding the lock, so skip locking" is inexpressible — not
+//     even inside package mem (mem may call Acquire, but Acquire locks; mem cannot
+//     forge a live lease through a struct literal).
+//   - Liveness (downstream Hard): the lease self-invalidates. Acquire's unlock
+//     closure (the sole writer of the live flag) flips it dead before store.mu is
+//     released. A ctx that escapes the runLocked closure — captured by a goroutine
+//     or an after-commit hook — therefore reports inLiveTx==false afterwards and
+//     falls back to per-call locking (fail-closed). This closes the
+//     capability-escape that the earlier pointer-only witness left open (#972): the
+//     witness proved the mutex was locked at SOME point, never that it is locked
+//     NOW. Mirrors database/sql *Tx.done → ErrTxDone invalidation on completion.
+//
+// History: the original bool sentinel (pre-#945) could not distinguish "RunInTx
+// holds the lock" from "a non-locking fake injected the sentinel"; a fake making
+// repo methods skip locking with no lock held caused concurrent map writes under
+// multi-goroutine load (fatal error: concurrent map writes; flake fixed by PR
+// fix/238 → #945 witness → #972 lease). The model aligns with ent (*Tx in
 // context), GORM (in-tx via ConnPool type assertion) and Kratos
-// (*queries.Queries in context): the context carries a strongly-typed
-// ownership object, never a bool. See ADR
+// (*queries.Queries in context): the context carries a strongly-typed,
+// resource-bound ownership object, never a bool. See ADR
 // docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
+//
+// Concurrency boundary: the lease guards AFTER-RETURN escape, not
+// CONCURRENT-DURING-TX use. Two goroutines sharing one LIVE tx ctx (e.g. a
+// goroutine spawned inside the closure that touches the repo with the inner ctx
+// while the parent still holds the lock) both see inLiveTx==true and skip
+// locking → the non-holder races the maps. This is the database/sql "*Tx must not
+// be used concurrently by multiple goroutines" boundary and is out of scope for
+// the lease, exactly as ErrTxDone does not make *sql.Tx concurrency-safe.
+// Operational rule: a goroutine spawned inside the closure MUST NOT use the inner
+// ctx to call repository methods — pass context.Background() (or hand results back
+// over a channel) so the goroutine takes its own per-call lock.
 //
 // MEM-STORE-RWMUTEX-READ-CONCURRENCY: store.mu could become sync.RWMutex so
 // outside-tx read methods take RLock (cf. client-go ThreadSafeStore).
 // Deferred — orthogonal to the flake root fix and independently verifiable.
 //
 // ForUpdate variants (GetByIDForUpdate, GetByUsernameForUpdate) follow the
-// same rule: inside memTxRunner.RunInTx they read under the held store.mu
-// (full FOR-UPDATE-until-commit serialization); under a foreign CellTxManager
-// or WithTxContext they take store.mu per call (functional fallback, no
-// cross-statement serialization). They never hard-fail on the TxRunner
-// pairing — see #501 (that broke corebundle/ssobff/demo logins).
+// same rule: inside RunInTx they read under the held store.mu (full
+// FOR-UPDATE-until-commit serialization); under a foreign CellTxManager they take
+// store.mu per call (functional fallback, no cross-statement serialization). They
+// never hard-fail on the TxRunner pairing — see #501 (that broke
+// corebundle/ssobff/demo logins).
 package mem
 
 import (
@@ -75,36 +96,29 @@ import (
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/mem/internal/txlock"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
-// memTxKey is the context key carrying the *memTxToken injected by
-// memTxRunner.RunInTx (holdsLock=true) or WithTxContext (holdsLock=false).
-// Repository methods consult it via Store.txHoldsLock to decide whether
-// store.mu is already held on the calling goroutine.
+// memTxKey is the context key carrying the txlock.Lease injected by
+// memTxRunner.runLocked. A LIVE lease authorizes repository methods to skip their
+// per-call store.mu lock (store.mu is held for the whole runLocked closure); the
+// zero Lease (absent key) means the method must take its own lock. Repository
+// methods consult it via Store.inLiveTx.
+//
+// The ctx carries the txlock.Lease value directly — no wrapper struct. The ONLY
+// way to obtain a Lease whose Live(&store.mu) is true is txlock.Acquire(&store.mu)
+// (which Lock()s the mutex and arms the live flag), and the sole sanctioned
+// Acquire site is runLocked. So "in a tx context AND holding the lock" is
+// inexpressible without genuinely holding the lock (upstream Hard), and the lease
+// self-invalidates when unlock runs so a ctx that escapes the closure fails
+// closed (downstream Hard) — see internal/txlock.
 type memTxKey struct{}
-
-// memTxToken is the typed tx-context value. It is unexported and its fields
-// are unexported: the ONLY site that can construct a token with
-// holdsLock=true is memTxRunner.RunInTx in this file (which has just called
-// store.mu.Lock()). No code outside package mem — including test TxRunner
-// fakes — can express "in a tx context AND holding the lock"; the only
-// out-of-package entry, WithTxContext, hard-codes holdsLock=false. This is
-// the upstream half of the AI-robust Hard funnel (MEM-TX-LOCK-OWNERSHIP-01).
-type memTxToken struct {
-	// store identifies which *Store's mutex the holder claims to hold. A
-	// token minted for store A must not let store B's repo methods skip
-	// their lock (cross-store safety).
-	store *Store
-	// holdsLock is true iff the injector currently holds store.mu on the
-	// calling goroutine for the lifetime of the ctx (the RunInTx closure).
-	holdsLock bool
-}
 
 // memTxRunner is a Store-bound TxRunner that acquires store.mu for the entire
 // transaction closure. All repository operations invoked from within the
-// closure run without additional locking (txHoldsLock proves the lock is
+// closure run without additional locking (inLiveTx proves the lock is
 // held), serializing them atomically — equivalent to PG SELECT FOR UPDATE
 // held until commit.
 //
@@ -114,14 +128,20 @@ type memTxToken struct {
 type memTxRunner struct{ s *Store }
 
 // RunInTx acquires store.mu (exclusive write lock) for the entire duration of
-// fn, injecting a holdsLock=true *memTxToken bound to this store so that
-// repository methods skip their individual lock acquisitions. This serializes
-// all concurrent mem writes for the lifetime of fn — equivalent to a PG
-// transaction WITH SELECT FOR UPDATE.
+// fn (via runLocked), injecting a live txlock.Lease so that repository methods
+// skip their individual lock acquisitions. This serializes all concurrent mem
+// writes for the lifetime of fn — equivalent to a PG transaction WITH SELECT FOR
+// UPDATE.
 //
 // Lock contract: store.mu is held from the start of fn until fn returns.
-// Repository methods called from fn must not acquire store.mu (txHoldsLock
-// returns true for this store, so they skip locking to avoid a deadlock).
+// Repository methods called from fn must not acquire store.mu (inLiveTx returns
+// true for this store, so they skip locking to avoid a deadlock).
+//
+// Nested RunInTx (e.g. inside an after-commit hook): WithAfterCommitRegistry
+// returns drainAfterCommit=false when a registry is already present in ctx, so
+// hooks registered by a RunInTx invoked from within a hook accumulate into the
+// outer registry and fire in the outer drain pass, not from the nested call.
+// (Upstream kernel/persistence semantics, unchanged by the lease rework.)
 func (r memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
 	mark := persistence.AfterCommitMark(ctx)
@@ -130,20 +150,28 @@ func (r memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error
 		return err
 	}
 	if drainAfterCommit {
-		// Drain AFTER releasing store.mu. store.mu is non-reentrant; the hook ctx
-		// no longer carries the holdsLock token, so a hook that legitimately
-		// touches the store would acquire store.mu fresh — under the lock that
-		// would deadlock. Mirrors PG firing hooks after the commit is durable.
+		// Drain AFTER releasing store.mu. store.mu is non-reentrant; the drain ctx
+		// is the outer ctx (no lease), so a hook that legitimately touches the
+		// store acquires store.mu fresh. Even a hook that captured the inner ctx
+		// is safe now: runLocked's defer unlock() flipped the lease dead before
+		// this point (#972), so inLiveTx reports false on the captured ctx and the
+		// hook takes the per-call lock instead of stale-skipping. Mirrors PG firing
+		// hooks after the commit is durable.
 		persistence.RunAfterCommitHooks(ctx)
 	}
 	return nil
 }
 
-// runLocked holds store.mu for the duration of fn, injecting the holdsLock token.
+// runLocked holds store.mu for the duration of fn, injecting the txlock.Lease
+// that proves the lock. This is the sole sanctioned txlock.Acquire site
+// (MEM-TX-LOCK-OWNERSHIP-01 W1): the lease it mints is the only one that makes
+// inLiveTx return true for this store, and it self-invalidates when unlock runs,
+// so an inner ctx that escapes this frame reports inLiveTx==false afterwards and
+// falls back to per-call locking (#972).
 func (r memTxRunner) runLocked(ctx context.Context, fn func(context.Context) error) error {
-	r.s.mu.Lock()
-	defer r.s.mu.Unlock()
-	return fn(context.WithValue(ctx, memTxKey{}, &memTxToken{store: r.s, holdsLock: true}))
+	lease, unlock := txlock.Acquire(&r.s.mu)
+	defer unlock()
+	return fn(context.WithValue(ctx, memTxKey{}, lease))
 }
 
 // Store is the shared backing for an in-memory accesscore deployment. The
@@ -168,14 +196,20 @@ type Store struct {
 	clock     clock.Clock
 }
 
-// txHoldsLock reports whether ctx carries a *memTxToken proving that THIS
-// store's mu is already held on the calling goroutine (the RunInTx closure).
-// Returns false for: no token, WithTxContext's holdsLock=false token, or a
-// token minted for a different *Store. A false result means the caller MUST
-// acquire store.mu for its own read/write.
-func (s *Store) txHoldsLock(ctx context.Context) bool {
-	tok, _ := ctx.Value(memTxKey{}).(*memTxToken)
-	return tok != nil && tok.holdsLock && tok.store == s
+// inLiveTx reports whether ctx carries a LIVE txlock.Lease proving THIS store's
+// mu is held on the calling goroutine (inside the runLocked closure). Returns
+// false for: no lease (absent key → zero Lease), a lease minted for a different
+// *Store's mutex, or a lease whose tx already returned (unlock flipped it dead —
+// #972). A false result means the caller MUST acquire store.mu for its own
+// read/write.
+//
+// MEM-TX-LOCK-OWNERSHIP-01 W2 pins this exact form (single return of
+// `l.Live(&s.mu)` where l is the type-asserted lease); the identity + liveness
+// logic lives in the sealed, reflect-frozen txlock.Lease.Live. The zero Lease
+// from a failed type assertion is safe (Live's mu/live nil-guards report false).
+func (s *Store) inLiveTx(ctx context.Context) bool {
+	l, _ := ctx.Value(memTxKey{}).(txlock.Lease)
+	return l.Live(&s.mu)
 }
 
 // NewStore constructs an empty shared Store. clk must be non-nil; mem
@@ -206,7 +240,7 @@ func (s *Store) RoleRepository() *RoleRepository {
 }
 
 // TxRunner returns a Store-bound persistence.TxRunner. It acquires store.mu
-// for the entire RunInTx closure and injects a holdsLock=true token so that
+// for the entire RunInTx closure and injects a live txlock.Lease so that
 // repository methods skip their individual lock acquisitions.
 //
 // This is the only correct TxRunner to use with repos vended by this Store.
@@ -214,36 +248,13 @@ func (s *Store) RoleRepository() *RoleRepository {
 //
 //	persistence.WrapForCell(store.TxRunner())
 //
-// Using any other TxRunner (including outbox.DemoTxRunner or a fake that injects
-// the sentinel without holding store.mu) does not break safety — repo methods
-// fall back to per-call locking — but it forfeits cross-method serialization.
+// Using any other TxRunner (including outbox.DemoTxRunner or a fake that does not
+// hold store.mu) does not break safety — repo methods fall back to per-call
+// locking (no live lease in ctx) — but it forfeits cross-method serialization.
 // As a visible consequence, ChangePassword may then return
 // ErrAuthOldPasswordIncorrect (if a concurrent write replaces the hash between
 // the read and the bcrypt comparison) in addition to ErrVersionConflict; the
 // Store-paired TxRunner's FOR-UPDATE-until-commit serialization prevents this.
 func (s *Store) TxRunner() persistence.TxRunner {
 	return memTxRunner{s: s}
-}
-
-// WithTxContext returns ctx carrying a holdsLock=false *memTxToken. Test
-// helpers that need GetByIDForUpdate / GetByUsernameForUpdate to take the
-// in-tx code path outside a full RunInTx (e.g. a single-goroutine test) use
-// this. Unlike RunInTx, it does NOT hold store.mu and does NOT authorize
-// skipping the per-call lock: every repo method invoked under this ctx still
-// acquires store.mu for its own read/write. It therefore provides no
-// cross-method atomicity — concurrent goroutines are each serialized per
-// call but a multi-statement read-modify-write is not atomic. For real
-// cross-method atomicity use Store.TxRunner().
-//
-// Token semantics: the injected token has store==nil and holdsLock==false.
-// txHoldsLock's tok.store == s is a pointer comparison, which is safe for a
-// nil tok.store in Go (no field access); the holdsLock==false short-circuit
-// additionally means that comparison is never reached. Either way, there is no
-// nil dereference. The use case is not limited to ForUpdate variants: any code
-// that must enter the in-tx branch (e.g. a fake TxRunner injecting transaction
-// context without holding the lock) can use this. Single-goroutine helpers are
-// safe; for multi-goroutine scenarios requiring cross-method atomicity, use
-// Store.TxRunner() instead.
-func WithTxContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, memTxKey{}, &memTxToken{holdsLock: false})
 }

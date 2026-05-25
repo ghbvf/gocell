@@ -298,9 +298,9 @@ func TestGetByUsernameForUpdate_InsideRunInTx(t *testing.T) {
 	assert.Equal(t, "usr-intx-un-001", got.ID)
 }
 
-// TestGetByIDForUpdate_WithTxContext verifies that mem.WithTxContext can be
-// used by custom TxRunners to inject the sentinel for GetByIDForUpdate.
-func TestGetByIDForUpdate_WithTxContext(t *testing.T) {
+// TestGetByIDForUpdate_Standalone verifies GetByIDForUpdate works on the
+// standalone (per-call lock) path, outside any RunInTx.
+func TestGetByIDForUpdate_Standalone(t *testing.T) {
 	store := NewStore(clock.Real())
 	repo := store.UserRepository()
 
@@ -309,9 +309,8 @@ func TestGetByIDForUpdate_WithTxContext(t *testing.T) {
 	user.ID = "usr-withctx-001"
 	require.NoError(t, repo.Create(context.Background(), user))
 
-	// WithTxContext must allow GetByIDForUpdate to succeed.
-	ctx := WithTxContext(context.Background())
-	got, err := repo.GetByIDForUpdate(ctx, "usr-withctx-001")
+	// GetByIDForUpdate must succeed on the standalone per-call lock path.
+	got, err := repo.GetByIDForUpdate(context.Background(), "usr-withctx-001")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "usr-withctx-001", got.ID)
