@@ -505,10 +505,13 @@ var expectedFunctions = []expectedFunction{
 // users_authz_epoch_positive, sessions_authz_epoch_at_issue_positive, and
 // refresh_tokens_authz_epoch_at_issue_positive are added by migration 028
 // (S4d P2.a — authz_epoch > 0 hard DB invariant).
+// users_password_version_non_negative is added by migration 033
+// (#940 P2-1 — password_version >= 0 defense-in-depth).
 var expectedChecks = []expectedCheck{
 	{Table: "users", Name: "users_status_chk"},
 	{Table: "users", Name: "users_creation_source_chk"},
 	{Table: "users", Name: "users_authz_epoch_positive"},
+	{Table: "users", Name: "users_password_version_non_negative"},
 	// Auto-lockout counter non-negativity (032_users_failed_login.sql) —
 	// ACCESSCORE-ACCOUNT-LOCKOUT-AUTO-LOCK-01. Named explicitly in the
 	// migration via CONSTRAINT users_failed_login_count_positive so the

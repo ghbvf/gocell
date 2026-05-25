@@ -28,7 +28,7 @@ endpoints:
         description: "Unauthorized — missing or invalid bearer token, or old password incorrect (ErrAuthOldPasswordIncorrect)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated subject is neither self nor admin"
+        description: "Forbidden — authenticated subject is neither self nor admin, or the subject account is suspended/locked (ERR_AUTH_USER_NOT_ACTIVE)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — user with given id does not exist"
