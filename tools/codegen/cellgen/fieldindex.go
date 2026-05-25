@@ -1,10 +1,10 @@
 package cellgen
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -45,10 +45,14 @@ func IndexCellStructFields(cellGoPath string) (map[string]string, error) {
 				continue
 			}
 			if existing, dup := idx[pkg]; dup {
-				return nil, fmt.Errorf(
-					"cellgen fieldindex: package %q maps to both fields %q and %q in %s — "+
-						"subscription field resolution requires a unique *%s.T field",
-					pkg, existing, name, cellGoPath, pkg)
+				return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+					"cellgen fieldindex: package selector maps to multiple cell struct fields; subscription field resolution requires a unique *<pkg>.T field",
+					errcode.WithDetails(
+						slog.String("pkg", pkg),
+						slog.String("field1", existing),
+						slog.String("field2", name),
+						slog.String("cellGoPath", cellGoPath),
+					))
 			}
 			idx[pkg] = name
 		}
@@ -105,15 +109,18 @@ func fieldPkgName(field *ast.Field) (pkg, name string, ok bool) {
 // structural mismatch).
 func resolveSliceField(fieldIndex map[string]string, cellID, sliceID string) (string, error) {
 	if fieldIndex == nil {
-		return "", fmt.Errorf("cellgen build: fieldIndex is nil for cell %q — "+
-			"IndexCellStructFields must be called before BuildCellSpec when subscriptions exist",
-			cellID)
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: fieldIndex is nil; IndexCellStructFields must run before BuildCellSpec when subscriptions exist",
+			errcode.WithDetails(slog.String("cellID", cellID)))
 	}
 	field, ok := fieldIndex[sliceID]
 	if !ok {
-		return "", fmt.Errorf("cellgen build: no cell.go struct field for slice %q in cell %q "+
-			"(cell struct must have a *%s.T pointer field for subscription HandlerExpr generation)",
-			sliceID, cellID, sliceID)
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: no cell.go struct field for subscribing slice; cell struct must declare a *<sliceID>.T pointer field for subscription HandlerExpr generation",
+			errcode.WithDetails(
+				slog.String("sliceID", sliceID),
+				slog.String("cellID", cellID),
+			))
 	}
 	return field, nil
 }
