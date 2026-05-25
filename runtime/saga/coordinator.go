@@ -421,7 +421,11 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		// per-instance tokens; using the batch token would break CAS fencing.
 		c.activeLeases.Store(ci.Instance.ID, ci.LeaseID)
 		if err := c.driveOne(ctx, ci); err != nil {
-			c.logger.WarnContext(ctx, "saga: drive failed",
+			// Sentinel-aware severity: ErrSagaStaleLease (handoff race) →
+			// Info; ErrSagaNotFound (instance gone) → Warn; default → Warn.
+			// Keeps multi-coordinator deployments from spamming WARN
+			// dashboards on every lease lost during normal handoff.
+			c.logger.Log(ctx, journalErrLevel(err), "saga: drive failed",
 				slog.String("instance_id", string(ci.Instance.ID)),
 				slog.String("definition_id", string(ci.Instance.DefinitionID)),
 				slog.String("lease_id", string(ci.LeaseID)),
@@ -606,7 +610,12 @@ func (c *Coordinator) heartbeatOnce(ctx context.Context) {
 		}
 		ok, err := c.journal.Heartbeat(ctx, instanceID, leaseID, c.cfg.LeaseDuration)
 		if err != nil {
-			c.logger.WarnContext(ctx, "saga: heartbeat failed",
+			// Heartbeat returns (false, nil) on stale lease or missing
+			// instance by contract — any err here is real infra (PG
+			// outage, ctx cancel) or KindInvalid (programmer error). Both
+			// stay at Warn; classifier still routes if a future Journal
+			// impl widens the error shape.
+			c.logger.Log(ctx, journalErrLevel(err), "saga: heartbeat failed",
 				slog.String("instance_id", string(instanceID)),
 				slog.Any("error", err))
 			return true
