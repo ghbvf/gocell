@@ -117,6 +117,10 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = internalLn.Close() })
 
+	healthLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = healthLn.Close() })
+
 	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
@@ -226,6 +230,12 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 			[]kauth.ListenerAuth{authtest.MustAuthServiceToken(nonceStore, ring)},
 			bootstrap.WithListenerNet(internalLn),
 		),
+		bootstrap.WithListener(
+			cell.HealthListener,
+			healthLn.Addr().String(),
+			[]kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn),
+		),
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newIntegrationTestConsumerBase(t, clock.Real())),
@@ -245,10 +255,10 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		}
 	})
 
-	// Wait for the primary listener to serve /healthz (signals full bootstrap).
-	primaryAddr := primaryLn.Addr().String()
+	// Wait for the health listener to serve /healthz (signals full bootstrap).
+	healthAddr := healthLn.Addr().String()
 	testwait.External(t, "integration-internal-rpc-caller-cell-asserted", func() bool {
-		resp, err := callerCellHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := callerCellHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
 		if err != nil {
 			return false
 		}

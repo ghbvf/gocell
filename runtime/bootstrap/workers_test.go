@@ -49,6 +49,7 @@ func TestWithRouterOptions(t *testing.T) {
 func TestRun_WithWorkers_Shutdown(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newLocalListener(t)
 
 	asm := assembly.New(assembly.Config{ID: "test-workers", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
@@ -60,6 +61,7 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithWorkers(w),
 	)
@@ -69,9 +71,8 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	// Wait for HTTP server to become ready instead of sleeping.
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get("http://" + addr + "/healthz")
+		resp, err := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/healthz")
 		if err != nil {
 			return false
 		}

@@ -36,24 +36,34 @@ Kubelet / Prometheus    │              health  :9091                │
 
 For full variable reference see `docs/ops/env-vars.md`.
 
-## Health-listener fallback (test/dev convenience)
+## Health-listener required (no fallback)
 
-When no `cell.HealthListener` is declared via `WithListener`,
-`phase5CollectRouteGroups` automatically remaps the framework-owned health
-groups (`/healthz`, `/readyz`, `/metrics`) onto `cell.PrimaryListener` so
-single-listener bootstraps still expose health endpoints. This is intended
-for tests, examples, and one-port dev runs only.
+A dedicated `cell.HealthListener` **must** be declared via `WithListener`.
+The framework-owned health groups (`/healthz`, `/readyz`, `/metrics`) live
+solely on that listener. When none is declared, bootstrap **fails fast at
+phase0** (`validateHTTPListenerConfigs` → `ERR_CELL_INVALID_CONFIG`):
 
-**Production deployments must declare an explicit `HealthListener`** — the
-fallback path collapses port-level isolation between business traffic and
-infra probes, and exposes `/metrics` on the public port. Kubernetes liveness
-/ readiness probes and Prometheus scrape targets must point at the dedicated
-health port. In production, bind the health listener to a Pod-reachable address
-such as `:9091` unless the probe/scrape runs in the same network namespace.
+```
+bootstrap: framework health routes (/healthz, /readyz, /metrics) require a
+dedicated cell.HealthListener; add WithListener(cell.HealthListener, ...)
+```
 
-The fallback is a structural convenience, not a deployment mode. There is no
-flag to opt out; declaring `WithListener(cell.HealthListener, ...)` simply
-disables the remap.
+There is **no silent fallback and no opt-in escape hatch** (#673). The
+pre-#673 behavior — remapping the health groups onto `cell.PrimaryListener`
+when no HealthListener was declared — silently collapsed port-level isolation
+between business traffic and infra probes (and risked exposing `/metrics` on
+the public port), so it was removed. Every deployment declares a HealthListener:
+
+- **Production**: bind a Pod-reachable address such as `:9091` (or loopback
+  `127.0.0.1:9091` with `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` for same-netns
+  sidecar / exec probes). `cmd/corebundle` defaults `GOCELL_HTTP_HEALTH_ADDR`
+  to `127.0.0.1:9091`, so the listener is always declared.
+- **Tests / one-port dev**: declare an ephemeral
+  `WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}})`.
+
+Enforcement: phase0 runtime fail-fast (above) + archtest `SEC-FAIL-CLOSED-10`
+(a `package main` declaring a PrimaryListener must also declare a
+HealthListener).
 
 ## k8s Liveness / Readiness Probe Migration
 
@@ -348,7 +358,7 @@ Workloads built against pre-PR-A14a binaries served `/api/v1/*`, `/internal/v1/*
 4. **Scrape**: move the Prometheus scrape job target from the primary port to the health port (see [Prometheus Scrape Config Migration](#prometheus-scrape-config-migration)).
 5. **Roll-out**: deploy the new binary into a canary pod first. The canary serves `/api/v1/*` on the same external endpoint, so Ingress / Service stays valid throughout the swap; the only externally observable change is that `/healthz` on `:8080` starts returning 404 — which is why the probe swap in step 3 must land before traffic shifts.
 
-If existing Pods cannot expose new container ports during the roll-out (for example, a `hostNetwork` deployment fully shared with another component), keep the legacy fallback path on by **not** declaring a `HealthListener` — the framework remaps `/healthz`, `/readyz`, `/metrics` onto the primary listener (see [Health-listener fallback (test/dev convenience)](#health-listener-fallback-testdev-convenience)). This is intended as a transient escape hatch, not a steady state.
+A `HealthListener` is mandatory — there is no single-port fallback (#673; see [Health-listener required (no fallback)](#health-listener-required-no-fallback)). If existing Pods cannot expose a new container port during the roll-out (for example, a `hostNetwork` deployment fully shared with another component), bind the HealthListener to a distinct **loopback** port and set `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1`, then probe/scrape it via a same-netns exec probe or sidecar until the new container port can be exposed. Omitting the HealthListener is not an option — bootstrap fails fast at phase0.
 
 ## Troubleshooting
 
@@ -360,7 +370,7 @@ Three failure modes have been observed in real deployments. Each entry links to 
 
 **Cause**: The default health bind is `127.0.0.1:9091`, which is unreachable from the kubelet via Pod IP. Same-netns probes (exec probes, sidecars) work; `httpGet` does not.
 
-**Fix**: Set `GOCELL_HTTP_HEALTH_ADDR=:9091` (or any Pod-reachable address). Setting `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` only acknowledges the loopback bind so corebundle does not refuse to start — it does **not** make the endpoint reachable from the kubelet. `LOCAL_ONLY=1` is correct only for same-pod sidecar / exec-probe deployments where the probe runs inside the container netns. See [Health-listener fallback (test/dev convenience)](#health-listener-fallback-testdev-convenience).
+**Fix**: Set `GOCELL_HTTP_HEALTH_ADDR=:9091` (or any Pod-reachable address). Setting `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` only acknowledges the loopback bind so corebundle does not refuse to start — it does **not** make the endpoint reachable from the kubelet. `LOCAL_ONLY=1` is correct only for same-pod sidecar / exec-probe deployments where the probe runs inside the container netns. See [Health-listener fallback (test/dev convenience)](#health-listener-required-no-fallback).
 
 ### `/internal/v1/*` requests succeed from unrelated pods
 

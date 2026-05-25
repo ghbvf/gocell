@@ -41,7 +41,7 @@ func errFullPhases(t *testing.T, err error) string {
 	return err.Error()
 }
 
-// --- phase5CollectRouteGroups: HealthListener fallback tests (R2-07) ---
+// --- phase5CollectRouteGroups: framework health group listener assignment ---
 
 // buildPhase5State constructs a minimal phaseState ready for
 // phase5CollectRouteGroups: it has an asm, a hh, and the registeredCheckers
@@ -68,48 +68,23 @@ func buildRouter(t *testing.T, ref cell.ListenerRef) *router.Router {
 	return r
 }
 
-// TestPhase5CollectRouteGroups_NoHealthListener_RemapsHealthGroupsToPrimary is an
-// intentional white-box test: b := New(WithClock(clock.Real())) bypasses phase0ValidateOptions (which would
-// reject a Bootstrap with no listeners). This is valid because phase5CollectRouteGroups
-// is a pure computation step — it only inspects the routers map and the healthRouteGroupOpts
-// field; it does not depend on any phase0 side-effects or listener validation state.
-// Testing it in isolation verifies the health-group fallback logic without the overhead
-// of a full Run() lifecycle.
-func TestPhase5CollectRouteGroups_NoHealthListener_RemapsHealthGroupsToPrimary(t *testing.T) {
+// TestPhase5CollectRouteGroups_HealthGroupsTargetHealthListener is an
+// intentional white-box test: b := New(WithClock(clock.Real())) bypasses
+// phase0ValidateOptions. phase5CollectRouteGroups is a pure computation step —
+// it builds the framework health groups, which always target
+// cell.HealthListener. #673 removed the fallback remap onto PrimaryListener, so
+// the assignment no longer depends on which listeners are declared.
+func TestPhase5CollectRouteGroups_HealthGroupsTargetHealthListener(t *testing.T) {
 	t.Parallel()
 	b := New(WithClock(clock.Real()))
 	s := buildPhase5State(t)
 
-	routers := map[cell.ListenerRef]*router.Router{
-		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
-	}
-
-	groups := b.phase5CollectRouteGroups(s, routers)
+	groups := b.phase5CollectRouteGroups(s)
 
 	require.NotEmpty(t, groups, "phase5 must always produce framework health groups")
-
-	for i, rg := range groups {
-		assert.Equal(t, cell.PrimaryListener, rg.Listener,
-			"group[%d]: with no HealthListener, every framework health group must be remapped to PrimaryListener", i)
-	}
-}
-
-func TestPhase5CollectRouteGroups_HealthListenerPresent_PreservesHealthListener(t *testing.T) {
-	t.Parallel()
-	b := New(WithClock(clock.Real()))
-	s := buildPhase5State(t)
-
-	routers := map[cell.ListenerRef]*router.Router{
-		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
-		cell.HealthListener:  buildRouter(t, cell.HealthListener),
-	}
-
-	groups := b.phase5CollectRouteGroups(s, routers)
-
-	require.NotEmpty(t, groups)
 	for i, rg := range groups {
 		assert.Equal(t, cell.HealthListener, rg.Listener,
-			"group[%d]: with HealthListener declared, framework health groups must stay on HealthListener (no fallback remap)", i)
+			"group[%d]: framework health groups must always target HealthListener (no fallback remap)", i)
 	}
 }
 
@@ -227,7 +202,11 @@ func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 // --- phase0ValidateOptions tests ---
 
 func TestPhase0_AcceptsValidOptions(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
+	b := New(
+		WithClock(clock.Real()),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
 
@@ -291,6 +270,7 @@ func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
@@ -358,6 +338,7 @@ func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			WithListenerTLS(cfg)),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
@@ -1480,6 +1461,7 @@ func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
 			WithListenerTLS(&tls.Config{
 				Certificates: []tls.Certificate{{Certificate: [][]byte{{0x00}}}},
 			})),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
@@ -1512,6 +1494,7 @@ func TestPhase0_TLSConfigWithGetCertificate_Accepted(t *testing.T) {
 					return &tls.Certificate{}, nil
 				},
 			})),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
