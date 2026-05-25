@@ -17,7 +17,7 @@
 //     `BASESLICE-CTOR-FUNNEL-01` as the only approved construction path.
 //
 //  3. test fixture — physically isolated in a test-fixture package
-//     (`pkg/contracttest/`, `pkg/testutil/`, `runtime/auth/authtest/`,
+//     (`pkg/contracttest/`, `pkg/testutil/`, `runtime/internal/authtest/`,
 //     `cells/internal/testoutbox/`). Callers must be `_test.go` files —
 //     enforced indirectly by the package not being importable from
 //     production paths without raising review attention.
@@ -29,12 +29,13 @@
 // AI-robust grade: Medium — the carve-out registry is a (pkgPath, funcName)
 // string-keyed allowlist. The Hard primary defense is the deletion of the
 // 20 production `Must*` constructors plus the physical relocation of the
-// three test-only key fns from `runtime/auth` to `runtime/auth/authtest`,
-// making the symbols unreachable at compile time. This archtest is the
-// secondary defense — preventing future AI from re-introducing Must*
-// declarations in production paths. ADR §"为何 Medium 是终态" documents why
-// upgrading to Hard (sealed marker receiver) is rejected: the 547-caller
-// prefix expansion violates the 优雅简洁 principle.
+// three test-only key fns from `runtime/auth` to `runtime/internal/authtest`
+// (last-leg move by issue #638; previously runtime/auth/authtest), making the
+// symbols unreachable at compile time. This archtest is the secondary defense
+// — preventing future AI from re-introducing Must* declarations in production
+// paths. ADR §"为何 Medium 是终态" documents why upgrading to Hard (sealed
+// marker receiver) is rejected: the 547-caller prefix expansion violates the
+// 优雅简洁 principle.
 //
 // Blind-spot inventory:
 //
@@ -133,7 +134,7 @@ var testFixturePkgPrefixes = []string{
 	"tests/contracttest",
 	"pkg/testutil",
 	"kernel/auth/authtest",
-	"runtime/auth/authtest",
+	"runtime/internal/authtest",
 	"runtime/auth/keystest",
 	"runtime/audit/ledger/storetest",
 	"cells/internal/testoutbox",

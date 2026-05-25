@@ -22,11 +22,11 @@ import (
 )
 
 // testAllowAllLimiter satisfies auth.BootstrapRateLimiter for tests that
-// focus on Basic Auth semantics. AUTH-AUTHTEST-B archtest forbids cells/ from
-// importing runtime/auth/authtest, so this fake stays file-local; the
-// equivalent fake also lives in cmd/corebundle/setup_integration_test.go and
-// cmd/corebundle/outbox_e2e_integration_test.go (per-package duplication is
-// the accepted cost of the layering boundary).
+// focus on Basic Auth semantics. The authtest helper lives under
+// runtime/internal/authtest (Go internal/ rule refuses cells/ imports at
+// compile time, see issue #638), so this fake stays file-local; the
+// equivalent fake also lives in cmd/corebundle/setup_integration_test.go
+// (per-package duplication is the accepted cost of the visibility boundary).
 type testAllowAllLimiter struct{}
 
 func (testAllowAllLimiter) Allow(string) bool { return true }

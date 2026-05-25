@@ -52,9 +52,10 @@ const (
 )
 
 // setupTestAllowAllLimiter satisfies auth.BootstrapRateLimiter without
-// throttling. AUTH-AUTHTEST-B archtest forbids cells/examples from importing
-// runtime/auth/authtest, so we keep an equivalent fake in each test file
-// rather than introducing a shared helper.
+// throttling. The authtest helper lives under runtime/internal/authtest (Go
+// internal/ rule refuses cmd/ imports at compile time, see issue #638), so we
+// keep an equivalent fake in each test file rather than introducing a shared
+// helper.
 type setupTestAllowAllLimiter struct{}
 
 func (setupTestAllowAllLimiter) Allow(string) bool { return true }
