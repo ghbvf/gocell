@@ -141,7 +141,7 @@ Wrapper 函数**仅允许**在以下位置调用（archtest `CELL-RAW-INFRA-WRAP
 - `examples/<demo>/main.go` / `examples/<demo>/app.go` / `examples/<demo>/run.go`（example composition root；run.go is the hand-written half of the K#10 main+run split, see cmd/corebundle pattern）
 - `*_test.go` 任意路径（测试构造 fake）
 - `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go`（marker 定义本身）
-- `kernel/outbox/demo_tx_runner.go`（`DemoCellTxManager()` / `DemoCellEmitter()` 工厂）
+- `kernel/outbox/demo_tx_runner.go`（`DemoCellTxManager()` / `DemoCellEmitter()` / `NewDirectCellEmitter()` 工厂；后者是 L4 direct-publish 的 sealed CellEmitter 构造，不走 `ResolveCellEmitter` 的 L2 atomicity warn）
 - `kernel/outbox/mode_resolver.go`（`ResolveCellEmitter` 把 kernel-built emitter wrap 成 sealed CellEmitter）
 - `kernel/outbox/outboxtest/recorder.go`（`(*Recorder).CellEmitter()` test seam）
 

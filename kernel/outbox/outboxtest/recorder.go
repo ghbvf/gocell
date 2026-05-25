@@ -2,9 +2,12 @@
 // unit tests.
 //
 // Use in tests only — package name follows the "*test" test-infrastructure
-// convention; production code must not import this package (enforced by
-// tools/archtest/celltest_import_scope_test.go for the cells/*/*test/ naming
-// pattern and by tools/archtest/testutil_boundary_test.go for *testutil paths).
+// convention; production code must not import this package, enforced by
+// tools/archtest/outboxtest_import_boundary_test.go (OUTBOXTEST-IMPORT-BOUNDARY-01).
+// The sibling rules celltest_import_scope_test.go (cells/*/*test) and
+// testutil_boundary_test.go (*testutil paths) do NOT cover this kernel package —
+// hence the dedicated boundary rule. Broad generalization to all kernel/runtime
+// *test packages is tracked in gh issue #986.
 package outboxtest
 
 import (

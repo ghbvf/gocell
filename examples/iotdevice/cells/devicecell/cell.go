@@ -162,13 +162,15 @@ func NewDeviceCell(opts ...Option) *DeviceCell {
 	return c
 }
 
-// buildCellEmitter routes emitter construction through ResolveCellEmitter so
-// the result is a sealed CellEmitter. devicecell is L4 DeviceLatent and uses
-// a publisher-only (DirectEmitter) path in all modes — there is no outbox
-// writer or txRunner (KG-07 decision). DurabilityDemo is passed explicitly so
-// ResolveCellEmitter takes the publisher-preferred branch regardless of assembly
-// durability mode; the durable publisher guard (CheckNotNoop) is enforced by
-// the caller (initDeps) before this function is reached.
+// buildCellEmitter constructs a sealed CellEmitter via NewDirectCellEmitter.
+// devicecell is L4 DeviceLatent and uses a publisher-only (DirectEmitter) path
+// in all modes — there is no outbox writer or txRunner (KG-07 decision). It
+// deliberately does NOT route through ResolveCellEmitter: for L4 the absence of
+// an outbox writer/txRunner is the intended production mode, so the
+// ResolveCellEmitter cellvocab.L2 non-durable "demo mode" Warn would mislabel
+// the designed path as a degradation. The durable-publisher guard
+// (CheckNotNoop) is enforced by the caller (initDeps) before this function is
+// reached.
 //
 // DirectPublishFailOpen is intentional — command persistence succeeds
 // independently of event publish; missed events are operational follow-up, not
@@ -178,18 +180,9 @@ func (c *DeviceCell) buildCellEmitter() (outbox.CellEmitter, error) {
 	if mp == nil {
 		mp = metrics.NopProvider{}
 	}
-	return outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
-		EmitterConfig: outbox.EmitterConfig{
-			CellID:            "devicecell",
-			Mode:              outbox.DurabilityDemo,
-			Publisher:         c.publisher,
-			DirectPublishMode: outbox.DirectPublishFailOpen,
-			MetricsProvider:   mp,
-			Clock:             c.clk,
-			Logger:            c.logger,
-		},
-		ConsistencyLevel: c.ConsistencyLevel(),
-	})
+	return outbox.NewDirectCellEmitter(
+		c.publisher, outbox.DirectPublishFailOpen, mp, c.clk, "devicecell", outbox.WithLogger(c.logger),
+	)
 }
 
 // initInternal is the K#04 codegen escape hatch: business init that cannot

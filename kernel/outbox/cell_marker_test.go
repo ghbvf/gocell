@@ -311,3 +311,37 @@ func TestWrapEmitterForCell_PreservesProbesPassThrough(t *testing.T) {
 		t.Fatalf("CellEmitter wrapping a WriterEmitter (no probes) must forward zero probes, got %d", got)
 	}
 }
+
+// TestNewDirectCellEmitter covers the L4 direct-publish funnel: it composes
+// NewDirectEmitter + WrapEmitterForCell into a sealed, non-durable CellEmitter
+// that still forwards the DirectEmitter fail-open probe — and never reaches the
+// ResolveCellEmitter L2 atomicity Warn path.
+func TestNewDirectCellEmitter(t *testing.T) {
+	t.Parallel()
+
+	em, err := outbox.NewDirectCellEmitter(&fakePublisher{}, outbox.DirectPublishFailOpen,
+		metrics.NopProvider{}, clock.Real(), "devicecell")
+	if err != nil {
+		t.Fatalf("NewDirectCellEmitter: %v", err)
+	}
+	if em == nil {
+		t.Fatal("NewDirectCellEmitter must return a non-nil CellEmitter")
+	}
+	if em.Durable() {
+		t.Fatal("NewDirectCellEmitter (DirectEmitter-backed) must report Durable()==false")
+	}
+	if got := len(em.Probes()); got != 1 {
+		t.Fatalf("NewDirectCellEmitter must forward the DirectEmitter fail-open probe, got %d probes", got)
+	}
+
+	// Error path: NewDirectEmitter rejects empty cellID — the funnel propagates
+	// the error and returns a nil CellEmitter (no partial sealed value).
+	emErr, err := outbox.NewDirectCellEmitter(&fakePublisher{}, outbox.DirectPublishFailOpen,
+		metrics.NopProvider{}, clock.Real(), "")
+	if err == nil {
+		t.Fatal("NewDirectCellEmitter with empty cellID must return an error")
+	}
+	if emErr != nil {
+		t.Fatal("NewDirectCellEmitter must return a nil CellEmitter on error")
+	}
+}
