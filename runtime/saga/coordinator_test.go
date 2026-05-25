@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
@@ -693,6 +694,55 @@ type stubRepoProberJournal struct {
 
 func (s *stubRepoProberJournal) RepoReady(_ context.Context) error {
 	return s.repoErr
+}
+
+// TestCoordinator_RepoReadinessConformance enrolls *Coordinator in the shared
+// healthz.RepoProber conformance harness (CELL-REPO-READYZ-PROBE-01). The
+// Coordinator's RepoReady is a lifecycle gate over journal delegation, so both
+// probers must be RUNNING for the harness to exercise the delegation path — a
+// non-running coordinator always reports Unavailable via the lifecycle gate,
+// which TestRepoReady_BeforeStart_NotRunning covers separately:
+//   - healthy: running coordinator backed by a healthy mem journal → nil.
+//   - broken:  running coordinator whose journal reports its relation gone → non-nil.
+func TestCoordinator_RepoReadinessConformance(t *testing.T) {
+	clkHealthy := newFakeClock()
+	healthy := startRunningCoordinator(t, newMemJournal(clkHealthy), clkHealthy)
+
+	clkBroken := newFakeClock()
+	broken := startRunningCoordinator(t, &stubRepoProberJournal{
+		MemJournal: newMemJournal(clkBroken),
+		repoErr:    errors.New("saga journal relation gone"),
+	}, clkBroken)
+
+	celltest.RunRepoReadinessConformance(t, "saga-coordinator", healthy, broken)
+}
+
+// startRunningCoordinator builds a Coordinator backed by j, Starts it, waits for
+// Ready, and registers Stop on cleanup. It returns the running coordinator so
+// RepoReady reflects the journal-delegation path rather than the lifecycle gate.
+func startRunningCoordinator(t *testing.T, j journal.Journal, clk clock.Clock) *Coordinator {
+	t.Helper()
+	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	startDone := make(chan error, 1)
+	go func() { startDone <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		cancel()
+		t.Fatal("coordinator did not become ready")
+	}
+	t.Cleanup(func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
+		defer stopCancel()
+		_ = c.Stop(stopCtx)
+		<-startDone
+	})
+	return c
 }
 
 // ---------------------------------------------------------------------------
