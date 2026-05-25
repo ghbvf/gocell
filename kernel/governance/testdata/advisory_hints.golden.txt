@@ -133,6 +133,16 @@ advHintCH05MissingParseCallFix
 add httputil.ParseUUIDPathParam call in the handler
 -----
 
+advHintCH05ParseFailed
+=====
+CH-05: contract %s — handler file %s could not be parsed (%v); cannot verify ParseUUIDPathParam usage
+-----
+
+advHintCH05ParseFailedFix
+=====
+fix the handler file so it parses (gofmt/go build), or remove the contract's in-repo handler reference
+-----
+
 advHintDOCNAME01CannotParseGuard
 =====
 cannot parse document naming guard: %v

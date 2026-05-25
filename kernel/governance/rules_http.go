@@ -842,7 +842,14 @@ func (v *Validator) checkPathParamUUIDForContract(
 
 	ph, err := parseHandlerFile(handlerFile, cache)
 	if err != nil {
-		return nil
+		// Fail-closed, symmetric with CH-04: an unparseable handler means the
+		// UUID-param check cannot run, so emit a finding rather than skip.
+		return []ValidationResult{v.newError(
+			codeCH05, IssueInvalid,
+			c.File, fieldHTTPPath,
+			fmt.Sprintf(advHintCH05ParseFailed, c.ID, handlerFile, err),
+			advHintCH05ParseFailedFix,
+		)}
 	}
 
 	fnName, ok := ph.contractToFuncs[c.ID]

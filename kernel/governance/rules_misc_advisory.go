@@ -795,6 +795,12 @@ func (v *Validator) globDocNamingInclude(include string, exclude []string, seen 
 		)}
 	}
 	for _, match := range matches {
+		// Defense-in-depth symmetric with walkDocNamingInclude: skip matches
+		// outside the root before addDocNamingTarget (which also guards). A glob
+		// pattern containing `..` can match parent-dir entries.
+		if !IsWithinRoot(v.root, match) {
+			continue
+		}
 		v.addDocNamingTarget(match, exclude, seen)
 	}
 	return nil
@@ -831,7 +837,10 @@ func (v *Validator) addDocNamingTarget(abs string, exclude []string, seen map[st
 func (v *Validator) scanDocNamingLiterals(file, content string, replacements []docNamingReplacement) []ValidationResult {
 	var results []ValidationResult
 	sc := bufio.NewScanner(strings.NewReader(content))
-	sc.Buffer(make([]byte, 1024), 1024*1024)
+	// Max token aligned with the file-size cap (docNamingMaxFileBytes): a target
+	// is already bounded to that size, so a single long line within it must not
+	// trip bufio.ErrTooLong and turn a best-effort scan into an IssueInvalid error.
+	sc.Buffer(make([]byte, 1024), docNamingMaxFileBytes)
 
 	lineNo := 0
 	for sc.Scan() {

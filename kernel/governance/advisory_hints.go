@@ -63,6 +63,13 @@ const (
 		" Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern"
 	advHintCH05CorrelationFailedFix = "register routes via auth.Mount with a resolvable contract spec"
 
+	// CH-05: handler file could not be parsed; UUID-param check cannot run.
+	// Fail-closed, symmetric with CH-04 (both share parseHandlerFile).
+	advHintCH05ParseFailed = "CH-05: contract %s — handler file %s could not be parsed (%v);" +
+		" cannot verify ParseUUIDPathParam usage"
+	advHintCH05ParseFailedFix = "fix the handler file so it parses (gofmt/go build), " +
+		"or remove the contract's in-repo handler reference"
+
 	// CH-05: pathParam with format:uuid missing ParseUUIDPathParam call.
 	advHintCH05MissingParseCall    = "%s: pathParam %q has format:uuid but handler does not call httputil.ParseUUIDPathParam(w, r, %q)"
 	advHintCH05MissingParseCallFix = "add httputil.ParseUUIDPathParam call in the handler"

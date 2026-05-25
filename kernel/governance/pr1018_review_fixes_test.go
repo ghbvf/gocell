@@ -48,6 +48,31 @@ func TestCheckCH04_HandlerParseFailure_FailsClosed(t *testing.T) {
 	assert.Equal(t, SeverityError, results[0].Severity)
 }
 
+// C2 — CH-05 fail-closed on unparseable handler (symmetric with CH-04).
+func TestCheckCH05_HandlerParseFailure_FailsClosed(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const contractID = "http.test.v1"
+	sliceRelDir := "cells/testcell/slices/testslice"
+	sliceAbsDir := filepath.Join(root, sliceRelDir)
+	require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sliceAbsDir, "handler.go"),
+		[]byte("package x\n\nfunc broken( {\n"), 0o644))
+
+	project := makeProject(contractID, sliceRelDir)
+	c := makeContract(contractID, "contracts/http/test/v1/contract.yaml", nil)
+	// CH-05 only inspects contracts with a uuid-format path param.
+	c.Endpoints.HTTP.PathParams = map[string]metadata.ParamSchema{"id": {Format: "uuid"}}
+	project.Contracts[contractID] = c
+
+	results := NewValidator(project, root, clock.Real()).checkCH05()
+
+	require.NotEmpty(t, results,
+		"unparseable handler must fail closed for CH-05 too (symmetric with CH-04)")
+	assert.Equal(t, codeCH05, results[0].Code)
+	assert.Equal(t, SeverityError, results[0].Severity)
+}
+
 // C3 — DOC-NAME-01 include path traversal rejected.
 func TestValidateDOCNAME01_Include_PathTraversalRejected(t *testing.T) {
 	t.Parallel()
@@ -57,16 +82,29 @@ func TestValidateDOCNAME01_Include_PathTraversalRejected(t *testing.T) {
 	require.NoError(t, os.WriteFile(secret, []byte("sso-bff leak\n"), 0o644))
 	t.Cleanup(func() { _ = os.Remove(secret) })
 
+	// In-root control file with the same literal, so the assertion is not
+	// vacuous: the rule must still scan README.md while rejecting the escaping
+	// include.
+	writeFile(t, root, "README.md", "sso-bff inside root\n")
 	writeFile(t, root, "docs/architecture/naming-guard.yaml",
-		"include:\n  - ../"+secretName+"\nreplacements:\n"+
+		"include:\n  - README.md\n  - ../"+secretName+"\nreplacements:\n"+
 			"  - literal: sso-bff\n    replacement: ssobff\n")
 
 	results := NewValidator(validProject(), root, clock.Real()).validateDOCNAME01()
 
+	var sawReadme, sawSecret bool
 	for _, r := range results {
-		assert.NotContains(t, r.File, "outside-secret",
-			"must not read/scan an include target that escapes the project root")
+		if r.File == "README.md" {
+			sawReadme = true
+		}
+		if strings.Contains(r.File, "outside-secret") {
+			sawSecret = true
+		}
 	}
+	assert.True(t, sawReadme,
+		"in-root README.md must still be scanned (proves the rule isn't vacuously skipping)")
+	assert.False(t, sawSecret,
+		"root-escaping include target must not be read/scanned")
 }
 
 // C3 — DOC-NAME-01 include oversize target skipped (no unbounded read).
@@ -108,7 +146,9 @@ func TestVERIFY06_DirectDetect_NoPanicAfterNewValidator(t *testing.T) {
 		}
 	}
 	require.NotNil(t, verify06, "VERIFY-06 must be registered in allRules")
-	require.NotPanics(t, func() { _ = verify06(v) })
+	var got []ValidationResult
+	require.NotPanics(t, func() { got = verify06(v) })
+	assert.Empty(t, got, "VERIFY-06 with empty root must yield no findings")
 }
 
 // F22 — filterByPhase with no phases returns empty.
