@@ -145,6 +145,24 @@ func (v *Validator) validateADV05() []ValidationResult {
 	return results
 }
 
+// adv05DeadEventCount is the ADV-05 distance metric (ADR §M3 P-C3): the number
+// of active event contracts with zero subscribers (dead events) in the
+// repository. It is the per-finding predicate of validateADV05 aggregated to a
+// repository distance. ok is false when there are no dead events — the rule
+// emits no findings then, so the metric is never attached to anything.
+func (v *Validator) adv05DeadEventCount() (float64, bool) {
+	n := 0
+	for _, c := range v.project.Contracts {
+		if c.Kind == "event" && c.Lifecycle == "active" && len(c.Endpoints.Subscribers) == 0 {
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, false
+	}
+	return float64(n), true
+}
+
 // =============================================================================
 // OUTGUARD-01 (formerly rules_outbox.go)
 // =============================================================================

@@ -1,6 +1,10 @@
 # kernel/governance/ 层规则
 
-governance/ 实现 GoCell 元数据治理规则，每条规则对应一个 `validate<RULEID>()` 方法。
+governance/ 实现 GoCell 元数据治理规则。每条规则是一个 detect 方法
+（`validate<RULEID>()` / `checkDEP*` / `checkCH*`，零参返回 `[]ValidationResult`），并在
+`rules_registry.go` 的 `allRules` 注册表以一个 `Rule{}` 条目登记（`Code` + `Phase` + `Next` +
+可选 `Metric` + 编译期检查的 `Detect` 方法表达式），由 `engine.go` 的 `Validator.run` 单循环执行
+（ADR `202605041430` §M3-RULE-ENGINE）。
 
 ## ValidationResult 构建
 
@@ -49,6 +53,8 @@ newErrorAt(codeDOCNAME01, IssueForbidden,
 
 ## 完整规则示例（ADV-05）
 
+detect 方法只检测 + 经 `locator` 构造器产出 finding（severity 由 `newError`/`newWarning` 决定）：
+
 ```go
 func (v *Validator) validateADV05() []ValidationResult {
     var results []ValidationResult
@@ -57,7 +63,7 @@ func (v *Validator) validateADV05() []ValidationResult {
             continue
         }
         if len(c.Endpoints.Subscribers) == 0 {
-            results = append(results, v.newError(
+            results = append(results, v.newWarning( // ADV-05 是 advisory（dead event 不阻断 CI）
                 codeADV05, IssueForbidden,
                 contractFile(c), "endpoints.subscribers",
                 fmt.Sprintf("active event contract %q has no subscribers (dead event)", c.ID),
@@ -71,17 +77,24 @@ func (v *Validator) validateADV05() []ValidationResult {
 
 ## 规则注册
 
-新规则在 `rules()` 方法末尾追加闭包：
+新规则：写 detect 方法 → 在 `rules_registry.go` 的 `allRules` 加一个 `Rule{}` 条目 →
+在 `rule_inventory_test.go` 的 `goldenRuleIDs()` 加它的 code（`TestAllRulesMatchGolden` 锁集合 + 唯一性）。
+`Next` 取 `NextBlock`（error）或 `NextAdvisory`（warning）；`Metric` 仅在规则有真实距离时声明，否则省略（nil）。
 
 ```go
-func (v *Validator) rules() []func() []ValidationResult {
-    return []func() []ValidationResult{
-        // ... 已有规则 ...
-        v.validateADV05,
-        v.validateMyNewRule, // 追加在这里
-    }
+var allRules = []Rule{
+    // ... 已有规则 ...
+    {
+        Code: codeADV05, Phase: PhaseBase, Next: NextAdvisory,
+        Metric: (*Validator).adv05DeadEventCount, // 可选：有距离的规则才声明
+        Detect: (*Validator).validateADV05,        // 方法表达式，编译期检查存在
+    },
 }
 ```
+
+`Phase` 决定何时运行：`PhaseBase`（`gocell validate`）/ `PhaseStrict`（`--strict`）/
+`PhaseDep`（依赖图）/ `PhaseHealth`（`gocell check`）。ctx-bound 规则（仅 VERIFY-06）的 `Detect`
+是读 `v.runCtx` 的闭包。`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁「detect 方法必在 allRules 登记」。
 
 ## 测试写法
 
@@ -93,9 +106,9 @@ func TestADV05_NoSubscribers(t *testing.T) {
         Endpoints: metadata.EndpointsMeta{Subscribers: nil},
         File: "contracts/event/dead/v1/contract.yaml",
     }
-    results := NewValidator(project, "").validateADV05()
-    requireError(t, results, "ADV-05", "endpoints.subscribers")
+    results := NewValidator(project, "", clock.Real()).validateADV05()
+    requireWarning(t, results, "ADV-05", "endpoints.subscribers") // advisory, not error
 }
 ```
 
-`minimalProject(t)` 返回最小化 `*metadata.ProjectMeta`；`requireError` 过滤并断言规则编号 + 字段路径。
+`minimalProject(t)` 返回最小化 `*metadata.ProjectMeta`；`requireWarning`/`requireError` 过滤并断言规则编号 + 字段路径。

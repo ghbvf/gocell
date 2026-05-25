@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -590,6 +591,39 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 		}
 	}
 	return results
+}
+
+// fmt23DeprecationDaysRemaining is the FMT-23 distance metric (ADR §M3 P-C3):
+// the grace days remaining for the deprecated contract closest to (or past) the
+// cleanup deadline — negative when the worst offender is already overdue. It is
+// a repository-level time-distance, the time-based counterpart to ADV-05's
+// count-distance. ok is false when no deprecated contract carries a parseable
+// deprecatedAt (the rule then emits only required/format errors, which carry no
+// meaningful days-remaining distance).
+func (v *Validator) fmt23DeprecationDaysRemaining() (float64, bool) {
+	const hoursPerDay = 24
+	graceDays := defaultDeprecationGracePeriod.Hours() / hoursPerDay
+	now := v.clk.Now().UTC()
+	minRemaining := math.Inf(1)
+	found := false
+	for _, c := range v.project.Contracts {
+		if c.Lifecycle != "deprecated" || c.DeprecatedAt == "" {
+			continue
+		}
+		ts, err := time.ParseInLocation("2006-01-02", c.DeprecatedAt, time.UTC)
+		if err != nil {
+			continue
+		}
+		remaining := graceDays - now.Sub(ts).Hours()/hoursPerDay
+		if remaining < minRemaining {
+			minRemaining = remaining
+		}
+		found = true
+	}
+	if !found {
+		return 0, false
+	}
+	return minRemaining, true
 }
 
 // --- FMT-25 (input constraint enforcement) ---

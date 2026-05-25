@@ -317,11 +317,37 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
 **为什么必须**：15 个 rules_*.go 样板违反 DRY；规则需带 5 槽位（detect / evidence / next / level / harvest）才能驱动 harvest。
 
 **怎么做**：
-- `kernel/governance/engine.go`：唯一执行体
-- `kernel/governance/rules/*.yaml`：64 条规则数据化（schema 含 5 槽位）
+- `kernel/governance/engine.go`：唯一执行体（`Validator.run` 单循环迭代 `allRules`）
+- `kernel/governance/rules_registry.go`：`allRules []Rule` 单一规则注册表（载体见下方 amendment）
+- `Rule` 承载分类元数据：`Phase`（Base/Strict/Dep/Health，取代 base/strict 两套规则集）+
+  `Next`（next-action 五级）+ 可选 `Metric`（距离函数）+ 编译期检查的 `Detect` 函数值
 - `next-action` 类型：autofix / suggest / advisory / block / escalate
-- 规则带 `metric`（距离函数：deprecation 剩余天数 / 覆盖率 / finding 数），不只是 bool
-- 修 ADV-05 SeverityError 错分（一行）
+- 规则带可选 `metric`（距离函数：deprecation 剩余天数 / 覆盖率 / finding 数），不只是 bool
+- 修 ADV-05 SeverityError 错分（一行：`newError` → `newWarning` + `Next: advisory`）
+
+**Amendment（2026-05-26，#687 实施）— 载体：Go typed-struct registry，不用 YAML**
+
+原 "怎么做" 写 `kernel/governance/rules/*.yaml`（5 槽位 detect/evidence/next/level/harvest 数据化）。
+实施时改为 **Go typed-struct registry**（`var allRules []Rule`），偏离 YAML 载体字面，但满足 P-B2/C2/C3
+的*意图*（单执行体 + 规则即数据 + 结构化 next-action + 距离 metric）。理由：
+
+1. **YAML 倒退 detect 绑定**：规则检测体是任意 Go（DFS 环检测、git subprocess、schema 树递归、
+   签名匹配），无法声明式表达。YAML 只能以 `detect.fn: <名字>` 字符串引用 Go 函数 —— 把绑定从
+   **编译器 Hard**（`Detect: (*Validator).validateXxx` 方法表达式，编译期查存在性）降级为
+   **archtest Medium**（字符串名匹配），并引入 YAML↔Go 漂移缝（新双源）。
+2. **YAML 唯一独有好处是非 Go 外部消费**（M5-HARVEST 工具 / 客户 app 读规则数据），服务于
+   *尚不存在* 的 M5 —— 是推测性收益。需要时由 Go registry 派生序列化（`gocell dump-rules`，
+   codegen 单源），而非手编 YAML。
+3. Go-struct registry：单源、编译器绑定、零新缝。detect/evidence/level 保留为现有 rule 方法 +
+   `ValidationResult` 字段（经 `locator` 构造器，`GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 不变）；
+   next/metric 为 `Rule` 上的新 typed 字段，由 engine stamp。harvest 槽位是 M5 的消费动作，本里程碑只产出 finding。
+
+**P-B2 / P-C2 / P-C3 重评（per ai-robust ADR amendment 落地必查）**：载体从 YAML 改为 Go-struct
+**不降反升** AI-robust 档 —— 注册由 `rules()`/`strictRules()`/`checks()`/`CheckContractHealth` 四套
+dispatch（散落、可漏注册）收敛为单 `allRules`（`TestAllRulesMatchGolden` golden + 唯一性锁，
+`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁 orphan detect 方法），漂移缝减少。`Metric` 为可选字段，
+仅有真实距离的规则声明（exemplar：ADV-05 dead-event 计数、FMT-23 deprecation 剩余天数），其余 nil —
+不为缺席消费者建死 bool 脚手架。无格子从 ✅ 退化。
 
 ### M4-COVERAGE：双向追溯（满足 P-B1）
 

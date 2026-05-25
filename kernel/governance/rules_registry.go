@@ -78,7 +78,11 @@ var allRules = []Rule{
 	{Code: codeFMT20, Phase: PhaseBase, Next: NextBlock, Detect: (*Validator).validateFMTRequestStrict01},
 	{Code: codeFMT21, Phase: PhaseBase, Next: NextBlock, Detect: (*Validator).validateFMTContractDirIDMatch01},
 	{Code: codeFMT22, Phase: PhaseBase, Next: NextBlock, Detect: (*Validator).validateStatusBoardStateEnum01},
-	{Code: codeFMT23, Phase: PhaseBase, Next: NextBlock, Detect: (*Validator).validateContractDeprecatedCleanup01},
+	{
+		Code: codeFMT23, Phase: PhaseBase, Next: NextBlock,
+		Metric: (*Validator).fmt23DeprecationDaysRemaining,
+		Detect: (*Validator).validateContractDeprecatedCleanup01,
+	},
 	{Code: codeFMT24, Phase: PhaseBase, Next: NextBlock, Detect: (*Validator).validateFMT24},
 	{Code: codeFMT25, Phase: PhaseBase, Next: NextBlock, Detect: (*Validator).validateFMTInputConstraint01},
 	{Code: codeFMT26, Phase: PhaseBase, Next: NextBlock, Detect: (*Validator).validateFMT26},
@@ -99,8 +103,13 @@ var allRules = []Rule{
 	{Code: codeADV01, Phase: PhaseBase, Next: NextAdvisory, Detect: (*Validator).validateADV01},
 	{Code: codeADV03, Phase: PhaseBase, Next: NextAdvisory, Detect: (*Validator).validateADV03},
 	{Code: codeADV04, Phase: PhaseBase, Next: NextAdvisory, Detect: (*Validator).validateADV04},
-	// ADV-05 is changed to SeverityWarning in Step 5; Next is NextAdvisory to match.
-	{Code: codeADV05, Phase: PhaseBase, Next: NextAdvisory, Detect: (*Validator).validateADV05},
+	// ADV-05 is SeverityWarning (M3 reclassification); Next is NextAdvisory to match.
+	// Metric: dead-event count (ADR §M3 P-C3 exemplar).
+	{
+		Code: codeADV05, Phase: PhaseBase, Next: NextAdvisory,
+		Metric: (*Validator).adv05DeadEventCount,
+		Detect: (*Validator).validateADV05,
+	},
 
 	// OUTGUARD — outbox durability
 	{Code: codeOUTGUARD01, Phase: PhaseBase, Next: NextBlock, Detect: (*Validator).validateOUTGUARD01},
