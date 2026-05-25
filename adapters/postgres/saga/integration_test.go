@@ -4,6 +4,7 @@ package saga_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,9 +13,10 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/postgres/saga"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
 	sagamod "github.com/ghbvf/gocell/kernel/saga"
+	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/kernel/saga/sagajournaltest"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
@@ -68,14 +70,17 @@ func TestPGSagaJournal_StaleAppendIsCAS_NotConstraintViolation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, leaseA, leaseB, "worker B lease must differ from A's")
 
-	// Worker A's stale Append must return ErrSagaStaleLease, not a PG-level
-	// constraint error. Note: requireCode/assertion live in conformance.go,
-	// not exported; we just assert the call surfaces a non-nil error.
+	// Worker A's stale Append must return ErrSagaStaleLease — verifies the
+	// CAS path surfaces as the typed Code, not a PG-level constraint error.
 	_, err = j.Append(ctx, inst.ID, leaseA, journal.Event{
 		Kind:     journal.KindStepStarted,
 		StepName: idutil.SafeID("step-one"),
 	})
 	require.Error(t, err, "stale Append must error")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "stale Append error must unwrap to *errcode.Error")
+	require.Equal(t, errcode.ErrSagaStaleLease, ec.Code,
+		"stale Append must return ErrSagaStaleLease (got %q)", ec.Code)
 }
 
 // TestPGSagaJournal_ClaimPending_Concurrent_NoDuplicate exercises the
@@ -122,6 +127,11 @@ func TestPGSagaJournal_ClaimPending_Concurrent_NoDuplicate(t *testing.T) {
 	wg.Wait()
 
 	require.Empty(t, errs, "concurrent ClaimPending errors")
+	// Conservation: every enqueued instance must be claimed exactly once. A
+	// silent batch loss would leave len(claims) < total, which the per-id
+	// count loop alone would not catch.
+	require.Equal(t, total, len(claims),
+		"all %d enqueued instances must be claimed exactly once (got %d distinct claimed)", total, len(claims))
 	for id, count := range claims {
 		require.Equal(t, 1, count, "instance %s claimed %d times (must be 1)", id, count)
 	}

@@ -135,12 +135,18 @@ type Event struct {
 	CreatedAt time.Time     // stamped by the Journal on Append
 }
 
+// MaxPayloadBytes caps Event.Payload size at append time so a misbehaving
+// caller cannot push GB-scale JSON blobs into the event log. Sized to 64 KiB
+// to match outbox per-entry payload caps; raise via ADR if a saga workload
+// proves it insufficient.
+const MaxPayloadBytes = 64 * 1024
+
 // ValidateForAppend checks an Event submitted to Journal.Append. It is a pure
 // validator (mutates nothing) enforcing:
 //   - Kind is Valid and is NOT a terminal kind (terminal events are written only
 //     by MarkTerminal, atomically with the projection's terminal flip);
 //   - a step kind carries a present, valid StepName;
-//   - Payload is a JSON object or null (or empty).
+//   - Payload is a JSON object or null (or empty), within MaxPayloadBytes.
 //
 // It does NOT check phase legality (whether the kind is permitted in the
 // instance's current status) — the Journal enforces that under its lock, where
@@ -155,6 +161,11 @@ func (e Event) ValidateForAppend() error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga journal: terminal event must be written via MarkTerminal, not Append",
 			errcode.WithInternal(fmt.Sprintf("kind=%s", e.Kind)))
+	}
+	if len(e.Payload) > MaxPayloadBytes {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga journal: event payload exceeds MaxPayloadBytes",
+			errcode.WithInternal(fmt.Sprintf("payloadBytes=%d max=%d", len(e.Payload), MaxPayloadBytes)))
 	}
 	if err := e.validateStepName(); err != nil {
 		return err

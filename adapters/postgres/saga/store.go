@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,19 +77,24 @@ const selectInstanceForUpdate = `SELECT status, current_version, lease_id, lease
 	FROM saga_instances WHERE id = $1 FOR UPDATE`
 
 // updateInstanceAfterAppend bumps current_version, flips status, and stamps
-// updated_at. It does NOT re-check the lease — the caller is required to hold
-// the row's FOR UPDATE lock when calling, so the lease state read at
-// selectInstanceForUpdate cannot have rotated.
+// updated_at. Defense-in-depth: the WHERE clause CAS-fences on lease_id so a
+// future refactor that drops the selectInstanceForUpdate FOR UPDATE lock
+// still cannot land an Append against a rotated lease (mirrors the outbox
+// store's CAS shape, OUTBOX-LEASE-ID-CAS-01).
+//
+// $1 newStatus, $2 now, $3 instanceID, $4 leaseID.
 const updateInstanceAfterAppend = `UPDATE saga_instances
 	SET current_version = current_version + 1, status = $1, updated_at = $2
-	WHERE id = $3`
+	WHERE id = $3 AND lease_id = $4`
 
 // updateInstanceTerminal flips status to a terminal value, releases the lease
-// (both lease columns NULL), and stamps updated_at. CAS-fenced on lease_id so
-// a tx that did not hold the lock at SELECT time cannot land it.
+// (both lease columns NULL), and stamps updated_at. CAS-fenced on lease_id
+// (same defense-in-depth rationale as updateInstanceAfterAppend).
+//
+// $1 finalStatus, $2 now, $3 instanceID, $4 leaseID.
 const updateInstanceTerminal = `UPDATE saga_instances
 	SET status = $1, lease_id = NULL, lease_expires_at = NULL, updated_at = $2
-	WHERE id = $3`
+	WHERE id = $3 AND lease_id = $4`
 
 // insertEvent appends one row to saga_events. PK (instance_id, version)
 // enforces monotonicity; a duplicate (instance_id, version) is a programmer
@@ -117,6 +123,12 @@ const instanceExistsQuery = `SELECT 1 FROM saga_instances WHERE id = $1`
 //
 // $1 leaseID (text), $2 lease window microseconds (text), $3 batchSize,
 // $4 now (timestamptz).
+//
+// current_version is intentionally NOT in the RETURNING list:
+// kernel/saga/journal.Journal contract says callers rebuild step cursor by
+// folding Load output, so the projection's version counter is opaque to
+// ClaimPending consumers (mirrors memjournal which exposes no currentVersion
+// in ClaimedInstance).
 const claimPendingQuery = `WITH picked AS MATERIALIZED (
 		SELECT id, started_at
 		FROM saga_instances
@@ -132,11 +144,11 @@ const claimPendingQuery = `WITH picked AS MATERIALIZED (
 			lease_expires_at = $4::timestamptz + ($2 || ' microseconds')::interval
 		FROM picked
 		WHERE si.id = picked.id
-		RETURNING si.id, si.definition_id, si.status, si.current_version,
+		RETURNING si.id, si.definition_id, si.status,
 			si.started_at, si.updated_at,
 			picked.started_at AS picked_started_at
 	)
-	SELECT id, definition_id, status, current_version, started_at, updated_at
+	SELECT id, definition_id, status, started_at, updated_at
 	FROM updated
 	ORDER BY picked_started_at, id`
 
@@ -177,7 +189,7 @@ func (s *PGJournal) Enqueue(ctx context.Context, instance saga.Instance) error {
 			"saga journal: Enqueue failed", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return errDuplicateInstance(instance.ID)
+		return journal.NewDuplicateInstanceError(instance.ID)
 	}
 	return nil
 }
@@ -207,14 +219,14 @@ func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeI
 	if err != nil {
 		// Append semantics: unknown instance → typed KindNotFound.
 		if errors.Is(err, errInstanceMissingSentinel) {
-			return 0, errInstanceNotFound(instanceID)
+			return 0, journal.NewInstanceNotFoundError(instanceID)
 		}
 		return 0, err
 	}
 
 	now := s.clock.Now()
 	if !fenced(row, leaseID, now) {
-		return 0, errStaleLease(instanceID, leaseID)
+		return 0, journal.NewStaleLeaseError(instanceID, leaseID)
 	}
 
 	// Build a working saga.Instance for AdvanceSaga's transition gate; only
@@ -231,7 +243,7 @@ func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeI
 	}
 
 	if _, err := tx.Exec(ctx, updateInstanceAfterAppend,
-		statusToInt16(newStatus), now, string(instanceID),
+		statusToInt16(newStatus), now, string(instanceID), string(leaseID),
 	); err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
 			"saga journal: Append update projection failed", err)
@@ -280,6 +292,17 @@ func (s *PGJournal) Load(ctx context.Context, instanceID idutil.SafeID) ([]journ
 		}
 		kind, kindErr := kindFromInt16(rawKind)
 		if kindErr != nil {
+			// Schema-shape error: persisted row contains a kind value the
+			// application enum does not recognize (migration drift or
+			// out-of-band write). Surface in slog so ops can correlate the
+			// row identity even when the upstream caller only sees the
+			// wrapped errcode.
+			slog.Error("saga journal: Load encountered invalid event kind",
+				slog.String("instance_id", string(instanceID)),
+				slog.Int64("version", version),
+				slog.Int("raw_kind", int(rawKind)),
+				slog.Any("error", kindErr),
+			)
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrPGSchemaShape,
 				"saga journal: Load encountered invalid event kind", kindErr)
 		}
@@ -307,7 +330,7 @@ func (s *PGJournal) Load(ctx context.Context, instanceID idutil.SafeID) ([]journ
 		err := s.db.QueryRow(ctx, instanceExistsQuery, string(instanceID)).Scan(&one)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
-			return nil, errInstanceNotFound(instanceID)
+			return nil, journal.NewInstanceNotFoundError(instanceID)
 		case err != nil:
 			return nil, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
 				"saga journal: Load existence check failed", err)
@@ -323,10 +346,10 @@ func (s *PGJournal) ClaimPending(
 	ctx context.Context, batchSize int, leaseDuration time.Duration,
 ) ([]journal.ClaimedInstance, idutil.SafeID, error) {
 	if batchSize <= 0 {
-		return nil, "", errNonPositiveBatchSize(batchSize)
+		return nil, "", journal.NewNonPositiveBatchSizeError(batchSize)
 	}
 	if leaseDuration <= 0 {
-		return nil, "", errNonPositiveLeaseDuration(leaseDuration)
+		return nil, "", journal.NewNonPositiveLeaseDurationError(leaseDuration)
 	}
 
 	leaseStr := uuid.NewString()
@@ -346,22 +369,25 @@ func (s *PGJournal) ClaimPending(
 			id           string
 			definitionID string
 			rawStatus    int16
-			currentVer   int64
 			startedAt    time.Time
 			updatedAt    time.Time
 		)
-		if err := rows.Scan(&id, &definitionID, &rawStatus, &currentVer, &startedAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &definitionID, &rawStatus, &startedAt, &updatedAt); err != nil {
 			return nil, "", errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
 				"saga journal: ClaimPending scan failed", err)
 		}
 		status, sErr := statusFromInt16(rawStatus)
 		if sErr != nil {
+			slog.Error("saga journal: ClaimPending encountered invalid status",
+				slog.String("instance_id", id),
+				slog.Int("raw_status", int(rawStatus)),
+				slog.Any("error", sErr),
+			)
 			return nil, "", errcode.Wrap(errcode.KindInternal, errcode.ErrPGSchemaShape,
 				"saga journal: ClaimPending encountered invalid status", sErr)
 		}
 		// updatedAt is non-nullable in saga_instances; copy it for the projection.
 		ua := updatedAt
-		_ = currentVer
 		claimed = append(claimed, journal.ClaimedInstance{
 			Instance: saga.Instance{
 				ID:           idutil.SafeID(id),
@@ -388,7 +414,7 @@ func (s *PGJournal) ClaimPending(
 // leader, so the silent semantic is deliberate.
 func (s *PGJournal) Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (bool, error) {
 	if leaseDuration <= 0 {
-		return false, errNonPositiveLeaseDuration(leaseDuration)
+		return false, journal.NewNonPositiveLeaseDurationError(leaseDuration)
 	}
 	micros := fmt.Sprintf("%d", leaseDuration.Microseconds())
 	now := s.clock.Now()
@@ -430,11 +456,11 @@ func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil
 	}
 
 	if !finalStatus.IsTerminal() {
-		return false, errInvalidTerminalStatus(instanceID, row.status, finalStatus)
+		return false, journal.NewInvalidTerminalStatusError(instanceID, row.status, finalStatus)
 	}
 	termKind, okKind := journal.TerminalEventKind(finalStatus)
 	if !okKind {
-		return false, errInvalidTerminalStatus(instanceID, row.status, finalStatus)
+		return false, journal.NewInvalidTerminalStatusError(instanceID, row.status, finalStatus)
 	}
 
 	inst := saga.Instance{
@@ -448,7 +474,7 @@ func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil
 	}
 
 	if _, err := tx.Exec(ctx, updateInstanceTerminal,
-		statusToInt16(finalStatus), now, string(instanceID),
+		statusToInt16(finalStatus), now, string(instanceID), string(leaseID),
 	); err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGQuery,
 			"saga journal: MarkTerminal update failed", err)
@@ -499,13 +525,13 @@ type instanceRow struct {
 
 // errInstanceMissingSentinel signals that selectInstanceLocked saw no rows.
 // MarkTerminal converts this to (false, nil); Append converts it to a typed
-// errInstanceNotFound. Internal to this package — never returned through the
-// Journal surface.
+// journal.NewInstanceNotFoundError. Internal to this package — never returned
+// through the Journal surface.
 var errInstanceMissingSentinel = errors.New("saga journal: instance missing")
 
 // selectInstanceLocked returns the instance projection under FOR UPDATE
 // lock. errInstanceMissingSentinel signals "no such row"; callers translate
-// (Append → errInstanceNotFound, MarkTerminal → silent (false, nil)).
+// (Append → journal.NewInstanceNotFoundError, MarkTerminal → silent (false, nil)).
 func selectInstanceLocked(ctx context.Context, tx pgx.Tx, instanceID idutil.SafeID) (instanceRow, error) {
 	var (
 		out         instanceRow
@@ -526,6 +552,11 @@ func selectInstanceLocked(ctx context.Context, tx pgx.Tx, instanceID idutil.Safe
 	}
 	status, sErr := statusFromInt16(rawStatus)
 	if sErr != nil {
+		slog.Error("saga journal: instance row has invalid status",
+			slog.String("instance_id", string(instanceID)),
+			slog.Int("raw_status", int(rawStatus)),
+			slog.Any("error", sErr),
+		)
 		return instanceRow{}, errcode.Wrap(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"saga journal: instance row has invalid status", sErr)
 	}
@@ -565,7 +596,7 @@ func projectAppend(inst *saga.Instance, kind journal.EventKind, now time.Time) (
 		case saga.StatusRunning:
 			return st, nil
 		default:
-			return 0, errEventPhase(inst.ID, kind, st)
+			return 0, journal.NewEventPhaseError(inst.ID, kind, st)
 		}
 	case journal.KindCompensationStarted:
 		if err := saga.AdvanceSaga(inst, saga.StatusCompensating, now); err != nil {
@@ -574,7 +605,7 @@ func projectAppend(inst *saga.Instance, kind journal.EventKind, now time.Time) (
 		return saga.StatusCompensating, nil
 	case journal.KindStepCompensated:
 		if st != saga.StatusCompensating {
-			return 0, errEventPhase(inst.ID, kind, st)
+			return 0, journal.NewEventPhaseError(inst.ID, kind, st)
 		}
 		return st, nil
 	default:
@@ -636,55 +667,6 @@ func nullableStepName(s idutil.SafeID) any {
 	return string(s)
 }
 
-// ---------------------------------------------------------------------------
-// Error constructors (mirror kernel/saga/journal/errors.go shape)
-// ---------------------------------------------------------------------------
-
-func errDuplicateInstance(id idutil.SafeID) error {
-	return errcode.New(errcode.KindConflict, errcode.ErrSagaDuplicateInstance,
-		"saga journal: instance already enqueued",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s", id)),
-	)
-}
-
-func errInstanceNotFound(id idutil.SafeID) error {
-	return errcode.New(errcode.KindNotFound, errcode.ErrSagaNotFound,
-		"saga journal: instance not found",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s", id)),
-	)
-}
-
-func errStaleLease(instanceID, leaseID idutil.SafeID) error {
-	return errcode.New(errcode.KindConflict, errcode.ErrSagaStaleLease,
-		"saga journal: stale lease on append",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s leaseID=%s", instanceID, leaseID)),
-	)
-}
-
-func errInvalidTerminalStatus(instanceID idutil.SafeID, from, to saga.Status) error {
-	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"saga journal: invalid terminal status",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s from=%s to=%s", instanceID, from, to)),
-	)
-}
-
-func errNonPositiveBatchSize(n int) error {
-	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"saga journal: ClaimPending batchSize must be positive",
-		errcode.WithInternal(fmt.Sprintf("batchSize=%d", n)),
-	)
-}
-
-func errNonPositiveLeaseDuration(d time.Duration) error {
-	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"saga journal: leaseDuration must be positive",
-		errcode.WithInternal(fmt.Sprintf("leaseDuration=%s", d)),
-	)
-}
-
-func errEventPhase(instanceID idutil.SafeID, kind journal.EventKind, status saga.Status) error {
-	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"saga journal: event kind not allowed in current phase",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s kind=%s status=%s", instanceID, kind, status)),
-	)
-}
+// Error constructors live in kernel/saga/journal/errors.go (exported as
+// NewXxxError helpers) and are reused at PG callsites verbatim — DRY per
+// PR-04 review carry-over.
