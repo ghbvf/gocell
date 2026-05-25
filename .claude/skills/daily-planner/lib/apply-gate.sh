@@ -15,6 +15,11 @@
 
 set -euo pipefail
 
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_preflight.sh
+source "$_LIB_DIR/_preflight.sh"
+require_cmds jq
+
 : "${WORKDIR:?WORKDIR required}"
 : "${TODAY_ITERATION_ID:?TODAY_ITERATION_ID required}"
 
@@ -50,24 +55,10 @@ if ! jq -e '
   exit 1
 fi
 
-# Validate conflict_group: required on every entry, must be an integer >= 1
-SCHEMA_VIOLATIONS=0
-while IFS= read -r row; do
-  item_id=$(jq -r '.item_id' <<<"$row")
-  cg=$(jq -r '.conflict_group // "null"' <<<"$row")
-  if [[ "$cg" == "null" ]]; then
-    echo "ERROR: plan.json schema invalid (conflict_group required, must be int >= 1) for item $item_id" >&2
-    SCHEMA_VIOLATIONS=$((SCHEMA_VIOLATIONS+1))
-  else
-    # Must be a JSON number (integer) >= 1
-    if ! jq -e '(.conflict_group | type == "number") and (.conflict_group >= 1) and (.conflict_group == (.conflict_group | floor))' <<<"$row" > /dev/null 2>&1; then
-      echo "ERROR: plan.json schema invalid (conflict_group must be int >= 1) for item $item_id" >&2
-      SCHEMA_VIOLATIONS=$((SCHEMA_VIOLATIONS+1))
-    fi
-  fi
-done < <(jq -c '.[]' "$PLAN_FILE")
-
-[[ $SCHEMA_VIOLATIONS -gt 0 ]] && exit 1
+# conflict_group is NOT validated here: after ship --from-plan was removed it has
+# no machine consumer (apply-write writes Iteration + Wave only, never conflict_group).
+# It survives as a brief display-only advisory column emitted by the agent; apply
+# treats it as free-form. See ADR 202605250010 §威胁模型 (re-graded to advisory).
 
 # ---------------------------------------------------------------------------
 # Compute allowed item_id set (bash-side, independent of agent)
