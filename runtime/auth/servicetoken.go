@@ -353,7 +353,8 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 		// that operators must be able to attribute back to caller IP / path /
 		// request_id. Emit a structured Warn here so the alerting-rules.md
 		// triage step "grep slog code=ERR_AUTH_REPLAY_DETECTED" produces hits.
-		cfg.logger.WarnContext(r.Context(), "service token replay detected",
+		cfg.logger.WarnContext(
+			r.Context(), "service token replay detected",
 			slog.String("code", string(errcode.ErrAuthReplayDetected)),
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
@@ -391,24 +392,28 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 	reason := classifyServiceTokenVerifyError(err)
 	switch reason {
 	case "legacy_format":
-		cfg.logger.WarnContext(r.Context(), "legacy service token format rejected",
+		cfg.logger.WarnContext(
+			r.Context(), "legacy service token format rejected",
 			slog.String("path", r.URL.Path),
 			slog.String("format", "2-part"),
 		)
 	case "missing_caller_cell":
-		cfg.logger.WarnContext(r.Context(), "service token missing caller cell",
+		cfg.logger.WarnContext(
+			r.Context(), "service token missing caller cell",
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
 			slog.String("caller_cell", callerCell),
 		)
 	case "invalid_caller_cell":
-		cfg.logger.WarnContext(r.Context(), "service token invalid caller cell",
+		cfg.logger.WarnContext(
+			r.Context(), "service token invalid caller cell",
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
 			slog.String("caller_cell", callerCell),
 		)
 	case "invalid_format":
-		cfg.logger.WarnContext(r.Context(), "service token invalid format",
+		cfg.logger.WarnContext(
+			r.Context(), "service token invalid format",
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
 			slog.String("caller_cell", callerCell),

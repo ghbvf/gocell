@@ -310,7 +310,7 @@ func (l *SweeperLifecycle) runLoop(
 					slog.String("cell", l.cellID()),
 					slog.Any("error", err))
 				if l.SweepErrorCounter != nil {
-					l.SweepErrorCounter.With(kernelmetrics.Labels{"cell": l.cellID()}).Inc()
+					l.SweepErrorCounter.With(kernelmetrics.Labels{"cell": l.cellID()}).Inc(runCtx)
 				}
 			}
 		}

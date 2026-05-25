@@ -82,13 +82,15 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 		// S43: expected 4xx (invalid/expired token, unauthorized) → Warn;
 		// infra errors (key load failure, verifier init error) → Error.
 		if errcode.IsExpected4xx(err) {
-			cfg.logger.Warn("token verification failed",
+			cfg.logger.Warn(
+				"token verification failed",
 				slog.Any("error", err),
 				slog.String("path", r.URL.Path),
 				slog.String("remote_addr", r.RemoteAddr),
 			)
 		} else {
-			cfg.logger.Error("token verification failed",
+			cfg.logger.Error(
+				"token verification failed",
 				slog.Any("error", err),
 				slog.String("path", r.URL.Path),
 				slog.String("remote_addr", r.RemoteAddr),
@@ -116,7 +118,8 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// their password and obtains a new token without the claim. If no matcher
 	// is wired, the gate rejects every request — fail-closed default.
 	if claims.PasswordResetRequired && !isPasswordResetExempt(cfg, r.Method, r.URL.Path) {
-		cfg.logger.Info("auth: password reset required gate blocked request",
+		cfg.logger.Info(
+			"auth: password reset required gate blocked request",
 			slog.String("subject", claims.Subject),
 			slog.String("path", r.URL.Path),
 			slog.String("method", r.Method),
@@ -245,7 +248,8 @@ func handleRequireRole(
 	if authorizer != nil {
 		allowed, err := checkAuthorizer(authorizer, r, p.Subject, roles)
 		if err != nil {
-			loggerFrom(r.Context()).Error("authorization check failed",
+			loggerFrom(r.Context()).Error(
+				"authorization check failed",
 				slog.Any("error", err),
 				slog.String("subject", p.Subject),
 			)
@@ -259,7 +263,8 @@ func handleRequireRole(
 		}
 	}
 
-	loggerFrom(r.Context()).Info("authorization role check failed",
+	loggerFrom(r.Context()).Info(
+		"authorization role check failed",
 		slog.String("subject", p.Subject),
 		slog.String("path", r.URL.Path),
 		slog.Any("required_roles", roles),

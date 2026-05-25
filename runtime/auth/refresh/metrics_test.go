@@ -78,8 +78,8 @@ func (gcHistogramVec) With(metrics.Labels) metrics.Histogram { return gcHistogra
 
 type gcCounter struct{}
 
-func (gcCounter) Inc(_ context.Context)              {}
-func (gcCounter) Add(_ context.Context, _ float64)   {}
+func (gcCounter) Inc(_ context.Context)            {}
+func (gcCounter) Add(_ context.Context, _ float64) {}
 
 type gcHistogram struct{}
 

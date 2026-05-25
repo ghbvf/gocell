@@ -242,7 +242,7 @@ type fakeFloat64Counter struct {
 	gotDelta float64
 }
 
-func (f *fakeFloat64Counter) Add(ctx context.Context, incr float64, _ ...otelmetric.MeasurementOption) {
+func (f *fakeFloat64Counter) Add(ctx context.Context, incr float64, _ ...otelmetric.AddOption) {
 	f.gotCtx = ctx
 	f.gotDelta = incr
 }
@@ -254,7 +254,7 @@ type fakeFloat64Histogram struct {
 	gotValue float64
 }
 
-func (f *fakeFloat64Histogram) Record(ctx context.Context, value float64, _ ...otelmetric.MeasurementOption) {
+func (f *fakeFloat64Histogram) Record(ctx context.Context, value float64, _ ...otelmetric.RecordOption) {
 	f.gotCtx = ctx
 	f.gotValue = value
 }
@@ -266,7 +266,7 @@ type fakeFloat64Gauge struct {
 	gotValue float64
 }
 
-func (f *fakeFloat64Gauge) Record(ctx context.Context, value float64, _ ...otelmetric.MeasurementOption) {
+func (f *fakeFloat64Gauge) Record(ctx context.Context, value float64, _ ...otelmetric.RecordOption) {
 	f.gotCtx = ctx
 	f.gotValue = value
 }

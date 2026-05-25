@@ -312,8 +312,8 @@ func join(ss []string) string {
 
 type promCounter struct{ inner prom.Counter }
 
-func (c promCounter) Inc(_ context.Context)             { c.inner.Inc() }
-func (c promCounter) Add(_ context.Context, d float64)  { c.inner.Add(d) }
+func (c promCounter) Inc(_ context.Context)            { c.inner.Inc() }
+func (c promCounter) Add(_ context.Context, d float64) { c.inner.Add(d) }
 
 type promHistogram struct{ inner prom.Observer }
 

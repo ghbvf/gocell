@@ -1,6 +1,7 @@
 package metrics_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -20,8 +21,9 @@ func TestProviderCollector_NopProviderNoPanic(t *testing.T) {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
 	// Recording through the Nop provider must not panic.
-	c.RecordRequest("dev", "GET", "/api/v1/users", 200, 0.05)
-	c.RecordRequest("dev", "POST", "/api/v1/users", 201, 0.12)
+	ctx := context.Background()
+	c.RecordRequest(ctx, "dev", "GET", "/api/v1/users", 200, 0.05)
+	c.RecordRequest(ctx, "dev", "POST", "/api/v1/users", 201, 0.12)
 }
 
 func TestProviderCollector_EmitsCellLabelFromArg(t *testing.T) {
@@ -30,7 +32,7 @@ func TestProviderCollector_EmitsCellLabelFromArg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest("accesscore", "GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest(context.Background(), "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
 
 	ops := p.counterOps["http_requests_total"]
 	if len(ops) != 1 {
@@ -58,9 +60,10 @@ func TestProviderCollector_PerCallCellLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest("accesscore", "GET", "/api/v1/sessions", 200, 0.01)
-	c.RecordRequest("auditcore", "GET", "/api/v1/audit", 200, 0.02)
-	c.RecordRequest("_runtime", "GET", "/healthz", 200, 0.001)
+	ctx := context.Background()
+	c.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest(ctx, "auditcore", "GET", "/api/v1/audit", 200, 0.02)
+	c.RecordRequest(ctx, "_runtime", "GET", "/healthz", 200, 0.001)
 
 	ops := p.counterOps["http_requests_total"]
 	if len(ops) != 3 {
@@ -144,8 +147,8 @@ type spyCounter struct {
 	labels kernelmetrics.Labels
 }
 
-func (c spyCounter) Inc() { c.Add(1) }
-func (c spyCounter) Add(d float64) {
+func (c spyCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c spyCounter) Add(_ context.Context, d float64) {
 	c.parent.counterOps[c.name] = append(c.parent.counterOps[c.name], spyOp{labels: c.labels, value: d})
 }
 
@@ -155,7 +158,7 @@ type spyHistogram struct {
 	labels kernelmetrics.Labels
 }
 
-func (h spyHistogram) Observe(v float64) {
+func (h spyHistogram) Observe(_ context.Context, v float64) {
 	h.parent.histogramOps[h.name] = append(h.parent.histogramOps[h.name], spyOp{labels: h.labels, value: v})
 }
 
@@ -177,12 +180,12 @@ type spyGauge struct {
 	labels kernelmetrics.Labels
 }
 
-func (g spyGauge) Set(v float64) {
+func (g spyGauge) Set(_ context.Context, v float64) {
 	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], spyOp{labels: g.labels, value: v})
 }
-func (g spyGauge) Inc() { g.Add(1) }
-func (g spyGauge) Dec() { g.Add(-1) }
-func (g spyGauge) Add(d float64) {
+func (g spyGauge) Inc(ctx context.Context) { g.Add(ctx, 1) }
+func (g spyGauge) Dec(ctx context.Context) { g.Add(ctx, -1) }
+func (g spyGauge) Add(ctx context.Context, d float64) {
 	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], spyOp{labels: g.labels, value: d})
 }
 

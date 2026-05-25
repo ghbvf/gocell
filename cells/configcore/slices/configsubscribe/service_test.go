@@ -646,7 +646,8 @@ func (r *recordingEventbusCacheCollector) total() int64 { return r.count.Load() 
 func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
 	spy := &recordingEventbusCacheCollector{}
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
@@ -696,7 +697,8 @@ func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 func TestCache_SweepTombstones_NeverTouchesActive(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
 	spy := &recordingEventbusCacheCollector{}
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
@@ -730,7 +732,8 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 
 	fc := clockmock.New(time.Unix(0, 0))
 	spy := &recordingEventbusCacheCollector{}
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
@@ -818,7 +821,8 @@ func TestNewService_TombstoneTTLDefaultAndWarn(t *testing.T) {
 // subsequent StopTombstoneGC(context.Background()) clears the state.
 func TestStopTombstoneGC_CtxTimeout(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 	)
@@ -867,7 +871,8 @@ func TestTombstoneTTL_SubWindowClampedPreventsResurrection(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	svc := mustNewService(t, logger,
+	svc := mustNewService(
+		t, logger,
 		WithClock(fc),
 		WithTombstoneTTL(testSubWindowTTL), // 1h, below the 24h window → clamp
 	)
@@ -906,7 +911,8 @@ func TestTombstoneTTL_SubWindowClampedPreventsResurrection(t *testing.T) {
 // a subsequent Stop with a background ctx drains the original goroutine.
 func TestStopTombstoneGC_TimeoutThenNoRestartThenDrains(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 	)

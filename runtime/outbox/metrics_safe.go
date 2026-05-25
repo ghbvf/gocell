@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"log/slog"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
@@ -23,20 +24,20 @@ type safeRelayCollector struct {
 // Compile-time interface check.
 var _ kout.RelayCollector = (*safeRelayCollector)(nil)
 
-func (s *safeRelayCollector) RecordPollCycle(r kout.PollCycleResult) {
-	s.safeCall(func() { s.inner.RecordPollCycle(r) })
+func (s *safeRelayCollector) RecordPollCycle(ctx context.Context, r kout.PollCycleResult) {
+	s.safeCall(func() { s.inner.RecordPollCycle(ctx, r) })
 }
 
-func (s *safeRelayCollector) RecordBatchSize(size int) {
-	s.safeCall(func() { s.inner.RecordBatchSize(size) })
+func (s *safeRelayCollector) RecordBatchSize(ctx context.Context, size int) {
+	s.safeCall(func() { s.inner.RecordBatchSize(ctx, size) })
 }
 
-func (s *safeRelayCollector) RecordReclaim(count int64) {
-	s.safeCall(func() { s.inner.RecordReclaim(count) })
+func (s *safeRelayCollector) RecordReclaim(ctx context.Context, count int64) {
+	s.safeCall(func() { s.inner.RecordReclaim(ctx, count) })
 }
 
-func (s *safeRelayCollector) RecordCleanup(publishedDeleted, deadDeleted int64) {
-	s.safeCall(func() { s.inner.RecordCleanup(publishedDeleted, deadDeleted) })
+func (s *safeRelayCollector) RecordCleanup(ctx context.Context, publishedDeleted, deadDeleted int64) {
+	s.safeCall(func() { s.inner.RecordCleanup(ctx, publishedDeleted, deadDeleted) })
 }
 
 // safeCall runs fn and recovers from any panic, logging it instead of

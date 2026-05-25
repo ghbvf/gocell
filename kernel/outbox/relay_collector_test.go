@@ -368,9 +368,9 @@ func (v *spyGaugeVec) With(l metrics.Labels) metrics.Gauge {
 type spyGauge struct{}
 
 func (spyGauge) Set(_ context.Context, _ float64) {}
-func (spyGauge) Inc(_ context.Context)             {}
-func (spyGauge) Dec(_ context.Context)             {}
-func (spyGauge) Add(_ context.Context, _ float64)  {}
+func (spyGauge) Inc(_ context.Context)            {}
+func (spyGauge) Dec(_ context.Context)            {}
+func (spyGauge) Add(_ context.Context, _ float64) {}
 
 // MetricName exposes the name so collectorName can extract it in tests.
 func (v *spyCounterVec) MetricName() string   { return v.name }

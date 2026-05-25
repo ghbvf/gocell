@@ -253,7 +253,8 @@ func TestPublish_NackReturnsNackErrcodeAndRecords(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn,
+	pub := NewPublisher(
+		conn,
 		WithPublisherClock(clock.Real()),
 		WithPublisherCollector(col),
 	)
@@ -288,7 +289,8 @@ func TestPublish_TimeoutReturnsTimeoutAndRecords(t *testing.T) {
 	}()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn,
+	pub := NewPublisher(
+		conn,
 		WithPublisherClock(clock.Real()),
 		WithPublisherCollector(col),
 	)
@@ -315,7 +317,8 @@ func TestPublish_ConfirmChanClosedReturnsTimeoutAndRecords(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn,
+	pub := NewPublisher(
+		conn,
 		WithPublisherClock(clock.Real()),
 		WithPublisherCollector(col),
 	)

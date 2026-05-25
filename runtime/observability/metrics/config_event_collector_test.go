@@ -20,11 +20,12 @@ func TestProviderConfigEventCollector_RejectsNilProvider(t *testing.T) {
 }
 
 func TestProviderConfigEventCollector_NopProviderNoPanic(t *testing.T) {
+	ctx := context.Background()
 	collector, err := obmetrics.NewProviderConfigEventCollector(kernelmetrics.NopProvider{})
 	require.NoError(t, err)
 
-	collector.RecordEventProcess("accesscore", "configreceive", obmetrics.ConfigEventProcessReasonAck)
-	collector.RecordEventSettlement("configcore", "configsubscribe", "requeue", outbox.SettlementResultCommitFailed)
+	collector.RecordEventProcess(ctx, "accesscore", "configreceive", obmetrics.ConfigEventProcessReasonAck)
+	collector.RecordEventSettlement(ctx, "configcore", "configsubscribe", "requeue", outbox.SettlementResultCommitFailed)
 }
 
 func TestProviderConfigEventCollector_ReturnsRegistrationError(t *testing.T) {
@@ -35,12 +36,13 @@ func TestProviderConfigEventCollector_ReturnsRegistrationError(t *testing.T) {
 }
 
 func TestProviderConfigEventCollector_EmitsExpectedMetricsAndLabels(t *testing.T) {
+	ctx := context.Background()
 	p := newSpyProvider()
 	collector, err := obmetrics.NewProviderConfigEventCollector(p)
 	require.NoError(t, err)
 
-	collector.RecordEventProcess("accesscore", "configreceive", obmetrics.ConfigEventProcessReasonStale)
-	collector.RecordEventSettlement("accesscore", "configreceive", "ack", outbox.SettlementResultSuccess)
+	collector.RecordEventProcess(ctx, "accesscore", "configreceive", obmetrics.ConfigEventProcessReasonStale)
+	collector.RecordEventSettlement(ctx, "accesscore", "configreceive", "ack", outbox.SettlementResultSuccess)
 
 	processOps := p.counterOps["config_event_process_total"]
 	require.Len(t, processOps, 1)
@@ -142,11 +144,15 @@ type configEventSettlementRecord struct {
 	result      outbox.SettlementResult
 }
 
-func (c *recordingConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
+func (c *recordingConfigEventCollector) RecordEventProcess(
+	_ context.Context, cellID, sliceID string, reason obmetrics.ConfigEventProcessReason,
+) {
 	c.processRecords = append(c.processRecords, configEventProcessRecord{cell: cellID, slice: sliceID, reason: reason})
 }
 
-func (c *recordingConfigEventCollector) RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult) {
+func (c *recordingConfigEventCollector) RecordEventSettlement(
+	_ context.Context, cellID, sliceID, disposition string, result outbox.SettlementResult,
+) {
 	c.settlementRecords = append(c.settlementRecords,
 		configEventSettlementRecord{cell: cellID, slice: sliceID, disposition: disposition, result: result})
 }

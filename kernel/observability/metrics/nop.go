@@ -60,8 +60,8 @@ func (v nopGaugeVec) With(l Labels) Gauge {
 
 type nopCounter struct{}
 
-func (nopCounter) Inc(_ context.Context)              {}
-func (nopCounter) Add(_ context.Context, _ float64)   {}
+func (nopCounter) Inc(_ context.Context)            {}
+func (nopCounter) Add(_ context.Context, _ float64) {}
 
 type nopHistogram struct{}
 

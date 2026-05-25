@@ -12,6 +12,7 @@ package metrics_test
 // with real implementations, these tests turn GREEN.
 
 import (
+	"context"
 	"testing"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -86,7 +87,7 @@ func TestOutboxRejectCollector_ObserveReject_IncrementsCounterWithLabels(t *test
 		t.Fatalf("NewOutboxRejectCollector: %v", err)
 	}
 
-	c.ObserveReject("accesscore", "event.session.created.v1", "cg-accesscore-session", "handler_reject")
+	c.ObserveReject(context.Background(), "accesscore", "event.session.created.v1", "cg-accesscore-session", "handler_reject")
 
 	ops := p.counterOps["outbox_consumer_rejected_total"]
 	if len(ops) != 1 {
@@ -115,7 +116,7 @@ func TestOutboxRejectCollector_ObserveReject_IncrementsCounterWithLabels(t *test
 // TestOutboxRejectCollector_NilReceiver_DoesNotPanic verifies nil-safe call.
 func TestOutboxRejectCollector_NilReceiver_DoesNotPanic(t *testing.T) {
 	var c *obmetrics.OutboxRejectCollector
-	c.ObserveReject("cell", "topic", "cg", "handler_reject") // must not panic
+	c.ObserveReject(context.Background(), "cell", "topic", "cg", "handler_reject") // must not panic
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +185,7 @@ func TestOutboxPendingDepthCollector_ObservePendingDepth_UsesConstructedCellID(t
 		t.Fatalf("NewOutboxPendingDepthCollector: %v", err)
 	}
 
-	c.ObservePendingDepth(42)
+	c.ObservePendingDepth(context.Background(), 42)
 
 	ops := p.gaugeOps["outbox_pending_depth"]
 	if len(ops) != 1 {
@@ -205,7 +206,7 @@ func TestOutboxPendingDepthCollector_ObservePendingDepth_UsesConstructedCellID(t
 // TestOutboxPendingDepthCollector_NilReceiver_DoesNotPanic verifies nil-safe call.
 func TestOutboxPendingDepthCollector_NilReceiver_DoesNotPanic(t *testing.T) {
 	var c *obmetrics.OutboxPendingDepthCollector
-	c.ObservePendingDepth(7) // must not panic
+	c.ObservePendingDepth(context.Background(), 7) // must not panic
 }
 
 // ---------------------------------------------------------------------------
@@ -280,8 +281,8 @@ type outboxSpyCounter struct {
 	labels kernelmetrics.Labels
 }
 
-func (c *outboxSpyCounter) Inc() { c.Add(1) }
-func (c *outboxSpyCounter) Add(d float64) {
+func (c *outboxSpyCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c *outboxSpyCounter) Add(_ context.Context, d float64) {
 	c.parent.counterOps[c.name] = append(c.parent.counterOps[c.name], outboxSpyRecord{labels: c.labels, value: d})
 }
 
@@ -291,9 +292,9 @@ type outboxSpyGauge struct {
 	labels kernelmetrics.Labels
 }
 
-func (g *outboxSpyGauge) Set(v float64) {
+func (g *outboxSpyGauge) Set(_ context.Context, v float64) {
 	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], outboxSpyRecord{labels: g.labels, value: v})
 }
-func (g *outboxSpyGauge) Inc()          { g.Add(1) }
-func (g *outboxSpyGauge) Dec()          { g.Add(-1) }
-func (g *outboxSpyGauge) Add(d float64) { g.Set(d) }
+func (g *outboxSpyGauge) Inc(ctx context.Context)            { g.Add(ctx, 1) }
+func (g *outboxSpyGauge) Dec(ctx context.Context)            { g.Add(ctx, -1) }
+func (g *outboxSpyGauge) Add(ctx context.Context, d float64) { g.Set(ctx, d) }

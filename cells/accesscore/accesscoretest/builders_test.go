@@ -168,7 +168,8 @@ func TestFakeConfigGetterCallsRecorded(t *testing.T) {
 func TestNewCredentialInvalidatorWithFixture(t *testing.T) {
 	t.Parallel()
 	f := accesscoretest.NewAccessFixture(t, clock.Real())
-	inv := accesscoretest.NewCredentialInvalidator(t,
+	inv := accesscoretest.NewCredentialInvalidator(
+		t,
 		accesscoretest.WithInvalidatorFixture(f),
 	)
 	require.NotNil(t, inv, "NewCredentialInvalidator must return non-nil *CredentialInvalidator")
@@ -224,7 +225,8 @@ func TestBuildConfigReceiveServiceSmoke(t *testing.T) {
 	fg := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"jwt.ttl": accesscoretest.PresentStub("jwt.ttl", "3600", 1),
 	})
-	svc := accesscoretest.BuildConfigReceiveService(t,
+	svc := accesscoretest.BuildConfigReceiveService(
+		t,
 		accesscoretest.WithConfigReceiveConfigGetter(fg),
 	)
 
@@ -242,7 +244,8 @@ func TestBuildConfigReceiveServiceSmoke(t *testing.T) {
 	fgStale := accesscoretest.NewFakeConfigGetter(map[string]accesscoretest.ConfigGetterStub{
 		"gone.key": accesscoretest.NotFoundStub(),
 	})
-	svcStale := accesscoretest.BuildConfigReceiveService(t,
+	svcStale := accesscoretest.BuildConfigReceiveService(
+		t,
 		accesscoretest.WithConfigReceiveConfigGetter(fgStale),
 	)
 	staleEntry := makeConfigUpsertedEntry("gone.key", 1)
@@ -293,11 +296,13 @@ func TestBuildIdentityManageService_AllOptions(t *testing.T) {
 	customClock := clock.Real()
 	customLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	issuer := &recordingTokenIssuer{}
-	customInv := accesscoretest.NewCredentialInvalidator(t,
+	customInv := accesscoretest.NewCredentialInvalidator(
+		t,
 		accesscoretest.WithInvalidatorFixture(fix),
 	)
 
-	svc, _, rec := accesscoretest.BuildIdentityManageService(t,
+	svc, _, rec := accesscoretest.BuildIdentityManageService(
+		t,
 		accesscoretest.WithIdentityFixture(fix),
 		accesscoretest.WithIdentityClock(customClock),
 		accesscoretest.WithIdentityLogger(customLogger),
@@ -360,7 +365,8 @@ func TestBuildConfigReceiveService_WithCollectorAndLogger(t *testing.T) {
 	collector := &recordingCollector{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	svc := accesscoretest.BuildConfigReceiveService(t,
+	svc := accesscoretest.BuildConfigReceiveService(
+		t,
 		accesscoretest.WithConfigReceiveConfigGetter(fg),
 		accesscoretest.WithConfigReceiveLogger(logger),
 		accesscoretest.WithConfigReceiveCollector(collector),

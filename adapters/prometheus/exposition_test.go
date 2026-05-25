@@ -71,8 +71,8 @@ func TestPrometheusExposition_HTTPCollector_FamiliesAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest("test-cell", "GET", "/api/v1/users", 200, 0.15)
-	c.RecordRequest("test-cell", "POST", "/api/v1/users", 201, 0.05)
+	c.RecordRequest(context.Background(), "test-cell", "GET", "/api/v1/users", 200, 0.15)
+	c.RecordRequest(context.Background(), "test-cell", "POST", "/api/v1/users", 201, 0.05)
 
 	body := expose(t, reg)
 
@@ -111,13 +111,13 @@ func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 		t.Fatalf("NewProviderRelayCollector: %v", err)
 	}
 
-	c.RecordPollCycle(outbox.PollCycleResult{
+	c.RecordPollCycle(context.Background(), outbox.PollCycleResult{
 		Published: 2, Retried: 0, Dead: 1, Skipped: 3,
 		ClaimDur: testtime.D10ms, PublishDur: testtime.MediumPoll, WriteBackDur: testtime.FastPoll,
 	})
-	c.RecordBatchSize(6)
-	c.RecordReclaim(4)
-	c.RecordCleanup(12, 2)
+	c.RecordBatchSize(context.Background(), 6)
+	c.RecordReclaim(context.Background(), 4)
+	c.RecordCleanup(context.Background(), 12, 2)
 
 	body := expose(t, reg)
 

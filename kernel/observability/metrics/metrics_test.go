@@ -162,7 +162,7 @@ func TestNopProvider_AcceptsEmptyLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CounterVec: %v", err)
 	}
-	cv.With(nil).Inc(context.Background())               // nil labels OK
+	cv.With(nil).Inc(context.Background())                 // nil labels OK
 	cv.With(metrics.Labels{}).Add(context.Background(), 1) // empty map OK
 }
 

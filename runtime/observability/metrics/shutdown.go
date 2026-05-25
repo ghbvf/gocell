@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"time"
@@ -159,27 +160,27 @@ func NewShutdownCollector(p kernelmetrics.Provider) (*ShutdownCollector, error) 
 
 // RecordPhaseEntry increments the phase-entry counter for the given phase
 // label. No-op on nil receiver.
-func (m *ShutdownCollector) RecordPhaseEntry(phase string) {
+func (m *ShutdownCollector) RecordPhaseEntry(ctx context.Context, phase string) {
 	if m == nil || m.disabled {
 		return
 	}
-	m.phaseEntries.With(kernelmetrics.Labels{"phase": phase}).Inc()
+	m.phaseEntries.With(kernelmetrics.Labels{"phase": phase}).Inc(ctx)
 }
 
 // ObservePhaseDuration records the duration of a shutdown phase. No-op on
 // nil receiver.
-func (m *ShutdownCollector) ObservePhaseDuration(phase string, d time.Duration) {
+func (m *ShutdownCollector) ObservePhaseDuration(ctx context.Context, phase string, d time.Duration) {
 	if m == nil || m.disabled {
 		return
 	}
-	m.phaseDuration.With(kernelmetrics.Labels{"phase": phase}).Observe(d.Seconds())
+	m.phaseDuration.With(kernelmetrics.Labels{"phase": phase}).Observe(ctx, d.Seconds())
 }
 
 // CountOutcome increments the shutdown outcome counter. outcome must be one of
 // "success", "timeout", "teardown_error", or "signal_error". No-op on nil receiver.
-func (m *ShutdownCollector) CountOutcome(outcome string) {
+func (m *ShutdownCollector) CountOutcome(ctx context.Context, outcome string) {
 	if m == nil || m.disabled {
 		return
 	}
-	m.shutdownTotal.With(kernelmetrics.Labels{"outcome": outcome}).Inc()
+	m.shutdownTotal.With(kernelmetrics.Labels{"outcome": outcome}).Inc(ctx)
 }

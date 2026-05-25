@@ -62,8 +62,8 @@ type fakeCounter struct {
 	labels kernelmetrics.Labels
 }
 
-func (c *fakeCounter) Inc() { c.Add(1) }
-func (c *fakeCounter) Add(delta float64) {
+func (c *fakeCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c *fakeCounter) Add(_ context.Context, delta float64) {
 	c.vec.mu.Lock()
 	defer c.vec.mu.Unlock()
 	c.vec.records = append(c.vec.records, fakeCounterRecord{labels: c.labels, delta: delta})
@@ -104,7 +104,7 @@ type fakeHistogram struct {
 	labels kernelmetrics.Labels
 }
 
-func (h *fakeHistogram) Observe(value float64) {
+func (h *fakeHistogram) Observe(_ context.Context, value float64) {
 	h.vec.mu.Lock()
 	defer h.vec.mu.Unlock()
 	h.vec.records = append(h.vec.records, fakeHistogramRecord{labels: h.labels, value: value})

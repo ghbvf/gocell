@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -97,8 +98,8 @@ type testCounter struct {
 	obs *atomic.Int64
 }
 
-func (c *testCounter) Inc()              { c.obs.Add(1) }
-func (c *testCounter) Add(delta float64) { c.obs.Add(int64(delta)) }
+func (c *testCounter) Inc(_ context.Context)                { c.obs.Add(1) }
+func (c *testCounter) Add(_ context.Context, delta float64) { c.obs.Add(int64(delta)) }
 
 // labelsKey produces a deterministic string key for a label set (sorted keys).
 func labelsKey(labels map[string]string) string {

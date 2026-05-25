@@ -60,12 +60,15 @@ type NoopRelayCollector struct{}
 func (NoopRelayCollector) RecordPollCycle(_ context.Context, _ PollCycleResult) {
 	/* no-op: metrics disabled */
 }
+
 func (NoopRelayCollector) RecordBatchSize(_ context.Context, _ int) {
 	/* no-op: metrics disabled */
 }
+
 func (NoopRelayCollector) RecordReclaim(_ context.Context, _ int64) {
 	/* no-op: metrics disabled */
 }
+
 func (NoopRelayCollector) RecordCleanup(_ context.Context, _, _ int64) {
 	/* no-op: metrics disabled */
 }

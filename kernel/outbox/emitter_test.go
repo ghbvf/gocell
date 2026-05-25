@@ -300,7 +300,7 @@ func TestNewDirectEmitter_NilClock(t *testing.T) {
 
 type spyCounter struct{ count int }
 
-func (c *spyCounter) Inc(_ context.Context)          { c.count++ }
+func (c *spyCounter) Inc(_ context.Context)            { c.count++ }
 func (c *spyCounter) Add(_ context.Context, d float64) { c.count += int(d) }
 
 type spyCounterVec struct {
@@ -337,9 +337,9 @@ func (v *spyGaugeVec) With(l metrics.Labels) metrics.Gauge {
 type spyGauge struct{}
 
 func (spyGauge) Set(_ context.Context, _ float64) {}
-func (spyGauge) Inc(_ context.Context)             {}
-func (spyGauge) Dec(_ context.Context)             {}
-func (spyGauge) Add(_ context.Context, _ float64)  {}
+func (spyGauge) Inc(_ context.Context)            {}
+func (spyGauge) Dec(_ context.Context)            {}
+func (spyGauge) Add(_ context.Context, _ float64) {}
 
 type spyMetricsProvider struct {
 	counter *spyCounter

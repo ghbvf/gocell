@@ -513,7 +513,7 @@ type reclaimRecordingCollector struct {
 	counts []int64
 }
 
-func (c *reclaimRecordingCollector) RecordReclaim(n int64) {
+func (c *reclaimRecordingCollector) RecordReclaim(_ context.Context, n int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.counts = append(c.counts, n)

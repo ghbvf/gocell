@@ -71,8 +71,10 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		}
 		if isSelectorCall(v, "collector", "RecordRequest") {
 			recordRequestPos = v.Pos()
-			if len(v.Args) > 0 {
-				if id, ok := v.Args[0].(*ast.Ident); ok && id.Name == "cellID" {
+			// Arg 0 is the ctx (METRICS-CTX-FUNNEL-01 ctx-bearing signature);
+			// the ctx-derived cellID label is arg 1.
+			if len(v.Args) > 1 {
+				if id, ok := v.Args[1].(*ast.Ident); ok && id.Name == "cellID" {
 					recordUsesCellIDArg = true
 				}
 			}

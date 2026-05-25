@@ -203,7 +203,8 @@ func (c *providerRelayCollector) RecordPollCycle(ctx context.Context, r PollCycl
 	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "claim"}).Observe(ctx, r.ClaimDur.Seconds())
 	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "publish"}).Observe(ctx, r.PublishDur.Seconds())
 	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "write_back"}).Observe(ctx, r.WriteBackDur.Seconds())
-	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "total"}).Observe(ctx, (r.ClaimDur+r.PublishDur+r.WriteBackDur).Seconds())
+	total := (r.ClaimDur + r.PublishDur + r.WriteBackDur).Seconds()
+	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "total"}).Observe(ctx, total)
 }
 
 // RecordBatchSize observes the claim count of each poll, including zero to
