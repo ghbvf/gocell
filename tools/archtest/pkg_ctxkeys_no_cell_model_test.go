@@ -30,29 +30,48 @@
 //     ctxKey string values is itself a golden, double-direction diffed
 //     against actual BasicLit STRING values in const ValueSpec.Values.
 //
-// Plus one boundary sanity sub-test (B2):
+// Plus one boundary sanity sub-test (Boundary_file_shape_sanity):
 //
-//   - File-shape sanity. pkg/ctxkeys/ must not contain a `package ctxkeys_test`
-//     file (black-box test packages would bypass the `_test.go` skip in the
-//     three layers' production-only walk) and must not contain `//go:generate`
-//     directives (generated code would bypass the hand-curated golden).
+//   - pkg/ctxkeys/ must not contain a `package ctxkeys_test` file
+//     (black-box test packages would bypass the `_test.go` skip in the
+//     three layers' production-only walk), must not contain `//go:generate`
+//     directives (generated code would bypass the hand-curated golden),
+//     and must not contain `//go:build` directives (a file gated out of
+//     the default build would skip Layer A/C scanning).
 //
-// Blind spots intentionally OUTSIDE this rule's protection radius
-// (called out per .claude/rules/gocell/ai-robust.md §载体决策原则 blind-spot
-// disclosure requirement):
+// Blind spots within the chosen tool's coverage (per
+// .claude/rules/gocell/ai-robust.md §载体决策原则: each must have a reverse
+// self-check test asserting it does not occur in production AST):
 //
-//   - Cross-package re-export from another pkg/ that smuggles a cell-model
-//     identifier through pkg/ctxkeys at use-site — out of scope; the rule
-//     scope is pkg/ctxkeys/ declarations, not transitive re-exports.
-//   - Build-tag-hidden files (//go:build ignore-style gating). Not plausible
-//     for a leaf observability util package; would be visible in PR diff.
+//   - Build-tag-hidden files (//go:build ignore-style gating). The
+//     production-only walk parses every .go file in pkg/ctxkeys regardless
+//     of build tags, but an AI could add a file with a non-default tag whose
+//     contents are skipped by go/build under the standard context.
+//     Reverse self-check: Boundary_file_shape_sanity sub-test asserts
+//     pkg/ctxkeys/ contains no `//go:build` directive (file-level tag form
+//     that would gate the file out of the default build).
 //
-// AI-robust rating: Hard (single sanctioned holder + codegen-funnel-and-golden
-// pattern from .claude/rules/gocell/ai-robust.md §Hard 范本目录). Both upstream
-// (production AST → golden diff) and downstream (golden contents substring
-// reject + string-value diff) are archtest-bound and not reachable through any
-// alternative path: only this file's golden vars can be added to, and any such
-// edit must pass Layer B.
+// Out of rule scope (categorically different rule space, NOT a blind spot
+// in the ai-robust sense — no reverse self-check required):
+//
+//   - Cross-package re-export from another pkg/ subpackage that smuggles
+//     a cell-model identifier through pkg/ctxkeys at use-site. The rule
+//     scope is pkg/ctxkeys/ declarations; transitive re-export is a
+//     separate concern that would need its own archtest.
+//
+// AI-robust rating (per .claude/rules/gocell/ai-robust.md §Funnel 双向锁评级):
+//
+//   - Upstream: Medium — production AST → golden diff (Layer A) is
+//     archtest-bound, not Go type-system sealed. An AI can edit
+//     pkg/ctxkeys/keys.go and the golden in the same PR; protection
+//     is detection (Layer A fails until golden updated) plus reviewer
+//     diff visibility, not impossibility. Hard upgrade path
+//     investigation tracked at gh issue #1012.
+//   - Downstream: Hard — any edit to the golden vars (Const/Func/Type
+//     names + KeyStringValues) must pass Layer B's case-insensitive
+//     cell-model substring check. "Add to golden AND pass B" is a
+//     jointly-impossible constraint for cell-model identifiers,
+//     closing the only escape path of interest.
 //
 // ref: tools/archtest/no_test_service_context_in_production_test.go
 // (production-only AST walk + _test.go skip pattern);
@@ -63,9 +82,12 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -90,9 +112,12 @@ var allowedPkgCtxkeysConstNames = map[string]struct{}{
 	"realIP":        {},
 }
 
-// allowedPkgCtxkeysFuncNames is the golden allowlist of top-level function
-// names declared in pkg/ctxkeys/ production .go files. With/From pair for
-// each of the six const keys.
+// allowedPkgCtxkeysFuncNames is the golden allowlist of function declaration
+// names (including methods — collectPkgCtxkeysIdentifiers walks every
+// *ast.FuncDecl.Name regardless of fd.Recv) declared in pkg/ctxkeys/
+// production .go files. With/From pair for each of the six const keys.
+// No methods exist today; adding one (e.g. `func (k ctxKey) String() string`)
+// would require listing the method name here too.
 var allowedPkgCtxkeysFuncNames = map[string]struct{}{
 	"WithCorrelationID": {}, "CorrelationIDFrom": {},
 	"WithTraceID": {}, "TraceIDFrom": {},
@@ -208,12 +233,14 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 		Report(t, rulePkgCtxkeysNoCellModel, diags)
 	})
 
-	t.Run("B2_file_shape_sanity", func(t *testing.T) {
+	t.Run("Boundary_file_shape_sanity", func(t *testing.T) {
 		t.Parallel()
 		// Include _test.go in this sub-scope so a future `package ctxkeys_test`
 		// (black-box test) file is visible. Production-only walks in A/C
 		// intentionally skip _test.go for golden simplicity; this sub-test
-		// closes the gap by refusing the file-shape entirely.
+		// closes the gap by refusing the file-shape entirely. Also serves as
+		// the reverse self-check for the documented blind spot
+		// "build-tag-hidden files" — see file-header godoc.
 		boundaryScope := DirsScope(root, []string{"pkg/ctxkeys"}, IncludeTests())
 		diags := Run(t, boundaryScope, func(p *Pass) []Diagnostic {
 			var ds []Diagnostic
@@ -229,12 +256,21 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 				}
 				for _, group := range file.Comments {
 					for _, c := range group.List {
-						if strings.HasPrefix(c.Text, "//go:generate") {
+						switch {
+						case strings.HasPrefix(c.Text, "//go:generate"):
 							ds = append(ds, Diagnostic{
 								Rel:  rel,
 								Line: p.Fset.Position(c.Pos()).Line,
 								Message: "pkg/ctxkeys/ must not contain `//go:generate` directives; " +
 									"generated code would bypass the hand-curated golden in PKG-CTXKEYS-NO-CELL-MODEL-01",
+							})
+						case strings.HasPrefix(c.Text, "//go:build"):
+							ds = append(ds, Diagnostic{
+								Rel:  rel,
+								Line: p.Fset.Position(c.Pos()).Line,
+								Message: "pkg/ctxkeys/ must not contain `//go:build` directives; " +
+									"a file gated out of the default build would skip Layer A/C scanning " +
+									"in PKG-CTXKEYS-NO-CELL-MODEL-01 (build-tag blind-spot reverse self-check)",
 							})
 						}
 					}
@@ -335,14 +371,17 @@ func diffNameSet(kind string, actual map[string]foundDecl, allowed map[string]st
 			})
 		}
 	}
+	goldenVar := "allowedPkgCtxkeys" + capitalizeKind(kind) + "Names"
+	goldenLine := goldenVarLine(goldenVar)
 	for name := range allowed {
 		if _, ok := actual[name]; !ok {
 			ds = append(ds, Diagnostic{
 				Rel:  goldenSelfFile,
-				Line: 1,
+				Line: goldenLine,
 				Message: fmt.Sprintf(
-					"%s name %q present in PKG-CTXKEYS-NO-CELL-MODEL-01 golden but missing from pkg/ctxkeys/ — remove from allowedPkgCtxkeys%sNames",
-					kind, name, capitalizeKind(kind)),
+					"%s name %q present in PKG-CTXKEYS-NO-CELL-MODEL-01 golden %s "+
+						"but missing from pkg/ctxkeys/ — remove from %s",
+					kind, name, goldenVar, goldenVar),
 			})
 		}
 	}
@@ -367,11 +406,12 @@ func diffStringValueSet(actual map[string]foundDecl, allowed map[string]struct{}
 			})
 		}
 	}
+	goldenLine := goldenVarLine("allowedPkgCtxkeysKeyStringValues")
 	for val := range allowed {
 		if _, ok := actual[val]; !ok {
 			ds = append(ds, Diagnostic{
 				Rel:  goldenSelfFile,
-				Line: 1,
+				Line: goldenLine,
 				Message: fmt.Sprintf(
 					"const string value %q present in PKG-CTXKEYS-NO-CELL-MODEL-01 golden "+
 						"but missing from pkg/ctxkeys/ — remove from allowedPkgCtxkeysKeyStringValues",
@@ -389,4 +429,54 @@ func capitalizeKind(kind string) string {
 		return kind
 	}
 	return strings.ToUpper(kind[:1]) + kind[1:]
+}
+
+// goldenVarLineCache lazily resolves the declaration line of each
+// allowedPkgCtxkeys* golden var inside THIS file. Used by diffNameSet /
+// diffStringValueSet so "missing from production" diagnostics point at the
+// exact golden var the reviewer must edit, not at file-header line 1.
+// Computed once via parseSelf below.
+var goldenVarLineCache = sync.OnceValue(parseSelf)
+
+// goldenVarLine returns the AST line of the top-level `var <name> = ...`
+// declaration in THIS file, or 1 if the name isn't found (defensive
+// fallback; the four golden vars are stable). Looked up via the
+// goldenVarLineCache map populated on first call.
+func goldenVarLine(name string) int {
+	if line, ok := goldenVarLineCache()[name]; ok {
+		return line
+	}
+	return 1
+}
+
+// parseSelf parses pkg_ctxkeys_no_cell_model_test.go and returns a map from
+// top-level var name to its declaration line. The path is resolved via
+// runtime.Caller so the test works regardless of cwd.
+func parseSelf() map[string]int {
+	out := map[string]int{}
+	_, selfPath, _, ok := runtime.Caller(0)
+	if !ok {
+		return out
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, selfPath, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return out
+	}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, n := range vs.Names {
+				out[n.Name] = fset.Position(n.Pos()).Line
+			}
+		}
+	}
+	return out
 }
