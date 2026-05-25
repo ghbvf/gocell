@@ -704,6 +704,17 @@ func (s *stubRepoProberJournal) RepoReady(_ context.Context) error {
 // which TestRepoReady_BeforeStart_NotRunning covers separately:
 //   - healthy: running coordinator backed by a healthy mem journal → nil.
 //   - broken:  running coordinator whose journal reports its relation gone → non-nil.
+//
+// Why a journal stub, not a real DROP TABLE: the Coordinator is NOT a SQL-backed
+// store — it owns no relation. Its differentiated property is *faithful
+// delegation* of the injected journal's readiness, so the "broken" prober is a
+// running coordinator over a journal stub that returns an error. This is the
+// strongest available broken analog (a no-op Coordinator.RepoReady that always
+// returned nil would FAIL this sub-test), and it is stronger than passing a nil
+// broken (which would skip the differentiated check entirely). The real
+// DROP-TABLE conformance for the SQL-backed journal lands with the PG durable
+// journal (#959) in adapters/postgres, which CELL-REPO-READYZ-PROBE-01 will then
+// independently require to enroll.
 func TestCoordinator_RepoReadinessConformance(t *testing.T) {
 	clkHealthy := newFakeClock()
 	healthy := startRunningCoordinator(t, newMemJournal(clkHealthy), clkHealthy)

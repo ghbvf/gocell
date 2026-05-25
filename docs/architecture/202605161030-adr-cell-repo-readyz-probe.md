@@ -6,7 +6,7 @@
 - Builds on: PR #485 (PR-8, A-01) — `adapters/postgres.Pool` implements `lifecycle.ManagedResource` + `postgres_ready` pool probe; PR #450 (S7) — auditcore `ledger.Store` + `LedgerStore.Probes()` partial pre-coverage (F6)
 - Implemented by: PR-REPO-READYZ (branch `fix/202-repo-readyz`)
 - Amended by: PR #886 (M1-OBSERVED stage 8) — probe names changed to cell-prefixed convention (see §D4 amendment below)
-- Amended by: this PR (2026-05-25) — ADR/代码对齐 + CELL-REPO-READYZ-PROBE-01 conformance-enrollment archtest 建成
+- Amended by: PR #997 (2026-05-25) — ADR/代码对齐 + CELL-REPO-READYZ-PROBE-01 conformance-enrollment archtest 建成
 
 ## Context
 
@@ -197,7 +197,7 @@ sibling `USERREPO-CONFORMANCE-ENROLLMENT-01`.  Backlog item
 **Scope note on kernel/ exclusion**: `kernel/saga.MemJournal` and `kernel/command.InMemQueue`
 implement `healthz.RepoProber` but are architecturally excluded from `CELL-REPO-READYZ-PROBE-01`
 scan scope.  The exclusion is not a deferred task — it is a layer invariant:
-`kernel/**` cannot import `kernel/cell/celltest` (CELLTEST-B), so conformance wiring is
+`kernel/**` cannot import `kernel/cell/celltest` (`CELLTEST-IMPORT-BOUNDARY-01` sub-rule CELLTEST-B), so conformance wiring is
 structurally impossible.  Both are mem no-op implementations (always-ready); their
 differentiated failure domain is carried by PG siblings in adapters/postgres, which ARE
 in scope and enrolled.
@@ -234,6 +234,21 @@ This amendment rebuilds the picture:
 **Negative / accepted costs**:
 - `kernel/cell/celltest.RunRepoReadinessConformance` requires a live PostgreSQL test database for the DROP TABLE scenario; it is gated by the `integration` build tag and runs in the CI integration-test job only, not in the unit-test job.
 - Each new cell store implementing `healthz.RepoProber` must be explicitly enrolled in `RunRepoReadinessConformance` coverage; `CELL-REPO-READYZ-PROBE-01` archtest enforces this but does not make it free.
+
+### New-implementer checklist
+
+Adding a new `healthz.RepoProber` implementation (a cell primary store, or any
+store under `cells/` + `adapters/` + `runtime/` + `examples/`) requires all of:
+
+1. Implement `RepoReady(ctx context.Context) error` on the concrete type.
+2. Register it through the cellgen `<cell>.RegisterRepoReady(reg, store)` typed
+   funnel — never call `reg.Healthz()` directly (`HEALTHZ-TYPED-REGISTER-01`).
+3. Enroll it in `celltest.RunRepoReadinessConformance(t, name, healthy, broken)`
+   from a `_test.go` in the store's own package (`CELL-REPO-READYZ-PROBE-01`).
+4. For a SQL-backed store, supply a non-nil `broken` prober from a real PG with
+   the relation dropped (`integration` build tag). For an in-memory store with no
+   differentiated failure domain, pass `nil` `broken` (the schema-broken sub-test
+   is recorded as skipped).
 
 ## Alternatives rejected
 

@@ -62,7 +62,9 @@
 //     such a type structurally satisfies the interface but provides no real
 //     storage. These appear only in test helpers (excluded from the impl scan).
 //     Production structs that embed the interface are treated as implementations
-//     and must enroll.
+//     and must enroll — and the enrolling test must supply a real backing value,
+//     since calling RepoReady on a struct whose embedded RepoProber field is nil
+//     will nil-panic inside the harness.
 //
 // ref: tools/archtest/user_repo_conformance_enrollment_test.go (sibling P1 pattern)
 // ref: docs/architecture/202605161030-adr-cell-repo-readyz-probe.md §Funnel 双向锁评级
@@ -158,7 +160,7 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 	require.NotEmpty(t, implSet,
 		"CELL-REPO-READYZ-PROBE-01: zero RepoProber implementations collected — "+
 			"likely a type-universe regression (iface and impls must share one packages.Load). "+
-			"Expect at least configcore/session/ledger mem + PG stores.")
+			"Expect at least runtime/saga.Coordinator and the configcore/session/ledger mem + PG stores.")
 
 	// ─── Step 3: scan test corpus for RunRepoReadinessConformance call sites ──
 	enrolledPkgs := make(map[string]bool) // canonical pkg path → true
@@ -196,7 +198,9 @@ func TestCellRepoReadyzProbe(t *testing.T) {
 					"archtest: healthz.RepoProber impl %q not enrolled in a "+
 						"celltest.RunRepoReadinessConformance test call "+
 						"(CELL-REPO-READYZ-PROBE-01). Add a _test.go in package %s that calls "+
-						"celltest.RunRepoReadinessConformance(t, name, healthy, broken).",
+						"celltest.RunRepoReadinessConformance(t, name, healthy, broken). "+
+						"If the impl gates readiness on a lifecycle state (e.g. *Coordinator), "+
+						"the healthy prober must already be in a running state.",
 					implKey, pkgPath),
 			})
 		}
@@ -257,12 +261,14 @@ func TestCellRepoReadyzProbe_REDFixture(t *testing.T) {
 	}
 	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty")
 
-	// Pick the first impl key and derive its pkg path.
-	var targetImplKey string
+	// Pick a deterministic impl key (sorted) so a REDFixture failure names a
+	// stable target across runs rather than a random map-iteration pick.
+	implKeys := make([]string, 0, len(implSet))
 	for k := range implSet {
-		targetImplKey = k
-		break
+		implKeys = append(implKeys, k)
 	}
+	sort.Strings(implKeys)
+	targetImplKey := implKeys[0]
 	dotIdx := strings.LastIndex(targetImplKey, ".")
 	require.Greater(t, dotIdx, 0, "REDFixture: malformed impl key %q", targetImplKey)
 	targetPkg := targetImplKey[:dotIdx]
@@ -340,7 +346,7 @@ func TestCellRepoReadyzProbe_ReverseBlindSpot_NoReflectImpl(t *testing.T) {
 func inReadyzProbeScope(pkgPath, modPath string) bool {
 	rel := strings.TrimPrefix(pkgPath, modPath+"/")
 	if rel == pkgPath {
-		return false // not under the module
+		return false // module root package, or not under the module — no enrollable prefix
 	}
 	for _, prefix := range readyzProbeScopePrefixes {
 		if strings.HasPrefix(rel, prefix) {

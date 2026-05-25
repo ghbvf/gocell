@@ -192,7 +192,7 @@ func TestBuildWriteServiceClockSingleSource(t *testing.T) {
 	assert.Equal(t, advanced, updated.UpdatedAt, "Update must observe the same advanced clock as the service")
 }
 
-// TestFakeConfigRepositoryRepoReadiness satisfies CELL-REPO-READYZ-PROBE-01/P1:
+// TestFakeConfigRepositoryRepoReadiness satisfies CELL-REPO-READYZ-PROBE-01:
 // every healthz.RepoProber implementation must be wired through
 // celltest.RunRepoReadinessConformance. FakeConfigRepository delegates to an
 // in-memory backend that is always ready, so broken=nil (skip the failure-
