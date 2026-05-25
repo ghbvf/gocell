@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 )
 
 // randomToken generates a cryptographically secure random hex string suitable
@@ -11,10 +12,12 @@ import (
 // so the token generation strategy is independent of the backend adapter.
 //
 // ref: adapters/redis/distlock.go randomToken — identical algorithm, hoisted up
-func randomToken() (string, error) {
+func randomToken() (string, error) { return randomTokenFrom(rand.Reader) }
+
+func randomTokenFrom(r io.Reader) (string, error) {
 	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("distlock: random token generation failed: %w", err)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return "", fmt.Errorf("distlock: read entropy: %w", err)
 	}
 	return hex.EncodeToString(b), nil
 }

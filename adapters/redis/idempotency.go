@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -310,10 +311,12 @@ func (r *redisReceipt) Extend(ctx context.Context, ttl time.Duration) error {
 }
 
 // claimToken generates a 16-byte hex-encoded token for lease ownership.
-func claimToken() (string, error) {
+func claimToken() (string, error) { return claimTokenFrom(rand.Reader) }
+
+func claimTokenFrom(r io.Reader) (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+	if _, err := io.ReadFull(r, b); err != nil {
+		return "", fmt.Errorf("redis: read entropy: %w", err)
 	}
 	return hex.EncodeToString(b), nil
 }

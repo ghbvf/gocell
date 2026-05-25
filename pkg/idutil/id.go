@@ -8,6 +8,7 @@ package idutil
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 )
 
 const (
@@ -53,10 +54,12 @@ func IsSafeID(s string) bool {
 // crypto/rand.Read always succeeds in Go 1.24+; it calls runtime.fatal
 // on OS entropy failure rather than returning an error, but the error return
 // keeps callers honest if that contract changes.
-func NewUUID() (string, error) {
+func NewUUID() (string, error) { return newUUID(rand.Reader) }
+
+func newUUID(r io.Reader) (string, error) {
 	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return "", fmt.Errorf("idutil: crypto/rand.Read: %w", err)
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return "", fmt.Errorf("idutil: read entropy: %w", err)
 	}
 	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
 	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10

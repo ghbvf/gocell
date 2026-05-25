@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"time"
@@ -599,10 +600,12 @@ func (q *PGCommandQueue) notFoundOrInvalidLease(ctx context.Context, commandID s
 
 // commandQueueNewID generates a random hex-encoded 16-byte ID for entries
 // that do not have one set by the caller.
-func commandQueueNewID() (string, error) {
+func commandQueueNewID() (string, error) { return commandQueueNewIDFrom(rand.Reader) }
+
+func commandQueueNewIDFrom(r io.Reader) (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("command_queue: generate ID: %w", err)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return "", fmt.Errorf("command_queue: read entropy: %w", err)
 	}
 	return hex.EncodeToString(b), nil
 }

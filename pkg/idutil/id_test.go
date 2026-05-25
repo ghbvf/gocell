@@ -1,12 +1,27 @@
 package idutil
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var errEntropyFailedForTest = errors.New("idutil_test: entropy stub failure")
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errEntropyFailedForTest }
+
+func TestNewUUID_RandFailure(t *testing.T) {
+	id, err := newUUID(failingReader{})
+	require.Error(t, err)
+	assert.Empty(t, id)
+	assert.ErrorIs(t, err, errEntropyFailedForTest)
+	assert.ErrorContains(t, err, "idutil: read entropy")
+}
 
 func TestIsSafeID(t *testing.T) {
 	tests := []struct {
