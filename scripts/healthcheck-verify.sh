@@ -17,7 +17,19 @@ set -euo pipefail
 
 TIMEOUT=30
 
-trap 'docker compose down' EXIT
+# Cleanup preserves the original exit code: bash's EXIT trap would
+# otherwise overwrite $? with the trap body's exit code, hiding the
+# real failure from callers (CI scripts, make targets). The explicit
+# `exit "$_rc"` at the end restores the caller-visible code while the
+# `|| ...` branch ensures a noisy `down` failure is logged, not
+# silenced (a silently-failed cleanup leaves orphan containers and
+# breaks the next run with port conflicts).
+#
+# shellcheck disable=SC2154
+# _rc is assigned inside the same trap body string before it is
+# referenced; shellcheck cannot follow sequence inside a single-quoted
+# trap argument.
+trap '_rc=$?; echo "[healthcheck-verify] tearing down containers..." >&2; docker compose down || echo "[healthcheck-verify] WARNING: docker compose down exited $? — orphan containers may remain" >&2; exit "$_rc"' EXIT
 
 echo "Starting Docker Compose services..."
 docker compose up -d --wait --wait-timeout "${TIMEOUT}"
