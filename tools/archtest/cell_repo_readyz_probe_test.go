@@ -6,9 +6,11 @@
 // kernel/healthz.RepoProber implementation is exercised by the behavioral
 // conformance harness. It is deliberately NOT the upstream half of the
 // RegisterRepoReady registration funnel — that funnel's downstream-Hard /
-// upstream-(caller-allowlist) grading, and its ai-robust.md §"Funnel 双向锁评级"
-// Hard-ization tracking (HEALTHZ-HOLDER-SEAL-01), live with HEALTHZ-WRITE-01 /
-// HEALTHZ-TYPED-REGISTER-01. §"Funnel 双向锁评级" governs that funnel, not this
+// upstream-(caller-allowlist) grading lives with HEALTHZ-WRITE-01 /
+// HEALTHZ-TYPED-REGISTER-01. That funnel's upstream stays Medium archtest: an
+// Aggregator interface seal is infeasible, so HEALTHZ-HOLDER-SEAL-01 (gh #893)
+// is closed won't-do (see HEALTHZ-WRITE-01/A3 godoc for the rationale).
+// §"Funnel 双向锁评级" governs that funnel, not this
 // backstop, so no funnel Hard-ization task is owed here.
 //
 //   - 实现扫描: types.Implements(*types.Interface) — type-aware, identifies every

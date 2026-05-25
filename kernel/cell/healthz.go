@@ -32,9 +32,11 @@ import (
 // AI-robust rating: the funnel inherits the existing healthz registration funnel
 // — downstream Medium (HEALTHZ-TYPED-REGISTER-01 keeps cells/ off reg.Healthz();
 // HEALTHZ-WRITE-01/A2 caller allowlist now covers kernel/), upstream Medium
-// (caller allowlist, not type-system-sealed). The upstream Hard upgrade is to
-// seal the Aggregator interface, tracked as HEALTHZ-HOLDER-SEAL-01 (gh issue
-// #893, cap-13 §13.1) — orthogonal to this dedup.
+// (caller allowlist, not type-system-sealed). The upstream stays Medium archtest:
+// an Aggregator interface seal is infeasible (the holder axis is inexpressible in
+// Go, plus cross-package impls + a kernel/healthz↔kernel/outbox import cycle), so
+// HEALTHZ-HOLDER-SEAL-01 (gh issue #893) is closed won't-do — see the
+// HEALTHZ-WRITE-01/A3 godoc in tools/archtest for the full rationale.
 func RegisterEmitterHealthProbes(reg Registrar, emitter outbox.Emitter) error {
 	if validation.IsNilInterface(emitter) {
 		return nil

@@ -276,7 +276,7 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 | `adapters/postgres/healthz` 持久化 adapter | 属宿主职责；无宿主请求 → 不预先实现以避免推测性设计 |
 | `adapters/otel/healthz` 指标 adapter | 同上；OTel 信号语义未在 M1 范围 |
 | `cell.yaml` `health.probes:` declarative block | 与 M2-LIFECYCLE 的 `lifecycle:` 字段共占 yaml schema，等 M2 一并改避免双次迁移 |
-| A3 holder allowlist 升 Hard | 同 PR 登记 backlog `HEALTHZ-HOLDER-SEAL-01`，via Aggregator interface sealing |
+| A3 holder allowlist 升 Hard | **RETRACTED**（见下方 §"Amendment 2026-05-26"）——经核实 Go 不可行；`HEALTHZ-HOLDER-SEAL-01`（gh #893）closed won't-do |
 
 **funnel allowlist 表**（HEALTHZ-WRITE-01/A2 caller-identity）：
 
@@ -300,6 +300,19 @@ GoCell 当前是**单世界（desired only）系统**，把 Bridle 三跃迁全�
 | P-A3 | conditions 层级 | 内存 Aggregator 树（`runtime/observability/healthz`）+ adapter 输出（延期） | 运行时 |
 
 P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel"——cellgen 在编译期将 `RepoProber` 注入 typed helper，进一步前移约束（对齐 P-E1"能在编译期完成的事不推运行时"）。该格升级不引入矛盾，P-A2 行无 ✅→⚠️ 退化。
+
+**Amendment 2026-05-26（HEALTHZ-HOLDER-SEAL-01 RETRACTED — gh #893 closed won't-do）**：
+
+上方"显式延期项"中的「A3 holder allowlist 升 Hard（via Aggregator interface sealing）」经核实在 Go 中**不可行**，撤回该延期项：
+
+1. **A3 是 holder 约束，Go 类型系统根本无法表达。** A3 限制「哪些 struct 可以*持有* `healthz.Aggregator` 字段」；Go 没有任何机制限制「谁能声明某类型的字段」。interface sealing（unexported marker method）约束的是*实现者*（谁能构造满足该接口的值），与 holder 是两条不同的轴。
+2. **即使实现者轴在此也无法 seal。** unexported marker 作用域限于 `kernel/healthz` 包，而 `Aggregator` 有 4 处跨包实现（`runtime/observability/healthz.aggregator`、`kernel/cell.recorderProbeSink`、公开测试桩 `healthztest.FakeAggregator`、A4 violate fixture）；折叠为单一包内实现被 `kernel/healthz → kernel/outbox → kernel/healthz` import 环阻断。
+
+**结论**：A3（及 A2 caller allowlist）维持 **Medium archtest**——这是 holder / caller-allowlist 轴在 Go 下可达的最强形态，非过渡档。`HEALTHZ-HOLDER-SEAL-01`（gh #893）closed won't-do。
+
+**威胁矩阵重评（per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"）**：本 amendment **不**使 K8s 校准表任何格从 ✅ 退化为 ⚠️/❌——holder allowlist 自 PR #886 起即登记为 Medium archtest，从未是 ✅ Hard 格。P-A1/P-A2/P-A3 行机制不变（P-A3 的内存 Aggregator 树聚合与 holder seal 正交）。撤回的只是一个本就不可达的升级目标，现有防御（A2 caller allowlist + A3 holder allowlist archtest + `HEALTHZ-TYPED-REGISTER-01` + `RepoProber` typed param）原样保留。
+
+> 依赖该 seal 作为 Hard 升级路径的 `REPO-READYZ-UPSTREAM-FUNNEL-HARD-01`（ADR `202605161030-adr-cell-repo-readyz-probe.md`）随之同结论：其 registration funnel 上游维持 Medium archtest，无可 owe 的 Hard-ization 任务。
 
 ### M2-LIFECYCLE：相位字段（满足 P-A1）
 
