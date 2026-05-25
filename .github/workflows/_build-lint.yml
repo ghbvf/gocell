@@ -75,8 +75,18 @@ jobs:
           - shard: cells
             pkgs: ./cells/...
             static_checks: false
-          - shard: others
-            pkgs: ./adapters/... ./cmd/... ./examples/... ./tests/... ./contracts/...
+          # `others` was a single 140s shard covering adapters + cmd +
+          # examples + tests + contracts. Splitting along compile cost:
+          # `others-heavy` carries ./adapters/... (external SDK dependency
+          # surface — postgres / redis / rabbitmq / vault / otel) and
+          # ./examples/... (links every layer end-to-end). `others-light`
+          # carries the remaining lightweight subtrees. The split brings the
+          # heavier leg below the kernel-shard critical path.
+          - shard: others-heavy
+            pkgs: ./adapters/... ./examples/...
+            static_checks: false
+          - shard: others-light
+            pkgs: ./cmd/... ./tests/... ./contracts/...
             static_checks: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -103,10 +113,12 @@ jobs:
         if: matrix.static_checks
         run: go build ./...
 
-      - name: Vet
-        if: matrix.static_checks
-        run: go vet ./...
-
+      # `go vet ./...` is intentionally absent here: golangci-lint v2 has
+      # `govet` in its default-enabled linter set (see .golangci.yml line 4
+      # comment), so a standalone vet step would re-walk the full repo AST
+      # for zero additional signal. Removing it cuts ~21s off the kernel
+      # shard wall time. Cross-tag vet (e.g. `-tags=e2e`) is still done
+      # explicitly below where the build tag changes the file set.
       - name: golangci-lint
         if: matrix.static_checks
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
@@ -245,38 +257,68 @@ jobs:
         if: matrix.static_checks
         run: go vet -tags=e2e ./tests/e2e/...
 
-      # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
-      # deliberately — it is not a duplicate of the Test step. The gate requires
-      # in-package kernel coverage (each package's tests of itself), while the
-      # kernel-shard Test step produces a merged profile that does not split
-      # per-package. Running standalone avoids having to slice the profile.
+      # Kernel coverage gate — parses the per-shard coverage profile produced
+      # by the Test step (covermode=atomic, one statement-block per row) and
+      # computes statement-weighted per-package coverage. Mirrors the
+      # adapters/postgres coverage gate pattern below: no extra `go test`
+      # invocation, ~1s parse vs ~13s re-run. Atomic profile rows are
+      # `<import_path>/<file>.go:start.col,end.col stmts hits`, so import
+      # path is a clean per-package key — no need for `go test -cover` stdout.
+      #
+      # Helper-package exemption: packages whose final path segment ends in
+      # `test` (Go *test convention: authtest, celltest, commandtest,
+      # outboxtest, persistencetest, sagajournaltest, sagaregtest) carry
+      # fixtures / Must* wrappers, not production logic — exempt from the
+      # 90% floor. `[no statements]` packages don't appear in the profile
+      # at all, so they're naturally skipped (no FAIL triggered).
       - name: Kernel coverage gate
         if: matrix.static_checks
         run: |
-          go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
-          awk '
-            /coverage: \[no statements\]/ { next }
-            # Test-support helper packages (Go *test convention: authtest,
-            # celltest, commandtest, outboxtest) carry fixtures / Must* wrappers,
-            # not production logic — exempt from the kernel 90% floor. Match the
-            # path segment generically (not a per-package enumeration) so that
-            # extracting a new *test helper never silently re-breaks this gate.
-            /\/[a-z]+test/ { next }
-            /coverage:/ {
-              cov = $0
-              sub(/^.*coverage: /, "", cov)
-              sub(/% of statements.*$/, "", cov)
-              if (cov == $0) {
-                print "FAIL: could not parse coverage line: " $0;
-                exit 1
+          set -euo pipefail
+          PROFILE="coverage-shard-${{ matrix.shard }}.out"
+          KERNEL_PREFIX='github.com/ghbvf/gocell/kernel/'
+
+          if [ ! -s "$PROFILE" ]; then
+            echo "FAIL: $PROFILE missing or empty"; exit 1
+          fi
+
+          fail=0
+          while IFS= read -r pkg; do
+            if echo "$pkg" | grep -qE '/[a-z]+test$'; then
+              continue
+            fi
+            pkg_pct=$(awk -v prefix="${pkg}/" '
+              $1 ~ "^"prefix"[^/]+\\.go:" {
+                total += $2
+                if ($3 > 0) hit += $2
               }
-              if (cov + 0 < 90) {
-                print "FAIL: " $2 " coverage " cov "% < 90%";
-                exit 1
+              END {
+                if (total > 0) printf "%.1f", hit/total*100
+                else print "no_stmts"
               }
+            ' "$PROFILE")
+            if [ "$pkg_pct" = "no_stmts" ]; then
+              continue
+            fi
+            result=$(awk -v p="$pkg_pct" -v pkg="$pkg" 'BEGIN {
+              if (p+0 < 90) { print "FAIL: " pkg " coverage " p "% < 90%"; exit 1 }
+              print "PASS: " pkg " " p "%"
+            }')
+            echo "$result"
+            echo "$result" | grep -q '^FAIL' && fail=1 || true
+          done < <(awk -v prefix="$KERNEL_PREFIX" '
+            $1 ~ "^"prefix {
+              path = $1
+              sub(/:[^:]*$/, "", path)
+              sub(/\/[^\/]+\.go$/, "", path)
+              print path
             }
-          ' /tmp/kernel-cov.txt
-          echo "PASS: kernel coverage >= 90%"
+          ' "$PROFILE" | sort -u)
+
+          if [ "$fail" -eq 1 ]; then
+            exit 1
+          fi
+          echo "PASS: all kernel packages >= 90%"
 
       - name: Upload coverage profile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -321,13 +363,22 @@ jobs:
     # DISCOVERY-01 archtest still passes; no hardcoded `./<path>/...` globs
     # appear in the run block).
     #
-    # The OTel collector smoke + PG migrator race + Redis primitive race +
-    # Redis cluster vet + adapters/postgres coverage gate are scoped to the
-    # adapters shard exclusively (matrix.run_adapters_extras flag) — they
-    # all read from packages that fall under the adapters shard's filter so
-    # putting them anywhere else would either double-run containers (cells/
-    # tests/corebundle shards re-pulling postgres image) or break the
-    # `coverage-integration-<shard>.out` profile referenced by the gate.
+    # Step scoping uses two flags on matrix entries:
+    #   - `run_adapters_extras`: scopes Redis cluster compile gate +
+    #     adapters/postgres coverage gate to the `adapters` main leg
+    #     (which produces coverage-integration-adapters.out the gate reads).
+    #   - `run_adapters_race`: scopes the three race / OTel smoke steps to
+    #     the dedicated `adapters-race` leg. Splitting them off keeps the
+    #     adapters main leg's wall-time bounded by the main integration step
+    #     alone (~117s) instead of main + ~70s of serial race steps.
+    #
+    # `filter: ''` on the adapters-race leg disables the main `Integration
+    # tests (testcontainers)` step (guarded by `if: matrix.filter != ''`) —
+    # the race leg only runs the focused -run race steps, not the full
+    # adapter integration suite. Without this guard adapters-race would
+    # re-discover and re-run every postgres / redis / vault integration
+    # already exercised on the adapters main leg.
+    #
     # New integration test contributors: your package falls into a shard
     # automatically by import-path prefix — no yaml edit needed:
     #   adapters/...                          → adapters shard
@@ -340,23 +391,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # adapters shard owns the OTel smoke / PG + Redis race / Redis
-          # cluster vet / adapters/postgres coverage gate steps; each of
-          # those steps below MUST carry `if: ${{ matrix.run_adapters_extras }}`.
-          # When adding a new adapters-only integration step, add the same
-          # condition or it will run 4× across all shards.
+          # adapters main leg: full adapter integration suite + Redis cluster
+          # compile gate + adapters/postgres coverage gate. Each adapters-only
+          # post-integration step MUST carry `if: ${{ matrix.run_adapters_extras }}`.
           - shard: adapters
             filter: '^github.com/ghbvf/gocell/adapters/'
             run_adapters_extras: true
+            run_adapters_race: false
+          # adapters-race leg: OTel smoke + PG migrator race + Redis primitive
+          # race only. Empty filter disables the main integration step (see
+          # `if: matrix.filter != ''` guard below). Race steps re-spin small
+          # containers focused on -run patterns; no coverage profile is
+          # produced, so the upload step is guarded by the same filter check.
+          - shard: adapters-race
+            filter: ''
+            run_adapters_extras: false
+            run_adapters_race: true
           - shard: cells
             filter: '^github.com/ghbvf/gocell/cells/'
             run_adapters_extras: false
+            run_adapters_race: false
           - shard: corebundle
             filter: '^github.com/ghbvf/gocell/(cmd|examples)/'
             run_adapters_extras: false
+            run_adapters_race: false
           - shard: tests
             filter: '^github.com/ghbvf/gocell/(tests|kernel|runtime|tools)/'
             run_adapters_extras: false
+            run_adapters_race: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -366,6 +428,10 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Integration tests (testcontainers)
+        # Skip on adapters-race leg (filter==''); that leg only runs the
+        # focused race/OTel steps below, not the full adapter integration
+        # suite.
+        if: ${{ matrix.filter != '' }}
         env:
           GOCELL_TEST_DOCKER_REQUIRED: "1"
           SHARD_NAME: ${{ matrix.shard }}
@@ -433,7 +499,7 @@ jobs:
           go test -tags=integration -covermode=atomic -coverprofile=coverage-integration-${{ matrix.shard }}.out "${pkgs[@]}" -count=1 -timeout 15m
 
       - name: OTel collector smoke
-        if: ${{ matrix.run_adapters_extras }}
+        if: ${{ matrix.run_adapters_race }}
         env:
           GOCELL_TEST_DOCKER_REQUIRED: "1"
         # Keep the PR/push gate focused on the single real OTLP/gRPC collector
@@ -454,7 +520,7 @@ jobs:
           fi
 
       - name: Race coverage for PG migrator concurrent Up
-        if: ${{ matrix.run_adapters_extras }}
+        if: ${{ matrix.run_adapters_race }}
         env:
           GOCELL_TEST_DOCKER_REQUIRED: "1"
         # B4 GOOSE-SESSION-LOCKER regression guard. The main integration step
@@ -481,7 +547,7 @@ jobs:
           fi
 
       - name: Race coverage for Redis primitive contention
-        if: ${{ matrix.run_adapters_extras }}
+        if: ${{ matrix.run_adapters_race }}
         env:
           GOCELL_TEST_DOCKER_REQUIRED: "1"
         # B11 PR-V1-REDIS-KEYNS / B2-A-29: race stress for the four Redis
@@ -595,6 +661,10 @@ jobs:
           done
 
       - name: Upload integration coverage profile
+        # adapters-race leg has no main integration step, so no profile is
+        # produced — skip upload to keep upload-artifact from failing on a
+        # missing path. Same `matrix.filter != ''` guard as the main step.
+        if: ${{ matrix.filter != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-integration-${{ matrix.shard }}
@@ -811,7 +881,15 @@ jobs:
         run: |
           set -euo pipefail
           echo "mode: atomic" > coverage-merged.out
-          for f in coverage-shard-kernel.out coverage-shard-tools.out coverage-shard-runtime.out coverage-shard-cells.out coverage-shard-others.out \
+          # build-test produces unit profiles for: kernel, tools, runtime,
+          #   cells, others-heavy, others-light (others-* replaces the single
+          #   former `others` shard, see build-test matrix above).
+          # integration-test produces profiles for: adapters (main leg),
+          #   cells, corebundle, tests. The adapters-race leg produces no
+          #   coverage profile (focused race-only steps, no main integration
+          #   run — see matrix definition's filter-empty guard).
+          for f in coverage-shard-kernel.out coverage-shard-tools.out coverage-shard-runtime.out coverage-shard-cells.out \
+                   coverage-shard-others-heavy.out coverage-shard-others-light.out \
                    coverage-integration-adapters.out coverage-integration-cells.out coverage-integration-corebundle.out coverage-integration-tests.out; do
             if [ ! -f "$f" ]; then
               echo "FAIL: expected profile $f is missing" >&2
