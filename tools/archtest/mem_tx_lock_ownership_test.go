@@ -81,15 +81,12 @@ package archtest
 //   - W2 field/method-name anchors ("inLiveTx", "Live", "memTxKey", "mu"): a
 //     rename breaks every call site to compile before archtest runs (build error),
 //     and the txlock.Lease seal is reflect-frozen by TestLeaseSealFrozen.
-//   - W2 type/source matchers are syntactic, not typed: isLeaseTypeExpr matches any
-//     `<pkg>.Lease` or bare `Lease` (NOT resolved to the txlock package via
-//     ResolvePackageRef), and isCtxValueMemTxKeyCall matches
-//     `<anyVar>.Value(memTxKey{})` (the receiver is not pinned to `ctx`). A foreign
-//     Lease type, or a non-ctx receiver calling `.Value(memTxKey{})`, would still
-//     satisfy bindsLeaseFromCtx. Accepted, not closed: package mem imports only
-//     txlock.Lease and has exactly one inLiveTx (canonical `ctx` receiver), and W2
-//     is a Medium regression anchor over the Hard seal — a syntactic match is
-//     sufficient here; tightening to ResolvePackageRef is optional future hardening.
+//   - W2 type/source matchers are TYPED (closed, not a blind spot): isTxlockLeaseType
+//     resolves the asserted type via go/types to a named Lease in a /txlock package
+//     (a foreign `<pkg>.Lease` is rejected), and isCtxValueMemTxKeyCall requires the
+//     `.Value(memTxKey{})` receiver to resolve to context.Context. No string-name
+//     latitude remains, so bindsLeaseFromCtx cannot be satisfied by a fabricated,
+//     freshly-Acquired, or foreign-typed lease source.
 
 import (
 	"fmt"
@@ -210,26 +207,48 @@ func leaseLiveCall(e ast.Expr, recv string) (leaseVar string, ok bool) {
 	return lid.Name, true
 }
 
-// isLeaseTypeExpr reports whether e names the Lease type (txlock.Lease or a bare
-// Lease alias).
-func isLeaseTypeExpr(e ast.Expr) bool {
-	switch t := e.(type) {
-	case *ast.SelectorExpr:
-		return t.Sel != nil && t.Sel.Name == "Lease"
-	case *ast.Ident:
-		return t.Name == "Lease"
+// isTxlockLeaseType reports whether the type expression e resolves (typed) to a
+// named "Lease" declared in a package whose import path ends in "/txlock"
+// (production …/mem/internal/txlock or the fixture mirror). Typed resolution via
+// info — not a bare Sel.Name=="Lease" string match — so a foreign package's Lease
+// type cannot satisfy the W2 lease-source check.
+func isTxlockLeaseType(info *types.Info, e ast.Expr) bool {
+	t := info.TypeOf(e)
+	if t == nil {
+		return false
 	}
-	return false
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj != nil && obj.Name() == "Lease" &&
+		obj.Pkg() != nil && strings.HasSuffix(obj.Pkg().Path(), "/txlock")
 }
 
-// isCtxValueMemTxKeyCall reports whether e is `ctx.Value(memTxKey{})`.
-func isCtxValueMemTxKeyCall(e ast.Expr) bool {
+// isContextContextType reports whether t is the named interface context.Context.
+func isContextContextType(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj != nil && obj.Name() == "Context" &&
+		obj.Pkg() != nil && obj.Pkg().Path() == "context"
+}
+
+// isCtxValueMemTxKeyCall reports whether e is `<ctx>.Value(memTxKey{})` where the
+// receiver is typed context.Context (typed — not any variable calling .Value).
+func isCtxValueMemTxKeyCall(info *types.Info, e ast.Expr) bool {
 	ce, ok := e.(*ast.CallExpr)
 	if !ok || len(ce.Args) != 1 {
 		return false
 	}
 	sel, ok := ce.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel == nil || sel.Sel.Name != "Value" {
+		return false
+	}
+	if rt := info.TypeOf(sel.X); rt == nil || !isContextContextType(rt) {
 		return false
 	}
 	cl, ok := ce.Args[0].(*ast.CompositeLit)
@@ -241,9 +260,11 @@ func isCtxValueMemTxKeyCall(e ast.Expr) bool {
 }
 
 // bindsLeaseFromCtx reports whether fd assigns leaseVar from
-// `ctx.Value(memTxKey{}).(txlock.Lease)`. Pins the W2 lease source so the
-// delegation cannot read a fabricated or freshly-Acquired lease.
-func bindsLeaseFromCtx(fd *ast.FuncDecl, leaseVar string) bool {
+// `<ctx>.Value(memTxKey{}).(txlock.Lease)` — typed: the asserted type resolves to
+// a /txlock-package Lease and the receiver is context.Context. Pins the W2 lease
+// source so the delegation cannot read a fabricated, freshly-Acquired, or
+// foreign-typed lease.
+func bindsLeaseFromCtx(info *types.Info, fd *ast.FuncDecl, leaseVar string) bool {
 	found := false
 	EachInSubtree[ast.AssignStmt](fd, func(as *ast.AssignStmt) {
 		if found || len(as.Lhs) == 0 || len(as.Rhs) != 1 {
@@ -254,10 +275,10 @@ func bindsLeaseFromCtx(fd *ast.FuncDecl, leaseVar string) bool {
 			return
 		}
 		ta, ok := as.Rhs[0].(*ast.TypeAssertExpr)
-		if !ok || ta.Type == nil || !isLeaseTypeExpr(ta.Type) {
+		if !ok || ta.Type == nil || !isTxlockLeaseType(info, ta.Type) {
 			return
 		}
-		if isCtxValueMemTxKeyCall(ta.X) {
+		if isCtxValueMemTxKeyCall(info, ta.X) {
 			found = true
 		}
 	})
@@ -274,7 +295,7 @@ func bindsLeaseFromCtx(fd *ast.FuncDecl, leaseVar string) bool {
 // is the canonical form; weakening it (dropping the Live delegation, comparing
 // l.mu directly to bypass the live flag, sourcing l elsewhere) must be a
 // deliberate edit that also updates this rule.
-func inLiveTxFormOK(fd *ast.FuncDecl) (ok bool, why string) {
+func inLiveTxFormOK(info *types.Info, fd *ast.FuncDecl) (ok bool, why string) {
 	recv := receiverVarName(fd)
 	if recv == "" {
 		return false, "no named receiver"
@@ -292,7 +313,7 @@ func inLiveTxFormOK(fd *ast.FuncDecl) (ok bool, why string) {
 	if !ok {
 		return false, fmt.Sprintf("return must be `<lease>.Live(&%s.mu)`", recv)
 	}
-	if !bindsLeaseFromCtx(fd, leaseVar) {
+	if !bindsLeaseFromCtx(info, fd, leaseVar) {
 		return false, fmt.Sprintf("`%s` must be bound from ctx.Value(memTxKey{}).(txlock.Lease)", leaseVar)
 	}
 	return true, ""
@@ -363,7 +384,7 @@ func scanMemTxLockWitness(p *Pass) []Diagnostic {
 			if fd.Recv == nil || receiverTypeName(fd) != "Store" {
 				return
 			}
-			if ok, why := inLiveTxFormOK(fd); !ok {
+			if ok, why := inLiveTxFormOK(p.TypesInfo, fd); !ok {
 				report(fd, fmt.Sprintf(
 					"weakened (*Store).inLiveTx in %s: %s — must be `return "+
 						"l.Live(&s.mu)` with l from ctx.Value(memTxKey{}).(txlock.Lease) "+

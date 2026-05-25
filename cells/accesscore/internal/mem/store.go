@@ -136,6 +136,12 @@ type memTxRunner struct{ s *Store }
 // Lock contract: store.mu is held from the start of fn until fn returns.
 // Repository methods called from fn must not acquire store.mu (inLiveTx returns
 // true for this store, so they skip locking to avoid a deadlock).
+//
+// Nested RunInTx (e.g. inside an after-commit hook): WithAfterCommitRegistry
+// returns drainAfterCommit=false when a registry is already present in ctx, so
+// hooks registered by a RunInTx invoked from within a hook accumulate into the
+// outer registry and fire in the outer drain pass, not from the nested call.
+// (Upstream kernel/persistence semantics, unchanged by the lease rework.)
 func (r memTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	ctx, drainAfterCommit := persistence.WithAfterCommitRegistry(ctx)
 	mark := persistence.AfterCommitMark(ctx)
