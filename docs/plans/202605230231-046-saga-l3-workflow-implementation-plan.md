@@ -236,6 +236,8 @@ PR-10 ────────────────────────�
 
 **ref**：`ref: ThreeDotsLabs/watermill components/saga + dtm-labs/dtm dtmsvr/svr.go`
 
+**Round-2 fixes (post-review, #977)**：12 finding 全部本 PR 收口（C1 fail-fast / C2 deadline+drain / C3 PII / C4 archtest scope / C5 atomicity testfake）。详见 `/Users/shengming/.claude/plans/c1-definition-abstract-nova.md`。关键决策：F5 删除 `Step.Compensate` 字段 + `CompensateFunc` 类型 + `SAGA-STEP-COMPENSATE-PURE-01` archtest（PR-06 重新引入，含 named-function resolution）；F3 Stop minimal drain（等 activeLeases 归零，复用 stopCtx）；F8 引入 `stagedJournal` test wrapper 实现真原子性测试。
+
 ---
 
 ### PR-04 · `adapters/postgres/saga` Journal 实现
@@ -302,7 +304,7 @@ PR-10 ────────────────────────�
 | 阶段 | 内容 |
 |---|---|
 | 1 探索（3 并行） | (a) 对标 temporal `internal/internal_workflow.go` retry policy + jitter；(b) 测试策略：clock injection（已有 `kernel/clock`）跑确定性 backoff 序列；(c) 边界：retry 耗尽 → 触发 compensation；Step.Run 中途 cancel；heartbeat 错过 → 视为 step failed |
-| 2 计划 | `Executor{step, retryPolicy, clock, journal, heartbeatInterval}`；`Execute(ctx, instance, step) → Result`；retry policy = exponential backoff + jitter（max attempts / max interval）；per-step timeout 用 `context.WithTimeout` + journal Heartbeat goroutine |
+| 2 计划 | `Executor{step, retryPolicy, clock, journal, heartbeatInterval}`；`Execute(ctx, instance, step) → Result`；retry policy = exponential backoff + jitter（max attempts / max interval）；per-step timeout 用 `context.WithTimeout` + journal Heartbeat goroutine。**重新引入 `Step.Compensate` 字段 + `CompensateFunc` 类型**（PR-03 round-2 删除）并实现 dispatch；同步重新引入 `SAGA-STEP-COMPENSATE-PURE-01` archtest，覆盖 function-literal AND named-function（`info.ObjectOf(ident).(*types.Func)` 解析 + recursive body scan）AND 通过 CompensateFunc-typed 参数传入的命名函数；新增红 fixture `red_named_func/`。 |
 | 3 worktree | `worktrees/065-saga-executor` |
 | 4 TDD | `executor_test.go`：retry 序列正确性（deterministic clock）/ heartbeat goroutine cleanup / Compensate 失败处理 |
 | 5 实施 | `runtime/saga/executor/{executor.go, retry_policy.go, heartbeat.go}` |
@@ -359,6 +361,13 @@ PR-10 ────────────────────────�
 |---|---|
 | 1 探索（3 并行） | (a) 复用 `tools/archtest` Hard 范本（typed function call / single sanctioned holder）；(b) 测试策略：archtest 自带反向 self-test；(c) 边界：codegen 派生 vs 业务手写的边界 |
 | 2 计划 | 新增 archtest：（i）`SAGA-CONSTRUCTOR-NIL-GUARD-01`：所有 `runtime/saga.NewXxx` 必须有 `if x == nil { return nil, err }` 顶层校验（Hard 范本第 N 条 "Service 构造模式 fail-fast on nil"）；（ii）`SAGA-STEP-COMPENSATE-PURE-01`：Compensate 函数体不能调任何 `*sql.Tx` / `pgx.*` / 写 outbox（**Compensate 必须纯反向**——D5）；（iii）`SAGA-JOURNAL-HOLDER-SEAL-01`：`runtime/saga.Coordinator` 是唯一持有 `kernel/saga/journal.Journal` 字段的 struct（single sanctioned holder）；（iv）`SAGA-CELL-LEVEL-L3-DECLARE-01`：cell.yaml `consistencyLevel: L3` ↔ 至少一个 slice `contractUsages` 含 `role: orchestrate`（governance rule） |
+
+> Note: 2 of these 4 archtests (SAGA-STEP-RUN-OUTSIDE-TX-01, SAGA-JOURNAL-HOLDER-SEAL-01) were pulled forward to PR-03 (#977) since the lockable type surface materializes there.
+>
+> SAGA-STEP-COMPENSATE-PURE-01 was also initially pulled forward to PR-03 but **removed in PR-03 round-2** along with `Step.Compensate` field and `CompensateFunc` type: PR-03 does not execute compensation, so exposing the field would have been a soft fallback ("reserved + Validate rejects non-nil") that violates the AI-HARD principle (`feedback_no_soft_fallback.md`). Removing the field makes "Compensate present on a Step" Go-compile-time inexpressible (Hard) — strictly stronger than archtest+Validate guard. PR-06 re-adds `Step.Compensate` + `CompensateFunc` when wiring the compensation executor, and re-introduces `SAGA-STEP-COMPENSATE-PURE-01` archtest at that time — with the named-function-resolution path baked in from day one (no Soft fallback like the PR-03 version had).
+>
+> PR-08 now owns: SAGA-CONSTRUCTOR-NIL-GUARD-01 + SAGA-CELL-LEVEL-L3-DECLARE-01.
+> PR-06 owns: SAGA-STEP-COMPENSATE-PURE-01 (re-introduction).
 | 3 worktree | `worktrees/067-saga-archtest` |
 | 4 TDD | 反向 self-test：故意写违反每条规则的 fixture，archtest 必须 FAIL |
 | 5 实施 | 4 个 archtest + 1 governance rule（TOPO-SAGA-L3-DECLARE） |
