@@ -102,13 +102,15 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      # Static checks (Build, Vet, golangci-lint, validate/check commands, layering
-      # guard, kernel coverage gate) run only on the kernel shard. Running them on
-      # every shard would cost 4x runner minutes for no signal — each step is
-      # repo-global (no package scoping) and its verdict does not depend on which
-      # shard is executing. Hosting them on the kernel shard (the smallest test
-      # load at ~22k lines / 17.9%) also gives the fastest fail-fast path when a
-      # lint regression is introduced.
+      # Static checks (Build, golangci-lint, kernel coverage gate) run only
+      # on the kernel shard. Running them on every shard would cost 4x runner
+      # minutes for no signal — each step is repo-global (no package scoping)
+      # and its verdict does not depend on which shard is executing. Hosting
+      # them on the kernel shard (the smallest test load at ~22k lines /
+      # 17.9%) also gives the fastest fail-fast path when a lint regression
+      # is introduced. (Vet is intentionally not listed: govet is in
+      # golangci-lint v2's default linter set — see the absence-rationale
+      # comment between Build and golangci-lint below.)
       - name: Build
         if: matrix.static_checks
         run: go build ./...
