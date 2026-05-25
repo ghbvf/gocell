@@ -1594,7 +1594,7 @@ func TestConsumerBase_ObserveReject_PanicingObserver_DoesNotEscape(t *testing.T)
 // used to verify panic isolation in ConsumerBase.Wrap.
 type panicingObserver struct{}
 
-func (p *panicingObserver) ObserveReject(_, _, _, _ string) {
+func (p *panicingObserver) ObserveReject(_ context.Context, _, _, _, _ string) {
 	panic("panicingObserver: intentional panic for isolation test")
 }
 

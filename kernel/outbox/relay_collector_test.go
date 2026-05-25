@@ -1,6 +1,7 @@
 package outbox_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -26,7 +27,8 @@ func TestProviderRelayCollector_NopProviderNoPanic(t *testing.T) {
 		t.Fatalf("NewProviderRelayCollector: %v", err)
 	}
 
-	c.RecordPollCycle(outbox.PollCycleResult{
+	ctx := context.Background()
+	c.RecordPollCycle(ctx, outbox.PollCycleResult{
 		Published:    3,
 		Retried:      1,
 		Dead:         0,
@@ -35,14 +37,14 @@ func TestProviderRelayCollector_NopProviderNoPanic(t *testing.T) {
 		PublishDur:   testtime.MediumPoll,
 		WriteBackDur: testtime.FastPoll,
 	})
-	c.RecordBatchSize(6)
-	c.RecordReclaim(4)
-	c.RecordCleanup(10, 2)
+	c.RecordBatchSize(ctx, 6)
+	c.RecordReclaim(ctx, 4)
+	c.RecordCleanup(ctx, 10, 2)
 
 	// Zero counts must not panic; skipped counter increment for zero values.
-	c.RecordPollCycle(outbox.PollCycleResult{})
-	c.RecordReclaim(0)
-	c.RecordCleanup(0, 0)
+	c.RecordPollCycle(ctx, outbox.PollCycleResult{})
+	c.RecordReclaim(ctx, 0)
+	c.RecordCleanup(ctx, 0, 0)
 }
 
 // spyProvider records the last operation so tests can assert the collector
@@ -93,8 +95,8 @@ type spyCounter struct {
 	labels metrics.Labels
 }
 
-func (c spyCounter) Inc() { c.Add(1) }
-func (c spyCounter) Add(d float64) {
+func (c spyCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c spyCounter) Add(_ context.Context, d float64) {
 	c.parent.counterOps[c.name] = append(c.parent.counterOps[c.name], spyCounterOp{labels: c.labels, op: "add", value: d})
 }
 
@@ -116,7 +118,7 @@ type spyHistogram struct {
 	labels metrics.Labels
 }
 
-func (h spyHistogram) Observe(v float64) {
+func (h spyHistogram) Observe(_ context.Context, v float64) {
 	// Histogram observations are recorded as counter-like ops under the name
 	// "hist:{metric}" so the spy can remain a single map.
 	h.parent.counterOps["hist:"+h.name] = append(h.parent.counterOps["hist:"+h.name], spyCounterOp{labels: h.labels, op: "observe", value: v})
@@ -129,7 +131,7 @@ func TestProviderRelayCollector_PollCycleEmitsPerOutcome(t *testing.T) {
 		t.Fatalf("NewProviderRelayCollector: %v", err)
 	}
 
-	c.RecordPollCycle(outbox.PollCycleResult{
+	c.RecordPollCycle(context.Background(), outbox.PollCycleResult{
 		Published: 4, Retried: 1, Dead: 0, Skipped: 2,
 		ClaimDur: time.Millisecond, PublishDur: testtime.D2ms, WriteBackDur: testWriteBackDur500us,
 	})
@@ -152,8 +154,8 @@ func TestProviderRelayCollector_ZeroBatchSizeStillObserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderRelayCollector: %v", err)
 	}
-	c.RecordBatchSize(0)
-	c.RecordBatchSize(5)
+	c.RecordBatchSize(context.Background(), 0)
+	c.RecordBatchSize(context.Background(), 5)
 	obs := p.counterOps["hist:outbox_batch_size"]
 	if len(obs) != 2 {
 		t.Fatalf("want 2 batch_size observations (including zero), got %d", len(obs))
@@ -236,10 +238,10 @@ func TestNewProviderRelayCollector_SuccessPath_AllFiveMetricsRegistered(t *testi
 		_ = totalVecs
 	}
 	// Exercise all recording paths to confirm all 5 vecs are live (no nil panic).
-	c.RecordPollCycle(outbox.PollCycleResult{Published: 1})
-	c.RecordBatchSize(1)
-	c.RecordReclaim(1)
-	c.RecordCleanup(1, 1)
+	c.RecordPollCycle(context.Background(), outbox.PollCycleResult{Published: 1})
+	c.RecordBatchSize(context.Background(), 1)
+	c.RecordReclaim(context.Background(), 1)
+	c.RecordCleanup(context.Background(), 1, 1)
 }
 
 // TestNewProviderRelayCollector_UnregisterLIFOOrder verifies that when
@@ -365,10 +367,10 @@ func (v *spyGaugeVec) With(l metrics.Labels) metrics.Gauge {
 
 type spyGauge struct{}
 
-func (spyGauge) Set(_ float64) {}
-func (spyGauge) Inc()          {}
-func (spyGauge) Dec()          {}
-func (spyGauge) Add(_ float64) {}
+func (spyGauge) Set(_ context.Context, _ float64) {}
+func (spyGauge) Inc(_ context.Context)             {}
+func (spyGauge) Dec(_ context.Context)             {}
+func (spyGauge) Add(_ context.Context, _ float64)  {}
 
 // MetricName exposes the name so collectorName can extract it in tests.
 func (v *spyCounterVec) MetricName() string   { return v.name }

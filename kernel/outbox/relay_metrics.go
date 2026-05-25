@@ -1,6 +1,9 @@
 package outbox
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // PollCycleResult captures the outcome of a single relay poll cycle.
 // Used by RelayCollector.RecordPollCycle to avoid a long parameter list
@@ -31,11 +34,11 @@ type PollCycleResult struct {
 type RelayCollector interface {
 	// RecordPollCycle records a completed poll cycle with outcome counts and
 	// per-phase durations. Called once per pollOnce invocation after writeBack.
-	RecordPollCycle(result PollCycleResult)
+	RecordPollCycle(ctx context.Context, r PollCycleResult)
 
 	// RecordBatchSize records the number of entries claimed in a poll cycle.
 	// Called even when the batch is empty (size=0) to capture idle cycles.
-	RecordBatchSize(size int)
+	RecordBatchSize(ctx context.Context, size int)
 
 	// RecordReclaim records the number of stale entries reclaimed back to
 	// pending (or dead-lettered). Called once per reclaimStale tick **only
@@ -43,18 +46,26 @@ type RelayCollector interface {
 	// is a recovery counter, not a tick frequency gauge). This contrasts
 	// with RecordBatchSize which is also called on size==0 cycles so
 	// dashboards can detect a totally idle relay.
-	RecordReclaim(count int64)
+	RecordReclaim(ctx context.Context, count int64)
 
 	// RecordCleanup records the number of entries removed during periodic
 	// cleanup, split by original status (published vs dead-lettered).
-	RecordCleanup(publishedDeleted, deadDeleted int64)
+	RecordCleanup(ctx context.Context, publishedDeleted, deadDeleted int64)
 }
 
 // NoopRelayCollector is a no-op implementation of RelayCollector.
 // Used when metrics collection is disabled (nil Metrics in RelayConfig).
 type NoopRelayCollector struct{}
 
-func (NoopRelayCollector) RecordPollCycle(_ PollCycleResult) { /* no-op: metrics disabled */ }
-func (NoopRelayCollector) RecordBatchSize(_ int)             { /* no-op: metrics disabled */ }
-func (NoopRelayCollector) RecordReclaim(_ int64)             { /* no-op: metrics disabled */ }
-func (NoopRelayCollector) RecordCleanup(_, _ int64)          { /* no-op: metrics disabled */ }
+func (NoopRelayCollector) RecordPollCycle(_ context.Context, _ PollCycleResult) {
+	/* no-op: metrics disabled */
+}
+func (NoopRelayCollector) RecordBatchSize(_ context.Context, _ int) {
+	/* no-op: metrics disabled */
+}
+func (NoopRelayCollector) RecordReclaim(_ context.Context, _ int64) {
+	/* no-op: metrics disabled */
+}
+func (NoopRelayCollector) RecordCleanup(_ context.Context, _, _ int64) {
+	/* no-op: metrics disabled */
+}

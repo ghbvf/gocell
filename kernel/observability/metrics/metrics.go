@@ -10,14 +10,13 @@
 // attribute.KeyValue because a map makes callers name their dimensions and
 // makes label-set drift a detectable error rather than a silent mismatch.
 //
-// The Prom-shape rationale covers label binding only. Counter.Inc / Add and
-// Histogram.Observe also deliberately omit context.Context — adapters/otel
-// emits with context.Background(). Aligning to OTel's ctx-bearing form
-// (which enables exemplar / baggage propagation) is open work; see
-// METRICS-CTX-FUNNEL-01.
+// Counter/Histogram/Gauge 方法都接受 context.Context 首参，对齐 OTel 原生
+// ctx-bearing 形态（exemplar/baggage 由 OTel adapter 透传；Prometheus adapter
+// 不消费 ctx）。
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -161,14 +160,14 @@ type GaugeVec interface {
 
 // Counter is a monotonically increasing counter, pre-bound to a label set.
 type Counter interface {
-	Inc()
-	Add(delta float64)
+	Inc(ctx context.Context)
+	Add(ctx context.Context, delta float64)
 }
 
 // Histogram records observations into predeclared buckets, pre-bound to a
 // label set.
 type Histogram interface {
-	Observe(value float64)
+	Observe(ctx context.Context, value float64)
 }
 
 // Gauge is an arbitrary-valued instrument that can move up or down,
@@ -180,10 +179,10 @@ type Histogram interface {
 //
 // ref: prometheus/client_golang prometheus/gauge.go — Gauge interface.
 type Gauge interface {
-	Set(value float64)
-	Inc()
-	Dec()
-	Add(delta float64)
+	Set(ctx context.Context, value float64)
+	Inc(ctx context.Context)
+	Dec(ctx context.Context)
+	Add(ctx context.Context, delta float64)
 }
 
 // ErrLabelMismatch is returned / panic-wrapped by ValidateLabels /

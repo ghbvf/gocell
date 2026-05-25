@@ -218,7 +218,7 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 			e.failOpenDroppedCv.With(metrics.Labels{
 				"cell":  e.cellID,
 				"topic": topic,
-			}).Inc()
+			}).Inc(ctx)
 			e.failOpenTracker.RecordDrop()
 			return nil
 		}

@@ -600,7 +600,7 @@ func (cb *ConsumerBase) retryLoop(
 				slog.String("topic", topic),
 				slog.String("consumer_group", consumerGroup),
 			), func() {
-				cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonHandlerReject)
+				cb.observer.ObserveReject(ctx, cellID, topic, consumerGroup, ConsumerRejectReasonHandlerReject)
 			})
 			return HandleResult{
 				Disposition:         DispositionReject,
@@ -641,7 +641,7 @@ func (cb *ConsumerBase) retryLoop(
 		slog.String("topic", topic),
 		slog.String("consumer_group", consumerGroup),
 	), func() {
-		cb.observer.ObserveReject(cellID, topic, consumerGroup, ConsumerRejectReasonRetryExhausted)
+		cb.observer.ObserveReject(ctx, cellID, topic, consumerGroup, ConsumerRejectReasonRetryExhausted)
 	})
 	return HandleResult{
 		Disposition:         DispositionReject,

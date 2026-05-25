@@ -264,7 +264,8 @@ func (d *hookDispatcher) dispatchOne(e cell.HookEvent) {
 		defer func() {
 			defer d.finishSink()
 			if r := recover(); r != nil {
-				d.dropped.With(metrics.Labels{"reason": DropReasonObserverPanic}).Inc()
+				// 后台 dispatch worker 从 channel 取事件、无请求 ctx，故用 Background（诚实，非占位）。
+				d.dropped.With(metrics.Labels{"reason": DropReasonObserverPanic}).Inc(context.Background())
 				slog.Error("lifecycle: hook observer panicked",
 					slog.String("cell", e.CellID),
 					slog.String("hook", string(e.Hook)),
@@ -286,7 +287,8 @@ func (d *hookDispatcher) dispatchOne(e cell.HookEvent) {
 		t.Stop()
 	case <-t.C():
 		t.Stop()
-		d.dropped.With(metrics.Labels{"reason": DropReasonSinkTimeout}).Inc()
+		// 后台 dispatch worker 从 channel 取事件、无请求 ctx，故用 Background（诚实，非占位）。
+		d.dropped.With(metrics.Labels{"reason": DropReasonSinkTimeout}).Inc(context.Background())
 		slog.Warn("lifecycle: hook observer exceeded sink timeout; abandoning",
 			slog.String("cell", e.CellID),
 			slog.String("hook", string(e.Hook)),
@@ -340,7 +342,8 @@ func (d *hookDispatcher) stop(ctx context.Context, drainTimeout time.Duration) {
 }
 
 func (d *hookDispatcher) dropQueueFull(e cell.HookEvent) {
-	d.dropped.With(metrics.Labels{"reason": DropReasonQueueFull}).Inc()
+	// 后台 dispatch worker 从 channel 取事件、无请求 ctx，故用 Background（诚实，非占位）。
+	d.dropped.With(metrics.Labels{"reason": DropReasonQueueFull}).Inc(context.Background())
 	d.queueWarn.Do(func() {
 		slog.Warn("assembly: hook dispatcher queue full; dropping hook event",
 			slog.String("reason", DropReasonQueueFull),
