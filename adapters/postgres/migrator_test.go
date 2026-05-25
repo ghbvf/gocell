@@ -162,7 +162,16 @@ func TestMigrationsFS_SubDirectory(t *testing.T) {
 	// the migration file has not yet landed; remove the entry once the gap
 	// closes (e.g. PR #464 reserved 022 → S6 merged → entry removed).
 	// Empty map = contiguous migrations, the steady state.
-	knownGaps := map[int64]string{}
+	knownGaps := map[int64]string{
+		// 033 landed on develop in PR #1007 (password_version >= 0 CHECK);
+		// 034-039 remain reserved for parallel PRs preceding saga 040.
+		34: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
+		35: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
+		36: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
+		37: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
+		38: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
+		39: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
+	}
 
 	// Max version must equal file count plus known-gap count.
 	assert.Equal(t, int64(len(versions)+len(knownGaps)), expected,

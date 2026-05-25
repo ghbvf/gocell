@@ -69,7 +69,7 @@ type Journal interface {
 	// beyond StartedAt). Enqueue is lease-free: it writes the projection with
 	// current version 0 and no lease, and writes no event (events describe step
 	// execution, which has not begun). Re-enqueuing an existing ID returns a
-	// KindConflict error.
+	// KindConflict error with code errcode.ErrSagaDuplicateInstance.
 	//
 	// Load after Enqueue returns an empty, non-nil slice (see Load); a consumer
 	// detects a not-yet-started instance by the empty event log.
@@ -102,15 +102,18 @@ type Journal interface {
 	// event kind. Append also does NOT maintain the step cursor
 	// (Instance.CurrentStep); see ClaimPending.
 	//
-	// An unknown instance returns KindNotFound; a terminal instance (whose lease
-	// was released by MarkTerminal) returns KindConflict — callers needing to
+	// An unknown instance returns KindNotFound with code errcode.ErrSagaNotFound;
+	// a stale lease returns KindConflict with code errcode.ErrSagaStaleLease.
+	// A terminal instance (whose lease was released by MarkTerminal) also
+	// returns KindConflict with ErrSagaStaleLease — the projection holds no
+	// lease, so the caller's leaseID cannot match. Callers needing to
 	// distinguish "expired lease" from "already terminal" must consult Load.
 	Append(ctx context.Context, instanceID, leaseID idutil.SafeID, event Event) (version int64, err error)
 
 	// Load returns the full ordered event history for an instance (version
 	// ascending), for replay / state reconstruction. A never-enqueued instance
-	// returns a KindNotFound error; an enqueued instance with no events yet
-	// returns an empty, non-nil slice.
+	// returns a KindNotFound error with code errcode.ErrSagaNotFound; an
+	// enqueued instance with no events yet returns an empty, non-nil slice.
 	Load(ctx context.Context, instanceID idutil.SafeID) ([]Event, error)
 
 	// ClaimPending atomically leases up to batchSize non-terminal instances that

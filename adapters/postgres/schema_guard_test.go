@@ -42,7 +42,9 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 33 migrations (001-033, contiguous).
+	// Currently 34 migrations: 001-033 contiguous, plus 040 (intentional gap
+	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
+	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
 	// 020 adds audit_entries table for the ledger.Store PG backend; 021 adds the
 	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard;
@@ -57,9 +59,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 030 creates the commands table (iotdevice L4 command queue PG backend);
 	// 031 adds unique index on commands metadata->>'_idempotency_key' (DB-level TOCTOU-safe dedup);
 	// 032 adds users.failed_login_count / last_failed_at / locked_until (accesscore auto-lockout);
-	// 033 adds users.password_version >= 0 CHECK (#940 P2-1 defense-in-depth).
-	assert.Equal(t, int64(33), v,
-		"expected version should be exactly 33 (current migration max)")
+	// 033 adds users.password_version >= 0 CHECK (#940 P2-1 defense-in-depth);
+	// 040 creates saga_instances + saga_events for the PG saga journal (PR-04 / W6 step 4/10).
+	assert.Equal(t, int64(40), v,
+		"expected version should be exactly 40 (current migration max — 040 saga tables)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
