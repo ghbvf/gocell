@@ -8,9 +8,13 @@
 // Fencing model mirrors adapters/postgres outbox (ADR
 // 202605051600-adr-pg-outbox-fencing.md): ClaimPending mints a fresh UUID
 // lease per batch; subsequent Append / Heartbeat / MarkTerminal CAS-fence on
-// (id, lease_id::uuid, lease_expires_at > now()) so a zombie leader's write
-// must miss the row and surface as KindConflict (Append) or (false, nil)
-// (Heartbeat / MarkTerminal). Behavior matches the in-memory reference
+// (id, lease_id, lease_expires_at >= injected_now) so a zombie leader's
+// write must miss the row and surface as KindConflict (Append) or
+// (false, nil) (Heartbeat / MarkTerminal). The `>=` boundary (vs strict `>`)
+// matches memjournal's `!Before(now)` semantic — at exact equality the lease
+// is STILL VALID — and is verified by conformance subtests
+// {Append,ClaimPending,Heartbeat}_ExactlyAtLeaseExpiry_*.
+// Behavior matches the in-memory reference
 // implementation (kernel/saga/journal.MemJournal) and is verified by
 // sagajournaltest.RunConformanceSuite over a real PostgreSQL backend
 // (testcontainers).

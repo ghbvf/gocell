@@ -67,21 +67,31 @@ func TestMigration040_CreatesSagaTables(t *testing.T) {
 		require.Equal(t, "NO", isNullable, "saga_instances.%s must be NOT NULL", col)
 	}
 
-	// CHECK constraints on saga_instances (status range + lease paired).
-	checkConstraints := []string{
-		"saga_instances_status_range",
-		"saga_instances_lease_paired",
-		"saga_instances_version_nonneg",
+	// CHECK constraints on both saga relations — status / kind enum ranges,
+	// version positivity, and lease pairing. Drift on any of these would
+	// silently weaken the schema-side defense of the enum / fencing model.
+	checkConstraints := map[string][]string{
+		"saga_instances": {
+			"saga_instances_status_range",
+			"saga_instances_lease_paired",
+			"saga_instances_version_nonneg",
+		},
+		"saga_events": {
+			"saga_events_kind_range",
+			"saga_events_version_positive",
+		},
 	}
-	for _, ck := range checkConstraints {
-		var exists bool
-		err := pool.DB().QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM pg_constraint c
-				JOIN pg_class rel ON c.conrelid = rel.oid
-				WHERE rel.relname = 'saga_instances' AND c.conname = $1 AND c.contype = 'c')`,
-			ck).Scan(&exists)
-		require.NoError(t, err, "pg_constraint lookup for %s", ck)
-		require.True(t, exists, "saga_instances must have CHECK constraint %s", ck)
+	for table, names := range checkConstraints {
+		for _, ck := range names {
+			var exists bool
+			err := pool.DB().QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM pg_constraint c
+					JOIN pg_class rel ON c.conrelid = rel.oid
+					WHERE rel.relname = $1 AND c.conname = $2 AND c.contype = 'c')`,
+				table, ck).Scan(&exists)
+			require.NoError(t, err, "pg_constraint lookup for %s.%s", table, ck)
+			require.True(t, exists, "%s must have CHECK constraint %s", table, ck)
+		}
 	}
 
 	// FK from saga_events.instance_id → saga_instances.id with ON DELETE CASCADE.

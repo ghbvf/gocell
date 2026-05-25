@@ -279,6 +279,46 @@ func TestPGSagaJournal_AppendOutsideAmbientTx_StillAtomic(t *testing.T) {
 		"current_version must advance when caller has no ambient tx (saga opens its own)")
 }
 
+// TestPGSagaJournal_RepoReady_SchemaBroken closes the conformance gap left
+// by sagajournaltest.RunConformanceSuite/RepoReady/schema-broken (skipped for
+// memjournal — no differentiated failure domain). Verifies that dropping
+// EITHER saga relation causes RepoReady to surface a non-nil error, locking
+// the UNION ALL double-probe contract (saga_instances + saga_events).
+//
+// Two subcases, each on its own per-test database so the schema mutation in
+// one does not leak into the other.
+func TestPGSagaJournal_RepoReady_SchemaBroken(t *testing.T) {
+	cases := []string{"saga_events", "saga_instances"}
+	for _, table := range cases {
+		t.Run("drop_"+table, func(t *testing.T) {
+			pool := sharedPG.NewPerTestPool(t)
+			clk := clockmock.New(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC))
+			j, err := saga.NewJournal(pool.DB(), clk)
+			require.NoError(t, err)
+
+			ctx := context.Background()
+			// Sanity: healthy schema → nil.
+			require.NoError(t, j.RepoReady(ctx),
+				"RepoReady on healthy schema must return nil before mutation")
+
+			// Drop one of the probed tables. CASCADE handles the FK from
+			// saga_events → saga_instances when the parent goes first.
+			_, err = pool.DB().Exec(ctx, "DROP TABLE "+table+" CASCADE")
+			require.NoError(t, err, "DROP TABLE %s setup must succeed", table)
+
+			err = j.RepoReady(ctx)
+			require.Error(t, err,
+				"RepoReady after DROP TABLE %s must surface a non-nil error "+
+					"(UNION ALL double-probe contract)", table)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec),
+				"RepoReady error must unwrap to *errcode.Error")
+			require.Equal(t, errcode.KindInternal, ec.Kind,
+				"RepoReady schema-broken error must carry KindInternal")
+		})
+	}
+}
+
 // TestPGSagaJournal_ClaimPendingInsideAmbientTx_RollsBackOnOuterFailure
 // guards the ClaimPending branch: even though ClaimPending uses a single
 // CTE (no explicit Begin in saga), it routes through pgExecutor which

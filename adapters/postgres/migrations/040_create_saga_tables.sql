@@ -9,8 +9,10 @@
 --
 -- The lease_id CAS pattern mirrors adapters/postgres outbox (migration 014 /
 -- ADR 202605051600-adr-pg-outbox-fencing.md): each ClaimPending mints a fresh
--- UUID; subsequent Append / Heartbeat / MarkTerminal CAS-fence on (id, lease_id,
--- lease_expires_at > now()) so a zombie leader's write must miss.
+-- UUID; subsequent Append / Heartbeat / MarkTerminal CAS-fence on (id,
+-- lease_id, lease_expires_at >= injected_now). Boundary `>=` (not strict `>`)
+-- aligns with memjournal's fenced semantic — at exact equality the lease is
+-- still valid (verified by conformance ExactlyAtLeaseExpiry subtests).
 --
 -- Status/Kind columns use SMALLINT mapping the saga.Status (iota+1) and
 -- journal.EventKind (iota+1) enums; 0 is reserved as the invalid zero-value

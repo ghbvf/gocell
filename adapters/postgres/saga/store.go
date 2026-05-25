@@ -154,9 +154,9 @@ const claimPendingQuery = `WITH picked AS MATERIALIZED (
 	FROM updated
 	ORDER BY picked_started_at, id`
 
-// heartbeatQuery extends an active lease. CAS-fenced on (id, lease_id, not
-// expired); RowsAffected==0 signals lost lease. The `now` parameter source is
-// the injected clock (see claimPendingQuery rationale).
+// heartbeatQuery extends an active lease. CAS-fenced on (id, lease_id,
+// lease_expires_at >= $now); RowsAffected==0 signals lost lease. The `now`
+// parameter source is the injected clock (see claimPendingQuery rationale).
 //
 // Boundary semantics: `>= $now` keeps heartbeat consistent with memjournal's
 // fenced ("lease valid at exact equality"). Strict `> $now` would race the
