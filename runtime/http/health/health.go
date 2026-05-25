@@ -168,7 +168,7 @@ func (h *Handler) SetShuttingDown() {
 // infrastructure and business responses uniformly (PR-A35 alignment).
 func (h *Handler) LivezHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, envelopeData(map[string]any{
+		writeJSON(r.Context(), w, http.StatusOK, envelopeData(map[string]any{
 			"status": "healthy",
 		}))
 	}
@@ -471,14 +471,14 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 	body["status"] = r.overall
 	switch r.overall {
 	case "healthy":
-		writeJSON(w, http.StatusOK, envelopeData(body))
+		writeJSON(ctx, w, http.StatusOK, envelopeData(body))
 	case "degraded":
 		// HTTP 200 — degraded does NOT trigger pod eviction (fail-open semantic).
 		// ref: envoyproxy/envoy admin /ready — DEGRADED returns 200.
 		// Emit channel d ops-diagnostics at Info level so operators can observe
 		// degraded dependency ErrorMsg without triggering a warn-level alert.
 		r.logDiagnostics(ctx, slog.LevelInfo, "readyz degraded")
-		writeJSON(w, http.StatusOK, envelopeData(body))
+		writeJSON(ctx, w, http.StatusOK, envelopeData(body))
 	default: // "unhealthy"
 		reason := r.reason
 		if reason == "" {
@@ -681,10 +681,10 @@ func statusFromRank(r int) string {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, statusCode int, v any) {
+func writeJSON(ctx context.Context, w http.ResponseWriter, statusCode int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("health: failed to write response", slog.Any("error", err))
+		slog.ErrorContext(ctx, "health: failed to write response", slog.Any("error", err))
 	}
 }
