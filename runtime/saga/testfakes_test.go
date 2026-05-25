@@ -87,20 +87,80 @@ func (e *safeFakeEmitter) ClearError() {
 // safeFakeTxRunner — after-commit aware TxRunner (mirrors
 // persistencetest/conformance.go pattern) for integration tests that need
 // concurrent-safe after-commit hook draining.
+//
+// Also installs a stagedTxState in ctx so a wrapping stagedJournal (when
+// present) can buffer Append mutations during fn and apply or discard them
+// on commit/rollback — giving the test the real-PG atomicity semantic that
+// MemJournal alone lacks. Existing tests using raw MemJournal see no
+// behavior change (no stagedJournal wrapper → ctx-value lookup is a no-op).
 // ---------------------------------------------------------------------------
 
-// safeFakeTxRunner is a TxRunner that installs an AfterCommit registry, runs
-// fn, drains hooks on success, and truncates hooks on failure. It mirrors the
-// persistencetest/conformance.go pattern. Thread-safe.
+// stagedTxKey scopes the per-tx staging state stored in ctx.
+type stagedTxKey struct{}
+
+// stagedTxState captures Append mutations that a stagedJournal defers until
+// commit. Discarded on rollback.
+type stagedTxState struct {
+	mu             sync.Mutex
+	pendingAppends []func() error
+}
+
+func newStagedTxState() *stagedTxState { return &stagedTxState{} }
+
+func (s *stagedTxState) addAppend(apply func() error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingAppends = append(s.pendingAppends, apply)
+}
+
+func (s *stagedTxState) commit() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, apply := range s.pendingAppends {
+		if err := apply(); err != nil {
+			return err
+		}
+	}
+	s.pendingAppends = nil
+	return nil
+}
+
+func (s *stagedTxState) rollback() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingAppends = nil
+}
+
+// stagedTxStateFrom returns the stagedTxState attached to ctx by
+// safeFakeTxRunner, or nil if ctx was not produced by a staging RunInTx.
+func stagedTxStateFrom(ctx context.Context) *stagedTxState {
+	if v := ctx.Value(stagedTxKey{}); v != nil {
+		if s, ok := v.(*stagedTxState); ok {
+			return s
+		}
+	}
+	return nil
+}
+
+// safeFakeTxRunner is a TxRunner that installs an AfterCommit registry + a
+// stagedTxState, runs fn, applies pending staged ops + drains hooks on
+// success, and discards pending ops + truncates hooks on failure. Thread-safe.
 type safeFakeTxRunner struct{}
 
 func newSafeFakeTxRunner() *safeFakeTxRunner { return &safeFakeTxRunner{} }
 
 func (f *safeFakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	txCtx, installed := persistence.WithAfterCommitRegistry(ctx)
+	state := newStagedTxState()
+	txCtx := context.WithValue(ctx, stagedTxKey{}, state)
+	txCtx, installed := persistence.WithAfterCommitRegistry(txCtx)
 	mark := persistence.AfterCommitMark(txCtx)
 
 	if err := fn(txCtx); err != nil {
+		state.rollback()
+		persistence.TruncateAfterCommitTo(txCtx, mark)
+		return err
+	}
+	if err := state.commit(); err != nil {
 		persistence.TruncateAfterCommitTo(txCtx, mark)
 		return err
 	}
@@ -108,6 +168,82 @@ func (f *safeFakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context)
 		persistence.RunAfterCommitHooks(txCtx)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// stagedJournal — wraps a Journal and defers Append mutations to commit time
+//
+// When the ctx passed to Append carries a stagedTxState (installed by
+// safeFakeTxRunner), the Append is buffered as a pending op; commit applies
+// it against the inner journal, rollback discards it. Reads and other
+// mutations (MarkTerminal/Heartbeat/Enqueue/ClaimPending/Load/RepoReady) are
+// delegated immediately — MarkTerminal is intentionally NOT staged so that
+// failingFakeJournal-injected errors fire during fn (matching production
+// semantics where MarkTerminal is also inside the same PG tx).
+//
+// Used by F8/C5 atomicity tests to verify that a tx-internal failure (Emit
+// fail, MarkTerminal fail) leaves no Append residue in the journal — the
+// real-PG behavior that plain MemJournal cannot exhibit.
+// ---------------------------------------------------------------------------
+
+type stagedJournal struct {
+	inner journal.Journal
+}
+
+func newStagedJournal(inner journal.Journal) *stagedJournal {
+	return &stagedJournal{inner: inner}
+}
+
+func (s *stagedJournal) Append(
+	ctx context.Context,
+	instanceID, leaseID idutil.SafeID,
+	event journal.Event,
+) (int64, error) {
+	if state := stagedTxStateFrom(ctx); state != nil {
+		// Capture by value so the closure does not race with the caller's
+		// loop variables (no loop here, but keep convention).
+		inner := s.inner
+		stagedInstance := instanceID
+		stagedLease := leaseID
+		stagedEvent := event
+		state.addAppend(func() error {
+			_, err := inner.Append(context.Background(), stagedInstance, stagedLease, stagedEvent)
+			return err
+		})
+		// Coordinator discards the version return; return 0 deterministically.
+		return 0, nil
+	}
+	return s.inner.Append(ctx, instanceID, leaseID, event)
+}
+
+func (s *stagedJournal) Enqueue(ctx context.Context, instance ksaga.Instance) error {
+	return s.inner.Enqueue(ctx, instance)
+}
+
+func (s *stagedJournal) Load(ctx context.Context, instanceID idutil.SafeID) ([]journal.Event, error) {
+	return s.inner.Load(ctx, instanceID)
+}
+
+func (s *stagedJournal) ClaimPending(
+	ctx context.Context, batchSize int, leaseDuration time.Duration,
+) ([]journal.ClaimedInstance, idutil.SafeID, error) {
+	return s.inner.ClaimPending(ctx, batchSize, leaseDuration)
+}
+
+func (s *stagedJournal) Heartbeat(
+	ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration,
+) (bool, error) {
+	return s.inner.Heartbeat(ctx, instanceID, leaseID, leaseDuration)
+}
+
+func (s *stagedJournal) MarkTerminal(
+	ctx context.Context, instanceID, leaseID idutil.SafeID, finalStatus ksaga.Status,
+) (bool, error) {
+	return s.inner.MarkTerminal(ctx, instanceID, leaseID, finalStatus)
+}
+
+func (s *stagedJournal) RepoReady(ctx context.Context) error {
+	return s.inner.RepoReady(ctx)
 }
 
 // ---------------------------------------------------------------------------

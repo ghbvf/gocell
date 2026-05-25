@@ -16,18 +16,17 @@ import (
 // JSON state, or a non-nil error to signal step failure.
 type StepFunc func(ctx context.Context, inst *Instance, prevState []byte) (newState []byte, err error)
 
-// CompensateFunc undoes one previously-committed step. MUST be pure-reverse:
-// no outbox.Writer, no *sql.Tx (locked by SAGA-STEP-COMPENSATE-PURE-01
-// archtest shipped in the same PR).
-type CompensateFunc func(ctx context.Context, inst *Instance, committedState []byte) error
-
 // Step is a single named unit inside a Definition. Name MUST be a valid
 // SafeID and flows into journal Event.StepName.
+//
+// Compensate (pure-reverse rollback) is intentionally absent — PR-06 wires
+// the compensation executor and adds the Compensate field + CompensateFunc
+// type back at that time (forward-compatible new optional field). Until then,
+// the on-failure semantics are terminal-Failed (no rollback).
 type Step struct {
-	Name       idutil.SafeID
-	Run        StepFunc
-	Compensate CompensateFunc // optional; nil => terminal-on-failure
-	Timeout    time.Duration  // per-step; 0 => inherit Definition.Timeout
+	Name    idutil.SafeID
+	Run     StepFunc
+	Timeout time.Duration // per-step; 0 => inherit Definition.Timeout
 }
 
 // Definition is the static recipe for a saga. ID is the DefinitionID stored
@@ -50,9 +49,9 @@ func (d *Definition) Len() int { return len(d.Steps) }
 // Validate returns nil iff:
 //   - ID is non-empty SafeID (use idutil.SafeID.Validate)
 //   - len(Steps) >= 1
-//   - each Step.Name is non-empty SafeID
+//   - each Step.Name is non-empty AND passes idutil.SafeID.Validate
 //   - Step.Name values are distinct within the Definition
-//   - each Step.Run is non-nil (StepFunc; Compensate may be nil)
+//   - each Step.Run is non-nil (StepFunc)
 //   - Step.Timeout >= 0
 //   - Definition.Timeout >= 0
 //
@@ -91,6 +90,17 @@ func (d *Definition) Validate() error {
 					slog.String("definitionId", string(d.ID)),
 					slog.Int("stepIndex", i),
 				),
+			)
+		}
+		if err := step.Name.Validate(); err != nil {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"saga definition: invalid step Name",
+				errcode.WithDetails(
+					slog.String("definitionId", string(d.ID)),
+					slog.Int("stepIndex", i),
+					slog.String("stepName", string(step.Name)),
+				),
+				errcode.WithInternal(err.Error()),
 			)
 		}
 		if step.Run == nil {
@@ -149,12 +159,19 @@ type InMemoryRegistry struct {
 }
 
 // NewInMemoryRegistry validates each definition then registers it by ID.
+// Nil definitions return errcode.KindInvalid + ErrValidationFailed.
 // Duplicate IDs return errcode.KindConflict + ErrConflict.
 func NewInMemoryRegistry(defs ...*Definition) (*InMemoryRegistry, error) {
 	r := &InMemoryRegistry{
 		defs: make(map[idutil.SafeID]*Definition, len(defs)),
 	}
-	for _, d := range defs {
+	for i, d := range defs {
+		if d == nil {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"saga registry: nil definition",
+				errcode.WithDetails(slog.Int("definitionIndex", i)),
+			)
+		}
 		if err := d.Validate(); err != nil {
 			return nil, err
 		}

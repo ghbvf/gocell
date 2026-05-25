@@ -62,37 +62,16 @@ func TestDefinition_Validate(t *testing.T) {
 			},
 		},
 		{
-			name: "happy path 3 steps mixed compensate",
+			name: "happy path 3 steps",
 			build: func() *Definition {
 				return &Definition{
 					ID: idutil.SafeID("saga-multi"),
 					Steps: []Step{
-						{
-							Name: idutil.SafeID("s1"),
-							Run:  noopStepFunc,
-							Compensate: func(_ context.Context, _ *Instance, _ []byte) error {
-								return nil
-							},
-						},
+						{Name: idutil.SafeID("s1"), Run: noopStepFunc},
 						{Name: idutil.SafeID("s2"), Run: noopStepFunc},
-						{
-							Name: idutil.SafeID("s3"),
-							Run:  noopStepFunc,
-							Compensate: func(_ context.Context, _ *Instance, _ []byte) error {
-								return nil
-							},
-						},
+						{Name: idutil.SafeID("s3"), Run: noopStepFunc},
 					},
 					Timeout: testDefTimeout,
-				}
-			},
-		},
-		{
-			name: "compensate nil for step is OK",
-			build: func() *Definition {
-				return &Definition{
-					ID:    idutil.SafeID("saga-nocomp"),
-					Steps: []Step{{Name: idutil.SafeID("s1"), Run: noopStepFunc, Compensate: nil}},
 				}
 			},
 		},
@@ -139,6 +118,33 @@ func TestDefinition_Validate(t *testing.T) {
 					Steps: []Step{
 						{Name: idutil.SafeID("s1"), Run: noopStepFunc},
 						{Name: idutil.SafeID(""), Run: noopStepFunc},
+					},
+				}
+			},
+			wantErr:  true,
+			wantKind: errcode.KindInvalid,
+		},
+		{
+			name: "step name unsafe characters",
+			build: func() *Definition {
+				return &Definition{
+					ID: idutil.SafeID("saga-unsafe-name"),
+					Steps: []Step{
+						{Name: idutil.SafeID("has space"), Run: noopStepFunc},
+					},
+				}
+			},
+			wantErr:  true,
+			wantKind: errcode.KindInvalid,
+		},
+		{
+			name: "step name unsafe characters second step",
+			build: func() *Definition {
+				return &Definition{
+					ID: idutil.SafeID("saga-unsafe-name-2"),
+					Steps: []Step{
+						{Name: idutil.SafeID("s1"), Run: noopStepFunc},
+						{Name: idutil.SafeID("bad!char"), Run: noopStepFunc},
 					},
 				}
 			},
@@ -316,6 +322,21 @@ func TestNewInMemoryRegistry(t *testing.T) {
 					ID:    idutil.SafeID("saga-invalid"),
 					Steps: nil, // empty steps → KindInvalid
 				},
+			},
+			wantErr:  true,
+			wantKind: errcode.KindInvalid,
+		},
+		{
+			name:     "nil definition returns KindInvalid",
+			defs:     []*Definition{nil},
+			wantErr:  true,
+			wantKind: errcode.KindInvalid,
+		},
+		{
+			name: "nil definition in second slot returns KindInvalid",
+			defs: []*Definition{
+				makeValidDef("saga-a"),
+				nil,
 			},
 			wantErr:  true,
 			wantKind: errcode.KindInvalid,

@@ -1131,15 +1131,20 @@ func mustNewUUID(t *testing.T) idutil.SafeID {
 }
 
 // ---------------------------------------------------------------------------
-// F8 — TestDriveOne_EmitFails_TxReturnsErr
+// F8 — TestDriveOne_EmitFails_AppendRolledBack
 // ---------------------------------------------------------------------------
 
-// TestDriveOne_EmitFails_TxReturnsErr verifies that when outbox Emit fails
-// inside the transaction, RunInTx returns the error and the coordinator logs
-// a warning (driveOne returns the error from RunInTx). The test asserts that
-// the instance is NOT terminal (it remains claimable after the failed tx).
-func TestDriveOne_EmitFails_TxReturnsErr(t *testing.T) {
-	const defID idutil.SafeID = "emitfailstx"
+// TestDriveOne_EmitFails_AppendRolledBack verifies real-PG atomicity: when
+// outbox Emit fails inside the transaction (after Append has been called),
+// the prior Append must NOT leave a KindStepCompleted event in the journal.
+//
+// The test uses stagedJournal + safeFakeTxRunner so the test fake mirrors
+// the production PG tx-rollback semantic that plain MemJournal cannot
+// exhibit. Without staging, this test would pass with a buggy coordinator
+// (Append residue in the journal after a failed tx) — the bug F8 originally
+// flagged as "false confidence".
+func TestDriveOne_EmitFails_AppendRolledBack(t *testing.T) {
+	const defID idutil.SafeID = "emitfailsatomic"
 
 	def := &ksaga.Definition{
 		ID: defID,
@@ -1149,14 +1154,15 @@ func TestDriveOne_EmitFails_TxReturnsErr(t *testing.T) {
 	}
 
 	clk := newFakeClock()
-	innerJ := newMemJournal(clk)
+	memJ := newMemJournal(clk)
+	staged := newStagedJournal(memJ)
+
 	reg, err := ksaga.NewInMemoryRegistry(def)
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
 
 	em := newSafeFakeEmitter()
-	// Inject an error into the emitter — Emit will fail inside the tx.
 	em.SetError(errors.New("emit intentionally failed"))
 
 	tx := newSafeFakeTxRunner()
@@ -1168,18 +1174,17 @@ func TestDriveOne_EmitFails_TxReturnsErr(t *testing.T) {
 		HeartbeatInterval: testtime.D20s,
 	}
 
-	c, err := NewCoordinator(innerJ, tx, em, reg, clk, WithConfig(cfg))
+	c, err := NewCoordinator(staged, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 
 	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
-	if err := innerJ.Enqueue(context.Background(), inst); err != nil {
+	if err := memJ.Enqueue(context.Background(), inst); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	// Drive one tick manually (no goroutines needed for this test).
-	claimed, _, claimErr := innerJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	claimed, _, claimErr := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
 	if claimErr != nil {
 		t.Fatalf("ClaimPending: %v", claimErr)
 	}
@@ -1188,46 +1193,48 @@ func TestDriveOne_EmitFails_TxReturnsErr(t *testing.T) {
 	}
 	ci := claimed[0]
 
-	// driveOne should return an error because Emit fails inside RunInTx.
 	driveErr := c.driveOne(context.Background(), ci)
 	if driveErr == nil {
-		t.Error("expected driveOne to return an error when Emit fails")
+		t.Fatal("expected driveOne to return an error when Emit fails")
 	}
 
-	// The lease has the instance; clear the error and verify instance is still
-	// claimable after the lease expires (it was not marked terminal).
-	// Advance clock past lease duration to verify instance comes back.
-	clk.Advance(testtime.D60s + testtime.D1ms)
-	claimed2, _, _ := innerJ.ClaimPending(context.Background(), 1, testtime.D60s)
-	if len(claimed2) != 1 {
-		t.Errorf("instance should be re-claimable after failed tx (lease expired), got %d", len(claimed2))
+	// Atomicity assertion: no KindStepCompleted event should have leaked.
+	events, loadErr := memJ.Load(context.Background(), inst.ID)
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
+	}
+	for _, ev := range events {
+		if ev.Kind == journal.KindStepCompleted {
+			t.Errorf("KindStepCompleted leaked into journal after Emit-failed tx: %+v (rollback broken)", ev)
+		}
 	}
 }
 
 // ---------------------------------------------------------------------------
-// F8 — TestDriveOne_MarkTerminalFails_TxReturnsErr
+// F8 — TestDriveOne_MarkTerminalFails_AppendRolledBack
 // ---------------------------------------------------------------------------
 
-// TestDriveOne_MarkTerminalFails_TxReturnsErr verifies that when
-// MarkTerminal fails inside the transaction, RunInTx returns the error.
-// The test uses failingFakeJournal to inject the MarkTerminal failure.
-func TestDriveOne_MarkTerminalFails_TxReturnsErr(t *testing.T) {
-	const defID idutil.SafeID = "marktermfailstx"
+// TestDriveOne_MarkTerminalFails_AppendRolledBack verifies that when
+// MarkTerminal fails after Append+Emit inside the transaction, the prior
+// Append is rolled back (no KindStepCompleted residue). Uses stagedJournal
+// composed over failingFakeJournal so MarkTerminal fires the injected error
+// while Append remains buffered until commit.
+func TestDriveOne_MarkTerminalFails_AppendRolledBack(t *testing.T) {
+	const defID idutil.SafeID = "marktermfailsatomic"
 
 	def := &ksaga.Definition{
 		ID: defID,
 		Steps: []ksaga.Step{
-			// Single step that succeeds — this triggers commitStepCompleted which
-			// calls MarkTerminal for the last step.
+			// Single step → isLastStep=true → commitStepCompleted calls MarkTerminal.
 			{Name: "step1", Run: noopStep},
 		},
 	}
 
 	clk := newFakeClock()
-	innerJ := newMemJournal(clk)
-	fj := newFailingFakeJournal(innerJ)
-	// Fail the first MarkTerminal call (which happens in commitStepCompleted).
-	fj.failMarkTerminalOnCall = 1
+	memJ := newMemJournal(clk)
+	failing := newFailingFakeJournal(memJ)
+	failing.failMarkTerminalOnCall = 1
+	staged := newStagedJournal(failing)
 
 	reg, err := ksaga.NewInMemoryRegistry(def)
 	if err != nil {
@@ -1243,18 +1250,17 @@ func TestDriveOne_MarkTerminalFails_TxReturnsErr(t *testing.T) {
 		HeartbeatInterval: testtime.D20s,
 	}
 
-	c, err := NewCoordinator(fj, tx, em, reg, clk, WithConfig(cfg))
+	c, err := NewCoordinator(staged, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 
 	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
-	if err := innerJ.Enqueue(context.Background(), inst); err != nil {
+	if err := memJ.Enqueue(context.Background(), inst); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	// Claim the instance directly.
-	claimed, _, claimErr := innerJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	claimed, _, claimErr := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
 	if claimErr != nil {
 		t.Fatalf("ClaimPending: %v", claimErr)
 	}
@@ -1263,9 +1269,18 @@ func TestDriveOne_MarkTerminalFails_TxReturnsErr(t *testing.T) {
 	}
 	ci := claimed[0]
 
-	// driveOne should return an error because MarkTerminal fails inside RunInTx.
 	driveErr := c.driveOne(context.Background(), ci)
 	if driveErr == nil {
-		t.Error("expected driveOne to return an error when MarkTerminal fails")
+		t.Fatal("expected driveOne to return an error when MarkTerminal fails")
+	}
+
+	events, loadErr := memJ.Load(context.Background(), inst.ID)
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
+	}
+	for _, ev := range events {
+		if ev.Kind == journal.KindStepCompleted {
+			t.Errorf("KindStepCompleted leaked into journal after MarkTerminal-failed tx: %+v (rollback broken)", ev)
+		}
 	}
 }
