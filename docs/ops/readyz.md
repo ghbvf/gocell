@@ -38,11 +38,15 @@ carries no breakdown; the same data is emitted to server-side `slog` via
 `slog.Log(ctx, level, "readyz <status>", ...)` — a `slog.Group("dependencies",
 ...)` plus status / reason / cells / adapters attrs — so on-call retains the
 diagnostic without leaking it to public 503 consumers. Because `slog.Log`
-receives the **request context**, every readyz record also carries the
-framework correlation fields (`request_id` / `trace_id` / `correlation_id`)
-injected by the logging contextHandler — the same source as the errcode
-`WithInternal` path — so a 503/degraded record can be joined back to the
-request that produced it (#942). ref: k8s.io/apiserver/pkg/server/healthz —
+receives the **request context**, a readyz record carries the framework
+correlation fields the contextHandler injects from ctx — the same source as the
+errcode `WithInternal` path. On probe endpoints those are **`request_id` +
+`correlation_id`** (the RequestID middleware runs on `/readyz` and is not
+probe-filtered), so a 503/degraded record can be joined back to the request
+that produced it (#942). **`trace_id` is NOT emitted on probe endpoints by
+default** — the Tracing middleware's `DefaultProbeFilter` skips span creation
+for `/healthz`, `/readyz`, `/livez`, `/metrics`; it only appears if a
+deployment removes that filter. ref: k8s.io/apiserver/pkg/server/healthz —
 failed checks do not surface in the 503 body; verbose breakdown is
 operator-only.
 
@@ -178,14 +182,15 @@ triggering request was verbose:
   dependencies + adapters maps.
 
 Verbose 503 slog example（text handler，`-log-format=text` 默认）。实际是单行
-key=value（这里按字段折行只为可读）。`request_id` / `trace_id` 等关联字段由 logging
-contextHandler 注入。**注意 `error_msg` 的引号规则**（text handler 的 logfmt 行为，决定
-下方 grep 怎么写）：含空格或 `=` 的值加引号、空值输出 `error_msg=""`、单 token 无特殊
-字符（如 `error_msg=timeout`）**不加引号**：
+key=value（这里按字段折行只为可读）。`request_id` / `correlation_id` 由 RequestID
+middleware 经 contextHandler 注入（probe 端点有；`trace_id` 默认无——见上文 preamble）。
+**注意 `error_msg` 的引号规则**（text handler 的 logfmt 行为，决定下方 grep 怎么写）：含
+空格或 `=` 的值加引号、空值输出 `error_msg=""`、单 token 无特殊字符（如 `error_msg=timeout`）
+**不加引号**：
 
 ```
 time=2026-05-26T03:50:06Z level=WARN msg="readyz unhealthy"
-  request_id=7f3c… trace_id=a1b2… status=unhealthy reason=readiness_failed
+  request_id=7f3c… correlation_id=7f3c… status=unhealthy reason=readiness_failed
   cells=map[accesscore:healthy auditcore:degraded]
   dependencies.postgres_ready.status=healthy
   dependencies.postgres_ready.duration_ms=3
@@ -203,7 +208,7 @@ Verbose 503 slog example（JSON handler，`-log-format=json`）：
   "level": "WARN",
   "msg": "readyz unhealthy",
   "request_id": "7f3c…",
-  "trace_id": "a1b2…",
+  "correlation_id": "7f3c…",
   "status": "unhealthy",
   "reason": "readiness_failed",
   "cells": {"accesscore": "healthy", "auditcore": "degraded"},
@@ -241,7 +246,8 @@ error 文本就无需截断）。Probe 实现仍应避免在 error message 中�
 ## 操作员诊断 cookbook
 
 > JSON 是推荐的诊断格式——嵌套对象路径可被 jq / LogQL 直接索引，且不受 text handler
-> 的引号歧义影响。需要按请求关联时，所有 readyz record 都带 `request_id` / `trace_id`。
+> 的引号歧义影响。需要按请求关联时，readyz record 带 `request_id` / `correlation_id`
+> （`trace_id` 在 probe 端点默认无，见 preamble）。
 
 ### JSON handler（`-log-format=json`）
 

@@ -495,11 +495,15 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 //
 // ctx is the request context (threaded from ReadyzHandler via writeTo). Since
 // the wire body carries no error text post-ADR, slog is the *primary*
-// diagnostic channel — it MUST carry the request correlation fields
-// (request_id / trace_id / correlation_id) that the framework's contextHandler
-// (runtime/observability/logging) injects from ctx, same source as the errcode
-// WithInternal path. Passing context.Background() here silently drops them and
-// breaks the link between a 503/degraded record and its request (R2 / #942).
+// diagnostic channel — it must carry the request correlation fields that the
+// framework's contextHandler (runtime/observability/logging) injects from ctx,
+// same source as the errcode WithInternal path. On probe endpoints that means
+// request_id + correlation_id (RequestID middleware runs on /readyz; it is not
+// probe-filtered); trace_id is NOT present by default because the Tracing
+// middleware's DefaultProbeFilter skips span creation for /healthz, /readyz,
+// /livez, /metrics. Passing context.Background() here silently drops even
+// request_id/correlation_id and breaks the link between a 503/degraded record
+// and its request (R2 / #942).
 //
 // The slogDependencies map (not the wire dependencies) is what gets logged
 // — its typed SlogDependencyEntry.ErrorMsg field carries the redacted error

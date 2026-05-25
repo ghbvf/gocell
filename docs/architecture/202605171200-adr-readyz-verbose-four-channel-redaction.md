@@ -95,7 +95,7 @@ archtest 锁形态"双保险。
 | slog `dependencies` map (`map[name]slogDependencyEntry`) | d | `slog.Any` | **ErrorMsg 字段类型 = `redactedErrorMsg`，由 `newRedactedErrorMsg` funnel 强制 `pkg/redaction.RedactString`**；适用于 degraded（Info 级）和 unhealthy（Warn 级）两条路径 |
 | slog `adapters` map (`map[role]info`) | d | `slog.Any` | adapter info 是部署期声明（in-memory / postgres / redis 等），无 runtime secret |
 | wire body `dependencies[*]` (200 verbose) | a body fragment | `map[name]verboseDependencyEntry` | struct 字段集冻结无 error → wire 上**结构性**无 error 文本；适用于 degraded 和 healthy 200 响应 |
-| degraded 路径 slog level | d | `slog.LevelInfo` | `logDiagnostics(slog.LevelInfo, "readyz degraded")` — 操作员关注但不触发告警；unhealthy 路径用 `slog.LevelWarn` |
+| degraded 路径 slog level | d | `slog.LevelInfo` | `logDiagnostics(ctx, slog.LevelInfo, "readyz degraded")`（ctx 首参见 D8）— 操作员关注但不触发告警；unhealthy 路径用 `slog.LevelWarn` |
 
 ### D4 — RETRACTS：旧 `health.go:426` 设计
 
@@ -129,8 +129,9 @@ ErrorMsg 从未被 operator 看到（F3 / PR #552 review P1 finding）。
 
 修复：
 
-1. `logUnhealthy` 重命名为 `logDiagnostics(level slog.Level, msg string, extra ...slog.Attr)`，
-   level 参数区分 unhealthy（`slog.LevelWarn`）和 degraded（`slog.LevelInfo`）。
+1. `logUnhealthy` 重命名为 `logDiagnostics(ctx context.Context, level slog.Level, msg string, extra ...slog.Attr)`，
+   level 参数区分 unhealthy（`slog.LevelWarn`）和 degraded（`slog.LevelInfo`）。ctx 首参由
+   #942 R2 加入（见 D8），此处签名为当前形态。
 2. `writeTo` 在 "degraded" 路径也调用 `logDiagnostics`，确保 channel d 覆盖两种非健康状态。
 3. unhealthy 路径额外传 `slog.String("reason", reason)` attr，保持既有 reason 字段。
 
@@ -181,14 +182,28 @@ exported 构造函数 + redactedErrorMsg 是包私有 newtype——外部包构�
 D5 把 `logUnhealthy` 改名 `logDiagnostics` 时，slog 调用仍是
 `slog.Log(context.Background(), level, msg, ...)`。wire 删 error 文本后（D1），slog 是
 **主诊断通道**——用 `context.Background()` 会丢框架 contextHandler
-（`runtime/observability/logging`）从 ctx 注入的 `request_id` / `trace_id` /
-`correlation_id`，使 503 / degraded 记录无法关联到触发它的请求（PR #552 review R2）。
+（`runtime/observability/logging`）从 ctx 注入的关联字段，使 503 / degraded 记录无法关联
+到触发它的请求（PR #552 review R2）。
 
 修复：`logDiagnostics` 加 `ctx context.Context` 首参，`writeTo`（持有 request ctx）的
 degraded / unhealthy 两条调用路径都传入，末行改 `slog.Log(ctx, level, msg, ...)`。关联
 字段来源与 errcode `WithInternal` 路径**同源**（同一 contextHandler）。同 readyz 路径的
 shutting-down / singleflight-error / panic-recover 三处包级 slog 调用一并改用
 `slog.InfoContext` / `slog.ErrorContext`，消除 readyz 路径全部 ctx 丢失点。
+
+**关联字段在 probe 端点的实际可见性**（#942 R2 二轮复审纠正——先前误写「record 必带
+request_id / trace_id / correlation_id」）：
+
+- `request_id` + `correlation_id`：**出现**。`RequestID` middleware（`runtime/http/middleware`）
+  在 listener-root chain 且无 probe filter，对 `/readyz` 照常运行（同时把 request_id bridge
+  成 correlation_id）。
+- `trace_id`：**默认不出现**。`Tracing` middleware 带 `WithProbeFilter(DefaultProbeFilter)`，
+  跳过 `/healthz /readyz /livez /metrics` 的 span 创建（`TestBootstrap_TracingE2E_InfraEndpoints`
+  断言），故 `ctxkeys.TraceID` 未设。仅当部署移除 probe filter（不推荐——高频探针会吃 span
+  预算）且 ctx 携带 span 时才出现。
+
+故 R2 的实质收益是 probe 端点 record 重获 `request_id` + `correlation_id` 关联（此前被
+`context.Background()` 丢弃），不含 `trace_id`。
 
 ctx 仅承载关联值（非 secret），不引入新泄漏面——见 §4 威胁矩阵 #942 重评。
 
@@ -263,9 +278,10 @@ ctx 仅承载关联值（非 secret），不引入新泄漏面——见 §4 威�
 - d 列三个 ⚠ 盲区行（裸 JWT / PEM / UUID）表述本就准确；本次仅把 §SIEM/ELK 与之**对齐**
   ——删除矛盾的「无泄漏路径」绝对化断言，§SIEM/ELK 是被纠正方，§3 矩阵是真值源。无格子
   从 ✅ 变 ⚠️。
-- D8 的 ctx 透传只新增 `request_id` / `trace_id` / `correlation_id` 关联字段到 slog
-  record。这些是关联 ID（非 secret，本就由 contextHandler 在全框架所有 slog record 注入），
-  不携带 probe error 文本，**不扩大 d 列暴露面**。
+- D8 的 ctx 透传只新增非 secret 关联 ID（probe 端点实际为 `request_id` + `correlation_id`，
+  `trace_id` 被 DefaultProbeFilter 拦掉——见 D8 末段）到 slog record。这些是关联 ID（非 secret，
+  本就由 contextHandler 在全框架所有 slog record 注入），不携带 probe error 文本，**不扩大 d
+  列暴露面**。
 - (P1)(P2) 两条前提仍由 guard ①④ 机器强制，未受本次 amendment 影响。
 
 §3 八行逐行对照（改动前 → 改动后，无 ✅→⚠️/❌ 回归）：

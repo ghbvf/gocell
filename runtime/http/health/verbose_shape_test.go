@@ -259,6 +259,12 @@ func TestLogDiagnostics_PropagatesRequestCtx(t *testing.T) {
 
 			capture := withSlogCapture(t)
 
+			// Inject all three correlation fields directly into the request ctx
+			// to prove the threading MECHANISM (whatever is in ctx reaches slog).
+			// trace_id is included only to exercise the mechanism — in production
+			// the probe endpoints do NOT carry trace_id (DefaultProbeFilter skips
+			// tracing for /readyz); request_id + correlation_id are the fields a
+			// real readyz record carries (RequestID middleware). See #942 R2.
 			ctx := ctxkeys.WithRequestID(context.Background(), wantReqID)
 			ctx = ctxkeys.WithTraceID(ctx, wantTraceID)
 			ctx = ctxkeys.WithCorrelationID(ctx, wantCorrID)
