@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_step_run_outside_tx_fixtures/red_safe_run_in_runintx/violator.go:26: SAGA-STEP-RUN-OUTSIDE-TX-01-A2: safeRun() called inside RunInTx closure body — user step code would run with a DB transaction held open

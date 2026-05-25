@@ -344,9 +344,13 @@ func callIsSafeRun(call *ast.CallExpr) bool {
 // name of the kernel/saga package. Tests files are excluded (they may
 // legitimately re-type StepFunc for mocking).
 //
-// Rated Soft (string anchor on import path + selector name). The structural
-// ceiling here is Medium — a type alias under a different local import name
-// would be missed. Tracked for upgrade in a follow-up PR.
+// AI-robust rating: see file-level CommentGroup ("Rated Soft; Hard upgrade
+// via typed StepFunc alias detection — gh issue #979"). This blind-spot
+// reverse self-test is an existing Soft carve-out for A1's Hard primary
+// path; new Soft enforcement is rejected (see .claude/rules/gocell/ai-robust.md).
+// Upgrading B1 to Medium requires switching from pure-AST `Run` to typed
+// `RunTyped` + resolving the kernel/saga package via TypesInfo.PkgNameOf
+// (no longer string-anchored on import path literal) — tracked in #979.
 func TestSagaStepRunOutsideTx_BlindSpot_B1_NoStepFuncAlias(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -459,6 +463,27 @@ func TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture(t *testing.T) {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			ds = append(ds, checkA1StepFuncCallsites(p, file)...)
+		}
+		return ds
+	})
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture proves that A2
+// fires when safeRun() is called directly inside a RunInTx closure body.
+// The fixture declares a fake TxRunner-shaped struct (RunInTx method) + a
+// local safeRun identifier, then calls safeRun inside the RunInTx closure.
+// A2 is a structural (pure-AST) check on method/identifier names, so the
+// fixture does not need to import persistence.TxRunner — the syntactic
+// match is by method name only.
+func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_safe_run_in_runintx")
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+		// No scope filter for fixtures: scan all loaded files directly.
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			ds = append(ds, checkA2SafeRunNotInRunInTx(p, file)...)
 		}
 		return ds
 	})

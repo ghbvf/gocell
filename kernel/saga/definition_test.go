@@ -432,5 +432,5 @@ func TestInMemoryRegistry_ConcurrentLookup(t *testing.T) {
 	wg.Wait()
 }
 
-// Ensure InMemoryRegistry satisfies the Registry interface at compile time.
-var _ Registry = (*InMemoryRegistry)(nil)
+// Ensure InMemoryRegistry satisfies the Resolver interface at compile time.
+var _ Resolver = (*InMemoryRegistry)(nil)

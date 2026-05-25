@@ -138,7 +138,7 @@ type Coordinator struct {
 	journal    journal.Journal
 	txRunner   persistence.TxRunner
 	outboxEmit koutbox.Emitter
-	registry   ksaga.Registry
+	registry   ksaga.Resolver
 
 	// optional with defaults
 	dispatcher Dispatcher   // default NoopDispatcher{}
@@ -166,7 +166,7 @@ func NewCoordinator(
 	j journal.Journal,
 	tx persistence.TxRunner,
 	em koutbox.Emitter,
-	reg ksaga.Registry,
+	reg ksaga.Resolver,
 	clk clock.Clock,
 	opts ...Option,
 ) (*Coordinator, error) {
@@ -254,7 +254,25 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop signals shutdown and waits for goroutines to drain. Idempotent.
+// Stop signals shutdown, drains inflight driveOne goroutines, then cancels
+// the loops and waits for them to exit. Idempotent.
+//
+// Drain budget = the passed-in ctx (same budget as the rest of Stop). While
+// draining, tickOnce short-circuits to stop accepting new claims and
+// heartbeatLoop keeps extending leases so inflight steps don't lose their
+// lease mid-flight. If a non-cooperative Step.Run ignores ctx.Done() and
+// exceeds the drain budget:
+//
+//   - cancel() fires anyway and Stop returns (best-effort).
+//   - The orphaned step goroutine continues until it returns naturally; the
+//     heartbeat goroutine has by then exited, so its lease will eventually
+//     expire and another coordinator may re-claim the instance.
+//   - This is the inherent limit of cooperative cancellation in Go and the
+//     accepted PR-03 single-process unsafe-mode behavior. PR-05/PR-06
+//     leader-elect + executor address the multi-process race.
+//
+// Step authors are responsible for selecting on ctx.Done() inside blocking
+// primitives — see ksaga.StepFunc godoc.
 func (c *Coordinator) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	state := coordState(c.state.Load())
@@ -328,10 +346,39 @@ func (c *Coordinator) Ready() <-chan struct{} {
 	return ch
 }
 
-// RepoReady implements healthz.RepoProber by delegating to journal.RepoReady.
+// RepoReady implements healthz.RepoProber. The probe is binary (ready / not
+// ready), driven by two layers in order:
+//
+//  1. Coordinator lifecycle — the probe MUST report not-ready while the
+//     instance is stopped / starting / stopping. A coordinator that has not
+//     reached coordRunning cannot drive new claims even if the journal is
+//     fine; conversely a stopping coordinator is draining inflight work and
+//     should be drained out of load balancers.
+//  2. Journal storage — when running, delegate to journal.RepoReady so an
+//     underlying PG/mem outage flips readiness off without needing a
+//     separate probe name (failure domains differ from the pool-level
+//     postgres_ready; see .claude/rules/gocell/observability.md §"Cell 级别
+//     Repo Readiness Probe").
+//
+// The unsafe single-process mode (UnsafeModeLabel) is signaled at Start()
+// via slog.Warn — it does NOT toggle readiness, because PR-03's contract is
+// "unsafe but ready to drive a saga in a single process". PR-05 leader-elect
+// is the path for multi-process safety; this probe stays binary.
+//
 // Cell-side registration (RegisterRepoReady funnel) is the Coordinator cell
 // holder's responsibility (PR-09).
 func (c *Coordinator) RepoReady(ctx context.Context) error {
+	switch coordState(c.state.Load()) {
+	case coordStopped:
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"saga coordinator: not running")
+	case coordStarting:
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"saga coordinator: starting")
+	case coordStopping:
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"saga coordinator: stopping")
+	}
 	return c.journal.RepoReady(ctx)
 }
 
@@ -421,23 +468,24 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	// 4. Run step OUTSIDE tx. safeRun recovers panics.
 	// Derive a per-step context with deadline from def.Timeout and/or step.Timeout.
 	// Deadlines use absolute wall-clock time derived from the injected clock so
-	// tests using a FakeClock can control time precisely.
+	// tests using a FakeClock can control time precisely. Each WithDeadline
+	// cancel func is defer-released so they fire deterministically once driveOne
+	// returns (LIFO order — innermost step cancel first, then total).
 	nextStep := def.Steps[cursor]
 	runCtx := ctx
-	runCancel := func() {}
 	if def.Timeout > 0 {
 		totalDeadline := ci.Instance.StartedAt.Add(def.Timeout)
-		runCtx, runCancel = context.WithDeadline(ctx, totalDeadline)
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithDeadline(ctx, totalDeadline)
+		defer cancel()
 	}
 	if nextStep.Timeout > 0 {
 		stepDeadline := c.clock.Now().Add(nextStep.Timeout)
-		var stepCancel context.CancelFunc
-		runCtx, stepCancel = context.WithDeadline(runCtx, stepDeadline)
-		prevCancel := runCancel
-		runCancel = func() { stepCancel(); prevCancel() }
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithDeadline(runCtx, stepDeadline)
+		defer cancel()
 	}
 	newState, runErr := safeRun(runCtx, nextStep.Run, &ci.Instance, prevState)
-	runCancel()
 	// If the derived deadline ctx fired (def.Timeout or step.Timeout exceeded)
 	// while the parent ctx is still valid, treat the outcome as a saga timeout.
 	// Two paths reach here:
@@ -453,9 +501,17 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	}
 
 	// 5. Open short tx: Append + (maybe) Emit + RegisterAfterCommit.
-	isLastStep := cursor == def.Len()-1
+	args := commitStepArgs{
+		instanceID: ci.Instance.ID,
+		leaseID:    ci.LeaseID,
+		defID:      def.ID,
+		step:       nextStep,
+		newState:   newState,
+		runErr:     runErr,
+		isLastStep: cursor == def.Len()-1,
+	}
 	return c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := c.commitStep(txCtx, ci.Instance.ID, ci.LeaseID, def.ID, nextStep, newState, runErr, isLastStep); err != nil {
+		if err := c.commitStep(txCtx, args); err != nil {
 			return err
 		}
 		persistence.RegisterAfterCommit(txCtx, func(hookCtx context.Context) {
@@ -465,60 +521,58 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	})
 }
 
+// commitStepArgs bundles the per-step commit inputs into a single value so
+// commitStep / commitStepFailed / commitStepCompleted stay under the
+// 7-parameter ceiling (driveOne knows all of these at the call site; bundling
+// keeps the signature small and avoids accidental arg reordering).
+type commitStepArgs struct {
+	instanceID idutil.SafeID
+	leaseID    idutil.SafeID
+	defID      idutil.SafeID
+	step       ksaga.Step
+	newState   []byte
+	runErr     error
+	isLastStep bool
+}
+
 // commitStep records the step outcome atomically inside a transaction.
 // On step failure it appends KindStepFailed and marks the instance terminal.
 // On step success it appends KindStepCompleted, emits the step-completed
 // outbox event, and (if it was the last step) marks the instance terminal.
-func (c *Coordinator) commitStep(
-	txCtx context.Context,
-	instanceID, leaseID, defID idutil.SafeID,
-	step ksaga.Step,
-	newState []byte,
-	runErr error,
-	isLastStep bool,
-) error {
-	if runErr != nil {
-		return c.commitStepFailed(txCtx, instanceID, leaseID, step.Name, runErr)
+func (c *Coordinator) commitStep(txCtx context.Context, a commitStepArgs) error {
+	if a.runErr != nil {
+		return c.commitStepFailed(txCtx, a)
 	}
-	return c.commitStepCompleted(txCtx, instanceID, leaseID, defID, step.Name, newState, isLastStep)
+	return c.commitStepCompleted(txCtx, a)
 }
 
-func (c *Coordinator) commitStepFailed(
-	txCtx context.Context,
-	instanceID, leaseID, stepName idutil.SafeID,
-	runErr error,
-) error {
-	if _, err := c.journal.Append(txCtx, instanceID, leaseID, journal.Event{
+func (c *Coordinator) commitStepFailed(txCtx context.Context, a commitStepArgs) error {
+	if _, err := c.journal.Append(txCtx, a.instanceID, a.leaseID, journal.Event{
 		Kind:     journal.KindStepFailed,
-		StepName: stepName,
-		Payload:  failurePayload(runErr),
+		StepName: a.step.Name,
+		Payload:  failurePayload(a.runErr),
 	}); err != nil {
 		return err
 	}
-	_, err := c.journal.MarkTerminal(txCtx, instanceID, leaseID, ksaga.StatusFailed)
+	_, err := c.journal.MarkTerminal(txCtx, a.instanceID, a.leaseID, ksaga.StatusFailed)
 	return err
 }
 
-func (c *Coordinator) commitStepCompleted(
-	txCtx context.Context,
-	instanceID, leaseID, defID, stepName idutil.SafeID,
-	newState []byte,
-	isLastStep bool,
-) error {
-	if _, err := c.journal.Append(txCtx, instanceID, leaseID, journal.Event{
+func (c *Coordinator) commitStepCompleted(txCtx context.Context, a commitStepArgs) error {
+	if _, err := c.journal.Append(txCtx, a.instanceID, a.leaseID, journal.Event{
 		Kind:     journal.KindStepCompleted,
-		StepName: stepName,
-		Payload:  newState,
+		StepName: a.step.Name,
+		Payload:  a.newState,
 	}); err != nil {
 		return err
 	}
 	if err := koutbox.Emit(txCtx, c.outboxEmit,
-		stepCompletedTopic(defID),
-		StepCompletedEvent{InstanceID: instanceID, Step: stepName}); err != nil {
+		stepCompletedTopic(a.defID),
+		StepCompletedEvent{InstanceID: a.instanceID, Step: a.step.Name}); err != nil {
 		return err
 	}
-	if isLastStep {
-		_, err := c.journal.MarkTerminal(txCtx, instanceID, leaseID, ksaga.StatusSucceeded)
+	if a.isLastStep {
+		_, err := c.journal.MarkTerminal(txCtx, a.instanceID, a.leaseID, ksaga.StatusSucceeded)
 		return err
 	}
 	return nil
@@ -622,6 +676,12 @@ func foldEvents(events []journal.Event, def *ksaga.Definition) (cursor int, prev
 // safeRun calls fn and converts panics to errors. safeRun MUST be the only
 // callsite of StepFunc inside this package (locked by SAGA-STEP-RUN-OUTSIDE-TX-01
 // archtest shipped in PR-08).
+//
+// ctx carries the derived step/saga deadline; a step that ignores ctx.Done()
+// will block this goroutine until it returns naturally. The Coordinator
+// detects post-call ctx expiry (driveOne) and marks the instance Expired,
+// but cannot terminate the underlying goroutine — see ksaga.StepFunc godoc
+// for the cooperative-cancellation contract.
 func safeRun(ctx context.Context, fn ksaga.StepFunc, inst *ksaga.Instance, prev []byte) (newState []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {

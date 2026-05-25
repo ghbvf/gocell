@@ -24,5 +24,11 @@ type Dispatcher interface {
 // in tests and as the default Coordinator dispatcher when no downstream is wired.
 type NoopDispatcher struct{}
 
-// Kick implements Dispatcher.
-func (NoopDispatcher) Kick(context.Context) {}
+// Kick implements Dispatcher with intentional no-op behavior — NoopDispatcher
+// is the default sink when no downstream component is wired (PR-03 ships this
+// only; outbox Relay integration lands in a later PR). The Coordinator still
+// calls Kick once per successful commit; dropping it costs nothing because the
+// downstream poller will catch up via its own periodic tick.
+func (NoopDispatcher) Kick(context.Context) {
+	// Intentionally empty — see godoc above.
+}

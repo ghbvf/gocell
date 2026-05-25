@@ -260,7 +260,7 @@ func TestNewCoordinator_NilDeps(t *testing.T) {
 		j          journal.Journal
 		tx         persistence.TxRunner
 		em         koutbox.Emitter
-		reg        ksaga.Registry
+		reg        ksaga.Resolver
 		wantErrStr string
 	}{
 		{
@@ -299,23 +299,33 @@ func TestNewCoordinator_NilDeps(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, err := NewCoordinator(tt.j, tt.tx, tt.em, tt.reg, clk)
-			if c != nil {
-				t.Error("expected nil Coordinator on error")
-			}
-			if err == nil {
-				t.Fatal("expected non-nil error")
-			}
-			var ecErr *errcode.Error
-			if !errors.As(err, &ecErr) {
-				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-			}
-			if ecErr.Kind != errcode.KindInvalid {
-				t.Errorf("kind = %v, want KindInvalid", ecErr.Kind)
-			}
-			if ecErr.Message != tt.wantErrStr {
-				t.Errorf("message = %q, want %q", ecErr.Message, tt.wantErrStr)
-			}
+			assertNilDepFailure(t, c, err, tt.wantErrStr)
 		})
+	}
+}
+
+// assertNilDepFailure consolidates the four-clause check used by
+// TestNewCoordinator_NilDeps so the test loop body stays under SonarCloud's
+// cognitive-complexity ceiling (≤15). All four assertions are independent —
+// any failure prints its own message; KindInvalid/Message mismatches use
+// t.Errorf (continue) while wrong type / nil error use t.Fatalf (stop).
+func assertNilDepFailure(t *testing.T, c *Coordinator, err error, wantMessage string) {
+	t.Helper()
+	if c != nil {
+		t.Error("expected nil Coordinator on error")
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error")
+	}
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ecErr.Kind != errcode.KindInvalid {
+		t.Errorf("kind = %v, want KindInvalid", ecErr.Kind)
+	}
+	if ecErr.Message != wantMessage {
+		t.Errorf("message = %q, want %q", ecErr.Message, wantMessage)
 	}
 }
 
@@ -611,28 +621,68 @@ func TestStart_Ready_Channel_Closes_After_State_Running(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRepoReady_Delegates_To_Journal
+// TestRepoReady — lifecycle gate + journal delegation
 // ---------------------------------------------------------------------------
 
-func TestRepoReady_Delegates_To_Journal(t *testing.T) {
+// TestRepoReady_BeforeStart_NotRunning verifies the probe rejects readiness
+// when the Coordinator has never been started.
+func TestRepoReady_BeforeStart_NotRunning(t *testing.T) {
+	clk := newFakeClock()
+	j := &stubRepoProberJournal{MemJournal: newMemJournal(clk)}
+	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	got := c.RepoReady(context.Background())
+	if got == nil {
+		t.Fatal("RepoReady() before Start: expected not-running error, got nil")
+	}
+	var ecErr *errcode.Error
+	if !errors.As(got, &ecErr) || ecErr.Kind != errcode.KindUnavailable {
+		t.Errorf("RepoReady() before Start: kind = %v, want KindUnavailable; err = %v", ecErrKind(ecErr), got)
+	}
+}
+
+// TestRepoReady_Running_DelegatesToJournal verifies that once the Coordinator
+// reaches coordRunning, the probe returns the journal's RepoReady result.
+func TestRepoReady_Running_DelegatesToJournal(t *testing.T) {
 	clk := newFakeClock()
 	j := &stubRepoProberJournal{
 		MemJournal: newMemJournal(clk),
 		repoErr:    errors.New("repo down"),
 	}
-	tx := &fakeTxRunner{}
-	em := &fakeEmitter{}
-	reg := newRegistry()
-
-	c, err := NewCoordinator(j, tx, em, reg, clk)
+	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startDone := make(chan error, 1)
+	go func() { startDone <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		t.Fatal("coordinator did not become ready")
+	}
+
 	got := c.RepoReady(context.Background())
 	if got == nil || got.Error() != "repo down" {
-		t.Errorf("RepoReady() = %v, want error 'repo down'", got)
+		t.Errorf("RepoReady() running: got %v, want error 'repo down'", got)
 	}
+
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer stopCancel()
+	_ = c.Stop(stopCtx)
+	<-startDone
+}
+
+func ecErrKind(e *errcode.Error) any {
+	if e == nil {
+		return "<nil>"
+	}
+	return e.Kind
 }
 
 // stubRepoProberJournal wraps MemJournal and overrides RepoReady.

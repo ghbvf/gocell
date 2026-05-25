@@ -710,7 +710,6 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	j, _ := journal.NewMemJournal(clk)
 	reg, _ := ksaga.NewInMemoryRegistry(def)
-
 	cfg := Config{
 		PollInterval:      testtime.D10ms,
 		ClaimBatchSize:    16,
@@ -718,94 +717,25 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 		HeartbeatInterval: testtime.D20s,
 	}
 
-	// First coordinator: drive step 1 only.
-	em1 := newSafeFakeEmitter()
-	tx1 := newSafeFakeTxRunner()
-	disp1 := &recordingDispatcher{}
-	c1, err := NewCoordinator(j, tx1, em1, reg, clk, WithConfig(cfg), WithDispatcher(disp1))
-	if err != nil {
-		t.Fatalf("NewCoordinator c1: %v", err)
-	}
-
 	inst := newInstance(t, defID, clk.Now())
 	if err := j.Enqueue(context.Background(), inst); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	done1 := make(chan error, 1)
-	go func() { done1 <- c1.Start(ctx1) }()
-	select {
-	case <-c1.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("c1 not ready")
-	}
-
-	// Wait for c1's tickers to register before advancing the clock.
-	testwait.External(t, "c1-tickers-registered",
-		func() bool { return clk.PendingTickers() >= 2 },
-		testtime.D2s, testtime.D1ms)
-
-	// Advance clock to trigger a tick; wait for step 1 to be committed
-	// (journal has StepCompleted v1 but NOT SagaSucceeded yet — it's a 2-step saga).
+	// Phase 1 — coordinator c1 drives step 1 only.
+	c1, c1Handles := startCoordinatorForResume(t, j, reg, clk, cfg, "c1")
 	tickOnceAndWait(t, clk, func() bool {
 		evs, err := j.Load(context.Background(), inst.ID)
 		return err == nil && len(evs) == 1 && evs[0].Kind == journal.KindStepCompleted
 	})
+	stopCoordinatorAndWait(t, c1, c1Handles, "c1")
 
-	// Stop coordinator 1 before step 2 can run.
-	cancel1()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
-	defer stopCancel()
-	if err := c1.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
-		t.Errorf("c1 Stop: %v", err)
-	}
-	select {
-	case <-done1:
-	case <-time.After(testtime.D3s):
-		t.Error("c1 goroutine did not exit")
-	}
+	// Phase 2 — coordinator c2 resumes from journal and drives step 2.
+	c2, c2Handles := startCoordinatorForResume(t, j, reg, clk, cfg, "c2")
+	defer stopCoordinatorAndWait(t, c2, c2Handles, "c2")
 
-	// Resume with coordinator 2 sharing the same journal.
-	em2 := newSafeFakeEmitter()
-	tx2 := newSafeFakeTxRunner()
-	disp2 := &recordingDispatcher{}
-	c2, err := NewCoordinator(j, tx2, em2, reg, clk, WithConfig(cfg), WithDispatcher(disp2))
-	if err != nil {
-		t.Fatalf("NewCoordinator c2: %v", err)
-	}
-
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	done2 := make(chan error, 1)
-	go func() { done2 <- c2.Start(ctx2) }()
-	select {
-	case <-c2.Ready():
-	case <-time.After(testtime.D2s):
-		t.Fatal("c2 not ready")
-	}
-	defer func() {
-		cancel2()
-		stopCtx2, stopCancel2 := context.WithTimeout(context.Background(), testtime.D3s)
-		defer stopCancel2()
-		_ = c2.Stop(stopCtx2)
-		select {
-		case <-done2:
-		case <-time.After(testtime.D3s):
-			t.Error("c2 goroutine did not exit")
-		}
-	}()
-
-	// Wait for c2's tickers to register before advancing the clock.
-	testwait.External(t, "c2-tickers-registered",
-		func() bool { return clk.PendingTickers() >= 2 },
-		testtime.D2s, testtime.D1ms)
-
-	// Advance clock to let coordinator 2 claim and drive step 2; wait for terminal.
-	// The lease from c1 has expired (c1 stopped, clock not advanced much yet), so
-	// c2 can re-claim. Advance past LeaseDuration to ensure re-claimability.
-	clk.Advance(testLeaseAdvance) // past the 60s lease expiry
-
+	// Past the 60s lease expiry so c2 can re-claim.
+	clk.Advance(testLeaseAdvance)
 	tickOnceAndWait(t, clk, func() bool {
 		evs, err := j.Load(context.Background(), inst.ID)
 		return err == nil && len(evs) == 3
@@ -815,28 +745,97 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	assertResumeJournal(t, evs, step2Ran, step2ReceivedState)
+}
 
-	// Expected: StepCompleted v1, StepCompleted v2, SagaSucceeded v3.
+// resumeCoordinatorHandles bundles the goroutine + cancel + done channel for
+// one coordinator in the resume-after-restart scenario. Used by
+// startCoordinatorForResume / stopCoordinatorAndWait.
+type resumeCoordinatorHandles struct {
+	cancel context.CancelFunc
+	done   chan error
+}
+
+// startCoordinatorForResume builds a coordinator, starts it in a goroutine,
+// waits for Ready, then waits for both loop tickers to register on the clock.
+// The returned handles are passed to stopCoordinatorAndWait to clean up.
+func startCoordinatorForResume(
+	t *testing.T,
+	j journal.Journal,
+	reg ksaga.Resolver,
+	clk *clockmock.FakeClock,
+	cfg Config,
+	name string,
+) (*Coordinator, resumeCoordinatorHandles) {
+	t.Helper()
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
+		WithConfig(cfg), WithDispatcher(&recordingDispatcher{}))
+	if err != nil {
+		t.Fatalf("NewCoordinator %s: %v", name, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		cancel()
+		t.Fatalf("%s not ready", name)
+	}
+	testwait.External(t, name+"-tickers-registered",
+		func() bool { return clk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
+	return c, resumeCoordinatorHandles{cancel: cancel, done: done}
+}
+
+// stopCoordinatorAndWait cancels the coordinator's ctx, calls Stop with a
+// generous budget, and waits for the Start goroutine to exit. Multiple
+// "did the goroutine exit" branches are isolated here so the calling test
+// stays under the cognitive-complexity ceiling.
+func stopCoordinatorAndWait(t *testing.T, c *Coordinator, h resumeCoordinatorHandles, name string) {
+	t.Helper()
+	h.cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
+	defer stopCancel()
+	if err := c.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("%s Stop: %v", name, err)
+	}
+	select {
+	case <-h.done:
+	case <-time.After(testtime.D3s):
+		t.Errorf("%s goroutine did not exit", name)
+	}
+}
+
+// assertResumeJournal validates the post-resume journal contents (3 events:
+// StepCompleted v1, StepCompleted v2, SagaSucceeded v3) + step2 invocation +
+// prevState passthrough. Kept here so the main test stays declarative.
+func assertResumeJournal(t *testing.T, evs []journal.Event, step2Ran bool, step2ReceivedState []byte) {
+	t.Helper()
 	if len(evs) != 3 {
 		t.Fatalf("journal event count = %d, want 3; events: %v", len(evs), evs)
 	}
-	if evs[0].Kind != journal.KindStepCompleted || evs[0].Version != 1 {
-		t.Errorf("evs[0] = {%s, v%d}, want {step_completed, v1}", evs[0].Kind, evs[0].Version)
+	expected := []struct {
+		kind    journal.EventKind
+		version int64
+		label   string
+	}{
+		{journal.KindStepCompleted, 1, "step_completed v1"},
+		{journal.KindStepCompleted, 2, "step_completed v2"},
+		{journal.KindSagaSucceeded, 3, "saga_succeeded v3"},
 	}
-	if evs[1].Kind != journal.KindStepCompleted || evs[1].Version != 2 {
-		t.Errorf("evs[1] = {%s, v%d}, want {step_completed, v2}", evs[1].Kind, evs[1].Version)
-	}
-	if evs[2].Kind != journal.KindSagaSucceeded || evs[2].Version != 3 {
-		t.Errorf("evs[2] = {%s, v%d}, want {saga_succeeded, v3}", evs[2].Kind, evs[2].Version)
+	for i, want := range expected {
+		if evs[i].Kind != want.kind || evs[i].Version != want.version {
+			t.Errorf("evs[%d] = {%s, v%d}, want {%s}", i, evs[i].Kind, evs[i].Version, want.label)
+		}
 	}
 	if !step2Ran {
 		t.Error("step2 was not executed by coordinator 2")
 	}
 	// Verify that foldEvents correctly passed step 1's output payload to step 2
 	// (L3 replay reconstruction discipline: prevState passthrough).
-	expectedPrevState := []byte(`{"step":1}`)
-	if !bytes.Equal(step2ReceivedState, expectedPrevState) {
-		t.Errorf("step2 prevState = %q, want %q", step2ReceivedState, expectedPrevState)
+	if expected := []byte(`{"step":1}`); !bytes.Equal(step2ReceivedState, expected) {
+		t.Errorf("step2 prevState = %q, want %q", step2ReceivedState, expected)
 	}
 }
 

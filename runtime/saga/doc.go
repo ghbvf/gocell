@@ -12,7 +12,7 @@
 //
 // # Layering
 //
-// The Definition / Step / Registry data primitives live in kernel/saga (a
+// The Definition / Step / Resolver data primitives live in kernel/saga (a
 // pure data package). The Coordinator + Dispatcher engine lives here. No
 // cell wraps runtime/saga in PR-03 — the cell-side wiring (including
 // RegisterRepoReady) lands in PR-09.

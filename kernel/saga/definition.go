@@ -14,6 +14,22 @@ import (
 // Coordinator owns transitions). prevState is the opaque JSON payload of the
 // previous step's success event (nil for the first step). Returns new opaque
 // JSON state, or a non-nil error to signal step failure.
+//
+// # Cooperative cancellation contract
+//
+// Step.Timeout / Definition.Timeout are enforced via context deadline only —
+// Go has no preemptive goroutine cancellation, so a Step.Run that ignores
+// ctx.Done() will block its driveOne goroutine until it returns naturally.
+// Best-effort recovery when this happens:
+//
+//   - Coordinator.Stop() drain budget eventually elapses; the goroutine is
+//     left running, but the heartbeat stops extending the lease.
+//   - Once the lease expires, another coordinator (or a future restart of the
+//     same coordinator) may re-claim the instance.
+//
+// Step authors MUST select on ctx.Done() inside any IO / blocking primitive.
+// PR-06 executor adds per-step kill via subprocess isolation; PR-03 relies
+// on author discipline + lease-expiry recovery.
 type StepFunc func(ctx context.Context, inst *Instance, prevState []byte) (newState []byte, err error)
 
 // Step is a single named unit inside a Definition. Name MUST be a valid
@@ -139,18 +155,24 @@ func (d *Definition) Validate() error {
 	return nil
 }
 
-// Registry resolves a Definition for a claimed Instance. Coordinator looks up
-// by Instance.DefinitionID. Returns ok=false when the DefinitionID isn't
+// Resolver resolves a Definition for a claimed Instance. Coordinator looks
+// up by Instance.DefinitionID. Returns ok=false when the DefinitionID isn't
 // registered (Coordinator treats this as terminal-Failed).
 //
+// The single-method interface is named Resolver (not "Registry") to follow
+// Go's "-er for single-method interfaces" convention (io.Reader, fmt.Stringer,
+// etc.); the implementing struct is still InMemoryRegistry because it owns
+// registration state, but the abstract role consumers depend on is "resolve a
+// definition by ID".
+//
 // Interface (not concrete map) so PR-07's contractgen can emit typed
-// SagaRegistry_<Name> values, and PR-08 archtest can check holders use the
+// SagaResolver_<Name> values, and PR-08 archtest can check holders use the
 // interface, not a closure.
-type Registry interface {
+type Resolver interface {
 	Lookup(definitionID idutil.SafeID) (*Definition, bool)
 }
 
-// InMemoryRegistry is a trivial map-backed Registry for tests and the PR-09
+// InMemoryRegistry is a trivial map-backed Resolver for tests and the PR-09
 // example. Construction validates each Definition via Definition.Validate;
 // the constructor returns an error on the first invalid definition. Lookup is
 // read-only and race-safe (no mutation after construction).
@@ -186,7 +208,7 @@ func NewInMemoryRegistry(defs ...*Definition) (*InMemoryRegistry, error) {
 	return r, nil
 }
 
-// Lookup implements Registry.
+// Lookup implements Resolver.
 func (r *InMemoryRegistry) Lookup(id idutil.SafeID) (*Definition, bool) {
 	d, ok := r.defs[id]
 	return d, ok

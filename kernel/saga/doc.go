@@ -38,9 +38,11 @@
 //
 // # Not in this package (deferred, with their consumers)
 //
-//   - Definition / Step / StepFunc / CompensateFunc / Registry /
-//     InMemoryRegistry live in this same package (kernel/saga). The
-//     Coordinator engine that executes them lives in runtime/saga.
+//   - Definition / Step / StepFunc / Resolver / InMemoryRegistry live in this
+//     same package (kernel/saga). The Coordinator engine that executes them
+//     lives in runtime/saga. (CompensateFunc + Step.Compensate were removed
+//     in PR-03 round-2 and re-introduced in PR-06 alongside the compensation
+//     executor.)
 //   - RetryPolicy and per-step / overall timeout execution land in
 //     runtime/saga/executor, alongside backoff, jitter, and the sweeper —
 //     following kernel/command, which ships its Timeouts config with the

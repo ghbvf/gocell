@@ -26,9 +26,9 @@ func makeTestDef(id string) *saga.Definition {
 }
 
 // TestInMemoryRegistry_Conformance runs the sagaregtest conformance suite
-// against InMemoryRegistry, verifying the full Registry.Lookup contract.
-// The conformance suite is reusable so future Registry implementations (e.g.
-// PR-07 contractgen-emitted SagaRegistry_<Name>) can plug into it with a
+// against InMemoryRegistry, verifying the full Resolver.Lookup contract.
+// The conformance suite is reusable so future Resolver implementations (e.g.
+// PR-07 contractgen-emitted SagaResolver_<Name>) can plug into it with a
 // single call.
 //
 // This test lives in package saga_test (external test package) to avoid the
@@ -41,14 +41,14 @@ func TestInMemoryRegistry_Conformance(t *testing.T) {
 		makeTestDef("saga-conf-c"),
 	}
 	sagaregtest.RunConformance(t,
-		func() saga.Registry {
+		func() saga.Resolver {
 			reg, err := saga.NewInMemoryRegistry(defs...)
 			if err != nil {
 				t.Fatalf("NewInMemoryRegistry: %v", err)
 			}
 			return reg
 		},
-		func() saga.Registry {
+		func() saga.Resolver {
 			reg, err := saga.NewInMemoryRegistry()
 			if err != nil {
 				t.Fatalf("NewInMemoryRegistry (empty): %v", err)
