@@ -64,6 +64,28 @@
 //	(d) alias conversion `type r = redactedErrorMsg; r(x)` — types.Unalias
 //	    collapses the alias to the same named type, so guard 1 catches it.
 //	(e) funnel deletion/rename → vacuous green — guard 3 fails instead.
+//	(f) outflow `string(redactedErrorMsg)` (in LogValue / the ErrorMsg
+//	    accessor) — direction is redactedErrorMsg → string, NOT
+//	    string → redactedErrorMsg; isRedactedConversion only intercepts inflow
+//	    conversions TO the newtype. Outflow is safe by construction (the value
+//	    already passed through RedactString before being stored), so guard 1
+//	    deliberately does not flag it.
+//	(g) test-file `redactedErrorMsg(...)` literals — guard 1 loads with
+//	    RunTyped(Tests:false), so verbose_shape_test.go's white-box
+//	    redactedErrorMsg("") literals are out of scope by construction.
+//	    Switching to Tests:true would require an allowlist for those sites.
+//
+// Reverse self-check posture (charter §载体决策原则): the wire-shape detection
+// logic is exercised by synthetic reverse tests (TestHealthVerboseWire*_Detects*)
+// that feed crafted verboseShapeScan values and assert the pure violation
+// helpers fire — proving non-vacuity without touching production. The funnel
+// rule has NO committed reverse fixture by construction: redactedErrorMsg is
+// unexported, so an out-of-funnel conversion is unconstructable in any package
+// other than runtime/http/health — the only way to inject one is to mutate that
+// package. Non-vacuity is therefore proved by mutation-RED against production
+// (recorded in the #947 PR, 5/5 guards red on mutation, green on revert) plus
+// the structural anti-vacuous Fatalf in guards 2 & 3. This is the same reason
+// PR #552 round-5 deleted its two reverse archtests ("compile-time 已不可表达").
 //
 // HEALTH-VERBOSE-SCAN-COVERAGE-01 was removed in #947: its purpose (surface a
 // type relocation that would let the gates pass vacuously) is now intrinsic to
@@ -200,6 +222,46 @@ func jsonTagFirstSegment(tag *ast.BasicLit) string {
 	return strings.SplitN(jsonTag, ",", 2)[0]
 }
 
+// verboseFieldSetViolations returns the Go-field-set violations of scan against
+// healthVerboseWireAllowedFields (embedded field, extra field, missing required
+// field). Pure (no *testing.T) so the reverse self-check can exercise it on a
+// synthetic scan; the Test funcs map each violation to a t.Errorf.
+func verboseFieldSetViolations(scan verboseShapeScan) []string {
+	var v []string
+	for _, line := range scan.embedded {
+		v = append(v, fmt.Sprintf("%s:%d embedded field forbidden — the wire shape carries no "+
+			"error text by design (channel d ops-diagnostics owns it)", healthVerboseShapeName, line))
+	}
+	seen := make(map[string]struct{}, len(scan.fields))
+	for _, fld := range scan.fields {
+		seen[fld.name] = struct{}{}
+		if _, ok := healthVerboseWireAllowedFields[fld.name]; !ok {
+			v = append(v, fmt.Sprintf("field %q not in allowlist", fld.name))
+		}
+	}
+	for want := range healthVerboseWireAllowedFields {
+		if _, ok := seen[want]; !ok {
+			v = append(v, fmt.Sprintf("required field %q missing — removing a field changes the wire payload", want))
+		}
+	}
+	return v
+}
+
+// verboseJSONTagViolations returns the json-tag violations of scan against
+// healthVerboseWireJSONTags (the actual on-wire field names). Pure (see
+// verboseFieldSetViolations rationale). Untracked Go names are skipped —
+// field-set drift is verboseFieldSetViolations's job.
+func verboseJSONTagViolations(scan verboseShapeScan) []string {
+	var v []string
+	for _, fld := range scan.fields {
+		want, tracked := healthVerboseWireJSONTags[fld.name]
+		if tracked && fld.jsonTag != want {
+			v = append(v, fmt.Sprintf("field %s json tag = %q, want %q", fld.name, fld.jsonTag, want))
+		}
+	}
+	return v
+}
+
 // TestHealthVerboseWireFieldSetFrozen enforces the Go field set half of
 // HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01.
 func TestHealthVerboseWireFieldSetFrozen(t *testing.T) {
@@ -211,27 +273,10 @@ func TestHealthVerboseWireFieldSetFrozen(t *testing.T) {
 			"healthVerboseShapeName + healthPackageRelativeRoot along with the move",
 			ruleHealthVerboseWireShapeFrozen, healthVerboseShapeName, healthPackageRelativeRoot)
 	}
-
-	for _, line := range scan.embedded {
-		t.Errorf("%s: %s:%d embedded field forbidden — the wire shape carries no error text "+
-			"by design (channel d ops-diagnostics owns it)",
-			ruleHealthVerboseWireShapeFrozen, healthVerboseShapeName, line)
-	}
-
-	seen := make(map[string]struct{}, len(scan.fields))
-	for _, fld := range scan.fields {
-		seen[fld.name] = struct{}{}
-		if _, ok := healthVerboseWireAllowedFields[fld.name]; !ok {
-			t.Errorf("%s: field %q not in allowlist; adding a wire field requires updating "+
-				"healthVerboseWireAllowedFields + healthVerboseWireJSONTags and amending ADR "+
-				"202605171200 §2 D3 + §4", ruleHealthVerboseWireShapeFrozen, fld.name)
-		}
-	}
-	for want := range healthVerboseWireAllowedFields {
-		if _, ok := seen[want]; !ok {
-			t.Errorf("%s: required field %q missing — removing a field changes the wire payload",
-				ruleHealthVerboseWireShapeFrozen, want)
-		}
+	for _, msg := range verboseFieldSetViolations(scan) {
+		t.Errorf("%s: %s — adding/removing/renaming a wire field requires updating "+
+			"healthVerboseWireAllowedFields + healthVerboseWireJSONTags and amending ADR "+
+			"202605171200 §2 D3 + §4", ruleHealthVerboseWireShapeFrozen, msg)
 	}
 }
 
@@ -242,20 +287,51 @@ func TestHealthVerboseWireJSONTagsFrozen(t *testing.T) {
 
 	scan := scanVerboseShape(t)
 	if !scan.found {
-		t.Fatalf("%s: %s struct not found under %s",
+		t.Fatalf("%s: %s struct not found under %s — if the type was relocated, update "+
+			"healthVerboseShapeName + healthPackageRelativeRoot along with the move",
 			ruleHealthVerboseWireShapeFrozen, healthVerboseShapeName, healthPackageRelativeRoot)
 	}
+	for _, msg := range verboseJSONTagViolations(scan) {
+		t.Errorf("%s: %s — the wire field name is driven by the json tag, not the Go field "+
+			"name; changing it drifts the /readyz?verbose body. Update healthVerboseWireJSONTags "+
+			"and amend ADR 202605171200 §2 D3 + §4", ruleHealthVerboseWireShapeFrozen, msg)
+	}
+}
 
-	for _, fld := range scan.fields {
-		want, tracked := healthVerboseWireJSONTags[fld.name]
-		if !tracked {
-			continue // field-set drift is TestHealthVerboseWireFieldSetFrozen's job
-		}
-		if fld.jsonTag != want {
-			t.Errorf("%s: field %s json tag = %q, want %q — the wire field name is driven by "+
-				"the json tag, not the Go field name; changing it drifts the /readyz?verbose body",
-				ruleHealthVerboseWireShapeFrozen, fld.name, fld.jsonTag, want)
-		}
+// TestHealthVerboseWireFieldSetFrozen_DetectsViolation is the reverse self-check
+// for verboseFieldSetViolations: a synthetic scan with an extra field + embedded
+// field + missing required field must produce violations (non-vacuity), and the
+// compliant shape must produce none.
+func TestHealthVerboseWireFieldSetFrozen_DetectsViolation(t *testing.T) {
+	t.Parallel()
+
+	bad := verboseShapeScan{found: true, embedded: []int{10}, fields: []verboseFieldDesc{{name: "Foo"}}}
+	if len(verboseFieldSetViolations(bad)) == 0 {
+		t.Errorf("%s: field-set check is vacuous — extra/embedded/missing fields produced no violation",
+			ruleHealthVerboseWireShapeFrozen)
+	}
+	good := verboseShapeScan{found: true, fields: []verboseFieldDesc{{name: "Status"}, {name: "DurationMs"}}}
+	if v := verboseFieldSetViolations(good); len(v) != 0 {
+		t.Errorf("%s: compliant field set must yield no violations, got %v", ruleHealthVerboseWireShapeFrozen, v)
+	}
+}
+
+// TestHealthVerboseWireJSONTagsFrozen_DetectsViolation is the reverse self-check
+// for verboseJSONTagViolations: a drifted tag must produce a violation, and the
+// compliant tags must produce none.
+func TestHealthVerboseWireJSONTagsFrozen_DetectsViolation(t *testing.T) {
+	t.Parallel()
+
+	bad := verboseShapeScan{found: true, fields: []verboseFieldDesc{{name: "Status", jsonTag: "state"}}}
+	if len(verboseJSONTagViolations(bad)) == 0 {
+		t.Errorf("%s: json-tag check is vacuous — a drifted tag produced no violation",
+			ruleHealthVerboseWireShapeFrozen)
+	}
+	good := verboseShapeScan{found: true, fields: []verboseFieldDesc{
+		{name: "Status", jsonTag: "status"}, {name: "DurationMs", jsonTag: "duration_ms"},
+	}}
+	if v := verboseJSONTagViolations(good); len(v) != 0 {
+		t.Errorf("%s: compliant json tags must yield no violations, got %v", ruleHealthVerboseWireShapeFrozen, v)
 	}
 }
 
@@ -286,19 +362,27 @@ func isRedactedConversion(info *types.Info, call *ast.CallExpr) bool {
 	return isHealthRedactedErrorMsgType(tv.Type)
 }
 
+// scanFuncDeclConversions flags every redactedErrorMsg(x) conversion inside a
+// FuncDecl body other than newRedactedErrorMsg's.
+//
+// EachInChildren[ast.FuncDecl] (depth-1) suffices: Go's AST places every
+// top-level function AND method declaration (incl. ones with a Recv) as a direct
+// child of *ast.File; FuncLit closures inside bodies are reached by the inner
+// EachInSubtree[ast.CallExpr]. The funnel-skip is a func-name string compare,
+// but it is closed-loop, not a Soft anchor: Go forbids two top-level decls
+// sharing a name within a package, so the name maps 1:1 to the object, and
+// guard 3 (TestHealthRedactedErrorMsgFunnelFuncSig) fails first if that name is
+// deleted/renamed — so a rename can never silently re-open this skip.
 func scanFuncDeclConversions(p *Pass, f *ast.File) []Diagnostic {
 	var ds []Diagnostic
 	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
-			return
+			return // bodiless decl (asm / linkname) — no conversion to scan
 		}
-		fnName := ""
-		if fd.Name != nil {
-			fnName = fd.Name.Name
-		}
-		if fnName == healthRedactedErrorMsgFunnelFuncName {
+		if fd.Name.Name == healthRedactedErrorMsgFunnelFuncName {
 			return // the sanctioned funnel — conversions here are allowed
 		}
+		fnName := fd.Name.Name
 		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 			if !isRedactedConversion(p.TypesInfo, call) {
 				return
@@ -458,6 +542,10 @@ func assertFunnelFuncSignature(t *testing.T, pkg *types.Package) {
 	}
 }
 
+// funnelSignatureMatches reports whether sig is func(error) redactedErrorMsg.
+// types.Universe.Lookup("error").Type() is the predeclared error interface;
+// types.Identical compares interfaces structurally (correct regardless of how
+// the error reference was spelled at the call site).
 func funnelSignatureMatches(sig *types.Signature) bool {
 	if sig.Params().Len() != 1 || sig.Results().Len() != 1 {
 		return false
