@@ -67,9 +67,9 @@ pg := cap.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutboxWriter(
 
 ### 3. SharedDeps：删 `SharedPGPool`，加 `PG`/`Redis` capability handle
 
-- `LoadSharedDepsFromEnv` 按 `assembly.yaml capabilities:[]` provision：postgres 模式下 open pool + `verifyPGPreconditions`（schema version / shape / invalid-index——用 bundle-global `adapterpg.MigrationsFS()`，本就是整 bundle 的共享迁移集，非 configcore 私有）+ 构造 `cap.PGProvider`，写 `SharedDeps.PG`；redis 同理写 `SharedDeps.Redis`。
-- **删** `SharedDeps.SharedPGPool *adapterpg.Pool`。
-- pool 的 `ManagedResource` 由 assembly 在 `defaultRuntimeOptions` 输出（先于 cellOpts append）注册 → LIFO 下 pool 最后 close（晚于所有 consumer）。
+- `runCorebundle` 在 `LoadSharedDepsFromEnv` 之后、`BuildApp` 之前调用 `provisionCapabilities`（`cap_wiring.go`），遍历 codegen 派生的 `generatedCapabilities()`（单源 = `assembly.yaml capabilities:[]`）逐项 provision：postgres 模式下 open pool + `verifyPGPreconditions`（schema version / shape / invalid-index——用 bundle-global `adapterpg.MigrationsFS()`，本就是整 bundle 的共享迁移集，非 configcore 私有）+ 构造 `cap.PGProvider` 写 `SharedDeps.PG`；redis 包装 `buildSharedReplayDeps` 已建的 client 写 `SharedDeps.Redis`（client 本身仍在 `buildSharedReplayDeps` 构造，claimer/nonce 同源）。memory 模式 `SharedDeps.PG` 保持 nil，cell 走 in-memory 路径。
+- **删** `SharedDeps.SharedPGPool *adapterpg.Pool`（+ `RedisClient` 公开字段，改 `Redis cap.RedisProvider` + unexported `redisClient`）。
+- pool 的 `ManagedResource`（`SharedDeps.poolMR`）由 `runtimeBaseOptions`（`defaultRuntimeOptions` 的一部分，先于 cellOpts append）注册 → LIFO 下 pool 最后 close（晚于所有 consumer）。`provisionCapabilities` 与 `bootstrap.Run` 之间的失败窗口由 `runCorebundle` 的 `handedToBootstrap` defer 守卫关池。
 - **删** `MODULE-ORDER-CONFIGCORE-FIRST-01`（`tools/archtest/module_order_test.go`）+ `main_test.go:65` 断言：前提（configcore 创建 pool）消失。
 
 留在 SharedDeps（composition-state，非外部系统 capability）：`BootstrapLedgerStore`（audit→access cell-domain store publish-back，`MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01` 不变）、`Clock`、`JWTDeps`、`PromStack`、`EventBus`、`InternalGuard`、listener addrs、`vaultTransitMetricsOnce`。
@@ -79,14 +79,20 @@ pg := cap.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutboxWriter(
 - **outbox relay 仍归 configcore**：relay 是唯一实例、metric label `configcore`、经 `WithRelay`（`RELAY-SOLE-HOLDER-01` 守）。它从 `shared.PG.DB()` 取 pool handle 构造，不再自开 pool。保留 configcore 归属避免 observability label churn；relay 不要求 module 顺序（只需 pool 存活，LIFO 已保证 pool 后 close）。
 - **protocol 构造**（`cas/session/ledger.NewProtocol`）仍 composition-root-only：module 文件在 `cmd/corebundle/ package main` 内，在既有 archtest allowlist 内。
 
-## Enforcement（funnel 预声明，下游 PR 落地）
+## Enforcement（已落地）
 
-`CAPABILITY-PROVIDER-FUNNEL-01`（`tools/archtest/capability_provider_funnel_test.go`）：
+四个机制协同；下表是 amendment 后的真实形态（取代落地前的"funnel 预声明、上游 Hard codegen funnel + 下游 Hard"草案）：
 
-| 方向 | 形态 | 评级 |
-|------|------|------|
-| 上游 | `assembly.yaml capabilities` schema `enum` + parser reject；生成 capability wiring regenerate-and-diff 字节锁（`gocell generate assembly --verify`） | Hard（codegen funnel + golden） |
-| 下游 | `cap.*Provider` sealed（impl 私有于 `cap`，唯一构造 `cap.NewPGProvider`）→ 包外不可伪造 provider；archtest 禁 `cmd/<id>/*_module.go` 在 funnel 外直接 `adapterpg.NewTxManager/NewPool` / `adapterredis.NewCache`（caller allowlist = assembly 构造站点 `cmd/corebundle/cap_wiring.go` + `_test.go`） | Hard（sealed construction + caller allowlist；镜像 `CAS-PROTOCOL-COMPOSITION-ROOT-01`） |
+| # | 约束 | 载体 | 评级 |
+|---|------|------|------|
+| 1 | `assembly.yaml capabilities` ∈ 封闭集 `{postgres,redis,rabbitmq}`、无重复 | `gocell validate` governance rule **FMT-35** + 单源 `metadata.CapabilityEnum` + `IsKnownCapability`；schema enum 由 `TestSchemaConstantsMatchSchemaLiterals` 字节对齐 | **Medium**（governance rule + 测试守卫；3 值封闭集不值得引 codegen funnel——K8s 旧 enum 模式同构，校验落 admission 层而非 parser） |
+| 2 | `modules_gen.go`（含 `generatedCapabilities()`）= `assembly.yaml` 派生 | `gocell verify codegen-assembly` regenerate-and-diff 字节锁 | **Hard**（codegen funnel + golden；既有机制，现覆盖 capabilities 分支） |
+| 3 | cell module 不能伪造 bypass provider | `cap.PGProvider`/`RedisProvider` sealed（unexported marker + 私有 impl + 唯一构造 `cap.NewPGProvider`/`NewRedisProvider`），包外不可表达 | **Hard**（sealed construction，type system） |
+| 4 | `cmd/<id>/*_module.go` 不直接构造**共享基建** | archtest **CAPABILITY-PROVIDER-FUNNEL-01**（`tools/archtest/capability_provider_funnel_test.go`）：ban `adapterpg.NewPool`/`NewTxManager`/`NewOutboxWriter` + `adapterredis.NewClient`，caller allowlist = `cmd/corebundle/cap_wiring.go` + `_test.go`；**不 ban** per-cell 派生（`NewSessionStore`/`NewCache`/`NewRedisDriver`/…，从注入 handle 构造，CLAUDE.md observability §per-cell 资源约定）；镜像 `CAS-PROTOCOL-COMPOSITION-ROOT-01` | **Medium**（type-aware caller-allowlist，非编译期） |
+
+机制 3（上游 Hard）+ 机制 4（下游 Medium）= ai-robust.md §"Funnel 双向锁评级"允许的 **Hard 上游 + Medium 下游过渡形态**；下游→Hard 升级路径（把 `cmd/corebundle` module 文件移出 `package main` 使共享基建构造 import-unreachable）由 gh issue **#988** 跟踪。
+
+落地前草案把上游写成"Hard codegen funnel"——**经评估撤回**：capabilities 是 3 值封闭集，建 codegen funnel（工具链 + 模板 + meta-archtest）的成本不匹配收益，改用项目既有 `DeployTemplateEnum`/`FMT-30` 同构的 governance + test-guard（机制 1，Medium）。同理把下游单格"Hard（sealed + caller allowlist）"拆为机制 3（sealed=Hard）与机制 4（archtest caller-allowlist=Medium）两栏，因为 caller-allowlist archtest 本身不是编译期 Hard。
 
 ## Rejected alternatives
 

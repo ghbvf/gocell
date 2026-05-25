@@ -95,20 +95,23 @@ func (AuditCoreModule) Provide(
 	}
 
 	if shared.Topology.StorageBackend == "postgres" {
-		if shared.SharedPGPool == nil {
-			return nil, nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires SharedPGPool " +
-				"(ConfigCoreModule must run before AuditCoreModule)")
+		if shared.PG == nil {
+			return nil, nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires the postgres capability provider " +
+				"(provisionCapabilities must run before BuildApp)")
 		}
-		txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
-		pgStore, storeErr := adapterpg.NewLedgerStore(shared.SharedPGPool.DB(), txMgr, protocol, shared.Clock)
+		db, poolErr := pgxPoolFromProvider(shared.PG)
+		if poolErr != nil {
+			return nil, nil, nil, fmt.Errorf("auditcore: %w", poolErr)
+		}
+		txMgr := shared.PG.TxManager()
+		pgStore, storeErr := adapterpg.NewLedgerStore(db, txMgr, protocol, shared.Clock)
 		if storeErr != nil {
 			return nil, nil, nil, fmt.Errorf("auditcore LedgerStore: %w", storeErr)
 		}
 		ledgerStore = pgStore
-		writer := adapterpg.NewOutboxWriter(shared.Clock)
 		auditOpts = append(
 			auditOpts,
-			auditcore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
+			auditcore.WithOutboxDeps(nil, outbox.WrapWriterForCell(shared.PG.OutboxWriter())),
 			auditcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		)
 	} else {

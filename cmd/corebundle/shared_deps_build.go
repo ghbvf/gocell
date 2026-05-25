@@ -137,7 +137,7 @@ func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.C
 func adapterInfoForSharedDeps(shared *SharedDeps) map[string]string {
 	info := shared.Topology.AdapterInfo()
 	redisState := "not-configured"
-	if shared.RedisClient != nil {
+	if shared.redisClient != nil {
 		redisState = "configured"
 	}
 	nonceStoreKind := string(kauth.NonceStoreKindNoop)

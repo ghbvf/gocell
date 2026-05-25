@@ -281,9 +281,10 @@ type AssemblyMeta struct {
 	// Capabilities lists assembly-level shared infrastructure capabilities
 	// (postgres / redis / rabbitmq) provisioned once by the composition root
 	// and injected into consuming cell modules via runtime/cap. The closed
-	// value set is mirrored by runtime/cap.Capability + assembly.schema.json
-	// enum; ParseFS rejects any value outside it (CAPABILITY-PROVIDER-FUNNEL-01
-	// upstream Hard).
+	// value set is mirrored by CapabilityEnum + runtime/cap.Capability +
+	// assembly.schema.json enum. Unknown or duplicate values are rejected by
+	// `gocell validate` governance rule FMT-35 (validation-time, not by ParseFS —
+	// the parser stays lenient, matching Kubernetes admission-layer validation).
 	Capabilities        []string  `yaml:"capabilities,omitempty"`
 	Build               BuildMeta `yaml:"build,omitempty"`
 	MaxConsistencyLevel string    `yaml:"-"` // derived; yaml occurrence rejected by KnownFields

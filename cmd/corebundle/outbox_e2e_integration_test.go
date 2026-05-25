@@ -62,6 +62,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/cap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -130,24 +131,32 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
-	modResult, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+	// Open a dedicated pool for e2e wiring; pool provisioning has moved to
+	// provisionCapabilities, so we inject a cap.PGProvider directly.
+	e2ePool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
+	require.NoError(t, err, "open e2e PG pool must succeed")
+	t.Cleanup(func() { _ = e2ePool.Close(context.Background()) })
+
+	e2ePGProvider := cap.NewPGProvider(
+		adapterpg.NewTxManager(e2ePool),
+		adapterpg.NewOutboxWriter(clock.Real()),
+		e2ePool.DB(),
+	)
+
+	modResult, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PGConfig:         adapterpg.Config{DSN: pgConnStr},
+		PG:               e2ePGProvider,
 		Publisher:        eb,
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
 		Clock:            clock.Real(),
 	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
-	pgRes := modResult.PoolResource
 	cellAdapterOpts := modResult.CellOptions
 	relayBootstrapOpts := modResult.BootstrapOpts
-	require.NotNil(t, pgRes,
-		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil ManagedResource in PG mode")
-	// Relay is now registered via independent bootstrap opts, not via PoolResource.Worker().
+	// Relay is registered via independent bootstrap opts, not via a PoolResource.
 	require.NotEmpty(t, relayBootstrapOpts,
 		"A11 regression guard: bootstrapOpts MUST carry relay ManagedResource in PG mode")
-	t.Cleanup(func() { _ = pgRes.Close(context.Background()) })
 
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
 	// This is the F1 regression guard: if the bus forwards envelope-wrapped
@@ -455,21 +464,30 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
-	modResult, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+	// Open a dedicated pool for e2e wiring; pool provisioning has moved to
+	// provisionCapabilities, so we inject a cap.PGProvider directly.
+	e2ePool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
+	require.NoError(t, err, "open e2e PG pool must succeed")
+	t.Cleanup(func() { _ = e2ePool.Close(context.Background()) })
+
+	e2ePGProvider := cap.NewPGProvider(
+		adapterpg.NewTxManager(e2ePool),
+		adapterpg.NewOutboxWriter(clock.Real()),
+		e2ePool.DB(),
+	)
+
+	modResult, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PGConfig:         adapterpg.Config{DSN: pgConnStr},
+		PG:               e2ePGProvider,
 		Publisher:        eb,
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
 		Clock:            clock.Real(),
 	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
-	pgRes := modResult.PoolResource
 	cellAdapterOpts := modResult.CellOptions
 	relayBootstrapOpts := modResult.BootstrapOpts
-	require.NotNil(t, pgRes, "PoolResource must be non-nil in postgres mode")
 	require.NotEmpty(t, relayBootstrapOpts, "relay bootstrap opts must be non-empty in postgres mode")
-	t.Cleanup(func() { _ = pgRes.Close(context.Background()) })
 
 	// --- Step 4: Stub internal server —
 	// Simulates GET /internal/v1/config/{key} — the endpoint that

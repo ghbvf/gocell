@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/cap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
@@ -45,8 +46,12 @@ func setupPostgresForMain(t *testing.T) (string, func()) {
 }
 
 // TestBuildConfigCoreOpts_Postgres_SchemaMatched verifies that buildConfigCoreOpts
-// returns (non-nil ManagedResource, non-nil opts, nil error) when a real PostgreSQL
-// container is available and all migrations have been applied.
+// returns (non-nil cell options, non-empty bootstrap opts, nil error) when a real
+// PostgreSQL container is available and all migrations have been applied.
+//
+// Pool provisioning has moved to provisionCapabilities; this test opens a pool
+// directly, wraps it into a cap.PGProvider, and injects it so buildConfigCoreOpts
+// can consume it without opening its own pool.
 func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
@@ -54,20 +59,28 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-apply all migrations so schema version matches the binary.
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
+	migPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	require.NoError(t, err, "pool for migration prep must succeed")
 
-	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(migPool, testAdapterMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err, "NewMigrator must succeed")
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
-	_ = pool.Close(ctx)
+	_ = migPool.Close(ctx)
 
-	// Pass the DSN directly; buildConfigCoreOpts no longer reads env vars.
+	// Open a fresh pool for the test; wrap into PGProvider for injection.
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
+	require.NoError(t, err, "open pool for test must succeed")
+	defer func() { _ = pool.Close(ctx) }()
+
+	txMgr := adapterpg.NewTxManager(pool)
+	writer := adapterpg.NewOutboxWriter(clock.Real())
+	pgProvider := cap.NewPGProvider(txMgr, writer, pool.DB())
+
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
-	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PGConfig:         adapterpg.Config{DSN: dsn},
+		PG:               pgProvider,
 		Publisher:        discardPublisher{},
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
@@ -75,19 +88,18 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
-	require.NotNil(t, result.PoolResource, "ManagedResource must be non-nil on success")
 	assert.NotNil(t, result.CellOptions, "cellOpts must be non-nil")
-	// Relay is now registered independently via bootstrap opts, not via PoolResource.Worker().
+	// Relay is registered via bootstrap opts, not via PoolResource.
 	assert.NotEmpty(t, result.BootstrapOpts, "bootstrapOpts must carry relay ManagedResource (A11 wire guard)")
-	assert.Nil(t, result.PoolResource.Worker(), "PoolResource.Worker() must be nil; relay is registered via bootstrapOpts")
-
-	// Close pool via ManagedResource so pool.Close(ctx) is called correctly.
-	require.NoError(t, result.PoolResource.Close(ctx))
 }
 
-// TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that buildConfigCoreOpts
-// returns an error (with schema guard message) and a nil ManagedResource when the
+// TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that
+// verifyPGPreconditions returns an error (with schema guard message) when the
 // DB schema version does not match the binary.
+//
+// Schema verification has moved to provisionPostgres / verifyPGPreconditions;
+// this test calls verifyPGPreconditions directly so the guard is still covered
+// at integration level.
 func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
@@ -108,27 +120,16 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	_, execErr := pool.DB().Exec(ctx,
 		"DELETE FROM schema_migrations WHERE version_id > 3")
 	require.NoError(t, execErr, "deleting version records must succeed")
+
+	// Schema verification now lives in verifyPGPreconditions (provisionPostgres).
+	// Call it directly to assert the schema guard fires on a lagged DB.
+	err = verifyPGPreconditions(ctx, pool)
+
 	_ = pool.Close(ctx)
 
-	// Pass the DSN directly; buildConfigCoreOpts no longer reads env vars.
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
-
-	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
-		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PGConfig:         adapterpg.Config{DSN: dsn},
-		Publisher:        discardPublisher{},
-		MetricsProvider:  kernelmetrics.NopProvider{},
-		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
-	})
-
-	require.Error(t, err, "buildConfigCoreOpts must return error when schema is lagged")
+	require.Error(t, err, "verifyPGPreconditions must return error when schema is lagged")
 	assert.Contains(t, err.Error(), "schema guard",
 		"error must mention schema guard")
-	assert.Nil(t, result.CellOptions, "cellOpts must be nil on schema mismatch")
-	assert.Nil(t, result.BootstrapOpts, "bootstrapOpts must be nil on schema mismatch")
-	// ManagedResource must be nil — pool was closed inside buildConfigCoreOpts before returning error.
-	assert.Nil(t, result.PoolResource, "ManagedResource must be nil on schema mismatch (error path, pool was closed)")
 }
 
 // TestIntegration_AdminExists_OrphanSwept was deleted by PR #392 follow-up:

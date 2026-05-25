@@ -1,6 +1,12 @@
 // invariants:
-//   - INVARIANT: MODULE-ORDER-CONFIGCORE-FIRST-01
 //   - INVARIANT: MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01
+//
+// MODULE-ORDER-CONFIGCORE-FIRST-01 was removed when the postgres pool moved out
+// of ConfigCoreModule.Provide into the assembly-level provisionCapabilities
+// (cap_wiring.go): the pool is provisioned before BuildApp and registered as the
+// first ManagedResource by runtimeBaseOptions, so cell module order no longer
+// carries the pool happens-before contract. See ADR
+// docs/architecture/202605251500-adr-capability-provider-interface.md §Decision.
 
 package archtest
 
@@ -21,7 +27,6 @@ import (
 )
 
 const (
-	ruleModuleOrderConfigCoreFirst01           = "MODULE-ORDER-CONFIGCORE-FIRST-01"
 	ruleModuleOrderAuditcoreBeforeAccesscore01 = "MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01"
 )
 
@@ -30,28 +35,16 @@ type assemblyOrderFixture struct {
 	Cells []string `yaml:"cells"`
 }
 
-func TestModuleOrderConfigCoreFirst01(t *testing.T) {
-	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "assemblies", "corebundle", "assembly.yaml")))
-	require.NoError(t, err)
-
-	var asm assemblyOrderFixture
-	require.NoError(t, yaml.Unmarshal(body, &asm))
-	require.NotEmpty(t, asm.Cells)
-	assert.Equal(t, "configcore", asm.Cells[0],
-		"%s: assemblies/corebundle/assembly.yaml cells order is the runtime module order; configcore must stay first",
-		ruleModuleOrderConfigCoreFirst01)
-}
-
 // TestModuleOrderAuditcoreBeforeAccesscore01 enforces that auditcore's
 // CellModule.Provide runs before accesscore's so that
 // SharedDeps.BootstrapLedgerStore is populated by the time AccessCoreModule
 // builds the bootstrap auth-fail observer via audit.NewBootstrapAuthFailObserver
 // (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2).
 //
-// MODULE-ORDER-CONFIGCORE-FIRST-01 still owns the slot-zero invariant;
-// this rule constrains the relative order of auditcore and accesscore
-// without coupling to the configcore-first check.
+// This is now the only cell-module-order invariant: the postgres pool no longer
+// rides on slot-zero (configcore) — it is provisioned assembly-level before
+// BuildApp (provisionCapabilities), so the former
+// MODULE-ORDER-CONFIGCORE-FIRST-01 was removed.
 func TestModuleOrderAuditcoreBeforeAccesscore01(t *testing.T) {
 	root := findModuleRoot(t)
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "assemblies", "corebundle", "assembly.yaml")))

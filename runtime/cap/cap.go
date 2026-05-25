@@ -7,8 +7,12 @@ import (
 
 // Capability names an assembly-level shared infrastructure resource declared in
 // assembly.yaml `capabilities` and (in #855) consumed via cell.yaml `requires`.
-// The closed value set below is mirrored by the assembly.schema.json enum; the
-// parser rejects any value outside it (upstream Hard funnel).
+// The closed value set below is the single source mirrored by the
+// assembly.schema.json enum (kept in lockstep by kernel/metadata/schemas
+// TestSchemaConstantsMatchSchemaLiterals). Unknown or duplicate values are
+// rejected by `gocell validate` governance rule FMT-35 at validation time — not
+// at parse time: ParseFS stays lenient, matching Kubernetes admission-layer enum
+// validation rather than parse-time rejection.
 type Capability string
 
 const (

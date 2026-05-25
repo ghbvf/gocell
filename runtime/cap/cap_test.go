@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
 // fakeTxRunner / fakeWriter are minimal kernel-typed stand-ins so the test can
@@ -35,8 +34,12 @@ func TestNewPGProvider_ThreadsPrimitives(t *testing.T) {
 	if p == nil {
 		t.Fatal("NewPGProvider returned nil")
 	}
-	var _ persistence.TxRunner = p.TxManager()
-	var _ outbox.Writer = p.OutboxWriter()
+	if p.TxManager() == nil {
+		t.Error("TxManager() must thread the injected runner (got nil)")
+	}
+	if p.OutboxWriter() == nil {
+		t.Error("OutboxWriter() must thread the injected writer (got nil)")
+	}
 	if got := p.DB(); got != db {
 		t.Fatalf("DB() = %v, want injected handle %v", got, db)
 	}

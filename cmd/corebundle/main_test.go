@@ -62,7 +62,6 @@ func TestCorebundleModulesMatchAssemblyMetadataOrder(t *testing.T) {
 		gotIDs = append(gotIDs, module.ID())
 	}
 	assert.Equal(t, asm.Cells, gotIDs)
-	assert.Equal(t, "configcore", gotIDs[0], "configcore must stay first because it owns SharedPGPool creation")
 }
 
 // TestCorebundleModulesRejectDrift verifies that corebundleModules returns an

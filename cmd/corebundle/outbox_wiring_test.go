@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/cap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -30,18 +31,16 @@ func (discardPublisher) Close(_ context.Context) error                       { r
 var _ outbox.Publisher = discardPublisher{}
 
 // TestBuildConfigCoreOpts_InMemoryMode_NoRelay asserts that memory topology
-// returns a nil ManagedResource (no PG pool, no relay). No database
-// connection is attempted; this test requires no external services.
+// returns no BootstrapOpts (no PG pool, no relay). No database connection is
+// attempted; this test requires no external services.
 //
 // Regression guard for A11: if the relay is accidentally wired in memory mode
 // it would try to Start() without a real DB and either panic or block.
 func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
-	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "memory"}
-	// Pass an empty Config; DSN check is only reached in postgres mode.
-	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+	// Pass an empty Config; PG nil is correct in memory mode.
+	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         topo,
-		PGConfig:         adapterpg.Config{},
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
@@ -49,14 +48,12 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Nil(t, result.PoolResource, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
 	assert.NotEmpty(t, result.CellOptions, "in-memory mode must return cell options (WithInMemoryDefaults)")
 	assert.Empty(t, result.BootstrapOpts, "in-memory mode must not return bootstrap opts (no relay)")
 }
 
 // TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape asserts that the postgres
-// path returns exactly one bootstrap.Option (the WithRelay option) and a non-nil
-// PoolResource, without any spurious WithManagedResource for the relay.
+// path returns exactly one bootstrap.Option (the WithRelay option).
 //
 // This test requires a real PostgreSQL database with the configcore schema
 // applied; run with:
@@ -65,8 +62,8 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 //	  go test -run TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape \
 //	  -tags=integration ./cmd/corebundle/...
 //
-// Without the integration tag the test is skipped via t.Skip so the standard
-// test suite (no DB required) stays green.
+// Without the env var set the test is skipped so the standard test suite
+// (no DB required) stays green.
 func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
 	dsn := os.Getenv("GOCELL_CONFIGCORE_DATABASE_URL")
 	if dsn == "" {
@@ -75,9 +72,20 @@ func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
 
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
-	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+
+	// Open a real pool, wrap into PGProvider, and inject it. The pool is owned
+	// by this test; buildConfigCoreOpts no longer opens its own pool.
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
+	require.NoError(t, err, "open PG pool for test")
+	defer func() { _ = pool.Close(ctx) }()
+
+	txMgr := adapterpg.NewTxManager(pool)
+	writer := adapterpg.NewOutboxWriter(clock.Real())
+	pgProvider := cap.NewPGProvider(txMgr, writer, pool.DB())
+
+	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         topo,
-		PGConfig:         adapterpg.Config{DSN: dsn},
+		PG:               pgProvider,
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
@@ -85,8 +93,6 @@ func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.NotNil(t, result.PoolResource,
-		"postgres mode must return a non-nil PoolResource (PG pool)")
 	assert.Len(t, result.BootstrapOpts, 1,
 		"postgres mode must return exactly one bootstrap.Option (WithRelay) — "+
 			"no extra WithManagedResource: *Relay is not a ManagedResource at the "+
@@ -95,15 +101,13 @@ func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
 }
 
 // TestBuildConfigCoreOpts_UnknownMode_Error asserts that an unrecognized
-// StorageBackend (bypassing Topology validation) returns an error and a nil
-// ManagedResource. In production, TopologyFromEnv already rejects such
-// values; this test locks the defense-in-depth behavior.
+// StorageBackend (bypassing Topology validation) returns an error. In
+// production, TopologyFromEnv already rejects such values; this test locks
+// the defense-in-depth behavior.
 func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
-	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "cassandra"}
-	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         topo,
-		PGConfig:         adapterpg.Config{},
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
@@ -112,30 +116,29 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cassandra")
-	assert.Nil(t, result.PoolResource, "error path must not leak a ManagedResource")
+	assert.Nil(t, result.CellOptions, "error path must not return cell options")
 }
 
-// TestBuildConfigCoreOpts_PGMode_MissingDSN asserts that postgres mode with an
-// empty DSN returns a non-nil error containing the env var name, so operators
-// know which variable to set. Corresponds to the fail-fast branch at
-// bundle_configcore_storage.go:75-77.
+// TestBuildConfigCoreOpts_PGMode_MissingDSN asserts that postgres mode with a
+// nil PGProvider returns a non-nil error naming the missing capability, so
+// operators know that provisionCapabilities must run before BuildApp.
+// Corresponds to the fail-fast branch at bundle_configcore_storage.go.
 func TestBuildConfigCoreOpts_PGMode_MissingDSN(t *testing.T) {
-	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
 
-	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         topo,
-		PGConfig:         adapterpg.Config{},
+		PG:               nil, // nil provider simulates missing provisionCapabilities
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
 		Clock:            clock.Real(),
 	})
 
-	require.Error(t, err, "postgres mode with empty DSN must return an error")
-	assert.Contains(t, err.Error(), "GOCELL_CONFIGCORE_DATABASE_URL",
-		"error must name the missing env var so operators know what to set")
-	assert.Nil(t, result.PoolResource, "error path must not leak a ManagedResource")
+	require.Error(t, err, "postgres mode with nil PGProvider must return an error")
+	assert.Contains(t, err.Error(), "postgres capability provider",
+		"error must name the missing capability so operators know what to fix")
+	assert.Nil(t, result.CellOptions, "error path must not return cell options")
 }
 
 // TestTopologyAdapterInfo_TableDriven locks the adapter_info map shape that
