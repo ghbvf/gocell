@@ -6,30 +6,41 @@
 # INVARIANT (HEALTHCHECK-VERIFY-CLEANUP-AND-WAIT-TIMEOUT-01, issue #19):
 #   - `trap ... EXIT` must be installed before the first `docker compose`
 #     call so cleanup runs on success, `set -e` early-exit, and SIGINT.
+#   - the trap body must invoke `docker compose down` (not a noop) — the
+#     archtest cross-checks the body to rule out an empty cleanup.
+#   - cleanup must propagate its own failure: if the main flow succeeded
+#     but `docker compose down` failed, the script exits non-zero so the
+#     caller doesn't see "success + orphan containers". When the main
+#     flow already failed, the original failure code is preserved.
 #   - `docker compose up --wait` must be bounded by `--wait-timeout`,
 #     never bare `--timeout` (that's the stop-shutdown flag and is
 #     silently ignored as a wait bound).
-# Both are enforced by tools/archtest/healthcheck_verify_script_test.go.
+# All four are enforced by tools/archtest/healthcheck_verify_script_test.go.
 #
-# Exit 0 on success, non-zero if any service fails within the timeout.
+# Exit 0 on success, non-zero if any service fails within the timeout
+# OR if cleanup itself fails on an otherwise-clean run.
 
 set -euo pipefail
 
 TIMEOUT=30
 
-# Cleanup preserves the original exit code: bash's EXIT trap would
-# otherwise overwrite $? with the trap body's exit code, hiding the
-# real failure from callers (CI scripts, make targets). The explicit
-# `exit "$_rc"` at the end restores the caller-visible code while the
-# `|| ...` branch ensures a noisy `down` failure is logged, not
-# silenced (a silently-failed cleanup leaves orphan containers and
-# breaks the next run with port conflicts).
-#
-# shellcheck disable=SC2154
-# _rc is assigned inside the same trap body string before it is
-# referenced; shellcheck cannot follow sequence inside a single-quoted
-# trap argument.
-trap '_rc=$?; echo "[healthcheck-verify] tearing down containers..." >&2; docker compose down || echo "[healthcheck-verify] WARNING: docker compose down exited $? — orphan containers may remain" >&2; exit "$_rc"' EXIT
+_cleanup() {
+  local _rc=$?
+  echo "[healthcheck-verify] tearing down containers..." >&2
+  if ! docker compose down; then
+    local _down_rc=$?
+    echo "[healthcheck-verify] WARNING: docker compose down exited $_down_rc — orphan containers may remain" >&2
+    # If the main flow succeeded, surface the cleanup failure instead of
+    # masking it with exit 0 (orphan containers + exit 0 misleads CI).
+    # If the main flow already failed, keep the original failure code.
+    if [ "$_rc" -eq 0 ]; then
+      _rc=$_down_rc
+    fi
+  fi
+  exit "$_rc"
+}
+
+trap _cleanup EXIT
 
 echo "Starting Docker Compose services..."
 docker compose up -d --wait --wait-timeout "${TIMEOUT}"
