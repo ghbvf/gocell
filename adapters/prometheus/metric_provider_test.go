@@ -1,6 +1,7 @@
 package prometheus_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -45,9 +46,9 @@ func TestMetricProvider_CounterInc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CounterVec: %v", err)
 	}
-	cv.With(metrics.Labels{"outcome": "success"}).Inc()
-	cv.With(metrics.Labels{"outcome": "success"}).Inc()
-	cv.With(metrics.Labels{"outcome": "failure"}).Add(3)
+	cv.With(metrics.Labels{"outcome": "success"}).Inc(context.Background())
+	cv.With(metrics.Labels{"outcome": "success"}).Inc(context.Background())
+	cv.With(metrics.Labels{"outcome": "failure"}).Add(context.Background(), 3)
 
 	got := testutil.CollectAndCount(reg, "gocelltest_events_total")
 	if got != 2 {
@@ -74,8 +75,8 @@ func TestMetricProvider_HistogramObserve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HistogramVec: %v", err)
 	}
-	hv.With(metrics.Labels{"phase": "start"}).Observe(0.05)
-	hv.With(metrics.Labels{"phase": "start"}).Observe(2.5)
+	hv.With(metrics.Labels{"phase": "start"}).Observe(context.Background(), 0.05)
+	hv.With(metrics.Labels{"phase": "start"}).Observe(context.Background(), 2.5)
 
 	count := testutil.CollectAndCount(reg, "gocelltest_hook_duration_seconds")
 	if count != 1 {
@@ -99,8 +100,8 @@ func TestMetricProvider_RegisterDuplicateReturnsExisting(t *testing.T) {
 		t.Fatalf("duplicate register must succeed (return existing), got error: %v", err)
 	}
 	// Both vecs must be functional and share the same underlying collector.
-	cv1.With(metrics.Labels{"a": "x"}).Inc()
-	cv2.With(metrics.Labels{"a": "x"}).Inc()
+	cv1.With(metrics.Labels{"a": "x"}).Inc(context.Background())
+	cv2.With(metrics.Labels{"a": "x"}).Inc(context.Background())
 	// The shared collector should report 2 increments.
 	if v := testutil.ToFloat64(collect(t, reg, "gocelltest_dup_total", prom.Labels{"a": "x"})); v != 2 {
 		t.Fatalf("shared counter = %v, want 2", v)
@@ -185,7 +186,7 @@ func TestMetricProvider_Unregister_RemovesAndAllowsReregister(t *testing.T) {
 
 	// Touch the new vec so Prometheus Gather emits a sample, then confirm
 	// exactly one family — the registry is in sync with no stale entries.
-	cv2.With(metrics.Labels{"label": "v"}).Inc()
+	cv2.With(metrics.Labels{"label": "v"}).Inc(context.Background())
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
@@ -287,8 +288,8 @@ func TestMetricProvider_HistogramVec_DuplicateReturnsExisting(t *testing.T) {
 		t.Fatalf("duplicate HistogramVec must succeed (return existing), got error: %v", err)
 	}
 	// Both vecs must be functional and share the same underlying collector.
-	hv1.With(metrics.Labels{"phase": "start"}).Observe(0.05)
-	hv2.With(metrics.Labels{"phase": "start"}).Observe(0.50)
+	hv1.With(metrics.Labels{"phase": "start"}).Observe(context.Background(), 0.05)
+	hv2.With(metrics.Labels{"phase": "start"}).Observe(context.Background(), 0.50)
 	// Exactly 1 series since both writes go to the same underlying histogram.
 	if cnt := testutil.CollectAndCount(reg, "gocelltest_dup_hist_seconds"); cnt != 1 {
 		t.Fatalf("expected 1 series after shared histogram writes, got %d", cnt)
@@ -449,8 +450,8 @@ func TestMetricProvider_CounterVec_CrossProvider_ReuseWithoutLabelCheck(t *testi
 		t.Fatalf("p2.CounterVec (cross-provider reuse) must succeed, got: %v", err)
 	}
 	// Both vecs must share the same underlying collector.
-	cv1.With(metrics.Labels{"l": "v"}).Inc()
-	cv2.With(metrics.Labels{"l": "v"}).Inc()
+	cv1.With(metrics.Labels{"l": "v"}).Inc(context.Background())
+	cv2.With(metrics.Labels{"l": "v"}).Inc(context.Background())
 	if cnt := testutil.CollectAndCount(reg, "cross_shared_counter_total"); cnt != 1 {
 		t.Fatalf("expected 1 series, got %d", cnt)
 	}
@@ -478,8 +479,8 @@ func TestMetricProvider_HistogramVec_CrossProvider_ReuseWithoutLabelCheck(t *tes
 	if err != nil {
 		t.Fatalf("p2.HistogramVec (cross-provider reuse) must succeed, got: %v", err)
 	}
-	hv1.With(metrics.Labels{"l": "v"}).Observe(1.0)
-	hv2.With(metrics.Labels{"l": "v"}).Observe(2.0)
+	hv1.With(metrics.Labels{"l": "v"}).Observe(context.Background(), 1.0)
+	hv2.With(metrics.Labels{"l": "v"}).Observe(context.Background(), 2.0)
 	if cnt := testutil.CollectAndCount(reg, "crosshist_shared_hist_seconds"); cnt != 1 {
 		t.Fatalf("expected 1 series, got %d", cnt)
 	}
@@ -649,7 +650,7 @@ func TestMetricProvider_ConcurrentCounterVec_RaceDetector(t *testing.T) {
 				firstErr.CompareAndSwap(nil, err)
 				return
 			}
-			cv.With(metrics.Labels{"k": "v"}).Inc()
+			cv.With(metrics.Labels{"k": "v"}).Inc(context.Background())
 		}()
 	}
 	wg.Wait()
@@ -718,7 +719,7 @@ func TestMetricProvider_GaugeVec_Register(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second GaugeVec (reuse): %v", err)
 	}
-	gv.With(metrics.Labels{"queue": "main"}).Set(1)
+	gv.With(metrics.Labels{"queue": "main"}).Set(context.Background(), 1)
 	if n := testutil.CollectAndCount(reg, "gocelltest_queue_depth"); n != 1 {
 		t.Fatalf("expected 1 series after Set, got %d", n)
 	}
@@ -739,11 +740,11 @@ func TestMetricProvider_GaugeVec_SetInc(t *testing.T) {
 	}
 
 	g := gv.With(metrics.Labels{"pool": "default"})
-	g.Set(10) // 10
-	g.Inc()   // 11
-	g.Dec()   // 10
-	g.Add(5)  // 15
-	g.Add(-3) // 12
+	g.Set(context.Background(), 10) // 10
+	g.Inc(context.Background())     // 11
+	g.Dec(context.Background())     // 10
+	g.Add(context.Background(), 5)  // 15
+	g.Add(context.Background(), -3) // 12
 
 	if v := testutil.ToFloat64(collectGauge(t, reg, "gocelltest_workers_active", prom.Labels{"pool": "default"})); v != 12 {
 		t.Fatalf("gauge value = %v, want 12", v)
@@ -767,8 +768,8 @@ func TestMetricProvider_GaugeVec_AlreadyRegistered_Reuse(t *testing.T) {
 		t.Fatalf("duplicate GaugeVec must succeed (return existing), got error: %v", err)
 	}
 	// Both write to the same underlying series; last write wins (Set semantics).
-	gv1.With(metrics.Labels{"a": "x"}).Set(5)
-	gv2.With(metrics.Labels{"a": "x"}).Inc() // 6
+	gv1.With(metrics.Labels{"a": "x"}).Set(context.Background(), 5)
+	gv2.With(metrics.Labels{"a": "x"}).Inc(context.Background()) // 6
 	if v := testutil.ToFloat64(collectGauge(t, reg, "gocelltest_dup_gauge", prom.Labels{"a": "x"})); v != 6 {
 		t.Fatalf("shared gauge = %v, want 6", v)
 	}
@@ -828,7 +829,7 @@ func TestMetricProvider_GaugeVec_Unregister(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-register after Unregister: %v", err)
 	}
-	gv2.With(metrics.Labels{"k": "v"}).Set(1)
+	gv2.With(metrics.Labels{"k": "v"}).Set(context.Background(), 1)
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
@@ -870,7 +871,7 @@ func TestMetricProvider_ConcurrentGaugeVec_RaceDetector(t *testing.T) {
 				firstErr.CompareAndSwap(nil, err)
 				return
 			}
-			gv.With(metrics.Labels{"k": "v"}).Set(1)
+			gv.With(metrics.Labels{"k": "v"}).Set(context.Background(), 1)
 		}()
 	}
 	wg.Wait()
@@ -963,7 +964,7 @@ func TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector(t *testing.
 				firstErr.CompareAndSwap(nil, err)
 				return
 			}
-			cv.With(metrics.Labels{"k": "v"}).Inc()
+			cv.With(metrics.Labels{"k": "v"}).Inc(context.Background())
 			if err := p.Unregister(cv); err != nil {
 				firstErr.CompareAndSwap(nil, err)
 			}

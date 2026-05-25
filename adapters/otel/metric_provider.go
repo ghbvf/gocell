@@ -269,18 +269,14 @@ type otelCounter struct {
 	attrs otelmetric.MeasurementOption
 }
 
-// Inc records 1. Uses context.Background() because the Counter interface
-// deliberately omits context (kernel modules emit from hot paths where
-// passing ctx everywhere would be noise). OTel tolerates Background.
-//
-// See METRICS-CTX-FUNNEL-01 — the ctx-bearing alignment to OTel
-// exemplar/baggage semantics is an open cross-layer refactor (kernel metrics
-// interface + adapters/{prometheus,otel} + all emission sites).
-// Background() here is bounded by the kernel interface shape, not by this adapter.
-func (c *otelCounter) Inc() { c.inner.Add(context.Background(), 1, c.attrs) }
+// Inc records 1. ctx is forwarded to the OTel instrument to support exemplar
+// and baggage correlation.
+func (c *otelCounter) Inc(ctx context.Context) { c.inner.Add(ctx, 1, c.attrs) }
 
-func (c *otelCounter) Add(delta float64) {
-	c.inner.Add(context.Background(), delta, c.attrs)
+// Add records delta. ctx is forwarded to the OTel instrument to support exemplar
+// and baggage correlation.
+func (c *otelCounter) Add(ctx context.Context, delta float64) {
+	c.inner.Add(ctx, delta, c.attrs)
 }
 
 type otelHistogram struct {
@@ -288,8 +284,10 @@ type otelHistogram struct {
 	attrs otelmetric.MeasurementOption
 }
 
-func (h *otelHistogram) Observe(v float64) {
-	h.inner.Record(context.Background(), v, h.attrs)
+// Observe records v. ctx is forwarded to the OTel instrument to support exemplar
+// and baggage correlation.
+func (h *otelHistogram) Observe(ctx context.Context, v float64) {
+	h.inner.Record(ctx, v, h.attrs)
 }
 
 // otelGaugeVec wraps Float64Gauge and provides per-label-set last-value
@@ -369,37 +367,40 @@ type otelGauge struct {
 }
 
 // Set records the gauge as absolute value v (Float64Gauge.Record semantics).
-//
-// See METRICS-CTX-FUNNEL-01 for the open work to propagate context through
-// the kernel metrics interface; until then context.Background() is the
-// correct placeholder here (mirrors Counter).
-func (g *otelGauge) Set(v float64) {
+// ctx is forwarded to the OTel instrument to support exemplar and baggage correlation.
+func (g *otelGauge) Set(ctx context.Context, v float64) {
 	g.mu.Lock()
 	g.last = v
 	g.mu.Unlock()
-	g.inner.Record(context.Background(), v, g.attrs)
+	g.inner.Record(ctx, v, g.attrs)
 }
 
-func (g *otelGauge) Inc() {
+// Inc increments the gauge by 1.
+// ctx is forwarded to the OTel instrument to support exemplar and baggage correlation.
+func (g *otelGauge) Inc(ctx context.Context) {
 	g.mu.Lock()
 	g.last++
 	v := g.last
 	g.mu.Unlock()
-	g.inner.Record(context.Background(), v, g.attrs)
+	g.inner.Record(ctx, v, g.attrs)
 }
 
-func (g *otelGauge) Dec() {
+// Dec decrements the gauge by 1.
+// ctx is forwarded to the OTel instrument to support exemplar and baggage correlation.
+func (g *otelGauge) Dec(ctx context.Context) {
 	g.mu.Lock()
 	g.last--
 	v := g.last
 	g.mu.Unlock()
-	g.inner.Record(context.Background(), v, g.attrs)
+	g.inner.Record(ctx, v, g.attrs)
 }
 
-func (g *otelGauge) Add(delta float64) {
+// Add adds delta to the gauge.
+// ctx is forwarded to the OTel instrument to support exemplar and baggage correlation.
+func (g *otelGauge) Add(ctx context.Context, delta float64) {
 	g.mu.Lock()
 	g.last += delta
 	v := g.last
 	g.mu.Unlock()
-	g.inner.Record(context.Background(), v, g.attrs)
+	g.inner.Record(ctx, v, g.attrs)
 }

@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -311,16 +312,16 @@ func join(ss []string) string {
 
 type promCounter struct{ inner prom.Counter }
 
-func (c promCounter) Inc()          { c.inner.Inc() }
-func (c promCounter) Add(d float64) { c.inner.Add(d) }
+func (c promCounter) Inc(_ context.Context)             { c.inner.Inc() }
+func (c promCounter) Add(_ context.Context, d float64)  { c.inner.Add(d) }
 
 type promHistogram struct{ inner prom.Observer }
 
-func (h promHistogram) Observe(v float64) { h.inner.Observe(v) }
+func (h promHistogram) Observe(_ context.Context, v float64) { h.inner.Observe(v) }
 
 type promGauge struct{ inner prom.Gauge }
 
-func (g promGauge) Set(value float64) { g.inner.Set(value) }
-func (g promGauge) Inc()              { g.inner.Inc() }
-func (g promGauge) Dec()              { g.inner.Dec() }
-func (g promGauge) Add(delta float64) { g.inner.Add(delta) }
+func (g promGauge) Set(_ context.Context, value float64) { g.inner.Set(value) }
+func (g promGauge) Inc(_ context.Context)                { g.inner.Inc() }
+func (g promGauge) Dec(_ context.Context)                { g.inner.Dec() }
+func (g promGauge) Add(_ context.Context, delta float64) { g.inner.Add(delta) }

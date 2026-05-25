@@ -50,9 +50,9 @@ func TestOTelMetricProvider_CounterInc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CounterVec: %v", err)
 	}
-	cv.With(metrics.Labels{"outcome": "success"}).Inc()
-	cv.With(metrics.Labels{"outcome": "success"}).Inc()
-	cv.With(metrics.Labels{"outcome": "failure"}).Add(3)
+	cv.With(metrics.Labels{"outcome": "success"}).Inc(context.Background())
+	cv.With(metrics.Labels{"outcome": "success"}).Inc(context.Background())
+	cv.With(metrics.Labels{"outcome": "failure"}).Add(context.Background(), 3)
 
 	rm := collect()
 	sum, points := extractCounterSum(t, rm, "gocell_test_counter_total")
@@ -75,8 +75,8 @@ func TestOTelMetricProvider_HistogramObserve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HistogramVec: %v", err)
 	}
-	hv.With(metrics.Labels{"phase": "start"}).Observe(0.05)
-	hv.With(metrics.Labels{"phase": "start"}).Observe(2.5)
+	hv.With(metrics.Labels{"phase": "start"}).Observe(context.Background(), 0.05)
+	hv.With(metrics.Labels{"phase": "start"}).Observe(context.Background(), 2.5)
 
 	rm := collect()
 	count, sum := extractHistogram(t, rm, "gocell_test_hist_seconds")
@@ -130,7 +130,7 @@ func TestOTelMetricProvider_AttrCacheReuse(t *testing.T) {
 		t.Fatalf("CounterVec: %v", err)
 	}
 	for range 100 {
-		cv.With(metrics.Labels{"k": "v"}).Inc()
+		cv.With(metrics.Labels{"k": "v"}).Inc(context.Background())
 	}
 	_, points := extractCounterSum(t, collect(), "gocell_test_cache_total")
 	if points != 1 {
@@ -174,8 +174,8 @@ func TestMetricProvider_GaugeVec_RecordsViaFloat64Gauge(t *testing.T) {
 	}
 
 	g := gv.With(metrics.Labels{"instance": "a"})
-	g.Set(10)
-	g.Set(20) // absolute last-write-wins: current value = 20
+	g.Set(context.Background(), 10)
+	g.Set(context.Background(), 20) // absolute last-write-wins: current value = 20
 
 	rm := collect()
 	val, points := extractGauge(t, rm, "gocell_test_gauge_set")
@@ -201,8 +201,8 @@ func TestMetricProvider_GaugeVec_IncDec(t *testing.T) {
 	}
 
 	g := gv.With(metrics.Labels{"worker": "w1"})
-	g.Inc()
-	g.Dec()
+	g.Inc(context.Background())
+	g.Dec(context.Background())
 
 	rm := collect()
 	val, _ := extractGauge(t, rm, "gocell_test_gauge_incdec")
@@ -226,8 +226,8 @@ func TestMetricProvider_GaugeVec_Add_Positive_And_Negative(t *testing.T) {
 	}
 
 	g := gv.With(metrics.Labels{"queue": "main"})
-	g.Add(5)
-	g.Add(-3)
+	g.Add(context.Background(), 5)
+	g.Add(context.Background(), -3)
 
 	rm := collect()
 	val, _ := extractGauge(t, rm, "gocell_test_gauge_add")
@@ -267,7 +267,7 @@ func TestMetricProvider_GaugeVec_DistinctLabelSetsEmitted(t *testing.T) {
 
 	// Emit 3 distinct label sets; verify each produces a distinct data point.
 	for i := range 3 {
-		gv.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(float64(i + 1))
+		gv.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(context.Background(), float64(i+1))
 	}
 
 	var rm metricdata.ResourceMetrics
@@ -318,9 +318,9 @@ func TestMetricProvider_GaugeVec_SetAfterInc(t *testing.T) {
 	}
 
 	g := gv.With(metrics.Labels{"svc": "a"})
-	g.Set(5) // last=5, delta=+5, cum=5
-	g.Inc()  // last=6, delta=+1, cum=6
-	g.Set(3) // last=3, delta=-3, cum=3
+	g.Set(context.Background(), 5) // last=5, delta=+5, cum=5
+	g.Inc(context.Background())    // last=6, delta=+1, cum=6
+	g.Set(context.Background(), 3) // last=3, delta=-3, cum=3
 
 	val, _ := extractGauge(t, collect(), "set_after_inc_test")
 	if val != 3 {
@@ -355,13 +355,13 @@ func TestMetricProvider_ConcurrentGaugeVec_RaceDetector(t *testing.T) {
 			for i := range iters {
 				switch i % 4 {
 				case 0:
-					gauge.Set(float64(i))
+					gauge.Set(context.Background(), float64(i))
 				case 1:
-					gauge.Inc()
+					gauge.Inc(context.Background())
 				case 2:
-					gauge.Dec()
+					gauge.Dec(context.Background())
 				case 3:
-					gauge.Add(float64(i))
+					gauge.Add(context.Background(), float64(i))
 				}
 			}
 		}(g)

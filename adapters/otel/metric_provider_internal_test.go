@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	otelmetric "go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -145,7 +146,7 @@ func TestMetricProvider_GaugeVec_OverflowGaugeSlotIsShared(t *testing.T) {
 
 	// Emit cap distinct label sets — all should land in gauges map.
 	for i := 0; i < cap; i++ {
-		gvIface.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(1)
+		gvIface.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(context.Background(), 1)
 	}
 	gv.gaugesMu.Lock()
 	sizeAtCap := len(gv.gauges)
@@ -154,7 +155,7 @@ func TestMetricProvider_GaugeVec_OverflowGaugeSlotIsShared(t *testing.T) {
 
 	// Emit 10 more distinct overflow label sets — gauges must not grow beyond cap.
 	for i := cap; i < cap+10; i++ {
-		gvIface.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(float64(i))
+		gvIface.With(metrics.Labels{"k": strconv.Itoa(i)}).Set(context.Background(), float64(i))
 	}
 	gv.gaugesMu.Lock()
 	sizeAfterOverflow := len(gv.gauges)
@@ -193,7 +194,7 @@ func TestMetricProvider_OverflowDataPointEmitted(t *testing.T) {
 
 	// Emit 5 distinct values past cap=3 → 3 distinct cached + 2 overflow.
 	for i := 0; i < 5; i++ {
-		cv.With(metrics.Labels{"k": strconv.Itoa(i)}).Inc()
+		cv.With(metrics.Labels{"k": strconv.Itoa(i)}).Inc(context.Background())
 	}
 
 	var rm metricdata.ResourceMetrics
@@ -220,4 +221,150 @@ func TestMetricProvider_OverflowDataPointEmitted(t *testing.T) {
 		"a data point with otel.metric.overflow=true must appear past cap")
 	assert.LessOrEqual(t, totalDataPoints, 4,
 		"data points must collapse high-cardinality tail; got %d (cap=3 + 1 overflow expected)", totalDataPoints)
+}
+
+// ---------------------------------------------------------------------------
+// ctx-passthrough tests (METRICS-CTX-FUNNEL-01)
+//
+// These tests assert that every otelCounter / otelHistogram / otelGauge method
+// forwards the *caller-supplied* ctx to the underlying OTel instrument — not
+// context.Background(). Fake implementations of Float64Counter /
+// Float64Histogram / Float64Gauge capture the ctx argument so we can assert
+// sentinel value propagation.
+// ---------------------------------------------------------------------------
+
+type ctxSentinelKey struct{}
+
+// fakeFloat64Counter captures the ctx and delta from Add calls.
+type fakeFloat64Counter struct {
+	otelmetric.Float64Counter
+	gotCtx   context.Context
+	gotDelta float64
+}
+
+func (f *fakeFloat64Counter) Add(ctx context.Context, incr float64, _ ...otelmetric.MeasurementOption) {
+	f.gotCtx = ctx
+	f.gotDelta = incr
+}
+
+// fakeFloat64Histogram captures the ctx and value from Record calls.
+type fakeFloat64Histogram struct {
+	otelmetric.Float64Histogram
+	gotCtx   context.Context
+	gotValue float64
+}
+
+func (f *fakeFloat64Histogram) Record(ctx context.Context, value float64, _ ...otelmetric.MeasurementOption) {
+	f.gotCtx = ctx
+	f.gotValue = value
+}
+
+// fakeFloat64Gauge captures the ctx and value from Record calls.
+type fakeFloat64Gauge struct {
+	otelmetric.Float64Gauge
+	gotCtx   context.Context
+	gotValue float64
+}
+
+func (f *fakeFloat64Gauge) Record(ctx context.Context, value float64, _ ...otelmetric.MeasurementOption) {
+	f.gotCtx = ctx
+	f.gotValue = value
+}
+
+// sentinelCtx creates a context containing a sentinel value for identity checks.
+func sentinelCtx() context.Context {
+	return context.WithValue(context.Background(), ctxSentinelKey{}, "sentinel")
+}
+
+// assertCtxSentinel fails the test if ctx does not carry the sentinel value.
+func assertCtxSentinel(t *testing.T, ctx context.Context, method string) {
+	t.Helper()
+	if ctx == nil {
+		t.Errorf("%s: captured ctx is nil — method must forward ctx, not drop it", method)
+		return
+	}
+	if ctx.Value(ctxSentinelKey{}) != "sentinel" {
+		t.Errorf("%s: ctx does not carry sentinel — method forwarded context.Background() instead of caller ctx", method)
+	}
+}
+
+// TestOtelCounter_CtxPassthrough verifies Inc and Add forward the caller's ctx.
+// RED: if the body uses context.Background(), ctx.Value(ctxSentinelKey{}) == nil.
+// GREEN: when the body uses the ctx parameter, the sentinel value is present.
+func TestOtelCounter_CtxPassthrough(t *testing.T) {
+	fake := &fakeFloat64Counter{}
+	c := &otelCounter{inner: fake, attrs: overflowOpt}
+	ctx := sentinelCtx()
+
+	c.Inc(ctx)
+	assertCtxSentinel(t, fake.gotCtx, "otelCounter.Inc")
+	if fake.gotDelta != 1 {
+		t.Errorf("Inc: expected delta=1, got %v", fake.gotDelta)
+	}
+
+	c.Add(ctx, 7.5)
+	assertCtxSentinel(t, fake.gotCtx, "otelCounter.Add")
+	if fake.gotDelta != 7.5 {
+		t.Errorf("Add: expected delta=7.5, got %v", fake.gotDelta)
+	}
+}
+
+// TestOtelHistogram_CtxPassthrough verifies Observe forwards the caller's ctx.
+func TestOtelHistogram_CtxPassthrough(t *testing.T) {
+	fake := &fakeFloat64Histogram{}
+	h := &otelHistogram{inner: fake, attrs: overflowOpt}
+	ctx := sentinelCtx()
+
+	h.Observe(ctx, 3.14)
+	assertCtxSentinel(t, fake.gotCtx, "otelHistogram.Observe")
+	if fake.gotValue != 3.14 {
+		t.Errorf("Observe: expected value=3.14, got %v", fake.gotValue)
+	}
+}
+
+// TestOtelGauge_CtxPassthrough verifies Set, Inc, Dec, Add each forward the caller's ctx.
+func TestOtelGauge_CtxPassthrough(t *testing.T) {
+	ctx := sentinelCtx()
+
+	t.Run("Set", func(t *testing.T) {
+		fake := &fakeFloat64Gauge{}
+		g := &otelGauge{inner: fake, attrs: overflowOpt}
+		g.Set(ctx, 42.0)
+		assertCtxSentinel(t, fake.gotCtx, "otelGauge.Set")
+		if fake.gotValue != 42.0 {
+			t.Errorf("Set: expected value=42.0, got %v", fake.gotValue)
+		}
+	})
+
+	t.Run("Inc", func(t *testing.T) {
+		fake := &fakeFloat64Gauge{}
+		g := &otelGauge{inner: fake, attrs: overflowOpt}
+		g.Inc(ctx)
+		assertCtxSentinel(t, fake.gotCtx, "otelGauge.Inc")
+		if fake.gotValue != 1.0 {
+			t.Errorf("Inc: expected value=1.0, got %v", fake.gotValue)
+		}
+	})
+
+	t.Run("Dec", func(t *testing.T) {
+		fake := &fakeFloat64Gauge{}
+		g := &otelGauge{inner: fake, attrs: overflowOpt}
+		g.last = 5.0
+		g.Dec(ctx)
+		assertCtxSentinel(t, fake.gotCtx, "otelGauge.Dec")
+		if fake.gotValue != 4.0 {
+			t.Errorf("Dec: expected value=4.0, got %v", fake.gotValue)
+		}
+	})
+
+	t.Run("Add", func(t *testing.T) {
+		fake := &fakeFloat64Gauge{}
+		g := &otelGauge{inner: fake, attrs: overflowOpt}
+		g.last = 10.0
+		g.Add(ctx, 3.0)
+		assertCtxSentinel(t, fake.gotCtx, "otelGauge.Add")
+		if fake.gotValue != 13.0 {
+			t.Errorf("Add: expected value=13.0, got %v", fake.gotValue)
+		}
+	})
 }
