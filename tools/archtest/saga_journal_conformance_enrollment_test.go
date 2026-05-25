@@ -3,11 +3,15 @@
 // AI-robust: Medium
 //
 //   - 实现扫描: types.Implements(*types.Interface) — type-aware；identifies every
-//     concrete named type that satisfies kernel/saga/journal.Journal (value or
-//     pointer receivers).
-//   - conformance 调用扫描: ResolvePackageRef + _test.go path filter — type-aware
-//     callee resolution via *types.Info. Identifies every package with at least
-//     one sagajournaltest.RunConformanceSuite call site.
+//     concrete named type (exported AND unexported) that satisfies
+//     kernel/saga/journal.Journal (value or pointer receivers).
+//   - conformance 调用扫描 (impl-level): ResolvePackageRef + _test.go path filter
+//     plus per-call return-type unwrap — type-aware callee resolution via
+//     *types.Info. For every _test.go file that calls
+//     sagajournaltest.RunConformanceSuite, walk every CallExpr in the file and
+//     unwrap its return tuple; impls whose key matches the impl set are marked
+//     enrolled. Package co-location alone no longer credits enrollment — the
+//     test file must actually construct the impl.
 //   - 综合 Medium 天花板: Go cannot require a _test.go file to exist for a type at
 //     compile time. The enforcement is archtest-bound (CI fails), not
 //     compile-time. The Hard upgrade path is a codegen funnel + golden that
@@ -126,8 +130,13 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 			"likely a type-universe regression (iface and impls must share one packages.Load). "+
 			"Expect at least journal.MemJournal and saga.PGJournal.")
 
-	// ─── Step 3: scan test corpus for RunConformanceSuite call sites ────────
-	enrolledPkgs := make(map[string]bool)
+	// ─── Step 3: scan test corpus for RunConformanceSuite call sites with
+	// impl-level enrollment. A test file is credited with enrolling impl X
+	// only if (a) it contains a sagajournaltest.RunConformanceSuite call AND
+	// (b) it constructs X (constructor call whose return type unwraps to X).
+	// Package co-location is no longer enough — closes the gap where two
+	// impls in one package could share a single conformance call.
+	enrolledImpls := make(map[string]bool)
 
 	testPatterns := prodscan.Patterns(root)
 	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, testPatterns,
@@ -140,9 +149,14 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 				if !strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				if hasSagaConformanceCall(f, p.TypesInfo) {
-					enrolledPkgs[canonicalPkgPath(p.Pkg.Path())] = true
+				if !hasSagaConformanceCall(f, p.TypesInfo) {
+					continue
 				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					for _, implKey := range extractEnrolledImpls(call, p.TypesInfo, implSet) {
+						enrolledImpls[implKey] = true
+					}
+				})
 			}
 			return nil
 		})
@@ -150,33 +164,36 @@ func TestSagaJournalConformanceEnrollment(t *testing.T) {
 	// ─── Step 4: flag unenrolled implementations ─────────────────────────────
 	var diags []Diagnostic
 	for implKey := range implSet {
+		if enrolledImpls[implKey] {
+			continue
+		}
 		dotIdx := strings.LastIndex(implKey, ".")
 		if dotIdx < 0 {
 			continue
 		}
 		pkgPath := implKey[:dotIdx]
-		if !enrolledPkgs[pkgPath] {
-			diags = append(diags, Diagnostic{
-				Rel:  implKey,
-				Line: 0,
-				Message: fmt.Sprintf(
-					"archtest: kernel/saga/journal.Journal impl %q not enrolled in "+
-						"sagajournaltest.RunConformanceSuite test call "+
-						"(SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01). "+
-						"Add a _test.go in package %s (or its external _test) that calls "+
-						"sagajournaltest.RunConformanceSuite(t, factory).",
-					implKey, pkgPath),
-			})
-		}
+		diags = append(diags, Diagnostic{
+			Rel:  implKey,
+			Line: 0,
+			Message: fmt.Sprintf(
+				"archtest: kernel/saga/journal.Journal impl %q not enrolled "+
+					"(SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01). "+
+					"Add a _test.go in package %s (or its external _test) that "+
+					"both calls sagajournaltest.RunConformanceSuite(t, factory) "+
+					"AND constructs %s inside the factory closure (impl-level "+
+					"enrollment).",
+				implKey, pkgPath, implKey),
+		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
 	Report(t, "SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01", diags)
 }
 
-// TestSagaJournalConformanceEnrollment_REDFixture simulates a "missing
-// enrollment" by removing one impl's pkg from the enrolled set and asserts
-// the diagnostic logic produces at least one violation. Mirrors the
-// USERREPO REDFixture pattern.
+// TestSagaJournalConformanceEnrollment_REDFixture simulates an
+// impl-level "missing enrollment" by dropping one impl from the
+// enrolled set and asserts the diagnostic logic produces at least
+// one violation. The fixture exercises the same comparison logic
+// the main test uses (now impl-level keys rather than pkg paths).
 func TestSagaJournalConformanceEnrollment_REDFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -218,34 +235,30 @@ func TestSagaJournalConformanceEnrollment_REDFixture(t *testing.T) {
 	}
 	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty")
 
+	// Pick an arbitrary impl as the "missing enrollment" target.
 	var targetImplKey string
 	for k := range implSet {
 		targetImplKey = k
 		break
 	}
-	dotIdx := strings.LastIndex(targetImplKey, ".")
-	require.Greater(t, dotIdx, 0, "REDFixture: malformed impl key %q", targetImplKey)
-	targetPkg := targetImplKey[:dotIdx]
 
-	enrolledPkgs := make(map[string]bool)
-	for pkg := range implPkgSet {
-		if pkg != targetPkg {
-			enrolledPkgs[pkg] = true
+	// Build enrolled impls = all impls EXCEPT the target. The diagnostic
+	// logic must flag the target.
+	enrolledImpls := make(map[string]bool)
+	for k := range implSet {
+		if k != targetImplKey {
+			enrolledImpls[k] = true
 		}
 	}
 
 	var diags []Diagnostic
 	for implKey := range implSet {
-		idx := strings.LastIndex(implKey, ".")
-		if idx < 0 {
-			continue
-		}
-		if !enrolledPkgs[implKey[:idx]] {
+		if !enrolledImpls[implKey] {
 			diags = append(diags, Diagnostic{Rel: implKey, Message: implKey + " not enrolled"})
 		}
 	}
 	assert.GreaterOrEqual(t, len(diags), 1,
-		"REDFixture: removing pkg %q from enrolledPkgs must produce ≥1 violation, got 0", targetPkg)
+		"REDFixture: removing impl %q from enrolledImpls must produce ≥1 violation, got 0", targetImplKey)
 }
 
 // TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl (B1)
@@ -300,13 +313,15 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-// collectSagaJournalImpls adds to implSet all exported concrete types in pkg
-// that implement Journal (value or pointer receiver). Interface types are
-// skipped.
+// collectSagaJournalImpls adds to implSet all concrete types in pkg (exported
+// AND unexported) that implement Journal (value or pointer receiver).
+// Interface types are skipped. Unexported impls must also enroll — a package-
+// private fake/wrapper that satisfies the interface still risks behavior
+// drift if not exercised by the conformance suite.
 func collectSagaJournalImpls(pkg *types.Package, iface *types.Interface, implSet, implPkgSet map[string]bool) {
 	for _, name := range pkg.Scope().Names() {
 		obj, ok := pkg.Scope().Lookup(name).(*types.TypeName)
-		if !ok || !obj.Exported() {
+		if !ok {
 			continue
 		}
 		t := obj.Type()
@@ -319,6 +334,51 @@ func collectSagaJournalImpls(pkg *types.Package, iface *types.Interface, implSet
 			implPkgSet[pkg.Path()] = true
 		}
 	}
+}
+
+// extractEnrolledImpls inspects a CallExpr's callee signature and returns
+// implKey strings ("pkg/path.TypeName") for every concrete Journal impl that
+// the call constructs (return values whose underlying named type is in
+// implSet). Pointer wrappers (*T) are unwrapped. Cross-package type identity
+// is irrelevant — we compare by string keys, so the iface-pass and test-pass
+// loads do not need to share *types.Named instances.
+//
+// This is the impl-level upgrade of the prior package-level enrollment: a
+// test file is now only credited with enrolling impl X if it actually
+// constructs X — package co-location is no longer enough.
+func extractEnrolledImpls(call *ast.CallExpr, info *types.Info, implSet map[string]bool) []string {
+	if info == nil {
+		return nil
+	}
+	calleeType := info.TypeOf(call.Fun)
+	if calleeType == nil {
+		return nil
+	}
+	sig, ok := calleeType.(*types.Signature)
+	if !ok {
+		return nil
+	}
+	var out []string
+	results := sig.Results()
+	for i := 0; i < results.Len(); i++ {
+		rt := results.At(i).Type()
+		if ptr, isPtr := rt.(*types.Pointer); isPtr {
+			rt = ptr.Elem()
+		}
+		named, ok := rt.(*types.Named)
+		if !ok {
+			continue
+		}
+		obj := named.Obj()
+		if obj == nil || obj.Pkg() == nil {
+			continue
+		}
+		key := obj.Pkg().Path() + "." + obj.Name()
+		if implSet[key] {
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 // hasSagaConformanceCall returns true when file contains at least one call to

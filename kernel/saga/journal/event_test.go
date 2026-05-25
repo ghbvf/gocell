@@ -301,3 +301,46 @@ func TestEvent_ValidateForAppend_StepNameRequired(t *testing.T) {
 		})
 	}
 }
+
+// TestEvent_ValidateForAppend_PayloadAtAndOverMaxBytes locks the
+// MaxPayloadBytes boundary contract introduced in PR-04 to close the
+// unbounded-payload DoS vector before BYTEA storage.
+//
+//   - exactly MaxPayloadBytes: accepted (must be a valid JSON object, so we
+//     pad an object literal up to the cap).
+//   - MaxPayloadBytes + 1: rejected with KindInvalid / ErrValidationFailed.
+func TestEvent_ValidateForAppend_PayloadAtAndOverMaxBytes(t *testing.T) {
+	t.Parallel()
+	// Build a JSON object whose serialized length is exactly MaxPayloadBytes.
+	// Header `{"x":"` is 6 bytes, footer `"}` is 2 bytes, so pad with N=
+	// MaxPayloadBytes-8 ASCII chars.
+	const headerLen = 6
+	const footerLen = 2
+	padLen := journal.MaxPayloadBytes - headerLen - footerLen
+	require.Positive(t, padLen)
+	pad := make([]byte, padLen)
+	for i := range pad {
+		pad[i] = 'a'
+	}
+	atCap := append(append([]byte(`{"x":"`), pad...), []byte(`"}`)...)
+	require.Len(t, atCap, journal.MaxPayloadBytes)
+
+	at := journal.Event{Kind: journal.KindStepStarted, StepName: validStep, Payload: atCap}
+	require.NoError(t, at.ValidateForAppend(), "payload exactly MaxPayloadBytes must be accepted")
+
+	overCap := make([]byte, 0, len(atCap)+1)
+	overCap = append(overCap, atCap...)
+	overCap = append(overCap, 'a') // one byte over (size check fires before JSON parse)
+	over := journal.Event{Kind: journal.KindStepStarted, StepName: validStep, Payload: overCap}
+	err := over.ValidateForAppend()
+	require.Error(t, err, "payload over MaxPayloadBytes must be rejected")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.KindInvalid, ecErr.Kind)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+}
+
+// Reference the saga package import (kept to avoid unused-import after
+// editing this file in the future); the saga package powers other tests in
+// this file's TerminalEventKind paths.
+var _ = saga.StatusPending

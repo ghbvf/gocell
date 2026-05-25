@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/postgres/saga"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	sagamod "github.com/ghbvf/gocell/kernel/saga"
@@ -135,4 +136,180 @@ func TestPGSagaJournal_ClaimPending_Concurrent_NoDuplicate(t *testing.T) {
 	for id, count := range claims {
 		require.Equal(t, 1, count, "instance %s claimed %d times (must be 1)", id, count)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Ambient-tx integration: Append / MarkTerminal must join the caller's
+// transaction so an outer rollback discards the journal write atomically.
+// This is the PR-04 review C1 contract: PGJournal MUST NOT open its own tx
+// when the ctx already carries one (kernel/persistence.TxFromContext), or
+// the L2 OutboxFact invariant ("saga.Append + outbox.Emit atomic") breaks.
+// ---------------------------------------------------------------------------
+
+// sentinelOuterFailure is the error returned by the outer RunInTx callback
+// to force a rollback after a successful inner journal write. Defined as a
+// package-level value so test asserts can errors.Is against it.
+var sentinelOuterFailure = errors.New("outer ambient tx forced failure")
+
+// TestPGSagaJournal_AppendInsideAmbientTx_RollsBackOnOuterFailure verifies
+// that an Append landed inside a txRunner.RunInTx block is rolled back when
+// the outer callback returns an error — saga_events MUST be empty after the
+// failed outer tx commits its rollback.
+func TestPGSagaJournal_AppendInsideAmbientTx_RollsBackOnOuterFailure(t *testing.T) {
+	pool := sharedPG.NewPerTestPool(t)
+	clk := clockmock.New(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC))
+	j, err := saga.NewJournal(pool.DB(), clk)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	inst := sagajournaltest.NewInstanceFixture(t, "pg-ambient-rollback-append", clk.Now())
+	require.NoError(t, j.Enqueue(ctx, inst))
+
+	claimed, _, err := j.ClaimPending(ctx, 1, 10*time.Second)
+	require.NoError(t, err)
+	require.NotEmpty(t, claimed)
+	ci := claimed[0]
+
+	txm := adapterpg.NewTxManager(pool)
+	rollbackErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		_, appendErr := j.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
+			Kind:     journal.KindStepStarted,
+			StepName: idutil.SafeID("step-one"),
+			Payload:  []byte(`{"k":"v"}`),
+		})
+		require.NoError(t, appendErr, "Append inside ambient tx must succeed")
+		return sentinelOuterFailure // force outer rollback AFTER successful Append
+	})
+	require.ErrorIs(t, rollbackErr, sentinelOuterFailure)
+
+	// saga_events must be empty for this instance — Append's INSERT was
+	// rolled back together with the outer tx.
+	var eventCount int
+	err = pool.DB().QueryRow(ctx,
+		`SELECT count(*) FROM saga_events WHERE instance_id = $1`, string(inst.ID)).Scan(&eventCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, eventCount,
+		"saga_events must be empty after outer RunInTx rollback (ambient tx atomicity)")
+
+	// Projection must also be untouched — current_version still 0.
+	var version int64
+	err = pool.DB().QueryRow(ctx,
+		`SELECT current_version FROM saga_instances WHERE id = $1`, string(inst.ID)).Scan(&version)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), version,
+		"saga_instances.current_version must be unchanged after outer rollback")
+}
+
+// TestPGSagaJournal_MarkTerminalInsideAmbientTx_RollsBackOnOuterFailure: same
+// invariant for MarkTerminal — outer rollback discards both the projection
+// flip and the terminal event row.
+func TestPGSagaJournal_MarkTerminalInsideAmbientTx_RollsBackOnOuterFailure(t *testing.T) {
+	pool := sharedPG.NewPerTestPool(t)
+	clk := clockmock.New(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC))
+	j, err := saga.NewJournal(pool.DB(), clk)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	inst := sagajournaltest.NewInstanceFixture(t, "pg-ambient-rollback-mt", clk.Now())
+	require.NoError(t, j.Enqueue(ctx, inst))
+
+	claimed, _, err := j.ClaimPending(ctx, 1, 10*time.Second)
+	require.NoError(t, err)
+	require.NotEmpty(t, claimed)
+	ci := claimed[0]
+
+	txm := adapterpg.NewTxManager(pool)
+	rollbackErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		ok, mtErr := j.MarkTerminal(txCtx, ci.Instance.ID, ci.LeaseID, sagamod.StatusFailed)
+		require.NoError(t, mtErr)
+		require.True(t, ok, "MarkTerminal inside ambient tx must succeed")
+		return sentinelOuterFailure
+	})
+	require.ErrorIs(t, rollbackErr, sentinelOuterFailure)
+
+	// saga_events must be empty AND saga_instances.status must remain Pending
+	// (not Failed) — both writes rolled back with the outer tx.
+	var eventCount int
+	err = pool.DB().QueryRow(ctx,
+		`SELECT count(*) FROM saga_events WHERE instance_id = $1`, string(inst.ID)).Scan(&eventCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, eventCount, "saga_events must be empty after outer rollback")
+
+	var status int16
+	err = pool.DB().QueryRow(ctx,
+		`SELECT status FROM saga_instances WHERE id = $1`, string(inst.ID)).Scan(&status)
+	require.NoError(t, err)
+	require.Equal(t, int16(sagamod.StatusPending), status,
+		"status must remain Pending after MarkTerminal outer rollback")
+}
+
+// TestPGSagaJournal_AppendOutsideAmbientTx_StillAtomic ensures the no-
+// ambient path (caller has no outer RunInTx) still uses an internally-
+// opened tx so the multi-statement Append remains atomic.
+func TestPGSagaJournal_AppendOutsideAmbientTx_StillAtomic(t *testing.T) {
+	pool := sharedPG.NewPerTestPool(t)
+	clk := clockmock.New(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC))
+	j, err := saga.NewJournal(pool.DB(), clk)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	inst := sagajournaltest.NewInstanceFixture(t, "pg-noambient-append", clk.Now())
+	require.NoError(t, j.Enqueue(ctx, inst))
+	claimed, _, err := j.ClaimPending(ctx, 1, 10*time.Second)
+	require.NoError(t, err)
+	require.NotEmpty(t, claimed)
+	ci := claimed[0]
+
+	version, err := j.Append(ctx, ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind:     journal.KindStepStarted,
+		StepName: idutil.SafeID("step-one"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), version)
+
+	events, err := j.Load(ctx, ci.Instance.ID)
+	require.NoError(t, err)
+	require.Len(t, events, 1, "no-ambient Append committed; Load returns the single event")
+
+	var curVersion int64
+	err = pool.DB().QueryRow(ctx,
+		`SELECT current_version FROM saga_instances WHERE id = $1`, string(inst.ID)).Scan(&curVersion)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), curVersion,
+		"current_version must advance when caller has no ambient tx (saga opens its own)")
+}
+
+// TestPGSagaJournal_ClaimPendingInsideAmbientTx_RollsBackOnOuterFailure
+// guards the ClaimPending branch: even though ClaimPending uses a single
+// CTE (no explicit Begin in saga), it routes through pgExecutor which
+// joins ambient tx — so a leased instance MUST revert to claimable when
+// the outer tx rolls back.
+func TestPGSagaJournal_ClaimPendingInsideAmbientTx_RollsBackOnOuterFailure(t *testing.T) {
+	pool := sharedPG.NewPerTestPool(t)
+	clk := clockmock.New(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC))
+	j, err := saga.NewJournal(pool.DB(), clk)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	inst := sagajournaltest.NewInstanceFixture(t, "pg-ambient-claim-rollback", clk.Now())
+	require.NoError(t, j.Enqueue(ctx, inst))
+
+	txm := adapterpg.NewTxManager(pool)
+	rollbackErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		claimed, leaseID, claimErr := j.ClaimPending(txCtx, 1, 10*time.Second)
+		require.NoError(t, claimErr)
+		require.NotEmpty(t, claimed, "ClaimPending inside ambient tx must see the enqueued instance")
+		require.NotEmpty(t, leaseID)
+		return sentinelOuterFailure
+	})
+	require.ErrorIs(t, rollbackErr, sentinelOuterFailure)
+
+	// Instance must still be claimable — the lease minted inside the rolled-
+	// back tx must not persist.
+	var leaseSet bool
+	err = pool.DB().QueryRow(ctx,
+		`SELECT lease_id IS NOT NULL FROM saga_instances WHERE id = $1`, string(inst.ID)).Scan(&leaseSet)
+	require.NoError(t, err)
+	require.False(t, leaseSet,
+		"lease_id must be NULL after outer RunInTx rollback (ClaimPending must join ambient tx)")
 }

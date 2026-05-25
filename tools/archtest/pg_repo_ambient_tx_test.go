@@ -209,7 +209,7 @@ const (
 	poolFieldName               = "pool"
 	approvedMarkerImportPath    = "github.com/ghbvf/gocell/pkg/pgrepoapproved"
 	approvedMarkerFuncName      = "ApprovedExecDirect"
-	expectedPGAdapterPackageMin = 3 // discovery coverage floor; see ADR §3.
+	expectedPGAdapterPackageMin = 4 // discovery coverage floor; see ADR §3.
 )
 
 // pgAdapterPackagesCache holds the once-computed result of
@@ -1364,6 +1364,7 @@ func TestPGRepoAmbientTx_DiscoveryCoverage(t *testing.T) {
 
 	expected := []string{
 		"github.com/ghbvf/gocell/adapters/postgres",
+		"github.com/ghbvf/gocell/adapters/postgres/saga",
 		"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres",
 		"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/adapters/postgres",
 	}

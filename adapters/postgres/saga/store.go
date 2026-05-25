@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	kerrors "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -19,42 +19,35 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
-// DB abstracts the database operations PGJournal needs. The backing handle is
-// typically a *pgxpool.Pool; tests can substitute a thin fake satisfying this
-// interface. Mirrors the relayDB pattern in adapters/postgres/outbox_db.go but
-// scoped to this subpackage so the parent package's relayDB stays internal.
-type DB interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
 // PGJournal implements kernel/saga/journal.Journal over PostgreSQL.
 //
-// Each lease-fenced mutation (Append / MarkTerminal) opens its own short
-// transaction that combines the lease check, projection update, and event
-// insert atomically. ClaimPending uses a CTE with FOR UPDATE SKIP LOCKED so
-// concurrent claimers see disjoint candidate sets. Heartbeat is a single
-// UPDATE under lease_id CAS.
+// All SQL ops route through pgExecutor (pg_executor.go), which is ambient-tx
+// aware via kernel/persistence.TxFromContext. Multi-statement mutations
+// (Append / MarkTerminal / ClaimPending) acquire a transaction via
+// pgExecutor.acquireTx — joining the ambient tx when one is present
+// (Coordinator.commitStep wraps Append + outbox.Emit + RegisterAfterCommit in
+// one txRunner.RunInTx; saga MUST join so an Emit failure rolls back the
+// journal write together with the outbox row, preserving the L2 OutboxFact
+// invariant). When no ambient tx is present, acquireTx opens a fresh one and
+// the caller takes ownership of Commit / Rollback.
 type PGJournal struct {
-	db    DB
+	db    pgExecutor
 	clock clock.Clock
 }
 
 // Compile-time assertion.
 var _ journal.Journal = (*PGJournal)(nil)
 
-// NewJournal constructs a PGJournal backed by db. clk is required; a nil or
+// NewJournal constructs a PGJournal backed by pool. clk is required; a nil or
 // typed-nil Clock panics via clock.MustHaveClock (programmer error, matching
 // the kernel/ wiring convention shared with MemJournal / outbox).
-func NewJournal(db DB, clk clock.Clock) (*PGJournal, error) {
-	if db == nil {
+func NewJournal(pool *pgxpool.Pool, clk clock.Clock) (*PGJournal, error) {
+	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"saga journal: NewJournal requires non-nil DB handle")
+			"saga journal: NewJournal requires non-nil pool")
 	}
 	clock.MustHaveClock(clk, "saga journal: NewJournal requires non-nil Clock")
-	return &PGJournal{db: db, clock: clk}, nil
+	return &PGJournal{db: newPGExecutor(pool), clock: clk}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -88,12 +81,16 @@ const updateInstanceAfterAppend = `UPDATE saga_instances
 	WHERE id = $3 AND lease_id = $4`
 
 // updateInstanceTerminal flips status to a terminal value, releases the lease
-// (both lease columns NULL), and stamps updated_at. CAS-fenced on lease_id
-// (same defense-in-depth rationale as updateInstanceAfterAppend).
+// (both lease columns NULL), advances current_version (the terminal event
+// gets the new version stamped in saga_events; the projection must stay in
+// lock-step or replay-from-projection paths see a stale version counter),
+// and stamps updated_at. CAS-fenced on lease_id (same defense-in-depth
+// rationale as updateInstanceAfterAppend).
 //
 // $1 finalStatus, $2 now, $3 instanceID, $4 leaseID.
 const updateInstanceTerminal = `UPDATE saga_instances
-	SET status = $1, lease_id = NULL, lease_expires_at = NULL, updated_at = $2
+	SET status = $1, current_version = current_version + 1,
+		lease_id = NULL, lease_expires_at = NULL, updated_at = $2
 	WHERE id = $3 AND lease_id = $4`
 
 // insertEvent appends one row to saga_events. PK (instance_id, version)
@@ -129,11 +126,16 @@ const instanceExistsQuery = `SELECT 1 FROM saga_instances WHERE id = $1`
 // folding Load output, so the projection's version counter is opaque to
 // ClaimPending consumers (mirrors memjournal which exposes no currentVersion
 // in ClaimedInstance).
+//
+// Lease-expiry boundary semantics: memjournal's fenced check is `!Before(now)`
+// — at exact equality the lease is STILL VALID. SQL aligns: claim eligibility
+// uses strict `< $now` so a lease whose expires_at equals now is NOT reclaim-
+// eligible (matching the fenced "valid" verdict from the journal Go side).
 const claimPendingQuery = `WITH picked AS MATERIALIZED (
 		SELECT id, started_at
 		FROM saga_instances
 		WHERE status IN (1, 2, 3)
-			AND (lease_id IS NULL OR lease_expires_at <= $4::timestamptz)
+			AND (lease_id IS NULL OR lease_expires_at < $4::timestamptz)
 		ORDER BY started_at, id
 		LIMIT $3
 		FOR UPDATE SKIP LOCKED
@@ -156,15 +158,22 @@ const claimPendingQuery = `WITH picked AS MATERIALIZED (
 // expired); RowsAffected==0 signals lost lease. The `now` parameter source is
 // the injected clock (see claimPendingQuery rationale).
 //
+// Boundary semantics: `>= $now` keeps heartbeat consistent with memjournal's
+// fenced ("lease valid at exact equality"). Strict `> $now` would race the
+// claim predicate `< $now` and leave an instant where both reject.
+//
 // $1 lease window microseconds (text), $2 instance id, $3 lease id,
 // $4 now (timestamptz).
 const heartbeatQuery = `UPDATE saga_instances
 	SET lease_expires_at = $4::timestamptz + ($1 || ' microseconds')::interval
-	WHERE id = $2 AND lease_id = $3 AND lease_expires_at > $4::timestamptz`
+	WHERE id = $2 AND lease_id = $3 AND lease_expires_at >= $4::timestamptz`
 
-// repoReadyQuery is a cost-free probe: parses + plans against the
-// saga_instances relation but never reads a row. Mirrors session_store.go.
-const repoReadyQuery = `SELECT 1 FROM saga_instances WHERE false`
+// repoReadyQuery probes BOTH saga relations so schema/migration drift on
+// either table surfaces independently of pool-level health. UNION ALL with
+// WHERE false plans both relations without reading any row.
+const repoReadyQuery = `SELECT 1 FROM saga_instances WHERE false
+	UNION ALL
+	SELECT 1 FROM saga_events WHERE false`
 
 // ---------------------------------------------------------------------------
 // Journal interface implementation
@@ -194,21 +203,22 @@ func (s *PGJournal) Enqueue(ctx context.Context, instance saga.Instance) error {
 	return nil
 }
 
-// Append validates the event, then under one transaction reads the projection
-// (FOR UPDATE), checks the lease fence, advances the status via
-// saga.AdvanceSaga, bumps current_version, and inserts the event row. Returns
-// the assigned version on success.
+// Append acquires a transaction (joining the ambient tx if present), reads
+// the projection (FOR UPDATE), checks the lease fence, validates the event,
+// advances the status via saga.AdvanceSaga, bumps current_version, and
+// inserts the event row. Returns the assigned version on success.
+//
+// Error precedence matches memjournal: instance-existence and lease fence are
+// checked BEFORE Event.ValidateForAppend so a bad payload on an unknown
+// instance returns ErrSagaNotFound (not ErrValidationFailed). Conformance
+// suite locks this with Append_UnknownInstanceWithBadPayload_PrefersNotFound.
 func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeID, event journal.Event) (int64, error) {
-	if err := event.ValidateForAppend(); err != nil {
-		return 0, err
-	}
-
-	tx, err := s.db.Begin(ctx)
+	tx, owned, err := s.db.acquireTx(ctx)
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGConnect,
-			"saga journal: Append begin tx", err)
+			"saga journal: Append acquireTx", err)
 	}
-	committed := false
+	committed := !owned // ambient tx: caller owns lifecycle; we don't Commit/Rollback
 	defer func() {
 		if !committed {
 			_ = tx.Rollback(context.WithoutCancel(ctx))
@@ -217,7 +227,6 @@ func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeI
 
 	row, err := selectInstanceLocked(ctx, tx, instanceID)
 	if err != nil {
-		// Append semantics: unknown instance → typed KindNotFound.
 		if errors.Is(err, errInstanceMissingSentinel) {
 			return 0, journal.NewInstanceNotFoundError(instanceID)
 		}
@@ -227,6 +236,12 @@ func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeI
 	now := s.clock.Now()
 	if !fenced(row, leaseID, now) {
 		return 0, journal.NewStaleLeaseError(instanceID, leaseID)
+	}
+
+	// Validate after fence so unknown-instance / stale-lease take precedence
+	// over event-shape errors (memjournal parity).
+	if err := event.ValidateForAppend(); err != nil {
+		return 0, err
 	}
 
 	// Build a working saga.Instance for AdvanceSaga's transition gate; only
@@ -258,11 +273,13 @@ func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeI
 			"saga journal: Append insert event failed", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return 0, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGConnect,
-			"saga journal: Append commit failed", err)
+	if owned {
+		if err := tx.Commit(ctx); err != nil {
+			return 0, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGConnect,
+				"saga journal: Append commit failed", err)
+		}
+		committed = true
 	}
-	committed = true
 	return version, nil
 }
 
@@ -427,15 +444,17 @@ func (s *PGJournal) Heartbeat(ctx context.Context, instanceID, leaseID idutil.Sa
 }
 
 // MarkTerminal transitions the instance to finalStatus and appends the
-// matching terminal event atomically. (false, nil) on stale lease / missing
-// instance; KindInvalid on a non-terminal finalStatus or illegal transition.
+// matching terminal event atomically. Joins the ambient tx when one is
+// present (Coordinator wraps commitStep in RunInTx). (false, nil) on stale
+// lease / missing instance; KindInvalid on a non-terminal finalStatus or
+// illegal transition.
 func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil.SafeID, finalStatus saga.Status) (bool, error) {
-	tx, err := s.db.Begin(ctx)
+	tx, owned, err := s.db.acquireTx(ctx)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGConnect,
-			"saga journal: MarkTerminal begin tx", err)
+			"saga journal: MarkTerminal acquireTx", err)
 	}
-	committed := false
+	committed := !owned
 	defer func() {
 		if !committed {
 			_ = tx.Rollback(context.WithoutCancel(ctx))
@@ -489,11 +508,13 @@ func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil
 			"saga journal: MarkTerminal insert event failed", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGConnect,
-			"saga journal: MarkTerminal commit failed", err)
+	if owned {
+		if err := tx.Commit(ctx); err != nil {
+			return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGConnect,
+				"saga journal: MarkTerminal commit failed", err)
+		}
+		committed = true
 	}
-	committed = true
 	return true, nil
 }
 

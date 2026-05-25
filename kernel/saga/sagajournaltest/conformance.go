@@ -122,6 +122,16 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"LeaderHandoff_ReadsCompensatingPhase", conformLeaderHandoffReadsCompensatingPhase},
 		{"ClaimPending_NonPositiveLeaseDuration_KindInvalid", conformClaimPendingNonPositiveLeaseDuration},
 		{"Heartbeat_NonPositiveLeaseDuration_KindInvalid", conformHeartbeatNonPositiveLeaseDuration},
+		// PR-04 review carry-over: lease exact-equality boundary (memjournal
+		// fenced uses !Before(now) → valid at ==; PG SQL must align).
+		{"Append_ExactlyAtLeaseExpiry_StillValid", conformAppendExactlyAtLeaseExpiryStillValid},
+		{"ClaimPending_ExactlyAtLeaseExpiry_NotEligible", conformClaimPendingExactlyAtLeaseExpiryNotEligible},
+		{"Heartbeat_ExactlyAtLeaseExpiry_StillExtends", conformHeartbeatExactlyAtLeaseExpiryStillExtends},
+		// PR-04 review carry-over: Append error precedence — instance-existence
+		// and lease fence take precedence over event-shape validation.
+		{"Append_UnknownInstanceWithBadPayload_PrefersNotFound", conformAppendUnknownWithBadPayloadPrefersNotFound},
+		// PR-04 review carry-over: MaxPayloadBytes contract.
+		{"Append_PayloadOverMaxBytes_KindInvalid", conformAppendPayloadOverMaxBytes},
 	}
 
 	for _, tc := range cases {
@@ -1819,5 +1829,164 @@ func conformHeartbeatNonPositiveLeaseDuration(t *testing.T, factory Factory) {
 		if ok {
 			t.Errorf("Heartbeat(leaseDuration=%s): want ok=false, got ok=true", d)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PR-04 carry-over: lease exact-equality boundary + error precedence + payload cap
+// ---------------------------------------------------------------------------
+
+// conformAppendExactlyAtLeaseExpiryStillValid asserts the journal's lease
+// boundary contract: at exact equality (clk.Now() == leaseExpiresAt) the
+// lease is STILL VALID (`!Before(now)` semantic). Append at this instant
+// must succeed; the boundary is symmetric across mem and PG.
+func conformAppendExactlyAtLeaseExpiryStillValid(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	const lease = 10 * time.Second
+	startedAt := clk.Now()
+	inst := NewInstanceFixture(t, "inst-expiry-append-equal", startedAt)
+	mustEnqueue(t, j, inst)
+
+	claimed, _, err := j.ClaimPending(context.Background(), 1, lease)
+	if err != nil || len(claimed) == 0 {
+		t.Fatalf(fmtClaimErr, err, len(claimed))
+	}
+	ci := findClaimed(t, claimed, inst.ID)
+
+	// Advance EXACTLY to the lease expiry instant.
+	clk.Advance(lease)
+
+	_, err = j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind:     journal.KindStepStarted,
+		StepName: stepOne,
+	})
+	if err != nil {
+		t.Errorf("Append at exact lease expiry (now == leaseExpiresAt): want success, got %v", err)
+	}
+}
+
+// conformClaimPendingExactlyAtLeaseExpiryNotEligible asserts the converse
+// boundary: at exact equality the lease is still valid, so another claim
+// MUST NOT reclaim it.
+func conformClaimPendingExactlyAtLeaseExpiryNotEligible(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	const lease = 10 * time.Second
+	inst := NewInstanceFixture(t, "inst-expiry-claim-equal", clk.Now())
+	mustEnqueue(t, j, inst)
+
+	claimedA, leaseA, err := j.ClaimPending(context.Background(), 1, lease)
+	if err != nil || len(claimedA) == 0 {
+		t.Fatalf(fmtClaimErr, err, len(claimedA))
+	}
+	_ = leaseA
+
+	clk.Advance(lease) // exactly at expiry
+
+	claimedB, _, err := j.ClaimPending(context.Background(), 1, lease)
+	if err != nil {
+		t.Fatalf("ClaimPending at exact expiry: %v", err)
+	}
+	if len(claimedB) != 0 {
+		t.Errorf("ClaimPending at exact lease expiry: want no reclaim (lease still valid), got %d", len(claimedB))
+	}
+}
+
+// conformHeartbeatExactlyAtLeaseExpiryStillExtends asserts Heartbeat at
+// exact equality extends the lease (still valid → ok=true).
+func conformHeartbeatExactlyAtLeaseExpiryStillExtends(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	const lease = 10 * time.Second
+	inst := NewInstanceFixture(t, "inst-expiry-hb-equal", clk.Now())
+	mustEnqueue(t, j, inst)
+
+	claimed, _, err := j.ClaimPending(context.Background(), 1, lease)
+	if err != nil || len(claimed) == 0 {
+		t.Fatalf(fmtClaimErr, err, len(claimed))
+	}
+	ci := findClaimed(t, claimed, inst.ID)
+
+	clk.Advance(lease)
+
+	ok, err := j.Heartbeat(context.Background(), ci.Instance.ID, ci.LeaseID, lease)
+	if err != nil {
+		t.Errorf("Heartbeat at exact expiry: unexpected error %v", err)
+	}
+	if !ok {
+		t.Errorf("Heartbeat at exact lease expiry: want ok=true (lease still valid), got ok=false")
+	}
+}
+
+// conformAppendUnknownWithBadPayloadPrefersNotFound asserts that Append
+// applied to a never-enqueued instance returns ErrSagaNotFound (KindNotFound)
+// even when the event payload is also invalid — instance-existence and lease
+// fence take precedence over event-shape validation. This contract makes
+// operator routing predictable across mem and PG.
+func conformAppendUnknownWithBadPayloadPrefersNotFound(t *testing.T, factory Factory) {
+	t.Helper()
+	j, _, cleanup := factory(t)
+	defer cleanup()
+
+	_, err := j.Append(context.Background(), neverEnqueuedID, anyLease, journal.Event{
+		Kind:     journal.KindStepStarted,
+		StepName: stepOne,
+		Payload:  []byte(`not-valid-json`), // also invalid; precedence test
+	})
+	if err == nil {
+		t.Fatal("Append on unknown instance with bad payload: want error, got nil")
+	}
+	if !isKindNotFound(err) {
+		t.Errorf("want KindNotFound (precedence over payload validation), got %v", err)
+	}
+	requireCode(t, err, errcode.ErrSagaNotFound)
+}
+
+// conformAppendPayloadOverMaxBytes asserts the MaxPayloadBytes contract is
+// enforced at the journal boundary (rejected before any DB / lock write).
+func conformAppendPayloadOverMaxBytes(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	inst := NewInstanceFixture(t, "inst-payload-overcap", clk.Now())
+	mustEnqueue(t, j, inst)
+	claimed, _, err := j.ClaimPending(context.Background(), 1, shortLease)
+	if err != nil || len(claimed) == 0 {
+		t.Fatalf(fmtClaimErr, err, len(claimed))
+	}
+	ci := findClaimed(t, claimed, inst.ID)
+
+	// Build a payload exactly MaxPayloadBytes+1 long. Use a JSON object
+	// shape that would otherwise parse, so the size check is what fires.
+	const headerLen = 6 // `{"x":"`
+	const footerLen = 2 // `"}`
+	padLen := journal.MaxPayloadBytes - headerLen - footerLen + 1
+	pad := make([]byte, padLen)
+	for i := range pad {
+		pad[i] = 'a'
+	}
+	over := append(append([]byte(`{"x":"`), pad...), []byte(`"}`)...)
+	if len(over) != journal.MaxPayloadBytes+1 {
+		t.Fatalf("test fixture length mismatch: got %d want %d", len(over), journal.MaxPayloadBytes+1)
+	}
+
+	_, err = j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind:     journal.KindStepStarted,
+		StepName: stepOne,
+		Payload:  over,
+	})
+	if err == nil {
+		t.Fatal("Append with oversize payload: want error, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("Append with oversize payload: want KindInvalid, got %v", err)
 	}
 }
