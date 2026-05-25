@@ -38,13 +38,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/internal/authtest"
 	"github.com/ghbvf/gocell/runtime/observability/tracingtest"
 )
 

@@ -81,7 +81,7 @@ production 代码（`cmd/corebundle/secrets.go:30`）可以直接调用，且编
 以低成本锁定：
 
 - `runtime/auth/keystest/`（新建，承接迁移来的三个 RSA key Must*）
-- `runtime/auth/authtest/`（既有 policy fixture 包，不变）
+- `runtime/internal/authtest/`（既有 policy fixture 包；本 ADR 落地时位于 `runtime/auth/authtest/`，issue #638 移入 `internal/` 升级 visibility 到 Hard，详见 `202605251700-adr-authtest-internal-path.md`）
 - `pkg/contracttest/`
 - `pkg/testutil/fileutil/`
 - `kernel/cell/celltest/`
@@ -146,9 +146,9 @@ shim、无 namespace 共存：
 迁包同时在 `runtime/auth/keys.go` 新增 production error-first `GenerateRSAKeyPair`，
 修复 `cmd/corebundle/secrets.go:30` 处 production 代码误调 test-only fn。
 
-注：`runtime/auth/authtest/` 是既有 policy fixture 包（`authtest/policy.go`），与本次
-RSA key 迁包无关，两个子包分工不同：`keystest/` 承接 key 生成测试工具，`authtest/` 承接
-policy fixture 工具。
+注：`runtime/internal/authtest/`（本 ADR 落地时位于 `runtime/auth/authtest/`，issue #638
+移入 `internal/`）是既有 policy fixture 包（`authtest/policy.go`），与本次 RSA key 迁包无关，
+两个子包分工不同：`keystest/` 承接 key 生成测试工具，`authtest/` 承接 policy fixture 工具。
 
 ### D3. archtest 声明侧守卫（Medium 次防线）
 
@@ -295,7 +295,7 @@ system 表达"function name 必须有 receiver"。
 Test fixture 包路径前缀（`testFixturePkgPrefixes` slice，这些路径下不扫描）：
 
 - `runtime/auth/keystest`（RSA key test-only fn，本次迁包目标）
-- `runtime/auth/authtest`（既有 policy fixture 包，不变）
+- `runtime/internal/authtest`（既有 policy fixture 包；本 ADR 落地时位于 `runtime/auth/authtest`，issue #638 移入 `internal/`）
 - `pkg/contracttest`
 - `pkg/testutil`
 - `kernel/cell/celltest`
