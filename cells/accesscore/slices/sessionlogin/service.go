@@ -728,7 +728,7 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // admin/UI to handle. The 401 enumeration-collapse design lives only on the
 // public Login endpoint where any unauthenticated requester can probe.
 //
-// Wire envelope note (#11): IssueForUser re-wraps any credentialauthority.Assert
+// Wire envelope note (ADR §A15 P2-2): IssueForUser re-wraps any credentialauthority.Assert
 // failure at the boundary into a clean user-visible "account is not active"
 // message (ErrAuthUserNotActive / KindPermissionDenied / 403). The original
 // "credential not authoritative" jargon from credentialauthority is retained

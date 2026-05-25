@@ -554,6 +554,13 @@ func (s *Service) rejectIfUserNotActive(ctx context.Context, user *domain.User, 
 		return nil
 	}
 	s.cascadeRevoke(ctx, sessionID, "user-not-active")
+	// Emit the user dimension explicitly: cascadeRevoke logs only reason +
+	// session_id, but operators auditing an account suspension need to trace
+	// refresh-chain cleanup by user_id. Mirrors the subject_id/subject fields
+	// that rejectIfRevokedSession / rejectIfStaleEpoch already log.
+	s.logger.Warn("session-refresh: user-not-active rejected",
+		slog.String("user_id", user.ID),
+		slog.String("session_id", sessionID))
 	return authRefreshRejected()
 }
 
