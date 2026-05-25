@@ -97,7 +97,7 @@ func TestL2Atomicity_appender_RollsBack(t *testing.T) {
 
 	failSvc, err := appender.NewService(
 		spec, failStore, proto, slog.Default(), fc,
-		appender.WithEmitter(failingEmitter{}),
+		appender.WithEmitter(outbox.WrapEmitterForCell(failingEmitter{})),
 		appender.WithTxManager(persistence.WrapForCell(failTxm)),
 	)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestL2Atomicity_appender_RollsBack(t *testing.T) {
 
 	okSvc, err := appender.NewService(
 		spec, okStore, proto, slog.Default(), fc,
-		appender.WithEmitter(passThroughEmitter{}),
+		appender.WithEmitter(outbox.WrapEmitterForCell(passThroughEmitter{})),
 		appender.WithTxManager(persistence.WrapForCell(okTxm)),
 	)
 	require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestL2Atomicity_appender_ReplayIdempotent(t *testing.T) {
 
 	svc, err := appender.NewService(
 		spec, store, proto, slog.Default(), fc,
-		appender.WithEmitter(passThroughEmitter{}),
+		appender.WithEmitter(outbox.WrapEmitterForCell(passThroughEmitter{})),
 		appender.WithTxManager(persistence.WrapForCell(txm)),
 	)
 	require.NoError(t, err)

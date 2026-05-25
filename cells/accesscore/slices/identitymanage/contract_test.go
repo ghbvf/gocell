@@ -110,7 +110,7 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 	refreshStore := newIdentityRefreshStore()
 	writer := &contractRecordingWriter{}
 	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(contractTxRunner{})),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(contractTxRunner{})),
 		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithOutbox: %v", err)

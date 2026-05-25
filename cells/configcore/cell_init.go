@@ -124,7 +124,7 @@ func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
 // (outbox.Entry.FailurePolicy) lets individual topics opt into fail-open;
 // configwrite uses the default.
 func (c *ConfigCore) resolveEmitter(mode outbox.DurabilityMode) error {
-	outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "configcore",
 			Mode:              mode,
@@ -142,7 +142,7 @@ func (c *ConfigCore) resolveEmitter(mode outbox.DurabilityMode) error {
 	if err != nil {
 		return err
 	}
-	c.emitter = outcome.Emitter
+	c.emitter = resolved
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
 	return nil

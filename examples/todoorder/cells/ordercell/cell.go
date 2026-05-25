@@ -106,7 +106,7 @@ type OrderCell struct {
 	*cell.BaseCell
 	repo     domain.OrderRepository
 	txRunner persistence.CellTxManager
-	emitter  outbox.Emitter
+	emitter  outbox.CellEmitter
 	// Outbox wiring — writer accumulated via WithOutboxWriter and composed into
 	// emitter at Init() via outbox.ResolveCellEmitter. ordercell is L2 OutboxFact:
 	// writer+txRunner is the only supported sink. Sealed marker types prevent
@@ -265,9 +265,9 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 // platform cells (accesscore/auditcore/configcore) use. ordercell only
 // supports the writer+txRunner sink (L2 OutboxFact).
 // After this call, pendingOutboxWriter is cleared and c.emitter is the
-// composed sink.
+// composed sealed CellEmitter.
 func (c *OrderCell) resolveOutboxDeps(mode outbox.DurabilityMode) error {
-	outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:       "ordercell",
 			Mode:         mode,
@@ -281,7 +281,7 @@ func (c *OrderCell) resolveOutboxDeps(mode outbox.DurabilityMode) error {
 	if err != nil {
 		return err
 	}
-	c.emitter = outcome.Emitter
+	c.emitter = resolved
 	c.pendingOutboxWriter = nil
 	return nil
 }

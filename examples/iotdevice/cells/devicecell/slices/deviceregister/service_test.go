@@ -129,7 +129,7 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
@@ -147,7 +147,7 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
@@ -166,7 +166,7 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(logger),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(repo, logger, WithEmitter(emitter), WithClock(clock.Real()))
+	svc, err := NewService(repo, logger, WithEmitter(outbox.WrapEmitterForCell(emitter)), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-log"})

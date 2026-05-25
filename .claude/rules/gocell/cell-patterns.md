@@ -125,20 +125,25 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 | `persistence.TxRunner` | `persistence.CellTxManager` | `persistence.WrapForCell` |
 | `outbox.Publisher` | `outbox.CellPublisher` | `outbox.WrapPublisherForCell` |
 | `outbox.Writer` | `outbox.CellWriter` | `outbox.WrapWriterForCell` |
+| `outbox.Emitter` | `outbox.CellEmitter` | `outbox.WrapEmitterForCell` |
 
 按 cell 真实能力声明 cell-specific Option：
 
-- Platform cell L1/L2（`cells/*`）：`WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`
+- Platform cell L1/L2（`cells/*`）：`WithOutboxDeps(pub outbox.CellPublisher, writer outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`；预组装 emitter 走 `WithEmitter(e outbox.CellEmitter)`（与 WithOutboxDeps 互斥）
 - Example ordercell L2（无 publisher 路径）：`WithOutboxWriter(w outbox.CellWriter)` + `WithTxManager(tx persistence.CellTxManager)`
 - Example devicecell L4（无 writer，无 txRunner）：`WithDirectPublisher(p outbox.CellPublisher)`
 
-Wrapper 函数**仅允许**在以下位置调用（archtest `CELL-RAW-INFRA-WRAPPER-LOCATION-01` 守卫）：
+> `outbox.CellEmitter` 额外 embed `DurabilityReporter` + `healthz.ProbeSet`（sealed wrapper 否则会隐藏内层 `Durable()`/`Probes()`），使 forwarding 编译期强制——详见 ADR `202605101900` Amendment 2026-05-25。其它三个 marker 无此下游断言点，不需要。
+
+Wrapper 函数**仅允许**在以下位置调用（archtest `CELL-RAW-INFRA-WRAPPER-LOCATION-01` 守卫；archtest 是权威源，本列表是参考）：
 
 - `cmd/*` 任意文件（composition root）
 - `examples/<demo>/main.go` / `examples/<demo>/app.go` / `examples/<demo>/run.go`（example composition root；run.go is the hand-written half of the K#10 main+run split, see cmd/corebundle pattern）
 - `*_test.go` 任意路径（测试构造 fake）
 - `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go`（marker 定义本身）
-- `kernel/outbox/demo_tx_runner.go`（`DemoCellTxManager()` 工厂）
+- `kernel/outbox/demo_tx_runner.go`（`DemoCellTxManager()` / `DemoCellEmitter()` / `NewDirectCellEmitter()` 工厂；后者是 L4 direct-publish 的 sealed CellEmitter 构造，不走 `ResolveCellEmitter` 的 L2 atomicity warn）
+- `kernel/outbox/mode_resolver.go`（`ResolveCellEmitter` 把 kernel-built emitter wrap 成 sealed CellEmitter）
+- `kernel/outbox/outboxtest/recorder.go`（`(*Recorder).CellEmitter()` test seam）
 
 **Hard 防线（type system）**：cells/* 持 sealed 字段 + With\* 接 sealed 参数，raw infra 在 compile 期不可入 cell。`Wrap*ForCell` 用 `validation.IsNilInterface` 拒 typed-nil，避免 typed-nil 包成非 nil sealed 值绕过 `Init()` 与 `cell.CheckNotNoop`（PR 441 F1 修复）。
 

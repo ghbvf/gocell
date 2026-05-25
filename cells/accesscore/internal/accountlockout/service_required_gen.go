@@ -21,7 +21,7 @@ func (s *Service) validateRequired() error {
 	}
 	if validation.IsNilInterface(s.emitter) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accountlockout.NewService: outbox.Emitter required")
+			"accountlockout.NewService: outbox.CellEmitter required")
 	}
 	if validation.IsNilInterface(s.clk) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,

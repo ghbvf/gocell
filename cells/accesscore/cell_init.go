@@ -50,7 +50,7 @@ func (c *AccessCore) resolveEmitter(mode outbox.DurabilityMode) error {
 	if c.pendingOutboxWriter == nil {
 		txRunnerForEmitter = nil
 	}
-	outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "accesscore",
 			Mode:              mode,
@@ -68,7 +68,7 @@ func (c *AccessCore) resolveEmitter(mode outbox.DurabilityMode) error {
 	if err != nil {
 		return err
 	}
-	c.emitter = outcome.Emitter
+	c.emitter = resolved
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
 	return nil

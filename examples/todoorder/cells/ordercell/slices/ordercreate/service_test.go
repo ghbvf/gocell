@@ -36,11 +36,11 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 
 var _ outbox.Writer = (*recordingWriter)(nil)
 
-func mustEmitter(t testing.TB, w outbox.Writer) outbox.Emitter {
+func mustEmitter(t testing.TB, w outbox.Writer) outbox.CellEmitter {
 	t.Helper()
 	emitter, err := outbox.NewWriterEmitter(w)
 	require.NoError(t, err)
-	return emitter
+	return outbox.WrapEmitterForCell(emitter)
 }
 
 type stubTxRunner struct {
@@ -76,7 +76,7 @@ func TestService_Create(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, err := NewService(mem.NewOrderRepository(), slog.Default(),
-				WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+				WithEmitter(outbox.DemoCellEmitter()),
 				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 				WithClock(clock.Real()),
 			)
@@ -154,7 +154,7 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	// Demo mode: NoopWriter validates entries then discards. Same outbox code path.
 	repo := mem.NewOrderRepository()
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+		WithEmitter(outbox.DemoCellEmitter()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()),
 	)
@@ -172,7 +172,7 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 func TestService_Create_PersistsOrder(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+		WithEmitter(outbox.DemoCellEmitter()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()),
 	)
@@ -202,7 +202,7 @@ func (failRepo) Create(_ context.Context, _ *domain.Order) error {
 
 func TestService_Create_RepoFailure(t *testing.T) {
 	svc, err := NewService(failRepo{}, slog.Default(),
-		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+		WithEmitter(outbox.DemoCellEmitter()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()),
 	)
@@ -228,7 +228,7 @@ func TestNewService_NilDep(t *testing.T) {
 			name: "nil repo",
 			repo: nil,
 			opts: []Option{
-				WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+				WithEmitter(outbox.DemoCellEmitter()),
 				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 				WithClock(clock.Real()),
 			},
@@ -238,7 +238,7 @@ func TestNewService_NilDep(t *testing.T) {
 		{
 			name:     "nil txRunner",
 			repo:     mem.NewOrderRepository(),
-			opts:     []Option{WithEmitter(mustEmitter(t, outbox.NoopWriter{})), WithClock(clock.Real())},
+			opts:     []Option{WithEmitter(outbox.DemoCellEmitter()), WithClock(clock.Real())},
 			wantCode: errcode.ErrCellInvalidConfig,
 			wantMsg:  "TxRunner required",
 		},
@@ -258,7 +258,7 @@ func TestNewService_NilDep(t *testing.T) {
 // TestService_NilTxRunner_FailsFast verifies that NewService rejects nil TxRunner.
 func TestService_NilTxRunner_FailsFast(t *testing.T) {
 	_, err := NewService(mem.NewOrderRepository(), slog.Default(),
-		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+		WithEmitter(outbox.DemoCellEmitter()),
 		// No WithTxManager — txRunner remains nil.
 		WithClock(clock.Real()),
 	)

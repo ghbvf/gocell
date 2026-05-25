@@ -39,7 +39,7 @@ func toDeviceRegisteredEvent(d *domain.Device) deviceRegisteredEvent {
 // Service handles device registration business logic.
 type Service struct {
 	repo    domain.DeviceRepository `gocell:"required"`
-	emitter outbox.Emitter
+	emitter outbox.CellEmitter
 	logger  *slog.Logger
 	clock   clock.Clock
 }
@@ -47,8 +47,9 @@ type Service struct {
 // Option configures a device-register Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter.
-func WithEmitter(e outbox.Emitter) Option {
+// WithEmitter sets the event emitter. Accepts outbox.CellEmitter (sealed
+// marker); callers in _test.go may use outbox.WrapEmitterForCell(e).
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -71,7 +72,7 @@ func WithClock(clk clock.Clock) Option {
 func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
 		repo:    repo,
-		emitter: outbox.NewNoopEmitter(),
+		emitter: outbox.DemoCellEmitter(),
 		logger:  logger,
 		clock:   clock.Real(),
 	}

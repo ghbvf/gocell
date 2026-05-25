@@ -19,8 +19,9 @@ import (
 // Option configures a session-logout Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter.
-func WithEmitter(e outbox.Emitter) Option {
+// WithEmitter sets the event emitter. Accepts a sealed outbox.CellEmitter;
+// typed-nil inputs are silently ignored (builder-option semantics).
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -44,7 +45,7 @@ type Service struct {
 	sessionStore session.Store             `gocell:"required"`
 	refreshStore refresh.Store             `gocell:"required"`
 	txRunner     persistence.CellTxManager `gocell:"required" gocellErr:"sessionlogout: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter      outbox.Emitter
+	emitter      outbox.CellEmitter
 	logger       *slog.Logger
 }
 
@@ -63,7 +64,7 @@ func NewService(
 	s := &Service{
 		sessionStore: sessionStore,
 		refreshStore: refreshStore,
-		emitter:      outbox.NewNoopEmitter(),
+		emitter:      outbox.DemoCellEmitter(),
 		logger:       logger,
 	}
 	for _, o := range opts {

@@ -3,6 +3,8 @@ package outbox
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
@@ -53,4 +55,51 @@ func (DemoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 // CELL-RAW-INFRA-WRAPPER-LOCATION-01.
 func DemoCellTxManager() persistence.CellTxManager {
 	return persistence.WrapForCell(DemoTxRunner{})
+}
+
+// DemoCellEmitter returns a sealed CellEmitter backed by NewNoopEmitter (a
+// NoopWriter-backed WriterEmitter). It is the emitter-leg analog of
+// DemoCellTxManager: composition roots and test builders that previously
+// passed a raw outbox.NewNoopEmitter() to a cell/slice WithEmitter now pass
+// DemoCellEmitter() so the public Option accepts the sealed CellEmitter.
+//
+// The wrapped emitter is non-durable (Durable()==false via NoopWriter), so a
+// durable assembly that forgets a real emitter still surfaces the error at
+// ResolveCellEmitter rather than silently losing L2 atomicity.
+//
+// The wrap call is restricted to this file by archtest
+// CELL-RAW-INFRA-WRAPPER-LOCATION-01.
+func DemoCellEmitter() CellEmitter {
+	return WrapEmitterForCell(NewNoopEmitter())
+}
+
+// NewDirectCellEmitter returns a sealed CellEmitter backed by a DirectEmitter,
+// for cells that publish directly with no transactional outbox by design —
+// e.g. L4 DeviceLatent cells (KG-07: no outbox writer / txRunner). It composes
+// NewDirectEmitter + WrapEmitterForCell so a public WithEmitter Option receives
+// a sealed CellEmitter.
+//
+// Use this instead of ResolveCellEmitter for L4 direct-publish: unlike
+// ResolveCellEmitter it carries NO cellvocab.L2 non-durable atomicity Warn.
+// For L4 direct publish the absence of an outbox writer/txRunner is the
+// intended production mode, not a demo degradation, so the L2 warning would be
+// misleading. This is the "typed function choice" sibling of ResolveCellEmitter
+// (mode-driven L1/L2/L3 resolution): the direct-publish-by-design semantic is
+// expressed by the API name, not by a runtime suppression flag.
+//
+// The durable-publisher guard (outbox.CheckNotNoop) is the caller's
+// responsibility before this path; this constructor does not re-derive
+// durability mode. The wrapped DirectEmitter is non-durable (Durable()==false)
+// and forwards its fail-open Probes() through the sealed wrapper.
+//
+// The wrap call is restricted to this file by archtest
+// CELL-RAW-INFRA-WRAPPER-LOCATION-01.
+func NewDirectCellEmitter(
+	p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, clk clock.Clock, cellID string, opts ...DirectEmitterOption,
+) (CellEmitter, error) {
+	de, err := NewDirectEmitter(p, mode, mp, clk, cellID, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return WrapEmitterForCell(de), nil
 }

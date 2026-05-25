@@ -74,7 +74,7 @@ func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Ser
 		cfg.logger,
 		cfg.clk,
 		configwrite.WithTxManager(outbox.DemoCellTxManager()),
-		configwrite.WithEmitter(rec),
+		configwrite.WithEmitter(rec.CellEmitter()),
 	)
 	if err != nil {
 		t.Fatalf("configcoretest.BuildWriteService: %v", err)

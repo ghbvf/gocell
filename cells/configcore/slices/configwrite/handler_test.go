@@ -302,7 +302,7 @@ func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{
@@ -325,7 +325,7 @@ func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
@@ -352,7 +352,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(tx)))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	// Create

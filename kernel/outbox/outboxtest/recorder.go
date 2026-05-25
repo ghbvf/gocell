@@ -2,9 +2,12 @@
 // unit tests.
 //
 // Use in tests only — package name follows the "*test" test-infrastructure
-// convention; production code must not import this package (enforced by
-// tools/archtest/celltest_import_scope_test.go for the cells/*/*test/ naming
-// pattern and by tools/archtest/testutil_boundary_test.go for *testutil paths).
+// convention; production code must not import this package, enforced by
+// tools/archtest/outboxtest_import_boundary_test.go (OUTBOXTEST-IMPORT-BOUNDARY-01).
+// The sibling rules celltest_import_scope_test.go (cells/*/*test) and
+// testutil_boundary_test.go (*testutil paths) do NOT cover this kernel package —
+// hence the dedicated boundary rule. Broad generalization to all kernel/runtime
+// *test packages is tracked in gh issue #986.
 package outboxtest
 
 import (
@@ -42,6 +45,21 @@ type Recorder struct {
 
 // NewRecorder returns an empty Recorder.
 func NewRecorder() *Recorder { return &Recorder{} }
+
+// CellEmitter returns the Recorder sealed as an outbox.CellEmitter so it can be
+// passed to a cell/slice public WithEmitter Option (which accepts the sealed
+// marker, not a raw Emitter). The Recorder is still usable for assertions via
+// the original *Recorder handle — wrapping does not consume it. The returned
+// CellEmitter reports Durable()==false (Recorder is not a DurabilityReporter),
+// so durable-mode (DurabilityDurable) tests must use a real WriterEmitter
+// instead. This is the test-emitter analog of outbox.DemoCellEmitter for the
+// asserting case; the
+// WrapEmitterForCell call is restricted to this file by archtest
+// CELL-RAW-INFRA-WRAPPER-LOCATION-01 (outboxtest is test-only infrastructure,
+// importable from production code is forbidden — see package doc).
+func (r *Recorder) CellEmitter() outbox.CellEmitter {
+	return outbox.WrapEmitterForCell(r)
+}
 
 // Emit captures entry. Always returns nil — Recorder does not simulate
 // emit-time failures; tests that need fail-injection should compose a custom

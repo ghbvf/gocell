@@ -27,8 +27,8 @@ type Option func(*Service)
 
 // WithEmitter sets the outbox emitter used to publish event.audit.appended.v1
 // after each successful Append. Nil is a silent noop; the default
-// outbox.NewNoopEmitter() stays in place.
-func WithEmitter(e outbox.Emitter) Option {
+// outbox.DemoCellEmitter() stays in place.
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -55,7 +55,7 @@ type Service struct {
 	store    ledger.Store
 	protocol *ledger.Protocol
 	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"auditappender: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter  outbox.Emitter
+	emitter  outbox.CellEmitter
 	logger   *slog.Logger
 	clk      clock.Clock
 }
@@ -81,7 +81,7 @@ func NewService(
 		spec:     spec,
 		store:    store,
 		protocol: protocol,
-		emitter:  outbox.NewNoopEmitter(),
+		emitter:  outbox.DemoCellEmitter(),
 		logger:   logger,
 		clk:      clk,
 	}

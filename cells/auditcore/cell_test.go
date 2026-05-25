@@ -307,7 +307,7 @@ func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithClock(clock.Real()),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithEmitter(outbox.NewNoopEmitter()),
+		WithEmitter(outbox.DemoCellEmitter()),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))
 	assert.NotNil(t, c.emitter)
@@ -324,7 +324,7 @@ func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithClock(clock.Real()),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithEmitter(outbox.NewNoopEmitter()),
+		WithEmitter(outbox.DemoCellEmitter()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo))
@@ -347,7 +347,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithCursorCodec(cursorCodec),
-		WithEmitter(outbox.NewNoopEmitter()), // non-durable
+		WithEmitter(outbox.DemoCellEmitter()), // non-durable
 		WithTxManager(outbox.DemoCellTxManager()),
 	)
 	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
@@ -652,7 +652,7 @@ func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 		WithClock(clock.Real()),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no ProbeSet method
+		WithEmitter(outbox.DemoCellEmitter()), // WriterEmitter — no ProbeSet method
 	)
 	recorder := newTestRecorder()
 	require.NoError(t, c.Init(context.Background(), recorder))

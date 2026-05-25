@@ -83,8 +83,9 @@ func callerHasRole(ctx context.Context, role string) bool {
 // Option configures an identity-manage Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter.
-func WithEmitter(e outbox.Emitter) Option {
+// WithEmitter sets the event emitter. Accepts a sealed outbox.CellEmitter;
+// typed-nil inputs are silently ignored (builder-option semantics).
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -160,7 +161,7 @@ type Service struct {
 	invalidator                  *credentialinvalidate.Invalidator `gocell:"required"`
 	authzmutator                 *authzmutate.Mutator
 	txRunner                     persistence.CellTxManager `gocell:"required" gocellErr:"identitymanage: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter                      outbox.Emitter
+	emitter                      outbox.CellEmitter
 	logger                       *slog.Logger
 	tokenIssuer                  TokenIssuer `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingTokenIssuer" gocellErr:"identity-manage: tokenIssuer is required; wire via WithTokenIssuer"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	clock                        clock.Clock
@@ -203,7 +204,7 @@ func NewService(
 	s := &Service{
 		repo:        repo,
 		invalidator: invalidator,
-		emitter:     outbox.NewNoopEmitter(),
+		emitter:     outbox.DemoCellEmitter(),
 		logger:      logger,
 		hasher:      credential.NewProductionHasher(),
 	}

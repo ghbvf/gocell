@@ -15,10 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	cctestutil "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -53,7 +55,7 @@ func setupWriteService(t *testing.T) writeBundle {
 	txMgr := adapterpg.NewTxManager(pool)
 
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, outboxWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
@@ -179,7 +181,7 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
 
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
@@ -205,7 +207,7 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	// succeed, proving the rollback assertion above is not vacuously trivial
 	// (i.e., Create genuinely writes a row on the happy path).
 	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real()))),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real())))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
@@ -233,7 +235,7 @@ func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
 
 	// Phase 1: seed the entry with a pass-through writer so the Create commits.
 	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real()))),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real())))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
@@ -249,7 +251,7 @@ func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
 	// a failing writer. Update must error and the row must stay at version 1.
 	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
 	failSvc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
@@ -285,7 +287,7 @@ func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
 
 	// Phase 1: seed the entry with a pass-through writer so the Create commits.
 	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real()))),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real())))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)
@@ -299,7 +301,7 @@ func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
 	// Phase 2: failing-writer Service — Delete must error and the row must survive.
 	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
 	failSvc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
 	require.NoError(t, err)

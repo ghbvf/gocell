@@ -40,7 +40,7 @@ func TestConfigCore_AfterStart_StartsTombstoneGC(t *testing.T) {
 		WithTombstoneTTL(testTombstoneTTL),
 		WithEventbusCacheCollector(obmetrics.NoopEventbusCacheCollector{}),
 		WithInMemoryDefaults(),
-		WithEmitter(outbox.NewNoopEmitter()),
+		WithEmitter(outbox.DemoCellEmitter()),
 	)
 	require.NoError(t, c.Init(ctx, newTestRecorder()))
 	require.NoError(t, c.Start(ctx))
@@ -83,7 +83,7 @@ func TestConfigCore_BeforeStop_SafeWhenGCNeverStarted(t *testing.T) {
 	c := NewConfigCore(
 		WithClock(fc),
 		WithInMemoryDefaults(),
-		WithEmitter(outbox.NewNoopEmitter()),
+		WithEmitter(outbox.DemoCellEmitter()),
 	)
 	require.NoError(t, c.Init(ctx, newTestRecorder()))
 	require.NoError(t, c.Start(ctx))

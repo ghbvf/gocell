@@ -413,7 +413,7 @@ func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	seedForService(repo, "k1", "v1")
@@ -441,7 +441,7 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(repo, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
 	seedForService(repo, "k3", "v3")

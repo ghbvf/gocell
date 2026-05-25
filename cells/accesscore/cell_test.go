@@ -390,7 +390,7 @@ func TestAccessCore_RefreshGCHookStartPropagatesWorkerConfigError(t *testing.T) 
 // a pre-composed outbox.Emitter skips outbox.ResolveEmitter entirely.
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
 func TestInit_WithEmitter_DirectInjection(t *testing.T) {
-	emitter := outbox.NewNoopEmitter()
+	emitter := outbox.DemoCellEmitter()
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
@@ -423,7 +423,7 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithEmitter(outbox.NewNoopEmitter()),
+		WithEmitter(outbox.DemoCellEmitter()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
 		withTestCASProtocol(),
 		withTestSetupLock(),
@@ -450,7 +450,7 @@ func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithCursorCodec(testCursorCodec),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithEmitter(outbox.NewNoopEmitter()), // non-durable
+		WithEmitter(outbox.DemoCellEmitter()), // non-durable
 		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
 		withTestSetupLock(),

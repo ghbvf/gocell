@@ -94,7 +94,8 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	sessID := seedContractSession(sessionRepo)
 	svc, err := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, &recordingWriter{}))),
+		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	require.NoError(t, err)
 
 	mux := celltest.NewTestMux()
@@ -123,7 +124,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	writer := &recordingWriter{}
 	svc := mustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	sessID := seedContractSession(sessionRepo)
 
@@ -197,7 +198,7 @@ func TestService_Logout_OutboxWriteError(t *testing.T) {
 	seedContractSession(sessionRepo)
 	failWriter := &recordingWriter{err: errors.New("outbox unavailable")}
 	svc := mustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	err := svc.Logout(context.Background(), testutil.TestID("sess-1"), testutil.TestID("usr-1"))
 	require.Error(t, err, "Logout must propagate outbox.Write error to preserve L2 atomicity")

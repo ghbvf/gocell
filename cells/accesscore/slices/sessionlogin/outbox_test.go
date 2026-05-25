@@ -115,7 +115,7 @@ func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc := mustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewStore(clock.Real()).RoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)),
+		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithClock(clock.Real()),
 		WithSessionTTL(time.Hour))
@@ -175,7 +175,7 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 	tx := &stubTxRunner{}
 
 	svc := mustNewService(userRepo, sessionStore, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
-		WithEmitter(emitter),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)),
 		WithTxManager(persistence.WrapForCell(tx)),
 		WithClock(clock.Real()),
 		WithSessionTTL(time.Hour))
@@ -205,7 +205,7 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	// so the service runs explicit session cleanup on emit failure.
 	refreshStore := &cleanupRefreshStoreSpy{Store: newOutboxRefreshStore()}
 	svc := mustNewService(userRepo, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default(),
-		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})),
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		WithClock(clock.Real()), WithSessionTTL(time.Hour))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)

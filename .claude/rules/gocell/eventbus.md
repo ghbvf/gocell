@@ -57,7 +57,7 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 type Service struct {
     repo     domain.XxxRepository   `gocell:"required"`
     txRunner persistence.CellTxManager `gocell:"required" gocellKind:"KindInvalid" gocellCode:"ErrValidationFailed" gocellErr:"xxx: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-    emitter  outbox.Emitter            // optional — no tag
+    emitter  outbox.CellEmitter        // optional — no tag (sealed marker; raw outbox.Emitter is forbidden in cell/slice public Options)
 }
 
 func NewService(..., opts ...Option) (*Service, error) {

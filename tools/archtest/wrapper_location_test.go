@@ -2,14 +2,17 @@
 //   - INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01
 //
 // CELL-RAW-INFRA-WRAPPER-LOCATION-01 — persistence.WrapForCell /
-// outbox.WrapPublisherForCell / outbox.WrapWriterForCell are the sole
-// authorized paths for handing raw infra types into a cell's With* Option.
-// They MUST be called only from composition roots (cmd/* +
-// examples/<demo>/main.go + examples/<demo>/app.go + examples/<demo>/run.go)
-// or *_test.go. Any other
+// outbox.WrapPublisherForCell / outbox.WrapWriterForCell /
+// outbox.WrapEmitterForCell are the sole authorized paths for handing raw
+// infra types into a cell's With* Option. They MUST be called only from
+// composition roots (cmd/* + examples/<demo>/main.go + examples/<demo>/app.go
+// + examples/<demo>/run.go) or *_test.go, plus the kernel-internal resolution
+// funnel kernel/outbox/mode_resolver.go (ResolveCellEmitter wraps the
+// kernel-built DirectEmitter/WriterEmitter into a sealed CellEmitter — the
+// analog of demo_tx_runner.go for the emitter leg). Any other
 // caller — most importantly a cell package — risks recreating the bypass
 // that the sealed marker (kernel/persistence.CellTxManager,
-// kernel/outbox.CellPublisher / CellWriter) eliminated.
+// kernel/outbox.CellPublisher / CellWriter / CellEmitter) eliminated.
 //
 // AI-robust 评级：Medium (archtest type-aware via typeseval.SharedResolver
 // caller-package check). The sealed marker is the AI-HARD field/assignment
@@ -43,6 +46,7 @@ var wrapperFunctionsCanonical = map[string]bool{
 	"github.com/ghbvf/gocell/kernel/persistence.WrapForCell":     true,
 	"github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell": true,
 	"github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell":    true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell":   true,
 }
 
 type wrapperViolation struct {
@@ -66,6 +70,14 @@ type wrapperViolation struct {
 //   - kernel/outbox/demo_tx_runner.go (DemoCellTxManager factory; the only
 //     kernel-internal helper that wraps a known noop fallback for cells —
 //     keeps cells/* free of any wrap call site)
+//   - kernel/outbox/mode_resolver.go (ResolveCellEmitter resolution funnel;
+//     wraps the kernel-built DirectEmitter/WriterEmitter into a sealed
+//     CellEmitter so cells store CellEmitter uniformly — the emitter-leg
+//     analog of demo_tx_runner.go; cells/* never call WrapEmitterForCell)
+//   - kernel/outbox/outboxtest/recorder.go (Recorder.CellEmitter test seam;
+//     outboxtest is test-only infrastructure that production code may not
+//     import, so wrapping a Recorder into a sealed CellEmitter here keeps
+//     cell/slice test builders off any direct WrapEmitterForCell call)
 //   - cells/accesscore/{mem,postgres}/bundle.go (cell-owned Bundle factories;
 //     ACCESSCORE-BUNDLE-FUNNEL-01 funnel — single sanctioned holder of the
 //     (UserRepo, RoleRepo, SetupLock, TxRunner) quadruple per backend.
@@ -85,6 +97,8 @@ func isWrapperCallerAllowed(rel string) bool {
 	case "kernel/persistence/cell_marker.go",
 		"kernel/outbox/cell_marker.go",
 		"kernel/outbox/demo_tx_runner.go",
+		"kernel/outbox/mode_resolver.go",
+		"kernel/outbox/outboxtest/recorder.go",
 		"cells/accesscore/mem/bundle.go",
 		"cells/accesscore/postgres/bundle.go":
 		return true
@@ -168,6 +182,7 @@ func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
 func allowlistDescription() string {
 	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
 		"kernel/{persistence,outbox}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
+		"kernel/outbox/mode_resolver.go | kernel/outbox/outboxtest/recorder.go | " +
 		"cells/accesscore/{mem,postgres}/bundle.go"
 }
 
@@ -246,6 +261,8 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 		"fixture must trigger outbox.WrapPublisherForCell detection")
 	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"],
 		"fixture must trigger outbox.WrapWriterForCell detection")
+	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell"],
+		"fixture must trigger outbox.WrapEmitterForCell detection")
 
 	// dotimport.go uses `import . "kernel/outbox"` and writes the wrap
 	// calls without a package selector — call.Fun is *ast.Ident, not
@@ -259,6 +276,8 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 		"WrapPublisherForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
 	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell"]), 2,
 		"WrapWriterForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
+	assert.GreaterOrEqual(t, len(gotLines["github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell"]), 2,
+		"WrapEmitterForCell must be detected via SelectorExpr (violation.go) AND *ast.Ident dot-import (dotimport.go)")
 }
 
 // INVARIANT: CELL-RAW-INFRA-WRAPPER-LOCATION-01

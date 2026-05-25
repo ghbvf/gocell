@@ -55,7 +55,7 @@ type Service struct {
 	roleRepo    ports.RoleRepository              `gocell:"required" gocellErr:"rbacassign: roleRepo is required"`                 //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	invalidator *credentialinvalidate.Invalidator `gocell:"required" gocellErr:"rbacassign: invalidator is required"`              //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	txRunner    persistence.CellTxManager         `gocell:"required" gocellErr:"rbacassign: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter     outbox.Emitter
+	emitter     outbox.CellEmitter
 	logger      *slog.Logger
 }
 
@@ -63,10 +63,10 @@ type Service struct {
 type Option func(*Service)
 
 // WithEmitter sets the event emitter used for role-change outbox entries.
-// Typed-nil inputs are silently ignored (builder-option semantics, see
-// runtime-api.md Option Pattern Layering); the service defaults to
-// outbox.NewNoopEmitter() (demo mode wrapper).
-func WithEmitter(e outbox.Emitter) Option {
+// Accepts a sealed outbox.CellEmitter; typed-nil inputs are silently ignored
+// (builder-option semantics, see runtime-api.md Option Pattern Layering);
+// the service defaults to outbox.DemoCellEmitter() (demo mode wrapper).
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -98,7 +98,7 @@ func NewService(
 	s := &Service{
 		roleRepo:    roleRepo,
 		invalidator: invalidator,
-		emitter:     outbox.NewNoopEmitter(),
+		emitter:     outbox.DemoCellEmitter(),
 		logger:      logger,
 	}
 	for _, o := range opts {

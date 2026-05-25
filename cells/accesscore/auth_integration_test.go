@@ -384,7 +384,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	stubTx := &rbacStubTxRunner{}
 	assignSvc, err := rbacassign.NewService(
 		roleRepo, invalidator, slog.Default(),
-		rbacassign.WithEmitter(testoutbox.MustEmitter(t, stubWriter)),
+		rbacassign.WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, stubWriter))),
 		rbacassign.WithTxManager(persistence.WrapForCell(stubTx)),
 	)
 	require.NoError(t, err)

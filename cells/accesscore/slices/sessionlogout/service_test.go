@@ -266,7 +266,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc := mustNewService(store, newLogoutRefreshStore(), slog.Default(),
-		WithEmitter(emitter), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 
 	err = svc.Logout(context.Background(), "sess-pub", "usr-1")
 	require.NoError(t, err, "publish failure in demo mode should not fail logout")

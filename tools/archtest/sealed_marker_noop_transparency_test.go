@@ -1,23 +1,42 @@
 // INVARIANT: SEALED-MARKER-NOOP-TRANSPARENCY-01
 //
-// SEALED-MARKER-NOOP-TRANSPARENCY-01 — every internalCell* concrete type in
-// kernel/{persistence,outbox}/cell_marker.go must declare a `Noop() bool`
-// method. Without this method the sealed wrapper hides the inner Nooper
-// signal from outbox.CheckNotNoop / mode_resolver.isNooperDep, letting durable
-// assemblies silently accept demo runners/publishers/writers.
+// SEALED-MARKER-NOOP-TRANSPARENCY-01 — every internalCell* concrete struct
+// type anywhere under kernel/... must declare a `Noop() bool` method. Without
+// it the sealed wrapper hides the inner Nooper signal from outbox.CheckNotNoop
+// / mode_resolver.isNooperDep, letting durable assemblies silently accept demo
+// runners/publishers/writers; it also keeps every sealed marker uniformly
+// transparency-complete (a future Nooper-capable Emitter must not be hidden by
+// the CellEmitter wrapper).
 //
-// AI-robust 评级：Medium (AST receiver-type scan — type-aware on method
-// name + receiver identifier). Upgraded to Hard path is blocked: the
-// internalCell* types are unexported so go/types canonical cannot be used
-// without loading the package; AST scan is the appropriate tool here.
+// AI-robust 评级：Hard (typed auto-discovery via go/types package scope).
+// RunTyped loads ./kernel/... and the rule walks pass.Pkg.Scope().Names() for
+// internalCell*-prefixed struct TypeNames, asserting each carries Noop() bool
+// in its method set. There is NO hand-maintained file list: a new sealed-marker
+// package or type is discovered automatically, and an internalCell* struct
+// without Noop() fails CI. Upgraded from the previous Medium AST-file-list scan
+// (PR-A23 / #618 A.7).
+//
+// 盲区自检（所选工具 go/types scope walk 的声明范围外形态）:
+//   - discovery keys on the `internalCell` name prefix (the documented
+//     sealed-marker naming convention). A sealed marker struct NOT prefixed
+//     internalCell would escape discovery. The Medium→Hard target of A.7 is
+//     removing the hand-maintained *file list* (which silently skipped whole
+//     files) — that is achieved: any file/package under kernel/ is now covered
+//     without manual list maintenance. Fully name-agnostic discovery (by the
+//     unexported sealed*() marker method) is a further Hard-ening tracked in
+//     ADR 202605101900 amendment, out of scope here.
+//   - pointer-receiver Noop: the existing markers all use value receivers, so
+//     types.NewMethodSet(named) (value method set) suffices. A pointer-only
+//     Noop would be missed; the `found < 3` floor below would NOT catch that,
+//     but the per-type Noop assertion is the real guard and value receivers are
+//     the established convention (mirrors kernel/persistence + kernel/outbox
+//     cell_marker.go).
 //
 // **行为覆盖分工**：本 archtest 仅守 "method 存在 + 签名"（结构性约束）；
-// runtime 透传行为（inner=nooper → wrapped.Noop()=true / inner=non-nooper
-// → wrapped.Noop()=false）由 unit test 守 —
-//   - kernel/persistence/cell_marker_test.go::TestWrapForCell_PreservesNooperPassThrough
-//   - kernel/persistence/cell_marker_test.go::TestWrapForCell_NonNooperReturnsFalse
-//   - kernel/outbox/cell_marker_test.go::TestWrapPublisherForCell_PreservesNooperPassThrough
-//   - kernel/outbox/cell_marker_test.go::TestWrapWriterForCell_PreservesNooperPassThrough
+// runtime 透传行为由 unit test 守 —
+//   - kernel/persistence/cell_marker_test.go::TestWrapForCell_PreservesNooperPassThrough / _NonNooperReturnsFalse
+//   - kernel/outbox/cell_marker_test.go::TestWrapPublisherForCell_* / TestWrapWriterForCell_* /
+//     TestWrapEmitterForCell_PreservesNooperPassThrough / _NonNooperReturnsFalse
 //
 // archtest 加 runtime 行为断言是反模式（static analysis 工具不应内嵌运行时）；
 // 双层防线分工已完整。
@@ -26,110 +45,82 @@
 package archtest
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"path/filepath"
+	"go/types"
 	"strings"
 	"testing"
-
-	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
-
-// sealedMarkerFiles 列出所有需扫的 sealed marker 实施文件。
-// **维护约定**：新增 sealed marker 包（如 PR-A23 引入的 kernel/outbox CellEmitter）
-// 必须同步追加到此列表，否则 archtest 静默跳过新文件。
-// 自动发现可实现 Hard 升级（当前为 Medium）。
-var sealedMarkerFiles = []struct {
-	rel    string // path relative to module root
-	prefix string // unexported type name prefix to scan
-}{
-	{"kernel/persistence/cell_marker.go", "internalCell"},
-	{"kernel/outbox/cell_marker.go", "internalCell"},
-}
 
 // INVARIANT: SEALED-MARKER-NOOP-TRANSPARENCY-01
 //
-// TestSealedMarkerNoopTransparency01 asserts that every `internalCell*`
-// concrete type declared in the sealed marker files has a `Noop() bool`
-// method. This prevents a refactor from silently removing the Noop
-// pass-through and breaking outbox.CheckNotNoop's durable-mode rejection.
+// TestSealedMarkerNoopTransparency01 auto-discovers every `internalCell*`
+// concrete struct type under kernel/... and asserts each declares a
+// `Noop() bool` method. This prevents a refactor from silently removing the
+// Noop pass-through (breaking outbox.CheckNotNoop's durable-mode rejection)
+// and removes the prior hand-maintained file list (a new sealed-marker file
+// could be silently skipped).
 func TestSealedMarkerNoopTransparency01(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
 
-	for _, entry := range sealedMarkerFiles {
-		entry := entry
-		t.Run(entry.rel, func(t *testing.T) {
-			t.Parallel()
-			absPath := filepath.Join(root, filepath.FromSlash(entry.rel))
-			fset := token.NewFileSet()
-			f, err := parser.ParseFile(fset, absPath, nil, 0)
-			if err != nil {
-				t.Fatalf("SEALED-MARKER-NOOP-TRANSPARENCY-01: parse %s: %v", entry.rel, err)
+	found := 0
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/..."}, func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		scope := p.Pkg.Scope()
+		for _, name := range scope.Names() {
+			if !strings.HasPrefix(name, "internalCell") {
+				continue
 			}
-
-			// Collect all internalCell* struct type names via scanner.EachInSubtree[ast.TypeSpec].
-			// scanner.EachInSubtree uses ast.Preorder; TypeSpec nodes only appear under GenDecl
-			// at file scope, so preorder yields the same set as a manual Decls/Specs walk.
-			internalTypes := map[string]bool{}
-			scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-				if strings.HasPrefix(ts.Name.Name, entry.prefix) {
-					if _, isStruct := ts.Type.(*ast.StructType); isStruct {
-						internalTypes[ts.Name.Name] = false // false = Noop not yet found
-					}
-				}
-			})
-
-			if len(internalTypes) == 0 {
-				t.Fatalf("SEALED-MARKER-NOOP-TRANSPARENCY-01: no %s* struct types found in %s",
-					entry.prefix, entry.rel)
+			tn, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok {
+				continue
 			}
-
-			// Walk function declarations and find `Noop() bool` methods on
-			// each internalCell* receiver. receiverTypeName is defined in
-			// pg_repo_ambient_tx_test.go (package-level helper shared across
-			// tests in this package).
-			//
-			// scanner.EachInSubtree[ast.FuncDecl] is used per SCANNER-FRAMEWORK-USAGE-01.
-			// FuncDecl only appears at file-scope in Go AST (function literals are
-			// ast.FuncLit, not ast.FuncDecl), so preorder yields the same set as
-			// a manual Decls walk.
-			scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-				if fd.Recv == nil || fd.Name.Name != "Noop" {
-					return
-				}
-				// Check return type is `bool`.
-				if !noopFuncReturnsOnlyBool(fd) {
-					return
-				}
-				// Identify receiver type name via shared receiverTypeName helper.
-				recv := receiverTypeName(fd)
-				if recv != "" {
-					if _, monitored := internalTypes[recv]; monitored {
-						internalTypes[recv] = true
-					}
-				}
-			})
-
-			for typeName, hasNoop := range internalTypes {
-				if !hasNoop {
-					t.Errorf("SEALED-MARKER-NOOP-TRANSPARENCY-01: %s in %s missing Noop() bool method — "+
-						"sealed wrapper must expose inner Nooper signal for outbox.CheckNotNoop / isNooperDep",
-						typeName, entry.rel)
-				}
+			named, ok := tn.Type().(*types.Named)
+			if !ok {
+				continue
 			}
-		})
+			if _, isStruct := named.Underlying().(*types.Struct); !isStruct {
+				continue
+			}
+			found++
+			if !hasNoopBoolMethod(named) {
+				t.Errorf("SEALED-MARKER-NOOP-TRANSPARENCY-01: %s.%s missing Noop() bool method — "+
+					"sealed wrapper must expose inner Nooper signal for outbox.CheckNotNoop / isNooperDep",
+					p.Pkg.Path(), name)
+			}
+		}
+		return nil
+	})
+
+	// Floor guard against a silent discovery break (RunTyped scope resolving
+	// nothing, prefix typo, etc.): the known sealed markers are
+	// internalCellTxManager (kernel/persistence) + internalCellPublisher /
+	// internalCellWriter / internalCellEmitter (kernel/outbox) = 4. Assert we
+	// found at least those so a load regression cannot make this archtest
+	// vacuously pass. Bump this floor whenever a sealed marker is added.
+	if found < 4 {
+		t.Fatalf("SEALED-MARKER-NOOP-TRANSPARENCY-01: discovered only %d internalCell* struct types under "+
+			"kernel/...; expected ≥4 (auto-discovery likely broken)", found)
 	}
 }
 
-// noopFuncReturnsOnlyBool reports whether a function declaration has exactly
-// one result that is the identifier "bool". Local to sealed_marker tests;
-// named to avoid collision with other helpers in the archtest package.
-func noopFuncReturnsOnlyBool(fd *ast.FuncDecl) bool {
-	if fd.Type.Results == nil || fd.Type.Results.NumFields() != 1 {
-		return false
+// hasNoopBoolMethod reports whether named's value method set contains a
+// `Noop() bool` method (no params, single bool result). The sealed markers use
+// value receivers, so the value method set suffices.
+func hasNoopBoolMethod(named *types.Named) bool {
+	ms := types.NewMethodSet(named)
+	for i := 0; i < ms.Len(); i++ {
+		fn, ok := ms.At(i).Obj().(*types.Func)
+		if !ok || fn.Name() != "Noop" {
+			continue
+		}
+		sig, ok := fn.Type().(*types.Signature)
+		if !ok || sig.Params().Len() != 0 || sig.Results().Len() != 1 {
+			continue
+		}
+		if b, ok := sig.Results().At(0).Type().(*types.Basic); ok && b.Kind() == types.Bool {
+			return true
+		}
 	}
-	ident, ok := fd.Type.Results.List[0].Type.(*ast.Ident)
-	return ok && ident.Name == "bool"
+	return false
 }

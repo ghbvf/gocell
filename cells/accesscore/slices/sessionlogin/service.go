@@ -77,8 +77,9 @@ var dummyBcryptHash = func() []byte {
 // Option configures a session-login Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter.
-func WithEmitter(e outbox.Emitter) Option {
+// WithEmitter sets the event emitter. Accepts a sealed outbox.CellEmitter;
+// typed-nil inputs are silently ignored (builder-option semantics).
+func WithEmitter(e outbox.CellEmitter) Option {
 	return func(s *Service) {
 		if e != nil {
 			s.emitter = e
@@ -141,7 +142,7 @@ type Service struct {
 	roleRepo        ports.RoleRepository      `gocell:"required"`
 	refreshStore    refresh.Store             `gocell:"required"`
 	txRunner        persistence.CellTxManager `gocell:"required" gocellErr:"sessionlogin: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter         outbox.Emitter
+	emitter         outbox.CellEmitter
 	issuer          *auth.JWTIssuer `gocell:"required"`
 	logger          *slog.Logger
 	clock           clock.Clock
@@ -186,7 +187,7 @@ func NewService(
 		sessionStore:    sessionStore,
 		roleRepo:        roleRepo,
 		refreshStore:    refreshStore,
-		emitter:         outbox.NewNoopEmitter(),
+		emitter:         outbox.DemoCellEmitter(),
 		issuer:          issuer,
 		logger:          logger,
 		comparePassword: bcrypt.CompareHashAndPassword,

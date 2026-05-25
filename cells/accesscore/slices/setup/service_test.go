@@ -96,7 +96,7 @@ func newService(
 		setup.WithPasswordHasher(credential.NewTestHasher(bcrypt.MinCost)),
 	}
 	if w != nil {
-		opts = append(opts, setup.WithEmitter(testoutbox.MustEmitter(t, w)))
+		opts = append(opts, setup.WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, w))))
 	}
 	opts = append(opts, extraOpts...)
 	svc, err := setup.NewService(prov, discardLogger(), opts...)
