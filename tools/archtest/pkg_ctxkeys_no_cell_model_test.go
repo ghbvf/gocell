@@ -9,26 +9,38 @@
 // generic cross-service conventions. This boundary is documented in
 // pkg/ctxkeys/doc.go; this archtest is the static guard.
 //
-// Three Hard layers form a closed funnel; any single one fails CI.
+// Three Hard layers form a closed funnel; any single one fails CI. Layers
+// A/C run in typed mode (RunTyped + TypedOpts{Tests: false}) so that
+// (a) the walk naturally excludes _test.go files via Tests=false and
+// (b) value-expression resolution covers const-folded forms (BinaryExpr,
+// Ident-to-const, cross-package selector) via go/types — not just BasicLit.
 //
 //   - Layer A — production-AST ↔ golden double-direction diff.
-//     Every const name (ValueSpec.Names inside a const block), every
-//     function name (FuncDecl.Name), and every type name (TypeSpec.Name)
-//     declared in pkg/ctxkeys/ (production .go files, _test.go excluded)
-//     must equal the corresponding golden allowlist exactly. Adding any
-//     new identifier — cell-model or not — requires editing the golden
-//     in this file, which forces a reviewer to see the diff.
+//     Every value-decl name (ValueSpec.Names inside `const` OR `var`),
+//     every function name (FuncDecl.Name, including methods), and every
+//     type name (TypeSpec.Name) declared in pkg/ctxkeys/ production
+//     packages must equal the corresponding golden allowlist exactly.
+//     Adding any new identifier — cell-model or not, const or var —
+//     requires editing the golden in this file, which forces a reviewer
+//     to see the diff. `var` is included alongside `const` because a
+//     `var genericKey ctxKey = "cell_id"` declaration would otherwise
+//     slip through a const-only walk (closed in PR #1010 round 2).
 //
 //   - Layer B — golden contents reject cell-model substrings.
 //     Each golden allowlist entry is checked (case-insensitive) against
 //     {"cell", "slice", "journey", "contract"}. An AI that "just adds the
 //     name to the golden" to bypass Layer A still fails Layer B.
 //
-//   - Layer C — const string-literal values ↔ golden double-direction diff.
-//     Defends against `genericKey ctxKey = "cell_id"` shape: an innocuous
-//     constant name carrying a cell-model wire value. The set of allowed
-//     ctxKey string values is itself a golden, double-direction diffed
-//     against actual BasicLit STRING values in const ValueSpec.Values.
+//   - Layer C — value-expression string values ↔ golden double-direction
+//     diff. Defends against `genericKey ctxKey = "cell" + "_id"` shape:
+//     an innocuous identifier carrying a cell-model wire value via a
+//     constant-folding expression. The set of allowed wire string values
+//     is itself a golden, double-direction diffed against actual
+//     compile-time string values in const/var ValueSpec.Values, resolved
+//     via `EvaluateConstString` (covers BasicLit / Ident / SelectorExpr /
+//     BinaryExpr). Non-constant initializers (function calls etc.) yield
+//     no value and are skipped — Layer A's name golden still catches the
+//     declaration via its identifier name.
 //
 // Plus one boundary sanity sub-test (Boundary_file_shape_sanity):
 //
@@ -73,10 +85,12 @@
 //     jointly-impossible constraint for cell-model identifiers,
 //     closing the only escape path of interest.
 //
-// ref: tools/archtest/no_test_service_context_in_production_test.go
-// (production-only AST walk + _test.go skip pattern);
+// ref: tools/archtest/observability_metrics_test.go
+// (RunTyped + EvaluateConstString const-fold pattern);
+// tools/archtest/governance_rules_invariants_test.go
+// (EvaluateConstString for Ident / SelectorExpr / BinaryExpr forms);
 // tools/archtest/cells_no_contractspec_import_test.go
-// (DirsScope-narrowed pkg-boundary pattern).
+// (narrow pkg-boundary scope pattern).
 package archtest
 
 import (
@@ -84,6 +98,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"runtime"
 	"sort"
 	"strings"
@@ -99,11 +114,14 @@ const rulePkgCtxkeysNoCellModel = "PKG-CTXKEYS-NO-CELL-MODEL-01"
 // contractAttrs) at the substring level.
 var cellModelSubstrings = []string{"cell", "slice", "journey", "contract"}
 
-// allowedPkgCtxkeysConstNames is the golden allowlist of unexported const
-// names declared inside any const block in pkg/ctxkeys/ production .go files.
-// Source of truth for Layer A's name-diff and Layer B's substring check.
-// Any addition requires PR review of this map.
-var allowedPkgCtxkeysConstNames = map[string]struct{}{
+// allowedPkgCtxkeysValueDeclNames is the golden allowlist of identifier
+// names declared in any value-spec (const OR var) ValueSpec in pkg/ctxkeys/
+// production .go files. Source of truth for Layer A's name-diff and Layer B's
+// substring check. Any addition requires PR review of this map. `const` is
+// the conventional declaration form for context keys (immutable wire
+// identifiers); `var` is included only to close the bypass surface — there
+// is no legitimate reason to declare a context key as `var`.
+var allowedPkgCtxkeysValueDeclNames = map[string]struct{}{
 	"correlationID": {},
 	"traceID":       {},
 	"spanID":        {},
@@ -160,33 +178,32 @@ type foundDecl struct {
 }
 
 // TestPkgCtxkeysNoCellModel01 enforces PKG-CTXKEYS-NO-CELL-MODEL-01 across
-// three layers (A/B/C) plus one file-shape sanity sub-test (B2). See file
-// header godoc for the full rationale and AI-robust framing.
+// three layers (A/B/C) plus one file-shape sanity sub-test. See file header
+// godoc for the full rationale and AI-robust framing.
 func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"pkg/ctxkeys"})
 
 	t.Run("LayerA_identifier_golden_diff", func(t *testing.T) {
 		t.Parallel()
-		diags := Run(t, scope, func(p *Pass) []Diagnostic {
-			actualConsts := make(map[string]foundDecl)
+		diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/ctxkeys/..."}, func(p *Pass) []Diagnostic {
+			actualValueDecls := make(map[string]foundDecl)
 			actualFuncs := make(map[string]foundDecl)
 			actualTypes := make(map[string]foundDecl)
 
 			for _, file := range p.Files {
 				rel := p.Rel(file)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				collectPkgCtxkeysIdentifiers(p.Fset, rel, file, actualConsts, actualFuncs, actualTypes)
+				collectPkgCtxkeysIdentifiers(p.Fset, rel, file, actualValueDecls, actualFuncs, actualTypes)
 			}
 
 			var ds []Diagnostic
-			ds = append(ds, diffNameSet("const", actualConsts, allowedPkgCtxkeysConstNames)...)
-			ds = append(ds, diffNameSet("func", actualFuncs, allowedPkgCtxkeysFuncNames)...)
-			ds = append(ds, diffNameSet("type", actualTypes, allowedPkgCtxkeysTypeNames)...)
+			ds = append(ds,
+				diffNameSet("value-decl", "allowedPkgCtxkeysValueDeclNames", actualValueDecls, allowedPkgCtxkeysValueDeclNames)...)
+			ds = append(ds,
+				diffNameSet("func", "allowedPkgCtxkeysFuncNames", actualFuncs, allowedPkgCtxkeysFuncNames)...)
+			ds = append(ds,
+				diffNameSet("type", "allowedPkgCtxkeysTypeNames", actualTypes, allowedPkgCtxkeysTypeNames)...)
 			return ds
 		})
 		Report(t, rulePkgCtxkeysNoCellModel, diags)
@@ -201,13 +218,14 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 				for _, sub := range cellModelSubstrings {
 					if strings.Contains(lower, sub) {
 						violations = append(violations, fmt.Sprintf(
-							"%s golden contains cell-model substring %q in %q — cell-model identifiers belong in kernel/ctxkeys/, not pkg/ctxkeys/",
+							"%s golden contains cell-model substring %q in %q — "+
+								"cell-model identifiers belong in kernel/ctxkeys/, not pkg/ctxkeys/",
 							kind, sub, name))
 					}
 				}
 			}
 		}
-		check("const", allowedPkgCtxkeysConstNames)
+		check("value-decl", allowedPkgCtxkeysValueDeclNames)
 		check("func", allowedPkgCtxkeysFuncNames)
 		check("type", allowedPkgCtxkeysTypeNames)
 		check("key-string-value", allowedPkgCtxkeysKeyStringValues)
@@ -219,14 +237,11 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 
 	t.Run("LayerC_key_string_value_golden_diff", func(t *testing.T) {
 		t.Parallel()
-		diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./pkg/ctxkeys/..."}, func(p *Pass) []Diagnostic {
 			actualValues := make(map[string]foundDecl)
 			for _, file := range p.Files {
 				rel := p.Rel(file)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				collectPkgCtxkeysConstStringValues(p.Fset, rel, file, actualValues)
+				collectPkgCtxkeysValueDeclStringValues(p.Fset, p.TypesInfo, rel, file, actualValues)
 			}
 			return diffStringValueSet(actualValues, allowedPkgCtxkeysKeyStringValues)
 		})
@@ -282,34 +297,40 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 	})
 }
 
-// collectPkgCtxkeysIdentifiers walks file and accumulates every const-block
-// identifier name, top-level FuncDecl name (including methods), and TypeSpec
-// name into the three out-maps, keyed by name with rel/line for diag.
+// collectPkgCtxkeysIdentifiers walks file and accumulates every value-decl
+// (token.CONST OR token.VAR) identifier name, every FuncDecl name (including
+// methods), and every TypeSpec name into the three out-maps, keyed by name
+// with rel/line for diag.
+//
+// `var` is included alongside `const` so a future `var genericKey ctxKey = ...`
+// declaration cannot bypass the golden — the original const-only walk had
+// exactly this gap (PR #1010 second-round review).
 func collectPkgCtxkeysIdentifiers(
 	fset *token.FileSet, rel string, file *ast.File,
-	consts, funcs, types map[string]foundDecl,
+	valueDecls, funcs, types map[string]foundDecl,
 ) {
 	EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
-		if gd.Tok != token.CONST && gd.Tok != token.TYPE {
-			return
-		}
-		for _, spec := range gd.Specs {
-			switch s := spec.(type) {
-			case *ast.ValueSpec:
-				if gd.Tok != token.CONST {
+		switch gd.Tok {
+		case token.CONST, token.VAR:
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				for _, name := range s.Names {
+				for _, name := range vs.Names {
 					if name.Name == "_" {
 						continue
 					}
-					consts[name.Name] = foundDecl{rel: rel, line: fset.Position(name.Pos()).Line}
+					valueDecls[name.Name] = foundDecl{rel: rel, line: fset.Position(name.Pos()).Line}
 				}
-			case *ast.TypeSpec:
-				if s.Name == nil || s.Name.Name == "_" {
+			}
+		case token.TYPE:
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok || ts.Name == nil || ts.Name.Name == "_" {
 					continue
 				}
-				types[s.Name.Name] = foundDecl{rel: rel, line: fset.Position(s.Name.Pos()).Line}
+				types[ts.Name.Name] = foundDecl{rel: rel, line: fset.Position(ts.Name.Pos()).Line}
 			}
 		}
 	})
@@ -321,14 +342,21 @@ func collectPkgCtxkeysIdentifiers(
 	})
 }
 
-// collectPkgCtxkeysConstStringValues walks file and accumulates every
-// BasicLit STRING value assigned in a const ValueSpec, keyed by unquoted
-// value. Layer C diff input.
-func collectPkgCtxkeysConstStringValues(
-	fset *token.FileSet, rel string, file *ast.File, out map[string]foundDecl,
+// collectPkgCtxkeysValueDeclStringValues walks file and accumulates every
+// compile-time-constant string value assigned in a const OR var ValueSpec,
+// keyed by unquoted value. Layer C diff input.
+//
+// Value resolution uses [EvaluateConstString] (go/types constant folding),
+// which covers BasicLit / Ident / SelectorExpr / BinaryExpr forms. This
+// closes the bypass `... = "cell" + "_id"` (binary expr) that the original
+// BasicLit-only walk missed (PR #1010 second-round review). Non-constant
+// expressions (e.g. `f()`) yield no value and are skipped — Layer A's name
+// golden still catches the declaration via its identifier name.
+func collectPkgCtxkeysValueDeclStringValues(
+	fset *token.FileSet, info *types.Info, rel string, file *ast.File, out map[string]foundDecl,
 ) {
 	EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
-		if gd.Tok != token.CONST {
+		if gd.Tok != token.CONST && gd.Tok != token.VAR {
 			return
 		}
 		for _, spec := range gd.Specs {
@@ -337,15 +365,11 @@ func collectPkgCtxkeysConstStringValues(
 				continue
 			}
 			for _, expr := range vs.Values {
-				lit, ok := expr.(*ast.BasicLit)
+				val, ok := EvaluateConstString(info, expr)
 				if !ok {
 					continue
 				}
-				val, ok := StringLitValue(lit)
-				if !ok {
-					continue
-				}
-				out[val] = foundDecl{rel: rel, line: fset.Position(lit.Pos()).Line}
+				out[val] = foundDecl{rel: rel, line: fset.Position(expr.Pos()).Line}
 			}
 		}
 	})
@@ -355,7 +379,12 @@ func collectPkgCtxkeysConstStringValues(
 // (extra) and any name in allowed not present in actual (missing). Both
 // directions force the golden to stay perfectly aligned with production — a
 // silent removal in keys.go can't drift the golden out of sync.
-func diffNameSet(kind string, actual map[string]foundDecl, allowed map[string]struct{}) []Diagnostic {
+//
+// `goldenVarName` is the exact `var ...` identifier in this file so
+// diagnostics can point the reviewer at the right map to edit; passed
+// explicitly (not derived from kind) so the {kind → golden} mapping stays
+// in the call site rather than relying on a name-construction convention.
+func diffNameSet(kind, goldenVarName string, actual map[string]foundDecl, allowed map[string]struct{}) []Diagnostic {
 	var ds []Diagnostic
 	for name, where := range actual {
 		if _, ok := allowed[name]; !ok {
@@ -366,13 +395,12 @@ func diffNameSet(kind string, actual map[string]foundDecl, allowed map[string]st
 					"new %s name %q not in PKG-CTXKEYS-NO-CELL-MODEL-01 golden — "+
 						"cell-model identifiers belong in kernel/ctxkeys/; if this is "+
 						"a legitimate observability/networking key, add it to "+
-						"allowedPkgCtxkeys%sNames in pkg_ctxkeys_no_cell_model_test.go",
-					kind, name, capitalizeKind(kind)),
+						"%s in pkg_ctxkeys_no_cell_model_test.go",
+					kind, name, goldenVarName),
 			})
 		}
 	}
-	goldenVar := "allowedPkgCtxkeys" + capitalizeKind(kind) + "Names"
-	goldenLine := goldenVarLine(goldenVar)
+	goldenLine := goldenVarLine(goldenVarName)
 	for name := range allowed {
 		if _, ok := actual[name]; !ok {
 			ds = append(ds, Diagnostic{
@@ -381,15 +409,15 @@ func diffNameSet(kind string, actual map[string]foundDecl, allowed map[string]st
 				Message: fmt.Sprintf(
 					"%s name %q present in PKG-CTXKEYS-NO-CELL-MODEL-01 golden %s "+
 						"but missing from pkg/ctxkeys/ — remove from %s",
-					kind, name, goldenVar, goldenVar),
+					kind, name, goldenVarName, goldenVarName),
 			})
 		}
 	}
 	return ds
 }
 
-// diffStringValueSet is Layer C's analog of diffNameSet for const string
-// literal values.
+// diffStringValueSet is Layer C's analog of diffNameSet for compile-time
+// string values folded out of const/var ValueSpec initializers.
 func diffStringValueSet(actual map[string]foundDecl, allowed map[string]struct{}) []Diagnostic {
 	var ds []Diagnostic
 	for val, where := range actual {
@@ -398,7 +426,7 @@ func diffStringValueSet(actual map[string]foundDecl, allowed map[string]struct{}
 				Rel:  where.rel,
 				Line: where.line,
 				Message: fmt.Sprintf(
-					"const string value %q not in PKG-CTXKEYS-NO-CELL-MODEL-01 golden — "+
+					"value-decl string value %q not in PKG-CTXKEYS-NO-CELL-MODEL-01 golden — "+
 						"cell-model wire keys belong in kernel/ctxkeys/; if this is a "+
 						"legitimate observability/networking key, add it to "+
 						"allowedPkgCtxkeysKeyStringValues",
@@ -413,22 +441,13 @@ func diffStringValueSet(actual map[string]foundDecl, allowed map[string]struct{}
 				Rel:  goldenSelfFile,
 				Line: goldenLine,
 				Message: fmt.Sprintf(
-					"const string value %q present in PKG-CTXKEYS-NO-CELL-MODEL-01 golden "+
+					"value-decl string value %q present in PKG-CTXKEYS-NO-CELL-MODEL-01 golden "+
 						"but missing from pkg/ctxkeys/ — remove from allowedPkgCtxkeysKeyStringValues",
 					val),
 			})
 		}
 	}
 	return ds
-}
-
-// capitalizeKind returns the kind string with the first letter uppercased,
-// so allowedPkgCtxkeys{Const,Func,Type}Names line up in diagnostic text.
-func capitalizeKind(kind string) string {
-	if kind == "" {
-		return kind
-	}
-	return strings.ToUpper(kind[:1]) + kind[1:]
 }
 
 // goldenVarLineCache lazily resolves the declaration line of each
