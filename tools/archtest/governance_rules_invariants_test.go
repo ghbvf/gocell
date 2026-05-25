@@ -6,14 +6,43 @@
 //
 // G-13 elevates governance rule registration from a hand-edited slice to an
 // archtest-guarded contract. The three invariants together catch:
-//   - forgotten registration (a new validate* method that never runs);
+//   - forgotten registration (a new validate*/checkDEP*/checkCH* method that
+//     never runs — GOVERNANCE-RULES-REGISTRATION-GUARD-01 orphan check);
 //   - drift between rule code literals and the rulecodes.go single source;
 //   - error findings emitted without remediation guidance in the typed Fix
 //     field, or built via a raw ValidationResult{} literal that bypasses the
 //     newError / newWarning / newErrorAt / newScopedError constructor funnel
 //     (#689 upgrade from the former "; fix:" Message-substring convention).
 //
-// ref: G-13 (governance rule registration archtest)
+// GOVERNANCE-RULES-REGISTRATION-GUARD-01 (INV-1) — allRules-based orphan check:
+// Verifies set equality: declared == registered, where:
+//   - declared = *Validator methods with signature func() []ValidationResult
+//     (zero params) AND name prefix in {validate, checkDEP, checkCH}. The
+//     prefix filter excludes same-signature helpers like ctmSliceToContract.
+//   - registered = method names extracted from the allRules package-level var
+//     composite literal in rules_registry.go. For each Rule element, the
+//     Detect: field is either a method expression (*Validator).NAME (collected)
+//     or a *ast.FuncLit (VERIFY-06 closure, skipped). Any other shape is fatal.
+//
+// VERIFY-06 consistency: validateVERIFY06 takes a ctx param → excluded from
+// declared (not func()[]VR); its allRules entry is a FuncLit → skipped in
+// registered. Both sides exclude it → they match. Its registration is
+// golden-locked by the in-package TestAllRulesMatchGolden (codeVERIFY06 ∈
+// allRules via the closure).
+//
+// AI-robust grading (INV-1):
+//   - downstream Hard: every allRules Detect must resolve to a real *Validator
+//     method expression — a typo'd/dangling method expression fails to compile,
+//     since allRules is production code (compiler-checked method expression).
+//   - upstream Medium: declared==registered set equality is archtest. The
+//     naming prefix {validate,checkDEP,checkCH} is a naming convention (Soft
+//     tier); the prefix filter is kept as the same tier as the pre-M3 validate*
+//     filter — not a regression. The golden code-set completeness (code ∈
+//     allRules for all 86 rule codes) lives in the in-package
+//     TestAllRulesMatchGolden, which is compiler-adjacent (RuleCode const set
+//     vs allRules slice size).
+//
+// ref: G-13 (governance rule registration archtest); #687 (M3-RULE-ENGINE)
 //
 // Performance note: each Test* function calls loadGovernancePackage (single
 // RunTyped over ./kernel/governance) or RunTyped over targeted fixture
@@ -44,25 +73,25 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// governancePkgPath is the import path of the package whose rules() and
-// strictRules() slices we enumerate.
+// governancePkgPath is the import path of the kernel/governance package.
 const governancePkgPath = "github.com/ghbvf/gocell/kernel/governance"
 
 // ruleCodesFile is the base name of the single-source file for RuleCode consts.
 const ruleCodesFile = "rulecodes.go"
 
-// TestGovernanceRulesRegistrationGuard verifies INV-1: every method on
-// *governance.Validator with the rule signature is referenced from rules()
-// or strictRules(). A rule signature is exactly one of:
+// TestGovernanceRulesRegistrationGuard verifies INV-1
+// (GOVERNANCE-RULES-REGISTRATION-GUARD-01): set equality declared == registered
+// where declared and registered are defined in the package-level godoc.
 //
-//   - func() []ValidationResult            (pure-memory rule)
-//   - func(context.Context) []ValidationResult   (ctx-bound rule — only VERIFY-06)
-//
-// Helper methods that take (*metadata.ContractMeta, ...) or similar arguments
-// fail the signature filter and are excluded.
+// A rule-shaped method has signature exactly func() []ValidationResult (zero
+// params) AND a name prefix in {validate, checkDEP, checkCH}. The prefix
+// filter excludes same-signature helpers like ctmSliceToContract,
+// ctmContractToSlice. validateVERIFY06 takes a ctx param → excluded from
+// declared; its FuncLit entry in allRules is skipped in registered. Both
+// sides exclude it, so the set equality holds.
 func TestGovernanceRulesRegistrationGuard(t *testing.T) {
 	t.Run("production_source_all_registered", testINV1ProductionSource)
-	t.Run("negative_fixture_shadow_receiver_rejected", testINV1ShadowReceiverFixture)
+	t.Run("negative_fixture_orphan_detection", testINV1OrphanFixture)
 }
 
 func testINV1ProductionSource(t *testing.T) {
@@ -71,7 +100,7 @@ func testINV1ProductionSource(t *testing.T) {
 
 	declared := declaredRuleMethodNames(t, pkg)
 
-	registered, fatal := extractRegisteredMethodNames(t, pkg)
+	registered, fatal := extractRegisteredFromAllRules(t, pkg)
 	if fatal != "" {
 		t.Fatal(fatal)
 	}
@@ -79,77 +108,81 @@ func testINV1ProductionSource(t *testing.T) {
 	missing := setDifference(declared, registered)
 	extra := setDifference(registered, declared)
 	assert.Empty(t, missing,
-		"validate* methods declared on *Validator but not registered in rules()/strictRules(): %v", missing)
+		"rule-shaped methods declared on *Validator but not registered in allRules: %v", missing)
 	assert.Empty(t, extra,
-		"names referenced in rules()/strictRules() but no matching validate* method on *Validator: %v", extra)
+		"names referenced in allRules Detect but no matching rule-shaped method on *Validator: %v", extra)
 }
 
-// testINV1ShadowReceiverFixture proves the receiver-type check is genuinely
-// active. The fixture rules() mixes a real *Validator method with a shadow
-// *OtherType method that has the same validate* name shape. The
-// receiver-type check must reject o.validateFOO; because extractFromCompositeLits
-// treats any unaccepted element as an unrecognized shape (refusing to silently
-// skip — the original loud-failure semantics), the rejection surfaces as a
-// non-empty fatal message anchored at the shadow line.
+// testINV1OrphanFixture proves the orphan-detection property of the new
+// allRules-based check. The fixture package declares:
+//   - type Validator + type ValidationResult + type Rule (minimal, matching
+//     the names the scan resolves);
+//   - var allRules = []Rule{...} referencing (*Validator).validateRegistered;
+//   - method validateRegistered() []ValidationResult — in allRules (registered);
+//   - method validateOrphan() []ValidationResult — NOT in allRules (orphan).
 //
-// Before the fail-closed fix, info.Types[sel.X] missed for every scanner-
-// parsed selector and the receiver check returned true unconditionally — both
-// methods would have been silently accepted, and the wrong receiver shadow
-// would not have triggered fatal.
-func testINV1ShadowReceiverFixture(t *testing.T) {
-	const fixturePattern = "./tools/archtest/testdata/governance_registration_guard_fixtures/shadow_receiver_red"
+// The test asserts that validateOrphan appears in the "declared but not
+// registered" set produced by extractRegisteredFromAllRules.
+//
+// This proves the check is ACTIVE: if extractRegisteredFromAllRules only read
+// declared and never checked allRules, validateOrphan would be missed; if it
+// only read allRules and ignored declared, validateOrphan would also be missed.
+// Only the set-equality path catches the orphan.
+func testINV1OrphanFixture(t *testing.T) {
+	const fixturePattern = "./tools/archtest/testdata/governance_registration_guard_fixtures/orphan_detection_red"
 
-	var validatorNamed *types.Named
-	registered := map[string]struct{}{}
-	var fatal string
+	var fixtureGP *governancePackage
 
 	RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
 		func(p *Pass) []Diagnostic {
-			// Retrieve Validator type from the fixture package scope.
-			validatorObj := p.Pkg.Scope().Lookup("Validator")
-			if validatorObj == nil {
-				t.Errorf("fixture must declare Validator")
-				return nil
-			}
-			validatorTypeName, ok := validatorObj.(*types.TypeName)
-			if !ok {
-				t.Errorf("Validator must be a type name")
-				return nil
-			}
-			validatorNamed, ok = validatorTypeName.Type().(*types.Named)
-			if !ok {
-				t.Errorf("Validator must be a named type")
-				return nil
-			}
-
-			for _, file := range p.Files {
-				relPath := p.Rel(file)
-				scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-					if fd.Name == nil || fd.Recv == nil {
-						return
-					}
-					if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
-						return
-					}
-					extractFromCompositeLits(p.Fset, relPath, fd, p.TypesInfo, validatorNamed, registered, &fatal)
-				})
+			fixtureGP = &governancePackage{
+				scope:     p.Pkg.Scope(),
+				info:      p.TypesInfo,
+				fset:      p.Fset,
+				files:     p.Files,
+				fileRelFn: p.Rel,
 			}
 			return nil
 		})
 
-	require.NotNil(t, validatorNamed, "fixture package must be loadable with type info")
-	_, hasLegit := registered["validateLegit"]
-	_, hasFOO := registered["validateFOO"]
-	assert.True(t, hasLegit, "v.validateLegit (real *Validator method) must be accepted before the shadow element triggers fatal")
-	assert.False(t, hasFOO, "o.validateFOO (OtherType receiver shadow) must be REJECTED by receiver-type check")
-	assert.NotEmpty(t, fatal,
-		"shadow receiver must surface as a non-empty fatal — silent skip would let the wrong method masquerade as registered")
-	assert.Contains(t, fatal, "shadow_receiver_red/violation.go",
-		"fatal must reference the fixture file so the violation is locatable")
+	require.NotNil(t, fixtureGP, "RunTyped must visit the fixture package")
+
+	declared := declaredRuleMethodNames(t, fixtureGP)
+	registered, fatal := extractRegisteredFromAllRules(t, fixtureGP)
+	require.Empty(t, fatal, "fixture must not trigger a fatal shape error")
+
+	_, hasRegistered := declared["validateRegistered"]
+	assert.True(t, hasRegistered, "validateRegistered must be in declared (it is a rule-shaped method)")
+
+	_, hasOrphan := declared["validateOrphan"]
+	assert.True(t, hasOrphan, "validateOrphan must be in declared (it is a rule-shaped method)")
+
+	_, regHasRegistered := registered["validateRegistered"]
+	assert.True(t, regHasRegistered, "validateRegistered must be in registered (it is in allRules)")
+
+	_, regHasOrphan := registered["validateOrphan"]
+	assert.False(t, regHasOrphan, "validateOrphan must NOT be in registered (it is not in allRules)")
+
+	missing := setDifference(declared, registered)
+	assert.Contains(t, missing, "validateOrphan",
+		"validateOrphan must appear as 'declared but not registered' — orphan detection is active")
 }
 
 // declaredRuleMethodNames returns the set of *Validator method names whose
-// signature matches a rule shape.
+// signature matches a rule shape AND whose name has a rule prefix.
+//
+// Rule shape: func() []ValidationResult (zero params, single []ValidationResult
+// result). The ctx-bound form func(context.Context) []ValidationResult is
+// intentionally excluded — validateVERIFY06 takes ctx and is registered via a
+// FuncLit closure in allRules; both sides exclude it by design.
+//
+// Rule prefix set: {validate, checkDEP, checkCH}. This excludes same-signature
+// helpers like ctmSliceToContract, ctmContractToSlice, scanWrapperPackageStateFile
+// etc. whose names do not start with any prefix in the set.
+//
+// When used against a fixture package, pkg.scope may not be the governance
+// package itself; the package-path filter is skipped when pkg.scope.Lookup
+// returns objects whose Pkg() differs (fixture packages define their own types).
 func declaredRuleMethodNames(t *testing.T, pkg *governancePackage) map[string]struct{} {
 	t.Helper()
 	valObj := pkg.scope.Lookup("Validator")
@@ -159,6 +192,13 @@ func declaredRuleMethodNames(t *testing.T, pkg *governancePackage) map[string]st
 	valNamed, ok := valTypeName.Type().(*types.Named)
 	require.True(t, ok, "Validator must be a named type")
 
+	// Determine the package path to filter — use the actual package of the
+	// Validator type so this works for both production and fixture packages.
+	var validatorPkgPath string
+	if valTypeName.Pkg() != nil {
+		validatorPkgPath = valTypeName.Pkg().Path()
+	}
+
 	ms := types.NewMethodSet(types.NewPointer(valNamed))
 	out := map[string]struct{}{}
 	for i := 0; i < ms.Len(); i++ {
@@ -167,10 +207,10 @@ func declaredRuleMethodNames(t *testing.T, pkg *governancePackage) map[string]st
 		if !ok {
 			continue
 		}
-		if fn.Pkg() == nil || fn.Pkg().Path() != governancePkgPath {
+		if validatorPkgPath != "" && (fn.Pkg() == nil || fn.Pkg().Path() != validatorPkgPath) {
 			continue
 		}
-		if !strings.HasPrefix(fn.Name(), "validate") {
+		if !isRuleMethodName(fn.Name()) {
 			continue
 		}
 		sig, ok := fn.Type().(*types.Signature)
@@ -185,12 +225,30 @@ func declaredRuleMethodNames(t *testing.T, pkg *governancePackage) map[string]st
 	return out
 }
 
-// ruleShapeSignature returns true when sig matches one of the rule shapes:
-// `func() []ValidationResult` or `func(context.Context) []ValidationResult`.
-// All other signatures (helpers taking *metadata.ContractMeta etc.) are
-// rejected.
+// isRuleMethodName returns true when name has one of the rule method prefixes:
+// validate, checkDEP, checkCH. This excludes same-signature helpers (e.g.
+// ctmSliceToContract) whose names do not match any rule prefix.
+func isRuleMethodName(name string) bool {
+	return strings.HasPrefix(name, "validate") ||
+		strings.HasPrefix(name, "checkDEP") ||
+		strings.HasPrefix(name, "checkCH")
+}
+
+// ruleShapeSignature returns true when sig matches the rule shape:
+// `func() []ValidationResult` (zero params, single []ValidationResult result).
+//
+// The ctx-bound form func(context.Context) []ValidationResult is intentionally
+// excluded. validateVERIFY06 is the only such method; it is registered via a
+// FuncLit closure in allRules rather than a method expression, so both the
+// declared set (this filter) and the registered set (FuncLit skip) exclude it
+// consistently. All other signatures (helpers taking *metadata.ContractMeta
+// etc.) are also rejected.
+//
+// The result element type is matched by name ("ValidationResult") rather than
+// by package path, so this works for both the production package and fixture
+// packages that define their own minimal ValidationResult type.
 func ruleShapeSignature(sig *types.Signature) bool {
-	if sig.Variadic() || sig.Results().Len() != 1 {
+	if sig.Variadic() || sig.Params().Len() != 0 || sig.Results().Len() != 1 {
 		return false
 	}
 	sliceT, ok := sig.Results().At(0).Type().(*types.Slice)
@@ -201,188 +259,156 @@ func ruleShapeSignature(sig *types.Signature) bool {
 	if !ok {
 		return false
 	}
-	if elem.Obj().Pkg() == nil || elem.Obj().Pkg().Path() != governancePkgPath {
-		return false
-	}
-	if elem.Obj().Name() != "ValidationResult" {
-		return false
-	}
-	switch sig.Params().Len() {
-	case 0:
-		return true
-	case 1:
-		p0, ok := sig.Params().At(0).Type().(*types.Named)
-		if !ok {
-			return false
-		}
-		if p0.Obj().Pkg() == nil {
-			return false
-		}
-		return p0.Obj().Pkg().Path() == "context" && p0.Obj().Name() == "Context"
-	default:
-		return false
-	}
+	return elem.Obj().Name() == "ValidationResult"
 }
 
-// extractRegisteredMethodNames walks the bodies of `rules` and `strictRules`
-// FuncDecls in kernel/governance and collects every validate* method name
-// referenced as either a method value (`v.validateXX`) or inside a closure
-// of the shape `func() []ValidationResult { return v.validateXX(ctx) }`.
-// Any composite-literal element with a different shape causes a fatal
-// message — silently skipping would let new closure forms bypass the check.
+// extractRegisteredFromAllRules scans the allRules package-level var in the
+// governance package files and collects method names from each Rule's Detect
+// field. This replaces the former rules()/strictRules() FuncDecl walk after the
+// M3-RULE-ENGINE migration (#687) deleted those functions.
 //
-// Same-source guarantee: gp.files, gp.info, and gp.fset are the three fields
-// of a governancePackage populated by loadGovernancePackage from a single
-// RunTyped Pass. RunTyped constructs the Pass via the packages.Load driver
-// (buildTypedPass), which co-derives Files, TypesInfo, and Fset from the same
-// load invocation. As a result info.Types[sel.X] resolves on every selector in
-// these files — the same-source property is guaranteed by the Pass funnel
-// driver, not by direct Pass field access (the governancePackage wrapper
-// transfers the three fields, not the *Pass itself).
-func extractRegisteredMethodNames(t *testing.T, pkg *governancePackage) (map[string]struct{}, string) {
+// For each element in allRules (a Rule composite literal), the Detect:
+// KeyValueExpr value is inspected:
+//   - (*Validator).NAME method expression → NAME collected.
+//   - *ast.FuncLit closure → skipped (VERIFY-06 pattern).
+//   - Any other shape → fatal (fail-closed: new Detect shapes must go through
+//     review, not silently bypass the check).
+//
+// The method expression structural pattern is:
+//
+//	*ast.SelectorExpr{
+//	  X:   *ast.ParenExpr{X: *ast.StarExpr{X: *ast.Ident{Name: "Validator"}}},
+//	  Sel: *ast.Ident{Name: methodName},
+//	}
+//
+// Structural ident-name match "Validator" is acceptable: the scan is
+// single-package (kernel/governance), so no other type named Validator exists.
+//
+// Same-source guarantee: pkg.files, pkg.info, and pkg.fset come from a single
+// RunTyped Pass invocation (loadGovernancePackage), so AST nodes and TypesInfo
+// are co-derived from the same packages.Load call.
+func extractRegisteredFromAllRules(t *testing.T, pkg *governancePackage) (map[string]struct{}, string) {
 	t.Helper()
-	validatorNamed := lookupValidatorNamed(t, pkg)
 
 	registered := map[string]struct{}{}
 	var fatal string
+
 	for _, file := range pkg.files {
 		if fatal != "" {
 			break
 		}
 		relPath := pkg.fileRel(file)
-		scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-			if fatal != "" {
+		scanner.EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
+			if fatal != "" || gd.Tok != token.VAR {
 				return
 			}
-			if fd.Name == nil || fd.Recv == nil {
-				return
-			}
-			if fd.Name.Name != "rules" && fd.Name.Name != "strictRules" {
-				return
-			}
-			extractFromCompositeLits(pkg.fset, relPath, fd, pkg.info, validatorNamed, registered, &fatal)
+			scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+				if fatal != "" {
+					return
+				}
+				// Find the ValueSpec whose name is "allRules".
+				isAllRules := false
+				for _, nameIdent := range vs.Names {
+					if nameIdent.Name == "allRules" {
+						isAllRules = true
+						break
+					}
+				}
+				if !isAllRules {
+					return
+				}
+				// vs.Values[0] should be a []Rule{...} composite literal.
+				if len(vs.Values) == 0 {
+					return
+				}
+				cl, ok := vs.Values[0].(*ast.CompositeLit)
+				if !ok {
+					return
+				}
+				// Each element in allRules is a Rule{...} composite literal.
+				for _, elt := range cl.Elts {
+					ruleLit, ok := elt.(*ast.CompositeLit)
+					if !ok {
+						continue
+					}
+					// Find the Detect: KeyValueExpr in this Rule literal.
+					scanner.EachInChildren[ast.KeyValueExpr](ruleLit, func(kv *ast.KeyValueExpr) {
+						if fatal != "" {
+							return
+						}
+						keyIdent, ok := kv.Key.(*ast.Ident)
+						if !ok || keyIdent.Name != "Detect" {
+							return
+						}
+						name, ok, isFatal := extractDetectMethodName(kv.Value, relPath, pkg.fset)
+						if isFatal {
+							fatal = name // name carries the fatal message when isFatal
+							return
+						}
+						if ok {
+							registered[name] = struct{}{}
+						}
+					})
+				}
+			})
 		})
 	}
 	return registered, fatal
 }
 
-// lookupValidatorNamed returns the *types.Named for kernel/governance.Validator.
-func lookupValidatorNamed(t *testing.T, pkg *governancePackage) *types.Named {
-	t.Helper()
-	obj := pkg.scope.Lookup("Validator")
-	require.NotNil(t, obj, "Validator must be declared in kernel/governance")
-	tn, ok := obj.(*types.TypeName)
-	require.True(t, ok, "Validator must be a type name")
-	named, ok := tn.Type().(*types.Named)
-	require.True(t, ok, "Validator must be a named type")
-	return named
-}
-
-func extractFromCompositeLits(
-	fset *token.FileSet, relPath string, fd *ast.FuncDecl, info *types.Info,
-	validatorNamed *types.Named, out map[string]struct{}, fatal *string,
-) {
-	scanner.EachInSubtree[ast.CompositeLit](fd.Body, func(cl *ast.CompositeLit) {
-		if *fatal != "" {
-			return
-		}
-		arr, ok := cl.Type.(*ast.ArrayType)
-		if !ok {
-			return
-		}
-		funcT, ok := arr.Elt.(*ast.FuncType)
-		if !ok {
-			return
-		}
-		if funcT.Params != nil && len(funcT.Params.List) != 0 {
-			return
-		}
-		for _, elt := range cl.Elts {
-			if name, ok := registeredElementMethodName(elt, info, validatorNamed); ok {
-				out[name] = struct{}{}
-				continue
-			}
-			pos := fset.Position(elt.Pos())
-			*fatal = "unrecognized rules() element shape at " + relPath + ":" +
-				strconv.Itoa(pos.Line) +
-				" — every element must be either v.validateXX or func() []VR { return v.validateXX(...) }"
-			return
-		}
-	})
-}
-
-// registeredElementMethodName returns the validate* method name referenced
-// by a single composite-literal element.
-//
-// INV-1 Medium upgrade: the receiver expression is verified via
-// info.Selections to confirm its declared type is *governance.Validator.
-// A local variable shadow (e.g. `v := someOtherType{}`) that happens to
-// expose a validate* method will be rejected.
-func registeredElementMethodName(expr ast.Expr, info *types.Info, validatorNamed *types.Named) (string, bool) {
+// extractDetectMethodName extracts the method name from a Detect field value.
+// Returns (methodName, true, false) for a method expression (*Validator).NAME.
+// Returns ("", false, false) for a *ast.FuncLit (VERIFY-06 skip pattern).
+// Returns (fatalMsg, false, true) for any unrecognized shape (fail-closed).
+func extractDetectMethodName(expr ast.Expr, relPath string, fset *token.FileSet) (string, bool, bool) {
+	// Case 1: (*Validator).NAME — method expression.
+	// AST shape: SelectorExpr{X: ParenExpr{X: StarExpr{X: Ident{"Validator"}}}, Sel: Ident{Name}}
 	if sel, ok := expr.(*ast.SelectorExpr); ok {
-		name, ok := validateSelectorReceiverAndName(sel, info, validatorNamed)
-		return name, ok
+		if name, matched := methodExprValidatorName(sel); matched {
+			return name, true, false
+		}
+		// SelectorExpr but not the expected (*Validator).NAME pattern → fatal.
+		pos := fset.Position(expr.Pos())
+		msg := "unrecognized Detect shape at " + relPath + ":" + strconv.Itoa(pos.Line) +
+			" — every allRules Detect must be (*Validator).methodName or a FuncLit closure"
+		return msg, false, true
 	}
-	fl, ok := expr.(*ast.FuncLit)
-	if !ok || fl.Body == nil || len(fl.Body.List) != 1 {
-		return "", false
+
+	// Case 2: FuncLit — VERIFY-06 closure pattern; skip.
+	if _, ok := expr.(*ast.FuncLit); ok {
+		return "", false, false
 	}
-	ret, ok := fl.Body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) != 1 {
-		return "", false
-	}
-	call, ok := ret.Results[0].(*ast.CallExpr)
-	if !ok {
-		return "", false
-	}
-	callSel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return "", false
-	}
-	name, ok := validateSelectorReceiverAndName(callSel, info, validatorNamed)
-	return name, ok
+
+	// Any other shape → fatal.
+	pos := fset.Position(expr.Pos())
+	msg := "unrecognized Detect shape at " + relPath + ":" + strconv.Itoa(pos.Line) +
+		" — every allRules Detect must be (*Validator).methodName or a FuncLit closure"
+	return msg, false, true
 }
 
-// validateSelectorReceiverAndName verifies that sel.X has type *Validator
-// (via info.Types, which maps every type-checked expression to its
-// TypeAndValue) and that sel.Sel.Name has the "validate" prefix.
-// Returns ("", false) for any non-matching selector.
-//
-// info must be the *types.Info from the same Pass that provided the AST file
-// containing sel — Pass guarantees this by design (Files and TypesInfo are
-// populated from the same packages.Load invocation in the driver).
-func validateSelectorReceiverAndName(sel *ast.SelectorExpr, info *types.Info, validatorNamed *types.Named) (string, bool) {
-	if sel.Sel == nil || !strings.HasPrefix(sel.Sel.Name, "validate") {
+// methodExprValidatorName returns the method name if expr is the structural
+// pattern (*Validator).NAME, and false otherwise.
+// Structural ident-name match "Validator" is sufficient for single-package scan.
+func methodExprValidatorName(sel *ast.SelectorExpr) (string, bool) {
+	if sel.Sel == nil {
 		return "", false
 	}
-	if !selectorReceiverIsValidator(sel, info, validatorNamed) {
+	paren, ok := sel.X.(*ast.ParenExpr)
+	if !ok {
+		return "", false
+	}
+	star, ok := paren.X.(*ast.StarExpr)
+	if !ok {
+		return "", false
+	}
+	ident, ok := star.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if ident.Name != "Validator" {
 		return "", false
 	}
 	return sel.Sel.Name, true
-}
-
-// selectorReceiverIsValidator returns true when sel.X resolves to a value of
-// type *Validator (or Validator) via go/types Types map.
-//
-// Fail-closed on lookup miss: a missing TypeAndValue means either info was
-// built from a different AST (caller violated the same-source invariant) or
-// the receiver expression is non-standard (e.g. assembled at runtime). Both
-// must be rejected — the previous "return true" fallback silently downgraded
-// the receiver-type check to a name-prefix match.
-func selectorReceiverIsValidator(sel *ast.SelectorExpr, info *types.Info, validatorNamed *types.Named) bool {
-	tv, ok := info.Types[sel.X]
-	if !ok {
-		return false
-	}
-	recvType := tv.Type
-	if ptr, ok := recvType.(*types.Pointer); ok {
-		recvType = ptr.Elem()
-	}
-	named, ok := recvType.(*types.Named)
-	if !ok {
-		return false
-	}
-	return named == validatorNamed
 }
 
 // TestGovernanceRuleCodeConstSingleSource verifies INV-2: every
