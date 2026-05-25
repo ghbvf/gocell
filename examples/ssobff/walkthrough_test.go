@@ -559,6 +559,63 @@ func TestWalkthrough(t *testing.T) {
 		}
 	})
 
+	t.Run("bootstrap auth-fail writes audit chain entry", func(t *testing.T) {
+		// End-to-end regression for PR #1005 ssobff bootstrap-audit-observer
+		// wiring. Trigger a 401 against the bootstrap-protected endpoint by
+		// reusing the valid username with a wrong password. The funnel-built
+		// observer (runtime/audit.NewBootstrapAuthFailObserver) must append
+		// a bootstrap.auth.fail entry via audit.AppendBootstrapAuthFail with
+		// reason=wrong_credentials, queryable via /api/v1/audit/entries.
+		//
+		// Why this complements the archtest: archtest guarantees the wire is
+		// in place; this test proves the wire actually carries the signal end-
+		// to-end (request → observer → ledger → auditquery).
+		// ref: Kubernetes audit (https://kubernetes.io/docs/tasks/debug/debug-cluster/audit/)
+		// — each request emits an audit event persisted by the backend; this is
+		// the runtime equivalent for bootstrap auth failures.
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			base+"/api/v1/access/setup/admin",
+			strings.NewReader(`{"username":"unused","email":"unused@local","password":"unused"}`))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(ssobffBootstrapUsername, "wrong-password-walkthrough")
+		failResp := doWalkthroughRequest(t, req)
+		require.Equal(t, http.StatusUnauthorized, failResp.StatusCode,
+			"bootstrap middleware must reject wrong password with 401")
+		_ = failResp.Body.Close()
+
+		// Append goes directly to ledger.Store (no outbox roundtrip), but the
+		// ledger write + auditquery read both run through PG transactions, so
+		// a short visibility window may exist under contention. testwait.External
+		// mirrors the sibling outbox-route audit subtest's posture.
+		var entries []json.RawMessage
+		testwait.External(t, "ssobff-bootstrap-audit-fail-entry-available", func() bool {
+			data, ok := fetchAuditEntries(base+"/api/v1/audit/entries?eventType=bootstrap.auth.fail", adminToken)
+			if ok {
+				entries = data
+			}
+			return ok
+		}, testtime.D5s, testtime.MediumPoll, "expected bootstrap.auth.fail audit entry")
+
+		var entry struct {
+			EventType string          `json:"eventType"`
+			ActorID   string          `json:"actorId"`
+			Payload   json.RawMessage `json:"payload"`
+		}
+		require.NoError(t, json.Unmarshal(entries[0], &entry))
+		assert.Equal(t, "bootstrap.auth.fail", entry.EventType,
+			"funnel observer must persist runtime/audit.bootstrapAuthFailEventType")
+		assert.Equal(t, "system:bootstrap", entry.ActorID,
+			"funnel observer must record platform-level actor (no user principal at bootstrap auth)")
+
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		require.NoError(t, json.Unmarshal(entry.Payload, &payload))
+		assert.Equal(t, "wrong_credentials", payload.Reason,
+			"payload.reason must match runtime/audit.ReasonWrongCredentials for Basic-Auth password mismatch")
+	})
+
 	// Steps 8-11: configcore CRUD + feature flags.
 	// PR-CFG-C: ALL config + flags HTTP routes (read and write) require RoleAdmin —
 	// even GET endpoints, because key names + the sensitive flag are themselves a
