@@ -16,10 +16,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // C2 — CH-04 fail-closed on unparseable handler.
@@ -114,4 +115,22 @@ func TestVERIFY06_DirectDetect_NoPanicAfterNewValidator(t *testing.T) {
 func TestFilterByPhase_NoPhases_ReturnsEmpty(t *testing.T) {
 	t.Parallel()
 	require.Empty(t, filterByPhase(allRules))
+}
+
+// C1 — StrictRuleCodes is exactly the PhaseStrict registry so the derived
+// --strict help text can never drift from the rules that run.
+func TestStrictRuleCodes_MatchesPhaseStrictRegistry(t *testing.T) {
+	t.Parallel()
+	got := StrictRuleCodes()
+	var want []RuleCode
+	for i := range allRules {
+		if allRules[i].Phase == PhaseStrict {
+			want = append(want, allRules[i].Code)
+		}
+	}
+	require.Equal(t, want, got)
+	// Regression guard for the review finding: the strict set must include the
+	// rules the old hand-written help text omitted.
+	assert.Contains(t, got, codeFMT19)
+	assert.Contains(t, got, codeDOCNAME01)
 }

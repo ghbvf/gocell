@@ -179,11 +179,15 @@ func (v *Validator) checkResponseAlignmentForContract(
 				advHintCH04CorrelationFailedFix,
 			)}
 		}
-		slog.Debug("CH-04: failed to parse handler AST",
-			slog.String("contract", c.ID),
-			slog.String("file", handlerFile),
-			slog.Any("error", err))
-		return nil
+		// Fail-closed: an unparseable handler means CH-04 cannot verify
+		// response-status alignment, so emit a finding rather than silently
+		// passing the contract (mirrors the errCorrelationMissing branch above).
+		return []ValidationResult{v.newError(
+			codeCH04, IssueInvalid,
+			c.File, fieldHTTPPath,
+			fmt.Sprintf(advHintCH04ParseFailed, c.ID, handlerFile, err),
+			advHintCH04ParseFailedFix,
+		)}
 	}
 
 	declared := declaredErrorStatuses(c)
@@ -323,9 +327,9 @@ func extractHandlerStatusCodesForContract(filename, contractID string, cache map
 	}
 
 	if ph.generated {
-		return extractFromGeneratedHandler(ph, contractID)
+		return extractFromGeneratedHandler(ph, contractID, filename)
 	}
-	return extractFromLegacyHandler(ph, contractID)
+	return extractFromLegacyHandler(ph, contractID, filename)
 }
 
 // extractFromGeneratedHandler scans the "handle" method body of the generated
@@ -335,7 +339,7 @@ func extractHandlerStatusCodesForContract(filename, contractID string, cache map
 // Correlation: the generated file must contain a package-level var with
 // ContractSpec.ID == contractID (set by collectSpecVarIDs in Pass 1). If the
 // spec var is absent, errCorrelationMissing is returned (fail-closed).
-func extractFromGeneratedHandler(ph *parsedHandlerFile, contractID string) (map[int]struct{}, error) {
+func extractFromGeneratedHandler(ph *parsedHandlerFile, contractID, file string) (map[int]struct{}, error) {
 	// Verify that the contractSpec var in this file actually matches contractID.
 	found := false
 	for _, id := range ph.specVarToID {
@@ -366,17 +370,17 @@ func extractFromGeneratedHandler(ph *parsedHandlerFile, contractID string) (map[
 		return out, nil
 	}
 	codes := make(map[int]struct{})
-	collectStatusCodesFromNode(body, codes)
+	collectStatusCodesFromNode(body, codes, file)
 	return codes, nil
 }
 
 // extractFromLegacyHandler extracts status codes for contractID from a legacy
 // hand-written handler.go using auth.Mount correlation.
-func extractFromLegacyHandler(ph *parsedHandlerFile, contractID string) (map[int]struct{}, error) {
+func extractFromLegacyHandler(ph *parsedHandlerFile, contractID, file string) (map[int]struct{}, error) {
 	if fnName, ok := ph.contractToFuncs[contractID]; ok {
 		if body, ok := ph.funcBodies[fnName]; ok {
 			codes := make(map[int]struct{})
-			collectStatusCodesFromNode(body, codes)
+			collectStatusCodesFromNode(body, codes, file)
 			return codes, nil
 		}
 	}
@@ -417,7 +421,7 @@ func parseHandlerFile(filename string, cache map[string]*parsedHandlerFile) (*pa
 	collectSpecVarIDs(f, ph.specVarToID)
 
 	// Pass 2: collect function declarations and whole-file status codes.
-	collectFuncBodies(f, ph.funcBodies, ph.allCodes)
+	collectFuncBodies(f, ph.funcBodies, ph.allCodes, filename)
 
 	// Pass 3: correlate auth.Mount calls to contract ID + handler function name.
 	collectAuthMountCorrelations(f, ph.specVarToID, ph.contractToFuncs)
@@ -450,7 +454,7 @@ func isGoCellGeneratedFile(f *ast.File) bool {
 // "ReceiverType.MethodName" so generated handler dispatch (e.g.
 // "Handler.handle") can be looked up. allCodes receives every ≥400 status
 // code found in any function body.
-func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node, allCodes map[int]struct{}) {
+func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node, allCodes map[int]struct{}, file string) {
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -463,7 +467,7 @@ func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node, allCodes map
 				funcBodies[recvType+"."+fn.Name.Name] = fn.Body
 			}
 		}
-		collectStatusCodesFromNode(fn.Body, allCodes)
+		collectStatusCodesFromNode(fn.Body, allCodes, file)
 	}
 }
 
@@ -630,15 +634,15 @@ func extractHandlerFuncName(expr ast.Expr) string {
 
 // collectStatusCodesFromNode walks node and adds every ≥400 HTTP status code
 // encountered in call arguments to out.
-func collectStatusCodesFromNode(node ast.Node, out map[int]struct{}) {
+func collectStatusCodesFromNode(node ast.Node, out map[int]struct{}, file string) {
 	ast.Inspect(node, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
 		collectHTTPStatusSelectors(call, out)
-		collectErrcodeKinds(call, out)
-		collectHelperWriteStatuses(call, out)
+		collectErrcodeKinds(call, out, file)
+		collectHelperWriteStatuses(call, out, file)
 		return true
 	})
 }
@@ -665,7 +669,7 @@ func collectHTTPStatusSelectors(call *ast.CallExpr, out map[int]struct{}) {
 // calls and maps them through errcode.Kind.Status. Code names are deliberately
 // ignored: runtime status is Kind-derived, so CH-04 must not reintroduce a
 // second code-name status table.
-func collectErrcodeKinds(call *ast.CallExpr, out map[int]struct{}) {
+func collectErrcodeKinds(call *ast.CallExpr, out map[int]struct{}, file string) {
 	fun, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return
@@ -683,7 +687,8 @@ func collectErrcodeKinds(call *ast.CallExpr, out map[int]struct{}) {
 	status, found := errcodeKindStatus(kindArg)
 	if !found {
 		slog.Warn("CH-04: errcode constructor without static Kind selector, skipping alignment check",
-			slog.String("constructor", fun.Sel.Name))
+			slog.String("constructor", fun.Sel.Name),
+			slog.String("file", file))
 		return
 	}
 	if status >= 400 {
@@ -719,7 +724,7 @@ func errcodeKindStatus(expr ast.Expr) (int, bool) {
 // invisible to collectHTTPStatusSelectors, so this table bridges that gap for
 // CH-04. Unknown httputil calls emit a slog.Warn so new helpers are not silently
 // skipped.
-func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
+func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}, file string) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return
@@ -730,7 +735,7 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 	}
 	helperName := sel.Sel.Name
 	if helperName == "WritePublic" {
-		collectWritePublicKind(call, out)
+		collectWritePublicKind(call, out, file)
 		return
 	}
 	statuses, known := httpHelperWritesStatuses[helperName]
@@ -752,7 +757,8 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 		}
 		if _, suppressed := knownNonWriters[helperName]; !suppressed {
 			slog.Warn("CH-04: unknown httputil helper call, skipping helper-status inference",
-				slog.String("helper", helperName))
+				slog.String("helper", helperName),
+				slog.String("file", file))
 		}
 		return
 	}
@@ -763,14 +769,16 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 	}
 }
 
-func collectWritePublicKind(call *ast.CallExpr, out map[int]struct{}) {
+func collectWritePublicKind(call *ast.CallExpr, out map[int]struct{}, file string) {
 	if len(call.Args) < 3 {
-		slog.Warn("CH-04: httputil.WritePublic without Kind argument, skipping alignment check")
+		slog.Warn("CH-04: httputil.WritePublic without Kind argument, skipping alignment check",
+			slog.String("file", file))
 		return
 	}
 	status, found := errcodeKindStatus(call.Args[2])
 	if !found {
-		slog.Warn("CH-04: httputil.WritePublic without static Kind selector, skipping alignment check")
+		slog.Warn("CH-04: httputil.WritePublic without static Kind selector, skipping alignment check",
+			slog.String("file", file))
 		return
 	}
 	if status >= 400 {

@@ -41,6 +41,7 @@ func assertResultsContainCode(t *testing.T, results []ValidationResult, code Rul
 // TestADV05_EmptySubscribers_NoActors asserts ADV-05 fires when a contract has
 // no cell subscribers AND no ActorSubscribers (so Subscribers is empty).
 func TestADV05_EmptySubscribers_NoActors(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	project.Contracts["event.dead.v1"] = &metadata.ContractMeta{
 		ID:        "event.dead.v1",
@@ -67,6 +68,7 @@ func TestADV05_EmptySubscribers_NoActors(t *testing.T) {
 // In the post-flip model, the test directly sets Subscribers (as derive would),
 // simulating the output of deriveEventSubscribers having merged ActorSubscribers.
 func TestADV05_ActorSubscribers_PopulatesSubscribers(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	project.Contracts["event.audit.appended.v1"] = &metadata.ContractMeta{
 		ID:        "event.audit.appended.v1",
@@ -94,6 +96,7 @@ func TestADV05_ActorSubscribers_PopulatesSubscribers(t *testing.T) {
 // TestADV06_NotInRules asserts that no result has code == "ADV-06" after the rule
 // is removed from the pipeline. We iterate allRules and confirm no result has code "ADV-06".
 func TestADV06_NotInRules(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	// Add a contract with no subscribers to guarantee ADV-05 fires if present,
 	// ensuring the rules pipeline runs all rules.

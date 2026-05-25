@@ -593,6 +593,11 @@ const (
 	// consumed by DOC-NAME-01.
 	docNamingGuardRelPath = "docs/architecture/naming-guard.yaml"
 
+	// docNamingMaxFileBytes caps the size of a DOC-NAME-01 scan target. Larger
+	// include targets are skipped to bound memory use (the scanner reads the
+	// whole file). 10 MiB comfortably covers any real documentation file.
+	docNamingMaxFileBytes = 10 << 20
+
 	// durabilityModeHintSuffix is user-facing guidance appended to OUTGUARD-01
 	// error messages to steer authors toward the correct durabilityMode value.
 	durabilityModeHintSuffix = "(use demo for examples/tests, durable for production assemblies)"
@@ -746,6 +751,12 @@ func (v *Validator) collectDocNamingInclude(include string, exclude []string, se
 func (v *Validator) walkDocNamingInclude(include string, exclude []string, seen map[string]struct{}) []ValidationResult {
 	baseRel := strings.TrimSuffix(include, "/**")
 	baseAbs := filepath.Join(v.root, filepath.FromSlash(baseRel))
+	// Don't walk a tree rooted outside the project (addDocNamingTarget would
+	// reject each escaping file anyway, but skipping the walk avoids
+	// enumerating directories outside the root).
+	if !IsWithinRoot(v.root, baseAbs) {
+		return nil
+	}
 	info, statErr := os.Stat(baseAbs)
 	if statErr != nil || !info.IsDir() {
 		return nil
@@ -790,8 +801,20 @@ func (v *Validator) globDocNamingInclude(include string, exclude []string, seen 
 }
 
 func (v *Validator) addDocNamingTarget(abs string, exclude []string, seen map[string]struct{}) {
+	// Single choke point for read-eligibility. Reject include targets that
+	// escape the project root (a hostile naming-guard.yaml could otherwise read
+	// arbitrary files on the CI worker via `include: ../../...`). Mirrors the
+	// IsWithinRoot guard already used by resolveCrossFileSchemaRef and rules_ref.go.
+	if !IsWithinRoot(v.root, abs) {
+		return
+	}
 	info, err := os.Stat(abs)
 	if err != nil || info.IsDir() {
+		return
+	}
+	// Skip oversize targets: scanDocNamingLiterals reads the whole file, so an
+	// include pointing at a multi-GB file would exhaust memory (DoS).
+	if info.Size() > docNamingMaxFileBytes {
 		return
 	}
 	rel, err := filepath.Rel(v.root, abs)

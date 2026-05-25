@@ -98,10 +98,10 @@ type Validator struct {
 	cells     *registry.CellRegistry
 	contracts *registry.ContractRegistry
 	// runCtx holds the context for the current run() invocation; read by
-	// ctx-bound detect funcs (VERIFY-06). Set by run() at the start of each
-	// invocation; zero value is nil (not context.Background()). Calling a
-	// PhaseStrict rule's Detect directly (bypassing run) leaves runCtx nil and
-	// VERIFY-06 will panic — tests must go through run() or set runCtx.
+	// ctx-bound detect funcs (VERIFY-06). run() overwrites it per invocation;
+	// NewValidator seeds it with context.Background() so a Detect call that
+	// bypasses run() (e.g. a unit test invoking a rule directly) never reads a
+	// nil context.
 	runCtx context.Context
 }
 
@@ -134,6 +134,7 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 		actorSet:  actorSet,
 		cells:     registry.NewCellRegistry(project),
 		contracts: registry.NewContractRegistry(project),
+		runCtx:    context.Background(),
 	}
 	if root != "" {
 		runner := verify.NewRunner(project, root)
@@ -163,6 +164,11 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 // Validator is not safe for concurrent ValidateStrict calls. Build one
 // Validator per concurrent caller — same expectation as the underlying
 // locator and the verifyJourneyRef closure.
+//
+// ValidateStrict drives the `gocell validate` surface (PhaseBase/Dep/Strict).
+// The contract-health surface (`gocell check`) is a separate entry point,
+// CheckHealth (contracthealth.go), which runs PhaseHealth through the same
+// engine loop.
 func (v *Validator) ValidateStrict(ctx context.Context, strict, failFast bool) ([]ValidationResult, error) {
 	phases := []Phase{PhaseBase, PhaseDep}
 	if strict {

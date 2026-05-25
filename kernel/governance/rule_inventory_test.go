@@ -1,3 +1,5 @@
+// INVARIANT: GOVERNANCE-RULE-REACHABILITY-TEST-01
+
 package governance
 
 import (
@@ -21,8 +23,6 @@ import (
 // (each asserts its method emits its own code) and archtest
 // GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01 (codes come from rulecodes.go
 // consts), the wiring is drift-locked.
-//
-// INVARIANT: GOVERNANCE-RULE-REACHABILITY-TEST-01
 //
 // ref: kubernetes/apimachinery pkg/util/validation/field/errors_test.go
 // (golden error-code allowlist + direct enumeration check).
@@ -51,9 +51,8 @@ func TestAllRulesMatchGolden(t *testing.T) {
 
 // goldenRuleIDs returns the pinned set of all rule IDs declared in
 // kernel/governance/*.go. Update this list whenever a rule is added /
-// renamed / removed.
-//
-// Total: 92 IDs across 12 series.
+// renamed / removed; TestAllRulesMatchGolden locks it against allRules, so the
+// list itself is the count — no hand-maintained total is kept here.
 func goldenRuleIDs() []string {
 	return []string{
 		// ADV — advisory warnings (rules_misc_advisory.go).

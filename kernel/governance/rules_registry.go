@@ -4,12 +4,10 @@ package governance
 // governance rule (ADR 202605041430 §M3-RULE-ENGINE). engine.go iterates it;
 // command entry points (ValidateStrict, the check command) select phases.
 //
-// Each entry is a Rule value: static classification (Code / Phase / Next)
-// plus a compiler-checked Detect function value. Detect functions live
-// alongside their former rule cluster (rules_ref.go, rules_topo.go, ...) and
-// return []ValidationResult; the engine stamps Next onto each finding.
-// Per-finding Metric is set by the Detect function itself when an orderable
-// distance exists (e.g. FMT-23 days-remaining on the stale-contract warning).
+// Each entry is a Rule value: static classification (Code / Phase) plus a
+// compiler-checked Detect function value. Detect functions live alongside
+// their former rule cluster (rules_ref.go, rules_topo.go, ...) and return
+// []ValidationResult built via the locator constructors.
 //
 // Invariant: the set of Rule.Code values here equals goldenRuleIDs() and every
 // Code is unique. Uniqueness and completeness are archtest-locked
@@ -96,13 +94,12 @@ var allRules = []Rule{
 	{Code: codeFMTA1, Phase: PhaseBase, Detect: (*Validator).validateFMTA1},
 	{Code: codeFMTC1, Phase: PhaseBase, Detect: (*Validator).validateFMTC1},
 
-	// ADV — advisory warnings (ADV-01/03/04 are SeverityWarning → NextAdvisory)
+	// ADV — advisory warnings (ADV-01/03/04 are SeverityWarning)
 	{Code: codeADV01, Phase: PhaseBase, Detect: (*Validator).validateADV01},
 	{Code: codeADV03, Phase: PhaseBase, Detect: (*Validator).validateADV03},
 	{Code: codeADV04, Phase: PhaseBase, Detect: (*Validator).validateADV04},
-	// ADV-05 is SeverityWarning (M3 reclassification) → Next derives to advisory.
-	// Dead-event count is a repository aggregate (number of ADV-05 findings),
-	// not a per-finding distance; ADV-05 findings carry no Metric.
+	// ADV-05 is SeverityWarning (M3 reclassification): a dead active event is
+	// advisory, not blocking.
 	{Code: codeADV05, Phase: PhaseBase, Detect: (*Validator).validateADV05},
 
 	// OUTGUARD — outbox durability

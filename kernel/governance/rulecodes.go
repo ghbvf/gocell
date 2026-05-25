@@ -23,9 +23,10 @@ package governance
 // part of any public API. RuleCode itself is exported so external consumers
 // (cmd/gocell, tools) can create ValidationResult values with the correct type.
 //
-// Total: 88 constants across 12 series, matching goldenRuleIDs() in
-// rule_inventory_test.go. FMT-18 and ADV-02 are retired; the numbering gaps
-// are intentional.
+// FMT-18 and ADV-02 are retired; the numbering gaps are intentional. The exact
+// constant set is golden-locked against goldenRuleIDs() by TestAllRulesMatchGolden
+// in rule_inventory_test.go — that test, not a hand-maintained count here, is the
+// source of truth for how many rules exist.
 
 // RuleCode is a named string type that identifies a single governance rule.
 // Exported so cmd/ and tools/ can reference the type when constructing

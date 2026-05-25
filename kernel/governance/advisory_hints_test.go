@@ -32,6 +32,8 @@ func TestAdvisoryHints_Golden(t *testing.T) {
 		// CH-04
 		"advHintCH04CorrelationFailed":    advHintCH04CorrelationFailed,
 		"advHintCH04CorrelationFailedFix": advHintCH04CorrelationFailedFix,
+		"advHintCH04ParseFailed":          advHintCH04ParseFailed,
+		"advHintCH04ParseFailedFix":       advHintCH04ParseFailedFix,
 		// CH-05
 		"advHintCH05CorrelationFailed":    advHintCH05CorrelationFailed,
 		"advHintCH05CorrelationFailedFix": advHintCH05CorrelationFailedFix,

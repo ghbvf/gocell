@@ -51,8 +51,8 @@ newErrorAt(codeDOCNAME01, IssueForbidden,
 | TOPO | TOPO-01 ~ TOPO-09 | 拓扑合法性（assembly、journey 结构） |
 | VERIFY | VERIFY-01 ~ VERIFY-06 | 验证闭包（verify.smoke/unit/contract 命令存在） |
 | FMT | FMT-01 ~ FMT-34 | 格式合规（YAML 结构、HTTP 契约、路径参数；FMT-18 已退役） |
-| ADV | ADV-01 ~ ADV-06 | 建议警告（dead event、journey 覆盖等） |
-| OUTGARD | OUTGARD-01 | Outbox 约束 |
+| ADV | ADV-01 ~ ADV-05 | 建议警告（dead event、journey 覆盖等；ADV-02/ADV-06 已退役） |
+| OUTGUARD | OUTGUARD-01 | Outbox 约束 |
 
 ## 完整规则示例（ADV-05）
 

@@ -3008,9 +3008,9 @@ func TestADV05(t *testing.T) {
 // Two paths are exercised:
 //  1. Direct detect (validateADV05): verifies the finding is SeverityWarning
 //     and that HasErrors is false on those findings alone.
-//  2. Engine stamp path (run via ValidateStrict): verifies that the engine
-//     stamps NextAdvisory (not NextBlock) onto the ADV-05 warning, confirming
-//     the severity→disposition derivation is correct for the reclassified rule.
+//  2. Engine loop path (run): verifies the engine accumulates the ADV-05
+//     finding as SeverityWarning and that HasErrors stays false, so the
+//     reclassified rule never drives a CI exit-code 1.
 func TestADV05_ExitCode_Regression(t *testing.T) {
 	t.Parallel()
 	pm := &metadata.ProjectMeta{

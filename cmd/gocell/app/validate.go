@@ -30,10 +30,7 @@ func runValidate(ctx context.Context, args []string) error {
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
 	failFast := fs.Bool("fail-fast", false,
 		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
-	strict := fs.Bool("strict", false,
-		"enforce strict-only governance rules"+
-			" (VERIFY-06 executable journey auto checks, FMT-16 slice/cell/assembly dirs,"+
-			" FMT-17 allowedFiles)")
+	strict := fs.Bool("strict", false, strictFlagUsage())
 	format := fs.String("format", string(printers.FormatText),
 		"output format: text (non-stable, default) | json | sarif")
 	if err := fs.Parse(args); err != nil {
@@ -73,9 +70,22 @@ func runValidate(ctx context.Context, args []string) error {
 	return runValidateFull(ctx, printer, validator, *strict)
 }
 
+// strictFlagUsage derives the --strict help text from the PhaseStrict registry
+// (governance.StrictRuleCodes) so the flag description is a pure projection of
+// the rules that actually run under --strict and can never drift from them.
+func strictFlagUsage() string {
+	codes := governance.StrictRuleCodes()
+	parts := make([]string, len(codes))
+	for i, c := range codes {
+		parts[i] = string(c)
+	}
+	return "enforce strict-only governance rules (" + strings.Join(parts, ", ") + ")"
+}
+
 // runValidateFailFast runs validation in short-circuit mode: the validator
 // and the dependency checker stop at the first SeverityError. When strict is
-// true, FMT-16/17 are appended only if the base pass finds no errors.
+// true, the PhaseStrict rules (governance.StrictRuleCodes) are appended only if
+// the base pass finds no errors.
 //
 // Output rendering depends on the --format and the run's outcome:
 //

@@ -39,7 +39,7 @@
 //     naming prefix {validate,checkDEP,checkCH} is a naming convention (Soft
 //     tier); the prefix filter is kept as the same tier as the pre-M3 validate*
 //     filter — not a regression. The golden code-set completeness (code ∈
-//     allRules for all 86 rule codes) lives in the in-package
+//     allRules for every registered rule code) lives in the in-package
 //     TestAllRulesMatchGolden, which is compiler-adjacent (RuleCode const set
 //     vs allRules slice size).
 //
@@ -979,9 +979,10 @@ func astShapeName(expr ast.Expr) string {
 // Blind-spot self-check (AST forms outside the chosen tools' declared scope):
 //   - A constructor invoked via a value/func variable rather than a direct
 //     SelectorExpr/Ident callee (e.g. `f := v.newError; f(...)`) would evade
-//     governanceEmitterName. governance has no such indirection; the reverse
-//     self-check is the production scan staying green AND the negative fixtures
-//     using direct calls.
+//     governanceEmitterName. This is reverse-checked with teeth by
+//     TestGovernanceEmitterConstructorsNeverFuncValue: it asserts production
+//     governance has ZERO such func-value uses AND that a negative fixture
+//     taking a constructor as a value IS flagged (so the scan is not vacuous).
 //   - A ValidationResult built by reflection or returned from a non-governance
 //     helper would evade isValidationResultCompositeLit (type-gated to
 //     governance.ValidationResult). No such path exists in governance.
@@ -1378,17 +1379,18 @@ func TestFindTypesPackageByPath(t *testing.T) {
 // compile time without merging the two fields into a single codegen funnel
 // (a larger refactor tracked separately).
 //
-// Blind-spot: the transitive walk follows same-receiver *Validator method
-// calls only (v.someHelper(...) style SelectorExpr). A rule that emits its
-// code exclusively through a package-level function (e.g. buildAlignmentFindings
-// for CH-04) would not be reached by this walk. In practice this does not
-// occur for CH-04 and similar cases because the *Validator method that
-// delegates to the package-level function (checkResponseAlignmentForContract)
-// also contains a direct newError call with the same code — so the code is
-// found anyway. The walk also doesn't follow function-value indirection.
-// Governance has no such paths; this is documented here as the declared
-// blind spot, not tracked as a Hard-upgrade issue (no low-cost Hard path
-// exists given the structural separation of Code and Detect).
+// Blind-spots (AST forms outside this walk's scope):
+//   - Function-value indirection (`f := v.newError; f(...)`): reverse-checked
+//     with teeth by TestGovernanceEmitterConstructorsNeverFuncValue, which
+//     asserts production has ZERO such uses and that a negative fixture is
+//     flagged (a vacuous scan would fail the fixture sub-test).
+//   - Code emitted exclusively through a package-level function (e.g.
+//     buildAlignmentFindings for CH-04) is not reached by the same-receiver
+//     method walk. This is a reasoned (not asserted) exclusion: every such
+//     delegating *Validator method (e.g. checkResponseAlignmentForContract)
+//     also contains a direct newError call with the same code, so the code is
+//     found anyway. No low-cost Hard path exists given the structural
+//     separation of Code and Detect.
 func TestGovernanceRuleCodeDetectBinding(t *testing.T) {
 	t.Run("production_source_all_bound", testBindingProductionSource)
 	t.Run("negative_fixture_mislabel_detected", testBindingNegativeFixture)
@@ -1454,6 +1456,99 @@ func testBindingNegativeFixture(t *testing.T) {
 		entry.codeValue, emitted)
 	assert.NotEmpty(t, emitted,
 		"fixture: methodA must emit at least one code (codeA) — confirms the walk is functioning")
+}
+
+// TestGovernanceEmitterConstructorsNeverFuncValue is the teeth-backed reverse
+// self-check for the func-value-indirection blind spot shared by
+// GOVERNANCE-RULE-CODE-DETECT-BINDING-01 and GOVERNANCE-RULE-ERROR-FIX-FIELD-01.
+//
+// Both invariants resolve emitter calls by inspecting CallExpr.Fun
+// (governanceEmitterName), so a constructor referenced as a value rather than
+// called directly — `f := v.newError; f(...)` — would evade them. The invariant
+// godocs previously asserted only that "the production scan stays green", which
+// a vacuous/broken scan also satisfies. This test makes the blind spot an
+// explicit, falsifiable assertion:
+//
+//   - production_source_no_funcvalue: kernel/governance must contain ZERO
+//     references to the emitter constructors that are not the direct callee of a
+//     call (assert count == 0).
+//   - negative_fixture_funcvalue_detected: a fixture that DOES take a
+//     constructor as a func value must be flagged (assert count > 0), proving the
+//     scan has teeth — a vacuous scan fails this sub-test.
+func TestGovernanceEmitterConstructorsNeverFuncValue(t *testing.T) {
+	t.Run("production_source_no_funcvalue", func(t *testing.T) {
+		root := findModuleRoot(t)
+		pkg := loadGovernancePackage(t, root)
+		var violations []string
+		for _, f := range pkg.files {
+			for _, pos := range scanEmitterFuncValueUsages(f) {
+				violations = append(violations,
+					pkg.fileRel(f)+":"+strconv.Itoa(pkg.fset.Position(pos).Line))
+			}
+		}
+		assert.Empty(t, violations,
+			"governance emitter constructors must only be called directly, never taken "+
+				"as func values (would evade governanceEmitterName); found uses at: %v",
+			violations)
+	})
+
+	t.Run("negative_fixture_funcvalue_detected", func(t *testing.T) {
+		const fixturePattern = "./tools/archtest/testdata/governance_emitter_funcvalue_fixtures/funcvalue_indirection_red"
+		var count int
+		RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
+			func(p *Pass) []Diagnostic {
+				for _, f := range p.Files {
+					count += len(scanEmitterFuncValueUsages(f))
+				}
+				return nil
+			})
+		assert.Positive(t, count,
+			"scanEmitterFuncValueUsages must detect the fixture's `f := newError` "+
+				"func-value indirection — a zero result means the scan is vacuous")
+	})
+}
+
+// scanEmitterFuncValueUsages returns the positions of references to the four
+// governance emitter constructors (newError/newWarning/newScopedError/
+// newErrorAt) that are NOT the direct callee of a call expression — i.e.
+// func-value indirections. Function declarations of those names and the .Sel
+// identifier of a call's SelectorExpr are excluded (they are not value uses).
+// Name-based, matching governanceEmitterName, so it works on both production
+// and the fixture's fake funnel.
+func scanEmitterFuncValueUsages(f *ast.File) []token.Pos {
+	callees := map[ast.Expr]bool{}
+	selSel := map[*ast.Ident]bool{}
+	declName := map[*ast.Ident]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			callees[x.Fun] = true
+		case *ast.SelectorExpr:
+			if x.Sel != nil {
+				selSel[x.Sel] = true
+			}
+		case *ast.FuncDecl:
+			if x.Name != nil {
+				declName[x.Name] = true
+			}
+		}
+		return true
+	})
+	var bad []token.Pos
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch e := n.(type) {
+		case *ast.SelectorExpr:
+			if e.Sel != nil && isGovernanceEmitterName(e.Sel.Name) && !callees[e] {
+				bad = append(bad, e.Pos())
+			}
+		case *ast.Ident:
+			if isGovernanceEmitterName(e.Name) && !callees[e] && !selSel[e] && !declName[e] {
+				bad = append(bad, e.Pos())
+			}
+		}
+		return true
+	})
+	return bad
 }
 
 // allRulesEntry holds the Code string value and Detect method name extracted

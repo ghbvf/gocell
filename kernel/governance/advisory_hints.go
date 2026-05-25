@@ -50,6 +50,13 @@ const (
 		" pattern with a resolvable spec var or inline ContractSpec literal"
 	advHintCH04CorrelationFailedFix = "ensure routes are registered via auth.Mount with a resolvable contract spec"
 
+	// CH-04: handler file could not be parsed; alignment cannot be verified.
+	// Fail-closed — an unparseable handler is a finding, not a silent skip.
+	advHintCH04ParseFailed = "CH-04: contract %s — handler file %s could not be parsed (%v);" +
+		" cannot verify response-status alignment"
+	advHintCH04ParseFailedFix = "fix the handler file so it parses (gofmt/go build), " +
+		"or remove the contract's in-repo handler reference"
+
 	// CH-05: auth.Mount correlation failed for UUID pathParam.
 	advHintCH05CorrelationFailed = "CH-05: contract %s with `pathParams.{name}.format: uuid`" +
 		" — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function." +

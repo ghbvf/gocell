@@ -12,9 +12,11 @@ import "context"
 // Detect returns the finished []ValidationResult (built through the existing
 // locator constructors newError/newWarning/newScopedError/newErrorAt, which stay
 // the construction funnel — GOVERNANCE-RULE-ERROR-FIX-FIELD-01 unchanged).
-// Rule.Code duplicates the code each Detect emits; that pairing is drift-locked
-// by the retargeted reachability archtest exactly as today, so the duplication
-// is archtest-Medium (same tier as the pre-M3 reachability test), not a new gap.
+// Rule.Code duplicates the code each Detect emits. That pairing is held by the
+// golden-set + uniqueness check in TestAllRulesMatchGolden (a mis-paired code
+// drops or duplicates an entry in the set) together with the per-rule unit
+// tests (each asserts its method emits its own code) — not by the registration
+// archtest, which only locks that every Detect method is registered in allRules.
 //
 // next-action and per-finding metric were removed from M3 as speculative
 // M5-HARVEST scaffolding (no consumer exists). M3 ships the engine refactor
@@ -94,6 +96,19 @@ func (v *Validator) run(ctx context.Context, rules []Rule, failFast bool) ([]Val
 // they run: validate → {Base, Dep} (+ Strict); check → {Health}.
 func rulesForPhases(phases ...Phase) []Rule {
 	return filterByPhase(allRules, phases...)
+}
+
+// StrictRuleCodes returns the codes of the PhaseStrict rules in declaration
+// order — the rules that run only under `gocell validate --strict`. The
+// validate CLI derives its --strict flag help from this, so the help text is a
+// pure projection of the registry and can never drift from the rules that run.
+func StrictRuleCodes() []RuleCode {
+	rules := rulesForPhases(PhaseStrict)
+	codes := make([]RuleCode, len(rules))
+	for i := range rules {
+		codes[i] = rules[i].Code
+	}
+	return codes
 }
 
 // filterByPhase is the pure phase selector rulesForPhases delegates to, kept
