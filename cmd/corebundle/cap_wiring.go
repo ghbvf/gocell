@@ -30,7 +30,8 @@ func pgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
 // downstream allowlist locks construction to this file.
 //
 // It iterates the codegen-declared generatedCapabilities() (single source:
-// assemblies/corebundle/assembly.yaml `capabilities`), and for each declared
+// the derived union of the assembly cells' cell.yaml `requires`, computed in
+// kernel/assembly.GenerateModulesGen), and for each declared
 // capability provisions the shared resource exactly once and wraps it into the
 // sealed runtime/capability provider stored on shared. Consuming cell modules receive
 // the injected provider (shared.PG / shared.Redis) and never construct adapter
@@ -49,9 +50,10 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 		case capability.Redis:
 			provisionRedis(shared)
 		default:
-			// Unreachable: FMT-36 governance + assembly.schema.json enum reject
-			// unknown capabilities, and generatedCapabilities() is codegen-derived
-			// from the validated set. Defense-in-depth only.
+			// Unreachable: FMT-36 governance (cell.yaml requires ∈ CapabilityEnum) +
+			// the generator's capabilityConstNames guard reject unknown values, and
+			// generatedCapabilities() is codegen-derived from the validated set.
+			// Defense-in-depth only.
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"corebundle: declared capability has no provisioning path",
 				errcode.WithInternal(fmt.Sprintf("capability=%q", string(c))))

@@ -38,9 +38,13 @@ type CellMeta struct {
 	// cell.schema.json `requires` enum; unknown/duplicate values are rejected by
 	// `gocell validate` governance rule FMT-36 (validation-time, not by ParseFS —
 	// the parser stays lenient, matching Kubernetes admission-layer validation).
-	// "Requires" names what the cell consumes, including optional
-	// provision-if-available capabilities (e.g. accesscore's redis cache); the
-	// provisioner (provisionCapabilities) decides hard-vs-best-effort per kind.
+	// "Requires" names what the cell consumes; it declares intent, not a uniform
+	// hardness contract. Whether a listed capability is hard-required or
+	// best-effort is decided per kind by the provisioner (cmd/corebundle
+	// provisionCapabilities): postgres is hard-required in non-memory storage
+	// modes (absence fails fast at the cell's nil-guard); redis is
+	// provision-if-available (absence degrades gracefully — e.g. accesscore's
+	// AUTH-CACHE-01 session cache is skipped when no redis client is configured).
 	Requires []string `yaml:"requires,omitempty"`
 	Dir      string   `yaml:"-"` // directory segment under cells/, set by parser
 	File     string   `yaml:"-"` // parsed cell.yaml path relative to project root

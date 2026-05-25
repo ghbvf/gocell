@@ -2,6 +2,7 @@ package assembly
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 
@@ -103,6 +104,47 @@ func TestGenerateModulesGen_DerivesCapabilitiesFromCellRequires(t *testing.T) {
 	// Dedup: postgres required by all three cells must appear exactly once.
 	assert.Equal(t, 1, strings.Count(content, "capability.Postgres"),
 		"postgres required by multiple cells must emit a single const")
+}
+
+// TestCapabilityConstNamesMatchCapabilityEnum locks the capabilityConstNames
+// map key set to metadata.CapabilityEnum (single source). Adding a capability to
+// the enum without a matching const-name entry (or vice versa) fails here in CI,
+// closing the gap between the codegen const-name table and the
+// governance/schema enum that TestSchemaConstantsMatchSchemaLiterals already
+// pins to cell.schema.json.
+func TestCapabilityConstNamesMatchCapabilityEnum(t *testing.T) {
+	keys := make([]string, 0, len(capabilityConstNames))
+	for k, v := range capabilityConstNames {
+		assert.NotEmpty(t, v, "capabilityConstNames[%q] must map to a non-empty const name", k)
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	want := append([]string(nil), metadata.CapabilityEnum...)
+	sort.Strings(want)
+	assert.Equal(t, want, keys,
+		"capabilityConstNames key set must equal metadata.CapabilityEnum (single source)")
+}
+
+// TestGenerateModulesGen_RabbitMQAndSingle covers the single-capability path
+// (sort/dedup with len 1) and the rabbitmq → capability.RabbitMQ const mapping
+// — the enum member with no provider yet, whose codegen path is otherwise
+// uncovered. The generated const must still emit (provisioning fails later at
+// provisionCapabilities' default branch, by design).
+func TestGenerateModulesGen_RabbitMQAndSingle(t *testing.T) {
+	project := buildModulesTestProject()
+	project.Cells["accesscore"].Requires = []string{"rabbitmq"}
+	// auditcore / configcore leave Requires nil — union is the single {rabbitmq}.
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+
+	content := string(out)
+	assert.Contains(t, content, "func generatedCapabilities() []capability.Kind")
+	assert.Contains(t, content, "capability.RabbitMQ")
+	assert.Equal(t, 1, strings.Count(content, "capability.RabbitMQ"))
+	assert.NotContains(t, content, "capability.Postgres")
+	assert.NotContains(t, content, "capability.Redis")
 }
 
 // TestGenerateModulesGen_UnknownCapability verifies the codegen-time guard:

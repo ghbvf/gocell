@@ -6,6 +6,36 @@
 - **来源路线**：`docs/plans/framework-capability-gaps/202605221303-006-spring-comparison-and-simplification-roadmap.md` §4 P0-1
 - **相关**：#855（P0-2，复用本接口）；ADR `202605201400-adr-relay-managedresource-isolation.md`（relay 归属不变）
 
+## Amendment 2026-05-26（#855 Design Y：capability 声明源翻转）
+
+#855 落地把 capability 的**声明源**从手写 `assembly.yaml capabilities` 翻转为 per-cell
+`cell.yaml requires`：assembly 的 provision 集是其 cells `requires` 的**排序去重 union**，由
+`kernel/assembly.GenerateModulesGen` 派生进 `modules_gen.go`。删 `AssemblyMeta.Capabilities`
++ `assembly.yaml capabilities` property + assembly#CapabilityEnum schema 测试；enum 镜像移到
+`cell.schema.json requires`。FMT-36 从校验 `assembly.capabilities` repurpose 为校验 per-cell
+`requires`（well-formedness：known + 无重复）。
+
+**与本 ADR §1「为什么不是 per-cell」的关系——不矛盾**：§1 拒绝的是 per-cell **provisioning**
+（每个 cell 自开 pool，破坏单池 + LIFO + 单 outbox/relay）。Design Y **不动 provisioning 模型**
+——`provisionCapabilities` 仍在 assembly 级把每个 capability provision 恰好一次（单池、LIFO 不变）。
+变的只是 capability **集合的声明源**：从「composition root 作者手写一份 assembly 列表」改为
+「每个 cell 声明自己消费什么，assembly 集由 union 派生」。声明源单源化消除了「cell 用 PG 但 assembly
+忘记声明」这一类 drift（漏声明 → 不入 union → 不 provision → cell nil-guard fail-fast），且兑现
+本 ADR §3 在 `runtime/capability/capability.go` 留下的 `requires` forward-reference。原 §1 末段
+「per-cell `requires:[postgres]` 让每个 cell 自开 pool」已就地改写以区分「声明源 per-cell」与
+「provisioning per-cell」。
+
+**Enforcement 矩阵逐行重评（无 ✅→⚠️/❌ 降级）**：
+
+| # | amendment 后 | 评级变化 |
+|---|------|---------|
+| 1 | FMT-36 校验对象 `assembly.capabilities` → **per-cell `cell.requires`**；schema 镜像移到 `cell.schema.json`；**新增** `TestCapabilityConstNamesMatchCapabilityEnum` 锁 `capabilityConstNames` key 集 == `CapabilityEnum`（补此前 codegen const-name 表与 enum 无守卫的盲区）| Medium 不变（守卫增强）|
+| 2 | golden 派生源 `assembly.yaml` → **∪cells.requires**；`gocell generate assembly` regenerate-and-diff 字节锁不变 | Hard 不变 |
+| 3 | sealed construction（provider 不可伪造）| Hard 不变，无关本 amendment |
+| 4 | CAPABILITY-PROVIDER-FUNNEL-01 caller-allowlist | Medium 不变，无关本 amendment |
+
+机制 3+4 的 Hard 上游 + Medium 下游过渡形态（gh #988 跟踪 Hard 化）不受本 amendment 影响。
+
 ## Context
 
 composition root（`cmd/corebundle/*_module.go`）的 infra wiring 全手写。三个平台 cell 在 postgres 模式各自从一个共享 pool 派生 `adapterpg.NewTxManager` / `NewOutboxWriter` / `pool.DB()`，pool 由 configcore 创建后经 `SharedDeps.SharedPGPool` publish-back 给 access/audit。这套耦合带来：
@@ -24,7 +54,7 @@ P0-1 目标：把 adapter 派生胶水收口到标准 capability provider，comp
 
 capability 是 **assembly 一次性 provision、注入消费 cell** 的共享资源，**不是** per-cell 构造。这对齐编译期 DI（Wire/Dagger）/ uber-fx `fx.Supply`——共享值 provision 一次，多 module 消费。pool 生命周期（open/close、ManagedResource、LIFO teardown）由 assembly composition root 持有。
 
-**为什么不是 per-cell**：per-cell `requires:[postgres]` 让每个 cell 自开 pool，破坏单 pool + LIFO shutdown，且与"一个 outbox 表 / 一个 relay"矛盾。共享资源天然是 assembly 级。
+**为什么 provisioning 不是 per-cell**：per-cell **provisioning**（每个 cell 自开 pool）破坏单 pool + LIFO shutdown，且与"一个 outbox 表 / 一个 relay"矛盾。共享资源天然是 assembly 级一次性 provision。（注：#855 Design Y 后 capability **声明源**是 per-cell `cell.yaml requires`，assembly 集由 union 派生——但 **provisioning 仍 assembly 级单次**，与此处结论一致；详见顶部 Amendment 2026-05-26。）
 
 ### 2. 接口 + sealed 构造（`runtime/capability/capability.go`，仅 import kernel/ + pkg/）
 
@@ -67,7 +97,7 @@ pg := capability.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutbox
 
 ### 3. SharedDeps：删 `SharedPGPool`，加 `PG`/`Redis` capability handle
 
-- `runCorebundle` 在 `LoadSharedDepsFromEnv` 之后、`BuildApp` 之前调用 `provisionCapabilities`（`cap_wiring.go`），遍历 codegen 派生的 `generatedCapabilities()`（单源 = `assembly.yaml capabilities:[]`）逐项 provision：postgres 模式下 open pool + `verifyPGPreconditions`（schema version / shape / invalid-index——用 bundle-global `adapterpg.MigrationsFS()`，本就是整 bundle 的共享迁移集，非 configcore 私有）+ 构造 `capability.PGProvider` 写 `SharedDeps.PG`；redis 包装 `buildSharedReplayDeps` 已建的 client 写 `SharedDeps.Redis`（client 本身仍在 `buildSharedReplayDeps` 构造，claimer/nonce 同源）。memory 模式 `SharedDeps.PG` 保持 nil，cell 走 in-memory 路径。
+- `runCorebundle` 在 `LoadSharedDepsFromEnv` 之后、`BuildApp` 之前调用 `provisionCapabilities`（`cap_wiring.go`），遍历 codegen 派生的 `generatedCapabilities()`（单源 = cells 的 `cell.yaml requires` union，#855 Design Y；见顶部 Amendment）逐项 provision：postgres 模式下 open pool + `verifyPGPreconditions`（schema version / shape / invalid-index——用 bundle-global `adapterpg.MigrationsFS()`，本就是整 bundle 的共享迁移集，非 configcore 私有）+ 构造 `capability.PGProvider` 写 `SharedDeps.PG`；redis 包装 `buildSharedReplayDeps` 已建的 client 写 `SharedDeps.Redis`（client 本身仍在 `buildSharedReplayDeps` 构造，claimer/nonce 同源）。memory 模式 `SharedDeps.PG` 保持 nil，cell 走 in-memory 路径。
 - **删** `SharedDeps.SharedPGPool *adapterpg.Pool`（+ `RedisClient` 公开字段，改 `Redis capability.RedisProvider` + unexported `redisClient`）。
 - pool 的 `ManagedResource`（`SharedDeps.poolMR`）由 `runtimeBaseOptions`（`defaultRuntimeOptions` 的一部分，先于 cellOpts append）注册 → LIFO 下 pool 最后 close（晚于所有 consumer）。`provisionCapabilities` 与 `bootstrap.Run` 之间的失败窗口由 `runCorebundle` 的 `handedToBootstrap` defer 守卫关池。
 - **删** `MODULE-ORDER-CONFIGCORE-FIRST-01`（`tools/archtest/module_order_test.go`）+ `main_test.go:65` 断言：前提（configcore 创建 pool）消失。
@@ -85,8 +115,8 @@ pg := capability.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutbox
 
 | # | 约束 | 载体 | 评级 |
 |---|------|------|------|
-| 1 | `assembly.yaml capabilities` ∈ 封闭集 `{postgres,redis,rabbitmq}`、无重复 | `gocell validate` governance rule **FMT-36** + 单源 `metadata.CapabilityEnum` + `IsKnownCapability`；schema enum 由 `TestSchemaConstantsMatchSchemaLiterals` 字节对齐 | **Medium**（governance rule + 测试守卫；3 值封闭集不值得引 codegen funnel——K8s 旧 enum 模式同构，校验落 admission 层而非 parser） |
-| 2 | `modules_gen.go`（含 `generatedCapabilities()`）= `assembly.yaml` 派生 | `gocell verify codegen-assembly` regenerate-and-diff 字节锁 | **Hard**（codegen funnel + golden；既有机制，现覆盖 capabilities 分支） |
+| 1 | per-cell `cell.requires` ∈ 封闭集 `{postgres,redis,rabbitmq}`、无重复（#855 Design Y；原 `assembly.capabilities`）| `gocell validate` governance rule **FMT-36** + 单源 `metadata.CapabilityEnum` + `IsKnownCapability`；schema enum（`cell.schema.json requires`）由 `TestSchemaConstantsMatchSchemaLiterals` 字节对齐；`capabilityConstNames` key 集由 `TestCapabilityConstNamesMatchCapabilityEnum` 锁到 enum | **Medium**（governance rule + 测试守卫；3 值封闭集不值得引 codegen funnel——K8s 旧 enum 模式同构，校验落 admission 层而非 parser） |
+| 2 | `modules_gen.go`（含 `generatedCapabilities()`）= **∪cells.requires** 派生（#855 Design Y）| `gocell generate assembly` regenerate-and-diff 字节锁 | **Hard**（codegen funnel + golden；既有机制，现覆盖派生 capabilities 分支） |
 | 3 | cell module 不能伪造 bypass provider | `capability.PGProvider`/`RedisProvider` sealed（unexported marker + 私有 impl + 唯一构造 `capability.NewPGProvider`/`NewRedisProvider`），包外不可表达 | **Hard**（sealed construction，type system） |
 | 4 | `cmd/<id>/*_module.go` 不直接构造**共享基建** | archtest **CAPABILITY-PROVIDER-FUNNEL-01**（`tools/archtest/capability_provider_funnel_test.go`）：ban `adapterpg.NewPool`/`NewTxManager`/`NewOutboxWriter` + `adapterredis.NewClient`，caller allowlist = `cmd/corebundle/cap_wiring.go` + `_test.go`；**不 ban** per-cell 派生（`NewSessionStore`/`NewCache`/`NewRedisDriver`/…，从注入 handle 构造，CLAUDE.md observability §per-cell 资源约定）；镜像 `CAS-PROTOCOL-COMPOSITION-ROOT-01` | **Medium**（type-aware caller-allowlist，非编译期） |
 

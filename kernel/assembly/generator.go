@@ -116,12 +116,14 @@ type modulesContext struct {
 	Capabilities []string
 }
 
-// capabilityConstNames maps assembly.yaml `capabilities` enum values to their
+// capabilityConstNames maps cell.yaml `requires` enum values to their
 // runtime/capability.Kind const identifiers. The enum is closed and mirrored by
-// assembly.schema.json + runtime/capability.Kind; an unknown value here means
-// the schema enum and this map drifted — GenerateModulesGen fails rather than
-// emit an undefined const (the FMT-36 validation in gocell validate is the
-// primary upstream gate).
+// metadata.CapabilityEnum + cell.schema.json + runtime/capability.Kind;
+// TestCapabilityConstNamesMatchCapabilityEnum locks this map's key set to
+// metadata.CapabilityEnum so adding a capability to the enum without a const
+// mapping (or vice versa) fails in CI. An unknown value reaching here means that
+// guard was bypassed — GenerateModulesGen fails rather than emit an undefined
+// const (the FMT-36 validation in gocell validate is the primary upstream gate).
 var capabilityConstNames = map[string]string{
 	"postgres": "Postgres",
 	"redis":    "Redis",
@@ -230,6 +232,11 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 // Each cell must have GoStructName set (cell.yaml schema extension consumed
 // by codegen). The generated factory references {GoStructName}Module by
 // convention; the *Module struct is hand-written in cmd/{assemblyID}/.
+//
+// generatedCapabilities() is the sorted, de-duplicated union of the assembly
+// cells' cell.yaml `requires` (Design Y, #855). Changing a cell's `requires`
+// therefore requires re-running `gocell generate assembly` to refresh
+// modules_gen.go; `--verify` catches stale output in CI.
 func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
