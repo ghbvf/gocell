@@ -230,7 +230,18 @@ func dispatchMarker(m collectedMarker, bundle *WireBundle) error {
 
 // unknownMarkerError returns a descriptive error for an unrecognized marker,
 // with an optional Levenshtein suggestion.
+//
+// The retired slice:subscribe marker gets a dedicated migration hint instead of
+// a generic suggestion: it was removed in the subscribe single-source flip, so a
+// Levenshtein "did you mean cell:listener?" would be actively misleading. Point
+// authors at the slice.yaml replacement directly.
 func unknownMarkerError(m collectedMarker) error {
+	if m.Name == "slice:subscribe" {
+		return fmt.Errorf("cell.go:%d: marker %q was retired in the subscribe single-source flip; "+
+			"declare the subscription in the slice's slice.yaml as "+
+			"contractUsages: [{contract: <event id>, role: subscribe, handler: <HandlerMethod>}] "+
+			"and delete this marker", m.Line, m.Name)
+	}
 	sug := suggestMarkerName(m.Name, knownMarkers)
 	if sug != "" {
 		return fmt.Errorf("cell.go:%d: unknown marker %q (did you mean %q?)", m.Line, m.Name, sug)

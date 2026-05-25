@@ -349,7 +349,22 @@ func renderSliceMetaLiteral(s *metadata.SliceMeta) string {
 	if len(s.ContractUsages) > 0 {
 		sb.WriteString("\tContractUsages: []metadata.ContractUsage{\n")
 		for _, u := range s.ContractUsages {
-			fmt.Fprintf(&sb, "\t\t{Contract: %q, Role: %q},\n", u.Contract, u.Role)
+			sb.WriteString("\t\t{")
+			fmt.Fprintf(&sb, "Contract: %q, Role: %q", u.Contract, u.Role)
+			// Handler / Group / Field are the subscribe-only columns. Projecting
+			// them (when set) keeps the typed sliceMeta a COMPLETE projection of
+			// slice.yaml's contractUsages — not just {Contract, Role}. Zero-value
+			// columns are omitted to keep regenerated output minimal.
+			if u.Handler != "" {
+				fmt.Fprintf(&sb, ", Handler: %q", u.Handler)
+			}
+			if u.Group != "" {
+				fmt.Fprintf(&sb, ", Group: %q", u.Group)
+			}
+			if u.Field != "" {
+				fmt.Fprintf(&sb, ", Field: %q", u.Field)
+			}
+			sb.WriteString("},\n")
 		}
 		sb.WriteString("\t},\n")
 	}

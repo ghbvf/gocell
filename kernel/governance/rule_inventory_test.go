@@ -123,6 +123,9 @@ func goldenRuleIDs() []string {
 		"FMT-20", "FMT-21", "FMT-22", "FMT-23", "FMT-24", "FMT-25",
 		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30", "FMT-31",
 		"FMT-32", "FMT-33", "FMT-34",
+		// FMT-35: subscribe CU field placement (handler required for subscribe;
+		// handler/group/field forbidden for non-subscribe roles).
+		"FMT-35",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency
@@ -144,7 +147,9 @@ func goldenRuleIDs() []string {
 		"REF-01", "REF-02", "REF-03", "REF-04", "REF-05",
 		"REF-06", "REF-07", "REF-08", "REF-09", "REF-10",
 		"REF-11", "REF-12", "REF-13", "REF-14", "REF-15",
-		"REF-16", "REF-17",
+		// REF-18: actorSubscribers reference integrity (each entry must be a
+		// registered external actor, not a cell ID and not a wildcard).
+		"REF-16", "REF-17", "REF-18",
 
 		// SLICE-CONSISTENCY — slice level vs parent cell + contractUsages role lower bound (rules_misc_advisory.go)
 		"SLICE-CONSISTENCY-01",

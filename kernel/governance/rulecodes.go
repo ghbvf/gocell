@@ -52,6 +52,7 @@ const (
 	codeREF15 RuleCode = "REF-15"
 	codeREF16 RuleCode = "REF-16"
 	codeREF17 RuleCode = "REF-17"
+	codeREF18 RuleCode = "REF-18"
 
 	// TOPO — topology legality (rules_topo.go).
 	codeTOPO01 RuleCode = "TOPO-01"
@@ -107,6 +108,7 @@ const (
 	codeFMT32 RuleCode = "FMT-32"
 	codeFMT33 RuleCode = "FMT-33"
 	codeFMT34 RuleCode = "FMT-34"
+	codeFMT35 RuleCode = "FMT-35"
 	codeFMTA1 RuleCode = "FMT-A1"
 	codeFMTC1 RuleCode = "FMT-C1"
 

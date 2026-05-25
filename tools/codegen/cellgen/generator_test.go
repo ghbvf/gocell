@@ -504,8 +504,8 @@ func syntheticBundle() markergen.WireBundle {
 // syntheticFieldIndex maps the alpha slice package name to the cell struct
 // field holding it. Used by TestRenderCell_GoldenSynth to supply fieldIndex
 // to BuildCellSpec (single-source flip: subscriptions derived from slice CUs).
-func syntheticFieldIndex() map[string]string {
-	return map[string]string{"alpha": "alphaHandler"}
+func syntheticFieldIndex() *CellFieldIndex {
+	return idxOf(map[string]string{"alpha": "alphaHandler"})
 }
 
 // mustContain fails the test (with truncated output) when needle is not in haystack.

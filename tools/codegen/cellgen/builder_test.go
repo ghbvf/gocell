@@ -225,7 +225,7 @@ func TestBuildCellSpec_UnknownContractFails(t *testing.T) {
 		},
 	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil) // no contracts declared
-	fieldIndex := map[string]string{"subs": "subsSvc"}
+	fieldIndex := idxOf(map[string]string{"subs": "subsSvc"})
 	_, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, fieldIndex)
 	if err == nil || !strings.Contains(err.Error(), "unknown contract") {
 		t.Fatalf("expected unknown-contract error, got %v", err)
@@ -244,7 +244,7 @@ func TestBuildCellSpec_NonEventContractRejected(t *testing.T) {
 		},
 	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "http.users.v1", Kind: "http"}})
-	fieldIndex := map[string]string{"subs": "subsSvc"}
+	fieldIndex := idxOf(map[string]string{"subs": "subsSvc"})
 	_, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, fieldIndex)
 	if err == nil || !strings.Contains(err.Error(), "non-event") {
 		t.Fatalf("expected non-event-contract error, got %v", err)
@@ -393,7 +393,7 @@ func TestBuildCellSpec_TransportAlwaysAMQP(t *testing.T) {
 		{ID: "event.bar.updated.v1", Kind: "event"},
 	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, contracts)
-	fieldIndex := map[string]string{"subs": "subsSvc"}
+	fieldIndex := idxOf(map[string]string{"subs": "subsSvc"})
 
 	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, fieldIndex)
 	if err != nil {

@@ -21,10 +21,10 @@ var sliceMeta = &metadata.SliceMeta{
 	ConsistencyLevel: "L2",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.audit.appended.v1", Role: "publish"},
-		{Contract: "event.config.entry-upserted.v1", Role: "subscribe"},
-		{Contract: "event.config.entry-deleted.v1", Role: "subscribe"},
-		{Contract: "event.config.version-published.v1", Role: "subscribe"},
-		{Contract: "event.config.rollback.v1", Role: "subscribe"},
+		{Contract: "event.config.entry-upserted.v1", Role: "subscribe", Handler: "HandleEvent"},
+		{Contract: "event.config.entry-deleted.v1", Role: "subscribe", Handler: "HandleEvent"},
+		{Contract: "event.config.version-published.v1", Role: "subscribe", Handler: "HandleEvent"},
+		{Contract: "event.config.rollback.v1", Role: "subscribe", Handler: "HandleEvent"},
 	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{

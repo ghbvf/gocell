@@ -28,24 +28,63 @@ type DemoCell struct {
 }
 `
 	path := writeTempCellGo(t, src)
-	idx, err := IndexCellStructFields(path)
+	idx, err := IndexCellStructFields(path, "DemoCell")
 	if err != nil {
 		t.Fatalf("IndexCellStructFields: %v", err)
 	}
-	if idx["orderprojection"] != "projectionSvc" {
-		t.Errorf("orderprojection → %q, want projectionSvc", idx["orderprojection"])
+	if idx.byPkg["orderprojection"] != "projectionSvc" {
+		t.Errorf("orderprojection → %q, want projectionSvc", idx.byPkg["orderprojection"])
 	}
-	if idx["orderwrite"] != "writeSvc" {
-		t.Errorf("orderwrite → %q, want writeSvc", idx["orderwrite"])
+	if idx.byPkg["orderwrite"] != "writeSvc" {
+		t.Errorf("orderwrite → %q, want writeSvc", idx.byPkg["orderwrite"])
+	}
+	// byField is the inverse, used for explicit field: validation.
+	if idx.byField["projectionSvc"] != "orderprojection" {
+		t.Errorf("byField[projectionSvc] = %q, want orderprojection", idx.byField["projectionSvc"])
 	}
 }
 
 // TestIndexCellStructFields_MissingFile returns an error when the file does not exist.
 func TestIndexCellStructFields_MissingFile(t *testing.T) {
 	t.Parallel()
-	_, err := IndexCellStructFields("/nonexistent/cell.go")
+	_, err := IndexCellStructFields("/nonexistent/cell.go", "DemoCell")
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+// TestIndexCellStructFields_HelperStructNotScanned verifies that pointer fields
+// declared on a non-cell struct in the same cell.go (e.g. an options/config
+// helper) do NOT enter the index — only the named cell struct is scanned. This
+// is the F2 regression guard: a helper struct holding a *orderprojection.X
+// field must not shadow or make-ambiguous the cell struct's own resolution.
+func TestIndexCellStructFields_HelperStructNotScanned(t *testing.T) {
+	t.Parallel()
+	src := `package democell
+
+import "github.com/example/democell/slices/orderprojection"
+
+type DemoCell struct {
+	projectionSvc *orderprojection.Service
+}
+
+// helperOptions is NOT the cell struct — its field must be ignored.
+type helperOptions struct {
+	shadow *orderprojection.Service
+}
+`
+	path := writeTempCellGo(t, src)
+	idx, err := IndexCellStructFields(path, "DemoCell")
+	if err != nil {
+		t.Fatalf("IndexCellStructFields: %v", err)
+	}
+	// The cell struct's field resolves cleanly — the helper struct's same-package
+	// field did NOT flip orderprojection to ambiguous.
+	if idx.byPkg["orderprojection"] != "projectionSvc" {
+		t.Errorf("orderprojection → %q, want projectionSvc (helper struct must not pollute index)", idx.byPkg["orderprojection"])
+	}
+	if _, ok := idx.byField["shadow"]; ok {
+		t.Errorf("helper struct field 'shadow' must not be indexed, got byField=%v", idx.byField)
 	}
 }
 
@@ -62,12 +101,12 @@ type DemoCell struct {
 }
 `
 	path := writeTempCellGo(t, src)
-	idx, err := IndexCellStructFields(path)
+	idx, err := IndexCellStructFields(path, "DemoCell")
 	if err != nil {
 		t.Fatalf("IndexCellStructFields: %v", err)
 	}
-	if _, ok := idx["OrderProjectionService"]; ok {
-		t.Errorf("non-pointer field should not be indexed, got idx=%v", idx)
+	if _, ok := idx.byPkg["OrderProjectionService"]; ok {
+		t.Errorf("non-pointer field should not be indexed, got byPkg=%v", idx.byPkg)
 	}
 }
 
@@ -84,13 +123,13 @@ type DemoCell struct {
 }
 `
 	path := writeTempCellGo(t, src)
-	idx, err := IndexCellStructFields(path)
+	idx, err := IndexCellStructFields(path, "DemoCell")
 	if err != nil {
 		t.Fatalf("IndexCellStructFields: %v", err)
 	}
 	// Embedded fields have no name so should not appear in index.
-	if len(idx) != 0 {
-		t.Errorf("embedded field should not be indexed, got idx=%v", idx)
+	if len(idx.byPkg) != 0 {
+		t.Errorf("embedded field should not be indexed, got byPkg=%v", idx.byPkg)
 	}
 }
 
@@ -102,7 +141,7 @@ func TestBuildCellSpec_SubscribesFromSliceYAML(t *testing.T) {
 	cell, slc, contracts := buildSubscribeFixtures()
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, contracts)
 	// fieldIndex maps slice ID → cell struct field name.
-	fieldIndex := map[string]string{"subs": "subsSvc"}
+	fieldIndex := idxOf(map[string]string{"subs": "subsSvc"})
 	bundle := emptyBundleWithListener()
 
 	spec, err := BuildCellSpec(p, "demo", bundle, fieldIndex)
@@ -130,7 +169,7 @@ func TestBuildCellSpec_SubscribeGroupExplicit(t *testing.T) {
 	t.Parallel()
 	cell, slc, contracts := buildSubscribeFixturesWithGroup("demo-fanout")
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, contracts)
-	fieldIndex := map[string]string{"subs": "subsSvc"}
+	fieldIndex := idxOf(map[string]string{"subs": "subsSvc"})
 	bundle := emptyBundleWithListener()
 
 	spec, err := BuildCellSpec(p, "demo", bundle, fieldIndex)
@@ -152,8 +191,8 @@ func TestBuildCellSpec_SubscribeFieldNotInIndex(t *testing.T) {
 	t.Parallel()
 	cell, slc, contracts := buildSubscribeFixtures()
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, contracts)
-	// Empty fieldIndex — slice field cannot be resolved.
-	fieldIndex := map[string]string{}
+	// Empty (but non-nil) fieldIndex — slice field cannot be resolved.
+	fieldIndex := idxOf(map[string]string{})
 	bundle := emptyBundleWithListener()
 
 	_, err := BuildCellSpec(p, "demo", bundle, fieldIndex)
@@ -178,7 +217,7 @@ func TestBuildCellSpec_SubscribeHandlerMissingInCU(t *testing.T) {
 	}
 	contract := &metadata.ContractMeta{ID: "event.foo.v1", Kind: "event"}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
-	fieldIndex := map[string]string{"subs": "subsSvc"}
+	fieldIndex := idxOf(map[string]string{"subs": "subsSvc"})
 	bundle := emptyBundleWithListener()
 
 	_, err := BuildCellSpec(p, "demo", bundle, fieldIndex)
@@ -227,22 +266,49 @@ type DemoCell struct {
 }
 `
 	path := writeTempCellGo(t, src)
-	idx, err := IndexCellStructFields(path)
+	idx, err := IndexCellStructFields(path, "DemoCell")
 	if err != nil {
 		t.Fatalf("IndexCellStructFields must not error on duplicate package: %v", err)
 	}
-	if idx["sessionlogout"] != ambiguousField {
-		t.Errorf("duplicate package should map to ambiguousField sentinel, got %q", idx["sessionlogout"])
+	if idx.byPkg["sessionlogout"] != ambiguousField {
+		t.Errorf("duplicate package should map to ambiguousField sentinel, got %q", idx.byPkg["sessionlogout"])
+	}
+	// byField retains BOTH field→pkg entries so an explicit field: can still
+	// disambiguate which of the two same-package fields to bind.
+	if idx.byField["logoutHandler"] != "sessionlogout" || idx.byField["rbacSessionConsumer"] != "sessionlogout" {
+		t.Errorf("byField must retain both same-package fields, got %v", idx.byField)
 	}
 }
 
+// indexFromSessionlogout builds the index for accesscore's sessionlogout
+// scenario from real source: two *sessionlogout.T fields make the package
+// ambiguous in byPkg while byField retains both.
+func indexFromSessionlogout(t *testing.T) *CellFieldIndex {
+	t.Helper()
+	src := `package democell
+
+import "github.com/example/democell/slices/sessionlogout"
+
+type DemoCell struct {
+	logoutHandler       *sessionlogout.Handler
+	rbacSessionConsumer *sessionlogout.Consumer
+}
+`
+	idx, err := IndexCellStructFields(writeTempCellGo(t, src), "DemoCell")
+	if err != nil {
+		t.Fatalf("IndexCellStructFields: %v", err)
+	}
+	return idx
+}
+
 // TestResolveSliceField_ExplicitFieldWins verifies the slice.yaml `field:`
-// override is returned directly, bypassing package-convention resolution
-// (and its ambiguity), so multi-field slices like sessionlogout resolve.
+// override resolves a multi-field slice like sessionlogout, where convention
+// resolution is ambiguous. The explicit field is validated to belong to the
+// subscribing slice's own package before it is accepted.
 func TestResolveSliceField_ExplicitFieldWins(t *testing.T) {
 	t.Parallel()
-	idx := map[string]string{"sessionlogout": ambiguousField}
-	got, err := resolveSliceField(idx, "rbacSessionConsumer", "accesscore", "sessionlogout")
+	idx := indexFromSessionlogout(t)
+	got, err := idx.resolveSliceField("rbacSessionConsumer", "accesscore", "sessionlogout")
 	if err != nil {
 		t.Fatalf("explicit field must resolve without error: %v", err)
 	}
@@ -255,8 +321,8 @@ func TestResolveSliceField_ExplicitFieldWins(t *testing.T) {
 // package with no explicit field: produces an actionable disambiguation error.
 func TestResolveSliceField_AmbiguousWithoutField_Errors(t *testing.T) {
 	t.Parallel()
-	idx := map[string]string{"sessionlogout": ambiguousField}
-	_, err := resolveSliceField(idx, "", "accesscore", "sessionlogout")
+	idx := indexFromSessionlogout(t)
+	_, err := idx.resolveSliceField("", "accesscore", "sessionlogout")
 	if err == nil {
 		t.Fatal("expected ambiguity error, got nil")
 	}
@@ -265,8 +331,58 @@ func TestResolveSliceField_AmbiguousWithoutField_Errors(t *testing.T) {
 	}
 }
 
+// TestResolveSliceField_ExplicitFieldWrongPackage_Errors is the F1 regression
+// guard: an explicit field: that names an existing cell-struct field whose
+// pointer type belongs to a DIFFERENT slice's package is rejected, instead of
+// silently binding the subscription to the wrong slice (which could compile if
+// that other type happens to expose a same-named handler method).
+func TestResolveSliceField_ExplicitFieldWrongPackage_Errors(t *testing.T) {
+	t.Parallel()
+	src := `package democell
+
+import (
+	"github.com/example/democell/slices/subs"
+	"github.com/example/democell/slices/other"
+)
+
+type DemoCell struct {
+	subsSvc  *subs.Service
+	otherSvc *other.Service
+}
+`
+	idx, err := IndexCellStructFields(writeTempCellGo(t, src), "DemoCell")
+	if err != nil {
+		t.Fatalf("IndexCellStructFields: %v", err)
+	}
+	// subscribing slice is "subs" but field: points at otherSvc (*other.Service).
+	_, err = idx.resolveSliceField("otherSvc", "demo", "subs")
+	if err == nil {
+		t.Fatal("expected error when field: points to a different slice's package, got nil")
+	}
+	if !strings.Contains(err.Error(), "different slice's package") {
+		t.Errorf("error should mention 'different slice's package', got %v", err)
+	}
+}
+
+// TestResolveSliceField_ExplicitFieldNotDeclared_Errors verifies that an
+// explicit field: naming no cell-struct *pkg.T field at all is rejected with a
+// descriptive error (rather than passing through to a c.<field>.<handler> that
+// would fail to compile with an opaque message).
+func TestResolveSliceField_ExplicitFieldNotDeclared_Errors(t *testing.T) {
+	t.Parallel()
+	idx := idxOf(map[string]string{"subs": "subsSvc"})
+	_, err := idx.resolveSliceField("ghostField", "demo", "subs")
+	if err == nil {
+		t.Fatal("expected error when field: names no declared cell-struct field, got nil")
+	}
+	if !strings.Contains(err.Error(), "names no") {
+		t.Errorf("error should mention field names no pointer field, got %v", err)
+	}
+}
+
 // TestBuildCellSpec_SubscribeFieldOverride verifies a subscribe CU carrying
-// field: resolves via the override even when the package index is ambiguous.
+// field: resolves via the override even when the package index is ambiguous —
+// and the override is validated to belong to the subscribing slice's package.
 func TestBuildCellSpec_SubscribeFieldOverride(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
@@ -277,8 +393,12 @@ func TestBuildCellSpec_SubscribeFieldOverride(t *testing.T) {
 		},
 	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.v1", Kind: "event"}})
-	// Ambiguous index: convention resolution would fail, but field: wins.
-	fieldIndex := map[string]string{"subs": ambiguousField}
+	// Two *subs.T fields → convention is ambiguous, but field: consumerField wins
+	// and is validated to belong to package "subs".
+	fieldIndex := &CellFieldIndex{
+		byPkg:   map[string]string{"subs": ambiguousField},
+		byField: map[string]string{"routeHandler": "subs", "consumerField": "subs"},
+	}
 
 	spec, err := BuildCellSpec(p, "demo", emptyBundleWithListener(), fieldIndex)
 	if err != nil {
@@ -289,30 +409,29 @@ func TestBuildCellSpec_SubscribeFieldOverride(t *testing.T) {
 	}
 }
 
-// TestBuildCellSpec_SubscribeFieldInvalidIdentifier verifies that a subscribe CU
-// carrying an explicit field: value that is not a valid Go identifier produces
-// a descriptive error mentioning the invalid pattern. This exercises the
-// fieldName validation added after resolveSliceField returns.
-func TestBuildCellSpec_SubscribeFieldInvalidIdentifier(t *testing.T) {
+// TestBuildCellSpec_SubscribeFieldUndeclared verifies that a subscribe CU
+// carrying an explicit field: value that names no declared *pkg.T cell-struct
+// field is rejected at BuildCellSpec time (rather than producing a
+// c.<field>.<handler> expression that fails to compile with an opaque message).
+func TestBuildCellSpec_SubscribeFieldUndeclared(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
 	slc := &metadata.SliceMeta{
 		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
 		ContractUsages: []metadata.ContractUsage{
-			{Contract: "event.foo.v1", Role: "subscribe", Handler: "HandleFoo", Field: "bad-name!"},
+			{Contract: "event.foo.v1", Role: "subscribe", Handler: "HandleFoo", Field: "ghostField"},
 		},
 	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.v1", Kind: "event"}})
-	fieldIndex := map[string]string{"subs": "subsSvc"}
+	fieldIndex := idxOf(map[string]string{"subs": "subsSvc"})
 	bundle := emptyBundleWithListener()
 
 	_, err := BuildCellSpec(p, "demo", bundle, fieldIndex)
 	if err == nil {
-		t.Fatal("expected error for invalid field identifier, got nil")
+		t.Fatal("expected error for undeclared field, got nil")
 	}
-	// Error message should mention the validation constraint.
-	if !strings.Contains(err.Error(), "valid Go identifier") {
-		t.Errorf("error should mention 'valid Go identifier', got: %v", err)
+	if !strings.Contains(err.Error(), "names no") {
+		t.Errorf("error should mention field names no pointer field, got: %v", err)
 	}
 }
 
@@ -336,6 +455,21 @@ func TestBuildCellSpec_NilFieldIndexWithSubscribeCU(t *testing.T) {
 }
 
 // --- fixture helpers ---
+
+// idxOf builds a *CellFieldIndex from a pkg→field map, deriving the inverse
+// byField (skipping ambiguousField entries, which carry no single field name).
+// For scenarios that need a specific byField shape (ambiguous package with an
+// explicit disambiguating field), construct *CellFieldIndex directly or build
+// from real source via IndexCellStructFields.
+func idxOf(byPkg map[string]string) *CellFieldIndex {
+	bf := make(map[string]string, len(byPkg))
+	for pkg, field := range byPkg {
+		if field != ambiguousField {
+			bf[field] = pkg
+		}
+	}
+	return &CellFieldIndex{byPkg: byPkg, byField: bf}
+}
 
 func buildSubscribeFixtures() (*metadata.CellMeta, *metadata.SliceMeta, []*metadata.ContractMeta) {
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}

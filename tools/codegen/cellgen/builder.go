@@ -53,10 +53,11 @@ const msgUndeclaredListener = "cellgen build: route references undeclared listen
 // marker comments (markergen.Merge output). An empty bundle produces a spec
 // with no RouteGroups.
 //
-// fieldIndex maps slice package short names to the cell struct field that holds
-// the slice service pointer (e.g. "orderprojection" → "projectionSvc"). It is
-// derived by IndexCellStructFields(cellGoPath). Pass nil when no subscriptions
-// are expected; a nil index with subscribe CUs in slices will produce an error.
+// fieldIndex indexes the cell struct's pointer fields (by slice package short
+// name and by field name). It is derived by
+// IndexCellStructFields(cellGoPath, goStructName). Pass nil when no
+// subscriptions are expected; a nil index with subscribe CUs in slices will
+// produce an error.
 //
 // Subscriptions are derived from slice.yaml contractUsages[role=subscribe],
 // not from bundle.Subscribes (subscribe single-source flip K05 W3).
@@ -73,7 +74,7 @@ func BuildCellSpec(
 	p *metadata.ProjectMeta,
 	cellID string,
 	bundle markergen.WireBundle,
-	fieldIndex map[string]string,
+	fieldIndex *CellFieldIndex,
 ) (*CellGenSpec, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -194,7 +195,7 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 // converts each contractUsage[role=subscribe] entry into a SubscriptionGenSpec.
 // fieldIndex is used to resolve the cell struct field for each subscribing slice.
 // Results are sorted deterministically by SliceID then ContractID.
-func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex map[string]string) ([]SubscriptionGenSpec, error) {
+func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]SubscriptionGenSpec, error) {
 	var out []SubscriptionGenSpec
 	for key, s := range p.Slices {
 		if !strings.HasPrefix(key, cellID+"/") {
@@ -226,14 +227,14 @@ func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldI
 // buildSubscriptionSpecFromCU validates one ContractUsage[role=subscribe]
 // and converts it to a SubscriptionGenSpec.
 //
-// The cell struct field is resolved via fieldIndex[sliceID].
+// The cell struct field is resolved via fieldIndex.resolveSliceField.
 // HandlerExpr is rendered as `c.<fieldName>.<cu.Handler>`.
 // ConsumerGroup is cu.Group (empty means template falls back to CellGenSpec.ConsumerGroupDefault).
 func buildSubscriptionSpecFromCU(
 	p *metadata.ProjectMeta,
 	cellID, sliceID string,
 	cu metadata.ContractUsage,
-	fieldIndex map[string]string,
+	fieldIndex *CellFieldIndex,
 ) (SubscriptionGenSpec, error) {
 	if !goExportedIdentPattern.MatchString(cu.Handler) {
 		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -246,7 +247,7 @@ func buildSubscriptionSpecFromCU(
 			))
 	}
 
-	fieldName, err := resolveSliceField(fieldIndex, cu.Field, cellID, sliceID)
+	fieldName, err := fieldIndex.resolveSliceField(cu.Field, cellID, sliceID)
 	if err != nil {
 		return SubscriptionGenSpec{}, err
 	}

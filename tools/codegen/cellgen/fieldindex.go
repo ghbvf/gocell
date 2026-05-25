@@ -9,31 +9,47 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// IndexCellStructFields parses the Go source file at cellGoPath and returns a
-// map from the short package name of pointer-typed struct fields to their field
-// names.
+// CellFieldIndex indexes the pointer fields of a cell.go cell struct so that a
+// subscribe CU resolves to a concrete, typed cell-struct field before cellgen
+// renders the `c.<field>.<handler>` expression. It is the typed target the
+// reviewer's "resolve to a determinate typed target before rendering" direction
+// requires: a field reference never reaches code generation as a bare name.
+//
+// Two complementary lookups, both derived from the SAME single cell struct:
+//
+//   - byPkg:   slice package short name → field name. Drives convention
+//     resolution (slice package short name == sliceID). A package that appears
+//     on more than one field maps to ambiguousField ("").
+//   - byField: field name → slice package short name. Validates an explicit
+//     slice.yaml `field:` actually points at the SUBSCRIBING slice's own
+//     package (byField[field] == sliceID), so a misdirected `field:` fails
+//     generation instead of silently binding the subscription to a different
+//     slice whose type happens to expose a same-named method.
+type CellFieldIndex struct {
+	byPkg   map[string]string
+	byField map[string]string
+}
+
+// IndexCellStructFields parses the Go source at cellGoPath and indexes the
+// *pkg.Type pointer fields of the single struct named cellStructName (the cell
+// struct named by cell.yaml goStructName).
+//
+// Only that one struct is scanned: helper / option / config structs declared
+// in the same cell.go cannot pollute the index or manufacture false ambiguity
+// (e.g. an options struct that also holds a *orderprojection.Foo field must not
+// shadow the cell struct's own field, nor flip a package to ambiguous).
 //
 // Only *pkg.Type fields (StarExpr → SelectorExpr → Ident) are indexed.
 // Non-pointer fields, embedded (anonymous) fields, and fields whose type is not
-// a qualified selector (e.g. plain same-package types) are silently ignored.
+// a qualified selector (plain same-package types) are ignored. When
+// cellStructName is not declared in the file the returned index is empty (a
+// subscribing slice then fails with a descriptive "no cell.go struct field"
+// error from resolveSliceField).
 //
-// The returned map lets BuildCellSpec resolve "sliceID → cell struct field
-// name" for subscription HandlerExpr generation. By convention the slice
-// package short name equals the slice ID in GoCell, so a subscribe slice X is
-// wired to the cell-struct field whose type is *X.T.
-//
-// Ambiguity is deferred, not fail-fast at index time: a package selector that
-// appears on more than one field maps to the sentinel ambiguousField ("").
-// Most duplicate selectors are harmless infrastructure packages (auth, cas,
-// query, slog) that are never queried as slice IDs. A duplicate only matters
-// when a SUBSCRIBE slice's own package is ambiguous (e.g. sessionlogout has
-// both a *sessionlogout.Handler route field and a *sessionlogout.Consumer
-// subscribe field); resolveSliceField reports that at query time and the
-// subscribe CU must then carry an explicit `field:` to disambiguate.
-//
-// Example: for `projectionSvc *orderprojection.Service` the entry is
-// idx["orderprojection"] = "projectionSvc".
-func IndexCellStructFields(cellGoPath string) (map[string]string, error) {
+// Example: for the cell struct `type AccessCore struct { projectionSvc
+// *orderprojection.Service }`, byPkg["orderprojection"] == "projectionSvc" and
+// byField["projectionSvc"] == "orderprojection".
+func IndexCellStructFields(cellGoPath, cellStructName string) (*CellFieldIndex, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, cellGoPath, nil, 0)
 	if err != nil {
@@ -41,25 +57,32 @@ func IndexCellStructFields(cellGoPath string) (map[string]string, error) {
 			"cellgen fieldindex: parse cell.go", err)
 	}
 
-	idx := make(map[string]string)
-	for _, st := range structTypes(f) {
-		for _, field := range st.Fields.List {
-			pkg, name, ok := fieldPkgName(field)
-			if !ok {
-				continue
-			}
-			if _, dup := idx[pkg]; dup {
-				idx[pkg] = ambiguousField // mark ambiguous; only an error if queried
-				continue
-			}
-			idx[pkg] = name
+	idx := &CellFieldIndex{
+		byPkg:   make(map[string]string),
+		byField: make(map[string]string),
+	}
+	st := findStruct(f, cellStructName)
+	if st == nil {
+		return idx, nil
+	}
+	for _, field := range st.Fields.List {
+		pkg, name, ok := fieldPkgName(field)
+		if !ok {
+			continue
 		}
+		// Field names are unique within a struct, so byField never collides.
+		idx.byField[name] = pkg
+		if _, dup := idx.byPkg[pkg]; dup {
+			idx.byPkg[pkg] = ambiguousField // mark ambiguous; only an error if queried by convention
+			continue
+		}
+		idx.byPkg[pkg] = name
 	}
 	return idx, nil
 }
 
-// ambiguousField is the sentinel stored in the field index when a package
-// selector appears on more than one struct field.
+// ambiguousField is the sentinel stored in byPkg when a package selector
+// appears on more than one struct field.
 //
 // The empty string is safe as a sentinel because a valid field name can never
 // be empty: goLocalIdentPattern (^[a-zA-Z_][A-Za-z0-9_]*$) requires at least
@@ -67,9 +90,9 @@ func IndexCellStructFields(cellGoPath string) (map[string]string, error) {
 // "key absent" (ok=false) from "key present but ambiguous" (ok=true, value="").
 const ambiguousField = ""
 
-// structTypes returns every struct type declaration in f, in source order.
-func structTypes(f *ast.File) []*ast.StructType {
-	var out []*ast.StructType
+// findStruct returns the struct type declared as `type <name> struct {...}` in
+// f, or nil when no such struct exists.
+func findStruct(f *ast.File, name string) *ast.StructType {
 	for _, decl := range f.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
@@ -77,15 +100,15 @@ func structTypes(f *ast.File) []*ast.StructType {
 		}
 		for _, spec := range genDecl.Specs {
 			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
+			if !ok || typeSpec.Name == nil || typeSpec.Name.Name != name {
 				continue
 			}
 			if st, ok := typeSpec.Type.(*ast.StructType); ok {
-				out = append(out, st)
+				return st
 			}
 		}
 	}
-	return out
+	return nil
 }
 
 // fieldPkgName extracts the package selector and field name from a named
@@ -111,27 +134,54 @@ func fieldPkgName(field *ast.Field) (pkg, name string, ok bool) {
 }
 
 // resolveSliceField returns the cell struct field name that holds a subscribe
-// slice's consumer.
+// slice's consumer, for the generated `c.<field>.<handler>` expression.
 //
-// explicitField (the slice.yaml subscribe CU `field:`) wins when set — the
-// generated `c.<field>.<handler>` expression is compile-checked by the Go build,
-// so an invalid name surfaces at compile time. This is the disambiguator for
-// slices that own more than one cell-struct field (e.g. sessionlogout: a route
-// Handler field plus a subscribe Consumer field).
+// explicitField (the slice.yaml subscribe CU `field:`) when set MUST name a
+// *<sliceID>.T pointer field on the cell struct — byField[explicitField] must
+// equal sliceID. A field that exists but points at a different slice's package
+// is rejected: otherwise `c.<field>.<handler>` could compile (when that other
+// type happens to expose a same-named method) and silently bind the
+// subscription to the wrong slice. This binds the configuration reference to a
+// determinate typed target before rendering, rather than trusting the Go build
+// to incidentally catch it. It is the disambiguator for slices owning more than
+// one *sliceID.T field (e.g. sessionlogout: a route Handler plus a subscribe
+// Consumer).
 //
-// Otherwise the field is resolved by convention from fieldIndex[sliceID]:
+// Otherwise the field is resolved by package convention from byPkg[sliceID]:
 //   - absent     → error (cell.go lacks a *sliceID.T pointer field)
-//   - ambiguous  → error (multiple *sliceID.T fields; add `field:` to the CU)
-func resolveSliceField(fieldIndex map[string]string, explicitField, cellID, sliceID string) (string, error) {
-	if explicitField != "" {
-		return explicitField, nil
-	}
-	if fieldIndex == nil {
+//   - ambiguous  → error (multiple *sliceID.T fields; add field: to the CU)
+func (idx *CellFieldIndex) resolveSliceField(explicitField, cellID, sliceID string) (string, error) {
+	if idx == nil {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: fieldIndex is nil; IndexCellStructFields must run before BuildCellSpec when subscriptions exist",
 			errcode.WithDetails(slog.String("cellID", cellID)))
 	}
-	field, ok := fieldIndex[sliceID]
+	if explicitField != "" {
+		pkg, ok := idx.byField[explicitField]
+		if !ok {
+			return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen build: subscribe field: names no *<pkg>.T pointer field on the cell struct; "+
+					"field: must reference a declared cell-struct field whose type is *<sliceID>.T",
+				errcode.WithDetails(
+					slog.String("sliceID", sliceID),
+					slog.String("cellID", cellID),
+					slog.String("field", explicitField),
+				))
+		}
+		if pkg != sliceID {
+			return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen build: subscribe field: points to a different slice's package, not the subscribing slice; "+
+					"the generated c.<field>.<handler> would bind the subscription to the wrong slice",
+				errcode.WithDetails(
+					slog.String("sliceID", sliceID),
+					slog.String("cellID", cellID),
+					slog.String("field", explicitField),
+					slog.String("fieldPackage", pkg),
+				))
+		}
+		return explicitField, nil
+	}
+	field, ok := idx.byPkg[sliceID]
 	if !ok {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: no cell.go struct field for subscribing slice; "+

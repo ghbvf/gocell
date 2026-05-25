@@ -211,8 +211,10 @@ func TestBuildBundle_Dispatch(t *testing.T) {
 // ---- slice:subscribe is now unknown (K05 W3 single-source flip) ---------------
 
 // TestBuildBundle_SubscribeMarkerIsNowUnknown verifies that after the
-// subscribe single-source flip, the slice:subscribe marker is no longer
-// in knownMarkers and dispatch produces an "unknown marker" error.
+// subscribe single-source flip, the slice:subscribe marker is rejected — and
+// the error is a dedicated migration hint pointing at the slice.yaml
+// replacement (not a generic "unknown marker" / misleading Levenshtein
+// suggestion).
 func TestBuildBundle_SubscribeMarkerIsNowUnknown(t *testing.T) {
 	t.Parallel()
 	markers := []collectedMarker{
@@ -220,13 +222,21 @@ func TestBuildBundle_SubscribeMarkerIsNowUnknown(t *testing.T) {
 	}
 	_, errs := buildBundle(markers)
 	if len(errs) != 1 {
-		t.Fatalf("expected 1 error for unknown slice:subscribe marker, got %d: %v", len(errs), errs)
+		t.Fatalf("expected 1 error for retired slice:subscribe marker, got %d: %v", len(errs), errs)
 	}
-	if !strings.Contains(errs[0].Error(), "unknown marker") {
-		t.Errorf("expected 'unknown marker' in error, got %q", errs[0].Error())
+	msg := errs[0].Error()
+	if !strings.Contains(msg, "slice:subscribe") {
+		t.Errorf("expected 'slice:subscribe' named in error, got %q", msg)
 	}
-	if !strings.Contains(errs[0].Error(), "slice:subscribe") {
-		t.Errorf("expected 'slice:subscribe' named in error, got %q", errs[0].Error())
+	// Dedicated migration hint: must steer the author to slice.yaml, not emit a
+	// generic "did you mean cell:listener?" suggestion.
+	for _, want := range []string{"retired", "slice.yaml", "role: subscribe"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("migration hint missing %q, got %q", want, msg)
+		}
+	}
+	if strings.Contains(msg, "did you mean") {
+		t.Errorf("retired slice:subscribe must not emit a Levenshtein suggestion, got %q", msg)
 	}
 }
 
@@ -322,32 +332,31 @@ func TestDispatchMarker_TargetEnforcement(t *testing.T) {
 		}
 	})
 
-	t.Run("slice:subscribe is now unknown regardless of target level (type)", func(t *testing.T) {
+	t.Run("slice:subscribe is rejected with migration hint regardless of target level (type)", func(t *testing.T) {
 		t.Parallel()
 		m := makeMarker("slice:subscribe", "slice=s,topic=t,handler=H,group=g")
 		var bundle WireBundle
 		err := dispatchMarker(m, &bundle)
 		if err == nil {
-			t.Fatal("expected error for slice:subscribe (now unknown marker), got nil")
+			t.Fatal("expected error for retired slice:subscribe marker, got nil")
 		}
-		if !strings.Contains(err.Error(), "unknown marker") {
-			t.Errorf("expected 'unknown marker', got: %v", err)
+		if !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), "slice.yaml") {
+			t.Errorf("expected migration hint (retired → slice.yaml), got: %v", err)
 		}
 	})
 
-	t.Run("slice:subscribe is now unknown regardless of target level (field)", func(t *testing.T) {
+	t.Run("slice:subscribe is rejected with migration hint regardless of target level (field)", func(t *testing.T) {
 		t.Parallel()
 		m := makeFieldMarker("slice:subscribe", "slice=s,topic=t,handler=H,group=g", "SubField")
 		var bundle WireBundle
 		err := dispatchMarker(m, &bundle)
 		if err == nil {
-			t.Fatal("expected error for slice:subscribe on field (now unknown marker), got nil")
+			t.Fatal("expected error for retired slice:subscribe marker on field, got nil")
 		}
-		if !strings.Contains(err.Error(), "unknown marker") {
-			t.Errorf("expected 'unknown marker', got: %v", err)
+		if !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), "slice.yaml") {
+			t.Errorf("expected migration hint (retired → slice.yaml), got: %v", err)
 		}
 		// WireBundle no longer has a Subscribes field (removed in single-source flip).
-		// The only assertion needed is that the error correctly names the marker.
 		if !strings.Contains(err.Error(), "slice:subscribe") {
 			t.Errorf("expected 'slice:subscribe' in error, got: %v", err)
 		}

@@ -146,7 +146,7 @@ func generateOneCell(
 	// produce no subscriptions; cells with subscribe CUs will surface a
 	// descriptive error from BuildCellSpec.
 	cellGoPath := filepath.Join(root, filepath.Dir(cell.File), "cell.go")
-	fieldIndex, idxErr := IndexCellStructFields(cellGoPath)
+	fieldIndex, idxErr := IndexCellStructFields(cellGoPath, cell.GoStructName.String())
 	if idxErr != nil {
 		// cell.go absent: acceptable only when the cell has NO subscribe CUs.
 		// If any slice declares contractUsages[role=subscribe], BuildCellSpec
@@ -251,7 +251,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	// Build fieldIndex from cell.go so BuildCellSpec can resolve
 	// "sliceID → cell struct field name" for subscription HandlerExpr generation.
 	cellGoPath := filepath.Join(root, filepath.Dir(cell.File), "cell.go")
-	fieldIndex, idxErr := IndexCellStructFields(cellGoPath)
+	fieldIndex, idxErr := IndexCellStructFields(cellGoPath, cell.GoStructName.String())
 	if idxErr != nil {
 		fieldIndex = nil
 	}

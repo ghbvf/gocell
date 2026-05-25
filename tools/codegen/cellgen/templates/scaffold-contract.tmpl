@@ -31,7 +31,9 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: {{.CellID}}
-  subscribers: []
+  # subscribers is a derived field — do NOT hand-write it (strict decode rejects it).
+  # Cell subscribers: declare contractUsages[role=subscribe] in the subscribing slice's slice.yaml.
+  # External (non-cell) subscribers: list them under actorSubscribers and register them in actors.yaml.
 schemaRefs:
   payload: payload.schema.json
   headers: headers.schema.json

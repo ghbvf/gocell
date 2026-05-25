@@ -1,11 +1,11 @@
 advHintADV05EmptySubscribers
 =====
-event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml
+event contract %q is active but has no subscribers; add a subscribing slice (contractUsages[role=subscribe] in slice.yaml), add an external actorSubscribers entry, or set lifecycle: deprecated
 -----
 
 advHintADV05EmptySubscribersFix
 =====
-add subscribers to endpoints.subscribers or set lifecycle: deprecated
+declare contractUsages[role=subscribe] in a slice.yaml, add an actorSubscribers entry, or set lifecycle: deprecated
 -----
 
 advHintCCE01DynamicTopicEmit

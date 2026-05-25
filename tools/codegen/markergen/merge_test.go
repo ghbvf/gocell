@@ -562,10 +562,10 @@ func TestMerge_SubscribeMarkerIsUnknown(t *testing.T) {
 
 	_, err := Merge(tmp, project)
 	if err == nil {
-		t.Fatal("expected error for slice:subscribe marker (now unknown), got nil")
+		t.Fatal("expected error for retired slice:subscribe marker, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown marker") {
-		t.Errorf("error should mention 'unknown marker', got: %v", err)
+	if !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), "slice.yaml") {
+		t.Errorf("error should carry the migration hint (retired → slice.yaml), got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "slice:subscribe") {
 		t.Errorf("error should name the marker 'slice:subscribe', got: %v", err)

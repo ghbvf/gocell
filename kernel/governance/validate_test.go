@@ -102,7 +102,7 @@ func validProject() *metadata.ProjectMeta {
 				ID:            "audit-write",
 				BelongsToCell: "auditcore",
 				ContractUsages: []metadata.ContractUsage{
-					{Contract: "event.session.created.v1", Role: "subscribe"},
+					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleSessionCreated"},
 				},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.audit-write.handler"},

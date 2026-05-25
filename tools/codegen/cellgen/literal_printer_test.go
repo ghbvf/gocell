@@ -352,3 +352,41 @@ func TestRenderFieldValue_UnsupportedKindPanics(t *testing.T) {
 		t.Errorf("panic error Kind = %v, want KindInternal", asErr.Kind)
 	}
 }
+
+// TestRenderSliceMetaLiteral_ProjectsSubscribeColumns verifies that the
+// subscribe-only contractUsage columns (Handler / Group / Field) are projected
+// into the rendered sliceMeta literal when set, and omitted when empty — so the
+// typed sliceMeta in slice_gen.go is a COMPLETE projection of slice.yaml's
+// contractUsages, not just {Contract, Role} (F5 regression guard).
+func TestRenderSliceMetaLiteral_ProjectsSubscribeColumns(t *testing.T) {
+	t.Parallel()
+	s := &metadata.SliceMeta{
+		ID:               "subs",
+		BelongsToCell:    "demo",
+		ConsistencyLevel: "L3",
+		ContractUsages: []metadata.ContractUsage{
+			// publish: no subscribe columns → none must appear.
+			{Contract: "event.out.v1", Role: "publish"},
+			// subscribe with all three columns set.
+			{Contract: "event.a.v1", Role: "subscribe", Handler: "HandleA", Group: "g1", Field: "aConsumer"},
+			// subscribe with only the required handler (group/field omitted).
+			{Contract: "event.b.v1", Role: "subscribe", Handler: "HandleB"},
+		},
+	}
+	got := renderSliceMetaLiteral(s)
+
+	wantSubstrings := []string{
+		`{Contract: "event.out.v1", Role: "publish"}`,
+		`{Contract: "event.a.v1", Role: "subscribe", Handler: "HandleA", Group: "g1", Field: "aConsumer"}`,
+		`{Contract: "event.b.v1", Role: "subscribe", Handler: "HandleB"}`,
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered literal missing %q\nfull literal:\n%s", want, got)
+		}
+	}
+	// The publish CU must NOT carry any subscribe column.
+	if strings.Contains(got, `Role: "publish", Handler`) {
+		t.Errorf("publish CU must not project Handler/Group/Field; got:\n%s", got)
+	}
+}
