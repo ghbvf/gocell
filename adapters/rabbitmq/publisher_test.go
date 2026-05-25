@@ -227,7 +227,7 @@ type fakeCollector struct {
 	reasons []PublishFailureReason
 }
 
-func (f *fakeCollector) RecordPublishFailure(reason PublishFailureReason) {
+func (f *fakeCollector) RecordPublishFailure(_ context.Context, reason PublishFailureReason) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reasons = append(f.reasons, reason)
@@ -343,7 +343,7 @@ func TestNoopPublisherCollector_DoesNotPanic(t *testing.T) {
 		PublishFailureConfirmMode,
 		PublishFailurePublishSend,
 	} {
-		assert.NotPanics(t, func() { noop.RecordPublishFailure(r) })
+		assert.NotPanics(t, func() { noop.RecordPublishFailure(context.Background(), r) })
 	}
 }
 

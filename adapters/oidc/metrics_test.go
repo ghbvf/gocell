@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -43,8 +44,8 @@ func TestNewProviderRefreshCollector_NopProviderNoPanic(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
-	assert.NotPanics(t, func() { c.RecordRefresh(true) })
-	assert.NotPanics(t, func() { c.RecordRefresh(false) })
+	assert.NotPanics(t, func() { c.RecordRefresh(context.Background(), true) })
+	assert.NotPanics(t, func() { c.RecordRefresh(context.Background(), false) })
 }
 
 // TestNewProviderRefreshCollector_RegistrationFailure verifies that a Provider
@@ -82,7 +83,7 @@ func TestProviderRefreshCollector_RecordRefresh_Labels(t *testing.T) {
 			col, err := NewProviderRefreshCollector(provider, "oidctest")
 			require.NoError(t, err)
 
-			col.RecordRefresh(tc.success)
+			col.RecordRefresh(context.Background(), tc.success)
 
 			ops := provider.ops()
 			require.Len(t, ops, 1, "exactly one counter Inc per RecordRefresh")
@@ -112,8 +113,8 @@ func TestProviderRefreshCollector_RegistersExpectedLabelNames(t *testing.T) {
 func TestNoopRefreshCollector_NoPanic(t *testing.T) {
 	t.Parallel()
 	var c NoopRefreshCollector
-	assert.NotPanics(t, func() { c.RecordRefresh(true) })
-	assert.NotPanics(t, func() { c.RecordRefresh(false) })
+	assert.NotPanics(t, func() { c.RecordRefresh(context.Background(), true) })
+	assert.NotPanics(t, func() { c.RecordRefresh(context.Background(), false) })
 }
 
 // ---------------------------------------------------------------------------
@@ -202,13 +203,13 @@ type refreshSpyCounter struct {
 	labels metrics.Labels
 }
 
-func (c *refreshSpyCounter) Inc() {
+func (c *refreshSpyCounter) Inc(_ context.Context) {
 	c.parent.records = append(c.parent.records, refreshSpyRecord{
 		name: c.name, op: "Inc", labels: c.labels, value: 1,
 	})
 }
 
-func (c *refreshSpyCounter) Add(d float64) {
+func (c *refreshSpyCounter) Add(_ context.Context, d float64) {
 	c.parent.records = append(c.parent.records, refreshSpyRecord{
 		name: c.name, op: "Add", labels: c.labels, value: d,
 	})

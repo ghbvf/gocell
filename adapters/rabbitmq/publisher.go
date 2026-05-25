@@ -116,10 +116,10 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		// Preserve terminal error code from Connection so callers can distinguish
 		// "permanent config failure" / "reconnect exhausted" from "transient publish failure".
 		if isTerminalConnectionError(err) {
-			p.collector.RecordPublishFailure(PublishFailureAcquireChannel)
+			p.collector.RecordPublishFailure(ctx, PublishFailureAcquireChannel)
 			return err
 		}
-		p.collector.RecordPublishFailure(PublishFailureAcquireChannel)
+		p.collector.RecordPublishFailure(ctx, PublishFailureAcquireChannel)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: acquire channel for publish", err)
 	}
 	// Close the channel after use instead of returning it to the shared pool.
@@ -138,13 +138,13 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
-		p.collector.RecordPublishFailure(PublishFailureDeclareExchange)
+		p.collector.RecordPublishFailure(ctx, PublishFailureDeclareExchange)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: declare exchange", err)
 	}
 
 	// Enable confirm mode.
 	if err := ch.Confirm(false); err != nil {
-		p.collector.RecordPublishFailure(PublishFailureConfirmMode)
+		p.collector.RecordPublishFailure(ctx, PublishFailureConfirmMode)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: enable confirm mode", err)
 	}
 
@@ -158,7 +158,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	}
 
 	if err := ch.PublishWithContext(ctx, topic, "", false, false, msg); err != nil {
-		p.collector.RecordPublishFailure(PublishFailurePublishSend)
+		p.collector.RecordPublishFailure(ctx, PublishFailurePublishSend)
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: publish message", err)
 	}
 
@@ -170,14 +170,14 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		if !ok {
 			slog.Warn("rabbitmq: confirm channel closed before broker confirmation",
 				slog.String("topic", topic))
-			p.collector.RecordPublishFailure(PublishFailureChanClosed)
+			p.collector.RecordPublishFailure(ctx, PublishFailureChanClosed)
 			return errcode.New(errcode.KindInternal, ErrAdapterAMQPConfirmTimeout, "rabbitmq: confirm channel closed")
 		}
 		if !confirm.Ack {
 			slog.Warn("rabbitmq: broker NACKed published message",
 				slog.String("topic", topic),
 				slog.Uint64("delivery_tag", confirm.DeliveryTag))
-			p.collector.RecordPublishFailure(PublishFailureNack)
+			p.collector.RecordPublishFailure(ctx, PublishFailureNack)
 			return errcode.New(errcode.KindInternal, ErrAdapterAMQPNack, "rabbitmq: broker nacked message")
 		}
 		slog.Debug("rabbitmq: message published and confirmed",
@@ -188,7 +188,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		slog.Warn("rabbitmq: publish confirm timer fired before broker reply",
 			slog.String("topic", topic),
 			slog.Duration("budget", p.conn.config.ConfirmTimeout))
-		p.collector.RecordPublishFailure(PublishFailureTimeout)
+		p.collector.RecordPublishFailure(ctx, PublishFailureTimeout)
 		return errcode.New(errcode.KindInternal, ErrAdapterAMQPConfirmTimeout, "rabbitmq: publish confirm timed out")
 
 	case <-ctx.Done():

@@ -27,7 +27,7 @@ type fakeRefreshCollector struct {
 	failureCount atomic.Int64
 }
 
-func (c *fakeRefreshCollector) RecordRefresh(success bool) {
+func (c *fakeRefreshCollector) RecordRefresh(_ context.Context, success bool) {
 	if success {
 		c.successCount.Add(1)
 	} else {
