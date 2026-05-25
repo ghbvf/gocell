@@ -134,7 +134,7 @@ func newE2EFixture() *e2eFixture {
 	// ADR Decision 2 (persistence.NoopTxRunner deletion). The e2e flow has
 	// no DB, so a stub that just invokes fn(ctx) satisfies the L2 contract.
 	// stubTxRunner holds no lock, so each repo method takes its per-call lock:
-	// this e2e does NOT verify cross-method atomicity. Cross-method atomicity (store-bound TxRunner, held witness)
+	// this e2e does NOT verify cross-method atomicity. Cross-method atomicity (store-bound TxRunner, live lease)
 	// is covered by identitymanage_credential_race_test.go
 	// TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive.
 	tx := &stubTxRunner{}

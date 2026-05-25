@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+// reAcquireTimeout bounds the re-Acquire-after-unlock check so a regression (an
+// unlock that fails to Unlock) surfaces as a clear test timeout, not a hang.
+// Package-level const per TEST-TIME-LITERAL-01 (no inline duration literals).
+const reAcquireTimeout = 2 * time.Second
+
 // TestAcquireLiveThenUnlock verifies the lease lifecycle: Acquire locks and
 // yields a Lease proving that mutex is held; Live is pointer-identity AND
 // liveness (true for the locked mutex while live, false for a foreign one); the
@@ -45,7 +50,7 @@ func TestAcquireLiveThenUnlock(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(reAcquireTimeout):
 		t.Fatal("re-Acquire blocked: unlock did not Unlock the mutex")
 	}
 }

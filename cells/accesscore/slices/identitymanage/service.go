@@ -832,7 +832,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// mem path outside a live tx (foreign / non-locking TxRunner): GetByID and
 	// UpdatePassword each acquire store.mu independently (per-call), so bcrypt
 	// runs between the two locks rather than under a held lock. Cross-method
-	// atomicity is only guaranteed by the mem Store's own TxRunner (held witness)
+	// atomicity is only guaranteed by the mem Store's own TxRunner (live lease)
 	// and by PG; the CAS version check still guards correctness on the mem path
 	// (ADR 202605171846).
 	var userID string
