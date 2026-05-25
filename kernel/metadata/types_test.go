@@ -34,9 +34,27 @@ func TestCellMetaRoundTrip(t *testing.T) {
 		Schema:           SchemaMeta{Primary: "cell_access_core"},
 		Verify:           CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 		L0Dependencies:   []L0DepMeta{{Cell: "shared-crypto", Reason: "hashing"}},
+		Requires:         []string{"postgres", "redis"},
 	}
 	_, got := roundTrip(t, orig)
 	assert.Equal(t, orig, got)
+}
+
+// TestCellMeta_Clone_RequiresIndependence asserts that Clone deep-copies the
+// Requires slice (Design Y, #855): mutating the clone's Requires must not leak
+// into the original. Mirrors the L0Dependencies / Verify.Smoke deep-copy guard.
+func TestCellMeta_Clone_RequiresIndependence(t *testing.T) {
+	src := &CellMeta{
+		ID:       "accesscore",
+		Requires: []string{"postgres", "redis"},
+	}
+	clone := src.Clone()
+	require.Equal(t, src.Requires, clone.Requires)
+
+	clone.Requires[0] = "MUTATED"
+	clone.Requires = append(clone.Requires, "rabbitmq")
+	assert.Equal(t, []string{"postgres", "redis"}, src.Requires,
+		"mutating clone.Requires must not affect the original")
 }
 
 func TestCellMetaEmptyL0Dependencies(t *testing.T) {

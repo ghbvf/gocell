@@ -73,12 +73,18 @@ func TestGenerateModulesGen_Corebundle(t *testing.T) {
 	assert.NotContains(t, content, "generatedCapabilities")
 }
 
-// TestGenerateModulesGen_Capabilities exercises the non-empty capabilities
-// branch: the template must emit the capability import + generatedCapabilities()
-// with one capability.Kind const per declared capability, in declaration order.
-func TestGenerateModulesGen_Capabilities(t *testing.T) {
+// TestGenerateModulesGen_DerivesCapabilitiesFromCellRequires exercises the
+// non-empty branch under Design Y (#855): the assembly capability set is the
+// sorted, de-duplicated union of its cells' `requires`. Input order is
+// irrelevant (sorted output) and a capability required by multiple cells emits
+// exactly one const (dedup).
+func TestGenerateModulesGen_DerivesCapabilitiesFromCellRequires(t *testing.T) {
 	project := buildModulesTestProject()
-	project.Assemblies["corebundle"].Capabilities = []string{"postgres", "redis"}
+	// Unsorted input + cross-cell duplicate of postgres → output must be the
+	// sorted union {postgres, redis} with postgres emitted once.
+	project.Cells["accesscore"].Requires = []string{"redis", "postgres"}
+	project.Cells["auditcore"].Requires = []string{"postgres"}
+	project.Cells["configcore"].Requires = []string{"postgres"}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateModulesGen("corebundle")
@@ -89,21 +95,24 @@ func TestGenerateModulesGen_Capabilities(t *testing.T) {
 	assert.Contains(t, content, "func generatedCapabilities() []capability.Kind")
 	assert.Contains(t, content, "capability.Postgres")
 	assert.Contains(t, content, "capability.Redis")
-	// Declaration order is preserved (postgres before redis).
+	// Deterministic alphabetical order regardless of per-cell input order.
 	assert.Less(t,
 		indexOfStr(content, "capability.Postgres"),
 		indexOfStr(content, "capability.Redis"),
-		"capabilities must appear in assembly.yaml declaration order")
+		"derived capabilities must be sorted (postgres before redis)")
+	// Dedup: postgres required by all three cells must appear exactly once.
+	assert.Equal(t, 1, strings.Count(content, "capability.Postgres"),
+		"postgres required by multiple cells must emit a single const")
 }
 
 // TestGenerateModulesGen_UnknownCapability verifies the codegen-time guard:
-// a capability value absent from capabilityConstNames fails with
+// a cell `requires` value absent from capabilityConstNames fails with
 // ErrMetadataInvalid rather than emitting an undefined capability const. The
 // closed enum's validation-time enforcement is FMT-36 (gocell validate); this
 // test only locks the generator's own fail-rather-than-emit-garbage behavior.
 func TestGenerateModulesGen_UnknownCapability(t *testing.T) {
 	project := buildModulesTestProject()
-	project.Assemblies["corebundle"].Capabilities = []string{"bogus-capability"}
+	project.Cells["accesscore"].Requires = []string{"bogus-capability"}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	_, err := gen.GenerateModulesGen("corebundle")

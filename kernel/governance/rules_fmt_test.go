@@ -1527,56 +1527,60 @@ func collectFMT34Fields(matches []ValidationResult) map[string]bool {
 	return out
 }
 
-// --- FMT-36: assembly.capabilities must be known enum values, no duplicates ---
+// --- FMT-36: cell.requires must be known capability enum values, no duplicates ---
+//
+// Design Y (#855): capability dependency is declared per-cell via cell.yaml
+// `requires`; the assembly's provisioned capability set is the derived union.
+// FMT-36 validates the per-cell declaration (well-formedness), not an
+// assembly-level list.
 
-// buildFMT36Project returns a minimal ProjectMeta with one assembly whose
-// capabilities field is set to the given slice.
-func buildFMT36Project(capabilities []string) *metadata.ProjectMeta {
+// buildFMT36Project returns a minimal ProjectMeta with one cell whose
+// requires field is set to the given slice.
+func buildFMT36Project(requires []string) *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{},
-		Slices:    map[string]*metadata.SliceMeta{},
-		Contracts: map[string]*metadata.ContractMeta{},
-		Journeys:  map[string]*metadata.JourneyMeta{},
-		Assemblies: map[string]*metadata.AssemblyMeta{
-			"testasm": {
-				ID:           "testasm",
-				Cells:        []string{},
-				Capabilities: capabilities,
-				Owner:        metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
-				Dir:          "testasm",
-				File:         "assemblies/testasm/assembly.yaml",
+		Cells: map[string]*metadata.CellMeta{
+			"testcell": {
+				ID:       "testcell",
+				Requires: requires,
+				Owner:    metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Dir:      "testcell",
+				File:     "cells/testcell/cell.yaml",
 			},
 		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 }
 
-// TestFMT36_ValidCapabilities verifies that a known subset produces 0 findings.
-func TestFMT36_ValidCapabilities(t *testing.T) {
+// TestFMT36_ValidRequires verifies that a known subset produces 0 findings.
+func TestFMT36_ValidRequires(t *testing.T) {
 	project := buildFMT36Project([]string{"postgres", "redis"})
 	v := NewValidator(project, "", clock.Real())
 	matches := findByCode(v.validateFMT36(), codeFMT36)
 	if len(matches) != 0 {
-		t.Fatalf("FMT-36: expected 0 findings for valid capabilities, got: %v", matches)
+		t.Fatalf("FMT-36: expected 0 findings for valid requires, got: %v", matches)
 	}
 }
 
-// TestFMT36_EmptyCapabilities verifies that an empty capabilities list is accepted.
-func TestFMT36_EmptyCapabilities(t *testing.T) {
+// TestFMT36_EmptyRequires verifies that an empty requires list is accepted.
+func TestFMT36_EmptyRequires(t *testing.T) {
 	project := buildFMT36Project([]string{})
 	v := NewValidator(project, "", clock.Real())
 	matches := findByCode(v.validateFMT36(), codeFMT36)
 	if len(matches) != 0 {
-		t.Fatalf("FMT-36: expected 0 findings for empty capabilities, got: %v", matches)
+		t.Fatalf("FMT-36: expected 0 findings for empty requires, got: %v", matches)
 	}
 }
 
-// TestFMT36_NilCapabilities verifies that a nil capabilities field is accepted.
-func TestFMT36_NilCapabilities(t *testing.T) {
+// TestFMT36_NilRequires verifies that a nil requires field is accepted.
+func TestFMT36_NilRequires(t *testing.T) {
 	project := buildFMT36Project(nil)
 	v := NewValidator(project, "", clock.Real())
 	matches := findByCode(v.validateFMT36(), codeFMT36)
 	if len(matches) != 0 {
-		t.Fatalf("FMT-36: expected 0 findings for nil capabilities, got: %v", matches)
+		t.Fatalf("FMT-36: expected 0 findings for nil requires, got: %v", matches)
 	}
 }
 
@@ -1586,44 +1590,44 @@ func TestFMT36_AllThree(t *testing.T) {
 	v := NewValidator(project, "", clock.Real())
 	matches := findByCode(v.validateFMT36(), codeFMT36)
 	if len(matches) != 0 {
-		t.Fatalf("FMT-36: expected 0 findings for all three capabilities, got: %v", matches)
+		t.Fatalf("FMT-36: expected 0 findings for all three requires, got: %v", matches)
 	}
 }
 
-// TestFMT36_UnknownCapability verifies that a single unknown value produces
-// exactly 1 error finding on field "capabilities[0]".
-func TestFMT36_UnknownCapability(t *testing.T) {
+// TestFMT36_UnknownRequires verifies that a single unknown value produces
+// exactly 1 error finding on field "requires[0]".
+func TestFMT36_UnknownRequires(t *testing.T) {
 	project := buildFMT36Project([]string{"foobar"})
 	v := NewValidator(project, "", clock.Real())
 	matches := findByCode(v.validateFMT36(), codeFMT36)
 	if len(matches) != 1 {
-		t.Fatalf("FMT-36: expected 1 finding for unknown capability, got %d: %v", len(matches), matches)
+		t.Fatalf("FMT-36: expected 1 finding for unknown requires, got %d: %v", len(matches), matches)
 	}
 	if matches[0].Severity != SeverityError {
 		t.Errorf("FMT-36: expected SeverityError, got %v", matches[0].Severity)
 	}
-	if matches[0].Field != "capabilities[0]" {
-		t.Errorf("FMT-36: expected Field=capabilities[0], got %q", matches[0].Field)
+	if matches[0].Field != "requires[0]" {
+		t.Errorf("FMT-36: expected Field=requires[0], got %q", matches[0].Field)
 	}
 	if matches[0].Fix == "" {
 		t.Errorf("FMT-36: Fix field must be non-empty")
 	}
 }
 
-// TestFMT36_DuplicateCapability verifies that a duplicate value produces
-// exactly 1 error finding on field "capabilities[1]".
-func TestFMT36_DuplicateCapability(t *testing.T) {
+// TestFMT36_DuplicateRequires verifies that a duplicate value produces
+// exactly 1 error finding on field "requires[1]".
+func TestFMT36_DuplicateRequires(t *testing.T) {
 	project := buildFMT36Project([]string{"postgres", "postgres"})
 	v := NewValidator(project, "", clock.Real())
 	matches := findByCode(v.validateFMT36(), codeFMT36)
 	if len(matches) != 1 {
-		t.Fatalf("FMT-36: expected 1 finding for duplicate capability, got %d: %v", len(matches), matches)
+		t.Fatalf("FMT-36: expected 1 finding for duplicate requires, got %d: %v", len(matches), matches)
 	}
 	if matches[0].Severity != SeverityError {
 		t.Errorf("FMT-36: expected SeverityError, got %v", matches[0].Severity)
 	}
-	if matches[0].Field != "capabilities[1]" {
-		t.Errorf("FMT-36: expected Field=capabilities[1], got %q", matches[0].Field)
+	if matches[0].Field != "requires[1]" {
+		t.Errorf("FMT-36: expected Field=requires[1], got %q", matches[0].Field)
 	}
 	if matches[0].Fix == "" {
 		t.Errorf("FMT-36: Fix field must be non-empty")
@@ -1649,21 +1653,21 @@ func TestFMT36_MultipleErrors(t *testing.T) {
 	}
 }
 
-// TestFMT36_NilAssembly verifies that a nil assembly entry does not panic.
-func TestFMT36_NilAssembly(t *testing.T) {
+// TestFMT36_NilCell verifies that a nil cell entry does not panic.
+func TestFMT36_NilCell(t *testing.T) {
 	project := &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{},
-		Slices:    map[string]*metadata.SliceMeta{},
-		Contracts: map[string]*metadata.ContractMeta{},
-		Journeys:  map[string]*metadata.JourneyMeta{},
-		Assemblies: map[string]*metadata.AssemblyMeta{
-			"nilasm": nil,
+		Cells: map[string]*metadata.CellMeta{
+			"nilcell": nil,
 		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 	v := NewValidator(project, "", clock.Real())
-	// Must not panic; nil assembly guard mirrors validateFMT29/FMT30.
+	// Must not panic; nil cell guard mirrors validateFMT29/FMT30.
 	matches := findByCode(v.validateFMT36(), codeFMT36)
 	if len(matches) != 0 {
-		t.Fatalf("FMT-36: expected 0 findings for nil assembly, got: %v", matches)
+		t.Fatalf("FMT-36: expected 0 findings for nil cell, got: %v", matches)
 	}
 }
