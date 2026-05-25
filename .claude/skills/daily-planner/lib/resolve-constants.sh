@@ -10,7 +10,8 @@
 #   FORCE_WEEKEND — "true" forces weekend mode (mutually exclusive with FORCE_WEEKDAY)
 #   FORCE_WEEKDAY — "true" forces weekday mode
 #
-# Requires `gh` on PATH (project view + field-list + auth status).
+# Requires `gh` + `jq` + `python3` on PATH (preflight via _preflight.sh): gh for
+# project view/field-list/auth status, jq for JSON parse, python3 for date math.
 #
 # Output: eval-able `export VAR=value` lines on stdout (printf %q quoted):
 #   PROJECT_NODE_ID ITERATION_FIELD_ID FIELD_LIST_JSON
@@ -21,6 +22,11 @@
 # Exit non-zero (errors to stderr) on: not logged in / missing project scope /
 #   unresolved project|iteration id / --weekend + --weekday both set.
 set -euo pipefail
+
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_preflight.sh
+source "$_LIB_DIR/_preflight.sh"
+require_cmds gh jq python3
 
 # 0.1 Token scope. Distinguish not-logged-in (gh auth status fails) vs missing
 # scope (succeeds but grep misses). Loose regex stays robust across gh versions.

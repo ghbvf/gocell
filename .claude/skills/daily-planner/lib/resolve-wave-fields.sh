@@ -20,6 +20,11 @@
 # against test/fixtures/field-list.json — neither re-implements the jq.
 set -euo pipefail
 
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_preflight.sh
+source "$_LIB_DIR/_preflight.sh"
+require_cmds jq  # pure jq transformer — no gh/python3
+
 fl="${FIELD_LIST_JSON:?FIELD_LIST_JSON required}"
 
 wave_field_id=$(jq -r '[.fields[] | select(.name=="Wave").id] | first // ""' <<<"$fl")

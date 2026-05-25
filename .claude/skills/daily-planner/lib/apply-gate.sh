@@ -15,6 +15,11 @@
 
 set -euo pipefail
 
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_preflight.sh
+source "$_LIB_DIR/_preflight.sh"
+require_cmds jq
+
 : "${WORKDIR:?WORKDIR required}"
 : "${TODAY_ITERATION_ID:?TODAY_ITERATION_ID required}"
 

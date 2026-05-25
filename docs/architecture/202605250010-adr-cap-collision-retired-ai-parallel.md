@@ -18,7 +18,7 @@ PR #926 落地 daily-planner，调度算法含一条 **CAP COLLISION** heuristic
 
 1. **实施者是 AI**：不存在"认知负荷"这一人类心理模型概念；AI 并发执行多个 worktree 时容量由机器资源和 wave size 决定，不由 cap 分组决定。
 2. **同 cap 不等于文件冲突**：`cap-14`（daily-planner）下的两个 issue 可能修改完全不同的文件，不会相互阻塞。CAP COLLISION 会错误地串行化本可并行的工作。
-3. **文件冲突才是真实约束**：`conflict_group`（C2c）基于 `affected_paths` 前缀重合做 union-find，直接建模文件级冲突——同组串行，异组并行。这是 CAP COLLISION 试图近似但精度更低的同一底层约束。
+3. **文件冲突才是真实约束**：真正会让 worktree 互相阻塞的是文件级冲突，由 `affected_paths` 前缀重合刻画（`conflict_group`，C2c）——CAP COLLISION 只是这一底层约束精度更低的 cap-维度近似。（`conflict_group` 自身如何被消费见 §Decision + §Amendment 2026-05-25：ship `--from-plan` 撤回后它降为 advisory 显示列、无机器串行化。）
 4. **逐-cap 压栈无 AI 对应物**：多 worktree 场景中没有"cap 维度的 CI/review 带宽"这一共享瓶颈的运维等价物；reviewer 带宽不按 cap 分桶管理。
 
 issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除。
@@ -37,7 +37,7 @@ issue #934 C2a 要求重审 CAP COLLISION 语义，激进决议：彻底删除�
 | 轴 | 载体 | 说明 |
 |----|------|------|
 | 拓扑正确性序 | `blocked_by` DAG（C2b）→ STEP 4/5 | 依赖关系决定 wave placement；blocker.wave ≤ dependent.wave |
-| 执行冲突分组 | `conflict_group`（C2c）→ STEP 6 | `affected_paths` 前缀重合做 union-find；同组冲突串行，异组可并行 |
+| 文件冲突分组（**advisory**） | `conflict_group`（C2c）→ STEP 6 | `affected_paths` 前缀重合做 union-find 派生显示分组：同组=共享文件、异组=文件独立。**advisory 显示列、无机器消费者**（ship `--from-plan` 撤回后，见 §Amendment 2026-05-25）——仅供人工读 brief，不驱动任何串/并行执行 |
 
 容量由 `WAVE_COUNT × WAVE_SIZE` 单独 governing，与 cap label 无关。
 

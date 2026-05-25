@@ -7,7 +7,7 @@
 #   - exit 1 on any failure
 #
 # Part A (offline deterministic): gate + write cases, no live gh calls.
-# Part B (live read-only, SMOKE_LIVE=1 opt-in): stage 0-2 + 1.5 dry-run, zero writes.
+# Part B (live read-only, SMOKE_LIVE=1 opt-in): stage 0-1.5 dry-run, zero writes.
 #
 # Usage:
 #   bash .claude/skills/daily-planner/test/smoke.sh         # Part A only
@@ -481,13 +481,13 @@ else
       "GH_STUB_ISSUES_MISSING=/dev/null" \
       "GH_STUB_GRAPHQL_ITEMS=${fixtures_dir}/items-graphql-page.json" \
       "GH_STUB_GRAPHQL_ITERCFG=${fixtures_dir}/iter-config.json" \
-      "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_data_script" >/dev/null 2>&1 || true
+      "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_data_script" >/dev/null 2>&1 && fd_rc=0 || fd_rc=$?
   fd_issues=$(jq 'length' "$fd_wd/issues.json" 2>/dev/null || echo missing)
   fd_items=$(jq 'length' "$fd_wd/items.json" 2>/dev/null || echo missing)
-  if [[ "$fd_issues" == "3" && "$fd_items" == "4" ]]; then
-    echo "PASS [PC-FD1: issues deduped (3 unique) + items paginate-unpacked (4 nodes)]"; pass=$((pass+1))
+  if [[ "${fd_rc:-1}" -eq 0 && "$fd_issues" == "3" && "$fd_items" == "4" ]]; then
+    echo "PASS [PC-FD1: rc0 + issues deduped (3 unique) + items paginate-unpacked (4 nodes)]"; pass=$((pass+1))
   else
-    echo "FAIL [PC-FD1: expected issues=3 items=4; got issues=$fd_issues items=$fd_items]"; fail=$((fail+1))
+    echo "FAIL [PC-FD1: expected rc0 issues=3 items=4; got rc=${fd_rc:-?} issues=$fd_issues items=$fd_items]"; fail=$((fail+1))
   fi
   rm -rf "$fd_wd"
 fi
@@ -501,19 +501,22 @@ else
   echo '[{"number":102,"title":"b"}]' > "$fdep_wd/issues.json"
   echo '{"data":{"repository":{"issue":{"blockedBy":{"nodes":[{"number":101}]}}}}}' > "$fdep_wd/dep-resp.json"
   env "WORKDIR=$fdep_wd" "GH_STUB_GRAPHQL_DEPS=$fdep_wd/dep-resp.json" \
-      "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_deps_script" >/dev/null 2>&1 || true
-  if [[ -f "$fdep_wd/deps.json" ]] \
+      "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_deps_script" >/dev/null 2>&1 && fdep_rc=0 || fdep_rc=$?
+  if [[ "${fdep_rc:-1}" -eq 0 && -f "$fdep_wd/deps.json" ]] \
      && [[ "$(jq -r '."102".blocked_by[0]' "$fdep_wd/deps.json" 2>/dev/null)" == "101" ]]; then
-    echo "PASS [PC-FDEP1: deps.json blocked-by edge assembled]"; pass=$((pass+1))
+    echo "PASS [PC-FDEP1: rc0 + deps.json blocked-by edge assembled]"; pass=$((pass+1))
   else
-    echo "FAIL [PC-FDEP1: expected deps.json {102:{blocked_by:[101]}}; got $(cat "$fdep_wd/deps.json" 2>/dev/null || echo missing)]"; fail=$((fail+1))
+    echo "FAIL [PC-FDEP1: expected rc0 + deps.json {102:{blocked_by:[101]}}; rc=${fdep_rc:-?} got $(cat "$fdep_wd/deps.json" 2>/dev/null || echo missing)]"; fail=$((fail+1))
   fi
   rm -rf "$fdep_wd"
 fi
 
-# PC-FDEP2: blocked-by query fails (transient) -> loud WARN + deps.json={} (NOT silent);
-# script still exits 0. Points GH_STUB_GRAPHQL_DEPS at a missing file so the stub's
-# `cat` fails -> gh stub exits non-zero -> fetch-deps takes the DEP_FETCH_FAILED path.
+# PC-FDEP2: blocked-by query failure -> fail-closed (rc non-zero, NO deps.json
+# emitted). Points GH_STUB_GRAPHQL_DEPS at a missing file so the stub's `cat`
+# fails -> gh stub exits non-zero -> fetch-deps fails closed, never emitting a
+# partial dependency graph (a missing edge would mis-order STEP 4 topo sort).
+# This covers both transient AND structural gh failures — fetch-deps no longer
+# distinguishes them; any failure is fatal.
 if [[ ! -x "$fetch_deps_script" ]]; then
   echo "FAIL [PC-FDEP2: fetch-deps.sh missing (expected RED before Wave 2)]"; fail=$((fail+1))
 else
@@ -522,13 +525,36 @@ else
   fdep2_err=$(env "WORKDIR=$fdep2_wd" "GH_STUB_GRAPHQL_DEPS=$fdep2_wd/nonexistent.json" \
       "PATH=${stage_stub_dir}:${PATH}" bash "$fetch_deps_script" 2>&1 >/dev/null) && fdep2_rc=0 || fdep2_rc=$?
   fdep2_deps=$(cat "$fdep2_wd/deps.json" 2>/dev/null || echo missing)
-  if [[ "${fdep2_rc:-0}" -eq 0 && "$fdep2_deps" == "{}" \
-        && "$fdep2_err" == *"[DEP DATA UNAVAILABLE]"* ]]; then
-    echo "PASS [PC-FDEP2: transient failure -> loud WARN + deps.json={} (no silent)]"; pass=$((pass+1))
+  if [[ "${fdep2_rc:-0}" -ne 0 && "$fdep2_deps" == "missing" \
+        && "$fdep2_err" == *"failing closed"* ]]; then
+    echo "PASS [PC-FDEP2: query failure -> fail-closed (rc!=0, no deps.json)]"; pass=$((pass+1))
   else
-    echo "FAIL [PC-FDEP2: expected rc0 + deps={} + [DEP DATA UNAVAILABLE]; rc=${fdep2_rc:-0} deps=$fdep2_deps]"; fail=$((fail+1))
+    echo "FAIL [PC-FDEP2: expected rc!=0 + no deps.json + 'failing closed'; rc=${fdep2_rc:-0} deps=$fdep2_deps]"; fail=$((fail+1))
   fi
   rm -rf "$fdep2_wd"
+fi
+
+# --- _preflight.sh: require_cmds dependency gate (F6) ---
+# PC-PF1: a missing command -> rc non-zero + names the command + install hint.
+# PC-PF2: all present (jq is a real dep of the smoke host) -> rc 0, silent.
+preflight_lib="${skill_dir}/lib/_preflight.sh"
+if [[ ! -f "$preflight_lib" ]]; then
+  echo "FAIL [PC-PF1/PC-PF2: _preflight.sh missing]"; fail=$((fail+2))
+else
+  # shellcheck disable=SC1090  # dynamic path is the script under test
+  pf_err=$( (source "$preflight_lib"; require_cmds jq __dp_missing_cmd_xyz) 2>&1 ) && pf_rc=0 || pf_rc=$?
+  if [[ "${pf_rc:-0}" -ne 0 && "$pf_err" == *"__dp_missing_cmd_xyz"* && "$pf_err" == *"install:"* ]]; then
+    echo "PASS [PC-PF1: require_cmds fails closed on missing command with install hint]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-PF1: expected rc!=0 + missing-cmd named + install hint; rc=${pf_rc:-0} err=$pf_err]"; fail=$((fail+1))
+  fi
+  # shellcheck disable=SC1090  # dynamic path is the script under test
+  pf2_out=$( (source "$preflight_lib"; require_cmds jq) 2>&1 ) && pf2_rc=0 || pf2_rc=$?
+  if [[ "${pf2_rc:-1}" -eq 0 && -z "$pf2_out" ]]; then
+    echo "PASS [PC-PF2: require_cmds passes silently when all present]"; pass=$((pass+1))
+  else
+    echo "FAIL [PC-PF2: expected rc0 + no output; rc=${pf2_rc:-?} out=$pf2_out]"; fail=$((fail+1))
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -783,10 +809,10 @@ rm -rf "$wd_w5"
 # ---------------------------------------------------------------------------
 echo ""
 if [[ "${SMOKE_LIVE:-}" != "1" ]]; then
-  echo "=== Part B: SKIP (set SMOKE_LIVE=1 to run live read-only stage 0-2 + 1.5) ==="
+  echo "=== Part B: SKIP (set SMOKE_LIVE=1 to run live read-only stage 0-1.5) ==="
 else
   echo "=== Part B: Live read-only (dry-run, zero mutation) ==="
-  echo "INFO: Running SKILL.md stage 0-2 + 1.5 dry-run against real Project v2 #3 (ghbvf)..." >&2
+  echo "INFO: Running SKILL.md stage 0-1.5 dry-run against real Project v2 #3 (ghbvf)..." >&2
 
   # Find repo root (4 levels up from test/)
   repo_root="$(cd "${skill_dir}/../../../.." && pwd -P)"
@@ -829,10 +855,10 @@ else
   ) || live_rc=$?
 
   if [[ $live_rc -eq 0 ]]; then
-    echo "PASS [Part B: live dry-run stage 0-2 + 1.5]"
+    echo "PASS [Part B: live dry-run stage 0-1.5]"
     pass=$((pass+1))
   else
-    echo "FAIL [Part B: live dry-run stage 0-2 + 1.5] exit $live_rc"
+    echo "FAIL [Part B: live dry-run stage 0-1.5] exit $live_rc"
     fail=$((fail+1))
   fi
 

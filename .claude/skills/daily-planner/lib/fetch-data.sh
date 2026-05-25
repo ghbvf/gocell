@@ -8,10 +8,16 @@
 #   INCLUDE_P2  — "true" adds pri-p2 to the input label set
 #   INCLUDE_P3  — "true" adds pri-p3
 #
-# Requires `gh` on PATH. All gh calls go through $PATH so smoke can PATH-stub gh.
+# Requires `gh` + `jq` on PATH (preflight via _preflight.sh). All gh calls go
+# through $PATH so smoke can PATH-stub gh.
 #
 # Outputs (files in $WORKDIR): issues.json items.json iter-config.json sub-issues.json
 set -euo pipefail
+
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_preflight.sh
+source "$_LIB_DIR/_preflight.sh"
+require_cmds gh jq
 
 : "${WORKDIR:?WORKDIR required}"
 

@@ -104,7 +104,9 @@ INCLUDE_P2="${INCLUDE_P2:-}" INCLUDE_P3="${INCLUDE_P3:-}" WORKDIR="$WORKDIR" \
 ```bash
 # 1.5 Native blocked-by 边（C2b）→ lib/fetch-deps.sh（单源；写 $WORKDIR/deps.json，
 # schema { "<issue_num>": { "blocked_by": [<int>,...] } }，仅含有入边的 issue）。
-# 降级策略：仅真·瞬态 API 错误才降级，loud WARN + [DEP DATA UNAVAILABLE]，禁 silent {}。
+# Fail-closed：任何 blocked-by 查询失败（瞬态 OR 结构性）都 exit 非零、不产出
+# deps.json，本阶段中止——blocked_by 是强依赖数据源，缺边的 DAG 会让 STEP 4 误排序。
+# 瞬态失败重跑即可（planner 全程只读、幂等）。无降级路径。
 WORKDIR="$WORKDIR" bash .claude/skills/daily-planner/lib/fetch-deps.sh
 ```
 
@@ -288,7 +290,7 @@ bash "$SKILL_DIR/lib/apply-write.sh"
 - **不在本地长期落盘**：brief = stdout，plan.json / audit.ndjson / deps.json = `$WORKDIR/` mktemp 临时；per-item NDJSON 提供 partial apply / 还原 / 重放所需的真值
 - 字段 ID 每次启动从 `gh` 查询，不硬编（避免 Project v2 迁移后双源漂移）
 - token 无 `project` scope → fail-fast 退出（无云沙箱降级）
-- **blocked-by 降级策略**：仅真·瞬态 API 错误才降级，loud WARN + `[DEP DATA UNAVAILABLE]`；结构性不支持 = `{}`（需 ADR carve-out + backlog 追踪）
+- **blocked-by fail-closed**：blocked_by 是产出可执行计划的强依赖数据源。任何查询失败（瞬态 OR 结构性）→ exit 非零、不写 deps.json、阶段 1.5 中止，绝不以缺边的不完整 DAG 继续。无降级路径、无 `[DEP DATA UNAVAILABLE]` 标记。瞬态失败由用户重跑（只读、幂等，成本极低）
 
 ## C3a 前置：Project v2 配置（已完成）
 

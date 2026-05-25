@@ -9,7 +9,9 @@
 #   APPLY              — "true" allows the field-configuration mutation; dry-run never mutates
 #   ITERATION_FIELD_ID — required only on the apply-mode create path
 #
-# Requires `gh` on PATH only when creating an iteration (apply mode + missing option).
+# Requires `jq` + `python3` on PATH (preflight via _preflight.sh; always used).
+# `gh` is additionally required only when creating an iteration (apply mode +
+# missing option) — that path is not preflighted here (it fails at its callsite).
 #
 # Output: eval-able `export VAR=value` lines on stdout:
 #   TODAY_ITERATION_ID YESTERDAY_ITERATION_ID CARRY_OVER_DISABLED
@@ -18,6 +20,12 @@
 # **写入 Project v2 是 apply-only**：dry-run 缺 iteration 时给 would-create 摘要并
 # 发 DP_ABORT_DRYRUN=true（调用方据此停止），绝不执行 updateProjectV2Field。
 set -euo pipefail
+
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_preflight.sh
+source "$_LIB_DIR/_preflight.sh"
+# gh is apply-create-only (see header); jq + python3 run on every path.
+require_cmds jq python3
 
 : "${WORKDIR:?WORKDIR required}"
 : "${DATE:?DATE required}"
