@@ -158,16 +158,30 @@ virtual `CELL-REPO-READYZ-PROBE-01` N1/N2 references in the original ADR text):
 
 **Combined posture**: Hard downstream + Medium upstream.  Per charter: "允许 Medium 上游 + Hard 下游的过渡形态，但必须同步登记 backlog 显式 Hard 化任务."
 
-**Backlog resolution**: Backlog item `REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` originally tracked
+**Backlog resolution**: Backlog item `REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` (#699) tracked an
 upgrade to Hard upstream (sealed interface or codegen marker forcing conformance wiring at
-compile time).  After M1-OBSERVED (PR #886) replaced the original `CELL-REPO-READYZ-PROBE-01`
-with `HEALTHZ-WRITE-01` + `HEALTHZ-TYPED-REGISTER-01`, the upstream conformance-enrollment
-archtest was rebuilt as the new `CELL-REPO-READYZ-PROBE-01` (this PR).
-The Hard upgrade path is type-theoretically unreachable: Go cannot make "a test must exist"
-a compile-time property.  The Medium ceiling is permanent — mirroring `USERREPO-CONFORMANCE-ENROLLMENT-01`.
-Backlog item `REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` is **closed** on this basis; the
-Hard-upgrade path tracking moves to `HEALTHZ-HOLDER-SEAL-01` (sealing `Aggregator`
-interface, tracked as backlog HEALTHZ-HOLDER-SEAL-01 / cap-13 §13.1).
+compile time).  Two corrections of the historical record:
+
+- The downstream form-uniqueness this ADR originally attributed to a standalone
+  `CELL-REPO-READYZ-PROBE-01` N1/N2 archtest **was never implemented as such** — no archtest
+  by that ID existed in `tools/`.  Downstream Hard is, and always was, carried by
+  `HEALTHZ-TYPED-REGISTER-01` + the cellgen funnel + the typed `RepoProber` parameter (see
+  the Funnel table above).  PR #886 (M1-OBSERVED) changed only the probe *names*, not the
+  archtest topology.
+- The upstream conformance-enrollment archtest `CELL-REPO-READYZ-PROBE-01`
+  (`tools/archtest/cell_repo_readyz_probe_test.go`) is **newly built in this PR** — it did not
+  exist before, so upstream was effectively unenforced (not Medium) prior to this PR.
+
+The upstream Hard upgrade is **type-theoretically unreachable**: Go cannot make "a test must
+exist" a compile-time property.  This is a property ceiling, not a missing mechanism — there
+is **no upgrade path** for it.  The Medium ceiling is therefore permanent, mirroring the
+sibling `USERREPO-CONFORMANCE-ENROLLMENT-01`.  Backlog item
+`REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` (#699) is **closed** on this basis.
+
+> `HEALTHZ-HOLDER-SEAL-01` (sealing the `Aggregator` interface, cap-13 §13.1) is an
+> **orthogonal, downstream-axis** task: it would upgrade the `HEALTHZ-WRITE-01` A2
+> caller-allowlist row (Medium) to Hard.  It does **not** bear on the upstream
+> conformance-test-existence property of this ADR and is not a successor to #699.
 
 ### Full AI-robust table
 
@@ -198,7 +212,7 @@ This amendment rebuilds the picture:
 |-----|---------------|--------------|
 | Downstream registration gate | ❌ Virtual N1/N2 claimed Hard | ✅ Hard — HEALTHZ-TYPED-REGISTER-01 + cellgen + typed param |
 | Upstream conformance-enrollment | ❌ Virtual P1 claimed Medium | ✅ Medium — CELL-REPO-READYZ-PROBE-01 built this PR |
-| Backlog Hard-upgrade task | ⚠️ REPO-READYZ-UPSTREAM-FUNNEL-HARD-01 open | ✅ Closed — Hard ceiling unreachable; upgrade path → HEALTHZ-HOLDER-SEAL-01 |
+| Backlog Hard-upgrade task | ⚠️ REPO-READYZ-UPSTREAM-FUNNEL-HARD-01 (#699) open | ✅ Closed — upstream Hard type-theoretically unreachable (no upgrade path; permanent Medium ceiling). HEALTHZ-HOLDER-SEAL-01 is an orthogonal downstream-axis task, not a successor. |
 
 ### AI-robust honest caveats
 
