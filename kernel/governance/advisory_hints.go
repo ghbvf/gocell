@@ -38,21 +38,6 @@ const (
 		" to endpoints.subscribers in the contract.yaml"
 	advHintADV05EmptySubscribersFix = "add subscribers to endpoints.subscribers or set lifecycle: deprecated"
 
-	// ADV-06: contract lists a cell as subscriber but no matching contractUsage found.
-	advHintADV06ContractToSlice = "event contract %q lists cell %q as subscriber," +
-		" but no slice in %q declares contractUsage{contract: %q, role: subscribe};" +
-		" add this contractUsage to a slice in %q" +
-		" (e.g. cells/%s/slices/<slice>/slice.yaml)" +
-		" or remove %q from endpoints.subscribers"
-	advHintADV06ContractToSliceFix = "add the subscribe contractUsage to a slice or remove the cell from endpoints.subscribers"
-
-	// ADV-06: slice declares subscribe usage but contract does not list the cell.
-	advHintADV06SliceToContract = "slice %q declares contractUsage{contract: %q, role: subscribe}," +
-		" but the contract's endpoints.subscribers does not list cell %q;" +
-		" add %q to the contract's endpoints.subscribers" +
-		" or remove the subscribe contractUsage from this slice"
-	advHintADV06SliceToContractFix = "add the cell to endpoints.subscribers in the contract or remove the subscribe contractUsage"
-
 	// CH-04: auth.Mount correlation failed; cannot extract handler status codes.
 	advHintCH04CorrelationFailed = "CH-04: contract %s served by handler file %s" +
 		" — auth.Mount correlation failed; cannot reliably extract handler status codes." +

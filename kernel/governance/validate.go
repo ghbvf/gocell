@@ -208,7 +208,6 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateFMTA1,
 		v.validateFMTC1,
 		v.validateADV01, v.validateADV03, v.validateADV04, v.validateADV05,
-		v.validateADV06,
 		v.validateOUTGUARD01,
 		v.validateSliceConsistency,
 		v.validateSliceConsistencyContractUsages,

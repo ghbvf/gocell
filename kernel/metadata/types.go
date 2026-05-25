@@ -233,8 +233,12 @@ type EndpointsMeta struct {
 	Clients []string           `yaml:"clients,omitempty"`
 	HTTP    *HTTPTransportMeta `yaml:"http,omitempty"`
 	// Event
-	Publisher   string   `yaml:"publisher,omitempty"`
-	Subscribers []string `yaml:"subscribers,omitempty"`
+	Publisher        string   `yaml:"publisher,omitempty"`
+	ActorSubscribers []string `yaml:"actorSubscribers,omitempty"`
+	// Subscribers is derived by deriveEventSubscribers (parser post-process):
+	// union of ActorSubscribers + cell IDs from slice.yaml contractUsages[role=subscribe].
+	// yaml:"-" means hand-written "subscribers:" in YAML is rejected by KnownFields strict decode.
+	Subscribers []string `yaml:"-"`
 	// Command
 	Handler  string   `yaml:"handler,omitempty"`
 	Invokers []string `yaml:"invokers,omitempty"`

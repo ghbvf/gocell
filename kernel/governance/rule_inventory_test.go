@@ -81,12 +81,14 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 // kernel/governance/*.go. Update this list whenever a rule is added /
 // renamed / removed.
 //
-// Total: 87 IDs across 12 series.
+// Total: 86 IDs across 12 series.
 func goldenRuleIDs() []string {
 	return []string{
 		// ADV — advisory warnings (rules_misc_advisory.go).
-		// ADV-02 was retired before PR-FUNNEL-03; the gap is intentional.
-		"ADV-01", "ADV-03", "ADV-04", "ADV-05", "ADV-06",
+		// ADV-02 retired before PR-FUNNEL-03; ADV-06 removed when Subscribers
+		// became a derived field (subscribers are always in sync by construction).
+		// Gaps are intentional.
+		"ADV-01", "ADV-03", "ADV-04", "ADV-05",
 
 		// CONTRACT-ENDPOINT-TEST-MAPPING — active HTTP contract → slice.verify.contract.serve
 		// reverse coverage check (rules_contract_test_mapping.go).

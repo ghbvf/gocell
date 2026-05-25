@@ -111,13 +111,14 @@ const (
 	codeFMTC1 RuleCode = "FMT-C1"
 
 	// ADV — advisory warnings & dead-event detection (rules_misc_advisory.go).
-	// 5 active constants (ADV-01/03/04/05/06); ADV-02 retired, gap intentional.
-	// ADV-05/06 are SeverityError; ADV-01/03/04 are SeverityWarning.
+	// 4 active constants (ADV-01/03/04/05); ADV-02 retired and ADV-06 removed
+	// (gap intentional). Subscribers are now derived from slice contractUsages +
+	// actorSubscribers, making drift-detection moot.
+	// ADV-05 is SeverityError; ADV-01/03/04 are SeverityWarning.
 	codeADV01 RuleCode = "ADV-01"
 	codeADV03 RuleCode = "ADV-03"
 	codeADV04 RuleCode = "ADV-04"
 	codeADV05 RuleCode = "ADV-05"
-	codeADV06 RuleCode = "ADV-06"
 
 	// CH — contract-health (contracthealth.go, rules_http.go).
 	// Registered via Validator.CheckContractHealth, not rules().

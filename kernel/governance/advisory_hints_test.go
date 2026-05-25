@@ -29,11 +29,6 @@ func TestAdvisoryHints_Golden(t *testing.T) {
 		// ADV-05
 		"advHintADV05EmptySubscribers":    advHintADV05EmptySubscribers,
 		"advHintADV05EmptySubscribersFix": advHintADV05EmptySubscribersFix,
-		// ADV-06
-		"advHintADV06ContractToSlice":    advHintADV06ContractToSlice,
-		"advHintADV06ContractToSliceFix": advHintADV06ContractToSliceFix,
-		"advHintADV06SliceToContract":    advHintADV06SliceToContract,
-		"advHintADV06SliceToContractFix": advHintADV06SliceToContractFix,
 		// CH-04
 		"advHintCH04CorrelationFailed":    advHintCH04CorrelationFailed,
 		"advHintCH04CorrelationFailedFix": advHintCH04CorrelationFailedFix,

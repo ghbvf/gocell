@@ -5,8 +5,6 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: test-cell
-  subscribers:
-    - other-cell
 replayable: false
 idempotencyKey: eventId
 deliverySemantics: at-least-once

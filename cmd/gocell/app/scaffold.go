@@ -851,7 +851,6 @@ endpoints:
   clients: []
 {{- else if eq .Kind "event"}}
   publisher: {{.OwnerCell}}
-  subscribers: []
 {{- else if eq .Kind "command"}}
   handler: {{.OwnerCell}}
   invokers: []

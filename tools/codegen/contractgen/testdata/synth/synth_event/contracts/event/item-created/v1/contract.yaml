@@ -5,7 +5,6 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: itemcell
-  subscribers: [example-consumer]
 schemaRefs:
   payload: payload.schema.json
 replayable: false
