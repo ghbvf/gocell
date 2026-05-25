@@ -10,10 +10,11 @@ package archtest
 //   - INVARIANT: SEC-FAIL-CLOSED-07
 //   - INVARIANT: SEC-FAIL-CLOSED-08
 //   - INVARIANT: SEC-FAIL-CLOSED-09
+//   - INVARIANT: SEC-FAIL-CLOSED-10
 //
 // security_defaults_test.go — static archtest rules for PR-MODE-1 SEC-FAIL-CLOSED.
 //
-// Sub-tests mirror the SEC-FAIL-CLOSED-01..09 rule IDs:
+// Sub-tests mirror the SEC-FAIL-CLOSED-01..10 rule IDs:
 //
 //   01  addr-driven gate: bundle.go must not wrap WithListener in IfStmt guarded
 //       by PrimaryHTTPAddr / InternalHTTPAddr / HealthHTTPAddr != "".
@@ -30,6 +31,9 @@ package archtest
 //   07  websocket UpgradeConfig literals must include Authenticator field
 //   08  no production code may call runtime/websocket.Hub.Broadcast (deleted API)
 //   09  hub.go conns and subjectIdx delete points must stay in sync
+//   10  health listener required: a package main that references
+//       cell.PrimaryListener must also reference cell.HealthListener (#673 —
+//       bootstrap phase0 fail-fasts without a HealthListener; no silent remap).
 //
 // ref: tools/archtest/auth_authtest_boundary_test.go — 4 sub-test pattern
 
@@ -67,7 +71,14 @@ const (
 	secFailClosed07 = "SEC-FAIL-CLOSED-07"
 	secFailClosed08 = "SEC-FAIL-CLOSED-08"
 	secFailClosed09 = "SEC-FAIL-CLOSED-09"
+	secFailClosed10 = "SEC-FAIL-CLOSED-10"
 )
+
+// kernelCellPkgPath is the canonical import path of the kernel/cell package,
+// home of the ListenerRef consts (PrimaryListener / InternalListener /
+// HealthListener). SEC-FAIL-CLOSED-10 resolves listener references to this path
+// via ResolvePackageRef (type-aware), so import aliases do not defeat it.
+const kernelCellPkgPath = "github.com/ghbvf/gocell/kernel/cell"
 
 func TestSecurityDefaults(t *testing.T) {
 	root := findModuleRoot(t)
@@ -107,6 +118,18 @@ func TestSecurityDefaults(t *testing.T) {
 	t.Run(secFailClosed09+"_hub_subjectidx_sync", func(t *testing.T) {
 		testSEC09HubSubjectIdxSync(t, root)
 	})
+
+	t.Run(secFailClosed10+"_main_with_primary_must_declare_health", func(t *testing.T) {
+		testSEC10HealthListenerRequiredInMain(t)
+	})
+
+	t.Run(secFailClosed10+"_no_dynamic_listenerref_in_main", func(t *testing.T) {
+		testSEC10NoDynamicListenerRefBlindSpotInProduction(t)
+	})
+
+	t.Run(secFailClosed10+"_fixture_catches_primary_without_health", func(t *testing.T) {
+		testSEC10FixtureCatchesPrimaryWithoutHealth(t)
+	})
 }
 
 // testSEC01AddrDrivenGate is skipped — SEC-FAIL-CLOSED-01 is retired.
@@ -123,6 +146,14 @@ func TestSecurityDefaults(t *testing.T) {
 // simply don't bind that port. Production correctness is enforced by
 // SharedDeps.Validate and internalGuardFromEnv (which now fails-fast in ALL
 // adapter modes when GOCELL_SERVICE_SECRET is unset, not just "real" mode).
+//
+// #673 note: for the HealthListener specifically, the retirement premise
+// ("omitting an addr merely skips registration") is now strengthened — omitting
+// the HealthListener no longer silently remaps health routes onto the public
+// primary listener; bootstrap phase0 fail-fasts instead. The addr-driven gate
+// stays legitimate (corebundle defaults GOCELL_HTTP_HEALTH_ADDR so the listener
+// is always declared), but a package main wiring PrimaryListener must also wire
+// HealthListener — now enforced statically by SEC-FAIL-CLOSED-10.
 //
 // SEC-02 covers the actual nil-authChain risk. See git history for context.
 func testSEC01AddrDrivenGate(t *testing.T, _ string) {
@@ -1130,4 +1161,147 @@ func findAllProductionMainPackageFiles(root string) ([]string, error) {
 		}
 	}
 	return files, nil
+}
+
+// --- SEC-FAIL-CLOSED-10: health listener required in composition roots ---
+
+// listenerRefsInPass reports whether the package in p references the kernel/cell
+// PrimaryListener / HealthListener consts (anywhere — not only as WithListener
+// arguments, since composition roots like examples/ssobff route the ref through
+// a listenerOption helper). primaryLine is the line of the first PrimaryListener
+// reference, for diagnostics.
+//
+// Resolution is type-aware via ResolvePackageRef → canonical *types.PkgName →
+// import path, so an aliased `import kcell ".../kernel/cell"` is handled and a
+// bare `.Sel.Name == "HealthListener"` (Soft name-convention) match is avoided.
+//
+// Tool blind spot (ResolvePackageRef on package-symbol references): two shapes
+// are invisible —
+//  1. a ListenerRef fabricated by converting a dynamic string,
+//     `cell.ListenerRef(s)`, never references a named const. Closed by
+//     testSEC10NoDynamicListenerRefBlindSpotInProduction, which asserts no
+//     production main package contains that conversion.
+//  2. a dot-import `import . ".../kernel/cell"` referencing `PrimaryListener`
+//     as a bare ident. Composition roots import kernel/cell qualified; this
+//     shape does not occur and only walking *ast.SelectorExpr below would miss
+//     it. It is documented rather than scanned because a dot-import of
+//     kernel/cell is itself a style break a reviewer would reject.
+func listenerRefsInPass(p *Pass) (primary, health bool, primaryLine int) {
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, sel)
+			if !ok || pkgPath != kernelCellPkgPath {
+				return
+			}
+			switch name {
+			case "PrimaryListener":
+				primary = true
+				if primaryLine == 0 {
+					primaryLine = p.Fset.Position(sel.Pos()).Line
+				}
+			case "HealthListener":
+				health = true
+			}
+		})
+	}
+	return primary, health, primaryLine
+}
+
+// dynamicListenerRefHits reports `cell.ListenerRef(...)` conversion CallExprs in
+// p — the only way to obtain a ListenerRef value without referencing a named
+// kernel/cell const, and therefore the blind spot of listenerRefsInPass.
+// Production composition roots use the named consts, so this must be empty.
+func dynamicListenerRefHits(p *Pass) []string {
+	var hits []string
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+			if !ok || pkgPath != kernelCellPkgPath || name != "ListenerRef" {
+				return
+			}
+			hits = append(hits, fmt.Sprintf("%s:%d", p.Rel(file), p.Fset.Position(call.Pos()).Line))
+		})
+	}
+	return hits
+}
+
+// testSEC10HealthListenerRequiredInMain enforces #673 at the composition-root
+// boundary: a `package main` that references cell.PrimaryListener (i.e. wires
+// the public listener) must also reference cell.HealthListener. Without it,
+// bootstrap phase0 fails fast at startup; this archtest catches the omission at
+// CI build time, layered with that runtime guard.
+func testSEC10HealthListenerRequiredInMain(t *testing.T) {
+	t.Helper()
+	var violations []string
+	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Name() != "main" {
+			return nil
+		}
+		primary, health, line := listenerRefsInPass(p)
+		if primary && !health {
+			violations = append(violations,
+				fmt.Sprintf("%s (references cell.PrimaryListener at line %d but never cell.HealthListener)", p.Pkg.Path(), line))
+		}
+		return nil
+	})
+	for _, v := range violations {
+		t.Logf("%s violation: %s", secFailClosed10, v)
+	}
+	assert.Empty(t, violations,
+		"SEC-FAIL-CLOSED-10: every package main wiring cell.PrimaryListener must also declare a "+
+			"cell.HealthListener (bootstrap phase0 fails fast without one; #673 removed the silent "+
+			"remap onto the public primary listener)")
+}
+
+// testSEC10NoDynamicListenerRefBlindSpotInProduction closes the blind spot of
+// listenerRefsInPass: a `cell.ListenerRef(dynamicString)` conversion would
+// fabricate a listener ref invisible to the named-const scan. Production must
+// not contain that shape (composition roots use the named consts).
+func testSEC10NoDynamicListenerRefBlindSpotInProduction(t *testing.T) {
+	t.Helper()
+	var blindspots []string
+	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Name() != "main" {
+			return nil
+		}
+		blindspots = append(blindspots, dynamicListenerRefHits(p)...)
+		return nil
+	})
+	for _, b := range blindspots {
+		t.Logf("%s blind spot: %s", secFailClosed10, b)
+	}
+	assert.Empty(t, blindspots,
+		"SEC-FAIL-CLOSED-10: package main must not build a cell.ListenerRef via dynamic "+
+			"string conversion (cell.ListenerRef(x)); use the named consts so the listener "+
+			"topology stays statically analyzable")
+}
+
+// testSEC10FixtureCatchesPrimaryWithoutHealth is the positive-coverage proof
+// that the rule fires. The build-tag-gated healthlistenerfixture references
+// cell.PrimaryListener (through a non-default alias, proving canonical-path
+// resolution) and never cell.HealthListener — the exact shape SEC-FAIL-CLOSED-10
+// must flag.
+func testSEC10FixtureCatchesPrimaryWithoutHealth(t *testing.T) {
+	t.Helper()
+	var primary, health bool
+	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/healthlistenerfixture"},
+		func(p *Pass) []Diagnostic {
+			gotPrimary, gotHealth, _ := listenerRefsInPass(p)
+			primary = primary || gotPrimary
+			health = health || gotHealth
+			return nil
+		})
+	require.True(t, primary,
+		"fixture must reference cell.PrimaryListener (through its kcell alias) so the rule's "+
+			"PrimaryListener detection is exercised")
+	assert.False(t, health,
+		"fixture must NOT reference cell.HealthListener — primary-without-health is the violating "+
+			"shape SEC-FAIL-CLOSED-10 catches")
 }
