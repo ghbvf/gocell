@@ -69,9 +69,9 @@
 // returns a custom impl): this is reachable only via Go-type-system upstream
 // Hard (sealing auth.BootstrapAuthFailObserver into a marker that only
 // runtime/audit can construct, which forces runtime/auth → runtime/audit,
-// breaking the documented non-dependency). Promotion to Hard is tracked as
-// This archtest defines the Medium ceiling reachable
-// without that refactor.
+// breaking the documented non-dependency). Until that refactor lands, this
+// archtest defines the Medium ceiling reachable without sealing the
+// observer interface.
 //
 // Scope:
 //   - cmd/corebundle/ (production, non-test): the platform composition root.
@@ -413,6 +413,12 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 		corebundlePkgPath: true,
 		ssobffPkgPath:     true,
 	}
+	// Reverse self-check (ai-robust.md §"工具选定后强制盲区自检"): record
+	// which scope packages were actually visited so we fail loudly if a
+	// future RunTypedProduction loader config silently skips one (e.g. drops
+	// package main binaries under examples/). Without this guard a vacuous
+	// pass would let the demo regress to slog-only undetected.
+	visited := map[string]bool{}
 
 	var upstreamViolations []upstreamViolation
 
@@ -420,6 +426,7 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 		if p.Pkg == nil || !scanPaths[p.Pkg.Path()] {
 			return nil
 		}
+		visited[p.Pkg.Path()] = true
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
@@ -462,6 +469,16 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 		}
 		return nil
 	})
+
+	// Fail loudly if any scope package was not visited by the loader. A
+	// vacuous pass (no violations because nothing was scanned) would let
+	// the demo or platform composition root regress to slog-only undetected.
+	for path := range scanPaths {
+		require.Truef(t, visited[path],
+			"%s: RunTypedProduction did not visit %q — scope coverage gap, "+
+				"upstream Medium guard would pass vacuously without it",
+			ruleBootstrapAuditObserverFunnelUpstreamMedium01, path)
+	}
 
 	for _, v := range upstreamViolations {
 		t.Logf("%s: %s — %s", ruleBootstrapAuditObserverFunnelUpstreamMedium01, v.location, v.reason)
