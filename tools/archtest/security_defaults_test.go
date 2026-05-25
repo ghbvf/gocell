@@ -1182,10 +1182,10 @@ func findAllProductionMainPackageFiles(root string) ([]string, error) {
 //     testSEC10NoDynamicListenerRefBlindSpotInProduction, which asserts no
 //     production main package contains that conversion.
 //  2. a dot-import `import . ".../kernel/cell"` referencing `PrimaryListener`
-//     as a bare ident. Composition roots import kernel/cell qualified; this
-//     shape does not occur and only walking *ast.SelectorExpr below would miss
-//     it. It is documented rather than scanned because a dot-import of
-//     kernel/cell is itself a style break a reviewer would reject.
+//     as a bare ident, which walking *ast.SelectorExpr below would miss.
+//     Closed by testSEC10NoDynamicListenerRefBlindSpotInProduction, which also
+//     asserts no production main package dot-imports kernel/cell (so every
+//     listener-ref reference is a qualified selector this scan sees).
 func listenerRefsInPass(p *Pass) (primary, health bool, primaryLine int) {
 	for _, file := range p.Files {
 		if strings.HasSuffix(p.Rel(file), "_test.go") {
@@ -1259,10 +1259,34 @@ func testSEC10HealthListenerRequiredInMain(t *testing.T) {
 			"remap onto the public primary listener)")
 }
 
-// testSEC10NoDynamicListenerRefBlindSpotInProduction closes the blind spot of
+// dotImportKernelCellHits reports `import . "<kernel/cell>"` dot-imports in p —
+// the second blind spot of listenerRefsInPass (a bare PrimaryListener/
+// HealthListener ident under a dot-import would not be a *ast.SelectorExpr the
+// scan walks). Composition roots import kernel/cell qualified, so this is empty.
+func dotImportKernelCellHits(p *Pass) []string {
+	var hits []string
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		for _, imp := range file.Imports {
+			if imp.Name == nil || imp.Name.Name != "." {
+				continue
+			}
+			if strings.Trim(imp.Path.Value, `"`) == kernelCellPkgPath {
+				hits = append(hits, fmt.Sprintf("%s:%d", p.Rel(file), p.Fset.Position(imp.Pos()).Line))
+			}
+		}
+	}
+	return hits
+}
+
+// testSEC10NoDynamicListenerRefBlindSpotInProduction closes both blind spots of
 // listenerRefsInPass: a `cell.ListenerRef(dynamicString)` conversion would
-// fabricate a listener ref invisible to the named-const scan. Production must
-// not contain that shape (composition roots use the named consts).
+// fabricate a listener ref invisible to the named-const scan, and a dot-import
+// of kernel/cell would make listener-ref references bare idents the
+// *ast.SelectorExpr walk misses. Production main packages must contain neither
+// shape (composition roots use the named consts via qualified imports).
 func testSEC10NoDynamicListenerRefBlindSpotInProduction(t *testing.T) {
 	t.Helper()
 	var blindspots []string
@@ -1271,6 +1295,7 @@ func testSEC10NoDynamicListenerRefBlindSpotInProduction(t *testing.T) {
 			return nil
 		}
 		blindspots = append(blindspots, dynamicListenerRefHits(p)...)
+		blindspots = append(blindspots, dotImportKernelCellHits(p)...)
 		return nil
 	})
 	for _, b := range blindspots {
@@ -1278,8 +1303,8 @@ func testSEC10NoDynamicListenerRefBlindSpotInProduction(t *testing.T) {
 	}
 	assert.Empty(t, blindspots,
 		"SEC-FAIL-CLOSED-10: package main must not build a cell.ListenerRef via dynamic "+
-			"string conversion (cell.ListenerRef(x)); use the named consts so the listener "+
-			"topology stays statically analyzable")
+			"string conversion (cell.ListenerRef(x)) nor dot-import kernel/cell; use the named "+
+			"consts via a qualified import so the listener topology stays statically analyzable")
 }
 
 // testSEC10FixtureCatchesPrimaryWithoutHealth is the positive-coverage proof

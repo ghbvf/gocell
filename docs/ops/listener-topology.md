@@ -370,7 +370,7 @@ Three failure modes have been observed in real deployments. Each entry links to 
 
 **Cause**: The default health bind is `127.0.0.1:9091`, which is unreachable from the kubelet via Pod IP. Same-netns probes (exec probes, sidecars) work; `httpGet` does not.
 
-**Fix**: Set `GOCELL_HTTP_HEALTH_ADDR=:9091` (or any Pod-reachable address). Setting `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` only acknowledges the loopback bind so corebundle does not refuse to start — it does **not** make the endpoint reachable from the kubelet. `LOCAL_ONLY=1` is correct only for same-pod sidecar / exec-probe deployments where the probe runs inside the container netns. See [Health-listener fallback (test/dev convenience)](#health-listener-required-no-fallback).
+**Fix**: Set `GOCELL_HTTP_HEALTH_ADDR=:9091` (or any Pod-reachable address). Setting `GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` only acknowledges the loopback bind so corebundle does not refuse to start — it does **not** make the endpoint reachable from the kubelet. `LOCAL_ONLY=1` is correct only for same-pod sidecar / exec-probe deployments where the probe runs inside the container netns. See [Health-listener required (no fallback)](#health-listener-required-no-fallback).
 
 ### `/internal/v1/*` requests succeed from unrelated pods
 

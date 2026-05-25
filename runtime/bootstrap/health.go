@@ -106,9 +106,10 @@ func WithReadyzVerboseDisabled() HealthRouteGroupOption {
 
 // HealthRouteGroups returns one RouteGroup per framework-owned health route
 // (/healthz, /readyz, optional /metrics) on the HealthListener. The HealthListener
-// is wired with no listener auth (cmd/corebundle pattern), so health probes are
-// reachable without a token; the verbose disclosure on /readyz is gated by
-// WithReadyzVerboseToken at the handler layer.
+// is wired with an explicit no-auth chain ([]auth.ListenerAuth{auth.AuthNone{}};
+// phase0 rejects a nil chain), so health probes are reachable without a token;
+// the verbose disclosure on /readyz is gated by WithReadyzVerboseToken at the
+// handler layer.
 //
 // A nil/zero metrics handler omits the /metrics route entirely.
 func HealthRouteGroups(h *health.Handler, opts ...HealthRouteGroupOption) []cell.RouteGroup {

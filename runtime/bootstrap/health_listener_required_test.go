@@ -99,3 +99,22 @@ func TestPhase0_HealthListenerDeclared_NoHealthError(t *testing.T) {
 			"declaring a HealthListener must satisfy the health-routes requirement")
 	}
 }
+
+// TestPhase0_HealthOnlyNoPrimary_Passes asserts that a Bootstrap with ONLY a
+// cell.HealthListener (no PrimaryListener) does NOT fail phase0 on the
+// health-listener requirement. A control-plane/worker-only binary that exposes
+// nothing on the primary port is a valid topology; phase0 may reject it for an
+// unrelated reason, but the HealthListener guard must not be the cause.
+func TestPhase0_HealthOnlyNoPrimary_Passes(t *testing.T) {
+	t.Parallel()
+
+	b := New(
+		WithClock(clock.Real()),
+		WithListener(cell.HealthListener, "127.0.0.1:9091", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+	err := b.phase0ValidateOptions()
+	if err != nil {
+		assert.NotContains(t, err.Error(), "HealthListener",
+			"a HealthListener-only binary must not fail the health-listener requirement at phase0")
+	}
+}

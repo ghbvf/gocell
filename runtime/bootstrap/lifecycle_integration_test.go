@@ -64,7 +64,7 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 	var startedAt, stoppedAt time.Time
 
 	ln := newIntegrationListener(t)
-	addr := ln.Addr().String()
+	healthLn := newIntegrationListener(t)
 
 	var onStartCalled bool
 
@@ -72,6 +72,7 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D3s),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -99,7 +100,7 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 
 	// Wait for /healthz — at this point, Step 4.6 (lifecycle.Start) has already
 	// completed because it runs before Step 7 (HTTP server).
-	waitForIntegrationHealthy(t, addr)
+	waitForIntegrationHealthy(t, healthLn.Addr().String())
 
 	// Assert that OnStart was called before healthz became ready.
 	mu.Lock()
@@ -145,13 +146,15 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 
 	boomErr := errors.New("boom")
 
-	// PR-A14b: phase0 requires a primary listener declaration even for pure
-	// lifecycle tests; inject an ephemeral listener so validation passes and
-	// Run proceeds to the lifecycle.Start phase.
+	// PR-A14b: phase0 requires a primary listener and a HealthListener
+	// declaration even for pure lifecycle tests; inject ephemeral listeners so
+	// validation passes and Run proceeds to the lifecycle.Start phase.
 	integLn := newIntegrationListener(t)
+	healthLn := newIntegrationListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, integLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(integLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D3s),
 		WithLifecycle(func(lc Lifecycle) {
 			// Hook A: succeeds; its OnStop must run during rollback.
