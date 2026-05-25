@@ -152,6 +152,11 @@ type ContractUsage struct {
 	// Group is the broker consumer group for role=subscribe; optional, defaults to
 	// the owning cell ID when empty. Forbidden for non-subscribe roles.
 	Group string `yaml:"group,omitempty"`
+	// Field optionally names the cell-struct field holding the subscribe slice's
+	// consumer, disambiguating slices that own more than one *sliceID.T field
+	// (e.g. a route Handler plus a subscribe Consumer). Optional for role=subscribe
+	// (cellgen resolves by package convention when empty); forbidden otherwise.
+	Field string `yaml:"field,omitempty"`
 }
 
 // SliceVerifyMeta holds verification requirements for a Slice.

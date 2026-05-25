@@ -19,21 +19,6 @@ import (
 // These tests are written FIRST (TDD RED phase) before the implementation.
 // They will fail until the types.go + parser.go changes land in the GREEN commit.
 
-// minimalEventContractYAML is the smallest valid event contract.yaml for tests.
-// Note: after the Option T flip, "subscribers:" is derived (yaml:"-") and
-// must NOT appear in hand-written YAML — its presence causes a KnownFields error.
-const minimalEventContractYAML = `id: event.test.created.v1
-kind: event
-ownerCell: testcell
-consistencyLevel: L2
-lifecycle: active
-endpoints:
-  publisher: testcell
-replayable: true
-idempotencyKey: eventId
-deliverySemantics: at-least-once
-`
-
 // TestParseContract_LiteralSubscribersKey_RejectsKnownFields asserts that a
 // contract.yaml with a hand-written "subscribers:" key is rejected by the
 // KnownFields strict decoder. This is the Hard guard: after Subscribers gets
@@ -176,8 +161,8 @@ func TestDeriveEventSubscribers_ActorContractEnumeratedAlways(t *testing.T) {
 				},
 			},
 			"event.session.created.v1": {
-				ID:   "event.session.created.v1",
-				Kind: "event",
+				ID:        "event.session.created.v1",
+				Kind:      "event",
 				Endpoints: EndpointsMeta{Publisher: "accesscore"},
 			},
 		},

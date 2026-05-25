@@ -10,10 +10,12 @@ contractUsages:
     role: subscribe
     handler: HandleRoleChanged
     group: accesscore-rbac-session-sync
+    field: rbacSessionConsumer
   - contract: event.role.revoked.v1
     role: subscribe
     handler: HandleRoleChanged
     group: accesscore-rbac-session-sync
+    field: rbacSessionConsumer
 verify:
   unit:
     - unit.sessionlogout.service

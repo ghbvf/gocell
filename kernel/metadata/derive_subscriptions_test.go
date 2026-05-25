@@ -321,6 +321,47 @@ func TestSliceSchema_GroupOnNonSubscribeRole_Invalid(t *testing.T) {
 	assert.Error(t, schema.Validate(doc), "group on non-subscribe role must fail schema validation")
 }
 
+func TestSliceSchema_FieldOnNonSubscribeRole_Invalid(t *testing.T) {
+	schema := compileSliceSchema(t)
+	doc := map[string]any{
+		"id":               "sessionlogin",
+		"consistencyLevel": "L1",
+		"contractUsages": []any{
+			map[string]any{
+				"contract": "http.auth.login.v1",
+				"role":     "serve",
+				"field":    "loginHandler", // forbidden on non-subscribe
+			},
+		},
+		"verify": map[string]any{
+			"unit":     []any{},
+			"contract": []any{},
+		},
+	}
+	assert.Error(t, schema.Validate(doc), "field on non-subscribe role must fail schema validation")
+}
+
+func TestSliceSchema_FieldOnSubscribe_Valid(t *testing.T) {
+	schema := compileSliceSchema(t)
+	doc := map[string]any{
+		"id":               "sessionlogout",
+		"consistencyLevel": "L2",
+		"contractUsages": []any{
+			map[string]any{
+				"contract": "event.role.assigned.v1",
+				"role":     "subscribe",
+				"handler":  "HandleRoleChanged",
+				"field":    "rbacSessionConsumer", // optional disambiguator, allowed
+			},
+		},
+		"verify": map[string]any{
+			"unit":     []any{},
+			"contract": []any{},
+		},
+	}
+	assert.NoError(t, schema.Validate(doc), "field on subscribe role must pass schema validation")
+}
+
 func TestSliceSchema_SubscribeWithHandlerAndGroup_Valid(t *testing.T) {
 	schema := compileSliceSchema(t)
 	doc := map[string]any{

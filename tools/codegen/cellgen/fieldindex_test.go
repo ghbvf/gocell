@@ -211,6 +211,84 @@ func TestBuildCellSpec_BundleSubscribesNotConsumed(t *testing.T) {
 	}
 }
 
+// TestIndexCellStructFields_DuplicatePkgDeferred verifies that a package
+// selector appearing on more than one field is marked ambiguous (sentinel "")
+// rather than erroring at index time — harmless infra-package duplicates
+// (auth, query, slog …) must not break indexing.
+func TestIndexCellStructFields_DuplicatePkgDeferred(t *testing.T) {
+	t.Parallel()
+	src := `package democell
+
+import "github.com/example/democell/slices/sessionlogout"
+
+type DemoCell struct {
+	logoutHandler       *sessionlogout.Handler
+	rbacSessionConsumer *sessionlogout.Consumer
+}
+`
+	path := writeTempCellGo(t, src)
+	idx, err := IndexCellStructFields(path)
+	if err != nil {
+		t.Fatalf("IndexCellStructFields must not error on duplicate package: %v", err)
+	}
+	if idx["sessionlogout"] != ambiguousField {
+		t.Errorf("duplicate package should map to ambiguousField sentinel, got %q", idx["sessionlogout"])
+	}
+}
+
+// TestResolveSliceField_ExplicitFieldWins verifies the slice.yaml `field:`
+// override is returned directly, bypassing package-convention resolution
+// (and its ambiguity), so multi-field slices like sessionlogout resolve.
+func TestResolveSliceField_ExplicitFieldWins(t *testing.T) {
+	t.Parallel()
+	idx := map[string]string{"sessionlogout": ambiguousField}
+	got, err := resolveSliceField(idx, "rbacSessionConsumer", "accesscore", "sessionlogout")
+	if err != nil {
+		t.Fatalf("explicit field must resolve without error: %v", err)
+	}
+	if got != "rbacSessionConsumer" {
+		t.Errorf("explicit field = %q, want rbacSessionConsumer", got)
+	}
+}
+
+// TestResolveSliceField_AmbiguousWithoutField_Errors verifies an ambiguous
+// package with no explicit field: produces an actionable disambiguation error.
+func TestResolveSliceField_AmbiguousWithoutField_Errors(t *testing.T) {
+	t.Parallel()
+	idx := map[string]string{"sessionlogout": ambiguousField}
+	_, err := resolveSliceField(idx, "", "accesscore", "sessionlogout")
+	if err == nil {
+		t.Fatal("expected ambiguity error, got nil")
+	}
+	if !strings.Contains(err.Error(), "disambiguate") {
+		t.Errorf("error should suggest adding field: to disambiguate, got %v", err)
+	}
+}
+
+// TestBuildCellSpec_SubscribeFieldOverride verifies a subscribe CU carrying
+// field: resolves via the override even when the package index is ambiguous.
+func TestBuildCellSpec_SubscribeFieldOverride(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+	slc := &metadata.SliceMeta{
+		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "event.foo.v1", Role: "subscribe", Handler: "HandleFoo", Field: "consumerField"},
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.v1", Kind: "event"}})
+	// Ambiguous index: convention resolution would fail, but field: wins.
+	fieldIndex := map[string]string{"subs": ambiguousField}
+
+	spec, err := BuildCellSpec(p, "demo", emptyBundleWithListener(), fieldIndex)
+	if err != nil {
+		t.Fatalf("BuildCellSpec with field override: %v", err)
+	}
+	if len(spec.Subscriptions) != 1 || spec.Subscriptions[0].HandlerExpr != "c.consumerField.HandleFoo" {
+		t.Errorf("HandlerExpr = %+v, want c.consumerField.HandleFoo", spec.Subscriptions)
+	}
+}
+
 // --- fixture helpers ---
 
 func buildSubscribeFixtures() (*metadata.CellMeta, *metadata.SliceMeta, []*metadata.ContractMeta) {

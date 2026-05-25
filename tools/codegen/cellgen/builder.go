@@ -246,7 +246,7 @@ func buildSubscriptionSpecFromCU(
 			))
 	}
 
-	fieldName, err := resolveSliceField(fieldIndex, cellID, sliceID)
+	fieldName, err := resolveSliceField(fieldIndex, cu.Field, cellID, sliceID)
 	if err != nil {
 		return SubscriptionGenSpec{}, err
 	}
