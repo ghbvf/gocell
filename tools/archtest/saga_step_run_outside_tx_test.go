@@ -3,10 +3,11 @@
 // saga_step_run_outside_tx_test.go — call-discipline lock for the Coordinator
 // step executor.
 //
-// Inside runtime/saga/coordinator.go, kernel/saga.StepFunc invocations are
-// confined to the safeRun helper, AND safeRun MUST NOT be called from inside
-// any TxRunner.RunInTx closure body. Together these ensure user step code
-// never runs with a DB transaction held open.
+// Inside all production .go files in runtime/saga/ (excluding _test.go),
+// kernel/saga.StepFunc invocations are confined to the safeRun helper, AND
+// safeRun MUST NOT be called from inside any TxRunner.RunInTx closure body.
+// Together these ensure user step code never runs with a DB transaction held
+// open.
 //
 // # Why ship in PR-03
 //
@@ -17,18 +18,20 @@
 // # Two-layer lock
 //
 //	A1 [TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness]
-//	   Every CallExpr in runtime/saga/coordinator.go whose callee resolves
-//	   to kernel/saga.StepFunc type MUST be inside the body of safeRun.
+//	   Every CallExpr in any production .go file under runtime/saga/ (excluding
+//	   _test.go) whose callee resolves to kernel/saga.StepFunc type MUST be
+//	   inside the body of safeRun.
 //	   AI-robust: Hard (typed callsite-uniqueness + posInRanges body gate;
 //	   the (callee type, enclosing function) pair is unique — any other shape
 //	   fails immediately).
 //
 //	A2 [TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure]
-//	   For every CallExpr to RunInTx in coordinator.go, the closure literal
-//	   passed as the second argument (the tx callback body) MUST NOT contain
-//	   a call to safeRun. Checked via EachInSubtree over the closure body.
+//	   For every CallExpr to RunInTx in any production .go file under
+//	   runtime/saga/ (excluding _test.go), the closure literal passed as the
+//	   second argument (the tx callback body) MUST NOT contain a call to
+//	   safeRun. Checked via EachInSubtree over the closure body.
 //	   AI-robust: Medium (AST structural check; covers direct safeRun(...) in
-//	   the closure body; a helper-wrapper two levels deep is a B1 residual —
+//	   the closure body; a helper-wrapper two levels deep is a B2 residual —
 //	   documented below).
 //
 // # Blind spots (ai-robust 强制反向自检; reverse self-test below)
@@ -46,10 +49,10 @@
 //	     wrapper := func() { safeRun(...) }
 //	     txRunner.RunInTx(ctx, func(txCtx context.Context) error { wrapper(); return nil })
 //	   would have safeRun inside wrapper, not directly in the RunInTx closure —
-//	   A2 would miss it. Mitigated by: file scope (coordinator.go only) +
+//	   A2 would miss it. Mitigated by: scope (all runtime/saga/ production .go) +
 //	   Coordinator single-authority pattern means no wrapper helpers exist today.
 //	   A2 helper-function transitivity (safeRun callsite chase) tracked in
-//	   gh issue #980 (shared call-graph technique with SAGA-STEP-COMPENSATE-PURE-01 B1).
+//	   gh issue #980.
 //
 // ref: tools/archtest/span_setattr_redact_test.go (callsite-uniqueness pattern)
 // ref: tools/archtest/aftercommit_pure_transient_test.go (parent-node negative)
@@ -75,12 +78,14 @@ const safeRunFuncName = "safeRun"
 // contain a safeRun call.
 const runInTxMethodName = "RunInTx"
 
-// coordinatorGoRel is the single file enforced by A1 and A2. Both rules are
-// intentionally narrow: only coordinator.go owns StepFunc dispatch.
-const coordinatorGoRel = "runtime/saga/coordinator.go"
-
-// sagaRuntimePkgPrefix is the prefix for runtime/saga files scanned by B1.
+// sagaRuntimePkgPrefix is the prefix for all production runtime/saga/ files
+// enforced by A1, A2, and B1. Both test-file exclusion (_test.go suffix) and
+// this prefix guard are applied together.
 const sagaRuntimePkgPrefix = "runtime/saga/"
+
+// sagaStepRunFixturesDir is the testdata directory for SAGA-STEP-RUN-OUTSIDE-TX-01
+// red/green fixtures.
+const sagaStepRunFixturesDir = "saga_step_run_outside_tx_fixtures"
 
 // ksagaPkgPath is the import path of kernel/saga, where StepFunc is declared.
 const ksagaPkgPath = "github.com/ghbvf/gocell/kernel/saga"
@@ -107,8 +112,9 @@ const (
 // --- A1: StepFunc callsite uniqueness (typed) ---
 
 // TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness asserts that every
-// CallExpr in runtime/saga/coordinator.go whose callee resolves to type
-// kernel/saga.StepFunc is inside the body of safeRun.
+// CallExpr in any production .go file under runtime/saga/ (excluding _test.go)
+// whose callee resolves to type kernel/saga.StepFunc is inside the body of
+// safeRun.
 //
 // Detection uses go/types TypesInfo to resolve the callee type: any CallExpr
 // whose Fun has an underlying type matching the function signature of
@@ -120,18 +126,18 @@ const (
 //     so TypeOf would not match the ksagaPkgPath.StepFunc lookup. B1 reverse
 //     self-test closes this gap syntactically.
 //   - An indirect call through an interface method that has the same signature
-//     is not caught — but coordinator.go does not define such interfaces.
+//     is not caught — but runtime/saga/ does not define such interfaces.
 func TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness(t *testing.T) {
 	t.Parallel()
 	diags := RunTyped(t, TypedOpts{}, []string{"./runtime/saga/..."}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
-		// Only enforce on coordinator.go.
+		// Enforce on all production .go files in runtime/saga/ (not _test.go).
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
-			if rel != coordinatorGoRel {
+			if !isRuntimeSagaProductionFile(rel) {
 				continue
 			}
 			ds = append(ds, checkA1StepFuncCallsites(p, file)...)
@@ -241,8 +247,8 @@ func calleeIsSagaStepFunc(info *types.Info, call *ast.CallExpr, sagaStepFuncType
 // --- A2: safeRun not inside RunInTx closure (pure AST) ---
 
 // TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure asserts that no
-// RunInTx call in coordinator.go has a safeRun call directly inside its
-// closure argument body.
+// RunInTx call in any production .go file under runtime/saga/ (excluding
+// _test.go) has a safeRun call directly inside its closure argument body.
 //
 // Detection: walk all CallExprs whose callee selector ends in "RunInTx". For
 // each, inspect Args[1] (the closure literal). EachInSubtree inside the
@@ -252,8 +258,8 @@ func calleeIsSagaStepFunc(info *types.Info, call *ast.CallExpr, sagaStepFuncType
 //
 // Residual blind spot B2: a wrapper helper defined outside the RunInTx
 // closure that itself calls safeRun — A2's sub-tree scan does not chase
-// helper bodies. Documented in package godoc; mitigated by coordinator.go
-// single-authority scope.
+// helper bodies. Documented in package godoc; mitigated by Coordinator
+// single-authority pattern (no wrapper helpers exist today).
 func TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -262,7 +268,7 @@ func TestSagaStepRunOutsideTx_A2_SafeRunNotInsideRunInTxClosure(t *testing.T) {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
-			if rel != coordinatorGoRel {
+			if !isRuntimeSagaProductionFile(rel) {
 				continue
 			}
 			ds = append(ds, checkA2SafeRunNotInRunInTx(p, file)...)
@@ -415,6 +421,48 @@ func sagaLocalName(file *ast.File) string {
 		return "saga"
 	}
 	return ""
+}
+
+// isRuntimeSagaProductionFile reports whether rel is a production .go file
+// under runtime/saga/ (i.e., has the sagaRuntimePkgPrefix prefix and does not
+// end with _test.go). Used by A1 and A2 to scope the rule to the full
+// runtime/saga/ package, not just coordinator.go.
+func isRuntimeSagaProductionFile(rel string) bool {
+	return strings.HasPrefix(rel, sagaRuntimePkgPrefix) && !strings.HasSuffix(rel, "_test.go")
+}
+
+// sagaStepRunFixturePattern returns the (relDir, pattern) pair for the given
+// fixture case under sagaStepRunFixturesDir. Mirrors the helper pattern used
+// by the saga compensate pure test.
+func sagaStepRunFixturePattern(fix string) (dir, pattern string) {
+	return filepath.Join("tools", "archtest", "testdata", sagaStepRunFixturesDir, fix),
+		"./tools/archtest/testdata/" + sagaStepRunFixturesDir + "/" + fix
+}
+
+// TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture proves that A1 fires
+// on a non-coordinator.go file in the fixture tree. The fixture violator.go
+// declares a StepFunc-typed variable and calls it directly outside of any
+// safeRun body. This confirms the scope extension (A1 now covers all
+// runtime/saga/ production files, not just coordinator.go).
+//
+// The fixture intentionally does NOT have the path runtime/saga/...; A1 in
+// fixture mode skips the production scope filter and calls
+// checkA1StepFuncCallsites directly on all loaded files.
+func TestSagaStepRunOutsideTx_Detector_RedExtraFileFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaStepRunFixturePattern("red_extra_file")
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		// No scope filter for fixtures: scan all loaded files directly.
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			ds = append(ds, checkA1StepFuncCallsites(p, file)...)
+		}
+		return ds
+	})
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
 
 // posInRanges (package-level, defined in span_record_error_redact_test.go) and
