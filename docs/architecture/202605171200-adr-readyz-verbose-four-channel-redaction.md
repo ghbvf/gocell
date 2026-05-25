@@ -202,9 +202,8 @@ mask 后 `<REDACTED>` 是固定字面量，value 长度信息丢失。SIEM/ELK �
 
 | InvariantID | 档 | 形态 | 上游 / 下游 | 文件 |
 |-------------|----|------|-----------|------|
-| `HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01` | **Hard** | typed struct field set frozen（FIELDS-FROZEN 范本，同 `OUTBOX-HANDLERESULT-FIELDS-FROZEN-01`） | 下游 Hard（archtest 锁字段集；加 error 字段需先改 allowlist + 改本 ADR）| `tools/archtest/health_verbose_invariants_test.go` + `runtime/http/health/verbose_shape.go:verboseDependencyEntry` |
-| `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01` | **Hard** | typed function call funnel（PANIC-REGISTERED 范本）+ unexported struct fields | **上游 Hard**：`SlogDependencyEntry` 三个字段全部 unexported（status / durationMs / errorMsg），外部包无法通过 composite literal 任何形式构造 — 不再依赖 archtest 兜底，**Go 编译器是 gate**；配合 `redactedErrorMsg` 是包私有 newtype，reflect 是唯一理论旁路（但 unexported 类型外部不可命名，包内用 reflect 是 self-inflicted bug，code review 兜底）。**下游 Hard**：archtest 锁包内 conversion CallExpr 必在 `newRedactedErrorMsg` 函数体内 OR 包级 GenDecl initializer 同样禁止（盲区清单 c）。| `tools/archtest/health_verbose_invariants_test.go` + `runtime/http/health/verbose_shape.go` |
-| `HEALTH-VERBOSE-SCAN-COVERAGE-01` | Medium | sanity gate — 验证 archtest scope 真覆盖 canonical 文件 | — | `tools/archtest/health_verbose_invariants_test.go` |
+| `HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01` | **Hard** | golden 字面量锁 ×2：typed struct 字段集冻结（FIELDS-FROZEN 范本，同 `OUTBOX-HANDLERESULT-FIELDS-FROZEN-01`）+ **每字段 json tag 首段字面量冻结**（#947 补——wire 字段名由 json tag 决定，非 Go 字段名） | 下游 Hard（`verboseDependencyEntry` 是 wire body 的唯一来源 struct，`json.Marshal` 单源；archtest 锁字段集 **和** json tag；加/改 wire 字段需先改 `healthVerboseWireAllowedFields` + `healthVerboseWireJSONTags` + 改本 ADR）| `tools/archtest/health_verbose_invariants_test.go`（`TestHealthVerboseWireFieldSetFrozen` + `TestHealthVerboseWireJSONTagsFrozen`）+ `runtime/http/health/verbose_shape.go:verboseDependencyEntry` |
+| `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01` | **Hard** | typed conversion funnel + 字段类型 linchpin + funnel-sig 反 vacuous（#947 由纯 AST ident 名字匹配升级为 go/types 解析）+ unexported struct fields | **上游 Hard**：`SlogDependencyEntry` 三个字段全部 unexported（status / durationMs / errorMsg）+ `redactedErrorMsg` 是包私有 newtype，外部包无法命名类型或寻址字段，**Go 编译器是 gate**（reflect 是唯一理论旁路，但 unexported 类型外部不可命名，包内用 reflect 是 self-inflicted bug，code review 兜底）。**下游 Hard（#947 三重 go/types 守卫）**：① `redactedErrorMsg(x)` 转换经 `info.Types[fun].IsType()` + named-type 同一性解析（`types.Unalias` 使 alias 透明、Obj() 身份免疫同名 shadow，非 `*ast.Ident` 名字锚），必在 `newRedactedErrorMsg` 体内 OR 包级 GenDecl initializer 同样禁止（盲区 c）；② `SlogDependencyEntry.errorMsg` 字段类型必为 `redactedErrorMsg`（linchpin——退回 `string` 即 funnel vacuous）；③ `newRedactedErrorMsg` 必存在且签名 `func(error) redactedErrorMsg`（反 vacuous——funnel 函数消失会让 ① 在零调用点下 vacuous green）。| `tools/archtest/health_verbose_invariants_test.go`（`TestHealthRedactedErrorMsgConversionFunnel` / `...FieldTyped` / `...FunnelFuncSig`）+ `runtime/http/health/verbose_shape.go` |
 
 **上游 Hard 论据更新历史**：
 
@@ -212,6 +211,10 @@ mask 后 `<REDACTED>` 是固定字面量，value 长度信息丢失。SIEM/ELK �
 - **round-4**：把 SlogDependencyEntry 三个字段全部 unexported，外部只通过 read-only accessor methods 消费——但同时为 healthtest unit test 加了 `NewSlogDependencyEntryForTesting` exported 构造 + archtest allowlist。reviewer 立即指出这是 production 文件的 exported function，任何 production 包都能调用——"ForTesting" 后缀只是 convention 非 enforcement，Hard 上游 backdoor。
 - **round-5（本 PR 终态）**：彻底删 `NewSlogDependencyEntryForTesting`；healthtest unit test 改用 zero-value plumbing 测试，语义测试改在 health 包内 white-box 用 real Handler 构造。同步删 archtest allowlist 条目。上游真 Hard：unexported 字段 + 无任何 exported 构造函数 + redactedErrorMsg 包私有 newtype + 无 testing backdoor。Go 编译器是唯一 gate。
 - 同步删两个 reverse archtest（TestHealthRedactedErrorMsgFunnelLiteralReverse + TestHealthRedactedErrorMsgFunnelPackageLevelVarReverse，round-3 加的）因 compile-time 已不可表达。盲区清单 (c) 整合到 forward 规则（FuncDecl.Body + GenDecl 双扫）。
+- **#947（archtest 硬化，下游 Hard 升级）**：round-5 的下游 forward 规则是**纯 AST**——只匹配 `*ast.Ident{Name:"redactedErrorMsg"}`，且文件头 godoc 自述「pure AST, no go/types — unexported closes the boundary, 足够」。PR #552 R1 复审证伪该论断：unexported 上游边界**不**阻止三类**包内**回归——字段类型退回 `string`（funnel 被旁路但 AST 规则仍绿）、`newRedactedErrorMsg` 删除/改名（零调用点 → vacuous green）、同名局部符号 shadow。#947 把下游升级为 **go/types 三重守卫**（见上表 ①②③），并重写文件头矛盾 rationale（不留两套真值源）。上游论据不变（仍是 Go 编译器 gate）。**`HEALTH-VERBOSE-SCAN-COVERAGE-01` 同步删除**：其唯一作用（surface 类型 relocation 致 gate vacuous）已被各规则的内生反 vacuous 守卫吸收——wire-shape 在 `scanVerboseShape` 找不到 struct 时 `t.Fatalf`，funnel 在 `Scope().Lookup` 返回 nil（类型/字段/funnel 函数缺失）时 `t.Fatalf`；独立 scope sanity gate 已是死代码。
+- **#947（WIRE-SHAPE json-tag 锁）**：round-5 的 `HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01` 只锁 Go 字段名 `{Status, DurationMs}`，但 wire 字段名实际由 json tag 决定——改 `json:"status"`→`json:"state"` 而保留 Go 字段名会让 wire 漂而 archtest 绿。#947 增 `TestHealthVerboseWireJSONTagsFrozen` 锁每字段 json tag 首段字面量（`healthVerboseWireJSONTags`），并把 wire-shape 拆为 field-set / json-tag 两个独立 Test（每属性独立失败归因，且各函数 gocognit ≤15）。
+
+**威胁矩阵（§3）重评**：#947 是 enforcement **强化**，无 ✅→⚠️ 回归。§3 所有行依赖「通道 d 文本必经 `newRedactedErrorMsg` funnel」这一前提；该前提此前仅由「字段类型 = `redactedErrorMsg`」**断言**承载（D3 表 line `slog dependencies map` 行明示），#947 用 guard ② 把它**机器强制**（字段退 string 即 CI 红），guard ③ 防 funnel 函数消失。即 #947 把 §3 各行所依赖的 funnel 应用性从「文档断言」升级为「archtest 强制」，是纯增益。
 
 **slog 序列化路径**：见 §2 D6 — `slog.Group("dependencies", slog.Any(name, entry)...)` 是唯一让 LogValue 真生效的 slog idiom，所有 handler 输出一致 snake_case。**严禁退回 `slog.Any("dependencies", map)` 形态**——unexported 字段 + JSON handler 会输出 `{}`，所有诊断信息丢失（round-4 实测 bug）。
 
@@ -228,7 +231,7 @@ panic dump、outbox last_error sanitize、auditquery payload redaction），该 
 
 1. 引入自己的 typed redacted 包装类型（同 `redactedErrorMsg`）
 2. 注册自己的 archtest funnel（同 `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01`）
-3. 在本 ADR §6 funnel matrix 表中追加条目
+3. 在本 ADR §4 funnel matrix 表中追加条目
 
 ## §6 ref
 

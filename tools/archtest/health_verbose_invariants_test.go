@@ -1,269 +1,469 @@
 // invariants:
 //   - INVARIANT: HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01
 //   - INVARIANT: HEALTH-REDACTED-ERROR-MSG-FUNNEL-01
-//   - INVARIANT: HEALTH-VERBOSE-SCAN-COVERAGE-01
 //
 // HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01 — runtime/http/health.verboseDependencyEntry
 //
-//	struct field set is exactly {Status, DurationMs}. Adding error text to the
-//	wire payload requires extending this allowlist deliberately + amending ADR
+//	is the single source of the /readyz?verbose body dependency entry
+//	(json.Marshal of this struct). Two golden literal locks (pure AST, no
+//	go/types — the wire shape is a syntactic struct-tag contract):
+//	  - TestHealthVerboseWireFieldSetFrozen: field set is exactly
+//	    {Status, DurationMs}; embedded fields forbidden.
+//	  - TestHealthVerboseWireJSONTagsFrozen: each field's json tag first segment
+//	    is frozen to its wire name ({Status:"status", DurationMs:"duration_ms"}).
+//	The wire field name is driven by the json tag, NOT the Go field name —
+//	locking only the Go field name (the pre-#947 form) let `json:"status"` drift
+//	to `json:"state"` undetected. Error text MUST NOT appear here; it belongs to
+//	channel d (ops-diagnostics slog). Adding/renaming a field requires updating
+//	healthVerboseWireAllowedFields + healthVerboseWireJSONTags and amending ADR
 //	docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md
-//	§3 (channel mapping) and §6 (enforcement funnel matrix).
+//	§2 D3 (channel mapping) + §4 (enforcement funnel matrix).
 //
-// HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 — Production runtime/http/health/ code may
+// HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 — the slog dependency entry error text
 //
-//	construct redactedErrorMsg values only via newRedactedErrorMsg. Any other
-//	type conversion `redactedErrorMsg(x)` outside newRedactedErrorMsg's function
-//	body fails this gate (downstream Hard, archtest forward rule below). There
-//	is NO testing-only exported constructor — healthtest unit tests assert
-//	against SlogDependencyEntry{} zero value plumbing; semantic value tests
-//	live in the health package's own white-box tests where they exercise a
-//	real Handler.
+//	must pass through newRedactedErrorMsg → pkg/redaction.RedactString. Three
+//	go/types-resolved guards (RunTyped, not pure AST):
+//	  1. TestHealthRedactedErrorMsgConversionFunnel — every redactedErrorMsg(x)
+//	     conversion in the package resolves (via info.Types[fun].IsType() +
+//	     named-type identity, NOT *ast.Ident name) to this package's
+//	     redactedErrorMsg AND sits inside newRedactedErrorMsg's body (downstream
+//	     Hard). Scans FuncDecl bodies AND package-level GenDecl initializers
+//	     (blind-spot c).
+//	  2. TestHealthRedactedErrorMsgFieldTyped — SlogDependencyEntry.errorMsg is
+//	     typed redactedErrorMsg (linchpin: a plain-string degrade would let raw
+//	     error text populate the field without the redactedErrorMsg(...)
+//	     conversion that guard 1 confines).
+//	  3. TestHealthRedactedErrorMsgFunnelFuncSig — newRedactedErrorMsg exists
+//	     with signature func(error) redactedErrorMsg (anti-vacuous: deleting or
+//	     renaming the funnel would make guard 1 pass with zero call sites).
 //
-//	Upstream Hard is enforced by the Go type system, not archtest:
-//	  - SlogDependencyEntry's three fields (status / durationMs / errorMsg)
-//	    are unexported, so external packages cannot construct a value via
-//	    composite literal by any path (field name not exported → compile error).
-//	  - redactedErrorMsg is a package-private newtype; external packages
-//	    cannot name the type, so reflect.Value.Convert is the only theoretical
-//	    bypass — and using reflect inside the health package would itself be
-//	    the bug under investigation, which a fresh code review (not archtest)
-//	    is the appropriate gate for.
-//	  - There is no exported testing-only constructor — round-4 PR #552
-//	    introduced one (NewSlogDependencyEntryForTesting) and round-5 removed
-//	    it after review surfaced that any production package could call it.
+//	Why go/types and not pure AST: the pre-#947 rule matched
+//	*ast.Ident{Name: "redactedErrorMsg"} only. The unexported newtype +
+//	unexported SlogDependencyEntry fields close the UPSTREAM boundary (external
+//	packages can name neither the type nor the field — the Go compiler is the
+//	gate), but that does NOT stop three in-package regressions: the field
+//	degrading to string (guard 2), the funnel function vanishing (guard 3), or a
+//	same-named local symbol shadowing the type (guard 1's typed resolution
+//	follows the object, not the name). Upstream stays Hard via the type system;
+//	downstream is Hard via these three typed guards. There is NO pure-AST
+//	"unexported closes the boundary, no go/types needed" shortcut for the
+//	downstream gate — that claim (pre-#947 file header) was the bug #947 fixed.
 //
-// HEALTH-VERBOSE-SCAN-COVERAGE-01 — sanity gate: asserts the archtest scope
+// Blind-spot inventory (charter §载体决策原则 mandatory) for the funnel rule:
 //
-//	used by the two Hard rules above enumerates the canonical files where the
-//	target types live (verbose_shape.go + health.go), so a future file move
-//	that relocates the types outside this scope is surfaced before silently
-//	dropping the gates.
+//	(a) external composite-literal SlogDependencyEntry{errorMsg: "raw"} —
+//	    compile-time forbidden (unexported field name). In-package, an untyped
+//	    string cannot be assigned to the redactedErrorMsg-typed field without a
+//	    redactedErrorMsg(...) conversion, which guard 1 confines and guard 2
+//	    keeps typed. No extra archtest beyond guard 2.
+//	(b) reflect-based construction (reflect.Value.Convert on the unexported
+//	    type) — unreachable from outside (type unnameable); in-package reflect is
+//	    the bug under investigation, code review is the backstop.
+//	(c) package-level GenDecl initializer `var _ = redactedErrorMsg("x")` —
+//	    guard 1 scans GenDecl subtrees, not just FuncDecl bodies.
+//	(d) alias conversion `type r = redactedErrorMsg; r(x)` — types.Unalias
+//	    collapses the alias to the same named type, so guard 1 catches it.
+//	(e) funnel deletion/rename → vacuous green — guard 3 fails instead.
 //
-// Blind-spot inventory (charter §3 mandatory) for HEALTH-REDACTED-ERROR-MSG-FUNNEL-01:
-//
-//	(a) composite-literal ErrorMsg field assignment from outside the health
-//	    package — used to bypass via untyped const conversion before this PR.
-//	    NOW compile-time forbidden by unexported field name; no archtest
-//	    needed (the Go compiler is the gate).
-//	(b) reflect-based construction of redactedErrorMsg — requires
-//	    reflect.Value.Convert on the unexported type. The type being
-//	    unexported makes this impossible to reach from outside the package;
-//	    using reflect within the package is the bug being investigated.
-//	    No archtest can usefully gate this; code review is the appropriate
-//	    backstop.
-//	(c) package-level GenDecl initializer containing `redactedErrorMsg(...)` —
-//	    e.g. `var _ = redactedErrorMsg("bypass")` in a var/const block.
-//	    Caught by package-level GenDecl scan added to the forward rule
-//	    (TestHealthRedactedErrorMsgFunnel walks both FuncDecl.Body AND
-//	    GenDecl subtrees), so package-level bypass produces the same
-//	    Diagnostic as inside-function bypass.
+// HEALTH-VERBOSE-SCAN-COVERAGE-01 was removed in #947: its purpose (surface a
+// type relocation that would let the gates pass vacuously) is now intrinsic to
+// each rule — wire-shape Fatalf's when scanVerboseShape doesn't find the struct,
+// and the funnel's typed Scope().Lookup Fatalf's when the type / field / funnel
+// func is absent. A standalone scope-coverage sanity gate is dead weight.
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
-	"path/filepath"
+	"go/types"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 const (
 	ruleHealthVerboseWireShapeFrozen     = "HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01"
 	ruleHealthRedactedErrorMsgFunnel     = "HEALTH-REDACTED-ERROR-MSG-FUNNEL-01"
-	ruleHealthVerboseScanCoverage        = "HEALTH-VERBOSE-SCAN-COVERAGE-01"
 	healthPackageRelativeRoot            = "runtime/http/health"
+	healthPackagePattern                 = "./runtime/http/health"
+	healthPackageImportPath              = "github.com/ghbvf/gocell/runtime/http/health"
 	healthVerboseShapeName               = "verboseDependencyEntry"
+	healthSlogShapeName                  = "SlogDependencyEntry"
 	healthRedactedErrorMsgTypeName       = "redactedErrorMsg"
 	healthRedactedErrorMsgFunnelFuncName = "newRedactedErrorMsg"
+	healthRedactedErrorMsgFieldName      = "errorMsg"
 )
 
-// healthVerboseWireAllowedFields is the verbatim field set of
-// runtime/http/health.verboseDependencyEntry. Adding a field requires
-// extending this allowlist deliberately and amending ADR
-// 202605171200-adr-readyz-verbose-four-channel-redaction.md §3 to declare
-// which channel the new field belongs to.
+// healthVerboseWireAllowedFields is the verbatim Go field set of
+// runtime/http/health.verboseDependencyEntry. Adding a field requires extending
+// this allowlist deliberately and amending ADR 202605171200 §2 D3.
 var healthVerboseWireAllowedFields = map[string]struct{}{
 	"Status":     {},
 	"DurationMs": {},
 }
 
-// healthScope returns the DirsScope used by all three HEALTH-VERBOSE-* gates.
-// Single source of truth: the SCAN-COVERAGE test verifies this scope resolves
-// the canonical files where the target types live.
+// healthVerboseWireJSONTags is the verbatim json tag (first comma segment) per
+// Go field — the actual on-wire field names. Locking the Go field name alone is
+// insufficient: the wire name is driven by the json tag.
+var healthVerboseWireJSONTags = map[string]string{
+	"Status":     "status",
+	"DurationMs": "duration_ms",
+}
+
+// healthScope returns the DirsScope used by the wire-shape gates. The wire shape
+// is a syntactic struct-tag contract, so AST-only Run + DirsScope is sufficient;
+// the funnel gates use RunTyped (go/types) instead.
 func healthScope(t *testing.T) Scope {
 	t.Helper()
 	return DirsScope(findModuleRoot(t), []string{healthPackageRelativeRoot})
 }
 
-// TestHealthVerboseWireShapeFrozen enforces HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01.
-func TestHealthVerboseWireShapeFrozen(t *testing.T) {
-	t.Parallel()
+// --- HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01 ------------------------------------
 
-	var (
-		found bool
-		seen  = make(map[string]struct{})
-	)
-	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
-		var ds []Diagnostic
+// verboseFieldDesc describes one declared field of verboseDependencyEntry.
+type verboseFieldDesc struct {
+	name    string
+	jsonTag string // first comma segment of the json tag; "" if no json tag
+	line    int
+}
+
+// verboseShapeScan is the result of one scanVerboseShape walk.
+type verboseShapeScan struct {
+	found    bool
+	fields   []verboseFieldDesc
+	embedded []int // lines of anonymous/embedded fields (forbidden on the wire)
+}
+
+// scanVerboseShape walks runtime/http/health for the verboseDependencyEntry
+// struct and returns a description of its declared fields. Shared by both
+// wire-shape tests so the AST walk happens once per test (cheap; one ~130-line
+// directory), keeping each test a thin single-property assertion.
+func scanVerboseShape(t *testing.T) verboseShapeScan {
+	t.Helper()
+	var scan verboseShapeScan
+	_ = Run(t, healthScope(t), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
 			EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-				if ts.Name == nil || ts.Name.Name != healthVerboseShapeName {
-					return
-				}
-				st, ok := ts.Type.(*ast.StructType)
-				if !ok || st.Fields == nil {
-					return
-				}
-				found = true
-				for _, field := range st.Fields.List {
-					if len(field.Names) == 0 {
-						ds = append(ds, Diagnostic{
-							Rel:     p.Rel(f),
-							Line:    p.Fset.Position(field.Type.Pos()).Line,
-							Message: "<embedded field> — wire shape forbids embedded fields (channel d owns error text)",
-						})
-						continue
-					}
-					for _, name := range field.Names {
-						seen[name.Name] = struct{}{}
-						if _, ok := healthVerboseWireAllowedFields[name.Name]; !ok {
-							ds = append(ds, Diagnostic{
-								Rel:  p.Rel(f),
-								Line: p.Fset.Position(name.Pos()).Line,
-								Message: fmt.Sprintf("%s — field not in allowlist; the wire shape carries no error text by "+
-									"design (channel d ops-diagnostics owns it). Adding a field requires updating "+
-									"healthVerboseWireAllowedFields and amending ADR "+
-									"docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md §3+§6", name.Name),
-							})
-						}
-					}
-				}
+				collectVerboseSpec(p, ts, &scan)
 			})
 		}
-		return ds
+		return nil
 	})
+	return scan
+}
 
-	Report(t, ruleHealthVerboseWireShapeFrozen, diags)
+func collectVerboseSpec(p *Pass, ts *ast.TypeSpec, scan *verboseShapeScan) {
+	if ts.Name == nil || ts.Name.Name != healthVerboseShapeName {
+		return
+	}
+	st, ok := ts.Type.(*ast.StructType)
+	if !ok || st.Fields == nil {
+		return
+	}
+	scan.found = true
+	for _, field := range st.Fields.List {
+		appendVerboseField(p, field, scan)
+	}
+}
 
-	if !found {
-		t.Fatalf("%s: %s struct definition not found under %s — if the type was relocated, "+
-			"update this test's hardcoded type name + relative root along with the move",
+func appendVerboseField(p *Pass, field *ast.Field, scan *verboseShapeScan) {
+	if len(field.Names) == 0 {
+		scan.embedded = append(scan.embedded, p.Fset.Position(field.Type.Pos()).Line)
+		return
+	}
+	tag := jsonTagFirstSegment(field.Tag)
+	for _, name := range field.Names {
+		scan.fields = append(scan.fields, verboseFieldDesc{
+			name:    name.Name,
+			jsonTag: tag,
+			line:    p.Fset.Position(name.Pos()).Line,
+		})
+	}
+}
+
+// jsonTagFirstSegment returns the first comma segment of the field's json tag,
+// or "" when the field carries no json tag. ref: golang.org/x/tools
+// go/analysis/passes/structtag/structtag.go (reflect.StructTag parsing).
+func jsonTagFirstSegment(tag *ast.BasicLit) string {
+	if tag == nil {
+		return ""
+	}
+	unquoted, err := strconv.Unquote(tag.Value)
+	if err != nil {
+		return ""
+	}
+	jsonTag, ok := reflect.StructTag(unquoted).Lookup("json")
+	if !ok {
+		return ""
+	}
+	return strings.SplitN(jsonTag, ",", 2)[0]
+}
+
+// TestHealthVerboseWireFieldSetFrozen enforces the Go field set half of
+// HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01.
+func TestHealthVerboseWireFieldSetFrozen(t *testing.T) {
+	t.Parallel()
+
+	scan := scanVerboseShape(t)
+	if !scan.found {
+		t.Fatalf("%s: %s struct not found under %s — if the type was relocated, update "+
+			"healthVerboseShapeName + healthPackageRelativeRoot along with the move",
 			ruleHealthVerboseWireShapeFrozen, healthVerboseShapeName, healthPackageRelativeRoot)
 	}
 
-	for k := range healthVerboseWireAllowedFields {
-		if _, ok := seen[k]; !ok {
-			t.Errorf("%s: required field %s missing from %s.%s — removing a field changes the wire payload; "+
-				"review ADR 202605171200",
-				ruleHealthVerboseWireShapeFrozen, k, healthPackageRelativeRoot, healthVerboseShapeName)
+	for _, line := range scan.embedded {
+		t.Errorf("%s: %s:%d embedded field forbidden — the wire shape carries no error text "+
+			"by design (channel d ops-diagnostics owns it)",
+			ruleHealthVerboseWireShapeFrozen, healthVerboseShapeName, line)
+	}
+
+	seen := make(map[string]struct{}, len(scan.fields))
+	for _, fld := range scan.fields {
+		seen[fld.name] = struct{}{}
+		if _, ok := healthVerboseWireAllowedFields[fld.name]; !ok {
+			t.Errorf("%s: field %q not in allowlist; adding a wire field requires updating "+
+				"healthVerboseWireAllowedFields + healthVerboseWireJSONTags and amending ADR "+
+				"202605171200 §2 D3 + §4", ruleHealthVerboseWireShapeFrozen, fld.name)
+		}
+	}
+	for want := range healthVerboseWireAllowedFields {
+		if _, ok := seen[want]; !ok {
+			t.Errorf("%s: required field %q missing — removing a field changes the wire payload",
+				ruleHealthVerboseWireShapeFrozen, want)
 		}
 	}
 }
 
-// TestHealthRedactedErrorMsgFunnel enforces HEALTH-REDACTED-ERROR-MSG-FUNNEL-01
-// (downstream Hard).
-//
-// Detection (pure AST, no go/types — scope is one directory, the type being
-// unexported closes the package boundary):
-//  1. Walk every non-test .go file under runtime/http/health/ recursively via
-//     archtest.Run + DirsScope.
-//  2. For each file, scan ALL CallExpr subtrees from BOTH top-level FuncDecls
-//     (function bodies) AND top-level GenDecls (var/const initializers) —
-//     covering blind-spot inventory case (c).
-//  3. For each CallExpr whose Fun is *ast.Ident{Name: "redactedErrorMsg"}
-//     (a type-conversion call), assert the enclosing function (if any) is
-//     "newRedactedErrorMsg". CallExprs inside GenDecl initializers have no
-//     enclosing FuncDecl — they fail unconditionally.
-//
-// Upstream Hard is enforced by the Go type system (unexported fields + newtype),
-// not by additional archtest — see file-header blind-spot inventory (a) and (b).
-func TestHealthRedactedErrorMsgFunnel(t *testing.T) {
+// TestHealthVerboseWireJSONTagsFrozen enforces the json-tag half of
+// HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01 (the actual on-wire field names).
+func TestHealthVerboseWireJSONTagsFrozen(t *testing.T) {
 	t.Parallel()
 
-	diags := Run(t, healthScope(t), func(p *Pass) []Diagnostic {
-		var ds []Diagnostic
-		for _, f := range p.Files {
-			// (1) FuncDecl.Body scan — in-function conversions.
-			EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-				if fd.Body == nil {
-					return
-				}
-				fnName := ""
-				if fd.Name != nil {
-					fnName = fd.Name.Name
-				}
-				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-					ident, ok := call.Fun.(*ast.Ident)
-					if !ok || ident.Name != healthRedactedErrorMsgTypeName {
-						return
-					}
-					if fnName != healthRedactedErrorMsgFunnelFuncName {
-						ds = append(ds, Diagnostic{
-							Rel:  p.Rel(f),
-							Line: p.Fset.Position(call.Pos()).Line,
-							Message: fmt.Sprintf(
-								"redactedErrorMsg(...) conversion inside func %s; only %s may construct redactedErrorMsg values",
-								fnName, healthRedactedErrorMsgFunnelFuncName,
-							),
-						})
-					}
-				})
-			})
+	scan := scanVerboseShape(t)
+	if !scan.found {
+		t.Fatalf("%s: %s struct not found under %s",
+			ruleHealthVerboseWireShapeFrozen, healthVerboseShapeName, healthPackageRelativeRoot)
+	}
 
-			// (2) GenDecl subtree scan — blind-spot (c) package-level initializers.
-			EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
-				EachInSubtree[ast.CallExpr](gd, func(call *ast.CallExpr) {
-					ident, ok := call.Fun.(*ast.Ident)
-					if !ok || ident.Name != healthRedactedErrorMsgTypeName {
-						return
-					}
-					ds = append(ds, Diagnostic{
-						Rel:  p.Rel(f),
-						Line: p.Fset.Position(call.Pos()).Line,
-						Message: fmt.Sprintf(
-							"redactedErrorMsg(...) conversion in package-level GenDecl initializer (blind-spot c); "+
-								"only %s may construct redactedErrorMsg values",
-							healthRedactedErrorMsgFunnelFuncName,
-						),
-					})
-				})
-			})
+	for _, fld := range scan.fields {
+		want, tracked := healthVerboseWireJSONTags[fld.name]
+		if !tracked {
+			continue // field-set drift is TestHealthVerboseWireFieldSetFrozen's job
 		}
-		return ds
+		if fld.jsonTag != want {
+			t.Errorf("%s: field %s json tag = %q, want %q — the wire field name is driven by "+
+				"the json tag, not the Go field name; changing it drifts the /readyz?verbose body",
+				ruleHealthVerboseWireShapeFrozen, fld.name, fld.jsonTag, want)
+		}
+	}
+}
+
+// --- HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 ------------------------------------
+
+// isHealthRedactedErrorMsgType reports whether t is the runtime/http/health
+// redactedErrorMsg newtype, resolved via go/types: types.Unalias makes an alias
+// transparent (blind-spot d) and Obj() identity binds it to this package, so a
+// same-named type in another package or a local shadow does not match.
+func isHealthRedactedErrorMsgType(t types.Type) bool {
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Pkg().Path() == healthPackageImportPath &&
+		named.Obj().Name() == healthRedactedErrorMsgTypeName
+}
+
+// isRedactedConversion reports whether call is a type conversion to
+// redactedErrorMsg. info.Types[call.Fun].IsType() distinguishes a conversion
+// T(x) from a function call f(x) — ref: golang.org/x/tools go/analysis
+// typeutil.Callee returns nil for conversions; this is its dual.
+func isRedactedConversion(info *types.Info, call *ast.CallExpr) bool {
+	tv, ok := info.Types[call.Fun]
+	if !ok || !tv.IsType() {
+		return false
+	}
+	return isHealthRedactedErrorMsgType(tv.Type)
+}
+
+func scanFuncDeclConversions(p *Pass, f *ast.File) []Diagnostic {
+	var ds []Diagnostic
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
+		}
+		fnName := ""
+		if fd.Name != nil {
+			fnName = fd.Name.Name
+		}
+		if fnName == healthRedactedErrorMsgFunnelFuncName {
+			return // the sanctioned funnel — conversions here are allowed
+		}
+		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+			if !isRedactedConversion(p.TypesInfo, call) {
+				return
+			}
+			ds = append(ds, Diagnostic{
+				Rel:  p.Rel(f),
+				Line: p.Fset.Position(call.Pos()).Line,
+				Message: fmt.Sprintf(
+					"redactedErrorMsg(...) conversion inside func %s; only %s may construct redactedErrorMsg values",
+					fnName, healthRedactedErrorMsgFunnelFuncName),
+			})
+		})
 	})
+	return ds
+}
+
+func scanGenDeclConversions(p *Pass, f *ast.File) []Diagnostic {
+	var ds []Diagnostic
+	EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		EachInSubtree[ast.CallExpr](gd, func(call *ast.CallExpr) {
+			if !isRedactedConversion(p.TypesInfo, call) {
+				return
+			}
+			ds = append(ds, Diagnostic{
+				Rel:  p.Rel(f),
+				Line: p.Fset.Position(call.Pos()).Line,
+				Message: fmt.Sprintf(
+					"redactedErrorMsg(...) conversion in package-level GenDecl initializer (blind-spot c); "+
+						"only %s may construct redactedErrorMsg values", healthRedactedErrorMsgFunnelFuncName),
+			})
+		})
+	})
+	return ds
+}
+
+// TestHealthRedactedErrorMsgConversionFunnel enforces guard 1 (downstream Hard).
+func TestHealthRedactedErrorMsgConversionFunnel(t *testing.T) {
+	t.Parallel()
+
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{healthPackagePattern},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != healthPackageImportPath {
+				return nil
+			}
+			var ds []Diagnostic
+			for _, f := range p.Files {
+				ds = append(ds, scanFuncDeclConversions(p, f)...)
+				ds = append(ds, scanGenDeclConversions(p, f)...)
+			}
+			return ds
+		})
 
 	Report(t, ruleHealthRedactedErrorMsgFunnel, diags)
 }
 
-// TestHealthVerboseScanCoverage enforces HEALTH-VERBOSE-SCAN-COVERAGE-01.
-//
-// Sanity gate: the DirsScope built by healthScope must enumerate the canonical
-// files where the target types live (verbose_shape.go declares
-// verboseDependencyEntry + redactedErrorMsg + SlogDependencyEntry + the funnel
-// function; health.go is the typical caller). If any of these moves out of
-// runtime/http/health/ silently, the Hard rules above would still pass
-// vacuously — this test catches that class of regression.
-func TestHealthVerboseScanCoverage(t *testing.T) {
+// TestHealthRedactedErrorMsgFieldTyped enforces guard 2 (linchpin).
+func TestHealthRedactedErrorMsgFieldTyped(t *testing.T) {
 	t.Parallel()
 
-	seen := make(map[string]struct{})
-	_ = Run(t, healthScope(t), func(p *Pass) []Diagnostic {
-		for _, f := range p.Files {
-			seen[p.Rel(f)] = struct{}{}
-		}
-		return nil
-	})
+	var checked bool
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{healthPackagePattern},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != healthPackageImportPath {
+				return nil
+			}
+			checked = true
+			assertErrorMsgFieldTyped(t, p.Pkg)
+			return nil
+		})
 
-	required := []string{
-		filepath.ToSlash(filepath.Join(healthPackageRelativeRoot, "verbose_shape.go")),
-		filepath.ToSlash(filepath.Join(healthPackageRelativeRoot, "health.go")),
+	if !checked {
+		t.Fatalf("%s: package %s not loaded — cannot verify %s.%s field type",
+			ruleHealthRedactedErrorMsgFunnel, healthPackageImportPath,
+			healthSlogShapeName, healthRedactedErrorMsgFieldName)
 	}
-	for _, want := range required {
-		_, ok := seen[want]
-		assert.True(t, ok,
-			"%s: archtest DirsScope must enumerate %s; missing files would let HEALTH-VERBOSE-* gates pass vacuously",
-			ruleHealthVerboseScanCoverage, want)
+}
+
+// assertErrorMsgFieldTyped verifies SlogDependencyEntry.errorMsg is typed
+// redactedErrorMsg. A plain-string degrade would let raw error text populate
+// the field without the redactedErrorMsg(...) conversion that
+// TestHealthRedactedErrorMsgConversionFunnel confines to newRedactedErrorMsg.
+func assertErrorMsgFieldTyped(t *testing.T, pkg *types.Package) {
+	t.Helper()
+	obj := pkg.Scope().Lookup(healthSlogShapeName)
+	if obj == nil {
+		t.Fatalf("%s: type %s not found in %s",
+			ruleHealthRedactedErrorMsgFunnel, healthSlogShapeName, healthPackageImportPath)
 	}
+	st, ok := obj.Type().Underlying().(*types.Struct)
+	if !ok {
+		t.Fatalf("%s: %s is not a struct", ruleHealthRedactedErrorMsgFunnel, healthSlogShapeName)
+	}
+	field := lookupStructField(st, healthRedactedErrorMsgFieldName)
+	if field == nil {
+		t.Fatalf("%s: %s has no field %q",
+			ruleHealthRedactedErrorMsgFunnel, healthSlogShapeName, healthRedactedErrorMsgFieldName)
+	}
+	if !isHealthRedactedErrorMsgType(field.Type()) {
+		t.Errorf("%s: %s.%s type = %s, want %s.%s — a plain-string degrade makes the redaction funnel vacuous",
+			ruleHealthRedactedErrorMsgFunnel, healthSlogShapeName, healthRedactedErrorMsgFieldName,
+			field.Type(), healthPackageImportPath, healthRedactedErrorMsgTypeName)
+	}
+}
+
+func lookupStructField(st *types.Struct, name string) *types.Var {
+	for i := 0; i < st.NumFields(); i++ {
+		if st.Field(i).Name() == name {
+			return st.Field(i)
+		}
+	}
+	return nil
+}
+
+// TestHealthRedactedErrorMsgFunnelFuncSig enforces guard 3 (anti-vacuous).
+func TestHealthRedactedErrorMsgFunnelFuncSig(t *testing.T) {
+	t.Parallel()
+
+	var checked bool
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{healthPackagePattern},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != healthPackageImportPath {
+				return nil
+			}
+			checked = true
+			assertFunnelFuncSignature(t, p.Pkg)
+			return nil
+		})
+
+	if !checked {
+		t.Fatalf("%s: package %s not loaded — cannot verify %s exists",
+			ruleHealthRedactedErrorMsgFunnel, healthPackageImportPath, healthRedactedErrorMsgFunnelFuncName)
+	}
+}
+
+// assertFunnelFuncSignature verifies newRedactedErrorMsg exists with signature
+// func(error) redactedErrorMsg. Deleting or renaming the funnel would make
+// TestHealthRedactedErrorMsgConversionFunnel pass vacuously (no conversion call
+// sites → no diagnostics); this guard fails instead.
+func assertFunnelFuncSignature(t *testing.T, pkg *types.Package) {
+	t.Helper()
+	obj := pkg.Scope().Lookup(healthRedactedErrorMsgFunnelFuncName)
+	if obj == nil {
+		t.Fatalf("%s: funnel func %s not found in %s — renaming/deleting it makes the conversion gate vacuous",
+			ruleHealthRedactedErrorMsgFunnel, healthRedactedErrorMsgFunnelFuncName, healthPackageImportPath)
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		t.Fatalf("%s: %s is not a function", ruleHealthRedactedErrorMsgFunnel, healthRedactedErrorMsgFunnelFuncName)
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		t.Fatalf("%s: %s has no signature", ruleHealthRedactedErrorMsgFunnel, healthRedactedErrorMsgFunnelFuncName)
+	}
+	if !funnelSignatureMatches(sig) {
+		t.Errorf("%s: %s signature = %s, want func(error) %s",
+			ruleHealthRedactedErrorMsgFunnel, healthRedactedErrorMsgFunnelFuncName, sig, healthRedactedErrorMsgTypeName)
+	}
+}
+
+func funnelSignatureMatches(sig *types.Signature) bool {
+	if sig.Params().Len() != 1 || sig.Results().Len() != 1 {
+		return false
+	}
+	if !types.Identical(sig.Params().At(0).Type(), types.Universe.Lookup("error").Type()) {
+		return false
+	}
+	return isHealthRedactedErrorMsgType(sig.Results().At(0).Type())
 }
