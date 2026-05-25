@@ -179,6 +179,7 @@ func buildCellEntity(c *metadata.CellMeta, inc IncludeOptions) Entity {
 		Schema:           CellSpecSchema{Primary: c.Schema.Primary},
 		VerifySmoke:      c.Verify.Smoke,
 		L0Dependencies:   l0Deps,
+		Requires:         c.Requires,
 	}
 
 	var rels []Relation

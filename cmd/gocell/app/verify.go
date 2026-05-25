@@ -90,9 +90,10 @@ var verifySubcommands = []subcommand[func(ctx context.Context, args []string) er
 	{
 		name: "codegen-assembly",
 		help: []string{
-			"Verify cmd/*/modules_gen.go are in sync with assembly.yaml /",
-			"cell.yaml goStructName. Default --local in-place verify (fast).",
-			"CI: pass --local=false for git worktree sandbox.",
+			"Verify cmd/*/modules_gen.go are in sync with assembly.yaml +",
+			"cell.yaml goStructName/requires (generatedCapabilities() derives",
+			"from the union of cells' requires). Default --local in-place verify",
+			"(fast). CI: pass --local=false for git worktree sandbox.",
 		},
 		run: runVerifyCodegenAssembly,
 	},

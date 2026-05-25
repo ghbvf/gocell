@@ -41,6 +41,12 @@ func pgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
 // the providers are present (or fail-fast) before any module.Provide runs —
 // mirroring fx.New()'s resolve-before-start ordering (ref: uber-go/fx app.go).
 func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
+	// INVARIANT: generatedCapabilities() exists because the corebundle assembly's
+	// cells declare a non-empty `requires` union (auditcore/configcore require
+	// postgres). The codegen template emits generatedCapabilities() iff that union
+	// is non-empty — so this unconditional call is only safe while corebundle keeps
+	// provisioning ≥1 capability. A hypothetical zero-capability corebundle would
+	// not need a provisioner at all; this function would then be removed alongside.
 	for _, c := range generatedCapabilities() {
 		switch c {
 		case capability.Postgres:
@@ -50,10 +56,13 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 		case capability.Redis:
 			provisionRedis(shared)
 		default:
-			// Unreachable: FMT-36 governance (cell.yaml requires ∈ CapabilityEnum) +
-			// the generator's capabilityConstNames guard reject unknown values, and
-			// generatedCapabilities() is codegen-derived from the validated set.
-			// Defense-in-depth only.
+			// Reached when a cell requires a capability that is a recognized enum
+			// member but has no provisioning path here — today only rabbitmq (it is
+			// in CapabilityEnum + capabilityConstNames, so it passes FMT-36 + codegen,
+			// but provisionCapabilities has no rabbitmq case). By-design fail-fast:
+			// a real provider must land its provisioning atomically. Truly unknown
+			// values are already rejected upstream by FMT-36 + the codegen guard.
+			// See runtime/capability.RabbitMQ.
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"corebundle: declared capability has no provisioning path",
 				errcode.WithInternal(fmt.Sprintf("capability=%q", string(c))))

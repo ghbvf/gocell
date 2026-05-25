@@ -66,10 +66,11 @@ func TestGenerateModulesGen_Corebundle(t *testing.T) {
 	assert.Contains(t, content, "AccessCoreModule{}")
 	assert.Contains(t, content, "AuditCoreModule{}")
 	assert.Contains(t, content, "ConfigCoreModule{}")
-	// Empty-capabilities path is byte-inert: no capability import, no
-	// generatedCapabilities(). Locks the {{- if .Capabilities}} else-branch so
-	// assemblies that declare no capabilities stay identical to the
-	// pre-capabilities form.
+	// Empty union (no cell declares requires) is byte-inert: no capability import,
+	// no generatedCapabilities(). The function is emitted iff the union is
+	// non-empty — an assembly whose cells require nothing has no provisioner to
+	// call it, so emitting a dead generatedCapabilities() (+ unused-looking import)
+	// would only pollute non-provisioning assemblies (e.g. examples). #855 F2.
 	assert.NotContains(t, content, "runtime/capability")
 	assert.NotContains(t, content, "generatedCapabilities")
 }
