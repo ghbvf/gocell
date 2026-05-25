@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -63,7 +64,7 @@ func TestNewBootstrapAuthFailObserver_DoubleWriteSlogAndAudit(t *testing.T) {
 	// Audit channel: a hash-chained entry was written to the ledger.
 	entries, err := store.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-		ledger.QueryListParams{Limit: 10})
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort})
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "observer must write exactly one ledger entry per invocation")
 	var payload struct {
@@ -135,7 +136,7 @@ func TestNewBootstrapAuthFailObserver_DetachedCtxSurvivesCallerCancel(t *testing
 
 	entries, err := store.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-		ledger.QueryListParams{Limit: 10})
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort})
 	require.NoError(t, err)
 	require.Len(t, entries, 1,
 		"detached ctx must let the ledger write complete even when the caller ctx is already canceled; "+

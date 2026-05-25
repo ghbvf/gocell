@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest" // test funnel; storetest is testing-helper package, errcodetest import is intentional (not a test-only import in a non-_test.go file)
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -149,6 +150,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_ByFilters", func(t *testing.T) { runQueryByFilters(t, factory) })
 	t.Run("Append_MultiKey_Payload_RoundTrip", func(t *testing.T) { runAppendMultiKeyPayloadRoundTrip(t, factory) })
 	t.Run("Query_Ordering_TimestampDesc_IDAsc", func(t *testing.T) { runQueryOrderingTimestampDescIDAsc(t, factory) })
+	t.Run("Query_Keyset_Pagination", func(t *testing.T) { runQueryKeysetPagination(t, factory) })
 	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
 }
 
@@ -447,7 +449,8 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: "type.X"}, ledger.QueryListParams{Limit: 50})
+	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: "type.X"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -543,7 +546,8 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), ledger.AuditFilters{}, ledger.QueryListParams{Limit: 10})
+	results, err := store.Query(context.Background(), ledger.AuditFilters{},
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -562,6 +566,101 @@ func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 				i, gotEventID, wantEventID)
 		}
 	}
+}
+
+// runQueryKeysetPagination verifies cross-backend keyset cursor pagination:
+// full traversal via the (timestamp DESC, id ASC) keyset yields every entry
+// exactly once, in timestamp-DESC order, with the final page detected by
+// len(rows) <= limit (no FetchLimit overflow row).
+//
+// Sub-second-distinct timestamps are deliberately used: the cursor value for
+// the timestamp column is an RFC3339Nano *string* (the wire form produced by
+// the service Extract closure after JSON round-trip). The PG store must convert
+// it back to time.Time before pushing it into the timestamptz keyset predicate;
+// millisecond-distinct timestamps prove that conversion preserves sub-second
+// ordering rather than truncating or lexically mis-comparing. MemStore exercises
+// the same string-typed cursor through query.CompareAny.
+//
+// The suite calls store.Query directly (raw CursorValues, not an opaque codec
+// token), so the next page's cursor is built by hand from the last visible
+// entry — mirroring the service Extract: []any{ts.Format(RFC3339Nano), id}.
+func runQueryKeysetPagination(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	seedKeysetEntries(t, store, fc.Now())
+	collected := collectKeysetPages(t, store, 2)
+
+	// timestamp DESC → ks-6, ks-5, ..., ks-0 (no ties: every entry seen once).
+	want := []string{"ks-6", "ks-5", "ks-4", "ks-3", "ks-2", "ks-1", "ks-0"}
+	if len(collected) != len(want) {
+		t.Fatalf("keyset traversal: got %d entries %v, want %d %v",
+			len(collected), collected, len(want), want)
+	}
+	for i := range want {
+		if collected[i] != want[i] {
+			t.Errorf("keyset order[%d]: got %q, want %q (full list got=%v)",
+				i, collected[i], want[i], collected)
+		}
+	}
+}
+
+// keysetSeedTotal is the number of entries seeded by seedKeysetEntries and the
+// upper bound on collectKeysetPages iterations.
+const keysetSeedTotal = 7
+
+// seedKeysetEntries appends keysetSeedTotal entries (ks-0..ks-6) in shuffled
+// insertion order with millisecond-distinct timestamps, so a backend that
+// ignores the keyset (returns insertion order) is caught.
+func seedKeysetEntries(t *testing.T, store ledger.Store, base time.Time) {
+	t.Helper()
+	insertion := []int{3, 0, 5, 1, 6, 2, 4}
+	for _, n := range insertion {
+		e := &ledger.Entry{
+			EventID:   fmt.Sprintf("ks-%d", n),
+			EventType: "keyset.test",
+			ActorID:   "actor",
+			Timestamp: base.Add(time.Duration(n) * time.Millisecond),
+			Payload:   []byte(`{}`),
+		}
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append ks-%d: %v", n, err)
+		}
+	}
+}
+
+// collectKeysetPages traverses every page via the (timestamp DESC, id ASC)
+// keyset and returns the EventIDs in visit order. Each next-page cursor is
+// built by hand from the last visible entry — mirroring the service Extract:
+// []any{ts.Format(RFC3339Nano), id} — to reproduce the string-typed cursor that
+// exercises the PG timestamptz bind path. The loop is bounded by keysetSeedTotal
+// to guard against a non-terminating cursor.
+func collectKeysetPages(t *testing.T, store ledger.Store, limit int) []string {
+	t.Helper()
+	var collected []string
+	var cursorVals []any
+	for iter := 0; iter <= keysetSeedTotal+1; iter++ {
+		rows, err := store.Query(context.Background(), ledger.AuditFilters{},
+			query.ListParams{Limit: limit, Sort: ledger.QuerySort, CursorValues: cursorVals})
+		if err != nil {
+			t.Fatalf("Query iter %d: %v", iter, err)
+		}
+		page := rows
+		hasMore := len(rows) > limit
+		if hasMore {
+			page = rows[:limit]
+		}
+		for _, e := range page {
+			collected = append(collected, e.EventID)
+		}
+		if !hasMore {
+			return collected
+		}
+		last := page[len(page)-1]
+		cursorVals = []any{last.Timestamp.Format(time.RFC3339Nano), last.ID}
+	}
+	t.Fatal("keyset traversal did not terminate within bound")
+	return nil
 }
 
 // runProtocolHashParity verifies that a Store's persisted entry.Hash matches

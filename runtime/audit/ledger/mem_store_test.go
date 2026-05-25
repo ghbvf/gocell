@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -567,7 +568,8 @@ func TestMemStore_Query_ByFilters(t *testing.T) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: "type.A"}, ledger.QueryListParams{Limit: 100})
+	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: "type.A"},
+		query.ListParams{Limit: 100, Sort: ledger.QuerySort})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

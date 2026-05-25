@@ -2,17 +2,18 @@ package ledger
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -161,16 +162,26 @@ func (m *MemStore) GetBySeq(_ context.Context, seq int64) (*Entry, error) {
 	return copyEntry(m.entries[seq-1]), nil
 }
 
-// Query returns entries matching the supplied filters sorted by timestamp DESC,
-// with ID ASC as the tie-breaker for entries sharing the same timestamp.
-// This matches the PG store ORDER BY clause (ORDER BY timestamp DESC, id ASC).
-// Zero-value filter fields are treated as "no filter". Applies Limit if > 0.
-func (m *MemStore) Query(_ context.Context, filters AuditFilters, params QueryListParams) ([]*Entry, error) {
+// Query returns entries matching the supplied filters using keyset cursor
+// pagination: candidates are filtered, sorted by params.Sort, then ApplyCursor
+// skips past params.CursorValues and returns up to params.FetchLimit() (Limit+1)
+// rows for N+1 hasMore detection. Zero-value filter fields are treated as "no
+// filter".
+//
+// params.Sort must be non-empty (callers pass QuerySort). An empty Sort is a
+// programmer error and yields ErrValidationFailed — the same rejection the PG
+// keyset builder produces, so both backends reject it identically.
+func (m *MemStore) Query(_ context.Context, filters AuditFilters, params query.ListParams) ([]*Entry, error) {
+	if len(params.Sort) == 0 {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger: query requires a non-empty sort")
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Collect all matching entries first (before applying Limit) so that the
-	// sort sees the full candidate set and Limit is applied after ordering.
+	// Collect all matching entries first so the sort/keyset see the full
+	// candidate set; ApplyCursor then trims to FetchLimit after ordering.
 	var candidates []*Entry
 	for _, e := range m.entries {
 		if matchesFilters(e, filters) {
@@ -178,23 +189,43 @@ func (m *MemStore) Query(_ context.Context, filters AuditFilters, params QueryLi
 		}
 	}
 
-	// Sort: primary timestamp DESC, secondary ID ASC (mirrors PG ORDER BY).
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].Timestamp.Equal(candidates[j].Timestamp) {
-			return candidates[i].ID < candidates[j].ID
-		}
-		return candidates[i].Timestamp.After(candidates[j].Timestamp)
-	})
-
-	// Apply Limit after sorting.
-	results := candidates
-	if params.Limit > 0 && len(results) > params.Limit {
-		results = results[:params.Limit]
+	query.Sort(candidates, params.Sort, compareEntryField)
+	results, err := query.ApplyCursor(candidates, params, entryFieldValue)
+	if err != nil {
+		return nil, err
 	}
 	if results == nil {
 		results = []*Entry{}
 	}
 	return results, nil
+}
+
+// compareEntryField compares a single named field of two ledger entries for
+// in-memory keyset sorting. Only QuerySort columns are recognized.
+func compareEntryField(a, b *Entry, field string) int {
+	switch field {
+	case "timestamp":
+		return a.Timestamp.Compare(b.Timestamp)
+	case "id":
+		return cmp.Compare(a.ID, b.ID)
+	default:
+		return 0
+	}
+}
+
+// entryFieldValue extracts a cursor-comparable value from a ledger entry. The
+// timestamp is returned as time.Time (not a formatted string) so that
+// query.CompareAny uses temporal comparison against the RFC3339Nano string
+// cursor value rather than lexical string comparison.
+func entryFieldValue(e *Entry, field string) any {
+	switch field {
+	case "timestamp":
+		return e.Timestamp
+	case "id":
+		return e.ID
+	default:
+		return ""
+	}
 }
 
 // Verify re-computes the HMAC-SHA256 hash for each entry in [fromSeq, toSeq]

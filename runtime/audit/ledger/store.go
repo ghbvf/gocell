@@ -3,6 +3,8 @@ package ledger
 import (
 	"context"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // TailSnapshot holds a point-in-time snapshot of the ledger chain tail.
@@ -37,18 +39,14 @@ type AuditFilters struct {
 	To time.Time
 }
 
-// QueryListParams holds pagination parameters for Store.Query.
-// Intentionally simple (no cursor) for the MemStore implementation; the PG
-// store will extend this with keyset cursor support in S8+.
-type QueryListParams struct {
-	// Limit is the maximum number of entries to return. Zero or negative
-	// values are treated as "no limit" for the MemStore; PG store applies
-	// query.MaxPageSize capping.
-	Limit int
-
-	// Offset is a simple row offset for MemStore. PG store will replace this
-	// with keyset cursor semantics.
-	Offset int
+// QuerySort is the canonical ordering for audit ledger listings: newest first
+// (timestamp DESC) with the store-assigned id as a stable ASC tie-breaker. It
+// is the single source of truth shared by every Store.Query caller and matches
+// the idx_audit_namespace_ts_id composite index, so PG keyset pagination is an
+// index scan. Store.Query requires a non-empty Sort — callers pass this.
+var QuerySort = []query.SortColumn{
+	{Name: "timestamp", Direction: query.SortDESC},
+	{Name: "id", Direction: query.SortASC},
 }
 
 // Store persists audit entries in a tamper-evident hash chain. Implementations
@@ -72,7 +70,7 @@ type QueryListParams struct {
 //   - Tail: returns the current chain tail snapshot. Returns zero TailSnapshot
 //     for an empty store (not an error).
 //   - GetBySeq: fetch entry by sequence number. Missing → ErrAuditLedgerNotFound.
-//   - Query: list entries matching AuditFilters with simple pagination.
+//   - Query: list entries matching AuditFilters with keyset cursor pagination.
 //     Returns empty slice (not error) when no entries match.
 //   - Verify: re-compute HMAC for each entry in [fromSeq, toSeq] and check
 //     chain linkage. Returns valid=true and firstInvalidSeq=-1 when all
@@ -95,9 +93,13 @@ type Store interface {
 	// ErrAuditLedgerNotFound when the sequence number does not exist.
 	GetBySeq(ctx context.Context, seq int64) (*Entry, error)
 
-	// Query lists entries matching AuditFilters with simple pagination.
+	// Query lists entries matching AuditFilters using keyset cursor pagination
+	// defined by params (Limit + decoded CursorValues + Sort). It returns up to
+	// params.FetchLimit() (Limit+1) rows for N+1 hasMore detection, ordered by
+	// params.Sort. params.Sort must be non-empty (callers pass QuerySort);
+	// an empty Sort is a programmer error and yields ErrValidationFailed.
 	// Returns an empty (non-nil) slice when no entries match.
-	Query(ctx context.Context, filters AuditFilters, params QueryListParams) ([]*Entry, error)
+	Query(ctx context.Context, filters AuditFilters, params query.ListParams) ([]*Entry, error)
 
 	// Verify re-computes the HMAC for each entry in [fromSeq, toSeq] and checks
 	// chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1 when
