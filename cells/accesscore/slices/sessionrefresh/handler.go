@@ -21,12 +21,14 @@ type RefreshAdapter struct{ S *Service }
 // reserved for infra outages that prevent evaluation of the request.
 //
 // Why every declared status here goes through (nil, err) framework fallback
-// rather than typed Refresh{401,503}ErrorResponse structs: the refresh endpoint
-// carries no per-status business body beyond the shared error envelope, and
-// httputil.WriteError owns the status-aware redaction (5xx strips details) that
-// a hand-built typed struct could silently bypass. The status set is still
-// statically guarded — ADAPTER-RETURNS-DECLARED-TYPES-01 rejects returning an
-// *un*declared typed status; it does not force declared statuses to be typed.
+// rather than typed Refresh{401,503}ErrorResponse structs: ADR D7 makes
+// ADAPTER-RETURNS-DECLARED-TYPES-01 a *ceiling* — returning zero typed error
+// structs is legal; the archtest only rejects returning an *un*declared typed
+// status, it never forces declared statuses to be typed. Both paths apply the
+// same status-aware redaction (httputil.WriteError derives status + strips 5xx
+// details from errcode.Kind exactly as the generated typed path does), so for
+// an endpoint whose errors carry no per-status business body beyond the shared
+// envelope the framework path is the simpler equivalent — not a redaction gap.
 // (Pre-existing convention; the 403 typed branch removed in #940 was the lone
 // exception and is now gone.)
 func (a RefreshAdapter) Refresh(ctx context.Context, req *refreshgen.Request) (refreshgen.RefreshResponseObject, error) {
