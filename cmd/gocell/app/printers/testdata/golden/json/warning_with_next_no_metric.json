@@ -6,9 +6,9 @@
       "issueType": "",
       "file": "contracts/event/dead/v1/contract.yaml",
       "scope": "",
-      "field": "endpoints.subscribers",
-      "message": "active event contract \"dead\" has no subscribers (dead event)",
-      "fix": "add subscribers to endpoints.subscribers or set lifecycle: deprecated",
+      "field": "lifecycle",
+      "message": "event contract \"dead\" is active but has no subscribers; add a subscribing slice (contractUsages[role=subscribe] in slice.yaml), add an external actorSubscribers entry, or set lifecycle: deprecated",
+      "fix": "declare contractUsages[role=subscribe] in a slice.yaml, add an actorSubscribers entry, or set lifecycle: deprecated",
       "line": 0,
       "column": 0,
       "next": "advisory"

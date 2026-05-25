@@ -3,8 +3,12 @@
 governance/ 实现 GoCell 元数据治理规则。每条规则是一个 detect 方法
 （`validate<RULEID>()` / `checkDEP*` / `checkCH*`，零参返回 `[]ValidationResult`），并在
 `rules_registry.go` 的 `allRules` 注册表以一个 `Rule{}` 条目登记（`Code` + `Phase` + `Next` +
-可选 `Metric` + 编译期检查的 `Detect` 方法表达式），由 `engine.go` 的 `Validator.run` 单循环执行
+编译期检查的 `Detect` 方法表达式），由 `engine.go` 的 `Validator.run` 单循环执行
 （ADR `202605041430` §M3-RULE-ENGINE）。
+
+`ValidationResult.Metric` 是 per-finding 距离：detect 函数在自己发出的特定 finding 上设置
+`f.Metric = &remaining`（仅当该 finding 有可排序距离时，如 FMT-23 的超期天数）。ADV-05
+的死事件数量是仓库聚合（可由 finding 数量推导），不是 per-finding 距离，不设 Metric。
 
 ## ValidationResult 构建
 
@@ -13,12 +17,12 @@ findings 一律经类型化构造函数（locator 方法 / `newErrorAt` 包级�
 ```go
 // error：fix 必填（最后一个位置参数）
 v.newError(
-    codeADV05,          // RuleCode const（rulecodes.go）
+    codeREF01,          // RuleCode const（rulecodes.go）
     IssueForbidden,     // required | invalid | referenceNotFound | mismatch | forbidden | duplicate
-    contractFile(c),    // 文件路径
-    "endpoints.subscribers", // 字段路径
-    fmt.Sprintf("active event contract %q has no subscribers", c.ID), // 问题陈述
-    "add subscribers to endpoints.subscribers or set lifecycle: deprecated", // 修复指导 → Fix 字段
+    sliceFile(s),       // 文件路径
+    "belongsToCell",    // 字段路径
+    fmt.Sprintf("slice %q references unknown cell %q", s.ID, s.BelongsToCell), // 问题陈述
+    "add the cell declaration or fix the belongsToCell value", // 修复指导 → Fix 字段
 )
 
 // warning：fix 同样必填（advisory，但"怎么改"也进 Fix，不留 Message）
@@ -53,7 +57,9 @@ newErrorAt(codeDOCNAME01, IssueForbidden,
 
 ## 完整规则示例（ADV-05）
 
-detect 方法只检测 + 经 `locator` 构造器产出 finding（severity 由 `newError`/`newWarning` 决定）：
+detect 方法只检测 + 经 `locator` 构造器产出 finding（severity 由 `newError`/`newWarning` 决定）。
+ADV-05 使用 `"lifecycle"` 字段锚点（`endpoints.subscribers` 是 derived field，`yaml:"-"`，
+用户不可编辑，指向它会误导用户）：
 
 ```go
 func (v *Validator) validateADV05() []ValidationResult {
@@ -65,9 +71,9 @@ func (v *Validator) validateADV05() []ValidationResult {
         if len(c.Endpoints.Subscribers) == 0 {
             results = append(results, v.newWarning( // ADV-05 是 advisory（dead event 不阻断 CI）
                 codeADV05, IssueForbidden,
-                contractFile(c), "endpoints.subscribers",
-                fmt.Sprintf("active event contract %q has no subscribers (dead event)", c.ID),
-                "add subscribers to endpoints.subscribers or set lifecycle: deprecated",
+                contractFile(c), "lifecycle",
+                fmt.Sprintf(advHintADV05EmptySubscribers, c.ID),
+                advHintADV05EmptySubscribersFix,
             ))
         }
     }
@@ -80,17 +86,14 @@ func (v *Validator) validateADV05() []ValidationResult {
 新规则：写 detect 方法 → 在 `rules_registry.go` 的 `allRules` 加一个 `Rule{}` 条目 →
 在 `rule_inventory_test.go` 的 `goldenRuleIDs()` 加它的 code（`TestAllRulesMatchGolden` 锁集合 + 唯一性）。
 `Next` **不用填**——engine 按每条 finding 的 severity 派生（error→block / warning→advisory），
-只有非默认 M5 处置（autofix/suggest/escalate）才显式覆盖。`Metric` 仅在规则有真实距离时声明，否则省略（nil）。
+只有非默认 M5 处置（autofix/suggest/escalate）才显式覆盖。`Metric` 不在 `Rule` 上声明——
+detect 函数在发出带可排序距离的 finding 时直接设置 `f.Metric = &val`（field assignment on
+constructed value is allowed — only raw `ValidationResult{}` composite literals are banned）。
 
 ```go
 var allRules = []Rule{
     // ... 已有规则 ...
-    {
-        Code:   codeADV05,
-        Phase:  PhaseBase,
-        Metric: (*Validator).adv05DeadEventCount, // 可选：有距离的规则才声明
-        Detect: (*Validator).validateADV05,        // 方法表达式，编译期检查存在
-    },
+    {Code: codeADV05, Phase: PhaseBase, Detect: (*Validator).validateADV05},
 }
 ```
 
@@ -111,7 +114,7 @@ func TestADV05_NoSubscribers(t *testing.T) {
         File: "contracts/event/dead/v1/contract.yaml",
     }
     results := NewValidator(project, "", clock.Real()).validateADV05()
-    requireWarning(t, results, "ADV-05", "endpoints.subscribers") // advisory, not error
+    requireWarning(t, results, "ADV-05", "lifecycle") // advisory, not error
 }
 ```
 

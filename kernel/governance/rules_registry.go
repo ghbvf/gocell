@@ -4,11 +4,12 @@ package governance
 // governance rule (ADR 202605041430 §M3-RULE-ENGINE). engine.go iterates it;
 // command entry points (ValidateStrict, the check command) select phases.
 //
-// Each entry is a Rule value: static classification (Code / Phase / Next /
-// optional Metric) plus a compiler-checked Detect function value. Detect
-// functions live alongside their former rule cluster (rules_ref.go,
-// rules_topo.go, ...) and return []ValidationResult; the engine stamps Next
-// and Metric onto each finding from the owning Rule.
+// Each entry is a Rule value: static classification (Code / Phase / Next)
+// plus a compiler-checked Detect function value. Detect functions live
+// alongside their former rule cluster (rules_ref.go, rules_topo.go, ...) and
+// return []ValidationResult; the engine stamps Next onto each finding.
+// Per-finding Metric is set by the Detect function itself when an orderable
+// distance exists (e.g. FMT-23 days-remaining on the stale-contract warning).
 //
 // Invariant: the set of Rule.Code values here equals goldenRuleIDs() and every
 // Code is unique. Uniqueness and completeness are archtest-locked
@@ -78,12 +79,7 @@ var allRules = []Rule{
 	{Code: codeFMT20, Phase: PhaseBase, Detect: (*Validator).validateFMTRequestStrict01},
 	{Code: codeFMT21, Phase: PhaseBase, Detect: (*Validator).validateFMTContractDirIDMatch01},
 	{Code: codeFMT22, Phase: PhaseBase, Detect: (*Validator).validateStatusBoardStateEnum01},
-	{
-		Code:   codeFMT23,
-		Phase:  PhaseBase,
-		Metric: (*Validator).fmt23DeprecationDaysRemaining,
-		Detect: (*Validator).validateContractDeprecatedCleanup01,
-	},
+	{Code: codeFMT23, Phase: PhaseBase, Detect: (*Validator).validateContractDeprecatedCleanup01},
 	{Code: codeFMT24, Phase: PhaseBase, Detect: (*Validator).validateFMT24},
 	{Code: codeFMT25, Phase: PhaseBase, Detect: (*Validator).validateFMTInputConstraint01},
 	{Code: codeFMT26, Phase: PhaseBase, Detect: (*Validator).validateFMT26},
@@ -105,13 +101,9 @@ var allRules = []Rule{
 	{Code: codeADV03, Phase: PhaseBase, Detect: (*Validator).validateADV03},
 	{Code: codeADV04, Phase: PhaseBase, Detect: (*Validator).validateADV04},
 	// ADV-05 is SeverityWarning (M3 reclassification) → Next derives to advisory.
-	// Metric: dead-event count (ADR §M3 P-C3 exemplar).
-	{
-		Code:   codeADV05,
-		Phase:  PhaseBase,
-		Metric: (*Validator).adv05DeadEventCount,
-		Detect: (*Validator).validateADV05,
-	},
+	// Dead-event count is a repository aggregate (number of ADV-05 findings),
+	// not a per-finding distance; ADV-05 findings carry no Metric.
+	{Code: codeADV05, Phase: PhaseBase, Detect: (*Validator).validateADV05},
 
 	// OUTGUARD — outbox durability
 	{Code: codeOUTGUARD01, Phase: PhaseBase, Detect: (*Validator).validateOUTGUARD01},

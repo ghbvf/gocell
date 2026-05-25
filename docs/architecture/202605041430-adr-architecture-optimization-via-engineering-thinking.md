@@ -341,14 +341,39 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
    codegen 单源），而非手编 YAML。
 3. Go-struct registry：单源、编译器绑定、零新缝。detect/evidence/level 保留为现有 rule 方法 +
    `ValidationResult` 字段（经 `locator` 构造器，`GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 不变）；
-   next/metric 为 `Rule` 上的新 typed 字段，由 engine stamp。harvest 槽位是 M5 的消费动作，本里程碑只产出 finding。
+   `next` 为 `Rule` 上的 typed 字段，由 engine stamp。`Metric` 是 **per-finding**（见下方
+   Amendment 2026-05-26 #687 round-3）。harvest 槽位是 M5 的消费动作，本里程碑只产出 finding。
 
 **P-B2 / P-C2 / P-C3 重评（per ai-robust ADR amendment 落地必查）**：载体从 YAML 改为 Go-struct
 **不降反升** AI-robust 档 —— 注册由 `rules()`/`strictRules()`/`checks()`/`CheckContractHealth` 四套
 dispatch（散落、可漏注册）收敛为单 `allRules`（`TestAllRulesMatchGolden` golden + 唯一性锁，
-`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁 orphan detect 方法），漂移缝减少。`Metric` 为可选字段，
-仅有真实距离的规则声明（exemplar：ADV-05 dead-event 计数、FMT-23 deprecation 剩余天数），其余 nil —
-不为缺席消费者建死 bool 脚手架。无格子从 ✅ 退化。
+`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁 orphan detect 方法），漂移缝减少。`Metric` 是
+per-finding 距离（Amendment 2026-05-26 #687 round-3）：detect 函数在发出有可排序距离的特定
+finding 上设置 `ValidationResult.Metric`（如 FMT-23 stale warning 的 days-remaining）。
+ADV-05 dead-event count 是仓库聚合（可由 finding 数推导），不是 per-finding 距离，无 Metric。
+其余 finding 无连续距离，Metric 保持 nil。无格子从 ✅ 退化。
+
+**Amendment（2026-05-26，#687 round-3）— Metric per-finding 修正**
+
+原 "怎么做" 描述 `Metric` 为规则级距离函数 `type Metric func(v *Validator) (float64, bool)`，
+stamp() 把同一值复制到规则发出的所有 finding — 这会"污染"：FMT-23 同时发出超期警告和
+missing/malformed-date 错误，规则级 Metric 会把超期天数错误地贴到错误 finding 上。
+
+修正：
+
+- 删除 `type Metric` 类型及 `Rule.Metric` 字段；`Rule` 只保留 `Code / Phase / Next / Detect`。
+- `stamp()` 只设置 `Next`，不触碰 `Metric`（pass-through：detect 已设置的 Metric 原样保留）。
+- detect 函数在发出有可排序距离的 **特定 finding** 上设置 `f.Metric = &val`（字段赋值合法；
+  禁止裸 `ValidationResult{}` 字面量的 archtest 不拦截构造后字段赋值）。
+- ADV-05 的 `adv05DeadEventCount` 方法已删除（dead-event count 是仓库聚合，不是 per-finding
+  距离；count 可由 ADV-05 finding 数量推导，无需独立 Metric）。
+- FMT-23 的 `fmt23DeprecationDaysRemaining` 方法已删除；其逻辑内联进
+  `validateContractDeprecatedCleanup01` 的 stale branch：`remaining := graceDays -
+  now.UTC().Sub(ts).Hours()/hoursPerDay; f.Metric = &remaining`（仅 stale warning，
+  missing/malformed-date 错误 Metric 为 nil）。
+
+P-C3 仍然满足："finding 带 metric"语义不变，只是从规则级聚合变为 per-finding 精确携带，
+M5-HARVEST 消费的 finding 更准确（stale warning 有距离，错误 finding 无距离）。
 
 ### M4-COVERAGE：双向追溯（满足 P-B1）
 

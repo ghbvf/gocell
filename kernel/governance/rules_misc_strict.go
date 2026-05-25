@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -550,10 +549,17 @@ func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
 // valid deprecatedAt date and are not stale (>90 days since deprecation).
 //
 // Three cases:
-//   - deprecated + empty deprecatedAt → Error, IssueRequired
-//   - deprecated + malformed date → Error, IssueInvalid
-//   - deprecated + date >90d ago → Warning, IssueForbidden
+//   - deprecated + empty deprecatedAt → Error, IssueRequired (Metric nil)
+//   - deprecated + malformed date → Error, IssueInvalid (Metric nil)
+//   - deprecated + date >90d ago → Warning, IssueForbidden (Metric = days remaining, negative)
+//
+// Per ADR §M3 P-C3, the stale-warning finding carries a per-finding Metric set
+// to the days remaining in the grace period (negative = overdue). Only the stale
+// branch sets Metric; the missing/malformed-date error branches carry nil because
+// there is no orderable distance when the date itself is absent or invalid.
 func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
+	const hoursPerDay = 24
+	graceDays := defaultDeprecationGracePeriod.Hours() / hoursPerDay
 	var results []ValidationResult
 	now := v.clk.Now()
 	for _, c := range v.project.Contracts {
@@ -580,7 +586,7 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 			continue
 		}
 		if now.UTC().Sub(ts) > defaultDeprecationGracePeriod {
-			results = append(results, v.newWarning(
+			f := v.newWarning(
 				codeFMT23, IssueForbidden,
 				contractFile(c), "lifecycle",
 				fmt.Sprintf(
@@ -588,51 +594,13 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 					c.ID, c.DeprecatedAt,
 				),
 				"delete the contract and migrate all consumers, or refresh deprecatedAt to today after re-evaluating the deprecation timeline",
-			))
+			)
+			remaining := graceDays - now.UTC().Sub(ts).Hours()/hoursPerDay
+			f.Metric = &remaining
+			results = append(results, f)
 		}
 	}
 	return results
-}
-
-// fmt23DeprecationDaysRemaining is the FMT-23 distance metric (ADR §M3 P-C3):
-// the (negative) grace days remaining for the most-overdue deprecated contract —
-// i.e. how many days past the cleanup deadline the worst offender is. It is a
-// repository-level time-distance (the time-based counterpart to ADV-05's
-// count-distance), counted ONLY over contracts that are actually past the grace
-// period (remaining < 0) — exactly the set FMT-23 emits a stale warning for.
-//
-// Scoping to overdue contracts keeps the value meaningful: a deprecated contract
-// still inside its grace window, or one whose only fault is a missing/malformed
-// deprecatedAt (which FMT-23 reports as a required/format error, not a stale
-// warning), carries no days-overdue distance. ok is false when no contract is
-// overdue, so the metric is not stamped onto those non-stale findings.
-func (v *Validator) fmt23DeprecationDaysRemaining() (float64, bool) {
-	const hoursPerDay = 24
-	graceDays := defaultDeprecationGracePeriod.Hours() / hoursPerDay
-	now := v.clk.Now().UTC()
-	worst := math.Inf(1)
-	overdue := false
-	for _, c := range v.project.Contracts {
-		if c.Lifecycle != "deprecated" || c.DeprecatedAt == "" {
-			continue
-		}
-		ts, err := time.ParseInLocation("2006-01-02", c.DeprecatedAt, time.UTC)
-		if err != nil {
-			continue
-		}
-		remaining := graceDays - now.Sub(ts).Hours()/hoursPerDay
-		if remaining >= 0 {
-			continue // still within the grace window — FMT-23 does not fire
-		}
-		if remaining < worst {
-			worst = remaining
-		}
-		overdue = true
-	}
-	if !overdue {
-		return 0, false
-	}
-	return worst, true
 }
 
 // --- FMT-25 (input constraint enforcement) ---

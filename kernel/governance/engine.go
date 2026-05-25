@@ -7,16 +7,26 @@ import "context"
 // allRules in rules_registry.go — iterated by a single loop (replacing the
 // former four separate dispatch lists, which were removed in §M3). Each rule
 // is a Rule value carrying its classification metadata
-// (Phase / Next / optional Metric) plus a compiler-checked Detect function value.
+// (Phase / Next) plus a compiler-checked Detect function value.
 //
 // Detect returns the finished []ValidationResult (built through the existing
 // locator constructors newError/newWarning/newScopedError/newErrorAt, which stay
 // the construction funnel — GOVERNANCE-RULE-ERROR-FIX-FIELD-01 unchanged). The
-// engine's only post-processing is to stamp the M3 metadata fields Next and
-// Metric onto each finding from the owning Rule. Rule.Code duplicates the code
-// each Detect emits; that pairing is drift-locked by the retargeted reachability
-// archtest exactly as today, so the duplication is archtest-Medium (same tier as
-// the pre-M3 reachability test), not a new gap.
+// engine's only post-processing is to stamp the M3 metadata field Next onto each
+// finding from the owning Rule. Rule.Code duplicates the code each Detect emits;
+// that pairing is drift-locked by the retargeted reachability archtest exactly as
+// today, so the duplication is archtest-Medium (same tier as the pre-M3
+// reachability test), not a new gap.
+//
+// Per-finding Metric (ADR §M3 P-C3): ValidationResult.Metric is a *float64 that
+// the detect function itself sets on specific findings when an orderable distance
+// is meaningful for that particular finding (e.g. FMT-23 sets days-remaining on
+// the stale-contract warning it emits). Most findings carry nil — a boolean
+// detect satisfies P-C3 with nil because the finding itself is the distance.
+// ADV-05's dead-event count is a repository-aggregate (derivable as the number
+// of ADV-05 findings), not a per-finding distance, so ADV-05 findings carry no
+// Metric. stamp() passes through any Metric the detect already set; it does not
+// touch or overwrite it.
 //
 // Carrier decision: rules are Go typed-struct values, not YAML. A YAML carrier
 // would demote the detect binding from compiler-checked (Hard) to a string→
@@ -29,9 +39,10 @@ import "context"
 // (linter.Config registry iterated by Manager). Deliberately omitted: Requires/
 // ResultType/FactTypes (rules share one *ProjectMeta, no inter-rule results),
 // flag.FlagSet (rule params come from cell/slice.yaml), push-Report (pure-memory
-// pull is simpler). Metric (distance function) has no go/analysis / golangci /
-// staticcheck analog — those are bool pass/fail + severity only; it is a GoCell
-// extension (conceptually SonarQube remediation-effort).
+// pull is simpler). Per-finding Metric has no go/analysis / golangci / staticcheck
+// analog — those are bool pass/fail + severity only; it is a GoCell extension
+// (conceptually SonarQube per-issue remediation effort, set by the detect that
+// has the orderable distance, not by a rule-level function).
 
 // Phase selects which command surface a rule participates in. It replaces the
 // former four separate dispatch lists with one declarative attribute, so the
@@ -73,31 +84,12 @@ const (
 	NextEscalate NextAction = "escalate"
 )
 
-// Metric is an optional distance function for a rule (ADR §M3 P-C3). Most rules
-// have no meaningful distance — a reference either resolves or it does not — and
-// leave it nil. Only rules with a genuine continuous distance (deprecation days
-// remaining, coverage gap, dead-event count) declare one. It returns (value, ok);
-// ok=false when the metric is not applicable to the current project state, in
-// which case the finding carries no metric value.
-//
-// A rule with purely boolean detect satisfies P-C3 with nil — the boolean
-// finding itself is the distance; a continuous metric is only meaningful for an
-// orderable gap (days/counts). A Metric returning (0, true) is valid: ok=true
-// means the metric is applicable even at zero distance (e.g. deadline is today).
-//
-// The metric is a REPOSITORY-LEVEL distance (ADR P-C3 "仓库 metric"): it is
-// evaluated once per run and stamp() attaches the same value to every finding the
-// rule emits — it is not a per-finding measure. For a rule whose findings are
-// heterogeneous (e.g. FMT-23 emits overdue warnings AND missing/malformed-date
-// errors), the Metric must scope itself to the subset it meaningfully describes
-// and return ok=false otherwise, so the value is not attached to unrelated
-// findings (see fmt23DeprecationDaysRemaining, which counts only overdue contracts).
-type Metric func(v *Validator) (float64, bool)
-
 // Rule is one governance rule expressed as data: classification metadata plus a
 // compiler-checked detect function value. The allRules slice (rules_registry.go)
 // is the sole source of truth; run() iterates it. Detect returns the finished
-// findings (built via the locator constructors); the engine stamps Next/Metric.
+// findings (built via the locator constructors); the engine stamps Next onto each
+// finding. Per-finding Metric is set by the Detect function itself when an
+// orderable distance is meaningful — stamp() passes it through unchanged.
 // See package doc for the open-source analogs this mirrors.
 type Rule struct {
 	Code  RuleCode
@@ -112,7 +104,6 @@ type Rule struct {
 	// carry the harvest intent (replacing the former separate Harvest field idea).
 	// No separate Harvest field is introduced until M5 defines an actuator.
 	Next   NextAction
-	Metric Metric // optional; nil when the rule has no continuous distance
 	Detect func(v *Validator) []ValidationResult
 }
 
@@ -139,22 +130,16 @@ func (v *Validator) run(ctx context.Context, rules []Rule, failFast bool) ([]Val
 	return out, nil
 }
 
-// stamp applies the rule's M3 metadata (Next, Metric) to each finding the rule
-// produced. Next is resolved per finding from its Severity (see resolveNext) so
-// a rule that emits both error and warning findings (e.g. JOURNEY-STATUS-
-// LIFECYCLE-01, FMT-23) labels each correctly; Rule.Next overrides only for
-// non-default dispositions. Metric is evaluated once per run (project state is
-// constant across a single run) and attached only when applicable.
-func (r Rule) stamp(v *Validator, found []ValidationResult) []ValidationResult {
-	var metric *float64
-	if r.Metric != nil {
-		if val, ok := r.Metric(v); ok {
-			metric = &val
-		}
-	}
+// stamp applies the rule's M3 Next metadata to each finding the rule produced.
+// Next is resolved per finding from its Severity (see resolveNext) so a rule
+// that emits both error and warning findings (e.g. JOURNEY-STATUS-LIFECYCLE-01,
+// FMT-23) labels each correctly; Rule.Next overrides only for non-default
+// dispositions. Per-finding Metric (ADR §M3 P-C3) is set by the Detect function
+// itself on the specific findings it describes; stamp() passes it through
+// unchanged and never overwrites it.
+func (r Rule) stamp(_ *Validator, found []ValidationResult) []ValidationResult {
 	for i := range found {
 		found[i].Next = resolveNext(r.Next, found[i].Severity)
-		found[i].Metric = metric
 	}
 	return found
 }

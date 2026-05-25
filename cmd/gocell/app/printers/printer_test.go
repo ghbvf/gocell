@@ -365,19 +365,25 @@ var goldenCases = []struct {
 	},
 	{
 		// Exercises Next=NextAdvisory + nil Metric: a warning finding with
-		// Next set but no continuous distance (boolean detect satisfies P-C3
-		// with nil per ADR §M3). Locks that nil Metric is omitted from output.
+		// Next set but no continuous distance (ADV-05 dead-event count is a
+		// repo aggregate, not per-finding; ADV-05 findings carry nil Metric
+		// per ADR §M3 P-C3). Locks that nil Metric is omitted from output.
+		// Field anchors at "lifecycle" — endpoints.subscribers is a derived
+		// field (yaml:"-", hand-write forbidden); lifecycle is the locatable
+		// anchor for the deprecate remediation path.
 		name: "warning_with_next_no_metric",
 		results: []governance.ValidationResult{
 			{
 				Code:     "ADV-05",
 				Severity: governance.SeverityWarning,
 				File:     "contracts/event/dead/v1/contract.yaml",
-				Field:    "endpoints.subscribers",
-				Message:  "active event contract \"dead\" has no subscribers (dead event)",
-				Fix:      "add subscribers to endpoints.subscribers or set lifecycle: deprecated",
-				Next:     governance.NextAdvisory,
-				Metric:   nil,
+				Field:    "lifecycle",
+				Message: "event contract \"dead\" is active but has no subscribers;" + //nolint:lll // advisory hint fixture mirrors production advHintADV05EmptySubscribers
+					" add a subscribing slice (contractUsages[role=subscribe] in slice.yaml)," +
+					" add an external actorSubscribers entry, or set lifecycle: deprecated",
+				Fix:    "declare contractUsages[role=subscribe] in a slice.yaml, add an actorSubscribers entry, or set lifecycle: deprecated",
+				Next:   governance.NextAdvisory,
+				Metric: nil,
 			},
 		},
 	},

@@ -12,7 +12,7 @@
             {
               "id": "ADV-05",
               "shortDescription": {
-                "text": "active event contract \"dead\" has no subscribers (dead event)"
+                "text": "event contract \"dead\" is active but has no subscribers; add a subscribing slice (contractUsages[role=subscribe] in slice.yaml), add an external actorSubscribers entry, or set lifecycle: deprecated"
               },
               "defaultConfiguration": {
                 "level": "warning"
@@ -26,7 +26,7 @@
           "ruleId": "ADV-05",
           "level": "warning",
           "message": {
-            "text": "active event contract \"dead\" has no subscribers (dead event) (field: endpoints.subscribers)"
+            "text": "event contract \"dead\" is active but has no subscribers; add a subscribing slice (contractUsages[role=subscribe] in slice.yaml), add an external actorSubscribers entry, or set lifecycle: deprecated (field: lifecycle)"
           },
           "locations": [
             {
@@ -39,7 +39,7 @@
             }
           ],
           "properties": {
-            "fix": "add subscribers to endpoints.subscribers or set lifecycle: deprecated",
+            "fix": "declare contractUsages[role=subscribe] in a slice.yaml, add an actorSubscribers entry, or set lifecycle: deprecated",
             "next": "advisory"
           }
         }

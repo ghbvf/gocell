@@ -17,16 +17,10 @@ func newTestValidator(t *testing.T) *Validator {
 	return NewValidator(nil, "", clock.Real())
 }
 
-func floatPtr(f float64) *float64 { return &f }
-
-// scopedFindings builds n scoped findings via the locator constructor so the
-// engine tests exercise real ValidationResult values without raw literals.
-func (v *Validator) scopedFindings(code RuleCode, n int) []ValidationResult {
-	out := make([]ValidationResult, 0, n)
-	for i := 0; i < n; i++ {
-		out = append(out, v.newScopedError(code, IssueForbidden, "project", "f", "m", "fix"))
-	}
-	return out
+// scopedFindings builds a single scoped finding via the locator constructor so
+// the engine tests exercise real ValidationResult values without raw literals.
+func (v *Validator) scopedFindings(code RuleCode) []ValidationResult {
+	return []ValidationResult{v.newScopedError(code, IssueForbidden, "project", "f", "m", "fix")}
 }
 
 // TestResolveNext covers the per-finding disposition derivation: severity
@@ -40,8 +34,8 @@ func TestResolveNext(t *testing.T) {
 }
 
 // TestRuleStamp covers the engine's only post-processing: deriving each
-// finding's Next from its severity (Rule.Next overriding) and attaching the
-// evaluated Metric (nil when absent or inapplicable).
+// finding's Next from its severity (Rule.Next overriding) and passing through
+// any per-finding Metric set by the Detect function.
 func TestRuleStamp(t *testing.T) {
 	t.Parallel()
 	v := newTestValidator(t)
@@ -59,36 +53,26 @@ func TestRuleStamp(t *testing.T) {
 	})
 	t.Run("explicit Next overrides the severity default", func(t *testing.T) {
 		r := Rule{Code: codeADV05, Next: NextSuggest}
-		got := r.stamp(v, v.scopedFindings(codeADV05, 1)) // error finding
+		got := r.stamp(v, v.scopedFindings(codeADV05)) // error finding
 		require.Len(t, got, 1)
 		assert.Equal(t, NextSuggest, got[0].Next) // override beats the block default
 	})
-	t.Run("applicable metric → value on every finding", func(t *testing.T) {
-		r := base
-		r.Metric = func(*Validator) (float64, bool) { return 12, true }
-		got := r.stamp(v, v.scopedFindings(codeADV05, 2))
-		require.Len(t, got, 2)
-		for _, res := range got {
-			assert.Equal(t, floatPtr(12), res.Metric)
+	t.Run("stamp preserves detect-set per-finding Metric unchanged", func(t *testing.T) {
+		// Detect sets Metric on specific findings; stamp() must pass it through.
+		val := 42.0
+		findings := []ValidationResult{
+			v.newScopedError(codeADV05, IssueForbidden, "project", "f", "m", "fix"),
 		}
-	})
-	t.Run("inapplicable metric → nil", func(t *testing.T) {
-		r := base
-		r.Metric = func(*Validator) (float64, bool) { return 0, false }
-		got := r.stamp(v, v.scopedFindings(codeADV05, 1))
+		findings[0].Metric = &val
+		got := base.stamp(v, findings)
 		require.Len(t, got, 1)
-		assert.Nil(t, got[0].Metric)
+		require.NotNil(t, got[0].Metric, "stamp must preserve detect-set Metric")
+		assert.Equal(t, 42.0, *got[0].Metric, "Metric value must be unchanged after stamp")
 	})
-	t.Run("metric zero ok=true → non-nil pointer to 0.0", func(t *testing.T) {
-		// A Metric returning (0, true) is valid per ADR §M3 P-C3: ok=true means
-		// the metric is applicable even at zero distance (e.g. deadline is today).
-		// The finding must carry a non-nil *float64 pointing to 0.0, not nil.
-		r := base
-		r.Metric = func(*Validator) (float64, bool) { return 0, true }
-		got := r.stamp(v, v.scopedFindings(codeADV05, 1))
+	t.Run("stamp does not set Metric when detect left it nil", func(t *testing.T) {
+		got := base.stamp(v, v.scopedFindings(codeADV05))
 		require.Len(t, got, 1)
-		require.NotNil(t, got[0].Metric, "ok=true with value 0 must produce non-nil *float64")
-		assert.Equal(t, 0.0, *got[0].Metric, "metric value must be exactly 0.0")
+		assert.Nil(t, got[0].Metric, "stamp must not inject a Metric when detect left it nil")
 	})
 	t.Run("empty findings → empty", func(t *testing.T) {
 		assert.Empty(t, base.stamp(v, nil))
@@ -103,7 +87,7 @@ func TestRunCollectsFindings(t *testing.T) {
 	rules := []Rule{
 		{
 			Code:   codeREF01,
-			Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01, 1) },
+			Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01) },
 		},
 		{
 			Code: codeADV01,
@@ -134,7 +118,7 @@ func TestRunFailFast(t *testing.T) {
 	}
 	errRule := Rule{
 		Code:   codeREF01,
-		Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01, 1) },
+		Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01) },
 	}
 	never := Rule{
 		Code: codeREF02,
@@ -184,7 +168,7 @@ func TestRunContextCancel_PartialFindings(t *testing.T) {
 				// Cancel ctx inside the first rule's Detect; the loop check
 				// fires before the second rule runs.
 				cancel()
-				return vv.scopedFindings(codeREF01, 1)
+				return vv.scopedFindings(codeREF01)
 			},
 		},
 		{

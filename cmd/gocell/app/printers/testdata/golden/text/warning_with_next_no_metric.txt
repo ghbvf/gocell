@@ -1,6 +1,6 @@
 WARNINGS (1):
-  [ADV-05] active event contract "dead" has no subscribers (dead event) (field: endpoints.subscribers)
-         fix: add subscribers to endpoints.subscribers or set lifecycle: deprecated
+  [ADV-05] event contract "dead" is active but has no subscribers; add a subscribing slice (contractUsages[role=subscribe] in slice.yaml), add an external actorSubscribers entry, or set lifecycle: deprecated (field: lifecycle)
+         fix: declare contractUsages[role=subscribe] in a slice.yaml, add an actorSubscribers entry, or set lifecycle: deprecated
         next: advisory
          at contracts/event/dead/v1/contract.yaml
 
