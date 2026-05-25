@@ -36,17 +36,22 @@ func newAggWithDeadline(clk clock.Clock, d time.Duration) khealthz.Aggregator {
 }
 
 // captureHandler records every slog event passed to it so tests can assert
-// on the verbose breakdown that K#08 5xx redaction keeps off the wire.
+// on the verbose breakdown that K#08 5xx redaction keeps off the wire. The
+// per-record ctx is captured in lockstep so tests can assert that the readyz
+// handler threads the request context (carrying request_id/trace_id/
+// correlation_id) into slog rather than context.Background() (R2 / #942).
 type captureHandler struct {
 	mu      sync.Mutex
 	records []slog.Record
+	ctxs    []context.Context
 }
 
 func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
-func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+func (h *captureHandler) Handle(ctx context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.records = append(h.records, r.Clone())
+	h.ctxs = append(h.ctxs, ctx)
 	return nil
 }
 func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
@@ -59,6 +64,19 @@ func (h *captureHandler) snapshot() []slog.Record {
 	out := make([]slog.Record, len(h.records))
 	copy(out, h.records)
 	return out
+}
+
+// recordCtx returns the ctx captured for the first slog record whose Message
+// equals msg. The bool reports whether such a record was seen.
+func (h *captureHandler) recordCtx(msg string) (context.Context, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i, r := range h.records {
+		if r.Message == msg {
+			return h.ctxs[i], true
+		}
+	}
+	return nil, false
 }
 
 // withSlogCapture redirects slog.Default for the duration of the test and

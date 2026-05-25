@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/clock"
 	khealthz "github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
 // TestNewRedactedErrorMsg_NilReturnsEmpty verifies the nil-input sentinel path.
@@ -141,6 +142,11 @@ func TestSlogDependencyEntry_LogValue(t *testing.T) {
 // resolve. Pre-round-5 this would have emitted "dependencies":{"db":{}}
 // because slog.Any(map) bypassed LogValue and json.Marshal can't see
 // unexported fields.
+//
+// R5 (#942): assertions round-trip the handler output through json.Unmarshal
+// and navigate the nested object — not substring Contains — so the test proves
+// the *handler-serialized* shape (dependencies.db.{status,duration_ms,error_msg}),
+// not merely that the right attrs were injected.
 func TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -157,27 +163,223 @@ func TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler(t *testing.T) {
 	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error {
 		return errors.New("connection refused")
 	})))
+	require.NoError(t, agg.Register(khealthz.NewProbe("cache", func(_ context.Context) error {
+		return nil // healthy — proves error_msg is "" not omitted
+	})))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
 	req.Header.Set(VerboseAuthHeader, testVerboseToken)
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
+	rec503 := findJSONRecord(t, buf.String(), "readyz unhealthy")
+
+	deps, ok := rec503["dependencies"].(map[string]any)
+	require.True(t, ok, "dependencies must round-trip to a JSON object (slog.Group), got %T", rec503["dependencies"])
+
+	db, ok := deps["db"].(map[string]any)
+	require.True(t, ok, "db dep must be a nested object (LogValue GroupValue), got %T", deps["db"])
+	assert.Equal(t, "unhealthy", db["status"])
+	_, hasDur := db["duration_ms"]
+	assert.True(t, hasDur, "db dep must carry duration_ms")
+	assert.Equal(t, "connection refused", db["error_msg"])
+
+	cache, ok := deps["cache"].(map[string]any)
+	require.True(t, ok, "cache dep must be a nested object")
+	assert.Equal(t, "healthy", cache["status"])
+	assert.Equal(t, "", cache["error_msg"], "healthy probe error_msg must be empty string, not omitted")
+
+	// Negative: round-4 bug shape (empty object) and the unexported-field
+	// fallback shape (CamelCase keys) must never appear.
 	out := buf.String()
-	// Locate the readyz unhealthy record (last one — preceded by other slog
-	// records from probe setup).
-	require.Contains(t, out, `"msg":"readyz unhealthy"`)
-	require.Contains(t, out, `"dependencies":{`, "dependencies must be a JSON object (slog.Group)")
-	require.Contains(t, out, `"db":{`, "db dep must be a sub-object (LogValue GroupValue)")
-	assert.Contains(t, out, `"status":"unhealthy"`)
-	assert.Contains(t, out, `"duration_ms":`)
-	assert.Contains(t, out, `"error_msg":"connection refused"`)
-	// Negative: must NOT emit empty objects (round-4 bug shape) or CamelCase
-	// fields (the unexported-field fallback shape).
 	assert.NotContains(t, out, `"db":{}`)
 	assert.NotContains(t, out, `"Status"`)
 	assert.NotContains(t, out, `"DurationMs"`)
 	assert.NotContains(t, out, `"ErrorMsg"`)
+}
+
+// TestLogDiagnostics_PropagatesRequestCtx is the R2 (#942) regression guard:
+// logDiagnostics must thread the request context — carrying request_id /
+// trace_id / correlation_id — into slog, not context.Background(). The
+// framework's contextHandler injects those correlation fields from ctx; with
+// context.Background() they are silently dropped and operators lose the link
+// between a 503/degraded diagnostic record and the request that triggered it.
+//
+// The capture handler records the ctx handed to Handle; we assert the injected
+// correlation values survive the writeTo → logDiagnostics → slog.Log hop.
+// Against the pre-fix code (slog.Log(context.Background(), ...)) the captured
+// ctx is Background and the *From lookups miss → RED.
+func TestLogDiagnostics_PropagatesRequestCtx(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-ctx", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
+	h.SetVerboseToken(testVerboseToken)
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error {
+		return errors.New("connection refused")
+	})))
+
+	capture := withSlogCapture(t)
+
+	const (
+		wantReqID   = "req-abc-123"
+		wantTraceID = "trace-xyz-789"
+		wantCorrID  = "corr-456"
+	)
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, wantReqID)
+	ctx = ctxkeys.WithTraceID(ctx, wantTraceID)
+	ctx = ctxkeys.WithCorrelationID(ctx, wantCorrID)
+
+	rec := httptest.NewRecorder()
+	req := newVerboseRequest("/readyz?verbose=true").WithContext(ctx)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	gotCtx, ok := capture.recordCtx("readyz unhealthy")
+	require.True(t, ok, "must capture a 'readyz unhealthy' slog record")
+
+	reqID, _ := ctxkeys.RequestIDFrom(gotCtx)
+	assert.Equal(t, wantReqID, reqID, "logDiagnostics must pass the request ctx (request_id) to slog, not context.Background()")
+	traceID, _ := ctxkeys.TraceIDFrom(gotCtx)
+	assert.Equal(t, wantTraceID, traceID, "trace_id must survive the slog hop")
+	corrID, _ := ctxkeys.CorrelationIDFrom(gotCtx)
+	assert.Equal(t, wantCorrID, corrID, "correlation_id must survive the slog hop")
+}
+
+// TestLogDiagnostics_TextHandlerRoundTrip is the R5 (#942) coverage lock for
+// the default text / logfmt handler — the prior contract test only exercised
+// the JSON handler. It round-trips the text-handler output through a logfmt
+// parser (not substring Contains) so the cross-handler snake_case contract
+// (slog.Group + LogValuer) is proven for the key=value format too.
+//
+// It also pins the exact quoting behaviour the docs/ops/readyz.md runbook
+// cookbook depends on: a redacted/space-containing error_msg is quoted, an
+// empty error_msg is "" — operators' grep patterns must match both.
+func TestLogDiagnostics_TextHandlerRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	asm := assembly.New(assembly.Config{ID: "test-text", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	agg := newAgg(clock.Real())
+	h := New(asm, agg, clock.Real())
+	h.SetVerboseToken(testVerboseToken)
+	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error {
+		return errors.New("dial failed password=hunter2")
+	})))
+	require.NoError(t, agg.Register(khealthz.NewProbe("cache", func(_ context.Context) error {
+		return nil // healthy
+	})))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req.Header.Set(VerboseAuthHeader, testVerboseToken)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	line := findLogfmtLine(t, buf.String(), "readyz unhealthy")
+	kv := parseLogfmtLine(line)
+
+	assert.Equal(t, "unhealthy", kv["dependencies.db.status"], "text handler must emit snake_case dotted group keys")
+	_, hasDur := kv["dependencies.db.duration_ms"]
+	assert.True(t, hasDur, "db dep must carry duration_ms in text output")
+	assert.Contains(t, kv["dependencies.db.error_msg"], "<REDACTED>", "secret must be redacted in text output")
+	assert.NotContains(t, kv["dependencies.db.error_msg"], "hunter2", "raw secret must not appear")
+
+	assert.Equal(t, "healthy", kv["dependencies.cache.status"])
+	assert.Equal(t, "", kv["dependencies.cache.error_msg"], "healthy probe error_msg must round-trip to empty string")
+}
+
+// findJSONRecord scans newline-delimited slog JSON output for the first record
+// whose "msg" equals msg and returns it as a parsed map. Fails the test if no
+// such record is present.
+func findJSONRecord(t *testing.T, out, msg string) map[string]any {
+	t.Helper()
+	for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+		if ln == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(ln), &rec); err != nil {
+			continue
+		}
+		if rec["msg"] == msg {
+			return rec
+		}
+	}
+	t.Fatalf("no JSON slog record with msg=%q in output:\n%s", msg, out)
+	return nil
+}
+
+// findLogfmtLine returns the first newline-delimited text-handler line whose
+// msg field equals msg. slog quotes msg values containing spaces, so we match
+// on the quoted form. Fails the test if absent.
+func findLogfmtLine(t *testing.T, out, msg string) string {
+	t.Helper()
+	want := `msg="` + msg + `"`
+	for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(ln, want) {
+			return ln
+		}
+	}
+	t.Fatalf("no text slog line with %s in output:\n%s", want, out)
+	return ""
+}
+
+// parseLogfmtLine tokenizes a single slog text-handler (logfmt) line into a
+// key→value map, handling both bare values (key=value) and double-quoted
+// values (key="value with spaces"). Quoted values have their surrounding
+// quotes stripped and \" / \\ unescaped. This is a round-trip decoder: it
+// reverses what slog.NewTextHandler emitted, so assertions run against the
+// decoded values rather than raw substrings.
+func parseLogfmtLine(line string) map[string]string {
+	m := make(map[string]string)
+	i := 0
+	for i < len(line) {
+		for i < len(line) && line[i] == ' ' {
+			i++
+		}
+		if i >= len(line) {
+			break
+		}
+		start := i
+		for i < len(line) && line[i] != '=' && line[i] != ' ' {
+			i++
+		}
+		if i >= len(line) || line[i] != '=' {
+			continue // token without '=' — skip
+		}
+		key := line[start:i]
+		i++ // consume '='
+		var val string
+		if i < len(line) && line[i] == '"' {
+			i++
+			var sb strings.Builder
+			for i < len(line) && line[i] != '"' {
+				if line[i] == '\\' && i+1 < len(line) {
+					i++
+				}
+				sb.WriteByte(line[i])
+				i++
+			}
+			i++ // consume closing quote
+			val = sb.String()
+		} else {
+			vs := i
+			for i < len(line) && line[i] != ' ' {
+				i++
+			}
+			val = line[vs:i]
+		}
+		m[key] = val
+	}
+	return m
 }
 
 // TestVerboseDependencyEntry_JSONShape verifies the wire shape serializes
