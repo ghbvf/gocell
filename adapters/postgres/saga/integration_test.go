@@ -21,6 +21,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
+// Test-time lease durations and the post-expiry advance step, extracted
+// per TEST-TIME-LITERAL-01 (forbids inline time.Duration literals in test
+// files). All PG integration tests pin to the same window so behavior is
+// consistent with conformance suite's shortLease (10s) baseline.
+const (
+	testLeaseWindow      = 10 * time.Second
+	testPastLeaseAdvance = 15 * time.Second // > testLeaseWindow → forces stale lease
+)
+
 // TestPGSagaJournal_ConformanceSuite verifies that PGJournal satisfies the
 // full journal.Journal conformance contract defined in sagajournaltest. This
 // is the PR-04 SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 entry point — once this
@@ -60,14 +69,14 @@ func TestPGSagaJournal_StaleAppendIsCAS_NotConstraintViolation(t *testing.T) {
 	inst := sagajournaltest.NewInstanceFixture(t, "pg-stale-cas", clk.Now())
 	require.NoError(t, j.Enqueue(ctx, inst))
 
-	claimed, leaseA, err := j.ClaimPending(ctx, 10, 10*time.Second)
+	claimed, leaseA, err := j.ClaimPending(ctx, 10, testLeaseWindow)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed)
 	_ = leaseA
 
 	// Advance past lease expiry, reclaim with worker B.
-	clk.Advance(15 * time.Second)
-	_, leaseB, err := j.ClaimPending(ctx, 10, 10*time.Second)
+	clk.Advance(testPastLeaseAdvance)
+	_, leaseB, err := j.ClaimPending(ctx, 10, testLeaseWindow)
 	require.NoError(t, err)
 	require.NotEqual(t, leaseA, leaseB, "worker B lease must differ from A's")
 
@@ -104,16 +113,16 @@ func TestPGSagaJournal_ClaimPending_Concurrent_NoDuplicate(t *testing.T) {
 
 	const G = 8
 	var (
-		mu      sync.Mutex
-		claims  = make(map[idutil.SafeID]int) // id → claim count
-		errs    []error
+		mu     sync.Mutex
+		claims = make(map[idutil.SafeID]int) // id → claim count
+		errs   []error
 	)
 	var wg sync.WaitGroup
 	for range G {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out, _, e := j.ClaimPending(ctx, 5, 10*time.Second)
+			out, _, e := j.ClaimPending(ctx, 5, testLeaseWindow)
 			mu.Lock()
 			defer mu.Unlock()
 			if e != nil {
@@ -165,7 +174,7 @@ func TestPGSagaJournal_AppendInsideAmbientTx_RollsBackOnOuterFailure(t *testing.
 	inst := sagajournaltest.NewInstanceFixture(t, "pg-ambient-rollback-append", clk.Now())
 	require.NoError(t, j.Enqueue(ctx, inst))
 
-	claimed, _, err := j.ClaimPending(ctx, 1, 10*time.Second)
+	claimed, _, err := j.ClaimPending(ctx, 1, testLeaseWindow)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed)
 	ci := claimed[0]
@@ -213,7 +222,7 @@ func TestPGSagaJournal_MarkTerminalInsideAmbientTx_RollsBackOnOuterFailure(t *te
 	inst := sagajournaltest.NewInstanceFixture(t, "pg-ambient-rollback-mt", clk.Now())
 	require.NoError(t, j.Enqueue(ctx, inst))
 
-	claimed, _, err := j.ClaimPending(ctx, 1, 10*time.Second)
+	claimed, _, err := j.ClaimPending(ctx, 1, testLeaseWindow)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed)
 	ci := claimed[0]
@@ -255,7 +264,7 @@ func TestPGSagaJournal_AppendOutsideAmbientTx_StillAtomic(t *testing.T) {
 	ctx := context.Background()
 	inst := sagajournaltest.NewInstanceFixture(t, "pg-noambient-append", clk.Now())
 	require.NoError(t, j.Enqueue(ctx, inst))
-	claimed, _, err := j.ClaimPending(ctx, 1, 10*time.Second)
+	claimed, _, err := j.ClaimPending(ctx, 1, testLeaseWindow)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed)
 	ci := claimed[0]
@@ -336,7 +345,7 @@ func TestPGSagaJournal_ClaimPendingInsideAmbientTx_RollsBackOnOuterFailure(t *te
 
 	txm := adapterpg.NewTxManager(pool)
 	rollbackErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
-		claimed, leaseID, claimErr := j.ClaimPending(txCtx, 1, 10*time.Second)
+		claimed, leaseID, claimErr := j.ClaimPending(txCtx, 1, testLeaseWindow)
 		require.NoError(t, claimErr)
 		require.NotEmpty(t, claimed, "ClaimPending inside ambient tx must see the enqueued instance")
 		require.NotEmpty(t, leaseID)

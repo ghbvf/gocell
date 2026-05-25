@@ -1845,7 +1845,7 @@ func conformAppendExactlyAtLeaseExpiryStillValid(t *testing.T, factory Factory) 
 	j, clk, cleanup := factory(t)
 	defer cleanup()
 
-	const lease = 10 * time.Second
+	const lease = shortLease // package-level const (== 10s)
 	startedAt := clk.Now()
 	inst := NewInstanceFixture(t, "inst-expiry-append-equal", startedAt)
 	mustEnqueue(t, j, inst)
@@ -1876,7 +1876,7 @@ func conformClaimPendingExactlyAtLeaseExpiryNotEligible(t *testing.T, factory Fa
 	j, clk, cleanup := factory(t)
 	defer cleanup()
 
-	const lease = 10 * time.Second
+	const lease = shortLease // package-level const (== 10s)
 	inst := NewInstanceFixture(t, "inst-expiry-claim-equal", clk.Now())
 	mustEnqueue(t, j, inst)
 
@@ -1904,7 +1904,7 @@ func conformHeartbeatExactlyAtLeaseExpiryStillExtends(t *testing.T, factory Fact
 	j, clk, cleanup := factory(t)
 	defer cleanup()
 
-	const lease = 10 * time.Second
+	const lease = shortLease // package-level const (== 10s)
 	inst := NewInstanceFixture(t, "inst-expiry-hb-equal", clk.Now())
 	mustEnqueue(t, j, inst)
 
