@@ -133,7 +133,16 @@ var allowedMustDecls = map[string]map[string]struct{}{
 var testFixturePkgPrefixes = []string{
 	"tests/contracttest",
 	"pkg/testutil",
+	// kernel/auth/authtest — AuthPlan Must* helpers (MustAuthJWT, MustAuthJWTFromAssembly,
+	// MustAuthServiceToken) used by composition-root test wiring. Independent package
+	// from runtime/internal/authtest below; spans cmd/+runtime/+kernel/+tests/ consumers,
+	// so no Hard internal/ placement is feasible. AUTH-AUTHTEST-C governs the test-file
+	// boundary (see tools/archtest/auth_authtest_boundary_test.go).
 	"kernel/auth/authtest",
+	// runtime/internal/authtest — RequireAuthenticated policy fixture. Moved here from
+	// runtime/auth/authtest by issue #638; out-of-runtime/ imports are blocked at
+	// compile time by Go's internal/ rule (AUTH-AUTHTEST-B Hard upgrade, see ADR
+	// 202605251700-adr-authtest-internal-path.md).
 	"runtime/internal/authtest",
 	"runtime/auth/keystest",
 	"runtime/audit/ledger/storetest",

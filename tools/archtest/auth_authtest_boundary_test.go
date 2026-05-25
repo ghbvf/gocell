@@ -19,19 +19,26 @@ import (
 	scannerPkg "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// TestAuthAuthtestBoundary enforces two rules around the test-only authtest
-// sub-package (now at runtime/internal/authtest after issue #638):
+// TestAuthAuthtestBoundary enforces two rules around the two test-only authtest
+// packages in the module:
+//
+//   - `runtime/internal/authtest` — policy fixture (RequireAuthenticated; the
+//     PR #267 substrate moved to internal/ by issue #638)
+//   - `kernel/auth/authtest` — AuthPlan factory fixture (MustAuthJWT, etc.;
+//     test-only Must* helpers used by composition-root test wiring)
+//
+// Rules:
 //
 //   - AUTH-AUTHTEST-A: no Go file anywhere in the module may contain the
 //     literal call expression "auth.Authenticated()" — this seals the deleted
 //     export and prevents accidental reintroduction.
 //
 //   - AUTH-AUTHTEST-C: non-test Go files (files not ending in _test.go) must
-//     not import "runtime/internal/authtest" anywhere in the module — the
-//     authtest package is exclusively for _test.go files.
+//     not import EITHER authtest package anywhere in the module — both
+//     packages are exclusively for _test.go consumers.
 //
-// The authtest package itself (runtime/internal/authtest/*.go) is exempt from
-// AUTH-AUTHTEST-C (it IS the authtest implementation, not an importer).
+// Each authtest package's own implementation files are exempt from
+// AUTH-AUTHTEST-C (they ARE the implementation, not importers).
 //
 // # B retired (issue #638)
 //
@@ -42,10 +49,18 @@ import (
 // cmd/, adapters/, tools/, tests/ all blocked) — a Hard upgrade per
 // ai-robust.md §Hard 范本目录 → "internal/ wrap 包". The archtest B subtest +
 // its negative probe are removed as redundant.
+//
+// Note: kernel/auth/authtest does NOT have an equivalent Hard upgrade path —
+// its consumers span cmd/, runtime/, kernel/, tests/ subtrees, so no single
+// internal/ placement can cover them. AUTH-AUTHTEST-C remains the boundary
+// (Medium archtest, terminal grade per ai-robust §Funnel 双向锁评级).
 func TestAuthAuthtestBoundary(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath := readModulePath(t, root)
-	authtestImport := modPath + "/runtime/internal/authtest"
+	authtestImports := []string{
+		modPath + "/runtime/internal/authtest",
+		modPath + "/kernel/auth/authtest",
+	}
 
 	// Collect all .go files once and share across rules.
 	allGoFiles, err := collectGoFiles(root)
@@ -65,7 +80,9 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 		for _, f := range allGoFiles {
 			rel, _ := filepath.Rel(root, f)
 			rel = filepath.ToSlash(rel)
-			if strings.HasPrefix(rel, "tools/archtest/") || strings.HasPrefix(rel, "runtime/internal/authtest/") {
+			if strings.HasPrefix(rel, "tools/archtest/") ||
+				strings.HasPrefix(rel, "runtime/internal/authtest/") ||
+				strings.HasPrefix(rel, "kernel/auth/authtest/") {
 				continue
 			}
 			callHits, err := findCallExpr(f, "auth", "Authenticated")
@@ -85,25 +102,46 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 				"authtest.RequireAuthenticated() in runtime _test.go files")
 	})
 
-	// AUTH-AUTHTEST-C: non-test Go files must not import authtest anywhere.
-	// Exception: the authtest package's own source files are excluded (they
-	// are the implementation, not consumers).
+	// AUTH-AUTHTEST-C: non-test Go files must not import EITHER authtest package
+	// (runtime/internal/authtest, kernel/auth/authtest). Exception: each
+	// authtest package's own source files are excluded (they are the
+	// implementation, not consumers).
 	t.Run("AUTH-AUTHTEST-C_only_test_files_may_import_authtest", func(t *testing.T) {
-		authtestPkgDir := filepath.Join(root, "runtime", "internal", "authtest")
+		authtestPkgDirs := []string{
+			filepath.Join(root, "runtime", "internal", "authtest"),
+			filepath.Join(root, "kernel", "auth", "authtest"),
+		}
+		isAuthtestPkgDir := func(dir string) bool {
+			for _, p := range authtestPkgDirs {
+				if dir == p {
+					return true
+				}
+			}
+			return false
+		}
+		isAuthtestImport := func(imp string) bool {
+			for _, p := range authtestImports {
+				if imp == p {
+					return true
+				}
+			}
+			return false
+		}
+
 		var violations []string
 		for _, f := range allGoFiles {
 			// Skip _test.go files — they are permitted by this rule.
 			if strings.HasSuffix(f, "_test.go") {
 				continue
 			}
-			// Skip the authtest package's own implementation files.
-			if filepath.Dir(f) == authtestPkgDir {
+			// Skip the authtest packages' own implementation files.
+			if isAuthtestPkgDir(filepath.Dir(f)) {
 				continue
 			}
 			imports, err := parseImports(f)
 			require.NoError(t, err, "failed to parse %s", f)
 			for _, imp := range imports {
-				if imp == authtestImport {
+				if isAuthtestImport(imp) {
 					rel, _ := filepath.Rel(root, f)
 					rel = filepath.ToSlash(rel)
 					violations = append(violations,
@@ -117,7 +155,7 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 			}
 		}
 		assert.Empty(t, violations,
-			"non-test .go files must not import runtime/internal/authtest; "+
+			"non-test .go files must not import runtime/internal/authtest or kernel/auth/authtest; "+
 				"move your auth policy helper into a _test.go file, or use "+
 				"auth.TestContext(subject, roles) for cell handler tests")
 	})
@@ -127,8 +165,11 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 // including _test.go files, skipping vendor, hidden directories, generated,
 // testdata, worktrees, and node_modules. tools/archtest is excluded to avoid
 // archtest scanning its own source for rule violations that reference forbidden
-// strings in comments/test names (AUTH-AUTHTEST-A applies its own exclusion
-// inline; C uses path-prefix filters that naturally skip tools/archtest).
+// strings in comments/test names. Both AUTH-AUTHTEST-A and AUTH-AUTHTEST-C
+// rely on this list — A applies its own inline exemption for the authtest
+// package dirs; C operates on the same list, which already skips
+// tools/archtest, so archtest comments mentioning the forbidden import paths
+// do not produce false positives.
 func collectGoFiles(root string) ([]string, error) {
 	// IncludeGenerated honors the rule's "anywhere in the module" docstring:
 	// codegen output (generated/contracts/**) must also obey the boundary;
@@ -244,7 +285,8 @@ func TestAuthAuthtestBoundary_NegativeProbes(t *testing.T) {
 	t.Parallel()
 
 	const modPath = "github.com/ghbvf/gocell"
-	authtestImport := modPath + "/runtime/internal/authtest"
+	runtimeAuthtestImport := modPath + "/runtime/internal/authtest"
+	kernelAuthtestImport := modPath + "/kernel/auth/authtest"
 
 	// Probe A1: findCallExpr must detect a real auth.Authenticated() call site.
 	t.Run("A1_findCallExpr_detects_real_call", func(t *testing.T) {
@@ -282,14 +324,14 @@ var msg = "auth.Authenticated() — string literal mentioning the symbol, must n
 			"negative probe A2: findCallExpr must NOT match auth.Authenticated() inside comments or string literals")
 	})
 
-	// Probe C: a non-test file importing authtest must be caught.
-	t.Run("C_detects_non_test_authtest_import", func(t *testing.T) {
+	// Probe C1: a non-test file importing runtime/internal/authtest must be caught.
+	t.Run("C1_detects_non_test_runtime_authtest_import", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
 		pkgDir := filepath.Join(root, "runtime", "somepackage")
 		require.NoError(t, os.MkdirAll(pkgDir, 0o755))
 
-		content := fmt.Sprintf("package somepackage\nimport _ %q\n", authtestImport)
+		content := fmt.Sprintf("package somepackage\nimport _ %q\n", runtimeAuthtestImport)
 		nonTestFile := filepath.Join(pkgDir, "helpers.go") // NOT _test.go
 		require.NoError(t, os.WriteFile(nonTestFile, []byte(content), 0o644))
 
@@ -297,12 +339,38 @@ var msg = "auth.Authenticated() — string literal mentioning the symbol, must n
 		require.NoError(t, err)
 		found := false
 		for _, imp := range imports {
-			if imp == authtestImport {
+			if imp == runtimeAuthtestImport {
 				found = true
 			}
 		}
-		assert.True(t, found, "negative probe C: parseImports must detect authtest import in non-test file")
+		assert.True(t, found, "negative probe C1: parseImports must detect runtime/internal/authtest import in non-test file")
 		assert.False(t, strings.HasSuffix(nonTestFile, "_test.go"),
-			"negative probe C: fixture file must not be a _test.go file")
+			"negative probe C1: fixture file must not be a _test.go file")
+	})
+
+	// Probe C2: a non-test file importing kernel/auth/authtest must also be caught.
+	// Mirrors C1 for the second authtest package to ensure AUTH-AUTHTEST-C
+	// covers both paths uniformly.
+	t.Run("C2_detects_non_test_kernel_authtest_import", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		pkgDir := filepath.Join(root, "kernel", "someother")
+		require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+
+		content := fmt.Sprintf("package someother\nimport _ %q\n", kernelAuthtestImport)
+		nonTestFile := filepath.Join(pkgDir, "helpers.go") // NOT _test.go
+		require.NoError(t, os.WriteFile(nonTestFile, []byte(content), 0o644))
+
+		imports, err := parseImports(nonTestFile)
+		require.NoError(t, err)
+		found := false
+		for _, imp := range imports {
+			if imp == kernelAuthtestImport {
+				found = true
+			}
+		}
+		assert.True(t, found, "negative probe C2: parseImports must detect kernel/auth/authtest import in non-test file")
+		assert.False(t, strings.HasSuffix(nonTestFile, "_test.go"),
+			"negative probe C2: fixture file must not be a _test.go file")
 	})
 }
