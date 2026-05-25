@@ -28,7 +28,7 @@ func TestLeaseInvalidatedAfterTxReturn(t *testing.T) {
 	var escaped context.Context
 	err := runner.RunInTx(context.Background(), func(inner context.Context) error {
 		escaped = inner // capture the in-tx ctx (carries a live lease)
-		if !store.txHoldsLock(inner) {
+		if !store.inLiveTx(inner) {
 			t.Fatal("in-tx check must be true inside RunInTx (lock genuinely held)")
 		}
 		return nil
@@ -38,7 +38,7 @@ func TestLeaseInvalidatedAfterTxReturn(t *testing.T) {
 	}
 
 	// After RunInTx returned, the lease must be dead for the escaped ctx.
-	if store.txHoldsLock(escaped) {
+	if store.inLiveTx(escaped) {
 		t.Fatal("in-tx check must be FALSE for an escaped inner ctx after the tx " +
 			"returned (self-invalidating lease); a true result re-arms the " +
 			"sentinel-without-lock flake — the lock is no longer held")

@@ -42,15 +42,14 @@ import (
 )
 
 // durableTxRunner is a test-only TxRunner that simulates a non-noop (real) tx
-// context. It injects the mem-tx token via mem.WithTxContext (zero witness)
-// so GetByUsernameForUpdate / GetByIDForUpdate take the in-tx code path on
-// mem.Store. The zero witness keeps per-call locking (race-safe, no
-// cross-method atomicity) since PR fix/238 — ADR
+// context. It does NOT hold mem.Store.mu, so it injects no lease: repo methods
+// take their per-call lock (race-safe, no cross-method atomicity). For
+// whole-closure atomicity wire mem.Store.TxRunner() instead. See ADR
 // docs/architecture/202605171846-adr-mem-tx-lock-ownership.md.
 type durableTxRunner struct{}
 
 func (durableTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(mem.WithTxContext(ctx))
+	return fn(ctx)
 }
 
 var _ persistence.TxRunner = durableTxRunner{}

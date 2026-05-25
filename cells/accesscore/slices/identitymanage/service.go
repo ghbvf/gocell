@@ -829,7 +829,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// the hash computation next to the CAS write avoids a TOCTOU window where a
 	// concurrent change could replace the hash between hash computation and write.
 	//
-	// mem no-witness path (WithTxContext / foreign TxRunner): GetByID and
+	// mem path outside a live tx (foreign / non-locking TxRunner): GetByID and
 	// UpdatePassword each acquire store.mu independently (per-call), so bcrypt
 	// runs between the two locks rather than under a held lock. Cross-method
 	// atomicity is only guaranteed by the mem Store's own TxRunner (held witness)

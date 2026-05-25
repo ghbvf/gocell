@@ -81,7 +81,7 @@ type stubTxRunner struct {
 
 func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
 	s.calls++
-	err := fn(mem.WithTxContext(context.Background()))
+	err := fn(context.Background())
 	s.committedCleanly = append(s.committedCleanly, err == nil)
 	return err
 }
@@ -89,11 +89,11 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 // noopTxRunner is a pass-through TxRunner that implements outbox.Nooper (Noop()==true),
 // signaling to the service that no real transaction is available (demo/test mode).
 // The service uses isNoopTx to decide whether to run explicit session cleanup on failure.
-// It injects the mem-tx sentinel so GetByUsernameForUpdate succeeds in the non-PG path.
+// It holds no lock, so repo methods take their per-call lock on the non-PG path.
 type noopTxRunner struct{}
 
 func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(mem.WithTxContext(ctx))
+	return fn(ctx)
 }
 
 func (noopTxRunner) Noop() bool { return true }
