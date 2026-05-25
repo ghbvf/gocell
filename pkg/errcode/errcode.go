@@ -697,6 +697,25 @@ const (
 	// has an unresolved identity field (name, label, namespace, bucket).
 	// Maps to HTTP 500.
 	ErrMetricsSchemaUnresolved Code = "ERR_METRICS_SCHEMA_UNRESOLVED"
+
+	// Saga journal error codes (kernel/saga/journal).
+	//
+	// ErrSagaNotFound signals that the addressed saga instance was never
+	// enqueued. Returned by Load and Append on unknown instance IDs; the
+	// silent (false,nil) shape on Heartbeat/MarkTerminal is deliberate
+	// (callers cannot distinguish a stale lease from a missing instance).
+	// Maps to HTTP 404.
+	ErrSagaNotFound Code = "ERR_SAGA_NOT_FOUND"
+	// ErrSagaStaleLease signals that a lease-fenced Append presented a leaseID
+	// that no longer owns the instance (lost / expired / superseded). A zombie
+	// leader must not corrupt the event stream, so Append surfaces this rather
+	// than dropping the write silently. Maps to HTTP 409.
+	ErrSagaStaleLease Code = "ERR_SAGA_STALE_LEASE"
+	// ErrSagaDuplicateInstance signals that Enqueue was called for an instance
+	// ID that already exists. Maps to HTTP 409. Distinct from generic
+	// ErrConflict so operator dashboards can route saga producer-side races
+	// separately from cell-wide conflict signals.
+	ErrSagaDuplicateInstance Code = "ERR_SAGA_DUPLICATE_INSTANCE"
 )
 
 // PublicDetail is the wire-safe key/value shape used in public error

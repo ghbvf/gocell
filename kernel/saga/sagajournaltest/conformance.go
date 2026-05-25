@@ -174,6 +174,22 @@ func isKindInvalid(err error) bool {
 	return errors.As(err, &ec) && ec.Kind == errcode.KindInvalid
 }
 
+// requireCode fails the test when err does not unwrap to *errcode.Error with
+// the expected Code. Used alongside isKindXxx to lock the dedicated saga
+// sentinels (ErrSagaNotFound / ErrSagaStaleLease / ErrSagaDuplicateInstance)
+// per PR-04 (#959) — both memjournal and PGJournal must emit the same Code so
+// operator routing is independent of storage backend.
+func requireCode(t *testing.T, err error, want errcode.Code) {
+	t.Helper()
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("error does not unwrap to *errcode.Error: %v", err)
+	}
+	if ec.Code != want {
+		t.Fatalf("error Code=%q, want %q (err=%v)", ec.Code, want, err)
+	}
+}
+
 // mustEnqueue calls Enqueue and fails the test on error.
 func mustEnqueue(t *testing.T, j journal.Journal, inst saga.Instance) {
 	t.Helper()
@@ -312,6 +328,7 @@ func conformLoadNeverEnqueued(t *testing.T, factory Factory) {
 	if !isKindNotFound(err) {
 		t.Errorf("Load of never-enqueued instance: want KindNotFound error, got %v", err)
 	}
+	requireCode(t, err, errcode.ErrSagaNotFound)
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +350,7 @@ func conformEnqueueDuplicate(t *testing.T, factory Factory) {
 	if !isKindConflict(err) {
 		t.Errorf("re-Enqueue of same ID: want KindConflict error, got %v", err)
 	}
+	requireCode(t, err, errcode.ErrSagaDuplicateInstance)
 }
 
 // ---------------------------------------------------------------------------
@@ -831,6 +849,7 @@ func conformAppendStaleLease(t *testing.T, factory Factory) {
 	if !isKindConflict(err) {
 		t.Errorf("stale Append: want KindConflict error, got %v", err)
 	}
+	requireCode(t, err, errcode.ErrSagaStaleLease)
 
 	// Worker B's valid Append must succeed.
 	ciB := findClaimed(t, claimedB, inst.ID)
@@ -1338,6 +1357,7 @@ func conformAppendUnknownInstance(t *testing.T, factory Factory) {
 	if !isKindNotFound(err) {
 		t.Errorf("Append on unknown instance: want KindNotFound error, got %v", err)
 	}
+	requireCode(t, err, errcode.ErrSagaNotFound)
 }
 
 // ---------------------------------------------------------------------------

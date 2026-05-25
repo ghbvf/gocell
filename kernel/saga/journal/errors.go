@@ -15,18 +15,11 @@ import (
 // errInstanceNotFound from four methods). Callers discriminate by errcode.Code,
 // not by helper identity, so a sibling implementation (PR-04 PG store) reaching
 // the same code yields the same caller-observable error class.
-//
-// Sentinel reuse, registered for upgrade: there is no generic not-found Code in
-// pkg/errcode, so instance-not-found pairs KindNotFound with ErrValidationFailed
-// for now. PR-04/PR-08 introduce dedicated ErrSagaNotFound / ErrSagaStaleLease /
-// ErrSagaDuplicateInstance codes for operator routing (see gh issue #956
-// (PR-08 dedicated ErrSaga* codes)). A kernel-feature PR deliberately does not
-// edit pkg/errcode (which would trip the contract-fanout errcode-sentinel scan).
 
 // errInstanceNotFound reports that the addressed saga instance was never
 // enqueued. Returned by Load / Append / Heartbeat / MarkTerminal.
 func errInstanceNotFound(instanceID idutil.SafeID) error {
-	return errcode.New(errcode.KindNotFound, errcode.ErrValidationFailed,
+	return errcode.New(errcode.KindNotFound, errcode.ErrSagaNotFound,
 		"saga journal: instance not found",
 		errcode.WithInternal(fmt.Sprintf("instanceID=%s", instanceID)),
 	)
@@ -35,7 +28,7 @@ func errInstanceNotFound(instanceID idutil.SafeID) error {
 // errDuplicateInstance reports that Enqueue was called for an instance ID that
 // already exists.
 func errDuplicateInstance(instanceID idutil.SafeID) error {
-	return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+	return errcode.New(errcode.KindConflict, errcode.ErrSagaDuplicateInstance,
 		"saga journal: instance already enqueued",
 		errcode.WithInternal(fmt.Sprintf("instanceID=%s", instanceID)),
 	)
@@ -46,7 +39,7 @@ func errDuplicateInstance(instanceID idutil.SafeID) error {
 // not corrupt the event stream, so Append surfaces this rather than dropping
 // the write silently.
 func errStaleLease(instanceID, leaseID idutil.SafeID) error {
-	return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+	return errcode.New(errcode.KindConflict, errcode.ErrSagaStaleLease,
 		"saga journal: stale lease on append",
 		errcode.WithInternal(fmt.Sprintf("instanceID=%s leaseID=%s", instanceID, leaseID)),
 	)
