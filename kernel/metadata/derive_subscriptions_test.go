@@ -194,6 +194,45 @@ func TestDeriveEventSubscribers_MissingContractSkipped(t *testing.T) {
 	})
 }
 
+// TestDeriveEventSubscribers_SameCellTwoSlices_Deduped verifies that when two
+// slices belonging to the same cell both subscribe to the same event contract,
+// the derived Subscribers list contains that cell exactly once. This covers the
+// dedup path in deriveEventSubscribers when cellSubs[contractID] accumulates
+// the same BelongsToCell value from multiple slices before dedupSorted runs.
+func TestDeriveEventSubscribers_SameCellTwoSlices_Deduped(t *testing.T) {
+	pm := buildSubscribeProject(
+		map[string]*SliceMeta{
+			"auditcore/auditingest": {
+				ID:            "auditingest",
+				BelongsToCell: "auditcore",
+				ContractUsages: []ContractUsage{
+					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleEvent"},
+				},
+			},
+			"auditcore/auditreplay": {
+				ID:            "auditreplay",
+				BelongsToCell: "auditcore",
+				ContractUsages: []ContractUsage{
+					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleReplay"},
+				},
+			},
+		},
+		map[string]*ContractMeta{
+			"event.session.created.v1": {
+				ID:        "event.session.created.v1",
+				Kind:      "event",
+				Endpoints: EndpointsMeta{Publisher: "accesscore", Subscribers: []string{}},
+			},
+		},
+	)
+
+	deriveEventSubscribers(pm)
+
+	subs := pm.Contracts["event.session.created.v1"].Endpoints.Subscribers
+	assert.Equal(t, []string{"auditcore"}, subs,
+		"two slices in the same cell subscribing to the same contract must yield exactly one subscriber entry")
+}
+
 func TestDeriveEventSubscribers_IdempotentWhenAlreadyListed(t *testing.T) {
 	// contract.yaml already declares "auditcore" — derive must not duplicate it
 	pm := buildSubscribeProject(

@@ -6,6 +6,7 @@ package wiresummary
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
@@ -51,10 +52,25 @@ func BuildCellWireSummaries(root string, project *metadata.ProjectMeta) ([]metad
 // subscribesFromProject derives the subscribe surface for a cell from
 // slice.yaml contractUsages[role=subscribe] entries in the project metadata.
 // This is the single source of truth after the issue #856 flip.
+//
+// The returned slice is sorted by (Slice, Topic) for deterministic catalog
+// output. project.Slices is a Go map so iteration order is nondeterministic;
+// sorting here prevents wireSummary.subscribes[] order from varying across
+// runs (unlike Routes/Listeners which are sourced from ordered AST walks).
+//
+// When cu.Group is empty the effective broker consumer group is the cell ID
+// (cellgen template fallback). The Group field is set to cellID so the catalog
+// shows the real group rather than "".
 func subscribesFromProject(project *metadata.ProjectMeta, cellID string) []metadata.WireBundleSubscribe {
 	var out []metadata.WireBundleSubscribe
 	for key, s := range project.Slices {
 		if s.BelongsToCell != cellID {
+			continue
+		}
+		// Guard: key must be "cellID/sliceID" — skip malformed entries where
+		// the sliceID segment would be empty (len(key) <= len(cellID)+1 means
+		// the separator "/" is the last char or the key equals "cellID/").
+		if len(key) <= len(cellID)+1 {
 			continue
 		}
 		sliceID := key[len(cellID)+1:] // strip "cellID/" prefix
@@ -62,14 +78,26 @@ func subscribesFromProject(project *metadata.ProjectMeta, cellID string) []metad
 			if cu.Role != "subscribe" {
 				continue
 			}
+			// Effective group: cellgen defaults empty group to cellID at runtime.
+			group := cu.Group
+			if group == "" {
+				group = cellID
+			}
 			out = append(out, metadata.WireBundleSubscribe{
 				Slice:   sliceID,
 				Topic:   cu.Contract,
 				Handler: cu.Handler,
-				Group:   cu.Group,
+				Group:   group,
 			})
 		}
 	}
+	// Sort by (Slice, Topic) for deterministic catalog output.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Slice != out[j].Slice {
+			return out[i].Slice < out[j].Slice
+		}
+		return out[i].Topic < out[j].Topic
+	})
 	return out
 }
 
