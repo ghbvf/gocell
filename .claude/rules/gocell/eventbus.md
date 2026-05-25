@@ -136,6 +136,17 @@ verify:
 
 ADV-06（contract.subscribers ↔ slice CU 双向对齐）已退役——cell 订阅者单源派生后漂移结构上不可能；VERIFY-01 保留。守卫见 archtest `SUBSCRIBERS-DERIVED-FIELD-FROZEN-01`（reflect 锁 `yaml:"-"`）/ `CONTRACT-YAML-NO-SUBSCRIBERS-KEY-01` / `SUBSCRIBE-MARKER-RETIRED-01`。
 
+### 常见错误排查
+
+- **`gocell generate cell` 报 "no cell.go struct field for subscribing slice"**：cell.go
+  结构体缺少对应 slice 的字段。在 cell struct 添加 `*<sliceID>.Service`（或
+  `*<sliceID>.Consumer`）字段后重新运行。该字段必须在 `generate` 执行前已存在于
+  cell.go。
+
+- **`gocell generate cell` 报 "ambiguous field for slice <sliceID>"**：cell struct 中有
+  多个字段的指针类型包名与 sliceID 相同。在 slice.yaml 的 subscribe CU 中添加
+  `field: <fieldName>` 消歧（参见 sessionlogout 场景）。
+
 ## 死信路由
 
 - DLX 由 broker 原生处理（`DispositionReject` → `Nack(requeue=false)` → DLX exchange）

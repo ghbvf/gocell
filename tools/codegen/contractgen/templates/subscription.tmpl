@@ -28,8 +28,8 @@ type Subscription struct {
 //     Registry.Subscribe takes it as a positional parameter — there is no
 //     SubscriptionOption escape hatch (HARD contract; see ADR
 //     docs/architecture/202605111000-adr-subscription-cellid-mandatory.md).
-//   - sliceID: per-slice observability owner; cellgen supplies it from the
-//     +slice:subscribe marker.
+//   - sliceID: per-slice observability owner; cellgen supplies it from
+//     slice.yaml contractUsages[role=subscribe] via cellgen.
 func NewSubscription(handler outbox.EntryHandler, consumerGroup, cellID, sliceID string) *Subscription {
 	return &Subscription{handler: handler, consumerGroup: consumerGroup, cellID: cellID, sliceID: sliceID}
 }

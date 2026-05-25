@@ -26,7 +26,8 @@ the subscribe axis only; they remain authoritative for `cell:listener` /
   subscribe CU; cellgen resolves the cell-struct field by "field pointer-type
   package == sliceID" (replacing the marker's auto-derived `SliceField`).
 - **Decision 8** scaffold emits a `// +slice:subscribe:` stub → removed from
-  the event template.
+  `tools/codegen/cellgen/templates/scaffold-cell.tmpl`; replaced with guidance
+  text pointing to slice.yaml contractUsages[role=subscribe].
 
 Threat re-eval (the K#05 anti-drift goal still holds):
 - Marker-vs-yaml drift for subscribe is now impossible — there is one source
@@ -128,7 +129,7 @@ Product review suggested:
 - Default `--all` + `--local` for `gocell generate cell` (covers 99% of dev workflow)
 - Scaffold template emits stub markers when scaffolding a new cell
 
-Implementation: shipped in this PR — `gocell generate cell` defaults to `--all`; `gocell verify` defaults to `--local`; `gocell scaffold cell` template emits stub markers (`// +cell:listener:` + `// +slice:route:` + `// +slice:subscribe:`). The `--type` and `--level` flags now flow through to `cell.yaml` (previously ignored; the YAML hardcoded `type: core` / `consistencyLevel: L1`). Backlog item `K05-CLI-FLAG-DEFAULT-AND-SCAFFOLD` closed.
+Implementation: shipped in this PR — `gocell generate cell` defaults to `--all`; `gocell verify` defaults to `--local`; `gocell scaffold cell` template (`tools/codegen/cellgen/templates/scaffold-cell.tmpl`) emits `// +cell:listener:` + `// +slice:route:` stubs only. Event subscriptions are not scaffolded as markers — they are declared in slice.yaml `contractUsages[role=subscribe]` (amended by #856; see Amendment above). The `--type` and `--level` flags now flow through to `cell.yaml` (previously ignored; the YAML hardcoded `type: core` / `consistencyLevel: L1`). Backlog item `K05-CLI-FLAG-DEFAULT-AND-SCAFFOLD` closed.
 
 ## Consequences
 

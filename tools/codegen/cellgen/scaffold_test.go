@@ -41,6 +41,39 @@ func TestScaffoldCell_GeneratesFiles(t *testing.T) {
 	}
 }
 
+// TestScaffoldCell_CellGoNoSubscribeMarker verifies the scaffolded cell.go does
+// NOT contain the retired // +slice:subscribe: marker (a leftover marker causes
+// a markergen unknown-marker error). Subscriptions are single-sourced in
+// slice.yaml contractUsages[role=subscribe]; the scaffold emits guidance text
+// pointing to that model instead.
+func TestScaffoldCell_CellGoNoSubscribeMarker(t *testing.T) {
+	dir := t.TempDir()
+	spec := ScaffoldSpec{
+		CellID:     mustID(t, "subcell"),
+		StructName: "SubCell",
+		Package:    "subcell",
+		ModulePath: "github.com/example/myproject",
+		OwnerTeam:  "platform",
+		OwnerRole:  "cell-owner",
+	}
+
+	if err := ScaffoldCell(dir, "cells/subcell", spec); err != nil {
+		t.Fatalf("ScaffoldCell() error = %v", err)
+	}
+
+	content := fileutil.MustReadFile(t, filepath.Join(dir, "cells", "subcell", "cell.go"))
+
+	if strings.Contains(string(content), "// +slice:subscribe:") {
+		t.Error("cell.go must not contain retired // +slice:subscribe: marker")
+	}
+	if !strings.Contains(string(content), "slice.yaml") {
+		t.Error("cell.go should contain new-model guidance referencing slice.yaml")
+	}
+	if !strings.Contains(string(content), "contractUsages") {
+		t.Error("cell.go should contain new-model guidance referencing contractUsages")
+	}
+}
+
 // TestScaffoldCell_CellGoContainsListenerMarker verifies the scaffolded
 // cell.go includes the K#05 // +cell:listener: stub marker.
 func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
@@ -168,7 +201,11 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				"package iotdevice",
 				"type IoTDevice struct",
 				"func NewIoTDevice()",
-				"// +slice:subscribe:",
+				// New-model guidance: subscriptions are declared in slice.yaml
+				// contractUsages (role: subscribe + handler:); cell struct only
+				// needs the *<sliceID>.Service field.
+				"slice.yaml",
+				"contractUsages",
 			},
 			wantInCellYAML: []string{
 				"id: iotdevice",

@@ -654,8 +654,10 @@ func TestNoMetadataLiteralInCellGo01(t *testing.T) {
 
 // TestNoWireFieldsInYaml01 verifies NO-WIRE-FIELDS-IN-YAML-01.
 // cell.yaml MUST NOT contain `listeners:`; slice.yaml MUST NOT contain
-// `routeMounts:` or `subscribes:` — wire is single-sourced in cell.go
-// marker comments after K#05.
+// `routeMounts:` or `subscribes:` — listeners and routes are single-sourced
+// in cell.go marker comments after K#05; subscriptions are single-sourced
+// from slice.yaml contractUsages[role=subscribe] (the `subscribes:` field is
+// a legacy top-level field, superseded by contractUsages).
 func TestNoWireFieldsInYaml01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -680,8 +682,9 @@ func TestNoWireFieldsInYaml01(t *testing.T) {
 			if hasYAMLTopKey(content, key) {
 				rel, _ := filepath.Rel(root, path)
 				t.Errorf(
-					"NO-WIRE-FIELDS-IN-YAML-01: %s declares `%s:` — wire is owned by cell.go markers "+
-						"(// +slice:route / // +slice:subscribe); remove the field",
+					"NO-WIRE-FIELDS-IN-YAML-01: %s declares `%s:` — routes are owned by cell.go "+
+						"// +slice:route markers; subscriptions are single-sourced from slice.yaml "+
+						"contractUsages[role=subscribe]; remove the legacy field",
 					filepath.ToSlash(rel), key)
 			}
 		}
@@ -703,8 +706,9 @@ func TestMarkerMissingForWireCall01(t *testing.T) {
 		if sym != "" {
 			rel, _ := filepath.Rel(root, path)
 			t.Errorf("MARKER-MISSING-FOR-WIRE-CALL-01: %s:%d contains %q — wire is owned by cell_gen.go after K#04 opt-in. "+
-				"Add `// +cell:listener` / `// +slice:route` / `// +slice:subscribe` markers and run `gocell generate cell %s`",
-				filepath.ToSlash(rel), line, sym, deriveCellID(path))
+				"For HTTP routes: add `// +cell:listener` / `// +slice:route` markers and run `gocell generate cell %s`. "+
+				"For event subscriptions: declare in slice.yaml contractUsages[role=subscribe] with handler:, then run `gocell generate cell %s`",
+				filepath.ToSlash(rel), line, sym, deriveCellID(path), deriveCellID(path))
 		}
 	}
 }

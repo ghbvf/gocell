@@ -16,14 +16,16 @@ import (
 type {{.StructName}} struct {
 	*cell.BaseCell
 
-	// TODO: add handler/service fields with // +slice:route or
-	// // +slice:subscribe markers. Examples:
+	// TODO: add handler/service fields. Example for HTTP routes:
 	//
 	//   // +slice:route:slice=foo,subPath=/foo
 	//   fooHandler *foo.Handler
 	//
-	//   // +slice:subscribe:slice=foo,topic=event.foo.created.v1,handler=HandleCreated,group={{.CellID}}
-	//   // TODO: replace topic with a real contract id before uncommenting
+	// For event subscriptions, declare them in the slice's slice.yaml under
+	// contractUsages with role: subscribe and a handler: field — cellgen
+	// generates the reg.Subscribe call into cell_gen.go automatically. The
+	// cell struct only needs the *<sliceID>.Service (or .Consumer) field:
+	//
 	//   fooSvc *foo.Service
 }
 
