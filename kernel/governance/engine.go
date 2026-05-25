@@ -3,10 +3,10 @@ package governance
 import "context"
 
 // engine.go is the single execution body for all governance rules (ADR
-// 202605041430 §M3-RULE-ENGINE). It replaces the four former dispatch lists
-// (Validator.rules / strictRules, DependencyChecker.checks, CheckContractHealth)
-// with one data-driven registry — allRules in rules_registry.go — iterated by a
-// single loop. Each rule is a Rule value carrying its classification metadata
+// 202605041430 §M3-RULE-ENGINE). It provides one data-driven registry —
+// allRules in rules_registry.go — iterated by a single loop (replacing the
+// former four separate dispatch lists, which were removed in §M3). Each rule
+// is a Rule value carrying its classification metadata
 // (Phase / Next / optional Metric) plus a compiler-checked Detect function value.
 //
 // Detect returns the finished []ValidationResult (built through the existing
@@ -79,6 +79,11 @@ const (
 // remaining, coverage gap, dead-event count) declare one. It returns (value, ok);
 // ok=false when the metric is not applicable to the current project state, in
 // which case the finding carries no metric value.
+//
+// A rule with purely boolean detect satisfies P-C3 with nil — the boolean
+// finding itself is the distance; a continuous metric is only meaningful for an
+// orderable gap (days/counts). A Metric returning (0, true) is valid: ok=true
+// means the metric is applicable even at zero distance (e.g. deadline is today).
 type Metric func(v *Validator) (float64, bool)
 
 // Rule is one governance rule expressed as data: classification metadata plus a
@@ -94,18 +99,22 @@ type Rule struct {
 	// advisory) — see resolveNext. Set it only for a non-default M5 disposition
 	// (autofix / suggest / escalate); no rule declares one yet, so it is "" for
 	// all current rules and the disposition is severity-derived per finding.
+	//
+	// ADR §M3 "harvest" slot: the NextAutofix/NextSuggest/NextEscalate values
+	// carry the harvest intent (replacing the former separate Harvest field idea).
+	// No separate Harvest field is introduced until M5 defines an actuator.
 	Next   NextAction
 	Metric Metric // optional; nil when the rule has no continuous distance
 	Detect func(v *Validator) []ValidationResult
 }
 
-// run executes the given rules in order, accumulating findings and stamping each
-// rule's Next/Metric metadata onto its findings. ctx cancellation is honored
-// between rules (partial findings returned with the error so callers can
-// distinguish a clean run from an interrupted one). When failFast is true, run
-// returns as soon as any rule produces a SeverityError; warnings never trigger
-// the bailout. This single loop body is what the former ValidateStrict /
-// DependencyChecker.Check{,FailFast} / CheckContractHealth all collapse into.
+// run is the single loop body for all entry points: ValidateStrict (base+dep+strict)
+// and CheckHealth (health). It executes the given rules in order, accumulating
+// findings and stamping each rule's Next/Metric metadata onto its findings. ctx
+// cancellation is honored between rules (partial findings returned with the error
+// so callers can distinguish a clean run from an interrupted one). When failFast
+// is true, run returns as soon as any rule produces a SeverityError; warnings
+// never trigger the bailout.
 func (v *Validator) run(ctx context.Context, rules []Rule, failFast bool) ([]ValidationResult, error) {
 	v.runCtx = ctx
 	var out []ValidationResult

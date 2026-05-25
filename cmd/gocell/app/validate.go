@@ -83,10 +83,9 @@ func runValidate(ctx context.Context, args []string) error {
 //     error in text mode (single line, no banner, no summary); in
 //     json/sarif emit a full document containing that one issue.
 //   - no errors but warnings present: emit the full warning set via the
-//     printer's standard Print path. `ValidateFailFast` and `CheckFailFast`
-//     in kernel/governance explicitly preserve warnings on the clean-error
-//     path; dropping them at the command layer would silently hide
-//     warning-only repos.
+//     printer's standard Print path. The fail-fast path preserves warnings
+//     on the clean-error path; dropping them at the command layer would
+//     silently hide warning-only repos.
 //   - no errors, no warnings: text emits the legacy "OK: no errors." line;
 //     json/sarif emit an empty document so consumers can always parse a
 //     result regardless of outcome.

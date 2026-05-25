@@ -339,6 +339,48 @@ var goldenCases = []struct {
 			},
 		},
 	},
+	{
+		// Exercises Next=NextBlock + non-nil Metric: an error finding with a
+		// continuous distance value. Production engine always stamps Next from
+		// severity; text renders next/metric in structured fields; JSON emits
+		// them in the issue object; SARIF stores them in result.properties.
+		name: "error_with_next_and_metric",
+		results: func() []governance.ValidationResult {
+			m := 12.5
+			return []governance.ValidationResult{
+				{
+					Code:      "FMT-23",
+					Severity:  governance.SeverityError,
+					IssueType: governance.IssueForbidden,
+					File:      "contracts/http/x/v1/contract.yaml",
+					Line:      5,
+					Field:     "lifecycle",
+					Message:   "contract \"x\" has been deprecated for >90d",
+					Fix:       "delete the contract or refresh deprecatedAt",
+					Next:      governance.NextBlock,
+					Metric:    &m,
+				},
+			}
+		}(),
+	},
+	{
+		// Exercises Next=NextAdvisory + nil Metric: a warning finding with
+		// Next set but no continuous distance (boolean detect satisfies P-C3
+		// with nil per ADR §M3). Locks that nil Metric is omitted from output.
+		name: "warning_with_next_no_metric",
+		results: []governance.ValidationResult{
+			{
+				Code:     "ADV-05",
+				Severity: governance.SeverityWarning,
+				File:     "contracts/event/dead/v1/contract.yaml",
+				Field:    "endpoints.subscribers",
+				Message:  "active event contract \"dead\" has no subscribers (dead event)",
+				Fix:      "add subscribers to endpoints.subscribers or set lifecycle: deprecated",
+				Next:     governance.NextAdvisory,
+				Metric:   nil,
+			},
+		},
+	},
 }
 
 // TestGolden_Text fans the golden corpus through TextPrinter and compares to
@@ -726,10 +768,39 @@ func TestSARIF_FixInProperties(t *testing.T) {
 		"message.text must not carry the fix suffix — fix is in properties.fix only")
 }
 
-// TestSARIF_EmptyFix_NoProperties verifies that when Fix is empty, the
-// properties field is omitted from the SARIF result (omitempty).
-func TestSARIF_EmptyFix_NoProperties(t *testing.T) {
-	results := []governance.ValidationResult{
+// TestSARIF_EmptyFix_PropertiesPresentDueToNext verifies the M3 production
+// shape: production findings always carry Next (stamped by the engine from
+// severity), so result.properties is always present. When Fix is empty,
+// properties.fix is omitted (omitempty), but properties itself is non-nil
+// because Next is non-empty. A finding with no Next AND no Fix AND no Metric
+// produces nil properties (synthetic test-only state — not a production path).
+func TestSARIF_EmptyFix_PropertiesPresentDueToNext(t *testing.T) {
+	// Production shape: Next stamped, no Fix.
+	withNext := []governance.ValidationResult{
+		{
+			Code:     "REF-01",
+			Severity: governance.SeverityError,
+			File:     "cells/x/cell.yaml",
+			Line:     1,
+			Message:  "no fix, but next is set",
+			Next:     governance.NextBlock,
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(withNext))
+	var parsed sarifLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed.Runs[0].Results, 1)
+	result := parsed.Runs[0].Results[0]
+	require.NotNil(t, result.Properties,
+		"result.properties must be present when Next is set, even without Fix")
+	assert.Equal(t, string(governance.NextBlock), result.Properties.Next,
+		"result.properties.next must carry the NextAction value")
+	assert.Empty(t, result.Properties.Fix,
+		"result.properties.fix must be omitted (empty) when Fix is empty")
+
+	// Synthetic zero-M3 state (no Next, no Fix, no Metric) → properties nil.
+	noM3 := []governance.ValidationResult{
 		{
 			Code:     "REF-01",
 			Severity: governance.SeverityError,
@@ -738,14 +809,13 @@ func TestSARIF_EmptyFix_NoProperties(t *testing.T) {
 			Message:  "no fix here",
 		},
 	}
-	var buf bytes.Buffer
-	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(results))
-
-	var parsed sarifLog
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
-	require.Len(t, parsed.Runs[0].Results, 1)
-	assert.Nil(t, parsed.Runs[0].Results[0].Properties,
-		"result.properties must be absent when Fix is empty")
+	buf.Reset()
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(noM3))
+	var parsed2 sarifLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed2))
+	require.Len(t, parsed2.Runs[0].Results, 1)
+	assert.Nil(t, parsed2.Runs[0].Results[0].Properties,
+		"result.properties must be absent when Fix, Next, and Metric are all zero")
 }
 
 // TestSARIF_OriginalUriBaseIDsAlwaysPresent verifies that the SRCROOT base ID

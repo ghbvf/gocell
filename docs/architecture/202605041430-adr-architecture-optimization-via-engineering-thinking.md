@@ -417,7 +417,7 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 | P-A2 | apiserver 强制 status 由 controller 写 | `kernel/healthz.Aggregator` 接口（boot-time 注入）+ cellgen 派生 typed helper（编译期 funnel） | 运行时接口 + 编译期 |
 | P-A3 | conditions 层级 | 内存 Aggregator 树（`runtime/observability/healthz`）+ adapter 输出（延期） | 运行时 |
 | P-B1 | OwnerReference + finalizer | archtest 双向 + codegen 引用图 | 编译期 + CI 期 |
-| P-B2 | OPA Gatekeeper（运行时 admission）| CI 期规则引擎 + 规则即 YAML | CI 期 |
+| P-B2 | OPA Gatekeeper（运行时 admission）| CI 期规则引擎 + 规则即 Go typed-struct registry（`allRules []Rule`；载体由 §M3 Amendment 2026-05-26 从 YAML 改为 Go-struct，非-Go 外部消费走 `gocell dump-rules` 派生） | CI 期 |
 | P-B3 | API GVK 唯一性（运行时）| 类型 owner 唯一（编译期）| 编译期 |
 | P-C1 | controller manager 持续 reconcile（运行时）| CI bot + AI Agent harvest（仓库收敛）| **CI 期 + Agent 域** |
 | P-C2 | Reconcile.Result + Event | next-action 五级（PR / advice / block / escalate）| CI 期 |
@@ -479,7 +479,7 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 | P-A2 | 配置管理 | DRY/SRP | 单源公理 | 运行时接口 + 编译期 funnel | apiserver 强制 | M1 ✅ |
 | P-A3 | 聚合 | 组合 | — | 运行时 | conditions 层级 | M1 ✅ |
 | P-B1 | traceability | 契约即代码 | 充要条件 | 编译期 + CI 期 | OwnerReference | M4 |
-| P-B2 | CI = 配置 | DRY | 形式化 | CI 期 | OPA / VAP | M3 |
+| P-B2 | CI = 配置 | DRY | 形式化 | CI 期 | OPA / VAP | M3（载体为 Go typed-struct `allRules []Rule`，见 §M3 Amendment 2026-05-26） |
 | P-B3 | 配置管理 | SRP | 单源公理 | 编译期 | GVK 唯一 | M0 |
 | P-C1 | 闭环 | testable | 收敛定义 | **CI 期 + Agent** | controller manager | **M5（仓库收敛）** |
 | P-C2 | 执行动作 | 结构化错误 | 动作可表达 | CI 期 | Result+Event | M3 |

@@ -2999,6 +2999,69 @@ func TestADV05(t *testing.T) {
 	}
 }
 
+// TestADV05_ExitCode_Regression proves that ADV-05 (dead event) does NOT
+// produce a SeverityError and therefore must not cause `gocell validate` to
+// exit non-zero.  ADV-05 was reclassified from SeverityError to
+// SeverityWarning in M3 (ADR §M3-RULE-ENGINE); this test locks the regression
+// to prevent accidental re-elevation.
+//
+// Two paths are exercised:
+//  1. Direct detect (validateADV05): verifies the finding is SeverityWarning
+//     and that HasErrors is false on those findings alone.
+//  2. Engine stamp path (run via ValidateStrict): verifies that the engine
+//     stamps NextAdvisory (not NextBlock) onto the ADV-05 warning, confirming
+//     the severity→disposition derivation is correct for the reclassified rule.
+func TestADV05_ExitCode_Regression(t *testing.T) {
+	t.Parallel()
+	pm := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"event.dead.regression.v1": {
+				ID:               "event.dead.regression.v1",
+				Kind:             "event",
+				OwnerCell:        "",
+				ConsistencyLevel: "L2",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Subscribers: nil,
+				},
+				File: "contracts/event/dead/regression/v1/contract.yaml",
+			},
+		},
+	}
+
+	val := NewValidator(pm, "", clock.Real())
+
+	// Path 1: direct detect — ADV-05 fires as SeverityWarning.
+	direct := findByCode(val.validateADV05(), "ADV-05")
+	require.NotEmpty(t, direct, "expected at least one ADV-05 finding from validateADV05")
+	for _, r := range direct {
+		assert.Equal(t, SeverityWarning, r.Severity,
+			"ADV-05 must be SeverityWarning (reclassified from error in M3)")
+	}
+	assert.False(t, HasErrors(direct),
+		"ADV-05 findings must not contain SeverityError — HasErrors must be false")
+
+	// Path 2: engine stamp — run() stamps NextAdvisory onto the warning.
+	adv05Rule := Rule{
+		Code:   codeADV05,
+		Phase:  PhaseBase,
+		Detect: (*Validator).validateADV05,
+	}
+	stamped, err := val.run(context.Background(), []Rule{adv05Rule}, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, stamped)
+	for _, r := range stamped {
+		assert.Equal(t, NextAdvisory, r.Next,
+			"engine must stamp NextAdvisory for SeverityWarning ADV-05 (not NextBlock)")
+	}
+	assert.False(t, HasErrors(stamped),
+		"engine-stamped ADV-05 results must not cause HasErrors==true (no CI exit-code 1)")
+}
+
 // TestADV06_Removed verifies that ADV-06 no longer exists in the rule pipeline.
 // Subscribers are derived from slice contractUsages + actorSubscribers, so drift
 // between contract.yaml and slice.yaml is impossible by construction.

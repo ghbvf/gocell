@@ -79,6 +79,17 @@ func TestRuleStamp(t *testing.T) {
 		require.Len(t, got, 1)
 		assert.Nil(t, got[0].Metric)
 	})
+	t.Run("metric zero ok=true → non-nil pointer to 0.0", func(t *testing.T) {
+		// A Metric returning (0, true) is valid per ADR §M3 P-C3: ok=true means
+		// the metric is applicable even at zero distance (e.g. deadline is today).
+		// The finding must carry a non-nil *float64 pointing to 0.0, not nil.
+		r := base
+		r.Metric = func(*Validator) (float64, bool) { return 0, true }
+		got := r.stamp(v, v.scopedFindings(codeADV05, 1))
+		require.Len(t, got, 1)
+		require.NotNil(t, got[0].Metric, "ok=true with value 0 must produce non-nil *float64")
+		assert.Equal(t, 0.0, *got[0].Metric, "metric value must be exactly 0.0")
+	})
 	t.Run("empty findings → empty", func(t *testing.T) {
 		assert.Empty(t, base.stamp(v, nil))
 	})
@@ -153,6 +164,46 @@ func TestRunContextCancel(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.Canceled))
 	assert.Empty(t, got)
+}
+
+// TestRunContextCancel_PartialFindings verifies that when ctx is canceled
+// AFTER the first rule runs, run() returns the partial findings collected so
+// far plus the context error. Callers use (len(findings)>0, err!=nil) to
+// distinguish a clean run from an interrupted one.
+func TestRunContextCancel_PartialFindings(t *testing.T) {
+	t.Parallel()
+	v := newTestValidator(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	firstRan := false
+	rules := []Rule{
+		{
+			Code: codeREF01,
+			Detect: func(vv *Validator) []ValidationResult {
+				firstRan = true
+				// Cancel ctx inside the first rule's Detect; the loop check
+				// fires before the second rule runs.
+				cancel()
+				return vv.scopedFindings(codeREF01, 1)
+			},
+		},
+		{
+			Code: codeREF02,
+			Detect: func(*Validator) []ValidationResult {
+				t.Error("second rule must not run after ctx is canceled")
+				return nil
+			},
+		},
+	}
+
+	got, err := v.run(ctx, rules, false)
+	require.True(t, firstRan, "first rule must have run before cancellation check")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled),
+		"error must be (or wrap) context.Canceled")
+	require.Len(t, got, 1,
+		"partial findings from the first rule must be returned alongside the error")
+	assert.Equal(t, codeREF01, got[0].Code)
 }
 
 // TestFilterByPhase verifies phase selection keeps only matching rules and

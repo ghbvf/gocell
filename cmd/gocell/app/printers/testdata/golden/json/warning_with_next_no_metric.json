@@ -1,0 +1,21 @@
+{
+  "issues": [
+    {
+      "code": "ADV-05",
+      "severity": "warning",
+      "issueType": "",
+      "file": "contracts/event/dead/v1/contract.yaml",
+      "scope": "",
+      "field": "endpoints.subscribers",
+      "message": "active event contract \"dead\" has no subscribers (dead event)",
+      "fix": "add subscribers to endpoints.subscribers or set lifecycle: deprecated",
+      "line": 0,
+      "column": 0,
+      "next": "advisory"
+    }
+  ],
+  "summary": {
+    "errors": 0,
+    "warnings": 1
+  }
+}

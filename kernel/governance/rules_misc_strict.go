@@ -3,18 +3,19 @@ package governance
 // rules_misc_strict.go consolidates two rule clusters tied to the strict
 // pipeline:
 //
-//   - strict-only registry (strictRules + the FMT-16 / FMT-17 rules it
-//     points at, plus FMT-A1 / FMT-C1 unconditional rules registered in
-//     the base rules() pipeline alongside this file).
+//   - strict-only rules registered in allRules (PhaseStrict): FMT-16, FMT-17,
+//     FMT-19, DOC-NAME-01 — run only with `gocell validate --strict`.
 //   - FMT-20 / FMT-21 / FMT-22 / FMT-23 / FMT-25 schema-walking rules
-//     (formerly rules_strict_extra.go) — registered in the base rules()
-//     pipeline but lineage-coupled to the strict scaffolding (FMT-20/25
-//     reuse walkSchemaTreeDepth helpers, FMT-23 shares the deprecation
-//     date semantics with FMT-strict cleanup).
+//     (formerly rules_strict_extra.go) — registered in allRules (PhaseBase)
+//     but lineage-coupled to the strict scaffolding (FMT-20/25 reuse
+//     walkSchemaTreeDepth helpers, FMT-23 shares the deprecation date
+//     semantics with FMT-strict cleanup). FMT-A1 / FMT-C1 are also
+//     PhaseBase in allRules.
 //
 // validateFMT19 (wrapper package-state, rules_misc_advisory.go) and
-// validateDOCNAME01 (doc literals, rules_misc_advisory.go) are referenced
-// from strictRules() as cross-file calls within the same package.
+// validateDOCNAME01 (doc literals, rules_misc_advisory.go) are also
+// registered in allRules (PhaseStrict) as cross-file calls within the same
+// package.
 
 import (
 	"encoding/json"
@@ -42,8 +43,8 @@ import (
 // kebab name while declaring a no-dash id in yaml, and pre-Dir
 // implementations that read only the id let kebab directories slip
 // through. Entries synthesized in tests without a Dir are skipped
-// (Dir != "" is the "parsed from disk" signal). The rule is strict-only
-// (registered in strictRules) — ValidateStrict gates invocation.
+// (Dir != "" is the "parsed from disk" signal). The rule is PhaseStrict in
+// allRules — ValidateStrict gates invocation via --strict.
 func (v *Validator) validateFMT16() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
@@ -79,8 +80,8 @@ func (v *Validator) checkKebabDir(dir, id, file, kind string) []ValidationResult
 // validateFMT17 checks that the first entry in slice.yaml allowedFiles matches
 // the canonical slice directory path. Expected path is derived from
 // SliceMeta.Dir / CellDir (filesystem truth) so a faked-path/faked-id
-// pairing cannot slip through. Strict-only — ValidateStrict gates
-// invocation through strictRules.
+// pairing cannot slip through. PhaseStrict in allRules — ValidateStrict
+// gates invocation via --strict.
 func (v *Validator) validateFMT17() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
@@ -126,7 +127,7 @@ func (v *Validator) validateFMT17() []ValidationResult {
 // adr-assembly-yaml-minimal-derivation.md §"Schema 约束单源".
 //
 // This is the same pattern as validateFMTA1 (assembly id) — both are
-// registered in the rules() pipeline at validate.go.
+// registered in allRules (PhaseBase).
 //
 // FMT-C1 complements FMT-16: FMT-16 catches kebab filesystem directories,
 // while FMT-C1 catches non-conforming yaml ids (kebab, uppercase, single
@@ -161,12 +162,12 @@ func (v *Validator) validateFMTC1() []ValidationResult {
 // users on a different contract than the schema and FMT-30 (deployTemplate
 // enum), violating the single-gatekeeper model declared in
 // docs/architecture/202605061800-adr-assembly-yaml-minimal-derivation.md
-// §"Schema 约束单源". Registered in rules() (base pipeline).
+// §"Schema 约束单源". Registered in allRules (PhaseBase).
 //
-// FMT-16 / FMT-17 stay strict-only because they catch stylistic
+// FMT-16 / FMT-17 stay PhaseStrict in allRules because they catch stylistic
 // concerns (kebab-case filesystem directories, allowedFiles drift) that
-// schemas do not directly mirror; FMT-C1 was migrated to the rules()
-// pipeline alongside cell.schema.json properties.id.pattern收紧 (PR-2
+// schemas do not directly mirror; FMT-C1 was migrated to PhaseBase in
+// allRules alongside cell.schema.json properties.id.pattern收紧 (PR-2
 // PR-PROM-HARDEN-3).
 func (v *Validator) validateFMTA1() []ValidationResult {
 	var results []ValidationResult

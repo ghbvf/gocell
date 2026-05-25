@@ -1,0 +1,8 @@
+WARNINGS (1):
+  [ADV-05] active event contract "dead" has no subscribers (dead event) (field: endpoints.subscribers)
+         fix: add subscribers to endpoints.subscribers or set lifecycle: deprecated
+        next: advisory
+         at contracts/event/dead/v1/contract.yaml
+
+
+Validation complete: 0 error(s), 1 warning(s)

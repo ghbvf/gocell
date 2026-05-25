@@ -2,12 +2,12 @@ package governance
 
 // adv06_removal_test.go tests that:
 //   1. codeADV06 constant no longer exists in rulecodes.go — covered by goldenRuleIDs()
-//   2. validateADV06 is removed from rules() — covered by TestADV06_NotInRules
+//   2. validateADV06 is removed from allRules — covered by TestADV06_NotInRules
 //   3. ADV-05 fires when Subscribers is empty (no cells, no actors)
 //   4. ADV-05 passes when contract has ActorSubscribers that populate Subscribers
 //
 // These are TDD RED tests: they reflect the post-flip invariants.
-// Tests 1+2 are implicitly covered by TestRuleReachabilityFromRegistrationRoots
+// Tests 1+2 are implicitly covered by TestAllRulesMatchGolden
 // via goldenRuleIDs() not listing "ADV-06".
 
 import (

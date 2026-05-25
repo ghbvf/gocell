@@ -18,7 +18,7 @@ import (
 
 // minimalProjectMeta returns a *metadata.ProjectMeta with one cell, sufficient
 // to exercise buildCellDepGraph without triggering validation errors from nil
-// fields inside governance.DependencyChecker.
+// fields inside governance.Validator.
 func minimalProjectMeta() *metadata.ProjectMeta {
 	const cellID = "testcell"
 

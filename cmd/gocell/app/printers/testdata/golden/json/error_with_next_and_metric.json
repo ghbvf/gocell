@@ -1,0 +1,22 @@
+{
+  "issues": [
+    {
+      "code": "FMT-23",
+      "severity": "error",
+      "issueType": "forbidden",
+      "file": "contracts/http/x/v1/contract.yaml",
+      "scope": "",
+      "field": "lifecycle",
+      "message": "contract \"x\" has been deprecated for >90d",
+      "fix": "delete the contract or refresh deprecatedAt",
+      "line": 5,
+      "column": 0,
+      "next": "block",
+      "metric": 12.5
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}

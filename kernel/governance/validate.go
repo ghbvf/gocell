@@ -92,10 +92,6 @@ type ValidationResult struct {
 //
 // Validator is not safe for concurrent ValidateStrict calls. Build one
 // Validator per concurrent caller.
-//
-// runCtx holds the context for the current run() invocation; read by
-// ctx-bound detect funcs (VERIFY-06). Validator is not concurrent-safe,
-// documented above.
 type Validator struct {
 	locator
 	root             string                            // project root for file existence checks
@@ -113,7 +109,9 @@ type Validator struct {
 	contracts *registry.ContractRegistry
 	// runCtx holds the context for the current run() invocation; read by
 	// ctx-bound detect funcs (VERIFY-06). Set by run() at the start of each
-	// invocation; zero value is context.Background().
+	// invocation; zero value is nil (not context.Background()). Calling a
+	// PhaseStrict rule's Detect directly (bypassing run) leaves runCtx nil and
+	// VERIFY-06 will panic — tests must go through run() or set runCtx.
 	runCtx context.Context
 }
 

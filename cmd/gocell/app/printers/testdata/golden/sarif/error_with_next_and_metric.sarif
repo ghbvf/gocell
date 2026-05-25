@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "gocell",
+          "version": "test-1.0.0",
+          "informationUri": "https://github.com/ghbvf/gocell",
+          "rules": [
+            {
+              "id": "FMT-23",
+              "shortDescription": {
+                "text": "contract \"x\" has been deprecated for >90d"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "issueType": "forbidden"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "FMT-23",
+          "level": "error",
+          "message": {
+            "text": "contract \"x\" has been deprecated for >90d (field: lifecycle)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "contracts/http/x/v1/contract.yaml",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 5,
+                  "startColumn": 1
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fix": "delete the contract or refresh deprecatedAt",
+            "next": "block",
+            "metric": 12.5
+          }
+        }
+      ],
+      "originalUriBaseIds": {
+        "SRCROOT": {}
+      }
+    }
+  ]
+}

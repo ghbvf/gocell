@@ -12,7 +12,7 @@ import (
 // (ADR §M3-RULE-ENGINE): allRules is the sole source of truth, the engine runs
 // every entry structurally (no separate dispatch list can drift), and direct
 // enumeration is strictly stronger than the former BFS reachability traversal
-// over rules()/strictRules()/checks().
+// over former dispatch lists (replaced by allRules in §M3).
 //
 // The uniqueness + golden-set pairing also locks the Code↔Detect binding: a
 // Rule literal that pairs a code with the wrong Detect method either drops the
@@ -136,6 +136,23 @@ func goldenRuleIDs() []string {
 		// VERIFY — verification closure (rules_verify.go)
 		"VERIFY-01", "VERIFY-02", "VERIFY-03",
 		"VERIFY-04", "VERIFY-05", "VERIFY-06",
+	}
+}
+
+// TestVERIFY06IsFirstPhaseStrict locks the ordering invariant that VERIFY-06
+// is the first PhaseStrict rule in allRules. The rules_registry.go comment
+// relies on this: "Must be first in PhaseStrict so fail-fast stops on
+// VERIFY-06 before FMT rules." If VERIFY-06 were not first, a failing FMT
+// rule could run before the ctx-subprocess guard fires.
+func TestVERIFY06IsFirstPhaseStrict(t *testing.T) {
+	t.Parallel()
+	strict := rulesForPhases(PhaseStrict)
+	if len(strict) == 0 {
+		t.Fatal("rulesForPhases(PhaseStrict) is empty — VERIFY-06 must be first")
+	}
+	if strict[0].Code != codeVERIFY06 {
+		t.Fatalf("rulesForPhases(PhaseStrict)[0].Code = %s; want %s (fail-fast ordering invariant)",
+			strict[0].Code, codeVERIFY06)
 	}
 }
 

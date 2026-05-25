@@ -13,7 +13,8 @@ import (
 )
 
 // depCheck runs all PhaseDep rules (DEP-01, DEP-02, DEP-03) in order and
-// returns the combined findings. Mirrors DependencyChecker.Check() for tests.
+// returns the combined findings. Wraps the PhaseDep rules directly for
+// focused DEP tests.
 func depCheck(v *Validator) []ValidationResult {
 	var r []ValidationResult
 	r = append(r, v.checkDEP01()...)
@@ -23,7 +24,7 @@ func depCheck(v *Validator) []ValidationResult {
 }
 
 // depCheckFailFast runs PhaseDep rules and stops after the first check that
-// produces a SeverityError. Mirrors DependencyChecker.CheckFailFast().
+// produces a SeverityError.
 func depCheckFailFast(v *Validator) []ValidationResult {
 	var r []ValidationResult
 	for _, check := range []func() []ValidationResult{
@@ -439,7 +440,7 @@ func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
 
 // --- Graph() ---
 
-func TestDependencyChecker_Graph_Empty(t *testing.T) {
+func TestValidatorGraph_Empty(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells:      map[string]*metadata.CellMeta{},
 		Slices:     map[string]*metadata.SliceMeta{},
@@ -454,7 +455,7 @@ func TestDependencyChecker_Graph_Empty(t *testing.T) {
 	assert.Nil(t, g.Edges)
 }
 
-func TestDependencyChecker_Graph_Acyclic(t *testing.T) {
+func TestValidatorGraph_Acyclic(t *testing.T) {
 	// cell-a → cell-b (cell-a depends on cell-b as L0)
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
@@ -516,7 +517,7 @@ func TestDependencyChecker_Graph_Acyclic(t *testing.T) {
 	assert.True(t, found, "expected edge cell-a → cell-b")
 }
 
-func TestDependencyChecker_Graph_IsolatedCells(t *testing.T) {
+func TestValidatorGraph_IsolatedCells(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
 			"alone": {ID: "alone", ConsistencyLevel: "L1"},
@@ -531,7 +532,7 @@ func TestDependencyChecker_Graph_IsolatedCells(t *testing.T) {
 	assert.Contains(t, g.Nodes, "alone", "isolated cell must appear in Nodes")
 }
 
-func TestDependencyChecker_Graph_DeterministicOrder(t *testing.T) {
+func TestValidatorGraph_DeterministicOrder(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
 			"cell-a": {ID: "cell-a", ConsistencyLevel: "L1"},
@@ -591,7 +592,7 @@ func TestDependencyChecker_Graph_DeterministicOrder(t *testing.T) {
 	}
 }
 
-func TestDependencyChecker_Graph_PropagatesValidationErrors(t *testing.T) {
+func TestValidatorGraph_PropagatesValidationErrors(t *testing.T) {
 	// Construct ProjectMeta with a slice using a serve role on a contract that
 	// has an unknown kind — this triggers buildDependencyGraph's error path
 	// (cannot resolve consumers for unknown contract kind).
@@ -628,7 +629,7 @@ func TestDependencyChecker_Graph_PropagatesValidationErrors(t *testing.T) {
 
 // --- empty project ---
 
-func TestDependencyChecker_EmptyProject(t *testing.T) {
+func TestValidator_EmptyProject(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells:      map[string]*metadata.CellMeta{},
 		Slices:     map[string]*metadata.SliceMeta{},
@@ -641,7 +642,7 @@ func TestDependencyChecker_EmptyProject(t *testing.T) {
 	assert.Empty(t, results, "empty project should produce no findings")
 }
 
-func TestDependencyChecker_NilProject(t *testing.T) {
+func TestValidator_NilProject(t *testing.T) {
 	dc := NewValidator(nil, "", clock.Real())
 	results := depCheck(dc)
 	assert.Empty(t, results, "nil project should produce no findings")

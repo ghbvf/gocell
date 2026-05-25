@@ -20,7 +20,7 @@ import (
 // ADV-05 is among the trailing ADV/OUTGUARD/SliceConsistency block). Validate
 // finds both; ValidateFailFast must surface REF-01 and skip ADV-05 entirely.
 //
-// If a future change to rules() reorders ADV-05 before REF-01, the
+// If a future change to allRules reorders ADV-05 before REF-01, the
 // ShortCircuit test below would still typecheck but stop covering the
 // short-circuit contract — TestValidate_RespectsCtxCancel and
 // TestValidateFailFast_RespectsCtxCancel act as the structural backstop.
@@ -71,7 +71,7 @@ func TestValidateFailFast_ShortCircuitsOnFirstError(t *testing.T) {
 	assert.Empty(t, findByCode(failFast, "ADV-05"),
 		"ADV-05 must NOT fire under fail-fast: short-circuit broke")
 	// Rule-code-agnostic short-circuit signature: fail-fast strictly produces
-	// fewer findings than the full pass. Holds regardless of rules() ordering
+	// fewer findings than the full pass. Holds regardless of allRules ordering
 	// because the only reason fail-fast can match the full count is if no
 	// rule ever errored, which the require.NotEmpty above already rules out.
 	assert.Less(t, len(failFast), len(full),
