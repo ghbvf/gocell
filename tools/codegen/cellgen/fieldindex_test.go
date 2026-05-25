@@ -289,6 +289,52 @@ func TestBuildCellSpec_SubscribeFieldOverride(t *testing.T) {
 	}
 }
 
+// TestBuildCellSpec_SubscribeFieldInvalidIdentifier verifies that a subscribe CU
+// carrying an explicit field: value that is not a valid Go identifier produces
+// a descriptive error mentioning the invalid pattern. This exercises the
+// fieldName validation added after resolveSliceField returns.
+func TestBuildCellSpec_SubscribeFieldInvalidIdentifier(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+	slc := &metadata.SliceMeta{
+		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "event.foo.v1", Role: "subscribe", Handler: "HandleFoo", Field: "bad-name!"},
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.v1", Kind: "event"}})
+	fieldIndex := map[string]string{"subs": "subsSvc"}
+	bundle := emptyBundleWithListener()
+
+	_, err := BuildCellSpec(p, "demo", bundle, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for invalid field identifier, got nil")
+	}
+	// Error message should mention the validation constraint.
+	if !strings.Contains(err.Error(), "valid Go identifier") {
+		t.Errorf("error should mention 'valid Go identifier', got: %v", err)
+	}
+}
+
+// TestBuildCellSpec_NilFieldIndexWithSubscribeCU verifies that passing nil
+// fieldIndex together with a subscribe CU (rather than an empty map) produces
+// an error mentioning "fieldIndex is nil". Previously no test covered this
+// specific code path in resolveSliceField.
+func TestBuildCellSpec_NilFieldIndexWithSubscribeCU(t *testing.T) {
+	t.Parallel()
+	cell, slc, contracts := buildSubscribeFixtures()
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, contracts)
+	bundle := emptyBundleWithListener()
+
+	_, err := BuildCellSpec(p, "demo", bundle, nil) // nil fieldIndex, not empty map
+	if err == nil {
+		t.Fatal("expected error when fieldIndex is nil and subscribe CU present, got nil")
+	}
+	if !strings.Contains(err.Error(), "fieldIndex is nil") {
+		t.Errorf("error should mention 'fieldIndex is nil', got: %v", err)
+	}
+}
+
 // --- fixture helpers ---
 
 func buildSubscribeFixtures() (*metadata.CellMeta, *metadata.SliceMeta, []*metadata.ContractMeta) {

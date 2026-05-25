@@ -21,14 +21,19 @@
 //
 // AI-robust ratings (per .claude/rules/gocell/ai-robust.md):
 //
-//   - SUBSCRIBERS-DERIVED-FIELD-FROZEN-01 — Hard (meta-lock). The real
-//     downstream-Hard enforcement is the type system: Subscribers yaml:"-" +
-//     KnownFields strict decode makes a hand-written `subscribers:` an
-//     unrepresentable parse error (mirrors the established MaxConsistencyLevel
-//     yaml:"-" precedent). This reflect-based test LOCKS that mechanism in
-//     place: if an author re-adds a yaml key to Subscribers (re-opening the
-//     hand-write bypass), this test fires. Type-level assertion, no string
-//     anchor.
+//   - SUBSCRIBERS-DERIVED-FIELD-FROZEN-01 — Funnel dual-lock:
+//     下游 Hard: yaml:"-" on EndpointsMeta.Subscribers + KnownFields strict
+//     decode makes a hand-written `subscribers:` key in contract.yaml an
+//     unrepresentable parse error (type-system gate; mirrors MaxConsistencyLevel
+//     yaml:"-" precedent). This reflect-based test LOCKS that mechanism: if an
+//     author re-adds a yaml key to Subscribers (re-opening the bypass), this
+//     test fires. Type-level assertion, no string anchor.
+//     上游 Medium: EndpointsMeta.Subscribers is an exported field on a public
+//     struct — direct assignment by any package (cells/, examples/, cmd/) is
+//     not currently guarded; package-internal AND package-external Go code can
+//     assign it directly, bypassing deriveEventSubscribers. Archtest does not
+//     yet lock the write path to the derive funnel. Upstream Hard-ization
+//     tracked in gh issue #985.
 //   - CONTRACT-YAML-NO-SUBSCRIBERS-KEY-01 — Medium (defense-in-depth +
 //     documentation). KnownFields already rejects `subscribers:` at parse; this
 //     content scan catches it statically across the tree and documents the
@@ -48,6 +53,9 @@
 //   - The marker scan matches the literal token "+slice:subscribe"; a marker
 //     split across comment lines is a documented blind spot (markergen's
 //     line-based parser would not recognize such a split as a marker either).
+//   - Subscribers is an exported field on a public struct — direct assignment
+//     by any package (cells/, examples/, cmd/) is not currently guarded;
+//     upstream Hard-ization tracked in gh issue #985.
 package archtest
 
 import (

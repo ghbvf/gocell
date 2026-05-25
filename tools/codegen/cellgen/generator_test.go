@@ -293,6 +293,33 @@ func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
 	}
 }
 
+// TestGenerate_CellGoAbsentWithSubscribeCU verifies that when cell.go is absent
+// (IndexCellStructFields errors → fieldIndex=nil) but the cell has a subscribe
+// CU, Generate returns a build error rather than silently succeeding with no
+// subscriptions. The comment "cell.go absent is acceptable (empty index)" only
+// applies to cells without subscribe CUs; with subscribe CUs it must fail fast.
+func TestGenerate_CellGoAbsentWithSubscribeCU(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Create minimal directory structure but NO cell.go.
+	if err := os.MkdirAll(filepath.Join(root, "cells", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write go.mod so readModulePath succeeds if reached.
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/ghbvf/gocell\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// cell.go is intentionally absent — IndexCellStructFields will error → fieldIndex=nil.
+	project := buildSyntheticProject() // has a subscribe CU on alpha slice
+	_, err := Generate(root, project, Options{OnlyCell: "demo"})
+	if err == nil {
+		t.Fatal("expected build error when cell.go absent and subscribe CU present, got nil")
+	}
+	if !strings.Contains(err.Error(), "fieldIndex is nil") {
+		t.Errorf("error should mention 'fieldIndex is nil', got: %v", err)
+	}
+}
+
 // TestRenderCell_GoldenSynth renders the synthetic project's CellGenSpec
 // through cell.tmpl and compares the result against a committed golden file.
 // When run with -update it regenerates the golden file instead.

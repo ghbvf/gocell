@@ -250,6 +250,16 @@ func buildSubscriptionSpecFromCU(
 	if err != nil {
 		return SubscriptionGenSpec{}, err
 	}
+	if !goLocalIdentPattern.MatchString(fieldName) {
+		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: subscribe field name must be a valid Go identifier (e.g. consumerSvc, eventHandler)",
+			errcode.WithDetails(
+				slog.String("cellID", cellID),
+				slog.String("sliceID", sliceID),
+				slog.String("field", fieldName),
+				slog.String("pattern", goLocalIdentPattern.String()),
+			))
+	}
 
 	contract, ok := p.Contracts[cu.Contract]
 	if !ok {

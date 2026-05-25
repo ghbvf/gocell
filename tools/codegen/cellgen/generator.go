@@ -148,7 +148,10 @@ func generateOneCell(
 	cellGoPath := filepath.Join(root, filepath.Dir(cell.File), "cell.go")
 	fieldIndex, idxErr := IndexCellStructFields(cellGoPath)
 	if idxErr != nil {
-		// cell.go absent is acceptable (empty index); other errors bubble up.
+		// cell.go absent: acceptable only when the cell has NO subscribe CUs.
+		// If any slice declares contractUsages[role=subscribe], BuildCellSpec
+		// will surface a descriptive "fieldIndex is nil" error below.
+		// Cells without subscribe CUs proceed with nil fieldIndex harmlessly.
 		fieldIndex = nil
 	}
 

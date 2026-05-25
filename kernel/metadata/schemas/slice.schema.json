@@ -43,7 +43,8 @@
           },
           "field": {
             "type": "string",
-            "description": "Cell-struct field name holding the subscribe consumer; disambiguates slices that own more than one *sliceID.T field. Optional for role=subscribe (cellgen resolves by package convention when empty); forbidden for non-subscribe roles."
+            "description": "Cell-struct field name holding the subscribe consumer; disambiguates slices that own more than one *sliceID.T field. Optional for role=subscribe (cellgen resolves by package convention when empty); forbidden for non-subscribe roles.",
+            "pattern": "^[a-zA-Z_][A-Za-z0-9_]*$"
           }
         },
         "allOf": [

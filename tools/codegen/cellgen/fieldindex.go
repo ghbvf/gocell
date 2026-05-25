@@ -60,6 +60,11 @@ func IndexCellStructFields(cellGoPath string) (map[string]string, error) {
 
 // ambiguousField is the sentinel stored in the field index when a package
 // selector appears on more than one struct field.
+//
+// The empty string is safe as a sentinel because a valid field name can never
+// be empty: goLocalIdentPattern (^[a-zA-Z_][A-Za-z0-9_]*$) requires at least
+// one character, so resolveSliceField's map-ok-idiom unambiguously distinguishes
+// "key absent" (ok=false) from "key present but ambiguous" (ok=true, value="").
 const ambiguousField = ""
 
 // structTypes returns every struct type declaration in f, in source order.
