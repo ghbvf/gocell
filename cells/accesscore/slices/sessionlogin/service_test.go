@@ -1391,3 +1391,43 @@ func TestLogin_SuspendedUser_DoesNotIncrementCounter(t *testing.T) {
 // pre-bcrypt-suspended user and exits the same loginOutcome path). Keeping a
 // mem-store stub for the baseline branch would duplicate the wrong-password
 // fixture without exercising new code (PR #585 review F2).
+
+// TestService_IssueForUser_InactiveUser_ReturnsCleanUserNotActiveError verifies
+// that IssueForUser translates the credentialauthority "credential not
+// authoritative" jargon into a user-visible "account is not active" message
+// (issue #940 P2-2). The error Kind/Code (KindPermissionDenied /
+// ErrAuthUserNotActive) must be preserved so the ChangePassword adapter can
+// map it to the declared typed 403 response.
+func TestService_IssueForUser_InactiveUser_ReturnsCleanUserNotActiveError(t *testing.T) {
+	tests := []struct {
+		name   string
+		status domain.UserStatus
+	}{
+		{name: "suspended user", status: domain.StatusSuspended},
+		{name: "locked user", status: domain.StatusLocked},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, userRepo := newTestService(t)
+			seedUser(userRepo, "inactive-user", "pass123")
+
+			u, err := userRepo.GetByUsername(context.Background(), "inactive-user")
+			require.NoError(t, err)
+
+			// Put the user into the target inactive state.
+			require.NoError(t, userRepo.UpdateLockState(context.Background(), u.ID, tt.status, time.Now()))
+
+			_, err = svc.IssueForUser(context.Background(), u.ID)
+			require.Error(t, err)
+
+			var ce *errcode.Error
+			require.ErrorAs(t, err, &ce, "must be *errcode.Error")
+			assert.Equal(t, errcode.ErrAuthUserNotActive, ce.Code,
+				"Code must be ErrAuthUserNotActive")
+			assert.Equal(t, errcode.KindPermissionDenied, ce.Kind,
+				"Kind must be KindPermissionDenied")
+			assert.Equal(t, "account is not active", ce.Message,
+				"Message must be the clean user-visible literal, not the jargon 'credential not authoritative'")
+		})
+	}
+}

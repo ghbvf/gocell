@@ -266,13 +266,12 @@ func TestHandler_Refresh_BlankToken(t *testing.T) {
 	assert.True(t, foundDetail, "expected 'detail' key in error details")
 }
 
-// TestHandleRefresh_UserNotActive_Returns403 exercises the RefreshAdapter
-// typed-response branch: when the session owner is suspended/locked,
-// service.rejectIfUserNotActive returns KindPermissionDenied +
-// ErrAuthUserNotActive, and the adapter must surface it as the declared
-// typed Refresh403ErrorResponse (contracts/http/auth/refresh/v1 responses.403),
-// not the generic framework fallback. Asserts the canonical 403 wire envelope.
-func TestHandleRefresh_UserNotActive_Returns403(t *testing.T) {
+// TestHandleRefresh_UserNotActive_Returns401 verifies that when the session
+// owner is suspended/locked, the handler returns 401 ErrAuthRefreshFailed
+// (ADR §A13 single-envelope). The 403 Refresh403ErrorResponse branch is
+// removed; user-not-active is now indistinguishable from other rejections
+// to the wire caller.
+func TestHandleRefresh_UserNotActive_Returns401(t *testing.T) {
 	sessionStore := newTestSessionStore(t)
 	refreshStore := newTestRefreshStore()
 
@@ -303,7 +302,7 @@ func TestHandleRefresh_UserNotActive_Returns403(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusForbidden, w.Code,
-		"suspended session owner must get 403 via typed Refresh403ErrorResponse")
-	assertErrorBody(t, w.Body.Bytes(), "ERR_AUTH_USER_NOT_ACTIVE", "account is not active")
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"suspended session owner must get 401 (ADR §A13 single-envelope)")
+	assertErrorBody(t, w.Body.Bytes(), "ERR_AUTH_REFRESH_FAILED", "invalid refresh token")
 }

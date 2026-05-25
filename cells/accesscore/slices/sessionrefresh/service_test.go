@@ -460,17 +460,19 @@ func (c *countingSessionStore) Create(ctx context.Context, s *session.Session) e
 // TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes covers the
 // S4.0 fail-closed path added by rejectIfUserNotActive: when the session
 // owner is non-active (suspended / locked), Refresh must (a) refuse with
-// ErrAuthUserNotActive (403) and (b) cascade-revoke the refresh chain so
-// subsequent rotation attempts cannot keep returning new tokens. Tests
-// both non-active states to confirm CanAuthenticate() applies uniformly.
+// ErrAuthRefreshFailed (401) — ADR §A13 single envelope: user-not-active
+// is indistinguishable from any other rejection to the wire caller — and
+// (b) cascade-revoke the refresh chain so subsequent rotation attempts
+// cannot keep returning new tokens. Tests both non-active states to
+// confirm CanAuthenticate() applies uniformly.
 func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 	cases := []struct {
 		name        string
 		status      domain.UserStatus
 		expectError errcode.Code
 	}{
-		{name: "suspended_rejected", status: domain.StatusSuspended, expectError: errcode.ErrAuthUserNotActive},
-		{name: "locked_rejected", status: domain.StatusLocked, expectError: errcode.ErrAuthUserNotActive},
+		{name: "suspended_rejected", status: domain.StatusSuspended, expectError: errcode.ErrAuthRefreshFailed},
+		{name: "locked_rejected", status: domain.StatusLocked, expectError: errcode.ErrAuthRefreshFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -498,8 +500,8 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
 			assert.Equal(t, tc.expectError, ec.Code,
-				"non-active refresh must surface ErrAuthUserNotActive (403)")
-			assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+				"non-active refresh must surface ErrAuthRefreshFailed (401) — ADR §A13 single envelope")
+			assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
 
 			// Cascade-revoke side effect: the refresh chain must be gone so a
 			// retry with the same wire token cannot keep returning tokens.
@@ -512,8 +514,7 @@ func TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes(t *testing.T) {
 			var retryEc *errcode.Error
 			require.ErrorAs(t, retryErr, &retryEc)
 			// After cascade revoke, the retry hits the refresh-store layer
-			// and surfaces ErrAuthRefreshFailed (uniform rejection message),
-			// not the user-state code.
+			// and surfaces ErrAuthRefreshFailed (uniform rejection message).
 			assert.Equal(t, errcode.ErrAuthRefreshFailed, retryEc.Code,
 				"retry after cascade revoke must surface uniform refresh rejection")
 		})
@@ -1243,7 +1244,14 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 	assert.Zero(t, businessN, "session-refresh cascade must not use business RevokeSession")
 }
 
-func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testing.T) {
+// TestService_Refresh_CascadeRevokeFailure_FailsClosed401 verifies that when the
+// rejection decision has already been made (session not found → cascade revoke
+// path) and the cascade RevokeSessionDetached call itself fails, the service
+// must still return 401 ErrAuthRefreshFailed rather than 503. Rationale: the
+// rejection is already decided; cascade failure is a best-effort cleanup write,
+// not a reason to bleed 503 (which would signal infra status to the caller).
+// ADR §A13 single envelope: fail-closed to 401 on cascade write failure.
+func TestService_Refresh_CascadeRevokeFailure_FailsClosed401(t *testing.T) {
 	notFoundErr := domainSessionNotFoundError()
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
@@ -1263,7 +1271,9 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"cascade revoke failure must not bleed 503; fail-closed to 401 (ADR §A13)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
 }
 
 func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testing.T) {
@@ -2086,3 +2096,213 @@ func TestRefresh_Reuse_CascadeUsesDetachedCtx(t *testing.T) {
 // Compile-time check: ports is used (userRepo, roleRepo). Ensure unused import
 // does not surface — the import is consumed by domain/mem references above.
 var _ ports.UserRepository = (*mem.UserRepository)(nil)
+
+// ---- cascade-fail-closed 401 regression suite (ADR §A13) ----
+//
+// Each test injects revokeFailingRefreshStore so RevokeSessionDetached fails,
+// then asserts the final error is still ErrAuthRefreshFailed (401), never 503.
+// Rationale: the rejection decision is made before the cascade write; cascade
+// failure must not bleed the infra error to the wire caller.
+
+// TestCascadeFailClosed_RevokedSession_401 verifies that a revoked session +
+// cascade-write failure still returns 401, not 503 (ADR §A13).
+func TestCascadeFailClosed_RevokedSession_401(t *testing.T) {
+	svc, store, innerRefreshStore := newTestServiceWithRefreshStore(t, "usr-cfr-revoked")
+	sess := newTestSession("usr-cfr-revoked", "sess-cfr-revoked")
+	require.NoError(t, store.Create(context.Background(), sess))
+	require.NoError(t, store.Revoke(context.Background(), "sess-cfr-revoked"))
+
+	wireToken, _, err := innerRefreshStore.Issue(context.Background(), "sess-cfr-revoked", "usr-cfr-revoked", int64(1))
+	require.NoError(t, err)
+
+	// Rebuild svc with revokeFailingRefreshStore wrapping innerRefreshStore so
+	// Peek/Issue work but RevokeSessionDetached fails.
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	u, _ := domain.NewUser("usr-cfr-revoked", "cfr-revoked@test.local", "hash", time.Now())
+	u.ID = "usr-cfr-revoked"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	failStore := revokeFailingRefreshStore{
+		Store: innerRefreshStore,
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh store down"),
+	}
+	svc2 := mustNewService(store, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		withTestInvalidator(userRepo, store, innerRefreshStore))
+	_ = svc // suppress unused var from newTestServiceWithRefreshStore
+
+	pair, err := svc2.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"revoked-session + cascade-fail must be fail-closed to 401 (ADR §A13)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+}
+
+// TestCascadeFailClosed_SubjectMismatch_401 verifies that a subject-mismatch +
+// cascade-write failure returns 401, not 503 (ADR §A13).
+func TestCascadeFailClosed_SubjectMismatch_401(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-cfr-mismatch", "cfr-mismatch@test.local", "hash", time.Now())
+	u.ID = "usr-cfr-mismatch"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	innerStore := newTestRefreshStore()
+	// Issue a token whose SubjectID differs from the session SubjectID to trigger
+	// the subject-mismatch branch in refreshInTx.
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-cfr-mismatch", "usr-WRONG-subject", int64(1))
+	require.NoError(t, err)
+
+	sess := newTestSession("usr-cfr-mismatch", "sess-cfr-mismatch")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	failStore := revokeFailingRefreshStore{
+		Store: innerStore,
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh store down"),
+	}
+	svc := mustNewService(sessionStore, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, innerStore))
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"subject-mismatch + cascade-fail must be fail-closed to 401 (ADR §A13)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+}
+
+// TestCascadeFailClosed_UserNotActive_401 verifies that user-not-active +
+// cascade-write failure returns 401, not 503 (ADR §A13).
+func TestCascadeFailClosed_UserNotActive_401(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, err := domain.NewUser("usr-cfr-inactive", "cfr-inactive@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = "usr-cfr-inactive"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+	require.NoError(t, userRepo.UpdateLockState(context.Background(), u.ID, domain.StatusSuspended, time.Now()))
+
+	innerStore := newTestRefreshStore()
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-cfr-inactive", u.ID, int64(1))
+	require.NoError(t, err)
+
+	sess := newTestSession(u.ID, "sess-cfr-inactive")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	failStore := revokeFailingRefreshStore{
+		Store: innerStore,
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh store down"),
+	}
+	svc := mustNewService(sessionStore, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, innerStore))
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"user-not-active + cascade-fail must be fail-closed to 401 (ADR §A13)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+}
+
+// TestCascadeFailClosed_StaleEpoch_401 verifies that stale-epoch +
+// cascade-write failure returns 401, not 503 (ADR §A13).
+func TestCascadeFailClosed_StaleEpoch_401(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, err := domain.NewUser("usr-cfr-stale", "cfr-stale@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	u.ID = "usr-cfr-stale"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+	// Bump epoch so user is at epoch=2; the token is issued at epoch=1 (stale).
+	_, bumpErr := userRepo.BumpAuthzEpoch(context.Background(), u.ID)
+	require.NoError(t, bumpErr)
+
+	innerStore := newTestRefreshStore()
+	// staleEpochPeekStore returns a token with epochAtIssue=1 (stale vs user epoch=2).
+	staleStore := &staleEpochPeekStore{
+		Store:        innerStore,
+		subjectID:    u.ID,
+		sessionID:    "sess-cfr-stale",
+		epochAtIssue: 1,
+	}
+
+	sess := newTestSession(u.ID, "sess-cfr-stale")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	failStore := revokeFailingRefreshStore{
+		Store: staleStore,
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh store down"),
+	}
+	svc := mustNewService(sessionStore, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, innerStore))
+
+	pair, err := svc.Refresh(context.Background(), "any-wire-token")
+	require.Error(t, err)
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"stale-epoch + cascade-fail must be fail-closed to 401 (ADR §A13)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+}
+
+// TestCascadeFailClosed_RotatedSubjectMismatch_401 verifies that a
+// rotated-subject-mismatch + cascade-write failure returns 401, not 503 (ADR §A13).
+func TestCascadeFailClosed_RotatedSubjectMismatch_401(t *testing.T) {
+	sessionStore := newTestSessionStore(t)
+	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+
+	u, _ := domain.NewUser("usr-cfr-rotmismatch", "cfr-rotmismatch@test.local", "hash", time.Now())
+	u.ID = "usr-cfr-rotmismatch"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	innerStore := newTestRefreshStore()
+	// rotateMismatchRefreshStore causes Rotate to return a token with wrong SessionID.
+	mismatchStore := rotateMismatchRefreshStore{
+		Store:            innerStore,
+		rotatedSessionID: "wrong-session",
+		rotatedSubjectID: u.ID,
+	}
+
+	sess := newTestSession(u.ID, "sess-cfr-rotmismatch")
+	require.NoError(t, sessionStore.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-cfr-rotmismatch", u.ID, int64(1))
+	require.NoError(t, err)
+
+	// Wrap the mismatch store so RevokeSessionDetached fails.
+	failStore := revokeFailingRefreshStore{
+		Store: mismatchStore,
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh store down"),
+	}
+	svc := mustNewService(sessionStore, roleRepo, userRepo, failStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, innerStore))
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"rotated-subject-mismatch + cascade-fail must be fail-closed to 401 (ADR §A13)")
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind)
+}
