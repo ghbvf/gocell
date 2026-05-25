@@ -10,10 +10,11 @@ import (
 
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"

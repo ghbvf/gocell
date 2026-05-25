@@ -5,10 +5,11 @@
 // declared anywhere in a cell subtree (cells/<x>/**/*.go +
 // examples/<demo>/cells/<x>/**/*.go, covering cell-package root +
 // internal/ + slices/<y>/ + postgres/ + mem/ ...) MUST NOT accept raw
-// infra types (persistence.TxRunner / outbox.Publisher / outbox.Writer)
-// as parameters. Composition roots wrap raw infra into sealed marker
-// types (persistence.CellTxManager / outbox.CellPublisher / outbox.CellWriter)
-// before calling any cell-subtree With* Option.
+// infra types (persistence.TxRunner / outbox.Publisher / outbox.Writer /
+// outbox.Emitter) as parameters. Composition roots wrap raw infra into sealed
+// marker types (persistence.CellTxManager / outbox.CellPublisher /
+// outbox.CellWriter / outbox.CellEmitter) before calling any cell-subtree
+// With* Option.
 //
 // Scope was extended from cell-package root only to the full cell subtree
 // by ADR 202605101900 Amendment 2026-05-12 (PR #481 / PR-S7); the previous
@@ -91,7 +92,7 @@ func (v rawPublicOptionViolation) String() string {
 // Sealed-marker boundary covers the full cell subtree (not just cell.go) —
 // every exported With* Option in cells/<x>/{cell.go, slices/<y>/service.go,
 // internal/.../service.go, ...} must accept `persistence.CellTxManager` /
-// `outbox.Cell{Publisher,Writer}`, not raw infra. See ADR 202605101900 §D1
+// `outbox.Cell{Publisher,Writer,Emitter}`, not raw infra. See ADR 202605101900 §D1
 // (boundary extension, Amendment 2026-05-12) for the architectural rationale.
 func isCellSubtreeFile(rel string) bool {
 	rel = filepath.ToSlash(rel)
