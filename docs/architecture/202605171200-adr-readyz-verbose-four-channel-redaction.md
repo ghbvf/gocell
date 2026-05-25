@@ -74,7 +74,7 @@ typed `dependencies` 字段。
 | **a. Message** | `errcode.Message` (const literal) | 下发 | 下发 | 记录 | 不需要（const literal，无 runtime 数据） |
 | **b. Details** | `errcode.Details` (`[]slog.Attr`) | 下发 | strip | 记录 | runtime 字段为程序员选择的低敏感字段（ID / 枚举 / 计数），无 raw secret |
 | **c. Internal** | `errcode.WithInternal` | ❌ 不下发 | ❌ 不下发 | 记录 | runtime 调试信息（堆栈摘要、SQL 片段），仅服务端可见 |
-| **d. Ops-Diagnostics** | handler-side `slog.Warn` 内的 typed payload | ❌ | ❌ | 记录 | **必须**经 typed funnel（health 包：`newRedactedErrorMsg(err) → redactedErrorMsg` 强制 `pkg/redaction.RedactString`） |
+| **d. Ops-Diagnostics** | handler-side `slog.Log(ctx, level, ...)` 内的 typed payload（D8 起透传 request ctx 关联字段） | ❌ | ❌ | 记录 | **必须**经 typed funnel（health 包：`newRedactedErrorMsg(err) → redactedErrorMsg` 强制 `pkg/redaction.RedactString`） |
 
 a/b/c 三层延续 ADR `202605051730-adr-errcode-message-pii-safety.md`；d 通道是
 本 ADR 新增的形式化——handler 在 errcode envelope 之外独立向 slog 写出
@@ -151,8 +151,10 @@ JSON handler 输出 `"dependencies":{"db":{}}`——所有字段丢失，operato
 修复：`logDiagnostics` 改用 `slog.Group("dependencies", slog.Any(name, entry)...)`。
 Group 内每个 sub-attr 的 value 是 SlogDependencyEntry（LogValuer），handler 在 Resolve 阶段
 调 LogValue 返回 GroupValue，所有 handler（JSON / text / logfmt）一致输出 snake_case。
-text 输出形态：`dependencies.db.status=unhealthy dependencies.db.duration_ms=0 dependencies.db.error_msg=<REDACTED>`。
-JSON 输出形态：`"dependencies":{"db":{"status":"unhealthy","duration_ms":0,"error_msg":"<REDACTED>"}}`。
+text 输出形态（probe error `dial failed password=hunter2 host=mq` 脱敏后）：
+`dependencies.db.status=unhealthy dependencies.db.duration_ms=0 dependencies.db.error_msg="dial failed password=<REDACTED> host=mq"`
+（text handler 对含空格 / `=` 的值加引号；空 error_msg 输出 `error_msg=""`，单 token 无特殊字符如 `error_msg=timeout` 则不加引号）。
+JSON 输出形态：`"dependencies":{"db":{"status":"unhealthy","duration_ms":0,"error_msg":"dial failed password=<REDACTED> host=mq"}}`。
 
 healthtest 包内 `ReadyzUnhealthyDeps` + `HasReadyzDependencyStatus` + health 包本地
 `readyzUnhealthyDeps` helper 全部改用 `slog.Value.Group()` 遍历——而非旧的 type-assert
@@ -174,6 +176,22 @@ upstream Hard 现在没有任何 backdoor：SlogDependencyEntry 三个字段 une
 exported 构造函数 + redactedErrorMsg 是包私有 newtype——外部包构造该类型在 Go 编译器
 层完全不可表达。
 
+### D8 — `logDiagnostics` 透传 request ctx（#942 R2 修复）
+
+D5 把 `logUnhealthy` 改名 `logDiagnostics` 时，slog 调用仍是
+`slog.Log(context.Background(), level, msg, ...)`。wire 删 error 文本后（D1），slog 是
+**主诊断通道**——用 `context.Background()` 会丢框架 contextHandler
+（`runtime/observability/logging`）从 ctx 注入的 `request_id` / `trace_id` /
+`correlation_id`，使 503 / degraded 记录无法关联到触发它的请求（PR #552 review R2）。
+
+修复：`logDiagnostics` 加 `ctx context.Context` 首参，`writeTo`（持有 request ctx）的
+degraded / unhealthy 两条调用路径都传入，末行改 `slog.Log(ctx, level, msg, ...)`。关联
+字段来源与 errcode `WithInternal` 路径**同源**（同一 contextHandler）。同 readyz 路径的
+shutting-down / singleflight-error / panic-recover 三处包级 slog 调用一并改用
+`slog.InfoContext` / `slog.ErrorContext`，消除 readyz 路径全部 ctx 丢失点。
+
+ctx 仅承载关联值（非 secret），不引入新泄漏面——见 §4 威胁矩阵 #942 重评。
+
 ## §3 Threat Matrix
 
 | Secret 形态 | 通道 a/b/c 暴露面 | 通道 d 暴露面 | 备注 |
@@ -189,14 +207,34 @@ exported 构造函数 + redactedErrorMsg 是包私有 newtype——外部包构�
 
 ⚠ 项是"已知盲区"（regex 类 redaction 共有），不在本 ADR 范围内解决；通过通道 a/b 完全不下发文本兜底——即便 d 通道 mask 漏，wire 仍不携带任何文本。
 
-### SIEM/ELK fingerprint 风险
+### SIEM/ELK 转发：redactor 覆盖面 vs 真实泄漏面
 
-mask 后 `<REDACTED>` 是固定字面量，value 长度信息丢失。SIEM/ELK 转发场景下：
-- 原始 secret 文本不出现在日志流中（key 保留，value 被替换），不存在通过日志泄漏 secret 的路径。
-- `<REDACTED>` 字面量长度恒定，不能反推原始 value 长度，不构成旁信道。
-- 对 SIEM 告警规则而言，`error_msg` 含 `<REDACTED>` 是正常形态（表示 secret 已被 mask），不是告警信号。
+通道 d（slog）是 wire 删 error 文本（D1）之后的**主诊断通道**，因此必须诚实区分 redactor
+*覆盖到*的形态与 *覆盖不到*的真实泄漏面——二者不能混为一谈：
 
-综合结论：SIEM/ELK 转发场景下无额外 fingerprint 风险，属已知接受非威胁。
+- **覆盖面（已脱敏）**：结构化 `key=value` 形态的 secret——`password=` / `Authorization:` /
+  `connection_string=` / JSON quoted key（见 `pkg/redaction.sensitiveKeyPattern`）。这类
+  value 段被替换为 `<REDACTED>`，原始 secret 文本不出现在日志流（§3 矩阵前三行 + panic /
+  connection_string 行）。
+- **真实泄漏面（已知盲区，会进 slog）**：无 key 锚的裸 token——裸 JWT 子串、PEM 块、
+  裸 UUID API key（§3 威胁矩阵 ⚠ 三行）。regex redaction 必须有 key 锚才能命中，这类
+  token **会原样写入 slog**。这不是「无泄漏路径」，而是「泄漏面收敛到 server-side slog
+  单一通道，且 wire 结构性永不携带任何 error 文本兜底」。
+
+接受该盲区的依据是**纵深防御，非「已消除」**：
+
+1. **wire 兜底**：即便 d 通道 mask 漏，通道 a/b 在 wire 上结构性不下发任何 error 文本
+   （`verboseDependencyEntry` 字段集冻结无 error 字段）——公网客户端永远拿不到。
+2. **通道受限**：slog 落 SIEM / ELK / Datadog，是运维受限的内部诊断面，不对外暴露。
+3. **probe 作者纵深**：probe error message 应避免硬编码完整 secret / PEM / 裸 token
+   （§3 备注列的纵深指引）；后续可加针对裸 base64url JWT 的 pattern 进一步收窄盲区。
+
+`<REDACTED>` fingerprint：mask 后为固定字面量，长度恒定，不反推原始 value 长度，不构成
+旁信道；`error_msg` 含 `<REDACTED>` 是 secret 已 mask 的正常形态，非告警信号。
+
+> **纠正（#942 R3）**：本节早期版本曾断言「不存在通过日志泄漏 secret 的路径」，与 §3
+> 威胁矩阵 ⚠ 三行（裸 JWT / PEM / UUID 泄漏到 slog）直接矛盾——运维若以前者为准会误判
+> d 通道已 fail-closed。该绝对化断言已删除；secret 泄漏面的真值以 §3 威胁矩阵为准。
 
 ## §4 Enforcement Funnel Matrix
 
@@ -217,14 +255,28 @@ mask 后 `<REDACTED>` 是固定字面量，value 长度信息丢失。SIEM/ELK �
 
 **威胁矩阵（§3）重评**：#947→#996 是 enforcement **强化**，无 ✅→⚠️ 回归。§3 所有行依赖两条前提：(P1)「通道 d 的每个 error 文本值都由 `newRedactedErrorMsg` 创建」和 (P2)「`newRedactedErrorMsg` 真的调用 `RedactString` 脱敏」。**纠正先前版本的过度声明**：曾写「guard ②（字段类型）把该前提机器强制」——这是错的。guard ②（`errorMsg` 类型必为 `redactedErrorMsg`）只保证字段**类型**，既不保证创建点收口（P1）也不保证 body 脱敏（P2）。真正的机器强制是：**guard ①（创建点 funnel）强制 P1**（含 untyped-const 入流，非仅显式 conversion——#996 F1 补；先前"字段类型即足够"漏了包内 `SlogDependencyEntry{errorMsg:"raw"}` / `var x redactedErrorMsg="raw"` 入流），**guard ④（body-redaction form-lock）强制 P2**（#996 F2 补；先前无任何 guard 验证 body 调 RedactString，去掉它 ①②③ 全绿）。guard ②/③ 是 ① 的反 vacuous 支撑（字段退 string / funnel 消失则 ① 失守）。四锁齐备后 §3 各行所依赖的 funnel **应用性 + 脱敏性**才真正从「文档断言」升级为「archtest 强制」。
 
+**威胁矩阵（§3）重评 — #942 R2/R3 amendment**：本次 amendment 是「文档纠正（R3，重写
+§SIEM/ELK）+ slog ctx 透传（R2，D8）」，**逐行重评无 ✅→⚠️ 回归**：
+
+- §3 八行的 a/b/c 列「✗ wire 不带文本」全部不变（wire shape 未动，`verboseDependencyEntry`
+  字段集仍冻结）。
+- d 列三个 ⚠ 盲区行（裸 JWT / PEM / UUID）表述本就准确；本次仅把 §SIEM/ELK 与之**对齐**
+  ——删除矛盾的「无泄漏路径」绝对化断言，§SIEM/ELK 是被纠正方，§3 矩阵是真值源。无格子
+  从 ✅ 变 ⚠️。
+- D8 的 ctx 透传只新增 `request_id` / `trace_id` / `correlation_id` 关联字段到 slog
+  record。这些是关联 ID（非 secret，本就由 contextHandler 在全框架所有 slog record 注入），
+  不携带 probe error 文本，**不扩大 d 列暴露面**。
+- (P1)(P2) 两条前提仍由 guard ①④ 机器强制，未受本次 amendment 影响。
+
 **slog 序列化路径**：见 §2 D6 — `slog.Group("dependencies", slog.Any(name, entry)...)` 是唯一让 LogValue 真生效的 slog idiom，所有 handler 输出一致 snake_case。**严禁退回 `slog.Any("dependencies", map)` 形态**——unexported 字段 + JSON handler 会输出 `{}`，所有诊断信息丢失（round-4 实测 bug）。
 
 ## §5 ADR amendment 验证矩阵（与 ADR `202605051730` 关系）
 
 本 ADR **扩展**而非 amend 现有 errcode-PII ADR。errcode 三层模型保持不变；新增的
-ops-diagnostics 第 4 通道在 errcode 之外独立运作（handler 直接 `slog.Warn(...)`，
-不经 errcode envelope）。因此现有 `202605051730` ADR 不需要 §"威胁矩阵" / §D
-段重审；本 ADR §3 是 readyz 自身的新威胁矩阵，与之并列。
+ops-diagnostics 第 4 通道在 errcode 之外独立运作——handler 经
+`slog.Log(ctx, level, ...)`（D8 起透传 request ctx）写出 typed payload，不经 errcode
+envelope。因此现有 `202605051730` ADR 不需要 §"威胁矩阵" / §D 段重审；本 ADR §3 是
+readyz 自身的新威胁矩阵，与之并列。
 
 后续如有新 handler 引入"ops-diagnostics 通道"形态（典型场景：recovery middleware
 panic dump、outbox last_error sanitize、auditquery payload redaction），该 handler

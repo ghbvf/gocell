@@ -33,25 +33,34 @@ All health responses use the project-wide JSON envelope
   never reaches public clients).
 
 The verbose breakdown (cells + dependencies + optional adapters) lives
-under `data.*` on 200 only. On 503 the wire body carries no breakdown; the
-same data is emitted to server-side `slog`
-(`logger.Warn("readyz unhealthy", status, reason, cells, dependencies, adapters)`)
-so on-call retains the diagnostic without leaking it to public 503
-consumers. ref: k8s.io/apiserver/pkg/server/healthz — failed checks do not
-surface in the 503 body; verbose breakdown is operator-only.
+under `data.*` on 200 (healthy **and** degraded) only. On 503 the wire body
+carries no breakdown; the same data is emitted to server-side `slog` via
+`slog.Log(ctx, level, "readyz <status>", ...)` — a `slog.Group("dependencies",
+...)` plus status / reason / cells / adapters attrs — so on-call retains the
+diagnostic without leaking it to public 503 consumers. Because `slog.Log`
+receives the **request context**, every readyz record also carries the
+framework correlation fields (`request_id` / `trace_id` / `correlation_id`)
+injected by the logging contextHandler — the same source as the errcode
+`WithInternal` path — so a 503/degraded record can be joined back to the
+request that produced it (#942). ref: k8s.io/apiserver/pkg/server/healthz —
+failed checks do not surface in the 503 body; verbose breakdown is
+operator-only.
 
 Public `/readyz` 503 reasons are intentionally low-cardinality. Operators
 read them from the structured `slog` record (the wire body carries an empty
 details array):
 
-| slog level | slog `status` | slog `reason` | Meaning |
-|------------|---------------|---------------|---------|
-| `Warn` (msg=`readyz unhealthy`) | `unhealthy` | `readiness_failed` | One or more cells/probes failed, or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
-| `Info` (msg=`readyz: shutting down (graceful_shutdown)`) | `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
+| slog level | slog `msg` | slog `status` | slog `reason` | Meaning |
+|------------|------------|---------------|---------------|---------|
+| `Warn` | `readyz unhealthy` | `unhealthy` | `readiness_failed` | One or more cells/probes failed (HTTP 503), or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
+| `Info` | `readyz degraded` | `degraded` | — (no `reason` attr) | One or more cells/probes are degraded but serving (**HTTP 200**, fail-open). Emitted at Info so operators can observe degraded dependency `error_msg` without a Warn-level alert. |
+| `Info` | `readyz: shutting down (graceful_shutdown)` | `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
 
 On-call dashboards / alert rules that filter by level alone will miss the
-`shutting_down` path; query both `level=Warn AND msg="readyz unhealthy"`
-and `level=Info AND status="shutting_down"` to capture every 503.
+`degraded` and `shutting_down` paths; query `level=Warn AND msg="readyz
+unhealthy"`, `level=Info AND msg="readyz degraded"`, and `level=Info AND
+status="shutting_down"` to capture every non-healthy outcome (degraded is a
+200, the other two are 503).
 
 ## Kubernetes probes — MUST NOT use `?verbose`
 
@@ -117,6 +126,33 @@ the `X-Readyz-Token` header.
 }
 ```
 
+200 (degraded — one or more cells/probes degraded but serving). A degraded
+service is **fail-open**: it returns HTTP 200 so it is NOT evicted from load
+balancer / kubelet rotation (ref: envoyproxy/envoy admin `/ready` — DEGRADED
+returns 200). The verbose wire body carries the per-dependency `{status,
+duration_ms}` exactly like the healthy case; `error_msg` is **never** on the
+wire (it rides the slog channel only):
+
+```json
+{
+  "data": {
+	    "status": "degraded",
+	    "cells":   { "accesscore": "healthy", "auditcore": "degraded" },
+	    "dependencies": {
+	      "postgres_ready": { "status": "healthy", "duration_ms": 3 },
+	      "rabbitmq_ready":  { "status": "degraded", "duration_ms": 8 }
+	    },
+	    "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
+	  }
+}
+```
+
+The degraded breakdown is additionally emitted to slog at **Info** level
+(`msg="readyz degraded"`), so operators see the degraded dependency
+`error_msg` without a Warn-level alert firing. The slog shape is identical to
+the unhealthy example below, only the level (`INFO`) and `msg`
+(`readyz degraded`) differ, and there is no `reason` attr.
+
 503 (one or more probes unhealthy):
 
 ```json
@@ -141,18 +177,22 @@ triggering request was verbose:
   `?verbose=true`): slog record additionally carries cells +
   dependencies + adapters maps.
 
-Verbose 503 slog example（text handler，`-log-format=text` 默认）：
+Verbose 503 slog example（text handler，`-log-format=text` 默认）。实际是单行
+key=value（这里按字段折行只为可读）。`request_id` / `trace_id` 等关联字段由 logging
+contextHandler 注入。**注意 `error_msg` 的引号规则**（text handler 的 logfmt 行为，决定
+下方 grep 怎么写）：含空格或 `=` 的值加引号、空值输出 `error_msg=""`、单 token 无特殊
+字符（如 `error_msg=timeout`）**不加引号**：
 
 ```
-level=WARN msg="readyz unhealthy"
-  status=unhealthy reason=readiness_failed
+time=2026-05-26T03:50:06Z level=WARN msg="readyz unhealthy"
+  request_id=7f3c… trace_id=a1b2… status=unhealthy reason=readiness_failed
   cells=map[accesscore:healthy auditcore:degraded]
   dependencies.postgres_ready.status=healthy
   dependencies.postgres_ready.duration_ms=3
   dependencies.postgres_ready.error_msg=""
   dependencies.rabbitmq_ready.status=unhealthy
   dependencies.rabbitmq_ready.duration_ms=12
-  dependencies.rabbitmq_ready.error_msg="<REDACTED>"
+  dependencies.rabbitmq_ready.error_msg="dial failed password=<REDACTED> host=mq"
   adapters=map[storage:postgres eventbus:rabbitmq]
 ```
 
@@ -162,16 +202,23 @@ Verbose 503 slog example（JSON handler，`-log-format=json`）：
 {
   "level": "WARN",
   "msg": "readyz unhealthy",
+  "request_id": "7f3c…",
+  "trace_id": "a1b2…",
   "status": "unhealthy",
   "reason": "readiness_failed",
   "cells": {"accesscore": "healthy", "auditcore": "degraded"},
   "dependencies": {
     "postgres_ready": {"status": "healthy", "duration_ms": 3, "error_msg": ""},
-    "rabbitmq_ready": {"status": "unhealthy", "duration_ms": 12, "error_msg": "<REDACTED>"}
+    "rabbitmq_ready": {"status": "unhealthy", "duration_ms": 12, "error_msg": "dial failed password=<REDACTED> host=mq"}
   },
   "adapters": {"storage": "postgres", "eventbus": "rabbitmq"}
 }
 ```
+
+The redacted `error_msg` retains the surrounding key context (`dial failed … host=mq`)
+and masks only the sensitive value (`password=<REDACTED>`); it is **not** truncated
+(slog has no wire-capacity constraint). A degraded 200 record is identical except
+`level=INFO`, `msg="readyz degraded"`, and no `reason` attr.
 
 `dependencies` 字段是 `slog.Group` 而非 `slog.Any(map)`——Group 内每个 sub-attr 的 value
 是 `health.SlogDependencyEntry`（LogValuer），handler 在 Resolve 阶段调
@@ -193,14 +240,20 @@ error 文本就无需截断）。Probe 实现仍应避免在 error message 中�
 
 ## 操作员诊断 cookbook
 
+> JSON 是推荐的诊断格式——嵌套对象路径可被 jq / LogQL 直接索引，且不受 text handler
+> 的引号歧义影响。需要按请求关联时，所有 readyz record 都带 `request_id` / `trace_id`。
+
 ### JSON handler（`-log-format=json`）
 
 ```bash
-# 过滤所有 readyz unhealthy 事件并展示 dependencies 字段
-kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy") | .dependencies'
+# unhealthy(503) 与 degraded(200) 两类非健康记录都看（degraded 是 Info，别只过滤 unhealthy）
+kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy" or .msg == "readyz degraded") | {msg, request_id, dependencies}'
 
-# 进一步定位某个 probe 的 error_msg
-kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy") | .dependencies.rabbitmq_ready.error_msg'
+# 定位某个 probe 的 error_msg（healthy probe 为空字符串）
+kubectl logs <pod> | jq 'select(.msg|test("readyz (unhealthy|degraded)")) | .dependencies.rabbitmq_ready.error_msg'
+
+# 按 request_id 关联一次具体请求的所有日志（R2：readyz record 现带关联字段）
+kubectl logs <pod> | jq 'select(.request_id == "7f3c…")'
 
 # Grafana / Loki LogQL 查询示例（结构化字段索引）：
 # {app="myapp"} | json | msg = "readyz unhealthy" | dependencies_rabbitmq_ready_status = "unhealthy"
@@ -209,16 +262,19 @@ kubectl logs <pod> | jq 'select(.msg == "readyz unhealthy") | .dependencies.rabb
 ### Text handler（`-log-format=text`，默认）
 
 ```bash
-# 过滤 readyz unhealthy 行
-kubectl logs <pod> | grep "readyz unhealthy"
+# 过滤 unhealthy(503) 与 degraded(200) 两类记录
+kubectl logs <pod> | grep -E 'msg="readyz (unhealthy|degraded)"'
 
-# 提取某个 probe 的 error_msg（key=value 形态）
-kubectl logs <pod> | grep "readyz unhealthy" | grep -oE 'dependencies\.rabbitmq_ready\.error_msg="[^"]*"'
+# 提取某个 probe 的 error_msg。值可能加引号（含空格/=，如 "dial … <REDACTED>"）也可能
+# 不加引号（单 token，如 timeout）——两种都匹配，否则会漏掉 unquoted 值：
+kubectl logs <pod> | grep -E 'msg="readyz (unhealthy|degraded)"' \
+  | grep -oE 'dependencies\.rabbitmq_ready\.error_msg=("[^"]*"|[^ ]+)'
 ```
 
 text handler 输出形态是 `dependencies.<probe_name>.<field>=<value>` 而非嵌套 `{}` 块，
-Loki / Grafana 通过 key=value 解析直接索引。如需更结构化的查询能力（嵌套对象路径），
-切换到 JSON handler。
+Loki / Grafana 通过 key=value 解析直接索引。`error_msg` 的引号取决于值内容（含空格/`=`
+→ 加引号；空 → `""`；单 token → 不加引号），所以**只匹配 `error_msg="…"` 会漏掉 unquoted
+值**。如需稳定的结构化查询（不受引号规则影响），切换到 JSON handler。
 
 ### Waiving the verbose endpoint
 
