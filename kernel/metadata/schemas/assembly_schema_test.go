@@ -83,35 +83,20 @@ func TestAssemblySchema_BuildOptional(t *testing.T) {
 	assert.NoError(t, schema.Validate(doc), "assembly with id/cells/owner only must pass")
 }
 
-// TestAssemblySchema_CapabilitiesEnum verifies that the capabilities array only
-// accepts the declared enum values (postgres/redis/rabbitmq) and rejects others
-// — the upstream-Hard half of CAPABILITY-PROVIDER-FUNNEL-01.
-func TestAssemblySchema_CapabilitiesEnum(t *testing.T) {
+// TestAssemblySchema_NoCapabilitiesProperty verifies that assembly.yaml no
+// longer accepts a `capabilities` property (Design Y, #855): the field moved to
+// cell.requires and additionalProperties:false now rejects it at the assembly
+// level. Coverage of the capability enum itself lives in cell_schema_test.go.
+func TestAssemblySchema_NoCapabilitiesProperty(t *testing.T) {
 	schema := compileAssemblySchema(t)
-
-	valid := parseAssemblyDoc(t, `{
+	doc := parseAssemblyDoc(t, `{
 		"id": "corebundle",
 		"cells": ["accesscore"],
 		"owner": {"team": "platform", "role": "cell-owner"},
 		"capabilities": ["postgres", "redis"]
 	}`)
-	assert.NoError(t, schema.Validate(valid), "capabilities with declared enum values must pass")
-
-	bogus := parseAssemblyDoc(t, `{
-		"id": "corebundle",
-		"cells": ["accesscore"],
-		"owner": {"team": "platform", "role": "cell-owner"},
-		"capabilities": ["postgres", "bogus"]
-	}`)
-	assert.Error(t, schema.Validate(bogus), "capabilities with a value outside the enum must fail")
-
-	dup := parseAssemblyDoc(t, `{
-		"id": "corebundle",
-		"cells": ["accesscore"],
-		"owner": {"team": "platform", "role": "cell-owner"},
-		"capabilities": ["postgres", "postgres"]
-	}`)
-	assert.Error(t, schema.Validate(dup), "duplicate capabilities must fail (uniqueItems)")
+	assert.Error(t, schema.Validate(doc),
+		"assembly capabilities property was removed; it must be rejected by additionalProperties:false")
 }
 
 // formatf is a helper that avoids importing fmt in a test-only file.

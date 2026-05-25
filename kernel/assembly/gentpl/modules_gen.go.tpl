@@ -16,8 +16,9 @@ func generatedCellModules() []CellModule {
 {{- if .Capabilities}}
 
 // generatedCapabilities lists the assembly-level shared infrastructure
-// capabilities declared in assembly.yaml. The composition root provisions each
-// once and injects the resulting runtime/capability provider into consuming modules.
+// capabilities — the sorted union of the assembly cells' cell.yaml `requires`.
+// The composition root provisions each once and injects the resulting
+// runtime/capability provider into consuming modules.
 func generatedCapabilities() []capability.Kind {
 	return []capability.Kind{
 {{- range .Capabilities}}

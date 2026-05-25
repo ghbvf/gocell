@@ -94,6 +94,16 @@
       "type": "string",
       "description": "Go receiver type backing this cell (e.g. OrderCell). Required when codegen renders cell_gen.go for this cell. There is no automatic mapping from a lowercased id to its conventional CamelCase Go type.",
       "pattern": "^[A-Z][A-Za-z0-9]*$"
+    },
+    "requires": {
+      "type": "array",
+      "description": "Assembly-level shared infrastructure capabilities this cell consumes (postgres / redis / rabbitmq), including optional provision-if-available ones. Authoritative single source: the owning assembly's provisioned capability set is the derived union of its cells' requires. Closed enum mirrored by metadata.CapabilityEnum + runtime/capability.Kind; FMT-36 rejects unknown/duplicate values.",
+      "default": [],
+      "items": {
+        "type": "string",
+        "enum": ["postgres", "redis", "rabbitmq"]
+      },
+      "uniqueItems": true
     }
   }
 }

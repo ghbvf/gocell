@@ -32,6 +32,10 @@ var cellMeta = &metadata.CellMeta{
 		"smoke.accesscore.startup",
 	}},
 	GoStructName: metadata.MustNewGoIdentifier("AccessCore"),
+	Requires: []string{
+		"postgres",
+		"redis",
+	},
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }

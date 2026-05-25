@@ -30,6 +30,9 @@ var cellMeta = &metadata.CellMeta{
 		"smoke.configcore.startup",
 	}},
 	GoStructName: metadata.MustNewGoIdentifier("ConfigCore"),
+	Requires: []string{
+		"postgres",
+	},
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
