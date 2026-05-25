@@ -27,7 +27,14 @@ TIMEOUT=30
 _cleanup() {
   local _rc=$?
   echo "[healthcheck-verify] tearing down containers..." >&2
-  if ! docker compose down; then
+  # Note: do NOT use `if ! docker compose down; then ... fi` here. Inside
+  # the then-branch of `if ! cmd`, $? is the result of the `!` expression
+  # (always 0), not of cmd. The if-then-else form below preserves cmd's
+  # real exit code in the else-branch's $?. Pinned by archtest's runtime
+  # arm (TestHealthcheckVerifyRuntime01_CleanupFailurePropagates).
+  if docker compose down; then
+    :
+  else
     local _down_rc=$?
     echo "[healthcheck-verify] WARNING: docker compose down exited $_down_rc — orphan containers may remain" >&2
     # If the main flow succeeded, surface the cleanup failure instead of
