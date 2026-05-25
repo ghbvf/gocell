@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -718,7 +719,8 @@ func stepCompletedTopic(defID idutil.SafeID) string {
 //
 // For errcode.Error values, only the const-literal Message is used to avoid
 // leaking runtime PII that may appear in InternalMessage or the Cause chain.
-// Non-errcode errors fall back to err.Error() (existing behavior).
+// Non-errcode errors are redacted via pkg/redaction.RedactString (masking
+// key=value secrets / DSN / token) before truncation.
 func failurePayload(err error) []byte {
 	const maxReason = 256
 	var ec *errcode.Error
@@ -726,7 +728,12 @@ func failurePayload(err error) []byte {
 	if errors.As(err, &ec) {
 		reason = ec.Message // const literal only — no runtime PII
 	} else {
-		reason = err.Error()
+		// Non-errcode error: err.Error() may carry runtime data (DSN, token,
+		// key=value secrets) into the journal Payload. Redact before truncation
+		// so a secret straddling maxReason cannot lose its mask anchor and leak
+		// its tail (RedactString MUST precede the cap — observability.md
+		// §"Span Attribute Redaction" ordering invariant).
+		reason = redaction.RedactString(err.Error())
 	}
 	if len(reason) > maxReason {
 		reason = reason[:maxReason]

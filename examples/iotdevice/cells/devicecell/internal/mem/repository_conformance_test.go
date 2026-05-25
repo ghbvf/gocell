@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain/conformance"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
@@ -21,6 +22,15 @@ func TestMemDeviceRepository_Conformance(t *testing.T) {
 		return repo, noopTxRunner{}, time.Now, func() {}
 	}
 	conformance.RunDeviceRepoConformance(t, factory, conformance.Features{RequiresAmbientTx: false})
+}
+
+// TestMemDeviceRepository_RepoReadinessConformance wires the in-memory
+// DeviceRepository through the shared RepoHealthProber conformance harness.
+// The mem implementation always returns nil from RepoReady (no real schema to
+// break), so the broken prober is passed as nil — the harness records the
+// schema-broken sub-test as skipped.
+func TestMemDeviceRepository_RepoReadinessConformance(t *testing.T) {
+	celltest.RunRepoReadinessConformance(t, "devicecell-mem", mem.NewDeviceRepository(), nil)
 }
 
 // noopTxRunner satisfies persistence.TxRunner for in-memory implementations
