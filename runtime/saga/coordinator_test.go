@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
@@ -1095,6 +1096,30 @@ func TestFailurePayload_NoInternalLeak(t *testing.T) {
 		if strings.Contains(payloadStr, forbidden) {
 			t.Errorf("failurePayload contains forbidden string %q: %s", forbidden, payloadStr)
 		}
+	}
+}
+
+// TestFailurePayload_NonErrcodeRedacted covers the else branch: a plain
+// (non-errcode) error whose text carries a key=value secret must be redacted by
+// pkg/redaction.RedactString before landing in the journal Payload.
+func TestFailurePayload_NonErrcodeRedacted(t *testing.T) {
+	err := errors.New("connect failed dsn=postgres://user:hunter2@db/saga token=abc123")
+
+	var result struct {
+		Reason string `json:"reason"`
+	}
+	if jsonErr := json.Unmarshal(failurePayload(err), &result); jsonErr != nil {
+		t.Fatalf("failurePayload produced invalid JSON: %v", jsonErr)
+	}
+
+	// Secret values must be masked; the <REDACTED> mask must be present.
+	for _, leaked := range []string{"hunter2", "abc123", "postgres://user"} {
+		if strings.Contains(result.Reason, leaked) {
+			t.Errorf("reason leaks %q: %s", leaked, result.Reason)
+		}
+	}
+	if !strings.Contains(result.Reason, redaction.Mask) {
+		t.Errorf("reason missing redaction mask %q: %s", redaction.Mask, result.Reason)
 	}
 }
 

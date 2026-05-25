@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -726,7 +727,12 @@ func failurePayload(err error) []byte {
 	if errors.As(err, &ec) {
 		reason = ec.Message // const literal only — no runtime PII
 	} else {
-		reason = err.Error()
+		// Non-errcode error: err.Error() may carry runtime data (DSN, token,
+		// key=value secrets) into the journal Payload. Redact before truncation
+		// so a secret straddling maxReason cannot lose its mask anchor and leak
+		// its tail (RedactString MUST precede the cap — observability.md
+		// §"Span Attribute Redaction" ordering invariant).
+		reason = redaction.RedactString(err.Error())
 	}
 	if len(reason) > maxReason {
 		reason = reason[:maxReason]
