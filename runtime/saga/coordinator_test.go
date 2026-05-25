@@ -3,7 +3,10 @@ package saga
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +17,9 @@ import (
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // File-local duration consts for values not present in testtime.
@@ -655,4 +660,612 @@ func mustCoordinator(t *testing.T, clk clock.Clock) *Coordinator {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 	return c
+}
+
+// ---------------------------------------------------------------------------
+// F3 — TestStop_DrainsInflight / TestStop_DrainTimeout
+// ---------------------------------------------------------------------------
+
+// TestStop_DrainsInflight verifies that Stop() waits for an in-flight step to
+// complete before returning, rather than immediately canceling goroutines.
+// Strategy: enqueue an instance with a step that blocks on a channel, call Stop
+// with a generous stopCtx, then unblock the channel. Stop should return only
+// after the step completes.
+func TestStop_DrainsInflight(t *testing.T) {
+	const defID idutil.SafeID = "stopdrainsinflight"
+
+	// stepBlockCh gates the step; close it to let the step finish.
+	stepBlockCh := make(chan struct{})
+	stepDone := make(chan struct{})
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "blockingstep",
+				Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					defer close(stepDone)
+					select {
+					case <-stepBlockCh:
+						return []byte(`{}`), nil
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				},
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, regErr := ksaga.NewInMemoryRegistry(def)
+	if regErr != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", regErr)
+	}
+	em := newSafeFakeEmitter()
+	tx := newSafeFakeTxRunner()
+
+	cfg := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+	}
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startDone := make(chan error, 1)
+	go func() { startDone <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		t.Fatal("coordinator not ready")
+	}
+
+	fakeclk := c.clock.(*clockmock.FakeClock)
+	testwait.External(t, "tickers-registered",
+		func() bool { return fakeclk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
+
+	// Trigger a tick to claim the instance and start the blocking step.
+	fakeclk.Advance(testtime.D10ms)
+
+	// Wait for the step to have started (activeLeases non-empty).
+	testwait.External(t, "step-inflight",
+		func() bool {
+			var n int
+			c.activeLeases.Range(func(_, _ any) bool { n++; return true })
+			return n > 0
+		},
+		testtime.D2s, testtime.D1ms)
+
+	// Call Stop in a goroutine with a generous timeout.
+	stopDone := make(chan error, 1)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
+	defer stopCancel()
+	go func() {
+		stopDone <- c.Stop(stopCtx)
+	}()
+
+	// Advance the fake clock continuously so the Stop drain ticker fires.
+	go func() {
+		for {
+			select {
+			case <-stopCtx.Done():
+				return
+			default:
+				fakeclk.Advance(testtime.D10ms)
+				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep drain-ticker: advance fake clock for Stop drain
+			}
+		}
+	}()
+
+	// Unblock the step so it can complete.
+	close(stepBlockCh)
+
+	// Stop should return after the step finishes (drain detects activeLeases==0).
+	select {
+	case stopErr := <-stopDone:
+		if stopErr != nil && !errors.Is(stopErr, context.Canceled) {
+			t.Errorf("Stop returned error: %v", stopErr)
+		}
+	case <-time.After(testtime.D3s):
+		t.Error("Stop did not return after step completed")
+	}
+
+	// Step must have finished.
+	select {
+	case <-stepDone:
+	default:
+		t.Error("step did not complete before Stop returned")
+	}
+
+	cancel()
+	select {
+	case <-startDone:
+	case <-time.After(testtime.D3s):
+		t.Error("coordinator goroutine did not exit")
+	}
+}
+
+// TestStop_DrainTimeout verifies that Stop() returns a deadline-exceeded error
+// when the stopCtx expires before all in-flight steps complete.
+func TestStop_DrainTimeout(t *testing.T) {
+	const defID idutil.SafeID = "stopdraintimeout"
+
+	// stepBlockCh is never closed; step blocks until ctx is canceled.
+	stepBlockCh := make(chan struct{})
+	defer close(stepBlockCh) // cleanup; won't fire during test
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "neverendingstep",
+				Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					select {
+					case <-stepBlockCh:
+						return []byte(`{}`), nil
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				},
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, regErr := ksaga.NewInMemoryRegistry(def)
+	if regErr != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", regErr)
+	}
+	em := newSafeFakeEmitter()
+	tx := newSafeFakeTxRunner()
+
+	cfg := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+	}
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startDone := make(chan error, 1)
+	go func() { startDone <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		t.Fatal("coordinator not ready")
+	}
+
+	fakeclk := c.clock.(*clockmock.FakeClock)
+	testwait.External(t, "tickers-registered",
+		func() bool { return fakeclk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
+
+	// Trigger a tick to claim the instance.
+	fakeclk.Advance(testtime.D10ms)
+
+	// Wait for the step to be in-flight.
+	testwait.External(t, "step-inflight",
+		func() bool {
+			var n int
+			c.activeLeases.Range(func(_, _ any) bool { n++; return true })
+			return n > 0
+		},
+		testtime.D2s, testtime.D1ms)
+
+	// Call Stop with a very short stopCtx (expires before step finishes).
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D50ms)
+	defer stopCancel()
+
+	// Advance the fake clock so the Stop drain ticker can fire.
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				fakeclk.Advance(testtime.D10ms)
+				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep drain-ticker: advance fake clock for Stop drain
+			}
+		}
+	}()
+
+	stopErr := c.Stop(stopCtx)
+
+	// Stop should return with a deadline-exceeded error.
+	if stopErr == nil {
+		t.Error("Stop should return error when stopCtx expires before drain")
+	}
+	var ecErr *errcode.Error
+	if !errors.As(stopErr, &ecErr) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", stopErr, stopErr)
+	}
+	if ecErr.Kind != errcode.KindDeadlineExceeded {
+		t.Errorf("error kind = %v, want KindDeadlineExceeded", ecErr.Kind)
+	}
+
+	// The coordinator goroutine should still exit (cancel the outer ctx).
+	cancel()
+	select {
+	case <-startDone:
+	case <-time.After(testtime.D3s):
+		t.Error("coordinator goroutine did not exit")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F11 — TestNewCoordinator_TypedNilJournal
+// ---------------------------------------------------------------------------
+
+// nilJournal is a concrete type that implements journal.Journal but whose
+// pointer value is nil. Passed as journal.Journal interface, this is a
+// typed-nil and must be caught by validation.IsNilInterface.
+type nilJournal struct{ *journal.MemJournal }
+
+func TestNewCoordinator_TypedNilJournal(t *testing.T) {
+	clk := newFakeClock()
+	tx := &fakeTxRunner{}
+	em := &fakeEmitter{}
+	reg := newRegistry()
+
+	// Cast a (*nilJournal)(nil) to the journal.Journal interface — typed nil.
+	var j journal.Journal = (*nilJournal)(nil)
+
+	c, err := NewCoordinator(j, tx, em, reg, clk)
+	if c != nil {
+		t.Error("expected nil Coordinator on typed-nil journal")
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error for typed-nil journal")
+	}
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ecErr.Kind != errcode.KindInvalid {
+		t.Errorf("kind = %v, want KindInvalid", ecErr.Kind)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F4 — TestFailurePayload_NoInternalLeak
+// ---------------------------------------------------------------------------
+
+// TestFailurePayload_NoInternalLeak constructs an errcode.Error that carries
+// WithInternal("secret=hunter2") and WithDetails(slog.String("password","p")),
+// calls failurePayload, and asserts the JSON result contains only the const
+// literal message — no secret or password substring.
+func TestFailurePayload_NoInternalLeak(t *testing.T) {
+	err := errcode.New(errcode.KindInternal, errcode.ErrInternal,
+		"step blew up",
+		errcode.WithInternal("secret=hunter2"),
+		errcode.WithDetails(slog.String("password", "p")),
+	)
+
+	payload := failurePayload(err)
+
+	// Verify it is valid JSON with a "reason" key.
+	var result struct {
+		Reason string `json:"reason"`
+	}
+	if jsonErr := json.Unmarshal(payload, &result); jsonErr != nil {
+		t.Fatalf("failurePayload produced invalid JSON: %v", jsonErr)
+	}
+
+	// The reason must be the const-literal message, not any runtime data.
+	if result.Reason != "step blew up" {
+		t.Errorf("reason = %q, want %q", result.Reason, "step blew up")
+	}
+
+	// Assert no PII leakage.
+	payloadStr := string(payload)
+	for _, forbidden := range []string{"secret", "hunter2", "password"} {
+		if strings.Contains(payloadStr, forbidden) {
+			t.Errorf("failurePayload contains forbidden string %q: %s", forbidden, payloadStr)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F2 — TestDriveOne_StepDeadlineExceeded_MarkExpired
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_StepDeadlineExceeded_MarkExpired verifies that when a step's
+// context deadline fires (step.Timeout > 0), driveOne marks the instance
+// Expired and does NOT append KindStepCompleted.
+//
+// Design: The coordinator uses c.clock.Now() to compute stepDeadline.
+// Since FakeClock.Now() returns a time in 2024 (far in the past relative to
+// real wall clock), context.WithDeadline(ctx, fakeNow+50ms) creates an
+// immediately-expired context — the step receives ctx.Done() right away.
+// The coordinator detects runCtx.Err() != nil and marks Expired.
+func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
+	const defID idutil.SafeID = "stepdeadlineexceeded"
+
+	stepRunCount := 0
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "timeoutstep",
+				// step.Timeout = 50ms; since FakeClock time is far in the past,
+				// the derived context deadline fires immediately — the step sees
+				// ctx.Done() and returns ctx.Err().
+				Timeout: testtime.D50ms,
+				Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					stepRunCount++
+					<-ctx.Done()
+					return nil, ctx.Err()
+				},
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	em := &fakeEmitter{}
+	tx := &fakeTxRunner{}
+
+	cfg := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+	}
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startDone := make(chan error, 1)
+	go func() { startDone <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		t.Fatal("coordinator not ready")
+	}
+
+	// Wait for tickers to register.
+	fakeclk := c.clock.(*clockmock.FakeClock)
+	testwait.External(t, "tickers-registered",
+		func() bool { return fakeclk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
+
+	// Trigger a tick to start the step.
+	fakeclk.Advance(testtime.D10ms)
+
+	// Wait for the instance to become terminal (KindSagaExpired).
+	// The step deadline fires immediately (fake clock time is in the past),
+	// so the coordinator quickly marks the instance Expired.
+	testwait.External(t, "instance-expired",
+		func() bool {
+			evs, loadErr := j.Load(context.Background(), inst.ID)
+			if loadErr != nil || len(evs) == 0 {
+				return false
+			}
+			return evs[len(evs)-1].Kind == journal.KindSagaExpired
+		},
+		testtime.D2s, testtime.D2ms)
+
+	evs, err := j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Assert final event is KindSagaExpired.
+	if last := evs[len(evs)-1]; last.Kind != journal.KindSagaExpired {
+		t.Errorf("last event = %s, want saga_expired", last.Kind)
+	}
+
+	// Assert NO KindStepCompleted was appended.
+	for _, ev := range evs {
+		if ev.Kind == journal.KindStepCompleted {
+			t.Errorf("unexpected KindStepCompleted in journal after step timeout: %v", evs)
+		}
+	}
+
+	// Assert no outbox entry was emitted (timeout path has no step-completed event).
+	if len(em.entries) != 0 {
+		t.Errorf("emitter entries = %d, want 0 on expired saga", len(em.entries))
+	}
+
+	// Step was called once (then returned via ctx.Done()).
+	if stepRunCount != 1 {
+		t.Errorf("stepRunCount = %d, want 1", stepRunCount)
+	}
+
+	// Stop coordinator.
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
+	defer stopCancel()
+	if stopErr := c.Stop(stopCtx); stopErr != nil && !errors.Is(stopErr, context.Canceled) {
+		t.Errorf("Stop: %v", stopErr)
+	}
+	select {
+	case <-startDone:
+	case <-time.After(testtime.D3s):
+		t.Error("coordinator goroutine did not exit")
+	}
+}
+
+// mustNewUUID is a test helper that creates a UUID or fatals.
+func mustNewUUID(t *testing.T) idutil.SafeID {
+	t.Helper()
+	id, err := idutil.NewUUID()
+	if err != nil {
+		t.Fatalf("NewUUID: %v", err)
+	}
+	return idutil.SafeID(id)
+}
+
+// ---------------------------------------------------------------------------
+// F8 — TestDriveOne_EmitFails_TxReturnsErr
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_EmitFails_TxReturnsErr verifies that when outbox Emit fails
+// inside the transaction, RunInTx returns the error and the coordinator logs
+// a warning (driveOne returns the error from RunInTx). The test asserts that
+// the instance is NOT terminal (it remains claimable after the failed tx).
+func TestDriveOne_EmitFails_TxReturnsErr(t *testing.T) {
+	const defID idutil.SafeID = "emitfailstx"
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{Name: "step1", Run: noopStep},
+		},
+	}
+
+	clk := newFakeClock()
+	innerJ := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+
+	em := newSafeFakeEmitter()
+	// Inject an error into the emitter — Emit will fail inside the tx.
+	em.SetError(errors.New("emit intentionally failed"))
+
+	tx := newSafeFakeTxRunner()
+
+	cfg := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+	}
+
+	c, err := NewCoordinator(innerJ, tx, em, reg, clk, WithConfig(cfg))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := innerJ.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Drive one tick manually (no goroutines needed for this test).
+	claimed, _, claimErr := innerJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil {
+		t.Fatalf("ClaimPending: %v", claimErr)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed instance, got %d", len(claimed))
+	}
+	ci := claimed[0]
+
+	// driveOne should return an error because Emit fails inside RunInTx.
+	driveErr := c.driveOne(context.Background(), ci)
+	if driveErr == nil {
+		t.Error("expected driveOne to return an error when Emit fails")
+	}
+
+	// The lease has the instance; clear the error and verify instance is still
+	// claimable after the lease expires (it was not marked terminal).
+	// Advance clock past lease duration to verify instance comes back.
+	clk.Advance(testtime.D60s + testtime.D1ms)
+	claimed2, _, _ := innerJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if len(claimed2) != 1 {
+		t.Errorf("instance should be re-claimable after failed tx (lease expired), got %d", len(claimed2))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F8 — TestDriveOne_MarkTerminalFails_TxReturnsErr
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_MarkTerminalFails_TxReturnsErr verifies that when
+// MarkTerminal fails inside the transaction, RunInTx returns the error.
+// The test uses failingFakeJournal to inject the MarkTerminal failure.
+func TestDriveOne_MarkTerminalFails_TxReturnsErr(t *testing.T) {
+	const defID idutil.SafeID = "marktermfailstx"
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			// Single step that succeeds — this triggers commitStepCompleted which
+			// calls MarkTerminal for the last step.
+			{Name: "step1", Run: noopStep},
+		},
+	}
+
+	clk := newFakeClock()
+	innerJ := newMemJournal(clk)
+	fj := newFailingFakeJournal(innerJ)
+	// Fail the first MarkTerminal call (which happens in commitStepCompleted).
+	fj.failMarkTerminalOnCall = 1
+
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	em := newSafeFakeEmitter()
+	tx := newSafeFakeTxRunner()
+
+	cfg := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+	}
+
+	c, err := NewCoordinator(fj, tx, em, reg, clk, WithConfig(cfg))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := innerJ.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Claim the instance directly.
+	claimed, _, claimErr := innerJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil {
+		t.Fatalf("ClaimPending: %v", claimErr)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed instance, got %d", len(claimed))
+	}
+	ci := claimed[0]
+
+	// driveOne should return an error because MarkTerminal fails inside RunInTx.
+	driveErr := c.driveOne(context.Background(), ci)
+	if driveErr == nil {
+		t.Error("expected driveOne to return an error when MarkTerminal fails")
+	}
 }

@@ -29,7 +29,6 @@
 //
 // # PR-03 deferred scope
 //
-//   - Compensate execution: deferred to PR-06.
 //   - Retry policy (per-step backoff): deferred to PR-06.
 //   - Leader-elect (distlock): deferred to PR-05.
 //   - Per-step parallelism: deferred to PR-06+ (tracked in #983).

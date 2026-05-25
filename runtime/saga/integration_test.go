@@ -28,6 +28,10 @@ const (
 	// testLeaseAdvance is used in TestIntegration_ResumeAfterRestart to advance
 	// the clock past the 60s lease expiry so coordinator 2 can re-claim.
 	testLeaseAdvance = 65 * time.Second
+
+	// testHeartbeatBoundaryExtra is used in TestIntegration_HeartbeatExtendsLease
+	// to advance slightly past where a non-renewed lease would have expired.
+	testHeartbeatBoundaryExtra = 60 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -329,80 +333,6 @@ func TestIntegration_StepRunError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 3 — Compensate present but PR-03 does not execute it
-// ---------------------------------------------------------------------------
-
-// TestIntegration_CompensateDeferred verifies that when a definition has a
-// Compensate function and the step fails, PR-03 still terminates Failed
-// (compensation execution is deferred to PR-06). The test asserts the current
-// correct PR-03 behavior.
-//
-// TODO(PR-06): execute Compensate path when a step fails with prior committed
-// steps, transitioning to Compensating status before terminal.
-func TestIntegration_CompensateDeferred(t *testing.T) {
-	const defID idutil.SafeID = "compensatedeferred"
-	compensateCalled := false
-	stepErr := errors.New("step failed to trigger compensation check")
-
-	def := &ksaga.Definition{
-		ID: defID,
-		Steps: []ksaga.Step{
-			{
-				Name: "step1",
-				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
-					return nil, stepErr
-				},
-				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
-					compensateCalled = true
-					return nil
-				},
-			},
-		},
-	}
-
-	h := newTestHarness(t, def)
-	cancel := startCoord(t, h.coord)
-	defer cancel()
-
-	inst := newInstance(t, defID, h.clk.Now())
-	if err := h.j.Enqueue(context.Background(), inst); err != nil {
-		t.Fatalf("Enqueue: %v", err)
-	}
-
-	// Wait for terminal (2 events: StepFailed + SagaFailed).
-	tickOnceAndWait(t, h.clk, func() bool {
-		evs, err := h.j.Load(context.Background(), inst.ID)
-		return err == nil && len(evs) == 2
-	})
-
-	evs, err := h.j.Load(context.Background(), inst.ID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	// PR-03 current behavior: terminates Failed without executing compensation.
-	if len(evs) != 2 {
-		t.Fatalf("want 2 events (StepFailed + SagaFailed), got %d", len(evs))
-	}
-	if evs[0].Kind != journal.KindStepFailed {
-		t.Errorf("evs[0].Kind = %s, want step_failed", evs[0].Kind)
-	}
-	if evs[1].Kind != journal.KindSagaFailed {
-		t.Errorf("evs[1].Kind = %s, want saga_failed", evs[1].Kind)
-	}
-	// Compensate was NOT called by PR-03.
-	if compensateCalled {
-		t.Error("Compensate was called, but PR-03 should defer compensation to PR-06")
-	}
-
-	// No compensation-related events (KindCompensationStarted / KindStepCompensated).
-	for _, ev := range evs {
-		if ev.Kind == journal.KindCompensationStarted || ev.Kind == journal.KindStepCompensated {
-			t.Errorf("unexpected compensation event: %s", ev.Kind)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Scenario 4 — Total saga timeout
 // ---------------------------------------------------------------------------
 
@@ -552,22 +482,43 @@ func TestIntegration_HeartbeatExtendsLease(t *testing.T) {
 		return hasLease
 	})
 
-	// Advance by LeaseDuration/2 twice with heartbeat ticks in between.
-	// The heartbeatLoop should re-extend the lease each time.
-	// leaseDuration == testtime.D300ms; half is testtime.D150ms.
+	// Advance close to the original lease boundary twice.
+	// Each advance brings us to leaseDuration - 50ms from the previous heartbeat.
+	// If heartbeat is NOT working, the second advance would push us past the
+	// original lease expiry (2 * (300ms - 50ms) = 500ms > leaseDuration=300ms),
+	// so ClaimPending would succeed — the test would fail. A working heartbeat
+	// extends the lease each interval, keeping the instance un-claimable.
+	//
+	// leaseDuration == testtime.D300ms; heartbeatInterval == testtime.D100ms.
+	// Each iteration we advance by (heartbeatInterval - D50ms) = 50ms, which is
+	// less than one heartbeat interval so the heartbeat fires between advances.
 	for i := 0; i < 2; i++ {
-		clk.Advance(testtime.D150ms)
-		// Let heartbeatLoop tick.
+		// Advance to just before the next heartbeat deadline.
+		clk.Advance(leaseDuration - testtime.D50ms)
+		// Let heartbeatLoop tick (real-time goroutine scheduling).
 		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep heartbeat-async: only side-effect is "lease NOT expired" (negative-test)
 
-		// Verify instance is still NOT re-claimable (lease is held and active).
+		// Verify instance is still NOT re-claimable (lease is held and extended).
 		claimed, _, err := j.ClaimPending(context.Background(), 16, leaseDuration)
 		if err != nil {
 			t.Fatalf("ClaimPending (heartbeat check %d): %v", i, err)
 		}
 		if len(claimed) != 0 {
-			t.Errorf("instance was re-claimed at heartbeat check %d — lease not extended", i)
+			t.Errorf("instance was re-claimed at heartbeat check %d — lease not extended by heartbeat", i)
 		}
+	}
+
+	// Final verification: advance past what the original lease boundary would
+	// have been without any heartbeat extensions. With heartbeat extending the
+	// lease each interval, the instance should still be un-claimable.
+	clk.Advance(testHeartbeatBoundaryExtra) // cross the boundary of a non-renewed lease
+	time.Sleep(testtime.D20ms)              //archtest:allow:test-sleep heartbeat-async: negative-test guard
+	claimed3, _, err3 := j.ClaimPending(context.Background(), 16, leaseDuration)
+	if err3 != nil {
+		t.Fatalf("ClaimPending (final check): %v", err3)
+	}
+	if len(claimed3) != 0 {
+		t.Errorf("instance was re-claimed at final boundary check — heartbeat extensions not working")
 	}
 
 	// Unblock the step so the coordinator finishes cleanly.

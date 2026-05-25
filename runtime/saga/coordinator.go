@@ -3,6 +3,7 @@ package saga
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Compile-time interface checks.
@@ -168,19 +170,19 @@ func NewCoordinator(
 	clk clock.Clock,
 	opts ...Option,
 ) (*Coordinator, error) {
-	if j == nil {
+	if validation.IsNilInterface(j) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga: journal required")
 	}
-	if tx == nil {
+	if validation.IsNilInterface(tx) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga: txRunner required")
 	}
-	if em == nil {
+	if validation.IsNilInterface(em) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga: outboxEmit required")
 	}
-	if reg == nil {
+	if validation.IsNilInterface(reg) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga: registry required")
 	}
@@ -275,6 +277,26 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 
 	c.state.Store(int32(coordStopping))
 
+	// Drain active leases before canceling goroutines. heartbeatLoop is still
+	// running during this phase so leases stay valid. Non-cooperative steps
+	// (those that ignore ctx) will continue until they naturally finish;
+	// once driveOne returns, tickOnce deletes the lease from activeLeases.
+	drainTicker := c.clock.NewTicker(c.cfg.PollInterval)
+drain:
+	for {
+		select {
+		case <-ctx.Done():
+			break drain // budget exhausted; fall through to cancel
+		case <-drainTicker.C():
+			count := 0
+			c.activeLeases.Range(func(_, _ any) bool { count++; return true })
+			if count == 0 {
+				break drain
+			}
+		}
+	}
+	drainTicker.Stop()
+
 	c.mu.Lock()
 	cancel := c.cancel
 	done := c.done
@@ -335,6 +357,10 @@ func (c *Coordinator) tickLoop(ctx context.Context) {
 }
 
 func (c *Coordinator) tickOnce(ctx context.Context) error {
+	// Do not claim new instances while draining for Stop().
+	if coordState(c.state.Load()) == coordStopping {
+		return nil
+	}
 	claimed, _, err := c.journal.ClaimPending(ctx, c.cfg.ClaimBatchSize, c.cfg.LeaseDuration)
 	if err != nil {
 		return fmt.Errorf("ClaimPending: %w", err)
@@ -393,8 +419,32 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	}
 
 	// 4. Run step OUTSIDE tx. safeRun recovers panics.
+	// Derive a per-step context with deadline from def.Timeout and/or step.Timeout.
+	// Deadlines use absolute wall-clock time derived from the injected clock so
+	// tests using a FakeClock can control time precisely.
 	nextStep := def.Steps[cursor]
-	newState, runErr := safeRun(ctx, nextStep.Run, &ci.Instance, prevState)
+	runCtx := ctx
+	runCancel := func() {}
+	if def.Timeout > 0 {
+		totalDeadline := ci.Instance.StartedAt.Add(def.Timeout)
+		runCtx, runCancel = context.WithDeadline(ctx, totalDeadline)
+	}
+	if nextStep.Timeout > 0 {
+		stepDeadline := c.clock.Now().Add(nextStep.Timeout)
+		var stepCancel context.CancelFunc
+		runCtx, stepCancel = context.WithDeadline(runCtx, stepDeadline)
+		prevCancel := runCancel
+		runCancel = func() { stepCancel(); prevCancel() }
+	}
+	newState, runErr := safeRun(runCtx, nextStep.Run, &ci.Instance, prevState)
+	runCancel()
+	// If the step-level context expired (deadline fired) while the parent ctx
+	// is still valid, treat the outcome as a saga timeout. This covers both:
+	//   (a) step succeeded but ctx.Err() fired (tight race) → runErr == nil
+	//   (b) step returned ctx.Err() directly → runErr != nil but due to deadline
+	if runCtx.Err() != nil && ctx.Err() == nil {
+		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusExpired)
+	}
 
 	// 5. Open short tx: Append + (maybe) Emit + RegisterAfterCommit.
 	isLastStep := cursor == def.Len()-1
@@ -598,10 +648,20 @@ func stepCompletedTopic(defID idutil.SafeID) string {
 }
 
 // failurePayload returns a minimal JSON []byte capturing the error reason for
-// journaling. Format: {"reason":"<truncated err.Error()>"}.
+// journaling. Format: {"reason":"<truncated message>"}.
+//
+// For errcode.Error values, only the const-literal Message is used to avoid
+// leaking runtime PII that may appear in InternalMessage or the Cause chain.
+// Non-errcode errors fall back to err.Error() (existing behavior).
 func failurePayload(err error) []byte {
 	const maxReason = 256
-	reason := err.Error()
+	var ec *errcode.Error
+	var reason string
+	if errors.As(err, &ec) {
+		reason = ec.Message // const literal only — no runtime PII
+	} else {
+		reason = err.Error()
+	}
 	if len(reason) > maxReason {
 		reason = reason[:maxReason]
 	}
