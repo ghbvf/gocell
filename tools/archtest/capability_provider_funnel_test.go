@@ -9,14 +9,14 @@
 //
 // may only be invoked from the assembly's single provisioning site
 // (cmd/corebundle/cap_wiring.go). Cell module files (cmd/<assembly>/*_module.go)
-// and every other cmd/ file must consume the injected cap.PGProvider /
-// cap.RedisProvider instead of constructing the shared pool / client / the
+// and every other cmd/ file must consume the injected capability.PGProvider /
+// capability.RedisProvider instead of constructing the shared pool / client / the
 // pool-bound TxManager+OutboxWriter themselves.
 //
 // This is the downstream half of the funnel; the upstream half is the
-// sealed cap.PGProvider / cap.RedisProvider (unexported marker methods +
+// sealed capability.PGProvider / capability.RedisProvider (unexported marker methods +
 // private impls + sole NewPGProvider/NewRedisProvider constructors in
-// runtime/cap), which Go's type system makes unforgeable outside package cap.
+// runtime/capability), which Go's type system makes unforgeable outside package capability.
 //
 // # Not banned (per-cell / per-role derivations)
 //
@@ -90,7 +90,7 @@ var capForbiddenCtors = map[string]map[string]struct{}{
 // TestCapabilityProviderFunnel_CompositionRootOnly enforces
 // CAPABILITY-PROVIDER-FUNNEL-01: the shared-infra adapter constructors may only
 // be called from cmd/corebundle/cap_wiring.go. Cell module files must consume
-// the injected cap.PGProvider / cap.RedisProvider.
+// the injected capability.PGProvider / capability.RedisProvider.
 func TestCapabilityProviderFunnel_CompositionRootOnly(t *testing.T) {
 	diags := RunTyped(t,
 		TypedOpts{Tests: false},
@@ -132,7 +132,7 @@ func scanCapabilityProviderViolations(p *Pass) []Diagnostic {
 				Line: line,
 				Message: fmt.Sprintf(
 					"%s.%s is shared infrastructure and may only be constructed in %s; "+
-						"cell modules must consume the injected cap.PGProvider / cap.RedisProvider",
+						"cell modules must consume the injected capability.PGProvider / capability.RedisProvider",
 					shortPkg(pkgPath), name, capWiringRel),
 			})
 		})

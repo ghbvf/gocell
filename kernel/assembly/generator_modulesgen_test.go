@@ -65,17 +65,17 @@ func TestGenerateModulesGen_Corebundle(t *testing.T) {
 	assert.Contains(t, content, "AccessCoreModule{}")
 	assert.Contains(t, content, "AuditCoreModule{}")
 	assert.Contains(t, content, "ConfigCoreModule{}")
-	// Empty-capabilities path is byte-inert: no cap import, no
+	// Empty-capabilities path is byte-inert: no capability import, no
 	// generatedCapabilities(). Locks the {{- if .Capabilities}} else-branch so
 	// assemblies that declare no capabilities stay identical to the
 	// pre-capabilities form.
-	assert.NotContains(t, content, "runtime/cap")
+	assert.NotContains(t, content, "runtime/capability")
 	assert.NotContains(t, content, "generatedCapabilities")
 }
 
 // TestGenerateModulesGen_Capabilities exercises the non-empty capabilities
-// branch: the template must emit the cap import + generatedCapabilities() with
-// one cap.Capability const per declared capability, in declaration order.
+// branch: the template must emit the capability import + generatedCapabilities()
+// with one capability.Kind const per declared capability, in declaration order.
 func TestGenerateModulesGen_Capabilities(t *testing.T) {
 	project := buildModulesTestProject()
 	project.Assemblies["corebundle"].Capabilities = []string{"postgres", "redis"}
@@ -85,23 +85,22 @@ func TestGenerateModulesGen_Capabilities(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, `import "github.com/ghbvf/gocell/runtime/cap"`)
-	assert.Contains(t, content, "func generatedCapabilities() []cap.Capability")
-	assert.Contains(t, content, "cap.CapabilityPostgres")
-	assert.Contains(t, content, "cap.CapabilityRedis")
+	assert.Contains(t, content, `import "github.com/ghbvf/gocell/runtime/capability"`)
+	assert.Contains(t, content, "func generatedCapabilities() []capability.Kind")
+	assert.Contains(t, content, "capability.Postgres")
+	assert.Contains(t, content, "capability.Redis")
 	// Declaration order is preserved (postgres before redis).
 	assert.Less(t,
-		indexOfStr(content, "cap.CapabilityPostgres"),
-		indexOfStr(content, "cap.CapabilityRedis"),
+		indexOfStr(content, "capability.Postgres"),
+		indexOfStr(content, "capability.Redis"),
 		"capabilities must appear in assembly.yaml declaration order")
 }
 
 // TestGenerateModulesGen_UnknownCapability verifies the codegen-time guard:
 // a capability value absent from capabilityConstNames fails with
-// ErrMetadataInvalid rather than emitting an undefined cap const. (The closed
-// enum's parse-time / archtest enforcement — CAPABILITY-PROVIDER-FUNNEL-01
-// upstream — lands in the downstream breaking-refactor PR per ADR; this test
-// only locks the generator's own fail-rather-than-emit-garbage behavior.)
+// ErrMetadataInvalid rather than emitting an undefined capability const. The
+// closed enum's validation-time enforcement is FMT-35 (gocell validate); this
+// test only locks the generator's own fail-rather-than-emit-garbage behavior.
 func TestGenerateModulesGen_UnknownCapability(t *testing.T) {
 	project := buildModulesTestProject()
 	project.Assemblies["corebundle"].Capabilities = []string{"bogus-capability"}

@@ -13,7 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
@@ -23,7 +23,7 @@ import (
 // go green by omitting external DSN configuration.
 //
 // Pool provisioning has moved to provisionCapabilities; this test opens a pool
-// directly, wraps it into a cap.PGProvider, and injects it. The relay is
+// directly, wraps it into a capability.PGProvider, and injects it. The relay is
 // registered via bootstrap opts, not via PoolResource.
 func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 	ctx := context.Background()
@@ -40,7 +40,7 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 	writer := adapterpg.NewOutboxWriter(clock.Real())
-	pgProvider := cap.NewPGProvider(txMgr, writer, pool.DB())
+	pgProvider := capability.NewPGProvider(txMgr, writer, pool.DB())
 
 	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         topo,

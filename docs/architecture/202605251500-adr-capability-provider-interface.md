@@ -1,4 +1,4 @@
-# ADR: Capability Provider 接口（runtime/cap/）
+# ADR: Capability Provider 接口（runtime/capability/）
 
 - **状态**：Accepted
 - **日期**：2026-05-25
@@ -16,7 +16,7 @@ composition root（`cmd/corebundle/*_module.go`）的 infra wiring 全手写。�
 
 P0-1 目标：把 adapter 派生胶水收口到标准 capability provider，composition root ~13k→~4k LOC。
 
-**架构约束**：`runtime/` 禁止 import `adapters/`（CLAUDE.md 分层规则）。capability 接口若住 `runtime/cap/`，不能在签名里出现 `*adapterpg.Pool` 等 adapter 类型。
+**架构约束**：`runtime/` 禁止 import `adapters/`（CLAUDE.md 分层规则）。capability 接口若住 `runtime/capability/`，不能在签名里出现 `*adapterpg.Pool` 等 adapter 类型。
 
 ## Decision
 
@@ -26,17 +26,17 @@ capability 是 **assembly 一次性 provision、注入消费 cell** 的共享资
 
 **为什么不是 per-cell**：per-cell `requires:[postgres]` 让每个 cell 自开 pool，破坏单 pool + LIFO shutdown，且与"一个 outbox 表 / 一个 relay"矛盾。共享资源天然是 assembly 级。
 
-### 2. 接口 + sealed 构造（`runtime/cap/cap.go`，仅 import kernel/ + pkg/）
+### 2. 接口 + sealed 构造（`runtime/capability/capability.go`，仅 import kernel/ + pkg/）
 
-unexported marker method 使接口**只能在 `cap` 包内实现**——故 impl 私有 struct + 构造函数都住 `cap`，入参是 kernel 类型 + `any`（`cap` 永不 import adapters）；`cmd/` 只**调用**构造函数，传入 adapter 构造的值。
+unexported marker method 使接口**只能在 `capability` 包内实现**——故 impl 私有 struct + 构造函数都住 `capability`，入参是 kernel 类型 + `any`（`capability` 永不 import adapters）；`cmd/` 只**调用**构造函数，传入 adapter 构造的值。
 
 ```go
-package cap
-type Capability string
+package capability
+type Kind string
 const (
-    CapabilityPostgres Capability = "postgres"
-    CapabilityRedis    Capability = "redis"
-    CapabilityRabbitMQ Capability = "rabbitmq"
+    Postgres Kind = "postgres"
+    Redis    Kind = "redis"
+    RabbitMQ Kind = "rabbitmq" // recognized, but NO provider/provisioning yet (fail-fast)
 )
 type PGProvider interface {
     TxManager() persistence.TxRunner   // kernel/persistence
@@ -59,16 +59,16 @@ func NewPGProvider(tx persistence.TxRunner, writer outbox.Writer, db any) PGProv
 `cmd/corebundle` 构造站点：
 
 ```go
-pg := cap.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutboxWriter(clk), pool.DB())
+pg := capability.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutboxWriter(clk), pool.DB())
 ```
 
-- `DB()` / `Client()` 返回 `any` 是保持 `runtime/cap` adapter-free 的刻意 typed-erasure：consumer cell 不在 runtime/cap 层，`any → *adapterpg.Pool.DB()` 断言只发生在 `cmd/corebundle`（允许 import adapters）内的 consumer 处。
+- `DB()` / `Client()` 返回 `any` 是保持 `runtime/capability` adapter-free 的刻意 typed-erasure：consumer cell 不在 runtime/capability 层，`any → *adapterpg.Pool.DB()` 断言只发生在 `cmd/corebundle`（允许 import adapters）内的 consumer 处。
 - impl 私有 + 唯一构造函数 → cell module 无法伪造 bypass provider（sealed-construction，AI-robust Hard 范本）。
 
 ### 3. SharedDeps：删 `SharedPGPool`，加 `PG`/`Redis` capability handle
 
-- `runCorebundle` 在 `LoadSharedDepsFromEnv` 之后、`BuildApp` 之前调用 `provisionCapabilities`（`cap_wiring.go`），遍历 codegen 派生的 `generatedCapabilities()`（单源 = `assembly.yaml capabilities:[]`）逐项 provision：postgres 模式下 open pool + `verifyPGPreconditions`（schema version / shape / invalid-index——用 bundle-global `adapterpg.MigrationsFS()`，本就是整 bundle 的共享迁移集，非 configcore 私有）+ 构造 `cap.PGProvider` 写 `SharedDeps.PG`；redis 包装 `buildSharedReplayDeps` 已建的 client 写 `SharedDeps.Redis`（client 本身仍在 `buildSharedReplayDeps` 构造，claimer/nonce 同源）。memory 模式 `SharedDeps.PG` 保持 nil，cell 走 in-memory 路径。
-- **删** `SharedDeps.SharedPGPool *adapterpg.Pool`（+ `RedisClient` 公开字段，改 `Redis cap.RedisProvider` + unexported `redisClient`）。
+- `runCorebundle` 在 `LoadSharedDepsFromEnv` 之后、`BuildApp` 之前调用 `provisionCapabilities`（`cap_wiring.go`），遍历 codegen 派生的 `generatedCapabilities()`（单源 = `assembly.yaml capabilities:[]`）逐项 provision：postgres 模式下 open pool + `verifyPGPreconditions`（schema version / shape / invalid-index——用 bundle-global `adapterpg.MigrationsFS()`，本就是整 bundle 的共享迁移集，非 configcore 私有）+ 构造 `capability.PGProvider` 写 `SharedDeps.PG`；redis 包装 `buildSharedReplayDeps` 已建的 client 写 `SharedDeps.Redis`（client 本身仍在 `buildSharedReplayDeps` 构造，claimer/nonce 同源）。memory 模式 `SharedDeps.PG` 保持 nil，cell 走 in-memory 路径。
+- **删** `SharedDeps.SharedPGPool *adapterpg.Pool`（+ `RedisClient` 公开字段，改 `Redis capability.RedisProvider` + unexported `redisClient`）。
 - pool 的 `ManagedResource`（`SharedDeps.poolMR`）由 `runtimeBaseOptions`（`defaultRuntimeOptions` 的一部分，先于 cellOpts append）注册 → LIFO 下 pool 最后 close（晚于所有 consumer）。`provisionCapabilities` 与 `bootstrap.Run` 之间的失败窗口由 `runCorebundle` 的 `handedToBootstrap` defer 守卫关池。
 - **删** `MODULE-ORDER-CONFIGCORE-FIRST-01`（`tools/archtest/module_order_test.go`）+ `main_test.go:65` 断言：前提（configcore 创建 pool）消失。
 
@@ -87,7 +87,7 @@ pg := cap.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutboxWriter(
 |---|------|------|------|
 | 1 | `assembly.yaml capabilities` ∈ 封闭集 `{postgres,redis,rabbitmq}`、无重复 | `gocell validate` governance rule **FMT-35** + 单源 `metadata.CapabilityEnum` + `IsKnownCapability`；schema enum 由 `TestSchemaConstantsMatchSchemaLiterals` 字节对齐 | **Medium**（governance rule + 测试守卫；3 值封闭集不值得引 codegen funnel——K8s 旧 enum 模式同构，校验落 admission 层而非 parser） |
 | 2 | `modules_gen.go`（含 `generatedCapabilities()`）= `assembly.yaml` 派生 | `gocell verify codegen-assembly` regenerate-and-diff 字节锁 | **Hard**（codegen funnel + golden；既有机制，现覆盖 capabilities 分支） |
-| 3 | cell module 不能伪造 bypass provider | `cap.PGProvider`/`RedisProvider` sealed（unexported marker + 私有 impl + 唯一构造 `cap.NewPGProvider`/`NewRedisProvider`），包外不可表达 | **Hard**（sealed construction，type system） |
+| 3 | cell module 不能伪造 bypass provider | `capability.PGProvider`/`RedisProvider` sealed（unexported marker + 私有 impl + 唯一构造 `capability.NewPGProvider`/`NewRedisProvider`），包外不可表达 | **Hard**（sealed construction，type system） |
 | 4 | `cmd/<id>/*_module.go` 不直接构造**共享基建** | archtest **CAPABILITY-PROVIDER-FUNNEL-01**（`tools/archtest/capability_provider_funnel_test.go`）：ban `adapterpg.NewPool`/`NewTxManager`/`NewOutboxWriter` + `adapterredis.NewClient`，caller allowlist = `cmd/corebundle/cap_wiring.go` + `_test.go`；**不 ban** per-cell 派生（`NewSessionStore`/`NewCache`/`NewRedisDriver`/…，从注入 handle 构造，CLAUDE.md observability §per-cell 资源约定）；镜像 `CAS-PROTOCOL-COMPOSITION-ROOT-01` | **Medium**（type-aware caller-allowlist，非编译期） |
 
 机制 3（上游 Hard）+ 机制 4（下游 Medium）= ai-robust.md §"Funnel 双向锁评级"允许的 **Hard 上游 + Medium 下游过渡形态**；下游→Hard 升级路径（把 `cmd/corebundle` module 文件移出 `package main` 使共享基建构造 import-unreachable）由 gh issue **#988** 跟踪。
@@ -96,13 +96,13 @@ pg := cap.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutboxWriter(
 
 ## Rejected alternatives
 
-- **Shape B：provider 返回 concrete `*adapterpg.Pool`**——不能住 `runtime/cap/`（违反 runtime 不依赖 adapters），且不是 assembly-reusable 的抽象。`DB() any` 的 typed-erasure 是为住 runtime/cap 付的刻意代价。
+- **Shape B：provider 返回 concrete `*adapterpg.Pool`**——不能住 `runtime/capability/`（违反 runtime 不依赖 adapters），且不是 assembly-reusable 的抽象。`DB() any` 的 typed-erasure 是为住 runtime/capability 付的刻意代价。
 - **per-cell capability 构造**——破坏单 pool + LIFO（见 Decision §1）。
-- **保留 `SharedPGPool` + 加 `cap.PGProvider` read-through view**——双路径 / 两真理源，违反"不向后兼容 / 优雅"。
+- **保留 `SharedPGPool` + 加 `capability.PGProvider` read-through view**——双路径 / 两真理源，违反"不向后兼容 / 优雅"。
 
 ## DG-2 gate
 
-006 roadmap §5 DG-2："005 W0/W1 若涉及 capability registration / module wire，P0-1 应等 W0 稳定"。调查：005 W0 = `outbox.Entry.Headers` envelope（未启动），W1 = after-commit hooks（部分落地），**均不定义 capability-registration 接口** → 条件不触发，P0-1 可立即启动。残余风险：未来 W-wave 若引入自己的 capability registration，回灌到本 ADR——`runtime/cap` 是唯一 sanctioned capability-provider 源。
+006 roadmap §5 DG-2："005 W0/W1 若涉及 capability registration / module wire，P0-1 应等 W0 稳定"。调查：005 W0 = `outbox.Entry.Headers` envelope（未启动），W1 = after-commit hooks（部分落地），**均不定义 capability-registration 接口** → 条件不触发，P0-1 可立即启动。残余风险：未来 W-wave 若引入自己的 capability registration，回灌到本 ADR——`runtime/capability` 是唯一 sanctioned capability-provider 源。
 
 ## Consequences
 

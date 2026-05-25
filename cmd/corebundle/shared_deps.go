@@ -16,7 +16,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -110,7 +110,7 @@ type SharedDeps struct {
 	// constraint.
 	//
 	// Nil in non-postgres modes (in-memory); cell modules take their memory path.
-	PG cap.PGProvider
+	PG capability.PGProvider
 
 	// poolMR is the postgres pool as a ManagedResource, set by provisionPostgres
 	// alongside PG. Registered first by runtimeBaseOptions for LIFO last-close.
@@ -120,7 +120,7 @@ type SharedDeps struct {
 	// Redis is the assembly's shared redis capability provider, wrapping the
 	// client built in buildSharedReplayDeps. Consumers obtain the raw
 	// *adapterredis.Client via Redis.Client(). Nil in modes without redis.
-	Redis cap.RedisProvider
+	Redis capability.RedisProvider
 
 	// redisClient holds the raw client constructed in LoadSharedDepsFromEnv
 	// (buildSharedReplayDeps); provisionRedis wraps it into Redis. Unexported

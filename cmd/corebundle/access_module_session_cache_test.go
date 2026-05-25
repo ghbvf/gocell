@@ -14,7 +14,7 @@ import (
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/session"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 )
 
 // stubSessionStore is a minimal session.Store used only to obtain a stable
@@ -124,7 +124,7 @@ func TestWrapSessionStoreWithCache_RedisStubFailsConstruction(t *testing.T) {
 
 	inner := stubSessionStore{}
 	shared := &SharedDeps{}
-	shared.Redis = cap.NewRedisProvider(new(adapterredis.Client)) // empty Client; cmdable is nil
+	shared.Redis = capability.NewRedisProvider(new(adapterredis.Client)) // empty Client; cmdable is nil
 	got, err := wrapSessionStoreWithCache(inner, shared, logger)
 
 	require.Error(t, err, "stub redis client: NewCache must fail fast")

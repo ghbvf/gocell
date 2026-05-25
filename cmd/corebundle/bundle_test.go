@@ -31,7 +31,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -150,7 +150,7 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 
 	base, err := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 	require.NoError(t, err)
-	shared.Redis = cap.NewRedisProvider(new(adapterredis.Client))
+	shared.Redis = capability.NewRedisProvider(new(adapterredis.Client))
 	withRedis, err := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 	require.NoError(t, err)
 
@@ -174,7 +174,7 @@ func TestBuildConfigCoreOpts_PGMode_WrongDBType_PoolError(t *testing.T) {
 	// trigger the pgxPoolFromProvider type-assertion failure branch.
 	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         topo,
-		PG:               cap.NewPGProvider(nil, nil, "wrong-type"),
+		PG:               capability.NewPGProvider(nil, nil, "wrong-type"),
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},

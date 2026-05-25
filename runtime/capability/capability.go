@@ -1,11 +1,11 @@
-package cap
+package capability
 
 import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
-// Capability names an assembly-level shared infrastructure resource declared in
+// Kind names an assembly-level shared infrastructure capability declared in
 // assembly.yaml `capabilities` and (in #855) consumed via cell.yaml `requires`.
 // The closed value set below is the single source mirrored by the
 // assembly.schema.json enum (kept in lockstep by kernel/metadata/schemas
@@ -13,19 +13,24 @@ import (
 // rejected by `gocell validate` governance rule FMT-35 at validation time — not
 // at parse time: ParseFS stays lenient, matching Kubernetes admission-layer enum
 // validation rather than parse-time rejection.
-type Capability string
+type Kind string
 
 const (
-	// CapabilityPostgres is the shared postgres pool (TxManager + OutboxWriter + DB).
-	CapabilityPostgres Capability = "postgres"
-	// CapabilityRedis is the shared redis client.
-	CapabilityRedis Capability = "redis"
-	// CapabilityRabbitMQ is the shared AMQP connection (declared for forward use).
-	CapabilityRabbitMQ Capability = "rabbitmq"
+	// Postgres is the shared postgres pool (TxManager + OutboxWriter + DB).
+	Postgres Kind = "postgres"
+	// Redis is the shared redis client.
+	Redis Kind = "redis"
+	// RabbitMQ is recognized by the enum but has NO provider / provisioning path
+	// yet: there is no RabbitMQProvider and cap_wiring's provisionCapabilities has
+	// no rabbitmq case, so declaring `capabilities: [rabbitmq]` passes FMT-35 +
+	// codegen but fails fast at provisionCapabilities' default branch. It stays in
+	// the enum as recognized forward vocabulary; a real AMQP-shared-connection
+	// assembly must land the RabbitMQProvider + provisioning atomically.
+	RabbitMQ Kind = "rabbitmq"
 )
 
 // PGProvider is the sealed handle to the assembly's single postgres pool. It is
-// implementable only inside package cap (unexported marker isPGProvider); the
+// implementable only inside package capability (unexported marker isPGProvider); the
 // sole construction path is NewPGProvider. Consumers receive an injected
 // PGProvider and must not construct adapter primitives themselves
 // (CAPABILITY-PROVIDER-FUNNEL-01).
@@ -35,13 +40,13 @@ type PGProvider interface {
 	// OutboxWriter returns the transactional outbox writer.
 	OutboxWriter() outbox.Writer
 	// DB returns the raw pool handle (*adapterpg.Pool.DB()) as any. The single
-	// type-assertion lives in the cmd/* consumer; runtime/cap stays adapter-free.
+	// type-assertion lives in the cmd/* consumer; runtime/capability stays adapter-free.
 	DB() any
 	isPGProvider()
 }
 
 // RedisProvider is the sealed handle to the assembly's shared redis client.
-// Implementable only inside package cap; sole construction path NewRedisProvider.
+// Implementable only inside package capability; sole construction path NewRedisProvider.
 type RedisProvider interface {
 	// Client returns the raw redis client (*adapterredis.Client) as any. The
 	// single type-assertion lives in the cmd/* consumer.

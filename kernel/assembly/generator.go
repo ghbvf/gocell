@@ -108,24 +108,24 @@ type modulesContext struct {
 	AssemblyID string
 	SourcePath string   // path to the assembly.yaml that drove generation (asm.File)
 	Modules    []string // CellModule struct names, in cells.yaml order
-	// Capabilities are runtime/cap.Capability const names (e.g.
-	// "CapabilityPostgres"), derived from assembly.yaml `capabilities`. When
-	// non-empty the template emits generatedCapabilities() + the cap import;
-	// empty leaves the file byte-identical to the pre-capabilities form so
-	// assemblies that declare no capabilities are unaffected.
+	// Capabilities are runtime/capability.Kind const names (e.g. "Postgres"),
+	// derived from assembly.yaml `capabilities`. When non-empty the template
+	// emits generatedCapabilities() + the capability import; empty leaves the
+	// file byte-identical to the pre-capabilities form so assemblies that declare
+	// no capabilities are unaffected.
 	Capabilities []string
 }
 
 // capabilityConstNames maps assembly.yaml `capabilities` enum values to their
-// runtime/cap.Capability const identifiers. The enum is closed and mirrored by
-// assembly.schema.json + runtime/cap.Capability; an unknown value here means
+// runtime/capability.Kind const identifiers. The enum is closed and mirrored by
+// assembly.schema.json + runtime/capability.Kind; an unknown value here means
 // the schema enum and this map drifted — GenerateModulesGen fails rather than
-// emit an undefined const (the schema validation in gocell validate is the
+// emit an undefined const (the FMT-35 validation in gocell validate is the
 // primary upstream gate).
 var capabilityConstNames = map[string]string{
-	"postgres": "CapabilityPostgres",
-	"redis":    "CapabilityRedis",
-	"rabbitmq": "CapabilityRabbitMQ",
+	"postgres": "Postgres",
+	"redis":    "Redis",
+	"rabbitmq": "RabbitMQ",
 }
 
 // AssemblyScaffoldSpec drives Generator.PlanAssemblyScaffold (K#09 SCAFFOLD-ONE-CMD).

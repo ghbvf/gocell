@@ -3,7 +3,7 @@
 package main
 {{- if .Capabilities}}
 
-import "github.com/ghbvf/gocell/runtime/cap"
+import "github.com/ghbvf/gocell/runtime/capability"
 {{- end}}
 
 func generatedCellModules() []CellModule {
@@ -17,11 +17,11 @@ func generatedCellModules() []CellModule {
 
 // generatedCapabilities lists the assembly-level shared infrastructure
 // capabilities declared in assembly.yaml. The composition root provisions each
-// once and injects the resulting runtime/cap provider into consuming modules.
-func generatedCapabilities() []cap.Capability {
-	return []cap.Capability{
+// once and injects the resulting runtime/capability provider into consuming modules.
+func generatedCapabilities() []capability.Kind {
+	return []capability.Kind{
 {{- range .Capabilities}}
-		cap.{{.}},
+		capability.{{.}},
 {{- end}}
 	}
 }

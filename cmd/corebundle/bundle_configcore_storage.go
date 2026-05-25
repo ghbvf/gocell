@@ -17,7 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 )
@@ -36,7 +36,7 @@ type ConfigCoreModuleConfig struct {
 	// provisionCapabilities (nil in memory mode). configcore no longer opens a
 	// pool — it derives its outbox store / storage repo / tx runner from the
 	// shared provider's db handle + TxManager + OutboxWriter.
-	PG               cap.PGProvider
+	PG               capability.PGProvider
 	Publisher        outbox.Publisher
 	MetricsProvider  metrics.Provider
 	ValueTransformer kcrypto.ValueTransformer
@@ -101,7 +101,7 @@ func buildConfigCoreOpts(cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, er
 
 // buildConfigCorePostgresOpts builds the configcore module result for the
 // "postgres" StorageBackend. The pool is provisioned by the assembly
-// (provisionCapabilities); this function consumes the injected cap.PGProvider —
+// (provisionCapabilities); this function consumes the injected capability.PGProvider —
 // it no longer opens a pool, runs preconditions, or owns the pool lifecycle.
 func buildConfigCorePostgresOpts(cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, error) {
 	if cfg.PG == nil {

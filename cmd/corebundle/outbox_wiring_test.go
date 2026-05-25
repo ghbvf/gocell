@@ -16,7 +16,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -81,7 +81,7 @@ func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 	writer := adapterpg.NewOutboxWriter(clock.Real())
-	pgProvider := cap.NewPGProvider(txMgr, writer, pool.DB())
+	pgProvider := capability.NewPGProvider(txMgr, writer, pool.DB())
 
 	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         topo,

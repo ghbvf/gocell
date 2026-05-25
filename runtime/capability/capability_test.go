@@ -1,4 +1,4 @@
-package cap
+package capability
 
 import (
 	"context"
@@ -19,7 +19,7 @@ type fakeWriter struct{}
 
 func (fakeWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
 
-// Compile-time seal assertions: only package cap can satisfy the interfaces.
+// Compile-time seal assertions: only package capability can satisfy the interfaces.
 var (
 	_ PGProvider    = pgProvider{}
 	_ RedisProvider = redisProvider{}
@@ -56,18 +56,18 @@ func TestNewRedisProvider_ThreadsClient(t *testing.T) {
 	}
 }
 
-func TestCapabilityConstants(t *testing.T) {
+func TestCapabilityKindConstants(t *testing.T) {
 	cases := []struct {
-		cap  Capability
+		kind Kind
 		want string
 	}{
-		{CapabilityPostgres, "postgres"},
-		{CapabilityRedis, "redis"},
-		{CapabilityRabbitMQ, "rabbitmq"},
+		{Postgres, "postgres"},
+		{Redis, "redis"},
+		{RabbitMQ, "rabbitmq"},
 	}
 	for _, tc := range cases {
-		if string(tc.cap) != tc.want {
-			t.Errorf("Capability = %q, want %q", tc.cap, tc.want)
+		if string(tc.kind) != tc.want {
+			t.Errorf("Kind = %q, want %q", tc.kind, tc.want)
 		}
 	}
 }

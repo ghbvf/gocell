@@ -280,8 +280,8 @@ type AssemblyMeta struct {
 	Owner OwnerMeta `yaml:"owner"`
 	// Capabilities lists assembly-level shared infrastructure capabilities
 	// (postgres / redis / rabbitmq) provisioned once by the composition root
-	// and injected into consuming cell modules via runtime/cap. The closed
-	// value set is mirrored by CapabilityEnum + runtime/cap.Capability +
+	// and injected into consuming cell modules via runtime/capability. The closed
+	// value set is mirrored by CapabilityEnum + runtime/capability.Kind +
 	// assembly.schema.json enum. Unknown or duplicate values are rejected by
 	// `gocell validate` governance rule FMT-35 (validation-time, not by ParseFS —
 	// the parser stays lenient, matching Kubernetes admission-layer validation).

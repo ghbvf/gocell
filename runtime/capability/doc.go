@@ -1,4 +1,4 @@
-// Package cap defines GoCell capability providers: assembly-level shared
+// Package capability defines GoCell capability providers: assembly-level shared
 // infrastructure resources (postgres pool, redis client, ...) provisioned once
 // by the composition root and injected into every consuming cell module.
 //
@@ -11,7 +11,7 @@
 // invariant and contradicting the one-outbox-table / one-relay model. See ADR
 // docs/architecture/202605251500-adr-capability-provider-interface.md.
 //
-// # Layering: runtime/cap never imports adapters/
+// # Layering: runtime/capability never imports adapters/
 //
 // runtime/ may depend only on kernel/ + pkg/ (CLAUDE.md). So the provider
 // interfaces are expressed over kernel types (persistence.TxRunner,
@@ -44,4 +44,4 @@
 // 双向锁评级". The downstream→Hard upgrade is tracked at gh issue #988. The
 // blind-spot inventory lives in that archtest's package godoc, not duplicated
 // here.
-package cap
+package capability

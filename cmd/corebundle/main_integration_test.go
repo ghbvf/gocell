@@ -14,7 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
@@ -50,7 +50,7 @@ func setupPostgresForMain(t *testing.T) (string, func()) {
 // PostgreSQL container is available and all migrations have been applied.
 //
 // Pool provisioning has moved to provisionCapabilities; this test opens a pool
-// directly, wraps it into a cap.PGProvider, and injects it so buildConfigCoreOpts
+// directly, wraps it into a capability.PGProvider, and injects it so buildConfigCoreOpts
 // can consume it without opening its own pool.
 func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
@@ -74,7 +74,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 	writer := adapterpg.NewOutboxWriter(clock.Real())
-	pgProvider := cap.NewPGProvider(txMgr, writer, pool.DB())
+	pgProvider := capability.NewPGProvider(txMgr, writer, pool.DB())
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 

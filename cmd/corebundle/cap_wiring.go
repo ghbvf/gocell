@@ -8,14 +8,14 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 )
 
-// pgxPoolFromProvider is the single type-assertion site for the cap.PGProvider's
-// any-typed DB() seam (runtime/cap stays adapter-free; the assertion lives here
+// pgxPoolFromProvider is the single type-assertion site for the capability.PGProvider's
+// any-typed DB() seam (runtime/capability stays adapter-free; the assertion lives here
 // in the cmd/* consumer per the ADR). Cell modules call this to obtain the raw
 // *pgxpool.Pool their per-cell stores need, rather than asserting themselves.
-func pgxPoolFromProvider(pg cap.PGProvider) (*pgxpool.Pool, error) {
+func pgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
 	pool, ok := pg.DB().(*pgxpool.Pool)
 	if !ok {
 		return nil, fmt.Errorf("corebundle: PG provider DB() is not *pgxpool.Pool (got %T)", pg.DB())
@@ -32,7 +32,7 @@ func pgxPoolFromProvider(pg cap.PGProvider) (*pgxpool.Pool, error) {
 // It iterates the codegen-declared generatedCapabilities() (single source:
 // assemblies/corebundle/assembly.yaml `capabilities`), and for each declared
 // capability provisions the shared resource exactly once and wraps it into the
-// sealed runtime/cap provider stored on shared. Consuming cell modules receive
+// sealed runtime/capability provider stored on shared. Consuming cell modules receive
 // the injected provider (shared.PG / shared.Redis) and never construct adapter
 // primitives themselves.
 //
@@ -42,11 +42,11 @@ func pgxPoolFromProvider(pg cap.PGProvider) (*pgxpool.Pool, error) {
 func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 	for _, c := range generatedCapabilities() {
 		switch c {
-		case cap.CapabilityPostgres:
+		case capability.Postgres:
 			if err := provisionPostgres(ctx, shared); err != nil {
 				return err
 			}
-		case cap.CapabilityRedis:
+		case capability.Redis:
 			provisionRedis(shared)
 		default:
 			// Unreachable: FMT-35 governance + assembly.schema.json enum reject
@@ -63,7 +63,7 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 // provisionPostgres opens the assembly's single postgres pool (postgres
 // StorageBackend only), runs the schema/shape/index fail-fast checks, and wraps
 // the pool-bound TxManager + OutboxWriter + raw *pgxpool.Pool handle into the
-// sealed cap.PGProvider. The pool is recorded as shared.poolMR so bundle_options
+// sealed capability.PGProvider. The pool is recorded as shared.poolMR so bundle_options
 // registers it as the first ManagedResource (LIFO: closed last, after every PG
 // consumer — relay, cell workers, tx).
 //
@@ -94,18 +94,18 @@ func provisionPostgres(ctx context.Context, shared *SharedDeps) error {
 	}
 	txMgr := adapterpg.NewTxManager(pool)
 	writer := adapterpg.NewOutboxWriter(shared.Clock)
-	shared.PG = cap.NewPGProvider(txMgr, writer, pool.DB())
+	shared.PG = capability.NewPGProvider(txMgr, writer, pool.DB())
 	shared.poolMR = pool
 	return nil
 }
 
 // provisionRedis wraps the shared redis client (constructed in
 // LoadSharedDepsFromEnv via buildSharedReplayDeps and held on shared.redisClient)
-// into the sealed cap.RedisProvider. The client construction itself
+// into the sealed capability.RedisProvider. The client construction itself
 // (adapterredis.NewClient via the redisClientFactory) lives in redis.go; this
 // step only wraps it. Nil (no-op) in modes without redis.
 func provisionRedis(shared *SharedDeps) {
 	if shared.redisClient != nil {
-		shared.Redis = cap.NewRedisProvider(shared.redisClient)
+		shared.Redis = capability.NewRedisProvider(shared.redisClient)
 	}
 }

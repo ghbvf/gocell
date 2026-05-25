@@ -62,7 +62,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/cap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -132,12 +132,12 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
 	// Open a dedicated pool for e2e wiring; pool provisioning has moved to
-	// provisionCapabilities, so we inject a cap.PGProvider directly.
+	// provisionCapabilities, so we inject a capability.PGProvider directly.
 	e2ePool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
 	require.NoError(t, err, "open e2e PG pool must succeed")
 	t.Cleanup(func() { _ = e2ePool.Close(context.Background()) })
 
-	e2ePGProvider := cap.NewPGProvider(
+	e2ePGProvider := capability.NewPGProvider(
 		adapterpg.NewTxManager(e2ePool),
 		adapterpg.NewOutboxWriter(clock.Real()),
 		e2ePool.DB(),
@@ -465,12 +465,12 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
 	// Open a dedicated pool for e2e wiring; pool provisioning has moved to
-	// provisionCapabilities, so we inject a cap.PGProvider directly.
+	// provisionCapabilities, so we inject a capability.PGProvider directly.
 	e2ePool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
 	require.NoError(t, err, "open e2e PG pool must succeed")
 	t.Cleanup(func() { _ = e2ePool.Close(context.Background()) })
 
-	e2ePGProvider := cap.NewPGProvider(
+	e2ePGProvider := capability.NewPGProvider(
 		adapterpg.NewTxManager(e2ePool),
 		adapterpg.NewOutboxWriter(clock.Real()),
 		e2ePool.DB(),
